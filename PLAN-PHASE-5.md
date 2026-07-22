@@ -20,6 +20,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 638 (2026-07-22) — (M0.4) fifteenth tail-pass migration:
+checkArgumentsCollision (TS2396 "Duplicate identifier 'arguments'…" for
+an `arguments`-named param alongside a rest param at target < ES2015 +
+TS1215 "Invalid use of 'arguments'…" for `arguments` param bindings in
+module files; 116.8 ms — the #15 per-file tail pass) is ON THE SPINE;
+the legacy driver + recursion (checkArgumentsCollision /
+checkArgsCollisionInStatements / checkArgsCollisionInStatement /
+checkArgsCollisionInExpr, ~130 lines) DELETED; the emission leaf
+(checkArgsCollisionInParams) survives unchanged, anchor-called.** The
+CONSTANT-CONTEXT variant — the simplest downward state of the migrated
+passes: the only threaded value is the per-file isModule boolean
+(= spineFileIsModule, already computed per file), so NO frames, NO ctx
+memo, NO prepass; the per-construct declare/body gates re-derive at the
+anchor from the construct node + its PARENT kind. Frozen asymmetries
+pinned: a class-DECLARATION method/ctor param-checks iff body +
+!class-declare and its set-accessors are body-walked but NEVER
+param-checked, while class-EXPRESSION and object-literal members
+param-check UNCONDITIONALLY; a FunctionDeclaration needs body +
+!declare; arrows/fn-exprs always check. Anchors at fn-like enters
+(FunctionDeclaration / MethodDeclaration / Constructor / SetAccessor /
+ArrowFunction / FunctionExpression) with a cheap `arguments`-param-name
+pre-gate BEFORE the reach climb (the name is rare — anchors nearly
+free). Reach is the memoized binary classifier spineAcStatus/
+spineAcEdge — a WIDER edge set than gIdx's (a fresh copy, not a reuse):
+arrows / fn-exprs / class-EXPRESSION members (incl. property
+initializers) / objlit members / template spans / typeof-await-yield-
+void-delete operands / tagged-template tags+spans all descend, while
+if/ternary CONDITIONS, for/while/do/switch HEADS, class-DECLARATION
+property initializers, and declare-namespace bodies stay silent (pinned
+both directions — the class-decl vs class-expr property-initializer
+asymmetry is the sharp pair). The run-level dispatch gate
+(target < ES2015 || any non-dts module file) becomes spineAcRunActive,
+computed once at checkSpine entry. No ambient sandwich (purely
+syntactic emission). The legacy binderResults driver → the spine's
+partition view, `--partitionCheck 2` EQUIVALENT ×8; ZERO TS2396/TS1215
+on all 8 tsc profiles → the listAll gate pins pure non-perturbation
+(the corpus's 8 collision tests are the behavior gate). Gates: 25 local
+pins (M04ArgsCollisionSpineMigrationTest) green against the LEGACY pass
+FIRST; suite 11,732 → 11,757/0; `--listAll` ×8 byte-identical (time
+header only); partitionCheck ×8 EQUIVALENT; pass table 424 → 423 (the
+row gone; checkSpine 19,665 ms single-run — in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top FIFTEEN tail passes
+migrated. NEXT: checkEvolvingEmptyArrayImplicitAny (103.2 ms) — scope
+shape + consumers before its slot-move.**
+
 **Round 637 (2026-07-22) — (M0.4) fourteenth tail-pass migration:
 checkGenericIndexWrite (TS2862 "Type 'T' is generic and can only be
 indexed for reading." — index WRITES through a receiver typed as a
@@ -525,62 +570,6 @@ emission leaves (emitTS2352IfSameTargetMismatch /
 emitTS2352IfFunctionReturnMismatch) run per anchor in that order. Next
 after it: checkBindingPatternComputedIndexSig (~120 ms).**
 
-**Round 628 (2026-07-21) — (M0.4) sixth tail-pass migration:
-checkSymbolToStringConversions (TS2469/TS2731, 96–108 ms — the #6 tail
-pass) is ON THE SPINE; the legacy recursion (checkSymbolToStringConversions
-/ sym2strHandleFnBody / sym2strHandleBody / sym2strScanStatement /
-sym2strCheckExpr, ~160 lines) DELETED.** The downward-SETS variant of the
-template: the pass threads (symbolNames, tpNames) sets that only
-ACCUMULATE (copies + adds, no removals), so the ctx is a pure function of
-the boundary ancestor chain and rebuilds pull-based per anchor, memoized
-per boundary-CHILD node (spineSyCtxFor). The whole-list locals PREPASS per
-body (collectSymbolLocals — statement-order-independent, descends nested
-control-flow statements but not fn/class/module bodies) reproduces as
-per-boundary LEVELS exactly as the round-627 note predicted; the key
-simplification: ONLY fn-like bodies and ModuleBlocks are collection
-boundaries — the legacy re-collects at inner Blocks / switch clauses / try
-blocks were always SUBSETS of the enclosing body's prepass (set-equal, so
-no boundary needed), and a class PROPERTY initializer needs no boundary
-either (the legacy passed outer names + OUTER tpNames verbatim — the
-climb-through yields exactly that; the initializer being BLIND to the
-class TP is a pinned legacy quirk, as is the accumulate-only no-shadowing
-rule: an inner string-typed param does NOT hide an outer symbol name).
-aliasNames is file-scoped (the collectSymbolAliases fixpoint at
-spineSySetup, with the top-level locals prepass). Anchors are binary `+`
-(left-ELSE-right — one emission per node) / `+=` (RIGHT-only — a symbol
-LEFT of `+=` never fired, pinned) / unary `+` / template spans, each
-pre-filtered on a bare-Identifier operand before any reach/ctx work. Reach
-is the memoized binary classifier (spineSyStatus/spineSyEdge) with two
-edges DIFFERING from the fp/ai classifiers — case-clause EXPRESSIONS and
-bare for-initializer EXPRESSIONS ARE reached (both pinned; the
-anti-copy-paste hazard when cloning a sibling classifier) — while typeof
-operands, tagged templates, and objlit METHOD bodies stay unreached
-(pinned). No ambient sandwich — the emissions read no checker ambient.
-Gates: 25 local pins (M04Sym2StrSpineMigrationTest) verified green against
-the LEGACY walker FIRST; suite 11,490 → 11,515/0; `--listAll` ×8
-byte-identical (46×7 + 94 env-legit artifacts); pass table 433 → 432 (the
-checkSymbolToStringConversions row GONE; checkSpine 18.4–19.1 s across two
-single runs — the 18.0–19.0 round-625..627 band, first reading was box
-drift); warning-clean. M0.4 running total: top SIX tail passes migrated.
-NEXT: checkDefiniteAssignmentViaFlowGraph (89–114 ms by run) — NO
-slot-move pre-gate needed (it already sits in the post-spine region, ~10
-dispatches after checkSpine), and the intervening
-checkCrossFileUseBeforeDeclaration is NOT a dedup hazard (VERIFIED this
-round: its emitCrossFileTS2448 emits TS2448 + related-2728 ONLY — the
-round-536 emitTS2448-co-emits-TS2454 gotcha is about the PER-FILE UBD
-leg, already on the spine as walker 7). The real migration constraints:
-(a) its per-file TS2454 position-dedup scan must see ALL spine-emitted
-TS2454s for that file (the set-based walker 5 + the spineUbd
-co-emissions — both fire during the spine walk), so the natural shape is
-a FILE-END dispatch in checkSpine's per-file loop (the
-spineResolveDeferredIterationChecks pattern: dedup-scan + the two
-whole-file flow walks after spineWalkFile returns), NOT per-anchor
-enters; (b) it installs currentFlowGraph save/restore around its walks;
-(c) the end-of-init flowDisabledRanges TS2454 filter still runs after it
-either way; (d) checkTryCatchOnlyAssignedVarReads (its
-shouldCheckDefiniteAssignment sibling) stays put or moves with it —
-check for one-directional dedup between the two before choosing.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -808,10 +797,21 @@ structural item instead of landing alone.**
   cleared for property initializers); anchors are `=` binaries with a
   paren-unwrapped ElementAccess LHS; zero TS2862 on all 8 profiles →
   the listAll gate pins pure non-perturbation);
-  next per-file candidates by cost: checkArgumentsCollision 116.8 ms
-  (slot-move pre-gate landed round 637 — see the session note's scope
-  map), checkEvolvingEmptyArrayImplicitAny 103.2 ms — scope shape +
-  consumers before the slot-move;
+  checkArgumentsCollision 116.8 ms — **MIGRATED round 638** (the
+  CONSTANT-CONTEXT variant, the simplest yet: the only downward value is
+  the per-file isModule boolean, so no frames, no ctx memo — the
+  per-construct declare/body gates re-derive at the anchor from the
+  construct node + its parent kind (class-DECLARATION members need
+  body + !class-declare and its set-accessors never param-check, while
+  class-EXPRESSION/objlit members param-check unconditionally — frozen
+  asymmetries, pinned); a WIDER reach than gIdx (arrows/fn-exprs/
+  class-expr members/objlit members/template spans/typeof operands
+  descend; if/ternary conditions, loop/switch heads, class-decl property
+  initializers, declare-namespace bodies stay silent) = a fresh edge
+  set; the run-level dispatch gate (target < ES2015 || any non-dts
+  module file) becomes the run-active flag);
+  next per-file candidates by cost: checkEvolvingEmptyArrayImplicitAny
+  103.2 ms — scope shape + consumers before the slot-move;
   98 passes >20 ms carry 5.3 s of the
   6.2 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the

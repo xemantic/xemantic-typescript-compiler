@@ -3684,6 +3684,32 @@ class Checker(
     /** The legacy per-file entry context (immutable — shared across files). */
     private val spineGxEmptyCtx = GxCtx(emptySet(), emptyMap(), emptyMap())
 
+    // (M0.4) round 638: checkArgumentsCollision (TS2396 arguments-vs-rest
+    // collision at target < ES2015 + TS1215 `arguments` bindings in module
+    // files) on the spine. The SIMPLEST downward context of the migrated
+    // passes — one CONSTANT-per-file boolean (isModule) + per-construct
+    // declare/body gates re-derived at the anchor — but a WIDER reach than
+    // the gIdx walker (arrows / fn-exprs / class-EXPRESSION members / objlit
+    // members / template spans / typeof-await-yield-void-delete operands all
+    // descend; if/ternary CONDITIONS, loop/switch HEADS, class-DECLARATION
+    // property initializers, and declare-namespace bodies stay silent).
+    // Anchors at fn-like enters (FunctionDeclaration / MethodDeclaration /
+    // Constructor / SetAccessor / ArrowFunction / FunctionExpression) with a
+    // cheap `arguments`-param-name pre-gate before the reach climb; reach is
+    // the memoized binary classifier [spineAcStatus] over [spineAcEdge] (the
+    // deleted arms verbatim). The run-level dispatch gate (target < ES2015
+    // || any non-dts module file) becomes [spineAcRunActive], computed once
+    // at checkSpine entry. No ambient sandwich — the emission leaf
+    // (checkArgsCollisionInParams) is purely syntactic. Fields PRE-init.
+    private var spineAcActive = false
+    private var spineAcRunActive = false
+    /** The legacy per-file isModule flag (constant per file). */
+    private var spineAcIsModule = false
+    /** Per-file nodeId memo for [spineAcStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineAcReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineAcStatus]. */
+    private val spineAcChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5253,28 +5279,17 @@ class Checker(
         // ×8 (the round-633 rule). No TS2862 dedup/scan consumers exist
         // (checkGenericRecordCastAccess emits the code but is gate-disjoint
         // and never scans the list).
-        // 42' (M0.4 slot-move pre-gate, round 637): checkArgumentsCollision
-        // (TS2396 arguments-vs-rest-param collision at target < ES2015 +
-        // TS1215 `arguments` bindings in module files) moved intact from its
-        // pre-spine slot 42 ahead of its spine migration. Fully SYNTACTIC +
-        // self-contained (isModuleFile + pure AST param scans — no type
-        // caches, no ambient); no TS2396/TS1215 dedup/scan consumers exist
-        // (the sibling TS1215 emitter checkModuleStrictModeInStatements
-        // covers NAME bindings — its FunctionDeclaration arm deliberately
-        // skips params, deferring to this pass — and never scans the list).
-        // Scope for the migrator:
-        // the SIMPLEST downward context yet — one CONSTANT-per-file boolean
-        // (isModule) + per-construct declare gates; the walker descends
-        // arrows/fn-exprs/class-exprs/objlit members/template spans (a WIDER
-        // reach than gIdx — needs a fresh edge set); param-list emissions
-        // anchor at fn-like enters gated body-present + !declare (class
-        // members inherit the CLASS's declare flag); the run-level dispatch
-        // gate (target < ES2015 || any non-dts module file) becomes the
-        // run-active flag.
-        val argsCollisionHasModuleFiles = binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
-        if (options.target < ScriptTarget.ES2015 || argsCollisionHasModuleFiles) {
-            pass("checkArgumentsCollision") { checkArgumentsCollision() }
-        }
+        // 42' (M0.4, round 638): checkArgumentsCollision (TS2396
+        // arguments-vs-rest-param collision at target < ES2015 + TS1215
+        // `arguments` bindings in module files) is ON THE SPINE — anchors at
+        // fn-like enters with an `arguments`-named param (spineAcEnterNode);
+        // the run-level dispatch gate became spineAcRunActive. Fully
+        // syntactic — no ambient sandwich; the legacy binderResults driver →
+        // the spine's partition view, gated `--partitionCheck 2` EQUIVALENT
+        // ×8. No TS2396/TS1215 dedup/scan consumers exist (the sibling
+        // TS1215 emitter checkModuleStrictModeInStatements covers NAME
+        // bindings — its FunctionDeclaration arm deliberately skips params,
+        // deferring to this pass — and never scans the list).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -21197,6 +21212,11 @@ class Checker(
         // dispatch gate, verbatim).
         spinePiRunActive = !options.strictExplicitlyFalse &&
             !options.strictPropertyInitializationExplicitlyFalse
+        // (M0.4) round 638: the args-collision anchors' run gate (the legacy
+        // slot-42 dispatch gate, verbatim: TS2396 only below ES2015, TS1215
+        // only with module files).
+        spineAcRunActive = options.target < ScriptTarget.ES2015 ||
+            binderResults.any { isModuleFile(it.sourceFile.statements) && !isDtsFile(it.sourceFile.fileName) }
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
         spineCaRestingLocalTypes = currentLocalTypes
@@ -21303,6 +21323,7 @@ class Checker(
                 spineCeSetup(result)
                 spinePmrSetup(result)
                 spineGxSetup(result)
+                spineAcSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21338,6 +21359,7 @@ class Checker(
                     spineCeTeardown()
                     spinePmrTeardown()
                     spineGxTeardown()
+                    spineAcTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21558,6 +21580,10 @@ class Checker(
         // with an ElementAccess LHS) — pull-based (tparams, tpProps, refs)
         // triple, no frames/leave hook, no ambient sandwich.
         if (spineGxActive) spineGxEnterNode(node)
+        // (M0.4) round 638: the args-collision anchors (fn-like enters with
+        // an `arguments`-named param) — one constant-per-file isModule
+        // boolean, no frames/leave hook, no ambient sandwich.
+        if (spineAcActive) spineAcEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -47590,6 +47616,12 @@ class Checker(
         private const val GX_REACHED = 1
         private const val GX_NONE = 2
         private const val GX_ROOT = 3
+
+        // (M0.4) round 638: spineAcStatus states (checkArgumentsCollision
+        // reach — binary + the transient SourceFile root).
+        private const val AC_REACHED = 1
+        private const val AC_NONE = 2
+        private const val AC_ROOT = 3
 
         // (M0.4) round 631: spineB94Status states (checkBindingPatternComputedIndexSig
         // reach — binary + the transient SourceFile root).
@@ -74637,184 +74669,213 @@ interface DataView {
     // Arguments collision with rest parameters (TS2396)
     // -----------------------------------------------------------------------
 
-    private fun checkArgumentsCollision() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val isModule = isModuleFile(result.sourceFile.statements)
-            checkArgsCollisionInStatements(result.sourceFile.statements, source, fileName, isModule)
+    // (M0.4) round 638: checkArgumentsCollision (TS2396/TS1215) ON THE
+    // SPINE. The legacy per-file recursion (checkArgumentsCollision /
+    // checkArgsCollisionInStatements / checkArgsCollisionInStatement /
+    // checkArgsCollisionInExpr) is deleted; the emission leaf
+    // (checkArgsCollisionInParams) is retained unchanged. The pass threaded
+    // ONE downward value — the per-file isModule boolean, CONSTANT per file
+    // — plus per-construct declare/body gates, all re-derived at the anchor
+    // from the construct node + its parent kind: a FunctionDeclaration
+    // param-checks iff body + !declare; a class-DECLARATION method/ctor iff
+    // body + !class-declare (its set-accessors are body-walked but never
+    // param-checked); class-EXPRESSION and object-literal members
+    // param-check UNCONDITIONALLY; arrows/fn-exprs always. Reach is the
+    // memoized binary classifier [spineAcStatus] over [spineAcEdge] (the
+    // deleted arms verbatim, frozen — if/ternary CONDITIONS, loop/switch
+    // HEADS, class-DECLARATION property initializers, declare-namespace
+    // bodies, and shorthand objlit properties all stay UNREACHED). No
+    // ambient sandwich — the emission is purely syntactic.
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy dts skip + the constant isModule flag. */
+    private fun spineAcSetup(result: BinderResult) {
+        spineAcActive = spineAcRunActive && !spineIsDts
+        spineAcIsModule = spineFileIsModule
+        spineAcReachMemo = if (!spineAcActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    private fun checkArgsCollisionInStatements(stmts: List<Statement>, source: String, fileName: String, isModule: Boolean = false) {
-        for (stmt in stmts) checkArgsCollisionInStatement(stmt, source, fileName, isModule)
+    private fun spineAcTeardown() {
+        spineAcActive = false
+        spineAcReachMemo = ByteArray(0)
     }
 
-    private fun checkArgsCollisionInStatement(stmt: Statement, source: String, fileName: String, isModule: Boolean = false) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                // Only check implementations (have body), skip overload signatures and declare
-                if (stmt.body != null && ModifierFlag.Declare !in stmt.modifiers) {
-                    checkArgsCollisionInParams(stmt.parameters, source, fileName, isModule)
-                }
-                stmt.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-            }
-            is ClassDeclaration -> {
-                val isDeclare = ModifierFlag.Declare in stmt.modifiers
-                for (m in stmt.members) {
-                    when (m) {
-                        is MethodDeclaration -> {
-                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
-                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                        }
-                        is Constructor -> {
-                            if (!isDeclare && m.body != null) checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
-                            m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                        }
-                        is GetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                        is SetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                        else -> {}
-                    }
-                }
-            }
-            is ExpressionStatement -> checkArgsCollisionInExpr(stmt.expression, source, fileName, isModule)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            }
-            is ReturnStatement -> stmt.expression?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            is Block -> checkArgsCollisionInStatements(stmt.statements, source, fileName, isModule)
-            is IfStatement -> {
-                checkArgsCollisionInStatement(stmt.thenStatement, source, fileName, isModule)
-                stmt.elseStatement?.let { checkArgsCollisionInStatement(it, source, fileName, isModule) }
-            }
-            is ForStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
-            is ForInStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
-            is ForOfStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
-            is WhileStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
-            is DoStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
-            is SwitchStatement -> {
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> checkArgsCollisionInStatements(c.statements, source, fileName, isModule)
-                    is DefaultClause -> checkArgsCollisionInStatements(c.statements, source, fileName, isModule)
-                    else -> {}
-                }
-            }
-            is TryStatement -> {
-                checkArgsCollisionInStatements(stmt.tryBlock.statements, source, fileName, isModule)
-                stmt.catchClause?.let { checkArgsCollisionInStatements(it.block.statements, source, fileName, isModule) }
-                stmt.finallyBlock?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-            }
-            is LabeledStatement -> checkArgsCollisionInStatement(stmt.statement, source, fileName, isModule)
-            is ThrowStatement -> stmt.expression?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            is ExportAssignment -> checkArgsCollisionInExpr(stmt.expression, source, fileName, isModule)
-            is ModuleDeclaration -> {
-                if (ModifierFlag.Declare !in stmt.modifiers) {
-                    (stmt.body as? ModuleBlock)?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                }
-            }
-            else -> {}
+    /** ENTER dispatch: fn-like enters — the cheap `arguments`-param pre-gate
+     *  runs BEFORE the reach climb (the name is rare); the per-construct
+     *  eligibility gates reproduce the deleted arms' call conditions. */
+    private fun spineAcEnterNode(node: Node) {
+        val params: List<Parameter> = when ((node as NodeBase).kindId) {
+            NodeKind.FUNCTION_DECLARATION -> (node as FunctionDeclaration).parameters
+            NodeKind.METHOD_DECLARATION -> (node as MethodDeclaration).parameters
+            NodeKind.CONSTRUCTOR -> (node as Constructor).parameters
+            NodeKind.SET_ACCESSOR -> (node as SetAccessor).parameters
+            NodeKind.ARROW_FUNCTION -> (node as ArrowFunction).parameters
+            NodeKind.FUNCTION_EXPRESSION -> (node as FunctionExpression).parameters
+            else -> return
         }
+        if (params.none { !it.isCommentPlaceholder && (it.name as? Identifier)?.text == "arguments" }) return
+        if (spineAcStatus(node) != AC_REACHED) return
+        val eligible = when (node) {
+            is FunctionDeclaration -> node.body != null && ModifierFlag.Declare !in node.modifiers
+            is ArrowFunction -> true
+            is FunctionExpression -> true
+            is MethodDeclaration -> when (val owner = (node as NodeBase).parent) {
+                is ClassDeclaration -> ModifierFlag.Declare !in owner.modifiers && node.body != null
+                is ClassExpression -> true
+                is ObjectLiteralExpression -> true
+                else -> false
+            }
+            is Constructor -> when (val owner = (node as NodeBase).parent) {
+                is ClassDeclaration -> ModifierFlag.Declare !in owner.modifiers && node.body != null
+                is ClassExpression -> true
+                else -> false
+            }
+            // A class-DECLARATION set-accessor is body-walked only (the
+            // legacy arm never param-checked it); class-EXPRESSION and
+            // object-literal setters param-check unconditionally.
+            is SetAccessor -> when ((node as NodeBase).parent) {
+                is ClassExpression -> true
+                is ObjectLiteralExpression -> true
+                else -> false
+            }
+            else -> false
+        }
+        if (eligible) checkArgsCollisionInParams(params, spineSource, spineFileName, spineAcIsModule)
     }
 
-    private fun checkArgsCollisionInExpr(expr: Expression, source: String, fileName: String, isModule: Boolean = false) {
-        when (expr) {
-            is ArrowFunction -> {
-                checkArgsCollisionInParams(expr.parameters, source, fileName, isModule)
-                when (val body = expr.body) {
-                    is Block -> checkArgsCollisionInStatements(body.statements, source, fileName, isModule)
-                    is Expression -> checkArgsCollisionInExpr(body, source, fileName, isModule)
-                    else -> {}
-                }
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineAcEdge] back down (spineFpStatus pattern).
+     *  The SourceFile anchor carries the transient AC_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineAcStatus(node: Node): Int {
+        if (node is SourceFile) return AC_ROOT
+        val memo = spineAcReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
-            is FunctionExpression -> {
-                checkArgsCollisionInParams(expr.parameters, source, fileName, isModule)
-                expr.body.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-            }
-            is ClassExpression -> for (m in expr.members) {
-                when (m) {
-                    is MethodDeclaration -> {
-                        checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
-                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    }
-                    is Constructor -> {
-                        checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
-                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    }
-                    is GetAccessor -> m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    is SetAccessor -> {
-                        checkArgsCollisionInParams(m.parameters, source, fileName, isModule)
-                        m.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    }
-                    is PropertyDeclaration -> m.initializer?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-                    else -> {}
-                }
-            }
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is MethodDeclaration -> {
-                        checkArgsCollisionInParams(prop.parameters, source, fileName, isModule)
-                        prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    }
-                    is GetAccessor -> prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    is SetAccessor -> {
-                        checkArgsCollisionInParams(prop.parameters, source, fileName, isModule)
-                        prop.body?.let { checkArgsCollisionInStatements(it.statements, source, fileName, isModule) }
-                    }
-                    is PropertyAssignment -> checkArgsCollisionInExpr(prop.initializer, source, fileName, isModule)
-                    is SpreadAssignment -> checkArgsCollisionInExpr(prop.expression, source, fileName, isModule)
-                    else -> {}
-                }
-            }
-            is ParenthesizedExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is AsExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is TypeAssertionExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is SatisfiesExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is NonNullExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    checkArgsCollisionInExpr(cur.right, source, fileName, isModule)
-                    cur = cur.left
-                }
-                checkArgsCollisionInExpr(cur, source, fileName, isModule)
-            }
-            is ConditionalExpression -> {
-                checkArgsCollisionInExpr(expr.whenTrue, source, fileName, isModule)
-                checkArgsCollisionInExpr(expr.whenFalse, source, fileName, isModule)
-            }
-            is CallExpression -> {
-                checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-                expr.arguments.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            }
-            is NewExpression -> {
-                checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-                expr.arguments?.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            }
-            is PropertyAccessExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is ElementAccessExpression -> {
-                checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-                checkArgsCollisionInExpr(expr.argumentExpression, source, fileName, isModule)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            is SpreadElement -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is PrefixUnaryExpression -> checkArgsCollisionInExpr(expr.operand, source, fileName, isModule)
-            is PostfixUnaryExpression -> checkArgsCollisionInExpr(expr.operand, source, fileName, isModule)
-            is AwaitExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is YieldExpression -> expr.expression?.let { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            is VoidExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is DeleteExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is TypeOfExpression -> checkArgsCollisionInExpr(expr.expression, source, fileName, isModule)
-            is TemplateExpression -> expr.templateSpans.forEach { checkArgsCollisionInExpr(it.expression, source, fileName, isModule) }
-            is TaggedTemplateExpression -> {
-                checkArgsCollisionInExpr(expr.tag, source, fileName, isModule)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    checkArgsCollisionInExpr(it.expression, source, fileName, isModule)
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { checkArgsCollisionInExpr(it, source, fileName, isModule) }
-            else -> {}
         }
+        val chain = spineAcChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = AC_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = AC_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = AC_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> AC_NONE
+                pStatus == AC_ROOT -> if (c is Statement) AC_REACHED else AC_NONE
+                pStatus == AC_REACHED -> if (spineAcEdge(pNode, c)) AC_REACHED else AC_NONE
+                else -> AC_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents are
+     *  the legacy `else -> {}`s (unreached children — if/ternary CONDITIONS,
+     *  loop/switch HEADS, class-DECLARATION property initializers,
+     *  declare-namespace bodies, shorthand objlit properties, decorators,
+     *  type positions). */
+    private fun spineAcEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted checkArgsCollisionInStatement arms) ----
+        is FunctionDeclaration -> child === parent.body
+        // A class DECLARATION reaches method/ctor/accessor members only —
+        // NOT PropertyDeclaration (its initializers were never walked); a
+        // class EXPRESSION (below) reaches PropertyDeclaration too.
+        is ClassDeclaration -> child is MethodDeclaration || child is Constructor ||
+            child is GetAccessor || child is SetAccessor
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement -> child === parent.thenStatement || child === parent.elseStatement // NOT the condition
+        is ForStatement -> child === parent.statement // body ONLY — no head positions
+        is ForInStatement -> child === parent.statement
+        is ForOfStatement -> child === parent.statement
+        is WhileStatement -> child === parent.statement
+        is DoStatement -> child === parent.statement
+        is SwitchStatement -> child is CaseClause || child is DefaultClause // NOT the subject
+        is CaseClause -> child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        is ExportAssignment -> child === parent.expression
+        is ModuleDeclaration ->
+            child === parent.body && child is ModuleBlock && ModifierFlag.Declare !in parent.modifiers
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the deleted checkArgsCollisionInExpr arms) ----
+        is ArrowFunction -> child === parent.body // Block AND expression bodies
+        is FunctionExpression -> child === parent.body
+        is ClassExpression -> child is MethodDeclaration || child is Constructor ||
+            child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
+        // Reachable only under a ClassExpression (the ClassDeclaration edge
+        // above excludes PropertyDeclaration members).
+        is PropertyDeclaration -> child === parent.initializer
+        is ObjectLiteralExpression -> child is MethodDeclaration || child is GetAccessor ||
+            child is SetAccessor || child is PropertyAssignment || child is SpreadAssignment
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is ParenthesizedExpression -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ConditionalExpression -> child === parent.whenTrue || child === parent.whenFalse // NOT the condition
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is SpreadElement -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is TaggedTemplateExpression ->
+            child === parent.tag || (child === parent.template && child is TemplateExpression)
+        is CommaListExpression -> parent.elements.any { it === child }
+        else -> false
     }
 
     private fun checkArgsCollisionInParams(params: List<Parameter>, source: String, fileName: String, isModule: Boolean = false) {

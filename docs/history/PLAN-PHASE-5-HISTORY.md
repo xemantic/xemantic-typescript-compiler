@@ -1,3 +1,59 @@
+**Round 628 (2026-07-21) — (M0.4) sixth tail-pass migration:
+checkSymbolToStringConversions (TS2469/TS2731, 96–108 ms — the #6 tail
+pass) is ON THE SPINE; the legacy recursion (checkSymbolToStringConversions
+/ sym2strHandleFnBody / sym2strHandleBody / sym2strScanStatement /
+sym2strCheckExpr, ~160 lines) DELETED.** The downward-SETS variant of the
+template: the pass threads (symbolNames, tpNames) sets that only
+ACCUMULATE (copies + adds, no removals), so the ctx is a pure function of
+the boundary ancestor chain and rebuilds pull-based per anchor, memoized
+per boundary-CHILD node (spineSyCtxFor). The whole-list locals PREPASS per
+body (collectSymbolLocals — statement-order-independent, descends nested
+control-flow statements but not fn/class/module bodies) reproduces as
+per-boundary LEVELS exactly as the round-627 note predicted; the key
+simplification: ONLY fn-like bodies and ModuleBlocks are collection
+boundaries — the legacy re-collects at inner Blocks / switch clauses / try
+blocks were always SUBSETS of the enclosing body's prepass (set-equal, so
+no boundary needed), and a class PROPERTY initializer needs no boundary
+either (the legacy passed outer names + OUTER tpNames verbatim — the
+climb-through yields exactly that; the initializer being BLIND to the
+class TP is a pinned legacy quirk, as is the accumulate-only no-shadowing
+rule: an inner string-typed param does NOT hide an outer symbol name).
+aliasNames is file-scoped (the collectSymbolAliases fixpoint at
+spineSySetup, with the top-level locals prepass). Anchors are binary `+`
+(left-ELSE-right — one emission per node) / `+=` (RIGHT-only — a symbol
+LEFT of `+=` never fired, pinned) / unary `+` / template spans, each
+pre-filtered on a bare-Identifier operand before any reach/ctx work. Reach
+is the memoized binary classifier (spineSyStatus/spineSyEdge) with two
+edges DIFFERING from the fp/ai classifiers — case-clause EXPRESSIONS and
+bare for-initializer EXPRESSIONS ARE reached (both pinned; the
+anti-copy-paste hazard when cloning a sibling classifier) — while typeof
+operands, tagged templates, and objlit METHOD bodies stay unreached
+(pinned). No ambient sandwich — the emissions read no checker ambient.
+Gates: 25 local pins (M04Sym2StrSpineMigrationTest) verified green against
+the LEGACY walker FIRST; suite 11,490 → 11,515/0; `--listAll` ×8
+byte-identical (46×7 + 94 env-legit artifacts); pass table 433 → 432 (the
+checkSymbolToStringConversions row GONE; checkSpine 18.4–19.1 s across two
+single runs — the 18.0–19.0 round-625..627 band, first reading was box
+drift); warning-clean. M0.4 running total: top SIX tail passes migrated.
+NEXT: checkDefiniteAssignmentViaFlowGraph (89–114 ms by run) — NO
+slot-move pre-gate needed (it already sits in the post-spine region, ~10
+dispatches after checkSpine), and the intervening
+checkCrossFileUseBeforeDeclaration is NOT a dedup hazard (VERIFIED this
+round: its emitCrossFileTS2448 emits TS2448 + related-2728 ONLY — the
+round-536 emitTS2448-co-emits-TS2454 gotcha is about the PER-FILE UBD
+leg, already on the spine as walker 7). The real migration constraints:
+(a) its per-file TS2454 position-dedup scan must see ALL spine-emitted
+TS2454s for that file (the set-based walker 5 + the spineUbd
+co-emissions — both fire during the spine walk), so the natural shape is
+a FILE-END dispatch in checkSpine's per-file loop (the
+spineResolveDeferredIterationChecks pattern: dedup-scan + the two
+whole-file flow walks after spineWalkFile returns), NOT per-anchor
+enters; (b) it installs currentFlowGraph save/restore around its walks;
+(c) the end-of-init flowDisabledRanges TS2454 filter still runs after it
+either way; (d) checkTryCatchOnlyAssignedVarReads (its
+shouldCheckDefiniteAssignment sibling) stays put or moves with it —
+check for one-directional dedup between the two before choosing.**
+
 **Round 627 (2026-07-21) — (M0.4) fifth tail-pass migration:
 checkAbstractClassInstantiation (TS2511, 113 ms — the #5 tail pass) is ON THE
 SPINE; the legacy recursion (checkAbstractClassInstantiation /
