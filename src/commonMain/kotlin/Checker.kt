@@ -5375,6 +5375,26 @@ class Checker(
         // driver → the spine's partition view, gated `--partitionCheck 2`
         // EQUIVALENT ×8. This pass is the SOLE emitter of all four codes
         // and no pass scans them.
+        // 27d' (M0.4 slot-move pre-gate, round 640):
+        // checkSuperRefInRebindingScope (TS2660 for `super` references
+        // inside regular-function rebinding scopes) moved intact from slot
+        // 27d ahead of its spine migration. Fully syntactic +
+        // self-contained (isSuperIdentifier + a pure AST walk — no type
+        // caches, no ambient, no side-set consults); the SIBLING TS2660
+        // emitter (checkSuperInObjectLiterals) is position-DISJOINT by
+        // construction (this walker skips ObjectLiteralExpression
+        // entirely) and neither pass scans the diagnostics list, so the
+        // order flip across the move is immaterial. Scope quirks for the
+        // migrator: the `rebound` flag is the ONE downward boolean —
+        // top-level statements start rebound=true, a FunctionDeclaration/
+        // FunctionExpression body RESETS it to true, an arrow PRESERVES
+        // it, a class-member body/prop-initializer direct level resets to
+        // FALSE (TS2335/derived-super territory — only a nested fn inside
+        // re-rebinds), a ModuleBlock PRESERVES it; `super(...)` callees
+        // and object literals are skipped (TS2337 / the objlit sibling own
+        // them); the for-INITIALIZER is walked here (unlike the yield
+        // walk) but for-condition/incrementor are NOT — a fresh edge set.
+        pass("checkSuperRefInRebindingScope") { checkSuperRefInRebindingScope() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5843,12 +5863,9 @@ class Checker(
         pass("checkSuperInObjectLiterals") { checkSuperInObjectLiterals() }
         // 27c. Check super(...) calls in nested functions inside constructors (TS2337)
         pass("checkIllegalSuperCallsInNestedFunctions") { checkIllegalSuperCallsInNestedFunctions() }
-        // 27d. Check `super` references inside regular function bodies (TS2660) — `function`
-        // declarations/expressions rebind super. Top-level statements rebind super too
-        // (no super available). Arrow bodies preserve the outer binding. Class member
-        // bodies are skipped here (TS2335 covers non-derived; derived class methods have
-        // valid super); we only descend INTO their bodies to find nested function rebinds.
-        pass("checkSuperRefInRebindingScope") { checkSuperRefInRebindingScope() }
+        // 27d. checkSuperRefInRebindingScope (TS2660) moved to the
+        // post-spine slot — see the pass("checkSpine") site (M0.4
+        // slot-move pre-gate, round 640).
         // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
         pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
         // 27f. Check abstract members in non-abstract class (TS1253) + abstract property without annotation (TS7008)
