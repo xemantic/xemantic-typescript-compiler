@@ -3546,6 +3546,38 @@ class Checker(
     /** Reusable ascent buffer for [spineCoStatus]. */
     private val spineCoChain = ArrayList<Node>()
 
+    // ── (M0.4) round 648: checkTypeParamStrictSubtypeCast on the spine ─────
+    // B60.3/B402/B60.18 TS2352 anchors at TypeAssertionExpression /
+    // AsExpression nodes whose target is a bare-Identifier TypeReference.
+    // Reach is the memoized MULTI-STATE classifier [spineTcStatus] over
+    // [spineTcEdge]: the TC_LIST/TC_BLOCK/TC_MEMBER states reproduce the
+    // deleted walkStmtsForTypeParamCasts recursion (fn-decl bodies / class
+    // method+ctor bodies / namespace ModuleBlocks — accessor bodies and
+    // property initializers of such classes SKIPPED), and every other
+    // statement kind hands off to the SHARED walker's edges ([spineCoEdge],
+    // reused verbatim) as TC_SHARED — so a fn-decl/class nested inside a
+    // non-decl statement is walked WITHOUT its own TP push but with the
+    // shared walker's WIDER class-member coverage, exactly as legacy. The
+    // per-anchor ambient sandwich ([spineTcDispatchWithAmbient]) rebuilds
+    // the legacy TP-scope layering pull-based from the ancestor chain
+    // (fn-decls withAst=false; class+method withAst=true with the method
+    // PARAM typing into an EpochMap currentLocalTypes scope — ctor params
+    // deliberately NOT typed), and the B402 empty-objlit local set rebuilds
+    // as the union over enclosing TPC statement lists (the legacy
+    // whole-list prepass, per-list memoized). currentCheckFileName install
+    // + currentFlowGraph nulled (the spineCo sandwich — same walker family,
+    // same legacy post-spine slot). Fields PRE-init (the pipeline runs
+    // inside `init`).
+    private var spineTcActive = false
+    /** Per-file nodeId memo for [spineTcStatus] — 0 unknown, else TC_*. */
+    private var spineTcReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineTcStatus]. */
+    private val spineTcChain = ArrayList<Node>()
+    /** Per-file memo: TC_BLOCK nodeId → its list's empty-objlit local names. */
+    private val spineTcEmptyObjMemo = HashMap<Int, List<String>>()
+    /** Lazy per-file cache of the SourceFile list's empty-objlit local names. */
+    private var spineTcRootEmptyObjNames: List<String>? = null
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -4145,9 +4177,11 @@ class Checker(
     // spineUResShorthandProp (B276). MUST be declared before init {} (init-order).
     private val destructuringPatternPos = HashSet<Int>()
 
-    // B402: names of in-scope local vars initialized to an empty object literal `{}`,
-    // tracked during the type-param cast pass. MUST be declared before init {} (init-order:
-    // checkTypeParamStrictSubtypeCast runs from init and mutates this set).
+    // B402: names of in-scope local vars initialized to an empty object literal `{}`.
+    // Since round 648 (spine migration) rebuilt PER-DISPATCH by
+    // spineTcFillEmptyObjLocals for AsExpression anchors with an Identifier
+    // source; consumed by emitTS2352IfEmptyObjectCastToTypeParam. MUST be
+    // declared before init {} (init-order: the spine runs from init).
     private val emptyObjectCastLocals = HashSet<String>()
 
     // B281: per-file cache of (top-level ambient module names, file declares ANY
@@ -5654,27 +5688,12 @@ class Checker(
         // super-in-objlit-property-fn) is ON THE SPINE — see
         // spineSuEnterNode / spineSuStatus (the round-646 slot-move
         // pre-gate parked it here first).
-        // 14''e' (M0.4 slot-move pre-gate, round 647):
-        // checkTypeParamStrictSubtypeCast (B60.3/B402 — TS2352 for
-        // `<TypeParam>concrete` casts where concrete is a strict subtype of
-        // the TP's constraint, + the empty-object-to-nullish-constrained-TP
-        // AsExpression arm) moved intact from slot 14''e ahead of its spine
-        // migration. Self-contained coupling surface: emptyObjectCastLocals
-        // + inTypeParamCastPass are pass-private (populated and cleaned
-        // within the pass); NO pass scans/dedups TS2352 from the
-        // diagnostics list. TYPE-RESOLVING (getTypeFromTypeNode on method
-        // params, withInternedTpScope pushes, an EpochMap currentLocalTypes
-        // scope) — the slot-move gate is the empirical first-touch check.
-        // Scope map for the migrator: walkStmtsForTypeParamCasts recursion
-        // (fn-decl bodies / class method+ctor bodies under interned TP
-        // scopes with method-param typing / namespace ModuleBlocks; every
-        // OTHER statement kind routes through the SHARED
-        // walkTypeAssertionsInStmt walker with the
-        // emitTS2352IfTypeParamStrictSubtypeCast callback — the round-630
-        // spineCo anchor/edge family) + the per-statement-LIST
-        // empty-objlit-local prepass (whole-list, added-then-removed around
-        // the list walk — order-independent collection).
-        pass("checkTypeParamStrictSubtypeCast") { checkTypeParamStrictSubtypeCast() }
+        // 14''e' (M0.4, round 648): checkTypeParamStrictSubtypeCast
+        // (B60.3/B402/B60.18 — TS2352 for `<TypeParam>expr` casts + the
+        // empty-object-to-nullish-constrained-TP AsExpression arm) is ON
+        // THE SPINE — see spineTcEnterNode / spineTcStatus /
+        // spineTcDispatchWithAmbient (the round-647 slot-move pre-gate
+        // parked it here first).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5941,8 +5960,8 @@ class Checker(
         pass("checkArrayToClassCastOverlap") { checkArrayToClassCastOverlap() }
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
         pass("checkJSDocVoidCastNonOverlap") { checkJSDocVoidCastNonOverlap() }
-        // 14''e. checkTypeParamStrictSubtypeCast MOVED to the post-spine slot
-        // (M0.4 slot-move pre-gate, round 647) ahead of its spine migration.
+        // 14''e. checkTypeParamStrictSubtypeCast is ON THE SPINE since round
+        // 648 (M0.4) — see spineTcEnterNode at the pass("checkSpine") site.
         // 14''f. Check `T extends T` (circular constraint) — TS2313 (B60.10)
         pass("checkTypeParamCircularConstraint") { checkTypeParamCircularConstraint() }
         // 14''f2. incorrectRecursiveMappedTypeConstraint — `<T extends { [P in T]: ... }>`: the
@@ -21722,6 +21741,7 @@ class Checker(
                 spineSmSetup(result)
                 spineClSetup()
                 spineSuSetup(result)
+                spineTcSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21767,6 +21787,7 @@ class Checker(
                     spineSmTeardown()
                     spineClTeardown()
                     spineSuTeardown()
+                    spineTcTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22040,6 +22061,12 @@ class Checker(
         // classifier status; emissions run the bounded findObjLitSuperRefs
         // leaves per property; no frames/leave hook, no ambient sandwich.
         if (spineSuActive) spineSuEnterNode(node)
+        // (M0.4) round 648: the type-param-cast anchors
+        // (TypeAssertionExpression / AsExpression enters with a
+        // bare-Identifier-target pre-gate) — the TS2352 emitters under the
+        // pull-based TP-scope/param-typing ambient rebuild; no frames/leave
+        // hook.
+        if (spineTcActive) spineTcEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48123,6 +48150,20 @@ class Checker(
         private const val CO_NONE = 2
         private const val CO_ROOT = 3
 
+        // (M0.4) round 648: spineTcStatus states (checkTypeParamStrictSubtypeCast
+        // reach — multi-state + the transient SourceFile root). TC_LIST = a
+        // statement at a walkStmtsForTypeParamCasts list position; TC_BLOCK =
+        // a fn-decl/method/ctor body Block or namespace ModuleBlock whose
+        // statements are TC_LIST; TC_MEMBER = a method/ctor member of a
+        // TC_LIST class on the path to its body; TC_SHARED = inside the
+        // SHARED assertion walker's region (spineCoEdge).
+        private const val TC_NONE = 1
+        private const val TC_LIST = 2
+        private const val TC_BLOCK = 3
+        private const val TC_MEMBER = 4
+        private const val TC_SHARED = 5
+        private const val TC_ROOT = 6
+
         // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
         // reach — binary + the transient SourceFile root).
         private const val GX_REACHED = 1
@@ -63293,6 +63334,278 @@ interface DataView {
         else -> false
     }
 
+    // ── (M0.4) round 648: checkTypeParamStrictSubtypeCast spine pieces ─────
+
+    private fun spineTcSetup(result: BinderResult) {
+        spineTcActive = !spineIsDts
+        spineTcEmptyObjMemo.clear()
+        spineTcRootEmptyObjNames = null
+        if (!spineTcActive) {
+            spineTcReachMemo = ByteArray(0)
+            return
+        }
+        val sf = result.sourceFile
+        spineTcReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+    }
+
+    private fun spineTcTeardown() {
+        spineTcActive = false
+        spineTcEmptyObjMemo.clear()
+        spineTcRootEmptyObjNames = null
+        spineTcReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: TypeAssertionExpression anchors run the B60.3/B60.18
+     *  strict-subtype/TP-to-TP emitter, AsExpression anchors the B402
+     *  empty-object emitter (the legacy `inTypeParamCastPass` flag arm,
+     *  lifted — the round-633 shape). Both pre-gate on the emitters' own
+     *  first bails (a bare-Identifier TypeReference target; the B402
+     *  source shape) before the reach climb and the ambient rebuild. */
+    private fun spineTcEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.TYPE_ASSERTION_EXPRESSION -> {
+                node as TypeAssertionExpression
+                val tn = node.type as? TypeReference ?: return
+                if (tn.typeName !is Identifier) return
+                if (spineTcStatus(node) != TC_SHARED) return
+                spineTcDispatchWithAmbient(node) {
+                    emitTS2352IfTypeParamStrictSubtypeCast(node, spineSource, spineFileName)
+                }
+            }
+            NodeKind.AS_EXPRESSION -> {
+                node as AsExpression
+                val tn = node.type as? TypeReference ?: return
+                if (tn.typeName !is Identifier) return
+                val src = node.expression
+                val srcMayMatch = (src is ObjectLiteralExpression && src.properties.isEmpty()) ||
+                    src is Identifier
+                if (!srcMayMatch) return
+                if (spineTcStatus(node) != TC_SHARED) return
+                if (src is Identifier) spineTcFillEmptyObjLocals(node) else emptyObjectCastLocals.clear()
+                spineTcDispatchWithAmbient(node) {
+                    emitTS2352IfEmptyObjectCastToTypeParam(node, spineSource, spineFileName)
+                }
+            }
+            else -> {}
+        }
+    }
+
+    /**
+     * Per-dispatch ambient sandwich: currentCheckFileName installed +
+     * currentFlowGraph nulled (the spineCo sandwich — same walker family,
+     * same legacy post-spine slot), then the legacy TP-scope layering
+     * rebuilt pull-based from the anchor's ancestor chain, outermost-first
+     * (see [spineTcScopeLevels]/[spineTcApplyLevels]).
+     */
+    private fun spineTcDispatchWithAmbient(anchor: Node, block: () -> Unit) {
+        val savedCheckFileName = currentCheckFileName
+        val savedFlow = currentFlowGraph
+        currentCheckFileName = spineFileName
+        currentFlowGraph = null
+        try {
+            val levels = spineTcScopeLevels(anchor)
+            if (levels == null) block() else spineTcApplyLevels(levels, 0, block)
+        } finally {
+            currentCheckFileName = savedCheckFileName
+            currentFlowGraph = savedFlow
+        }
+    }
+
+    /**
+     * The scope-affecting ancestors the LEGACY walk pushed for, outermost
+     * first: a TC_LIST FunctionDeclaration entered through its body, or a
+     * TC_MEMBER MethodDeclaration/Constructor entered through its body —
+     * a SHARED-region fn-decl/class pushes nothing (the deleted walker
+     * handed those to the shared walker scope-free, frozen). FnDecl levels
+     * with no TPs and Constructor levels whose class has no TPs are no-ops
+     * and dropped; Method levels always apply (their param typing is
+     * observable under any outer TP scope).
+     */
+    private fun spineTcScopeLevels(anchor: Node): ArrayList<Node>? {
+        var levels: ArrayList<Node>? = null
+        var child: Node = anchor
+        var cur: Node? = (anchor as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            val level: Node? = when (cur) {
+                is FunctionDeclaration ->
+                    if (child === cur.body && !cur.typeParameters.isNullOrEmpty() &&
+                        spineTcStatus(cur) == TC_LIST) cur else null
+                is MethodDeclaration ->
+                    if (child === cur.body && spineTcStatus(cur) == TC_MEMBER) cur else null
+                is Constructor ->
+                    if (child === cur.body && spineTcStatus(cur) == TC_MEMBER &&
+                        !(((cur as NodeBase).parent as? ClassDeclaration)?.typeParameters).isNullOrEmpty()
+                    ) cur else null
+                else -> null
+            }
+            if (level != null) {
+                (levels ?: ArrayList<Node>().also { levels = it }).add(level)
+            }
+            child = cur
+            cur = (cur as NodeBase).parent
+        }
+        return levels?.also { it.reverse() }
+    }
+
+    /** The legacy nesting, verbatim: fn-decl TPs withAst=false; a member
+     *  level pushes the class TPs then (methods only) the method's own TPs,
+     *  both withAst=true, then types the method PARAMS into an EpochMap
+     *  [currentLocalTypes] scope under those scopes (ctor params NOT typed
+     *  — the frozen asymmetry). */
+    private fun spineTcApplyLevels(levels: List<Node>, i: Int, block: () -> Unit) {
+        if (i >= levels.size) { block(); return }
+        when (val lvl = levels[i]) {
+            is FunctionDeclaration -> withInternedTpScope(lvl.typeParameters, withAst = false) {
+                spineTcApplyLevels(levels, i + 1, block)
+            }
+            is Constructor -> withInternedTpScope(
+                (((lvl as NodeBase).parent) as? ClassDeclaration)?.typeParameters, withAst = true,
+            ) {
+                spineTcApplyLevels(levels, i + 1, block)
+            }
+            is MethodDeclaration -> withInternedTpScope(
+                (((lvl as NodeBase).parent) as? ClassDeclaration)?.typeParameters, withAst = true,
+            ) {
+                withInternedTpScope(lvl.typeParameters, withAst = true) {
+                    val savedLocalTypes = currentLocalTypes
+                    currentLocalTypes = EpochMap(currentLocalTypes)
+                    for (param in lvl.parameters) {
+                        val paramName = param.name as? Identifier ?: continue
+                        val paramType = param.type ?: continue
+                        val resolved = getTypeFromTypeNode(paramType)
+                        if (resolved !== errorType && resolved !== anyType) {
+                            currentLocalTypes[paramName.text] = resolved
+                        }
+                    }
+                    try {
+                        spineTcApplyLevels(levels, i + 1, block)
+                    } finally {
+                        currentLocalTypes = savedLocalTypes
+                    }
+                }
+            }
+            else -> spineTcApplyLevels(levels, i + 1, block)
+        }
+    }
+
+    /** Rebuilds [emptyObjectCastLocals] for an AsExpression anchor: the
+     *  union over enclosing TPC statement lists (SourceFile + TC_BLOCK
+     *  ancestors) of `const/let/var x = {}` names — the legacy whole-list
+     *  prepass semantics (a decl AFTER the cast still counts; shared-region
+     *  blocks never contribute). Per-list results memoized per file. */
+    private fun spineTcFillEmptyObjLocals(anchor: Node) {
+        emptyObjectCastLocals.clear()
+        var cur: Node? = (anchor as NodeBase).parent
+        while (cur != null) {
+            if (cur is SourceFile) {
+                val root = spineTcRootEmptyObjNames
+                    ?: spineTcCollectEmptyObj(cur.statements).also { spineTcRootEmptyObjNames = it }
+                emptyObjectCastLocals.addAll(root)
+                return
+            }
+            if ((cur is Block || cur is ModuleBlock) && spineTcStatus(cur) == TC_BLOCK) {
+                val id = (cur as NodeBase).nodeId
+                val names = if (id >= 0) {
+                    spineTcEmptyObjMemo.getOrPut(id) { spineTcCollectEmptyObjOf(cur) }
+                } else spineTcCollectEmptyObjOf(cur)
+                emptyObjectCastLocals.addAll(names)
+            }
+            cur = (cur as NodeBase).parent
+        }
+    }
+
+    private fun spineTcCollectEmptyObjOf(block: Node): List<String> = when (block) {
+        is Block -> spineTcCollectEmptyObj(block.statements)
+        is ModuleBlock -> spineTcCollectEmptyObj(block.statements)
+        else -> emptyList()
+    }
+
+    /** The deleted prepass loop, verbatim: direct VariableStatements whose
+     *  declarator has an Identifier name and an EMPTY object-literal
+     *  initializer. */
+    private fun spineTcCollectEmptyObj(stmts: List<Statement>): List<String> {
+        var names: ArrayList<String>? = null
+        for (stmt in stmts) {
+            if (stmt !is VariableStatement) continue
+            for (d in stmt.declarationList.declarations) {
+                val nm = (d.name as? Identifier)?.text ?: continue
+                val init = d.initializer
+                if (init is ObjectLiteralExpression && init.properties.isEmpty()) {
+                    (names ?: ArrayList<String>().also { names = it }).add(nm)
+                }
+            }
+        }
+        return names ?: emptyList()
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineTcEdge] back down (spineOsStatus pattern).
+     *  The SourceFile anchor carries the transient TC_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement` → TC_LIST. */
+    private fun spineTcStatus(node: Node): Int {
+        if (node is SourceFile) return TC_ROOT
+        val memo = spineTcReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineTcChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = TC_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = TC_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = TC_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = if (pNode == null || pStatus == TC_NONE) TC_NONE
+                else spineTcEdge(pNode, pStatus, c)
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The edge rules — the deleted walkStmtsForTypeParamCasts arms plus
+     *  the SHARED walker handoff ([spineCoEdge], reused verbatim — keep in
+     *  sync with any walker-arm change per the round-630 rule). */
+    private fun spineTcEdge(parent: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        TC_ROOT -> if (child is Statement) TC_LIST else TC_NONE
+        TC_LIST -> when (parent) {
+            is FunctionDeclaration -> if (child === parent.body) TC_BLOCK else TC_NONE
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor) TC_MEMBER else TC_NONE
+            is ModuleDeclaration ->
+                if (child === parent.body && child is ModuleBlock) TC_BLOCK else TC_NONE
+            else -> if (spineCoEdge(parent, child)) TC_SHARED else TC_NONE
+        }
+        TC_BLOCK -> if (child is Statement) TC_LIST else TC_NONE
+        TC_MEMBER -> when (parent) {
+            is MethodDeclaration -> if (child === parent.body) TC_BLOCK else TC_NONE
+            is Constructor -> if (child === parent.body) TC_BLOCK else TC_NONE
+            else -> TC_NONE
+        }
+        TC_SHARED -> if (spineCoEdge(parent, child)) TC_SHARED else TC_NONE
+        else -> TC_NONE
+    }
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─
 
     private fun spineB94Setup(result: BinderResult) {
@@ -77501,13 +77814,10 @@ interface DataView {
             is DeleteExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is NonNullExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             is AsExpression -> {
-                // (M0.4, round 632): the null-cast-overlap pass's four
-                // flag-gated emitters moved to the spine's AsExpression
-                // anchors (spineCoEnterNode); only the type-param sibling
-                // pass still emits inline here.
-                if (inTypeParamCastPass) {
-                    emitTS2352IfEmptyObjectCastToTypeParam(expr, source, fileName)
-                }
+                // (M0.4, rounds 632/648): the null-cast-overlap AND
+                // type-param-cast passes' flag-gated emitters both moved to
+                // the spine's AsExpression anchors (spineCoEnterNode /
+                // spineTcEnterNode) — no inline emission remains here.
                 walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
             }
             is SatisfiesExpression -> walkTypeAssertionsInExpr(expr.expression, source, fileName, onAssertion)
@@ -78021,88 +78331,13 @@ interface DataView {
      * the constraint (no overlap mismatch). The chain matches B60.2's
      * "constraint-assignable" form.
      *
-     * Walks per-function so TypeParams from the enclosing function are visible.
+     * (M0.4, round 648): ON THE SPINE — the per-file driver
+     * (checkTypeParamStrictSubtypeCast) and the walkStmtsForTypeParamCasts
+     * recursion are deleted; [spineTcEnterNode] anchors the two emission
+     * leaves below, [spineTcDispatchWithAmbient] rebuilds the TP-scope /
+     * method-param-typing layering, and [spineTcFillEmptyObjLocals]
+     * rebuilds the B402 empty-objlit local set.
      */
-    private fun checkTypeParamStrictSubtypeCast() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            currentFileLocals = result.locals
-            val savedPass = inTypeParamCastPass
-            inTypeParamCastPass = true
-            try {
-                walkStmtsForTypeParamCasts(result.sourceFile.statements, source, fileName)
-            } finally {
-                currentFileLocals = savedLocals
-                inTypeParamCastPass = savedPass
-            }
-        }
-    }
-
-    private fun walkStmtsForTypeParamCasts(stmts: List<Statement>, source: String, fileName: String) {
-        val addedEmptyObjLocals = mutableListOf<String>()
-        for (stmt in stmts) {
-            if (stmt is VariableStatement) {
-                for (d in stmt.declarationList.declarations) {
-                    val nm = (d.name as? Identifier)?.text ?: continue
-                    val init = d.initializer
-                    if (init is ObjectLiteralExpression && init.properties.isEmpty() && emptyObjectCastLocals.add(nm)) {
-                        addedEmptyObjLocals.add(nm)
-                    }
-                }
-            }
-        }
-        try {
-        for (stmt in stmts) {
-            when (stmt) {
-                is FunctionDeclaration -> withInternedTpScope(stmt.typeParameters, withAst = false) {
-                    stmt.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
-                }
-                // B60.18: push class's TypeParams onto scope so member bodies can see them.
-                is ClassDeclaration -> withInternedTpScope(stmt.typeParameters, withAst = true) {
-                    for (m in stmt.members) {
-                        when (m) {
-                            is MethodDeclaration -> m.body?.let { body ->
-                                withInternedTpScope(m.typeParameters, withAst = true) {
-                                    // Populate currentLocalTypes with parameter types so
-                                    // assertion-walker can resolve `<T>param` source.
-                                    val savedLocalTypes = currentLocalTypes
-                                    currentLocalTypes = EpochMap(currentLocalTypes)
-                                    for (param in m.parameters) {
-                                        val paramName = param.name as? Identifier ?: continue
-                                        val paramType = param.type ?: continue
-                                        val resolved = getTypeFromTypeNode(paramType)
-                                        if (resolved !== errorType && resolved !== anyType) {
-                                            currentLocalTypes[paramName.text] = resolved
-                                        }
-                                    }
-                                    try {
-                                        walkStmtsForTypeParamCasts(body.statements, source, fileName)
-                                    } finally {
-                                        currentLocalTypes = savedLocalTypes
-                                    }
-                                }
-                            }
-                            is Constructor -> m.body?.statements?.let { walkStmtsForTypeParamCasts(it, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
-                    walkStmtsForTypeParamCasts(it, source, fileName)
-                }
-                else -> walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfTypeParamStrictSubtypeCast)
-            }
-        }
-        } finally {
-            addedEmptyObjLocals.forEach { emptyObjectCastLocals.remove(it) }
-        }
-    }
-
-    /** True while [checkTypeParamStrictSubtypeCast] walks bodies, gating AsExpression-specific emits. */
-    private var inTypeParamCastPass = false
 
     /**
      * B402 (TS2352): `expr as T` where `expr` has the empty-object type `{}` and `T` is a type
