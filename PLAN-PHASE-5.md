@@ -61,8 +61,28 @@ ambient sandwich; binderResults driver → the partition view,
 byte-identical (sorted, non-time lines) vs the pre-migration baseline;
 pass table 416 → 415 (the 91 ms row gone; checkSpine 20.7 s single-run —
 in-band; compiler-profile wall parity 31.4 s); warning-clean. M0.4
-running total: top TWENTY-FOUR tail passes migrated. NEXT candidates by
-cost (round-647 table): checkTypeParamStrictSubtypeCast 93.7 ms,
+running total: top TWENTY-FOUR tail passes migrated. SESSION TAIL: the
+checkTypeParamStrictSubtypeCast (#25, 93.7 ms — B60.3/B402 TS2352 for
+`<TypeParam>concrete` strict-subtype-of-constraint casts + the
+empty-object-to-nullish-constrained-TP AsExpression arm) slot-move
+pre-gate LANDED (moved intact from slot 14''e to the post-spine slot;
+suite 12,116/0; listAll ×8 byte-identical; coupling surface verified
+self-contained — emptyObjectCastLocals + inTypeParamCastPass are
+pass-private, no TS2352 diagnostics-list consumers; the pass is
+TYPE-RESOLVING (getTypeFromTypeNode on method params, withInternedTpScope
+pushes, an EpochMap currentLocalTypes scope), so the slot-move gate is
+the empirical first-touch check — it passed). Scope map for the
+migrator: walkStmtsForTypeParamCasts recursion — fn-decl bodies / class
+method+ctor bodies under interned TP scopes with method-PARAM typing /
+namespace ModuleBlocks; every OTHER statement kind routes through the
+SHARED walkTypeAssertionsInStmt walker (the round-630 spineCo
+anchor/edge family) with the emitTS2352IfTypeParamStrictSubtypeCast
+callback, and the AsExpression arm fires
+emitTS2352IfEmptyObjectCastToTypeParam under the inTypeParamCastPass
+flag — the round-633 flag-arm-lift shape applies; PLUS the
+per-statement-LIST empty-objlit-local prepass (whole-list,
+added-then-removed around the list walk — order-independent). NEXT
+session starts at that migration; after it by cost (round-647 table):
 checkDeleteOperator 86.8 ms, checkConstructorParamInInitializers 85.5 ms
 (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
 cross-file).**
