@@ -5694,6 +5694,21 @@ class Checker(
         // THE SPINE — see spineTcEnterNode / spineTcStatus /
         // spineTcDispatchWithAmbient (the round-647 slot-move pre-gate
         // parked it here first).
+        // 25b' (M0.4 slot-move pre-gate, round 648 tail): checkDeleteOperator
+        // (TS1102 delete-identifier-in-strict / TS2703 non-property-ref /
+        // TS2790 non-optional operand / TS2704 read-only property / TS2542
+        // read-only index sig) moved intact from slot 25b ahead of its spine
+        // migration. Coupling surface: self-contained (per-file isStrict
+        // computed inline; no pass scans/dedups/retracts its codes — the
+        // element-access-write TS2542 emitters are position-disjoint by
+        // construction, a delete operand is never a write target).
+        // TYPE-RESOLVING (getTypeOfExpression / getApparentType /
+        // getPropertyOfType in the TS2790/TS2704/TS2542 arms) — the
+        // slot-move gate is the empirical first-touch check. Migrator note:
+        // checkDeleteReadonlyOperand consults `currentFileLocals` (null at
+        // every init-level slot, SET per-file on the spine) — the migration
+        // needs a null install per the round-533/644 precedent.
+        pass("checkDeleteOperator") { checkDeleteOperator() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6151,8 +6166,8 @@ class Checker(
         pass("checkSuperBeforeThis") { checkSuperBeforeThis() }
         // 25. checkConstAssignment moved to the spine slot — see the
         // pass("checkSpine") site (INV.4(d) walker 9 slot-move pre-gate).
-        // 25b. Check delete operator (TS1102/TS2703)
-        pass("checkDeleteOperator") { checkDeleteOperator() }
+        // 25b. checkDeleteOperator MOVED to the post-spine slot (M0.4
+        // slot-move pre-gate, round 648) ahead of its spine migration.
         // 26. Check parameter properties outside constructor (TS2369)
         pass("checkParameterProperties") { checkParameterProperties() }
         // 27. Check super in non-derived class (TS2335)
