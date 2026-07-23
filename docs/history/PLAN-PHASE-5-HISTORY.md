@@ -1,3 +1,70 @@
+**Round 639 (2026-07-22) — (M0.4) sixteenth tail-pass migration:
+checkEvolvingEmptyArrayImplicitAny (TS7034 at the decl + TS7005 at each
+read of an un-annotated `let/var x = []` evolving array, round-316 family
+incl. the single-array/branch-merge/snapshot push TS2345s; 103.2 ms — the
+#16 per-file tail pass) is ON THE SPINE; the legacy binderResults driver +
+evRecurseScopes (~35 lines) DELETED; evProcessScope + the whole
+evUseStmt/evUseExpr simulation + the three push checks survive as the
+anchor-called leaf.** The PER-LIST-OWNER variant (the round-627/634 shape,
+first full application): each scope's statement LIST dispatches ONCE at
+its owning SourceFile / Block / ModuleBlock ENTER (spineEvEnterNode) —
+never per anchor — gated by the memoized MULTI-STATE reach classifier
+spineEvStatus/spineEvFold reproducing the deleted evRecurseScopes arms
+verbatim, including its LEVEL-SKIPPING quirks (the sharp pins): a REACHED
+Block is itself a scope (bare/control-flow position), while try/catch/
+finally clause Blocks and case/default clauses carry pass-through statuses
+(EV_TRYCLAUSE/EV_CLAUSE — their statements are recursed for NESTED scopes
+but the list never forms a scope, so a candidate declared DIRECTLY in a
+try block or case clause never fires while a Block statement inside them
+DOES); fn-declaration and class-DECLARATION member bodies reach via
+EV_MEMBER→EV_SCOPE; arrow/fn-EXPRESSION bodies and class-EXPRESSION
+member bodies are never scopes (the recursion had no expression descent).
+Scope-map correction the pins caught: a dotted `namespace A.B` IS a scope
+— the parser keeps ONE ModuleDeclaration with a direct ModuleBlock body,
+so the `body as? ModuleBlock` arm matched it (the round-638 tail note
+implied otherwise). Second correction: the round-638 "fully syntactic —
+no ambient" guess was WRONG — Part 2 (evCheckSingleArrayPush) resolves
+types (getTypeOfArrayLiteral / getTypeOfExpression / checkTypeRelatedTo),
+so every dispatch runs under an ambient sandwich (spineEvDispatch):
+resting currentFileLocals (the legacy slot ran FIRST after checkSpine,
+whose finally restores the pre-spine value) + per-file
+currentCheckFileName + a nulled currentFlowGraph (the round-630 co
+precedent). The legacy driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule); the pass emits
+ZERO TS7034/TS7005 on all 8 tsc profiles → the listAll gate pins pure
+non-perturbation. Gates: 33 local pins (M04EvolvingArraySpineMigrationTest
+— trigger A/B, concretizer gating, captured reads surviving an outer
+concretizer, the five suppression shapes, the self-spread read, the reach
+battery both directions, the three push checks, run gates) green against
+the LEGACY pass FIRST; suite 11,757 → 11,790/0; `--listAll` ×8
+byte-identical (time header only); partitionCheck ×8 EQUIVALENT; pass
+table 423 → 422 (the row gone; checkSpine in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top SIXTEEN tail passes
+migrated (one skip: the cross-file checkCrossFileModuleAugmentationDuplicates).
+SESSION TAIL: the checkUndefinedClassInterfaceName (#17, 123.9 ms at the
+round-639 table — TS2414 class / TS2427 interface / TS2457 type-alias
+names in PREDEFINED_TYPE_NAMES + the piggy-backed TS1163
+yield-outside-generator walk) slot-move pre-gate LANDED (moved intact
+from pre-spine slot 53 to the post-spine slot; suite 11,790/0; listAll
+×8 byte-identical; it is the SOLE emitter of all four codes and nothing
+scans them — order flip immaterial). Scope map for the migrator: TWO
+interleaved reach shapes in one pass — the NAME-check recursion
+(class/interface/type-alias names; descends Block/ModuleBlock/
+if/loops/switch-clauses/try/labeled but NEVER fn or class-member bodies
+— a `class undefined {}` inside a function body is unchecked, frozen)
+and the yield walk (starts ONLY at the name-recursion's
+FunctionDeclaration statements — top-level class METHOD bodies are
+never yield-walked, frozen — then tracks generator state through
+fn-decl/fn-expr/objlit-method asteriskToken boundaries with arrows
+always non-generator, incl. a full expression descent + a left-spine
+iterative BinaryExpression fold). Likely migrates as two coupled
+classifiers: a binary name-check reach + a 3-state yield status
+(GEN/NONGEN/unreached) carrying the generator flag as the status.
+NEXT session starts at that migration; after it by cost:
+checkSuperRefInRebindingScope 113.1 ms, checkInvalidAssignmentTargets
+105.8 ms.**
+
+
 **Round 638 (2026-07-22) — (M0.4) fifteenth tail-pass migration:
 checkArgumentsCollision (TS2396 "Duplicate identifier 'arguments'…" for
 an `arguments`-named param alongside a rest param at target < ES2015 +
