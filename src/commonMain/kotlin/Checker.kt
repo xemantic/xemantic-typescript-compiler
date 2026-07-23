@@ -3781,6 +3781,30 @@ class Checker(
     /** Reusable ascent buffer for [spineSrStatus]. */
     private val spineSrChain = ArrayList<Node>()
 
+    // ── (M0.4) round 647: checkSuperInObjectLiterals on the spine ──────────
+    // (TS2659 `super` in objlit members below ES2015 / TS2660 `super` in
+    // objlit property functions.) The walk threads ONE downward boolean —
+    // `superValid` — carried AS the status by [spineSuStatus] over
+    // [spineSuFold]: FALSE at top-level statements, fn-decl/fn-expr bodies
+    // RESET to false, arrows/blocks/ModuleBlocks PRESERVE, class-member
+    // bodies + property initializers set it from the containing class's
+    // `extends` clause (the SU_CMEMBER_* carriers), objlit method/accessor
+    // bodies set TRUE (the SU_OMEMBER carrier). Emissions happen ONLY at
+    // ObjectLiteralExpression anchors — per property, via the surviving
+    // BOUNDED [findObjLitSuperRefs] leaves (which never descend nested
+    // object literals, arrows, or fn-exprs — a nested literal is its own
+    // anchor). Frozen quirks: class EXPRESSIONS never walked; a for-head
+    // DECLARATION-LIST initializer never walked (an EXPRESSION initializer
+    // is); for-condition/incrementor never walked; for-in/of head
+    // EXPRESSIONS, throw expressions, and ExportAssignment ARE walked
+    // (wider than the SR pass). Fully syntactic — no ambient sandwich.
+    // Fields PRE-init.
+    private var spineSuActive = false
+    /** Per-file nodeId memo for [spineSuStatus] — 0 unknown, else SU_*. */
+    private var spineSuReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineSuStatus]. */
+    private val spineSuChain = ArrayList<Node>()
+
     // ── (M0.4) round 642: checkInvalidAssignmentTargets on the spine ───────
     // The TS2364 invalid-assignment-target pass (plain `=` + compound
     // targets, the destructuring private-identifier check) — the legacy
@@ -5625,28 +5649,11 @@ class Checker(
         // for a `const`-literal compared to a DIFFERENT literal) is ON THE
         // SPINE — see spineClEnterNode / spineClScopeAt (the round-645
         // slot-move pre-gate parked it here first).
-        // 27b' (M0.4 slot-move pre-gate, round 646): checkSuperInObjectLiterals
-        // (TS2659 super-in-objlit-member below ES2015 / TS2660
-        // super-in-objlit-property-fn) moved intact from slot 27b ahead of
-        // its spine migration. Fully syntactic + self-contained (the walk
-        // reads options.target + AST + the file source only; no pass
-        // scans/dedups TS2659/TS2660 from the diagnostics list — the
-        // sibling TS2660 emitter spineSrEnterNode is position-DISJOINT by
-        // construction, round 641). Scope map for the migrator: a
-        // statement/expression walker threading ONE downward boolean
-        // `superValid` (arrows/blocks/ModuleBlocks PRESERVE; regular
-        // fn-decls/fn-exprs reset FALSE; class member bodies + prop
-        // initializers set it from the containing class's `extends`
-        // clause; objlit method/accessor bodies set TRUE) — the round-641
-        // boolean-as-status shape — PLUS the bounded findObjLitSuperRefs
-        // leaf sub-walks started at objlit member/property-fn bodies
-        // (TS2659 at target < ES2015 for method/accessor bodies; TS2660
-        // for property-assignment fn-expr bodies unconditionally and
-        // arrow bodies only when !superValid). The ExportAssignment arm,
-        // for-in/of head EXPRESSIONS, and throw expressions ARE walked
-        // (wider than the SR pass); for-head condition/incrementor are
-        // NOT.
-        pass("checkSuperInObjectLiterals") { checkSuperInObjectLiterals() }
+        // 27b' (M0.4, round 647): checkSuperInObjectLiterals (TS2659
+        // super-in-objlit-member below ES2015 / TS2660
+        // super-in-objlit-property-fn) is ON THE SPINE — see
+        // spineSuEnterNode / spineSuStatus (the round-646 slot-move
+        // pre-gate parked it here first).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -21694,6 +21701,7 @@ class Checker(
                 spineExSetup(result)
                 spineSmSetup(result)
                 spineClSetup()
+                spineSuSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21738,6 +21746,7 @@ class Checker(
                     spineExTeardown()
                     spineSmTeardown()
                     spineClTeardown()
+                    spineSuTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22005,6 +22014,12 @@ class Checker(
         // a cheap for-ancestor pre-filter; no frames/leave hook, no
         // ambient sandwich.
         if (spineClActive) spineClEnterNode(node)
+        // (M0.4) round 647: the super-in-object-literal anchors
+        // (ObjectLiteralExpression enters with an emission-shape pre-gate)
+        // — the one downward `superValid` boolean carried as the
+        // classifier status; emissions run the bounded findObjLitSuperRefs
+        // leaves per property; no frames/leave hook, no ambient sandwich.
+        if (spineSuActive) spineSuEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48153,6 +48168,24 @@ class Checker(
         private const val SR_CLEAR = 4
         private const val SR_MEMBER = 5
 
+        // (M0.4) round 647: spineSuStatus states (checkSuperInObjectLiterals
+        // reach — the one downward `superValid` boolean carried AS the
+        // status + the transient SourceFile root). SU_INVALID/SU_VALID = a
+        // walked position whose lexical scope lacks/provides a `super`
+        // binding (an objlit anchor's arrow-initializer properties emit
+        // TS2660 only under SU_INVALID); SU_CMEMBER_EXT/SU_CMEMBER_NOEXT =
+        // a class-DECLARATION member on the path to its body/initializer
+        // (becomes VALID/INVALID from the class's `extends` clause);
+        // SU_OMEMBER = an objlit method/accessor on the path to its body
+        // (always becomes VALID below it).
+        private const val SU_NONE = 1
+        private const val SU_ROOT = 2
+        private const val SU_INVALID = 3
+        private const val SU_VALID = 4
+        private const val SU_CMEMBER_EXT = 5
+        private const val SU_CMEMBER_NOEXT = 6
+        private const val SU_OMEMBER = 7
+
         // (M0.4) round 643: spineTdStatus states (checkTypeParameterDefaults
         // reach — binary + the transient SourceFile root).
         private const val TD_REACHED = 1
@@ -69648,223 +69681,271 @@ interface DataView {
     // Super in object literal members (TS2659/TS2660)
     // -----------------------------------------------------------------------
 
-    private fun checkSuperInObjectLiterals() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkForObjLitSuper(result.sourceFile.statements, source, fileName, superValid = false)
+    // -----------------------------------------------------------------------
+    // (M0.4) round 647: checkSuperInObjectLiterals ON THE SPINE —
+    // ObjectLiteralExpression anchors gated by [spineSuStatus]. The legacy
+    // driver + walkForObjLitSuper/walkObjLitSuperInStmt/walkObjLitSuperInExpr
+    // recursion are deleted; the bounded [findObjLitSuperRefs] leaves and
+    // [emitObjLitSuperError] survive anchor-called.
+    // -----------------------------------------------------------------------
+
+    /** Per-file setup: the legacy driver's dts skip (its ONLY gate — the
+     *  pass ran unconditionally otherwise, any options). */
+    private fun spineSuSetup(result: BinderResult) {
+        spineSuActive = !spineIsDts
+        spineSuReachMemo = if (!spineSuActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    // [superValid] tracks whether the current LEXICAL scope provides a valid `super`
-    // binding (derived-class method/constructor/getter/setter body, or object-literal
-    // method/getter/setter body). Arrows preserve it; regular functions reset to false;
-    // class members set it from their containing class's `extends` clause. Used to
-    // decide whether an ArrowFunction-initialized PropertyAssignment in an object literal
-    // should fire TS2660 — the arrow inherits super from the enclosing context, so
-    // `obj = { p: () => super.x }` at top level errors but `class B extends A { f() {
-    // var obj = { p: () => super.x } } }` is valid.
-    private fun walkForObjLitSuper(statements: List<Statement>, source: String, fileName: String, superValid: Boolean) {
-        for (stmt in statements) walkObjLitSuperInStmt(stmt, source, fileName, superValid)
+    private fun spineSuTeardown() {
+        spineSuActive = false
+        spineSuReachMemo = ByteArray(0)
     }
 
-    private fun walkObjLitSuperInStmt(stmt: Statement, source: String, fileName: String, superValid: Boolean) {
-        when (stmt) {
-            is ExpressionStatement -> walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-            is VariableStatement -> stmt.declarationList.declarations.forEach {
-                it.initializer?.let { i -> walkObjLitSuperInExpr(i, source, fileName, superValid) }
-            }
-            is ReturnStatement -> stmt.expression?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-            is IfStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-                walkObjLitSuperInStmt(stmt.thenStatement, source, fileName, superValid)
-                stmt.elseStatement?.let { walkObjLitSuperInStmt(it, source, fileName, superValid) }
-            }
-            is Block -> walkForObjLitSuper(stmt.statements, source, fileName, superValid)
-            is ForStatement -> {
-                (stmt.initializer as? Expression)?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
-            }
-            is WhileStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
-            }
-            is DoStatement -> {
-                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
-                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-            }
-            // Regular functions rebind super (to undefined for object literals).
-            is FunctionDeclaration -> stmt.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = false) }
-            is ClassDeclaration -> {
-                val classHasExtends = stmt.heritageClauses
-                    ?.any { it.token == SyntaxKind.ExtendsKeyword } == true
-                for (member in stmt.members) {
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        is Constructor -> member.body
-                        is ClassStaticBlockDeclaration -> member.body
-                        else -> null
-                    }
-                    body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = classHasExtends) }
-                    if (member is PropertyDeclaration) {
-                        member.initializer?.let { walkObjLitSuperInExpr(it, source, fileName, superValid = classHasExtends) }
-                    }
+    /** ENTER dispatch: ObjectLiteralExpression anchors. The emission-shape
+     *  pre-gate runs BEFORE the reach climb: an emission needs a
+     *  method/accessor property (TS2659 — only below ES2015) or a
+     *  PropertyAssignment with a DIRECT fn-expr/arrow initializer (TS2660);
+     *  a parenthesized/comma-wrapped function initializer takes the
+     *  preserve arm and never emits (frozen). */
+    private fun spineSuEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.OBJECT_LITERAL_EXPRESSION) return
+        node as ObjectLiteralExpression
+        val below2015 = options.target < ScriptTarget.ES2015
+        var canEmit = false
+        for (prop in node.properties) {
+            when (prop) {
+                is GetAccessor, is SetAccessor, is MethodDeclaration -> if (below2015) canEmit = true
+                is PropertyAssignment -> {
+                    val init = prop.initializer
+                    if (init is FunctionExpression || init is ArrowFunction) canEmit = true
                 }
+                else -> {}
             }
-            is ModuleDeclaration -> {
-                val body = stmt.body
-                if (body is ModuleBlock) walkForObjLitSuper(body.statements, source, fileName, superValid)
-            }
-            is ForInStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
-            }
-            is ForOfStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-                walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
-            }
-            is SwitchStatement -> {
-                walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            walkObjLitSuperInExpr(clause.expression, source, fileName, superValid)
-                            clause.statements.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
-                        }
-                        is DefaultClause -> clause.statements.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
-                        else -> {}
-                    }
-                }
-            }
-            is TryStatement -> {
-                stmt.tryBlock.statements.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
-                stmt.catchClause?.block?.statements?.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
-                stmt.finallyBlock?.statements?.forEach { walkObjLitSuperInStmt(it, source, fileName, superValid) }
-            }
-            is LabeledStatement -> walkObjLitSuperInStmt(stmt.statement, source, fileName, superValid)
-            is ThrowStatement -> stmt.expression?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-            is ExportAssignment -> walkObjLitSuperInExpr(stmt.expression, source, fileName, superValid)
-            else -> {}
+            if (canEmit) break
         }
+        if (!canEmit) return
+        val st = spineSuStatus(node)
+        if (st != SU_VALID && st != SU_INVALID) return
+        emitObjLitSuperProperties(node, superValid = st == SU_VALID)
     }
 
-    private fun walkObjLitSuperInExpr(expr: Expression, source: String, fileName: String, superValid: Boolean) {
-        when (expr) {
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        // Object-literal methods/accessors bind super (via __proto__).
-                        is GetAccessor -> {
-                            if (options.target < ScriptTarget.ES2015) {
-                                prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
-                            }
-                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = true) }
-                        }
-                        is SetAccessor -> {
-                            if (options.target < ScriptTarget.ES2015) {
-                                prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
-                            }
-                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = true) }
-                        }
-                        is MethodDeclaration -> {
-                            if (options.target < ScriptTarget.ES2015) {
-                                prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
-                            }
-                            prop.body?.let { walkForObjLitSuper(it.statements, source, fileName, superValid = true) }
-                        }
-                        is PropertyAssignment -> {
-                            when (val init = prop.initializer) {
-                                is FunctionExpression -> {
-                                    // Regular function expression rebinds super → unconditional TS2660.
-                                    findObjLitSuperRefs(init.body.statements, source, fileName, code = 2660)
-                                    walkForObjLitSuper(init.body.statements, source, fileName, superValid = false)
-                                }
-                                is ArrowFunction -> {
-                                    // Arrow inherits super from the enclosing lexical scope.
-                                    // Emit TS2660 only when that scope lacks a super binding.
-                                    if (!superValid) {
-                                        when (val body = init.body) {
-                                            is Block -> findObjLitSuperRefs(body.statements, source, fileName, code = 2660)
-                                            is Expression -> findObjLitSuperRefsInExpr(body, source, fileName, code = 2660)
-                                            else -> {}
-                                        }
-                                    }
-                                    when (val body = init.body) {
-                                        is Block -> walkForObjLitSuper(body.statements, source, fileName, superValid)
-                                        is Expression -> walkObjLitSuperInExpr(body, source, fileName, superValid)
-                                        else -> {}
-                                    }
-                                }
-                                else -> walkObjLitSuperInExpr(init, source, fileName, superValid)
-                            }
-                        }
-                        is SpreadAssignment -> walkObjLitSuperInExpr(prop.expression, source, fileName, superValid)
-                        else -> {}
+    /** The legacy ObjectLiteralExpression arm's EMISSION half — per
+     *  property, in declaration order, running the bounded
+     *  [findObjLitSuperRefs] leaves (which never descend nested object
+     *  literals, arrows, or function expressions — a nested literal is its
+     *  own anchor). [superValid] tracks whether the anchor's LEXICAL scope
+     *  provides a valid `super` binding (derived-class member body or
+     *  objlit method/accessor body): `obj = { p: () => super.x }` at top
+     *  level errors, but the same literal inside a derived class method is
+     *  valid — the arrow inherits super from the enclosing context. */
+    private fun emitObjLitSuperProperties(expr: ObjectLiteralExpression, superValid: Boolean) {
+        val source = spineSource
+        val fileName = spineFileName
+        for (prop in expr.properties) {
+            when (prop) {
+                // Object-literal methods/accessors bind super (via __proto__)
+                // — valid from ES2015 up, TS2659 below.
+                is GetAccessor ->
+                    if (options.target < ScriptTarget.ES2015) {
+                        prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
                     }
-                }
-            }
-            is BinaryExpression -> {
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkObjLitSuperInExpr(cur, source, fileName, superValid)
-                while (rightStack.isNotEmpty()) walkObjLitSuperInExpr(rightStack.removeLast(), source, fileName, superValid)
-            }
-            is CallExpression -> {
-                walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-                expr.arguments.forEach { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-            }
-            is NewExpression -> {
-                walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-                expr.arguments?.forEach { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-            }
-            is PropertyAccessExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is ElementAccessExpression -> {
-                walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-                walkObjLitSuperInExpr(expr.argumentExpression, source, fileName, superValid)
-            }
-            is ParenthesizedExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is ConditionalExpression -> {
-                walkObjLitSuperInExpr(expr.condition, source, fileName, superValid)
-                walkObjLitSuperInExpr(expr.whenTrue, source, fileName, superValid)
-                walkObjLitSuperInExpr(expr.whenFalse, source, fileName, superValid)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-            // Regular function expression rebinds super.
-            is FunctionExpression -> walkForObjLitSuper(expr.body.statements, source, fileName, superValid = false)
-            // Arrow function preserves super from outer scope.
-            is ArrowFunction -> {
-                when (val body = expr.body) {
-                    is Block -> walkForObjLitSuper(body.statements, source, fileName, superValid)
-                    is Expression -> walkObjLitSuperInExpr(body, source, fileName, superValid)
+                is SetAccessor ->
+                    if (options.target < ScriptTarget.ES2015) {
+                        prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
+                    }
+                is MethodDeclaration ->
+                    if (options.target < ScriptTarget.ES2015) {
+                        prop.body?.let { findObjLitSuperRefs(it.statements, source, fileName, code = 2659) }
+                    }
+                is PropertyAssignment -> when (val init = prop.initializer) {
+                    // Regular function expression rebinds super → unconditional TS2660.
+                    is FunctionExpression ->
+                        findObjLitSuperRefs(init.body.statements, source, fileName, code = 2660)
+                    // Arrow inherits super from the enclosing lexical scope —
+                    // TS2660 only when that scope lacks a super binding.
+                    is ArrowFunction ->
+                        if (!superValid) {
+                            when (val body = init.body) {
+                                is Block -> findObjLitSuperRefs(body.statements, source, fileName, code = 2660)
+                                is Expression -> findObjLitSuperRefsInExpr(body, source, fileName, code = 2660)
+                                else -> {}
+                            }
+                        }
                     else -> {}
                 }
+                else -> {}
             }
-            is AsExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is TypeAssertionExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is SatisfiesExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is NonNullExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is PrefixUnaryExpression -> walkObjLitSuperInExpr(expr.operand, source, fileName, superValid)
-            is PostfixUnaryExpression -> walkObjLitSuperInExpr(expr.operand, source, fileName, superValid)
-            is SpreadElement -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is AwaitExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is YieldExpression -> expr.expression?.let { walkObjLitSuperInExpr(it, source, fileName, superValid) }
-            is VoidExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is DeleteExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is TypeOfExpression -> walkObjLitSuperInExpr(expr.expression, source, fileName, superValid)
-            is TemplateExpression -> for (span in expr.templateSpans) walkObjLitSuperInExpr(span.expression, source, fileName, superValid)
-            is TaggedTemplateExpression -> {
-                walkObjLitSuperInExpr(expr.tag, source, fileName, superValid)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) walkObjLitSuperInExpr(span.expression, source, fileName, superValid)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) walkObjLitSuperInExpr(e, source, fileName, superValid)
-            else -> {}
         }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineSuFold] back down (the spineSrStatus
+     *  pattern). The SourceFile anchor carries the transient SU_ROOT status
+     *  (never memoized) whose sole edge is `child is Statement` →
+     *  SU_INVALID (top-level statements have no super binding). */
+    private fun spineSuStatus(node: Node): Int {
+        if (node is SourceFile) return SU_ROOT
+        val memo = spineSuReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineSuChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = SU_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = SU_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = SU_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> SU_NONE
+                pStatus == SU_ROOT -> if (c is Statement) SU_INVALID else SU_NONE
+                else -> spineSuFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's arms, verbatim, as (parent, parent-status)
+     *  → child-status transitions — SU_INVALID/SU_VALID are the SAME walk
+     *  carrying the `superValid` boolean as the status. Resets: fn-decl/
+     *  fn-expr bodies → SU_INVALID; class-member bodies/prop initializers
+     *  → the class's `extends` verdict (via the SU_CMEMBER_* carriers);
+     *  objlit method/accessor bodies → SU_VALID (via SU_OMEMBER); a
+     *  PropertyAssignment initializer, arrows, and every other walked edge
+     *  preserve. Unlisted (parent, status) pairs are the legacy
+     *  `else -> {}`s: class EXPRESSIONS, shorthand properties, computed
+     *  names, member parameters/defaults, for-condition/incrementor, a
+     *  for-head DECLARATION-LIST initializer, property-access NAMES, catch
+     *  variable declarations, decorators, heritage clauses, and every type
+     *  position. */
+    private fun spineSuFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        SU_INVALID, SU_VALID -> when (pNode) {
+            // ---- walkObjLitSuperInStmt arms ----
+            is ExpressionStatement -> if (child === pNode.expression) pStatus else SU_NONE
+            is VariableStatement -> if (child === pNode.declarationList) pStatus else SU_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else SU_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) pStatus else SU_NONE
+            is ReturnStatement -> if (child === pNode.expression) pStatus else SU_NONE
+            is ThrowStatement -> if (child === pNode.expression) pStatus else SU_NONE
+            is IfStatement -> if (child === pNode.expression || child === pNode.thenStatement ||
+                child === pNode.elseStatement) pStatus else SU_NONE
+            is Block -> if (child is Statement) pStatus else SU_NONE
+            // The for-INITIALIZER is walked ONLY as a bare expression (a
+            // declaration-list initializer was never walked, frozen); the
+            // condition and incrementor are NOT walked (frozen).
+            is ForStatement -> if ((child === pNode.initializer && child is Expression) ||
+                child === pNode.statement) pStatus else SU_NONE
+            is WhileStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SU_NONE
+            is DoStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SU_NONE
+            is FunctionDeclaration -> if (child === pNode.body) SU_INVALID else SU_NONE
+            is ClassDeclaration -> if (child is MethodDeclaration || child is GetAccessor ||
+                child is SetAccessor || child is Constructor || child is ClassStaticBlockDeclaration ||
+                child is PropertyDeclaration) {
+                if (pNode.heritageClauses?.any { it.token == SyntaxKind.ExtendsKeyword } == true)
+                    SU_CMEMBER_EXT else SU_CMEMBER_NOEXT
+            } else SU_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) pStatus else SU_NONE
+            is ModuleBlock -> if (child is Statement) pStatus else SU_NONE
+            is ForInStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SU_NONE
+            is ForOfStatement -> if (child === pNode.expression || child === pNode.statement) pStatus else SU_NONE
+            is SwitchStatement -> if (child === pNode.expression || child is CaseClause ||
+                child is DefaultClause) pStatus else SU_NONE
+            is CaseClause -> if (child === pNode.expression || child is Statement) pStatus else SU_NONE
+            is DefaultClause -> if (child is Statement) pStatus else SU_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child === pNode.finallyBlock ||
+                child is CatchClause) pStatus else SU_NONE
+            is CatchClause -> if (child === pNode.block) pStatus else SU_NONE
+            is LabeledStatement -> if (child === pNode.statement) pStatus else SU_NONE
+            is ExportAssignment -> if (child === pNode.expression) pStatus else SU_NONE
+            // ---- walkObjLitSuperInExpr arms ----
+            // Objlit methods/accessors carry SU_OMEMBER to their bodies
+            // (super binds via __proto__); a PropertyAssignment/
+            // SpreadAssignment continues the walk — the fn-expr reset and
+            // arrow preserve ride the general expression arms below.
+            is ObjectLiteralExpression -> when (child) {
+                is GetAccessor, is SetAccessor, is MethodDeclaration -> SU_OMEMBER
+                is PropertyAssignment, is SpreadAssignment -> pStatus
+                else -> SU_NONE
+            }
+            is PropertyAssignment -> if (child === pNode.initializer) pStatus else SU_NONE
+            is SpreadAssignment -> if (child === pNode.expression) pStatus else SU_NONE
+            is FunctionExpression -> if (child === pNode.body) SU_INVALID else SU_NONE
+            is ArrowFunction -> if (child === pNode.body) pStatus else SU_NONE
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right) pStatus else SU_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) pStatus else SU_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) pStatus else SU_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) pStatus else SU_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) pStatus else SU_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else SU_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else SU_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else SU_NONE
+            is AsExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is NonNullExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is SpreadElement -> if (child === pNode.expression) pStatus else SU_NONE
+            is AwaitExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is YieldExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is VoidExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is DeleteExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is TypeOfExpression -> if (child === pNode.expression) pStatus else SU_NONE
+            is TemplateExpression -> if (child is TemplateSpan) pStatus else SU_NONE
+            is TemplateSpan -> if (child === pNode.expression) pStatus else SU_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) pStatus else SU_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else SU_NONE
+            else -> SU_NONE
+        }
+        SU_CMEMBER_EXT, SU_CMEMBER_NOEXT -> {
+            val v = if (pStatus == SU_CMEMBER_EXT) SU_VALID else SU_INVALID
+            when (pNode) {
+                is MethodDeclaration -> if (child === pNode.body) v else SU_NONE
+                is GetAccessor -> if (child === pNode.body) v else SU_NONE
+                is SetAccessor -> if (child === pNode.body) v else SU_NONE
+                is Constructor -> if (child === pNode.body) v else SU_NONE
+                is ClassStaticBlockDeclaration -> if (child === pNode.body) v else SU_NONE
+                is PropertyDeclaration -> if (child === pNode.initializer) v else SU_NONE
+                else -> SU_NONE
+            }
+        }
+        SU_OMEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) SU_VALID else SU_NONE
+            is GetAccessor -> if (child === pNode.body) SU_VALID else SU_NONE
+            is SetAccessor -> if (child === pNode.body) SU_VALID else SU_NONE
+            else -> SU_NONE
+        }
+        else -> SU_NONE
     }
 
     private fun findObjLitSuperRefs(statements: List<Statement>, source: String, fileName: String, code: Int) {
@@ -69920,7 +70001,7 @@ interface DataView {
                 while (rightStack.isNotEmpty()) findObjLitSuperRefsInExpr(rightStack.removeLast(), source, fileName, code)
             }
             expr is ParenthesizedExpression -> findObjLitSuperRefsInExpr(expr.expression, source, fileName, code)
-            // Nested object literals are handled by walkObjLitSuperInExpr separately — don't double-emit.
+            // Nested object literals are their own spine anchors — don't double-emit.
             expr is ObjectLiteralExpression -> {}
             // Arrow inherits super; FunctionExpression rebinds. Don't descend (separate walker handles them).
             expr is ArrowFunction -> {}
