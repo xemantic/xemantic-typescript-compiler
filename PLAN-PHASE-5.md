@@ -20,6 +20,53 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 647 (2026-07-23) — (M0.4) twenty-fourth tail-pass migration:
+checkSuperInObjectLiterals (TS2659 super-in-objlit-member below ES2015 /
+TS2660 super-in-objlit-property-fn; 91 ms at the round-642 table — the
+#24 per-file tail pass) is ON THE SPINE; the legacy driver +
+walkForObjLitSuper/walkObjLitSuperInStmt/walkObjLitSuperInExpr recursion
+(~230 lines) DELETED; the bounded findObjLitSuperRefs leaves +
+emitObjLitSuperError survive anchor-called.** The round-641
+boolean-as-status shape's second application, with two new moves: (1)
+the anchors are OBJECT LITERALS (spineSuEnterNode — not SR's rare-name
+identifiers), pre-gated on the emission SHAPE before the memoized climb
+(a method/accessor property below ES2015, or a PropertyAssignment with a
+DIRECT fn-expr/arrow initializer); (2) the legacy ObjectLiteralExpression
+arm SPLITS — its per-property EMISSION half becomes the anchor-called
+emitObjLitSuperProperties (running the bounded leaves in property order),
+while its walk-CONTINUATION half dissolves into classifier edges: objlit
+method/accessor bodies → SU_VALID via the SU_OMEMBER carrier, and a
+PropertyAssignment initializer is a plain PRESERVE edge — the legacy
+per-initializer dispatch (fn-expr walks superValid=false, arrow preserves,
+else preserve) reproduces EXACTLY on the general FunctionExpression-resets/
+ArrowFunction-preserves arms, so no special initializer handling exists in
+the fold at all. Class-member bodies + property initializers become
+VALID/INVALID from the containing class's `extends` clause via the two
+carriers SU_CMEMBER_EXT/SU_CMEMBER_NOEXT — the classHasExtends boolean
+rides the CARRIER CHOICE, not a separate channel. Frozen quirks pinned
+both directions: class EXPRESSIONS never walked; a for-head
+DECLARATION-LIST initializer never walked while an EXPRESSION initializer
+is; for-condition/incrementor never; for-in/of head EXPRESSIONS + throw +
+ExportAssignment ARE walked (wider than SR); only DIRECT fn-expr/arrow
+initializers emit (a comma/paren-wrapped fn-expr takes the preserve arm —
+silent); an arrow-returning-arrow hides super from the leaf (the leaf
+bails on nested arrows/fn-exprs/objlits — a nested literal is its own
+anchor, pinned exactly-once); leaf statement coverage frozen at
+if/while/for-expr/block/return/var (throw/try/switch INSIDE a member body
+silent); the leaf never descends new/element-access. Fully syntactic — no
+ambient sandwich; binderResults driver → the partition view,
+`--partitionCheck 2` EQUIVALENT ×8 (46×7/94). Gates: 41 local pins
+(M04ObjLitSuperSpineMigrationTest) green against the LEGACY pass FIRST
+(41/41 on the first run); suite 12,075 → 12,116/0; `--listAll` ×8
+byte-identical (sorted, non-time lines) vs the pre-migration baseline;
+pass table 416 → 415 (the 91 ms row gone; checkSpine 20.7 s single-run —
+in-band; compiler-profile wall parity 31.4 s); warning-clean. M0.4
+running total: top TWENTY-FOUR tail passes migrated. NEXT candidates by
+cost (round-647 table): checkTypeParamStrictSubtypeCast 93.7 ms,
+checkDeleteOperator 86.8 ms, checkConstructorParamInInitializers 85.5 ms
+(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file).**
+
 **Round 646 (2026-07-23) — (M0.4) twenty-third tail-pass migration:
 checkConstLiteralComparisons (B98.r101 — TS2367 for a for-INIT `const x =
 <bare literal>` compared to a DIFFERENT literal via ==/===/!=/!==; 95 ms
@@ -561,76 +608,6 @@ NEXT session starts at that migration; after it by cost:
 checkSuperRefInRebindingScope 113.1 ms, checkInvalidAssignmentTargets
 105.8 ms.**
 
-**Round 638 (2026-07-22) — (M0.4) fifteenth tail-pass migration:
-checkArgumentsCollision (TS2396 "Duplicate identifier 'arguments'…" for
-an `arguments`-named param alongside a rest param at target < ES2015 +
-TS1215 "Invalid use of 'arguments'…" for `arguments` param bindings in
-module files; 116.8 ms — the #15 per-file tail pass) is ON THE SPINE;
-the legacy driver + recursion (checkArgumentsCollision /
-checkArgsCollisionInStatements / checkArgsCollisionInStatement /
-checkArgsCollisionInExpr, ~130 lines) DELETED; the emission leaf
-(checkArgsCollisionInParams) survives unchanged, anchor-called.** The
-CONSTANT-CONTEXT variant — the simplest downward state of the migrated
-passes: the only threaded value is the per-file isModule boolean
-(= spineFileIsModule, already computed per file), so NO frames, NO ctx
-memo, NO prepass; the per-construct declare/body gates re-derive at the
-anchor from the construct node + its PARENT kind. Frozen asymmetries
-pinned: a class-DECLARATION method/ctor param-checks iff body +
-!class-declare and its set-accessors are body-walked but NEVER
-param-checked, while class-EXPRESSION and object-literal members
-param-check UNCONDITIONALLY; a FunctionDeclaration needs body +
-!declare; arrows/fn-exprs always check. Anchors at fn-like enters
-(FunctionDeclaration / MethodDeclaration / Constructor / SetAccessor /
-ArrowFunction / FunctionExpression) with a cheap `arguments`-param-name
-pre-gate BEFORE the reach climb (the name is rare — anchors nearly
-free). Reach is the memoized binary classifier spineAcStatus/
-spineAcEdge — a WIDER edge set than gIdx's (a fresh copy, not a reuse):
-arrows / fn-exprs / class-EXPRESSION members (incl. property
-initializers) / objlit members / template spans / typeof-await-yield-
-void-delete operands / tagged-template tags+spans all descend, while
-if/ternary CONDITIONS, for/while/do/switch HEADS, class-DECLARATION
-property initializers, and declare-namespace bodies stay silent (pinned
-both directions — the class-decl vs class-expr property-initializer
-asymmetry is the sharp pair). The run-level dispatch gate
-(target < ES2015 || any non-dts module file) becomes spineAcRunActive,
-computed once at checkSpine entry. No ambient sandwich (purely
-syntactic emission). The legacy binderResults driver → the spine's
-partition view, `--partitionCheck 2` EQUIVALENT ×8; ZERO TS2396/TS1215
-on all 8 tsc profiles → the listAll gate pins pure non-perturbation
-(the corpus's 8 collision tests are the behavior gate). Gates: 25 local
-pins (M04ArgsCollisionSpineMigrationTest) green against the LEGACY pass
-FIRST; suite 11,732 → 11,757/0; `--listAll` ×8 byte-identical (time
-header only); partitionCheck ×8 EQUIVALENT; pass table 424 → 423 (the
-row gone; checkSpine 19,665 ms single-run — in-band); warning-clean
-(--rerun-tasks, zero `w:`). M0.4 running total: top FIFTEEN tail passes
-migrated. SESSION TAIL: the checkEvolvingEmptyArrayImplicitAny (#16,
-103.2 ms — TS7034/TS7005 evolving empty-array implicit-any, the
-round-316 family incl. the single-array/branch-merge/snapshot push
-checks) slot-move pre-gate LANDED (moved intact from pre-spine slot
-37a3 to the post-spine slot; suite 11,757/0; listAll ×8
-byte-identical). Scope map for the migrator: a per-STATEMENT-LIST scope
-pass — each scope (file / fn / method / accessor body, via
-evRecurseScopes) processes its DIRECT VariableStatement candidates with
-a whole-LIST simulation (evUseStmt over ALL statements of the list —
-order-independent collection, per-candidate EvState) then runs the
-three push checks per scope; no TS7034/TS7005 dedup consumers
-(checkUninitializedLetCapturedReads emits the same codes but the
-trigger-B split is gate-disjoint BY CONSTRUCTION — captured reads of
-uninitialized lets vs this pass's same-scope reads — so the order flip
-across the move is immaterial); likely migrates as per-LIST-owner
-dispatch at scope-owner enters (the round-627/634 shape), not
-per-anchor. PROCESS NOTE (a trap worth remembering): waiting for a
-background suite by XML COUNT is unsound — `rm -rf
-build/test-results/jvmTest/binary` keeps the previous run's 472 XMLs
-and gradle deletes them only when the test task STARTS (after the
-multi-minute compile), so a count-based wait "passed" on STALE results
-and a `./gradlew --stop` issued then KILLED the in-flight compile
-(empty classes dir → 8 ClassNotFoundException captures + a corrupted
-in-progress-results-generic.bin needing a test-state wipe). Rule: wipe
-the WHOLE build/test-results/jvmTest dir before a suite whose
-completion is awaited by file checks, and never --stop/pkill while a
-gradle client exists. NEXT session starts at the eafs migration.**
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -956,9 +933,25 @@ structural item instead of landing alone.**
   operand names, so a cheap parent-climb pre-filter guards the precise
   memo-free reach+scope fold; the legacy left-spine binary iteration
   dissolves into plain left/right edges);
-  next per-file candidates by cost (round-642 table):
-  checkSuperInObjectLiterals
-  91 ms (98 passes >20 ms carry 5.3 s of the 6.2 s). Migration protocol per
+  checkSuperInObjectLiterals 91 ms — **MIGRATED round 647** (the
+  boolean-as-status shape's second application with OBJLIT anchors: the
+  legacy ObjectLiteralExpression arm SPLITS — its per-property EMISSION
+  half becomes the anchor-called emitObjLitSuperProperties running the
+  bounded findObjLitSuperRefs leaves, while its walk-continuation half
+  dissolves into classifier edges (objlit method/accessor bodies →
+  SU_VALID via the SU_OMEMBER carrier; a PropertyAssignment initializer
+  is a plain PRESERVE edge — the legacy fn-expr/arrow initializer
+  dispatch reproduces exactly on the general FunctionExpression-resets/
+  ArrowFunction-preserves arms); the classHasExtends boolean rides the
+  CARRIER CHOICE (SU_CMEMBER_EXT/SU_CMEMBER_NOEXT), not a separate
+  channel; anchors pre-gate on the emission shape before the memoized
+  climb);
+  next per-file candidates by cost (round-647 table):
+  checkTypeParamStrictSubtypeCast 93.7 ms, checkDeleteOperator 86.8 ms,
+  checkConstructorParamInInitializers 85.5 ms, checkAbstractMemberContext
+  81.6 ms (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays
+  SKIP — cross-file aggregation, not per-file spine material; ~90 passes
+  >20 ms still carry ~5 s of tail). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient

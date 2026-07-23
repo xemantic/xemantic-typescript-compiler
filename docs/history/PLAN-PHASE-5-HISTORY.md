@@ -1,3 +1,73 @@
+**Round 638 (2026-07-22) — (M0.4) fifteenth tail-pass migration:
+checkArgumentsCollision (TS2396 "Duplicate identifier 'arguments'…" for
+an `arguments`-named param alongside a rest param at target < ES2015 +
+TS1215 "Invalid use of 'arguments'…" for `arguments` param bindings in
+module files; 116.8 ms — the #15 per-file tail pass) is ON THE SPINE;
+the legacy driver + recursion (checkArgumentsCollision /
+checkArgsCollisionInStatements / checkArgsCollisionInStatement /
+checkArgsCollisionInExpr, ~130 lines) DELETED; the emission leaf
+(checkArgsCollisionInParams) survives unchanged, anchor-called.** The
+CONSTANT-CONTEXT variant — the simplest downward state of the migrated
+passes: the only threaded value is the per-file isModule boolean
+(= spineFileIsModule, already computed per file), so NO frames, NO ctx
+memo, NO prepass; the per-construct declare/body gates re-derive at the
+anchor from the construct node + its PARENT kind. Frozen asymmetries
+pinned: a class-DECLARATION method/ctor param-checks iff body +
+!class-declare and its set-accessors are body-walked but NEVER
+param-checked, while class-EXPRESSION and object-literal members
+param-check UNCONDITIONALLY; a FunctionDeclaration needs body +
+!declare; arrows/fn-exprs always check. Anchors at fn-like enters
+(FunctionDeclaration / MethodDeclaration / Constructor / SetAccessor /
+ArrowFunction / FunctionExpression) with a cheap `arguments`-param-name
+pre-gate BEFORE the reach climb (the name is rare — anchors nearly
+free). Reach is the memoized binary classifier spineAcStatus/
+spineAcEdge — a WIDER edge set than gIdx's (a fresh copy, not a reuse):
+arrows / fn-exprs / class-EXPRESSION members (incl. property
+initializers) / objlit members / template spans / typeof-await-yield-
+void-delete operands / tagged-template tags+spans all descend, while
+if/ternary CONDITIONS, for/while/do/switch HEADS, class-DECLARATION
+property initializers, and declare-namespace bodies stay silent (pinned
+both directions — the class-decl vs class-expr property-initializer
+asymmetry is the sharp pair). The run-level dispatch gate
+(target < ES2015 || any non-dts module file) becomes spineAcRunActive,
+computed once at checkSpine entry. No ambient sandwich (purely
+syntactic emission). The legacy binderResults driver → the spine's
+partition view, `--partitionCheck 2` EQUIVALENT ×8; ZERO TS2396/TS1215
+on all 8 tsc profiles → the listAll gate pins pure non-perturbation
+(the corpus's 8 collision tests are the behavior gate). Gates: 25 local
+pins (M04ArgsCollisionSpineMigrationTest) green against the LEGACY pass
+FIRST; suite 11,732 → 11,757/0; `--listAll` ×8 byte-identical (time
+header only); partitionCheck ×8 EQUIVALENT; pass table 424 → 423 (the
+row gone; checkSpine 19,665 ms single-run — in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top FIFTEEN tail passes
+migrated. SESSION TAIL: the checkEvolvingEmptyArrayImplicitAny (#16,
+103.2 ms — TS7034/TS7005 evolving empty-array implicit-any, the
+round-316 family incl. the single-array/branch-merge/snapshot push
+checks) slot-move pre-gate LANDED (moved intact from pre-spine slot
+37a3 to the post-spine slot; suite 11,757/0; listAll ×8
+byte-identical). Scope map for the migrator: a per-STATEMENT-LIST scope
+pass — each scope (file / fn / method / accessor body, via
+evRecurseScopes) processes its DIRECT VariableStatement candidates with
+a whole-LIST simulation (evUseStmt over ALL statements of the list —
+order-independent collection, per-candidate EvState) then runs the
+three push checks per scope; no TS7034/TS7005 dedup consumers
+(checkUninitializedLetCapturedReads emits the same codes but the
+trigger-B split is gate-disjoint BY CONSTRUCTION — captured reads of
+uninitialized lets vs this pass's same-scope reads — so the order flip
+across the move is immaterial); likely migrates as per-LIST-owner
+dispatch at scope-owner enters (the round-627/634 shape), not
+per-anchor. PROCESS NOTE (a trap worth remembering): waiting for a
+background suite by XML COUNT is unsound — `rm -rf
+build/test-results/jvmTest/binary` keeps the previous run's 472 XMLs
+and gradle deletes them only when the test task STARTS (after the
+multi-minute compile), so a count-based wait "passed" on STALE results
+and a `./gradlew --stop` issued then KILLED the in-flight compile
+(empty classes dir → 8 ClassNotFoundException captures + a corrupted
+in-progress-results-generic.bin needing a test-state wipe). Rule: wipe
+the WHOLE build/test-results/jvmTest dir before a suite whose
+completion is awaited by file checks, and never --stop/pkill while a
+gradle client exists. NEXT session starts at the eafs migration.**
+
 **Round 637 (2026-07-22) — (M0.4) fourteenth tail-pass migration:
 checkGenericIndexWrite (TS2862 "Type 'T' is generic and can only be
 indexed for reading." — index WRITES through a receiver typed as a
