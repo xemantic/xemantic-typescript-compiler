@@ -60,7 +60,32 @@ driver → the partition view. Gates: 46 local pins
 parity 29.9 vs 29.6 s); `--partitionCheck 2` EQUIVALENT ×8 (46×7/94);
 pass table 414 → 413 (the 86.8 ms row gone; checkSpine 21.5 s
 single-run under --passTiming — in-band); warning-clean. M0.4 running
-total: top TWENTY-SIX tail passes migrated.**
+total: top TWENTY-SIX tail passes migrated. SESSION TAIL: the
+checkConstructorParamInInitializers (#27, 85.5 ms — TS2301 ctor-param/
+ctor-body-var referenced from an instance field initializer + the TS2663
+param-property variant) slot-move pre-gate LANDED (moved intact from
+slot 63 to the post-spine slot; suite 12,192/0; listAll ×8
+byte-identical; coupling surface verified self-contained — pure AST +
+immutable program-wide consults only (perFileScope, built pre-spine;
+KNOWN_GLOBALS), NOT type-resolving so no first-touch hazard, no pass
+scans/dedups/retracts TS2301/TS2663). Scope map for the migrator:
+EMISSION at ClassDeclaration/ClassExpression enters (declare-gated)
+via checkConstructorParamInClassMembers — ctor param-name/body-var
+collection + a per-PropertyDeclaration-initializer ref walk (non-static,
+Identifier-named, initializer present) → TS2301/TS2663; the routing
+recursion's frozen quirks: if THEN/ELSE walked but NOT the condition,
+loop/switch HEADS never walked (bodies/clause statements only),
+class-DECLARATION members recurse method/ctor/accessor BODIES AND
+property INITIALIZERS while the ClassExpression arm recurses property
+initializers ONLY (its method bodies are never descended), arrow
+Block/expression bodies + fn-expr bodies route back into the statement
+walk, objlit PropertyAssignment values + spreads only; likely NO
+ambient sandwich (fully syntactic; the TS2663 gate consults only
+perFileScope + KNOWN_GLOBALS, both immutable). NEXT session starts at
+that migration; after it by cost (round-647 table):
+checkAbstractMemberContext 81.6 ms
+(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file).**
 
 **Round 648 (2026-07-23) — (M0.4) twenty-fifth tail-pass migration:
 checkTypeParamStrictSubtypeCast (B60.3/B402/B60.18 — TS2352 for
