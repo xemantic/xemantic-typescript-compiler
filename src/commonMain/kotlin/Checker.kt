@@ -5625,6 +5625,28 @@ class Checker(
         // for a `const`-literal compared to a DIFFERENT literal) is ON THE
         // SPINE — see spineClEnterNode / spineClScopeAt (the round-645
         // slot-move pre-gate parked it here first).
+        // 27b' (M0.4 slot-move pre-gate, round 646): checkSuperInObjectLiterals
+        // (TS2659 super-in-objlit-member below ES2015 / TS2660
+        // super-in-objlit-property-fn) moved intact from slot 27b ahead of
+        // its spine migration. Fully syntactic + self-contained (the walk
+        // reads options.target + AST + the file source only; no pass
+        // scans/dedups TS2659/TS2660 from the diagnostics list — the
+        // sibling TS2660 emitter spineSrEnterNode is position-DISJOINT by
+        // construction, round 641). Scope map for the migrator: a
+        // statement/expression walker threading ONE downward boolean
+        // `superValid` (arrows/blocks/ModuleBlocks PRESERVE; regular
+        // fn-decls/fn-exprs reset FALSE; class member bodies + prop
+        // initializers set it from the containing class's `extends`
+        // clause; objlit method/accessor bodies set TRUE) — the round-641
+        // boolean-as-status shape — PLUS the bounded findObjLitSuperRefs
+        // leaf sub-walks started at objlit member/property-fn bodies
+        // (TS2659 at target < ES2015 for method/accessor bodies; TS2660
+        // for property-assignment fn-expr bodies unconditionally and
+        // arrow bodies only when !superValid). The ExportAssignment arm,
+        // for-in/of head EXPRESSIONS, and throw expressions ARE walked
+        // (wider than the SR pass); for-head condition/incrementor are
+        // NOT.
+        pass("checkSuperInObjectLiterals") { checkSuperInObjectLiterals() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6089,8 +6111,9 @@ class Checker(
         pass("checkParameterProperties") { checkParameterProperties() }
         // 27. Check super in non-derived class (TS2335)
         pass("checkSuperInNonDerived") { checkSuperInNonDerived() }
-        // 27b. Check super in object literal members (TS2659/TS2660)
-        pass("checkSuperInObjectLiterals") { checkSuperInObjectLiterals() }
+        // 27b. Check super in object literal members (TS2659/TS2660): moved
+        // to the post-spine slot — see the pass("checkSpine") site (M0.4
+        // slot-move pre-gate, round 646).
         // 27c. Check super(...) calls in nested functions inside constructors (TS2337)
         pass("checkIllegalSuperCallsInNestedFunctions") { checkIllegalSuperCallsInNestedFunctions() }
         // 27d. checkSuperRefInRebindingScope (TS2660) is ON THE SPINE
