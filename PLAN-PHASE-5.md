@@ -63,13 +63,30 @@ driver → the partition view. Gates: 30 local pins
 gone; checkSpine 21.4 s single-run under --passTiming — in-band;
 compiler-profile listAll self-time parity 28.9 s post vs 28.1 s pre);
 warning-clean. M0.4 running total: top TWENTY-FIVE tail passes migrated.
-NEXT by cost (round-647 table): checkDeleteOperator 86.8 ms (slot-move
-pre-gate first — note for the migrator: checkDeleteReadonlyOperand consults
-`currentFileLocals`, null at every init-level slot but SET per-file on the
-spine, so the migration needs a null install per the round-533/644
-precedent; the pass is TYPE-RESOLVING — getTypeOfExpression/getApparentType
-/getPropertyOfType in the TS2790/TS2704/TS2542 arms — with a per-FILE
-`isStrict` boolean computed at file entry, no downward context), then
+SESSION TAIL: the checkDeleteOperator (#26, 86.8 ms — TS1102
+delete-identifier-in-strict / TS2703 non-property-ref / TS2790
+non-optional operand / TS2704 read-only property / TS2542 read-only index
+sig) slot-move pre-gate LANDED (moved intact from slot 25b to the
+post-spine slot; suite 12,146/0; listAll ×8 byte-identical; coupling
+surface verified self-contained — per-file `isStrict` computed inline, no
+pass scans/dedups/retracts its codes, the element-access-write TS2542
+emitters position-disjoint by construction since a delete operand is never
+a write target; the pass is TYPE-RESOLVING — getTypeOfExpression/
+getApparentType/getPropertyOfType in the TS2790/TS2704/TS2542 arms — so
+the slot-move gate is the empirical first-touch check, passed). Scope map
+for the migrator: walkStmtForDelete/walkExprForDelete recursion — a
+per-FILE `isStrict` boolean (target ≥ ES2015 / strict / alwaysStrict /
+module file / "use strict" prologue, decided at file entry → a per-file
+SETUP flag, no downward context), statement arms incl. class
+method/ctor/accessor bodies + namespace ModuleBlocks + LabeledStatement/
+throw/ExportAssignment, a broad expression walk (binary left-spine
+iteration, call/new args, objlit PropertyAssignment+SpreadAssignment
+values, template spans, arrow expression bodies), anchors at
+DeleteExpression enters (paren-unwrapped operand); MIGRATOR TRAP:
+checkDeleteReadonlyOperand consults `currentFileLocals` — null at every
+init-level slot but SET per-file on the spine, so the migration needs a
+null install in its ambient sandwich per the round-533/644 precedent.
+NEXT session starts at that migration; after it by cost (round-647 table):
 checkConstructorParamInInitializers 85.5 ms
 (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
 cross-file).**
