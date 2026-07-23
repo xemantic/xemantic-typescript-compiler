@@ -5731,6 +5731,16 @@ class Checker(
         // read-only index sig) is ON THE SPINE — see spineDelEnterNode /
         // spineDelStatus (the round-648-tail slot-move pre-gate parked it
         // here first).
+        // 63' (M0.4 slot-move pre-gate, round 649 tail):
+        // checkConstructorParamInInitializers (TS2301 ctor-param/var
+        // referenced from an instance field initializer + the TS2663
+        // param-property variant) moved intact from slot 63 ahead of its
+        // spine migration. Coupling surface: self-contained — pure AST +
+        // immutable program-wide consults only (perFileScope, built
+        // pre-spine at buildPerFileScopes; KNOWN_GLOBALS); NOT
+        // type-resolving (no getTypeOfExpression/type caches — no
+        // first-touch hazard); no pass scans/dedups/retracts TS2301/TS2663.
+        pass("checkConstructorParamInInitializers") { checkConstructorParamInInitializers() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6406,8 +6416,9 @@ class Checker(
         pass("checkVarHoistRedeclaration") { checkVarHoistRedeclaration() }
         // 62b. Check var shadowing outer block-scoped name (TS2481)
         pass("checkOuterScopeVarShadowing") { checkOuterScopeVarShadowing() }
-        // 63. Check class member initializers referencing constructor params/vars (TS2301)
-        pass("checkConstructorParamInInitializers") { checkConstructorParamInInitializers() }
+        // 63. checkConstructorParamInInitializers MOVED to the post-spine slot
+        // (M0.4 slot-move pre-gate, round 649 tail) ahead of its spine
+        // migration.
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
         // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
         pass("checkGeneratorBareYieldTypes") { checkGeneratorBareYieldTypes() }
