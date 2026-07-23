@@ -5654,6 +5654,27 @@ class Checker(
         // super-in-objlit-property-fn) is ON THE SPINE — see
         // spineSuEnterNode / spineSuStatus (the round-646 slot-move
         // pre-gate parked it here first).
+        // 14''e' (M0.4 slot-move pre-gate, round 647):
+        // checkTypeParamStrictSubtypeCast (B60.3/B402 — TS2352 for
+        // `<TypeParam>concrete` casts where concrete is a strict subtype of
+        // the TP's constraint, + the empty-object-to-nullish-constrained-TP
+        // AsExpression arm) moved intact from slot 14''e ahead of its spine
+        // migration. Self-contained coupling surface: emptyObjectCastLocals
+        // + inTypeParamCastPass are pass-private (populated and cleaned
+        // within the pass); NO pass scans/dedups TS2352 from the
+        // diagnostics list. TYPE-RESOLVING (getTypeFromTypeNode on method
+        // params, withInternedTpScope pushes, an EpochMap currentLocalTypes
+        // scope) — the slot-move gate is the empirical first-touch check.
+        // Scope map for the migrator: walkStmtsForTypeParamCasts recursion
+        // (fn-decl bodies / class method+ctor bodies under interned TP
+        // scopes with method-param typing / namespace ModuleBlocks; every
+        // OTHER statement kind routes through the SHARED
+        // walkTypeAssertionsInStmt walker with the
+        // emitTS2352IfTypeParamStrictSubtypeCast callback — the round-630
+        // spineCo anchor/edge family) + the per-statement-LIST
+        // empty-objlit-local prepass (whole-list, added-then-removed around
+        // the list walk — order-independent collection).
+        pass("checkTypeParamStrictSubtypeCast") { checkTypeParamStrictSubtypeCast() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5920,9 +5941,8 @@ class Checker(
         pass("checkArrayToClassCastOverlap") { checkArrayToClassCastOverlap() }
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
         pass("checkJSDocVoidCastNonOverlap") { checkJSDocVoidCastNonOverlap() }
-        // 14''e. Check `<TypeParam>concrete` casts where concrete is a strict
-        // subtype of TypeParam's constraint — TS2352 (B60.3)
-        pass("checkTypeParamStrictSubtypeCast") { checkTypeParamStrictSubtypeCast() }
+        // 14''e. checkTypeParamStrictSubtypeCast MOVED to the post-spine slot
+        // (M0.4 slot-move pre-gate, round 647) ahead of its spine migration.
         // 14''f. Check `T extends T` (circular constraint) — TS2313 (B60.10)
         pass("checkTypeParamCircularConstraint") { checkTypeParamCircularConstraint() }
         // 14''f2. incorrectRecursiveMappedTypeConstraint — `<T extends { [P in T]: ... }>`: the
