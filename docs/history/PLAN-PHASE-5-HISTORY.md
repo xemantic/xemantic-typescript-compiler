@@ -1,3 +1,68 @@
+**Round 637 (2026-07-22) — (M0.4) fourteenth tail-pass migration:
+checkGenericIndexWrite (TS2862 "Type 'T' is generic and can only be
+indexed for reading." — index WRITES through a receiver typed as a
+string/symbol-index-constrained type parameter, the gIdx walker;
+117.3 ms — the #14 per-file tail pass) is ON THE SPINE; the legacy
+driver + recursion (checkGenericIndexWrite / gIdxHandleBody /
+gIdxScanStatements / gIdxScanStatement / gIdxCheckExpr, ~85 lines)
+DELETED; emitTS2862IfGenericIndexWrite + the pure-AST helpers
+(constrainedTpNames / bareTypeParamRefName / collectParamTpRefs /
+collectTpLocalsMap) survive as anchor-called leaves.** The round-626
+DOWNWARD-MAP variant, third application: the purely downward (tparams,
+tpProps, refs) triple is a pure function of the ancestor chain — tparams
+ACCUMULATE through class/fn boundaries (constrainedTpNames), refs
+REBUILD at every fn-like boundary from collectParamTpRefs + the
+body-WIDE collectTpLocalsMap prepass (NOT statement-ordered →
+pull-based per-boundary rebuilds reproduce it; use-before-decl locals
+still match, pinned), tpProps from the nearest enclosing class's
+bare-TP property annotations (RESET by a nested FunctionDeclaration;
+cleared for property initializers — both pinned) — so it rebuilds per
+anchor with a per-boundary-child memo (spineGxCtxFor). Anchors are `=`
+BinaryExpressions whose paren-unwrapped LHS is an
+ElementAccessExpression (the cheap shape gate runs BEFORE the reach
+climb); reach is the memoized binary classifier spineGxStatus/
+spineGxEdge (the deleted arms verbatim, frozen — arrow/fn-EXPRESSION
+bodies, class EXPRESSIONS, object literals, compound assignments, and
+nested-fn refs inheritance all stay silent, pinned both directions).
+Frozen quirk worth naming: the locals PREPASS's descent set is NARROWER
+than the scan's — collectTpLocalsMap has no Switch/Try arms, so a
+`let t: T` declared inside a switch case or try block never registers
+(pinned) while an if-block local does. No ambient sandwich (the
+emission is purely syntactic — source + string maps; no type caches
+touched). The legacy binderResults driver → the spine's partition view,
+gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule); the pass
+emits ZERO TS2862 on all 8 tsc profiles, so the listAll gate pins pure
+non-perturbation. Gates: 31 local pins
+(M04GenericIndexWriteSpineMigrationTest — the emitter's
+constraint/index/receiver gates, the ctx battery (tparams accumulation,
+nested-fn refs reset, tpProps method/initializer/nested-fn split,
+get-accessor locals-only refs, a nested class built through a
+method-body chain), and the reach battery both directions) green
+against the LEGACY pass FIRST; suite 11,701 → 11,732/0; `--listAll` ×8
+byte-identical (time header only); partitionCheck ×8 EQUIVALENT; pass
+table 425 → 424 (the row gone; checkSpine 19,714.4 ms single-run —
+in the recent 19.3–20.5 s band); warning-clean (--rerun-tasks, zero
+`w:`). M0.4 running total: top FOURTEEN tail passes migrated. SESSION
+TAIL: the checkArgumentsCollision (#15, 116.8 ms — TS2396
+arguments-vs-rest-param collision at target < ES2015 + TS1215
+`arguments` bindings in module files) slot-move pre-gate LANDED (moved
+intact with its run-level dispatch gate from pre-spine slot 42 to the
+post-spine slot; suite 11,732/0; listAll ×8 byte-identical). Scope map
+for the migrator: the SIMPLEST downward context yet — one
+CONSTANT-per-file boolean (isModule) + per-construct declare gates; no
+maps, no accumulation, no prepass; the walker descends
+arrows/fn-exprs/class-exprs/objlit members/template spans and
+typeof/await/yield/void/delete operands (a WIDER reach than gIdx — a
+fresh edge set, not a reuse); param-list emissions anchor at fn-like
+enters gated body-present + !declare (class members inherit the CLASS's
+declare flag; get-accessors never param-check); the run-level dispatch
+gate (target < ES2015 || any non-dts module file) becomes the
+run-active flag; the sibling TS1215 emitter
+checkModuleStrictModeInStatements covers NAME bindings only (its
+FunctionDeclaration arm deliberately defers params to this pass) and
+scans no lists. NEXT session starts at its migration; after it by cost:
+checkEvolvingEmptyArrayImplicitAny 103.2 ms.**
+
 **Round 636 (2026-07-22) — (M0.4) thirteenth tail-pass migration:
 checkPropertyInitialization (TS2564 strict-property-initialization,
 ~99 ms — the #13 per-file tail pass) is ON THE SPINE; the normal-mode
