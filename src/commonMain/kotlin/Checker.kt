@@ -3578,6 +3578,37 @@ class Checker(
     /** Lazy per-file cache of the SourceFile list's empty-objlit local names. */
     private var spineTcRootEmptyObjNames: List<String>? = null
 
+    // ── (M0.4) round 649: checkDeleteOperator on the spine ─────────────────
+    // TS1102/TS2703/TS2790/TS2704/TS2542 anchors at DeleteExpression nodes.
+    // Reach = the memoized binary classifier [spineDelStatus] over
+    // [spineDelEdge] (the deleted walkStmtForDelete/walkExprForDelete arms
+    // verbatim — for-head DECL-LIST initializers, case EXPRESSIONS,
+    // class-DECLARATION property initializers, objlit METHOD/accessor
+    // bodies, computed property NAMES, and parameter DEFAULTS stay
+    // UNREACHED; class-EXPRESSION property initializers, case BODIES,
+    // for-head EXPRESSION initializers, for-in/of head EXPRESSIONS, throw
+    // and export-assignment expressions ARE reached). ONE per-file
+    // `isStrict` boolean (the legacy preamble verbatim — the isModule scan
+    // counts import/export-DECLARATION/export-assignment statements only)
+    // decided at setup. TYPE-RESOLVING (getTypeOfExpression/getApparentType/
+    // getPropertyOfType in the TS2790/TS2704/TS2542 arms) — per-anchor
+    // ambient sandwich: currentFileLocals RESTING install (the legacy
+    // post-spine slot ran outside the spine's per-file install and
+    // checkDeleteReadonlyOperand consults it — the round-533/644 precedent,
+    // spineB94 pattern) + currentFlowGraph nulled (the spineCo sandwich);
+    // currentCheckFileName deliberately UNTOUCHED — the legacy pass never
+    // set it, and mid-spine it already rests at the legacy slot's value.
+    // Fields PRE-init (the pipeline runs inside `init`).
+    private var spineDelActive = false
+    /** The legacy per-file isStrict preamble result. */
+    private var spineDelIsStrict = false
+    /** The spine-entry resting currentFileLocals (the legacy slot's ambient). */
+    private var spineDelRestingLocals: SymbolTable? = null
+    /** Per-file nodeId memo for [spineDelStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineDelReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineDelStatus]. */
+    private val spineDelChain = ArrayList<Node>()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5694,21 +5725,12 @@ class Checker(
         // THE SPINE — see spineTcEnterNode / spineTcStatus /
         // spineTcDispatchWithAmbient (the round-647 slot-move pre-gate
         // parked it here first).
-        // 25b' (M0.4 slot-move pre-gate, round 648 tail): checkDeleteOperator
-        // (TS1102 delete-identifier-in-strict / TS2703 non-property-ref /
-        // TS2790 non-optional operand / TS2704 read-only property / TS2542
-        // read-only index sig) moved intact from slot 25b ahead of its spine
-        // migration. Coupling surface: self-contained (per-file isStrict
-        // computed inline; no pass scans/dedups/retracts its codes — the
-        // element-access-write TS2542 emitters are position-disjoint by
-        // construction, a delete operand is never a write target).
-        // TYPE-RESOLVING (getTypeOfExpression / getApparentType /
-        // getPropertyOfType in the TS2790/TS2704/TS2542 arms) — the
-        // slot-move gate is the empirical first-touch check. Migrator note:
-        // checkDeleteReadonlyOperand consults `currentFileLocals` (null at
-        // every init-level slot, SET per-file on the spine) — the migration
-        // needs a null install per the round-533/644 precedent.
-        pass("checkDeleteOperator") { checkDeleteOperator() }
+        // 25b'' (M0.4, round 649): checkDeleteOperator (TS1102
+        // delete-identifier-in-strict / TS2703 non-property-ref / TS2790
+        // non-optional operand / TS2704 read-only property / TS2542
+        // read-only index sig) is ON THE SPINE — see spineDelEnterNode /
+        // spineDelStatus (the round-648-tail slot-move pre-gate parked it
+        // here first).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6166,8 +6188,8 @@ class Checker(
         pass("checkSuperBeforeThis") { checkSuperBeforeThis() }
         // 25. checkConstAssignment moved to the spine slot — see the
         // pass("checkSpine") site (INV.4(d) walker 9 slot-move pre-gate).
-        // 25b. checkDeleteOperator MOVED to the post-spine slot (M0.4
-        // slot-move pre-gate, round 648) ahead of its spine migration.
+        // 25b. checkDeleteOperator moved to the spine (M0.4, round 649 —
+        // slot-move pre-gate round 648) — see spineDelEnterNode.
         // 26. Check parameter properties outside constructor (TS2369)
         pass("checkParameterProperties") { checkParameterProperties() }
         // 27. Check super in non-derived class (TS2335)
@@ -21621,6 +21643,10 @@ class Checker(
         // (M0.4) round 631: the binding-pattern computed-key TS2537 emitters
         // likewise (the legacy pass never installed currentFileLocals).
         spineB94RestingLocals = currentFileLocals
+        // (M0.4) round 649: the delete-operator anchors likewise
+        // (checkDeleteReadonlyOperand's `currentFileLocals ?: globals`
+        // class-name consult must see the legacy slot's resting value).
+        spineDelRestingLocals = currentFileLocals
         spineItRunActive = options.noImplicitThis || options.strict ||
             !options.strictExplicitlyFalse
         // (M0.4) round 636: the property-init anchors' run gate (the legacy
@@ -21757,6 +21783,7 @@ class Checker(
                 spineClSetup()
                 spineSuSetup(result)
                 spineTcSetup(result)
+                spineDelSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21803,6 +21830,7 @@ class Checker(
                     spineClTeardown()
                     spineSuTeardown()
                     spineTcTeardown()
+                    spineDelTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22082,6 +22110,10 @@ class Checker(
         // pull-based TP-scope/param-typing ambient rebuild; no frames/leave
         // hook.
         if (spineTcActive) spineTcEnterNode(node)
+        // (M0.4) round 649: the delete-operator anchors (DeleteExpression
+        // enters) — the TS1102/TS2703/TS2790/TS2704/TS2542 emission under
+        // the resting-locals + null-flow sandwich; no frames/leave hook.
+        if (spineDelActive) spineDelEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48179,6 +48211,12 @@ class Checker(
         private const val TC_SHARED = 5
         private const val TC_ROOT = 6
 
+        // (M0.4) round 649: spineDelStatus states (checkDeleteOperator
+        // reach — binary + the transient SourceFile root).
+        private const val DEL_REACHED = 1
+        private const val DEL_NONE = 2
+        private const val DEL_ROOT = 3
+
         // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
         // reach — binary + the transient SourceFile root).
         private const val GX_REACHED = 1
@@ -63621,6 +63659,204 @@ interface DataView {
         else -> TC_NONE
     }
 
+    // ── (M0.4) round 649: checkDeleteOperator spine pieces ─────────────────
+
+    private fun spineDelSetup(result: BinderResult) {
+        spineDelActive = !spineIsDts
+        if (!spineDelActive) {
+            spineDelReachMemo = ByteArray(0)
+            return
+        }
+        val sf = result.sourceFile
+        // The legacy per-file preamble, verbatim: NOTE the isModule scan
+        // counts import/export-DECLARATION/export-assignment statements
+        // ONLY — an `export const` VariableStatement does NOT trip it
+        // (frozen quirk, pinned).
+        val isModule = sf.statements.any {
+            it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment
+        }
+        spineDelIsStrict = options.target >= ScriptTarget.ES2015 ||
+            options.strict == true ||
+            options.alwaysStrict == true ||
+            isModule ||
+            sf.statements.firstOrNull()?.let { stmt ->
+                stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
+                    (stmt.expression).text == "use strict"
+            } == true
+        spineDelReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+    }
+
+    private fun spineDelTeardown() {
+        spineDelActive = false
+        spineDelReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: DeleteExpression anchors run the legacy emission
+     *  (TS2790 → readonly TS2704/TS2542 → TS1102/TS2703, in the deleted
+     *  arm's order) under the resting-locals + null-flow sandwich. */
+    private fun spineDelEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.DELETE_EXPRESSION) return
+        node as DeleteExpression
+        if (spineDelStatus(node) != DEL_REACHED) return
+        val savedLocals = currentFileLocals
+        val savedFlow = currentFlowGraph
+        currentFileLocals = spineDelRestingLocals
+        currentFlowGraph = null
+        try {
+            checkDeleteExpressionOperand(node, spineSource, spineFileName, spineDelIsStrict)
+        } finally {
+            currentFileLocals = savedLocals
+            currentFlowGraph = savedFlow
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineDelEdge] back down (spineCoStatus
+     *  pattern). The SourceFile anchor carries the transient DEL_ROOT
+     *  status (never memoized) whose sole edge is `child is Statement`. */
+    private fun spineDelStatus(node: Node): Int {
+        if (node is SourceFile) return DEL_ROOT
+        val memo = spineDelReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineDelChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = DEL_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = DEL_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = DEL_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> DEL_NONE
+                pStatus == DEL_ROOT -> if (c is Statement) DEL_REACHED else DEL_NONE
+                pStatus == DEL_REACHED -> if (spineDelEdge(pNode, c)) DEL_REACHED else DEL_NONE
+                else -> DEL_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted walkStmtForDelete/walkExprForDelete descent arms,
+     *  verbatim. Unlisted parents are the walkers' `else -> {}`s
+     *  (unreached children). */
+    private fun spineDelEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the walkStmtForDelete arms) ----
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is Block -> child is Statement
+        // for-head: the EXPRESSION initializer only — a DECL-LIST
+        // initializer was never walked (`stmt.initializer as? Expression`,
+        // frozen; unlike the spineCo classifier).
+        is ForStatement ->
+            (child === parent.initializer && child is Expression) ||
+                child === parent.condition || child === parent.incrementor ||
+                child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        // switch: the subject + clause STATEMENTS only — case EXPRESSIONS
+        // were never walked (frozen; unlike the spineCo classifier).
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child is CatchClause || child === parent.finallyBlock
+        is CatchClause -> child === parent.block
+        is FunctionDeclaration -> child === parent.body
+        // class DECLARATIONS: method/ctor/accessor bodies only — property
+        // initializers were never walked (frozen; class EXPRESSIONS below DO
+        // walk them).
+        is ClassDeclaration ->
+            child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        is LabeledStatement -> child === parent.statement
+        is ThrowStatement -> child === parent.expression
+        is ExportAssignment -> child === parent.expression
+        // ---- member bodies/initializers ----
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        // reached only under ClassExpression (the class-DECLARATION edge
+        // above excludes PropertyDeclaration children).
+        is PropertyDeclaration -> child === parent.initializer
+        // ---- expressions (the walkExprForDelete arms) ----
+        is DeleteExpression -> child === parent.expression
+        // the legacy left-spine iteration dissolves into plain edges
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is ParenthesizedExpression -> child === parent.expression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        // objlit: PropertyAssignment values + spreads only — METHOD/accessor
+        // bodies, shorthand properties, and computed NAMES were never walked
+        // (frozen; unlike the spineCo classifier).
+        is ObjectLiteralExpression -> child is PropertyAssignment || child is SpreadAssignment
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is CommaListExpression -> parent.elements.any { it === child }
+        is AsExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is SpreadElement -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is TaggedTemplateExpression ->
+            child === parent.tag || (child === parent.template && child is TemplateExpression)
+        is ClassExpression ->
+            child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
+        else -> false
+    }
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─
 
     private fun spineB94Setup(result: BinderResult) {
@@ -66575,284 +66811,116 @@ interface DataView {
     // -----------------------------------------------------------------------
 
     /**
+     * The delete-operator emission leaf — anchor-called from the spine
+     * ([spineDelEnterNode]) at DeleteExpression enters; the legacy
+     * whole-file driver + walkStmtForDelete/walkExprForDelete recursion
+     * are deleted (M0.4, round 649 — reach is the [spineDelStatus]
+     * classifier, `isStrict` the per-file [spineDelSetup] preamble).
+     *
      * TS2703: "The operand of a 'delete' operator must be a property reference."
-     * Fires unconditionally when delete operand is not a PropertyAccessExpression
-     * or ElementAccessExpression.
+     * Fires unconditionally when the delete operand is not a
+     * PropertyAccessExpression or ElementAccessExpression.
      *
      * TS1102: "'delete' cannot be called on an identifier in strict mode."
-     * Additionally fires when the operand is an Identifier and the code is in strict mode.
+     * Additionally fires when the operand is an Identifier and the code is
+     * in strict mode.
      */
-    private fun checkDeleteOperator() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val isModule = result.sourceFile.statements.any {
-                it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment
-            }
-            val isStrict = options.target >= ScriptTarget.ES2015 ||
-                options.strict == true ||
-                options.alwaysStrict == true ||
-                isModule ||
-                result.sourceFile.statements.firstOrNull()?.let { stmt ->
-                    stmt is ExpressionStatement && stmt.expression is StringLiteralNode &&
-                        (stmt.expression).text == "use strict"
-                } == true
-            walkForDeleteOperator(result.sourceFile.statements, source, fileName, isStrict)
-        }
-    }
-
-    private fun walkForDeleteOperator(stmts: List<Statement>, source: String, fileName: String, isStrict: Boolean) {
-        for (stmt in stmts) walkStmtForDelete(stmt, source, fileName, isStrict)
-    }
-
-    private fun walkStmtForDelete(stmt: Statement, source: String, fileName: String, isStrict: Boolean) {
-        when (stmt) {
-            is ExpressionStatement -> walkExprForDelete(stmt.expression, source, fileName, isStrict)
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { walkExprForDelete(it, source, fileName, isStrict) }
-                }
-            }
-            is ReturnStatement -> stmt.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
-            is IfStatement -> {
-                walkExprForDelete(stmt.expression, source, fileName, isStrict)
-                walkStmtForDelete(stmt.thenStatement, source, fileName, isStrict)
-                stmt.elseStatement?.let { walkStmtForDelete(it, source, fileName, isStrict) }
-            }
-            is Block -> walkForDeleteOperator(stmt.statements, source, fileName, isStrict)
-            is ForStatement -> {
-                (stmt.initializer as? Expression)?.let { walkExprForDelete(it, source, fileName, isStrict) }
-                stmt.condition?.let { walkExprForDelete(it, source, fileName, isStrict) }
-                stmt.incrementor?.let { walkExprForDelete(it, source, fileName, isStrict) }
-                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-            }
-            is ForInStatement -> {
-                walkExprForDelete(stmt.expression, source, fileName, isStrict)
-                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-            }
-            is ForOfStatement -> {
-                walkExprForDelete(stmt.expression, source, fileName, isStrict)
-                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-            }
-            is WhileStatement -> {
-                walkExprForDelete(stmt.expression, source, fileName, isStrict)
-                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-            }
-            is DoStatement -> {
-                walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-                walkExprForDelete(stmt.expression, source, fileName, isStrict)
-            }
-            is SwitchStatement -> {
-                walkExprForDelete(stmt.expression, source, fileName, isStrict)
-                for (clause in stmt.caseBlock) {
-                    val stmts2 = when (clause) { is CaseClause -> clause.statements; is DefaultClause -> clause.statements; else -> emptyList() }
-                    walkForDeleteOperator(stmts2, source, fileName, isStrict)
-                }
-            }
-            is TryStatement -> {
-                walkForDeleteOperator(stmt.tryBlock.statements, source, fileName, isStrict)
-                stmt.catchClause?.let { walkForDeleteOperator(it.block.statements, source, fileName, isStrict) }
-                stmt.finallyBlock?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-            }
-            is FunctionDeclaration -> stmt.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-            is ClassDeclaration -> {
-                for (member in stmt.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is Constructor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is GetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is SetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        else -> {}
-                    }
-                }
-            }
-            is ModuleDeclaration -> {
-                val body = stmt.body
-                if (body is ModuleBlock) walkForDeleteOperator(body.statements, source, fileName, isStrict)
-            }
-            is LabeledStatement -> walkStmtForDelete(stmt.statement, source, fileName, isStrict)
-            is ThrowStatement -> stmt.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
-            is ExportAssignment -> stmt.expression.let { walkExprForDelete(it, source, fileName, isStrict) }
-            else -> {}
-        }
-    }
-
-    private fun walkExprForDelete(expr: Expression, source: String, fileName: String, isStrict: Boolean) {
-        when (expr) {
-            is DeleteExpression -> {
-                val operand = expr.expression
-                // Unwrap parentheses
-                var inner = operand
-                while (inner is ParenthesizedExpression) inner = inner.expression
-                val isPropertyRef = inner is PropertyAccessExpression || inner is ElementAccessExpression
-                // 16.4eb: TS2790 "The operand of a 'delete' operator must be optional."
-                // Fires under strictNullChecks when deleting a known property that isn't
-                // declared optional AND whose type doesn't include undefined/any/unknown/never.
-                // Index-signature access is skipped (no named property declaration resolves).
-                if (strictNullChecks && inner is PropertyAccessExpression) {
-                    val objType = getTypeOfExpression(inner.expression)
-                    if (objType !== anyType && objType !== errorType) {
-                        val apparent = getApparentType(objType)
-                        val propSym = getPropertyOfType(apparent, inner.name.text)
-                        val emit2790 = {
-                            val start = inner.pos
-                            val length = expressionTrueEnd(inner) - start
-                            if (length > 0) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "The operand of a 'delete' operator must be optional.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2790,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                ))
-                            }
-                        }
-                        if (propSym != null && !isOptionalProperty(propSym)) {
-                            val propType = getTypeOfSymbol(propSym)
-                            // Under exactOptionalPropertyTypes, a required property with
-                            // `| undefined` in its type still requires optionality to delete.
-                            // Under default (exactOptional=false), `T | undefined` is treated
-                            // as optional-for-delete purposes.
-                            val skipOnUndefinedInType = !options.exactOptionalPropertyTypes
-                            if (propType !== anyType && propType !== errorType &&
-                                !propType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never) &&
-                                (!skipOnUndefinedInType || !typeIncludesUndefinedOrTop(propType))) {
-                                emit2790()
-                            }
-                        } else if (propSym == null && objType is Type.Object &&
-                            inner.name.text in OBJECT_PROTOTYPE_PROPERTIES) {
-                            // `getApparentType` does NOT fold Object.prototype's members into
-                            // an object type's apparent members (a real-lib `ArrayConstructor`
-                            // has no OWN `toString`; it inherits it from `Object.prototype`).
-                            // Object.prototype members (toString/valueOf/hasOwnProperty/…) are
-                            // non-optional and present on EVERY object, so `delete x.<member>`
-                            // is always TS2790 under strictNullChecks — matches tsc. Gated to an
-                            // object-like receiver whose own type genuinely lacks the member
-                            // (propSym == null) so a user type that declares it optionally still
-                            // routes through the branch above.
-                            emit2790()
-                        }
-                    }
-                }
-                // B98.r84: TS2704 (read-only property) / TS2542 (read-only index
-                // signature) for `delete obj.readonlyProp` / `delete obj[key]`.
-                // Independent of strictNullChecks (unlike TS2790). Reuses the readonly
-                // helpers from the assignment-target path.
-                checkDeleteReadonlyOperand(inner, source, fileName)
-                if (!isPropertyRef) {
-                    // TS2703: operand must be property reference
+    private fun checkDeleteExpressionOperand(
+        expr: DeleteExpression,
+        source: String,
+        fileName: String,
+        isStrict: Boolean,
+    ) {
+        val operand = expr.expression
+        // Unwrap parentheses
+        var inner = operand
+        while (inner is ParenthesizedExpression) inner = inner.expression
+        val isPropertyRef = inner is PropertyAccessExpression || inner is ElementAccessExpression
+        // 16.4eb: TS2790 "The operand of a 'delete' operator must be optional."
+        // Fires under strictNullChecks when deleting a known property that isn't
+        // declared optional AND whose type doesn't include undefined/any/unknown/never.
+        // Index-signature access is skipped (no named property declaration resolves).
+        if (strictNullChecks && inner is PropertyAccessExpression) {
+            val objType = getTypeOfExpression(inner.expression)
+            if (objType !== anyType && objType !== errorType) {
+                val apparent = getApparentType(objType)
+                val propSym = getPropertyOfType(apparent, inner.name.text)
+                val emit2790 = {
                     val start = inner.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    if (isStrict && inner is Identifier) {
-                        // TS1102: delete on identifier in strict mode
+                    val length = expressionTrueEnd(inner) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
                         diagnostics.add(Diagnostic(
-                            message = "'delete' cannot be called on an identifier in strict mode.",
+                            message = "The operand of a 'delete' operator must be optional.",
                             category = DiagnosticCategory.Error,
-                            code = 1102,
+                            code = 2790,
                             fileName = fileName,
                             line = line,
                             character = character,
                             start = start,
-                            length = inner.text.length,
+                            length = length,
                         ))
                     }
-                    diagnostics.add(Diagnostic(
-                        message = "The operand of a 'delete' operator must be a property reference.",
-                        category = DiagnosticCategory.Error,
-                        code = 2703,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = if (inner is Identifier) inner.text.length else (inner.end - inner.pos).coerceAtLeast(1),
-                    ))
                 }
-                // Also recurse into the operand for nested deletes
-                walkExprForDelete(operand, source, fileName, isStrict)
-            }
-            is BinaryExpression -> {
-                // Iteratively walk binary chains to avoid StackOverflow on deep trees
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    walkExprForDelete(current.right, source, fileName, isStrict)
-                    current = current.left
-                }
-                walkExprForDelete(current, source, fileName, isStrict)
-            }
-            is CallExpression -> {
-                walkExprForDelete(expr.expression, source, fileName, isStrict)
-                expr.arguments.forEach { walkExprForDelete(it, source, fileName, isStrict) }
-            }
-            is ParenthesizedExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is ConditionalExpression -> {
-                walkExprForDelete(expr.condition, source, fileName, isStrict)
-                walkExprForDelete(expr.whenTrue, source, fileName, isStrict)
-                walkExprForDelete(expr.whenFalse, source, fileName, isStrict)
-            }
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> walkForDeleteOperator(body.statements, source, fileName, isStrict)
-                is Expression -> walkExprForDelete(body, source, fileName, isStrict)
-                else -> {}
-            }
-            is FunctionExpression -> expr.body.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForDelete(it, source, fileName, isStrict) }
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> walkExprForDelete(prop.initializer, source, fileName, isStrict)
-                        is SpreadAssignment -> walkExprForDelete(prop.expression, source, fileName, isStrict)
-                        else -> {}
+                if (propSym != null && !isOptionalProperty(propSym)) {
+                    val propType = getTypeOfSymbol(propSym)
+                    // Under exactOptionalPropertyTypes, a required property with
+                    // `| undefined` in its type still requires optionality to delete.
+                    // Under default (exactOptional=false), `T | undefined` is treated
+                    // as optional-for-delete purposes.
+                    val skipOnUndefinedInType = !options.exactOptionalPropertyTypes
+                    if (propType !== anyType && propType !== errorType &&
+                        !propType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never) &&
+                        (!skipOnUndefinedInType || !typeIncludesUndefinedOrTop(propType))) {
+                        emit2790()
                     }
+                } else if (propSym == null && objType is Type.Object &&
+                    inner.name.text in OBJECT_PROTOTYPE_PROPERTIES) {
+                    // `getApparentType` does NOT fold Object.prototype's members into
+                    // an object type's apparent members (a real-lib `ArrayConstructor`
+                    // has no OWN `toString`; it inherits it from `Object.prototype`).
+                    // Object.prototype members (toString/valueOf/hasOwnProperty/…) are
+                    // non-optional and present on EVERY object, so `delete x.<member>`
+                    // is always TS2790 under strictNullChecks — matches tsc. Gated to an
+                    // object-like receiver whose own type genuinely lacks the member
+                    // (propSym == null) so a user type that declares it optionally still
+                    // routes through the branch above.
+                    emit2790()
                 }
             }
-            is TemplateExpression -> {
-                expr.templateSpans.forEach { walkExprForDelete(it.expression, source, fileName, isStrict) }
+        }
+        // B98.r84: TS2704 (read-only property) / TS2542 (read-only index
+        // signature) for `delete obj.readonlyProp` / `delete obj[key]`.
+        // Independent of strictNullChecks (unlike TS2790). Reuses the readonly
+        // helpers from the assignment-target path.
+        checkDeleteReadonlyOperand(inner, source, fileName)
+        if (!isPropertyRef) {
+            // TS2703: operand must be property reference
+            val start = inner.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            if (isStrict && inner is Identifier) {
+                // TS1102: delete on identifier in strict mode
+                diagnostics.add(Diagnostic(
+                    message = "'delete' cannot be called on an identifier in strict mode.",
+                    category = DiagnosticCategory.Error,
+                    code = 1102,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = inner.text.length,
+                ))
             }
-            is CommaListExpression -> expr.elements.forEach { walkExprForDelete(it, source, fileName, isStrict) }
-            is AsExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is TypeAssertionExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is SatisfiesExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is NonNullExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is NewExpression -> {
-                walkExprForDelete(expr.expression, source, fileName, isStrict)
-                expr.arguments?.forEach { walkExprForDelete(it, source, fileName, isStrict) }
-            }
-            is PropertyAccessExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is ElementAccessExpression -> {
-                walkExprForDelete(expr.expression, source, fileName, isStrict)
-                walkExprForDelete(expr.argumentExpression, source, fileName, isStrict)
-            }
-            is PrefixUnaryExpression -> walkExprForDelete(expr.operand, source, fileName, isStrict)
-            is PostfixUnaryExpression -> walkExprForDelete(expr.operand, source, fileName, isStrict)
-            is SpreadElement -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is AwaitExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is YieldExpression -> expr.expression?.let { walkExprForDelete(it, source, fileName, isStrict) }
-            is VoidExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is TypeOfExpression -> walkExprForDelete(expr.expression, source, fileName, isStrict)
-            is TaggedTemplateExpression -> {
-                walkExprForDelete(expr.tag, source, fileName, isStrict)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    walkExprForDelete(it.expression, source, fileName, isStrict)
-                }
-            }
-            is ClassExpression -> {
-                for (member in expr.members) {
-                    when (member) {
-                        is MethodDeclaration -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is Constructor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is GetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is SetAccessor -> member.body?.let { walkForDeleteOperator(it.statements, source, fileName, isStrict) }
-                        is PropertyDeclaration -> member.initializer?.let { walkExprForDelete(it, source, fileName, isStrict) }
-                        else -> {}
-                    }
-                }
-            }
-            else -> {}
+            diagnostics.add(Diagnostic(
+                message = "The operand of a 'delete' operator must be a property reference.",
+                category = DiagnosticCategory.Error,
+                code = 2703,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = if (inner is Identifier) inner.text.length else (inner.end - inner.pos).coerceAtLeast(1),
+            ))
         }
     }
 
