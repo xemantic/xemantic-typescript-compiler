@@ -1,3 +1,65 @@
+**Round 640 (2026-07-22) — (M0.4) seventeenth tail-pass migration:
+checkUndefinedClassInterfaceName (TS2414 class / TS2427 interface /
+TS2457 type-alias names in PREDEFINED_TYPE_NAMES + the piggy-backed
+TS1163 yield-outside-generator walk; 123.9 ms — the #17 per-file tail
+pass) is ON THE SPINE; the legacy driver + checkUndefinedNamesInStmts +
+the walkYieldInStmts/-InStmt/-InExpr recursion (~280 lines) DELETED; the
+emissions inlined as the spineUyEmitName/spineUyEmitYield leaves.** The
+TWO-INTERLEAVED-WALKS variant (a new template move): the pass ran two
+recursions with DISJOINT node sets — the NAME-check walk (statement
+positions only; descends Block/ModuleBlock/if/loops/switch-clauses/
+try/labeled but NEVER fn or class-member bodies, no expression descent)
+and the yield walk (started ONLY at name-reached FunctionDeclaration
+statements, tracking generator state through fn-decl/fn-expr/
+objlit-method asteriskToken boundaries; arrows always non-generator) —
+reproduced by ONE multi-state classifier (spineUyStatus/spineUyFold)
+whose statuses carry the walk identity AND the downward state: UY_NAME
+for name positions, UY_YGEN/UY_YNON with the generator flag AS the
+status (the round-639 tail note's "3-state yield status" guess held),
+UY_MEMBER bridging a yield-walked container's member to its
+body/initializer with the frozen member filters encoded on the CONTAINER
+edge (class DECLARATIONS walk method/ctor/accessor bodies + property
+initializers; class EXPRESSIONS method/ctor ONLY; object literals
+methods only — accessors never). The walks are disjoint by construction
+(yield positions live inside some fn body, which the name walk never
+crosses), so each node has a unique status and one ByteArray memo serves
+both. Frozen quirks pinned both directions: a `class undefined {}`
+inside a fn/method/arrow body is unchecked; top-level class METHOD
+bodies and top-level fn-EXPRESSIONS are never yield-walked; a
+for-INITIALIZER is never yield-walked while condition + incrementor are;
+the legacy left-spine BinaryExpression fold reduces to plain left/right
+edges (reach-equivalent). Anchors: class/interface/type-alias enters
+with a PREDEFINED_TYPE_NAMES pre-gate BEFORE the reach climb (the names
+are rare — anchors nearly free) + YieldExpression enters. Fully
+syntactic — no ambient sandwich. The legacy binderResults driver → the
+spine's partition view, gated `--partitionCheck 2` EQUIVALENT ×8; zero
+TS2414/TS2427/TS2457/TS1163 on all 8 tsc profiles → the listAll gate
+pins pure non-perturbation. Gates: 32 local pins
+(M04UndefinedNameSpineMigrationTest) green against the LEGACY pass
+FIRST; suite 11,790 → 11,822/0; `--listAll` ×8 byte-identical (time
+header only; compiler-profile wall parity legacy 30.1 s vs migrated
+29.9 s); partitionCheck ×8 EQUIVALENT; pass table 422 → 421 (the row
+gone; checkSpine 21.3/21.6 s repeat runs — in-band for this session's
+box state, wall parity per the listAll pair); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top SEVENTEEN tail
+passes migrated. SESSION TAIL: the checkSuperRefInRebindingScope (#18,
+113.1 ms at the round-639 table — TS2660 for `super` references inside
+regular-function rebinding scopes) slot-move pre-gate LANDED (moved
+intact from slot 27d to the post-spine slot; suite 11,822/0; listAll ×8
+byte-identical; the sibling TS2660 emitter checkSuperInObjectLiterals is
+position-DISJOINT by construction — this walker skips object literals
+entirely — and nothing scans the code). Scope map for the migrator: the
+`rebound` flag is ONE downward boolean — top-level starts true, fn-decl/
+fn-expr bodies RESET to true, arrows PRESERVE, class-member bodies and
+prop initializers reset to FALSE at the direct level (only a nested fn
+inside re-rebinds), ModuleBlocks preserve; `super(...)` callees and
+object literals are skipped (TS2337 / the objlit sibling own them); the
+for-INITIALIZER is walked but for-condition/incrementor are NOT — likely
+the round-625 frameless pull-based shape (anchors = the rare `super`
+Identifiers, status = the folded rebound flag). NEXT session starts at
+that migration; after it by cost: checkInvalidAssignmentTargets
+105.8 ms.**
+
 **Round 639 (2026-07-22) — (M0.4) sixteenth tail-pass migration:
 checkEvolvingEmptyArrayImplicitAny (TS7034 at the decl + TS7005 at each
 read of an un-annotated `let/var x = []` evolving array, round-316 family
