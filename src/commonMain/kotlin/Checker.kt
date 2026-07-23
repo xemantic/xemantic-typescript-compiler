@@ -3914,6 +3914,32 @@ class Checker(
     /** Reusable ascent buffer for [spineSmStatus]. */
     private val spineSmChain = ArrayList<Node>()
 
+    // ── (M0.4) round 646: checkConstLiteralComparisons on the spine ────────
+    // The B98.r101 TS2367 pass (a for-INIT `const x = <bare literal>`
+    // compared to a DIFFERENT literal via ==/===/!=/!==) — the legacy driver
+    // + walkConstLitStatements/-Statement/-Expr recursion are deleted;
+    // [emitConstLitNoOverlap] (+ [constLiteralOf]) survives as the
+    // anchor-called leaf. The walk threads ONE downward MAP
+    // (name → ConstLitInfo): ONLY the ForStatement arm ADDS entries
+    // (for-init const bare-literal decls, no annotation, scoped to
+    // cond/incr/body), every statement LIST applies the whole-list SHADOW
+    // prepass (any VariableStatement decl name removes an inherited entry —
+    // order-independent, a pure function of the list), and fn-decl/fn-expr/
+    // arrow boundaries remove param names. Because removals never CREATE
+    // entries, the map is empty outside a for-with-const-literal-add
+    // ancestor — the anchor pre-filter climbs for exactly that before the
+    // precise fold [spineClFold] runs, so the fold needs no memo (rare
+    // after the filter — the round-625 rare-anchor rule). Frozen quirks:
+    // class METHOD/ctor params do NOT shadow (only fn-decl/fn-expr/arrow
+    // params do); a catch VARIABLE does not shadow; accessor bodies, object
+    // literals, templates, typeof operands, new-expression CALLEES,
+    // for-in/of HEADS, and for-init decl-list INITIALIZERS are never
+    // walked. Anchors: ==/===/!=/!== BinaryExpressions with ≥1 Identifier
+    // operand. Fully syntactic — no ambient sandwich. Fields PRE-init.
+    private var spineClActive = false
+    /** Reusable ascent buffer for [spineClScopeAt]. */
+    private val spineClChain = ArrayList<Node>()
+
     // ── INV.4(d) walker 6 (round 535): checkArgumentCounts on the spine ────
     // The function-call arity pass (TS2554/TS2555/TS2575) — the recursion
     // walkers (checkArgCountInStatements/-InStatement/-InExpr(Core)) are
@@ -5595,29 +5621,10 @@ class Checker(
         // corpus-unique TS1100 wipe — dispatches long after the spine; the
         // 12→12b relative order (TS1210-owns-class-bodies) is preserved
         // (the spine slot precedes 12b).
-        // B98.r101' (M0.4 slot-move pre-gate, round 645):
-        // checkConstLiteralComparisons (TS2367 for a `const`-literal
-        // compared to a DIFFERENT literal) moved intact from its early slot
-        // (after checkDtsImportEqualsAliasResolved) ahead of its spine
-        // migration. Fully syntactic + self-contained (the walk reads
-        // options + AST + the file source only — the currentFileLocals
-        // consult nearby belongs to the arithmetic pass's separate TS2367
-        // emitter); no pass scans/dedups TS2367 from the diagnostics list,
-        // and the wipe-and-pin walkers (checkOperationsAvailableOnPromisedType,
-        // checkStyledComponentsInstantiationLimit) dispatch after BOTH
-        // slots. Scope map for the migrator: a per-statement-LIST walker
-        // with a downward const-literal MAP — walkConstLitStatements does a
-        // whole-list SHADOW prepass (any VariableStatement decl name
-        // REMOVES an inherited entry — order-independent, a pure function
-        // of the list) then walks statements; ONLY the ForStatement arm
-        // ADDS entries (for-INIT `const x = <bare literal>`, no annotation,
-        // scoped to cond/incr/body — block consts deliberately never
-        // track); fn-decl/fn-expr/arrow boundaries REMOVE param names from
-        // a copied map. The map is a pure function of the ancestor
-        // list-owner chain → the round-637 pull-based per-boundary-memo
-        // shape. Anchors: ==/===/!=/!== binaries (the walk's left-spine
-        // iteration dissolves into plain edges).
-        pass("checkConstLiteralComparisons") { checkConstLiteralComparisons() }
+        // B98.r101' (M0.4, round 646): checkConstLiteralComparisons (TS2367
+        // for a `const`-literal compared to a DIFFERENT literal) is ON THE
+        // SPINE — see spineClEnterNode / spineClScopeAt (the round-645
+        // slot-move pre-gate parked it here first).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -5787,8 +5794,8 @@ class Checker(
         // remains only as the declarationOnly-mode driver.
         pass("checkDtsImportEqualsAliasResolved") { checkDtsImportEqualsAliasResolved() }
         // B98.r101: checkConstLiteralComparisons (TS2367 const-literal vs
-        // different-literal comparisons) moved to the post-spine slot — see
-        // the pass("checkSpine") site (M0.4 slot-move pre-gate, round 645).
+        // different-literal comparisons) is ON THE SPINE (M0.4, round 646)
+        // — see spineClEnterNode / spineClScopeAt.
         // 9. Check JSX elements for missing type definitions (TS7026)
         // TS7026 is an implicit-any diagnostic, so only fire when noImplicitAny/strict is on.
         // With @strict: false or @noImplicitAny: false, implicit any is allowed → no TS7026.
@@ -21663,6 +21670,7 @@ class Checker(
                 spineTdSetup(result)
                 spineExSetup(result)
                 spineSmSetup(result)
+                spineClSetup()
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21706,6 +21714,7 @@ class Checker(
                     spineTdTeardown()
                     spineExTeardown()
                     spineSmTeardown()
+                    spineClTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21967,6 +21976,12 @@ class Checker(
         // setup, the walk identity carried by the classifier; no
         // frames/leave hook, no ambient sandwich.
         if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
+        // (M0.4) round 646: the const-literal-comparison anchors (==/===/
+        // !=/!== binaries with an Identifier operand) — the downward
+        // for-init const-literal map rebuilds pull-based per anchor behind
+        // a cheap for-ancestor pre-filter; no frames/leave hook, no
+        // ambient sandwich.
+        if (spineClActive) spineClEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -140779,176 +140794,221 @@ interface DataView {
         else -> null
     }
 
-    private fun checkConstLiteralComparisons() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            if (!options.checkJs && (fileName.endsWith(".js") || fileName.endsWith(".jsx"))) continue
-            val source = result.sourceFile.text
-            walkConstLitStatements(result.sourceFile.statements, emptyMap(), source, fileName)
-        }
+    // ── (M0.4) round 646: checkConstLiteralComparisons on the spine ────────
+    // (B98.r101 TS2367 — a for-INIT `const x = <bare literal>` compared to a
+    // DIFFERENT literal.) The legacy driver + walkConstLitStatements/
+    // -Statement/-Expr recursion are deleted; [emitConstLitNoOverlap]
+    // (+ [constLiteralOf]) survives as the anchor-called leaf. See the field
+    // block for the walk's shape; [spineClScopeAt] rebuilds the downward map
+    // pull-based per anchor (memo-free — the pre-filter makes folds rare).
+
+    /** Per-file spine setup: the legacy driver's dts + non-checkJs js/jsx skips. */
+    private fun spineClSetup() {
+        spineClActive = !spineIsDts &&
+            (options.checkJs || !(spineFileName.endsWith(".js") || spineFileName.endsWith(".jsx")))
     }
 
-    /** Build the const-literal map for this statement list, then walk each statement. */
-    private fun walkConstLitStatements(
-        stmts: List<Statement>, inherited: Map<String, ConstLitInfo>, source: String, fileName: String,
-    ) {
-        val scope = inherited.toMutableMap()
-        // A block-level `const`/`let`/`var` does NOT keep a usable literal type for
-        // TS2367 here — TypeScript widens a loop-BODY-captured block-scoped const
-        // (`while (…) { const x = 1; if (x == 2) … }` does NOT error, unlike a
-        // for-INITIALIZER const). So a block VariableStatement only SHADOWS (removes)
-        // any inherited for-init const-literal of the same name; it never adds one.
-        // (for-init consts are tracked in the ForStatement branch of walkConstLitStatement.)
-        for (stmt in stmts) {
-            if (stmt is VariableStatement) {
-                for (decl in stmt.declarationList.declarations) {
-                    (decl.name as? Identifier)?.text?.let { scope.remove(it) }
-                }
-            }
-        }
-        for (stmt in stmts) walkConstLitStatement(stmt, scope, source, fileName)
+    private fun spineClTeardown() {
+        spineClActive = false
     }
 
-    private fun walkConstLitStatement(
-        stmt: Statement, scope: Map<String, ConstLitInfo>, source: String, fileName: String,
-    ) {
-        when (stmt) {
-            is VariableStatement -> for (d in stmt.declarationList.declarations)
-                d.initializer?.let { walkConstLitExpr(it, scope, source, fileName) }
-            is ExpressionStatement -> walkConstLitExpr(stmt.expression, scope, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { walkConstLitExpr(it, scope, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { walkConstLitExpr(it, scope, source, fileName) }
-            is IfStatement -> {
-                walkConstLitExpr(stmt.expression, scope, source, fileName)
-                walkConstLitStatement(stmt.thenStatement, scope, source, fileName)
-                stmt.elseStatement?.let { walkConstLitStatement(it, scope, source, fileName) }
-            }
-            is Block -> walkConstLitStatements(stmt.statements, scope, source, fileName)
-            is ForStatement -> {
-                // const-literals declared in the for-init are scoped to cond/incr/body.
-                val inner = scope.toMutableMap()
-                (stmt.initializer as? VariableDeclarationList)?.let { vdl ->
-                    val isConst = vdl.flags == SyntaxKind.ConstKeyword
+    /** ENTER dispatch: ==/===/!=/!== BinaryExpressions. Two pre-filters run
+     *  BEFORE the fold: ≥1 operand must be a bare Identifier (the emission
+     *  requires a TRACKED identifier operand), and some ForStatement
+     *  ancestor's const init must ADD one of the operand names — the map is
+     *  populated ONLY by for-init const-literal adds (the shadow prepass and
+     *  param boundaries only REMOVE), so without such an ancestor the map at
+     *  the anchor is empty and the emission cannot fire. */
+    private fun spineClEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.BINARY_EXPRESSION) return
+        node as BinaryExpression
+        val op = node.operator
+        if (op != SyntaxKind.EqualsEquals && op != SyntaxKind.ExclamationEquals &&
+            op != SyntaxKind.EqualsEqualsEquals && op != SyntaxKind.ExclamationEqualsEquals
+        ) return
+        val lt = (node.left as? Identifier)?.text
+        val rt = (node.right as? Identifier)?.text
+        if (lt == null && rt == null) return
+        var candidate = false
+        var cur: Node? = node.parent
+        outer@ while (cur != null) {
+            if (cur is ForStatement) {
+                val vdl = cur.initializer as? VariableDeclarationList
+                if (vdl != null && vdl.flags == SyntaxKind.ConstKeyword) {
                     for (d in vdl.declarations) {
                         val nm = (d.name as? Identifier)?.text ?: continue
-                        val lit = if (isConst && d.type == null) constLiteralOf(d.initializer) else null
-                        if (lit != null) inner[nm] = lit else inner.remove(nm)
-                    }
-                }
-                (stmt.initializer as? Expression)?.let { walkConstLitExpr(it, scope, source, fileName) }
-                stmt.condition?.let { walkConstLitExpr(it, inner, source, fileName) }
-                stmt.incrementor?.let { walkConstLitExpr(it, inner, source, fileName) }
-                walkConstLitStatement(stmt.statement, inner, source, fileName)
-            }
-            is ForInStatement -> walkConstLitStatement(stmt.statement, scope, source, fileName)
-            is ForOfStatement -> walkConstLitStatement(stmt.statement, scope, source, fileName)
-            is LabeledStatement -> walkConstLitStatement(stmt.statement, scope, source, fileName)
-            is WhileStatement -> {
-                walkConstLitExpr(stmt.expression, scope, source, fileName)
-                walkConstLitStatement(stmt.statement, scope, source, fileName)
-            }
-            is DoStatement -> {
-                walkConstLitStatement(stmt.statement, scope, source, fileName)
-                walkConstLitExpr(stmt.expression, scope, source, fileName)
-            }
-            is SwitchStatement -> {
-                walkConstLitExpr(stmt.expression, scope, source, fileName)
-                for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> {
-                            walkConstLitExpr(clause.expression, scope, source, fileName)
-                            walkConstLitStatements(clause.statements, scope, source, fileName)
+                        if ((nm == lt || nm == rt) && d.type == null &&
+                            constLiteralOf(d.initializer) != null
+                        ) {
+                            candidate = true
+                            break@outer
                         }
-                        is DefaultClause -> walkConstLitStatements(clause.statements, scope, source, fileName)
-                        else -> {}
                     }
                 }
             }
-            is TryStatement -> {
-                walkConstLitStatements(stmt.tryBlock.statements, scope, source, fileName)
-                stmt.catchClause?.block?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
-                stmt.finallyBlock?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
-            }
-            is FunctionDeclaration -> stmt.body?.let { fnBody ->
-                val inner = scope.toMutableMap()
-                for (p in stmt.parameters) (p.name as? Identifier)?.text?.let { inner.remove(it) }
-                walkConstLitStatements(fnBody.statements, inner, source, fileName)
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let {
-                walkConstLitStatements(it.statements, scope, source, fileName)
-            }
-            is ClassDeclaration -> for (m in stmt.members) {
-                when (m) {
-                    is MethodDeclaration -> m.body?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
-                    is Constructor -> m.body?.let { walkConstLitStatements(it.statements, scope, source, fileName) }
-                    is PropertyDeclaration -> m.initializer?.let { walkConstLitExpr(it, scope, source, fileName) }
-                    else -> {}
-                }
-            }
-            else -> {}
+            cur = (cur as NodeBase).parent
         }
+        if (!candidate) return
+        val scope = spineClScopeAt(node) ?: return
+        if (scope.isNotEmpty()) emitConstLitNoOverlap(node, scope, spineSource, spineFileName)
     }
 
-    private fun walkConstLitExpr(
-        expr: Expression, scope: Map<String, ConstLitInfo>, source: String, fileName: String,
-    ) {
-        when (expr) {
-            is BinaryExpression -> {
-                // CLAUDE.md: walk the BinaryExpression LEFT spine ITERATIVELY (not
-                // recursively) — `binderBinaryExpressionStress`'s deep `a+b+c+…` chain
-                // StackOverflows a naive `walk(left); walk(right)` and a crash mid-check
-                // aborts JS emit (shows up as a JS-EMIT diff regression). Right children
-                // are shallow → recurse them.
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    val op = cur.operator
-                    if (op == SyntaxKind.EqualsEquals || op == SyntaxKind.ExclamationEquals ||
-                        op == SyntaxKind.EqualsEqualsEquals || op == SyntaxKind.ExclamationEqualsEquals) {
-                        emitConstLitNoOverlap(cur, scope, source, fileName)
-                    }
-                    walkConstLitExpr(cur.right, scope, source, fileName)
-                    cur = cur.left
-                }
-                walkConstLitExpr(cur, scope, source, fileName)
+    /**
+     * Rebuilds the deleted walk's downward const-literal map at [node] — null
+     * when the legacy recursion never reached the position. Ascends to the
+     * SourceFile (a detached/unindexed chain is unreached), then folds
+     * [spineClFold] back down from an empty map.
+     */
+    private fun spineClScopeAt(node: Node): Map<String, ConstLitInfo>? {
+        val chain = spineClChain
+        chain.clear()
+        var cur: Node = node
+        var root: SourceFile? = null
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent ?: break // detached/unindexed → unreached
+            if (parent is SourceFile) {
+                root = parent
+                break
             }
-            is ParenthesizedExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
-            is PrefixUnaryExpression -> walkConstLitExpr(expr.operand, scope, source, fileName)
-            is PostfixUnaryExpression -> walkConstLitExpr(expr.operand, scope, source, fileName)
-            is ConditionalExpression -> {
-                walkConstLitExpr(expr.condition, scope, source, fileName)
-                walkConstLitExpr(expr.whenTrue, scope, source, fileName)
-                walkConstLitExpr(expr.whenFalse, scope, source, fileName)
-            }
-            is CallExpression -> {
-                walkConstLitExpr(expr.expression, scope, source, fileName)
-                expr.arguments.forEach { walkConstLitExpr(it, scope, source, fileName) }
-            }
-            is NewExpression -> expr.arguments?.forEach { walkConstLitExpr(it, scope, source, fileName) }
-            is PropertyAccessExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
-            is ElementAccessExpression -> {
-                walkConstLitExpr(expr.expression, scope, source, fileName)
-                walkConstLitExpr(expr.argumentExpression, scope, source, fileName)
-            }
-            is AsExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
-            is NonNullExpression -> walkConstLitExpr(expr.expression, scope, source, fileName)
-            is ArrowFunction -> {
-                val inner = scope.toMutableMap()
-                for (p in expr.parameters) (p.name as? Identifier)?.text?.let { inner.remove(it) }
-                when (val b = expr.body) {
-                    is Block -> walkConstLitStatements(b.statements, inner, source, fileName)
-                    is Expression -> walkConstLitExpr(b, inner, source, fileName)
-                    else -> {}
-                }
-            }
-            is FunctionExpression -> {
-                val inner = scope.toMutableMap()
-                for (p in expr.parameters) (p.name as? Identifier)?.text?.let { inner.remove(it) }
-                expr.body.let { walkConstLitStatements(it.statements, inner, source, fileName) }
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkConstLitExpr(it, scope, source, fileName) }
-            else -> {}
+            cur = parent
         }
+        if (root == null) {
+            chain.clear()
+            return null
+        }
+        var pNode: Node = root
+        var scope: Map<String, ConstLitInfo> = emptyMap()
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            val next = spineClFold(pNode, scope, c)
+            if (next == null) {
+                chain.clear()
+                return null
+            }
+            scope = next
+            pNode = c
+        }
+        chain.clear()
+        return scope
+    }
+
+    /**
+     * The deleted recursion's arms, verbatim, as (parent → child) map
+     * transitions — null = an edge the legacy walk never descended. Statement
+     * LISTs apply the whole-list shadow prepass; the ForStatement arm applies
+     * the for-init transform to cond/incr/body (its Expression initializer
+     * keeps the OUTER map — equivalent anyway: the inner map differs only
+     * when the initializer is a declaration list); fn-decl/fn-expr/arrow
+     * boundaries remove param names; class method/ctor bodies keep the
+     * class-outer map unchanged (params deliberately NOT removed — frozen);
+     * the legacy left-spine binary iteration dissolves into plain
+     * left/right edges.
+     */
+    private fun spineClFold(
+        p: Node, s: Map<String, ConstLitInfo>, c: Node,
+    ): Map<String, ConstLitInfo>? = when (p) {
+        is SourceFile -> if (c is Statement) spineClPrepass(s, p.statements) else null
+        // ---- walkConstLitStatement arms ----
+        is VariableStatement -> if (c === p.declarationList) s else null
+        is VariableDeclarationList -> if (c is VariableDeclaration) s else null
+        is VariableDeclaration -> if (c === p.initializer) s else null
+        is ExpressionStatement -> if (c === p.expression) s else null
+        is ReturnStatement -> if (c === p.expression) s else null
+        is ThrowStatement -> if (c === p.expression) s else null
+        is IfStatement -> if (c === p.expression || c === p.thenStatement ||
+            c === p.elseStatement) s else null
+        is Block -> if (c is Statement) spineClPrepass(s, p.statements) else null
+        is ForStatement -> when {
+            c === p.initializer && c is Expression -> s
+            c === p.condition || c === p.incrementor || c === p.statement ->
+                spineClForInner(s, p)
+            else -> null // a for-init DECLARATION-LIST initializer is never walked
+        }
+        is ForInStatement -> if (c === p.statement) s else null // heads unreached
+        is ForOfStatement -> if (c === p.statement) s else null // heads unreached
+        is LabeledStatement -> if (c === p.statement) s else null
+        is WhileStatement -> if (c === p.expression || c === p.statement) s else null
+        is DoStatement -> if (c === p.statement || c === p.expression) s else null
+        is SwitchStatement -> if (c === p.expression || c is CaseClause ||
+            c is DefaultClause) s else null
+        is CaseClause -> if (c === p.expression) s
+            else if (c is Statement) spineClPrepass(s, p.statements) else null
+        is DefaultClause -> if (c is Statement) spineClPrepass(s, p.statements) else null
+        is TryStatement -> if (c === p.tryBlock || c === p.finallyBlock ||
+            c is CatchClause) s else null
+        is CatchClause -> if (c === p.block) s else null // the catch VARIABLE never shadows (frozen)
+        is FunctionDeclaration -> if (c === p.body) spineClMinusParams(s, p.parameters) else null
+        is ModuleDeclaration -> if (c === p.body && c is ModuleBlock) s else null
+        is ModuleBlock -> if (c is Statement) spineClPrepass(s, p.statements) else null
+        is ClassDeclaration -> if (c is MethodDeclaration || c is Constructor ||
+            c is PropertyDeclaration) s else null // accessors/heritage unreached
+        is MethodDeclaration -> if (c === p.body) s else null // params NOT removed (frozen)
+        is Constructor -> if (c === p.body) s else null // params NOT removed (frozen)
+        is PropertyDeclaration -> if (c === p.initializer) s else null
+        // ---- walkConstLitExpr arms ----
+        is BinaryExpression -> if (c === p.left || c === p.right) s else null
+        is ParenthesizedExpression -> if (c === p.expression) s else null
+        is PrefixUnaryExpression -> if (c === p.operand) s else null
+        is PostfixUnaryExpression -> if (c === p.operand) s else null
+        is ConditionalExpression -> if (c === p.condition || c === p.whenTrue ||
+            c === p.whenFalse) s else null
+        is CallExpression -> if (c === p.expression || p.arguments.any { it === c }) s else null
+        is NewExpression -> if (p.arguments?.any { it === c } == true) s else null // CALLEE unreached
+        is PropertyAccessExpression -> if (c === p.expression) s else null
+        is ElementAccessExpression -> if (c === p.expression || c === p.argumentExpression) s else null
+        is AsExpression -> if (c === p.expression) s else null
+        is NonNullExpression -> if (c === p.expression) s else null
+        is ArrowFunction -> if (c === p.body) spineClMinusParams(s, p.parameters) else null
+        is FunctionExpression -> if (c === p.body) spineClMinusParams(s, p.parameters) else null
+        is ArrayLiteralExpression -> if (p.elements.any { it === c }) s else null
+        else -> null
+    }
+
+    /** The whole-list SHADOW prepass: any VariableStatement declaration name
+     *  in [stmts] removes an inherited entry. A block-level `const`/`let`/
+     *  `var` never ADDS — TypeScript widens a loop-BODY-captured block const
+     *  (`while (…) { const x = 1; if (x == 2) … }` does NOT error, unlike a
+     *  for-INITIALIZER const). */
+    private fun spineClPrepass(
+        s: Map<String, ConstLitInfo>, stmts: List<Statement>,
+    ): Map<String, ConstLitInfo> {
+        if (s.isEmpty()) return s
+        val out = HashMap(s)
+        for (stmt in stmts) {
+            if (stmt !is VariableStatement) continue
+            for (decl in stmt.declarationList.declarations) {
+                (decl.name as? Identifier)?.text?.let { out.remove(it) }
+            }
+        }
+        return out
+    }
+
+    /** fn-decl/fn-expr/arrow boundary: remove parameter names (copied map). */
+    private fun spineClMinusParams(
+        s: Map<String, ConstLitInfo>, params: List<Parameter>,
+    ): Map<String, ConstLitInfo> {
+        if (s.isEmpty()) return s
+        val out = HashMap(s)
+        for (p in params) (p.name as? Identifier)?.text?.let { out.remove(it) }
+        return out
+    }
+
+    /** The ForStatement arm's inner-map transform: a for-init `const x =
+     *  <bare literal>` (no annotation) ADDS; every other for-init
+     *  declaration REMOVES its name. */
+    private fun spineClForInner(
+        s: Map<String, ConstLitInfo>, p: ForStatement,
+    ): Map<String, ConstLitInfo> {
+        val vdl = p.initializer as? VariableDeclarationList ?: return s
+        val out = HashMap(s)
+        val isConst = vdl.flags == SyntaxKind.ConstKeyword
+        for (d in vdl.declarations) {
+            val nm = (d.name as? Identifier)?.text ?: continue
+            val lit = if (isConst && d.type == null) constLiteralOf(d.initializer) else null
+            if (lit != null) out[nm] = lit else out.remove(nm)
+        }
+        return out
     }
 
     /** Emit TS2367 when an eq-comparison has a const-literal operand vs a different literal. */
