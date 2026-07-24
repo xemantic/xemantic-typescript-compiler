@@ -105,7 +105,16 @@ whose descent is NARROWER than the scan's (no nested fn/class bodies). Frozen
 quirks to pin: only ClassDeclaration and FunctionDeclaration create scopes —
 class EXPRESSIONS, arrows and fn-EXPRESSIONS have NO arm at all, so a `++`
 inside them is UNREACHED — and a class PROPERTY INITIALIZER is walked with BOTH
-sets EMPTIED (so `this.tp++` in an initializer draws nothing).
+sets EMPTIED (so `this.tp++` in an initializer draws nothing). ALSO LANDED this session (ahead of schedule, so the next session
+starts directly at the implementation): the 40 round-654 migration PINS
+(M04IncDecTypeParamSpineMigrationTest) — 40/40 green against the LEGACY pass on
+the first run, no calibration — covering the core this-property/local emissions
+and spans, all four operator forms, the constrained / type-argument-bearing /
+concrete / non-this negative controls, scope accumulation across class + method
++ nested function-declaration boundaries, and every frozen reach quirk above
+(plus: the tpLocals prepass is body-WIDE and block-BLIND — a `let x!: T` inside
+an if-block registers for the whole body — yet never descends a nested function
+body, while a for-INIT declaration does register).
 
 **Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
 checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
