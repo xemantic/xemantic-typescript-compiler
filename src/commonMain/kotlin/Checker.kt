@@ -5814,6 +5814,18 @@ class Checker(
         // NOT apply). The only diagnostics-list consumer of TS7057 —
         // checkBuiltinIterator's corpus-unique suppress-and-re-emit — dispatches
         // far after the spine slot.
+        // 27e' (M0.4 slot-move pre-gate, round 652 tail):
+        // checkAbstractMemberAccessInConstructor (TS2715 — a `this.X` reference
+        // inside a constructor body or a class-field initializer where X is an
+        // abstract member of the surrounding class, own or inherited) moved
+        // intact from slot 27e ahead of its spine migration. Coupling surface:
+        // self-contained — FULLY SYNTACTIC (class members' modifiers/names +
+        // heritage Identifier names + source text; NOT type-resolving → no
+        // first-touch hazard, no ambient install); its per-file
+        // buildClassDeclarationMap prepass is a FILE-scoped collector (the
+        // round-627 migration shape); grep-verified NO pass scans/dedups/
+        // retracts TS2715 (this pass is the code's only mention).
+        pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6284,8 +6296,10 @@ class Checker(
         pass("checkIllegalSuperCallsInNestedFunctions") { checkIllegalSuperCallsInNestedFunctions() }
         // 27d. checkSuperRefInRebindingScope (TS2660) is ON THE SPINE
         // (M0.4, round 641) — see spineSrEnterNode.
-        // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
-        pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
+        // 27e. checkAbstractMemberAccessInConstructor (TS2715 — `this.X` in a
+        // constructor / field initializer where X is abstract) MOVED to the
+        // post-spine slot (M0.4 slot-move pre-gate, round 652 tail) ahead of its
+        // spine migration.
         // 27f. checkAbstractMemberContext (TS1253/TS1244/TS7008) is ON THE
         // SPINE (M0.4, round 651) — see spineAbEnterNode / spineAbStatus.
         // 28. TS1155 (const without initializer) + 28b. TS1182/TS7031

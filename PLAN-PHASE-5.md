@@ -81,8 +81,22 @@ then checkIncDecTypeParamOperands 68.3, checkConflictMarkers 67.8,
 checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
 65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
 (checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file). The
-usual next step is the #30 slot-move pre-gate; the round-652 `--listAll` ×8
-captures are the valid PRE baseline for it, since HEAD is that build.
+SESSION TAIL: the #30 slot-move pre-gate LANDED —
+checkAbstractMemberAccessInConstructor (TS2715, a `this.X` reference inside a
+constructor body or class-field initializer where X is an abstract member of
+the surrounding class, own or inherited) moved intact from slot 27e to the
+post-spine slot. Coupling surface: self-contained — FULLY SYNTACTIC (member
+modifiers/names + heritage Identifier names + source text; NOT type-resolving →
+no first-touch hazard, no ambient install); its per-file
+buildClassDeclarationMap prepass is a FILE-scoped collector (the round-627
+migration shape); grep-verified NO pass scans/dedups/retracts TS2715 (this pass
+is the code's only mention of the code), and TS2715 fires 0 times on all 8
+profiles. Gates: suite 12,291/0; `--listAll` ×8 byte-identical pre-vs-post on
+all 8 profiles (46×7/94). NEXT session starts at its migration — the walk is a
+class-anchored routing recursion over a FILE-scoped classMap prepass, so the
+round-627 collector-prepass variant is the template (per-file setup state for
+the map + a memoized reach classifier for the `this.X` anchors, with the
+nested-function-body skip — deferred `this` — as frozen reach edges).
 
 **Round 651 (2026-07-24) — (M0.4) twenty-eighth tail-pass migration:
 checkAbstractMemberContext (TS1253 abstract properties + TS1244 abstract
