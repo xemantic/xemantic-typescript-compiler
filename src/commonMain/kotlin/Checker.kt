@@ -3625,6 +3625,29 @@ class Checker(
     /** Reusable ascent buffer for [spineCpStatus]. */
     private val spineCpChain = ArrayList<Node>()
 
+    // ── (M0.4) round 651: checkAbstractMemberContext on the spine ──────────
+    // TS1253 (abstract properties) / TS1244 (abstract methods/accessors) in a
+    // non-abstract, non-ambient class + TS7008 (abstract property without a
+    // type annotation) anchors at ClassDeclaration / ClassExpression enters.
+    // Reach = the memoized single-state classifier [spineAbStatus] over
+    // [spineAbFold] (the deleted walkClassesForAbstractContext/
+    // walkExprForAbstractContext arms verbatim — unlike round 650 there is NO
+    // declare-skip: declare classes/modules/functions ARE walked, threading a
+    // downward `inAmbient` flag). Fully syntactic — no ambient sandwich (the
+    // emission leaf processClassForAbstractContext reads only its `source`/
+    // `fileName` args + `options`, all immutable). The downward `inAmbient`
+    // is re-derived per class by [spineAbInAmbient] — a separate declare-
+    // ancestor climb (monotone: for a REACHED class the threaded value equals
+    // the OR over its `declare` ClassDeclaration/ModuleDeclaration ancestors,
+    // since a reached class is always inside such an ancestor's member body /
+    // module body — the only walked edges out of those nodes). Fields
+    // PRE-init (the pipeline runs inside `init`).
+    private var spineAbActive = false
+    /** Per-file nodeId memo for [spineAbStatus] — 0 unknown, else AB_*. */
+    private var spineAbReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineAbStatus]. */
+    private val spineAbChain = ArrayList<Node>()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5754,16 +5777,14 @@ class Checker(
         // pre-gate parked it here first). Fully syntactic — no ambient
         // sandwich (the emission leaf reads only its fileName arg +
         // perFileScope + KNOWN_GLOBALS, all immutable).
-        // 27f' (M0.4 slot-move pre-gate, round 650 tail):
-        // checkAbstractMemberContext (TS1253 abstract properties + TS1244
-        // abstract methods in a non-abstract class + TS7008 abstract property
-        // without a type annotation) moved intact from slot 27f ahead of its
-        // spine migration. Coupling surface: self-contained — FULLY SYNTACTIC
-        // (member modifiers/type/initializer/name + options + source.indexOf
-        // only; NOT type-resolving → no first-touch hazard); the downward
-        // `inAmbient` flag is re-derivable per class from the ancestor chain;
-        // grep-verified NO pass scans/dedups/retracts TS1253/TS1244/TS7008.
-        pass("checkAbstractMemberContext") { checkAbstractMemberContext() }
+        // 27f' (M0.4, round 651): checkAbstractMemberContext (TS1253 abstract
+        // properties + TS1244 abstract methods in a non-abstract class + TS7008
+        // abstract property without a type annotation) is ON THE SPINE — see
+        // spineAbEnterNode / spineAbStatus (the round-650-tail slot-move
+        // pre-gate parked it here first). Fully syntactic — no ambient sandwich
+        // (the emission leaf reads only its source/fileName args + options, all
+        // immutable); the downward `inAmbient` flag is re-derived per class by
+        // spineAbInAmbient (a declare-ancestor climb).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6236,9 +6257,8 @@ class Checker(
         // (M0.4, round 641) — see spineSrEnterNode.
         // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
         pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
-        // 27f. checkAbstractMemberContext (TS1253/TS1244/TS7008) MOVED to the
-        // post-spine slot (M0.4 slot-move pre-gate, round 650 tail) ahead of
-        // its spine migration.
+        // 27f. checkAbstractMemberContext (TS1253/TS1244/TS7008) is ON THE
+        // SPINE (M0.4, round 651) — see spineAbEnterNode / spineAbStatus.
         // 28. TS1155 (const without initializer) + 28b. TS1182/TS7031
         // (destructuring declaration without initializer) migrated to the check
         // spine (INV.4(b) batch 5) — see spineCheckConstInitializer /
@@ -21633,6 +21653,7 @@ class Checker(
                 spineTcSetup(result)
                 spineDelSetup(result)
                 spineCpSetup(result)
+                spineAbSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21681,6 +21702,7 @@ class Checker(
                     spineTcTeardown()
                     spineDelTeardown()
                     spineCpTeardown()
+                    spineAbTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21970,6 +21992,12 @@ class Checker(
         // classifier; fully syntactic, no frames/leave hook, no ambient
         // sandwich.
         if (spineCpActive) spineCpEnterNode(node)
+        // (M0.4) round 651: the abstract-member-context anchors (ClassDeclaration
+        // / ClassExpression enters) — the TS1253/TS1244/TS7008 emission leaf
+        // under the single-state reach classifier + the per-anchor
+        // declare-ancestor `inAmbient` climb; fully syntactic, no frames/leave
+        // hook, no ambient sandwich.
+        if (spineAbActive) spineAbEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48091,6 +48119,20 @@ class Checker(
         private const val CP_MEMBER = 5
         private const val CP_ROOT = 6
 
+        // (M0.4) round 651: spineAbStatus states (checkAbstractMemberContext
+        // reach — single-state + the transient SourceFile root; the downward
+        // `inAmbient` flag is computed SEPARATELY by spineAbInAmbient, not
+        // folded into the status). AB_STMT = a walkClassesForAbstractContext
+        // position; AB_EXPR = a walkExprForAbstractContext position; AB_MEMBER
+        // = a class member on the path to its body (Method/Ctor/Get/Set/
+        // StaticBlock → AB_STMT; NO PropertyDeclaration — Ab recurses member
+        // BODIES only, never property initializers).
+        private const val AB_NONE = 1
+        private const val AB_STMT = 2
+        private const val AB_EXPR = 3
+        private const val AB_MEMBER = 4
+        private const val AB_ROOT = 5
+
         // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
         // reach — binary + the transient SourceFile root).
         private const val GX_REACHED = 1
@@ -63937,6 +63979,240 @@ interface DataView {
         else -> CP_NONE
     }
 
+    // ── (M0.4) round 651: checkAbstractMemberContext spine pieces ──────────
+
+    private fun spineAbSetup(result: BinderResult) {
+        spineAbActive = !spineIsDts
+        spineAbReachMemo = if (!spineAbActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineAbTeardown() {
+        spineAbActive = false
+        spineAbReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: a reached ClassDeclaration (AB_STMT) or ClassExpression
+     *  (AB_EXPR) runs the emission leaf processClassForAbstractContext over
+     *  its DIRECT members (nested classes are reached independently by the
+     *  spine — this never re-descends into them). The downward `inAmbient`
+     *  flag is re-derived per class from the declare-ancestor chain
+     *  ([spineAbInAmbient]); a ClassDeclaration OR-s its OWN `declare`, a
+     *  ClassExpression uses `inAmbient` directly (it can never be `declare`).
+     *  Fully syntactic — no ambient sandwich. */
+    private fun spineAbEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
+                if (spineAbStatus(node) != AB_STMT) return
+                val isAmbientClass = spineAbInAmbient(node) || ModifierFlag.Declare in node.modifiers
+                val classIsAbstract = ModifierFlag.Abstract in node.modifiers
+                processClassForAbstractContext(
+                    node.members, classIsAbstract, isAmbientClass, spineSource, spineFileName
+                )
+            }
+            NodeKind.CLASS_EXPRESSION -> {
+                node as ClassExpression
+                if (spineAbStatus(node) != AB_EXPR) return
+                val classIsAbstract = ModifierFlag.Abstract in node.modifiers
+                processClassForAbstractContext(
+                    node.members, classIsAbstract, spineAbInAmbient(node), spineSource, spineFileName
+                )
+            }
+        }
+    }
+
+    /** The threaded `inAmbient` value that REACHED [node] (a reached class).
+     *  Monotone-equivalent to the OR over `node`'s `declare` ClassDeclaration /
+     *  ModuleDeclaration ancestors: a reached class sits inside every such
+     *  ancestor's MEMBER BODY / MODULE BODY (the only walked edges out of those
+     *  nodes), and each such boundary contributes `Declare(owner)` to the
+     *  monotone flag — so a single declare-ancestor makes it ambient. A
+     *  ClassExpression ancestor never contributes (it cannot be `declare`, and
+     *  its member-body descent passes `inAmbient` unchanged); a
+     *  FunctionDeclaration ancestor never contributes (unchanged pass-through).
+     *  `node`'s OWN `declare` is added by the caller. */
+    private fun spineAbInAmbient(node: Node): Boolean {
+        var cur: Node? = (node as NodeBase).parent
+        while (cur != null && cur !is SourceFile) {
+            when (cur) {
+                is ClassDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
+                is ModuleDeclaration -> if (ModifierFlag.Declare in cur.modifiers) return true
+                else -> {}
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return false
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineAbFold] back down (spineCpStatus pattern).
+     *  The SourceFile anchor carries the transient AB_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement` → AB_STMT. */
+    private fun spineAbStatus(node: Node): Int {
+        if (node is SourceFile) return AB_ROOT
+        val memo = spineAbReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineAbChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = AB_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = AB_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = AB_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> AB_NONE
+                pStatus == AB_ROOT -> if (c is Statement) AB_STMT else AB_NONE
+                else -> spineAbFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted walkClassesForAbstractContext/walkExprForAbstractContext
+     *  arms, verbatim, as (parent, parent-status) → child-status transitions.
+     *  AB_STMT reproduces the statement walk (a class DECLARATION descends
+     *  member BODIES via AB_MEMBER — NOT property initializers — and the walk
+     *  is NEVER declare-skipped, only threaded); AB_EXPR the expression walk (a
+     *  class EXPRESSION likewise descends member bodies only). Differences from
+     *  round 650's CP fold, all frozen + pinned: no declare gate on class/
+     *  module/function; NO PropertyDeclaration in the class→member conduit;
+     *  the SwitchStatement SUBJECT and the ConditionalExpression CONDITION ARE
+     *  walked; arrow/fn-expr Block bodies are the FULL statement walk (AB_STMT),
+     *  not a restricted subset. VariableDeclarationList/VariableDeclaration
+     *  carry AB_STMT as an internal label (reached only via a VariableStatement,
+     *  never a for-head, which the AB_STMT arms never descend). Unlisted
+     *  (parent, status) pairs are the legacy `else -> {}`s (if/loop HEADS, for
+     *  initializers, param defaults, computed names, decorators, type positions,
+     *  class-decl property initializers …). */
+    private fun spineAbFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        AB_STMT -> when (pNode) {
+            // ---- walkClassesForAbstractContext arms ----
+            // class DECLARATIONS: emission at the class enter; the walk
+            // descends member BODIES (Method/Ctor/Get/Set/StaticBlock) — NOT
+            // property initializers — with NO declare skip.
+            is ClassDeclaration -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is ClassStaticBlockDeclaration) AB_MEMBER else AB_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) AB_STMT else AB_NONE
+            is ModuleBlock -> if (child is Statement) AB_STMT else AB_NONE
+            is FunctionDeclaration -> if (child === pNode.body) AB_STMT else AB_NONE
+            is VariableStatement -> if (child === pNode.declarationList) AB_STMT else AB_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) AB_STMT else AB_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) AB_EXPR else AB_NONE
+            is ExpressionStatement -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is ReturnStatement -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is Block -> if (child is Statement) AB_STMT else AB_NONE
+            is IfStatement -> if (child === pNode.thenStatement || child === pNode.elseStatement)
+                AB_STMT else AB_NONE // NOT the condition
+            is ForStatement -> if (child === pNode.statement) AB_STMT else AB_NONE // NOT the head
+            is ForInStatement -> if (child === pNode.statement) AB_STMT else AB_NONE
+            is ForOfStatement -> if (child === pNode.statement) AB_STMT else AB_NONE
+            is WhileStatement -> if (child === pNode.statement) AB_STMT else AB_NONE
+            is DoStatement -> if (child === pNode.statement) AB_STMT else AB_NONE
+            // Ab walks the switch SUBJECT (→ AB_EXPR) in addition to the
+            // clauses (→ AB_STMT); CP did not.
+            is SwitchStatement -> if (child === pNode.expression) AB_EXPR
+                else if (child is CaseClause || child is DefaultClause) AB_STMT else AB_NONE
+            is CaseClause -> if (child is Statement) AB_STMT else AB_NONE
+            is DefaultClause -> if (child is Statement) AB_STMT else AB_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child is CatchClause ||
+                child === pNode.finallyBlock) AB_STMT else AB_NONE
+            is CatchClause -> if (child === pNode.block) AB_STMT else AB_NONE
+            is LabeledStatement -> if (child === pNode.statement) AB_STMT else AB_NONE
+            is ThrowStatement -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is ExportAssignment -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            else -> AB_NONE
+        }
+        AB_EXPR -> when (pNode) {
+            // ---- walkExprForAbstractContext arms ----
+            // class EXPRESSIONS descend member BODIES only (Method/Ctor/Get/
+            // Set/StaticBlock → AB_MEMBER; NO PropertyDeclaration — Ab never
+            // recurses property initializers).
+            is ClassExpression -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is ClassStaticBlockDeclaration) AB_MEMBER else AB_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is AsExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is NonNullExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            // Ab walks the CONDITION as well as both branches; CP did not.
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) AB_EXPR else AB_NONE
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right)
+                AB_EXPR else AB_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) AB_EXPR else AB_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) AB_EXPR else AB_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) AB_EXPR else AB_NONE
+            is SpreadElement -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) AB_EXPR else AB_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) AB_EXPR else AB_NONE
+            is AwaitExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is YieldExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is VoidExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is DeleteExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is TypeOfExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is TemplateExpression -> if (child is TemplateSpan) AB_EXPR else AB_NONE
+            is TemplateSpan -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) AB_EXPR else AB_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) AB_EXPR else AB_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) AB_EXPR else AB_NONE
+            is ObjectLiteralExpression -> if (child is PropertyAssignment ||
+                child is SpreadAssignment) AB_EXPR else AB_NONE
+            is PropertyAssignment -> if (child === pNode.initializer) AB_EXPR else AB_NONE
+            is SpreadAssignment -> if (child === pNode.expression) AB_EXPR else AB_NONE
+            // arrow/fn-expr bodies are the FULL statement walk (a Block →
+            // AB_STMT, unlike CP's restricted subset); an expression concise
+            // arrow body continues as AB_EXPR.
+            is ArrowFunction -> if (child === pNode.body) {
+                if (child is Block) AB_STMT else AB_EXPR
+            } else AB_NONE
+            is FunctionExpression -> if (child === pNode.body) AB_STMT else AB_NONE
+            else -> AB_NONE
+        }
+        AB_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) AB_STMT else AB_NONE
+            is Constructor -> if (child === pNode.body) AB_STMT else AB_NONE
+            is GetAccessor -> if (child === pNode.body) AB_STMT else AB_NONE
+            is SetAccessor -> if (child === pNode.body) AB_STMT else AB_NONE
+            is ClassStaticBlockDeclaration -> if (child === pNode.body) AB_STMT else AB_NONE
+            else -> AB_NONE
+        }
+        else -> AB_NONE
+    }
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─
 
     private fun spineB94Setup(result: BinderResult) {
@@ -71280,173 +71556,17 @@ interface DataView {
     }
 
     // -----------------------------------------------------------------------
-    // TS1253: abstract members in non-abstract class
-    // TS7008: abstract property without annotation in non-ambient class
+    // TS1253/TS1244: abstract members in a non-abstract class + TS7008
+    // (abstract property without annotation in a non-ambient class) — ON THE
+    // SPINE (M0.4, round 651). The legacy driver + the
+    // walkClassesForAbstractContext/walkExprForAbstractContext recursion
+    // (which threaded a downward `inAmbient` flag to reach every nested class
+    // declaration/expression) is DELETED; the anchors are ClassDeclaration/
+    // ClassExpression enters (spineAbEnterNode) gated by the single-state
+    // reach classifier spineAbStatus/spineAbFold, with `inAmbient` re-derived
+    // per class by spineAbInAmbient (a declare-ancestor climb). The emission
+    // leaf processClassForAbstractContext below survives anchor-called.
     // -----------------------------------------------------------------------
-
-    private fun checkAbstractMemberContext() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            walkClassesForAbstractContext(result.sourceFile.statements, source, fileName, inAmbient = false)
-        }
-    }
-
-    private fun walkClassesForAbstractContext(
-        stmts: List<Statement>,
-        source: String,
-        fileName: String,
-        inAmbient: Boolean,
-    ) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    val isAmbientClass = inAmbient || ModifierFlag.Declare in stmt.modifiers
-                    val classIsAbstract = ModifierFlag.Abstract in stmt.modifiers
-                    processClassForAbstractContext(stmt.members, classIsAbstract, isAmbientClass, source, fileName)
-                    // Recurse into nested classes inside member bodies.
-                    for (member in stmt.members) {
-                        val body = when (member) {
-                            is MethodDeclaration -> member.body
-                            is GetAccessor -> member.body
-                            is SetAccessor -> member.body
-                            is Constructor -> member.body
-                            is ClassStaticBlockDeclaration -> member.body
-                            else -> null
-                        }
-                        body?.let { walkClassesForAbstractContext(it.statements, source, fileName, isAmbientClass) }
-                    }
-                }
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        val init = decl.initializer ?: continue
-                        walkExprForAbstractContext(init, source, fileName, inAmbient)
-                    }
-                }
-                is ExpressionStatement -> walkExprForAbstractContext(stmt.expression, source, fileName, inAmbient)
-                is FunctionDeclaration -> stmt.body?.let { walkClassesForAbstractContext(it.statements, source, fileName, inAmbient) }
-                is Block -> walkClassesForAbstractContext(stmt.statements, source, fileName, inAmbient)
-                is IfStatement -> {
-                    walkClassesForAbstractContext(listOf(stmt.thenStatement), source, fileName, inAmbient)
-                    stmt.elseStatement?.let { walkClassesForAbstractContext(listOf(it), source, fileName, inAmbient) }
-                }
-                is ModuleDeclaration -> {
-                    val body = stmt.body
-                    val nowAmbient = inAmbient || ModifierFlag.Declare in stmt.modifiers
-                    if (body is ModuleBlock) walkClassesForAbstractContext(body.statements, source, fileName, nowAmbient)
-                }
-                is ReturnStatement -> stmt.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-                is ForStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
-                is ForInStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
-                is ForOfStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
-                is WhileStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
-                is DoStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
-                is SwitchStatement -> {
-                    walkExprForAbstractContext(stmt.expression, source, fileName, inAmbient)
-                    for (clause in stmt.caseBlock) {
-                        val clauseStmts = when (clause) {
-                            is CaseClause -> clause.statements
-                            is DefaultClause -> clause.statements
-                            else -> emptyList()
-                        }
-                        walkClassesForAbstractContext(clauseStmts, source, fileName, inAmbient)
-                    }
-                }
-                is TryStatement -> {
-                    walkClassesForAbstractContext(stmt.tryBlock.statements, source, fileName, inAmbient)
-                    stmt.catchClause?.let { walkClassesForAbstractContext(it.block.statements, source, fileName, inAmbient) }
-                    stmt.finallyBlock?.let { walkClassesForAbstractContext(it.statements, source, fileName, inAmbient) }
-                }
-                is LabeledStatement -> walkClassesForAbstractContext(listOf(stmt.statement), source, fileName, inAmbient)
-                is ThrowStatement -> stmt.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-                is ExportAssignment -> walkExprForAbstractContext(stmt.expression, source, fileName, inAmbient)
-                else -> {}
-            }
-        }
-    }
-
-    private fun walkExprForAbstractContext(expr: Expression, source: String, fileName: String, inAmbient: Boolean) {
-        when (expr) {
-            is ClassExpression -> {
-                val classIsAbstract = ModifierFlag.Abstract in expr.modifiers
-                processClassForAbstractContext(expr.members, classIsAbstract, inAmbient, source, fileName)
-                for (member in expr.members) {
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        is Constructor -> member.body
-                        is ClassStaticBlockDeclaration -> member.body
-                        else -> null
-                    }
-                    body?.let { walkClassesForAbstractContext(it.statements, source, fileName, inAmbient) }
-                }
-            }
-            is ParenthesizedExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is BinaryExpression -> {
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                walkExprForAbstractContext(cur, source, fileName, inAmbient)
-                while (rightStack.isNotEmpty()) walkExprForAbstractContext(rightStack.removeLast(), source, fileName, inAmbient)
-            }
-            is CallExpression -> {
-                walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-                expr.arguments.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-            }
-            is NewExpression -> {
-                walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-                expr.arguments?.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-            }
-            is AsExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is TypeAssertionExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is SatisfiesExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is NonNullExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is ConditionalExpression -> {
-                walkExprForAbstractContext(expr.condition, source, fileName, inAmbient)
-                walkExprForAbstractContext(expr.whenTrue, source, fileName, inAmbient)
-                walkExprForAbstractContext(expr.whenFalse, source, fileName, inAmbient)
-            }
-            is PropertyAccessExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is ElementAccessExpression -> {
-                walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-                walkExprForAbstractContext(expr.argumentExpression, source, fileName, inAmbient)
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-            is ObjectLiteralExpression -> for (prop in expr.properties) {
-                when (prop) {
-                    is PropertyAssignment -> walkExprForAbstractContext(prop.initializer, source, fileName, inAmbient)
-                    is SpreadAssignment -> walkExprForAbstractContext(prop.expression, source, fileName, inAmbient)
-                    else -> {}
-                }
-            }
-            is SpreadElement -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is PrefixUnaryExpression -> walkExprForAbstractContext(expr.operand, source, fileName, inAmbient)
-            is PostfixUnaryExpression -> walkExprForAbstractContext(expr.operand, source, fileName, inAmbient)
-            is AwaitExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is YieldExpression -> expr.expression?.let { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-            is VoidExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is DeleteExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is TypeOfExpression -> walkExprForAbstractContext(expr.expression, source, fileName, inAmbient)
-            is TemplateExpression -> expr.templateSpans.forEach { walkExprForAbstractContext(it.expression, source, fileName, inAmbient) }
-            is TaggedTemplateExpression -> {
-                walkExprForAbstractContext(expr.tag, source, fileName, inAmbient)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    walkExprForAbstractContext(it.expression, source, fileName, inAmbient)
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { walkExprForAbstractContext(it, source, fileName, inAmbient) }
-            // round 43 iter17: function-like body recursion (mirror of iter14-16 pattern).
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> walkClassesForAbstractContext(body.statements, source, fileName, inAmbient)
-                is Expression -> walkExprForAbstractContext(body, source, fileName, inAmbient)
-                else -> {}
-            }
-            is FunctionExpression -> walkClassesForAbstractContext(expr.body.statements, source, fileName, inAmbient)
-            else -> {}
-        }
-    }
 
     private fun processClassForAbstractContext(
         members: List<ClassElement>,
