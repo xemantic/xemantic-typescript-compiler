@@ -74,11 +74,23 @@ FIRST; suite 12,192 → 12,225/0; `--listAll` ×8 byte-identical (sorted error
 lines; 46×7/94, harness 94); pass table 413 → 412 (the 85.5 ms row gone;
 checkSpine 20.9 s single-run under --passTiming — in-band); warning-clean
 (--rerun-tasks, zero `w:`). M0.4 running total: top TWENTY-SEVEN tail passes
-migrated. SESSION TAIL: checkAbstractMemberContext (#28, 81.6 ms — TS1253
-abstract members in a non-abstract class + TS7008 abstract property without
-annotation) is the next per-file target; it is a class-anchored pass with a
-downward `inAmbient` flag (the round-532/638 downward-context shape). Its
-slot-move pre-gate + migration are NEXT session's work
+migrated. SESSION TAIL: the checkAbstractMemberContext (#28, 81.6 ms —
+TS1253 abstract properties + TS1244 abstract methods in a non-abstract
+class + TS7008 abstract property without a type annotation) slot-move
+pre-gate LANDED (moved intact from slot 27f to the post-spine slot; suite
+12,225/0; `--listAll` ×8 byte-identical pre-vs-post on all 8 profiles;
+coupling surface verified self-contained — FULLY SYNTACTIC (member
+modifiers/type/initializer/name + options + `source.indexOf` only; NOT
+type-resolving → no first-touch hazard, so the slot-move needs no empirical
+first-touch check beyond the byte-diff), a downward `inAmbient` flag that is
+re-derivable per class from the ancestor chain, and grep-verified NO pass
+scans/dedups/retracts TS1253/TS1244/TS7008). Scope map for the migrator:
+a class-anchored walk (ClassDeclaration/ClassExpression enters, declare/
+ambient-gated) with the round-532/638 downward-`inAmbient`-flag shape —
+`inAmbient` becomes true at a `declare` class/namespace and stays true
+through descendants; the emission leaf processClassForAbstractContext reads
+only member AST + options + source, so no ambient sandwich is needed. NEXT
+session starts at that migration; after it by cost
 (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
 cross-file).**
 
