@@ -5754,6 +5754,16 @@ class Checker(
         // pre-gate parked it here first). Fully syntactic — no ambient
         // sandwich (the emission leaf reads only its fileName arg +
         // perFileScope + KNOWN_GLOBALS, all immutable).
+        // 27f' (M0.4 slot-move pre-gate, round 650 tail):
+        // checkAbstractMemberContext (TS1253 abstract properties + TS1244
+        // abstract methods in a non-abstract class + TS7008 abstract property
+        // without a type annotation) moved intact from slot 27f ahead of its
+        // spine migration. Coupling surface: self-contained — FULLY SYNTACTIC
+        // (member modifiers/type/initializer/name + options + source.indexOf
+        // only; NOT type-resolving → no first-touch hazard); the downward
+        // `inAmbient` flag is re-derivable per class from the ancestor chain;
+        // grep-verified NO pass scans/dedups/retracts TS1253/TS1244/TS7008.
+        pass("checkAbstractMemberContext") { checkAbstractMemberContext() }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6226,8 +6236,9 @@ class Checker(
         // (M0.4, round 641) — see spineSrEnterNode.
         // 27e. Check this.X access in constructors / field initializers where X is abstract (TS2715)
         pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
-        // 27f. Check abstract members in non-abstract class (TS1253) + abstract property without annotation (TS7008)
-        pass("checkAbstractMemberContext") { checkAbstractMemberContext() }
+        // 27f. checkAbstractMemberContext (TS1253/TS1244/TS7008) MOVED to the
+        // post-spine slot (M0.4 slot-move pre-gate, round 650 tail) ahead of
+        // its spine migration.
         // 28. TS1155 (const without initializer) + 28b. TS1182/TS7031
         // (destructuring declaration without initializer) migrated to the check
         // spine (INV.4(b) batch 5) — see spineCheckConstInitializer /
