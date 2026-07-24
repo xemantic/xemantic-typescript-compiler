@@ -87,9 +87,22 @@ MIGRATION build of the same tree and diffed, not merely count-compared);
 checkAbstractMemberContext rows; checkSpine 20.0 s single-run, in-band with
 rounds 646–650's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`).
 M0.4 running total: top TWENTY-EIGHT tail passes migrated.
-NEXT: the top-28 rows are gone, so the next pick needs a FRESH `--passTiming`
-table (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
-cross-file aggregation, not per-file spine material).
+NEXT (from the FRESH round-651 table captured this session — the top-28 rows
+are gone and **the tail is now FLAT: no row above 110 ms**, so per-pass wall
+value is small and the arc's remaining value is the aggregate ~5 s across ~90
+passes >20 ms): #29 is **checkImplicitAnyYieldExpressions 107.2 ms** (TS7057,
+walkYield7057Stmt/-Expr over a downward `inGen` boolean) — IMPORTANT for the
+migrator: `inGen` is RESET by any nested function-like and set true only by a
+generator FunctionDeclaration, so it is NOT monotone and THIS round's
+ambient-climb variant does NOT apply; it is the round-641
+boolean-as-status shape (the flag rides the classifier status). After it:
+checkAbstractMemberAccessInConstructor 68.4, checkIncDecTypeParamOperands
+68.3, checkConflictMarkers 67.8, checkImplicitAnyNewExpressions 66.9,
+checkArgumentsInClassFieldInitializers 65.0, checkSpreadPropertyOverrides
+60.4, checkTypeParamTypedOps 60.0 (checkCrossFileModuleAugmentationDuplicates,
+now 91.8 ms, stays SKIP — cross-file). The usual next step is the #29
+slot-move pre-gate; note the round-651 `--listAll` ×8 captures (46×7/94) are
+the valid PRE baseline for it, since HEAD is that build.
 
 **Round 650 (2026-07-24) — (M0.4) twenty-seventh tail-pass migration:
 checkConstructorParamInInitializers (TS2301 — an instance field initializer
@@ -1016,11 +1029,20 @@ structural item instead of landing alone.**
   EMISSION), arrow/fn-expr Block bodies are the FULL statement walk (a class
   DECLARATION in an arrow body IS reached), and the switch SUBJECT and
   ternary CONDITION ARE walked);
-  next per-file candidates by cost: the top-28 rows are now gone, so the
-  next pick needs a FRESH `--passTiming` table
-  (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays
-  SKIP — cross-file aggregation, not per-file spine material; ~90 passes
-  >20 ms still carry ~5 s of tail). Migration protocol per
+  next per-file candidates by cost (FRESH round-651 table, the top-28 rows
+  gone): **checkImplicitAnyYieldExpressions 107.2 ms** (#29 — TS7057, a
+  downward `inGen` boolean; NOTE it is RESET by any nested function-like, so
+  it is NOT monotone and the round-651 ambient-climb variant does NOT apply —
+  this is the round-641 boolean-as-status shape, with the flag riding the
+  classifier status), then checkAbstractMemberAccessInConstructor 68.4 ms,
+  checkIncDecTypeParamOperands 68.3 ms, checkConflictMarkers 67.8 ms,
+  checkImplicitAnyNewExpressions 66.9 ms,
+  checkArgumentsInClassFieldInitializers 65.0 ms,
+  checkSpreadPropertyOverrides 60.4 ms, checkTypeParamTypedOps 60.0 ms
+  (checkCrossFileModuleAugmentationDuplicates, now 91.8 ms, stays
+  SKIP — cross-file aggregation, not per-file spine material; the tail is
+  now FLAT — no row above 110 ms, so per-pass wall value is small and the
+  remaining ~90 passes >20 ms carry the residual ~5 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient
