@@ -5844,6 +5844,21 @@ class Checker(
         // NOT apply). The only diagnostics-list consumer of TS7057 —
         // checkBuiltinIterator's corpus-unique suppress-and-re-emit — dispatches
         // far after the spine slot.
+        // 64d3' (M0.4 slot-move pre-gate, round 653 tail):
+        // checkIncDecTypeParamOperands (TS2356 — a `++`/`--` whose operand is
+        // `this.X` for a class property, or a local, annotated as a bare
+        // UNCONSTRAINED type parameter) moved intact from slot 64d3 ahead of
+        // its spine migration. Coupling surface: self-contained — FULLY
+        // SYNTACTIC (annotations matched structurally: a bare TypeReference to
+        // an in-scope type-param name with no type args and a null constraint;
+        // NOT type-resolving → no first-touch hazard, no ambient install); its
+        // downward context is a triple of NAME SETS (tparams / tpProps /
+        // tpLocals — the round-628 downward-SETS shape); grep-verified NO pass
+        // scans/dedups/retracts TS2356 (the other TS2356 emitters —
+        // checkForInNumericForRedeclare's for-in redeclare set, the arithmetic
+        // pass, a corpus-unique pinDiag walker — are position-disjoint and
+        // dedup only among themselves).
+        pass("checkIncDecTypeParamOperands") { checkIncDecTypeParamOperands() }
         // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
         // (TS2715 — a `this.X` reference inside a constructor body or a
         // class-field initializer where X is an abstract member of the
@@ -6554,8 +6569,9 @@ class Checker(
         pass("checkNamespaceImportMemberWrites") { checkNamespaceImportMemberWrites() }
         // 64d2b. Shift-by-out-of-range-literal simplification (TS6807, captureSuggestions only)
         pass("checkShiftOverflow") { checkShiftOverflow() }
-        // 64d3. Check ++/-- on type-parameter-typed operands (TS2356)
-        pass("checkIncDecTypeParamOperands") { checkIncDecTypeParamOperands() }
+        // 64d3. Check ++/-- on type-parameter-typed operands (TS2356) MOVED to
+        // the post-spine slot (M0.4 slot-move pre-gate, round 653 tail) ahead
+        // of its spine migration — see the pass("checkSpine") site.
         // 64d3b (B265). Mixin class-expression extending a type-param-typed value (TS2507/TS2545/TS2322)
         pass("checkMixinClassExtendsTypeParam") { checkMixinClassExtendsTypeParam() }
         // 64d4. checkGenericIndexWrite (TS2862) is ON THE SPINE since round
