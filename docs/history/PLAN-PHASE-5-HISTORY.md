@@ -1,3 +1,69 @@
+**Round 641 (2026-07-22) — (M0.4) eighteenth tail-pass migration:
+checkSuperRefInRebindingScope (TS2660 `super` references inside
+regular-function rebinding scopes; 113.1 ms at the round-639 table — the
+#18 per-file tail pass) is ON THE SPINE; the legacy driver +
+walkSuperRebindStmts/-Stmt/-Expr (~190 lines) DELETED;
+emitTS2660InRebindingScope survives as the anchor-called leaf.** The
+REBOUND-BOOLEAN-AS-STATUS variant (the round-640 tail note's
+"frameless pull-based" guess held, as the UY generator-flag shape): the
+walk's ONE downward boolean rides the classifier status —
+SR_REBOUND/SR_CLEAR are the SAME walk carrying `rebound`, fn-decl/
+fn-expr bodies RESET to SR_REBOUND, arrows/ModuleBlocks PRESERVE,
+class-member bodies/prop initializers reset to SR_CLEAR via the
+SR_MEMBER carrier (method/ctor/get/set/static-block bodies +
+PropertyDeclaration initializers; only a nested fn inside re-rebinds).
+Anchors: `super` Identifiers (the text pre-gate runs before the reach
+climb — the name is rare); the frozen `super(...)` CALLEE skip (TS2337
+territory) is the anchor's DIRECT-parent gate, so a PARENTHESIZED super
+callee `(super)()` still fires exactly as legacy (which walked through
+the parens). The legacy PropertyAccess/ElementAccess special-cased
+emission AT the receiver reproduces as plain descent edges — the anchor
+at the receiver super emits identically. Frozen quirks pinned both
+directions: object literals skipped entirely (the sibling
+checkSuperInObjectLiterals is position-DISJOINT — objlit member/value
+supers draw nothing from EITHER pass in a plain fn, pinned); the
+for-INITIALIZER is walked as a bare EXPRESSION only (a for-head
+declaration-LIST initializer never walked) while for-condition/
+incrementor are NOT; class EXPRESSIONS never walked; property-access
+NAMES and catch variables unreached. Fully syntactic — no ambient
+sandwich. The legacy binderResults driver → the spine's partition view,
+gated `--partitionCheck 2` EQUIVALENT ×8; zero TS2660 on all 8 tsc
+profiles → the listAll gate pins pure non-perturbation. Gates: 35 local
+pins (M04SuperRebindSpineMigrationTest) green against the LEGACY pass
+FIRST (34 on the first run; the for-head decl-list negative added from
+the code reading); suite 11,822 → 11,857/0; `--listAll` ×8
+byte-identical; partitionCheck ×8 EQUIVALENT; pass table 421 → 420 (the
+row gone; checkSpine 20.9 s single-run — in-band for this box state);
+warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
+EIGHTEEN tail passes migrated. SESSION TAIL: the
+checkInvalidAssignmentTargets (#19, 105.8 ms — TS2364 invalid
+assignment/compound-assignment targets + the destructuring
+private-identifier check) slot-move pre-gate LANDED (moved intact from
+slot 65 to the post-spine slot; suite 11,857/0; listAll ×8
+byte-identical; no TS2364 dedup/scan consumers anywhere — the sole
+other 2364 mention is a comment in the TS2454 walker). Scope map for
+the migrator: fully syntactic (isValidAssignmentTarget +
+checkDestructuringPrivateIds + expressionTrueEnd — no type caches, no
+ambient); anchors = BinaryExpressions whose operator is an assignment
+kind (the TS2364 emitters) — but note the pass descends into BOTH sides
+of every binary VIA RECURSION GUARDED by the shared `checkDepth`
+counter (checkInvalidAssignInExpr trips at maxCheckDepth), so deep
+chains PRUNE — the round-535 INT-depth classifier (spineArgDepth shape)
+is the likely reach form, with per-edge depth increments reproducing
+checkDepth's consumption; edge quirks to pin: for-heads walk
+initializer-as-Expression AND condition AND incrementor (unlike sr);
+switch-case EXPRESSIONS are NOT walked (clauses' statements only);
+objlit methods/accessors + class-EXPRESSION members ARE walked;
+TaggedTemplate walks tag + spans; class-DECLARATION members walk
+method/ctor/accessor bodies + prop initializers. NEXT session starts at
+that migration; after it by cost (this round's table, single-run):
+checkTypeParameterDefaults 150 ms (CAUTION — a PRODUCER: it
+materializes TypeParam .constraint/.default fields consumed downstream,
+per the round-555 hoist note; needs producer-aware treatment, not a
+plain slot-move), checkExpandoFunctionNestedReads 99 ms,
+checkStrictModeIdentifiers 96 ms, checkConstLiteralComparisons 95 ms,
+checkSuperInObjectLiterals 91 ms.**
+
 **Round 640 (2026-07-22) — (M0.4) seventeenth tail-pass migration:
 checkUndefinedClassInterfaceName (TS2414 class / TS2427 interface /
 TS2457 type-alias names in PREDEFINED_TYPE_NAMES + the piggy-backed

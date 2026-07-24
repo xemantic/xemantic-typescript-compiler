@@ -20,6 +20,68 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 650 (2026-07-24) — (M0.4) twenty-seventh tail-pass migration:
+checkConstructorParamInInitializers (TS2301 — an instance field initializer
+referencing a ctor param / ctor-body `var`; TS2663 — the parameter-property
+variant "Did you mean the instance member 'this.X'?"; 85.5 ms at the
+round-647 table — the #27 per-file tail pass) is ON THE SPINE; the legacy
+driver + the mutually-recursive
+checkConstructorParamInInitializersInStatements/-InExpr routing recursion
+(~199 lines — whose SOLE job was to REACH every nested class
+declaration/expression) DELETED; the emission leaf
+checkConstructorParamInClassMembers — with its OWN nested-scope-shadowing
+walk of the class's own property initializers — + its helpers survive
+anchor-called at ClassDeclaration/ClassExpression enters (declare-gated).**
+Reach = the memoized MULTI-STATE classifier spineCpStatus/spineCpFold
+reproducing the two deleted walks' arms verbatim: CP_STMT (the InStatements
+walk), CP_EXPR (the InExpr walk), CP_ABODY (an arrow/fn-expr body Block —
+the RESTRICTED walk of only Expression/Return/Variable statements), CP_MEMBER
+(a class-member conduit). Structural compression worth recording: CP_ABODY
+hands its three permitted statement kinds straight to CP_STMT — the CP_STMT
+arms for Expression/Return/Variable statements descend to CP_EXPR IDENTICALLY
+to the legacy inline restricted loop, so the restricted arrow/fn-expr body
+needs NO extra statuses beyond CP_ABODY itself; likewise
+VariableDeclarationList/VariableDeclaration carry CP_STMT as an internal
+label (they reach it only via a VariableStatement, never a for-head — which
+CP_STMT never descends). The DECLARATION-vs-EXPRESSION asymmetry rides the
+two enclosing arms: a reached ClassDeclaration (CP_STMT) gives
+Method/Ctor/Get/Set/PropertyDeclaration → CP_MEMBER (member bodies AND
+property initializers), a reached ClassExpression (CP_EXPR) gives
+PropertyDeclaration → CP_MEMBER ONLY (method/accessor bodies never
+descended); the ClassDeclaration member descent is declare-gated (a `declare
+class` reaches nothing inside) while the ClassExpression property-initializer
+descent is NOT (only the emission is declare-gated — the legacy behavior).
+Fully syntactic — NO ambient sandwich: the emission leaf reads only its
+`fileName` argument + perFileScope (built pre-spine) + KNOWN_GLOBALS, all
+immutable and independent of the spine's per-file ambient. Frozen reach
+quirks pinned both directions: statement BODIES
+(fn/namespace/block/if-then/loop-body/try/catch/switch-clause) reached but
+if/loop/switch HEADS and ternary CONDITIONS not; a class DECLARATION directly
+in an arrow body is NOT reached (the restricted body walk only descends the
+three statement kinds — a ClassDeclaration statement is not one of them)
+while a class EXPRESSION inside a Variable/Return/Expression statement's
+expression IS reached; class-EXPRESSION method bodies never descended.
+CALIBRATION FIND (a real emission-leaf quirk, now pinned both directions —
+NOT a migration change): an EXPRESSION-bodied arrow does NOT collect its
+params for shadowing (only a BLOCK body does), so `field = (param) => param`
+where `param` is a ctor param STILL fires TS2301; the emission leaf is
+unchanged so the behavior is preserved automatically (32/33 pins green on the
+first legacy run — the 33rd was this quirk, corrected to the block-body form
++ a new expression-body pin). The legacy binderResults driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (46×7/94). Gates: 33
+local pins (M04CtorParamInitSpineMigrationTest) green against the LEGACY pass
+FIRST; suite 12,192 → 12,225/0; `--listAll` ×8 byte-identical (sorted error
+lines; 46×7/94, harness 94); pass table 413 → 412 (the 85.5 ms row gone;
+checkSpine 20.9 s single-run under --passTiming — in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top TWENTY-SEVEN tail passes
+migrated. SESSION TAIL: checkAbstractMemberContext (#28, 81.6 ms — TS1253
+abstract members in a non-abstract class + TS7008 abstract property without
+annotation) is the next per-file target; it is a class-anchored pass with a
+downward `inAmbient` flag (the round-532/638 downward-context shape). Its
+slot-move pre-gate + migration are NEXT session's work
+(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file).**
+
 **Round 649 (2026-07-23) — (M0.4) twenty-sixth tail-pass migration:
 checkDeleteOperator (TS1102 delete-identifier-in-strict / TS2703
 non-property-ref operand / TS2790 non-optional operand / TS2704
@@ -572,72 +634,6 @@ side-set write, which stays in the producer). After #20 by cost:
 checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers 96 ms,
 checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals 91 ms.**
 
-**Round 641 (2026-07-22) — (M0.4) eighteenth tail-pass migration:
-checkSuperRefInRebindingScope (TS2660 `super` references inside
-regular-function rebinding scopes; 113.1 ms at the round-639 table — the
-#18 per-file tail pass) is ON THE SPINE; the legacy driver +
-walkSuperRebindStmts/-Stmt/-Expr (~190 lines) DELETED;
-emitTS2660InRebindingScope survives as the anchor-called leaf.** The
-REBOUND-BOOLEAN-AS-STATUS variant (the round-640 tail note's
-"frameless pull-based" guess held, as the UY generator-flag shape): the
-walk's ONE downward boolean rides the classifier status —
-SR_REBOUND/SR_CLEAR are the SAME walk carrying `rebound`, fn-decl/
-fn-expr bodies RESET to SR_REBOUND, arrows/ModuleBlocks PRESERVE,
-class-member bodies/prop initializers reset to SR_CLEAR via the
-SR_MEMBER carrier (method/ctor/get/set/static-block bodies +
-PropertyDeclaration initializers; only a nested fn inside re-rebinds).
-Anchors: `super` Identifiers (the text pre-gate runs before the reach
-climb — the name is rare); the frozen `super(...)` CALLEE skip (TS2337
-territory) is the anchor's DIRECT-parent gate, so a PARENTHESIZED super
-callee `(super)()` still fires exactly as legacy (which walked through
-the parens). The legacy PropertyAccess/ElementAccess special-cased
-emission AT the receiver reproduces as plain descent edges — the anchor
-at the receiver super emits identically. Frozen quirks pinned both
-directions: object literals skipped entirely (the sibling
-checkSuperInObjectLiterals is position-DISJOINT — objlit member/value
-supers draw nothing from EITHER pass in a plain fn, pinned); the
-for-INITIALIZER is walked as a bare EXPRESSION only (a for-head
-declaration-LIST initializer never walked) while for-condition/
-incrementor are NOT; class EXPRESSIONS never walked; property-access
-NAMES and catch variables unreached. Fully syntactic — no ambient
-sandwich. The legacy binderResults driver → the spine's partition view,
-gated `--partitionCheck 2` EQUIVALENT ×8; zero TS2660 on all 8 tsc
-profiles → the listAll gate pins pure non-perturbation. Gates: 35 local
-pins (M04SuperRebindSpineMigrationTest) green against the LEGACY pass
-FIRST (34 on the first run; the for-head decl-list negative added from
-the code reading); suite 11,822 → 11,857/0; `--listAll` ×8
-byte-identical; partitionCheck ×8 EQUIVALENT; pass table 421 → 420 (the
-row gone; checkSpine 20.9 s single-run — in-band for this box state);
-warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
-EIGHTEEN tail passes migrated. SESSION TAIL: the
-checkInvalidAssignmentTargets (#19, 105.8 ms — TS2364 invalid
-assignment/compound-assignment targets + the destructuring
-private-identifier check) slot-move pre-gate LANDED (moved intact from
-slot 65 to the post-spine slot; suite 11,857/0; listAll ×8
-byte-identical; no TS2364 dedup/scan consumers anywhere — the sole
-other 2364 mention is a comment in the TS2454 walker). Scope map for
-the migrator: fully syntactic (isValidAssignmentTarget +
-checkDestructuringPrivateIds + expressionTrueEnd — no type caches, no
-ambient); anchors = BinaryExpressions whose operator is an assignment
-kind (the TS2364 emitters) — but note the pass descends into BOTH sides
-of every binary VIA RECURSION GUARDED by the shared `checkDepth`
-counter (checkInvalidAssignInExpr trips at maxCheckDepth), so deep
-chains PRUNE — the round-535 INT-depth classifier (spineArgDepth shape)
-is the likely reach form, with per-edge depth increments reproducing
-checkDepth's consumption; edge quirks to pin: for-heads walk
-initializer-as-Expression AND condition AND incrementor (unlike sr);
-switch-case EXPRESSIONS are NOT walked (clauses' statements only);
-objlit methods/accessors + class-EXPRESSION members ARE walked;
-TaggedTemplate walks tag + spans; class-DECLARATION members walk
-method/ctor/accessor bodies + prop initializers. NEXT session starts at
-that migration; after it by cost (this round's table, single-run):
-checkTypeParameterDefaults 150 ms (CAUTION — a PRODUCER: it
-materializes TypeParam .constraint/.default fields consumed downstream,
-per the round-555 hoist note; needs producer-aware treatment, not a
-plain slot-move), checkExpandoFunctionNestedReads 99 ms,
-checkStrictModeIdentifiers 96 ms, checkConstLiteralComparisons 95 ms,
-checkSuperInObjectLiterals 91 ms.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -984,9 +980,19 @@ structural item instead of landing alone.**
   template application: binary reach classifier over the deleted walker
   arms, one per-file isStrict setup boolean, resting-currentFileLocals +
   null-flow sandwich with currentCheckFileName deliberately untouched);
+  checkConstructorParamInInitializers 85.5 ms — **MIGRATED round 650** (the
+  multi-state class-anchored reach classifier: CP_STMT/CP_EXPR reproduce
+  the two deleted routing walks, CP_ABODY the restricted arrow/fn-expr body
+  — its three permitted statement kinds handed straight to CP_STMT, which
+  descends them to CP_EXPR identically to the legacy inline loop, so no
+  extra restricted-body statuses — and CP_MEMBER the class-member conduit
+  carrying the DECLARATION-vs-EXPRESSION descent asymmetry, member bodies +
+  property initializers for a class DECL, property initializers only for a
+  class EXPR; fully syntactic, no ambient sandwich);
   next per-file candidates by cost (round-647 table):
-  checkConstructorParamInInitializers 85.5 ms, checkAbstractMemberContext
-  81.6 ms (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays
+  checkAbstractMemberContext 81.6 ms (a class-anchored pass with a downward
+  `inAmbient` flag — the round-532/638 downward-context shape)
+  (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays
   SKIP — cross-file aggregation, not per-file spine material; ~90 passes
   >20 ms still carry ~5 s of tail). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
