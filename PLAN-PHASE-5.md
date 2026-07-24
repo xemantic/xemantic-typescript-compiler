@@ -84,7 +84,28 @@ total: top THIRTY tail passes migrated. NEXT (round-651 table): #31
 checkIncDecTypeParamOperands 68.3 ms, then checkConflictMarkers 67.8,
 checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
 65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
-(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file).
+(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file). The SESSION TAIL: the #31 slot-move pre-gate LANDED —
+checkIncDecTypeParamOperands (TS2356, a `++`/`--` whose operand is `this.X` for
+a class property, or a local, annotated as a bare UNCONSTRAINED type parameter)
+moved intact from slot 64d3 to the post-spine slot. Coupling surface:
+self-contained — FULLY SYNTACTIC (annotations matched structurally: a bare
+TypeReference to an in-scope type-param name, no type args, null constraint; NOT
+type-resolving → no first-touch hazard, no ambient install); grep-verified NO
+pass scans/dedups/retracts TS2356 (the other emitters —
+checkForInNumericForRedeclare's for-in redeclare set, the arithmetic pass, a
+corpus-unique pinDiag walker — are position-disjoint and dedup only among
+themselves). Gates: suite 12,335/0; `--listAll` ×8 byte-identical pre-vs-post on
+all 8 profiles (46×7/94). NEXT session starts at its migration: the round-628
+downward-SETS / round-637 downward-MAP shape over `++`/`--` anchors, with a
+triple of name sets rebuilt pull-based — `tparams` ACCUMULATE at
+ClassDeclaration/FunctionDeclaration/method boundaries, `tpProps` REBUILD from
+the nearest enclosing class DECLARATION's bare-TP-annotated properties, and
+`tpLocals` rebuild per fn-like BODY from a body-wide collectTpLocals prepass
+whose descent is NARROWER than the scan's (no nested fn/class bodies). Frozen
+quirks to pin: only ClassDeclaration and FunctionDeclaration create scopes —
+class EXPRESSIONS, arrows and fn-EXPRESSIONS have NO arm at all, so a `++`
+inside them is UNREACHED — and a class PROPERTY INITIALIZER is walked with BOTH
+sets EMPTIED (so `this.tp++` in an initializer draws nothing).
 
 **Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
 checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
