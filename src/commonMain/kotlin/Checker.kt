@@ -3609,6 +3609,22 @@ class Checker(
     /** Reusable ascent buffer for [spineDelStatus]. */
     private val spineDelChain = ArrayList<Node>()
 
+    // ── (M0.4) round 650: checkConstructorParamInInitializers on the spine ─
+    // TS2301/TS2663 anchors at ClassDeclaration / ClassExpression enters
+    // (declare-gated). Reach = the memoized multi-state classifier
+    // [spineCpStatus] over [spineCpFold] (the deleted
+    // checkConstructorParamInInitializersInStatements/-InExpr arms verbatim).
+    // Fully syntactic — no ambient sandwich: the emission leaf
+    // checkConstructorParamInClassMembers reads only its `fileName`
+    // argument + perFileScope (built pre-spine) + KNOWN_GLOBALS, all
+    // immutable and independent of the spine's per-file ambient. Fields
+    // PRE-init (the pipeline runs inside `init`).
+    private var spineCpActive = false
+    /** Per-file nodeId memo for [spineCpStatus] — 0 unknown, else CP_*. */
+    private var spineCpReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineCpStatus]. */
+    private val spineCpChain = ArrayList<Node>()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5731,16 +5747,13 @@ class Checker(
         // read-only index sig) is ON THE SPINE — see spineDelEnterNode /
         // spineDelStatus (the round-648-tail slot-move pre-gate parked it
         // here first).
-        // 63' (M0.4 slot-move pre-gate, round 649 tail):
-        // checkConstructorParamInInitializers (TS2301 ctor-param/var
-        // referenced from an instance field initializer + the TS2663
-        // param-property variant) moved intact from slot 63 ahead of its
-        // spine migration. Coupling surface: self-contained — pure AST +
-        // immutable program-wide consults only (perFileScope, built
-        // pre-spine at buildPerFileScopes; KNOWN_GLOBALS); NOT
-        // type-resolving (no getTypeOfExpression/type caches — no
-        // first-touch hazard); no pass scans/dedups/retracts TS2301/TS2663.
-        pass("checkConstructorParamInInitializers") { checkConstructorParamInInitializers() }
+        // 63' (M0.4, round 650): checkConstructorParamInInitializers (TS2301
+        // ctor-param/var referenced from an instance field initializer + the
+        // TS2663 param-property variant) is ON THE SPINE — see
+        // spineCpEnterNode / spineCpStatus (the round-649-tail slot-move
+        // pre-gate parked it here first). Fully syntactic — no ambient
+        // sandwich (the emission leaf reads only its fileName arg +
+        // perFileScope + KNOWN_GLOBALS, all immutable).
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6416,9 +6429,8 @@ class Checker(
         pass("checkVarHoistRedeclaration") { checkVarHoistRedeclaration() }
         // 62b. Check var shadowing outer block-scoped name (TS2481)
         pass("checkOuterScopeVarShadowing") { checkOuterScopeVarShadowing() }
-        // 63. checkConstructorParamInInitializers MOVED to the post-spine slot
-        // (M0.4 slot-move pre-gate, round 649 tail) ahead of its spine
-        // migration.
+        // 63. checkConstructorParamInInitializers is ON THE SPINE (M0.4,
+        // round 650) — see spineCpEnterNode / spineCpStatus.
         // 64. Check type assignability (TS2322) — basic primitive type mismatches
         // 64a2. Check bare `yield;` against an explicit generator yield-type (TS2322)
         pass("checkGeneratorBareYieldTypes") { checkGeneratorBareYieldTypes() }
@@ -20065,203 +20077,17 @@ class Checker(
     }
 
     // -----------------------------------------------------------------------
-    // Constructor parameter references in class member initializers (TS2301)
+    // Constructor parameter references in class member initializers (TS2301/
+    // TS2663) — ON THE SPINE (M0.4, round 650). The legacy driver +
+    // checkConstructorParamInInitializersInStatements/-InExpr routing
+    // recursion (which reached every nested class declaration/expression) is
+    // DELETED; the anchors are ClassDeclaration/ClassExpression enters
+    // (spineCpEnterNode) gated by the multi-state reach classifier
+    // spineCpStatus/spineCpFold. The emission leaf
+    // checkConstructorParamInClassMembers below — with its OWN
+    // nested-scope-shadowing walk of the class's property initializers —
+    // survives anchor-called.
     // -----------------------------------------------------------------------
-
-    /**
-     * Checks that instance member variable initializers do not reference identifiers
-     * declared in the constructor (parameters or var declarations in the constructor body).
-     * Emits TS2301 when such a reference is found.
-     *
-     * TypeScript fires this because field initializers run before the constructor body,
-     * yet in the emitted JS they appear inside the constructor — so a reference that
-     * looks like it refers to an outer-scope variable would silently bind to the
-     * constructor parameter instead.
-     */
-    private fun checkConstructorParamInInitializers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            checkConstructorParamInInitializersInStatements(
-                result.sourceFile.statements, source, fileName
-            )
-        }
-    }
-
-    private fun checkConstructorParamInInitializersInStatements(
-        statements: List<Statement>,
-        source: String,
-        fileName: String,
-    ) {
-        for (stmt in statements) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    if (ModifierFlag.Declare in stmt.modifiers) continue
-                    checkConstructorParamInClassMembers(stmt.members, source, fileName)
-                    // round 44 iter3: recurse into class member bodies (mirror of iter2 pattern).
-                    for (member in stmt.members) {
-                        when (member) {
-                            is MethodDeclaration -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
-                            is Constructor -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
-                            is GetAccessor -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
-                            is SetAccessor -> member.body?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
-                            is PropertyDeclaration -> member.initializer?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-                            else -> {}
-                        }
-                    }
-                }
-                is ModuleDeclaration -> {
-                    if (ModifierFlag.Declare in stmt.modifiers) continue
-                    when (val body = stmt.body) {
-                        is ModuleBlock -> checkConstructorParamInInitializersInStatements(
-                            body.statements, source, fileName
-                        )
-                        else -> {}
-                    }
-                }
-                is FunctionDeclaration -> {
-                    if (ModifierFlag.Declare in stmt.modifiers) continue
-                    stmt.body?.let {
-                        checkConstructorParamInInitializersInStatements(it.statements, source, fileName)
-                    }
-                }
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        checkConstructorParamInInitializersInExpr(decl.initializer, source, fileName)
-                    }
-                }
-                is ExpressionStatement ->
-                    checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
-                is ReturnStatement ->
-                    checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
-                is Block -> checkConstructorParamInInitializersInStatements(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    checkConstructorParamInInitializersInStatements(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { checkConstructorParamInInitializersInStatements(listOf(it), source, fileName) }
-                }
-                is ForStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
-                is DoStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> {
-                    for (clause in stmt.caseBlock) {
-                        when (clause) {
-                            is CaseClause -> checkConstructorParamInInitializersInStatements(clause.statements, source, fileName)
-                            is DefaultClause -> checkConstructorParamInInitializersInStatements(clause.statements, source, fileName)
-                            else -> {}
-                        }
-                    }
-                }
-                is TryStatement -> {
-                    checkConstructorParamInInitializersInStatements(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.block?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
-                    stmt.finallyBlock?.let { checkConstructorParamInInitializersInStatements(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> checkConstructorParamInInitializersInStatements(listOf(stmt.statement), source, fileName)
-                is ThrowStatement -> stmt.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-                is ExportAssignment -> checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
-                else -> {}
-            }
-        }
-    }
-
-    private fun checkConstructorParamInInitializersInExpr(
-        expr: Expression?,
-        source: String,
-        fileName: String,
-    ) {
-        if (expr == null) return
-        when (expr) {
-            is ClassExpression -> {
-                if (ModifierFlag.Declare !in expr.modifiers) {
-                    checkConstructorParamInClassMembers(expr.members, source, fileName)
-                }
-                // Recurse into member bodies (field initializers can contain nested ClassExpressions)
-                for (m in expr.members) {
-                    when (m) {
-                        is PropertyDeclaration -> checkConstructorParamInInitializersInExpr(m.initializer, source, fileName)
-                        else -> {}
-                    }
-                }
-            }
-            is ParenthesizedExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is AsExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                checkConstructorParamInInitializersInExpr(expr.whenTrue, source, fileName)
-                checkConstructorParamInInitializersInExpr(expr.whenFalse, source, fileName)
-            }
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    checkConstructorParamInInitializersInExpr(cur.right, source, fileName)
-                    cur = cur.left
-                }
-                checkConstructorParamInInitializersInExpr(cur, source, fileName)
-            }
-            is CallExpression -> {
-                checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-            }
-            is NewExpression -> {
-                checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-            }
-            is ArrayLiteralExpression -> expr.elements.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-            is SpreadElement -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> checkConstructorParamInInitializersInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkConstructorParamInInitializersInExpr(expr.operand, source, fileName)
-            is AwaitExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-            is VoidExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is TemplateExpression -> expr.templateSpans.forEach { checkConstructorParamInInitializersInExpr(it.expression, source, fileName) }
-            is TaggedTemplateExpression -> {
-                checkConstructorParamInInitializersInExpr(expr.tag, source, fileName)
-                (expr.template as? TemplateExpression)?.templateSpans?.forEach {
-                    checkConstructorParamInInitializersInExpr(it.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> expr.elements.forEach { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-            is PropertyAccessExpression -> checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkConstructorParamInInitializersInExpr(expr.expression, source, fileName)
-                checkConstructorParamInInitializersInExpr(expr.argumentExpression, source, fileName)
-            }
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> checkConstructorParamInInitializersInExpr(p.initializer, source, fileName)
-                    is SpreadAssignment -> checkConstructorParamInInitializersInExpr(p.expression, source, fileName)
-                    else -> {}
-                }
-            }
-            // round 43 iter15: function-like body recursion (mirror of iter14's pattern).
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> body.statements.forEach { stmt ->
-                    if (stmt is ExpressionStatement) checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
-                    else if (stmt is ReturnStatement) stmt.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-                    else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
-                        d.initializer?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-                    }
-                }
-                is Expression -> checkConstructorParamInInitializersInExpr(body, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> for (stmt in expr.body.statements) {
-                if (stmt is ExpressionStatement) checkConstructorParamInInitializersInExpr(stmt.expression, source, fileName)
-                else if (stmt is ReturnStatement) stmt.expression?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-                else if (stmt is VariableStatement) for (d in stmt.declarationList.declarations) {
-                    d.initializer?.let { checkConstructorParamInInitializersInExpr(it, source, fileName) }
-                }
-            }
-            else -> {}
-        }
-    }
 
     private fun checkConstructorParamInClassMembers(
         members: List<ClassElement>,
@@ -21795,6 +21621,7 @@ class Checker(
                 spineSuSetup(result)
                 spineTcSetup(result)
                 spineDelSetup(result)
+                spineCpSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21842,6 +21669,7 @@ class Checker(
                     spineSuTeardown()
                     spineTcTeardown()
                     spineDelTeardown()
+                    spineCpTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22125,6 +21953,12 @@ class Checker(
         // enters) — the TS1102/TS2703/TS2790/TS2704/TS2542 emission under
         // the resting-locals + null-flow sandwich; no frames/leave hook.
         if (spineDelActive) spineDelEnterNode(node)
+        // (M0.4) round 650: the constructor-param-in-initializer anchors
+        // (ClassDeclaration / ClassExpression enters, declare-gated) — the
+        // TS2301/TS2663 emission leaf under the multi-state reach
+        // classifier; fully syntactic, no frames/leave hook, no ambient
+        // sandwich.
+        if (spineCpActive) spineCpEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48228,6 +48062,24 @@ class Checker(
         private const val DEL_NONE = 2
         private const val DEL_ROOT = 3
 
+        // (M0.4) round 650: spineCpStatus states
+        // (checkConstructorParamInInitializers reach — multi-state + the
+        // transient SourceFile root). CP_STMT = a
+        // checkConstructorParamInInitializersInStatements position;
+        // CP_EXPR = a checkConstructorParamInInitializersInExpr position;
+        // CP_ABODY = an arrow/fn-expr body Block whose statements are the
+        // RESTRICTED walk (only Expression/Return/Variable statements →
+        // CP_STMT, which descend to CP_EXPR exactly as those three arms do);
+        // CP_MEMBER = a class member on the path to its body (Method/Ctor/
+        // Get/Set → CP_STMT) or property initializer (PropertyDeclaration →
+        // CP_EXPR).
+        private const val CP_NONE = 1
+        private const val CP_STMT = 2
+        private const val CP_EXPR = 3
+        private const val CP_ABODY = 4
+        private const val CP_MEMBER = 5
+        private const val CP_ROOT = 6
+
         // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
         // reach — binary + the transient SourceFile root).
         private const val GX_REACHED = 1
@@ -63866,6 +63718,212 @@ interface DataView {
             child is MethodDeclaration || child is Constructor ||
                 child is GetAccessor || child is SetAccessor || child is PropertyDeclaration
         else -> false
+    }
+
+    // ── (M0.4) round 650: checkConstructorParamInInitializers spine pieces ─
+
+    private fun spineCpSetup(result: BinderResult) {
+        spineCpActive = !spineIsDts
+        spineCpReachMemo = if (!spineCpActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineCpTeardown() {
+        spineCpActive = false
+        spineCpReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: a reached, non-`declare` ClassDeclaration (CP_STMT)
+     *  or ClassExpression (CP_EXPR) runs the emission leaf
+     *  checkConstructorParamInClassMembers, which does its OWN
+     *  nested-scope-shadowing walk of the class's property initializers.
+     *  Nested classes are reached independently by the spine (this walk
+     *  never re-descends into them). Fully syntactic — no ambient sandwich. */
+    private fun spineCpEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
+                if (ModifierFlag.Declare in node.modifiers) return
+                if (spineCpStatus(node) != CP_STMT) return
+                checkConstructorParamInClassMembers(node.members, spineSource, spineFileName)
+            }
+            NodeKind.CLASS_EXPRESSION -> {
+                node as ClassExpression
+                if (ModifierFlag.Declare in node.modifiers) return
+                if (spineCpStatus(node) != CP_EXPR) return
+                checkConstructorParamInClassMembers(node.members, spineSource, spineFileName)
+            }
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineCpFold] back down (spineUyStatus pattern).
+     *  The SourceFile anchor carries the transient CP_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement` → CP_STMT. */
+    private fun spineCpStatus(node: Node): Int {
+        if (node is SourceFile) return CP_ROOT
+        val memo = spineCpReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineCpChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = CP_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = CP_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = CP_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> CP_NONE
+                pStatus == CP_ROOT -> if (c is Statement) CP_STMT else CP_NONE
+                else -> spineCpFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted checkConstructorParamInInitializersInStatements/-InExpr
+     *  arms, verbatim, as (parent, parent-status) → child-status
+     *  transitions. CP_STMT reproduces the InStatements walk (a class
+     *  DECLARATION descends member bodies AND property initializers via
+     *  CP_MEMBER); CP_EXPR the InExpr walk (a class EXPRESSION descends
+     *  PropertyDeclaration initializers ONLY); CP_ABODY the RESTRICTED
+     *  arrow/fn-expr body walk (only Expression/Return/Variable statements,
+     *  handed to CP_STMT — those three arms descend to CP_EXPR identically);
+     *  CP_MEMBER bridges a reached class member to its body/initializer.
+     *  VariableDeclarationList/VariableDeclaration carry CP_STMT as an
+     *  internal label (they only reach it via a VariableStatement, never a
+     *  for-head, which the CP_STMT arms never descend). Unlisted
+     *  (parent, status) pairs are the legacy `else -> {}`s (if/loop/switch
+     *  HEADS, ternary conditions, param defaults, computed names, decorators,
+     *  type positions, class-EXPRESSION method bodies …). */
+    private fun spineCpFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        CP_STMT -> when (pNode) {
+            // ---- checkConstructorParamInInitializersInStatements arms ----
+            is ClassDeclaration -> if (ModifierFlag.Declare in pNode.modifiers) CP_NONE
+                else if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor ||
+                    child is PropertyDeclaration) CP_MEMBER else CP_NONE
+            is ModuleDeclaration -> if (ModifierFlag.Declare in pNode.modifiers) CP_NONE
+                else if (child === pNode.body && child is ModuleBlock) CP_STMT else CP_NONE
+            is ModuleBlock -> if (child is Statement) CP_STMT else CP_NONE
+            is FunctionDeclaration -> if (ModifierFlag.Declare in pNode.modifiers) CP_NONE
+                else if (child === pNode.body) CP_STMT else CP_NONE
+            is VariableStatement -> if (child === pNode.declarationList) CP_STMT else CP_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) CP_STMT else CP_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) CP_EXPR else CP_NONE
+            is ExpressionStatement -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is ReturnStatement -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is Block -> if (child is Statement) CP_STMT else CP_NONE
+            is IfStatement -> if (child === pNode.thenStatement || child === pNode.elseStatement)
+                CP_STMT else CP_NONE // NOT the condition
+            is ForStatement -> if (child === pNode.statement) CP_STMT else CP_NONE // NOT the head
+            is ForInStatement -> if (child === pNode.statement) CP_STMT else CP_NONE
+            is ForOfStatement -> if (child === pNode.statement) CP_STMT else CP_NONE
+            is WhileStatement -> if (child === pNode.statement) CP_STMT else CP_NONE
+            is DoStatement -> if (child === pNode.statement) CP_STMT else CP_NONE
+            is SwitchStatement -> if (child is CaseClause || child is DefaultClause)
+                CP_STMT else CP_NONE // NOT the subject/case exprs
+            is CaseClause -> if (child is Statement) CP_STMT else CP_NONE
+            is DefaultClause -> if (child is Statement) CP_STMT else CP_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child is CatchClause ||
+                child === pNode.finallyBlock) CP_STMT else CP_NONE
+            is CatchClause -> if (child === pNode.block) CP_STMT else CP_NONE
+            is LabeledStatement -> if (child === pNode.statement) CP_STMT else CP_NONE
+            is ThrowStatement -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is ExportAssignment -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            else -> CP_NONE
+        }
+        CP_EXPR -> when (pNode) {
+            // ---- checkConstructorParamInInitializersInExpr arms ----
+            // class EXPRESSIONS descend PropertyDeclaration initializers ONLY
+            // (method/accessor bodies never walked — the DECLARATION-only
+            // asymmetry; the descent is NOT declare-gated, only the emission).
+            is ClassExpression -> if (child is PropertyDeclaration) CP_MEMBER else CP_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is AsExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is NonNullExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is ConditionalExpression -> if (child === pNode.whenTrue || child === pNode.whenFalse)
+                CP_EXPR else CP_NONE // NOT the condition
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right)
+                CP_EXPR else CP_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) CP_EXPR else CP_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) CP_EXPR else CP_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) CP_EXPR else CP_NONE
+            is SpreadElement -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) CP_EXPR else CP_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) CP_EXPR else CP_NONE
+            is AwaitExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is YieldExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is VoidExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is DeleteExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is TypeOfExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is TemplateExpression -> if (child is TemplateSpan) CP_EXPR else CP_NONE
+            is TemplateSpan -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) CP_EXPR else CP_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) CP_EXPR else CP_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) CP_EXPR else CP_NONE
+            // objlit: PropertyAssignment values + spreads only (the property
+            // node carries CP_EXPR as an internal label, resolved below).
+            is ObjectLiteralExpression -> if (child is PropertyAssignment ||
+                child is SpreadAssignment) CP_EXPR else CP_NONE
+            is PropertyAssignment -> if (child === pNode.initializer) CP_EXPR else CP_NONE
+            is SpreadAssignment -> if (child === pNode.expression) CP_EXPR else CP_NONE
+            // arrow body: a Block is the RESTRICTED walk (CP_ABODY), an
+            // expression concise body continues as CP_EXPR.
+            is ArrowFunction -> if (child === pNode.body) {
+                if (child is Block) CP_ABODY else CP_EXPR
+            } else CP_NONE
+            is FunctionExpression -> if (child === pNode.body) CP_ABODY else CP_NONE
+            else -> CP_NONE
+        }
+        // The RESTRICTED arrow/fn-expr body walk: only Expression/Return/
+        // Variable statements are descended (handed to CP_STMT, whose arms
+        // for exactly those three kinds descend to CP_EXPR identically to the
+        // legacy inline loop). A ClassDeclaration statement here is NOT one
+        // of the three → unreached.
+        CP_ABODY -> if (child is ExpressionStatement || child is ReturnStatement ||
+            child is VariableStatement) CP_STMT else CP_NONE
+        CP_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) CP_STMT else CP_NONE
+            is Constructor -> if (child === pNode.body) CP_STMT else CP_NONE
+            is GetAccessor -> if (child === pNode.body) CP_STMT else CP_NONE
+            is SetAccessor -> if (child === pNode.body) CP_STMT else CP_NONE
+            is PropertyDeclaration -> if (child === pNode.initializer) CP_EXPR else CP_NONE
+            else -> CP_NONE
+        }
+        else -> CP_NONE
     }
 
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─
