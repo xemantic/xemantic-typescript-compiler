@@ -3648,6 +3648,27 @@ class Checker(
     /** Reusable ascent buffer for [spineAbStatus]. */
     private val spineAbChain = ArrayList<Node>()
 
+    // ── (M0.4) round 652: checkImplicitAnyYieldExpressions on the spine ────
+    // TS7057 (a `yield` whose result type is implicitly `any` because its
+    // containing generator FUNCTION DECLARATION lacks a return-type
+    // annotation) anchors at YieldExpression enters. Reach = the memoized
+    // classifier [spineIyStatus] over [spineIyFold] (the deleted
+    // walkYield7057Stmt/walkYield7057Expr arms verbatim), whose status CARRIES
+    // the walk's one downward boolean `inGen` (IY_GEN / IY_NON) — the round-641
+    // boolean-as-status shape, NOT round 651's ambient climb: `inGen` is RESET
+    // by every nested function-like, so it is not monotone in the ancestor
+    // chain and no cheaper separate climb can re-derive it. The frozen
+    // discarded-result skip (a statement-position `yield x;`) is an ANCHOR-side
+    // gate in [spineIyEnterNode], not a reach state. Fully syntactic — no
+    // ambient sandwich. Fields PRE-init (the pipeline runs inside `init`).
+    /** The legacy dispatch gate (`noImplicitAny || strict`), once per run. */
+    private var spineIyRunActive = false
+    private var spineIyActive = false
+    /** Per-file nodeId memo for [spineIyStatus] — 0 unknown, else IY_*. */
+    private var spineIyReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineIyStatus]. */
+    private val spineIyChain = ArrayList<Node>()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5468,8 +5489,8 @@ class Checker(
         }
         // 7a''. checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result
         // type is implicitly `any` because its containing generator FUNCTION
-        // DECLARATION lacks a return-type annotation) MOVED to the post-spine slot
-        // (M0.4 slot-move pre-gate, round 652) ahead of its spine migration.
+        // DECLARATION lacks a return-type annotation) is ON THE SPINE (M0.4,
+        // round 652) — see spineIyEnterNode at the pass("checkSpine") site.
         // 7a2. TS1320 (`yield* obj` of a non-promise thenable in an async generator)
         // migrated to the check spine (INV.4(b) batch 2) — see spineNoteYieldStar /
         // spineResolveDeferredIterationChecks.
@@ -5782,20 +5803,17 @@ class Checker(
         // (the emission leaf reads only its source/fileName args + options, all
         // immutable); the downward `inAmbient` flag is re-derived per class by
         // spineAbInAmbient (a declare-ancestor climb).
-        // 7a'' (M0.4 slot-move pre-gate, round 652):
-        // checkImplicitAnyYieldExpressions (TS7057 — a `yield` inside a generator
-        // FUNCTION DECLARATION that lacks a return-type annotation) moved intact
-        // from slot 7a'' ahead of its spine migration. Coupling surface:
-        // self-contained — FULLY SYNTACTIC (asteriskToken / return-type presence /
-        // node positions only; NOT type-resolving → no first-touch hazard); the
-        // downward `inGen` flag is re-derivable from the ancestor chain (it is
-        // RESET by every nested function-like, so it rides the classifier status,
-        // not an ambient climb); the ONLY diagnostics-list consumer of TS7057 —
+        // 7a'' (M0.4, round 652): checkImplicitAnyYieldExpressions (TS7057 — a
+        // `yield` whose result type is implicitly `any` because its containing
+        // generator FUNCTION DECLARATION lacks a return-type annotation) is ON
+        // THE SPINE — see spineIyEnterNode / spineIyStatus (the round-652
+        // slot-move pre-gate parked it here first). Fully syntactic — no ambient
+        // sandwich (the emission leaf reads only its pos/source/fileName args);
+        // the downward `inGen` flag rides the classifier status (RESET by every
+        // nested function-like → not monotone, so round 651's ambient climb does
+        // NOT apply). The only diagnostics-list consumer of TS7057 —
         // checkBuiltinIterator's corpus-unique suppress-and-re-emit — dispatches
-        // far after BOTH slots, so the move cannot change what it sees.
-        if (options.noImplicitAny || options.strict) {
-            pass("checkImplicitAnyYieldExpressions") { checkImplicitAnyYieldExpressions() }
-        }
+        // far after the spine slot.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -20842,154 +20860,27 @@ class Checker(
      * return-type annotation has implicit-any result type. Gated noImplicitAny/strict.
      * FP-safe subset: only FunctionDeclaration generators are flagged (they are never
      * contextually typed, unlike a generator FunctionExpression/method passed as an
-     * argument or assigned to a typed variable). The `inGen` flag is true ONLY while
-     * directly inside such a generator's body — any nested function-like resets it.
-     * Squiggle = the `yield` keyword (length 5).
+     * argument or assigned to a typed variable).
+     *
+     * (M0.4, round 652): the pass is ON THE SPINE — the driver and the
+     * walkYield7057Stmts/walkYield7057Stmt/walkYield7057Expr recursion (whose sole
+     * job was to REACH every expression position while threading the downward
+     * `inGen` flag) are DELETED; anchors fire at YieldExpression enters, see
+     * [spineIyEnterNode] / [spineIyStatus] / [spineIyFold]. Only this emission leaf
+     * survives. Squiggle = the `yield` keyword (length 5) at the expression start.
      */
-    private fun checkImplicitAnyYieldExpressions() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            for (stmt in result.sourceFile.statements) walkYield7057Stmt(stmt, false, source, fileName)
-        }
-    }
-
-    private fun walkYield7057Stmts(stmts: List<Statement>, inGen: Boolean, source: String, fileName: String) {
-        for (s in stmts) walkYield7057Stmt(s, inGen, source, fileName)
-    }
-
-    private fun walkYield7057Stmt(stmt: Statement, inGen: Boolean, source: String, fileName: String) {
-        when (stmt) {
-            is FunctionDeclaration -> {
-                val childGen = stmt.asteriskToken && stmt.type == null
-                stmt.body?.let { walkYield7057Stmts(it.statements, childGen, source, fileName) }
-            }
-            is ClassDeclaration -> for (m in stmt.members) when (m) {
-                is MethodDeclaration -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
-                is Constructor -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
-                is GetAccessor -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
-                is SetAccessor -> m.body?.let { walkYield7057Stmts(it.statements, false, source, fileName) }
-                is PropertyDeclaration -> m.initializer?.let { walkYield7057Expr(it, false, source, fileName) }
-                else -> {}
-            }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
-            is Block -> walkYield7057Stmts(stmt.statements, inGen, source, fileName)
-            is ExpressionStatement -> {
-                // Round 479 (tsc checkYieldExpression: `noImplicitAny &&
-                // !expressionResultIsUnused(node)`): a statement-position `yield x;`
-                // discards the yield's RESULT, so the implicit-any result draws no
-                // TS7057 (harness typeWriter.ts forEachASTNode). Only the operand
-                // is walked.
-                var e: Expression = stmt.expression
-                while (e is ParenthesizedExpression) e = e.expression
-                if (e is YieldExpression) {
-                    e.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
-                } else {
-                    walkYield7057Expr(stmt.expression, inGen, source, fileName)
-                }
-            }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { walkYield7057Expr(it, inGen, source, fileName) }
-            is ReturnStatement -> stmt.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
-            is IfStatement -> {
-                walkYield7057Expr(stmt.expression, inGen, source, fileName)
-                walkYield7057Stmt(stmt.thenStatement, inGen, source, fileName)
-                stmt.elseStatement?.let { walkYield7057Stmt(it, inGen, source, fileName) }
-            }
-            is WhileStatement -> { walkYield7057Expr(stmt.expression, inGen, source, fileName); walkYield7057Stmt(stmt.statement, inGen, source, fileName) }
-            is DoStatement -> { walkYield7057Stmt(stmt.statement, inGen, source, fileName); walkYield7057Expr(stmt.expression, inGen, source, fileName) }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { walkYield7057Expr(it, inGen, source, fileName) } }
-                (stmt.initializer as? Expression)?.let { walkYield7057Expr(it, inGen, source, fileName) }
-                stmt.condition?.let { walkYield7057Expr(it, inGen, source, fileName) }
-                stmt.incrementor?.let { walkYield7057Expr(it, inGen, source, fileName) }
-                walkYield7057Stmt(stmt.statement, inGen, source, fileName)
-            }
-            is ForInStatement -> { walkYield7057Expr(stmt.expression, inGen, source, fileName); walkYield7057Stmt(stmt.statement, inGen, source, fileName) }
-            is ForOfStatement -> { walkYield7057Expr(stmt.expression, inGen, source, fileName); walkYield7057Stmt(stmt.statement, inGen, source, fileName) }
-            is SwitchStatement -> {
-                walkYield7057Expr(stmt.expression, inGen, source, fileName)
-                for (clause in stmt.caseBlock) when (clause) {
-                    is CaseClause -> { walkYield7057Expr(clause.expression, inGen, source, fileName); walkYield7057Stmts(clause.statements, inGen, source, fileName) }
-                    is DefaultClause -> walkYield7057Stmts(clause.statements, inGen, source, fileName)
-                    else -> {}
-                }
-            }
-            is LabeledStatement -> walkYield7057Stmt(stmt.statement, inGen, source, fileName)
-            is TryStatement -> {
-                walkYield7057Stmts(stmt.tryBlock.statements, inGen, source, fileName)
-                stmt.catchClause?.block?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
-                stmt.finallyBlock?.let { walkYield7057Stmts(it.statements, inGen, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkYield7057Expr(expr: Expression, inGen: Boolean, source: String, fileName: String) {
-        when (expr) {
-            is YieldExpression -> {
-                if (inGen) {
-                    // Squiggle the `yield` keyword (5 chars) at the expression start.
-                    val pos = expr.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, pos)
-                    diagnostics.add(Diagnostic(
-                        message = "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation.",
-                        category = DiagnosticCategory.Error,
-                        code = 7057,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = pos,
-                        length = 5,
-                    ))
-                }
-                expr.expression?.let { walkYield7057Expr(it, inGen, source, fileName) }
-            }
-            is BinaryExpression -> {
-                // Iterative left-spine to avoid StackOverflow on deep `a+b+c...` chains.
-                var current: Expression = expr
-                while (current is BinaryExpression) {
-                    walkYield7057Expr(current.right, inGen, source, fileName)
-                    current = current.left
-                }
-                walkYield7057Expr(current, inGen, source, fileName)
-            }
-            is ParenthesizedExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is CallExpression -> { walkYield7057Expr(expr.expression, inGen, source, fileName); for (a in expr.arguments) walkYield7057Expr(a, inGen, source, fileName) }
-            is NewExpression -> { walkYield7057Expr(expr.expression, inGen, source, fileName); expr.arguments?.forEach { walkYield7057Expr(it, inGen, source, fileName) } }
-            is ConditionalExpression -> { walkYield7057Expr(expr.condition, inGen, source, fileName); walkYield7057Expr(expr.whenTrue, inGen, source, fileName); walkYield7057Expr(expr.whenFalse, inGen, source, fileName) }
-            is PrefixUnaryExpression -> walkYield7057Expr(expr.operand, inGen, source, fileName)
-            is PostfixUnaryExpression -> walkYield7057Expr(expr.operand, inGen, source, fileName)
-            is PropertyAccessExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is ElementAccessExpression -> { walkYield7057Expr(expr.expression, inGen, source, fileName); walkYield7057Expr(expr.argumentExpression, inGen, source, fileName) }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkYield7057Expr(e, inGen, source, fileName)
-            is ObjectLiteralExpression -> for (prop in expr.properties) when (prop) {
-                is PropertyAssignment -> { (prop.name as? ComputedPropertyName)?.let { walkYield7057Expr(it.expression, inGen, source, fileName) }; walkYield7057Expr(prop.initializer, inGen, source, fileName) }
-                is SpreadAssignment -> walkYield7057Expr(prop.expression, inGen, source, fileName)
-                else -> {}
-            }
-            is TemplateExpression -> expr.templateSpans.forEach { walkYield7057Expr(it.expression, inGen, source, fileName) }
-            is TaggedTemplateExpression -> { walkYield7057Expr(expr.tag, inGen, source, fileName); (expr.template as? TemplateExpression)?.templateSpans?.forEach { walkYield7057Expr(it.expression, inGen, source, fileName) } }
-            is SpreadElement -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is AwaitExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is AsExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is NonNullExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is TypeOfExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is DeleteExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is VoidExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is TypeAssertionExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is SatisfiesExpression -> walkYield7057Expr(expr.expression, inGen, source, fileName)
-            is CommaListExpression -> for (e in expr.elements) walkYield7057Expr(e, inGen, source, fileName)
-            // Nested function-likes reset the generator context (FP-safe subset).
-            is ArrowFunction -> when (val body = expr.body) {
-                is Block -> walkYield7057Stmts(body.statements, false, source, fileName)
-                is Expression -> walkYield7057Expr(body, false, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> walkYield7057Stmts(expr.body.statements, false, source, fileName)
-            else -> {}
-        }
+    private fun emitImplicitAnyYield(pos: Int, source: String, fileName: String) {
+        val (line, character) = getLineAndCharacterOfPosition(source, pos)
+        diagnostics.add(Diagnostic(
+            message = "'yield' expression implicitly results in an 'any' type because its containing generator lacks a return-type annotation.",
+            category = DiagnosticCategory.Error,
+            code = 7057,
+            fileName = fileName,
+            line = line,
+            character = character,
+            start = pos,
+            length = 5,
+        ))
     }
 
     private fun walkNewImplicitAnyStmts(stmts: List<Statement>, source: String, fileName: String) {
@@ -21492,6 +21383,9 @@ class Checker(
                     lname.equals("esnext", ignoreCase = true)
             }
         spineAbstractAccessorActive = options.noImplicitAny || options.strict
+        // (M0.4) round 652: the TS7057 implicit-any-yield anchors carry the
+        // legacy pass's dispatch gate as a run-level flag.
+        spineIyRunActive = options.noImplicitAny || options.strict
         // TS1101 fires unless alwaysStrict is EXPLICITLY false (the old
         // checkWithStatements gate).
         spineWithStrictActive = options.alwaysStrict != false
@@ -21665,6 +21559,7 @@ class Checker(
                 spineDelSetup(result)
                 spineCpSetup(result)
                 spineAbSetup(result)
+                spineIySetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21714,6 +21609,7 @@ class Checker(
                     spineDelTeardown()
                     spineCpTeardown()
                     spineAbTeardown()
+                    spineIyTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22009,6 +21905,12 @@ class Checker(
         // declare-ancestor `inAmbient` climb; fully syntactic, no frames/leave
         // hook, no ambient sandwich.
         if (spineAbActive) spineAbEnterNode(node)
+        // (M0.4) round 652: the implicit-any-yield anchors (YieldExpression
+        // enters) — the TS7057 emission under the classifier whose status
+        // carries the walk's downward `inGen` boolean, plus the anchor-side
+        // discarded-statement-result gate; fully syntactic, no frames/leave
+        // hook, no ambient sandwich.
+        if (spineIyActive) spineIyEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48144,6 +48046,19 @@ class Checker(
         private const val AB_MEMBER = 4
         private const val AB_ROOT = 5
 
+        // (M0.4) round 652: spineIyStatus states
+        // (checkImplicitAnyYieldExpressions reach — the walk's downward `inGen`
+        // boolean carried AS the status, the round-641 shape). IY_GEN = inside
+        // the body of a generator FunctionDeclaration lacking a return-type
+        // annotation; IY_NON = the same walk with inGen=false; IY_MEMBER = a
+        // class member on the path to its body or property initializer (both →
+        // IY_NON — every nested function-like resets the flag).
+        private const val IY_NONE = 1
+        private const val IY_GEN = 2
+        private const val IY_NON = 3
+        private const val IY_MEMBER = 4
+        private const val IY_ROOT = 5
+
         // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
         // reach — binary + the transient SourceFile root).
         private const val GX_REACHED = 1
@@ -64222,6 +64137,203 @@ interface DataView {
             else -> AB_NONE
         }
         else -> AB_NONE
+    }
+
+    // ── (M0.4) round 652: checkImplicitAnyYieldExpressions spine pieces ─────
+
+    /** Per-file setup: the legacy driver's dts skip, under the run-level
+     *  dispatch gate (`noImplicitAny || strict`). */
+    private fun spineIySetup(result: BinderResult) {
+        spineIyActive = spineIyRunActive && !spineIsDts
+        spineIyReachMemo = if (!spineIyActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineIyTeardown() {
+        spineIyActive = false
+        spineIyReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: every YieldExpression is an anchor. The frozen
+     *  discarded-result rule (round 479, tsc `expressionResultIsUnused`) is
+     *  re-expressed as an anchor-side gate instead of a reach state: a yield
+     *  whose value is thrown away by an ExpressionStatement (parentheses
+     *  transparent) draws nothing, while its OPERAND still walks — which the
+     *  ExpressionStatement → ParenthesizedExpression → YieldExpression pass-
+     *  through edges already give. Fully syntactic — no ambient sandwich. */
+    private fun spineIyEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.YIELD_EXPRESSION) return
+        var top: Node = node
+        var parent: Node? = node.parent
+        while (parent is ParenthesizedExpression) {
+            top = parent
+            parent = (parent as NodeBase).parent
+        }
+        if (parent is ExpressionStatement && parent.expression === top) return
+        if (spineIyStatus(node) != IY_GEN) return
+        emitImplicitAnyYield(node.pos, spineSource, spineFileName)
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineIyFold] back down (spineAbStatus pattern).
+     *  The SourceFile anchor carries the transient IY_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement` → IY_NON (the legacy
+     *  driver entered every top-level statement with inGen=false). */
+    private fun spineIyStatus(node: Node): Int {
+        if (node is SourceFile) return IY_ROOT
+        val memo = spineIyReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineIyChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = IY_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = IY_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = IY_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> IY_NONE
+                pStatus == IY_ROOT -> if (c is Statement) IY_NON else IY_NONE
+                else -> spineIyFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted walkYield7057Stmt/walkYield7057Expr arms, verbatim, as
+     *  (parent, parent-status) → child-status transitions. IY_GEN and IY_NON
+     *  are the SAME walk carrying `inGen` as the status (statement and
+     *  expression node classes are disjoint, so one arm set serves both
+     *  recursions); the ONLY status-CHANGING edges are the ones the legacy
+     *  walk changed the flag on: a FunctionDeclaration body → IY_GEN iff the
+     *  declaration is `function*` WITHOUT a return-type annotation (else
+     *  IY_NON), every nested function-like (arrow / function expression /
+     *  class-member body / class property initializer, the last two via the
+     *  IY_MEMBER conduit) → IY_NON. Frozen quirks: class EXPRESSIONS are never
+     *  walked (no arm — a generator method there is contextually typable);
+     *  neither are static blocks, object-literal METHODS/accessors/shorthand
+     *  properties, `with` bodies, catch VARIABLES, for-in/for-of INITIALIZERS,
+     *  decorators, param defaults, and every type position; a for-head's
+     *  declaration-list initializers, conditions and incrementors ARE walked.
+     *  The statement-position yield skip is the anchor gate in
+     *  [spineIyEnterNode], not an edge. */
+    private fun spineIyFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        IY_GEN, IY_NON -> when (pNode) {
+            // ---- walkYield7057Stmt arms ----
+            is FunctionDeclaration -> if (child === pNode.body)
+                (if (pNode.asteriskToken && pNode.type == null) IY_GEN else IY_NON) else IY_NONE
+            is ClassDeclaration -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is PropertyDeclaration) IY_MEMBER else IY_NONE
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) pStatus else IY_NONE
+            is ModuleBlock -> if (child is Statement) pStatus else IY_NONE
+            is Block -> if (child is Statement) pStatus else IY_NONE
+            is ExpressionStatement -> if (child === pNode.expression) pStatus else IY_NONE
+            is VariableStatement -> if (child === pNode.declarationList) pStatus else IY_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else IY_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) pStatus else IY_NONE
+            is ReturnStatement -> if (child === pNode.expression) pStatus else IY_NONE
+            is ThrowStatement -> if (child === pNode.expression) pStatus else IY_NONE
+            is IfStatement -> if (child === pNode.expression || child === pNode.thenStatement ||
+                child === pNode.elseStatement) pStatus else IY_NONE
+            is WhileStatement -> if (child === pNode.expression || child === pNode.statement)
+                pStatus else IY_NONE
+            is DoStatement -> if (child === pNode.expression || child === pNode.statement)
+                pStatus else IY_NONE
+            // The WHOLE for-head is walked (initializer — declaration list OR
+            // bare expression — condition and incrementor), unlike the round-641
+            // Sr fold.
+            is ForStatement -> if (child === pNode.initializer || child === pNode.condition ||
+                child === pNode.incrementor || child === pNode.statement) pStatus else IY_NONE
+            is ForInStatement -> if (child === pNode.expression || child === pNode.statement)
+                pStatus else IY_NONE
+            is ForOfStatement -> if (child === pNode.expression || child === pNode.statement)
+                pStatus else IY_NONE
+            is SwitchStatement -> if (child === pNode.expression || child is CaseClause ||
+                child is DefaultClause) pStatus else IY_NONE
+            is CaseClause -> if (child === pNode.expression || child is Statement) pStatus else IY_NONE
+            is DefaultClause -> if (child is Statement) pStatus else IY_NONE
+            is LabeledStatement -> if (child === pNode.statement) pStatus else IY_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child is CatchClause ||
+                child === pNode.finallyBlock) pStatus else IY_NONE
+            is CatchClause -> if (child === pNode.block) pStatus else IY_NONE
+            // ---- walkYield7057Expr arms ----
+            is YieldExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right)
+                pStatus else IY_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) pStatus else IY_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) pStatus else IY_NONE
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) pStatus else IY_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else IY_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else IY_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) pStatus else IY_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else IY_NONE
+            is ObjectLiteralExpression -> if (child is PropertyAssignment ||
+                child is SpreadAssignment) pStatus else IY_NONE
+            is PropertyAssignment -> if (child === pNode.initializer ||
+                (child === pNode.name && child is ComputedPropertyName)) pStatus else IY_NONE
+            is ComputedPropertyName -> if (child === pNode.expression) pStatus else IY_NONE
+            is SpreadAssignment -> if (child === pNode.expression) pStatus else IY_NONE
+            is TemplateExpression -> if (child is TemplateSpan) pStatus else IY_NONE
+            is TemplateSpan -> if (child === pNode.expression) pStatus else IY_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) pStatus else IY_NONE
+            is SpreadElement -> if (child === pNode.expression) pStatus else IY_NONE
+            is AwaitExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is AsExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is NonNullExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is TypeOfExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is DeleteExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is VoidExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) pStatus else IY_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else IY_NONE
+            // Nested function-likes reset the generator context (the FP-safe
+            // subset: only FunctionDeclaration generators are ever flagged).
+            is ArrowFunction -> if (child === pNode.body) IY_NON else IY_NONE
+            is FunctionExpression -> if (child === pNode.body) IY_NON else IY_NONE
+            else -> IY_NONE
+        }
+        IY_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) IY_NON else IY_NONE
+            is Constructor -> if (child === pNode.body) IY_NON else IY_NONE
+            is GetAccessor -> if (child === pNode.body) IY_NON else IY_NONE
+            is SetAccessor -> if (child === pNode.body) IY_NON else IY_NONE
+            is PropertyDeclaration -> if (child === pNode.initializer) IY_NON else IY_NONE
+            else -> IY_NONE
+        }
+        else -> IY_NONE
     }
 
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─

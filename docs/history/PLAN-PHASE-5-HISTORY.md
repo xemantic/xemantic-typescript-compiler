@@ -1,3 +1,80 @@
+**Round 643 (2026-07-22) — (M0.4) twentieth tail-pass migration:
+checkTypeParameterDefaults (TS2368 reserved TP names + TS2744
+forward/self TP default references + the circularDefaultTypeParamCount
+side-set; 150 ms at the round-641 table — the #20 per-file tail pass,
+slot 59b) is SPLIT: the emissions are ON THE SPINE, the side-set write
+stays pre-spine; the legacy driver + walkTParamDefaultsInStmts/-InStmt/
+-InClassMember/-InExpr/-InType recursion (~250 lines) DELETED;
+validateTParamDefaultsEmit (+ findForwardTParamRef) survives as the
+anchor-called leaf.** The SPLIT-PRODUCER variant (new template move,
+round-642's scope map held): a pass with ONE side-set whose consumer is
+cross-file/earlier-in-file (the `Name` → `Name<any, ...>` no-args
+display in formatTypeForDisplay) cannot ride the spine walk — the write
+splits into the pre-spine producer populateCircularTpDefaults (still
+slot 59b; COLLECTOR discipline, binderResults) while the emissions
+anchor at the ten TP-list-bearing construct kinds (fn/class/interface/
+alias declarations, arrow/fn-expr/class-expr/objlit+member methods,
+FunctionType/ConstructorType) over the memoized BINARY reach classifier
+spineTdStatus/spineTdEdge with a cheap non-empty-typeParameters
+pre-gate. TWO structural firsts: (1) the producer FILTERS its
+candidates through the SAME frozen classifier the spine emissions use —
+one edge set serves both halves, no walker clone to drift; (2) the
+candidate set is PARSE-RECORDED (SourceFile.typeAliasesWithTpDefaults,
+the moduleSpecifiers pattern: appended at parseTypeAliasDeclaration
+when any TP carries a default; a speculative-parse discard classifies
+unreached via its DETACHED parent chain, so over-collection is
+harmless) — the producer runs at 0.4 ms where the legacy row was
+150 ms. Producer-scan lesson (measured, do not repeat): re-scanning the
+tree for candidates via a forEachChild worklist costs MORE than the
+walk it replaces (264 ms raw; 218 ms with an exact TypeNode-subtree
+prune — type positions can never contain a legacy-reachable alias since
+type-member bodies are parser-discarded) — parse-time recording is the
+shape for future split producers. Frozen reach quirks pinned both
+directions: if CONDITIONS, switch SUBJECT + case EXPRESSIONS, for-in/of
+heads, expression-bodied arrow BODIES, objlit ACCESSORS (class accessor
+bodies ARE walked), enum member initializers, heritage clauses,
+call/new TYPE ARGUMENTS, TP constraint/default INTERIORS (a FunctionType
+inside a TP default is never validated; findForwardTParamRef's own-TP
+inner-scope skip pinned separately), computed names, static blocks, and
+mapped/keyof interiors all silent; for-head initializer(decl-list AND
+expression)/condition/incrementor, declare-namespace bodies (NO declare
+gate, unlike ac), catch blocks, template spans, ternary CONDITIONS
+(unlike ac), and As/Satisfies/TypeAssertion type positions reached.
+Fully syntactic emissions — no ambient sandwich (the legacy
+currentFileLocals install fed only the side-set write). The legacy
+binderResults driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8. Gates: 56 local pins
+(M04TpDefaultsSpineMigrationTest) green against the LEGACY pass FIRST
+(all 55 initial pins on the first run); suite 11,892 → 11,948/0;
+`--listAll` ×8 byte-identical (sorted, non-time lines) vs the round-642
+HEAD baseline; partitionCheck ×8 EQUIVALENT (46/46/46/46/46/46/46/94);
+pass table 419 → 419 (checkTypeParameterDefaults 150 ms →
+populateCircularTpDefaults 0.4 ms; checkSpine 19.9 s single-run —
+in-band); warning-clean (--rerun-tasks, zero `w:`). M0.4 running total:
+top TWENTY tail passes migrated. SESSION TAIL: the
+checkExpandoFunctionNestedReads (#21, 99 ms — TS2339 for an
+expando-function property read inside a NESTED function, B431)
+slot-move pre-gate LANDED (moved intact from the B431 slot to the
+post-spine slot; suite 11,948/0; listAll ×8 byte-identical vs the
+migrated baseline; the only diagnostics-list consumer between the
+slots, ctaPostFilters, touches TS2322/TS7030 and reads TS2304/TS2314 —
+TS2339 is invisible to it). Scope map for the migrator (verified
+against source): THREE per-file walks — (a) a TOP-LEVEL-only statement
+scan building funcNames/nameCount/merged (candidates = uniquely-named
+top-level fns not merged with any other decl kind); (b)
+collectExpandoDecls, the file-scope `Foo.prop =` write collector
+walking statements + expression positions (if/for/while/switch HEADS
+and case EXPRESSIONS included) but NEVER descending into
+function-likes; (c) visitExpandoStmt/-Expr, the read walk carrying TWO
+downward values — the inNestedFn flag (flips true inside fn-like
+bodies AND param defaults) and the ChainedNameSet shadow chain (param
+names + fn-body locals; a fn-expr's own name too) — likely the UY/SR
+status-carried-flag shape with per-boundary shadow levels (the
+round-628 downward-SETS rebuild). NEXT session starts at that
+migration; after it by cost: checkStrictModeIdentifiers 96 ms,
+checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+91 ms.**
+
 **Round 642 (2026-07-22) — (M0.4) nineteenth tail-pass migration:
 checkInvalidAssignmentTargets (TS2364 invalid assignment/
 compound-assignment targets + the destructuring private-identifier

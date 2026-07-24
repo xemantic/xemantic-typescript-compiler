@@ -20,6 +20,70 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
+checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
+implicitly `any` because its containing generator FUNCTION DECLARATION lacks a
+return-type annotation; 107.2 ms at the fresh round-651 table — the #29
+per-file tail pass) is ON THE SPINE; the legacy driver + the
+walkYield7057Stmts/walkYield7057Stmt/walkYield7057Expr recursion (~154 lines —
+whose SOLE job was to REACH every expression position while threading the
+downward `inGen` flag) DELETED; only the diagnostic-building leaf survives
+(emitImplicitAnyYield), anchor-called at YieldExpression enters.** Shape = the
+round-641 BOOLEAN-AS-STATUS variant (IY_GEN / IY_NON carry `inGen`), explicitly
+NOT round 651's ambient climb: `inGen` is RESET by every nested function-like,
+so it is not monotone in the ancestor chain and no cheaper separate climb can
+re-derive it — the migrator's rule of thumb is now **monotone downward boolean →
+separate climb (651); reset-bearing downward boolean → classifier status
+(641/652)**. THE NEW TEMPLATE MOVE — **a frozen EMISSION SKIP whose condition is
+decidable from the ANCHOR's OWN parent chain migrates as an ANCHOR-SIDE GATE,
+not as a reach state.** Here the round-479 discarded-result rule (a
+statement-position `yield x;` — parentheses transparent — draws nothing because
+tsc's `expressionResultIsUnused` holds, while its OPERAND is still walked) would
+have DOUBLED the status space had it been folded into the classifier (a skip
+state per `inGen` value); as a four-line paren-climb at the anchor it costs
+nothing and the operand keeps reaching through the ordinary ExpressionStatement
+→ ParenthesizedExpression → YieldExpression pass-through edges. Reach = the
+memoized classifier spineIyStatus/spineIyFold reproducing the two deleted walks
+arm-for-arm in ONE arm set (statement and expression node classes are disjoint,
+so no walk-identity channel is needed — unlike rounds 640/645), with IY_MEMBER
+as the class-member conduit (Method/Ctor/Get/Set bodies AND PropertyDeclaration
+initializers → IY_NON — this pass resets the flag for both, so the conduit needs
+no DECL/EXPR asymmetry and class EXPRESSIONS are never walked at all). Frozen
+quirks pinned both directions: the WHOLE for-head is walked (declaration-list
+initializers, condition, incrementor — wider than the round-641 Sr fold), as are
+if/while/do conditions, the switch subject, case expressions, catch and finally
+blocks, object-literal computed NAMES and spreads; object-literal METHOD bodies,
+static blocks, `with` bodies, catch VARIABLES and for-in/of INITIALIZERS are
+not. Fully syntactic — NO ambient sandwich (the leaf reads only its
+pos/source/fileName args); the run-level dispatch gate (`noImplicitAny ||
+strict`) becomes spineIyRunActive, the per-file dts skip rides spineIySetup;
+binderResults driver → the spine's partition view, gated `--partitionCheck 2`
+EQUIVALENT ×8. GATE NOTE: TS7057 fires 0 times across all 8 tsc-source profiles
+AND only 2 generated corpus files mention `yield` at all — so `--listAll` ×8
+proves PURE NON-PERTURBATION and the corpus is a WEAK gate here; the
+behavioral-equivalence burden rests on the 36 pins
+(M04ImplicitAnyYieldSpineMigrationTest), which were green against the LEGACY
+walker FIRST (36/36 on the first run — no calibration needed, the only mid-run
+addition being four decisive edge pins: the fn-expression body, the class
+property initializer, the objlit computed name/spread, and the never-walked
+objlit method body). Gates: 36 local pins
+(M04ImplicitAnyYieldSpineMigrationTest) green against the LEGACY pass FIRST,
+36/36 on the spine; suite 12,255 → 12,291/0 (3 skipped); `--listAll` ×8
+byte-identical pre-vs-post on all 8 profiles (sorted error lines; 46×7/94 —
+captured from a LEGACY build and a MIGRATION build of the same tree and
+diffed, not merely count-compared); `--partitionCheck 2` EQUIVALENT ×8;
+pass table 411 → 410 (`--passTiming` reports "410 passes recorded" and zero
+checkImplicitAnyYieldExpressions rows; checkSpine 21.1 s single-run, in-band
+with rounds 646–651's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`). M0.4 running total: top TWENTY-NINE tail passes migrated.
+NEXT (round-651 table, the top-29 rows gone; the tail stays FLAT — no row
+above 110 ms): #30 is **checkAbstractMemberAccessInConstructor 68.4 ms**,
+then checkIncDecTypeParamOperands 68.3, checkConflictMarkers 67.8,
+checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
+65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
+(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file). The
+usual next step is the #30 slot-move pre-gate; the round-652 `--listAll` ×8
+captures are the valid PRE baseline for it, since HEAD is that build.
+
 **Round 651 (2026-07-24) — (M0.4) twenty-eighth tail-pass migration:
 checkAbstractMemberContext (TS1253 abstract properties + TS1244 abstract
 methods/accessors in a non-abstract class + TS7008 abstract property without a
@@ -579,82 +643,6 @@ NEXT session starts at that migration; after it:
 checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
 91 ms.**
 
-**Round 643 (2026-07-22) — (M0.4) twentieth tail-pass migration:
-checkTypeParameterDefaults (TS2368 reserved TP names + TS2744
-forward/self TP default references + the circularDefaultTypeParamCount
-side-set; 150 ms at the round-641 table — the #20 per-file tail pass,
-slot 59b) is SPLIT: the emissions are ON THE SPINE, the side-set write
-stays pre-spine; the legacy driver + walkTParamDefaultsInStmts/-InStmt/
--InClassMember/-InExpr/-InType recursion (~250 lines) DELETED;
-validateTParamDefaultsEmit (+ findForwardTParamRef) survives as the
-anchor-called leaf.** The SPLIT-PRODUCER variant (new template move,
-round-642's scope map held): a pass with ONE side-set whose consumer is
-cross-file/earlier-in-file (the `Name` → `Name<any, ...>` no-args
-display in formatTypeForDisplay) cannot ride the spine walk — the write
-splits into the pre-spine producer populateCircularTpDefaults (still
-slot 59b; COLLECTOR discipline, binderResults) while the emissions
-anchor at the ten TP-list-bearing construct kinds (fn/class/interface/
-alias declarations, arrow/fn-expr/class-expr/objlit+member methods,
-FunctionType/ConstructorType) over the memoized BINARY reach classifier
-spineTdStatus/spineTdEdge with a cheap non-empty-typeParameters
-pre-gate. TWO structural firsts: (1) the producer FILTERS its
-candidates through the SAME frozen classifier the spine emissions use —
-one edge set serves both halves, no walker clone to drift; (2) the
-candidate set is PARSE-RECORDED (SourceFile.typeAliasesWithTpDefaults,
-the moduleSpecifiers pattern: appended at parseTypeAliasDeclaration
-when any TP carries a default; a speculative-parse discard classifies
-unreached via its DETACHED parent chain, so over-collection is
-harmless) — the producer runs at 0.4 ms where the legacy row was
-150 ms. Producer-scan lesson (measured, do not repeat): re-scanning the
-tree for candidates via a forEachChild worklist costs MORE than the
-walk it replaces (264 ms raw; 218 ms with an exact TypeNode-subtree
-prune — type positions can never contain a legacy-reachable alias since
-type-member bodies are parser-discarded) — parse-time recording is the
-shape for future split producers. Frozen reach quirks pinned both
-directions: if CONDITIONS, switch SUBJECT + case EXPRESSIONS, for-in/of
-heads, expression-bodied arrow BODIES, objlit ACCESSORS (class accessor
-bodies ARE walked), enum member initializers, heritage clauses,
-call/new TYPE ARGUMENTS, TP constraint/default INTERIORS (a FunctionType
-inside a TP default is never validated; findForwardTParamRef's own-TP
-inner-scope skip pinned separately), computed names, static blocks, and
-mapped/keyof interiors all silent; for-head initializer(decl-list AND
-expression)/condition/incrementor, declare-namespace bodies (NO declare
-gate, unlike ac), catch blocks, template spans, ternary CONDITIONS
-(unlike ac), and As/Satisfies/TypeAssertion type positions reached.
-Fully syntactic emissions — no ambient sandwich (the legacy
-currentFileLocals install fed only the side-set write). The legacy
-binderResults driver → the spine's partition view, gated
-`--partitionCheck 2` EQUIVALENT ×8. Gates: 56 local pins
-(M04TpDefaultsSpineMigrationTest) green against the LEGACY pass FIRST
-(all 55 initial pins on the first run); suite 11,892 → 11,948/0;
-`--listAll` ×8 byte-identical (sorted, non-time lines) vs the round-642
-HEAD baseline; partitionCheck ×8 EQUIVALENT (46/46/46/46/46/46/46/94);
-pass table 419 → 419 (checkTypeParameterDefaults 150 ms →
-populateCircularTpDefaults 0.4 ms; checkSpine 19.9 s single-run —
-in-band); warning-clean (--rerun-tasks, zero `w:`). M0.4 running total:
-top TWENTY tail passes migrated. SESSION TAIL: the
-checkExpandoFunctionNestedReads (#21, 99 ms — TS2339 for an
-expando-function property read inside a NESTED function, B431)
-slot-move pre-gate LANDED (moved intact from the B431 slot to the
-post-spine slot; suite 11,948/0; listAll ×8 byte-identical vs the
-migrated baseline; the only diagnostics-list consumer between the
-slots, ctaPostFilters, touches TS2322/TS7030 and reads TS2304/TS2314 —
-TS2339 is invisible to it). Scope map for the migrator (verified
-against source): THREE per-file walks — (a) a TOP-LEVEL-only statement
-scan building funcNames/nameCount/merged (candidates = uniquely-named
-top-level fns not merged with any other decl kind); (b)
-collectExpandoDecls, the file-scope `Foo.prop =` write collector
-walking statements + expression positions (if/for/while/switch HEADS
-and case EXPRESSIONS included) but NEVER descending into
-function-likes; (c) visitExpandoStmt/-Expr, the read walk carrying TWO
-downward values — the inNestedFn flag (flips true inside fn-like
-bodies AND param defaults) and the ChainedNameSet shadow chain (param
-names + fn-body locals; a fn-expr's own name too) — likely the UY/SR
-status-carried-flag shape with per-boundary shadow levels (the
-round-628 downward-SETS rebuild). NEXT session starts at that
-migration; after it by cost: checkStrictModeIdentifiers 96 ms,
-checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
-91 ms.**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1029,12 +1017,21 @@ structural item instead of landing alone.**
   EMISSION), arrow/fn-expr Block bodies are the FULL statement walk (a class
   DECLARATION in an arrow body IS reached), and the switch SUBJECT and
   ternary CONDITION ARE walked);
-  next per-file candidates by cost (FRESH round-651 table, the top-28 rows
-  gone): **checkImplicitAnyYieldExpressions 107.2 ms** (#29 — TS7057, a
-  downward `inGen` boolean; NOTE it is RESET by any nested function-like, so
-  it is NOT monotone and the round-651 ambient-climb variant does NOT apply —
-  this is the round-641 boolean-as-status shape, with the flag riding the
-  classifier status), then checkAbstractMemberAccessInConstructor 68.4 ms,
+  checkImplicitAnyYieldExpressions 107.2 ms — **MIGRATED round 652** (the
+  ANCHOR-SIDE-GATE variant of the round-641 boolean-as-status shape: the
+  downward `inGen` boolean rides the status — it is RESET by every nested
+  function-like, so it is NOT monotone and round 651's ambient climb does
+  NOT apply — while a frozen EMISSION SKIP whose condition is decidable
+  from the ANCHOR's OWN parent chain (the round-479 discarded-result rule:
+  a statement-position `yield x;`, parens transparent, draws nothing) is
+  re-expressed as a four-line paren-climb AT THE ANCHOR instead of a reach
+  state, which would have doubled the status space; ONE arm set serves both
+  deleted walks since statement and expression node classes are disjoint —
+  no walk-identity channel; IY_MEMBER carries class member bodies AND
+  property initializers, both → IY_NON, so no DECL/EXPR asymmetry and class
+  EXPRESSIONS are never walked);
+  next per-file candidates by cost (round-651 table, the top-29 rows
+  gone): **checkAbstractMemberAccessInConstructor 68.4 ms** (#30), then
   checkIncDecTypeParamOperands 68.3 ms, checkConflictMarkers 67.8 ms,
   checkImplicitAnyNewExpressions 66.9 ms,
   checkArgumentsInClassFieldInitializers 65.0 ms,
