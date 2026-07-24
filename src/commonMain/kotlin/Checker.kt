@@ -5466,13 +5466,10 @@ class Checker(
         if (options.noImplicitAny || options.strict) {
             pass("checkImplicitAnyNewExpressions") { checkImplicitAnyNewExpressions() }
         }
-        // 7a''. TS7057: a `yield` expression inside a generator FUNCTION DECLARATION that
-        // lacks a return-type annotation has implicit-any result type (no contextual type
-        // tells what `next()` passes back). Gated noImplicitAny/strict. FP-safe subset:
-        // only FunctionDeclaration generators (never contextually typed).
-        if (options.noImplicitAny || options.strict) {
-            pass("checkImplicitAnyYieldExpressions") { checkImplicitAnyYieldExpressions() }
-        }
+        // 7a''. checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result
+        // type is implicitly `any` because its containing generator FUNCTION
+        // DECLARATION lacks a return-type annotation) MOVED to the post-spine slot
+        // (M0.4 slot-move pre-gate, round 652) ahead of its spine migration.
         // 7a2. TS1320 (`yield* obj` of a non-promise thenable in an async generator)
         // migrated to the check spine (INV.4(b) batch 2) — see spineNoteYieldStar /
         // spineResolveDeferredIterationChecks.
@@ -5785,6 +5782,20 @@ class Checker(
         // (the emission leaf reads only its source/fileName args + options, all
         // immutable); the downward `inAmbient` flag is re-derived per class by
         // spineAbInAmbient (a declare-ancestor climb).
+        // 7a'' (M0.4 slot-move pre-gate, round 652):
+        // checkImplicitAnyYieldExpressions (TS7057 — a `yield` inside a generator
+        // FUNCTION DECLARATION that lacks a return-type annotation) moved intact
+        // from slot 7a'' ahead of its spine migration. Coupling surface:
+        // self-contained — FULLY SYNTACTIC (asteriskToken / return-type presence /
+        // node positions only; NOT type-resolving → no first-touch hazard); the
+        // downward `inGen` flag is re-derivable from the ancestor chain (it is
+        // RESET by every nested function-like, so it rides the classifier status,
+        // not an ambient climb); the ONLY diagnostics-list consumer of TS7057 —
+        // checkBuiltinIterator's corpus-unique suppress-and-re-emit — dispatches
+        // far after BOTH slots, so the move cannot change what it sees.
+        if (options.noImplicitAny || options.strict) {
+            pass("checkImplicitAnyYieldExpressions") { checkImplicitAnyYieldExpressions() }
+        }
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
