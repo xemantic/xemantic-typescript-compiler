@@ -20,6 +20,72 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 653 (2026-07-24) — (M0.4) thirtieth tail-pass migration:
+checkAbstractMemberAccessInConstructor (TS2715 — a `this.X` reference inside a
+constructor body or a class-field initializer where X is an abstract member of
+the surrounding class, own or inherited; 68.4 ms at the round-651 table — the
+#30 per-file tail pass) is ON THE SPINE; the whole-file driver is DELETED and
+the emission half is anchored at ClassDeclaration / ClassExpression enters.**
+THE NEW TEMPLATE MOVE — **a pass whose per-anchor leaf can RE-ENTER the pass on
+a nested anchor migrates by SPLITTING the leaf at the re-entry boundary and
+KEEPING the routing walkers alive: the spine reproduces the ROOT-driven reach,
+the surviving recursion reproduces the LEAF-driven reach, and the two compose to
+the legacy multiplicity with no INT-valued (round 636) classifier.** Here the
+legacy `processClassForAbstractAccess` did TWO jobs per reached class — (a) an
+unconditional member-BODY descent back into the routing walk and (b) the
+emission walk over constructor bodies + non-abstract non-static field
+initializers — while the EMISSION walk's own ClassExpression arm re-entered
+`processClassForAbstractAccess` for a nested class. So a class expression
+sitting in a PROCESSED constructor is legitimately processed TWICE (routing
+reach + inline reach) and its own TS2715 emitted twice; pinned both ways (the
+same class in a NON-processed constructor is processed once). The split is: (a)
+becomes classifier edges, (b) becomes the new anchor leaf
+`emitAbstractAccessInClass`, and `walkClassesForAbstractAccess` /
+`walkExprForNestedClasses` SURVIVE for the inline path (the round-630
+shared-walker rule — `spineAaFold` must stay IN SYNC with their arms).
+SECOND move: **the legacy VariableStatement arm's NAME OVERRIDE (an anonymous
+`const C = class {…}` taking the variable's name) is recovered ANCHOR-side**,
+by asking the parent VariableDeclaration's own classifier status — round 652's
+anchor-side-gate applied to a NAME rather than a skip: that arm's REACH is
+identical to the plain initializer→AA_EXPR edge, so encoding the override as a
+status would have doubled the state space for a naming detail. It fires only in
+statement mode (AA_STMT); the RESTRICTED arrow/fn-expression body walk
+(AA_RSTMT) routes initializers through the plain expression arm, so an anonymous
+class there stays nameless and draws NOTHING, and a parenthesized initializer
+never matched the arm's `init is ClassExpression` test — both pinned. Reach =
+the memoized classifier spineAaStatus/spineAaFold (AA_STMT / AA_EXPR / AA_RSTMT
+/ AA_MEMBER), PURELY STRUCTURAL — the routing walk threads no downward value at
+all, and the emission walk's `inDeferredFn` flag lives entirely inside the
+surviving leaf, so unlike rounds 641/651/652 there is neither a status channel
+nor an ancestor climb. Frozen quirks pinned both directions, including three
+divergences from the same-shaped round-651 Ab fold: arrow/fn-expr Block bodies
+are the RESTRICTED three-statement-kind walk (a class DECLARATION in an arrow
+body is NEVER reached — Ab reaches it), object-literal METHOD bodies are not
+routing positions (property VALUES and spreads are), and the EMISSION walk has
+NO TryStatement arm (a `try { this.p }` inside a constructor draws nothing even
+though the ROUTING walk descends try/catch/finally) — the first calibration the
+pins caught; the second was the routing walk's switch SUBJECT, which IS walked
+(if/loop HEADS and for-INITIALIZERS are not). The file-scoped
+`buildClassDeclarationMap` prepass (heritage lookup for INHERITED abstract
+names) rides spineAaSetup (the round-627 collector shape); fully syntactic — NO
+ambient sandwich (both leaves read only their source/fileName args).
+GATE NOTE: unlike round 652 the CORPUS is a real behavioural gate here —
+`abstractPropertyInConstructor`'s `.errors.txt` subtest is generated and active
+(byte-exact TS2715 positions/messages), as is `errorInUnnamedClassExpression` —
+while TS2715 fires 0 times across all 8 tsc-source profiles, so `--listAll` ×8
+pins pure non-perturbation. Gates: 44 local pins
+(M04AbstractAccessSpineMigrationTest) green against the LEGACY pass FIRST
+(2 calibrations, above), 44/44 on the spine; suite 12,291 → 12,335/0 (3
+skipped); `--listAll` ×8 byte-identical pre-vs-post on all 8 profiles (sorted
+error lines, 46×7/94 — captured from a LEGACY build and a MIGRATION build of the
+same tree and diffed); `--partitionCheck 2` EQUIVALENT ×8; pass table 410 → 409
+(zero checkAbstractMemberAccessInConstructor rows); warning-clean. M0.4 running
+total: top THIRTY tail passes migrated. NEXT (round-651 table): #31
+checkIncDecTypeParamOperands 68.3 ms, then checkConflictMarkers 67.8,
+checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
+65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
+(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file).
+
 **Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
 checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
 implicitly `any` because its containing generator FUNCTION DECLARATION lacks a
@@ -589,75 +655,6 @@ pull-based per-boundary-memo shape. Anchors: `==`/`===`/`!=`/`!==`
 binaries whose operand resolves through the map. NEXT session starts at
 that migration; after it: checkSuperInObjectLiterals 91 ms.**
 
-**Round 644 (2026-07-22) — (M0.4) twenty-first tail-pass migration:
-checkExpandoFunctionNestedReads (B431 — TS2339 for an expando-function
-property read inside a NESTED function where the property was never
-declared by a file-scope `Foo.prop =` write; 99 ms at the round-642
-table — the #21 per-file tail pass) is ON THE SPINE; the legacy driver +
-visitExpandoStmt/-Expr read walk + ChainedNameSet + collectExpandoFnLocals
-(~140 lines) DELETED; the TOP-LEVEL candidate scan + the
-collectExpandoDecls write collector survive as per-file SETUP leaves.**
-The FILE-GATED + PULL-BASED-SHADOW combination: (1) the write collector
-runs at spineExSetup (the round-632 shape) — it never descends
-function-likes, so its whole-file setup leg is bounded by top-level
-expression code and the anchors consult the COMPLETE `declared` map and
-emit INLINE (a write BELOW the read still declares — order-independence
-pinned; no buffering needed, unlike a true collect-then-scan). (2) Reach
-is the memoized 3-state classifier spineExStatus/spineExFold —
-EX_TOP/EX_NESTED carry the legacy inNestedFn boolean AS the status
-(fn-decl/fn-expr/arrow param INITIALIZERS + bodies reset to EX_NESTED,
-everything else preserves — the round-641 SR shape with a fires-only-
-nested emission gate). (3) The ChainedNameSet shadow chain rebuilds
-PULL-BASED per anchor (spineExShadowed): every fn-like ancestor of a
-REACHED anchor was entered through its walked interior (param default or
-body — the only walked edges out of a fn-like), so each contributes its
-layer (params + TOP-LEVEL body var/fn/class names + a fn-expression's
-own name), memo-free per the round-625 rare-anchor rule — the anchor
-pre-gates on the candidate-receiver TEXT before any climb. Frozen quirks
-pinned both directions: class/namespace/enum bodies, objlit METHODS
-(property-VALUE fn-exprs ARE reached), template spans, tagged templates,
-typeof/delete/void operands, for-in/of loop-head INITIALIZERS, catch
-variables, and class expressions never walked; the collector additionally
-never reaches yield/await operands; element-access/compound-assignment/
-non-Identifier-receiver writes never collected (their nested READS still
-fire — a nested write's own LHS fires too); a nested-BLOCK body local
-does NOT shadow. Fully syntactic — no ambient sandwich; the legacy
-binderResults driver → the spine's partition view, gated
-`--partitionCheck 2` EQUIVALENT ×8. Pin-calibration note: negative pins
-in .ts must key on the pass's exact `'typeof Foo'` message shape — a
-bare `Foo.name` read draws an unrelated general-checker TS2339
-displaying `'() => void'` (found by the CLI probe round; 32/33 pins
-green on the first legacy run, the 33rd was that predicate sharpening).
-Gates: 33 local pins (M04ExpandoSpineMigrationTest) green against the
-LEGACY pass FIRST; suite 11,948 → 11,981/0; `--listAll` ×8
-byte-identical (sorted, non-time lines) vs the pre-migration stash
-baseline; partitionCheck ×8 EQUIVALENT (46×7/94); pass table 419 → 418
-(the 99 ms row gone; checkSpine 20.9 s single-run — in-band);
-warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
-TWENTY-ONE tail passes migrated. SESSION TAIL: the
-checkStrictModeIdentifiers (#22, 96 ms — TS1100 restricted-name
-bindings + TS2630 eval-assign + TS1215 module-file restricted names +
-the top-level `var eval` TS2300/TS6203 lib-collision pair) slot-move
-pre-gate LANDED (moved intact from slot 12 to the post-spine slot;
-suite 11,981/0; listAll ×8 byte-identical vs the migration baseline;
-the family is grep-verified ambient-free, the only consumer of its
-codes — checkStyledComponentsInstantiationLimit's corpus-unique TS1100
-wipe — dispatches long after both slots, and the 12→12b relative order
-is preserved). Scope map for the migrator: THREE per-file routing modes
-decided by (isModuleFile, globalStrict || "use strict" prologue) —
-module files route ALL statements through
-checkModuleStrictModeInStatements (TS1215); strict files through
-checkStrictModeInStatements (TS1100/TS2630, restricted names at
-BINDING positions only — never property names, the round-406 gotcha) +
-the top-level `var eval` TS2300 pair; non-strict files through
-checkFunctionLocalStrictMode (only fn bodies carrying their OWN
-prologue — a downward strict flag flipping at fn boundaries, likely
-the SR status-carried shape with the prologue test at body edges).
-NEXT session starts at that migration; after it:
-checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
-91 ms.**
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -1044,9 +1041,25 @@ structural item instead of landing alone.**
   no walk-identity channel; IY_MEMBER carries class member bodies AND
   property initializers, both → IY_NON, so no DECL/EXPR asymmetry and class
   EXPRESSIONS are never walked);
-  next per-file candidates by cost (round-651 table, the top-29 rows
-  gone): **checkAbstractMemberAccessInConstructor 68.4 ms** (#30), then
-  checkIncDecTypeParamOperands 68.3 ms, checkConflictMarkers 67.8 ms,
+  checkAbstractMemberAccessInConstructor 68.4 ms — **MIGRATED round 653**
+  (the SPLIT-AT-THE-RE-ENTRY-BOUNDARY variant: a pass whose per-anchor
+  leaf can RE-ENTER the pass on a nested anchor splits at that boundary
+  and KEEPS the routing walkers alive — the spine reproduces the
+  ROOT-driven reach, the surviving recursion the LEAF-driven reach, and
+  the two compose to the legacy multiplicity (a class expression in a
+  PROCESSED constructor is processed TWICE) with no INT-valued round-636
+  classifier; the round-630 sync rule applies to the survivors. Second
+  move: the legacy VariableStatement NAME OVERRIDE is recovered
+  ANCHOR-side from the parent declaration's classifier status — round
+  652's anchor-side gate applied to a NAME, since that arm's reach is
+  identical to the plain initializer edge. Reach is PURELY STRUCTURAL —
+  the routing walk threads no downward value and the emission walk's
+  inDeferredFn lives inside the surviving leaf, so neither a status
+  channel nor an ancestor climb is needed; the file-scoped classMap
+  prepass rides setup);
+  next per-file candidates by cost (round-651 table, the top-30 rows
+  gone): **checkIncDecTypeParamOperands 68.3 ms** (#31), then
+  checkConflictMarkers 67.8 ms,
   checkImplicitAnyNewExpressions 66.9 ms,
   checkArgumentsInClassFieldInitializers 65.0 ms,
   checkSpreadPropertyOverrides 60.4 ms, checkTypeParamTypedOps 60.0 ms

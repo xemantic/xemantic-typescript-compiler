@@ -1,3 +1,72 @@
+**Round 644 (2026-07-22) — (M0.4) twenty-first tail-pass migration:
+checkExpandoFunctionNestedReads (B431 — TS2339 for an expando-function
+property read inside a NESTED function where the property was never
+declared by a file-scope `Foo.prop =` write; 99 ms at the round-642
+table — the #21 per-file tail pass) is ON THE SPINE; the legacy driver +
+visitExpandoStmt/-Expr read walk + ChainedNameSet + collectExpandoFnLocals
+(~140 lines) DELETED; the TOP-LEVEL candidate scan + the
+collectExpandoDecls write collector survive as per-file SETUP leaves.**
+The FILE-GATED + PULL-BASED-SHADOW combination: (1) the write collector
+runs at spineExSetup (the round-632 shape) — it never descends
+function-likes, so its whole-file setup leg is bounded by top-level
+expression code and the anchors consult the COMPLETE `declared` map and
+emit INLINE (a write BELOW the read still declares — order-independence
+pinned; no buffering needed, unlike a true collect-then-scan). (2) Reach
+is the memoized 3-state classifier spineExStatus/spineExFold —
+EX_TOP/EX_NESTED carry the legacy inNestedFn boolean AS the status
+(fn-decl/fn-expr/arrow param INITIALIZERS + bodies reset to EX_NESTED,
+everything else preserves — the round-641 SR shape with a fires-only-
+nested emission gate). (3) The ChainedNameSet shadow chain rebuilds
+PULL-BASED per anchor (spineExShadowed): every fn-like ancestor of a
+REACHED anchor was entered through its walked interior (param default or
+body — the only walked edges out of a fn-like), so each contributes its
+layer (params + TOP-LEVEL body var/fn/class names + a fn-expression's
+own name), memo-free per the round-625 rare-anchor rule — the anchor
+pre-gates on the candidate-receiver TEXT before any climb. Frozen quirks
+pinned both directions: class/namespace/enum bodies, objlit METHODS
+(property-VALUE fn-exprs ARE reached), template spans, tagged templates,
+typeof/delete/void operands, for-in/of loop-head INITIALIZERS, catch
+variables, and class expressions never walked; the collector additionally
+never reaches yield/await operands; element-access/compound-assignment/
+non-Identifier-receiver writes never collected (their nested READS still
+fire — a nested write's own LHS fires too); a nested-BLOCK body local
+does NOT shadow. Fully syntactic — no ambient sandwich; the legacy
+binderResults driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8. Pin-calibration note: negative pins
+in .ts must key on the pass's exact `'typeof Foo'` message shape — a
+bare `Foo.name` read draws an unrelated general-checker TS2339
+displaying `'() => void'` (found by the CLI probe round; 32/33 pins
+green on the first legacy run, the 33rd was that predicate sharpening).
+Gates: 33 local pins (M04ExpandoSpineMigrationTest) green against the
+LEGACY pass FIRST; suite 11,948 → 11,981/0; `--listAll` ×8
+byte-identical (sorted, non-time lines) vs the pre-migration stash
+baseline; partitionCheck ×8 EQUIVALENT (46×7/94); pass table 419 → 418
+(the 99 ms row gone; checkSpine 20.9 s single-run — in-band);
+warning-clean (--rerun-tasks, zero `w:`). M0.4 running total: top
+TWENTY-ONE tail passes migrated. SESSION TAIL: the
+checkStrictModeIdentifiers (#22, 96 ms — TS1100 restricted-name
+bindings + TS2630 eval-assign + TS1215 module-file restricted names +
+the top-level `var eval` TS2300/TS6203 lib-collision pair) slot-move
+pre-gate LANDED (moved intact from slot 12 to the post-spine slot;
+suite 11,981/0; listAll ×8 byte-identical vs the migration baseline;
+the family is grep-verified ambient-free, the only consumer of its
+codes — checkStyledComponentsInstantiationLimit's corpus-unique TS1100
+wipe — dispatches long after both slots, and the 12→12b relative order
+is preserved). Scope map for the migrator: THREE per-file routing modes
+decided by (isModuleFile, globalStrict || "use strict" prologue) —
+module files route ALL statements through
+checkModuleStrictModeInStatements (TS1215); strict files through
+checkStrictModeInStatements (TS1100/TS2630, restricted names at
+BINDING positions only — never property names, the round-406 gotcha) +
+the top-level `var eval` TS2300 pair; non-strict files through
+checkFunctionLocalStrictMode (only fn bodies carrying their OWN
+prologue — a downward strict flag flipping at fn boundaries, likely
+the SR status-carried shape with the prologue test at body edges).
+NEXT session starts at that migration; after it:
+checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
+91 ms.**
+
+
 **Round 643 (2026-07-22) — (M0.4) twentieth tail-pass migration:
 checkTypeParameterDefaults (TS2368 reserved TP names + TS2744
 forward/self TP default references + the circularDefaultTypeParamCount
