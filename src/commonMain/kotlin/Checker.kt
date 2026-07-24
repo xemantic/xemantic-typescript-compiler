@@ -3669,6 +3669,36 @@ class Checker(
     /** Reusable ascent buffer for [spineIyStatus]. */
     private val spineIyChain = ArrayList<Node>()
 
+    // ── (M0.4) round 653: checkAbstractMemberAccessInConstructor on the
+    // spine ───────────────────────────────────────────────────────────────
+    // TS2715 (a `this.X` reference inside a constructor body or a class-field
+    // initializer where X is an abstract member of the surrounding class, own
+    // or inherited) anchors at ClassDeclaration / ClassExpression enters,
+    // running the EMISSION half only ([emitAbstractAccessInClass] — the
+    // constructor bodies + non-abstract non-static field initializers). Reach
+    // = the memoized classifier [spineAaStatus] over [spineAaFold], which
+    // reproduces the ROUTING recursion (walkClassesForAbstractAccess /
+    // walkExprForNestedClasses) PLUS [processClassForAbstractAccess]'s
+    // unconditional member-body descent, purely structurally. Unlike most
+    // M0.4 migrations the routing walkers SURVIVE (the round-630 shared-walker
+    // rule): the emission walker's own ClassExpression arm still processes a
+    // nested class INLINE (full processClass — member descent + emission), and
+    // that path is not driven from the file root, so the classifier must stay
+    // IN SYNC with any future routing-arm change. Keeping it verbatim is what
+    // preserves the legacy DOUBLE processing of a class expression sitting in
+    // a processed constructor (routing reach + inline reach). Fully syntactic
+    // — no ambient sandwich (the leaves read only their source/fileName args).
+    // The per-file classMap prepass (buildClassDeclarationMap, used for
+    // INHERITED abstract names) is FILE-scoped setup state, the round-627
+    // collector shape. Fields PRE-init (the pipeline runs inside `init`).
+    private var spineAaActive = false
+    /** Per-file nodeId memo for [spineAaStatus] — 0 unknown, else AA_*. */
+    private var spineAaReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineAaStatus]. */
+    private val spineAaChain = ArrayList<Node>()
+    /** The per-file `name → ClassDeclaration` prepass (heritage lookup). */
+    private var spineAaClassMap: Map<String, ClassDeclaration> = emptyMap()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5814,18 +5844,16 @@ class Checker(
         // NOT apply). The only diagnostics-list consumer of TS7057 —
         // checkBuiltinIterator's corpus-unique suppress-and-re-emit — dispatches
         // far after the spine slot.
-        // 27e' (M0.4 slot-move pre-gate, round 652 tail):
-        // checkAbstractMemberAccessInConstructor (TS2715 — a `this.X` reference
-        // inside a constructor body or a class-field initializer where X is an
-        // abstract member of the surrounding class, own or inherited) moved
-        // intact from slot 27e ahead of its spine migration. Coupling surface:
-        // self-contained — FULLY SYNTACTIC (class members' modifiers/names +
-        // heritage Identifier names + source text; NOT type-resolving → no
-        // first-touch hazard, no ambient install); its per-file
-        // buildClassDeclarationMap prepass is a FILE-scoped collector (the
-        // round-627 migration shape); grep-verified NO pass scans/dedups/
-        // retracts TS2715 (this pass is the code's only mention).
-        pass("checkAbstractMemberAccessInConstructor") { checkAbstractMemberAccessInConstructor() }
+        // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
+        // (TS2715 — a `this.X` reference inside a constructor body or a
+        // class-field initializer where X is an abstract member of the
+        // surrounding class, own or inherited) is ON THE SPINE — see
+        // spineAaEnterNode / spineAaStatus (the round-652-tail slot-move
+        // pre-gate parked it here first). Fully syntactic — no ambient
+        // sandwich; the file-scoped buildClassDeclarationMap prepass rides
+        // spineAaSetup. Unusually the ROUTING walkers survive (the round-630
+        // shared-walker rule) — the emission walker's ClassExpression arm
+        // drives them inline for a nested class.
         // (cta-retire) round 586: the checkTypeAssignability legacy pass is
         // RETIRED — every cta emission is spine-anchored (rounds 566-576),
         // the cpa residue consumer is retired (round 585), the ccet channel
@@ -6297,9 +6325,8 @@ class Checker(
         // 27d. checkSuperRefInRebindingScope (TS2660) is ON THE SPINE
         // (M0.4, round 641) — see spineSrEnterNode.
         // 27e. checkAbstractMemberAccessInConstructor (TS2715 — `this.X` in a
-        // constructor / field initializer where X is abstract) MOVED to the
-        // post-spine slot (M0.4 slot-move pre-gate, round 652 tail) ahead of its
-        // spine migration.
+        // constructor / field initializer where X is abstract) is ON THE SPINE
+        // (M0.4, round 653) — see spineAaEnterNode / spineAaStatus.
         // 27f. checkAbstractMemberContext (TS1253/TS1244/TS7008) is ON THE
         // SPINE (M0.4, round 651) — see spineAbEnterNode / spineAbStatus.
         // 28. TS1155 (const without initializer) + 28b. TS1182/TS7031
@@ -21574,6 +21601,7 @@ class Checker(
                 spineCpSetup(result)
                 spineAbSetup(result)
                 spineIySetup(result)
+                spineAaSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21624,6 +21652,7 @@ class Checker(
                     spineCpTeardown()
                     spineAbTeardown()
                     spineIyTeardown()
+                    spineAaTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21925,6 +21954,12 @@ class Checker(
         // discarded-statement-result gate; fully syntactic, no frames/leave
         // hook, no ambient sandwich.
         if (spineIyActive) spineIyEnterNode(node)
+        // (M0.4) round 653: the abstract-member-access anchors
+        // (ClassDeclaration / ClassExpression enters) — the TS2715 emission
+        // half under the memoized structural reach classifier, with the
+        // file-scoped classMap prepass in setup; fully syntactic, no
+        // frames/leave hook, no ambient sandwich.
+        if (spineAaActive) spineAaEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48073,6 +48108,24 @@ class Checker(
         private const val IY_MEMBER = 4
         private const val IY_ROOT = 5
 
+        // (M0.4) round 653: spineAaStatus states
+        // (checkAbstractMemberAccessInConstructor reach — purely structural:
+        // the routing walk carries no downward value). AA_STMT = a
+        // walkClassesForAbstractAccess position; AA_EXPR = a
+        // walkExprForNestedClasses position; AA_RSTMT = a statement of the
+        // RESTRICTED arrow / function-expression body walk (only Expression/
+        // Return/Variable statements, whose expressions go to AA_EXPR — a
+        // class DECLARATION there is never reached); AA_MEMBER = a class
+        // member on the path to its body (Method/Ctor/Get/Set/StaticBlock →
+        // AA_STMT; NO PropertyDeclaration — the member descent covers BODIES
+        // only).
+        private const val AA_NONE = 1
+        private const val AA_STMT = 2
+        private const val AA_EXPR = 3
+        private const val AA_RSTMT = 4
+        private const val AA_MEMBER = 5
+        private const val AA_ROOT = 6
+
         // (M0.4) round 637: spineGxStatus states (checkGenericIndexWrite
         // reach — binary + the transient SourceFile root).
         private const val GX_REACHED = 1
@@ -64350,6 +64403,261 @@ interface DataView {
         else -> IY_NONE
     }
 
+    // ── (M0.4) round 653: checkAbstractMemberAccessInConstructor spine
+    // pieces ──────────────────────────────────────────────────────────────
+
+    /** Per-file setup: the legacy driver's dts skip plus its FILE-scoped
+     *  classMap prepass (the round-627 collector shape — the heritage lookup
+     *  for INHERITED abstract names, built once per file). */
+    private fun spineAaSetup(result: BinderResult) {
+        spineAaActive = !spineIsDts
+        if (!spineAaActive) {
+            spineAaReachMemo = ByteArray(0)
+            spineAaClassMap = emptyMap()
+            return
+        }
+        val sf = result.sourceFile
+        spineAaReachMemo = if (sf.nodeCount > 0) ByteArray(sf.nodeCount) else ByteArray(0)
+        spineAaClassMap = buildClassDeclarationMap(sf.statements)
+    }
+
+    private fun spineAaTeardown() {
+        spineAaActive = false
+        spineAaReachMemo = ByteArray(0)
+        spineAaClassMap = emptyMap()
+    }
+
+    /** ENTER dispatch: a reached ClassDeclaration (AA_STMT) or ClassExpression
+     *  (AA_EXPR) runs the EMISSION half [emitAbstractAccessInClass] over its
+     *  DIRECT members. The member-body descent that the legacy
+     *  [processClassForAbstractAccess] performed first (its step (a)) is
+     *  reproduced by the classifier's class→member edges, so nested classes
+     *  are anchored independently and this never re-descends into them.
+     *
+     *  The abstract-name map is built exactly as the legacy reach that would
+     *  have produced it: a class DECLARATION gets own + INHERITED names via
+     *  [collectAbstractPropertyNames] over the file classMap; a class
+     *  EXPRESSION gets its OWN abstract properties only, named by
+     *  `expr.name` — except when it is DIRECTLY a statement-mode variable
+     *  initializer (`const C = class { … }`), where the legacy
+     *  VariableStatement arm substituted the variable's name. Fully
+     *  syntactic — no ambient sandwich. */
+    private fun spineAaEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
+                if (spineAaStatus(node) != AA_STMT) return
+                val abstractMap = collectAbstractPropertyNames(node, spineAaClassMap)
+                emitAbstractAccessInClass(
+                    node.members, node.name?.text, abstractMap, spineSource, spineFileName
+                )
+            }
+            NodeKind.CLASS_EXPRESSION -> {
+                node as ClassExpression
+                if (spineAaStatus(node) != AA_EXPR) return
+                val className = node.name?.text ?: spineAaVarNameOverride(node)
+                val effectiveName = className ?: "<class>"
+                val abstractMap = mutableMapOf<String, String>()
+                for (member in node.members) {
+                    if (member is PropertyDeclaration && ModifierFlag.Abstract in member.modifiers) {
+                        getMemberName(member.name)?.let { abstractMap[it] = effectiveName }
+                    }
+                }
+                emitAbstractAccessInClass(
+                    node.members, className, abstractMap, spineSource, spineFileName
+                )
+            }
+        }
+    }
+
+    /** The legacy VariableStatement arm's name override: an ANONYMOUS class
+     *  expression that is DIRECTLY a variable initializer takes the (Identifier)
+     *  variable's name. It applies only where that arm ran — a STATEMENT-mode
+     *  declaration (`AA_STMT`); the RESTRICTED arrow / fn-expression body walk
+     *  routes its initializers through the plain expression arm instead, and a
+     *  parenthesized initializer never matched the arm's `init is
+     *  ClassExpression` test. */
+    private fun spineAaVarNameOverride(node: ClassExpression): String? {
+        val decl = (node as NodeBase).parent as? VariableDeclaration ?: return null
+        if (decl.initializer !== node) return null
+        if (spineAaStatus(decl) != AA_STMT) return null
+        return (decl.name as? Identifier)?.text
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineAaFold] back down (spineAbStatus pattern).
+     *  The SourceFile anchor carries the transient AA_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement` → AA_STMT. */
+    private fun spineAaStatus(node: Node): Int {
+        if (node is SourceFile) return AA_ROOT
+        val memo = spineAaReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineAaChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = AA_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = AA_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = AA_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> AA_NONE
+                pStatus == AA_ROOT -> if (c is Statement) AA_STMT else AA_NONE
+                else -> spineAaFold(pNode, pStatus, c)
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The routing arms (walkClassesForAbstractAccess /
+     *  walkExprForNestedClasses — both SURVIVING, since the emission walker's
+     *  ClassExpression arm still drives them inline) plus
+     *  [processClassForAbstractAccess]'s unconditional member-BODY descent, as
+     *  (parent, parent-status) → child-status transitions. Frozen quirks:
+     *  if/loop HEADS and for-INITIALIZERS are unreached while the switch
+     *  SUBJECT is reached; object-literal METHOD/accessor bodies are unreached
+     *  (only PropertyAssignment values and spreads); class property
+     *  INITIALIZERS are unreached (member BODIES only); an arrow / fn-expr
+     *  Block body is the RESTRICTED walk (AA_RSTMT), not the full statement
+     *  walk that round 651's Ab fold uses. Unlisted (parent, status) pairs are
+     *  the legacy `else -> {}`s. */
+    private fun spineAaFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        AA_STMT -> when (pNode) {
+            // ---- walkClassesForAbstractAccess arms ----
+            // the class itself is the anchor; the walk descends member BODIES
+            // (processClassForAbstractAccess step (a)) — never property
+            // initializers.
+            is ClassDeclaration -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is ClassStaticBlockDeclaration) AA_MEMBER else AA_NONE
+            is VariableStatement -> if (child === pNode.declarationList) AA_STMT else AA_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) AA_STMT else AA_NONE
+            // a ClassExpression initializer is anchored through this same
+            // AA_EXPR edge; the legacy arm's NAME OVERRIDE is recovered at the
+            // anchor ([spineAaVarNameOverride]).
+            is VariableDeclaration -> if (child === pNode.initializer) AA_EXPR else AA_NONE
+            is ExpressionStatement -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is FunctionDeclaration -> if (child === pNode.body) AA_STMT else AA_NONE
+            is Block -> if (child is Statement) AA_STMT else AA_NONE
+            is IfStatement -> if (child === pNode.thenStatement || child === pNode.elseStatement)
+                AA_STMT else AA_NONE // NOT the condition
+            is ModuleDeclaration -> if (child === pNode.body && child is ModuleBlock) AA_STMT else AA_NONE
+            is ModuleBlock -> if (child is Statement) AA_STMT else AA_NONE
+            is ReturnStatement -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is ForStatement -> if (child === pNode.statement) AA_STMT else AA_NONE // NOT the head
+            is ForInStatement -> if (child === pNode.statement) AA_STMT else AA_NONE
+            is ForOfStatement -> if (child === pNode.statement) AA_STMT else AA_NONE
+            is WhileStatement -> if (child === pNode.statement) AA_STMT else AA_NONE
+            is DoStatement -> if (child === pNode.statement) AA_STMT else AA_NONE
+            is SwitchStatement -> if (child === pNode.expression) AA_EXPR
+                else if (child is CaseClause || child is DefaultClause) AA_STMT else AA_NONE
+            is CaseClause -> if (child is Statement) AA_STMT else AA_NONE // NOT the case expression
+            is DefaultClause -> if (child is Statement) AA_STMT else AA_NONE
+            is TryStatement -> if (child === pNode.tryBlock || child is CatchClause ||
+                child === pNode.finallyBlock) AA_STMT else AA_NONE
+            is CatchClause -> if (child === pNode.block) AA_STMT else AA_NONE
+            is LabeledStatement -> if (child === pNode.statement) AA_STMT else AA_NONE
+            is ThrowStatement -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is ExportAssignment -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            else -> AA_NONE
+        }
+        // The RESTRICTED arrow / fn-expression body walk: the Block descends
+        // ONLY Expression/Return/Variable statements, and their expressions go
+        // straight to the expression walk (so a class DECLARATION, or anything
+        // nested in an if/loop/try there, is NEVER reached).
+        AA_RSTMT -> when (pNode) {
+            is Block -> if (child is ExpressionStatement || child is ReturnStatement ||
+                child is VariableStatement) AA_RSTMT else AA_NONE
+            is ExpressionStatement -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is ReturnStatement -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is VariableStatement -> if (child === pNode.declarationList) AA_RSTMT else AA_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) AA_RSTMT else AA_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) AA_EXPR else AA_NONE
+            else -> AA_NONE
+        }
+        AA_EXPR -> when (pNode) {
+            // ---- walkExprForNestedClasses arms ----
+            is ClassExpression -> if (child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is ClassStaticBlockDeclaration) AA_MEMBER else AA_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            // the legacy left-spine iteration is reach-equivalent to plain
+            // left/right edges.
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right)
+                AA_EXPR else AA_NONE
+            is CallExpression -> if (child === pNode.expression ||
+                pNode.arguments.any { it === child }) AA_EXPR else AA_NONE
+            is NewExpression -> if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) AA_EXPR else AA_NONE
+            is AsExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is TypeAssertionExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is SatisfiesExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is NonNullExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is ConditionalExpression -> if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) AA_EXPR else AA_NONE
+            is PropertyAccessExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is ElementAccessExpression -> if (child === pNode.expression ||
+                child === pNode.argumentExpression) AA_EXPR else AA_NONE
+            is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) AA_EXPR else AA_NONE
+            is ObjectLiteralExpression -> if (child is PropertyAssignment ||
+                child is SpreadAssignment) AA_EXPR else AA_NONE
+            is PropertyAssignment -> if (child === pNode.initializer) AA_EXPR else AA_NONE
+            is SpreadAssignment -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is SpreadElement -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) AA_EXPR else AA_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) AA_EXPR else AA_NONE
+            is AwaitExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is YieldExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is VoidExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is DeleteExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is TypeOfExpression -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is TemplateExpression -> if (child is TemplateSpan) AA_EXPR else AA_NONE
+            is TemplateSpan -> if (child === pNode.expression) AA_EXPR else AA_NONE
+            is TaggedTemplateExpression -> if (child === pNode.tag ||
+                (child === pNode.template && child is TemplateExpression)) AA_EXPR else AA_NONE
+            is CommaListExpression -> if (pNode.elements.any { it === child }) AA_EXPR else AA_NONE
+            // arrow/fn-expr bodies are the RESTRICTED statement walk; a
+            // concise (expression) arrow body continues as AA_EXPR.
+            is ArrowFunction -> if (child === pNode.body) {
+                if (child is Block) AA_RSTMT else AA_EXPR
+            } else AA_NONE
+            is FunctionExpression -> if (child === pNode.body) AA_RSTMT else AA_NONE
+            else -> AA_NONE
+        }
+        AA_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) AA_STMT else AA_NONE
+            is Constructor -> if (child === pNode.body) AA_STMT else AA_NONE
+            is GetAccessor -> if (child === pNode.body) AA_STMT else AA_NONE
+            is SetAccessor -> if (child === pNode.body) AA_STMT else AA_NONE
+            is ClassStaticBlockDeclaration -> if (child === pNode.body) AA_STMT else AA_NONE
+            else -> AA_NONE
+        }
+        else -> AA_NONE
+    }
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig spine pieces ─
 
     private fun spineB94Setup(result: BinderResult) {
@@ -71166,15 +71474,19 @@ interface DataView {
      * or class-field initializers, where X is an abstract member of the surrounding
      * class. Nested function/arrow bodies are skipped (their `this` use is deferred,
      * so the abstract member has been initialized by then). */
-    private fun checkAbstractMemberAccessInConstructor() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val classMap = buildClassDeclarationMap(result.sourceFile.statements)
-            walkClassesForAbstractAccess(result.sourceFile.statements, source, fileName, classMap)
-        }
-    }
+    // (M0.4, round 653) The whole-file driver is DELETED —
+    // checkAbstractMemberAccessInConstructor is ON THE SPINE: the emission
+    // half [emitAbstractAccessInClass] is anchored at reached ClassDeclaration
+    // / ClassExpression enters (spineAaEnterNode) under the memoized reach
+    // classifier spineAaStatus/spineAaFold, and the per-file classMap prepass
+    // rides spineAaSetup. The ROUTING walkers below
+    // (walkClassesForAbstractAccess / walkExprForNestedClasses) SURVIVE — the
+    // round-630 shared-walker rule: [findAbstractAccessInExpr]'s
+    // ClassExpression arm still processes a nested class INLINE through
+    // [processClassForAbstractAccess] (member descent + emission), a path that
+    // is not driven from the file root and is what makes a class expression
+    // inside a PROCESSED constructor legitimately processed twice. Any change
+    // to their arms must be mirrored in spineAaFold.
 
     private fun buildClassDeclarationMap(stmts: List<Statement>): Map<String, ClassDeclaration> {
         val map = mutableMapOf<String, ClassDeclaration>()
@@ -71426,6 +71738,23 @@ interface DataView {
             body?.let { walkClassesForAbstractAccess(it.statements, source, fileName, classMap) }
         }
 
+        emitAbstractAccessInClass(members, className, abstractMap, source, fileName)
+    }
+
+    /**
+     * The EMISSION half of the legacy processClassForAbstractAccess (its step
+     * (b)): the class's constructor bodies plus its non-abstract, non-static
+     * field initializers are walked for `this.X` references to an abstract
+     * name. Split out at round 653 so the spine anchors can run it WITHOUT the
+     * member-BODY descent (step (a)), which the reach classifier reproduces.
+     */
+    private fun emitAbstractAccessInClass(
+        members: List<ClassElement>,
+        className: String?,
+        abstractMap: Map<String, String>,
+        source: String,
+        fileName: String,
+    ) {
         if (abstractMap.isEmpty() || className == null) return
 
         // Walk constructor body for `this.X` accesses.
