@@ -20,6 +20,77 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 651 (2026-07-24) — (M0.4) twenty-eighth tail-pass migration:
+checkAbstractMemberContext (TS1253 abstract properties + TS1244 abstract
+methods/accessors in a non-abstract class + TS7008 abstract property without a
+type annotation; 81.6 ms at the round-647 table — the #28 per-file tail pass)
+is ON THE SPINE; the legacy driver + the mutually-recursive
+walkClassesForAbstractContext/walkExprForAbstractContext routing recursion
+(~161 lines — whose SOLE job was to REACH every nested class
+declaration/expression while threading a downward `inAmbient` flag) DELETED;
+the emission leaf processClassForAbstractContext (+
+emitAbstractMemberInNonAbstractClass / AbstractMemberInfo) survives
+anchor-called at ClassDeclaration/ClassExpression enters.** THE NEW TEMPLATE
+MOVE — **a downward BOOLEAN that is a pure function of the ancestor chain does
+NOT need to ride the classifier status (the round-641 boolean-as-status shape)
+NOR a frame stack: it can be re-derived by a SEPARATE, cheaper ancestor
+climb**, halving the status space. Here `inAmbient` is threaded monotonically
+(`inAmbient || Declare in modifiers` at ClassDeclaration and ModuleDeclaration;
+every other arm passes it through unchanged), and the ONLY walked edges out of
+those two node kinds are into member BODIES / the MODULE BLOCK — so for a
+REACHED node, "some `declare` ClassDeclaration/ModuleDeclaration ancestor
+exists" is exactly equivalent to the threaded OR. `spineAbInAmbient` is that
+climb; the reach classifier therefore carries no ambient channel at all
+(AB_STMT/AB_EXPR/AB_MEMBER only, where round 641's shape would have needed a
+doubled set). SOUNDNESS PRECONDITION worth stating for the next migrator: the
+climb is called ONLY after the reach check passes (spineAbEnterNode tests
+spineAbStatus first) — on an UNREACHED node the equivalence does NOT hold,
+since the path to it need not run through the contributing edge. Reach = the
+memoized classifier spineAbStatus/spineAbFold reproducing the two deleted walks
+verbatim: AB_STMT (the walkClasses walk), AB_EXPR (the walkExpr walk), AB_MEMBER
+(the class-member conduit — Method/Ctor/Get/Set/StaticBlock → body/AB_STMT).
+Unlike round 650's CP fold there is NO PropertyDeclaration in the conduit: Ab
+recurses member BODIES only, never property initializers, so BOTH class
+DECLARATIONS and class EXPRESSIONS share ONE conduit (no DECL/EXPR asymmetry to
+encode). Fully syntactic — NO ambient sandwich (the emission leaf reads only its
+`source`/`fileName` args + `options`, all immutable). Frozen quirks pinned both
+directions, including the FOUR deliberate divergences from the same-shaped
+round-650 CP fold (the easy-to-copy-wrong ones, since the two passes' walkers
+look nearly identical): (1) NO declare-skip anywhere — `declare`
+classes/modules/functions ARE walked, the flag suppresses only the EMISSION;
+(2) arrow/fn-expr Block bodies are the FULL statement walk, so a class
+DECLARATION directly in an arrow body IS reached (CP restricts to
+Expression/Return/Variable statements → NOT reached); (3) the switch SUBJECT IS
+walked (CP: not); (4) the ternary CONDITION IS walked (CP: not). Also pinned:
+class property INITIALIZERS unreached, if/loop/switch HEADS and for-INITIALIZERS
+unreached. CALIBRATION FIND (an emitter-scope fact, not a migration change): the
+abstract-property TS7008 is gated on `!isAmbient` but NOT on class abstractness,
+so an untyped `abstract prop;` in an ABSTRACT class still draws TS7008 while
+drawing no TS1253 — pinned. Two initial pins over-asserted `TS7008 == 0` by
+conflating this pass's TS7008 with the SEPARATE ambient-class implicit-any
+TS7008 (which fires independently inside a `declare namespace`); corrected to
+assert the UNIQUE codes TS1253/TS1244 — the only `to 1253`/`to 1244` mappings in
+Checker.kt, hence a clean reach signal. GATE NOTE: these three codes never fire
+on the clean tsc sources (0 occurrences across all 8 profiles), so `--listAll`
+×8 here proves PURE NON-PERTURBATION (that interleaving the emissions into the
+spine walk disturbs no other pass); the behavioral-equivalence burden rests on
+the 30 pins verified against the LEGACY pass first + the corpus suite, which
+does exercise abstract-member shapes. binderResults driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8. Gates: 30 local pins
+(M04AbstractContextSpineMigrationTest) green against the LEGACY pass FIRST
+(30/30 after the TS7008 calibration above), 30/30 on the spine; suite 12,225 →
+12,255/0 (3 skipped); `--listAll` ×8 byte-identical pre-vs-post on all 8
+profiles (sorted error lines; 46×7/94 — captured from a LEGACY build and a
+MIGRATION build of the same tree and diffed, not merely count-compared);
+`--partitionCheck 2` EQUIVALENT ×8 (46×7/94); pass table 412 → 411 (the
+81.6 ms row gone — `--passTiming` reports "411 passes recorded" and zero
+checkAbstractMemberContext rows; checkSpine 20.0 s single-run, in-band with
+rounds 646–650's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`).
+M0.4 running total: top TWENTY-EIGHT tail passes migrated.
+NEXT: the top-28 rows are gone, so the next pick needs a FRESH `--passTiming`
+table (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file aggregation, not per-file spine material).
+
 **Round 650 (2026-07-24) — (M0.4) twenty-seventh tail-pass migration:
 checkConstructorParamInInitializers (TS2301 — an instance field initializer
 referencing a ctor param / ctor-body `var`; TS2663 — the parameter-property
@@ -572,80 +643,6 @@ migration; after it by cost: checkStrictModeIdentifiers 96 ms,
 checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals
 91 ms.**
 
-**Round 642 (2026-07-22) — (M0.4) nineteenth tail-pass migration:
-checkInvalidAssignmentTargets (TS2364 invalid assignment/
-compound-assignment targets + the destructuring private-identifier
-check; 105.8 ms at the round-641 table — the #19 per-file tail pass) is
-ON THE SPINE; the legacy driver +
-checkInvalidAssignInStatement(s)/-InExpr(Core) recursion (~220 lines)
-DELETED; emitInvalidAssignAtBinary (+ isValidAssignmentTarget /
-checkDestructuringPrivateIds) survives as the anchor-called leaf.** The
-INT-depth classifier's SECOND application (the round-535 spineArgDepth
-shape, as the round-641 tail note predicted): spineIaDepth reproduces
-the legacy SHARED `checkDepth` counter per node — every
-checkInvalidAssignInExpr call consumed one frame and bailed past
-maxCheckDepth (200); statements and carrier positions inherit the
-ambient counter unchanged, INCLUDING a statement list nested inside an
-expression (arrow/fn-expr/objlit-method/class-EXPRESSION bodies inherit
-the expression's elevated ambient — encoded uniformly as +1 on every
-expression parent's outgoing edge, with the bail check applied at
-expression-CALL edges only). Unlike spineArgEdge there is NO right-spine
-absorption — both binary operands cost a frame, so deep chains prune at
-200 (pinned at the exact boundary: fires under 200 nested parens, silent
-under 201). Frozen quirks pinned both directions: for-heads walk
-initializer-as-Expression AND condition AND incrementor while a for-head
-DECLARATION-LIST initializer is never walked; the switch SUBJECT and
-case EXPRESSIONS are not walked (clause statements only); objlit
-methods/accessors + class-EXPRESSION members ARE walked; enum member
-initializers, class heritage, computed property names, decorators
-unreached; `<<=`/`>>=`/`>>>=`/`**=` sit OUTSIDE isAssignmentOperator
-(frozen gap → silent). Anchors: assignment-operator BinaryExpressions
-(operator pre-gate before the climb). Fully syntactic — no ambient
-sandwich. The now-orphaned shared `checkDepth` counter (this pass was
-its only mutator) is deleted from Checker + CheckerState. The legacy
-binderResults driver → the spine's partition view, gated
-`--partitionCheck 2` EQUIVALENT ×8. Gates: 35 local pins
-(M04InvalidAssignSpineMigrationTest) green against the LEGACY pass FIRST
-(all 35 on the first run); suite 11,857 → 11,892/0 — NOTE this pass
-emits 16 diagnostics on the corpus census, so unlike rounds 637–641 the
-corpus is a REAL behavior gate here, not just non-perturbation;
-`--listAll` ×8 byte-identical (sorted) vs the round-641 slot-move
-baseline; partitionCheck ×8 EQUIVALENT; pass table 420 → 419 (the row
-gone; checkSpine 20.7 s single-run — in-band); warning-clean
-(--rerun-tasks, zero `w:`). M0.4 running total: top NINETEEN tail passes
-migrated. SESSION TAIL — the #20 row checkTypeParameterDefaults (150 ms,
-slot 59b) PRODUCER scope map, VERIFIED against the source (no slot-move
-landed — the pass is ALREADY a round-555 pre-spine hoist, so there is no
-move to make; the migration itself is what needs the producer split):
-the round-555/641 "materializes TypeParam .constraint/.default"
-attribution is a MISNOMER for this pass — checkTpListDefaults (which
-does materialize, via typeParamInternCache + getTypeFromTypeNode)
-belongs to the SEPARATE checkGenericDefaultsValidation pass (B498,
-its own later slot), while the 59b family
-(checkTypeParameterDefaults → walkTParamDefaultsInStmt(s)/-InType/
--InExpr/-InClassMember → validateTParamDefaults, Checker.kt
-78917–79157) contains ZERO type-resolution calls: it emits TS2368
-(reserved TP name) + TS2744 (forward default ref) and writes exactly ONE
-side-set — `circularDefaultTypeParamCount[sym.id]` (a TypeAliasDeclaration
-whose TP defaults are circular; consumed by the no-args generic display
-`Test` → `Test<any>`; the write consults currentFileLocals, which the
-driver installs per file). The 59b comment's hoist rationale is the
-side-set-before-display ordering, and the display consumer is
-spine-anchored (cross-file + earlier-in-file consumption), so the
-side-set write CANNOT ride the spine walk. Treatment (now precise):
-SPLIT — a tiny pre-spine producer walking only to TypeAliasDeclarations
-(any walked statement position) re-running the findForwardTParamRef
-verdict to populate the side-set, and the TS2368/TS2744 emissions
-migrate onto the spine (anchors = TP-list-bearing constructs incl.
-FunctionType/ConstructorType TYPE positions and TypeLiteral members —
-note walkTParamDefaultsInType descends union/intersection/array/tuple/
-paren/type-args, a TYPE-side reach classifier like batch 5's; fully
-syntactic, no ambient sandwich needed for the emissions since
-validateTParamDefaults' currentFileLocals consult feeds only the
-side-set write, which stays in the producer). After #20 by cost:
-checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers 96 ms,
-checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals 91 ms.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -1001,9 +998,26 @@ structural item instead of landing alone.**
   carrying the DECLARATION-vs-EXPRESSION descent asymmetry, member bodies +
   property initializers for a class DECL, property initializers only for a
   class EXPR; fully syntactic, no ambient sandwich);
-  next per-file candidates by cost (round-647 table):
-  checkAbstractMemberContext 81.6 ms (a class-anchored pass with a downward
-  `inAmbient` flag — the round-532/638 downward-context shape)
+  checkAbstractMemberContext 81.6 ms — **MIGRATED round 651** (the
+  AMBIENT-CLIMB variant: a downward BOOLEAN that is a pure function of the
+  ancestor chain need not ride the classifier status (round 641) NOR a
+  frame stack — it is re-derived by a SEPARATE cheaper ancestor climb
+  (spineAbInAmbient), halving the status space to AB_STMT/AB_EXPR/AB_MEMBER;
+  sound because `inAmbient` is monotone (`|| Declare in modifiers` at
+  ClassDeclaration/ModuleDeclaration, pass-through everywhere else) and the
+  ONLY walked edges out of those two kinds are into member BODIES / the
+  MODULE BLOCK, so for a REACHED node "some `declare` class/module ancestor
+  exists" IS the threaded OR — the climb must therefore run only AFTER the
+  reach check passes; one AB_MEMBER conduit serves both class DECLARATIONS
+  and class EXPRESSIONS since Ab recurses member BODIES only, never property
+  initializers, so there is no DECL/EXPR asymmetry to encode; four
+  deliberate divergences from the same-shaped round-650 CP fold, each pinned
+  both directions: NO declare-skip anywhere (the flag suppresses only the
+  EMISSION), arrow/fn-expr Block bodies are the FULL statement walk (a class
+  DECLARATION in an arrow body IS reached), and the switch SUBJECT and
+  ternary CONDITION ARE walked);
+  next per-file candidates by cost: the top-28 rows are now gone, so the
+  next pick needs a FRESH `--passTiming` table
   (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays
   SKIP — cross-file aggregation, not per-file spine material; ~90 passes
   >20 ms still carry ~5 s of tail). Migration protocol per

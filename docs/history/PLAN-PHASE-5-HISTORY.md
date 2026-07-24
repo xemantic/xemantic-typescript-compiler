@@ -1,3 +1,77 @@
+**Round 642 (2026-07-22) — (M0.4) nineteenth tail-pass migration:
+checkInvalidAssignmentTargets (TS2364 invalid assignment/
+compound-assignment targets + the destructuring private-identifier
+check; 105.8 ms at the round-641 table — the #19 per-file tail pass) is
+ON THE SPINE; the legacy driver +
+checkInvalidAssignInStatement(s)/-InExpr(Core) recursion (~220 lines)
+DELETED; emitInvalidAssignAtBinary (+ isValidAssignmentTarget /
+checkDestructuringPrivateIds) survives as the anchor-called leaf.** The
+INT-depth classifier's SECOND application (the round-535 spineArgDepth
+shape, as the round-641 tail note predicted): spineIaDepth reproduces
+the legacy SHARED `checkDepth` counter per node — every
+checkInvalidAssignInExpr call consumed one frame and bailed past
+maxCheckDepth (200); statements and carrier positions inherit the
+ambient counter unchanged, INCLUDING a statement list nested inside an
+expression (arrow/fn-expr/objlit-method/class-EXPRESSION bodies inherit
+the expression's elevated ambient — encoded uniformly as +1 on every
+expression parent's outgoing edge, with the bail check applied at
+expression-CALL edges only). Unlike spineArgEdge there is NO right-spine
+absorption — both binary operands cost a frame, so deep chains prune at
+200 (pinned at the exact boundary: fires under 200 nested parens, silent
+under 201). Frozen quirks pinned both directions: for-heads walk
+initializer-as-Expression AND condition AND incrementor while a for-head
+DECLARATION-LIST initializer is never walked; the switch SUBJECT and
+case EXPRESSIONS are not walked (clause statements only); objlit
+methods/accessors + class-EXPRESSION members ARE walked; enum member
+initializers, class heritage, computed property names, decorators
+unreached; `<<=`/`>>=`/`>>>=`/`**=` sit OUTSIDE isAssignmentOperator
+(frozen gap → silent). Anchors: assignment-operator BinaryExpressions
+(operator pre-gate before the climb). Fully syntactic — no ambient
+sandwich. The now-orphaned shared `checkDepth` counter (this pass was
+its only mutator) is deleted from Checker + CheckerState. The legacy
+binderResults driver → the spine's partition view, gated
+`--partitionCheck 2` EQUIVALENT ×8. Gates: 35 local pins
+(M04InvalidAssignSpineMigrationTest) green against the LEGACY pass FIRST
+(all 35 on the first run); suite 11,857 → 11,892/0 — NOTE this pass
+emits 16 diagnostics on the corpus census, so unlike rounds 637–641 the
+corpus is a REAL behavior gate here, not just non-perturbation;
+`--listAll` ×8 byte-identical (sorted) vs the round-641 slot-move
+baseline; partitionCheck ×8 EQUIVALENT; pass table 420 → 419 (the row
+gone; checkSpine 20.7 s single-run — in-band); warning-clean
+(--rerun-tasks, zero `w:`). M0.4 running total: top NINETEEN tail passes
+migrated. SESSION TAIL — the #20 row checkTypeParameterDefaults (150 ms,
+slot 59b) PRODUCER scope map, VERIFIED against the source (no slot-move
+landed — the pass is ALREADY a round-555 pre-spine hoist, so there is no
+move to make; the migration itself is what needs the producer split):
+the round-555/641 "materializes TypeParam .constraint/.default"
+attribution is a MISNOMER for this pass — checkTpListDefaults (which
+does materialize, via typeParamInternCache + getTypeFromTypeNode)
+belongs to the SEPARATE checkGenericDefaultsValidation pass (B498,
+its own later slot), while the 59b family
+(checkTypeParameterDefaults → walkTParamDefaultsInStmt(s)/-InType/
+-InExpr/-InClassMember → validateTParamDefaults, Checker.kt
+78917–79157) contains ZERO type-resolution calls: it emits TS2368
+(reserved TP name) + TS2744 (forward default ref) and writes exactly ONE
+side-set — `circularDefaultTypeParamCount[sym.id]` (a TypeAliasDeclaration
+whose TP defaults are circular; consumed by the no-args generic display
+`Test` → `Test<any>`; the write consults currentFileLocals, which the
+driver installs per file). The 59b comment's hoist rationale is the
+side-set-before-display ordering, and the display consumer is
+spine-anchored (cross-file + earlier-in-file consumption), so the
+side-set write CANNOT ride the spine walk. Treatment (now precise):
+SPLIT — a tiny pre-spine producer walking only to TypeAliasDeclarations
+(any walked statement position) re-running the findForwardTParamRef
+verdict to populate the side-set, and the TS2368/TS2744 emissions
+migrate onto the spine (anchors = TP-list-bearing constructs incl.
+FunctionType/ConstructorType TYPE positions and TypeLiteral members —
+note walkTParamDefaultsInType descends union/intersection/array/tuple/
+paren/type-args, a TYPE-side reach classifier like batch 5's; fully
+syntactic, no ambient sandwich needed for the emissions since
+validateTParamDefaults' currentFileLocals consult feeds only the
+side-set write, which stays in the producer). After #20 by cost:
+checkExpandoFunctionNestedReads 99 ms, checkStrictModeIdentifiers 96 ms,
+checkConstLiteralComparisons 95 ms, checkSuperInObjectLiterals 91 ms.**
+
 **Round 641 (2026-07-22) — (M0.4) eighteenth tail-pass migration:
 checkSuperRefInRebindingScope (TS2660 `super` references inside
 regular-function rebinding scopes; 113.1 ms at the round-639 table — the
