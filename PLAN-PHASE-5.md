@@ -20,6 +20,61 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 667 (2026-07-25) — EP triage: two of the four items are BLOCKED OFFLINE,
+EP.1's premise is partly FALSIFIED, and the residual turns out to be one shape —
+`export *` barrels — which also emits a FALSE POSITIVE TS2694 that matters more
+than the emit bytes.** No code this round; the PERF arc's habit of checking a
+premise before building it transferred straight to EP and paid immediately.
+
+**Blocked offline (recorded so nobody re-attempts it).** This box has **no
+`node`, no `npx`, no `tsc`, and no `tsc.js` anywhere** — the tsc/tsgo columns in
+`bench-history/README.md` come from CI. So **EP.0** (wire the emit-diff gate)
+cannot run, and **EP.2** cannot start either, because its own text requires "the
+emit-diff gate in place" — without it there is no way to tell whether a printer
+change moves the diff toward or away from tsc, and the printer is precisely what
+the green corpus pins. Unblocking needs a network install of node + `typescript`
+or a tsc built at the pinned commit; both are outside the offline envelope, so
+that is a user-gated decision rather than agent work.
+
+**EP.1's premise is stale.** The round-483 claim was that xtsc "keeps
+`mod.Enum.Member` for const enums imported across modules". Cross-module
+inlining in fact already works, for both import forms and both value kinds,
+verified two independent ways: (1) the corpus test
+`constEnumNamespaceReferenceCausesNoImport` is an ACTIVE JS-emit subtest whose
+tsc baseline is `case 0 /* Foo.ConstFooEnum.Some */` — and it passes in a
+12,507/0 suite; (2) a scratch project emits `1 /* Kind.B */` for a named import,
+`"x" /* Names.X */` for a string-valued one, and `1 /* E.Kind.B */` for
+`import * as`. Somewhere in the ~180 rounds since round 483 this was fixed, and
+the item was never re-checked.
+
+**What actually fails is the barrel hop** — and that is exactly tsc's own
+`_namespaces/ts.js` layout, which is why round 483 saw the symptom in
+`utilities.js`. With `barrel.ts = export * from "./enums"`:
+`import { Kind } from "./barrel"` emits `barrel_1.Kind.B`, `import * as B` emits
+`B.Kind.A`, and both drag in a real `require("./barrel")` plus the entire
+`__importStar` helper that tsc elides. So EP.1 is not "teach the checker
+whole-program const-enum resolution" (that machinery exists) but "follow
+`export *` when resolving a const-enum member". The likely lever is visible:
+`Transformer.collectConstEnumValues` walks statements directly, while the
+barrel-following resolvers (`resolveExportedSymbolThroughStars` /
+`getModuleExportsFollowingStars`, M1.1 round 413) live in the Checker — the two
+are not connected.
+
+**The finding worth more than the emit bytes.** The same two-file barrel shape
+also produces a FALSE POSITIVE: `import * as B from "./barrel"` then `B.Kind`
+reports *"Namespace '"viaBarrel".B' has no exported member 'Kind'"* (TS2694) on
+valid TypeScript. **FPs are the v1 metric**, so EP.1a is sequenced ahead of the
+byte-fidelity half; presumably the same missing star-hop fixes both. Note it does
+NOT show on the 8 tsc-source profiles (still 46×7/94), so it is a shape those
+profiles never reach — it belongs in a local pin, not a dashboard expectation,
+and it is a reminder that "zero FPs on the profiles" is not "zero FPs".
+
+**Both EP.1 and EP.1a are gateable OFFLINE** (local pin + corpus, no reference
+tsc), which makes them the only workable EP items here. The repro is saved at
+`scratchpad/eptest` (enums / named / star / barrel / viaBarrel + tsconfig).
+
+Gates: no code changed (triage only); tree clean; suite untouched at 12,507/0/3.
+
 **Round 666 (2026-07-25) — (M2) SIZED BEFORE ANY CODE AND PARKED: only 23% of
 the run divides, w4 is flat, and the 4-core box — not the design — is the binding
 constraint. The PERF arc closes here.** Round 665 ended with "size (M2) with a
@@ -499,75 +554,6 @@ SHADOW-FIRST using the round-595 epoch infrastructure. Note for whoever starts
 it: the round-596/599 dead-ends are documented in CLAUDE.md's measured-dead-ends
 section and BOTH were revived-as-blocked pending exactly (b) — canonical types
 are the unblocker, so (b) is the real first step, not (c).
-
-**Round 658 (2026-07-25) — (M0.4) thirty-fifth tail-pass migration:
-checkTypeParamTypedOps (B60.12 — TS2339 / TS2349 / TS2351 for property access,
-call and `new` on a value whose type is an EFFECTIVELY UNCONSTRAINED type
-parameter, whose apparent type `{}` has no call/construct signatures and no own
-properties; 71.0 ms at the round-656 table — the #36 row) is ON THE SPINE; the
-driver and the whole walkStmtsForTypeParamOps / walkStmtForTypeParamOps /
-walkFnLikeBodyForTypeParamOps / emitTypeParamTypedOps recursion are DELETED and
-the three emissions are anchor-called at PropertyAccess / Call / New enters.**
-Shape: the round-635 PUSH-BASED ORDER-DEPENDENT variant — and the first
-migration whose downward context includes a **TYPE-SYSTEM AMBIENT** rather than
-only plain data, which is the round's transferable lesson. The data half is
-familiar: `tpVars` (name → TypeParameter AST) is MUTATED IN STATEMENT ORDER,
-LEAKS through block/if/loop/try/namespace descents, and is REBUILT at every
-function-like body from that body's own parameters, so it rides a LIFO of
-`TpoFrame`s pushed at exactly the boundaries the legacy walkers created a new
-map or TP scope at (a reached ClassDeclaration's member scope; a reached
-fn-like's BODY — SKIPPED when the body is absent, the legacy early return, so no
-interning happens there either) and popped at the owner's leave. The ambient
-half is new: the legacy walk held `withInternedTpScope(tps, withAst = true)`
-OPEN as a region across the whole subtree, and **a spine migration cannot hold
-an inline region open across nodes — so the boundary CAPTURES the region's
-result instead: run `withInternedTpScope` for its interning and
-constraint-materialization side effects and read `currentTypeParamScope` /
-`currentTypeParamAstForOps` from inside the block, then carry that pair on the
-frame and install it around each dispatch.** That keeps the first-touch
-behaviour identical (the interning + constraint materialization still happen
-once, at the same point in the walk, under the enclosing scope) while obeying
-the round-538 rule that a widely-consumed ambient field is installed ONLY around
-the emission, never walk-wide. The file-level base is the spine-entry RESTING
-pair, because the legacy driver installed only `currentFileLocals` (which
-checkSpine's per-file loop already does) and inherited its slot's ambient —
-the round-655 "reproduce the DRIVER's own install" rule, in its inherit-nothing
-form. Second detail worth keeping: the legacy VariableStatement arm ran TWO
-loops (record every declaration, THEN emit on the initializers), which
-reproduces EXACTLY as a recording dispatch at the statement's own ENTER, before
-any child is walked — so `var x: T = x.foo` still sees `x` recorded, no special
-casing. Reach (`spineTpoStatus` over `spineTpoFold`; TPO_STMT / TPO_EXPR /
-TPO_MEMBER) is unusually NARROW and every gap is deliberate, pinned both
-directions: `for` HEAD initializers, `switch` statements, object and array
-literals, template expressions, all four cast forms, await/yield, the
-typeof/void/delete operands, spreads and comma chains have NO arm — and the big
-one, ARROW and function-EXPRESSION bodies are never walked, so a TypeParam op
-inside any of them is UNREACHED rather than merely unrecorded; on the class side
-only method / constructor / accessor BODIES are reached, never property
-initializers or static blocks. The legacy left-spine BinaryExpression flatten
-reduces to plain left/right edges (it emitted leftmost-first then the rights in
-source order — identical). No sibling move was needed: the TS2349-retracting
-`checkUnresolvableSelfReferencingAwaitedUnion` sits after BOTH the old slot and
-checkSpine (the round-636 rule). Gates: 33 pins
-(M04TypeParamTypedOpsSpineMigrationTest, written green against the LEGACY
-walkers last session) 33/33 on the spine on the FIRST run — no calibration, the
-FOURTH consecutive round where pre-writing the pins against the legacy pass made
-the migration a single-attempt change, which is now the established discipline
-for this arc; suite 12,507/0 (3 skipped, unchanged); `--listAll` ×8
-byte-identical vs the round-657 capture (46×7/94, only the `time:` line differs
-— the reuse trick again: the two rounds touched only the migrating pass);
-`--partitionCheck 2` EQUIVALENT ×8; pass table 405 → 404 (zero
-checkTypeParamTypedOps rows; checkSpine 20.9 s — in-band); warning-clean (one
-`Variable is unused` on the New-expression anchor caught and fixed before the
-suite run). M0.4 running total: top THIRTY-FIVE tail passes migrated. NEXT by
-cost (round-656 table, the migrated rows gone): checkVarHoistRedeclaration
-68.9 ms, checkCallTypeArgCount 66.2, checkIllegalSuperCallsInNestedFunctions
-62.7, checkTypeArgumentConstraints 62.7, checkSpreadPropertyOverrides 62.5
-(checkCrossFileModuleAugmentationDuplicates, 109.7 ms, stays SKIP —
-cross-file). The per-pass wall value is now clearly below the noise floor
-(~65 ms on a ~25 s checker-init), so the honest next milestone is the ARC-level
-interleaved A/B once a few more land — or a decision to stop the arc and take
-(M1) identity stability, which carries the ≤15–20 s path.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1263,24 +1249,49 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   `LogicalAssignmentDownlevelTest` only. KNOWN RESIDUAL: a `??=` target BELOW ES2020
   keeps a native `??` (not further downleveled — ES2020 is the tested/dashboard
   target); close when a sub-ES2020 `??=` case appears.
-- [ ] **EP.2 Multi-line expression printer formatting.** Match tsc's operator/`:`
-  placement (line-end vs line-start) and indentation when wrapping long
-  `||`/`&&`/ternary chains. Mechanical Emitter work, no cross-file dependency, but
-  HIGHER corpus-regression risk (touches the printer that the green corpus pins) —
-  do it with the emit-diff gate in place and verify the full suite after each step.
-- [ ] **EP.1 Cross-module const-enum inlining** (highest impact, ~93% of the changed
-  lines in files like utilities.js). xtsc inlines SAME-FILE const enums but keeps
-  `mod.Enum.Member` for const enums imported across modules; tsc inlines to
-  `VALUE /* Enum.Member */` (numeric AND string-valued). Needs the checker to resolve
-  imported const-enum values whole-program. Biggest/hardest (cross-file), collapses
-  most of the diff. NOTE: xtsc's form still RUNS (preserveConstEnums keeps the enum
-  objects) — this is byte-fidelity, not correctness.
-- [ ] **EP.0 Wire the emit-diff gate into the dashboard.** `scripts/emit-diff-tsc.sh`
-  exists (reports identical/differing + family signals). Ideal reference is a tsc
-  BUILT AT THE PINNED COMMIT (npm tsc adds version noise to the small residual tail,
-  esp. emitHelpers.js helper bodies); decide whether to build+cache the pinned tsc or
-  accept the version-stable family signals. Re-run after EP.2/EP.1 to track the diff
-  shrinking.
+- [ ] **EP.2 Multi-line expression printer formatting** — **BLOCKED OFFLINE
+  (round 667).** Its own text requires "the emit-diff gate in place", and that
+  gate needs a reference tsc: this box has **no `node`, no `npx`, no `tsc`, and
+  no `tsc.js` anywhere** (the bench-history tsc/tsgo columns come from CI, not
+  locally). Do not start EP.2 here — without the gate there is no way to know
+  whether a printer change moves the diff toward or away from tsc, and the
+  printer is exactly what the green corpus pins. Revive when a reference tsc is
+  available (see EP.0).
+- [~] **EP.1 Cross-module const-enum inlining — PREMISE PARTLY FALSIFIED
+  (round 667); the residual is BARRELS ONLY and it is offline-gateable.** The
+  round-483 claim ("xtsc keeps `mod.Enum.Member` for const enums imported across
+  modules") is stale — direct cross-module inlining already works, for BOTH
+  import forms and BOTH value kinds. Verified two ways: the corpus test
+  `constEnumNamespaceReferenceCausesNoImport` is an ACTIVE JS-emit subtest whose
+  tsc baseline is `case 0 /* Foo.ConstFooEnum.Some */`, and it PASSES; and a
+  scratch project emits `1 /* Kind.B */` for a named import, `"x" /* Names.X */`
+  for a string-valued one, and `1 /* E.Kind.B */` for `import * as`. What still
+  fails is the `export * from` BARREL hop — exactly tsc's own `_namespaces/ts.js`
+  layout, which is why round 483 saw it in `utilities.js`:
+  `import { Kind } from "./barrel"` emits `barrel_1.Kind.B`, `import * as B`
+  emits `B.Kind.A`, and both drag in a real `require` plus the whole
+  `__importStar` helper that tsc elides. So the item is NOT "teach the checker
+  whole-program const-enum resolution" (that exists) but "follow `export *` when
+  resolving a const-enum member". Likely lever: `Transformer.collectConstEnumValues`
+  walks statements directly, while the barrel-following resolvers
+  (`resolveExportedSymbolThroughStars` / `getModuleExportsFollowingStars`, M1.1
+  round 413) live in the Checker — the two are not connected. Gateable OFFLINE
+  by a local pin + the corpus; no reference tsc needed.
+  - [ ] **EP.1a FIRST, and worth more than the emit bytes: the same barrel shape
+    emits a FALSE POSITIVE TS2694.** `import * as B from "./barrel"` (barrel =
+    `export * from "./enums"`) then `B.Kind` reports *"Namespace '"viaBarrel".B'
+    has no exported member 'Kind'"* — valid TypeScript, wrongly rejected. FPs are
+    the v1 metric, so fix this before the byte-fidelity half; the repro is two
+    files and the fix is presumably the same missing star-hop. Note it does NOT
+    appear on the 8 tsc-source profiles (still 46×7/94), so it is a shape those
+    profiles do not reach — add it as a local pin, not a dashboard expectation.
+- [ ] **EP.0 Wire the emit-diff gate into the dashboard** — **BLOCKED OFFLINE
+  (round 667): there is no reference tsc on this box** (no node/npx/tsc/tsc.js;
+  `scripts/emit-diff-tsc.sh` exists but cannot run). Unblocking needs either a
+  network install of node + `typescript`, or building tsc at the pinned commit —
+  both outside the offline envelope, so this is a user-gated decision, not
+  agent work. Until then EP progress is limited to what the CORPUS and local
+  pins can gate (EP.1/EP.1a qualify; EP.2 does not).
 
 Session note (round 484) has the full family breakdown + methodology.
 
