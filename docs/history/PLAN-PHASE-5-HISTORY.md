@@ -1,3 +1,58 @@
+**Round 664 (2026-07-25) — (M1)(c) THE FLOW-WALK MEMO IS LIVE: −2.93% wall
+(−833 ms), 40,542 walks skipped, and every diagnostic on all eight profiles
+byte-identical. The first measured WIN of the whole M5 performance arc.** Rounds
+660–663 were measurement; this one is the payoff, and it landed on the first
+attempt because the correctness argument was already finished.
+
+**What landed.** `flowWalkWithTripCheck` serves from a memo keyed
+`(reference nodeId, fileHash, walkKind, inputId)` whose value carries the
+dependencies the walk actually read — the FlowGraph instance plus the Type
+instances bound to the reference's ROOT NAME in `currentLocalTypes` and
+`narrowedDeclaredTypes` — returning the cached result while all three still
+match. A swap to a DIFFERENT scope map that still binds the root to the SAME
+instance is deliberately not an invalidation; that tolerance IS the design, and
+it is exactly the population the global epoch fence discarded (round 660).
+
+**Measured, interleaved, 6 pairs, alternating within-pair order, both class dirs
+kept with no recompile between measurements:**
+
+    pre  median 28,433 ms      post median 27,600 ms
+    delta −833 ms = −2.93%,    post wins 5/6
+    per-pair: −1124 −1540 −720 −1434 −810 +524
+
+Instrumented on the same profile: walks executed **111,248 → 69,859** (40,542
+served), narrowWalks **3,791 → 2,756 ms**, checker-init ~25.4 → 23.6 s.
+
+**The honest gap, and the lesson for the next memo.** The net (−0.83 s) is
+SMALLER than the ~1.4 s the shadow predicted, because the memo pays key +
+dependency lookup on ALL 111 k walks in order to skip 37% of them. Shadow
+"servable time" is an upper bound, not a forecast — the overhead side never
+appears in a shadow, by construction. That matters directly for (d): the
+expression path has ~6× the call count and a much cheaper mean call (~7 µs vs
+~34 µs), so its overhead fraction is far worse and the memo may not pay at all;
+the queue item now says to measure the mean served-call cost BEFORE building.
+
+**Correctness was finished before the first line of live code** — rounds 661–663
+ran this exact key as a shadow classifier and drove `depServeWrong` to 0 over
+41,389 serves — and all three round-663 hazards are handled: a walk that TRIPPED
+is never stored (its result is truncated and its TS2563 side effect must keep
+firing; a served hit runs no walk at all, so it consumes no visit budget and
+trips can only become RARER); the cache stores `Any?` and casts, sound because
+`walkKind` is part of the key so the Boolean-returning `isAssignedAtFlow` walks
+never share a key with Type-returning ones; and the shadow classification stays
+available under `--passTiming` so a lossy-`inputId` collision would surface as a
+wrong serve rather than silently.
+
+**Gates:** suite 12,507/0 (3 skipped, unchanged); `--listAll` ×8
+**byte-identical on all eight profiles** vs the round-658 capture (only `time:`
+differs) — so the memo moves no diagnostic anywhere, TS2563 included;
+`--partitionCheck 2` EQUIVALENT ×8; warning-clean.
+
+Arc position after five rounds of M1: the queue's original "≤15–20 s path"
+(30–45%) was retired at round 660 in favour of a measured ~3.3 s, corrected to
+~2.5 s at round 662, of which this round banks 0.83 s. The remaining (d) is the
+expression memo, and it is now the last M1 item.
+
 **Round 663 (2026-07-25) — (M1)(b2) MEASURED AND DROPPED: the canonical-output
 prize is ~0.1 s reachable, because 76% of it sits behind object-type freshness
 the relation engine deliberately depends on. (c) goes straight to the live walk

@@ -20,6 +20,48 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 673 (2026-07-25) — EP.2 RE-SCOPED by measurement: the residual is NOT
+mostly formatting, and the largest single finding is a 128-occurrence emit
+DEFECT with a three-line repro.** With the gate live, the honest first move was
+to classify the residual rather than start writing printer code against the
+family name in the item.
+
+**Classification of all 1,335 differing hunks across the 47 remaining files:**
+**482 residual qualified access**, 173 other, **128 whitespace/wrap only**. So
+"multi-line expression formatting" — the entire premise of EP.2 — is under 10%
+of what is left, while the const-enum family that round 672 reported as "96%
+closed" still dominates the diff. Closing 96% of the READS left a long tail of
+HUNKS, which is a good reminder that a count-based percentage and a diff-based
+one measure different things.
+
+**EP.2a — the defect, and it is real output corruption, not cosmetics.** We
+emit `".jsx" /* Extension.Jsx */ /* Extension.Jsx */` where tsc emits one
+comment; 128 occurrences. Reproduced in three lines (saved at
+`scratchpad/dblcomment`): with a const enum imported cross-module,
+`export const arr = [Ext.Cts, Ext.Cjs]` labels each element TWICE while a plain
+`const one = Ext.Cts` is correct — so the ARRAY-LITERAL element path transforms
+the element twice. The real shape is checker.ts:2550
+`fileExtensionIsOneOf(fileName, [Extension.Cts, Extension.Cjs])`. This is now
+first in the queue: malformed output outranks formatting.
+
+**EP.2b — the 675-read const-enum residual is essentially ONE enum:**
+`CharacterCodes` accounts for 638 of the qualified-access occurrences. It is
+declared in types.ts alongside SymbolFlags and Extension, which DO inline, so
+the difference is in how its members are reached or valued (it is large and
+char-code-valued) — that question is the first thing to answer, not a
+speculative fix. Also surfaced: `tracing.Phase.Bind` (a const enum behind a
+namespace) and one unrelated import-elision difference (`ts_js_1.version` vs
+`version` in builder.js).
+
+**EP.2c — the original formatting item is LAST**, deliberately: ~128 hunks,
+lowest count, and the highest corpus-regression risk of the three since it is
+the printer the 12,520-test corpus pins. One placement rule per commit, full
+suite after each, gate re-run to confirm the diff shrinks rather than merely
+changes.
+
+No code changed this round (classification + repro construction); tree clean;
+suite untouched at 12,520/0/3.
+
 **Round 672 (2026-07-25) — the owner authorised a network install, the emit-diff
 gate went LIVE, and its FIRST RUN falsified my own round-669 conclusion within
 minutes. Fixing what it exposed took const-enum inlining from 1,618 to 17,443
@@ -442,61 +484,6 @@ unchecked PERF item. Honest note for whoever takes it: the box is 4-core /
 this arc's record is that every advertised number shrank on measurement — so
 size (M2) with a probe before writing code, the same way (d) was killed for
 30 ms.
-
-**Round 664 (2026-07-25) — (M1)(c) THE FLOW-WALK MEMO IS LIVE: −2.93% wall
-(−833 ms), 40,542 walks skipped, and every diagnostic on all eight profiles
-byte-identical. The first measured WIN of the whole M5 performance arc.** Rounds
-660–663 were measurement; this one is the payoff, and it landed on the first
-attempt because the correctness argument was already finished.
-
-**What landed.** `flowWalkWithTripCheck` serves from a memo keyed
-`(reference nodeId, fileHash, walkKind, inputId)` whose value carries the
-dependencies the walk actually read — the FlowGraph instance plus the Type
-instances bound to the reference's ROOT NAME in `currentLocalTypes` and
-`narrowedDeclaredTypes` — returning the cached result while all three still
-match. A swap to a DIFFERENT scope map that still binds the root to the SAME
-instance is deliberately not an invalidation; that tolerance IS the design, and
-it is exactly the population the global epoch fence discarded (round 660).
-
-**Measured, interleaved, 6 pairs, alternating within-pair order, both class dirs
-kept with no recompile between measurements:**
-
-    pre  median 28,433 ms      post median 27,600 ms
-    delta −833 ms = −2.93%,    post wins 5/6
-    per-pair: −1124 −1540 −720 −1434 −810 +524
-
-Instrumented on the same profile: walks executed **111,248 → 69,859** (40,542
-served), narrowWalks **3,791 → 2,756 ms**, checker-init ~25.4 → 23.6 s.
-
-**The honest gap, and the lesson for the next memo.** The net (−0.83 s) is
-SMALLER than the ~1.4 s the shadow predicted, because the memo pays key +
-dependency lookup on ALL 111 k walks in order to skip 37% of them. Shadow
-"servable time" is an upper bound, not a forecast — the overhead side never
-appears in a shadow, by construction. That matters directly for (d): the
-expression path has ~6× the call count and a much cheaper mean call (~7 µs vs
-~34 µs), so its overhead fraction is far worse and the memo may not pay at all;
-the queue item now says to measure the mean served-call cost BEFORE building.
-
-**Correctness was finished before the first line of live code** — rounds 661–663
-ran this exact key as a shadow classifier and drove `depServeWrong` to 0 over
-41,389 serves — and all three round-663 hazards are handled: a walk that TRIPPED
-is never stored (its result is truncated and its TS2563 side effect must keep
-firing; a served hit runs no walk at all, so it consumes no visit budget and
-trips can only become RARER); the cache stores `Any?` and casts, sound because
-`walkKind` is part of the key so the Boolean-returning `isAssignedAtFlow` walks
-never share a key with Type-returning ones; and the shadow classification stays
-available under `--passTiming` so a lossy-`inputId` collision would surface as a
-wrong serve rather than silently.
-
-**Gates:** suite 12,507/0 (3 skipped, unchanged); `--listAll` ×8
-**byte-identical on all eight profiles** vs the round-658 capture (only `time:`
-differs) — so the memo moves no diagnostic anywhere, TS2563 included;
-`--partitionCheck 2` EQUIVALENT ×8; warning-clean.
-
-Arc position after five rounds of M1: the queue's original "≤15–20 s path"
-(30–45%) was retired at round 660 in favour of a measured ~3.3 s, corrected to
-~2.5 s at round 662, of which this round banks 0.83 s. The remaining (d) is the
-expression memo, and it is now the last M1 item.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1213,7 +1200,36 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   `LogicalAssignmentDownlevelTest` only. KNOWN RESIDUAL: a `??=` target BELOW ES2020
   keeps a native `??` (not further downleveled — ES2020 is the tested/dashboard
   target); close when a sub-ES2020 `??=` case appears.
-- [ ] **EP.2 Multi-line expression printer formatting — UNBLOCKED round 672**
+- [ ] **EP.2 — RE-SCOPED round 673 by classifying the residual: it is NOT
+  mostly formatting.** Every differing hunk in the 47 remaining files was
+  classified (1,335 hunks total): **482 residual qualified access**, 173 other,
+  **128 whitespace/wrap only**. So formatting is under 10% of the residual and
+  the const-enum family — supposedly 96% closed — still dominates. Three
+  distinct sub-targets, in value order:
+  - [ ] **EP.2a THE DOUBLE-COMMENT DEFECT (128 occurrences) — do this first,
+    it is malformed output, not a cosmetic.** We emit
+    `".jsx" /* Extension.Jsx */ /* Extension.Jsx */` where tsc emits one
+    comment. REPRO IS THREE LINES (saved at `scratchpad/dblcomment`): a const
+    enum imported cross-module, then `export const arr = [Ext.Cts, Ext.Cjs]`
+    emits each element's label TWICE while a plain `const one = Ext.Cts` is
+    correct — so the ARRAY-LITERAL element path transforms the element twice.
+    Real source shape: checker.ts:2550
+    `fileExtensionIsOneOf(fileName, [Extension.Cts, Extension.Cjs])`.
+  - [ ] **EP.2b The 675-read const-enum residual, dominated by
+    `CharacterCodes` (638 of the qualified-access occurrences).** Why that one
+    enum resists while SymbolFlags/Extension inline is the question to answer
+    first — it is declared in types.ts like the others, so the difference is
+    likely in how its members are reached or valued (it is large and
+    char-code-valued). Also visible: `tracing.Phase.Bind` (a const enum behind
+    a namespace) and one import-elision difference (`ts_js_1.version` vs
+    `version` in builder.js).
+  - [ ] **EP.2c Multi-line expression formatting** — the original item, now
+    known to be ~128 hunks: tsc puts a wrapped ternary's `:` at LINE START
+    (`? [...]` / newline / `: [`) where xtsc trails it. Highest
+    corpus-regression risk (this is the printer the 12,520-test corpus pins),
+    lowest count — so it goes LAST, one placement rule per commit, full suite
+    after each, and re-run the gate to confirm the diff SHRINKS.
+  SUPERSEDED NOTE: — **WAS UNBLOCKED round 672**
   (the emit-diff gate is live, which its own text required), and it is now the
   LARGEST remaining emit-parity family: 47/78 files still differ while the
   const-enum family is 96% closed, so most of that residual is formatting. The
