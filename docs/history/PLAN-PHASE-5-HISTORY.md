@@ -1,3 +1,74 @@
+**Round 648 (2026-07-23) — (M0.4) twenty-fifth tail-pass migration:
+checkTypeParamStrictSubtypeCast (B60.3/B402/B60.18 — TS2352 for
+`<TypeParam>concrete` casts where the concrete source is a strict subtype
+of the TP's constraint, TP-to-TP casts with the TS2208 related info, + the
+empty-object-to-nullish-constrained-TP AsExpression arm; 93.7 ms at the
+round-647 table — the #25 per-file tail pass) is ON THE SPINE; the legacy
+driver + walkStmtsForTypeParamCasts recursion + the inTypeParamCastPass
+flag (~90 lines) DELETED; the two emission leaves
+(emitTS2352IfTypeParamStrictSubtypeCast /
+emitTS2352IfEmptyObjectCastToTypeParam) survive anchor-called at
+TypeAssertionExpression / AsExpression enters with bare-Identifier-target
+pre-gates.** Three template moves, one of them new: (1) FOLD-THROUGH — the
+first classifier that reuses ANOTHER pass's edge set: the multi-state
+spineTcStatus/spineTcEdge reproduces the deleted fn-decl/class-method+ctor/
+namespace arms as TC_LIST/TC_BLOCK/TC_MEMBER, and EVERY other statement
+kind hands off to the shared assertion walker's spineCoEdge as TC_SHARED —
+so a fn-decl/class nested in a non-decl statement is walked WITHOUT its own
+TP push but WITH the shared walker's wider class-member coverage (accessor
+bodies + property initializers), exactly as legacy; the round-630 sync rule
+now covers BOTH passes (a walker-arm change must be mirrored in spineCoEdge
+or both reaches silently diverge — CLAUDE.md gotcha updated). (2) The
+pull-based TP-scope layering rebuild (spineTcScopeLevels /
+spineTcApplyLevels, outermost-first from the anchor's ancestor chain):
+fn-decl TPs withAst=false gated on a TC_LIST body entry; a TC_MEMBER method
+level pushes the class TPs then its own TPs (withAst=true) then types the
+method PARAMS into an EpochMap currentLocalTypes scope; ctor params
+deliberately NOT typed (the frozen asymmetry); a shared-region fn-decl/
+class pushes NOTHING (legacy handed those to the shared walker scope-free —
+pinned both directions). (3) The B402 empty-objlit local set rebuilds per
+AsExpression anchor as the union over enclosing TPC statement lists
+(SourceFile root + TC_BLOCK ancestors, per-list memoized) — the legacy
+whole-list-prepass semantics preserved: a decl AFTER the cast still counts,
+shared-region blocks never contribute. Ambient sandwich: currentCheckFileName
+install + currentFlowGraph nulled (the spineCo sandwich — same walker
+family, same legacy post-spine slot). TYPE-RESOLVING pass; binderResults
+driver → the partition view. Gates: 30 local pins
+(M04TypeParamCastSpineMigrationTest) green against the LEGACY pass FIRST
+(30/30 on the first run), 30/30 on the spine; suite 12,116 → 12,146/0;
+`--listAll` ×8 byte-identical (sorted, non-time lines; 46×7/94);
+`--partitionCheck 2` EQUIVALENT ×8; pass table 415 → 414 (the 93.7 ms row
+gone; checkSpine 21.4 s single-run under --passTiming — in-band;
+compiler-profile listAll self-time parity 28.9 s post vs 28.1 s pre);
+warning-clean. M0.4 running total: top TWENTY-FIVE tail passes migrated.
+SESSION TAIL: the checkDeleteOperator (#26, 86.8 ms — TS1102
+delete-identifier-in-strict / TS2703 non-property-ref / TS2790
+non-optional operand / TS2704 read-only property / TS2542 read-only index
+sig) slot-move pre-gate LANDED (moved intact from slot 25b to the
+post-spine slot; suite 12,146/0; listAll ×8 byte-identical; coupling
+surface verified self-contained — per-file `isStrict` computed inline, no
+pass scans/dedups/retracts its codes, the element-access-write TS2542
+emitters position-disjoint by construction since a delete operand is never
+a write target; the pass is TYPE-RESOLVING — getTypeOfExpression/
+getApparentType/getPropertyOfType in the TS2790/TS2704/TS2542 arms — so
+the slot-move gate is the empirical first-touch check, passed). Scope map
+for the migrator: walkStmtForDelete/walkExprForDelete recursion — a
+per-FILE `isStrict` boolean (target ≥ ES2015 / strict / alwaysStrict /
+module file / "use strict" prologue, decided at file entry → a per-file
+SETUP flag, no downward context), statement arms incl. class
+method/ctor/accessor bodies + namespace ModuleBlocks + LabeledStatement/
+throw/ExportAssignment, a broad expression walk (binary left-spine
+iteration, call/new args, objlit PropertyAssignment+SpreadAssignment
+values, template spans, arrow expression bodies), anchors at
+DeleteExpression enters (paren-unwrapped operand); MIGRATOR TRAP:
+checkDeleteReadonlyOperand consults `currentFileLocals` — null at every
+init-level slot but SET per-file on the spine, so the migration needs a
+null install in its ambient sandwich per the round-533/644 precedent.
+NEXT session starts at that migration; after it by cost (round-647 table):
+checkConstructorParamInInitializers 85.5 ms
+(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file).**
+
 **Round 647 (2026-07-23) — (M0.4) twenty-fourth tail-pass migration:
 checkSuperInObjectLiterals (TS2659 super-in-objlit-member below ES2015 /
 TS2660 super-in-objlit-property-fn; 91 ms at the round-642 table — the
