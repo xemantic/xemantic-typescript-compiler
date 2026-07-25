@@ -20,9 +20,64 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 677 (2026-07-25) — the const-enum divergence family is CLOSED: 18,118
-inlined reads vs tsc's 18,118, from 18,048. Three separate gaps, each one found
-by the gate and reproduced standalone before any code changed.**
+**Round 678 (2026-07-25) — the const-enum family is ACTUALLY closed now (true
+gap 34 → 0, byte-identical files 31 → 32), and round 677's "closed at parity"
+claim was WRONG. The gate's own summary metric lied, and I believed it.**
+
+**The correction first, because it is the point.** Round 677 declared the family
+closed on the strength of the emit-diff script's family-1 line reading
+`18,118 vs 18,118`. That counter is `grep -E '[0-9]+ /\* Name.Member \*/'` — it
+requires a **numeric** value before the comment. Every STRING-valued const enum
+is therefore invisible to it *on both sides*, so it reads perfect parity while
+string-valued reads are missing. Counting **all** `/* X.Y */` comments per file
+showed the truth: 34 still missing, every one of them `tracing.Phase.*`. The
+honest measure is the per-file comment count, and it is now 15,218 = 15,218.
+
+**What the residual actually was — and it was my ORIGINAL round-676 prediction,
+which round 677 then talked itself out of.** tsc's tracing.ts:
+
+    export namespace tracingEnabled { export const enum Phase { Bind = "bind" } }
+    export let tracing: typeof tracingEnabled | undefined;
+
+with every call site writing `tracing?.push(tracing.Phase.Bind, …)`. The
+receiver is a runtime VARIABLE whose declared TYPE is the namespace. Name
+resolution stops at the variable; tsc goes through the type.
+`namespaceBehindTypeofVariable` follows a `typeof <identifier>` annotation
+(through unions/parens, i.e. the `| undefined` form), resolving in the
+DECLARING file and falling back to the star-follower because the namespace name
+may itself come through a barrel. Wired into both the import path and the direct
+path, so `declare const t: typeof NS` behaves like an imported one. The variable
+keeps its runtime identity — only the MEMBER is substituted, the receiver's
+access and its import survive; both are negative controls.
+
+**Why round 677 got it wrong is worth naming precisely.** Round 676 predicted
+`tracing.Phase` (34 occurrences). Round 677 built a repro for a *namespace
+nested behind a barrel*, saw it fail, fixed it (EP.2e — a real bug), and when
+the count did not move went looking again and found EP.2f (also real). Two
+genuine fixes plus a metric that read parity produced a confident "closed". The
+missing step was never re-checking the ORIGINAL prediction against the ORIGINAL
+measurement: `tracing.Phase` was in the residual the whole time, and one
+per-file count would have shown it. **A metric agreeing with you is not
+verification when you have not checked what the metric can see.**
+
+**Gates.** Corpus 12,573 / 0 / 3 (+7 pins). `--listAll` ×8 unchanged (46 on
+seven, 94 on harness). True const-enum comment gap 0. Zero live `tracing.Phase`
+reads. byte-identical 31 → **32**/78 — the first file-level movement from this
+family, since the other 46 differ for family-2 reasons too.
+
+**NEXT:** emit families 1 and 3 are now genuinely at parity, verified by a
+measure that can actually see the thing. What remains is EP.2c, and the
+residual-hunk classification run this round refines its shape: of 368 differing
+hunks, 300 are CONTENT (dominated by the ternary/binary wrap-and-indent
+structure), 35 indent-only, 32 where we add a blank line tsc lacks, 1 collapsed
+wrap. The 32 blank-line hunks look like the smallest genuinely separable slice
+and are the recommended next EP step if EP.2c stays parked.
+
+---
+
+**Round 677 (2026-07-25) — three const-enum gaps fixed (18,048 → 18,118 on the
+script's counter). NOTE: the "family CLOSED" claim made here was WRONG — see
+round 678; 34 string-valued reads remained and the metric could not see them.**
 
 **EP.2d — parameter DEFAULT VALUES were never transformed at ES2018+.** The
 residual classifier pointed at two shapes; the larger was
@@ -69,14 +124,12 @@ explain why it should have; go read the residual.
 
 **Gates.** Corpus 12,566 / 0 / 3 (+32 hand-written tests across three new
 classes). `--listAll` ×8 unchanged: 46 on seven profiles, 94 on harness, zero
-crashes. Emit-diff const-enum reads 18,118 vs tsc 18,118. byte-identical files
-stay 31/78 — the remaining 47 are entirely family 2 (EP.2c), untouched.
+crashes. byte-identical files stay 31/78.
 
-**NEXT:** the low-risk EP tail is now exhausted — families 1 and 3 are both at
-parity. What is left in emit parity is EP.2c alone, still sized as a subsystem
-project (see round 676) and still awaiting an explicit go/no-go rather than
-drift. Absent that steer, the queue's next unchecked non-EP item is the correct
-pick.
+**SUPERSEDED:** this round claimed the const-enum family was closed because the
+script's family-1 counter read 18,118 = 18,118. That counter only sees
+NUMERIC-valued inlines; 34 string-valued reads (`tracing.Phase.*`) were still
+missing. Closed for real in round 678 — see above.
 
 ---
 
@@ -1229,8 +1282,41 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
     char-code-valued). Also visible: `tracing.Phase.Bind` (a const enum behind
     a namespace) and one import-elision difference (`ts_js_1.version` vs
     `version` in builder.js).
+  - [x] **EP.2d/e/f DONE round 677 — the const-enum family is CLOSED at 18,118
+    inlined reads vs tsc's 18,118.** Three unrelated causes, each found by the
+    gate: (2d) parameter DEFAULT VALUES were never transformed at ES2018+ —
+    `flattenRestParameters` returned the parameters raw from its early return,
+    and it owns the plain FunctionDeclaration branch, function/arrow
+    expressions and constructors, so every default there skipped
+    `transformExpression` wholesale (invisible to the corpus, whose emit tests
+    sit mostly BELOW that threshold); (2e) a const enum nested in a NAMESPACE
+    did not inline through a barrel — the star closure yields the namespace and
+    the binder flags a const-enum-only namespace `ConstEnum`, so the flag test
+    passed while the id-keyed `enumValues` lookup missed (`descendToConstEnum`);
+    (2f) COMPUTED initializers did not fold in the same-file collector —
+    `const enum Connection { Up = 1 << 0, …, UpDown = Up | Down }` in tsc's
+    debug.ts, worth 25 of that file's 121 reads. 2f surfaced only because 2e did
+    NOT move the count: re-running the gate with `--keep` and counting per file
+    beat a confident wrong model, the third time this arc (cf. 669, 672). The
+    numeric operator table now lives once in `tsFoldNumericBinary`. Gates: suite
+    12,566/0/3 (+32 pins), `--listAll` ×8 unchanged (46×7, harness 94).
+  - [x] **EP.2g DONE round 678 — the const-enum family is closed FOR REAL
+    (true gap 34 → 0; byte-identical 31 → 32).** A const enum reached through a
+    VARIABLE whose declared type is the namespace (`export let tracing: typeof
+    tracingEnabled | undefined`, used as `tracing.Phase.Bind`) never inlined:
+    resolution stops at the variable, tsc goes through the type.
+    `namespaceBehindTypeofVariable` follows the `typeof` annotation, wired into
+    both the import and direct paths; the variable keeps its runtime identity.
+    **This also CORRECTS round 677's "closed at parity" claim** — the script's
+    family-1 counter requires a NUMERIC value, so string-valued enums are
+    invisible to it on both sides. Measure with a per-file count of all
+    `/* X.Y */` comments. Suite 12,573/0/3, `--listAll` ×8 unchanged.
   - [ ] **EP.2c SIZED round 676 — a subsystem project, not a placement rule;
-    132 hunks in THREE shapes, recommend an explicit go/no-go.** Classified:
+    132 hunks in THREE shapes, recommend an explicit go/no-go.** Round 678
+    re-classified the current 368 differing hunks: 300 CONTENT (dominated by the
+    ternary/binary wrap-and-indent structure), 35 indent-only, **32 where we
+    emit a blank line tsc does not**, 1 collapsed wrap. Those 32 look like the
+    smallest genuinely separable slice if a first step is wanted. Classified:
     **78 same line count but different continuation INDENT DEPTH**, differing in
     BOTH directions (checker.js has us indenting 4 too many in one wrapped `&&`
     chain and 4 too few in another — no single constant fixes it); **47 where
