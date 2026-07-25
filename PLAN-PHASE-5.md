@@ -72,6 +72,17 @@ Gates: suite **12,611 / 0 / 3** — identical to round 681's count, because roun
 `compileTestKotlinJvm` warning-clean. Trims per protocol: STATUS 679–677 and PLAN
 674–669 moved to `docs/history/`.
 
+**Also queued, at owner request: (CATCH.1) at the TOP of the queue** — the
+defensive-`catch` audit. The owner flagged one `catch (_: Exception) { null }` in
+`Checker.kt` and asked what else looks like it: **218 sites in `src/commonMain`,
+197 of them in Checker.kt**, all the same swallow-and-default shape. Blame shows
+the flagged one was born `catch (_: Throwable)` in the inline-SOE-guard era and
+was narrowed to `Exception` MECHANICALLY by the 2026-07-04 sweep, so it no longer
+catches what it was written for. The sweep's own CLAUDE.md entry reserved the
+per-site removal as separate work; CATCH.1 is that work, batched and gated
+(corpus + `--listAll` ×8), classifying each site as dead residue (delete) or real
+modelling bug (file it, restore that one catch with the exception named).
+
 **Round 683 (2026-07-25) — the test suite speaks ONE dialect.** Owner-requested
 follow-through on round 682's idiom unification, which had converted the
 `kotlin.test` calls but left three older conventions standing in files that sweep
@@ -570,6 +581,40 @@ M1–M3 campaign items still unchecked in the history file (M2.2/M2.3/M3.1–M3.
 hit their re-scoped v1 acceptance bar — "the shapes tsc's source uses" — when the
 burn-down reached zero real FPs; reviving their full-completeness form is a
 backlog-horizon decision, not queue debt.)
+
+**TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+- [ ] **(CATCH.1) Defensive-`catch` audit — turn ~200 silent wrong-answer paths
+  into either deletions or filed bugs, in suite-gated batches.** Owner flagged
+  `Checker.kt`'s `val app = try { getApparentType(localType) } catch (_: Exception)
+  { null }` as a code smell and asked what else looks like it. **The census:** 218
+  `catch` sites in `src/commonMain`, **197 in Checker.kt**, every one the same
+  shape — swallow and return a default: 84 `null`/`return null`, 57
+  `return`/`continue`/`return@…`, 26 `false`/`true`, 9 empty or fall-through, ~14
+  type-valued (`anyType`, `errorType`, `"any"`, `Ts2403Cmp.UNKNOWN`). **Why they
+  are residue rather than design:** git blame on the flagged site shows it was
+  born `catch (_: Throwable)` (round 351) in the era of inline
+  `StackOverflowError` guards, and the 2026-07-04 sweep (3b950156) narrowed all
+  135 such sites to `Exception` **mechanically** — so this guard no longer catches
+  the thing it was written for (SOE is an `Error`), and no named exception is
+  documented for what it wraps. That sweep's own CLAUDE.md entry says removing the
+  catches ENTIRELY is "a separate, per-site root-cause effort — do not do it
+  blind"; this item IS that effort, done in gated batches rather than blind.
+  **Method** (repeat per batch, one commit each): (a) pick a batch whose guarded
+  expression is a small, near-total helper — start with the `getApparentType` /
+  `getPropertyOfType` cluster the owner pointed at; (b) DELETE the try/catch,
+  keeping the expression; (c) gate with the full corpus suite **plus `--listAll`
+  ×8** (a swallowed exception's default can be corpus-invisible but profile-live);
+  (d) classify each site by the result — **byte-identical ⇒ dead residue, delete
+  it; now crashes ⇒ a real modelling bug**, so file it as its own queue item with
+  the stack trace and RESTORE the catch for that site only, with a comment naming
+  the exception it actually absorbs. **Record the ledger** (sites removed / bugs
+  found per batch) in the session note; a batch that finds a bug has paid for
+  itself even if the catch goes back. **Do NOT** blanket-remove, and do NOT
+  re-widen any of these to `Throwable` — the `Exception` narrowing is what lets an
+  `Error` reach the init boundary guard (→ TS2589) instead of becoming wrong
+  output. Expect this to run over several rounds; ~200 sites is the population,
+  not the target for one session.
 
 **PERF — the post-inversion performance arc (owner-approved 2026-07-20, round 618:
 "proceed according to your recommendations"; measurements + rationale in the
