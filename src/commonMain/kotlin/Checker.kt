@@ -3699,6 +3699,42 @@ class Checker(
     /** The per-file `name → ClassDeclaration` prepass (heritage lookup). */
     private var spineAaClassMap: Map<String, ClassDeclaration> = emptyMap()
 
+    // (M0.4) round 654: checkIncDecTypeParamOperands (TS2356 — a `++`/`--`
+    // whose operand is a local, or a `this.<prop>` access, annotated as a bare
+    // UNCONSTRAINED type parameter) on the spine. Anchors at Prefix/Postfix
+    // `++`/`--` enters; reach is the memoized binary classifier
+    // [spineIdcStatus] over [spineIdcEdge] (the deleted incDecScanStatement /
+    // incDecCheckExpr arms verbatim — arrow/fn-EXPRESSION bodies, class
+    // EXPRESSIONS, static blocks, object literals, template/typeof/void/
+    // delete/await operands and case-clause EXPRESSIONS all stay UNREACHED).
+    // The purely DOWNWARD (tparams, tpProps, tpLocals) triple — the round-637
+    // gx shape with SETS instead of maps — is rebuilt PULL-based per anchor
+    // with a per-boundary-child memo ([spineIdcCtxFor]): tparams ACCUMULATE
+    // through class/fn-declaration/method boundaries, tpProps REBUILD from the
+    // nearest enclosing class DECLARATION (RESET by a nested
+    // FunctionDeclaration, CLEARED for a property initializer), and tpLocals
+    // REBUILD per fn-like BODY from the body-WIDE [collectTpLocals] prepass
+    // (block-BLIND, and NARROWER than the scan — it never enters a nested
+    // fn/class body). No ambient sandwich — the emission leaf is purely
+    // syntactic (source + name sets). Fields PRE-init (the pipeline runs
+    // inside `init`).
+    private var spineIdcActive = false
+    /** Per-file nodeId memo for [spineIdcStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineIdcReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineIdcStatus]. */
+    private val spineIdcChain = ArrayList<Node>()
+    /** The legacy downward triple — tparams only feed nested rebuilds. */
+    private class IdcCtx(
+        val tparams: Set<String>,
+        val tpProps: Set<String>,
+        val tpLocals: Set<String>,
+    )
+    /** Per-file ctx memo keyed by the boundary-CHILD nodeId (fn body /
+     *  class-prop initializer node). */
+    private val spineIdcCtxMemo = HashMap<Int, IdcCtx>()
+    /** The legacy per-file entry context (immutable — shared across files). */
+    private val spineIdcEmptyCtx = IdcCtx(emptySet(), emptySet(), emptySet())
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5844,21 +5880,19 @@ class Checker(
         // NOT apply). The only diagnostics-list consumer of TS7057 —
         // checkBuiltinIterator's corpus-unique suppress-and-re-emit — dispatches
         // far after the spine slot.
-        // 64d3' (M0.4 slot-move pre-gate, round 653 tail):
-        // checkIncDecTypeParamOperands (TS2356 — a `++`/`--` whose operand is
-        // `this.X` for a class property, or a local, annotated as a bare
-        // UNCONSTRAINED type parameter) moved intact from slot 64d3 ahead of
-        // its spine migration. Coupling surface: self-contained — FULLY
-        // SYNTACTIC (annotations matched structurally: a bare TypeReference to
-        // an in-scope type-param name with no type args and a null constraint;
-        // NOT type-resolving → no first-touch hazard, no ambient install); its
-        // downward context is a triple of NAME SETS (tparams / tpProps /
-        // tpLocals — the round-628 downward-SETS shape); grep-verified NO pass
-        // scans/dedups/retracts TS2356 (the other TS2356 emitters —
+        // 64d3'' (M0.4, round 654): checkIncDecTypeParamOperands (TS2356 — a
+        // `++`/`--` whose operand is `this.X` for a class property, or a
+        // local, annotated as a bare UNCONSTRAINED type parameter) is ON THE
+        // SPINE — anchors at Prefix/Postfix `++`/`--` enters
+        // (spineIdcEnterNode); the downward (tparams, tpProps, tpLocals)
+        // triple rebuilds pull-based per anchor (spineIdcCtxAt/spineIdcCtxFor,
+        // the round-637 gx shape with SETS). Fully syntactic — no ambient
+        // sandwich; the legacy binderResults driver → the spine's partition
+        // view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule).
+        // No TS2356 dedup/scan consumers exist (the other emitters —
         // checkForInNumericForRedeclare's for-in redeclare set, the arithmetic
         // pass, a corpus-unique pinDiag walker — are position-disjoint and
         // dedup only among themselves).
-        pass("checkIncDecTypeParamOperands") { checkIncDecTypeParamOperands() }
         // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
         // (TS2715 — a `this.X` reference inside a constructor body or a
         // class-field initializer where X is an abstract member of the
@@ -21618,6 +21652,7 @@ class Checker(
                 spineAbSetup(result)
                 spineIySetup(result)
                 spineAaSetup(result)
+                spineIdcSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21669,6 +21704,7 @@ class Checker(
                     spineAbTeardown()
                     spineIyTeardown()
                     spineAaTeardown()
+                    spineIdcTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21976,6 +22012,12 @@ class Checker(
         // file-scoped classMap prepass in setup; fully syntactic, no
         // frames/leave hook, no ambient sandwich.
         if (spineAaActive) spineAaEnterNode(node)
+        // (M0.4) round 654: the inc/dec type-param-operand anchors (Prefix/
+        // Postfix `++`/`--` enters) — the TS2356 emission leaf under the
+        // memoized binary reach classifier, with the downward
+        // (tparams, tpProps, tpLocals) triple rebuilt pull-based per anchor;
+        // fully syntactic, no frames/leave hook, no ambient sandwich.
+        if (spineIdcActive) spineIdcEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48147,6 +48189,13 @@ class Checker(
         private const val GX_REACHED = 1
         private const val GX_NONE = 2
         private const val GX_ROOT = 3
+
+        // (M0.4) round 654: spineIdcStatus states
+        // (checkIncDecTypeParamOperands reach — binary + the transient
+        // SourceFile root).
+        private const val IDC_REACHED = 1
+        private const val IDC_NONE = 2
+        private const val IDC_ROOT = 3
 
         // (M0.4) round 638: spineAcStatus states (checkArgumentsCollision
         // reach — binary + the transient SourceFile root).
@@ -149894,14 +149943,13 @@ interface DataView {
     // params (`T extends string`) are a deliberate FN to keep zero FP.
     // -----------------------------------------------------------------------
 
-    private fun checkIncDecTypeParamOperands() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || fileName.endsWith(".js") || fileName.endsWith(".jsx")) continue
-            val source = result.sourceFile.text
-            incDecScanStatements(result.sourceFile.statements, source, fileName, emptySet(), emptySet(), emptySet())
-        }
-    }
+    // (M0.4, round 654): the per-file pass driver + the recursion walkers
+    // (checkIncDecTypeParamOperands / incDecHandleBody / incDecScanStatements /
+    // incDecScanStatement / incDecCheckExpr) are DELETED — the spine dispatches
+    // the emission (spineIdcEnterNode) with a pull-based per-anchor context
+    // rebuild. The set-building leaves (unconstrainedTpNames /
+    // isBareTypeParamRef / collectTpLocals) and the emission leaf
+    // (emitTS2356IfTypeParamOperand) below are retained as its leaves.
 
     /** B265: `return class X extends superClass { ... }` inside a generic function where
      *  `superClass` is a parameter typed as a bare type-param `TFunction`.
@@ -150098,111 +150146,274 @@ interface DataView {
         }
     }
 
-    private fun incDecHandleBody(body: Block, source: String, fileName: String, tparams: Set<String>, tpProps: Set<String>) {
-        val tpLocals = mutableSetOf<String>()
-        collectTpLocals(body.statements, tparams, tpLocals)
-        incDecScanStatements(body.statements, source, fileName, tparams, tpProps, tpLocals)
-    }
+    // -----------------------------------------------------------------------
+    // (M0.4) round 654: checkIncDecTypeParamOperands (TS2356) ON THE SPINE.
+    // The per-file driver + the recursion walkers (incDecHandleBody /
+    // incDecScanStatements / incDecScanStatement / incDecCheckExpr) are
+    // deleted; the anchors are Prefix/Postfix `++`/`--` enters
+    // ([spineIdcEnterNode]) and the downward (tparams, tpProps, tpLocals)
+    // triple rebuilds pull-based per anchor ([spineIdcCtxAt]/[spineIdcCtxFor]),
+    // the round-637 gx shape with SETS instead of maps. The set-building
+    // leaves (unconstrainedTpNames / isBareTypeParamRef / collectTpLocals) and
+    // the emission leaf (emitTS2356IfTypeParamOperand) are retained unchanged.
+    // -----------------------------------------------------------------------
 
-    private fun incDecScanStatements(stmts: List<Statement>, source: String, fileName: String, tparams: Set<String>, tpProps: Set<String>, tpLocals: Set<String>) {
-        for (stmt in stmts) incDecScanStatement(stmt, source, fileName, tparams, tpProps, tpLocals)
-    }
-
-    private fun incDecScanStatement(stmt: Statement, source: String, fileName: String, tparams: Set<String>, tpProps: Set<String>, tpLocals: Set<String>) {
-        when (stmt) {
-            is ClassDeclaration -> {
-                val newTp = tparams + unconstrainedTpNames(stmt.typeParameters)
-                val props = stmt.members.filterIsInstance<PropertyDeclaration>()
-                    .filter { isBareTypeParamRef(it.type, newTp) }
-                    .mapNotNull { (it.name as? Identifier)?.text }.toSet()
-                for (m in stmt.members) when (m) {
-                    is MethodDeclaration -> m.body?.let { incDecHandleBody(it, source, fileName, newTp + unconstrainedTpNames(m.typeParameters), props) }
-                    is Constructor -> m.body?.let { incDecHandleBody(it, source, fileName, newTp, props) }
-                    is GetAccessor -> m.body?.let { incDecHandleBody(it, source, fileName, newTp, props) }
-                    is SetAccessor -> m.body?.let { incDecHandleBody(it, source, fileName, newTp, props) }
-                    is PropertyDeclaration -> m.initializer?.let { incDecCheckExpr(it, source, fileName, emptySet(), emptySet()) }
-                    else -> {}
-                }
-            }
-            is FunctionDeclaration -> stmt.body?.let { incDecHandleBody(it, source, fileName, tparams + unconstrainedTpNames(stmt.typeParameters), emptySet()) }
-            is ExpressionStatement -> incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals)
-            is VariableStatement -> for (d in stmt.declarationList.declarations) d.initializer?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-            is ReturnStatement -> stmt.expression?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-            is ThrowStatement -> stmt.expression?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-            is Block -> incDecScanStatements(stmt.statements, source, fileName, tparams, tpProps, tpLocals)
-            is IfStatement -> {
-                incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals)
-                incDecScanStatement(stmt.thenStatement, source, fileName, tparams, tpProps, tpLocals)
-                stmt.elseStatement?.let { incDecScanStatement(it, source, fileName, tparams, tpProps, tpLocals) }
-            }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d -> d.initializer?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) } }
-                (stmt.initializer as? Expression)?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-                stmt.condition?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-                stmt.incrementor?.let { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-                incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals)
-            }
-            is ForInStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
-            is ForOfStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
-            is WhileStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
-            is DoStatement -> { incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals); incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals) }
-            is SwitchStatement -> {
-                incDecCheckExpr(stmt.expression, source, fileName, tpProps, tpLocals)
-                for (c in stmt.caseBlock) {
-                    val cs = when (c) { is CaseClause -> c.statements; is DefaultClause -> c.statements; else -> emptyList() }
-                    incDecScanStatements(cs, source, fileName, tparams, tpProps, tpLocals)
-                }
-            }
-            is TryStatement -> {
-                incDecScanStatements(stmt.tryBlock.statements, source, fileName, tparams, tpProps, tpLocals)
-                stmt.catchClause?.let { incDecScanStatements(it.block.statements, source, fileName, tparams, tpProps, tpLocals) }
-                stmt.finallyBlock?.let { incDecScanStatements(it.statements, source, fileName, tparams, tpProps, tpLocals) }
-            }
-            is LabeledStatement -> incDecScanStatement(stmt.statement, source, fileName, tparams, tpProps, tpLocals)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { incDecScanStatements(it.statements, source, fileName, tparams, tpProps, tpLocals) }
-            else -> {}
+    /** Per-file setup: the legacy dts + `.js`/`.jsx` skip. */
+    private fun spineIdcSetup(result: BinderResult) {
+        spineIdcActive = !spineIsDts &&
+            !spineFileName.endsWith(".js") && !spineFileName.endsWith(".jsx")
+        spineIdcCtxMemo.clear()
+        spineIdcReachMemo = if (!spineIdcActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    /** Recursively check expressions for `++`/`--` on a type-param-typed
-     *  operand. Stops at nested function/class boundaries (handled by the
-     *  statement walker with their own scope). */
-    private fun incDecCheckExpr(expr: Expression, source: String, fileName: String, tpProps: Set<String>, tpLocals: Set<String>) {
-        when (expr) {
-            is PrefixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    emitTS2356IfTypeParamOperand(expr.operand, source, fileName, tpProps, tpLocals)
-                }
-                incDecCheckExpr(expr.operand, source, fileName, tpProps, tpLocals)
+    private fun spineIdcTeardown() {
+        spineIdcActive = false
+        spineIdcCtxMemo.clear()
+        spineIdcReachMemo = ByteArray(0)
+    }
+
+    /** ENTER dispatch: the legacy incDecCheckExpr Prefix/Postfix arms — a
+     *  `++`/`--` whose paren-unwrapped operand is a bare Identifier or a
+     *  `this.<name>` access (the cheap shape gate runs BEFORE the reach climb;
+     *  the name-set membership + span computation stay inside the retained
+     *  emission leaf, which re-unwraps the parentheses itself). */
+    private fun spineIdcEnterNode(node: Node) {
+        val operand: Expression = when ((node as NodeBase).kindId) {
+            NodeKind.PREFIX_UNARY_EXPRESSION -> {
+                node as PrefixUnaryExpression
+                if (node.operator != SyntaxKind.PlusPlus &&
+                    node.operator != SyntaxKind.MinusMinus) return
+                node.operand
             }
-            is PostfixUnaryExpression -> {
-                if (expr.operator == SyntaxKind.PlusPlus || expr.operator == SyntaxKind.MinusMinus) {
-                    emitTS2356IfTypeParamOperand(expr.operand, source, fileName, tpProps, tpLocals)
-                }
-                incDecCheckExpr(expr.operand, source, fileName, tpProps, tpLocals)
+            NodeKind.POSTFIX_UNARY_EXPRESSION -> {
+                node as PostfixUnaryExpression
+                if (node.operator != SyntaxKind.PlusPlus &&
+                    node.operator != SyntaxKind.MinusMinus) return
+                node.operand
             }
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    incDecCheckExpr(cur.right, source, fileName, tpProps, tpLocals)
-                    cur = cur.left
-                }
-                incDecCheckExpr(cur, source, fileName, tpProps, tpLocals)
-            }
-            is ParenthesizedExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            is CallExpression -> { incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals); expr.arguments.forEach { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) } }
-            is NewExpression -> { incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals); expr.arguments?.forEach { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) } }
-            is PropertyAccessExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            is ElementAccessExpression -> { incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals); incDecCheckExpr(expr.argumentExpression, source, fileName, tpProps, tpLocals) }
-            is ConditionalExpression -> { incDecCheckExpr(expr.condition, source, fileName, tpProps, tpLocals); incDecCheckExpr(expr.whenTrue, source, fileName, tpProps, tpLocals); incDecCheckExpr(expr.whenFalse, source, fileName, tpProps, tpLocals) }
-            is ArrayLiteralExpression -> expr.elements.forEach { incDecCheckExpr(it, source, fileName, tpProps, tpLocals) }
-            is SpreadElement -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            is AsExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            is NonNullExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            is TypeAssertionExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            is SatisfiesExpression -> incDecCheckExpr(expr.expression, source, fileName, tpProps, tpLocals)
-            else -> {}
+            else -> return
         }
+        var core: Expression = operand
+        while (core is ParenthesizedExpression) core = core.expression
+        val shaped = when (core) {
+            is Identifier -> true
+            is PropertyAccessExpression -> (core.expression as? Identifier)?.text == "this"
+            else -> false
+        }
+        if (!shaped) return
+        if (spineIdcStatus(node) != IDC_REACHED) return
+        val ctx = spineIdcCtxAt(node)
+        emitTS2356IfTypeParamOperand(operand, spineSource, spineFileName, ctx.tpProps, ctx.tpLocals)
+    }
+
+    /** The legacy downward triple at [anchor]: climb to the nearest
+     *  ctx-defining boundary child (a fn-like's body / a class-prop
+     *  initializer); no boundary up to the SourceFile → the per-file entry
+     *  ctx (the legacy top-level scan's empty triple — ModuleBlocks pass
+     *  context through unchanged, exactly as the legacy ModuleDeclaration arm
+     *  did). */
+    private fun spineIdcCtxAt(anchor: Node): IdcCtx {
+        var child: Node = anchor
+        var p: Node? = (anchor as NodeBase).parent
+        while (p != null && p !is SourceFile) {
+            if (spineIdcIsBoundaryChild(p, child)) return spineIdcCtxFor(p, child)
+            child = p
+            p = (p as NodeBase).parent
+        }
+        return spineIdcEmptyCtx
+    }
+
+    private fun spineIdcIsBoundaryChild(p: Node, child: Node): Boolean = when (p) {
+        is FunctionDeclaration -> child === p.body
+        is MethodDeclaration -> child === p.body
+        is Constructor -> child === p.body
+        is GetAccessor -> child === p.body
+        is SetAccessor -> child === p.body
+        is PropertyDeclaration -> child === p.initializer
+        else -> false
+    }
+
+    /** Memoized child ctx for a boundary [child] of fn-like/class-member [p] —
+     *  the deleted incDecScanStatement ClassDeclaration/FunctionDeclaration
+     *  arms + incDecHandleBody verbatim (a FunctionDeclaration RESETS tpProps;
+     *  only a MethodDeclaration contributes its OWN type params; a class-prop
+     *  initializer runs with the cleared (∅, ∅) pair — nothing below an
+     *  initializer can define a nested boundary, so its tparams are never
+     *  consulted). */
+    private fun spineIdcCtxFor(p: Node, child: Node): IdcCtx {
+        val id = (child as NodeBase).nodeId
+        if (id >= 0) spineIdcCtxMemo[id]?.let { return it }
+        val ctx: IdcCtx = when (p) {
+            is FunctionDeclaration -> {
+                val ftp = spineIdcCtxAt(p).tparams + unconstrainedTpNames(p.typeParameters)
+                IdcCtx(ftp, emptySet(), spineIdcBodyLocals(child as Block, ftp))
+            }
+            is MethodDeclaration -> {
+                val cls = (p as NodeBase).parent as? ClassDeclaration
+                val newTp = spineIdcClassTp(cls)
+                val mtp = newTp + unconstrainedTpNames(p.typeParameters)
+                IdcCtx(mtp, spineIdcClassProps(cls, newTp), spineIdcBodyLocals(child as Block, mtp))
+            }
+            is Constructor, is GetAccessor, is SetAccessor -> {
+                val cls = (p as NodeBase).parent as? ClassDeclaration
+                val newTp = spineIdcClassTp(cls)
+                IdcCtx(newTp, spineIdcClassProps(cls, newTp), spineIdcBodyLocals(child as Block, newTp))
+            }
+            else -> spineIdcEmptyCtx // PropertyDeclaration initializer: (∅, ∅)
+        }
+        if (id >= 0) spineIdcCtxMemo[id] = ctx
+        return ctx
+    }
+
+    /** incDecHandleBody's tpLocals build — the body-WIDE prepass (block-BLIND:
+     *  it descends nested control-flow statements, but never a nested
+     *  fn/class body). */
+    private fun spineIdcBodyLocals(body: Block, tparams: Set<String>): Set<String> {
+        if (tparams.isEmpty()) return emptySet()
+        val locals = HashSet<String>()
+        collectTpLocals(body.statements, tparams, locals)
+        return locals
+    }
+
+    /** The ClassDeclaration arm's newTp — the class's own statement-position
+     *  tparams (accumulated through enclosing fn bodies) + its unconstrained
+     *  TPs. */
+    private fun spineIdcClassTp(cls: ClassDeclaration?): Set<String> {
+        if (cls == null) return emptySet()
+        return spineIdcCtxAt(cls).tparams + unconstrainedTpNames(cls.typeParameters)
+    }
+
+    /** The ClassDeclaration arm's props set — bare-TP-annotated property
+     *  members (for `this.<prop>++` operands). */
+    private fun spineIdcClassProps(cls: ClassDeclaration?, newTp: Set<String>): Set<String> {
+        if (cls == null || newTp.isEmpty()) return emptySet()
+        var props: HashSet<String>? = null
+        for (m in cls.members) {
+            if (m !is PropertyDeclaration) continue
+            if (!isBareTypeParamRef(m.type, newTp)) continue
+            val n = (m.name as? Identifier)?.text ?: continue
+            (props ?: HashSet<String>().also { props = it }).add(n)
+        }
+        return props ?: emptySet()
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineIdcEdge] back down (spineGxStatus pattern).
+     *  The SourceFile anchor carries the transient IDC_ROOT status (never
+     *  memoized) whose sole edge is `child is Statement`. */
+    private fun spineIdcStatus(node: Node): Int {
+        if (node is SourceFile) return IDC_ROOT
+        val memo = spineIdcReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineIdcChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = IDC_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = IDC_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = IDC_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> IDC_NONE
+                pStatus == IDC_ROOT -> if (c is Statement) IDC_REACHED else IDC_NONE
+                pStatus == IDC_REACHED -> if (spineIdcEdge(pNode, c)) IDC_REACHED else IDC_NONE
+                else -> IDC_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted recursion's descent edges, verbatim. Unlisted parents are
+     *  the legacy `else -> {}`s (unreached children — arrows, fn/class
+     *  EXPRESSIONS, static blocks, object literals, templates, typeof/void/
+     *  delete/await operands, for-in/of LEFT sides, case-clause EXPRESSIONS,
+     *  param defaults, heritage, decorators). */
+    private fun spineIdcEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the deleted incDecScanStatement arms) ----
+        is ClassDeclaration -> when (child) {
+            is MethodDeclaration, is Constructor, is GetAccessor,
+            is SetAccessor, is PropertyDeclaration -> true
+            else -> false
+        }
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        is FunctionDeclaration -> child === parent.body
+        is ExpressionStatement -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        is ForStatement -> // BOTH initializer forms (decl-list inits AND a bare expr)
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child is Statement // NOT the case expression
+        is DefaultClause -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child === parent.finallyBlock || child is CatchClause
+        is CatchClause -> child === parent.block
+        is LabeledStatement -> child === parent.statement
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        // ---- expressions (the deleted incDecCheckExpr arms) ----
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ParenthesizedExpression -> child === parent.expression
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        is SpreadElement -> child === parent.expression
+        is AsExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        is TypeAssertionExpression -> child === parent.expression
+        is SatisfiesExpression -> child === parent.expression
+        else -> false
     }
 
     private fun emitTS2356IfTypeParamOperand(operand: Expression, source: String, fileName: String, tpProps: Set<String>, tpLocals: Set<String>) {
