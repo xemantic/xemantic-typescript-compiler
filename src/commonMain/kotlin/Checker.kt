@@ -8416,11 +8416,89 @@ class Checker(
         var i = fromIdx
         while (i < parts.size) {
             if (cur.declarations.any { it is EnumDeclaration }) break
-            val next = cur.exports?.get(parts[i]) ?: return null
+            var next = cur.exports?.get(parts[i])
+            if (next == null) {
+                // The segment may be reached through a VARIABLE whose TYPE is the
+                // namespace — see [namespaceBehindTypeofVariable].
+                val ns = namespaceBehindTypeofVariable(cur) ?: return null
+                next = ns.exports?.get(parts[i]) ?: return null
+            }
             cur = resolveAlias(next)
             i++
         }
         return if (cur.flags.hasAny(SymbolFlags.ConstEnum)) cur else null
+    }
+
+    /**
+     * Resolve `let x: typeof NS | undefined` to `NS`, so a const enum reached
+     * through the VARIABLE inlines the way tsc's does.
+     *
+     * EP.2g (round 678): tsc's own tracing.ts declares
+     * `export namespace tracingEnabled { export const enum Phase { … } }` beside
+     * `export let tracing: typeof tracingEnabled | undefined`, and every call
+     * site writes `tracing.Phase.Bind`. The receiver is therefore a runtime
+     * VARIABLE, not a namespace — name resolution stops there and the member
+     * never inlines. tsc reaches the enum through the variable's declared type.
+     * This was the entire residual const-enum gap (34 reads across seven files).
+     *
+     * Deliberately narrow: only a `typeof <identifier>` annotation (optionally
+     * inside a union or parentheses, which is how the `| undefined` form is
+     * written) is followed, and the target is resolved in the DECLARING file
+     * first. The variable itself keeps its runtime identity — it is a real
+     * binding, so its import must NOT be elided, which holds because the
+     * variable symbol carries no `ConstEnum` flag.
+     */
+    private fun namespaceBehindTypeofVariable(sym: Symbol): Symbol? {
+        for (d in sym.declarations) {
+            val vd = d as? VariableDeclaration ?: continue
+            val name = typeQueryTargetName(vd.type ?: continue) ?: continue
+            val declFile = owningSourceFile(vd)?.fileName
+            val local = declFile?.let { fileResults[it]?.locals?.get(name) }
+            (local ?: globals[name])?.let { resolveAlias(it) }
+                ?.takeIf { it.exports != null }
+                ?.let { return it }
+            // The namespace NAME may itself arrive through an `export *` barrel,
+            // which `resolveAlias` cannot follow — same gap the const-enum path
+            // has, so use the same star-following resolver.
+            declFile?.let { namespaceThroughStarImports(name, it) }?.let { return it }
+        }
+        return null
+    }
+
+    /**
+     * Resolve a named import to the NAMESPACE symbol it denotes, following
+     * `export *` barrels. Suppression-free and read-only: it returns a symbol
+     * only when one is genuinely exported and carries an export table, so it can
+     * never invent a resolution. Kept separate from
+     * [constEnumSymbolThroughStars], which answers the narrower const-enum
+     * question and whose working path is left untouched.
+     */
+    private fun namespaceThroughStarImports(name: String, fileName: String): Symbol? {
+        val importer = fileResults[fileName] ?: return null
+        for (stmt in importer.sourceFile.statements) {
+            val imp = stmt as? ImportDeclaration ?: continue
+            val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val nb = (imp.importClause ?: continue).namedBindings as? NamedImports ?: continue
+            val el = nb.elements.firstOrNull { it.name.text == name } ?: continue
+            val exportedName = (el.propertyName ?: el.name).text
+            val targetSf = resolveBarrelStarTarget(spec, fileName)
+                ?: (resolveModuleSpecifier(spec, imp.moduleSpecifier)
+                    ?: resolveModuleSpecifierRelative(spec, fileName))
+                    ?.let { fileResults[it]?.sourceFile }
+                ?: continue
+            val resolved = resolveExportedSymbolThroughStars(targetSf, exportedName)
+                ?.let { resolveAlias(it) } ?: continue
+            if (resolved.exports != null) return resolved
+        }
+        return null
+    }
+
+    /** The bare identifier of a `typeof X` annotation, seen through unions/parens. */
+    private fun typeQueryTargetName(t: TypeNode): String? = when (t) {
+        is TypeQuery -> (t.exprName as? Identifier)?.text
+        is UnionType -> t.types.firstNotNullOfOrNull { typeQueryTargetName(it) }
+        is ParenthesizedType -> typeQueryTargetName(t.type)
+        else -> null
     }
 
     fun resolveConstEnumMemberAccess(
@@ -8432,7 +8510,17 @@ class Checker(
         val direct = resolveNamePath(enumName, result)?.let { resolveAlias(it) }
             ?.takeIf { it.flags.hasAny(SymbolFlags.ConstEnum) }
         // EP.1: fall back to the `export *` chain (barrels) — see the helper.
-        val target = direct ?: constEnumSymbolThroughStars(enumName, sourceFileName) ?: return null
+        val target = direct
+            ?: constEnumSymbolThroughStars(enumName, sourceFileName)
+            // EP.2g: the root may be a LOCAL binding whose type is the namespace
+            // (`declare const t: typeof NS`) — the non-imported form of the same
+            // shape, which `resolveNamePath` cannot follow because it walks
+            // `exports` only.
+            ?: enumName.split(".").let { parts ->
+                (result.locals[parts[0]] ?: globals[parts[0]])
+                    ?.let { descendToConstEnum(resolveAlias(it), parts, 1) }
+            }
+            ?: return null
         return enumValues[target.id]?.get(memberName)
     }
 
