@@ -250,3 +250,30 @@ fun nodeKey(pos: Int, end: Int): Long =
 
 /** Get the identity key for a [Node], based on its source position. */
 fun nodeKey(node: Node): Long = nodeKey(node.pos, node.end)
+
+/**
+ * Parse a TypeScript NUMERIC LITERAL's source text to its numeric value,
+ * honouring every base TypeScript allows plus `_` separators.
+ *
+ * EP.2b (round 675): the const-enum evaluators used `text.toDoubleOrNull()`,
+ * which parses decimal only — Kotlin accepts a hex FLOAT (`0x1.8p3`) but not a
+ * hex INTEGER (`0x7F`), so it returned null and the member silently became
+ * un-inlinable. That is why tsc's `CharacterCodes` (almost entirely hex) kept
+ * `ts_js_1.CharacterCodes.doubleQuote` in the emit while `SymbolFlags` and
+ * `Extension` from the SAME file inlined: those are decimal and string valued.
+ * 638 of the 675 residual un-inlined reads on the compiler profile were this
+ * one enum.
+ *
+ * Returns null for genuinely non-constant text (BigInt `n` suffix included, as
+ * a const enum member cannot be a BigInt).
+ */
+fun tsNumericLiteralToDouble(raw: String): Double? {
+    val t = raw.replace("_", "")
+    if (t.endsWith("n") || t.endsWith("N")) return null // BigInt literal
+    return when {
+        t.startsWith("0x") || t.startsWith("0X") -> t.substring(2).toLongOrNull(16)?.toDouble()
+        t.startsWith("0b") || t.startsWith("0B") -> t.substring(2).toLongOrNull(2)?.toDouble()
+        t.startsWith("0o") || t.startsWith("0O") -> t.substring(2).toLongOrNull(8)?.toDouble()
+        else -> t.toDoubleOrNull()
+    }
+}

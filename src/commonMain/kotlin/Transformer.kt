@@ -13410,12 +13410,12 @@ class Transformer(
                     val init = member.initializer
                     when {
                         init is NumericLiteralNode -> {
-                            val v = init.text.toDoubleOrNull()
+                            val v = tsNumericLiteralToDouble(init.text)
                             nextValue = (v ?: nextValue) + 1.0
                             v
                         }
                         init is PrefixUnaryExpression && init.operator == Minus -> {
-                            val inner = (init.operand as? NumericLiteralNode)?.text?.toDoubleOrNull()
+                            val inner = (init.operand as? NumericLiteralNode)?.text?.let { tsNumericLiteralToDouble(it) }
                             if (inner != null) {
                                 nextValue = -inner + 1.0
                                 -inner

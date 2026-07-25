@@ -8634,9 +8634,9 @@ class Checker(
     private fun literalConstantValue(expr: Expression): ConstantValue? = when (expr) {
         is StringLiteralNode -> ConstantValue.StringValue(expr.text)
         is NoSubstitutionTemplateLiteralNode -> ConstantValue.StringValue(expr.text)
-        is NumericLiteralNode -> expr.text.toDoubleOrNull()?.let { ConstantValue.NumberValue(it) }
+        is NumericLiteralNode -> tsNumericLiteralToDouble(expr.text)?.let { ConstantValue.NumberValue(it) }
         is PrefixUnaryExpression -> {
-            val inner = (expr.operand as? NumericLiteralNode)?.text?.toDoubleOrNull()
+            val inner = (expr.operand as? NumericLiteralNode)?.text?.let { tsNumericLiteralToDouble(it) }
             when {
                 inner == null -> null
                 expr.operator == SyntaxKind.Minus -> ConstantValue.NumberValue(-inner)
@@ -9456,8 +9456,11 @@ class Checker(
     ): ConstantValue? {
         return when (expr) {
             is NumericLiteralNode -> {
-                // Numeric separators (`1_000_000`) are kept in the token text — strip them.
-                val value = expr.text.replace("_", "").toDoubleOrNull() ?: return null
+                // Numeric separators (`1_000_000`) are kept in the token text, and the
+                // literal may be hex/binary/octal — tsc's CharacterCodes is almost entirely
+                // hex, and a decimal-only parse silently made every such member
+                // un-inlinable (EP.2b, round 675).
+                val value = tsNumericLiteralToDouble(expr.text) ?: return null
                 ConstantValue.NumberValue(value)
             }
             is StringLiteralNode -> ConstantValue.StringValue(expr.text)
