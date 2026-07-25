@@ -88,11 +88,22 @@ subsystem in round 676 have now turned out to be plain defects (EP.2a's double
 comment, EP.2h's blank line). Before committing to the expensive reading of a
 classification, check whether the cheap one explains it.
 
-**NEXT:** emit families 1 and 3 are at parity, verified by a measure that can
-see the thing. The residual is 302 hunks: **266 CONTENT** (the ternary/binary
-wrap-and-indent structure — the genuine EP.2c subsystem), **35 indent-only**,
-**1 collapsed wrap**. Nothing cheap is left in it; EP.2c remains a real project
-and still wants an explicit go/no-go.
+**EP.2c: asked, and the owner said SKIP.** With the cheap parts gone the fork
+was clean enough to put to the owner rather than guess: 302 residual hunks, 266
+of them the wrapped-expression structure, against the fact that byte-parity is
+not a v1 exit criterion. The answer was to move on. **The emit arc closes here
+at 33/78 byte-identical**, families 1 and 3 at full parity.
+
+**NEXT:** with EP closed, every remaining live queue item is either parked
+(INV.7b: needs a ≥16 GB builder) or explicitly zero-value on this box ((6e)
+parallel emit — the benches are `--noEmit`, and round 666 measured parallel
+scaling flat at w4 on 4 cores). That makes the next round's job an assessment,
+not a fix: **v1's three exit legs (zero FPs / all files emitted / zero crashes)
+all appear to be MET** — the FP leg since round 481, and the current TSVs show
+0 crashes with every profile emitting its full file set (78/80/81/84/88/252/
+274/312). If that holds under a deliberate check, v1 should be declared and the
+post-v1 backlog (M2.4/M3.0/M3.5/M4.x) unparked, which is where the real
+remaining work lives.
 
 ---
 
@@ -1341,8 +1352,15 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
     including the source-has-a-blank case. Hunks **368 → 302**, add-a-line
     family **32 → 0** (also cleared 34 entangled CONTENT hunks), byte-identical
     **32 → 33**/78. Suite 12,579/0/3, all JS baselines byte-exact.
-  - [ ] **EP.2c SIZED round 676 — a subsystem project, not a placement rule;
-    recommend an explicit go/no-go.** After rounds 677–678 the residual is
+  - [x] **EP.2c SKIPPED-BY-OWNER (round 678, 2026-07-25).** Asked explicitly and
+    the answer was "skip — move on": byte-parity is NOT a v1 exit criterion
+    (v1 = zero FPs + all files emitted + zero crashes, all three already met),
+    so a multi-round printer subsystem with no v1 impact is not where rounds
+    should go. The emit arc therefore CLOSES at **33/78 byte-identical**, with
+    families 1 (const enums) and 3 (logical-assign) at full parity and the two
+    genuine defects found along the way (EP.2a double comment, EP.2h blank
+    line) fixed. If ever revived, the residual and its shape are recorded
+    below — do not re-derive it. After rounds 677–678 the residual is
     **302 hunks: 266 CONTENT** (the ternary/binary wrap-and-indent structure —
     the genuine subsystem), **35 indent-only**, **1 collapsed wrap**. Nothing
     cheap remains: the two shapes that looked separable (EP.2a's double comment,
