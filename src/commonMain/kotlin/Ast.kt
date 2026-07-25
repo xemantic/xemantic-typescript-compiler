@@ -114,10 +114,27 @@ data class SourceFile(
      * parses (tsc's `SourceFile.imports` equivalent): static `import`/`export ... from`,
      * `import x = require(...)`, dynamic `import(...)` and `require(...)` calls with a
      * string-literal argument at any nesting depth, `import("...")` type positions, and
-     * `/// <reference path|types>` directives. Lexically exact — string literals,
+     * and `import("...")` type positions. Lexically exact — string literals,
      * comments, and regex literals can never contribute (unlike a text scan).
+     *
+     * `/// <reference path|types>` directives are NOT here — they resolve
+     * differently (see [referencedPaths] / [referencedTypes]) and lumping them in
+     * made the crawl resolve `path="globals.d.ts"` as a BARE module specifier,
+     * which fails.
      */
     val moduleSpecifiers: List<String> = emptyList(),
+    /**
+     * `/// <reference path="…" />` targets, in source order. These are file paths
+     * relative to THIS file's directory (tsc `resolveTripleslashReference`), not
+     * module specifiers — and tsc's `processReferencedFiles` pulls each into the
+     * program, which is why they are tracked separately (M4.8).
+     */
+    val referencedPaths: List<String> = emptyList(),
+    /**
+     * `/// <reference types="…" />` targets: PACKAGE names resolved through the
+     * type roots exactly like a tsconfig `types` entry, not relative paths.
+     */
+    val referencedTypes: List<String> = emptyList(),
 ) : NodeBase(), Node {
     override val kind: SyntaxKind = SyntaxKind.SourceFile
     init { kindId = NodeKind.SOURCE_FILE }

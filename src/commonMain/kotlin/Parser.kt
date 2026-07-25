@@ -162,6 +162,8 @@ class Parser(
             text = source,
             end = source.length,
             moduleSpecifiers = moduleSpecifiers.toList(),
+            referencedPaths = referencedPaths.toList(),
+            referencedTypes = referencedTypes.toList(),
         ).also {
             it.typeAliasesWithTpDefaults = tpDefaultAliases.toList()
             indexSourceFile(it)
@@ -181,6 +183,12 @@ class Parser(
      * the same text re-parses on the real path, so the specifier is real either way.
      */
     private val moduleSpecifiers = LinkedHashSet<String>()
+
+    /** `/// <reference path="…" />` targets — see [SourceFile.referencedPaths]. */
+    private val referencedPaths = LinkedHashSet<String>()
+
+    /** `/// <reference types="…" />` targets — see [SourceFile.referencedTypes]. */
+    private val referencedTypes = LinkedHashSet<String>()
 
     /** (M0.4 round 643) TypeAliasDeclarations with a TP default, recorded as they
      *  parse — see [SourceFile.typeAliasesWithTpDefaults]. Distinct node objects
@@ -208,7 +216,7 @@ class Parser(
      * whose narrower leading-`///`-block scan is corpus-pinned for TS1084/TS1006.
      */
     private fun recordLeadingReferenceDirectives() {
-        val directive = Regex("""^///\s*<reference\s+(?:path|types)\s*=\s*["']([^"']+)["']""")
+        val directive = Regex("""^///\s*<reference\s+(path|types)\s*=\s*["']([^"']+)["']""")
         var inBlockComment = false
         for (rawLine in source.lineSequence()) {
             var line = rawLine.trimStart()
@@ -226,8 +234,16 @@ class Parser(
             }
             if (inBlockComment || line.isEmpty()) continue
             if (line.startsWith("//")) {
-                directive.find(line)?.groupValues?.get(1)
-                    ?.takeIf { it.isNotEmpty() }?.let { moduleSpecifiers.add(it) }
+                directive.find(line)?.let { m ->
+                    val target = m.groupValues[2]
+                    // `path` and `types` resolve DIFFERENTLY (relative file vs type
+                    // package), so they are kept apart rather than merged into
+                    // moduleSpecifiers — see [SourceFile.referencedPaths] (M4.8).
+                    if (target.isNotEmpty()) {
+                        if (m.groupValues[1] == "path") referencedPaths.add(target)
+                        else referencedTypes.add(target)
+                    }
+                }
                 continue
             }
             break // first code token — directives past this point are plain comments

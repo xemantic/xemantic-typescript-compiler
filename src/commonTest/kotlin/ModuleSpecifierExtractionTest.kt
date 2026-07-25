@@ -60,9 +60,13 @@ class ModuleSpecifierExtractionTest {
             type Q = import("./import-type").Foo;
             type QQ = typeof import("./import-typeof");
         """.trimIndent()
+        // M4.8 (round 680): reference directives are NO LONGER module specifiers —
+        // they resolve as relative FILE paths / type packages, not through the module
+        // resolver, and are recorded on their own fields (asserted just below).
+        assertEquals(listOf("./ref-path.ts"), Parser(src, "/proj/test.ts").parse().referencedPaths)
+        assertEquals(listOf("ref-types"), Parser(src, "/proj/test.ts").parse().referencedTypes)
         assertEquals(
             setOf(
-                "./ref-path.ts", "ref-types",
                 "./static-default", "./static-named", "./static-namespace", "./side-effect",
                 "./type-only", "./import-equals",
                 "./export-star", "./export-named", "./export-type",
@@ -139,7 +143,9 @@ class ModuleSpecifierExtractionTest {
     fun referenceDirectivesSurviveABlockCommentHeader() {
         // tsc honors triple-slash directives after a leading block-comment (license
         // header) — they are trivia before the first token. Directives after the
-        // first statement are plain comments.
+        // first statement are plain comments. This shape is exactly @types/node's
+        // index.d.ts, whose 64 reference lines follow a long license block.
+        // M4.8: the directive now lands on `referencedPaths`, not `moduleSpecifiers`.
         val src = """
             /*
              * Copyright header.
@@ -148,7 +154,8 @@ class ModuleSpecifierExtractionTest {
             import { x } from "./real";
             /// <reference path="./too-late.ts" />
         """.trimIndent()
-        assertEquals(setOf("./after-header.ts", "./real"), specifiersOf(src))
+        assertEquals(setOf("./real"), specifiersOf(src))
+        assertEquals(listOf("./after-header.ts"), Parser(src, "/proj/test.ts").parse().referencedPaths)
     }
 
     @Test

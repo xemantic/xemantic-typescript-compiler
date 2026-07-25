@@ -151,7 +151,13 @@ class ProjectCompiler(private val vfs: Vfs) {
         val importEdges = mutableListOf<Pair<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
         runCompilerPipeline {
-            crawlImportGraph(seeds, resolver, emitOptions, unresolved, importEdges).collect { f ->
+            val typeRoots = effectiveTypeRoots(config)
+            crawlImportGraph(
+                seeds, resolver, emitOptions, unresolved, importEdges,
+                resolveReferenceTypes = { name ->
+                    typeRoots.firstNotNullOfOrNull { resolveTypePackageInRoot(it, name, resolver) }
+                },
+            ).collect { f ->
                 program[f.path] = f.content ?: ""
                 f.preParsed?.let { preParsed[f.path] = it }
             }
@@ -237,6 +243,12 @@ class ProjectCompiler(private val vfs: Vfs) {
      */
     private class CrawledFile(val path: String, val content: String?, val preParsed: PreParsedFile?) {
         val specifiers: Set<String> = preParsed?.sourceFile?.moduleSpecifiers?.toSet() ?: emptySet()
+
+        /** M4.8: `/// <reference path>` targets — resolved relative to this file. */
+        val referencedPaths: List<String> = preParsed?.sourceFile?.referencedPaths ?: emptyList()
+
+        /** M4.8: `/// <reference types>` targets — resolved through the type roots. */
+        val referencedTypes: List<String> = preParsed?.sourceFile?.referencedTypes ?: emptyList()
     }
 
     /**
@@ -264,6 +276,9 @@ class ProjectCompiler(private val vfs: Vfs) {
         options: CompilerOptions,
         unresolved: MutableList<Pair<String, String>>,
         importEdges: MutableList<Pair<String, String>> = mutableListOf(),
+        // M4.8: `/// <reference types="pkg">` needs the tsconfig's type roots, which
+        // the crawl has no other access to; the caller supplies the lookup.
+        resolveReferenceTypes: (String) -> String? = { null },
     ): Flow<CrawledFile> = flow {
         val loaded = HashSet<String>() // paths already emitted (the dedup set)
         // Frontier 0: the seeds — read per occurrence (duplicate-seed re-reads
@@ -287,6 +302,20 @@ class ProjectCompiler(private val vfs: Vfs) {
                         if (PathUtil.isBare(spec) || PathUtil.isRelative(spec)) unresolved.add(f.path to spec)
                         continue
                     }
+                    importEdges.add(f.path to resolved)
+                    if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
+                }
+                // M4.8: `/// <reference path|types>` targets join the program too
+                // (tsc `processReferencedFiles`). An unresolvable one is left to the
+                // checker's TS6053, which asks whether the target is in the program —
+                // so it goes silent exactly when this succeeds.
+                for (ref in f.referencedPaths) {
+                    val resolved = resolveReferencePath(ref, f.path) ?: continue
+                    importEdges.add(f.path to resolved)
+                    if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
+                }
+                for (ref in f.referencedTypes) {
+                    val resolved = resolveReferenceTypes(ref) ?: continue
                     importEdges.add(f.path to resolved)
                     if (resolved !in loaded && pending.add(resolved)) discovered.add(resolved)
                 }
@@ -369,6 +398,30 @@ class ProjectCompiler(private val vfs: Vfs) {
      * that resolves in no type root reports TS2688 (auto-discovery includes only
      * what exists, so it never does).
      */
+    /**
+     * Resolve a `/// <reference path="…" />` target against the referencing file
+     * (M4.8, tsc `resolveTripleslashReference`): the value is a PATH relative to
+     * that file's directory, never a module specifier — resolving it through
+     * [ModuleResolver] treats `path="globals.d.ts"` as a bare package and fails,
+     * which is why `@types/node` contributed only its entry file.
+     *
+     * tsc uses the path as given; the extension probes cover the forms that
+     * appear in practice (an extensionless target, and a `.js` target that names
+     * its declaration sibling). Returns null when nothing exists — the checker's
+     * TS6053 owns the reporting.
+     */
+    private fun resolveReferencePath(spec: String, fromFile: String): String? {
+        val base = if (PathUtil.isAbsolute(spec)) spec
+        else PathUtil.normalize(PathUtil.join(PathUtil.dirname(fromFile), spec))
+        if (vfs.exists(base) && !vfs.isDirectory(base)) return base
+        val probes = when {
+            base.endsWith(".js") -> listOf(base.dropLast(3) + ".d.ts", base.dropLast(3) + ".ts")
+            PathUtil.extname(base).isEmpty() -> listOf("$base.d.ts", "$base.ts", "$base.tsx")
+            else -> emptyList()
+        }
+        return probes.firstOrNull { vfs.exists(it) && !vfs.isDirectory(it) }
+    }
+
     private fun collectTypeRootEntries(
         config: LoadedTsConfig,
         resolver: ModuleResolver,
