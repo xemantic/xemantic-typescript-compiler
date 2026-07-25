@@ -74,7 +74,32 @@ LEGACY pass) 40/40 on the spine on the FIRST run — no calibration; suite
 (sorted error lines, 46×7/94 — main sources were unchanged between that
 capture and this migration, git-verified); `--partitionCheck 2` EQUIVALENT ×8;
 pass table 409 → 408 (zero checkIncDecTypeParamOperands rows; checkSpine 20.5 s — in-band); warning-clean.
-M0.4 running total: top THIRTY-ONE tail passes migrated.
+M0.4 running total: top THIRTY-ONE tail passes migrated. THE SESSION TAIL — the #32 pass is NOT spine
+material, and saying so is the finding: **checkConflictMarkers (TS1185, 67.8 ms
+at the round-651 table) does NO AST walk at all — it is a per-file SOURCE-TEXT
+scan — so there is nothing to fold into the spine and its cost is INTRINSIC;
+the lever is ALGORITHMIC.** A conflict marker is meaningful only at a LINE
+START, so the scan now visits line starts (one JDK-intrinsified
+`indexOf('\n')` hop per line) instead of testing every character. Measured on
+the compiler profile under the same single-run `--passTiming` methodology:
+67.8 ms (the legacy per-character loop) → 45.1 (an intermediate cut, four
+`indexOf(marker)` scans — REJECTED: `=`/`<`/`>` are so common in TS source
+that each scan pays for a false start on nearly every line, and it needed a
+hit list + sort to preserve emission order) → **26.5 ms** (line starts, 2.6×,
+emissions naturally left-to-right so no list and no sort). Equivalent by
+construction: exactly the legacy line-start positions are tested, the
+seven-identical-character test IS the legacy substring compare, and the
+`pos + 6 < length` bound is unchanged. Gates: 9 new pins
+(ConflictMarkerScanTest) green against the LEGACY scan FIRST and then
+unchanged across both rewrites; suite 12,375 → 12,384/0 (3 skipped);
+`--listAll` ×8 byte-identical (TS1185 fires 0 times on the tsc sources — but
+unlike most tail passes the CORPUS is a strong gate here: the generated
+conflictMarker* / conflictMarkerDiff3* `.errors.txt` subtests are ACTIVE and
+pin byte-exact TS1185 positions); pass table stays 408 (the pass keeps its own
+slot deliberately); warning-clean. NEXT (round-651 table): #33
+checkImplicitAnyNewExpressions 66.9 ms, then
+checkArgumentsInClassFieldInitializers 65.0, checkSpreadPropertyOverrides
+60.4, checkTypeParamTypedOps 60.0.
 
 **Round 653 (2026-07-24) — (M0.4) thirtieth tail-pass migration:
 checkAbstractMemberAccessInConstructor (TS2715 — a `this.X` reference inside a
@@ -1085,14 +1110,17 @@ structural item instead of landing alone.**
   tparams accumulate, tpProps rebuild from the nearest enclosing class
   DECLARATION (reset by a nested FunctionDeclaration), tpLocals rebuild
   per fn-like BODY from the body-wide prepass);
+  checkConflictMarkers 67.8 ms — **NOT SPINE MATERIAL, OPTIMIZED IN PLACE
+  round 654 tail** (a pure per-file SOURCE-TEXT scan with no AST walk at
+  all: nothing to fold into the spine, cost INTRINSIC, lever ALGORITHMIC.
+  A marker is meaningful only at a LINE START, so the scan now hops line
+  starts via `indexOf('\n')` instead of testing every character —
+  67.8 → 26.5 ms, 2.6×; the intermediate four-`indexOf(marker)` form was
+  REJECTED at 45.1 ms because `=`/`<`/`>` false-start on nearly every
+  line. The pass keeps its own slot; gated by 9 new pins + the ACTIVE
+  generated conflictMarker* `.errors.txt` subtests + listAll ×8);
   next per-file candidates by cost (round-651 table, the top-31 rows
-  gone): **checkConflictMarkers 67.8 ms** (#32 — NOTE: a pure per-file
-  SOURCE-TEXT character scan with no AST walk at all, so there is nothing
-  to fold into the spine; its cost is INTRINSIC and the lever is
-  ALGORITHMIC — replace the per-char line-start loop with
-  indexOf-per-marker scans, corpus-gated by the ACTIVE generated
-  conflictMarker* `.errors.txt` subtests), then
-  checkImplicitAnyNewExpressions 66.9 ms,
+  gone): **checkImplicitAnyNewExpressions 66.9 ms** (#33),
   checkArgumentsInClassFieldInitializers 65.0 ms,
   checkSpreadPropertyOverrides 60.4 ms, checkTypeParamTypedOps 60.0 ms
   (checkCrossFileModuleAugmentationDuplicates, now 91.8 ms, stays
