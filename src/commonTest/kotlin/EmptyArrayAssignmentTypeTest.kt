@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import org.intellij.lang.annotations.Language
@@ -55,7 +56,8 @@ class EmptyArrayAssignmentTypeTest {
     }
 
     /** `(x || (x = [])).push(v)` — the `||` default-init idiom. */
-    @Test fun orDefaultInitPush() {
+    @Test
+    fun `an or-default init then push`() {
         assertNo2349(
             """
             // @strict: true
@@ -68,7 +70,8 @@ class EmptyArrayAssignmentTypeTest {
     }
 
     /** `(x ??= []).push(v)` — the `??=` default-init idiom. */
-    @Test fun nullishAssignDefaultInitPush() {
+    @Test
+    fun `a nullish-assign default init then push`() {
         assertNo2349(
             """
             // @strict: true
@@ -81,7 +84,8 @@ class EmptyArrayAssignmentTypeTest {
     }
 
     /** A local `let a: string[] | undefined;` variant of the idiom. */
-    @Test fun localVarOrDefaultInitPush() {
+    @Test
+    fun `a local var or-default init then push`() {
         assertNo2349(
             """
             // @strict: true
@@ -97,7 +101,8 @@ class EmptyArrayAssignmentTypeTest {
      * The assignment expression's type is the TARGET's array type, not `any[]`:
      * `const bad: symbol = (x = []);` reports `number[]`, proving the contextual typing.
      */
-    @Test fun emptyArrayAssignTypesAsTarget() {
+    @Test
+    fun `an empty array assignment types as the target`() {
         val msg = diagnosticsOf(
             """
             // @strict: true
@@ -107,8 +112,8 @@ class EmptyArrayAssignmentTypeTest {
             }
             """.trimIndent() + "\n",
         ).filter { it.code == 2322 }.joinToString { it.message }
-        have(msg.contains("'number[]'"), "expected the assignment to type as 'number[]'")
-        have(!msg.contains("any[]"), "assignment should NOT type as any[]")
+        assert(msg.contains("'number[]'"))
+        assert(!msg.contains("any[]"))
     }
 
     /**
@@ -116,7 +121,8 @@ class EmptyArrayAssignmentTypeTest {
      * `(a = [true])` stays `boolean[]` (only the empty `[]` is contextually collapsed),
      * so a `boolean[]` → `number[]` mismatch still fires TS2322.
      */
-    @Test fun nonEmptyArrayNotRetyped() {
+    @Test
+    fun `negative control - a non-empty array is not retyped`() {
         diagnosticsOf(
             """
             // @strict: true

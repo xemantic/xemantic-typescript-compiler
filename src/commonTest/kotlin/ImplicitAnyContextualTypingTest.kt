@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
@@ -89,7 +88,7 @@ class ImplicitAnyContextualTypingTest {
     @Test
     fun `negative control - unresolvable callee still fires TS7006`() {
         val d = diagnose("missingFn(zz => zz);")
-        have(d.any { it.code == 2304 }, "expected TS2304 on the callee")
+        assert(d.any { it.code == 2304 })
         assert(
             d.filter { it.code == 7006 } .map { it.message.removePrefix("Parameter '").substringBefore("'") } == listOf("zz")
         )

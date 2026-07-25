@@ -62,7 +62,7 @@ class EnclosingImportIndexTest {
         result.diagnostics.filter { it.code == 2322 }.mapNotNull { it.fileName }.sorted()
 
     @Test
-    fun structurallyIdenticalImportsInTwoFilesBothResolve() {
+    fun `structurally identical imports in two files both resolve`() {
         // f1.ts and f2.ts are byte-identical → their ImportSpecifier nodes are
         // structurally equal (index-key collision, one entry list for both files).
         val importer = "import { A } from \"./lib\";\nconst x: number = A;\n"
@@ -77,7 +77,7 @@ class EnclosingImportIndexTest {
     }
 
     @Test
-    fun structurallyDistinctImportsResolveThroughTheirOwnStatements() {
+    fun `structurally distinct imports resolve through their own statements`() {
         // Same import statement text, but g2's leading comment shifts its node
         // positions → the ImportSpecifier nodes are structurally DISTINCT and
         // land on SEPARATE index keys. Each file must resolve through its own

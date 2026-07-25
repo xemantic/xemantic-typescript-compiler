@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
@@ -46,19 +46,17 @@ import kotlin.test.Test
 class InfiniteLoopTerminationTest {
 
     private fun assertNoImplicitReturn(@Language("typescript") source: String, what: String) {
-        have(
-            diagnose(source).none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "$what must not draw TS2366/TS7030/TS2355",
-        )
+        assert(diagnose(source).none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
     }
 
     private fun assertImplicitReturn(@Language("typescript") source: String, what: String) {
-        have(diagnose(source).any { it.code == 2366 }, "$what must draw TS2366")
+        assert(diagnose(source).any { it.code == 2366 })
     }
 
     // --- the fixed false-positive cases (an infinite loop with only return exits) ---
 
-    @Test fun whileTrueWithReturnDrawsNothing() {
+    @Test
+    fun `a while-true with a return draws nothing`() {
         assertNoImplicitReturn(
             """
             function f(): number {
@@ -71,7 +69,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun whileTrueWithConditionalReturnDrawsNothing() {
+    @Test
+    fun `a while-true with a conditional return draws nothing`() {
         // The real tsc shape: unwrapInnermostStatementOfLabel — loop forever or return.
         assertNoImplicitReturn(
             """
@@ -88,7 +87,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun forEverWithReturnDrawsNothing() {
+    @Test
+    fun `a for-ever loop with a return draws nothing`() {
         assertNoImplicitReturn(
             """
             function f(): number {
@@ -101,7 +101,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun doWhileTrueWithReturnDrawsNothing() {
+    @Test
+    fun `a do-while-true with a return draws nothing`() {
         assertNoImplicitReturn(
             """
             function f(): number {
@@ -114,7 +115,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun whileTrueWithThrowDrawsNothing() {
+    @Test
+    fun `a while-true with a throw draws nothing`() {
         assertNoImplicitReturn(
             """
             declare const c: boolean;
@@ -130,7 +132,8 @@ class InfiniteLoopTerminationTest {
 
     // --- negative controls: an escapable loop still falls through → TS2366 fires ---
 
-    @Test fun whileTrueWithBreakStillFires() {
+    @Test
+    fun `negative control - a while-true with a break still fires`() {
         // The break makes the endpoint reachable; the value return exercises the TS2366
         // path specifically (a break-only body with no value return draws TS2355 instead).
         assertImplicitReturn(
@@ -148,7 +151,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun whileTrueWithNestedLabeledBreakStillFires() {
+    @Test
+    fun `negative control - a while-true with a nested labeled break still fires`() {
         // f11 preservation: a labeled break in a nested loop escapes THIS loop too.
         assertImplicitReturn(
             """
@@ -167,7 +171,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun nonInfiniteLoopWithReturnStillFires() {
+    @Test
+    fun `negative control - a non-infinite loop with a return still fires`() {
         // A conditional loop may run zero times → the endpoint is reachable.
         assertImplicitReturn(
             """
@@ -184,7 +189,8 @@ class InfiniteLoopTerminationTest {
 
     // --- Pattern B: a trailing call to a `never`-returning function diverges ---
 
-    @Test fun trailingNeverCallDrawsNothing() {
+    @Test
+    fun `a trailing never-returning call draws nothing`() {
         // The real tsc shape: firstIterator — `for (…) return v; Debug.fail("empty");`
         assertNoImplicitReturn(
             """
@@ -199,7 +205,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun trailingNamespaceMemberNeverCallDrawsNothing() {
+    @Test
+    fun `a trailing namespace-member never-returning call draws nothing`() {
         // `Debug.fail(...)` — a namespace-member never call (PropertyAccess callee).
         assertNoImplicitReturn(
             """
@@ -216,7 +223,8 @@ class InfiniteLoopTerminationTest {
         )
     }
 
-    @Test fun trailingVoidCallStillFires() {
+    @Test
+    fun `negative control - a trailing void call still fires`() {
         // Negative control: a non-never call does NOT diverge — the endpoint is reachable.
         assertImplicitReturn(
             """

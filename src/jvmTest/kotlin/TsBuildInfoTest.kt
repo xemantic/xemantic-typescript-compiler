@@ -27,11 +27,9 @@ package com.xemantic.typescript.compiler
 
 import java.nio.file.Files
 import java.nio.file.Path
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 import kotlin.test.assertNotEquals
-import kotlin.test.assertTrue
 
 /**
  * INV.7(d3): the cross-process `.xtsbuildinfo` contract — a cold start reusing
@@ -104,14 +102,14 @@ class TsBuildInfoTest {
         withProject { dir ->
             val (first, firstLog) = buildInfo(dir)
             val firstBuildWasFull = firstLog.any { "full build" in it }
-            assertTrue(firstBuildWasFull)
-            assertTrue(Files.exists(infoFile(dir)), "tsconfig.xtsbuildinfo should be written next to tsconfig.json")
+            assert(firstBuildWasFull)
+            assert(Files.exists(infoFile(dir)))
 
             val (second, secondLog) = buildInfo(dir)
             val zeroRecheck = secondLog.any { "incremental recheck of 0/" in it }
-            assertTrue(zeroRecheck, "unchanged inputs must skip the whole check: $secondLog")
-            assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(second.diagnostics))
-            assertEquals(diagKeys(first.diagnostics), diagKeys(second.diagnostics))
+            assert(zeroRecheck)
+            assert(diagKeys(second.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
+            assert(diagKeys(second.diagnostics) == diagKeys(first.diagnostics))
         }
 
     @Test
@@ -127,10 +125,10 @@ class TsBuildInfoTest {
         """)
         val (result, log) = buildInfo(dir)
         val incremental = log.any { "incremental recheck of 1/" in it }
-        assertTrue(incremental, "a leaf edit should recheck exactly 1 file: $log")
-        assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(result.diagnostics))
+        assert(incremental)
+        assert(diagKeys(result.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
         val hasFreshError = result.diagnostics.any { it.code == 2322 && it.fileName?.endsWith("c.ts") == true }
-        assertTrue(hasFreshError)
+        assert(hasFreshError)
     }
 
     @Test
@@ -140,9 +138,9 @@ class TsBuildInfoTest {
         // and verify c.ts's stored TS2322 (out of the empty partition) survives.
         val (result, _) = buildInfo(dir)
         val kept = result.diagnostics.filter { it.code == 2322 }
-        assertEquals(1, kept.size)
+        assert(kept.size == 1)
         val line = kept.single().line
-        assertEquals(4, line, "round-tripped diagnostic must keep its position fields")
+        assert(line == 4)
     }
 
     @Test
@@ -150,21 +148,21 @@ class TsBuildInfoTest {
         buildInfo(dir, id = "compiler-A")
         val (result, log) = buildInfo(dir, id = "compiler-B")
         val refused = log.any { "build id mismatch" in it }
-        assertTrue(refused, "a stale-compiler buildinfo must never be reused: $log")
-        assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(result.diagnostics))
+        assert(refused)
+        assert(diagKeys(result.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
         val rewritten = Files.readString(infoFile(dir))
-        assertTrue("compiler-B" in rewritten)
+        assert("compiler-B" in rewritten)
     }
 
     @Test
     fun `negative control - dirty and unknown build ids never persist nor reuse`() = withProject { dir ->
         buildInfo(dir, id = "abc123.dirty")
-        assertFalse(Files.exists(infoFile(dir)), "a dirty build must not persist buildinfo")
+        assert(!Files.exists(infoFile(dir)))
         buildInfo(dir, id = "unknown")
-        assertFalse(Files.exists(infoFile(dir)), "an unknown build id must not persist buildinfo")
-        assertFalse(TsBuildInfo.buildIdReusable("abc123.dirty"))
-        assertFalse(TsBuildInfo.buildIdReusable("unknown"))
-        assertTrue(TsBuildInfo.buildIdReusable(cleanId))
+        assert(!Files.exists(infoFile(dir)))
+        assert(!TsBuildInfo.buildIdReusable("abc123.dirty"))
+        assert(!TsBuildInfo.buildIdReusable("unknown"))
+        assert(TsBuildInfo.buildIdReusable(cleanId))
     }
 
     @Test
@@ -173,8 +171,8 @@ class TsBuildInfoTest {
         edit(dir, "tsconfig.json", """{ "compilerOptions": { "strict": true, "noUnusedLocals": false }, "include": ["src/**/*"] }""")
         val (result, log) = buildInfo(dir)
         val fullFallback = log.any { "non-local change" in it }
-        assertTrue(fullFallback, "a config edit must force a full build: $log")
-        assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(result.diagnostics))
+        assert(fullFallback)
+        assert(diagKeys(result.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
     }
 
     @Test
@@ -188,10 +186,10 @@ class TsBuildInfoTest {
         """)
         val (result, log) = buildInfo(dir)
         val shapeFallback = log.any { "program shape changed" in it }
-        assertTrue(shapeFallback, "a newly-globbed file must invalidate the incremental outcome: $log")
+        assert(shapeFallback)
         val newFileError = result.diagnostics.any { it.code == 2322 && it.fileName?.endsWith("d.ts") == true }
-        assertTrue(newFileError)
-        assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(result.diagnostics))
+        assert(newFileError)
+        assert(diagKeys(result.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
     }
 
     @Test
@@ -200,10 +198,10 @@ class TsBuildInfoTest {
         Files.delete(dir.resolve("src/c.ts"))
         val (result, log) = buildInfo(dir)
         val fullFallback = log.any { "non-local change" in it }
-        assertTrue(fullFallback, "a deleted file must force a full build: $log")
-        assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(result.diagnostics))
+        assert(fullFallback)
+        assert(diagKeys(result.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
         val staleDiagnostic = result.diagnostics.any { it.fileName?.endsWith("c.ts") == true }
-        assertFalse(staleDiagnostic, "no diagnostic may survive for a deleted file")
+        assert(!staleDiagnostic)
     }
 
     @Test
@@ -212,10 +210,10 @@ class TsBuildInfoTest {
         Files.writeString(infoFile(dir), "{ not json ][")
         val (result, log) = buildInfo(dir)
         val fullFallback = log.any { "none — full build" in it }
-        assertTrue(fullFallback, "corrupt buildinfo must read as absent: $log")
-        assertEquals(diagKeys(fullBuild(dir).diagnostics), diagKeys(result.diagnostics))
+        assert(fullFallback)
+        assert(diagKeys(result.diagnostics) == diagKeys(fullBuild(dir).diagnostics))
         val rereadable = TsBuildInfo.read(SystemVfs, infoFile(dir).toString())
-        assertEquals(cleanId, rereadable?.buildId, "the corrupt file must be replaced by a valid one")
+        assert(rereadable?.buildId == cleanId)
     }
 
     @Test
@@ -223,14 +221,14 @@ class TsBuildInfoTest {
         val a = TsBuildInfo.contentHash("export const x = 1;")
         val b = TsBuildInfo.contentHash("export const x = 2;")
         val a2 = TsBuildInfo.contentHash("export const x = 1;")
-        assertEquals(a, a2)
+        assert(a2 == a)
         assertNotEquals(a, b)
         assertNotEquals(TsBuildInfo.contentHash(""), TsBuildInfo.contentHash(" "))
     }
 
     @Test
     fun `negative control - a bare source file build has no buildinfo path`() {
-        assertEquals(null, TsBuildInfo.infoPath("/proj/foo.ts"))
-        assertEquals("/proj/tsconfig.xtsbuildinfo", TsBuildInfo.infoPath("/proj/tsconfig.json"))
+        assert(TsBuildInfo.infoPath("/proj/foo.ts") == null)
+        assert(TsBuildInfo.infoPath("/proj/tsconfig.json") == "/proj/tsconfig.xtsbuildinfo")
     }
 }

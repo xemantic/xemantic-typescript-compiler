@@ -54,19 +54,20 @@ class UndefinedVsUnionTargetsTest {
 
     private fun assertClean(@Language("typescript") source: String, what: String) {
         diagnose(source) should {
-            have(none { it.code == 2322 || it.code == 2345 }, "$what must not error")
+            have(none { it.code == 2322 || it.code == 2345 })
         }
     }
 
     private fun assertRejects(@Language("typescript") source: String, code: Int, what: String) {
         diagnose(source) should {
-            have(any { it.code == code }, "$what must still reject with TS$code")
+            have(any { it.code == code })
         }
     }
 
     // -- family 1: return undefined vs union alias ---------------------------
 
-    @Test fun returnUndefinedAgainstLiteralUnionAliasWithUndefined() {
+    @Test
+    fun `returning undefined against a literal-union alias with undefined`() {
         assertClean(
             """
             type Mode = 1 | 2 | undefined;
@@ -78,7 +79,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun returnNullAgainstUnionAliasWithoutNullStillRejects() {
+    @Test
+    fun `negative control - returning null against a union alias without null still rejects`() {
         assertRejects(
             """
             type Mode = 1 | 2;
@@ -93,7 +95,8 @@ class UndefinedVsUnionTargetsTest {
 
     // -- family 2: generic alias substitution --------------------------------
 
-    @Test fun returnUndefinedAgainstGenericAliasSubstitutedUnion() {
+    @Test
+    fun `returning undefined against a generic alias substituted union`() {
         assertClean(
             """
             interface Node { kind: number; }
@@ -106,7 +109,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun returnNullAgainstGenericAliasSubstitutedNullUnion() {
+    @Test
+    fun `returning null against a generic alias substituted null union`() {
         assertClean(
             """
             interface Node { kind: number; }
@@ -119,7 +123,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun returnUndefinedAgainstGenericAliasWithoutUndefinedStillRejects() {
+    @Test
+    fun `negative control - returning undefined against a generic alias without undefined still rejects`() {
         assertRejects(
             """
             interface Node { kind: number; }
@@ -135,7 +140,8 @@ class UndefinedVsUnionTargetsTest {
 
     // -- family 3: enum-member union alias (engine-unresolvable) -------------
 
-    @Test fun returnUndefinedAgainstEnumMemberUnionAliasWithUndefined() {
+    @Test
+    fun `returning undefined against an enum-member union alias with undefined`() {
         assertClean(
             """
             enum MK { ESNext = 99, CommonJS = 1 }
@@ -153,7 +159,8 @@ class UndefinedVsUnionTargetsTest {
 
     // -- family 4: assignment target uses the DECLARED type ------------------
 
-    @Test fun assignUndefinedInsideNotUndefinedGuardIsLegal() {
+    @Test
+    fun `assigning undefined inside a not-undefined guard is legal`() {
         assertClean(
             """
             function h(cb: (a: number) => void) {
@@ -169,7 +176,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun narrowedReadInsideGuardStillNarrows() {
+    @Test
+    fun `a narrowed read inside the guard still narrows`() {
         // The guard's narrowing must survive for READS: `cb(start)` needs `number`.
         assertClean(
             """
@@ -184,7 +192,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun wrongTypeWriteInsideGuardStillRejects() {
+    @Test
+    fun `negative control - a wrong-type write inside the guard still rejects`() {
         assertRejects(
             """
             function h() {
@@ -201,7 +210,8 @@ class UndefinedVsUnionTargetsTest {
 
     // -- family 5: args — optional primitive + own inferable bare TP ---------
 
-    @Test fun undefinedToOptionalPrimitiveParamIsLegal() {
+    @Test
+    fun `undefined to an optional primitive param is legal`() {
         assertClean(
             """
             declare function f(a: number, b?: string): void;
@@ -211,7 +221,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun undefinedToRequiredPrimitiveParamStillRejects() {
+    @Test
+    fun `negative control - undefined to a required primitive param still rejects`() {
         assertRejects(
             """
             declare function f(a: number, b: string): void;
@@ -222,7 +233,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun undefinedToOwnInferableBareTypeParamIsLegal() {
+    @Test
+    fun `undefined to an own inferable bare type param is legal`() {
         assertClean(
             """
             declare function g<T, U>(state: T, initial: U): U;
@@ -232,7 +244,8 @@ class UndefinedVsUnionTargetsTest {
         )
     }
 
-    @Test fun undefinedToOptionalRefParamInNamespaceNestedFnIsLegal() {
+    @Test
+    fun `undefined to an optional ref param in a namespace-nested fn is legal`() {
         assertClean(
             """
             namespace P {

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import java.io.File
 import java.lang.reflect.Modifier
@@ -74,19 +75,19 @@ class NodeKindIdTest {
         have(values.isNotEmpty())
         val expected = (0 until values.size).toSet()
         val actual = values.toSet()
-        have(actual == expected, "NodeKind ids not dense/unique: ${values.sorted()}")
+        assert(actual == expected)
     }
 
     @Test
     fun `stamped kindId equals nodeKindIdOf across the rich fixture`() {
         val checked = assertStampsOnTree(Parser(INV2_RICH_FIXTURE, "rich.ts").parse(), "rich.ts")
-        have(checked > 400, "rich fixture unexpectedly small: $checked nodes")
+        assert(checked > 400)
     }
 
     @Test
     fun `stamped kindId equals nodeKindIdOf across the jsx fixture`() {
         val checked = assertStampsOnTree(Parser(INV2_JSX_FIXTURE, "t.tsx").parse(), "t.tsx")
-        have(checked > 30, "jsx fixture unexpectedly small: $checked nodes")
+        assert(checked > 30)
     }
 
     @Test
@@ -141,6 +142,6 @@ class NodeKindIdTest {
         for (file in sourceDir.walkTopDown().filter { it.isFile && it.extension == "ts" }) {
             checked += assertStampsOnTree(Parser(file.readText(), file.name).parse(), file.name)
         }
-        have(checked > 100_000, "real-source sweep unexpectedly small: $checked nodes")
+        assert(checked > 100_000)
     }
 }

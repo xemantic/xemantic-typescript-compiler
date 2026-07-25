@@ -66,17 +66,17 @@ class ProjectBuildTest {
     )
 
     @Test
-    fun loadsTsConfigWithExtendsChain() {
+    fun `loads a tsconfig with an extends chain`() {
         val cfg = TsConfigLoader(sampleProject()).load("/proj/tsconfig.json")
         assert(cfg.options.target == ScriptTarget.ES2020)
-        have(cfg.options.strict, "strict inherited from base.json")
+        assert(cfg.options.strict)
         assert(cfg.options.outDir == "/proj/dist")
         assert(cfg.include == listOf("src/**/*.ts"))
         assert(cfg.exclude == listOf("**/*.test.ts"))
     }
 
     @Test
-    fun resolvesRelativeJsToTsAndNodeModulesExports() {
+    fun `resolves relative js to ts and node_modules exports`() {
         val vfs = sampleProject()
         val resolver = ModuleResolver(vfs)
         // `./math.js` denotes the sibling `math.ts`.
@@ -88,12 +88,12 @@ class ProjectBuildTest {
     }
 
     @Test
-    fun buildsProgramHonoringGlobsAndImportGraph() {
+    fun `builds a program honoring globs and the import graph`() {
         val result = ProjectCompiler(sampleProject()).build("/proj", noEmit = true)
         val roots = result.rootFiles.toSet()
         assert("/proj/src/index.ts" in roots)
         assert("/proj/src/math.ts" in roots)
-        have("/proj/src/ignore.test.ts" !in roots, "exclude must drop *.test.ts")
+        assert("/proj/src/ignore.test.ts" !in roots)
         // The dependency's declaration file is pulled into the program via the import graph.
         assert("/proj/node_modules/dep/types/index.d.ts" in result.programFiles.toSet())
         // Everything resolved — no dangling relative/bare specifiers.
@@ -101,7 +101,7 @@ class ProjectBuildTest {
     }
 
     @Test
-    fun emitsJsOutputsToOutDir() {
+    fun `emits js outputs to outDir`() {
         val vfs = sampleProject()
         val result = ProjectCompiler(vfs).build("/proj", noEmit = false)
         // index.ts and math.ts emit under dist/ (declaration file under node_modules does not).
@@ -130,7 +130,7 @@ class ProjectBuildTest {
     )
 
     @Test
-    fun preservesSourceSubdirectoriesUnderOutDir() {
+    fun `preserves source subdirectories under outDir`() {
         val vfs = nestedProject()
         val result = ProjectCompiler(vfs).build("/proj")
         val written = result.written.map { it.first }.toSet()
@@ -142,35 +142,30 @@ class ProjectBuildTest {
     }
 
     @Test
-    fun sameBasenameFilesInDifferentDirectoriesBothEmit() {
+    fun `same-basename files in different directories both emit`() {
         val vfs = nestedProject()
         val result = ProjectCompiler(vfs).build("/proj")
         assert(result.written.size == 3)
         val rootIndex = vfs.readText("/proj/dist/index.js")
         val localeIndex = vfs.readText("/proj/dist/locales/index.js")
         have(rootIndex != null && rootIndex.contains("rootMarker"))
-        have(
-            localeIndex != null && localeIndex.contains("localeMarker"),
-            "locales/index.js written separately, not overwritten by a basename collision",
-        )
+        // locales/index.js written separately, not overwritten by a basename collision
+        assert(localeIndex != null && localeIndex.contains("localeMarker"))
     }
 
     @Test
-    fun writtenOutputsEndWithExactlyOneTrailingNewline() {
+    fun `written outputs end with exactly one trailing newline`() {
         val vfs = nestedProject()
         val result = ProjectCompiler(vfs).build("/proj")
         have(result.written.isNotEmpty())
         for ((path, _) in result.written) {
             val text = vfs.readText(path)
-            have(
-                text != null && text.endsWith("\n") && !text.endsWith("\n\n"),
-                "$path must end with exactly one newline",
-            )
+            assert(text != null && text.endsWith("\n") && !text.endsWith("\n\n"))
         }
     }
 
     @Test
-    fun reportsMalformedTsConfig() {
+    fun `reports a malformed tsconfig`() {
         val vfs = InMemoryVfs(
             mapOf(
                 "/proj/tsconfig.json" to "{ this is not valid json",
@@ -182,7 +177,7 @@ class ProjectBuildTest {
     }
 
     @Test
-    fun reportsMissingExtends() {
+    fun `reports a missing extends`() {
         val vfs = InMemoryVfs(
             mapOf(
                 "/proj/tsconfig.json" to """{ "extends": "./nope.json", "include": ["src/**/*.ts"] }""",
@@ -194,7 +189,7 @@ class ProjectBuildTest {
     }
 
     @Test
-    fun reportsMissingTsConfig() {
+    fun `reports a missing tsconfig`() {
         // Point at a directory with no tsconfig.json.
         val vfs = InMemoryVfs(mapOf("/proj/src/index.ts" to "export const x = 1;"))
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)

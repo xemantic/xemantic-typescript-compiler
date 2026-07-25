@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
@@ -50,8 +51,10 @@ class GenericIndexWriteConstraintTest {
     @Test
     fun `assign over T extends object - no TS2862`() {
         // The exact tsc core.ts `assign` idiom: `object` has no index signature.
-        have(
-            !has2862(
+        // index-write on a `T extends object` receiver must not fire TS2862 (no index
+        // signature in the constraint)
+        assert(
+!has2862(
                 """
                 function assign<T extends object>(t: T, arg: T): T {
                     for (const p in arg) {
@@ -60,68 +63,69 @@ class GenericIndexWriteConstraintTest {
                     return t;
                 }
                 """,
-            ),
-            "index-write on a `T extends object` receiver must not fire TS2862 (no index signature in the constraint)",
+            )
         )
     }
 
     @Test
     fun `T extends plain interface with no index signature - no TS2862`() {
-        have(
-            !has2862(
+        // a constraint without a string/symbol index signature must not fire TS2862
+        assert(
+!has2862(
                 """
                 interface Point { a: number; b: number; }
                 function set<T extends Point>(t: T, p: keyof T, v: T[keyof T]): void {
                     t[p] = v;
                 }
                 """,
-            ),
-            "a constraint without a string/symbol index signature must not fire TS2862",
+            )
         )
     }
 
     @Test
     fun `T extends Record with string-symbol key - fires TS2862`() {
         // cannotIndexGenericWritingError.ts foo() — the corpus positive shape.
-        have(
-            has2862(
+        // a `Record<string | symbol, any>` constraint (string index signature) must
+        // still fire TS2862
+        assert(
+has2862(
                 """
                 function foo<T extends Record<string | symbol, any>>(target: T, p: string | symbol) {
                     target[p] = "";
                 }
                 """,
-            ),
-            "a `Record<string | symbol, any>` constraint (string index signature) must still fire TS2862",
+            )
         )
     }
 
     @Test
     fun `T extends inline string index signature intersection - fires TS2862`() {
         // cannotIndexGenericWritingError.ts foo2() — the corpus positive shape.
-        have(
-            has2862(
+        // an intersection constraint bearing a `{ [s: string]: … }` index signature
+        // must still fire TS2862
+        assert(
+has2862(
                 """
                 function foo2<T extends number[] & { [s: string]: number | string }>(target: T, p: string | number) {
                     target[p] = 1;
                     target[1] = 1; // ok — numeric-literal index is exempt
                 }
                 """,
-            ),
-            "an intersection constraint bearing a `{ [s: string]: … }` index signature must still fire TS2862",
+            )
         )
     }
 
     @Test
     fun `T extends Record of string number - fires TS2862`() {
-        have(
-            has2862(
+        // a `Record<string, number>` constraint must fire TS2862
+        assert(
+has2862(
                 """
                 function put<T extends Record<string, number>>(t: T, k: string): void {
                     t[k] = 1;
                 }
                 """,
-            ),
-            "a `Record<string, number>` constraint must fire TS2862",
+            )
         )
     }
 }

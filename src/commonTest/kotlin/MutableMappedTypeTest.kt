@@ -50,25 +50,29 @@ class MutableMappedTypeTest {
         declare const sf: SF;
     """.trimIndent()
 
-    @Test fun writeThroughMutableCastIsLegal() {
+    @Test
+    fun `a write through a Mutable cast is legal`() {
         compile("$decls\n(sf as Mutable<SF>).flags |= 4;\n(sf as Mutable<SF>).text = \"x\";\n") should {
             have(diagnostics.none { it.code == 2540 })
         }
     }
 
-    @Test fun writeThroughMutableAnnotatedVarIsLegal() {
+    @Test
+    fun `a write through a Mutable-annotated var is legal`() {
         compile("$decls\ndeclare const m: Mutable<SF>;\nm.flags = 1;\n") should {
             have(diagnostics.none { it.code == 2540 })
         }
     }
 
-    @Test fun directReadonlyWriteStillRejects() {
+    @Test
+    fun `negative control - a direct readonly write still rejects`() {
         compile("$decls\nsf.flags = 1;\n") should {
             have(diagnostics.any { it.code == 2540 })
         }
     }
 
-    @Test fun plainHomomorphicMappedKeepsSourceReadonly() {
+    @Test
+    fun `a plain homomorphic mapped type keeps the source readonly`() {
         // WITHOUT the minus, a bare `readonly` mapped type ADDS readonly.
         compile(
             """

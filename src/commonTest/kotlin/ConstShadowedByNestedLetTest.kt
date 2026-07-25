@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -118,7 +119,7 @@ class ConstShadowedByNestedLetTest {
             directives = "",
         ) should {
             val ts2588 = filter { it.code == 2588 }
-            have(ts2588.size == 1 && ts2588[0].line == 3, "exactly one TS2588 on the outer const reassignment (line 3)")
+            assert(ts2588.size == 1 && ts2588[0].line == 3)
         }
     }
 }

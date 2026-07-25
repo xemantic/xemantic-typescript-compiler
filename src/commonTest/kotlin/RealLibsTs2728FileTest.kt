@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import org.intellij.lang.annotations.Language
@@ -79,7 +80,7 @@ class RealLibsTs2728FileTest {
             Object.getOwnPropertyNamess(null);
             """.trimIndent(),
         ) should {
-            have(any { it.fileName == "lib.es5.d.ts" && it.line == null }, "an es5 lib member must render lib.es5.d.ts:--:--")
+            have(any { it.fileName == "lib.es5.d.ts" && it.line == null })
             have(none { it.fileName == "t.ts" })
         }
     }
@@ -133,10 +134,8 @@ class RealLibsTs2728FileTest {
         ).diagnostics
         diags.firstOrNull { it.code == 2551 && it.message.contains("toFixed") } should {
             val rel = relatedInformation.filter { it.code == 2728 }
-            have(
-                rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null },
-                "the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--",
-            )
+            // the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--
+            assert(rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null })
             have(rel.none { (it.fileName ?: "").endsWith("index.ts") })
         }
     }

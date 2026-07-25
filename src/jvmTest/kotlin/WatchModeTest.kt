@@ -31,25 +31,23 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import java.nio.file.Files
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /** INV.7(c1): the watch-mode building blocks. */
 class WatchModeTest {
 
     @Test
     fun `watchRelevant accepts source and config files, rejects the rest`() {
-        assertTrue(watchRelevant("/p/src/a.ts"))
-        assertTrue(watchRelevant("/p/src/a.tsx"))
-        assertTrue(watchRelevant("/p/src/a.mts"))
-        assertTrue(watchRelevant("/p/tsconfig.json"))
-        assertTrue(watchRelevant("/p/package.json"))
-        assertFalse(watchRelevant("/p/out/a.js.map"))
-        assertFalse(watchRelevant("/p/notes.md"))
-        assertFalse(watchRelevant("/p/node_modules/x/index.ts"))
-        assertFalse(watchRelevant("/p/other.json"))
+        assert(watchRelevant("/p/src/a.ts"))
+        assert(watchRelevant("/p/src/a.tsx"))
+        assert(watchRelevant("/p/src/a.mts"))
+        assert(watchRelevant("/p/tsconfig.json"))
+        assert(watchRelevant("/p/package.json"))
+        assert(!watchRelevant("/p/out/a.js.map"))
+        assert(!watchRelevant("/p/notes.md"))
+        assert(!watchRelevant("/p/node_modules/x/index.ts"))
+        assert(!watchRelevant("/p/other.json"))
     }
 
     @Test
@@ -59,7 +57,7 @@ class WatchModeTest {
         changes.send("/p/b.ts")
         changes.send("/p/a.ts")
         val batch = awaitChangeBatch(changes, quietMs = 100)
-        assertEquals(setOf("/p/a.ts", "/p/b.ts"), batch)
+        assert(batch == setOf("/p/a.ts", "/p/b.ts"))
     }
 
     @Test
@@ -70,7 +68,7 @@ class WatchModeTest {
             changes.send("/p/late.ts")
         }
         val batch = withTimeout(2000) { awaitChangeBatch(changes, quietMs = 50) }
-        assertEquals(setOf("/p/late.ts"), batch)
+        assert(batch == setOf("/p/late.ts"))
     }
 
     @Test
@@ -89,7 +87,7 @@ class WatchModeTest {
             val event = withTimeout(10_000) {
                 fileEvents(dir.toString()).first { it.endsWith("a.ts") }
             }
-            assertTrue(event.endsWith("a.ts"), event)
+            assert(event.endsWith("a.ts"))
             writer.cancel()
         } finally {
             sub.toFile().deleteRecursively()

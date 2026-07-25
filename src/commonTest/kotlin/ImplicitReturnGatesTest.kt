@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
@@ -46,20 +47,15 @@ import kotlin.test.Test
 class ImplicitReturnGatesTest {
 
     private fun assertNone(@Language("typescript") header: String, source: String, codes: Set<Int>, what: String) {
-        have(
-            diagnose(source, directives = header).none { it.code in codes },
-            "$what must not draw ${codes.joinToString { "TS$it" }}",
-        )
+        assert(diagnose(source, directives = header).none { it.code in codes })
     }
 
     private fun assertHas(@Language("typescript") header: String, source: String, code: Int, what: String) {
-        have(
-            diagnose(source, directives = header).any { it.code == code },
-            "$what must draw TS$code",
-        )
+        assert(diagnose(source, directives = header).any { it.code == code })
     }
 
-    @Test fun strictOnlyDirectUndefinedUnionMixedReturnsDrawsNothing() {
+    @Test
+    fun `strict only - a direct undefined-union with mixed returns draws nothing`() {
         assertNone(
             "// @strict: true",
             """
@@ -75,7 +71,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun strictOnlyAliasUnionMixedReturnsDrawsNothing() {
+    @Test
+    fun `strict only - an alias union with mixed returns draws nothing`() {
         assertNone(
             "// @strict: true",
             """
@@ -94,7 +91,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun strictOnlyEnumMemberAliasWithUndefinedDrawsNothing() {
+    @Test
+    fun `strict only - an enum-member alias with undefined draws nothing`() {
         assertNone(
             "// @strict: true",
             """
@@ -112,7 +110,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun strictOnlyNonNullableMixedReturnsKeepsTs2366() {
+    @Test
+    fun `strict only - a non-nullable annotation with mixed returns keeps TS2366`() {
         assertHas(
             "// @strict: true",
             """
@@ -128,7 +127,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun strictOnlyEmptyReturnAgainstNonNullableIsTs2322NotTs7030() {
+    @Test
+    fun `strict only - an empty return against a non-nullable annotation is TS2322 not TS7030`() {
         val d = diagnose(
             """
             declare const cond: boolean;
@@ -141,13 +141,13 @@ class ImplicitReturnGatesTest {
             """.trimIndent(),
             directives = "// @strict: true",
         )
-        have(
-            d.any { it.code == 2322 } && d.none { it.code == 7030 },
-            "strict empty return routes through return-expression assignability (TS2322), not TS7030",
-        )
+        // A strict empty return routes through return-expression assignability
+        // (TS2322), not TS7030.
+        assert(d.any { it.code == 2322 } && d.none { it.code == 7030 })
     }
 
-    @Test fun strictOnlyEmptyReturnAgainstUndefinedUnionDrawsNothing() {
+    @Test
+    fun `strict only - an empty return against an undefined union draws nothing`() {
         assertNone(
             "// @strict: true",
             """
@@ -164,7 +164,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun noImplicitReturnsMixedReturnsKeepsTs7030() {
+    @Test
+    fun `noImplicitReturns - mixed returns keep TS7030`() {
         // strict OFF isolates tsc's branch 4: under strict+noImplicitReturns the
         // TS2366 branch wins first (undefined not assignable to number).
         assertHas(
@@ -182,7 +183,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun strictPlusNoImplicitReturnsMixedReturnsIsTs2366() {
+    @Test
+    fun `strict plus noImplicitReturns - mixed returns are TS2366`() {
         assertHas(
             "// @strict: true\n// @noImplicitReturns: true",
             """
@@ -198,7 +200,8 @@ class ImplicitReturnGatesTest {
         )
     }
 
-    @Test fun noImplicitReturnsEmptyReturnKeepsTs7030() {
+    @Test
+    fun `noImplicitReturns - an empty return keeps TS7030`() {
         assertHas(
             "// @strict: false\n// @noImplicitReturns: true",
             """

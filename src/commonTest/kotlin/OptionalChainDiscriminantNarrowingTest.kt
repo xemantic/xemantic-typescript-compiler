@@ -102,10 +102,9 @@ class OptionalChainDiscriminantNarrowingTest {
             }
             """,
         ) should {
-            have(
-                any { it.code == 18048 },
-                "`x?.kind !== Enum.Member` is TRUE when x is undefined — the access must still fire TS18048",
-            )
+            // `x?.kind !== Enum.Member` is TRUE when x is undefined — the access must
+            // still fire TS18048
+            have(any { it.code == 18048 })
         }
     }
 
@@ -122,10 +121,9 @@ class OptionalChainDiscriminantNarrowingTest {
             }
             """,
         ) should {
-            have(
-                any { it.code == 18048 },
-                "`x?.kind === undefined` holds when x IS undefined — the access must still fire TS18048",
-            )
+            // `x?.kind === undefined` holds when x IS undefined — the access must
+            // still fire TS18048
+            have(any { it.code == 18048 })
         }
     }
 

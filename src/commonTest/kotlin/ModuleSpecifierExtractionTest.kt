@@ -43,7 +43,7 @@ class ModuleSpecifierExtractionTest {
         Parser(source, fileName).parse().moduleSpecifiers.toSet()
 
     @Test
-    fun collectsEveryRealImportKind() {
+    fun `collects every real import kind`() {
         val src = """
             /// <reference path="./ref-path.ts" />
             /// <reference types="ref-types" />
@@ -67,7 +67,7 @@ class ModuleSpecifierExtractionTest {
     }
 
     @Test
-    fun stringLiteralsCommentsTemplatesAndRegexesNeverContribute() {
+    fun `string literals comments templates and regexes never contribute`() {
         // Every "garbage-N" below sits in a lexical context a text scan would match
         // but the parser must not: plain strings, template literals (including one
         // whose content spans lines and starts a line with a reference directive —
@@ -95,7 +95,7 @@ class ModuleSpecifierExtractionTest {
     }
 
     @Test
-    fun findsDynamicImportsAndRequiresAtAnyDepth() {
+    fun `finds dynamic imports and requires at any depth`() {
         val src = """
             export class C {
                 async m() {
@@ -115,7 +115,7 @@ class ModuleSpecifierExtractionTest {
     }
 
     @Test
-    fun nonLiteralArgumentsAreIgnored() {
+    fun `non-literal arguments are ignored`() {
         val src = """
             const name = "./computed";
             const a = import(name);
@@ -128,7 +128,7 @@ class ModuleSpecifierExtractionTest {
     }
 
     @Test
-    fun referenceDirectivesSurviveABlockCommentHeader() {
+    fun `reference directives survive a block-comment header`() {
         // tsc honors triple-slash directives after a leading block-comment (license
         // header) — they are trivia before the first token. Directives after the
         // first statement are plain comments.
@@ -144,7 +144,7 @@ class ModuleSpecifierExtractionTest {
     }
 
     @Test
-    fun projectBuildReportsNoGarbageUnresolvedImports() {
+    fun `a project build reports no garbage unresolved imports`() {
         // End-to-end wiring: ProjectCompiler's graph walk must consume the parser's
         // specifier set, so import-shaped text in string literals neither shows up in
         // `unresolved` nor pulls files into the program.
@@ -164,9 +164,7 @@ class ModuleSpecifierExtractionTest {
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
         assert(result.unresolved == listOf("/proj/src/index.ts" to "./genuinely-missing.js"))
-        have(
-            result.programFiles.none { it.contains("some-package") },
-            "a string-literal mention must not pull a file into the program",
-        )
+        // a string-literal mention must not pull a file into the program
+        assert(result.programFiles.none { it.contains("some-package") })
     }
 }

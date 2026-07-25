@@ -132,11 +132,9 @@ class OverloadArgFlowNarrowingTest {
             }
             """,
         ) should {
-            have(
-                none { it.code == 2769 || it.code == 2345 },
-                "`!allowAmbiguity` must narrow boolean to `false` (and the else-continuation to " +
-                    "`true`) so the literal overloads match",
-            )
+            // `!allowAmbiguity` must narrow boolean to `false` (and the
+            // else-continuation to `true`) so the literal overloads match
+            have(none { it.code == 2769 || it.code == 2345 })
         }
     }
 
@@ -151,10 +149,9 @@ class OverloadArgFlowNarrowingTest {
             }
             """,
         ) should {
-            have(
-                any { it.code == 2769 },
-                "an un-narrowed `boolean` matches neither literal overload (tsc errors here too)",
-            )
+            // an un-narrowed `boolean` matches neither literal overload (tsc errors
+            // here too)
+            have(any { it.code == 2769 })
         }
     }
 

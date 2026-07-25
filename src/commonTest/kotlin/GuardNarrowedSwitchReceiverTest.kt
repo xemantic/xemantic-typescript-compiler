@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
@@ -49,14 +49,11 @@ import kotlin.test.Test
 class GuardNarrowedSwitchReceiverTest {
 
     private fun assertNoImplicitReturnCodes(d: List<Diagnostic>, what: String) {
-        have(
-            d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
-            "$what must count as terminating",
-        )
+        assert(d.none { it.code == 2366 || it.code == 7030 || it.code == 2355 })
     }
 
     private fun assertFires2366(d: List<Diagnostic>, what: String) {
-        have(d.any { it.code == 2366 }, "$what must keep TS2366")
+        assert(d.any { it.code == 2366 })
     }
 
     private val nodeDecls = """

@@ -50,7 +50,7 @@ class ExportStarImportsTest {
         result.diagnostics.filter { it.code == 2305 }.map { it.message }
 
     @Test
-    fun namesThroughAStarBarrelResolveAndMissingNamesStillFire() {
+    fun `names through a star barrel resolve and missing names still fire`() {
         val result = build(
             mapOf(
                 "/proj/src/a.ts" to "export const alpha = 1;",
@@ -70,7 +70,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun multiHopBarrelChainsResolve() {
+    fun `multi-hop barrel chains resolve`() {
         val result = build(
             mapOf(
                 "/proj/src/leaf.ts" to "export const deep = 1;",
@@ -86,7 +86,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun circularStarReexportsResolveWithoutHangingAndMissingNamesStillFire() {
+    fun `circular star re-exports resolve without hanging and missing names still fire`() {
         val result = build(
             mapOf(
                 "/proj/src/c.ts" to """
@@ -107,7 +107,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun unresolvableStarTargetSuppressesAbsenceDiagnostics() {
+    fun `an unresolvable star target suppresses absence diagnostics`() {
         val result = build(
             mapOf(
                 "/proj/src/opaque.ts" to """
@@ -124,7 +124,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun defaultAbsenceStaysDecidableThroughAnUnknowableStar() {
+    fun `default absence stays decidable through an unknowable star`() {
         // `export *` never forwards a default export, so `import { default as X }`
         // from a module with NO default is TS2305 even when the star set is
         // unknowable — only NON-default specs get the FN-safe skip.
@@ -144,7 +144,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun starAsNamespaceExportsOnlyTheNamespaceName() {
+    fun `star-as-namespace exports only the namespace name`() {
         val result = build(
             mapOf(
                 "/proj/src/a.ts" to "export const alpha = 1;",
@@ -159,7 +159,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun reExportSpecifiersAlsoFollowStars() {
+    fun `re-export specifiers also follow stars`() {
         val result = build(
             mapOf(
                 "/proj/src/a.ts" to "export const alpha = 1;",
@@ -173,7 +173,7 @@ class ExportStarImportsTest {
     }
 
     @Test
-    fun barrelWithHundredsOfNamesStaysFast() {
+    fun `a barrel with hundreds of names stays fast`() {
         // The tsc self-compile shape: ~78 files each importing dozens of names
         // through one barrel that star-re-exports every other file. The per-file
         // memo must make this linear-ish; this completes in well under a second.
@@ -191,9 +191,7 @@ class ExportStarImportsTest {
             """.trimIndent()
         }
         val result = build(files)
-        have(
-            ts2305Messages(result).isEmpty(),
-            "no false absence through the wide barrel",
-        )
+        // no false absence through the wide barrel
+        assert(ts2305Messages(result).isEmpty())
     }
 }

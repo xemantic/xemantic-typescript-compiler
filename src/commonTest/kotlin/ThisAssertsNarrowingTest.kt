@@ -63,7 +63,7 @@ class ThisAssertsNarrowingTest {
     """
 
     @Test
-    fun explicitTypeArgAssertRetypesThisAndSwitchNarrows() {
+    fun `an explicit type-arg assert retypes this and the switch narrows`() {
         diagnose(
             prelude + """
             export class DebugTypeMapper {
@@ -87,7 +87,7 @@ class ThisAssertsNarrowingTest {
     }
 
     @Test
-    fun withoutTheAssertThisMembersStillFire() {
+    fun `negative control - without the assert the this-member accesses still fire`() {
         // Negative control: no assert — the class-chain TS2339 on a member the
         // class does not declare must keep firing.
         diagnose(
@@ -105,7 +105,7 @@ class ThisAssertsNarrowingTest {
     }
 
     @Test
-    fun assertedUnionMemberMissingPropertyStillFires() {
+    fun `negative control - a property missing from the asserted union member still fires`() {
         // Negative control: the assert + switch narrow to the Array member,
         // which genuinely lacks `source` — the suppression requires the
         // property on EVERY narrowed member.

@@ -54,10 +54,9 @@ class DeleteObjectPrototypeTs2790Test {
     @Test
     fun `real libs - delete Array_toString fires TS2790 - the keywordExpressionInternalComments fix`() {
         diagnose("delete Array.toString;", directives = realLibs) should {
-            have(
-                any { it.code == 2790 },
-                "delete Array.toString must be TS2790 under real libs (toString inherited from Object.prototype)",
-            )
+            // delete Array.toString must be TS2790 under real libs (toString inherited
+            // from Object.prototype)
+            have(any { it.code == 2790 })
         }
     }
 

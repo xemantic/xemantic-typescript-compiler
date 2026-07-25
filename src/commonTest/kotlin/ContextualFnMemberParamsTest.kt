@@ -57,11 +57,12 @@ class ContextualFnMemberParamsTest {
 
     private fun assertNo7006(@Language("typescript") source: String, what: String) {
         compile(source).diagnostics should {
-            have(none { it.code == 7006 }, "$what must not draw TS7006")
+            have(none { it.code == 7006 })
         }
     }
 
-    @Test fun varDeclAnnotationFactoryArrowMembers() {
+    @Test
+    fun `a var-decl annotation contextually types factory arrow members`() {
         assertNo7006(
             "$iface\nconst checker: TC = {\n" +
                 "    isUndef: symbol => symbol.id === 0,\n" +
@@ -72,7 +73,8 @@ class ContextualFnMemberParamsTest {
         )
     }
 
-    @Test fun returnAnnotationFactoryArrowMembers() {
+    @Test
+    fun `a return annotation contextually types factory arrow members`() {
         assertNo7006(
             "$iface\nfunction create(): TC {\n" +
                 "    return {\n" +
@@ -85,7 +87,8 @@ class ContextualFnMemberParamsTest {
         )
     }
 
-    @Test fun methodMembersAreContextuallyTyped() {
+    @Test
+    fun `method members are contextually typed`() {
         assertNo7006(
             "$iface\nconst checker: TC = {\n" +
                 "    isUndef(symbol) { return symbol.id === 0; },\n" +
@@ -96,7 +99,8 @@ class ContextualFnMemberParamsTest {
         )
     }
 
-    @Test fun methodBodyReturnAnnotationAlsoThreads() {
+    @Test
+    fun `a method body return annotation also threads the context`() {
         // The return-ctx threading must reset per function boundary: the inner
         // class method's own annotation drives ITS returns.
         assertNo7006(
@@ -113,14 +117,16 @@ class ContextualFnMemberParamsTest {
         )
     }
 
-    @Test fun directArrowReturnAgainstFnTypeAnnotation() {
+    @Test
+    fun `a direct arrow return against a fn-type annotation is contextually typed`() {
         assertNo7006(
             "function f(): (a: number) => void {\n    return a => {};\n}\n",
             "a directly returned arrow against a fn-type return annotation",
         )
     }
 
-    @Test fun excessParamBeyondContextualArityStillFires() {
+    @Test
+    fun `negative control - an excess param beyond the contextual arity still fires`() {
         compile(
             "interface One { f(a: number): void; }\n" +
                 "const o: One = { f: (a, b) => {} };\n",
@@ -132,22 +138,23 @@ class ContextualFnMemberParamsTest {
         }
     }
 
-    @Test fun uncontextualizedLiteralStillFires() {
+    @Test
+    fun `negative control - an uncontextualized literal still fires`() {
         compile("const o = { f: (a) => a };\n").diagnostics should {
             have(any { it.code == 7006 })
         }
     }
 
-    @Test fun unannotatedReturnStillFires() {
+    @Test
+    fun `negative control - an unannotated return still fires`() {
         compile("function create() {\n    return { f: (a) => a };\n}\n").diagnostics should {
-            have(
-                any { it.code == 7006 },
-                "a return without a return-type annotation provides no contextual type",
-            )
+            // a return without a return-type annotation provides no contextual type
+            have(any { it.code == 7006 })
         }
     }
 
-    @Test fun nestedFunctionResetsReturnContext() {
+    @Test
+    fun `a nested function resets the return context`() {
         // The OUTER fn's TC annotation must NOT leak into the INNER
         // annotation-less function's return literal.
         compile(
@@ -169,7 +176,8 @@ class ContextualFnMemberParamsTest {
         }
     }
 
-    @Test fun restParamContextCoversAllPositionalParams() {
+    @Test
+    fun `a rest param context covers all positional params`() {
         assertNo7006(
             "interface R { go(...args: number[]): void; }\n" +
                 "const r: R = { go: (a, b, c) => {} };\n",
@@ -186,7 +194,8 @@ class ContextualFnMemberParamsTest {
         type Table = { [TKind in SK]?: VisitFn<Node> };
     """.trimIndent()
 
-    @Test fun computedEnumKeyMappedTableFnValues() {
+    @Test
+    fun `a computed enum key maps table fn values`() {
         assertNo7006(
             "$mappedTable\nconst table: Table = {\n" +
                 "    [SK.A]: function (node, extra) { return node; },\n" +
@@ -196,7 +205,8 @@ class ContextualFnMemberParamsTest {
         )
     }
 
-    @Test fun computedKeyExcessParamBeyondMappedArityStillFires() {
+    @Test
+    fun `negative control - a computed-key excess param beyond the mapped arity still fires`() {
         compile(
             "$mappedTable\nconst table: Table = {\n" +
                 "    [SK.A]: function (node, extra, oops) { return node; },\n" +
@@ -209,7 +219,8 @@ class ContextualFnMemberParamsTest {
         }
     }
 
-    @Test fun computedKeyWithoutMappedAnnotationStillFires() {
+    @Test
+    fun `negative control - a computed key without a mapped annotation still fires`() {
         compile(
             "enum SK { A = 1 }\n" +
                 "const table = {\n" +

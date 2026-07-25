@@ -100,7 +100,7 @@ class CrlfSameAsIssueTest {
      */
     @kotlin.test.Ignore
     @Test
-    fun crlfDiffOutputIsGarbledInTerminal() {
+    fun `a CRLF diff output is garbled in the terminal`() {
         val expected = makeBaseline("export const x = 1;")
         val actual   = makeBaseline("export const x = 2;")   // one character differs
         // The diff message will be unreadable: \r in content lines overwrites the -/+ prefix
@@ -119,7 +119,7 @@ class CrlfSameAsIssueTest {
      */
     @kotlin.test.Ignore
     @Test
-    fun lfDiffOutputIsReadableForComparison() {
+    fun `an LF diff output is readable for comparison`() {
         val expected = makeBaseline("export const x = 1;").replace("\r\n", "\n")
         val actual   = makeBaseline("export const x = 2;").replace("\r\n", "\n")
         // The diff message is clean: "-export const x = 1;" / "+export const x = 2;"
@@ -136,7 +136,7 @@ class CrlfSameAsIssueTest {
      */
     @kotlin.test.Ignore
     @Test
-    fun minimalCrlfReproduction() {
+    fun `a minimal CRLF reproduction`() {
         val expected = "unchanged line\r\nexpected content\r\n"
         val actual   = "unchanged line\r\nactual content\r\n"
         // In a terminal the diff shows only "actual content" with no -/+ sign visible,

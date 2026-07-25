@@ -31,6 +31,7 @@ import kotlinx.coroutines.channels.ReceiveChannel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.time.Duration.Companion.milliseconds
 
 /**
  * CLI entry point for the xemantic TypeScript compiler — whole-project build.
@@ -194,7 +195,7 @@ internal suspend fun awaitChangeBatch(
 ): Set<String> {
     val batch = mutableSetOf(changes.receive())
     while (true) {
-        val next = withTimeoutOrNull(quietMs) { changes.receive() } ?: break
+        val next = withTimeoutOrNull(quietMs.milliseconds) { changes.receive() } ?: break
         batch.add(next)
     }
     return batch
