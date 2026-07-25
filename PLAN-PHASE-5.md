@@ -20,6 +20,58 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 681 (2026-07-25) — M4.9: two gaps that only existed because M4.8 let
+`@types` in. Compiler profile with `"types": ["node"]`: 60 → 30 errors. Also the
+round where I walked into a trap CLAUDE.md documents by name.**
+
+**`skipLibCheck` was parsed and never consulted.** Nothing noticed for as long as
+`.d.ts` files came only from the corpus and the bundled libs — but `@types/node`
+is ~70 declaration files, and checking them reported 15 TS7008 + 2 TS7010
+against DefinitelyTyped's own code in a project that had explicitly asked not
+to. Applied to the CHECKER's output only: tsc's `skipLibCheck` skips type
+checking of declaration files, it does not suppress their SYNTAX errors.
+
+**A PARAMETER did not shadow a same-named namespace reaching globals from an
+ambient module body.** `checkMemberAccessMissing` bails to the locally-known type
+only for names in `currentShadowedNames`, which `applyBodyLocalShadowing` fills
+for body-local VAR declarations and deliberately EXCLUDES parameter names (a var
+redeclaring a same-function param is a redeclaration, not a shadow). So a
+parameter fell through to the symbol-based branches, which resolve through
+globals. tsc's own `function formatJSDocLink(link: JSDocLink | …)` hit it
+because `fs.d.ts` declares `export namespace link` — 18 diagnostics reading
+*"Property 'kind' does not exist on type 'typeof link'"*.
+
+**What made this cheap to find was a discriminator, not a search.** I was
+grepping resolution paths and getting nowhere. Four one-line variants settled it
+in one run: a global `declare namespace link` is shadowed correctly, an
+ambient-module one is not; a LOCAL named `link` works, a PARAMETER does not; and
+it is not union-specific. That located the fault in the parameter path exactly,
+after which the fix was one gate.
+
+**The trap, worth stating plainly.** My first cut bailed whenever a concrete
+local type resolved the member. That is precisely the *"raw declared type
+exposes the property → suppress"* shape CLAUDE.md warns against, and it
+over-suppressed `instanceofWithStructurallyIdenticalTypes` — where `C1|C2|C3`
+narrows to `never` via `!isC1 && !isC2` on structurally-identical types and tsc
+DOES report TS2339-on-`never`. The corpus caught it in one run. Keying the bail
+on the name ALSO denoting a NAMESPACE in globals repairs only the
+mis-resolution and leaves that test untouched. The documented warning was
+specific enough to have saved the round had I re-read it before writing the
+gate rather than after the failure.
+
+**Gates.** Corpus **12,611 / 0 / 3** (+13 pins, including the sharp case: a
+member absent from BOTH the parameter type and the namespace must still
+report). `--listAll` ×8 unchanged (46 on seven, 94 on harness) — the dashboard
+profiles set `"types": []` and declare no colliding namespaces.
+
+**NEXT (M4.9 continues):** the remaining 30 on that profile are 13 TS2591
+(`require`/`process` in files that reference node types without importing
+them), 7 TS2353 (`fs.WatchOptions` vs the compiler's own `WatchOptions` in an
+object literal), 3 TS2339, and singletons. Worth a ninth dashboard profile so
+the number is tracked — but do NOT alter the existing eight.
+
+---
+
 **Round 680 (2026-07-25) — M4.8 DONE: `/// <reference path|types>` now pulls
 files into the program. `@types/node` goes from contributing 1 file to 67.**
 
@@ -3326,7 +3378,21 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   goes silent exactly when resolution succeeds — pinned both ways). Measured with
   `@types/node`: program 79 → 146, TS2591 43 → 13. Dashboard untouched (all 8
   profiles identical in errors AND program size); suite 12,598/0/3 (+19 pins).
-- [ ] **M4.9 The gaps `@types/node` exposes once it loads** (found round 680,
+- [ ] **M4.9 (PARTLY DONE round 681 — 60 → 30 on the profile).** Landed:
+  `skipLibCheck` is now honoured (it was parsed and never consulted — TS7008×15
+  + TS7010×2 were being reported against DefinitelyTyped's own declaration
+  files), and a PARAMETER now shadows a same-named namespace that reached
+  globals from an ambient module body (TS2339×18 → 3; tsc's
+  `formatJSDocLink(link: …)` vs `fs.d.ts`'s `export namespace link`). REMAINING
+  on that profile: 13 TS2591 (`require`/`process` where the file references node
+  types without importing them), **7 TS2353** (`fs.WatchOptions` vs the
+  compiler's own `WatchOptions` in an object literal — the next-largest
+  cluster), 3 TS2339, plus TS2322×2/TS7006/TS2709/TS2558/TS2345/TS1345
+  singletons. Repro: copy the profile tsconfig with `"types": ["node"]`
+  (fixture gitignored at `build/bench/tsc-project-637d5746/node_modules/@types/node`).
+  Consider a NINTH dashboard profile to track it — do NOT alter the existing
+  eight, whose `"types": []` is deliberate.
+- [ ] ~~M4.9 (original)~~ — **The gaps `@types/node` exposes once it loads** (found round 680,
   directly downstream of M4.8). With `"types": ["node"]` on the compiler profile
   the missing-ambient errors mostly clear (TS2591 43 → 13) and what remains is
   REAL, previously masked by the unresolved names: **TS2339×18** (e.g.
