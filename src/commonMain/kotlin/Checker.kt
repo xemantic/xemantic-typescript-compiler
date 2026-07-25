@@ -5547,12 +5547,10 @@ class Checker(
             // shape. Narrow walker — see checkImplicitAnyDefaultVarFunctions docs.
             pass("checkImplicitAnyDefaultVarFunctions") { checkImplicitAnyDefaultVarFunctions() }
         }
-        // 7a'. TS7009: `new F()` where F is a plain function (no construct signature)
-        // implicitly has type 'any'. Gated on noImplicitAny/strict (TypeScript's tests
-        // set @noimplicitany explicitly — it is NOT a harness default like TS2683).
-        if (options.noImplicitAny || options.strict) {
-            pass("checkImplicitAnyNewExpressions") { checkImplicitAnyNewExpressions() }
-        }
+        // 7a'. TS7009 (`new F()` where F is a plain function — no construct
+        // signature — so the expression implicitly has type 'any') MOVED to the
+        // post-spine slot (M0.4 slot-move pre-gate, round 655) ahead of its
+        // spine migration — see the pass("checkSpine") site.
         // 7a''. checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result
         // type is implicitly `any` because its containing generator FUNCTION
         // DECLARATION lacks a return-type annotation) is ON THE SPINE (M0.4,
@@ -5893,6 +5891,23 @@ class Checker(
         // checkForInNumericForRedeclare's for-in redeclare set, the arithmetic
         // pass, a corpus-unique pinDiag walker — are position-disjoint and
         // dedup only among themselves).
+        // 7a''' (M0.4 slot-move pre-gate, round 655): checkImplicitAnyNewExpressions
+        // (TS7009 — `new F()` whose target `F` is a plain FUNCTION symbol, so it
+        // carries no construct signature and the expression implicitly has type
+        // 'any') moved intact from slot 7a' ahead of its spine migration.
+        // Coupling surface: self-contained — the emission leaf is FULLY
+        // SYNTACTIC apart from ONE symbol-table consult (`currentFileLocals ?:
+        // globals` on the callee name, flags-only: never getTypeOfSymbol → no
+        // first-touch hazard), the walk threads NO downward value at all (only
+        // source/fileName), and grep-verified NO pass scans/dedups/retracts
+        // TS7009 (the sibling `new`-expression emitter at 17.170 is
+        // gate-DISJOINT: its TS2350 arm fires only when noImplicitAny/strict is
+        // OFF, i.e. exactly when this pass does not run). The dispatch gate
+        // (round 79i: TS7009 needs noImplicitAny/strict explicitly — it is NOT a
+        // harness default like TS2683) moves with it.
+        if (options.noImplicitAny || options.strict) {
+            pass("checkImplicitAnyNewExpressions") { checkImplicitAnyNewExpressions() }
+        }
         // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
         // (TS2715 — a `this.X` reference inside a constructor body or a
         // class-field initializer where X is an abstract member of the
