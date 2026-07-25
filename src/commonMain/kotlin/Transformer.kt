@@ -8229,7 +8229,15 @@ class Transformer(
         params: List<Parameter>,
         body: Block,
     ): Pair<List<Parameter>, Block> {
-        if (options.effectiveTarget >= ScriptTarget.ES2018) return Pair(params, body)
+        // No rest-flattening needed at ES2018+, but the parameters STILL need the
+        // ordinary parameter transform — in particular each default-value
+        // initializer must go through `transformExpression` (const-enum inlining,
+        // `this`-capture, optional-chain lowering, …). Returning `params` raw here
+        // silently skipped all of that for every function whose params this helper
+        // owns: the plain (non-async) FunctionDeclaration branch, function/arrow
+        // expressions, and constructors. The sub-ES2018 path below already applies
+        // the same treatment per parameter, so this keeps the two paths symmetric.
+        if (options.effectiveTarget >= ScriptTarget.ES2018) return Pair(transformParameters(params), body)
         val newParams = mutableListOf<Parameter>()
         val restStmts = mutableListOf<VariableStatement>()
         for (param in params) {
@@ -13409,23 +13417,18 @@ class Transformer(
                 } else {
                     val init = member.initializer
                     when {
-                        init is NumericLiteralNode -> {
-                            val v = tsNumericLiteralToDouble(init.text)
-                            nextValue = (v ?: nextValue) + 1.0
-                            v
-                        }
-                        init is PrefixUnaryExpression && init.operator == Minus -> {
-                            val inner = (init.operand as? NumericLiteralNode)?.text?.let { tsNumericLiteralToDouble(it) }
-                            if (inner != null) {
-                                nextValue = -inner + 1.0
-                                -inner
-                            } else null
-                        }
                         init is StringLiteralNode -> {
                             // After a string member, auto-increment is disrupted
                             init.text
                         }
-                        else -> null // non-constant, don't inline
+                        else -> {
+                            // EP.2f: fold the whole initializer expression, not just a
+                            // bare literal — tsc's own const enums combine shifts and
+                            // PRIOR members (`Up = 1 << 0`, `UpDown = Up | Down`).
+                            val v = foldConstEnumInitializer(init, members)
+                            if (v is Double) nextValue = v + 1.0
+                            v
+                        }
                     }
                 }
                 members[name] = value
@@ -13436,6 +13439,54 @@ class Transformer(
             }
             constEnumValues[decl.name.text] = members
         }
+    }
+
+    /**
+     * Constant-fold a const-enum member initializer for the SAME-FILE collector.
+     *
+     * EP.2f (round 677): the collector previously accepted only a numeric or
+     * string literal (and a negated numeric), returning null — "non-constant,
+     * don't inline" — for everything else. tsc's own const enums are routinely
+     * computed, so the first such member silently ended inlining for the rest of
+     * the enum: `debug.ts`'s `const enum Connection { Up = 1 << 0, …, UpDown = Up
+     * | Down }` lost 25 of its 121 reads that way.
+     *
+     * [own] is the enum's members resolved SO FAR, which is what lets a member
+     * reference an earlier sibling by bare name; a forward reference correctly
+     * folds to null. A qualified `Other.Member` resolves against the const enums
+     * already collected in this file. Anything else — a call, a non-const enum,
+     * an unresolved name — yields null and simply is not inlined.
+     */
+    private fun foldConstEnumInitializer(expr: Expression?, own: Map<String, Any?>): Any? = when (expr) {
+        null -> null
+        is NumericLiteralNode -> tsNumericLiteralToDouble(expr.text)
+        is StringLiteralNode -> expr.text
+        is ParenthesizedExpression -> foldConstEnumInitializer(expr.expression, own)
+        is Identifier -> own[expr.text] as? Double
+        is PropertyAccessExpression -> {
+            val recv = (expr.expression as? Identifier)?.text
+            if (recv != null) constEnumValues[recv]?.get(expr.name.text) as? Double else null
+        }
+        is PrefixUnaryExpression -> {
+            val v = foldConstEnumInitializer(expr.operand, own) as? Double
+            when {
+                v == null -> null
+                expr.operator == Plus -> v
+                expr.operator == Minus -> -v
+                expr.operator == Tilde -> v.toLong().inv().toDouble()
+                else -> null
+            }
+        }
+        is BinaryExpression -> {
+            val l = foldConstEnumInitializer(expr.left, own)
+            val r = foldConstEnumInitializer(expr.right, own)
+            when {
+                l is Double && r is Double -> tsFoldNumericBinary(l, expr.operator, r)
+                l is String && r is String && expr.operator == Plus -> l + r
+                else -> null
+            }
+        }
+        else -> null
     }
 
     /**

@@ -8358,11 +8358,19 @@ class Checker(
             val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
             val clause = imp.importClause ?: continue
             // Which name are we looking for in the TARGET module's star closure?
+            // `restIdx` is the index of the FIRST path segment still unconsumed
+            // once `exportedName` has been looked up in the star closure — the
+            // path may continue through nested namespaces (see the descent below).
+            val restIdx: Int
             val exportedName: String = when (val nb = clause.namedBindings) {
-                is NamespaceImport ->
-                    if (nb.name.text == rootName && memberSeg != null) memberSeg else continue
+                is NamespaceImport -> {
+                    if (nb.name.text != rootName || memberSeg == null) continue
+                    restIdx = 2 // `B.Kind…` — `B` is the import, `Kind` is exportedName
+                    memberSeg
+                }
                 is NamedImports -> {
                     val el = nb.elements.firstOrNull { it.name.text == rootName } ?: continue
+                    restIdx = 1 // `tracing…` — the root itself is exportedName
                     (el.propertyName ?: el.name).text
                 }
                 else -> continue
@@ -8381,10 +8389,38 @@ class Checker(
                     ?.let { fileResults[it]?.sourceFile }
                 ?: continue
             val sym = resolveExportedSymbolThroughStars(targetSf, exportedName) ?: continue
-            val resolved = resolveAlias(sym)
-            if (resolved.flags.hasAny(SymbolFlags.ConstEnum)) return resolved
+            descendToConstEnum(resolveAlias(sym), parts, restIdx)?.let { return it }
         }
         return null
+    }
+
+    /**
+     * Walk the still-unconsumed segments of a const-enum access path down through
+     * NAMESPACE exports, returning the const-enum symbol the path names.
+     *
+     * A const enum may be nested in a namespace (`namespace tracing { export
+     * const enum Phase { … } }`), so the barrel's star closure yields the
+     * NAMESPACE for the first segment, not the enum. That matters because the
+     * binder sets `SymbolFlags.ConstEnum` on a namespace holding only const enums
+     * — so the caller's flag test passes on the namespace and the `enumValues`
+     * lookup, which is keyed by the ENUM's symbol id, then silently misses.
+     *
+     * Descent stops as soon as a genuine `EnumDeclaration` is reached: any
+     * segments after that are member names, which the caller resolves.
+     * With no segments left this returns the start symbol unchanged (the plain
+     * `import { Kind } from "./barrel"` case, and the elision probe in
+     * [isConstEnumAlias], which asks only about the root name).
+     */
+    private fun descendToConstEnum(start: Symbol, parts: List<String>, fromIdx: Int): Symbol? {
+        var cur = start
+        var i = fromIdx
+        while (i < parts.size) {
+            if (cur.declarations.any { it is EnumDeclaration }) break
+            val next = cur.exports?.get(parts[i]) ?: return null
+            cur = resolveAlias(next)
+            i++
+        }
+        return if (cur.flags.hasAny(SymbolFlags.ConstEnum)) cur else null
     }
 
     fun resolveConstEnumMemberAccess(
@@ -9585,22 +9621,8 @@ class Checker(
         operator: SyntaxKind,
         right: Double,
     ): ConstantValue? {
-        val result = when (operator) {
-            SyntaxKind.Plus -> left + right
-            SyntaxKind.Minus -> left - right
-            SyntaxKind.Asterisk -> left * right
-            SyntaxKind.Slash -> left / right
-            SyntaxKind.Percent -> left % right
-            SyntaxKind.AsteriskAsterisk -> left.pow(right)
-            SyntaxKind.Bar -> (left.toLong() or right.toLong()).toDouble()
-            SyntaxKind.Ampersand -> (left.toLong() and right.toLong()).toDouble()
-            SyntaxKind.Caret -> (left.toLong() xor right.toLong()).toDouble()
-            SyntaxKind.LessThanLessThan -> (left.toLong() shl right.toInt()).toDouble()
-            SyntaxKind.GreaterThanGreaterThan -> (left.toLong() shr right.toInt()).toDouble()
-            SyntaxKind.GreaterThanGreaterThanGreaterThan ->
-                (left.toLong().toInt().ushr(right.toInt())).toDouble()
-            else -> return null
-        }
+        // Shared with the Transformer's same-file collector — see [tsFoldNumericBinary].
+        val result = tsFoldNumericBinary(left, operator, right) ?: return null
         return ConstantValue.NumberValue(result)
     }
 

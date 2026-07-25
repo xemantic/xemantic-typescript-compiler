@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import kotlin.jvm.JvmInline
+import kotlin.math.pow
 
 // ---------------------------------------------------------------------------
 // Symbol flags — bit field indicating what kind of entity a symbol represents
@@ -276,4 +277,35 @@ fun tsNumericLiteralToDouble(raw: String): Double? {
         t.startsWith("0o") || t.startsWith("0O") -> t.substring(2).toLongOrNull(8)?.toDouble()
         else -> t.toDoubleOrNull()
     }
+}
+
+/**
+ * Constant-fold a numeric binary operator for const-enum evaluation, returning
+ * null for any operator that cannot appear in a compile-time constant.
+ *
+ * EP.2f (round 677): shared so the Checker's cross-module evaluator and the
+ * Transformer's same-file collector cannot drift. They had drifted: the Checker
+ * folded shifts and bitwise ops while the collector accepted only literals, so a
+ * same-file `const enum Connection { Up = 1 << 0, UpDown = Up | Down }` — tsc's
+ * own `debug.ts` — silently stopped being inlinable at the first computed
+ * member.
+ *
+ * Bitwise and shift results are taken through `Long`/`Int` exactly as JavaScript
+ * specifies (`>>>` is an unsigned 32-bit shift, hence the `toInt()`).
+ */
+fun tsFoldNumericBinary(left: Double, operator: SyntaxKind, right: Double): Double? = when (operator) {
+    SyntaxKind.Plus -> left + right
+    SyntaxKind.Minus -> left - right
+    SyntaxKind.Asterisk -> left * right
+    SyntaxKind.Slash -> left / right
+    SyntaxKind.Percent -> left % right
+    SyntaxKind.AsteriskAsterisk -> left.pow(right)
+    SyntaxKind.Bar -> (left.toLong() or right.toLong()).toDouble()
+    SyntaxKind.Ampersand -> (left.toLong() and right.toLong()).toDouble()
+    SyntaxKind.Caret -> (left.toLong() xor right.toLong()).toDouble()
+    SyntaxKind.LessThanLessThan -> (left.toLong() shl right.toInt()).toDouble()
+    SyntaxKind.GreaterThanGreaterThan -> (left.toLong() shr right.toInt()).toDouble()
+    SyntaxKind.GreaterThanGreaterThanGreaterThan ->
+        (left.toLong().toInt().ushr(right.toInt())).toDouble()
+    else -> null
 }

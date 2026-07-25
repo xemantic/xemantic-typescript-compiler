@@ -132,6 +132,100 @@ class BarrelConstEnumInliningTest {
         assertContains(js, "1 /* Kind.B */")
     }
 
+    // ── EP.2e (round 677): the const enum nested in a NAMESPACE ────────────
+    //
+    // The barrel's star closure yields the NAMESPACE for the first path segment,
+    // and the binder puts `SymbolFlags.ConstEnum` on a namespace holding only
+    // const enums — so the flag test passed on the namespace while the
+    // `enumValues` lookup (keyed by the ENUM's symbol id) missed, and the emit
+    // kept `barrel_1.tracing.Phase.Bind`. This is tsc's own `tracing.Phase`
+    // shape, the largest residual group in the emit-parity diff.
+
+    private val nsEnums = """
+        // @module: commonjs
+        // @filename: tracing.ts
+        export namespace tracing { export const enum Phase { Bind = "bind", Check = "check" } }
+        // @filename: barrel.ts
+        export * from "./tracing";
+        // @filename: main.ts
+    """.trimIndent() + "\n"
+
+    @Test
+    fun `a const enum nested in a NAMESPACE inlines through a barrel`() {
+        val js = TypeScriptCompiler().compile(
+            nsEnums + """
+            import { tracing } from "./barrel";
+            export function f() { return tracing.Phase.Bind; }
+            """.trimIndent(),
+            "main.ts",
+        ).jsOutputs.joinToString("\n") { it.second }
+        assertContains(js, "\"bind\" /* tracing.Phase.Bind */")
+        assertFalse("barrel_1.tracing" in js, "must not keep a qualified access, got:\n$js")
+    }
+
+    @Test
+    fun `a namespace-nested const enum inlines through a NAMESPACE import of the barrel`() {
+        val js = TypeScriptCompiler().compile(
+            nsEnums + """
+            import * as B from "./barrel";
+            export function f() { return B.tracing.Phase.Check; }
+            """.trimIndent(),
+            "main.ts",
+        ).jsOutputs.joinToString("\n") { it.second }
+        assertContains(js, "\"check\"")
+    }
+
+    @Test
+    fun `a namespace-nested const enum still inlines on a DIRECT import`() {
+        // Control: the direct path always worked — the descent must not break it.
+        val js = TypeScriptCompiler().compile(
+            """
+            // @module: commonjs
+            // @filename: tracing.ts
+            export namespace tracing { export const enum Phase { Bind = "bind" } }
+            // @filename: main.ts
+            import { tracing } from "./tracing";
+            export function f() { return tracing.Phase.Bind; }
+            """.trimIndent(),
+            "main.ts",
+        ).jsOutputs.joinToString("\n") { it.second }
+        assertContains(js, "\"bind\" /* tracing.Phase.Bind */")
+    }
+
+    @Test
+    fun `negative control - a namespace holding a VALUE is not treated as a const enum`() {
+        // The namespace is instantiated (it has a runtime export), so it carries
+        // no ConstEnum flag and the access must survive.
+        val js = TypeScriptCompiler().compile(
+            """
+            // @module: commonjs
+            // @filename: ns.ts
+            export namespace mixed { export const v = 1; export const enum P { A = 0 } }
+            // @filename: barrel.ts
+            export * from "./ns";
+            // @filename: main.ts
+            import { mixed } from "./barrel";
+            export function f() { return mixed.v; }
+            """.trimIndent(),
+            "main.ts",
+        ).jsOutputs.joinToString("\n") { it.second }
+        assertTrue("mixed" in js, "an instantiated namespace must keep its access, got:\n$js")
+    }
+
+    @Test
+    fun `negative control - a missing member under a namespace does not inline`() {
+        val js = TypeScriptCompiler().compile(
+            nsEnums + """
+            import { tracing } from "./barrel";
+            export function f() { return tracing.Phase; }
+            """.trimIndent(),
+            "main.ts",
+        ).jsOutputs.joinToString("\n") { it.second }
+        // `tracing.Phase` with no member selected names the enum itself — there is
+        // no constant to inline, so nothing may be substituted.
+        assertFalse("\"bind\"" in js, "must not invent a value, got:\n$js")
+    }
+
     // ── Negative controls: a REGULAR enum must keep its runtime access ─────
 
     @Test
