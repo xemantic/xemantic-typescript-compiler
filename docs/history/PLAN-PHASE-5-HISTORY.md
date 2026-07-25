@@ -1,3 +1,70 @@
+**Round 649 (2026-07-23) — (M0.4) twenty-sixth tail-pass migration:
+checkDeleteOperator (TS1102 delete-identifier-in-strict / TS2703
+non-property-ref operand / TS2790 non-optional operand / TS2704
+read-only property / TS2542 read-only index signature; 86.8 ms at the
+round-647 table — the #26 per-file tail pass) is ON THE SPINE; the
+legacy driver + walkForDeleteOperator/walkStmtForDelete/walkExprForDelete
+recursion (~280 lines) DELETED; the emission body survives as the
+anchor-called leaf checkDeleteExpressionOperand (TS2790 → readonly
+TS2704/TS2542 → TS1102/TS2703, the deleted arm's order) at
+DeleteExpression enters.** A straight template application with one
+ambient nuance worth recording: the per-anchor sandwich installs the
+RESTING currentFileLocals (spineDelRestingLocals, captured at spine
+entry — the legacy post-spine slot ran outside the spine's per-file
+install, and checkDeleteReadonlyOperand's class-name arm consults
+`currentFileLocals ?: globals`; the spineB94 resting pattern,
+round-533/644 precedent) + currentFlowGraph nulled (the spineCo
+sandwich), while currentCheckFileName is deliberately UNTOUCHED — the
+legacy pass never set it, and mid-spine it already rests at the legacy
+slot's value, so not touching it IS the exact-reproduction choice (the
+spineCo family's spineFileName install was the alternative; both are
+empirically byte-identical here, but untouched needs no argument).
+Reach = the memoized binary classifier spineDelStatus over spineDelEdge
+(the deleted arms verbatim); frozen quirks pinned BOTH directions:
+for-head DECL-LIST initializers, case EXPRESSIONS, class-DECLARATION
+property initializers, objlit METHOD/accessor bodies, computed property
+NAMES, and parameter DEFAULTS stay UNREACHED, while class-EXPRESSION
+property initializers, case BODIES, for-head EXPRESSION initializers,
+for-in/of head EXPRESSIONS, throw + export-assignment expressions ARE
+reached (nested delete-of-delete emits at both levels, pinned). ONE
+per-file isStrict boolean decided at setup (the legacy preamble
+verbatim — the isModule scan counts import/export-DECLARATION/
+export-assignment statements ONLY: an `export const` VariableStatement
+does NOT trip it, pinned non-strict). TYPE-RESOLVING pass; binderResults
+driver → the partition view. Gates: 46 local pins
+(M04DeleteOpSpineMigrationTest) green against the LEGACY pass FIRST
+(46/46 on the first run), 46/46 on the spine; suite 12,146 → 12,192/0;
+`--listAll` ×8 byte-identical (sorted, non-time lines; 46×7/94; wall
+parity 29.9 vs 29.6 s); `--partitionCheck 2` EQUIVALENT ×8 (46×7/94);
+pass table 414 → 413 (the 86.8 ms row gone; checkSpine 21.5 s
+single-run under --passTiming — in-band); warning-clean. M0.4 running
+total: top TWENTY-SIX tail passes migrated. SESSION TAIL: the
+checkConstructorParamInInitializers (#27, 85.5 ms — TS2301 ctor-param/
+ctor-body-var referenced from an instance field initializer + the TS2663
+param-property variant) slot-move pre-gate LANDED (moved intact from
+slot 63 to the post-spine slot; suite 12,192/0; listAll ×8
+byte-identical; coupling surface verified self-contained — pure AST +
+immutable program-wide consults only (perFileScope, built pre-spine;
+KNOWN_GLOBALS), NOT type-resolving so no first-touch hazard, no pass
+scans/dedups/retracts TS2301/TS2663). Scope map for the migrator:
+EMISSION at ClassDeclaration/ClassExpression enters (declare-gated)
+via checkConstructorParamInClassMembers — ctor param-name/body-var
+collection + a per-PropertyDeclaration-initializer ref walk (non-static,
+Identifier-named, initializer present) → TS2301/TS2663; the routing
+recursion's frozen quirks: if THEN/ELSE walked but NOT the condition,
+loop/switch HEADS never walked (bodies/clause statements only),
+class-DECLARATION members recurse method/ctor/accessor BODIES AND
+property INITIALIZERS while the ClassExpression arm recurses property
+initializers ONLY (its method bodies are never descended), arrow
+Block/expression bodies + fn-expr bodies route back into the statement
+walk, objlit PropertyAssignment values + spreads only; likely NO
+ambient sandwich (fully syntactic; the TS2663 gate consults only
+perFileScope + KNOWN_GLOBALS, both immutable). NEXT session starts at
+that migration; after it by cost (round-647 table):
+checkAbstractMemberContext 81.6 ms
+(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file).**
+
 **Round 648 (2026-07-23) — (M0.4) twenty-fifth tail-pass migration:
 checkTypeParamStrictSubtypeCast (B60.3/B402/B60.18 — TS2352 for
 `<TypeParam>concrete` casts where the concrete source is a strict subtype

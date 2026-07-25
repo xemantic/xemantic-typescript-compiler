@@ -20,6 +20,75 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 658 (2026-07-25) — (M0.4) thirty-fifth tail-pass migration:
+checkTypeParamTypedOps (B60.12 — TS2339 / TS2349 / TS2351 for property access,
+call and `new` on a value whose type is an EFFECTIVELY UNCONSTRAINED type
+parameter, whose apparent type `{}` has no call/construct signatures and no own
+properties; 71.0 ms at the round-656 table — the #36 row) is ON THE SPINE; the
+driver and the whole walkStmtsForTypeParamOps / walkStmtForTypeParamOps /
+walkFnLikeBodyForTypeParamOps / emitTypeParamTypedOps recursion are DELETED and
+the three emissions are anchor-called at PropertyAccess / Call / New enters.**
+Shape: the round-635 PUSH-BASED ORDER-DEPENDENT variant — and the first
+migration whose downward context includes a **TYPE-SYSTEM AMBIENT** rather than
+only plain data, which is the round's transferable lesson. The data half is
+familiar: `tpVars` (name → TypeParameter AST) is MUTATED IN STATEMENT ORDER,
+LEAKS through block/if/loop/try/namespace descents, and is REBUILT at every
+function-like body from that body's own parameters, so it rides a LIFO of
+`TpoFrame`s pushed at exactly the boundaries the legacy walkers created a new
+map or TP scope at (a reached ClassDeclaration's member scope; a reached
+fn-like's BODY — SKIPPED when the body is absent, the legacy early return, so no
+interning happens there either) and popped at the owner's leave. The ambient
+half is new: the legacy walk held `withInternedTpScope(tps, withAst = true)`
+OPEN as a region across the whole subtree, and **a spine migration cannot hold
+an inline region open across nodes — so the boundary CAPTURES the region's
+result instead: run `withInternedTpScope` for its interning and
+constraint-materialization side effects and read `currentTypeParamScope` /
+`currentTypeParamAstForOps` from inside the block, then carry that pair on the
+frame and install it around each dispatch.** That keeps the first-touch
+behaviour identical (the interning + constraint materialization still happen
+once, at the same point in the walk, under the enclosing scope) while obeying
+the round-538 rule that a widely-consumed ambient field is installed ONLY around
+the emission, never walk-wide. The file-level base is the spine-entry RESTING
+pair, because the legacy driver installed only `currentFileLocals` (which
+checkSpine's per-file loop already does) and inherited its slot's ambient —
+the round-655 "reproduce the DRIVER's own install" rule, in its inherit-nothing
+form. Second detail worth keeping: the legacy VariableStatement arm ran TWO
+loops (record every declaration, THEN emit on the initializers), which
+reproduces EXACTLY as a recording dispatch at the statement's own ENTER, before
+any child is walked — so `var x: T = x.foo` still sees `x` recorded, no special
+casing. Reach (`spineTpoStatus` over `spineTpoFold`; TPO_STMT / TPO_EXPR /
+TPO_MEMBER) is unusually NARROW and every gap is deliberate, pinned both
+directions: `for` HEAD initializers, `switch` statements, object and array
+literals, template expressions, all four cast forms, await/yield, the
+typeof/void/delete operands, spreads and comma chains have NO arm — and the big
+one, ARROW and function-EXPRESSION bodies are never walked, so a TypeParam op
+inside any of them is UNREACHED rather than merely unrecorded; on the class side
+only method / constructor / accessor BODIES are reached, never property
+initializers or static blocks. The legacy left-spine BinaryExpression flatten
+reduces to plain left/right edges (it emitted leftmost-first then the rights in
+source order — identical). No sibling move was needed: the TS2349-retracting
+`checkUnresolvableSelfReferencingAwaitedUnion` sits after BOTH the old slot and
+checkSpine (the round-636 rule). Gates: 33 pins
+(M04TypeParamTypedOpsSpineMigrationTest, written green against the LEGACY
+walkers last session) 33/33 on the spine on the FIRST run — no calibration, the
+FOURTH consecutive round where pre-writing the pins against the legacy pass made
+the migration a single-attempt change, which is now the established discipline
+for this arc; suite 12,507/0 (3 skipped, unchanged); `--listAll` ×8
+byte-identical vs the round-657 capture (46×7/94, only the `time:` line differs
+— the reuse trick again: the two rounds touched only the migrating pass);
+`--partitionCheck 2` EQUIVALENT ×8; pass table 405 → 404 (zero
+checkTypeParamTypedOps rows; checkSpine 20.9 s — in-band); warning-clean (one
+`Variable is unused` on the New-expression anchor caught and fixed before the
+suite run). M0.4 running total: top THIRTY-FIVE tail passes migrated. NEXT by
+cost (round-656 table, the migrated rows gone): checkVarHoistRedeclaration
+68.9 ms, checkCallTypeArgCount 66.2, checkIllegalSuperCallsInNestedFunctions
+62.7, checkTypeArgumentConstraints 62.7, checkSpreadPropertyOverrides 62.5
+(checkCrossFileModuleAugmentationDuplicates, 109.7 ms, stays SKIP —
+cross-file). The per-pass wall value is now clearly below the noise floor
+(~65 ms on a ~25 s checker-init), so the honest next milestone is the ARC-level
+interleaved A/B once a few more land — or a decision to stop the arc and take
+(M1) identity stability, which carries the ≤15–20 s path.
+
 **Round 657 (2026-07-25) — (M0.4) thirty-fourth tail-pass migration:
 checkArrayToClassCastOverlap (TS2352 for a `<C<X>>arr` angle-bracket cast from
 an ARRAY-typed source to a different GENERIC CLASS target missing a required
@@ -659,73 +728,6 @@ session starts at that migration; after it by cost
 (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
 cross-file).**
 
-**Round 649 (2026-07-23) — (M0.4) twenty-sixth tail-pass migration:
-checkDeleteOperator (TS1102 delete-identifier-in-strict / TS2703
-non-property-ref operand / TS2790 non-optional operand / TS2704
-read-only property / TS2542 read-only index signature; 86.8 ms at the
-round-647 table — the #26 per-file tail pass) is ON THE SPINE; the
-legacy driver + walkForDeleteOperator/walkStmtForDelete/walkExprForDelete
-recursion (~280 lines) DELETED; the emission body survives as the
-anchor-called leaf checkDeleteExpressionOperand (TS2790 → readonly
-TS2704/TS2542 → TS1102/TS2703, the deleted arm's order) at
-DeleteExpression enters.** A straight template application with one
-ambient nuance worth recording: the per-anchor sandwich installs the
-RESTING currentFileLocals (spineDelRestingLocals, captured at spine
-entry — the legacy post-spine slot ran outside the spine's per-file
-install, and checkDeleteReadonlyOperand's class-name arm consults
-`currentFileLocals ?: globals`; the spineB94 resting pattern,
-round-533/644 precedent) + currentFlowGraph nulled (the spineCo
-sandwich), while currentCheckFileName is deliberately UNTOUCHED — the
-legacy pass never set it, and mid-spine it already rests at the legacy
-slot's value, so not touching it IS the exact-reproduction choice (the
-spineCo family's spineFileName install was the alternative; both are
-empirically byte-identical here, but untouched needs no argument).
-Reach = the memoized binary classifier spineDelStatus over spineDelEdge
-(the deleted arms verbatim); frozen quirks pinned BOTH directions:
-for-head DECL-LIST initializers, case EXPRESSIONS, class-DECLARATION
-property initializers, objlit METHOD/accessor bodies, computed property
-NAMES, and parameter DEFAULTS stay UNREACHED, while class-EXPRESSION
-property initializers, case BODIES, for-head EXPRESSION initializers,
-for-in/of head EXPRESSIONS, throw + export-assignment expressions ARE
-reached (nested delete-of-delete emits at both levels, pinned). ONE
-per-file isStrict boolean decided at setup (the legacy preamble
-verbatim — the isModule scan counts import/export-DECLARATION/
-export-assignment statements ONLY: an `export const` VariableStatement
-does NOT trip it, pinned non-strict). TYPE-RESOLVING pass; binderResults
-driver → the partition view. Gates: 46 local pins
-(M04DeleteOpSpineMigrationTest) green against the LEGACY pass FIRST
-(46/46 on the first run), 46/46 on the spine; suite 12,146 → 12,192/0;
-`--listAll` ×8 byte-identical (sorted, non-time lines; 46×7/94; wall
-parity 29.9 vs 29.6 s); `--partitionCheck 2` EQUIVALENT ×8 (46×7/94);
-pass table 414 → 413 (the 86.8 ms row gone; checkSpine 21.5 s
-single-run under --passTiming — in-band); warning-clean. M0.4 running
-total: top TWENTY-SIX tail passes migrated. SESSION TAIL: the
-checkConstructorParamInInitializers (#27, 85.5 ms — TS2301 ctor-param/
-ctor-body-var referenced from an instance field initializer + the TS2663
-param-property variant) slot-move pre-gate LANDED (moved intact from
-slot 63 to the post-spine slot; suite 12,192/0; listAll ×8
-byte-identical; coupling surface verified self-contained — pure AST +
-immutable program-wide consults only (perFileScope, built pre-spine;
-KNOWN_GLOBALS), NOT type-resolving so no first-touch hazard, no pass
-scans/dedups/retracts TS2301/TS2663). Scope map for the migrator:
-EMISSION at ClassDeclaration/ClassExpression enters (declare-gated)
-via checkConstructorParamInClassMembers — ctor param-name/body-var
-collection + a per-PropertyDeclaration-initializer ref walk (non-static,
-Identifier-named, initializer present) → TS2301/TS2663; the routing
-recursion's frozen quirks: if THEN/ELSE walked but NOT the condition,
-loop/switch HEADS never walked (bodies/clause statements only),
-class-DECLARATION members recurse method/ctor/accessor BODIES AND
-property INITIALIZERS while the ClassExpression arm recurses property
-initializers ONLY (its method bodies are never descended), arrow
-Block/expression bodies + fn-expr bodies route back into the statement
-walk, objlit PropertyAssignment values + spreads only; likely NO
-ambient sandwich (fully syntactic; the TS2663 gate consults only
-perFileScope + KNOWN_GLOBALS, both immutable). NEXT session starts at
-that migration; after it by cost (round-647 table):
-checkAbstractMemberContext 81.6 ms
-(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
-cross-file).**
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1197,8 +1199,26 @@ structural item instead of landing alone.**
   already sets the file's binder locals and the shared arm installs
   currentCheckFileName. BEFORE picking any next tail pass, grep its driver for
   a shared-walker call: a fold-in is orders of magnitude less work);
+  checkTypeParamTypedOps 71.0 ms — **MIGRATED round 658** (the round-635
+  PUSH-BASED ORDER-DEPENDENT variant, and the first whose downward context
+  includes a TYPE-SYSTEM AMBIENT rather than only plain data: `tpVars` is
+  MUTATED in statement order, LEAKS through block/if/loop/try/namespace
+  descents and REBUILDS at every fn-like body from its own parameters, so it
+  rides a LIFO of frames at exactly the legacy new-map/new-scope boundaries —
+  while the legacy `withInternedTpScope` REGION, which a spine migration
+  cannot hold open across nodes, is reproduced by CAPTURING its result: run
+  it at the boundary for its interning + constraint-materialization side
+  effects, read currentTypeParamScope/currentTypeParamAstForOps from inside
+  the block, carry the pair on the frame and install it around each dispatch
+  only. The VariableStatement two-loop order — record all declarations, then
+  emit on the initializers — reproduces as a recording dispatch at that
+  statement's ENTER. Reach is unusually NARROW: `for` heads, `switch`, object
+  and array literals, templates, all four cast forms, await/yield,
+  typeof/void/delete operands, spreads, comma chains and — the big one —
+  ARROW and function-EXPRESSION bodies have NO arm, and on the class side only
+  method/ctor/accessor BODIES are reached);
   next per-file candidates by cost (round-656 table, the migrated rows
-  gone): **checkTypeParamTypedOps 71.0 ms**, checkVarHoistRedeclaration 68.9 ms,
+  gone): **checkVarHoistRedeclaration 68.9 ms**,
   checkCallTypeArgCount 66.2 ms,
   checkIllegalSuperCallsInNestedFunctions 62.7 ms,
   checkTypeArgumentConstraints 62.7 ms, checkSpreadPropertyOverrides
