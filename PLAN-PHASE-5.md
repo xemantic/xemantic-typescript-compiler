@@ -20,6 +20,69 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 659 (2026-07-25) — (M0.4-AB) THE ARC MEASUREMENT, PAID: the M0.4
+migration arc is NOT a wall-clock lever, and the mechanism is measured. M0.4 is
+CLOSED at 35 passes; (M1) identity stability is next.** This round landed no
+compiler change — it paid a debt the arc had carried since round 624 ("A/B the
+ARC once several passes land") and turned it into a decision, which is worth
+more than a 36th migration would have been.
+
+**Method** (as queued at round 658): pre-arc binary `4b0dfcc7` (round-623 HEAD,
+the commit before round 624's first migration) vs HEAD `e9d8279d`; both class
+dirs snapshotted to scratch and NO recompile between measurements (the
+round-493 rule); alternating within-pair order so session drift cannot favour
+either side; medians, never batch-then-batch.
+
+**Numbers.** compiler profile, 6 interleaved pairs: pre median **28,945 ms** →
+post **29,015 ms** = **+0.24%**, post wins **3/6**, per-pair deltas
+−667/−295/−76/+786/+985/+1,190 ms. harness profile, 2 pairs: **40,256 →
+39,605 = −1.6%**, post wins 2/2. The per-pair spread (~4% of total) is an order
+of magnitude larger than the effect, so the honest statement is: the arc's true
+value is a SMALL gain somewhere in 0–2%, entirely inside the ±2% band the PERF
+ground rules refuse to land on. A LESSON ABOUT THE INSTRUMENTS, incidentally
+confirmed: the FIRST single un-interleaved `--passTiming` sample this session
+showed pre 24.86 s vs post 25.35 s — the post looking 0.5 s SLOWER — which is
+exactly the artefact the interleaving rule exists to kill; a session that had
+taken that sample at face value would have "discovered" a regression that is
+not there.
+
+**The mechanism, measured — the transferable finding: 75% of a migrated pass's
+cost REAPPEARS INSIDE checkSpine.** Same-run `--passTiming` on both binaries:
+the 35 rows present pre and absent post summed **3,146 ms**, while checkSpine's
+own row grew **18,896 → 21,253 = +2,358 ms** (75%). So the premise the arc rested
+on — that the ~6 s tail is mostly REDUNDANT TRAVERSAL that one walk eliminates —
+is wrong for these passes. Their cost is per-node work that a single walk still
+has to do, and folding them in converts "N walks over the tree" into "N
+`when (kindId)` dispatches plus memoized ancestor-climb reach classifiers on
+every node of every file" — the same order of multiplication, just relocated.
+That also explains why every single-pass round measured neutral in isolation:
+each was genuinely ~25%-of-its-row, i.e. ~15 ms.
+
+**The rate arithmetic that closes the arc.** Residual ≈ 25% of migrated cost.
+The remaining tail is ~90 rows >20 ms ≈ 4.3 s, so finishing it buys
+~25% × 4.3 s ≈ **1.1 s ≈ 4% of wall, for ~90 single-pass rounds**. (M1) targets
+≤15–20 s from ~29 s = **30–45%**. Stopping is not a retreat: the 35 landed
+migrations are behaviour-preserving, deleted ~8 k lines of hand-rolled walker
+recursion, and made the spine the single place per-node checks live — all of
+which is architectural value the INV arc wanted anyway. What is retired is the
+CLAIM that continuing buys speed. Rule written into the queue: **do not migrate
+another tail pass FOR PERFORMANCE; migrate one only when it is on the path of
+another change**, and keep M0.4's migration-pattern zoo as the reference for HOW
+(it is complete — 20+ documented shapes from the round-624 template through
+round 658's ambient-region capture).
+
+Bench TSV carries both medians (`bench/self-compile-tsc.tsv`, label
+`round659 (M0.4-AB) arc A/B`). Suite untouched at 12,507/0/3 (no code change);
+no listAll/partitionCheck run needed for a measurement-only round. NEXT:
+**(M1) identity stability** — (a) attribute the epoch churn (80k of 111k
+narrowing walks run at fresh epochs because the walk's own recordings bump the
+fences), (b) canonicalize narrowing outputs so filters over interned unions
+yield interned results, (c) re-attempt the (f2) per-(reference, flowNode) fold
+SHADOW-FIRST using the round-595 epoch infrastructure. Note for whoever starts
+it: the round-596/599 dead-ends are documented in CLAUDE.md's measured-dead-ends
+section and BOTH were revived-as-blocked pending exactly (b) — canonical types
+are the unblocker, so (b) is the real first step, not (c).
+
 **Round 658 (2026-07-25) — (M0.4) thirty-fifth tail-pass migration:
 checkTypeParamTypedOps (B60.12 — TS2339 / TS2349 / TS2351 for property access,
 call and `new` on a value whose type is an EFFECTIVELY UNCONSTRAINED type
@@ -654,80 +717,6 @@ now 91.8 ms, stays SKIP — cross-file). The usual next step is the #29
 slot-move pre-gate; note the round-651 `--listAll` ×8 captures (46×7/94) are
 the valid PRE baseline for it, since HEAD is that build.
 
-**Round 650 (2026-07-24) — (M0.4) twenty-seventh tail-pass migration:
-checkConstructorParamInInitializers (TS2301 — an instance field initializer
-referencing a ctor param / ctor-body `var`; TS2663 — the parameter-property
-variant "Did you mean the instance member 'this.X'?"; 85.5 ms at the
-round-647 table — the #27 per-file tail pass) is ON THE SPINE; the legacy
-driver + the mutually-recursive
-checkConstructorParamInInitializersInStatements/-InExpr routing recursion
-(~199 lines — whose SOLE job was to REACH every nested class
-declaration/expression) DELETED; the emission leaf
-checkConstructorParamInClassMembers — with its OWN nested-scope-shadowing
-walk of the class's own property initializers — + its helpers survive
-anchor-called at ClassDeclaration/ClassExpression enters (declare-gated).**
-Reach = the memoized MULTI-STATE classifier spineCpStatus/spineCpFold
-reproducing the two deleted walks' arms verbatim: CP_STMT (the InStatements
-walk), CP_EXPR (the InExpr walk), CP_ABODY (an arrow/fn-expr body Block —
-the RESTRICTED walk of only Expression/Return/Variable statements), CP_MEMBER
-(a class-member conduit). Structural compression worth recording: CP_ABODY
-hands its three permitted statement kinds straight to CP_STMT — the CP_STMT
-arms for Expression/Return/Variable statements descend to CP_EXPR IDENTICALLY
-to the legacy inline restricted loop, so the restricted arrow/fn-expr body
-needs NO extra statuses beyond CP_ABODY itself; likewise
-VariableDeclarationList/VariableDeclaration carry CP_STMT as an internal
-label (they reach it only via a VariableStatement, never a for-head — which
-CP_STMT never descends). The DECLARATION-vs-EXPRESSION asymmetry rides the
-two enclosing arms: a reached ClassDeclaration (CP_STMT) gives
-Method/Ctor/Get/Set/PropertyDeclaration → CP_MEMBER (member bodies AND
-property initializers), a reached ClassExpression (CP_EXPR) gives
-PropertyDeclaration → CP_MEMBER ONLY (method/accessor bodies never
-descended); the ClassDeclaration member descent is declare-gated (a `declare
-class` reaches nothing inside) while the ClassExpression property-initializer
-descent is NOT (only the emission is declare-gated — the legacy behavior).
-Fully syntactic — NO ambient sandwich: the emission leaf reads only its
-`fileName` argument + perFileScope (built pre-spine) + KNOWN_GLOBALS, all
-immutable and independent of the spine's per-file ambient. Frozen reach
-quirks pinned both directions: statement BODIES
-(fn/namespace/block/if-then/loop-body/try/catch/switch-clause) reached but
-if/loop/switch HEADS and ternary CONDITIONS not; a class DECLARATION directly
-in an arrow body is NOT reached (the restricted body walk only descends the
-three statement kinds — a ClassDeclaration statement is not one of them)
-while a class EXPRESSION inside a Variable/Return/Expression statement's
-expression IS reached; class-EXPRESSION method bodies never descended.
-CALIBRATION FIND (a real emission-leaf quirk, now pinned both directions —
-NOT a migration change): an EXPRESSION-bodied arrow does NOT collect its
-params for shadowing (only a BLOCK body does), so `field = (param) => param`
-where `param` is a ctor param STILL fires TS2301; the emission leaf is
-unchanged so the behavior is preserved automatically (32/33 pins green on the
-first legacy run — the 33rd was this quirk, corrected to the block-body form
-+ a new expression-body pin). The legacy binderResults driver → the spine's
-partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (46×7/94). Gates: 33
-local pins (M04CtorParamInitSpineMigrationTest) green against the LEGACY pass
-FIRST; suite 12,192 → 12,225/0; `--listAll` ×8 byte-identical (sorted error
-lines; 46×7/94, harness 94); pass table 413 → 412 (the 85.5 ms row gone;
-checkSpine 20.9 s single-run under --passTiming — in-band); warning-clean
-(--rerun-tasks, zero `w:`). M0.4 running total: top TWENTY-SEVEN tail passes
-migrated. SESSION TAIL: the checkAbstractMemberContext (#28, 81.6 ms —
-TS1253 abstract properties + TS1244 abstract methods in a non-abstract
-class + TS7008 abstract property without a type annotation) slot-move
-pre-gate LANDED (moved intact from slot 27f to the post-spine slot; suite
-12,225/0; `--listAll` ×8 byte-identical pre-vs-post on all 8 profiles;
-coupling surface verified self-contained — FULLY SYNTACTIC (member
-modifiers/type/initializer/name + options + `source.indexOf` only; NOT
-type-resolving → no first-touch hazard, so the slot-move needs no empirical
-first-touch check beyond the byte-diff), a downward `inAmbient` flag that is
-re-derivable per class from the ancestor chain, and grep-verified NO pass
-scans/dedups/retracts TS1253/TS1244/TS7008). Scope map for the migrator:
-a class-anchored walk (ClassDeclaration/ClassExpression enters, declare/
-ambient-gated) with the round-532/638 downward-`inAmbient`-flag shape —
-`inAmbient` becomes true at a `declare` class/namespace and stays true
-through descendants; the emission leaf processClassForAbstractContext reads
-only member AST + options + source, so no ambient sandwich is needed. NEXT
-session starts at that migration; after it by cost
-(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
-cross-file).**
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -837,7 +826,17 @@ structural item instead of landing alone.**
   (counted-loop self-% is safepoint-bias-inflated + parallel-crawl savings
   don't move serial-dominated wall — A/B before believing any self entry)
   is in the round-623 session note.
-- [ ] **(M0.4) Migrate the surviving pinned tail** into the spine (the documented
+- [x] **(M0.4) CLOSED at 35 passes by the round-659 arc measurement — see
+  (M0.4-AB) for the number and the verdict. NOT a wall-clock lever: 75% of a
+  migrated pass's cost reappears inside checkSpine (the 35 deleted rows summed
+  3,146 ms; checkSpine grew +2,358 ms), the interleaved arc A/B is +0.24% on
+  compiler / −1.6% on harness = inside the drift band, and finishing the
+  remaining ~90 rows would buy ~1.1 s (~4%) for ~90 rounds. Do NOT migrate
+  another tail pass for performance; migrate one only when it is on the path of
+  another change, and keep this item's migration-pattern zoo as the reference
+  for HOW (it is complete and each shape is documented below).** The original
+  item text, and the per-round record of all 35 migrations, follows —
+  Migrate the surviving pinned tail into the spine (the documented
   migration-pattern zoo), cost-descending; retire dead migration scaffolding as
   it goes (emit-twice arms whose legacy side is gone, the dead m3
   truncation-mark blocks). Post-round-619 this carries the WHOLE tail lever
@@ -1234,29 +1233,34 @@ structural item instead of landing alone.**
   single-pass wall delta (~0.5%) is BELOW the drift band — the per-item
   evidence is the `--passTiming` table (the pass's row gone, checkSpine's row
   not inflated), not an interleaved A/B; A/B the ARC once several passes land.
-- [ ] **(M0.4-AB) PAY THE OWED ARC MEASUREMENT — interleaved A/B of the whole
-  M0.4 migration arc, and decide from it whether to continue the arc or take
-  (M1) next.** Promoted to the queue at round 658 because the arc's own
-  landing rule now bites: 35 passes are migrated, the per-file tail is FLAT
-  (no row above 69 ms = ~0.26% of a ~25 s checker-init), so every further
-  single-pass round is unmeasurable in isolation BY CONSTRUCTION and the only
-  honest evidence left is the arc-level number the M0.4 item promised. Method:
-  build the pre-arc binary (the round-623 HEAD, i.e. the commit before round
-  624's first migration — `git log --oneline --grep "round 624"` to find it;
-  keep BOTH class dirs, do NOT recompile between measurements) and the current
-  HEAD, then run INTERLEAVED B/A pairs on the compiler profile (≥5 pairs,
-  compare MEDIANS — the box drifts within a session, so batch-then-batch is
-  invalid; see the interleaving gotcha) plus one pair on `harness` (the
-  largest profile, where the multiplication tail should show most). Record the
-  row in bench/*.tsv with the label and the pair-by-pair numbers in the
-  session note. THE DECISION this measurement makes: if the arc is paying
-  ≥5% cumulative, finish the remaining >20 ms rows (~90 passes, residual
-  ~4.3 s by the pass table) as a mechanical grind now that the migration-shape
-  zoo is complete and each round is single-attempt; if it is NOT paying (the
-  spine's own row absorbed the tail rather than the work disappearing), STOP
-  the arc at 35 and go to (M1), whose prize is the ≤15–20 s path — an order of
-  magnitude more than the whole remaining tail. Either way write the verdict
-  into the M0.4 item so no future session has to re-derive it.
+- [x] **(M0.4-AB) ARC MEASUREMENT PAID — round 659. VERDICT: STOP the arc at 35
+  passes; (M1) is next.** The number the arc owed since round 624 is in, and it
+  says the migration is NOT a wall-clock lever. Method as queued: pre-arc binary
+  `4b0dfcc7` (round-623 HEAD) vs HEAD `e9d8279d`, both class dirs kept, NO
+  recompile between measurements, alternating within-pair order.
+  **compiler profile, 6 interleaved pairs: pre median 28,945 ms → post 29,015 ms
+  = +0.24%, post wins 3/6** (per-pair deltas −667…+1,190 ms — the noise spread
+  is ~4% of total, an order of magnitude above the effect). **harness profile,
+  2 pairs: 40,256 → 39,605 = −1.6%, post wins 2/2.** So the true effect is a
+  SMALL gain somewhere in 0–2%, entirely inside the ±2% drift band the ground
+  rules refuse to land on.
+  **THE MECHANISM, measured (this is the transferable part): 75% of a migrated
+  pass's cost REAPPEARS INSIDE checkSpine.** Same-run `--passTiming` both sides:
+  the 35 deleted rows summed **3,146 ms**, while checkSpine grew
+  **18,896 → 21,253 = +2,358 ms**. The tail was NOT redundant traversal that a
+  single walk eliminates — it is per-node work that a single walk still has to
+  do, now as ~35 `when (kindId)` dispatches plus memoized ancestor-climb reach
+  classifiers on EVERY node of EVERY file. The multiplication moved from "N
+  walks over the tree" to "N dispatches per node", which is the same order.
+  **THE RATE ARITHMETIC that closes the arc:** the residual is ~25% of migrated
+  cost. The remaining tail is ~90 rows >20 ms ≈ 4.3 s, so finishing it buys
+  ~25% × 4.3 s ≈ **1.1 s ≈ 4% of wall — for ~90 single-pass rounds.** (M1)
+  targets ≤15–20 s from ~29 s = **30–45%**. The arc stops here; the 35 landed
+  migrations keep their real value (they are behaviour-preserving, they deleted
+  ~8 k lines of walker recursion, and the spine is now the single place per-node
+  checks live), but no further pass is migrated FOR PERFORMANCE. Migrate one
+  only when it is on the path of another change. Bench TSV rows carry both
+  medians; the per-pair numbers are in the round-659 session note.
 - [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
   path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
   existence proof that the (f2) fold works once types are canonical).
