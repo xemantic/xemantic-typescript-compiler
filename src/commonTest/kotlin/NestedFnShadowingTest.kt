@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -44,7 +45,7 @@ import kotlin.test.Test
  */
 class NestedFnShadowingTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
     private fun ts2554(r: CompilationResult) = r.diagnostics.filter { it.code == 2554 }

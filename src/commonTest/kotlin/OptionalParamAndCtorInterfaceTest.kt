@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -46,7 +47,7 @@ import kotlin.test.Test
  */
 class OptionalParamAndCtorInterfaceTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
     private val tok = """

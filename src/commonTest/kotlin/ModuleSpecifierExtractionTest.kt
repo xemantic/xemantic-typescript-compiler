@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -38,7 +39,7 @@ import kotlin.test.Test
  */
 class ModuleSpecifierExtractionTest {
 
-    private fun specifiersOf(source: String, fileName: String = "/proj/test.ts"): Set<String> =
+    private fun specifiersOf(@Language("typescript") source: String, fileName: String = "/proj/test.ts"): Set<String> =
         Parser(source, fileName).parse().moduleSpecifiers.toSet()
 
     @Test

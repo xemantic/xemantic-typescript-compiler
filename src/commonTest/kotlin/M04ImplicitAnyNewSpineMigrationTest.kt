@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -62,7 +63,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
 
     private fun ts7009(ds: List<Diagnostic>) = ds.count { it.code == 7009 }
 
-    private fun run(body: String, directives: String = "// @strict: true", fileName: String = "t.ts") =
+    private fun run(@Language("typescript") body: String, directives: String = "// @strict: true", fileName: String = "t.ts") =
         diagnose(prelude + body.trimIndent(), directives, fileName)
 
     // ── Core emission + the leaf's own gates ──────────────────────────────

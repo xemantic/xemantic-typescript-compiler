@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -47,7 +48,7 @@ import kotlin.test.Test
  */
 class FlowCalleeNonNullishInferenceTest {
 
-    private fun build(checkerSource: String): ProjectCompiler.Result {
+    private fun build(@Language("typescript") checkerSource: String): ProjectCompiler.Result {
         val vfs = InMemoryVfs(
             mapOf(
                 "/proj/tsconfig.json" to

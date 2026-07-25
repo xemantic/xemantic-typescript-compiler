@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -44,14 +45,14 @@ import kotlin.test.Test
  */
 class ImplicitReturnGatesTest {
 
-    private fun assertNone(header: String, source: String, codes: Set<Int>, what: String) {
+    private fun assertNone(@Language("typescript") header: String, source: String, codes: Set<Int>, what: String) {
         have(
             diagnose(source, directives = header).none { it.code in codes },
             "$what must not draw ${codes.joinToString { "TS$it" }}",
         )
     }
 
-    private fun assertHas(header: String, source: String, code: Int, what: String) {
+    private fun assertHas(@Language("typescript") header: String, source: String, code: Int, what: String) {
         have(
             diagnose(source, directives = header).any { it.code == code },
             "$what must draw TS$code",

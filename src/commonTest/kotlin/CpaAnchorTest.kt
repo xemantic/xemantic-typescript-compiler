@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -39,7 +40,7 @@ import kotlin.test.Test
  */
 class CpaAnchorTest {
 
-    private fun count2339(source: String): Int =
+    private fun count2339(@Language("typescript") source: String): Int =
         diagnose(source).count { it.code == 2339 }
 
     @Test

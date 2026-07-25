@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -51,13 +52,13 @@ import kotlin.test.Test
  */
 class UndefinedVsUnionTargetsTest {
 
-    private fun assertClean(source: String, what: String) {
+    private fun assertClean(@Language("typescript") source: String, what: String) {
         diagnose(source) should {
             have(none { it.code == 2322 || it.code == 2345 }, "$what must not error")
         }
     }
 
-    private fun assertRejects(source: String, code: Int, what: String) {
+    private fun assertRejects(@Language("typescript") source: String, code: Int, what: String) {
         diagnose(source) should {
             have(any { it.code == code }, "$what must still reject with TS$code")
         }

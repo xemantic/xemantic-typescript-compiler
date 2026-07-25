@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -47,7 +48,7 @@ import kotlin.test.Test
  */
 class DeepExpressionChainTest {
 
-    private fun compileExpectingNoOverflow(source: String): CompilationResult {
+    private fun compileExpectingNoOverflow(@Language("typescript") source: String): CompilationResult {
         val result = TypeScriptCompiler().compile(source, "deepChain.ts")
         // TS2589 at position 0 is the init boundary guard's overflow report
         // (reportCheckerStackOverflow) — a masked StackOverflowError, not a pass.

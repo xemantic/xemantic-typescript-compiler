@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -44,10 +45,10 @@ import kotlin.test.Test
  */
 class EmptyArrayAssignmentTypeTest {
 
-    private fun diagnosticsOf(source: String, name: String = "arr.ts") =
+    private fun diagnosticsOf(@Language("typescript") source: String, name: String = "arr.ts") =
         TypeScriptCompiler().compile(source, name).diagnostics
 
-    private fun assertNo2349(source: String) {
+    private fun assertNo2349(@Language("typescript") source: String) {
         diagnosticsOf(source) should {
             have(none { it.code == 2349 })
         }

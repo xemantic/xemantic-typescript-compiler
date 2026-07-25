@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -39,7 +40,7 @@ import kotlin.test.Test
  */
 class LogicalAssignmentDownlevelTest {
 
-    private fun js(source: String, target: String = "es2020"): String =
+    private fun js(@Language("typescript") source: String, target: String = "es2020"): String =
         TypeScriptCompiler().compile("// @target: $target\n$source").javascript
             ?: error("no javascript output")
 

@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -57,8 +58,8 @@ class M04TypeParamTypedOpsSpineMigrationTest {
     private fun ts2349(ds: List<Diagnostic>) = ds.count { it.code == 2349 }
     private fun ts2351(ds: List<Diagnostic>) = ds.count { it.code == 2351 }
 
-    private fun run(body: String) = diagnose(body.trimIndent(), "// @strict: true")
-    private fun runNonStrict(body: String) = diagnose(body.trimIndent(), "// @strict: false")
+    private fun run(@Language("typescript") body: String) = diagnose(body.trimIndent(), "// @strict: true")
+    private fun runNonStrict(@Language("typescript") body: String) = diagnose(body.trimIndent(), "// @strict: false")
 
     // ── The three emissions ───────────────────────────────────────────────
 

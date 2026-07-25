@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -61,7 +62,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
 
     private fun ts2815(ds: List<Diagnostic>) = ds.count { it.code == 2815 }
 
-    private fun run(body: String) = diagnose(body.trimIndent(), "// @target: esnext")
+    private fun run(@Language("typescript") body: String) = diagnose(body.trimIndent(), "// @target: esnext")
 
     // ── Core emissions ────────────────────────────────────────────────────
 

@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.sameAs
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -70,7 +71,7 @@ class CrlfSameAsIssueTest {
      * Structure: source echo section (LF endings) followed by JS output section (CRLF endings).
      * This mirrors the real files in `typescript-repo/tests/baselines/reference/`.
      */
-    private fun makeBaseline(jsLine: String): String = buildString {
+    private fun makeBaseline(@Language("typescript") jsLine: String): String = buildString {
         // Source echo: LF endings (preserved from the original .ts file)
         append("//// [example.ts]\n")
         append("export const x = 1;\n")

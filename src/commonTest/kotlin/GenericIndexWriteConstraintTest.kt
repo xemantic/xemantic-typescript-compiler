@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -44,7 +45,7 @@ import kotlin.test.Test
  */
 class GenericIndexWriteConstraintTest {
 
-    private fun has2862(source: String) = diagnose(source).any { it.code == 2862 }
+    private fun has2862(@Language("typescript") source: String) = diagnose(source).any { it.code == 2862 }
 
     @Test
     fun `assign over T extends object - no TS2862`() {

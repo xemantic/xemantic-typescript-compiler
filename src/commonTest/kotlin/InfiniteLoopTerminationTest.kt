@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -44,14 +45,14 @@ import kotlin.test.Test
  */
 class InfiniteLoopTerminationTest {
 
-    private fun assertNoImplicitReturn(source: String, what: String) {
+    private fun assertNoImplicitReturn(@Language("typescript") source: String, what: String) {
         have(
             diagnose(source).none { it.code == 2366 || it.code == 7030 || it.code == 2355 },
             "$what must not draw TS2366/TS7030/TS2355",
         )
     }
 
-    private fun assertImplicitReturn(source: String, what: String) {
+    private fun assertImplicitReturn(@Language("typescript") source: String, what: String) {
         have(diagnose(source).any { it.code == 2366 }, "$what must draw TS2366")
     }
 

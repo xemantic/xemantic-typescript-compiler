@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -42,7 +43,7 @@ import kotlin.test.Test
  */
 class ContextualFnMemberParamsTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
     private val iface = """
@@ -54,7 +55,7 @@ class ContextualFnMemberParamsTest {
         }
     """.trimIndent()
 
-    private fun assertNo7006(source: String, what: String) {
+    private fun assertNo7006(@Language("typescript") source: String, what: String) {
         compile(source).diagnostics should {
             have(none { it.code == 7006 }, "$what must not draw TS7006")
         }

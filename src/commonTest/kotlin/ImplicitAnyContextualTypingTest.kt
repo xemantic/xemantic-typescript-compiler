@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -52,7 +53,7 @@ import kotlin.test.Test
  */
 class ImplicitAnyContextualTypingTest {
 
-    private fun ts7006Params(source: String): List<String> =
+    private fun ts7006Params(@Language("typescript") source: String): List<String> =
         diagnose(source).filter { it.code == 7006 }
             .map { it.message.removePrefix("Parameter '").substringBefore("'") }
 

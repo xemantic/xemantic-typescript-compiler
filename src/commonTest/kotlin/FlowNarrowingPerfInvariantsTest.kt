@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -48,7 +49,7 @@ import kotlin.test.Test
  */
 class FlowNarrowingPerfInvariantsTest {
 
-    private fun build(source: String): ProjectCompiler.Result {
+    private fun build(@Language("typescript") source: String): ProjectCompiler.Result {
         val vfs = InMemoryVfs(
             mapOf(
                 "/proj/src/main.ts" to source,

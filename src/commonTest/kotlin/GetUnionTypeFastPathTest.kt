@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -41,7 +42,7 @@ import kotlin.test.Test
 class GetUnionTypeFastPathTest {
 
     // The SOURCE display of the TS2322 for `let <t>: <bad> = arr[0];`.
-    private fun sourceDisplay(arrayLiteral: String, targetType: String): String? =
+    private fun sourceDisplay(@Language("typescript") arrayLiteral: String, targetType: String): String? =
         diagnose("const arr = $arrayLiteral; let t: $targetType = arr[0];")
             .firstOrNull { it.code == 2322 }
             ?.message

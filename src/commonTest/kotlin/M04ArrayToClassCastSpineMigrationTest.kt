@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -65,7 +66,7 @@ class M04ArrayToClassCastSpineMigrationTest {
         d.code == 2352 && d.messageChain.any { it.contains("is missing in type") }
     }
 
-    private fun run(body: String) = diagnose(body.trimIndent(), "// @target: esnext")
+    private fun run(@Language("typescript") body: String) = diagnose(body.trimIndent(), "// @target: esnext")
 
     /** A generic class with one required property — the canonical target. */
     private val cls = """

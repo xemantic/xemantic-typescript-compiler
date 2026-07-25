@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -46,15 +47,15 @@ import kotlin.test.Test
  */
 class FlowAssignmentNarrowingTest {
 
-    private fun diagnosticsOf(source: String) =
+    private fun diagnosticsOf(@Language("typescript") source: String) =
         TypeScriptCompiler().compile(source, "flowassign.ts").diagnostics
 
-    private fun assertNone(source: String, vararg codes: Int) {
+    private fun assertNone(@Language("typescript") source: String, vararg codes: Int) {
         val hits = diagnosticsOf(source).filter { it.code in codes.toSet() }
         have(hits.isEmpty())
     }
 
-    private fun assertSome(source: String, vararg codes: Int) {
+    private fun assertSome(@Language("typescript") source: String, vararg codes: Int) {
         val diags = diagnosticsOf(source)
         have(diags.any { it.code in codes.toSet() }, "negative control lost")
     }

@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -42,7 +43,7 @@ import kotlin.test.Test
  */
 class RealLibsTs2728FileTest {
 
-    private fun related(source: String): List<Diagnostic> =
+    private fun related(@Language("typescript") source: String): List<Diagnostic> =
         TypeScriptCompiler().compile(source, "t.ts").diagnostics
             .flatMap { it.relatedInformation }
             .filter { it.code == 2728 }

@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -47,7 +48,7 @@ class TypesAcquisitionTest {
      * `index.d.ts` fallback) declare ambient globals and are never imported —
      * only type acquisition can pull their files into the program.
      */
-    private fun project(tsconfig: String, extra: Map<String, String> = emptyMap()) = InMemoryVfs(
+    private fun project(@Language("typescript") tsconfig: String, extra: Map<String, String> = emptyMap()) = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to tsconfig,
             "/proj/src/index.ts" to "export const total: number = gadget + widget;",

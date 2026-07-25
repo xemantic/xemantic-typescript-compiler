@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -274,7 +275,7 @@ class M04DeleteOpSpineMigrationTest {
 
     // ── Reached positions (TS2703 as the reach signal, non-strict) ─────────
 
-    private fun reach(source: String, expected: Int = 1) {
+    private fun reach(@Language("typescript") source: String, expected: Int = 1) {
         val ds = diagnose(
             "declare var x: any;\ndeclare var obj: any;\n" + source.trimIndent(),
             directives = "// @strict: false"

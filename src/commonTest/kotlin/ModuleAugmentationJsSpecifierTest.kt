@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -40,7 +41,7 @@ import kotlin.test.Test
  */
 class ModuleAugmentationJsSpecifierTest {
 
-    private fun compile(source: String, primary: String = "services/types.ts") =
+    private fun compile(@Language("typescript") source: String, primary: String = "services/types.ts") =
         TypeScriptCompiler().compile(source.trimIndent(), primary).diagnostics
 
     @Test

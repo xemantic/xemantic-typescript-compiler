@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -42,7 +43,7 @@ import kotlin.test.Test
  */
 class AssertsBarrelResolutionTest {
 
-    private fun project(mainBody: String) = InMemoryVfs(
+    private fun project(@Language("typescript") mainBody: String) = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to """
                 { "compilerOptions": { "strict": true, "module": "nodenext" }, "include": ["src/**/*.ts"] }

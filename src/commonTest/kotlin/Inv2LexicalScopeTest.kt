@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -44,7 +45,7 @@ import kotlin.test.assertNotNull
  */
 class Inv2LexicalScopeTest {
 
-    private fun bind(source: String, fileName: String = "t.ts"): BinderResult {
+    private fun bind(@Language("typescript") source: String, fileName: String = "t.ts"): BinderResult {
         val sourceFile = Parser(source.trimIndent(), fileName).parse()
         return Binder(CompilerOptions()).bind(sourceFile)
     }

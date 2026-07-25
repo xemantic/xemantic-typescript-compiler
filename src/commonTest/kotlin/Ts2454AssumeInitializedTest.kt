@@ -23,6 +23,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -48,10 +49,10 @@ import kotlin.test.Test
  */
 class Ts2454AssumeInitializedTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
-    private fun ts2454s(source: String) =
+    private fun ts2454s(@Language("typescript") source: String) =
         compile(source).diagnostics.filter { it.code == 2454 }
 
     /** tsc's `(sourceStack ??= []).push(…)` in a nested closure: the `??=` is a
