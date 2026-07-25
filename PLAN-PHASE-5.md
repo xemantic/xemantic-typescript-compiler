@@ -20,6 +20,62 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 672 (2026-07-25) — the owner authorised a network install, the emit-diff
+gate went LIVE, and its FIRST RUN falsified my own round-669 conclusion within
+minutes. Fixing what it exposed took const-enum inlining from 1,618 to 17,443
+reads and byte-identical files from 9 to 31 of 78.** This is the largest
+emit-parity movement in the project's history, and none of it was findable
+offline.
+
+**EP.0 (the gate).** Node v24.18.0 + `typescript@6.0.3` installed under
+`build/tools` — tarball rather than apt, so no system mutation, and `build/` is
+gitignored so no binaries enter the repo. `scripts/emit-diff-tsc.sh` runs.
+
+**It immediately contradicted me.** Round 669 reported that EP.1 had "ZERO
+effect on the tsc profiles" and that the profile "already inlines everything". I
+had grepped the emitted dist for residual `ts_[0-9]+\.X\.Y` — a pattern that
+requires digits straight after `ts_`, while the real barrel alias is **`ts_js_1`**.
+It matched nothing and I read that as "no residual". The gate's first run:
+**xtsc 1,618 inlined const-enum reads vs tsc 18,118.** The lesson is not subtle
+and I want it recorded plainly: **I hand-rolled a pattern instead of using the
+tool built for the job, and shipped a confidently wrong conclusion that stood
+for three rounds.** The tool existed; it just could not run, and I substituted a
+guess for it rather than saying "unmeasurable here".
+
+**The real root cause, once visible.** `constEnumSymbolThroughStars` (round 669)
+resolved the IMPORT specifier via `resolveModuleSpecifier`/`-Relative`, neither
+of which strips `.js`. tsc's own layout imports barrels as ESM
+`./_namespaces/ts.js`, and those barrels re-export `../core.js` — so the helper
+could not resolve tsc's layout AT ALL. It only ever worked on the extensionless
+repro I had written it against, which is exactly the trap CLAUDE.md warns about
+("the tsc-source profiles CANNOT catch this class... verify with a path-shaped
+scratch project"), inverted: my scratch project could not catch the tsc class.
+Fixed by reusing `resolveBarrelStarTarget` — the tested `.js`/`.jsx`-stripping
+resolver the star-follower already uses internally.
+
+**Measured (compiler profile, the gate):**
+
+    const-enum inlined reads   1,618 → 17,443   (tsc 18,118 — ~96% of the gap closed)
+    byte-identical files           9 → 31 / 78  (3.4×)
+    differing files               69 → 47 / 78
+    logical-assign operators   xtsc 15 vs tsc 15 (EP.3 confirmed at parity)
+
+**Gates:** suite 12,520/0 (3 skipped) with every JS baseline still byte-exact —
+the corpus is the emit gate and it did not budge; `--listAll` ×8 byte-identical
+on all eight profiles, so no diagnostic moved; warning-clean.
+
+**Also, a self-inflicted scare worth logging:** my queue-edit script did
+`open(p,"w").write(open(p).read().replace(...))` — the `"w"` TRUNCATES before
+the nested read runs, so PLAN-PHASE-5.md went to 0 bytes. Recovered instantly
+with `git checkout` because the code fix had already been committed separately.
+Two habits paid off: commit the code before touching the docs, and never nest a
+read inside a write of the same path.
+
+**NEXT: EP.2** is now unblocked and is the largest remaining family — 47/78
+files still differ with const-enum 96% closed, so most of that is formatting
+(tsc puts a wrapped ternary's `:` at line start; xtsc trails it). Residual
+const-enum gap is 675 reads.
+
 **Round 671 (2026-07-25) — the queue boundary VERIFIED, and the last live
 non-backlog item turned out to be a stale checkbox. Phase 17's offline work is
 complete; what remains needs an owner decision.** Round 670 suggested the queue
@@ -441,56 +497,6 @@ Arc position after five rounds of M1: the queue's original "≤15–20 s path"
 (30–45%) was retired at round 660 in favour of a measured ~3.3 s, corrected to
 ~2.5 s at round 662, of which this round banks 0.83 s. The remaining (d) is the
 expression memo, and it is now the last M1 item.
-
-**Round 663 (2026-07-25) — (M1)(b2) MEASURED AND DROPPED: the canonical-output
-prize is ~0.1 s reachable, because 76% of it sits behind object-type freshness
-the relation engine deliberately depends on. (c) goes straight to the live walk
-memo.** Round 662 queued (b2) with an explicit "re-measure before investing"
-instruction; this round paid that and the instruction earned its keep.
-
-**Where the prize was hiding.** The expression shadow admits only
-instance-stable result kinds (Intrinsic / Interface / Reference) *because* unions
-and literal types are freshly minted per call — which IS the non-canonical-output
-problem, and it means those calls were never in the memo's denominator at all.
-Counting every `getTypeOfExpression` call by result kind: intrinsic 331,636,
-iface 125,683, **obj 102,102**, ref 27,309, union2 24,498, union3 3,773,
-Intersection 1,719, union7 1,165 … So the whitelist admits 484,628 (exactly the
-shadowMemo denominator, a nice self-check) and EXCLUDES ~134 k calls (22%).
-
-**The prize, and then the deciding split.** Of the excluded calls, **62,949 are
-same-epoch STRUCTURAL repeats** — freshly minted but structurally equal, so
-interning the output would make them servable — against only 347 that genuinely
-differ. That looks like ~0.45 s at the shadow's ~7.2 µs/hit. But split by kind it
-collapses: **obj = 47,629 (76%)**, unions ≈ 12.7 k, Intersection 495. Object-type
-freshness is DELIBERATELY load-bearing — the round-435 `freshObjLitRange`
-relation machinery depends on it, and the whitelist's own comment says so — so
-that 47.6 k / ~0.34 s half is unavailable without reopening relation semantics.
-The safely internable union+intersection remainder is ~13.2 k ≈ **~0.1 s**.
-
-**Verdict: drop (b2).** ~0.1 s of reachable gain, with its larger half gated
-behind semantics we depend on, against a ~1.4 s live walk memo that is already
-sound at `depServeWrong` = 0. Revisit only if union interning becomes desirable
-for another reason (INV.5 canonical types would subsume it anyway). This is the
-fourth consecutive round where measuring first changed the plan — and the second
-where it *cancelled* work rather than resizing it.
-
-**(c) is now an implementation task, not a research one**, and round 663 also
-banked the three hazards it must handle, all found while reasoning about going
-live: (i) **the walk is not pure** — it can trip `flowDepthTripped` → TS2563 via
-`reportFlowControlError`, and it consumes the global visit BUDGET, so a served
-hit changes both; the conservative rule is do not memoize a walk that tripped,
-and note a served hit consumes no budget so trips should become RARER, never more
-frequent (`--listAll` ×8 is the gate); (ii) the wrapper is generic and
-`isAssignedAtFlow` returns Boolean while the others return Type, so the cache
-stores `Any?` and casts — sound ONLY because `walkKind` is part of the key, which
-must be documented at the cast; (iii) the `inputId` fold is lossy in principle
-(32-bit path hash), so keep the shadow classification available under
-`--passTiming` so a collision surfaces as a wrong serve instead of silently. And
-unlike every M0.4 round, ~1.4 s ≈ 5% is ABOVE the drift band, so (c) owes a real
-interleaved A/B.
-
-Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — every counter added
-this round is behind `--passTiming`; warning-clean.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1207,7 +1213,16 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   `LogicalAssignmentDownlevelTest` only. KNOWN RESIDUAL: a `??=` target BELOW ES2020
   keeps a native `??` (not further downleveled — ES2020 is the tested/dashboard
   target); close when a sub-ES2020 `??=` case appears.
-- [ ] **EP.2 Multi-line expression printer formatting** — **BLOCKED OFFLINE
+- [ ] **EP.2 Multi-line expression printer formatting — UNBLOCKED round 672**
+  (the emit-diff gate is live, which its own text required), and it is now the
+  LARGEST remaining emit-parity family: 47/78 files still differ while the
+  const-enum family is 96% closed, so most of that residual is formatting. The
+  shape is visible in the utilities.js diff — tsc puts a wrapped ternary's `:`
+  at LINE START (`? [...]` / newline / `: [`) where xtsc trails it at line end.
+  Corpus-regression risk is real (this is the printer the 12,520-test corpus
+  pins), so: one placement rule per commit, full suite after each, and re-run
+  the gate to confirm the diff SHRINKS rather than merely changes.
+  SUPERSEDED NOTE: — **WAS BLOCKED OFFLINE
   (round 667).** Its own text requires "the emit-diff gate in place", and that
   gate needs a reference tsc: this box has **no `node`, no `npx`, no `tsc`, and
   no `tsc.js` anywhere** (the bench-history tsc/tsgo columns come from CI, not
@@ -1238,7 +1253,18 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   chain and two negative controls for regular enums and
   preserveConstEnums/isolatedModules); suite 12,520/0 with every JS baseline
   byte-exact; `--listAll` ×8 byte-identical.
-- [ ] **EP.0 Wire the emit-diff gate into the dashboard** — **BLOCKED OFFLINE
+- [x] **EP.0 DONE round 672 — the gate is LIVE (owner authorised the network
+  install).** Node v24.18.0 + `typescript@6.0.3` under `build/tools`
+  (gitignored; tarball, not apt — no system mutation). Run it with
+  `scripts/emit-diff-tsc.sh --ref-tsc build/tools/tsc-ref/node_modules/.bin/tsc`
+  (put `build/tools/node/bin` on PATH first). The reference is npm tsc 6.0.3
+  against a pinned repo whose package.json says 6.0.0, so the three FAMILY
+  counts are trustworthy (version-stable behaviours) while the small residual
+  tail carries version noise — building tsc at the pinned commit remains the
+  ideal and is still open. Its FIRST RUN earned its keep by falsifying round
+  669 (see EP.1). Baseline at round 672: **31/78 byte-identical**, const-enum
+  reads 17,443 vs tsc 18,118, logical-assign 15 vs 15.
+  SUPERSEDED NOTE: — **WAS BLOCKED OFFLINE
   (round 667): there is no reference tsc on this box** (no node/npx/tsc/tsc.js;
   `scripts/emit-diff-tsc.sh` exists but cannot run). Unblocking needs either a
   network install of node + `typescript`, or building tsc at the pinned commit —

@@ -1,3 +1,53 @@
+**Round 663 (2026-07-25) — (M1)(b2) MEASURED AND DROPPED: the canonical-output
+prize is ~0.1 s reachable, because 76% of it sits behind object-type freshness
+the relation engine deliberately depends on. (c) goes straight to the live walk
+memo.** Round 662 queued (b2) with an explicit "re-measure before investing"
+instruction; this round paid that and the instruction earned its keep.
+
+**Where the prize was hiding.** The expression shadow admits only
+instance-stable result kinds (Intrinsic / Interface / Reference) *because* unions
+and literal types are freshly minted per call — which IS the non-canonical-output
+problem, and it means those calls were never in the memo's denominator at all.
+Counting every `getTypeOfExpression` call by result kind: intrinsic 331,636,
+iface 125,683, **obj 102,102**, ref 27,309, union2 24,498, union3 3,773,
+Intersection 1,719, union7 1,165 … So the whitelist admits 484,628 (exactly the
+shadowMemo denominator, a nice self-check) and EXCLUDES ~134 k calls (22%).
+
+**The prize, and then the deciding split.** Of the excluded calls, **62,949 are
+same-epoch STRUCTURAL repeats** — freshly minted but structurally equal, so
+interning the output would make them servable — against only 347 that genuinely
+differ. That looks like ~0.45 s at the shadow's ~7.2 µs/hit. But split by kind it
+collapses: **obj = 47,629 (76%)**, unions ≈ 12.7 k, Intersection 495. Object-type
+freshness is DELIBERATELY load-bearing — the round-435 `freshObjLitRange`
+relation machinery depends on it, and the whitelist's own comment says so — so
+that 47.6 k / ~0.34 s half is unavailable without reopening relation semantics.
+The safely internable union+intersection remainder is ~13.2 k ≈ **~0.1 s**.
+
+**Verdict: drop (b2).** ~0.1 s of reachable gain, with its larger half gated
+behind semantics we depend on, against a ~1.4 s live walk memo that is already
+sound at `depServeWrong` = 0. Revisit only if union interning becomes desirable
+for another reason (INV.5 canonical types would subsume it anyway). This is the
+fourth consecutive round where measuring first changed the plan — and the second
+where it *cancelled* work rather than resizing it.
+
+**(c) is now an implementation task, not a research one**, and round 663 also
+banked the three hazards it must handle, all found while reasoning about going
+live: (i) **the walk is not pure** — it can trip `flowDepthTripped` → TS2563 via
+`reportFlowControlError`, and it consumes the global visit BUDGET, so a served
+hit changes both; the conservative rule is do not memoize a walk that tripped,
+and note a served hit consumes no budget so trips should become RARER, never more
+frequent (`--listAll` ×8 is the gate); (ii) the wrapper is generic and
+`isAssignedAtFlow` returns Boolean while the others return Type, so the cache
+stores `Any?` and casts — sound ONLY because `walkKind` is part of the key, which
+must be documented at the cast; (iii) the `inputId` fold is lossy in principle
+(32-bit path hash), so keep the shadow classification available under
+`--passTiming` so a collision surfaces as a wrong serve instead of silently. And
+unlike every M0.4 round, ~1.4 s ≈ 5% is ABOVE the drift band, so (c) owes a real
+interleaved A/B.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — every counter added
+this round is behind `--passTiming`; warning-clean.
+
 **Round 662 (2026-07-25) — (M1)(b1) ANSWERED WITHOUT BUILDING IT: the 165 wrong
 serves were a KEY COLLISION, not a dependency gap. `depServeWrong` is now 0, the
 dependency-keyed fence is SOUND as it stands — and the prize corrects down again,
