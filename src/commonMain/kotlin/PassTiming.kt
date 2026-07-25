@@ -192,7 +192,7 @@ object PassTiming {
         relationNanos = 0; typeNodeNanos = 0; memberResolveNanos = 0
         walkRepeatIdentical = 0; walkRepeatStructuralUnion = 0; walkRepeatDiff = 0; walkMiss = 0
         walkRepeatNanos = 0
-        walkMemoServed = 0; walkMissCold = 0; walkMissEpochIdentical = 0; walkMissEpochStructural = 0
+        walkMemoServed = 0; exprSavableNanos = 0; exprSavableCalls = 0; walkMissCold = 0; walkMissEpochIdentical = 0; walkMissEpochStructural = 0
         walkMissEpochDiff = 0; walkMissEpochDeltaSum = 0
         epochBumps.clear(); epochBlame.clear(); epochNoops.clear()
         depServeIdentical = 0; depServeStructural = 0; depServeWrong = 0
@@ -259,6 +259,16 @@ object PassTiming {
     // that reference: an epoch-invalidated repeat whose recomputed result is
     // IDENTICAL is a fence that is too coarse, i.e. directly recoverable by
     // splitting read-relevant from record-only state (or fencing per map).
+    /** (M1)(d) round 665: what a LIVE expression memo would actually save —
+     *  the core-compute time of calls the shadow would have SERVED, counted
+     *  only at the OUTERMOST such call so nested servable calls are not
+     *  double-counted (serving an outer call skips its whole subtree). This is
+     *  the measure-before-building number round 664 insisted on: the walk memo
+     *  netted 60% of its shadow estimate once per-call overhead was paid, and
+     *  the expression path has ~6x the calls at a fraction of the cost each. */
+    var exprSavableNanos: Long = 0
+    var exprSavableCalls: Long = 0
+
     /** (M1)(c) round 664: LIVE memo serves (walks skipped entirely). */
     var walkMemoServed: Long = 0
     var walkMissCold: Long = 0
@@ -509,6 +519,7 @@ object PassTiming {
             depWrongSamples.joinToString("") { "   wrongSample: $it\n" } +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
+            "exprMemo would-save: ${exprSavableNanos / 1_000_000}ms over $exprSavableCalls outermost served calls\n" +
             "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +
             "typeOfExpr repeats: same-result=$typeOfExprRepeatSame diff-result=$typeOfExprRepeatDiff " +
                 "(memoizable fraction of repeats: ${if (typeOfExprRepeatSame + typeOfExprRepeatDiff > 0) typeOfExprRepeatSame * 100 / (typeOfExprRepeatSame + typeOfExprRepeatDiff) else 0}%)\n" +

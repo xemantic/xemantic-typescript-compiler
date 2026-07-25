@@ -350,6 +350,10 @@ class Checker(
     )
     private val walkMemo = HashMap<Long, WalkMemoEntry>()
 
+    /** (M1)(d) round 665: outermost-only guard for the expression memo's
+     *  would-save measurement. Declared BEFORE `init` (the init-order trap). */
+    private var exprSavableGuard = false
+
     private var tnProbeDepth = 0
     private var mrProbeDepth = 0
 
@@ -103351,9 +103355,26 @@ interface DataView {
         // INV.0 recompute-factor counter — inert unless --passTiming enabled it.
         if (PassTiming.enabled) {
             PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
+            // (M1)(d) round 665: would a LIVE memo have served THIS call? The
+            // test is exactly the live one (a CONFIRMED entry at the current
+            // epoch) and is made BEFORE the core runs, so the time measured is
+            // precisely what serving would have skipped — subtree included. The
+            // guard keeps only the OUTERMOST servable call, since serving it
+            // would skip its nested servable calls too.
+            val eid = (expr as NodeBase).nodeId
+            val wouldServe = !exprSavableGuard && eid >= 0 &&
+                shadowExprMemo[eid]?.first == spineExprEpoch && eid in shadowConfirmed
+            if (wouldServe) exprSavableGuard = true
             val t0 = PassTiming.nowNanos()
-            val r = getTypeOfExpressionCore(expr)
-            PassTiming.typeOfExprNanos += PassTiming.nowNanos() - t0
+            val r = try { getTypeOfExpressionCore(expr) } finally {
+                if (wouldServe) exprSavableGuard = false
+            }
+            val dt = PassTiming.nowNanos() - t0
+            PassTiming.typeOfExprNanos += dt
+            if (wouldServe) {
+                PassTiming.exprSavableNanos += dt
+                PassTiming.exprSavableCalls++
+            }
             PassTiming.noteTypeOfExprResult(expr.pos, expr.end, r)
             // (f1b-i): the SHADOW memo — classify each repeat vs the live
             // recompute; hitWRONG = an invalidation-surface gap. Object/array
