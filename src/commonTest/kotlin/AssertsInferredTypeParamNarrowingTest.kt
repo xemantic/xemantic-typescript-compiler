@@ -133,7 +133,7 @@ class AssertsInferredTypeParamNarrowingTest {
     }
 
     @Test
-    fun noAssertStillFires() {
+    fun `negative control - without the assert the signal still fires`() {
         diagnose(
             prelude + """
             export function h(node: FnDecl): string {
