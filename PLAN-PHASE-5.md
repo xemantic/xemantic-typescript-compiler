@@ -1234,6 +1234,29 @@ structural item instead of landing alone.**
   single-pass wall delta (~0.5%) is BELOW the drift band — the per-item
   evidence is the `--passTiming` table (the pass's row gone, checkSpine's row
   not inflated), not an interleaved A/B; A/B the ARC once several passes land.
+- [ ] **(M0.4-AB) PAY THE OWED ARC MEASUREMENT — interleaved A/B of the whole
+  M0.4 migration arc, and decide from it whether to continue the arc or take
+  (M1) next.** Promoted to the queue at round 658 because the arc's own
+  landing rule now bites: 35 passes are migrated, the per-file tail is FLAT
+  (no row above 69 ms = ~0.26% of a ~25 s checker-init), so every further
+  single-pass round is unmeasurable in isolation BY CONSTRUCTION and the only
+  honest evidence left is the arc-level number the M0.4 item promised. Method:
+  build the pre-arc binary (the round-623 HEAD, i.e. the commit before round
+  624's first migration — `git log --oneline --grep "round 624"` to find it;
+  keep BOTH class dirs, do NOT recompile between measurements) and the current
+  HEAD, then run INTERLEAVED B/A pairs on the compiler profile (≥5 pairs,
+  compare MEDIANS — the box drifts within a session, so batch-then-batch is
+  invalid; see the interleaving gotcha) plus one pair on `harness` (the
+  largest profile, where the multiplication tail should show most). Record the
+  row in bench/*.tsv with the label and the pair-by-pair numbers in the
+  session note. THE DECISION this measurement makes: if the arc is paying
+  ≥5% cumulative, finish the remaining >20 ms rows (~90 passes, residual
+  ~4.3 s by the pass table) as a mechanical grind now that the migration-shape
+  zoo is complete and each round is single-attempt; if it is NOT paying (the
+  spine's own row absorbed the tail rather than the work disappearing), STOP
+  the arc at 35 and go to (M1), whose prize is the ≤15–20 s path — an order of
+  magnitude more than the whole remaining tail. Either way write the verdict
+  into the M0.4 item so no future session has to re-derive it.
 - [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
   path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
   existence proof that the (f2) fold works once types are canonical).
