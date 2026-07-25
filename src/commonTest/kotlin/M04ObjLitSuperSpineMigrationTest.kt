@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 647): pins for the checkSuperInObjectLiterals (TS2659
@@ -57,7 +57,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { p: function() { return super.x; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -67,7 +67,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { p: () => super.x };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -77,7 +77,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { p: () => { return super.x; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -92,7 +92,7 @@ class M04ObjLitSuperSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -106,7 +106,7 @@ class M04ObjLitSuperSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -123,7 +123,7 @@ class M04ObjLitSuperSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -133,7 +133,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const a = { p: function() { return super.x; }, q: () => super.y };
             """
         )
-        assertEquals(2, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     // ── TS2660 silent: superValid=true contexts ────────────────────────────
@@ -195,7 +195,7 @@ class M04ObjLitSuperSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -247,8 +247,8 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { m() { return super.x; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2659 })
-        assertEquals(0, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2660 } == 0)
     }
 
     @Test
@@ -261,7 +261,7 @@ class M04ObjLitSuperSpineMigrationTest {
             };
             """
         )
-        assertEquals(2, ds.count { it.code == 2659 })
+        assert(ds.count { it.code == 2659 } == 2)
     }
 
     @Test
@@ -285,7 +285,7 @@ class M04ObjLitSuperSpineMigrationTest {
             """,
             directives = "// @strict: true\n// @target: es2015",
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -295,8 +295,8 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { m() { return super.a; }, p: function() { return super.b; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2659 })
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2659 } == 1)
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     // ── the bounded leaf's frozen coverage ─────────────────────────────────
@@ -308,7 +308,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { m() { return 1 + super.x; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2659 })
+        assert(ds.count { it.code == 2659 } == 1)
     }
 
     @Test
@@ -322,7 +322,7 @@ class M04ObjLitSuperSpineMigrationTest {
             } };
             """
         )
-        assertEquals(4, ds.count { it.code == 2659 })
+        assert(ds.count { it.code == 2659 } == 4)
     }
 
     @Test
@@ -332,7 +332,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { m() { super.f(super.g); } };
             """
         )
-        assertEquals(2, ds.count { it.code == 2659 })
+        assert(ds.count { it.code == 2659 } == 2)
     }
 
     @Test
@@ -373,7 +373,7 @@ class M04ObjLitSuperSpineMigrationTest {
             throw { p: function() { return super.x; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -383,7 +383,7 @@ class M04ObjLitSuperSpineMigrationTest {
             export = { p: function() { return super.x; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -393,7 +393,7 @@ class M04ObjLitSuperSpineMigrationTest {
             for (const k in { m() { return super.x; } }) { }
             """
         )
-        assertEquals(1, ds.count { it.code == 2659 })
+        assert(ds.count { it.code == 2659 } == 1)
     }
 
     @Test
@@ -403,7 +403,7 @@ class M04ObjLitSuperSpineMigrationTest {
             for (const v of [{ m() { return super.x; } }]) { }
             """
         )
-        assertEquals(1, ds.count { it.code == 2659 })
+        assert(ds.count { it.code == 2659 } == 1)
     }
 
     @Test
@@ -414,7 +414,7 @@ class M04ObjLitSuperSpineMigrationTest {
             for (o = { p: function() { return super.x; } }; ; ) { break; }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -473,7 +473,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { ...{ p: function() { return super.x; } } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -483,7 +483,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const t = `a${'$'}{ ({ p: function() { return super.x; } }) }b`;
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -499,7 +499,7 @@ class M04ObjLitSuperSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     @Test
@@ -510,7 +510,7 @@ class M04ObjLitSuperSpineMigrationTest {
             l: { const q = { r: () => super.y }; }
             """
         )
-        assertEquals(2, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     @Test
@@ -522,7 +522,7 @@ class M04ObjLitSuperSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -534,7 +534,7 @@ class M04ObjLitSuperSpineMigrationTest {
             finally { const c = { r: () => super.c }; }
             """
         )
-        assertEquals(3, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 3)
     }
 
     @Test
@@ -546,7 +546,7 @@ class M04ObjLitSuperSpineMigrationTest {
             const o = { p: () => { const i = { q: () => super.x }; } };
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     // ── run gates ──────────────────────────────────────────────────────────

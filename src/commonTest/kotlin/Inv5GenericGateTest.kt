@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -53,8 +54,8 @@ class Inv5GenericGateTest {
             }
         """)
         val msg = d.firstOrNull { it.code == 2322 }?.message ?: ""
-        kotlin.test.assertEquals(1, d.count { it.code == 2322 }, "expected 1 TS2322, got: $d")
-        kotlin.test.assertTrue("Box<T>" in msg && "Box<string>" in msg, "expected Box<T> vs Box<string> display, got: $msg")
+        assert(d.count { it.code == 2322 } == 1)
+        assert("Box<T>" in msg && "Box<string>" in msg)
     }
 
     @Test

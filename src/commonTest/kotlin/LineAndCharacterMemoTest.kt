@@ -25,9 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Round 486 (M5.1 perf): `getLineAndCharacterOfPosition` was an O(position) linear
@@ -47,21 +46,15 @@ class LineAndCharacterMemoTest {
         // `a` sits on the line after 40 comment lines; `b` after 40 more — a 41-line
         // gap between the two error positions, both deep into the source so the binary
         // search over the line-start table must land the correct line and line-start.
-        val bad = "let %s: number = \"oops\";"
+        fun bad(name: String) = "let $name: number = \"oops\";"
         val src = "// filler\n".repeat(40) +
-            bad.format("a") + "\n" +
+            bad("a") + "\n" +
             "// gap\n".repeat(40) +
-            bad.format("b")
+            bad("b")
         val ts2322 = diagnose(src).filter { it.code == 2322 }.sortedBy { it.line }
-        assertTrue(ts2322.size >= 2, "expected two TS2322, got ${ts2322.size}")
-        assertEquals(
-            41, ts2322[1].line!! - ts2322[0].line!!,
-            "the two identical errors are exactly 41 lines apart",
-        )
-        assertEquals(
-            ts2322[0].character, ts2322[1].character,
-            "identical `let X: number = \"oops\"` structure → identical column on both lines",
-        )
+        assert(ts2322.size >= 2)
+        assert(ts2322[1].line!! - ts2322[0].line!! == 41)
+        assert(ts2322[1].character == ts2322[0].character)
     }
 
     @Test
@@ -75,14 +68,8 @@ class LineAndCharacterMemoTest {
             "// gap\n".repeat(30) +
             "v = \"oops\";"
         val ts2322 = diagnose(src).filter { it.code == 2322 }.sortedBy { it.line }
-        assertTrue(ts2322.size >= 2, "expected two TS2322, got ${ts2322.size}")
-        assertEquals(
-            31, ts2322[1].line!! - ts2322[0].line!!,
-            "the two reassignments are exactly 31 lines apart",
-        )
-        assertEquals(
-            ts2322[0].character, ts2322[1].character,
-            "same `v = \"oops\";` text → same 1-based column regardless of line",
-        )
+        assert(ts2322.size >= 2)
+        assert(ts2322[1].line!! - ts2322[0].line!! == 31)
+        assert(ts2322[1].character == ts2322[0].character)
     }
 }

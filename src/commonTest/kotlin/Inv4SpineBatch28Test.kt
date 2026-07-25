@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -64,7 +65,7 @@ class Inv4SpineBatch28Test {
                 if (c) { return 1; }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2366 }, "expected 1 TS2366, got: $d")
+        assert(d.count { it.code == 2366 } == 1)
     }
 
     @Test
@@ -73,7 +74,7 @@ class Inv4SpineBatch28Test {
             function f(): number {
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2355 }, "expected 1 TS2355, got: $d")
+        assert(d.count { it.code == 2355 } == 1)
     }
 
     @Test
@@ -84,7 +85,7 @@ class Inv4SpineBatch28Test {
                 if (c) { return 1; }
             }
         """, directives = "// @noImplicitReturns: true")
-        kotlin.test.assertEquals(1, d.count { it.code == 7030 }, "expected 1 TS7030, got: $d")
+        assert(d.count { it.code == 7030 } == 1)
     }
 
     @Test
@@ -94,7 +95,7 @@ class Inv4SpineBatch28Test {
                 get a(): number { }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2378 }, "expected 1 TS2378, got: $d")
+        assert(d.count { it.code == 2378 } == 1)
     }
 
     @Test
@@ -104,7 +105,7 @@ class Inv4SpineBatch28Test {
                 get x() { return this.x; }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 7023 }, "expected 1 TS7023, got: $d")
+        assert(d.count { it.code == 7023 } == 1)
     }
 
     @Test
@@ -114,7 +115,7 @@ class Inv4SpineBatch28Test {
                 return [fib][0];
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 7023 }, "expected 1 TS7023, got: $d")
+        assert(d.count { it.code == 7023 } == 1)
     }
 
     @Test
@@ -155,8 +156,8 @@ class Inv4SpineBatch28Test {
         """)
         // nested, K.m, ce.m, o.m, fe, ar, NS.nf, call-arg arrow → TS2355; the
         // two getters (K.g, o.g) fire BOTH TS2378 and TS2355 → 10 + 2.
-        kotlin.test.assertEquals(10, d.count { it.code == 2355 }, "expected 10 TS2355, got: ${d.filter { it.code == 2355 }}")
-        kotlin.test.assertEquals(2, d.count { it.code == 2378 }, "expected 2 TS2378, got: ${d.filter { it.code == 2378 }}")
+        assert(d.count { it.code == 2355 } == 10)
+        assert(d.count { it.code == 2378 } == 2)
     }
 
     @Test
@@ -166,7 +167,7 @@ class Inv4SpineBatch28Test {
                 p = (): number => { };
             };
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2355 }, "expected 1 TS2355, got: $d")
+        assert(d.count { it.code == 2355 } == 1)
     }
 
     // ── reach quirks (negative controls, legacy walker geometry) ────────────
@@ -293,7 +294,7 @@ class Inv4SpineBatch28Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(4, d.count { it.code == 2355 }, "expected 4 TS2355, got: $d")
+        assert(d.count { it.code == 2355 } == 4)
     }
 
     @Test

@@ -57,7 +57,7 @@ class CollectionIteratorTypesTest {
     }
 
     @Test
-    fun `a genuinely unknown iterator type still errors (negative control)`() {
+    fun `a genuinely unknown iterator type still errors - negative control`() {
         diagnose("let x: NotAnIterator<number> = null as any;", directives = "") should {
             have(any { it.code == 2304 || it.code == 2552 })
         }

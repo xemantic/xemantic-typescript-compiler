@@ -44,102 +44,101 @@ import kotlin.test.Test
  */
 class CalleeNarrowingNotCallableTest {
 
-    private fun diagnosticsOf(source: String, name: String = "callee.ts") =
-        TypeScriptCompiler().compile(source, name).diagnostics
-
-    private fun assertNo2349(source: String) {
-        diagnosticsOf(source) should {
-            have(none { it.code == 2349 })
-        }
-    }
-
-    private fun assert2349(source: String) {
-        diagnosticsOf(source) should {
-            have(any { it.code == 2349 })
-        }
-    }
-
     /** `if (fn) fn()` — truthiness guard on an optional-callable identifier param. */
-    @Test fun truthinessGuardedIdentifierCall() {
-        assertNo2349(
+    @Test
+    fun `a truthiness-guarded identifier call is callable`() {
+        diagnose(
             """
-            // @strict: true
             function run(fn: (() => void) | undefined) {
                 if (fn) {
                     fn();
                 }
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(none { it.code == 2349 })
+        }
     }
 
-    /** `typeof fn === "function"` then call — the positive typeof-function guard
-     *  narrows an optional callback to the callable (round 408, narrowByTypeOfGuard). */
-    @Test fun typeofFunctionGuard() {
-        assertNo2349(
+    /**
+     * `typeof fn === "function"` then call — the positive typeof-function guard
+     * narrows an optional callback to the callable (round 408, narrowByTypeOfGuard).
+     */
+    @Test
+    fun `a typeof function guard narrows an optional callback to the callable`() {
+        diagnose(
             """
-            // @strict: true
             let onEvent: ((s: string) => void) | undefined;
             function fire(s: string) {
                 if (typeof onEvent === "function") {
                     onEvent(s);
                 }
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     /** `typeof x !== "function"` else-branch: the else keeps only the function member. */
-    @Test fun typeofFunctionNegatedElse() {
-        assertNo2349(
+    @Test
+    fun `a negated typeof function guard keeps only the function member`() {
+        diagnose(
             """
-            // @strict: true
             function run(fn: string | (() => void)) {
                 if (typeof fn !== "function") {
                     return;
                 }
                 fn();
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     /** `typeof x === "string" ? x : x()` — the false branch narrows to the callable. */
-    @Test fun typeofStringTernaryFalseBranch() {
-        assertNo2349(
+    @Test
+    fun `a typeof string ternary false branch narrows to the callable`() {
+        diagnose(
             """
-            // @strict: true
             function pick(v: string | (() => string)): string {
                 return typeof v === "string" ? v : v();
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     /** `fn?.()` — an optional call short-circuits on the nullish member. */
-    @Test fun optionalCallDropsNullish() {
-        assertNo2349(
+    @Test
+    fun `an optional call drops the nullish member`() {
+        diagnose(
             """
-            // @strict: true
             function run(fn: (() => void) | undefined) {
                 fn?.();
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     /** `&&`-chained truthiness guard then call. */
-    @Test fun andChainGuard() {
-        assertNo2349(
+    @Test
+    fun `an and-chained truthiness guard narrows the callee`() {
+        diagnose(
             """
-            // @strict: true
             function run(ok: boolean, fn: (() => void) | undefined) {
                 if (ok && fn) {
                     fn();
                 }
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(none { it.code == 2349 })
+        }
     }
 
     /**
@@ -147,15 +146,17 @@ class CalleeNarrowingNotCallableTest {
      * TS2349 — the fix only suppresses when narrowing actually removes the
      * non-callable member.
      */
-    @Test fun unguardedPossiblyUndefinedStillFires() {
-        assert2349(
+    @Test
+    fun `negative control - an unguarded possibly-undefined callee still fires`() {
+        diagnose(
             """
-            // @strict: true
             function run(fn: (() => void) | undefined) {
                 fn();
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(any { it.code == 2349 })
+        }
     }
 
     /**
@@ -163,16 +164,18 @@ class CalleeNarrowingNotCallableTest {
      * (a string) must still fire — `if (typeof v === "string") v()` narrows to
      * the string, which has no call signatures.
      */
-    @Test fun narrowedToNonCallableStillFires() {
-        assert2349(
+    @Test
+    fun `negative control - a callee narrowed to a non-callable member still fires`() {
+        diagnose(
             """
-            // @strict: true
             function pick(v: string | (() => string)) {
                 if (typeof v === "string") {
                     v();
                 }
             }
-            """.trimIndent() + "\n",
-        )
+            """
+        ) should {
+            have(any { it.code == 2349 })
+        }
     }
 }

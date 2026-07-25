@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * EP.1 (round 669): a const enum reached through an `export * from` BARREL must
@@ -50,72 +50,80 @@ import kotlin.test.assertTrue
 class BarrelConstEnumInliningTest {
 
     /** enums -> barrel (`export *`) -> consumer, emitted as CommonJS. */
-    private fun emit(consumer: String): String {
-        val source = """
-            // @module: commonjs
-            // @filename: enums.ts
-            export const enum Kind { A = 0, B = 1 }
-            export const enum Names { X = "x" }
-            // @filename: barrel.ts
-            export * from "./enums";
-            // @filename: main.ts
-            $consumer
-        """.trimIndent()
-        val out = TypeScriptCompiler().compile(source, "main.ts")
-        return out.jsOutputs.joinToString("\n") { it.second }
-    }
+    private fun emit(@Language("typescript") consumer: String): String = emitProgram(
+        """
+        // @module: commonjs
+        // @filename: enums.ts
+        export const enum Kind { A = 0, B = 1 }
+        export const enum Names { X = "x" }
+        // @filename: barrel.ts
+        export * from "./enums";
+        // @filename: main.ts
+        $consumer
+        """
+    )
+
+    /** Emits a whole multi-file program and joins every JS output. */
+    private fun emitProgram(@Language("typescript") source: String): String =
+        TypeScriptCompiler().compile(source.trimIndent(), "main.ts")
+            .jsOutputs.joinToString("\n") { it.second }
 
     @Test
     fun `a named import through a barrel inlines the const enum member`() {
-        val js = emit(
+        emit(
             """
             import { Kind } from "./barrel";
             export function p(k: Kind): number { return k === Kind.B ? 1 : 0; }
-            """.trimIndent()
-        )
-        assertContains(js, "1 /* Kind.B */")
-        assertFalse("barrel_1.Kind" in js, "must not keep a qualified access, got:\n$js")
+            """
+        ) should {
+            have("1 /* Kind.B */" in this)
+            have("barrel_1.Kind" !in this)
+        }
     }
 
     @Test
     fun `a namespace import through a barrel inlines the const enum member`() {
-        val js = emit(
+        emit(
             """
             import * as B from "./barrel";
             export function q(k: B.Kind): number { return k === B.Kind.A ? 1 : 0; }
-            """.trimIndent()
-        )
-        assertContains(js, "0 /* B.Kind.A */")
-        assertFalse("B.Kind.A" in js.substringAfter("0 /* B.Kind.A */"), "no residual access")
+            """
+        ) should {
+            have("0 /* B.Kind.A */" in this)
+            have("B.Kind.A" !in substringAfter("0 /* B.Kind.A */"))
+        }
     }
 
     @Test
     fun `a STRING-valued const enum through a barrel inlines too`() {
-        val js = emit(
+        emit(
             """
             import { Names } from "./barrel";
             export function s(): string { return Names.X; }
-            """.trimIndent()
-        )
-        assertContains(js, "\"x\" /* Names.X */")
+            """
+        ) should {
+            have("\"x\" /* Names.X */" in this)
+        }
     }
 
     @Test
     fun `the barrel import is ELIDED once every member is inlined`() {
-        val js = emit(
+        emit(
             """
             import { Kind } from "./barrel";
             export function p(k: Kind): number { return k === Kind.B ? 1 : 0; }
-            """.trimIndent()
-        )
-        // tsc emits no require and no interop helper for a const-enum-only import.
-        assertFalse("require(\"./barrel\")" in js, "import must be elided, got:\n$js")
-        assertFalse("__importStar" in js, "no interop helper for an elided import, got:\n$js")
+            """
+        ) should {
+            // tsc emits no require and no interop helper for a const-enum-only import.
+            have("require(\"./barrel\")" !in this)
+            have("__importStar" !in this)
+        }
     }
 
     @Test
     fun `a member reached through TWO chained barrels still inlines`() {
-        val source = """
+        emitProgram(
+            """
             // @module: commonjs
             // @filename: enums.ts
             export const enum Kind { A = 0, B = 1 }
@@ -126,17 +134,18 @@ class BarrelConstEnumInliningTest {
             // @filename: main.ts
             import { Kind } from "./outer";
             export function t(k: Kind): number { return k === Kind.B ? 1 : 0; }
-        """.trimIndent()
-        val js = TypeScriptCompiler().compile(source, "main.ts").jsOutputs
-            .joinToString("\n") { it.second }
-        assertContains(js, "1 /* Kind.B */")
+            """
+        ) should {
+            have("1 /* Kind.B */" in this)
+        }
     }
 
     // ── Negative controls: a REGULAR enum must keep its runtime access ─────
 
     @Test
     fun `negative control - a NON-const enum through a barrel is NOT inlined`() {
-        val source = """
+        emitProgram(
+            """
             // @module: commonjs
             // @filename: enums.ts
             export enum Plain { A = 0, B = 1 }
@@ -145,16 +154,17 @@ class BarrelConstEnumInliningTest {
             // @filename: main.ts
             import { Plain } from "./barrel";
             export function u(k: Plain): number { return k === Plain.B ? 1 : 0; }
-        """.trimIndent()
-        val js = TypeScriptCompiler().compile(source, "main.ts").jsOutputs
-            .joinToString("\n") { it.second }
-        assertFalse("1 /* Plain.B */" in js, "a regular enum must keep its runtime access, got:\n$js")
-        assertTrue("Plain" in js, "the enum reference must survive")
+            """
+        ) should {
+            have("1 /* Plain.B */" !in this)
+            have("Plain" in this)
+        }
     }
 
     @Test
     fun `negative control - preserveConstEnums keeps the runtime access`() {
-        val source = """
+        emitProgram(
+            """
             // @module: commonjs
             // @preserveConstEnums: true
             // @isolatedModules: true
@@ -165,9 +175,9 @@ class BarrelConstEnumInliningTest {
             // @filename: main.ts
             import { Kind } from "./barrel";
             export function v(k: Kind): number { return k === Kind.B ? 1 : 0; }
-        """.trimIndent()
-        val js = TypeScriptCompiler().compile(source, "main.ts").jsOutputs
-            .joinToString("\n") { it.second }
-        assertFalse("1 /* Kind.B */" in js, "isolatedModules must not inline, got:\n$js")
+            """
+        ) should {
+            have("1 /* Kind.B */" !in this)
+        }
     }
 }

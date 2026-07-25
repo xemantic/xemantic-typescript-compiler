@@ -88,7 +88,7 @@ class NonNullIdentifierStripTest {
     }
 
     @Test
-    fun `pure-nullish NonNull is never (still assignable everywhere)`() {
+    fun `pure-nullish NonNull is never - still assignable everywhere`() {
         // `undefined!` / `null!` = never — assignable to anything (B282); no regression.
         diagnose(
             """

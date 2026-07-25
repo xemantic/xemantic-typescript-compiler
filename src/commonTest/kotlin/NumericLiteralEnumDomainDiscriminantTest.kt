@@ -75,7 +75,7 @@ class NumericLiteralEnumDomainDiscriminantTest {
     }
 
     @Test
-    fun `negative control - an enum WITH a 0-valued member does not narrow, access still fires`() {
+    fun `negative control - an enum WITH a 0-valued member does not narrow - access still fires`() {
         // WithZero.Zero == 0, so `x.flags === 0` cannot exclude T2 —
         // `.type` on the surviving union must keep firing.
         diagnose("""

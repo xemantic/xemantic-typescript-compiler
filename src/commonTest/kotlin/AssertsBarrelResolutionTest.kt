@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 
@@ -71,7 +72,7 @@ class AssertsBarrelResolutionTest {
             }
             """
         )).build("/proj", noEmit = true)
-        have(result.diagnostics.any { it.code == 2345 })
+        assert(result.diagnostics.any { it.code == 2345 })
     }
 
     /** A namespace assert imported THROUGH an export-star barrel narrows after the call. */
@@ -87,7 +88,7 @@ class AssertsBarrelResolutionTest {
             """
         )).build("/proj", noEmit = true)
         val hits = result.diagnostics.filter { it.code == 2345 }
-        have(hits.isEmpty())
+        assert(hits.isEmpty())
     }
 
     /** Same shape imported DIRECTLY (no barrel) — the simpler topology also narrows. */
@@ -103,6 +104,6 @@ class AssertsBarrelResolutionTest {
             """
         )).build("/proj", noEmit = true)
         val hits = result.diagnostics.filter { it.code == 2345 }
-        have(hits.isEmpty())
+        assert(hits.isEmpty())
     }
 }

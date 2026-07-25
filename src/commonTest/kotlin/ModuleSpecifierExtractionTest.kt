@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the parse-based module-specifier extraction invariant (M0.3): the parser
@@ -60,16 +60,8 @@ class ModuleSpecifierExtractionTest {
             type Q = import("./import-type").Foo;
             type QQ = typeof import("./import-typeof");
         """.trimIndent()
-        assertEquals(
-            setOf(
-                "./ref-path.ts", "ref-types",
-                "./static-default", "./static-named", "./static-namespace", "./side-effect",
-                "./type-only", "./import-equals",
-                "./export-star", "./export-named", "./export-type",
-                "./dynamic-top", "./require-top",
-                "./import-type", "./import-typeof",
-            ),
-            specifiersOf(src),
+        assert(
+            specifiersOf(src) == setOf( "./ref-path.ts", "ref-types", "./static-default", "./static-named", "./static-namespace", "./side-effect", "./type-only", "./import-equals", "./export-star", "./export-named", "./export-type", "./dynamic-top", "./require-top", "./import-type", "./import-typeof", )
         )
     }
 
@@ -98,7 +90,7 @@ class ModuleSpecifierExtractionTest {
         have(specs.none { it.contains("garbage") })
         // Real specifiers still found — including a dynamic import INSIDE a template
         // substitution (real code position) right next to template text that is not.
-        assertEquals(setOf("./real", "./real-in-template"), specs)
+        assert(specs == setOf("./real", "./real-in-template"))
     }
 
     @Test
@@ -116,9 +108,8 @@ class ModuleSpecifierExtractionTest {
             function f(): import("./deep-type").T { return null as any; }
             const generic = require<{ x: number }>("./generic-require");
         """.trimIndent()
-        assertEquals(
-            setOf("./deep-dynamic", "./deep-require", "./deep-prop", "./deep-type", "./generic-require"),
-            specifiersOf(src),
+        assert(
+            specifiersOf(src) == setOf("./deep-dynamic", "./deep-require", "./deep-prop", "./deep-type", "./generic-require")
         )
     }
 
@@ -132,7 +123,7 @@ class ModuleSpecifierExtractionTest {
             const d = other("./not-an-import");
             const e = obj.require("./method-not-require");
         """.trimIndent()
-        assertEquals(emptySet(), specifiersOf(src))
+        assert(specifiersOf(src).isEmpty())
     }
 
     @Test
@@ -148,7 +139,7 @@ class ModuleSpecifierExtractionTest {
             import { x } from "./real";
             /// <reference path="./too-late.ts" />
         """.trimIndent()
-        assertEquals(setOf("./after-header.ts", "./real"), specifiersOf(src))
+        assert(specifiersOf(src) == setOf("./after-header.ts", "./real"))
     }
 
     @Test
@@ -171,11 +162,7 @@ class ModuleSpecifierExtractionTest {
             )
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assertEquals(
-            listOf("/proj/src/index.ts" to "./genuinely-missing.js"),
-            result.unresolved,
-            "only the genuinely missing import is unresolved",
-        )
+        assert(result.unresolved == listOf("/proj/src/index.ts" to "./genuinely-missing.js"))
         have(
             result.programFiles.none { it.contains("some-package") },
             "a string-literal mention must not pull a file into the program",

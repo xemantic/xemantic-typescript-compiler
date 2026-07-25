@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertNotNull
 
 /**
  * Local corner-case tests for DEEP binary-expression chains.
@@ -61,7 +61,8 @@ class DeepExpressionChainTest {
         val terms = 10_000
         val source = "var a = 1;\nvar r = " + "a + ".repeat(terms - 1) + "a;\n"
         val result = compileExpectingNoOverflow(source)
-        val js = assertNotNull(result.javascript, "no JS emitted for the left-associative chain")
+        val js = result.javascript
+        assert(js != null)
         have(js.contains("var r = a + a"), "chain head missing from emitted JS")
         have(js.length > 3 * terms, "emitted JS suspiciously short — chain truncated?")
     }
@@ -71,7 +72,8 @@ class DeepExpressionChainTest {
         val assignments = 10_000
         val source = "var a;\n" + "a = ".repeat(assignments) + "1;\n"
         val result = compileExpectingNoOverflow(source)
-        val js = assertNotNull(result.javascript, "no JS emitted for the right-associative chain")
+        val js = result.javascript
+        assert(js != null)
         have(js.contains("a = a = "), "assignment chain missing from emitted JS")
         have(js.length > 3 * assignments, "emitted JS suspiciously short — chain truncated?")
     }
@@ -81,7 +83,8 @@ class DeepExpressionChainTest {
         val groups = 5_000
         val source = "var a = 1;\nvar r = " + "(a + a) + ".repeat(groups) + "a;\n"
         val result = compileExpectingNoOverflow(source)
-        val js = assertNotNull(result.javascript, "no JS emitted for the parenthesized-group chain")
+        val js = result.javascript
+        assert(js != null)
         have(js.contains("(a + a) + (a + a)"), "parenthesized groups missing from emitted JS")
     }
 
@@ -98,7 +101,8 @@ class DeepExpressionChainTest {
             f({ p: ${"a + ".repeat(terms - 1)}a });
         """.trimIndent()
         val result = compileExpectingNoOverflow(source)
-        val js = assertNotNull(result.javascript, "no JS emitted for the nested chain")
+        val js = result.javascript
+        assert(js != null)
         have(js.contains("f({ p: a + a"), "nested chain missing from emitted JS")
     }
 
@@ -112,6 +116,6 @@ class DeepExpressionChainTest {
         val source = "var o = { x: 1 };\nvar r = " +
             "({ ...o, y: 1 }) + ".repeat(terms - 1) + "({ ...o, y: 1 });\n"
         val result = compileExpectingNoOverflow(source)
-        assertNotNull(result.javascript, "no JS emitted for the spread-operand chain")
+        assert(result.javascript != null)
     }
 }

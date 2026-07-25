@@ -76,7 +76,7 @@ class UnannotatedParamShadowsModuleVarTest {
     }
 
     @Test
-    fun `negative control - an ANNOTATED shadowing param is still type-checked (TS2322)`() {
+    fun `negative control - an ANNOTATED shadowing param is still type-checked - TS2322`() {
         diagnose(
             """
             const indent = "    ";

@@ -61,7 +61,7 @@ class AssignmentRhsNarrowingTest {
                     cur = parent; // parent : ParenthesizedExpression <: Expression — OK
                 }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2741 || it.code == 2322 || it.code == 2739 })
         }
@@ -86,7 +86,7 @@ class AssignmentRhsNarrowingTest {
                     target = callee; // callee : SuperProperty <: LeftHandSideExpression — OK
                 }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2739 || it.code == 2741 || it.code == 2322 })
         }
@@ -120,7 +120,7 @@ class AssignmentRhsNarrowingTest {
                     return false;
                 }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2741 || it.code == 2322 || it.code == 2739 })
         }
@@ -137,7 +137,7 @@ class AssignmentRhsNarrowingTest {
             export function bad(node: Expression, parent: Node): void {
                 node = parent; // Node is missing _expressionBrand — genuine error
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2741 || it.code == 2322 })
         }
@@ -162,7 +162,7 @@ class AssignmentRhsNarrowingTest {
                 }
                 return currentSourceFile;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2322 || it.code == 2741 || it.code == 2739 })
         }
@@ -181,7 +181,7 @@ class AssignmentRhsNarrowingTest {
                 let currentSourceFile: SourceFile | undefined;
                 currentSourceFile = node; // genuine error — Node ≁ SourceFile | undefined
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2322 || it.code == 2741 })
         }

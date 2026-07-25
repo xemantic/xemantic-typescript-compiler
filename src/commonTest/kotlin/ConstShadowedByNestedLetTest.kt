@@ -65,7 +65,7 @@ class ConstShadowedByNestedLetTest {
     }
 
     @Test
-    fun `nested var (compound assign) shadowing an enclosing const - no TS2588`() {
+    fun `nested var compound assign shadowing an enclosing const - no TS2588`() {
         // moduleNameResolver's `let resolved = …; resolved ??= …` shape shadowing an outer const.
         diagnose(
             """
@@ -88,7 +88,7 @@ class ConstShadowedByNestedLetTest {
     }
 
     @Test
-    fun `a genuine const reassignment STILL fires TS2588 (negative control)`() {
+    fun `a genuine const reassignment STILL fires TS2588 - negative control`() {
         diagnose(
             """
             function h(): number {

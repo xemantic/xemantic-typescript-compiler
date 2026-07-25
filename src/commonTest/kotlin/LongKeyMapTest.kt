@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /**
@@ -53,10 +53,10 @@ class LongKeyMapTest {
         val m = LongKeyMap<String>()
         val k = (7L shl 32) or 9L
         m.put(k, "first")
-        assertEquals("first", m.get(k))
+        assert(m.get(k) == "first")
         m.put(k, "second")
-        assertEquals("second", m.get(k))
-        assertEquals(1, m.entryCount)
+        assert(m.get(k) == "second")
+        assert(m.entryCount == 1)
     }
 
     @Test
@@ -82,9 +82,9 @@ class LongKeyMapTest {
                 v++
             }
         }
-        assertEquals(oracle.size, m.entryCount)
+        assert(m.entryCount == oracle.size)
         for ((key, expected) in oracle) {
-            assertEquals(expected, m.get(key), "key $key")
+            assert(m.get(key) == expected)
         }
         // Distinct keys never alias: flip hi/lo of an existing pair.
         have(m.get((5L shl 32) or 6L) != m.get((6L shl 32) or 5L) ||
@@ -100,6 +100,6 @@ class LongKeyMapTest {
         // bound guarantees it well before 50% load across several rounds).
         val keys = (1..7).map { (it.toLong() shl 32) or 1L }
         for ((i, k) in keys.withIndex()) m.put(k, "v$i")
-        for ((i, k) in keys.withIndex()) assertEquals("v$i", m.get(k))
+        for ((i, k) in keys.withIndex()) assert(m.get(k) == "v$i")
     }
 }

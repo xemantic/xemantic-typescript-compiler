@@ -25,9 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * (M0.4, round 653): pins for the checkAbstractMemberAccessInConstructor
@@ -74,10 +73,10 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
         val d = ds.single { it.code == 2715 }
-        assertEquals("p".length, d.length)
-        assertTrue(d.message.contains("Abstract property 'p' in class 'C'"))
+        assert(d.length == "p".length)
+        assert(d.message.contains("Abstract property 'p' in class 'C'"))
     }
 
     @Test
@@ -90,7 +89,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -103,8 +102,8 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
-        assertTrue(ds.single { it.code == 2715 }.message.contains("in class 'B'"))
+        assert(ts2715(ds) == 1)
+        assert(ds.single { it.code == 2715 }.message.contains("in class 'B'"))
     }
 
     @Test
@@ -118,7 +117,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -132,8 +131,8 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
-        assertTrue(ds.single { it.code == 2715 }.message.contains("in class 'A'"))
+        assert(ts2715(ds) == 1)
+        assert(ds.single { it.code == 2715 }.message.contains("in class 'A'"))
     }
 
     @Test
@@ -146,7 +145,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -160,7 +159,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ts2715(ds))
+        assert(ts2715(ds) == 2)
     }
 
     @Test
@@ -173,7 +172,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     // ── Deferred-`this` boundaries (the inDeferredFn flag) ────────────────
@@ -188,7 +187,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -201,7 +200,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -214,7 +213,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -227,7 +226,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -240,7 +239,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     // ── Member-kind gates on the emission half ────────────────────────────
@@ -255,7 +254,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -268,7 +267,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -285,7 +284,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts2715(ds))
+        assert(ts2715(ds) == 3)
     }
 
     @Test
@@ -303,7 +302,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     // ── Routing reach: statement positions ────────────────────────────────
@@ -320,7 +319,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -335,7 +334,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -350,11 +349,11 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
-    fun `a class inside a loop body, switch clause, try, catch and finally is reached`() {
+    fun `a class inside a loop body - switch clause - try - catch and finally is reached`() {
         val ds = diagnose(
             """
             for (;;) {
@@ -376,11 +375,11 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(6, ts2715(ds))
+        assert(ts2715(ds) == 6)
     }
 
     @Test
-    fun `a class inside a member body is reached (the step-a member descent)`() {
+    fun `a class inside a member body is reached - the step-a member descent`() {
         val ds = diagnose(
             """
             class Outer {
@@ -393,7 +392,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -406,7 +405,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     // ── Routing reach: expression positions ───────────────────────────────
@@ -419,8 +418,8 @@ class M04AbstractAccessSpineMigrationTest {
             f(class D { abstract p: number; constructor() { this.p; } });
             """
         )
-        assertEquals(1, ts2715(ds))
-        assertTrue(ds.single { it.code == 2715 }.message.contains("in class 'D'"))
+        assert(ts2715(ds) == 1)
+        assert(ds.single { it.code == 2715 }.message.contains("in class 'D'"))
     }
 
     @Test
@@ -432,7 +431,7 @@ class M04AbstractAccessSpineMigrationTest {
             f(class { abstract p: number; constructor() { this.p; } });
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -442,8 +441,8 @@ class M04AbstractAccessSpineMigrationTest {
             const C = class { abstract p: number; constructor() { this.p; } };
             """
         )
-        assertEquals(1, ts2715(ds))
-        assertTrue(ds.single { it.code == 2715 }.message.contains("in class 'C'"))
+        assert(ts2715(ds) == 1)
+        assert(ds.single { it.code == 2715 }.message.contains("in class 'C'"))
     }
 
     @Test
@@ -453,8 +452,8 @@ class M04AbstractAccessSpineMigrationTest {
             const C = class D { abstract p: number; constructor() { this.p; } };
             """
         )
-        assertEquals(1, ts2715(ds))
-        assertTrue(ds.single { it.code == 2715 }.message.contains("in class 'D'"))
+        assert(ts2715(ds) == 1)
+        assert(ds.single { it.code == 2715 }.message.contains("in class 'D'"))
     }
 
     @Test
@@ -467,11 +466,11 @@ class M04AbstractAccessSpineMigrationTest {
             const C = (class { abstract p: number; constructor() { this.p; } });
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
-    fun `a class expression in a return, throw, ternary and array literal is reached`() {
+    fun `a class expression in a return - throw - ternary and array literal is reached`() {
         val ds = diagnose(
             """
             declare const cond: boolean;
@@ -481,7 +480,7 @@ class M04AbstractAccessSpineMigrationTest {
             const arr = [class E { abstract p: number; constructor() { this.p; } }];
             """
         )
-        assertEquals(4, ts2715(ds))
+        assert(ts2715(ds) == 4)
     }
 
     @Test
@@ -491,7 +490,7 @@ class M04AbstractAccessSpineMigrationTest {
             if (class D { abstract p: number; constructor() { this.p; } }) { }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -501,7 +500,7 @@ class M04AbstractAccessSpineMigrationTest {
             for (let i: any = class D { abstract p: number; constructor() { this.p; } }; ; ) { }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -514,7 +513,7 @@ class M04AbstractAccessSpineMigrationTest {
             switch (class D { abstract p: number; constructor() { this.p; } }) { }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -524,7 +523,7 @@ class M04AbstractAccessSpineMigrationTest {
             const o = { m() { return class D { abstract p: number; constructor() { this.p; } }; } };
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -534,7 +533,7 @@ class M04AbstractAccessSpineMigrationTest {
             const o = { v: class D { abstract p: number; constructor() { this.p; } } };
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     // ── The RESTRICTED arrow / function-expression body walk ──────────────
@@ -550,7 +549,7 @@ class M04AbstractAccessSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -562,8 +561,8 @@ class M04AbstractAccessSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2715(ds))
-        assertTrue(ds.single { it.code == 2715 }.message.contains("in class 'D'"))
+        assert(ts2715(ds) == 1)
+        assert(ds.single { it.code == 2715 }.message.contains("in class 'D'"))
     }
 
     @Test
@@ -577,7 +576,7 @@ class M04AbstractAccessSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -589,7 +588,7 @@ class M04AbstractAccessSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -599,7 +598,7 @@ class M04AbstractAccessSpineMigrationTest {
             const f = () => class D { abstract p: number; constructor() { this.p; } };
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     @Test
@@ -611,7 +610,7 @@ class M04AbstractAccessSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     // ── Nesting: the outer map never leaks, and the legacy DOUBLE reach ───
@@ -628,7 +627,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 
     @Test
@@ -648,7 +647,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ts2715(ds))
+        assert(ts2715(ds) == 2)
     }
 
     @Test
@@ -664,7 +663,7 @@ class M04AbstractAccessSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2715(ds))
+        assert(ts2715(ds) == 1)
     }
 
     // ── File gate ─────────────────────────────────────────────────────────
@@ -680,6 +679,6 @@ class M04AbstractAccessSpineMigrationTest {
             """,
             fileName = "t.d.ts",
         )
-        assertEquals(0, ts2715(ds))
+        assert(ts2715(ds) == 0)
     }
 }

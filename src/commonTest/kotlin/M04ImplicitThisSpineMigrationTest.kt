@@ -159,7 +159,7 @@ class M04ImplicitThisSpineMigrationTest {
     }
 
     @Test
-    fun `legacy quirk - the call-callee edge drops the arrow context so this() draws no TS7041`() {
+    fun `legacy quirk - the call-callee edge drops the arrow context so this draws no TS7041`() {
         diagnose(
             """
             const f = () => this();

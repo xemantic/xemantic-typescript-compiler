@@ -52,7 +52,7 @@ class ObjectSetPrototypeOfTest {
     }
 
     @Test
-    fun `a genuinely missing ObjectConstructor member still errors (negative control)`() {
+    fun `a genuinely missing ObjectConstructor member still errors - negative control`() {
         diagnose("Object.definitelyNotAMethod({});", directives = "") should {
             have(any { it.code == 2339 || it.code == 2551 })
         }

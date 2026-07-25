@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -86,7 +87,7 @@ class M04DaFlowSpineMigrationTest {
             }
             """
         ).count { it.code == 2454 }
-        kotlin.test.assertEquals(1, count)
+        assert(count == 1)
     }
 
     @Test

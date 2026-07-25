@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the M1.1 invariant: the named-import existence check (TS2305 family)
@@ -66,11 +66,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./barrel.js\"' has no exported member 'gamma'."),
-            ts2305Messages(result),
-            "star-provided names must not fire; the genuinely missing one must",
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./barrel.js\"' has no exported member 'gamma'."))
     }
 
     @Test
@@ -86,10 +82,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./top.js\"' has no exported member 'nope'."),
-            ts2305Messages(result),
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./top.js\"' has no exported member 'nope'."))
     }
 
     @Test
@@ -110,11 +103,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./c.js\"' has no exported member 'absent'."),
-            ts2305Messages(result),
-            "a star cycle must terminate and resolve both directions' names",
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./c.js\"' has no exported member 'absent'."))
     }
 
     @Test
@@ -131,11 +120,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2305Messages(result),
-            "an unknowable export set must not prove absence (FN-safe)",
-        )
+        assert(ts2305Messages(result).isEmpty())
     }
 
     @Test
@@ -155,10 +140,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./opaque.js\"' has no exported member 'default'."),
-            ts2305Messages(result),
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./opaque.js\"' has no exported member 'default'."))
     }
 
     @Test
@@ -173,11 +155,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./nsbarrel.js\"' has no exported member 'alpha'."),
-            ts2305Messages(result),
-            "`export * as ns` exposes only `ns`, not the target's names",
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./nsbarrel.js\"' has no exported member 'alpha'."))
     }
 
     @Test
@@ -191,10 +169,7 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./barrel.js\"' has no exported member 'ghost'."),
-            ts2305Messages(result),
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./barrel.js\"' has no exported member 'ghost'."))
     }
 
     @Test

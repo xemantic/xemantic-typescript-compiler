@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 488 (M5.2): [Checker.getUnionType] gained tiny-input fast paths (size 1
@@ -52,26 +52,23 @@ class GetUnionTypeFastPathTest {
     fun `2-element union sorts by flags value independent of element order`() {
         // string flag (1<<2) < number flag (1<<3) → "string | number" both ways;
         // this is the size-2 fast path's stable sort-by-flags-value.
-        assertTrue(sourceDisplay("[1, \"x\"]", "boolean") == "string | number", "forward")
-        assertTrue(sourceDisplay("[\"x\", 1]", "boolean") == "string | number", "reversed")
+        assert(sourceDisplay("[1, \"x\"]", "boolean") == "string | number")
+        assert(sourceDisplay("[\"x\", 1]", "boolean") == "string | number")
     }
 
     @Test
     fun `identical members dedupe to a single type`() {
         // Every element widens to `number` → the union collapses to plain `number`
         // (no `|`), exercising the size-2 fast path's id-dedup / size-1 collapse.
-        assertTrue(sourceDisplay("[1, 2]", "boolean") == "number", "two")
-        assertTrue(sourceDisplay("[1, 2, 3]", "boolean") == "number", "three")
+        assert(sourceDisplay("[1, 2]", "boolean") == "number")
+        assert(sourceDisplay("[1, 2, 3]", "boolean") == "number")
     }
 
     @Test
     fun `three-plus member unions fall through to the general path`() {
         // boolean-literal `true` sorts last (flag 1<<4); a size-3 input skips the
         // fast path entirely and must still sort + render identically.
-        assertTrue(
-            sourceDisplay("[true, \"x\", 1]", "symbol") == "string | number | true",
-            "size-3 general path",
-        )
+        assert(sourceDisplay("[true, \"x\", 1]", "symbol") == "string | number | true")
     }
 
     @Test
@@ -86,9 +83,6 @@ class GetUnionTypeFastPathTest {
             let b: boolean = y;
             """.trimIndent(),
         ).firstOrNull { it.code == 2322 }?.message
-        assertTrue(
-            msg != null && msg.contains("Type 'string | number'"),
-            msg ?: "no TS2322 emitted",
-        )
+        assert(msg != null && msg.contains("Type 'string | number'"))
     }
 }

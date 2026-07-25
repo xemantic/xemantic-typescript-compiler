@@ -25,11 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 
 /**
  * INV.1(e) (round 494): the compilation core's multi-file parse site reuses a
@@ -87,8 +84,8 @@ class Inv1PreParseReuseTest {
     fun `a matching pre-parse is reused by the multi-file core`() {
         val options = CompilerOptions()
         val js = compileWithPreParse(lyingPreParse(options), options)
-        assertTrue(js.contains("sentinelTwo"), "matching pre-parse must be reused; emitted: $js")
-        assertFalse(js.contains("realOne"), "the entry content must not be re-parsed on a match; emitted: $js")
+        assert(js.contains("sentinelTwo"))
+        assert(!js.contains("realOne"))
     }
 
     @Test
@@ -97,8 +94,8 @@ class Inv1PreParseReuseTest {
         val flags = computeParserFlags(fileName, realContent, options)
         val lying = lyingPreParse(options, flags.copy(topLevelAwait = !flags.topLevelAwait))
         val js = compileWithPreParse(lying, options)
-        assertTrue(js.contains("realOne"), "flags mismatch must re-parse the entry content; emitted: $js")
-        assertFalse(js.contains("sentinelTwo"))
+        assert(js.contains("realOne"))
+        assert(!js.contains("sentinelTwo"))
     }
 
     @Test
@@ -108,8 +105,8 @@ class Inv1PreParseReuseTest {
         val sentinel = parseWith(fileName, sentinelContent, flags)
         val stale = PreParsedFile("$realContent ", flags, sentinel.sourceFile, sentinel.diagnostics)
         val js = compileWithPreParse(stale, options)
-        assertTrue(js.contains("realOne"), "content mismatch must re-parse the entry content; emitted: $js")
-        assertFalse(js.contains("sentinelTwo"))
+        assert(js.contains("realOne"))
+        assert(!js.contains("sentinelTwo"))
     }
 
     @Test
@@ -129,12 +126,12 @@ class Inv1PreParseReuseTest {
         } finally {
             PassTiming.enabled = false
         }
-        assertEquals(2, result.programFiles.size)
+        assert(result.programFiles.size == 2)
         // module es2022 makes `topLevelAwait` OPTION-driven for every file: a crawl
         // that parsed with default flags would record topLevelAwait=false, fail the
         // core's flags gate, and this counter would read 0.
-        assertEquals(2L, PassTiming.preParseReused, "every program file's crawl parse must be reused")
-        assertEquals(0L, PassTiming.preParseFresh)
+        assert(PassTiming.preParseReused == 2L)
+        assert(PassTiming.preParseFresh == 0L)
         PassTiming.reset()
     }
 
@@ -152,11 +149,11 @@ class Inv1PreParseReuseTest {
         // module es2022. A wrongly-flagged parse (topLevelAwait=false) would read
         // `await` as an identifier and cascade parse errors; the reused crawl parse
         // must flow through check and emit as a native await expression.
-        assertEquals(0, result.errorCount, "expected a clean build, got: ${result.diagnostics}")
+        assert(result.errorCount == 0)
         val out = result.written.firstOrNull { it.first.endsWith("index.js") }
-        assertNotNull(out, "expected index.js to be written, got: ${result.written}")
+        assert(out != null)
         val js = vfs.readText(out.first) ?: ""
-        assertTrue(js.contains("await Promise.resolve(1)"), "expected native top-level await in emit, got: $js")
+        assert(js.contains("await Promise.resolve(1)"))
     }
 
     @Test
@@ -171,8 +168,8 @@ class Inv1PreParseReuseTest {
         } finally {
             PassTiming.enabled = false
         }
-        assertEquals(0L, PassTiming.preParseReused, "the corpus path carries no pre-parses")
-        assertEquals(2L, PassTiming.preParseFresh, "both multi-file entries must parse fresh")
+        assert(PassTiming.preParseReused == 0L)
+        assert(PassTiming.preParseFresh == 2L)
         PassTiming.reset()
     }
 }

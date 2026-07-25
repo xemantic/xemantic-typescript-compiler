@@ -84,7 +84,7 @@ class NestedBlockConstShadowsParamTest {
     }
 
     @Test
-    fun `negative control - a top-level body var keeps the param type (redeclaration)`() {
+    fun `negative control - a top-level body var keeps the param type - redeclaration`() {
         // functionArgShadowing rule: `function foo(x: A) { var x: B; … }` keeps x: A.
         diagnose(
             prelude + """

@@ -96,7 +96,7 @@ class Inv5RelationBudgetTest {
     }
 
     @Test
-    fun `negative control - un-inferred generic union param draws no TS2345 (the flatten shape)`() {
+    fun `negative control - un-inferred generic union param draws no TS2345 - the flatten shape`() {
         // tsc infers T=string and the call is valid; our engine leaves T
         // unbound, so the whole-union relation fails — the param-side
         // foreign-TP gate must suppress the B561 emitter.

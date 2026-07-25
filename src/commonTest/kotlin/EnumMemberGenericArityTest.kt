@@ -69,7 +69,7 @@ class EnumMemberGenericArityTest {
     }
 
     @Test
-    fun `a bare generic lib type used without type args STILL fires TS2314 (negative control)`() {
+    fun `a bare generic lib type used without type args STILL fires TS2314 - negative control`() {
         // `Array` used bare (not enum-qualified) genuinely requires 1 type argument.
         diagnose("type Bad = Array;", directives = "") should {
             have(any { it.code == 2314 && it.message.contains("Array") })
@@ -77,7 +77,7 @@ class EnumMemberGenericArityTest {
     }
 
     @Test
-    fun `a namespace-qualified generic used without type args STILL fires TS2314 (negative control)`() {
+    fun `a namespace-qualified generic used without type args STILL fires TS2314 - negative control`() {
         // The qualifier is a NAMESPACE (not an enum), and the member IS a generic type missing
         // its arg — the enum-qualifier skip must not apply here.
         diagnose(

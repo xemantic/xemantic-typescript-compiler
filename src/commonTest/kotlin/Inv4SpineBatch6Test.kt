@@ -134,7 +134,7 @@ class Inv4SpineBatch6Test {
     }
 
     @Test
-    fun `negative control - non-top-level function skips the modifier check (B459b)`() {
+    fun `negative control - non-top-level function skips the modifier check - B459b`() {
         // TS1184 owns position-illegal modifiers on a nested function; the
         // duplicate-modifier grammar check is suppressed there.
         diagnose(
@@ -149,7 +149,7 @@ class Inv4SpineBatch6Test {
     }
 
     @Test
-    fun `negative control - ambient import-equals skips TS1029 (B61-5g)`() {
+    fun `negative control - ambient import-equals skips TS1029 - B61-5g`() {
         diagnose(
             """
             declare namespace M {
@@ -212,7 +212,7 @@ class Inv4SpineBatch6Test {
     }
 
     @Test
-    fun `negative control - same-enum member reference is a constant initializer (B162)`() {
+    fun `negative control - same-enum member reference is a constant initializer - B162`() {
         diagnose(
             """
             declare enum E {

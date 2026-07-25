@@ -207,7 +207,7 @@ class Inv4SpineBatch15Test {
     // ── old-walk reach negatives (unreached positions, preserved) ───────────
 
     @Test
-    fun `old reach - await in async fn parameter default is TS2524 territory, not TS1308`() {
+    fun `old reach - await in async fn parameter default is TS2524 territory - not TS1308`() {
         diagnose(
             """
             async function f(g = await 1) {}

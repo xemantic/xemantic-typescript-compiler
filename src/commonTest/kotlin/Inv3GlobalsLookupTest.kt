@@ -25,11 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
-import kotlin.test.assertTrue
 
 /**
  * INV.3(a) (round 500): the `globals`-lookup instrumentation must be strictly
@@ -82,23 +79,23 @@ class Inv3GlobalsLookupTest {
         } finally {
             PassTiming.enabled = false
         }
-        assertEquals(off, on, "diagnostics must be byte-identical with instrumentation on")
+        assert(on == off)
 
-        assertTrue(PassTiming.globalsLookups > 0, "the check must consult globals")
+        assert(PassTiming.globalsLookups > 0)
         val sum = PassTiming.globalsMisses + PassTiming.globalsTrueGlobalHits +
             PassTiming.globalsSharedHits + PassTiming.globalsOwnLocalHits +
             PassTiming.globalsConflatedHits + PassTiming.globalsUnscopedHits
-        assertEquals(PassTiming.globalsLookups, sum, "every lookup lands in exactly one class")
+        assert(sum == PassTiming.globalsLookups)
 
         // Lib names (Array/…) and the script-file `scriptGlobal` classify TRUE_GLOBAL.
-        assertTrue(PassTiming.globalsTrueGlobalHits > 0, "lib/script lookups must classify TRUE_GLOBAL")
+        assert(PassTiming.globalsTrueGlobalHits > 0)
         // INV.3(d): `leakedVar` (declared ONLY by module file a.ts) is RETIRED from
         // the merged globals — a residual lookup can only MISS, so the leak classes
         // must no longer carry it. (Pre-retire this test asserted the OPPOSITE:
         // conflated/unscoped > 0 with leakedVar in the worklist — the migration's
         // victory condition is that worklist draining to empty for retired names.)
         val leakNames = PassTiming.globalsConflatedByName.keys + PassTiming.globalsUnscopedByName.keys
-        assertFalse("leakedVar" in leakNames, "a retired module-only name must not classify as a leak, got: $leakNames")
+        assert(!("leakedVar" in leakNames))
         PassTiming.reset()
     }
 
@@ -107,10 +104,10 @@ class Inv3GlobalsLookupTest {
         PassTiming.enabled = false
         PassTiming.reset()
         diagnose(probeSource)
-        assertEquals(0L, PassTiming.globalsLookups)
-        assertEquals(0L, PassTiming.globalsConflatedHits)
-        assertTrue(PassTiming.globalsConflatedByName.isEmpty())
-        assertTrue(PassTiming.globalsUnscopedByName.isEmpty())
+        assert(PassTiming.globalsLookups == 0L)
+        assert(PassTiming.globalsConflatedHits == 0L)
+        assert(PassTiming.globalsConflatedByName.isEmpty())
+        assert(PassTiming.globalsUnscopedByName.isEmpty())
     }
 
     @Test
@@ -121,30 +118,26 @@ class Inv3GlobalsLookupTest {
 
         val sym = Symbol(SymbolFlags.Variable, "x")
         table["x"] = sym
-        assertEquals(sym, table["x"])
-        assertNull(table["absent"])
-        assertTrue(table.containsKey("x"))
-        assertFalse(table.containsKey("absent"))
-        assertEquals(
-            listOf("x" to true, "absent" to false, "x" to true, "absent" to false),
-            seen,
-            "get and containsKey must both report, hit and miss alike",
-        )
+        assert(table["x"] == sym)
+        assert(table["absent"] == null)
+        assert(table.containsKey("x"))
+        assert(!table.containsKey("absent"))
+        assert(seen == listOf("x" to true, "absent" to false, "x" to true, "absent" to false))
 
         seen.clear()
         table.remove("x")
-        assertTrue(table.isEmpty())
-        assertTrue(seen.isEmpty(), "mutation and size queries must not report")
+        assert(table.isEmpty())
+        assert(seen.isEmpty())
     }
 
     @Test
     fun `instrumented table preserves insertion order and stays inert without a hook`() {
         val table = InstrumentedSymbolTable()
         for (n in listOf("zeta", "alpha", "mid")) table[n] = Symbol(SymbolFlags.Variable, n)
-        assertEquals(listOf("zeta", "alpha", "mid"), table.keys.toList(), "LinkedHashMap order preserved")
+        assert(table.keys.toList() == listOf("zeta", "alpha", "mid"))
         // No hook installed: lookups must behave plainly.
-        assertEquals("alpha", table["alpha"]?.name)
-        assertNull(table["nope"])
+        assert(table["alpha"]?.name == "alpha")
+        assert(table["nope"] == null)
     }
 
     @Test
@@ -152,7 +145,7 @@ class Inv3GlobalsLookupTest {
         PassTiming.reset()
         val before = StringBuilder()
         PassTiming.dump { before.appendLine(it) }
-        assertFalse("globals lookups" in before.toString(), "zero-lookup dump omits the section")
+        assert(!("globals lookups" in before.toString()))
 
         PassTiming.noteGlobalsLookup(GlobalsLookupClass.TRUE_GLOBAL, "Array")
         PassTiming.noteGlobalsLookup(GlobalsLookupClass.CONFLATED, "leakedVar")
@@ -161,10 +154,10 @@ class Inv3GlobalsLookupTest {
         val out = StringBuilder()
         PassTiming.dump { out.appendLine(it) }
         val text = out.toString()
-        assertTrue("== globals lookups (INV.3(a)) ==" in text)
-        assertTrue("total 4: trueGlobal 1, shared 0, ownLocal 0, CONFLATED 1, unscoped 1, miss 1" in text)
-        assertTrue("leakedVar" in text, "conflated names render in the worklist")
-        assertTrue("orphan" in text, "unscoped names render in the worklist")
+        assert("== globals lookups (INV.3(a)) ==" in text)
+        assert("total 4: trueGlobal 1, shared 0, ownLocal 0, CONFLATED 1, unscoped 1, miss 1" in text)
+        assert("leakedVar" in text)
+        assert("orphan" in text)
         PassTiming.reset()
     }
 }

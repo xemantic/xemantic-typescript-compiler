@@ -194,7 +194,7 @@ class Inv4SpineBatch1Test {
     }
 
     @Test
-    fun `negative control - function-nested interface stays unchecked (old-walk reachability)`() {
+    fun `negative control - function-nested interface stays unchecked - old-walk reachability`() {
         diagnose(
             """
             function f(): void {

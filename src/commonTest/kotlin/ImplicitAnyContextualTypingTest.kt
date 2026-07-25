@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Round 431 (M3.2): TS7006 contextual-typing slice — the self-compile TS7006×301
@@ -70,7 +70,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params, "nested-fn callee must contextually type the callback")
+        assert(params.isEmpty())
     }
 
     @Test
@@ -82,15 +82,16 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params, "param callee resolves lexically")
+        assert(params.isEmpty())
     }
 
     @Test
     fun `negative control - unresolvable callee still fires TS7006`() {
         val d = diagnose("missingFn(zz => zz);")
         have(d.any { it.code == 2304 }, "expected TS2304 on the callee")
-        assertEquals(listOf("zz"), d.filter { it.code == 7006 }
-            .map { it.message.removePrefix("Parameter '").substringBefore("'") })
+        assert(
+            d.filter { it.code == 7006 } .map { it.message.removePrefix("Parameter '").substringBefore("'") } == listOf("zz")
+        )
     }
 
     // ------------------------------------------------------------------
@@ -108,7 +109,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -120,7 +121,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -134,7 +135,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -146,7 +147,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -162,7 +163,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(listOf("tag"), params)
+        assert(params == listOf("tag"))
     }
 
     @Test
@@ -175,7 +176,7 @@ class ImplicitAnyContextualTypingTest {
             f2 = (x2, y2) => { return x2; };
             """
         )
-        assertEquals(listOf("x2", "y2"), params)
+        assert(params == listOf("x2", "y2"))
     }
 
     @Test
@@ -188,7 +189,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(listOf("extra"), params)
+        assert(params == listOf("extra"))
     }
 
     // ------------------------------------------------------------------
@@ -208,7 +209,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -223,7 +224,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -237,7 +238,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
@@ -249,7 +250,7 @@ class ImplicitAnyContextualTypingTest {
             }
             """
         )
-        assertEquals(listOf("a"), params)
+        assert(params == listOf("a"))
     }
 
     // ------------------------------------------------------------------
@@ -257,7 +258,7 @@ class ImplicitAnyContextualTypingTest {
     // ------------------------------------------------------------------
 
     @Test
-    fun `logical-and left operand fires, right operand is contextually typed`() {
+    fun `logical-and left operand fires - right operand is contextually typed`() {
         // contextuallyTypeLogicalAnd03's pinned asymmetry.
         val params = ts7006Params(
             """
@@ -265,7 +266,7 @@ class ImplicitAnyContextualTypingTest {
             x5 = (a5 => a5) && (b5 => b5);
             """
         )
-        assertEquals(listOf("a5"), params)
+        assert(params == listOf("a5"))
     }
 
     @Test
@@ -279,11 +280,11 @@ class ImplicitAnyContextualTypingTest {
             x6 = (a6 => a6) || (b6 => b6);
             """
         )
-        assertEquals(emptyList(), params)
+        assert(params.isEmpty())
     }
 
     @Test
-    fun `comma left operand fires, right operand is contextually typed`() {
+    fun `comma left operand fires - right operand is contextually typed`() {
         // contextuallyTypeCommaOperator03's pinned asymmetry.
         val params = ts7006Params(
             """
@@ -291,6 +292,6 @@ class ImplicitAnyContextualTypingTest {
             x8 = (a8 => a8, b8 => b8);
             """
         )
-        assertEquals(listOf("a8"), params)
+        assert(params == listOf("a8"))
     }
 }

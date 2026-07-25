@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
@@ -48,7 +49,7 @@ class CpaAnchorTest {
             declare const o: O;
             o.missing;
         """)
-        assert(n == 1) { "expected exactly 1 TS2339, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -58,13 +59,13 @@ class CpaAnchorTest {
             declare const o: O;
             const x = o.missing;
         """)
-        assert(nVar == 1) { "var-init: expected exactly 1 TS2339, got $nVar" }
+        assert(nVar == 1)
         val nRet = count2339("""
             interface O { a: number }
             declare const o: O;
             function f() { return o.missing; }
         """)
-        assert(nRet == 1) { "return: expected exactly 1 TS2339, got $nRet" }
+        assert(nRet == 1)
     }
 
     @Test
@@ -74,7 +75,7 @@ class CpaAnchorTest {
             declare const o: O;
             namespace N { export const y = o.missing; }
         """)
-        assert(nNs == 1) { "namespace: expected exactly 1 TS2339, got $nNs" }
+        assert(nNs == 1)
         val nIf = count2339("""
             interface O { a: number }
             declare const o: O;
@@ -83,7 +84,7 @@ class CpaAnchorTest {
                 if (cond) { o.missing; }
             }
         """)
-        assert(nIf == 1) { "if-nested: expected exactly 1 TS2339, got $nIf" }
+        assert(nIf == 1)
         val nSwitch = count2339("""
             interface O { a: number }
             declare const o: O;
@@ -92,7 +93,7 @@ class CpaAnchorTest {
                 switch (k) { case 1: o.missing; break; }
             }
         """)
-        assert(nSwitch == 1) { "switch-clause: expected exactly 1 TS2339, got $nSwitch" }
+        assert(nSwitch == 1)
     }
 
     @Test
@@ -102,13 +103,13 @@ class CpaAnchorTest {
             declare const o: O;
             const g = () => { return o.missing; };
         """)
-        assert(nArrow == 1) { "arrow body: expected exactly 1 TS2339, got $nArrow" }
+        assert(nArrow == 1)
         val nFe = count2339("""
             interface O { a: number }
             declare const o: O;
             const fe = function () { o.missing; };
         """)
-        assert(nFe == 1) { "fn-expr body: expected exactly 1 TS2339, got $nFe" }
+        assert(nFe == 1)
     }
 
     @Test
@@ -120,13 +121,13 @@ class CpaAnchorTest {
                 m() { return o.missing; }
             }
         """)
-        assert(nMethod == 1) { "method body: expected exactly 1 TS2339, got $nMethod" }
+        assert(nMethod == 1)
         val nThis = count2339("""
             class D {
                 m() { return this.missing; }
             }
         """)
-        assert(nThis == 1) { "this-access: expected exactly 1 TS2339, got $nThis" }
+        assert(nThis == 1)
     }
 
     @Test
@@ -138,19 +139,19 @@ class CpaAnchorTest {
             declare const o: O;
             if (o.missing) {}
         """)
-        assert(nIf == 1) { "if-condition: expected exactly 1 TS2339, got $nIf" }
+        assert(nIf == 1)
         val nWhile = count2339("""
             interface O { a: number }
             declare const o: O;
             function f() { while (o.missing) {} }
         """)
-        assert(nWhile == 1) { "while-condition: expected exactly 1 TS2339, got $nWhile" }
+        assert(nWhile == 1)
         val nFor = count2339("""
             interface O { a: number }
             declare const o: O;
             function g() { for (let i = 0; o.missing; i++) {} }
         """)
-        assert(nFor == 1) { "for-condition: expected exactly 1 TS2339, got $nFor" }
+        assert(nFor == 1)
         val nSwitch = count2339("""
             interface O { a: number }
             declare const o: O;
@@ -159,7 +160,7 @@ class CpaAnchorTest {
                 switch (o.missing) { case o.missing: break; }
             }
         """)
-        assert(nSwitch == 2) { "switch subject+case: expected exactly 2 TS2339, got $nSwitch" }
+        assert(nSwitch == 2)
     }
 
     @Test
@@ -169,13 +170,13 @@ class CpaAnchorTest {
             declare const o: O;
             function f() { throw o.missing; }
         """)
-        assert(nThrow == 1) { "throw: expected exactly 1 TS2339, got $nThrow" }
+        assert(nThrow == 1)
         val nEnum = count2339("""
             interface O { a: number }
             declare const o: O;
             enum E { x = 1, y = o.missing }
         """)
-        assert(nEnum == 1) { "enum-init: expected exactly 1 TS2339, got $nEnum" }
+        assert(nEnum == 1)
     }
 
     @Test
@@ -187,7 +188,7 @@ class CpaAnchorTest {
             declare const o: O;
             if ([1].some(x => { return o.missing; })) {}
         """)
-        assert(n == 1) { "arrow-in-condition: expected exactly 1 TS2339, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -200,7 +201,7 @@ class CpaAnchorTest {
             declare const ns: O;
             class C extends ns.missingBase {}
         """)
-        assert(nHeritage == 1) { "heritage: expected exactly 1 TS2339, got $nHeritage" }
+        assert(nHeritage == 1)
         val nProp = count2339("""
             interface O { a: number }
             declare const o: O;
@@ -209,7 +210,7 @@ class CpaAnchorTest {
                 static q = o.missing;
             }
         """)
-        assert(nProp == 2) { "prop-inits: expected exactly 2 TS2339, got $nProp" }
+        assert(nProp == 2)
     }
 
     @Test
@@ -222,7 +223,7 @@ class CpaAnchorTest {
                 m() { return o.missing; }
             };
         """)
-        assert(n == 2) { "class-expr members: expected exactly 2 TS2339, got $n" }
+        assert(n == 2)
     }
 
     @Test
@@ -234,6 +235,6 @@ class CpaAnchorTest {
             const x = o.a;
             const g = () => { return o.a; };
         """)
-        assert(n == 0) { "expected 0 TS2339, got $n" }
+        assert(n == 0)
     }
 }

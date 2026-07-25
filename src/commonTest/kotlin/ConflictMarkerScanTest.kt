@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 654): behavioural pins for checkConflictMarkers (TS1185 "Merge
@@ -54,77 +54,68 @@ class ConflictMarkerScanTest {
     fun `a start marker at a line start draws one TS1185 spanning seven chars`() {
         val source = "let a = 1;\n<<<<<<< HEAD\nlet b = 2;\n"
         val ds = markers(diagnose(source))
-        assertEquals(1, ds.size)
-        assertEquals(source.indexOf("<<<<<<<"), ds[0].start)
-        assertEquals(7, ds[0].length)
-        assertEquals("Merge conflict marker encountered.", ds[0].message)
+        assert(ds.size == 1)
+        assert(ds[0].start == source.indexOf("<<<<<<<"))
+        assert(ds[0].length == 7)
+        assert(ds[0].message == "Merge conflict marker encountered.")
     }
 
     @Test
-    fun `all four marker kinds count, in ascending source order`() {
+    fun `all four marker kinds count - in ascending source order`() {
         val source = "<<<<<<< HEAD\nlet a = 1;\n||||||| base\nlet b = 2;\n" +
             "=======\nlet c = 3;\n>>>>>>> other\n"
         val ds = markers(diagnose(source))
-        assertEquals(4, ds.size)
+        assert(ds.size == 4)
         val starts = ds.map { it.start ?: -1 }
-        assertEquals(starts.sorted(), starts)
-        assertEquals(
-            listOf(
-                source.indexOf("<<<<<<<"),
-                source.indexOf("|||||||"),
-                source.indexOf("======="),
-                source.indexOf(">>>>>>>"),
-            ),
-            starts,
+        assert(starts == starts.sorted())
+        assert(
+            starts == listOf( source.indexOf("<<<<<<<"), source.indexOf("|||||||"), source.indexOf("======="), source.indexOf(">>>>>>>"), )
         )
     }
 
     @Test
     fun `a marker at offset zero counts`() {
         val ds = markers(diagnose("=======\n"))
-        assertEquals(1, ds.size)
-        assertEquals(0, ds[0].start)
+        assert(ds.size == 1)
+        assert(ds[0].start == 0)
     }
 
     @Test
     fun `negative control - a marker that is not at a line start never counts`() {
         // indented, and embedded mid-line inside a string
         val ds = markers(diagnose("  <<<<<<< HEAD\nlet s = \"======= x\";\n"))
-        assertEquals(0, ds.size)
+        assert(ds.size == 0)
     }
 
     @Test
     fun `a run longer than seven marker chars counts exactly once`() {
         val source = "<<<<<<<<<<<< HEAD\n"
         val ds = markers(diagnose(source))
-        assertEquals(1, ds.size)
-        assertEquals(0, ds[0].start)
+        assert(ds.size == 1)
+        assert(ds[0].start == 0)
     }
 
     @Test
     fun `negative control - a run of only six marker chars never counts`() {
-        assertEquals(0, markers(diagnose("<<<<<<\n======\n>>>>>>\n||||||\n")).size)
+        assert(markers(diagnose("<<<<<<\n======\n>>>>>>\n||||||\n")).size == 0)
     }
 
     @Test
-    fun `a marker ending exactly at end-of-file counts, a truncated one does not`() {
-        assertEquals(1, markers(diagnose("let a = 1;\n>>>>>>>")).size)
-        assertEquals(0, markers(diagnose("let a = 1;\n>>>>>>")).size)
+    fun `a marker ending exactly at end-of-file counts - a truncated one does not`() {
+        assert(markers(diagnose("let a = 1;\n>>>>>>>")).size == 1)
+        assert(markers(diagnose("let a = 1;\n>>>>>>")).size == 0)
     }
 
     @Test
     fun `consecutive marker lines each count`() {
         val source = "<<<<<<<\n=======\n>>>>>>>\n"
         val ds = markers(diagnose(source))
-        assertEquals(3, ds.size)
-        assertEquals(listOf(0, 8, 16), ds.map { it.start ?: -1 })
+        assert(ds.size == 3)
+        assert(ds.map { it.start ?: -1 } == listOf(0, 8, 16))
     }
 
     @Test
     fun `negative control - a d_ts file is skipped`() {
-        assertEquals(
-            0,
-            markers(diagnose("<<<<<<< HEAD\ndeclare const a: number;\n", fileName = "t.d.ts")).size,
-        )
+        assert(markers(diagnose("<<<<<<< HEAD\ndeclare const a: number;\n", fileName = "t.d.ts")).size == 0)
     }
 }

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -63,7 +64,7 @@ class Inv4SpineBatch29Test {
                 --x;
             }
         """)
-        kotlin.test.assertEquals(4, d.count { it.code == 2588 }, "expected 4 TS2588, got: $d")
+        assert(d.count { it.code == 2588 } == 4)
     }
 
     @Test
@@ -92,7 +93,7 @@ class Inv4SpineBatch29Test {
                 x.c = true;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2540 }, "expected 1 TS2540, got: $d")
+        assert(d.count { it.code == 2540 } == 1)
     }
 
     @Test
@@ -102,7 +103,7 @@ class Inv4SpineBatch29Test {
             declare let b: number;
             (a + b)++;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2357 }, "expected 1 TS2357, got: $d")
+        assert(d.count { it.code == 2357 } == 1)
     }
 
     @Test
@@ -110,7 +111,7 @@ class Inv4SpineBatch29Test {
         val d = diagnose("""
             const r = /\u{41}/;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 1538 }, "expected 1 TS1538, got: $d")
+        assert(d.count { it.code == 1538 } == 1)
     }
 
     // ── statement-ordered collection ────────────────────────────────────────
@@ -173,7 +174,7 @@ class Inv4SpineBatch29Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2588 }, "expected 1 TS2588, got: $d")
+        assert(d.count { it.code == 2588 } == 1)
     }
 
     @Test
@@ -197,7 +198,7 @@ class Inv4SpineBatch29Test {
                 c = 6;
             }
         """)
-        kotlin.test.assertEquals(5, d.count { it.code == 2588 }, "expected 5 TS2588, got: $d")
+        assert(d.count { it.code == 2588 } == 5)
     }
 
     @Test
@@ -206,14 +207,14 @@ class Inv4SpineBatch29Test {
             const c = 1;
             const g = () => c = 2;
         """)
-        kotlin.test.assertEquals(1, d1.count { it.code == 2588 }, "expression body: expected 1 TS2588, got: $d1")
+        assert(d1.count { it.code == 2588 } == 1)
         val d2 = diagnose("""
             const c = 1;
             (() => {
                 c = 2;
             })();
         """)
-        kotlin.test.assertEquals(0, d2.count { it.code == 2588 }, "IIFE block body: expected 0 TS2588, got: $d2")
+        assert(d2.count { it.code == 2588 } == 0)
     }
 
     // ── for-header overlay ──────────────────────────────────────────────────
@@ -227,14 +228,14 @@ class Inv4SpineBatch29Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2588 }, "expected 2 TS2588 (incrementor + body), got: $d")
+        assert(d.count { it.code == 2588 } == 2)
         val d2 = diagnose("""
             function f() {
                 const j = 1;
                 for (j = 2; ;) { break; }
             }
         """)
-        kotlin.test.assertEquals(1, d2.count { it.code == 2588 }, "init expr vs outer const: expected 1 TS2588, got: $d2")
+        assert(d2.count { it.code == 2588 } == 1)
     }
 
     // ── B510 class-this readonly context ────────────────────────────────────
@@ -252,7 +253,7 @@ class Inv4SpineBatch29Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2540 }, "expected 1 TS2540 (the method write only), got: $d")
+        assert(d.count { it.code == 2540 } == 1)
     }
 
     @Test
@@ -270,7 +271,7 @@ class Inv4SpineBatch29Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2540 }, "expected 1 TS2540 (the captured arrow only), got: $d")
+        assert(d.count { it.code == 2540 } == 1)
     }
 
     @Test
@@ -299,7 +300,7 @@ class Inv4SpineBatch29Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2540 }, "expected 1 TS2540, got: $d")
+        assert(d.count { it.code == 2540 } == 1)
     }
 
     @Test
@@ -328,7 +329,7 @@ class Inv4SpineBatch29Test {
             sharedC = 2;
             """,
         )
-        kotlin.test.assertEquals(1, d.count { it.code == 2588 }, "expected 1 TS2588, got: $d")
+        assert(d.count { it.code == 2588 } == 1)
     }
 
     @Test

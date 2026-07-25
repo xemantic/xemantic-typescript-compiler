@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4): pins for the checkConstEnumDiagnostics spine migration — the
@@ -82,8 +82,9 @@ class M04ConstEnumSpineMigrationTest {
             const enum E1 { Y = E1.Z, Y1 = E1["W"] }
             """
         )
-        assertEquals(2, ds.count { it.code == 2474 &&
-            it.message == "const enum member initializers must be constant expressions." })
+        assert(
+            ds.count { it.code == 2474 && it.message == "const enum member initializers must be constant expressions." } == 2
+        )
     }
 
     @Test
@@ -136,8 +137,9 @@ class M04ConstEnumSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ds.count { it.code == 2567 &&
-            it.message == "Enum declarations can only merge with namespace or other enum declarations." })
+        assert(
+            ds.count { it.code == 2567 && it.message == "Enum declarations can only merge with namespace or other enum declarations." } == 2
+        )
     }
 
     @Test
@@ -195,7 +197,7 @@ class M04ConstEnumSpineMigrationTest {
             var y = [E];
             """
         )
-        assertEquals(2, ds.count { it.code == 2475 })
+        assert(ds.count { it.code == 2475 } == 2)
     }
 
     @Test
@@ -345,8 +347,9 @@ class M04ConstEnumSpineMigrationTest {
             var y1 = E2[name];
             """
         )
-        assertEquals(2, ds.count { it.code == 2476 &&
-            it.message == "A const enum member can only be accessed using a string literal." })
+        assert(
+            ds.count { it.code == 2476 && it.message == "A const enum member can only be accessed using a string literal." } == 2
+        )
     }
 
     @Test

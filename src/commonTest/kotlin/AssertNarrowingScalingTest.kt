@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
@@ -99,13 +100,13 @@ class AssertNarrowingScalingTest {
             const y: string = x;
         """.trimIndent() + "\n"
         val result = TypeScriptCompiler().compile(source, "control.ts")
-        have(result.diagnostics.any { it.code == 2322 })
+        assert(result.diagnostics.any { it.code == 2322 })
     }
 
     /** Positive control at trivial depth: the `x is string` predicate narrows → clean. */
     @Test fun predicateNarrowingStillApplies() {
         val result = TypeScriptCompiler().compile(callDenseSource(calls = 2), "narrowed.ts")
-        have(result.diagnostics.isEmpty())
+        assert(result.diagnostics.isEmpty())
     }
 
     /**
@@ -123,7 +124,7 @@ class AssertNarrowingScalingTest {
         val (result, elapsed) = measureTimedValue {
             TypeScriptCompiler().compile(callDenseSource(calls = 120), "dense.ts")
         }
-        have(result.diagnostics.isEmpty())
-        have(elapsed < 60.seconds, "superlinear re-entry is back")
+        assert(result.diagnostics.isEmpty())
+        assert(elapsed < 60.seconds)
     }
 }

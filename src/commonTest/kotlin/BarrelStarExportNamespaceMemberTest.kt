@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * EP.1a (round 668): a namespace import of a BARREL — `import * as B from
@@ -61,37 +62,37 @@ class BarrelStarExportNamespaceMemberTest {
         export * from "./enums";
     """.trimIndent() + "\n"
 
-    private fun ts2694(ds: List<Diagnostic>) = ds.count { it.code == 2694 }
-
     @Test
     fun `a const enum reached through a star-export barrel resolves in type position`() {
-        val ds = diagnose(
+        diagnose(
             enums + barrel + """
             // @filename: main.ts
             import * as B from "./barrel";
             export function q(k: B.Kind): number { return k === B.Kind.A ? 1 : 0; }
             """.trimIndent(),
             "// @module: commonjs",
-        )
-        assertEquals(0, ts2694(ds))
+        ) should {
+            have(none { it.code == 2694 })
+        }
     }
 
     @Test
     fun `an interface reached through a star-export barrel resolves in type position`() {
-        val ds = diagnose(
+        diagnose(
             enums + barrel + """
             // @filename: main.ts
             import * as B from "./barrel";
             export function r(s: B.Shape): number { return s.kind; }
             """.trimIndent(),
             "// @module: commonjs",
-        )
-        assertEquals(0, ts2694(ds))
+        ) should {
+            have(none { it.code == 2694 })
+        }
     }
 
     @Test
     fun `a member reached through TWO chained barrels still resolves`() {
-        val ds = diagnose(
+        diagnose(
             enums + barrel + """
             // @filename: outer.ts
             export * from "./barrel";
@@ -100,48 +101,52 @@ class BarrelStarExportNamespaceMemberTest {
             export function s(k: O.Kind): number { return k; }
             """.trimIndent(),
             "// @module: commonjs",
-        )
-        assertEquals(0, ts2694(ds))
+        ) should {
+            have(none { it.code == 2694 })
+        }
     }
 
     // ── Negative controls: the suppression must not silence real absences ──
 
     @Test
     fun `negative control - a member absent from the whole barrel chain still reports TS2694`() {
-        val ds = diagnose(
+        diagnose(
             enums + barrel + """
             // @filename: main.ts
             import * as B from "./barrel";
             export function t(x: B.NotThere): number { return 0; }
             """.trimIndent(),
             "// @module: commonjs",
-        )
-        assertEquals(1, ts2694(ds))
+        ) should {
+            have(any { it.code == 2694 })
+        }
     }
 
     @Test
-    fun `negative control - a member absent from a direct (non-barrel) namespace import still reports`() {
-        val ds = diagnose(
+    fun `negative control - a member absent from a direct non-barrel namespace import still reports`() {
+        diagnose(
             enums + """
             // @filename: main.ts
             import * as E from "./enums";
             export function u(x: E.Missing): number { return 0; }
             """.trimIndent(),
             "// @module: commonjs",
-        )
-        assertEquals(1, ts2694(ds))
+        ) should {
+            have(any { it.code == 2694 })
+        }
     }
 
     @Test
     fun `a direct namespace import of a real member is unaffected`() {
-        val ds = diagnose(
+        diagnose(
             enums + """
             // @filename: main.ts
             import * as E from "./enums";
             export function v(k: E.Kind): number { return k; }
             """.trimIndent(),
             "// @module: commonjs",
-        )
-        assertEquals(0, ts2694(ds))
+        ) should {
+            have(none { it.code == 2694 })
+        }
     }
 }

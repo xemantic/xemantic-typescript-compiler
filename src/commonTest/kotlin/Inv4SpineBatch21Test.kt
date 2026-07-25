@@ -233,7 +233,7 @@ class Inv4SpineBatch21Test {
     }
 
     @Test
-    fun `quirk pin - try-block const does NOT shadow (no block scope for try statements)`() {
+    fun `quirk pin - try-block const does NOT shadow - no block scope for try statements`() {
         diagnose("""
             declare function act(): boolean;
             declare function compute(): any;
@@ -431,7 +431,7 @@ class Inv4SpineBatch21Test {
     }
 
     @Test
-    fun `dotted-namespace bodies are walked (single ModuleDeclaration with dotted name)`() {
+    fun `dotted-namespace bodies are walked - single ModuleDeclaration with dotted name`() {
         diagnose("""
             declare function act(): boolean;
             function isReady(): boolean { return true; }

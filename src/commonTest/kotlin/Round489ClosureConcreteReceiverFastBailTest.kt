@@ -51,7 +51,7 @@ class Round489ClosureConcreteReceiverFastBailTest {
     """.trimIndent()
 
     @Test
-    fun `a captured concrete-typed receiver in a closure draws no TS18048 (fast bail)`() {
+    fun `a captured concrete-typed receiver in a closure draws no TS18048 - fast bail`() {
         // `x` is a captured param typed `string` (no `undefined`). The fast path resolves
         // its type, sees it can never be `undefined`, and bails before the closure scan.
         diagnose(prelude + "\n" + """
@@ -68,7 +68,7 @@ class Round489ClosureConcreteReceiverFastBailTest {
     }
 
     @Test
-    fun `a captured maybe-undefined receiver still fires (fast path must not bail on unions)`() {
+    fun `a captured maybe-undefined receiver still fires - fast path must not bail on unions`() {
         // `x` is `string | undefined` — the fast path must NOT bail; the closure scan runs
         // and the unguarded capture is flagged possibly-undefined.
         diagnose(prelude + "\n" + """

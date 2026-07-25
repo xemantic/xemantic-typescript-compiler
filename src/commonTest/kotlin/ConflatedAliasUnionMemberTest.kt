@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -47,7 +48,7 @@ import kotlin.test.Test
  */
 class ConflatedAliasUnionMemberTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile(source.trimIndent(), "entry.ts").diagnostics
 
     private val protocolFile = """

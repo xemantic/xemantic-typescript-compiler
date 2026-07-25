@@ -69,7 +69,7 @@ class TypeNamespaceCloduleTest {
     }
 
     @Test
-    fun `a namespace-ONLY name used as a type STILL fires TS2709 (negative control)`() {
+    fun `a namespace-ONLY name used as a type STILL fires TS2709 - negative control`() {
         diagnose(
             """
             namespace NsOnly { export const v = 1; }
@@ -82,7 +82,7 @@ class TypeNamespaceCloduleTest {
     }
 
     @Test
-    fun `a type-alias-ONLY name used as a value STILL fires TS2693 (negative control)`() {
+    fun `a type-alias-ONLY name used as a value STILL fires TS2693 - negative control`() {
         diagnose(
             """
             type TOnly = number;

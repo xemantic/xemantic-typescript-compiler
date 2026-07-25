@@ -25,11 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertSame
-import kotlin.test.assertTrue
 
 /**
  * INV.3(b) (round 501): `lookupPerFile` — THE per-file resolution primitive the
@@ -70,8 +69,8 @@ class Inv3PerFileLookupTest {
             """,
         )
         val target = results.getValue("/proj/a.ts").locals["Foo"]
-        assertNotNull(target)
-        assertSame(target, checker.lookupPerFile("/proj/c.ts", "Foo"))
+        assert(target != null)
+        assert(checker.lookupPerFile("/proj/c.ts", "Foo") === target)
     }
 
     @Test
@@ -89,8 +88,8 @@ class Inv3PerFileLookupTest {
             """,
         )
         val target = results.getValue("/proj/a.ts").locals["Foo"]
-        assertNotNull(target)
-        assertSame(target, checker.lookupPerFile("/proj/c.ts", "Foo"))
+        assert(target != null)
+        assert(checker.lookupPerFile("/proj/c.ts", "Foo") === target)
     }
 
     @Test
@@ -108,8 +107,8 @@ class Inv3PerFileLookupTest {
             """,
         )
         val target = results.getValue("/proj/a.ts").locals["Foo"]
-        assertNotNull(target)
-        assertSame(target, checker.lookupPerFile("/proj/c.ts", "Bar"))
+        assert(target != null)
+        assert(checker.lookupPerFile("/proj/c.ts", "Bar") === target)
     }
 
     @Test
@@ -131,7 +130,7 @@ class Inv3PerFileLookupTest {
             results.getValue("/proj/script.ts").locals["scriptGlobal"],
             checker.lookupPerFile("/proj/c.ts", "scriptGlobal"),
         )
-        assertNotNull(checker.lookupPerFile("/proj/c.ts", "Array"), "lib names are visible from every file")
+        assert(checker.lookupPerFile("/proj/c.ts", "Array") != null)
     }
 
     @Test
@@ -145,12 +144,9 @@ class Inv3PerFileLookupTest {
             """,
         )
         assertNotNull(results.getValue("/proj/a.ts").locals["leaked"], "the leak candidate is a real module local")
-        assertNull(
-            checker.lookupPerFile("/proj/c.ts", "leaked"),
-            "an unimported foreign module local must NOT resolve — the conflated globals leak",
-        )
-        assertNull(checker.lookupPerFile("/proj/c.ts", "nothingAnywhere"))
-        assertNull(checker.lookupPerFile("no-such-file.ts", "own"))
+        assert(checker.lookupPerFile("/proj/c.ts", "leaked") == null)
+        assert(checker.lookupPerFile("/proj/c.ts", "nothingAnywhere") == null)
+        assert(checker.lookupPerFile("no-such-file.ts", "own") == null)
     }
 
     @Test
@@ -162,9 +158,9 @@ class Inv3PerFileLookupTest {
             """,
         )
         val alias = results.getValue("/proj/c.ts").locals["Ghost"]
-        assertNotNull(alias)
+        assert(alias != null)
         val aliasFlagged = alias.flags.hasAny(SymbolFlags.Alias)
-        assertTrue(aliasFlagged, "the local must be an import alias")
-        assertSame(alias, checker.lookupPerFile("/proj/c.ts", "Ghost"), "callers keep their existing alias handling")
+        assert(aliasFlagged)
+        assert(checker.lookupPerFile("/proj/c.ts", "Ghost") === alias)
     }
 }

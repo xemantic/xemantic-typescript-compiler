@@ -252,7 +252,7 @@ class Inv4SpineBatch22Test {
     }
 
     @Test
-    fun `truthy && guard strips the nullish member for the right operand`() {
+    fun `truthy AND guard strips the nullish member for the right operand`() {
         diagnose("""
             declare var u: number | undefined;
             u && u * 2;
@@ -262,7 +262,7 @@ class Inv4SpineBatch22Test {
     }
 
     @Test
-    fun `an && absorbed into a left-spine chain still narrows via the flow-graph layer`() {
+    fun `an AND absorbed into a left-spine chain still narrows via the flow-graph layer`() {
         // `u && u * 2 || 1` — the top `||` flatten ABSORBS the `&&` node, so the
         // legacy syntactic special branch (truthy-set narrowing while walking the
         // right) never runs — but the round-453 flow-graph layer
@@ -338,7 +338,7 @@ class Inv4SpineBatch22Test {
     }
 
     @Test
-    fun `arrow expression body narrows via its own && guard`() {
+    fun `arrow expression body narrows via its own AND guard`() {
         diagnose("""
             const f = (u: number | undefined) => u && u * 2;
         """) should {

@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertContains
 
 /**
  * M1.3: tsconfig `types` / `typeRoots` / `node_modules/@types` acquisition in
@@ -65,8 +65,8 @@ class TypesAcquisitionTest {
         val result = ProjectCompiler(project("""{ "include": ["src/**/*.ts"] }"""))
             .build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertContains(program, gadgetEntry, "entry via package.json 'types' field")
-        assertContains(program, widgetEntry, "entry via index.d.ts fallback")
+        assert(gadgetEntry in program)
+        assert(widgetEntry in program)
         have(result.diagnostics.none { it.code == 2304 })
     }
 
@@ -76,7 +76,7 @@ class TypesAcquisitionTest {
             project("""{ "compilerOptions": { "types": ["gadget"] }, "include": ["src/**/*.ts"] }"""),
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertContains(program, gadgetEntry)
+        assert(gadgetEntry in program)
         have(widgetEntry !in program, "'types' must exclude unlisted packages")
         have(!cannotFindName(result, "gadget"), "listed package's global resolves")
         have(cannotFindName(result, "widget"), "unlisted package's global must NOT resolve")
@@ -116,7 +116,7 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertContains(program, "/proj/typings/env/index.d.ts")
+        assert("/proj/typings/env/index.d.ts" in program)
         have(
             gadgetEntry !in program && widgetEntry !in program,
             "explicit typeRoots must REPLACE the node_modules/@types default, not extend it",
@@ -135,7 +135,7 @@ class TypesAcquisitionTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/repo/packages/app", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/repo/node_modules/@types/hoistedlib/index.d.ts")
+        assert("/repo/node_modules/@types/hoistedlib/index.d.ts" in result.programFiles.toSet())
         have(result.diagnostics.none { it.code == 2304 })
     }
 
@@ -150,7 +150,7 @@ class TypesAcquisitionTest {
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/@myscope/thing/index.d.ts")
+        assert("/proj/node_modules/@types/@myscope/thing/index.d.ts" in result.programFiles.toSet())
         have(!cannotFindName(result, "scopedThing"))
     }
 
@@ -166,7 +166,7 @@ class TypesAcquisitionTest {
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/myscope__thing/index.d.ts")
+        assert("/proj/node_modules/@types/myscope__thing/index.d.ts" in result.programFiles.toSet())
         have(result.diagnostics.none { it.code == 2688 }, "mangled probe must satisfy the request")
         have(!cannotFindName(result, "scopedThing"))
     }
@@ -187,7 +187,7 @@ class TypesAcquisitionTest {
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/reflib/index.d.ts")
+        assert("/proj/node_modules/@types/reflib/index.d.ts" in result.programFiles.toSet())
         have(!cannotFindName(result, "refthing"))
     }
 }

@@ -47,7 +47,7 @@ class CrossFileCalleeCollisionTest {
         TypeScriptCompiler().compile(source.trimIndent(), "b.ts").diagnostics
 
     @Test
-    fun `callee resolves to the current file's own function, not another file's`() {
+    fun `callee resolves to the current file's own function - not another file's`() {
         // a.ts has getInfo(file: string, ...); b.ts has its own getInfo(State, ...).
         // The call in b.ts passes a State — must pick b.ts's getInfo.
         compile(

@@ -50,7 +50,7 @@ class WidenTuplePreservesShapeTest {
     """.trimIndent()
 
     @Test
-    fun `a map callback returning a tuple, assigned through a generic wrapper, relates to a tuple array`() {
+    fun `a map callback returning a tuple - assigned through a generic wrapper - relates to a tuple array`() {
         diagnose(
             prelude + """
             let rawReferencedFiles: [SF, FR][] | undefined;

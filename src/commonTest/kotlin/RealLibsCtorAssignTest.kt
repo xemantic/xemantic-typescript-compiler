@@ -44,7 +44,7 @@ import kotlin.test.Test
 class RealLibsCtorAssignTest {
 
     @Test
-    fun `Array = fn reports only the missing-property TS2739, not a construct-sig TS2322`() {
+    fun `Array = fn reports only the missing-property TS2739 - not a construct-sig TS2322`() {
         diagnose(
             "Array = function (n:number, s:string) {return n;};",
             directives = "// @useRealLibs: true\n// @target: es2015",
@@ -55,7 +55,7 @@ class RealLibsCtorAssignTest {
     }
 
     @Test
-    fun `a function vs a construct-only interface (no named props) still reports TS2322`() {
+    fun `a function vs a construct-only interface no named props still reports TS2322`() {
         // POSITIVE control proving the guard is NARROW. `Ctor` has ONLY a construct
         // signature — no named properties — so nothing is "missing" from the function
         // source; the guard (`targetHasRequiredPropAbsentFromSource`) returns false and the

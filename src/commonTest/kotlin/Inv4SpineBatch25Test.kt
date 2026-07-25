@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -68,7 +69,7 @@ class Inv4SpineBatch25Test {
                 x.toString();
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
         d should { have(any { it.code == 2454 && it.message == "Variable 'x' is used before being assigned." }) }
     }
 
@@ -78,7 +79,7 @@ class Inv4SpineBatch25Test {
             let x: number;
             x.toString();
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -113,7 +114,7 @@ class Inv4SpineBatch25Test {
                 return inner();
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -178,7 +179,7 @@ class Inv4SpineBatch25Test {
                 e |= 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -279,7 +280,7 @@ class Inv4SpineBatch25Test {
                 return y;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -290,7 +291,7 @@ class Inv4SpineBatch25Test {
                 return (() => { return x + 1; })();
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -302,7 +303,7 @@ class Inv4SpineBatch25Test {
                 return g;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -314,7 +315,7 @@ class Inv4SpineBatch25Test {
                 return o;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     // ── reach quirks: class declarations vs class expressions ───────────────
@@ -328,7 +329,7 @@ class Inv4SpineBatch25Test {
                 return C;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -340,7 +341,7 @@ class Inv4SpineBatch25Test {
                 return C;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -365,7 +366,7 @@ class Inv4SpineBatch25Test {
                 return C;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -396,7 +397,7 @@ class Inv4SpineBatch25Test {
                 x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
         d should { have(any { it.code == 2454 && it.message == "Variable 'y' is used before being assigned." }) }
     }
 
@@ -410,7 +411,7 @@ class Inv4SpineBatch25Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -460,7 +461,7 @@ class Inv4SpineBatch25Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -473,7 +474,7 @@ class Inv4SpineBatch25Test {
                 } finally { }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -485,7 +486,7 @@ class Inv4SpineBatch25Test {
                 return y;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     // ── namespaces / ambient ────────────────────────────────────────────────
@@ -498,7 +499,7 @@ class Inv4SpineBatch25Test {
                 x.toString();
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -509,7 +510,7 @@ class Inv4SpineBatch25Test {
                 x.toString();
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -549,7 +550,7 @@ class Inv4SpineBatch25Test {
                 return a;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
         d should { have(any { it.code == 2454 && it.message == "Variable 'b' is used before being assigned." }) }
     }
 
@@ -562,6 +563,6 @@ class Inv4SpineBatch25Test {
                 return C;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2454 } == 1)
     }
 }

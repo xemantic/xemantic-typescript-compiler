@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -50,7 +51,7 @@ class CtaFnBodyAnchorTest {
                 const x: string = 1;
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -62,7 +63,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -74,7 +75,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -84,7 +85,7 @@ class CtaFnBodyAnchorTest {
                 return "s";
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
         diagnose("""
             async function good(): Promise<number> {
                 return 1;
@@ -104,7 +105,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -122,7 +123,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322 (B101 void-this), got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -138,7 +139,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -150,7 +151,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -166,7 +167,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322 (B63.5 bridged return), got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -178,7 +179,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(nStatic == 1) { "static: expected exactly 1 TS2322, got $nStatic" }
+        assert(nStatic == 1)
         val nGeneric = countTs2322("""
             class C<T> {
                 m() {
@@ -186,7 +187,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(nGeneric == 1) { "generic: expected exactly 1 TS2322, got $nGeneric" }
+        assert(nGeneric == 1)
     }
 
     @Test
@@ -231,7 +232,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(nClause == 1) { "clause: expected exactly 1 TS2322, got $nClause" }
+        assert(nClause == 1)
         val nBare = countTs2322("""
             declare const cond: boolean;
             function g(): string {
@@ -239,7 +240,7 @@ class CtaFnBodyAnchorTest {
                 return "ok";
             }
         """)
-        assert(nBare == 1) { "bare-if-return: expected exactly 1 TS2322, got $nBare" }
+        assert(nBare == 1)
         val nLoop = countTs2322("""
             function h() {
                 for (let i = 0; i < 3; i++) {
@@ -247,7 +248,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(nLoop == 1) { "loop-body: expected exactly 1 TS2322, got $nLoop" }
+        assert(nLoop == 1)
     }
 
     @Test
@@ -263,10 +264,8 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """).filter { it.code == 2322 }
-        assert(d.size == 1) { "expected exactly 1 TS2322, got ${d.size}" }
-        assert(d[0].message.contains("Type 'string' is not assignable")) {
-            "expected the NARROWED 'string' display, got: ${d[0].message}"
-        }
+        assert(d.size == 1)
+        assert(d[0].message.contains("Type 'string' is not assignable"))
     }
 
     @Test
@@ -283,10 +282,8 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """).filter { it.code == 2322 }
-        assert(d.size == 1) { "expected exactly 1 TS2322, got ${d.size}" }
-        assert(d[0].message.contains("Type 'string' is not assignable")) {
-            "expected the NARROWED 'string' display, got: ${d[0].message}"
-        }
+        assert(d.size == 1)
+        assert(d[0].message.contains("Type 'string' is not assignable"))
     }
 
     @Test
@@ -299,13 +296,13 @@ class CtaFnBodyAnchorTest {
                 p: string = 1;
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
         val nStatic = countTs2322("""
             class D {
                 static q: number = "s";
             }
         """)
-        assert(nStatic == 1) { "static: expected exactly 1 TS2322, got $nStatic" }
+        assert(nStatic == 1)
     }
 
     @Test
@@ -324,7 +321,7 @@ class CtaFnBodyAnchorTest {
                 const c: number = a;
             }
         """)
-        assert(n == 0) { "expected 0 TS2322 (legacy-parity silence), got $n" }
+        assert(n == 0)
     }
 
     @Test
@@ -337,7 +334,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(n == 1) { "expected exactly 1 TS2322, got $n" }
+        assert(n == 1)
     }
 
     private val forInRedeclareBody = """
@@ -359,9 +356,9 @@ class CtaFnBodyAnchorTest {
                 $forInRedeclareBody
             }
         """)
-        assert(d.count { it.code == 2403 } == 1) { "TS2403: ${d.count { it.code == 2403 }}" }
-        assert(d.count { it.code == 2365 } == 1) { "TS2365: ${d.count { it.code == 2365 }}" }
-        assert(d.count { it.code == 2356 } == 1) { "TS2356: ${d.count { it.code == 2356 }}" }
+        assert(d.count { it.code == 2403 } == 1)
+        assert(d.count { it.code == 2365 } == 1)
+        assert(d.count { it.code == 2356 } == 1)
     }
 
     @Test
@@ -374,7 +371,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(dNs.count { it.code == 2403 } == 1) { "ns TS2403: ${dNs.count { it.code == 2403 }}" }
+        assert(dNs.count { it.code == 2403 } == 1)
         val dCls = diagnose("""
             declare const o: any;
             class C {
@@ -383,7 +380,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """)
-        assert(dCls.count { it.code == 2403 } == 1) { "method TS2403: ${dCls.count { it.code == 2403 }}" }
+        assert(dCls.count { it.code == 2403 } == 1)
     }
 
     @Test
@@ -409,7 +406,7 @@ class CtaFnBodyAnchorTest {
                 b = a;
             }
         """).filter { it.code == 2322 && it.message.contains("FlatArray") }
-        assert(dFn.size == 1) { "fn: expected exactly 1 FlatArray TS2322, got ${dFn.size}" }
+        assert(dFn.size == 1)
         val dCls = diagnose("""
             class C {
                 m<A, D extends number>(a: FlatArray<A, any>, b: FlatArray<A, D>) {
@@ -417,7 +414,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """).filter { it.code == 2322 && it.message.contains("FlatArray") }
-        assert(dCls.size == 1) { "method: expected exactly 1 FlatArray TS2322, got ${dCls.size}" }
+        assert(dCls.size == 1)
     }
 
     @Test
@@ -433,7 +430,7 @@ class CtaFnBodyAnchorTest {
                 return a;
             }
         """).filter { it.code == 2339 }
-        assert(dFn.size == 1) { "fn: expected exactly 1 TS2339, got ${dFn.size}: ${dFn.map { it.message }}" }
+        assert(dFn.size == 1)
         val dCls = diagnose("""
             declare const r: { a: number } | undefined;
             class C {
@@ -442,7 +439,7 @@ class CtaFnBodyAnchorTest {
                 }
             }
         """).filter { it.code == 2339 }
-        assert(dCls.size == 1) { "method: expected exactly 1 TS2339, got ${dCls.size}" }
+        assert(dCls.size == 1)
     }
 
     @Test
@@ -468,7 +465,7 @@ class CtaFnBodyAnchorTest {
             declare const r: { a: number } | undefined;
             const g = ({ a } = r) => { return a; };
         """).filter { it.code == 2339 }
-        assert(d.size == 1) { "arrow: expected exactly 1 TS2339, got ${d.size}" }
+        assert(d.size == 1)
     }
 
     @Test
@@ -485,7 +482,7 @@ class CtaFnBodyAnchorTest {
                 $forInRedeclareBody
             }
         """)
-        assert(d.none { it.code == 2322 }) { "bare-position fn body must stay unreached (TS2322)" }
-        assert(d.none { it.code == 2403 }) { "bare-position fn body must stay unreached (TS2403)" }
+        assert(d.none { it.code == 2322 })
+        assert(d.none { it.code == 2403 })
     }
 }

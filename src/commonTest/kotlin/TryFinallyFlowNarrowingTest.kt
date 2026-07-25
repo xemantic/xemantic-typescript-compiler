@@ -113,7 +113,7 @@ class TryFinallyFlowNarrowingTest {
     }
 
     @Test
-    fun `statements after a try-finally see the try's normal completion, not the exceptional widening`() {
+    fun `statements after a try-finally see the try's normal completion - not the exceptional widening`() {
         // A pre-`return` guard inside the try narrows `x`; after the try/finally the
         // narrowing must survive (the finally's exceptional entry must not leak into
         // the post-statement flow). Assigning the narrowed `x` back to a `string`

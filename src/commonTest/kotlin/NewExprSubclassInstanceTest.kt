@@ -65,7 +65,7 @@ class NewExprSubclassInstanceTest {
     """
 
     @Test
-    fun `new subclass instance types as the subclass, not the base - no TS2739 on return`() {
+    fun `new subclass instance types as the subclass - not the base - no TS2739 on return`() {
         diagnose(
             prelude + """
             class ProjectService {

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -142,7 +143,7 @@ class Inv4SpineBatch20Test {
             namespace N3 { export interface I {} }
             N3 = 5;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2708 }, "expected exactly 1 TS2708, got: $d")
+        assert(d.count { it.code == 2708 } == 1)
     }
 
     @Test
@@ -330,7 +331,7 @@ class Inv4SpineBatch20Test {
                 m() { IG(); }
             }
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2693 }, "expected 2 TS2693s, got: $d")
+        assert(d.count { it.code == 2693 } == 2)
     }
 
     @Test
@@ -377,7 +378,7 @@ class Inv4SpineBatch20Test {
                 m() { return IK; },
             };
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2693 }, "expected 2 TS2693s, got: $d")
+        assert(d.count { it.code == 2693 } == 2)
     }
 
     @Test

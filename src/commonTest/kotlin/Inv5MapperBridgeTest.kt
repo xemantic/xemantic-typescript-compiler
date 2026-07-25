@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -44,7 +45,7 @@ class Inv5MapperBridgeTest {
         val d = diagnose("""
             interface I<T extends string = number> { p: T; }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2344 }, "expected 1 TS2344, got: $d")
+        assert(d.count { it.code == 2344 } == 1)
     }
 
     @Test
@@ -68,8 +69,8 @@ class Inv5MapperBridgeTest {
             const w: Wrap<string> = { value: 1 };
         """)
         val msg = d.firstOrNull { it.code == 2322 }?.message ?: ""
-        kotlin.test.assertTrue("Wrap<string>" in msg || "string" in msg, "expected a substituted mismatch, got: $d")
-        kotlin.test.assertEquals(1, d.count { it.code == 2322 }, "expected 1 TS2322, got: $d")
+        assert("Wrap<string>" in msg || "string" in msg)
+        assert(d.count { it.code == 2322 } == 1)
     }
 
     @Test

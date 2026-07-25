@@ -48,7 +48,7 @@ class BarePrimitiveEqualityNarrowingTest {
                 const base = getBaseFileName(configFilePath);
                 return base === "tsconfig.json" || base === "jsconfig.json" ? base : undefined;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2322 })
         }
@@ -63,7 +63,7 @@ class BarePrimitiveEqualityNarrowingTest {
                 const base = getBaseFileName(configFilePath);
                 return base;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2322 })
         }

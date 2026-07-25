@@ -61,7 +61,7 @@ class AssertsInferredTypeParamNarrowingTest {
                 Debug.assertNode(node.name, isIdent);
                 return node.name.escapedText;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 18048 })
         }
@@ -84,7 +84,7 @@ class AssertsInferredTypeParamNarrowingTest {
                 Debug.assertNode(node.name, isIdent);
                 return node.name.escapedText;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 18048 })
         }
@@ -109,7 +109,7 @@ class AssertsInferredTypeParamNarrowingTest {
                 Debug.assertNode(node.name, isIdent);
                 return node.name.escapedText;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 18048 || it.code == 2339 })
         }
@@ -126,7 +126,7 @@ class AssertsInferredTypeParamNarrowingTest {
                 Dbg.assertThing(node.name);
                 return node.name.escapedText;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 18048 })
         }
@@ -139,7 +139,7 @@ class AssertsInferredTypeParamNarrowingTest {
             export function h(node: FnDecl): string {
                 return node.name.escapedText;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 18048 })
         }

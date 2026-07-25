@@ -289,7 +289,7 @@ class M04ArgsCollisionSpineMigrationTest {
     }
 
     @Test
-    fun `frozen - a for HEAD is never walked (body is)`() {
+    fun `frozen - a for HEAD is never walked - body is`() {
         diagnose(
             """
             for (let g = (arguments: string, ...r: any[]) => 1; ; ) {

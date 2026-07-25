@@ -75,7 +75,7 @@ class AssignmentOverwriteResetNarrowingTest {
                 }
                 return undefined;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2339 })
         }
@@ -101,7 +101,7 @@ class AssignmentOverwriteResetNarrowingTest {
                 }
                 return undefined;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2339 })
         }
@@ -119,7 +119,7 @@ class AssignmentOverwriteResetNarrowingTest {
                 const resolved = loadOther(name);
                 return resolved.path;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2339 && it.message.contains("path") })
         }

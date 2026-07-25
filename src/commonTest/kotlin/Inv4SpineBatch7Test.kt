@@ -208,7 +208,7 @@ class Inv4SpineBatch7Test {
     }
 
     @Test
-    fun `negative control - interface method bodies are dropped by the parse (no TS1183)`() {
+    fun `negative control - interface method bodies are dropped by the parse - no TS1183`() {
         // Like the TS1246 initializer shape (batch 4): the interface member
         // parse never STORES a body, so the interface arm covers only
         // body-carrying members — a faithful migration of the old walker's

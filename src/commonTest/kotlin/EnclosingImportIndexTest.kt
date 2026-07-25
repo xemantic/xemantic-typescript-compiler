@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the round-432 perf refactor: the program-wide `spec in bindings.elements`
@@ -73,12 +73,7 @@ class EnclosingImportIndexTest {
                 "/proj/src/f2.ts" to importer,
             )
         )
-        assertEquals(
-            listOf("/proj/src/f1.ts", "/proj/src/f2.ts"),
-            ts2322Files(result),
-            "both structurally-colliding imports must resolve (string → number = TS2322 in each file); " +
-                "diagnostics: ${result.diagnostics.map { "${it.fileName}: TS${it.code} ${it.message}" }}"
-        )
+        assert(ts2322Files(result) == listOf("/proj/src/f1.ts", "/proj/src/f2.ts"))
     }
 
     @Test
@@ -101,11 +96,6 @@ class EnclosingImportIndexTest {
                 "/proj/src/g2.ts" to "// offset-shifting comment\nimport { A } from \"./lib\";\nconst z: number = A;\n",
             )
         )
-        assertEquals(
-            listOf("/proj/src/g1.ts", "/proj/src/g2.ts"),
-            ts2322Files(result),
-            "both structurally-distinct imports must resolve through their own statements; " +
-                "diagnostics: ${result.diagnostics.map { "${it.fileName}: TS${it.code} ${it.message}" }}"
-        )
+        assert(ts2322Files(result) == listOf("/proj/src/g1.ts", "/proj/src/g2.ts"))
     }
 }

@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 652): pins for the checkImplicitAnyYieldExpressions (TS7057 —
@@ -72,8 +72,8 @@ class M04ImplicitAnyYieldSpineMigrationTest {
         val hit = diagnose(src).first { it.code == 7057 }
         // The directives line is stripped before checking, so positions index
         // into the bare snippet.
-        assertEquals(src.indexOf("yield"), hit.start)
-        assertEquals(5, hit.length)
+        assert(hit.start == src.indexOf("yield"))
+        assert(hit.length == 5)
     }
 
     @Test

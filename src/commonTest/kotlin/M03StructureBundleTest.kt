@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.fail
 
 /**
@@ -70,15 +70,15 @@ class M03StructureBundleTest {
     }
 
     @Test
-    fun `diagnostic line and character are identical across LF, CRLF, and lone CR line endings`() {
+    fun `diagnostic line and character are identical across LF - CRLF - and lone CR line endings`() {
         val lf = positionsOf("\n")
         val crlf = positionsOf("\r\n")
         val cr = positionsOf("\r")
         // The error is on source line 2 in every convention — \r\n must count
         // as ONE break (double-counting would report line 3+).
-        assertEquals(2, lf.first)
-        assertEquals(lf, crlf)
-        assertEquals(lf, cr)
+        assert(lf.first == 2)
+        assert(crlf == lf)
+        assert(cr == lf)
     }
 
     @Test
@@ -89,7 +89,7 @@ class M03StructureBundleTest {
         // A no-trailing-newline error on line 1 still positions correctly.
         val d = TypeScriptCompiler().compile("let b = ;", "t.ts").diagnostics
             .firstOrNull { it.line != null } ?: fail("expected a positioned diagnostic")
-        assertEquals(1, d.line)
+        assert(d.line == 1)
     }
 
     // -- 2. fileDeclaresNonGenericType memo: the round-442 verdict ------------
@@ -138,7 +138,7 @@ class M03StructureBundleTest {
     }
 
     @Test
-    fun `contextual fn-type annotation types an arrow initializer's params (B246 arm)`() {
+    fun `contextual fn-type annotation types an arrow initializer's params - B246 arm`() {
         val diags = diagnose(
             """
             type F = (s: string) => number;
@@ -162,7 +162,7 @@ class M03StructureBundleTest {
     }
 
     @Test
-    fun `static generic method mints its own TP scope (B74_5 arm)`() {
+    fun `static generic method mints its own TP scope - B74_5 arm`() {
         val diags = diagnose(
             """
             class D<T> {

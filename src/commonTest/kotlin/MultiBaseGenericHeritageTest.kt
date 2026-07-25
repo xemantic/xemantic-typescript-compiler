@@ -110,7 +110,7 @@ class MultiBaseGenericHeritageTest {
     }
 
     @Test
-    fun `genuine non-entity-name interface base STILL fires TS2499 (negative control)`() {
+    fun `genuine non-entity-name interface base STILL fires TS2499 - negative control`() {
         // A call-expression base is a real non-entity-name; the heritage-spine flag only
         // suppresses the instantiation-expr collapse, so this must still error.
         diagnose(
@@ -125,7 +125,7 @@ class MultiBaseGenericHeritageTest {
     }
 
     @Test
-    fun `single generic base in last position still works (regression control)`() {
+    fun `single generic base in last position still works - regression control`() {
         // This shape already parsed correctly (the follow token `{` is not in
         // canFollowTypeArgumentsInExpression); pin that the flag did not disturb it.
         diagnose(

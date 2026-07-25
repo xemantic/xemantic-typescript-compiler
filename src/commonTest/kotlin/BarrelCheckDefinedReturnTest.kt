@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -45,7 +46,7 @@ import kotlin.test.Test
  */
 class BarrelCheckDefinedReturnTest {
 
-    private fun build(programSource: String): ProjectCompiler.Result {
+    private fun build(@Language("typescript") programSource: String): ProjectCompiler.Result {
         val vfs = InMemoryVfs(
             mapOf(
                 "/proj/tsconfig.json" to
@@ -76,7 +77,7 @@ class BarrelCheckDefinedReturnTest {
     }
 
     @Test
-    fun `a barrel checkDefined call types as the argument minus nullish, and downstream narrowing completes`() {
+    fun `a barrel checkDefined call types as the argument minus nullish - and downstream narrowing completes`() {
         val result = build(
             """
             import { Debug, Program, RefLoc, SynthRefLoc, SourceFile } from "./barrel.js";

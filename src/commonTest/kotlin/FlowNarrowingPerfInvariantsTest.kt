@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the round-433 perf refactors' semantic invariants:
@@ -81,11 +81,8 @@ class FlowNarrowingPerfInvariantsTest {
             }
             """.trimIndent()
         )
-        assertEquals(
-            listOf("'a' is possibly 'undefined'."),
-            result.diagnostics.filter { it.code == 18048 }.map { it.message },
-            "expected exactly the withheld-narrowing TS18048 on `a` (not `b`); " +
-                "diagnostics: ${result.diagnostics.map { "${it.line}: TS${it.code} ${it.message}" }}"
+        assert(
+            result.diagnostics.filter { it.code == 18048 }.map { it.message } == listOf("'a' is possibly 'undefined'.")
         )
     }
 
@@ -106,11 +103,7 @@ class FlowNarrowingPerfInvariantsTest {
             }
             """.trimIndent()
         )
-        assertEquals(
-            emptyList<Int?>(), ts18048Lines(result),
-            "narrowing must survive the diamond join into the closure; " +
-                "diagnostics: ${result.diagnostics.map { "${it.line}: TS${it.code} ${it.message}" }}"
-        )
+        assert(ts18048Lines(result) == emptyList<Int?>())
     }
 
     @Test

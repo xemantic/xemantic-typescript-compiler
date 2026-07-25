@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -69,7 +70,7 @@ class Inv4SpineBatch26Test {
             function f(a: number, b: number) {}
             f(1);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
         d should { have(any { it.code == 2554 && it.message == "Expected 2 arguments, but got 1." }) }
     }
 
@@ -79,7 +80,7 @@ class Inv4SpineBatch26Test {
             function f(a: number) {}
             f(1, 2, 3);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
         d should { have(any { it.code == 2554 && it.message == "Expected 1 arguments, but got 3." }) }
     }
 
@@ -89,7 +90,7 @@ class Inv4SpineBatch26Test {
             function f(a: number, ...rest: number[]) {}
             f();
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2555 }, "expected 1 TS2555, got: $d")
+        assert(d.count { it.code == 2555 } == 1)
     }
 
     @Test
@@ -100,7 +101,7 @@ class Inv4SpineBatch26Test {
             function f(a: number, b?: number, c?: number): void {}
             f(1, 2);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2575 }, "expected 1 TS2575, got: $d")
+        assert(d.count { it.code == 2575 } == 1)
         d should { have(any { it.code == 2575 && it.message.contains("either 1 or 3") }) }
     }
 
@@ -112,7 +113,7 @@ class Inv4SpineBatch26Test {
             function f(a: number, b?: number): void {}
             f(1, 2, 3, 4);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -124,7 +125,7 @@ class Inv4SpineBatch26Test {
             const x = new C(1);
             const y = new C(1, 2, 3);
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2554 }, "expected 2 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 2)
     }
 
     @Test
@@ -136,7 +137,7 @@ class Inv4SpineBatch26Test {
             }
             const x = new D();
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -151,7 +152,7 @@ class Inv4SpineBatch26Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -178,7 +179,7 @@ class Inv4SpineBatch26Test {
                 g(1, 2);
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -189,7 +190,7 @@ class Inv4SpineBatch26Test {
                 g(1, 2);
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -210,7 +211,7 @@ class Inv4SpineBatch26Test {
             const f = (a: number, b: number) => a + b;
             f(1);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -224,7 +225,7 @@ class Inv4SpineBatch26Test {
             const obj = { p: f(1, 2) };
             const t = `x${'$'}{f(1, 2)}y`;
         """)
-        kotlin.test.assertEquals(5, d.count { it.code == 2554 }, "expected 5 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 5)
     }
 
     @Test
@@ -234,7 +235,7 @@ class Inv4SpineBatch26Test {
             const g = () => f(1, 2);
             const h = function () { f(1, 2); };
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2554 }, "expected 2 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 2)
     }
 
     @Test
@@ -247,7 +248,7 @@ class Inv4SpineBatch26Test {
                 get a() { f(1, 2); return 1; }
             }
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2554 }, "expected 3 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 3)
     }
 
     @Test
@@ -259,7 +260,7 @@ class Inv4SpineBatch26Test {
                 m() { f(1, 2); }
             };
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2554 }, "expected 2 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 2)
     }
 
     @Test
@@ -268,7 +269,7 @@ class Inv4SpineBatch26Test {
             function tag(strings: any) {}
             tag`a${'$'}{1}b`;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
         d should { have(any { it.code == 2554 && it.message == "Expected 1 arguments, but got 2." }) }
     }
 
@@ -280,7 +281,7 @@ class Inv4SpineBatch26Test {
             function foo(a: any, b?: any): void {}
             foo<number>(1);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
         d should { have(any { it.code == 2554 && it.message == "Expected 2 arguments, but got 1." }) }
     }
 
@@ -304,7 +305,7 @@ class Inv4SpineBatch26Test {
             declare const xs: number[];
             f(1, 2, ...xs);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -353,7 +354,7 @@ class Inv4SpineBatch26Test {
                     f(1, 2);
             }
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2554 }, "expected 2 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 2)
     }
 
     @Test
@@ -435,7 +436,7 @@ class Inv4SpineBatch26Test {
             function f(a: number): number { return a; }
             const x = $shallow;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554 at shallow depth, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -449,7 +450,7 @@ class Inv4SpineBatch26Test {
             function f(a: number): number { return a; }
             const x = $chain;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     // ── lexical shadowing (M1.11 + B64.2 + 17.126) ──────────────────────────
@@ -526,7 +527,7 @@ class Inv4SpineBatch26Test {
                 f(1);
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
         d should { have(any { it.code == 2554 && it.message == "Expected 0 arguments, but got 1." }) }
     }
 
@@ -557,7 +558,7 @@ class Inv4SpineBatch26Test {
                 }
             };
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -574,7 +575,7 @@ class Inv4SpineBatch26Test {
                 }
             };
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test
@@ -601,7 +602,7 @@ class Inv4SpineBatch26Test {
             crossF(1);
             """,
         )
-        kotlin.test.assertEquals(1, d.count { it.code == 2554 }, "expected 1 TS2554, got: $d")
+        assert(d.count { it.code == 2554 } == 1)
     }
 
     @Test

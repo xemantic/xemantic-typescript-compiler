@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -255,7 +256,7 @@ class Inv2NodeIndexTest {
     @Test
     fun `negative control - a synthesized node is unindexed until a parse indexes it`() {
         val synthesized = Identifier(text = "synthetic")
-        assertEquals(-1, synthesized.nodeId)
-        assertEquals(null, synthesized.parent)
+        assert(synthesized.nodeId == -1)
+        assert(synthesized.parent == null)
     }
 }

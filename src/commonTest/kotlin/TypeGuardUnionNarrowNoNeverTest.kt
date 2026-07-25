@@ -41,7 +41,7 @@ import kotlin.test.Test
 class TypeGuardUnionNarrowNoNeverTest {
 
     @Test
-    fun `guard target is a subtype of a union member - narrows down, not never`() {
+    fun `guard target is a subtype of a union member - narrows down - not never`() {
         diagnose(
             """
             interface Node { kind: number; }

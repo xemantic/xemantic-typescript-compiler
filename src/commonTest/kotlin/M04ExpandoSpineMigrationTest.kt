@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 644): pins for the checkExpandoFunctionNestedReads (B431 —
@@ -70,9 +70,9 @@ class M04ExpandoSpineMigrationTest {
         val src = "function Foo() {}\nfunction g() { Foo.bar; }"
         val d = diagnose(src, directives = "")
         val hit = d.first { it.code == 2339 }
-        assertEquals("Property 'bar' does not exist on type 'typeof Foo'.", hit.message)
-        assertEquals(src.indexOf("bar;"), hit.start)
-        assertEquals(3, hit.length)
+        assert(hit.message == "Property 'bar' does not exist on type 'typeof Foo'.")
+        assert(hit.start == src.indexOf("bar;"))
+        assert(hit.length == 3)
     }
 
     @Test
@@ -217,7 +217,7 @@ class M04ExpandoSpineMigrationTest {
         )
         // Both the nested write's LHS and the sibling read fire — the
         // collector never descends into function bodies.
-        assertEquals(2, d.count { it.code == 2339 && it.message.contains("'late'") })
+        assert(d.count { it.code == 2339 && it.message.contains("'late'") } == 2)
     }
 
     @Test

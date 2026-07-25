@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 
 /**
@@ -56,10 +56,10 @@ class IntKeyMapTest {
     fun `put then get round-trips and re-put overwrites`() {
         val m = IntKeyMap<String>()
         m[7] = "first"
-        assertEquals("first", m[7])
+        assert(m[7] == "first")
         m[7] = "second"
-        assertEquals("second", m[7])
-        assertEquals(1, m.entryCount)
+        assert(m[7] == "second")
+        assert(m.entryCount == 1)
     }
 
     @Test
@@ -68,9 +68,9 @@ class IntKeyMapTest {
         m[-2] = "scope"
         m[2] = "main"
         m[0] = "zero"
-        assertEquals("scope", m[-2])
-        assertEquals("main", m[2])
-        assertEquals("zero", m[0])
+        assert(m[-2] == "scope")
+        assert(m[2] == "main")
+        assert(m[0] == "zero")
         have(m[-3] == null)
     }
 
@@ -95,7 +95,7 @@ class IntKeyMapTest {
             val neg = -2 - i
             m[neg] = v; oracle[neg] = v; v++
         }
-        assertEquals(oracle.size, m.entryCount)
+        assert(m.entryCount == oracle.size)
         for ((k, expected) in oracle) {
             val got = m[k]
             have(got == expected)
@@ -170,7 +170,7 @@ class IntKeyMapTest {
     }
 
     @Test
-    fun `NarrowSeen randomized oracle across growth, tombstone churn and nested marks`() {
+    fun `NarrowSeen randomized oracle across growth - tombstone churn and nested marks`() {
         // Reference implementation = the pre-M0.3(vii) HashSet + ArrayList form.
         val seen = NarrowSeen()
         val ids = HashSet<Int>()

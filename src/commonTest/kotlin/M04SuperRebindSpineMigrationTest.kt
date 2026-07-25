@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 641): pins for the checkSuperRefInRebindingScope (TS2660
@@ -146,7 +146,7 @@ class M04SuperRebindSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     @Test
@@ -283,7 +283,7 @@ class M04SuperRebindSpineMigrationTest {
             function f() { super(super.x); }
             """
         )
-        assertEquals(1, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 1)
     }
 
     @Test
@@ -392,7 +392,7 @@ class M04SuperRebindSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     @Test
@@ -417,7 +417,7 @@ class M04SuperRebindSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 3)
     }
 
     @Test
@@ -456,7 +456,7 @@ class M04SuperRebindSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 2)
     }
 
     @Test
@@ -471,7 +471,7 @@ class M04SuperRebindSpineMigrationTest {
             }
             """
         )
-        assertEquals(4, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 4)
     }
 
     @Test
@@ -486,7 +486,7 @@ class M04SuperRebindSpineMigrationTest {
             }
             """
         )
-        assertEquals(5, ds.count { it.code == 2660 })
+        assert(ds.count { it.code == 2660 } == 5)
     }
 
     // ── run gates ──────────────────────────────────────────────────────────

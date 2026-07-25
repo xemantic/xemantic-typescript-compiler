@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -58,7 +59,7 @@ class Inv4SpineBatch32Test {
             declare const b: number;
             const r = (a, b);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2695 }, "expected 1 TS2695, got: $d")
+        assert(d.count { it.code == 2695 } == 1)
     }
 
     @Test
@@ -81,7 +82,7 @@ class Inv4SpineBatch32Test {
             declare const c: number;
             const r = (a, b, c);
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2695 }, "expected 2 TS2695, got: ${d.filter { it.code == 2695 }}")
+        assert(d.count { it.code == 2695 } == 2)
     }
 
     @Test
@@ -95,7 +96,7 @@ class Inv4SpineBatch32Test {
             class K { m() { const r = (a, b); } }
             enum E { M = (a, 1) }
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2695 }, "expected 3 TS2695, got: ${d.filter { it.code == 2695 }}")
+        assert(d.count { it.code == 2695 } == 3)
     }
 
     // ── nullish predicates (TS2871/TS2869) ──────────────────────────────────
@@ -126,29 +127,31 @@ class Inv4SpineBatch32Test {
         """)
         // both `1` (inner left) and `1 ?? 2` — the outer left's semantics are
         // the RIGHT of the inner ?? (`2`, never nullish) → 2 emissions.
-        kotlin.test.assertEquals(2, d.count { it.code == 2869 }, "expected 2 TS2869, got: ${d.filter { it.code == 2869 }}")
+        assert(d.count { it.code == 2869 } == 2)
     }
 
     @Test
     fun `while and do conditions get truthiness checks`() {
-        val d = diagnose("""
+        diagnose("""
             while ([]) { break; }
             do { break; } while (void 0);
-        """)
-        d should { have(any { it.code == 2872 }) }
-        d should { have(any { it.code == 2873 }) }
+        """) should {
+            have(any { it.code == 2872 })
+            have(any { it.code == 2873 })
+        }
     }
 
     @Test
     fun `np anchors fire inside nested function and member bodies`() {
-        val d = diagnose("""
+        diagnose("""
             declare const y: number;
             function f() { const a = null ?? y; }
             const o = { m() { const b = undefined ?? y; } };
             const ce = class { m() { const c = null ?? y; } };
             const arrow = () => null ?? y;
-        """)
-        kotlin.test.assertEquals(4, d.count { it.code == 2871 }, "expected 4 TS2871, got: ${d.filter { it.code == 2871 }}")
+        """) should {
+            have(count { it.code == 2871 } == 4)
+        }
     }
 
     @Test

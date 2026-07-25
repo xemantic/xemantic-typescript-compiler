@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * M2.1(a) (round 390): [RealLibFiles] ships the real TypeScript lib `.d.ts`
@@ -72,7 +72,7 @@ class RealLibFilesTest {
         have(es5.trimEnd().endsWith("}"))
         have("toLocaleTimeString(locales?: string | string[], options?: Intl.DateTimeFormatOptions): string;" in es5)
         // CRLF line endings preserved byte-faithfully (no LF-only lines).
-        assertEquals(0, es5.count { it == '\n' } - es5.windowed(2).count { it == "\r\n" })
+        assert(es5.count { it == '\n' } - es5.windowed(2).count { it == "\r\n" } == 0)
     }
 
     @Test

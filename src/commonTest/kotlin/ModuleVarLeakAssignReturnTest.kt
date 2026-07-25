@@ -44,7 +44,7 @@ class ModuleVarLeakAssignReturnTest {
         TypeScriptCompiler().compile(source.trimIndent(), "entry.ts").diagnostics
 
     @Test
-    fun `return and assignment of a destructured local resolve its member type, not a foreign module var`() {
+    fun `return and assignment of a destructured local resolve its member type - not a foreign module var`() {
         compile(
             """
             // @strict: true

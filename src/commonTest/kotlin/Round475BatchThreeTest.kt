@@ -213,7 +213,7 @@ class Round475BatchThreeTest {
     }
 
     @Test
-    fun `conflated alias with un-modeled body - return is unknowable, no TS2322`() {
+    fun `conflated alias with un-modeled body - return is unknowable - no TS2322`() {
         // jsTyping's `type SafeList = ReadonlyMap<string, string>` (ReadonlyMap has no
         // modeled interface) loses the merge to editorServices' `interface SafeList` —
         // the body is unresolvable, so the verdict is unknowable (FN-not-FP).

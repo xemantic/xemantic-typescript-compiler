@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertNotNull
 
 /**
  * Pins the compiler's behavior for the module kinds tsgo (TypeScript 7) removed.
@@ -51,7 +51,8 @@ class RemovedModuleKindsTest {
     @Test fun removedModuleKindsDegradeGracefully() {
         for (kind in listOf("amd", "umd", "system")) {
             val result = TypeScriptCompiler().compile("// @module: $kind\n$moduleSource", "input.ts")
-            val js = assertNotNull(result.javascript, "module: $kind emitted no output")
+            val js = result.javascript
+            assert(js != null)
             have(js.isNotBlank(), "module: $kind emitted blank output")
             // The transforms are gone — their wrappers must never appear again.
             have(!js.contains("define("), "module: $kind emitted an AMD define() wrapper")

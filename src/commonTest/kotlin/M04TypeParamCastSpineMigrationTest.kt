@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 648): pins for the checkTypeParamStrictSubtypeCast
@@ -65,7 +65,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             "class C<T, U> { m(u: U): void { const t = <T>u; } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 &&
                 it.message.startsWith("Conversion of type 'U' to type 'T'") &&
@@ -109,7 +109,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nclass C<T extends Animal, U extends Dog> { m(u: U): void { const t = <T>u; } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 &&
                 it.message.startsWith("Conversion of type 'U' to type 'T'") &&
@@ -125,7 +125,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nclass C<T extends Animal> { m(d: Dog): void { const t = <T>d; } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 &&
                 it.message.startsWith("Conversion of type 'Dog' to type 'T'") &&
@@ -139,7 +139,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nclass C { m<T extends Animal>(d: Dog): void { const t = <T>d; } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -147,7 +147,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction f<T extends Animal>(): void { const t = <T>dog; }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 &&
                 it.message.startsWith("Conversion of type 'Dog' to type 'T'") })
@@ -179,7 +179,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             "function f<T extends null | undefined>(): void { const y = {} as T; }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 &&
                 it.message.startsWith("Conversion of type '{}' to type 'T'") &&
@@ -193,7 +193,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             "function f<T extends undefined>(): void { const e = {}; e as T; }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -201,7 +201,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             "function f<T extends undefined>(): void { e as T; var e = {}; }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -212,7 +212,7 @@ class M04TypeParamCastSpineMigrationTest {
             function f<T extends null>(): void { e as T; }
             """
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -258,7 +258,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction outer(): void { function g<T extends Animal>(): void { const t = <T>dog; } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -284,7 +284,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction f<T extends Animal>(): void { if (flag) { class K { p = <T>dog; } } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -301,7 +301,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction f<T extends Animal>(): void { if (flag) { class K { get g(): Animal { return <T>dog; } } } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -309,7 +309,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nclass C<T extends Animal> { constructor() { const t = <T>dog; } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -326,7 +326,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nnamespace N { export class C<T extends Animal> { m(d: Dog): void { const t = <T>d; } } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -334,7 +334,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction f<T extends Animal>(): void { const g = (): Animal => <T>dog; }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -342,7 +342,7 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction f<T extends Animal>(): void { const o = { m(): Animal { return <T>dog; } }; }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 
     @Test
@@ -350,6 +350,6 @@ class M04TypeParamCastSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nfunction f<T extends Animal>(): void { switch (1) { case 1: { const t = <T>dog; } } }"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
     }
 }
