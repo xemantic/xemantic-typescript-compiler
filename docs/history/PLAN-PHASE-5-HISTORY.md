@@ -1,3 +1,81 @@
+**Round 660 (2026-07-25) — (M1)(a) THE EPOCH-CHURN ATTRIBUTION: the item's
+premise was wrong in two ways, "fence per map" is dead before it was tried, and
+M1's prize is ~11–13%, not the 30–45% the queue claimed.** The first (M1) step
+was stated as "attribute the epoch churn: 80k of 111k walks run at fresh epochs
+because the walk's own recordings bump the fences — split read-relevant vs
+record-only state, or fence per-map". Measuring it says the diagnosis, the cause
+and the size were all off.
+
+**The instrument** (behind `--passTiming`, off-mode additive-only): every one of
+the 21 fence bumps is now TAGGED with the field or collection that moved
+(`bumpExprEpoch(src)`, inline with a constant tag → `epochBumps`), and the walk
+probe's single `walkMiss` counter is SPLIT — cold (first sighting of this
+reference) vs epoch-invalidated repeat — with, for the latter, the recomputed
+result compared against the pre-invalidation one (identical / structural / diff),
+the epoch delta, and a blame tag naming the last bumper.
+
+**Finding 1 — most misses are COLD, not churn.** Of 80,034 misses: **cold 45,476
+(57%)**, epoch-invalidated 34,558 (43%). The old framing conflated the two; no
+fence design whatsoever recovers the cold half.
+
+**Finding 2 — but the fence really is far too coarse.** Of the 34,558
+invalidated repeats, **34,424 (99.6%) recompute to an IDENTICAL result** — 1
+structural, 133 genuinely different. So essentially every invalidation is
+spurious *for the reference being walked*.
+
+**Finding 3 — and the coarseness is NOT noise, which kills "fence per map".**
+`meanEpochDelta` is **218**: between two successive walks of the SAME reference
+the fence moves ~218 times. Blame concentrates in exactly two sources —
+**currentLocalTypes swaps 67%, currentFlowGraph swaps 29% = 96%** — which are
+the spine's per-scope and per-file installs, i.e. GENUINE state changes, not
+bookkeeping. A finer fence over the same key space still trips on them.
+
+**Landed alongside, sound and zero-risk: no-op guards on all 13 fenced setters**
+(`if (field !== v) { field = v; bump }`) — an assignment that does not change the
+field cannot invalidate anything. That removes **1,461,277 pure no-op bumps
+(28% of all fence traffic**: currentTypeParamScope 466,906, contextualType
+223,699, currentSuperBaseType/Sig 186,004 each, currentEnumConstrainedParams
+181,336, currentClassForThis 152,548, currentFlowGraph 63,670 — i.e. save/restore
+round-trips and re-installs of the same instance) and drops meanEpochDelta
+218 → 154. **HONEST RESULT: it recovers ~200 of the 34.5k invalidated repeats —
+0.6%.** Killing the noise does not kill the churn; that is Finding 3 measured
+from the other side. Kept anyway because it is correct, it sharpens the blame
+table to genuine changes only, and a live memo will need it. Worth stating
+plainly: **the epoch is PROBE-ONLY today** — `spineExprEpoch` is read only by
+the two `--passTiming` shadow probes — so nothing in this round can alter
+compiler output, which is why a fence change of this size is a zero-risk commit.
+
+**What (b) becomes.** Not "split read-relevant vs record-only", not "fence per
+map", but **DEPENDENCY-KEYED validity**: a walk of reference R reads only state
+reachable from R's ROOT NAME, so a memo entry should record the
+`(rootName, generation)` it read and be served while that pair still matches —
+a per-NAME generation counter on the localTypes family (bumped on put/remove of
+that key; a swap = a new generation id for the whole map). Its second half is
+unchanged and is the part both earlier dead-ends were blocked on: canonicalize
+narrowing OUTPUTS (filters over interned unions must yield interned results;
+literal interning; instantiated-member caching ON the Type.Reference, deleting
+resolveGenericPropertyType's fresh-minting), because a valid memo hit that
+returns a fresh-but-equal Type still misses every downstream id-keyed cache.
+
+**Ceiling recalibration — the number to carry forward.** narrowWalks cost
+3,942 ms over 111,248 walks ≈ **35 µs/walk**, so a PERFECT walk memo saves the
+1,000 ms of already-identical repeats plus ~34.2k × 35 µs ≈ 1.2 s → **~2.2 s**;
+the getTypeOfExpression shadow memo could serve 149,742 of 484,628 calls (31%)
+≈ **1.1 s**. Together **≈ 3.3 s of ~29 s = 11–13%.** That is still the biggest
+single lever left — 3× the entire remaining M0.4 tail — but the item's
+"≤15–20 s path" (30–45%) was never measured and is now retired from the queue.
+Sizing the work to the real number is the point of paying for measurement first;
+this is the second consecutive round where doing so changed the plan.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); off-mode `--listAll` on the
+compiler profile byte-identical vs the round-658 capture (only `time:` differs) —
+sufficient here because the change is confined to probe counters and a fence
+that nothing outside `--passTiming` reads; warning-clean (the
+`NOTHING_TO_INLINE` suppression on `bumpExprEpoch` is deliberate: inlining keeps
+off-mode at one increment plus one static boolean test). NEXT: (M1)(b) —
+per-name generation counters on the localTypes family, shadow-gated
+(`hitWRONG` must stay 0), then canonical narrowing outputs.
+
 **Round 659 (2026-07-25) — (M0.4-AB) THE ARC MEASUREMENT, PAID: the M0.4
 migration arc is NOT a wall-clock lever, and the mechanism is measured. M0.4 is
 CLOSED at 35 passes; (M1) identity stability is next.** This round landed no

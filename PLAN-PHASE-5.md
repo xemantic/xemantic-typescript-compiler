@@ -20,6 +20,57 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 669 (2026-07-25) — EP.1 DONE: barrel-reached const enums now inline —
+and measuring it falsified EP.1's dashboard premise as well, the way round 667
+falsified its technical one.** This completes the barrel-hop pair begun in round
+668 (the checker-side TS2694 FP); same root cause, same suppression-safe shape,
+and the same lesson about checking a stale claim before believing its size.
+
+**The fix.** Through a barrel the emit kept `barrel_1.Kind.B`, retained a real
+`require("./barrel")` and dragged in the entire `__importStar` helper tsc
+elides. It now emits `1 /* Kind.B */`, `0 /* B.Kind.A */`,
+`"x" /* Names.X */` with the import fully elided. Cause: both const-enum entry
+points (`resolveConstEnumMemberAccess`, `isConstEnumAlias`) reach the enum via
+`resolveAlias`/`resolveNamePath`, which walk `symbol.exports` — and a star
+re-export never populates the barrel's own export table.
+`constEnumSymbolThroughStars` resolves the importing statement (named OR
+namespace form), follows the target module's star closure, and returns a symbol
+ONLY when it carries `SymbolFlags.ConstEnum`. **Const-enum-only by
+construction** — it can never feed a general type resolution, which is precisely
+what keeps it clear of the documented dead-end where star-following inside
+`resolveAlias` flooded TS2315 ×466.
+
+**The honest headline: ZERO effect on the tsc profiles.** Before AND after, the
+emitted `compiler` dist contains 1,663 numeric + 18 string const-enum inlines
+and **0 residual `ts_N.X.Y`** accesses — identical. I measured that with a
+stash/rebuild specifically because attributing those 1,681 inlines to this
+change would have been wrong, and this arc has already produced three
+mis-attributions from exactly that reflex. So EP.1's "highest impact, ~93% of
+the changed lines" sizing is stale in the same way its technical premise was:
+the tsc profile already inlines everything, and the barrel gap is a shape those
+profiles never hit. The fix is kept because the gap is real — the repro and pins
+prove it — but it is **general-correctness value for the post-v1 "any TypeScript
+project" horizon, not a dashboard win**, and the queue now says so.
+
+**Where that leaves EP.** EP.3 done (round 484), EP.1a done (668), EP.1 done
+(669) — and all three of the "systematic families" round 483 identified are now
+either fixed or found already-fixed. EP.2 (multi-line printer formatting) and
+EP.0 (the diff gate) remain blocked offline: no `node`, no `tsc`, no `tsc.js` on
+this box. So **the EP family is finished to the extent it can be, offline**, and
+what remains needs either a user-provided reference tsc or a decision that
+byte-parity is not worth the network dependency.
+
+Gates: 7 pins (`BarrelConstEnumInliningTest` — named/namespace/string-valued
+inlining, import elision, a two-barrel chain, plus two negative controls proving
+a REGULAR enum and `preserveConstEnums`/`isolatedModules` keep their runtime
+access); suite 12,513 → **12,520/0** (3 skipped) with every JS baseline still
+byte-exact — the corpus is the real emit gate here; `--listAll` ×8
+byte-identical on all eight profiles; warning-clean.
+
+Re-learned the hard way, and worth repeating because CLAUDE.md documents it: a
+literal `/*` inside a KDoc opens a NESTED block comment and breaks the file. The
+doc comment now describes tsc's inlined form in words instead.
+
 **Round 668 (2026-07-25) — EP.1a DONE: the `export *` barrel namespace-import
 false positive (TS2694) is fixed, gated offline, and inert on all eight
 profiles.** Round 667's triage found this while checking EP.1's premise; it was
@@ -462,84 +513,6 @@ block, no matter where its consumer lives.**
 Gates: suite 12,507/0 (3 skipped, unchanged); probe-only so no output can change
 (the epoch/shadow machinery is read solely under `--passTiming`); warning-clean.
 NEXT: (M1)(b1) — the recorded read-set, same shadow gate.
-
-**Round 660 (2026-07-25) — (M1)(a) THE EPOCH-CHURN ATTRIBUTION: the item's
-premise was wrong in two ways, "fence per map" is dead before it was tried, and
-M1's prize is ~11–13%, not the 30–45% the queue claimed.** The first (M1) step
-was stated as "attribute the epoch churn: 80k of 111k walks run at fresh epochs
-because the walk's own recordings bump the fences — split read-relevant vs
-record-only state, or fence per-map". Measuring it says the diagnosis, the cause
-and the size were all off.
-
-**The instrument** (behind `--passTiming`, off-mode additive-only): every one of
-the 21 fence bumps is now TAGGED with the field or collection that moved
-(`bumpExprEpoch(src)`, inline with a constant tag → `epochBumps`), and the walk
-probe's single `walkMiss` counter is SPLIT — cold (first sighting of this
-reference) vs epoch-invalidated repeat — with, for the latter, the recomputed
-result compared against the pre-invalidation one (identical / structural / diff),
-the epoch delta, and a blame tag naming the last bumper.
-
-**Finding 1 — most misses are COLD, not churn.** Of 80,034 misses: **cold 45,476
-(57%)**, epoch-invalidated 34,558 (43%). The old framing conflated the two; no
-fence design whatsoever recovers the cold half.
-
-**Finding 2 — but the fence really is far too coarse.** Of the 34,558
-invalidated repeats, **34,424 (99.6%) recompute to an IDENTICAL result** — 1
-structural, 133 genuinely different. So essentially every invalidation is
-spurious *for the reference being walked*.
-
-**Finding 3 — and the coarseness is NOT noise, which kills "fence per map".**
-`meanEpochDelta` is **218**: between two successive walks of the SAME reference
-the fence moves ~218 times. Blame concentrates in exactly two sources —
-**currentLocalTypes swaps 67%, currentFlowGraph swaps 29% = 96%** — which are
-the spine's per-scope and per-file installs, i.e. GENUINE state changes, not
-bookkeeping. A finer fence over the same key space still trips on them.
-
-**Landed alongside, sound and zero-risk: no-op guards on all 13 fenced setters**
-(`if (field !== v) { field = v; bump }`) — an assignment that does not change the
-field cannot invalidate anything. That removes **1,461,277 pure no-op bumps
-(28% of all fence traffic**: currentTypeParamScope 466,906, contextualType
-223,699, currentSuperBaseType/Sig 186,004 each, currentEnumConstrainedParams
-181,336, currentClassForThis 152,548, currentFlowGraph 63,670 — i.e. save/restore
-round-trips and re-installs of the same instance) and drops meanEpochDelta
-218 → 154. **HONEST RESULT: it recovers ~200 of the 34.5k invalidated repeats —
-0.6%.** Killing the noise does not kill the churn; that is Finding 3 measured
-from the other side. Kept anyway because it is correct, it sharpens the blame
-table to genuine changes only, and a live memo will need it. Worth stating
-plainly: **the epoch is PROBE-ONLY today** — `spineExprEpoch` is read only by
-the two `--passTiming` shadow probes — so nothing in this round can alter
-compiler output, which is why a fence change of this size is a zero-risk commit.
-
-**What (b) becomes.** Not "split read-relevant vs record-only", not "fence per
-map", but **DEPENDENCY-KEYED validity**: a walk of reference R reads only state
-reachable from R's ROOT NAME, so a memo entry should record the
-`(rootName, generation)` it read and be served while that pair still matches —
-a per-NAME generation counter on the localTypes family (bumped on put/remove of
-that key; a swap = a new generation id for the whole map). Its second half is
-unchanged and is the part both earlier dead-ends were blocked on: canonicalize
-narrowing OUTPUTS (filters over interned unions must yield interned results;
-literal interning; instantiated-member caching ON the Type.Reference, deleting
-resolveGenericPropertyType's fresh-minting), because a valid memo hit that
-returns a fresh-but-equal Type still misses every downstream id-keyed cache.
-
-**Ceiling recalibration — the number to carry forward.** narrowWalks cost
-3,942 ms over 111,248 walks ≈ **35 µs/walk**, so a PERFECT walk memo saves the
-1,000 ms of already-identical repeats plus ~34.2k × 35 µs ≈ 1.2 s → **~2.2 s**;
-the getTypeOfExpression shadow memo could serve 149,742 of 484,628 calls (31%)
-≈ **1.1 s**. Together **≈ 3.3 s of ~29 s = 11–13%.** That is still the biggest
-single lever left — 3× the entire remaining M0.4 tail — but the item's
-"≤15–20 s path" (30–45%) was never measured and is now retired from the queue.
-Sizing the work to the real number is the point of paying for measurement first;
-this is the second consecutive round where doing so changed the plan.
-
-Gates: suite 12,507/0 (3 skipped, unchanged); off-mode `--listAll` on the
-compiler profile byte-identical vs the round-658 capture (only `time:` differs) —
-sufficient here because the change is confined to probe counters and a fence
-that nothing outside `--passTiming` reads; warning-clean (the
-`NOTHING_TO_INLINE` suppression on `bumpExprEpoch` is deliberate: inlining keeps
-off-mode at one increment plus one static boolean test). NEXT: (M1)(b) —
-per-name generation counters on the localTypes family, shadow-gated
-(`hitWRONG` must stay 0), then canonical narrowing outputs.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1243,47 +1216,29 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   whether a printer change moves the diff toward or away from tsc, and the
   printer is exactly what the green corpus pins. Revive when a reference tsc is
   available (see EP.0).
-- [~] **EP.1 Cross-module const-enum inlining — PREMISE PARTLY FALSIFIED
-  (round 667); the residual is BARRELS ONLY and it is offline-gateable.** The
-  round-483 claim ("xtsc keeps `mod.Enum.Member` for const enums imported across
-  modules") is stale — direct cross-module inlining already works, for BOTH
-  import forms and BOTH value kinds. Verified two ways: the corpus test
-  `constEnumNamespaceReferenceCausesNoImport` is an ACTIVE JS-emit subtest whose
-  tsc baseline is `case 0 /* Foo.ConstFooEnum.Some */`, and it PASSES; and a
-  scratch project emits `1 /* Kind.B */` for a named import, `"x" /* Names.X */`
-  for a string-valued one, and `1 /* E.Kind.B */` for `import * as`. What still
-  fails is the `export * from` BARREL hop — exactly tsc's own `_namespaces/ts.js`
-  layout, which is why round 483 saw it in `utilities.js`:
-  `import { Kind } from "./barrel"` emits `barrel_1.Kind.B`, `import * as B`
-  emits `B.Kind.A`, and both drag in a real `require` plus the whole
-  `__importStar` helper that tsc elides. So the item is NOT "teach the checker
-  whole-program const-enum resolution" (that exists) but "follow `export *` when
-  resolving a const-enum member". Likely lever: `Transformer.collectConstEnumValues`
-  walks statements directly, while the barrel-following resolvers
-  (`resolveExportedSymbolThroughStars` / `getModuleExportsFollowingStars`, M1.1
-  round 413) live in the Checker — the two are not connected. Gateable OFFLINE
-  by a local pin + the corpus; no reference tsc needed.
-  - [x] **EP.1a DONE round 668 — the barrel-shape FP TS2694 is fixed.**
-    `namespaceImportMemberViaStarExports` consults `getModuleExportsFollowingStars`
-    (M1.1) and withholds the emission when the member is reachable through the
-    star chain, or when that returns NULL (= UNKNOWABLE, per the M1.1 rule that
-    callers must then skip absence emission). SUPPRESSION-ONLY by construction —
-    it resolves no types, which is exactly why it is safe where star-following in
-    the general `resolveAlias` is a documented dead-end (TS2315 ×466 flood).
-    Located in ONE run with the CLAUDE.md probe technique (a temporary env-gated
-    `init` on the Diagnostic data class printing a stack trace for code 2694)
-    instead of reading four candidate emitters. Gates: 6 pins
-    (BarrelStarExportNamespaceMemberTest — 3 positive incl. a two-barrel chain,
-    3 negative controls proving a real absence still reports); suite
-    12,507 → 12,513/0; `--listAll` ×8 byte-identical on all eight profiles. The
-    ORIGINAL note follows, for the record:
-  - [ ] ~~EP.1a: the same barrel shape emits a FALSE POSITIVE TS2694.~~ `import * as B from "./barrel"` (barrel =
-    `export * from "./enums"`) then `B.Kind` reports *"Namespace '"viaBarrel".B'
-    has no exported member 'Kind'"* — valid TypeScript, wrongly rejected. FPs are
-    the v1 metric, so fix this before the byte-fidelity half; the repro is two
-    files and the fix is presumably the same missing star-hop. Note it does NOT
-    appear on the 8 tsc-source profiles (still 46×7/94), so it is a shape those
-    profiles do not reach — add it as a local pin, not a dashboard expectation.
+- [x] **EP.1 DONE round 669 — and its dashboard premise is falsified too.** The
+  barrel hop now inlines: `1 /* Kind.B */`, `"x" /* Names.X */`,
+  `0 /* B.Kind.A */`, with the import elided and no `__importStar` helper —
+  tsc's exact shape. Cause was the same as EP.1a's: both const-enum entry points
+  (`resolveConstEnumMemberAccess`, `isConstEnumAlias`) reach the enum through
+  `resolveAlias`/`resolveNamePath`, which walk `symbol.exports`, and a star
+  re-export never populates the barrel's own export table.
+  `constEnumSymbolThroughStars` follows the target module's star closure and
+  returns a symbol ONLY when it carries `SymbolFlags.ConstEnum` —
+  const-enum-only by construction, so it can never feed a general type
+  resolution, which is what keeps it clear of the `resolveAlias` star dead-end
+  (TS2315 ×466). **MEASURED, not assumed: ZERO effect on the tsc profiles.**
+  Before AND after, the emitted `compiler` dist has 1,663 numeric + 18 string
+  inlines and **0 residual `ts_N.X.Y`** — identical (verified by stash/rebuild
+  precisely so the 1,681 inlines would not be mis-attributed to this change). So
+  EP.1's "highest impact, ~93% of the changed lines" sizing is stale exactly like
+  its premise was: the tsc profile already inlined everything, and the barrel gap
+  is a shape those profiles never hit. Kept because the gap was real (repro +
+  pins) — general-correctness value for the post-v1 "any project" horizon, NOT a
+  dashboard win. Gates: 7 pins (BarrelConstEnumInliningTest, incl. a two-barrel
+  chain and two negative controls for regular enums and
+  preserveConstEnums/isolatedModules); suite 12,520/0 with every JS baseline
+  byte-exact; `--listAll` ×8 byte-identical.
 - [ ] **EP.0 Wire the emit-diff gate into the dashboard** — **BLOCKED OFFLINE
   (round 667): there is no reference tsc on this box** (no node/npx/tsc/tsc.js;
   `scripts/emit-diff-tsc.sh` exists but cannot run). Unblocking needs either a
