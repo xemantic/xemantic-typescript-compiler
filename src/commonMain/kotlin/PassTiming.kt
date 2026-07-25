@@ -192,6 +192,9 @@ object PassTiming {
         relationNanos = 0; typeNodeNanos = 0; memberResolveNanos = 0
         walkRepeatIdentical = 0; walkRepeatStructuralUnion = 0; walkRepeatDiff = 0; walkMiss = 0
         walkRepeatNanos = 0
+        walkMissCold = 0; walkMissEpochIdentical = 0; walkMissEpochStructural = 0
+        walkMissEpochDiff = 0; walkMissEpochDeltaSum = 0
+        epochBumps.clear(); epochBlame.clear(); epochNoops.clear()
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -241,6 +244,50 @@ object PassTiming {
     var walkRepeatDiff: Long = 0
     var walkMiss: Long = 0
     var walkRepeatNanos: Long = 0
+
+    // (M1)(a) round 660: the epoch-churn ATTRIBUTION split. `walkMiss` above
+    // conflated two very different things — a reference seen for the FIRST time
+    // (cold, unavoidable) and a reference seen before whose memo entry was
+    // INVALIDATED by an epoch bump. Only the second is churn, and the decisive
+    // sub-question is whether the invalidating state change mattered AT ALL for
+    // that reference: an epoch-invalidated repeat whose recomputed result is
+    // IDENTICAL is a fence that is too coarse, i.e. directly recoverable by
+    // splitting read-relevant from record-only state (or fencing per map).
+    var walkMissCold: Long = 0
+    var walkMissEpochIdentical: Long = 0
+    var walkMissEpochStructural: Long = 0
+    var walkMissEpochDiff: Long = 0
+    /** Sum of (epoch now − epoch at the previous walk of the same reference) —
+     *  a small mean means single bumps are doing the invalidating. */
+    var walkMissEpochDeltaSum: Long = 0
+    /** Epoch bumps by SOURCE field/collection (every fenced setter is tagged). */
+    val epochBumps = HashMap<String, Long>()
+    /** For each epoch-invalidated repeat, the source of the LAST bump before it
+     *  — an approximation of "who invalidated this walk", exact when the delta
+     *  is 1. */
+    val epochBlame = HashMap<String, Long>()
+
+    fun noteEpochBump(src: String) {
+        epochBumps[src] = (epochBumps[src] ?: 0L) + 1L
+        lastEpochBumpSource = src
+    }
+
+    /** The source tag of the most recent epoch bump (not reset per walk). */
+    var lastEpochBumpSource: String = "(none)"
+
+    fun noteEpochBlame(src: String) {
+        epochBlame[src] = (epochBlame[src] ?: 0L) + 1L
+    }
+
+    /** (M1)(a) round 660: assignments to a fenced field that did NOT change it
+     *  (`field === v`) — save/restore round-trips and re-installs of the same
+     *  instance. These used to bump the fence and invalidate every memo entry
+     *  for nothing; the setters now skip the bump and count here instead. */
+    val epochNoops = HashMap<String, Long>()
+
+    fun noteEpochNoop(src: String) {
+        epochNoops[src] = (epochNoops[src] ?: 0L) + 1L
+    }
 
     var relationNanos: Long = 0
     var typeNodeNanos: Long = 0
@@ -308,6 +355,19 @@ object PassTiming {
         initMark = null
     }
 
+    /** (M1)(a): mean epoch advance between two walks of the SAME reference —
+     *  1.0 would mean a single bump invalidates each repeat. */
+    private fun epochDeltaMean(): String {
+        val n = walkMissEpochIdentical + walkMissEpochStructural + walkMissEpochDiff
+        return if (n == 0L) "n/a" else ((walkMissEpochDeltaSum * 10 / n) / 10.0).toString()
+    }
+
+    /** Top-[k] "name=count" pairs, count-descending, for the churn tables. */
+    private fun topCounts(m: Map<String, Long>, k: Int): String =
+        if (m.isEmpty()) "(none)"
+        else m.entries.sortedByDescending { it.value }.take(k)
+            .joinToString(" ") { "${it.key}=${it.value}" }
+
     /** Render the sorted pass-time table + counters through [appendLine]. */
     fun dump(appendLine: (String) -> Unit) {
         appendLine("== xtsc pass timing (INV.0) ==")
@@ -354,6 +414,12 @@ object PassTiming {
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
         appendLine(
             "walkRepeats: identical=$walkRepeatIdentical structuralUnion=$walkRepeatStructuralUnion diff=$walkRepeatDiff miss=$walkMiss savableNanos=${walkRepeatNanos / 1_000_000}ms\n" +
+            "walkMiss split: cold=$walkMissCold epochInvalidated=${walkMissEpochIdentical + walkMissEpochStructural + walkMissEpochDiff}" +
+            " (identical=$walkMissEpochIdentical structural=$walkMissEpochStructural diff=$walkMissEpochDiff" +
+            " meanEpochDelta=${epochDeltaMean()})\n" +
+            "epochBumps: ${topCounts(epochBumps, 8)}\n" +
+            "epochBlame (last bump before an invalidated repeat): ${topCounts(epochBlame, 8)}\n" +
+            "epochNoops (same-value assignments, bump SKIPPED): ${topCounts(epochNoops, 8)}\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +

@@ -300,6 +300,21 @@ class Checker(
      *  Declared BEFORE init (the init-order trap). */
     private var spineExprEpoch: Long = 1
 
+    /** (M1)(a) round 660: bump the expression-memo epoch, TAGGED with the field
+     *  or collection that moved. The tag is a compile-time constant at every
+     *  call site and is recorded only under `--passTiming`, so off-mode remains
+     *  exactly the pre-tagging `spineExprEpoch++` plus one static boolean test —
+     *  the INV.0 additive-only rule. The tags are what make the churn
+     *  attributable: `epochBumps` says who moves the fence and `epochBlame` says
+     *  who was moving it right before a walk had to recompute. */
+    @Suppress("NOTHING_TO_INLINE") // inlined to keep the off-mode cost at one
+    // increment + one static boolean test on a very hot path, and to keep the
+    // tag a constant-pool reference rather than an argument push.
+    private inline fun bumpExprEpoch(src: String) {
+        spineExprEpoch++
+        if (PassTiming.enabled) PassTiming.noteEpochBump(src)
+    }
+
     // (f2) round 598 probes: depth-0 reentrance guards for the time split.
     private var relProbeDepth = 0
     /** (f2) round 599: the walk-result shadow — (refNodeId | fileHash) →
@@ -317,10 +332,10 @@ class Checker(
     ) : MutableMap<String, Type> by backing {
         constructor() : this(HashMap())
         constructor(m: Map<String, Type>) : this(HashMap(m))
-        override fun put(key: String, value: Type): Type? { spineExprEpoch++; return backing.put(key, value) }
-        override fun remove(key: String): Type? { spineExprEpoch++; return backing.remove(key) }
-        override fun putAll(from: Map<out String, Type>) { spineExprEpoch++; backing.putAll(from) }
-        override fun clear() { spineExprEpoch++; backing.clear() }
+        override fun put(key: String, value: Type): Type? { bumpExprEpoch("EpochMap.put"); return backing.put(key, value) }
+        override fun remove(key: String): Type? { bumpExprEpoch("EpochMap.remove"); return backing.remove(key) }
+        override fun putAll(from: Map<out String, Type>) { bumpExprEpoch("EpochMap.putAll"); backing.putAll(from) }
+        override fun clear() { bumpExprEpoch("EpochMap.clear"); backing.clear() }
     }
 
     /** In-place-mutation-tracked set for the name-set family (composition — see [EpochMap]). */
@@ -329,10 +344,10 @@ class Checker(
     ) : MutableSet<String> by backing {
         constructor() : this(HashSet())
         constructor(c: Collection<String>) : this(HashSet(c))
-        override fun add(element: String): Boolean { spineExprEpoch++; return backing.add(element) }
-        override fun remove(element: String): Boolean { spineExprEpoch++; return backing.remove(element) }
-        override fun addAll(elements: Collection<String>): Boolean { spineExprEpoch++; return backing.addAll(elements) }
-        override fun clear() { spineExprEpoch++; backing.clear() }
+        override fun add(element: String): Boolean { bumpExprEpoch("EpochSet.add"); return backing.add(element) }
+        override fun remove(element: String): Boolean { bumpExprEpoch("EpochSet.remove"); return backing.remove(element) }
+        override fun addAll(elements: Collection<String>): Boolean { bumpExprEpoch("EpochSet.addAll"); return backing.addAll(elements) }
+        override fun clear() { bumpExprEpoch("EpochSet.clear"); backing.clear() }
     }
 
     /** (f1b-i): the SHADOW memo — under --passTiming only, getTypeOfExpression
@@ -343,7 +358,7 @@ class Checker(
     private val shadowConfirmed = HashSet<Int>()
 
     private var currentClassForThis: ClassDeclaration? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentClassForThis") }
 
     /** B-interfaceClassMerging: the enclosing class symbol whose method-body return type
      *  is currently being inferred. Set around method-return inference (both the lazy
@@ -503,7 +518,7 @@ class Checker(
     // iteration order is never consumed, and it is COPIED per function-body scope entry,
     // so LinkedHashMap's afterNodeInsertion + ordered-copy overhead is pure waste.
     private var currentLocalTypes: MutableMap<String, Type> = HashMap()
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentLocalTypes(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentLocalTypes(swap)") }
 
     /**
      * Round 459: annotation type NODES for function-body locals, populated alongside
@@ -527,7 +542,7 @@ class Checker(
      */
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
     private var currentShadowedNames: MutableSet<String> = HashSet()
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentShadowedNames(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentShadowedNames(swap)") }
 
     /**
      * Round 460 (program.ts findSourceFileWorker): names declared by TWO OR MORE
@@ -555,7 +570,7 @@ class Checker(
      * IfStatement arms.
      */
     private var narrowedDeclaredTypes: MutableMap<String, Type> = mutableMapOf()
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("narrowedDeclaredTypes(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("narrowedDeclaredTypes(swap)") }
 
     /** B263: names declared ONLY in typeRoot package files that did NOT resolve from the
      *  `types` compiler option — stripped from the unresolved-name scope so uses of them
@@ -596,7 +611,7 @@ class Checker(
      *  at function-body entry. NOT used for type resolution — membership-only. */
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
     private var currentParamBindingNames: MutableSet<String> = HashSet()
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentParamBindingNames(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentParamBindingNames(swap)") }
 
     /** Round 477: memo for [resolveNamespaceQualifiedTypeAlias], key `"file|ns|member"`
      *  (null = doesn't resolve). Declared before `init` — the discriminant-key readers
@@ -626,7 +641,7 @@ class Checker(
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
      *  enumPropertyAccess TS2339 case. Saved/restored alongside `currentLocalTypes`. */
     private var currentEnumConstrainedParams: Map<String, String> = emptyMap()
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentEnumConstrainedParams") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentEnumConstrainedParams") }
 
     /** The enum declaration whose member-initializer expressions are currently being
      *  walked by the property-access pass, so a bare-Identifier receiver that names a
@@ -634,13 +649,13 @@ class Checker(
      *  the EnumDeclaration branch of [checkPropertyAccessInStatement]; consulted by
      *  [enumTypedReceiverDisplay]. */
     private var currentEnclosingEnum: EnumDeclaration? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentEnclosingEnum") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentEnclosingEnum") }
 
     /** File-level symbol table for the file currently being checked. Set by checker passes
      *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFileLocals") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentFileLocals") }
 
     /** INV.2(d): the current file's lexical scope tables ([BinderResult.lexicalScopes]),
      *  set per file by [checkPropertyAccess]. Consulted by [lexicalScopeSymbol] to resolve
@@ -684,7 +699,7 @@ class Checker(
      *  [getFlowAt] during narrowing in [checkVarDeclAssignability]. Null in passes
      *  that don't initialize it (narrowing is opt-in per emission site). */
     private var currentFlowGraph: FlowGraph? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFlowGraph") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentFlowGraph") }
     /**
      * inKeywordAndUnknown: when true, [narrowByTruthiness] maps a bare truthy
      * `unknown` to the [truthyUnknownType] sentinel so [checkInOperatorRhs] can
@@ -775,14 +790,14 @@ class Checker(
      *  target has call signatures (e.g., `var f: (x: number) => void = (x) => { ... }`).
      *  Used by getTypeOfArrowFunction/getTypeOfFunctionExpression to infer parameter types. */
     private var contextualType: Type? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("contextualType") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("contextualType") }
 
     /** 16.0: Class/interface type parameter scope for member type resolution.
      *  Set by resolveReferenceMembers / getTypeOfVariableOrProperty when resolving member
      *  types that reference enclosing class type parameters (e.g. `get foo(): T` inside
      *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
     private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentTypeParamScope") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentTypeParamScope") }
 
     /** (cpa-m2a): the cpa spine frame — most legacy state is AMBIENT with
      *  map COPIES only at function-like boundaries (the per-member-kind
@@ -3119,7 +3134,7 @@ class Checker(
      *  the heritage clause's type args. Consumed by [checkSingleCallExpressionTypes]
      *  when the callee is `Identifier("super")`. */
     private var currentSuperBaseSig: Signature? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentSuperBaseSig") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentSuperBaseSig") }
 
     /** 17.20: Base-class instance type for `super.method(...)` arg checking.
      *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around both
@@ -3128,7 +3143,7 @@ class Checker(
      *  Consumed by [checkSingleCallExpressionTypes] when callee is
      *  `PropertyAccess(super, methodName)`. */
     private var currentSuperBaseType: Type? = null
-        set(v) { field = v; spineExprEpoch++ }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentSuperBaseType") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentSuperBaseType") }
 
     /** 17.221: Stack of enclosing class symbols for call/new walks.
      *  Pushed/popped by [checkCallTypesInStatement]'s ClassDeclaration branch
@@ -103637,8 +103652,31 @@ interface DataView {
                 val fh = (currentFlowGraph?.sourceFile?.fileName?.hashCode() ?: 0).toLong()
                 val key = (((reference as NodeBase).nodeId.toLong()) shl 32) or (fh and 0xFFFF_FFFFL)
                 val prev = walkShadow.put(key, spineExprEpoch to result)
-                if (prev == null || prev.first != spineExprEpoch) PassTiming.walkMiss++
-                else {
+                if (prev == null || prev.first != spineExprEpoch) {
+                    PassTiming.walkMiss++
+                    // (M1)(a) round 660: split the miss. A COLD miss (first
+                    // sighting of this reference) is unavoidable; an
+                    // EPOCH-INVALIDATED repeat is churn, and comparing the
+                    // recomputed result against the pre-invalidation one says
+                    // whether the state change mattered for THIS reference at
+                    // all — an `identical` verdict is fence coarseness, i.e.
+                    // directly recoverable by splitting read-relevant from
+                    // record-only state.
+                    if (prev == null) PassTiming.walkMissCold++
+                    else {
+                        PassTiming.walkMissEpochDeltaSum += spineExprEpoch - prev.first
+                        PassTiming.noteEpochBlame(PassTiming.lastEpochBumpSource)
+                        val pv = prev.second
+                        when {
+                            pv === result -> PassTiming.walkMissEpochIdentical++
+                            pv is Type.Union && result is Type.Union &&
+                                pv.types.map { it.id }.sorted() ==
+                                result.types.map { it.id }.sorted() ->
+                                PassTiming.walkMissEpochStructural++
+                            else -> PassTiming.walkMissEpochDiff++
+                        }
+                    }
+                } else {
                     val pv = prev.second
                     when {
                         pv === result -> {
