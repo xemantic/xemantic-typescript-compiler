@@ -20,6 +20,52 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 674 (2026-07-25) — EP.2a fixed: string-valued const enums in array
+literals stopped doubling their comment, 128 → 1.** The first emit fix made with
+the gate in place, and the gate is what makes the claim checkable.
+
+**The bug.** We emitted `".cts" /* Ext.Cts */ /* Ext.Cts */` where tsc emits one
+comment. `emitArrayLiteral` re-emits each element's same-line trailing comments
+after `emitExpression(element)`, guarded by `element !is NumericLiteralNode`
+because a numeric literal already emits its own inside `emitExpression`. A
+`StringLiteralNode` does exactly the same and was NOT excluded — so only
+string-valued const enums doubled, which is why every one of the 128 occurrences
+was an `Extension.*`.
+
+**Two debugging notes worth keeping.** (1) BOTH array branches carry that guard,
+and I patched the MULTILINE one first — the repro did not change, because the
+repro's array is single-line. That non-result is what located the real trigger;
+both are now fixed (the multiline half was a latent instance of the same bug).
+(2) An emitter probe — a temporary env-gated println of
+`node.trailingComments.size` — showed the NODE carried exactly ONE comment,
+which ruled out the transformer and localised the fault to the emitter in a
+single run. Removed before commit.
+
+**Measured (the gate):**
+
+    double-comment occurrences   128 → 1     (residual is a different shape)
+    total differing hunks      1,335 → 1,307
+    byte-identical files          31 / 78    (unchanged)
+
+**Reporting all three is the point.** The defect is essentially gone at hunk
+level while the file-level headline does not move, because those hunks sit in
+files that still differ for other reasons. Conflating hunk-level and file-level
+progress is exactly what made round 672's "96% closed" read as more progress
+than it was, so this round states both.
+
+**Gates:** 6 pins (`ArrayLiteralConstEnumCommentTest`) covering single-line,
+multiline, numeric, non-array and nested/call-argument shapes, plus a negative
+control that a GENUINE source trailing comment on an array element still
+survives the guard. The pins COUNT occurrences rather than asserting a
+substring — a substring check passes on doubled output, which is precisely how
+this survived until the gate exposed it. Suite 12,520 → **12,526/0** (3 skipped)
+with every JS baseline byte-exact despite touching the printer the corpus pins;
+warning-clean.
+
+**NEXT: EP.2b** — the 675-read const-enum residual, 638 of which are
+`CharacterCodes`. First question is why that one enum resists while SymbolFlags
+and Extension inline, since all three live in types.ts.
+
 **Round 673 (2026-07-25) — EP.2 RE-SCOPED by measurement: the residual is NOT
 mostly formatting, and the largest single finding is a 128-occurrence emit
 DEFECT with a three-line repro.** With the gate live, the honest first move was
@@ -432,58 +478,6 @@ const-enum inlining, EP.0 wiring the emit-diff gate into the dashboard.
 
 Gates: no code changed this round (probe only); tree clean; suite untouched at
 12,507/0/3.
-
-**Round 665 (2026-07-25) — (M1)(d) DEAD BEFORE IT WAS BUILT: an expression memo
-would save 30 ms, not the ~1.1 s on the books. M1 CLOSES with 0.83 s banked.**
-Round 664 wrote "measure the mean served-call cost BEFORE building" into this
-item precisely because the walk memo had just netted 60% of its shadow estimate.
-The measurement went much further than expected.
-
-**The instrument.** For each `getTypeOfExpression` call: decide with EXACTLY the
-live test (a CONFIRMED shadow entry at the current epoch), decide BEFORE the core
-runs so the timed region is precisely what serving would skip, and accumulate the
-core time of the OUTERMOST servable call only — serving an outer call skips its
-whole subtree, so counting nested servable calls would double-count.
-
-**The result: 30 ms over 71,310 outermost served calls** — ~0.42 µs each, 0.12%
-of a ~24 s compile. A live memo would pay per-call overhead on ~618 k calls to
-collect that, so it cannot break even. (d) is dead.
-
-**Why the round-660 estimate was 35× off, and it is a repeat offence.** That
-estimate multiplied the shadow's 149,742 hits by a MEAN call cost. But the
-servable population is not average — it is the **cheap tail**: trivial
-identifiers and literals whose underlying resolution is already cached. The
-expensive calls (fresh minting, narrowing, relation work) are exactly the ones
-whose results are not instance-stable, so the whitelist excludes them by
-construction. Applying an aggregate mean to a non-uniform population is the same
-error class as round 662's key collision — twice in this arc now, and both times
-the fix was to measure the specific population rather than scale a ratio.
-
-**It also explains a documented dead-end.** CLAUDE.md already records that a LIVE
-per-node `getTypeOfExpression` memo measured **1–3% SLOWER** interleaved (round
-596). That was observed but never explained; 30 ms is the explanation. Worth
-saying plainly: my round-660 estimate contradicted an existing MEASURED result,
-and I should have weighted the measurement above a fresh multiplication. The
-CLAUDE.md dead-end entry now has its mechanism.
-
-**M1's ledger, closed.** Original claim "≤15–20 s path" (30–45%) → retired at
-round 660 for a measured ~3.3 s → corrected to ~2.5 s at round 662 when a key
-collision turned up in my own instrument → round 664 banked **0.83 s (−2.93%)**
-with the live dependency-keyed flow-walk memo, the arc's only live win → round
-665 shows the remaining ~1.1 s was never there. What survives as reusable
-machinery: the tagged epoch (`bumpExprEpoch`), the live walk memo, and three
-shadow classifiers that made every one of those corrections cheap — each
-correction cost one probe run rather than a build-and-revert cycle.
-
-Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — the measurement is
-behind `--passTiming` and adds no live code path; warning-clean.
-
-**NEXT: (M2) parallel scaling Phase 1** (shared frozen collectors), the last
-unchecked PERF item. Honest note for whoever takes it: the box is 4-core /
-7.7 GB, the queue itself says that caps what can be demonstrated locally, and
-this arc's record is that every advertised number shrank on measurement — so
-size (M2) with a probe before writing code, the same way (d) was killed for
-30 ms.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1206,7 +1200,25 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   **128 whitespace/wrap only**. So formatting is under 10% of the residual and
   the const-enum family — supposedly 96% closed — still dominates. Three
   distinct sub-targets, in value order:
-  - [ ] **EP.2a THE DOUBLE-COMMENT DEFECT (128 occurrences) — do this first,
+  - [x] **EP.2a DONE round 674 — 128 → 1.** `emitArrayLiteral` re-emits each
+    element's same-line trailing comments after `emitExpression(element)`,
+    guarded by `element !is NumericLiteralNode` because a numeric literal
+    already emits its own; `StringLiteralNode` does the same and was NOT
+    excluded, so string-valued const enums printed their label twice (hence only
+    `Extension.*` showed it). BOTH array branches carry the guard — I patched
+    the MULTILINE one first and the repro did not change, which is what pointed
+    at the single-line branch where the real trigger was; both fixed. An
+    emitter probe proved the NODE held exactly ONE comment, localising the fault
+    away from the transformer in one run. Measured: double-comments 128 → 1,
+    total differing hunks 1,335 → 1,307, byte-identical files unchanged at 31/78
+    (those hunks live in files that still differ for other reasons — hunk-level
+    and file-level progress are different measurements). Gates: 6 pins
+    (ArrayLiteralConstEnumCommentTest — they COUNT occurrences, since a
+    substring check passes on doubled output, plus a negative control that a
+    genuine source comment still survives); suite 12,526/0 with every JS
+    baseline byte-exact despite touching the printer. RESIDUAL: 1 occurrence of
+    a different shape, worth a look when convenient.
+  - [ ] ~~EP.2a (original)~~ — **THE DOUBLE-COMMENT DEFECT (128 occurrences) — do this first,
     it is malformed output, not a cosmetic.** We emit
     `".jsx" /* Extension.Jsx */ /* Extension.Jsx */` where tsc emits one
     comment. REPRO IS THREE LINES (saved at `scratchpad/dblcomment`): a const

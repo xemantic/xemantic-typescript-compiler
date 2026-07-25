@@ -1,3 +1,55 @@
+**Round 665 (2026-07-25) — (M1)(d) DEAD BEFORE IT WAS BUILT: an expression memo
+would save 30 ms, not the ~1.1 s on the books. M1 CLOSES with 0.83 s banked.**
+Round 664 wrote "measure the mean served-call cost BEFORE building" into this
+item precisely because the walk memo had just netted 60% of its shadow estimate.
+The measurement went much further than expected.
+
+**The instrument.** For each `getTypeOfExpression` call: decide with EXACTLY the
+live test (a CONFIRMED shadow entry at the current epoch), decide BEFORE the core
+runs so the timed region is precisely what serving would skip, and accumulate the
+core time of the OUTERMOST servable call only — serving an outer call skips its
+whole subtree, so counting nested servable calls would double-count.
+
+**The result: 30 ms over 71,310 outermost served calls** — ~0.42 µs each, 0.12%
+of a ~24 s compile. A live memo would pay per-call overhead on ~618 k calls to
+collect that, so it cannot break even. (d) is dead.
+
+**Why the round-660 estimate was 35× off, and it is a repeat offence.** That
+estimate multiplied the shadow's 149,742 hits by a MEAN call cost. But the
+servable population is not average — it is the **cheap tail**: trivial
+identifiers and literals whose underlying resolution is already cached. The
+expensive calls (fresh minting, narrowing, relation work) are exactly the ones
+whose results are not instance-stable, so the whitelist excludes them by
+construction. Applying an aggregate mean to a non-uniform population is the same
+error class as round 662's key collision — twice in this arc now, and both times
+the fix was to measure the specific population rather than scale a ratio.
+
+**It also explains a documented dead-end.** CLAUDE.md already records that a LIVE
+per-node `getTypeOfExpression` memo measured **1–3% SLOWER** interleaved (round
+596). That was observed but never explained; 30 ms is the explanation. Worth
+saying plainly: my round-660 estimate contradicted an existing MEASURED result,
+and I should have weighted the measurement above a fresh multiplication. The
+CLAUDE.md dead-end entry now has its mechanism.
+
+**M1's ledger, closed.** Original claim "≤15–20 s path" (30–45%) → retired at
+round 660 for a measured ~3.3 s → corrected to ~2.5 s at round 662 when a key
+collision turned up in my own instrument → round 664 banked **0.83 s (−2.93%)**
+with the live dependency-keyed flow-walk memo, the arc's only live win → round
+665 shows the remaining ~1.1 s was never there. What survives as reusable
+machinery: the tagged epoch (`bumpExprEpoch`), the live walk memo, and three
+shadow classifiers that made every one of those corrections cheap — each
+correction cost one probe run rather than a build-and-revert cycle.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — the measurement is
+behind `--passTiming` and adds no live code path; warning-clean.
+
+**NEXT: (M2) parallel scaling Phase 1** (shared frozen collectors), the last
+unchecked PERF item. Honest note for whoever takes it: the box is 4-core /
+7.7 GB, the queue itself says that caps what can be demonstrated locally, and
+this arc's record is that every advertised number shrank on measurement — so
+size (M2) with a probe before writing code, the same way (d) was killed for
+30 ms.
+
 **Round 664 (2026-07-25) — (M1)(c) THE FLOW-WALK MEMO IS LIVE: −2.93% wall
 (−833 ms), 40,542 walks skipped, and every diagnostic on all eight profiles
 byte-identical. The first measured WIN of the whole M5 performance arc.** Rounds
