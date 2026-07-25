@@ -5618,7 +5618,7 @@ class Checker(
                     val base = ((be.left as? ElementAccessExpression)?.expression as? Identifier) ?: continue
                     if (base.text !in autoArrayNames) continue
                     val flow = getFlowAt(base) ?: getFlowAt(es) ?: continue
-                    flowWalkWithTripCheck(base) { evolvingArrayWalkTrips(flow, base.text) }
+                    flowWalkWithTripCheck(base, WK_EVOLVING, base.text.hashCode().toLong()) { evolvingArrayWalkTrips(flow, base.text) }
                 }
             } finally {
                 currentFlowGraph = null
@@ -18591,7 +18591,7 @@ class Checker(
             }
             val unionDisplay = formatTypeForDisplay(decl.type!!) ?: "$primText | undefined"
             for (arg in scan.gatedLoopArgs) {
-                if (flowWalkWithTripCheck(arg) {
+                if (flowWalkWithTripCheck(arg, WK_ASSIGNED_ARG, name.hashCode().toLong()) {
                         isAssignedAtFlow(getFlowAt(arg), name, mutableSetOf())
                     } != false) continue
                 val (line, character) = getLineAndCharacterOfPosition(source, arg.pos)
@@ -19129,7 +19129,7 @@ class Checker(
                     // TS2563 (the end-of-init range filter then retracts the TS2454).
                     // A disabled container (null) is treated as assigned (tsc errorType).
                     val flow = getFlowAt(expr)
-                    val assigned = flowWalkWithTripCheck(expr) {
+                    val assigned = flowWalkWithTripCheck(expr, WK_ASSIGNED_EXPR, expr.text.hashCode().toLong()) {
                         isAssignedAtFlow(flow, expr.text, mutableSetOf())
                     } ?: true
                     if (pos !in emitted && !assigned) {
@@ -48306,6 +48306,24 @@ class Checker(
         // call / `new` anchors fire); TPO_MEMBER = a class method / ctor /
         // accessor on the path from its reached class DECLARATION to its BODY
         // (property initializers and static blocks are never reached).
+        // (M1)(b1) round 662: walk-KIND tags for the flow-walk shadow key. The
+        // 12 flowWalkWithTripCheck sites run three different walk functions
+        // (narrowTypeFromFlow / -FollowLoopEntry / isAssignedAtFlow) from
+        // different starting types over different paths, so the shadow memo key
+        // must separate them — round 661's (reference, file) key collided them
+        // and that collision, NOT a dependency gap, was its 165 wrong serves.
+        private const val WK_EVOLVING = 1
+        private const val WK_ASSIGNED_ARG = 2
+        private const val WK_ASSIGNED_EXPR = 3
+        private const val WK_NARROW = 4
+        private const val WK_NARROW_LOOP = 5
+        private const val WK_RECV_OF_RECV = 6
+        private const val WK_RECV_LEFTMOST = 7
+        private const val WK_SEGMENT = 8
+        private const val WK_BASE_EXPR = 9
+        private const val WK_FLOW_ANCHOR = 10
+        private const val WK_RHS = 11
+
         private const val TPO_STMT = 1
         private const val TPO_NONE = 2
         private const val TPO_ROOT = 3
@@ -103665,6 +103683,33 @@ interface DataView {
      * this key, since it counts entries this fence would have served with a
      * result the live recompute disagrees with.
      */
+    /** (M1)(b1): the reference's SHAPE — `this`-rooted, a bare identifier, a
+     *  property path or an element-access path. */
+    private fun depPathShape(path: String): String = when {
+        path == "this" || path.startsWith("this.") || path.startsWith("this[") -> "this-rooted"
+        path.contains('[') -> "elemAccessPath"
+        path.contains('.') -> "propPath"
+        else -> "bareIdent"
+    }
+
+    private fun depTypeShape(v: Any?): String = when (v) {
+        null -> "null"
+        is Type.Union -> "union${v.types.size}"
+        is Type.Reference -> "ref"
+        is Type.Interface -> "iface"
+        is Type.Object -> "obj"
+        is Type.Intrinsic -> "intrinsic"
+        is Type.TypeParam -> "tp"
+        is Boolean -> "bool"
+        else -> v::class.simpleName ?: "?"
+    }
+
+    private fun depTypeBrief(v: Any?): String = when (v) {
+        null -> "null"
+        is Type -> try { typeToString(v) } catch (_: Exception) { depTypeShape(v) }
+        else -> v.toString()
+    }
+
     private fun depKeyedShadowClassify(key: Long, reference: Node, result: Any?) {
         val path = (reference as? Expression)?.let { getReferencePath(it) }
         if (path == null) { PassTiming.depNoPath++; return }
@@ -103683,7 +103728,15 @@ interface DataView {
                 pv is Type.Union && result is Type.Union &&
                     pv.types.map { it.id }.sorted() == result.types.map { it.id }.sorted() ->
                     PassTiming.depServeStructural++
-                else -> PassTiming.depServeWrong++
+                // (M1)(b1) round 662: a WRONG serve is classified by the SHAPE
+                // of the reference and of the disagreement, so the 165 can be
+                // triaged before a read-set recorder is engineered.
+                else -> PassTiming.noteDepWrong(
+                    "${depPathShape(path)}|${depTypeShape(pv)}->${depTypeShape(result)}",
+                    "$path @${currentFlowGraph?.sourceFile?.fileName?.substringAfterLast('/')} " +
+                        "was=${depTypeBrief(pv)} now=${depTypeBrief(result)} root=$root " +
+                        "localType=${depTypeBrief(localType)}",
+                )
             }
             return
         }
@@ -103695,7 +103748,18 @@ interface DataView {
         PassTiming.noteDepInvalidated(what)
     }
 
-    private inline fun <T> flowWalkWithTripCheck(reference: Node, walk: () -> T): T? {
+    /** (M1)(b1) round 662: the shadow key must include the walk's INPUTS, not
+     *  just its reference — the 12 call sites run three different walk
+     *  functions from different starting types over different paths, and
+     *  round 661's (reference, file) key collided them (that, not a dependency
+     *  gap, produced its 165 "wrong" serves). [kind] identifies the call site
+     *  and [inputId] folds the starting type id with the path hash. */
+    private inline fun <T> flowWalkWithTripCheck(
+        reference: Node,
+        kind: Int,
+        inputId: Long = 0L,
+        walk: () -> T,
+    ): T? {
         if (isFlowAnalysisDisabledAt(reference.pos)) return null
         // INV.0 walks-launched counter — inert unless --passTiming enabled it.
         if (PassTiming.enabled) PassTiming.noteNarrowWalk()
@@ -103708,7 +103772,10 @@ interface DataView {
                 PassTiming.narrowWalkNanos += PassTiming.nowNanos() - probeStart
                 // (f2): walk-result repeat classification.
                 val fh = (currentFlowGraph?.sourceFile?.fileName?.hashCode() ?: 0).toLong()
-                val key = (((reference as NodeBase).nodeId.toLong()) shl 32) or (fh and 0xFFFF_FFFFL)
+                var key = (((reference as NodeBase).nodeId.toLong()) shl 32) or (fh and 0xFFFF_FFFFL)
+                // fold in the walk kind and its input digest (see the doc above)
+                key = key * 31 + kind
+                key = key * 31 + inputId
                 val prev = walkShadow.put(key, spineExprEpoch to result)
                 if (prev == null || prev.first != spineExprEpoch) {
                     PassTiming.walkMiss++
@@ -103887,7 +103954,7 @@ interface DataView {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr) {
+        return flowWalkWithTripCheck(expr, WK_NARROW, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL)) {
             narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
     }
@@ -103914,7 +103981,7 @@ interface DataView {
         val path = getReferencePath(expr) ?: return declaredType
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = NarrowSeen()
-        return flowWalkWithTripCheck(expr) {
+        return flowWalkWithTripCheck(expr, WK_NARROW_LOOP, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL)) {
             narrowTypeFromFlowFollowLoopEntry(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
     }
@@ -128528,7 +128595,7 @@ interface DataView {
         val recvPath = getReferencePath(info.recvOfRecv)
         val recvFlow = getFlowAt(info.recvOfRecv) ?: getFlowAt(info.narrowExpr)
         if (recvPath != null && recvFlow != null) {
-            val recvNarrowed = flowWalkWithTripCheck(info.recvOfRecv) {
+            val recvNarrowed = flowWalkWithTripCheck(info.recvOfRecv, WK_RECV_OF_RECV, recvOfRecvType.id.toLong() shl 32 or (recvPath.hashCode().toLong() and 0xFFFF_FFFFL)) {
                 narrowTypeFromFlowFollowLoopEntry(recvOfRecvType, recvFlow, recvPath, NarrowSeen(), 0)
             } ?: recvOfRecvType
             if (recvNarrowed !== recvOfRecvType) {
@@ -128778,7 +128845,7 @@ interface DataView {
         if (receiverType === anyType || receiverType === errorType) return
         var path: String = leftmost.text
         if (receiverType is Type.Union) {
-            receiverType = flowWalkWithTripCheck(leftmost) {
+            receiverType = flowWalkWithTripCheck(leftmost, WK_RECV_LEFTMOST, receiverType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL)) {
                 narrowTypeFromFlowFollowLoopEntry(receiverType, flow, path, NarrowSeen(), 0)
             } ?: receiverType
         }
@@ -128821,7 +128888,7 @@ interface DataView {
             }
             path = newPath
             receiverType = if (propType is Type.Union) {
-                flowWalkWithTripCheck(segment) {
+                flowWalkWithTripCheck(segment, WK_SEGMENT, propType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL)) {
                     narrowTypeFromFlowFollowLoopEntry(propType, flow, path, NarrowSeen(), 0)
                 } ?: propType
             } else propType
@@ -129512,7 +129579,7 @@ interface DataView {
                 val baseRaw = getTypeOfExpression(baseExpr)
                 val flow = getFlowAt(baseExpr) ?: getFlowAt(objectExpr)
                 if (baseRaw is Type.Union && flow != null) {
-                    val narrowedBase = flowWalkWithTripCheck(baseExpr) {
+                    val narrowedBase = flowWalkWithTripCheck(baseExpr, WK_BASE_EXPR, baseRaw.id.toLong() shl 32 or (basePath.hashCode().toLong() and 0xFFFF_FFFFL)) {
                         narrowTypeFromFlow(baseRaw, flow, basePath, NarrowSeen(), depth = 0)
                     } ?: baseRaw
                     if (narrowedBase !== baseRaw && narrowedBase !== neverType &&
@@ -141700,7 +141767,7 @@ interface DataView {
         if (declaredVar !is Type.Union) return false
         val flow = getFlowAt(flowAnchor) ?: return false
         val narrowed = try {
-            flowWalkWithTripCheck(flowAnchor) {
+            flowWalkWithTripCheck(flowAnchor, WK_FLOW_ANCHOR, declaredVar.id.toLong() shl 32 or (varName.hashCode().toLong() and 0xFFFF_FFFFL)) {
                 narrowTypeFromFlow(declaredVar, flow, varName, NarrowSeen(), 0)
             } ?: return false
         } catch (_: Exception) { return false }
@@ -142337,7 +142404,7 @@ interface DataView {
                 val narrowed = try {
                     val flow = getFlowAt(rhs)
                     if (flow != null) {
-                        flowWalkWithTripCheck(rhs) {
+                        flowWalkWithTripCheck(rhs, WK_RHS, unknownType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL)) {
                             narrowTypeFromFlow(unknownType, flow, path, NarrowSeen(), 0)
                         } ?: unknownType
                     } else unknownType

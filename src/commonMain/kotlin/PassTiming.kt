@@ -197,6 +197,7 @@ object PassTiming {
         epochBumps.clear(); epochBlame.clear(); epochNoops.clear()
         depServeIdentical = 0; depServeStructural = 0; depServeWrong = 0
         depCold = 0; depNoPath = 0; depInvalidated = 0; depInvalidatedBy.clear()
+        depWrongBy.clear(); depWrongSamples.clear()
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -315,6 +316,20 @@ object PassTiming {
     fun noteDepInvalidated(what: String) {
         depInvalidated++
         depInvalidatedBy[what] = (depInvalidatedBy[what] ?: 0L) + 1L
+    }
+
+    // (M1)(b1) round 662: characterise the WRONG serves before engineering a
+    // read-set recorder. If they cluster on one mechanism the key can be
+    // completed (or that shape excluded from serving) cheaply; if they are
+    // diffuse across mechanisms, the walk's dependencies are not
+    // name-enumerable and that is (b1)'s falsifiable answer.
+    val depWrongBy = HashMap<String, Long>()
+    val depWrongSamples = ArrayList<String>()
+
+    fun noteDepWrong(shape: String, sample: String) {
+        depServeWrong++
+        depWrongBy[shape] = (depWrongBy[shape] ?: 0L) + 1L
+        if (depWrongSamples.size < 20) depWrongSamples.add(sample)
     }
 
     var relationNanos: Long = 0
@@ -452,6 +467,8 @@ object PassTiming {
             " (identical=$depServeIdentical structural=$depServeStructural WRONG=$depServeWrong)" +
             " cold=$depCold invalidated=$depInvalidated noPath=$depNoPath\n" +
             "depInvalidatedBy: ${topCounts(depInvalidatedBy, 6)}\n" +
+            "depWrongBy: ${topCounts(depWrongBy, 10)}\n" +
+            depWrongSamples.joinToString("") { "   wrongSample: $it\n" } +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +
