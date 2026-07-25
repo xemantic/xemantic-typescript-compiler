@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * EP.2a (round 674): an inlined const-enum member inside an ARRAY LITERAL must
@@ -53,7 +53,7 @@ class ArrayLiteralConstEnumCommentTest {
         return n
     }
 
-    private fun emit(body: String): String {
+    private fun emit(@Language("typescript") body: String): String {
         val source = """
             // @module: commonjs
             // @filename: e.ts
@@ -73,9 +73,9 @@ class ArrayLiteralConstEnumCommentTest {
             export const arr = [Ext.Cts, Ext.Cjs];
             """.trimIndent()
         )
-        assertEquals(1, occurrences(js, "/* Ext.Cts */"), "comment must appear once, got:\n$js")
-        assertEquals(1, occurrences(js, "/* Ext.Cjs */"), "comment must appear once, got:\n$js")
-        assertTrue("\".cts\" /* Ext.Cts */" in js)
+        assert(occurrences(js, "/* Ext.Cts */") == 1)
+        assert(occurrences(js, "/* Ext.Cjs */") == 1)
+        assert("\".cts\" /* Ext.Cts */" in js)
     }
 
     @Test
@@ -89,8 +89,8 @@ class ArrayLiteralConstEnumCommentTest {
             ];
             """.trimIndent()
         )
-        assertEquals(1, occurrences(js, "/* Ext.Cts */"), "comment must appear once, got:\n$js")
-        assertEquals(1, occurrences(js, "/* Ext.Cjs */"), "comment must appear once, got:\n$js")
+        assert(occurrences(js, "/* Ext.Cts */") == 1)
+        assert(occurrences(js, "/* Ext.Cjs */") == 1)
     }
 
     @Test
@@ -101,8 +101,8 @@ class ArrayLiteralConstEnumCommentTest {
             export const arr = [Num.A, Num.B];
             """.trimIndent()
         )
-        assertEquals(1, occurrences(js, "/* Num.A */"), "comment must appear once, got:\n$js")
-        assertEquals(1, occurrences(js, "/* Num.B */"), "comment must appear once, got:\n$js")
+        assert(occurrences(js, "/* Num.A */") == 1)
+        assert(occurrences(js, "/* Num.B */") == 1)
     }
 
     @Test
@@ -113,7 +113,7 @@ class ArrayLiteralConstEnumCommentTest {
             export const one = Ext.Cts;
             """.trimIndent()
         )
-        assertEquals(1, occurrences(js, "/* Ext.Cts */"))
+        assert(occurrences(js, "/* Ext.Cts */") == 1)
     }
 
     @Test
@@ -126,8 +126,8 @@ class ArrayLiteralConstEnumCommentTest {
             take([Ext.Cts]);
             """.trimIndent()
         )
-        assertEquals(2, occurrences(js, "/* Ext.Cts */"), "two distinct sites, once each, got:\n$js")
-        assertEquals(1, occurrences(js, "/* Ext.Cjs */"))
+        assert(occurrences(js, "/* Ext.Cts */") == 2)
+        assert(occurrences(js, "/* Ext.Cjs */") == 1)
     }
 
     @Test
@@ -139,6 +139,6 @@ class ArrayLiteralConstEnumCommentTest {
             export const arr = ["a" /* keep me */, "b"];
             """.trimIndent()
         )
-        assertEquals(1, occurrences(js, "/* keep me */"), "source comment must survive, got:\n$js")
+        assert(occurrences(js, "/* keep me */") == 1)
     }
 }

@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 642): pins for the checkInvalidAssignmentTargets (TS2364
@@ -124,7 +124,7 @@ class M04InvalidAssignSpineMigrationTest {
     }
 
     @Test
-    fun `TS2364 - shift-compound assignment draws nothing (frozen operator gap)`() {
+    fun `TS2364 - shift-compound assignment draws nothing - frozen operator gap`() {
         diagnose(
             """
             1 <<= 2;
@@ -198,7 +198,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(3, count)
+        assert(count == 3)
     }
 
     @Test
@@ -209,7 +209,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(3, count)
+        assert(count == 3)
     }
 
     @Test
@@ -232,7 +232,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(2, count)
+        assert(count == 2)
     }
 
     @Test
@@ -273,7 +273,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(6, count)
+        assert(count == 6)
     }
 
     @Test
@@ -325,7 +325,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(5, count)
+        assert(count == 5)
     }
 
     @Test
@@ -339,7 +339,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(2, count)
+        assert(count == 2)
     }
 
     @Test
@@ -358,7 +358,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(6, count)
+        assert(count == 6)
     }
 
     @Test
@@ -384,7 +384,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(3, count)
+        assert(count == 3)
     }
 
     @Test
@@ -399,7 +399,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(4, count)
+        assert(count == 4)
     }
 
     @Test
@@ -413,7 +413,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(3, count)
+        assert(count == 3)
     }
 
     @Test
@@ -431,7 +431,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(7, count)
+        assert(count == 7)
     }
 
     @Test
@@ -443,7 +443,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(2, count)
+        assert(count == 2)
     }
 
     @Test
@@ -466,7 +466,7 @@ class M04InvalidAssignSpineMigrationTest {
             """
         )
         val count = d.count { it.code == 2364 }
-        assertEquals(3, count)
+        assert(count == 3)
     }
 
     // ── the depth cap (shared checkDepth counter, maxCheckDepth = 200) ─────
@@ -476,7 +476,7 @@ class M04InvalidAssignSpineMigrationTest {
         val src = "(".repeat(200) + "1 = 2" + ")".repeat(200) + ";"
         val d = diagnose(src)
         val count = d.count { it.code == 2364 }
-        assertEquals(1, count)
+        assert(count == 1)
     }
 
     @Test

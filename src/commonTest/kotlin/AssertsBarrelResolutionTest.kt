@@ -25,7 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -41,7 +43,7 @@ import kotlin.test.Test
  */
 class AssertsBarrelResolutionTest {
 
-    private fun project(mainBody: String) = InMemoryVfs(
+    private fun project(@Language("typescript") mainBody: String) = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to """
                 { "compilerOptions": { "strict": true, "module": "nodenext" }, "include": ["src/**/*.ts"] }
@@ -61,7 +63,8 @@ class AssertsBarrelResolutionTest {
     )
 
     /** Negative control: without the assert, the maybe-undefined arg fires TS2345. */
-    @Test fun withoutAssertMaybeUndefinedArgErrors() {
+    @Test
+    fun `negative control - without the assert a maybe-undefined argument errors`() {
         val result = ProjectCompiler(project(
             """
             import { Debug } from "./barrel.js";
@@ -71,11 +74,12 @@ class AssertsBarrelResolutionTest {
             }
             """
         )).build("/proj", noEmit = true)
-        have(result.diagnostics.any { it.code == 2345 })
+        assert(result.diagnostics.any { it.code == 2345 })
     }
 
     /** A namespace assert imported THROUGH an export-star barrel narrows after the call. */
-    @Test fun barrelImportedNamespaceAssertNarrows() {
+    @Test
+    fun `a barrel-imported namespace assert narrows`() {
         val result = ProjectCompiler(project(
             """
             import { Debug } from "./barrel.js";
@@ -87,11 +91,12 @@ class AssertsBarrelResolutionTest {
             """
         )).build("/proj", noEmit = true)
         val hits = result.diagnostics.filter { it.code == 2345 }
-        have(hits.isEmpty())
+        assert(hits.isEmpty())
     }
 
     /** Same shape imported DIRECTLY (no barrel) — the simpler topology also narrows. */
-    @Test fun directlyImportedNamespaceAssertNarrows() {
+    @Test
+    fun `a directly imported namespace assert narrows`() {
         val result = ProjectCompiler(project(
             """
             import { Debug } from "./debug.js";
@@ -103,6 +108,6 @@ class AssertsBarrelResolutionTest {
             """
         )).build("/proj", noEmit = true)
         val hits = result.diagnostics.filter { it.code == 2345 }
-        have(hits.isEmpty())
+        assert(hits.isEmpty())
     }
 }

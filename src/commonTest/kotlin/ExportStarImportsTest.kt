@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the M1.1 invariant: the named-import existence check (TS2305 family)
@@ -50,7 +50,7 @@ class ExportStarImportsTest {
         result.diagnostics.filter { it.code == 2305 }.map { it.message }
 
     @Test
-    fun namesThroughAStarBarrelResolveAndMissingNamesStillFire() {
+    fun `names through a star barrel resolve and missing names still fire`() {
         val result = build(
             mapOf(
                 "/proj/src/a.ts" to "export const alpha = 1;",
@@ -66,15 +66,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./barrel.js\"' has no exported member 'gamma'."),
-            ts2305Messages(result),
-            "star-provided names must not fire; the genuinely missing one must",
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./barrel.js\"' has no exported member 'gamma'."))
     }
 
     @Test
-    fun multiHopBarrelChainsResolve() {
+    fun `multi-hop barrel chains resolve`() {
         val result = build(
             mapOf(
                 "/proj/src/leaf.ts" to "export const deep = 1;",
@@ -86,14 +82,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./top.js\"' has no exported member 'nope'."),
-            ts2305Messages(result),
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./top.js\"' has no exported member 'nope'."))
     }
 
     @Test
-    fun circularStarReexportsResolveWithoutHangingAndMissingNamesStillFire() {
+    fun `circular star re-exports resolve without hanging and missing names still fire`() {
         val result = build(
             mapOf(
                 "/proj/src/c.ts" to """
@@ -110,15 +103,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./c.js\"' has no exported member 'absent'."),
-            ts2305Messages(result),
-            "a star cycle must terminate and resolve both directions' names",
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./c.js\"' has no exported member 'absent'."))
     }
 
     @Test
-    fun unresolvableStarTargetSuppressesAbsenceDiagnostics() {
+    fun `an unresolvable star target suppresses absence diagnostics`() {
         val result = build(
             mapOf(
                 "/proj/src/opaque.ts" to """
@@ -131,15 +120,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2305Messages(result),
-            "an unknowable export set must not prove absence (FN-safe)",
-        )
+        assert(ts2305Messages(result).isEmpty())
     }
 
     @Test
-    fun defaultAbsenceStaysDecidableThroughAnUnknowableStar() {
+    fun `default absence stays decidable through an unknowable star`() {
         // `export *` never forwards a default export, so `import { default as X }`
         // from a module with NO default is TS2305 even when the star set is
         // unknowable — only NON-default specs get the FN-safe skip.
@@ -155,14 +140,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./opaque.js\"' has no exported member 'default'."),
-            ts2305Messages(result),
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./opaque.js\"' has no exported member 'default'."))
     }
 
     @Test
-    fun starAsNamespaceExportsOnlyTheNamespaceName() {
+    fun `star-as-namespace exports only the namespace name`() {
         val result = build(
             mapOf(
                 "/proj/src/a.ts" to "export const alpha = 1;",
@@ -173,15 +155,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./nsbarrel.js\"' has no exported member 'alpha'."),
-            ts2305Messages(result),
-            "`export * as ns` exposes only `ns`, not the target's names",
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./nsbarrel.js\"' has no exported member 'alpha'."))
     }
 
     @Test
-    fun reExportSpecifiersAlsoFollowStars() {
+    fun `re-export specifiers also follow stars`() {
         val result = build(
             mapOf(
                 "/proj/src/a.ts" to "export const alpha = 1;",
@@ -191,14 +169,11 @@ class ExportStarImportsTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            listOf("Module '\"./barrel.js\"' has no exported member 'ghost'."),
-            ts2305Messages(result),
-        )
+        assert(ts2305Messages(result) == listOf("Module '\"./barrel.js\"' has no exported member 'ghost'."))
     }
 
     @Test
-    fun barrelWithHundredsOfNamesStaysFast() {
+    fun `a barrel with hundreds of names stays fast`() {
         // The tsc self-compile shape: ~78 files each importing dozens of names
         // through one barrel that star-re-exports every other file. The per-file
         // memo must make this linear-ish; this completes in well under a second.
@@ -216,9 +191,7 @@ class ExportStarImportsTest {
             """.trimIndent()
         }
         val result = build(files)
-        have(
-            ts2305Messages(result).isEmpty(),
-            "no false absence through the wide barrel",
-        )
+        // no false absence through the wide barrel
+        assert(ts2305Messages(result).isEmpty())
     }
 }

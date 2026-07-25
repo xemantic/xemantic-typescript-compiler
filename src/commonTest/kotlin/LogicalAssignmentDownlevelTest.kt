@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertFalse
 
 /**
  * Emit-parity family #3 (self-compile emit diff, 2026-07-12): tsc downlevels the
@@ -40,29 +40,29 @@ import kotlin.test.assertFalse
  */
 class LogicalAssignmentDownlevelTest {
 
-    private fun js(source: String, target: String = "es2020"): String =
+    private fun js(@Language("typescript") source: String, target: String = "es2020"): String =
         TypeScriptCompiler().compile("// @target: $target\n$source").javascript
             ?: error("no javascript output")
 
     @Test
     fun `identifier or-assign downlevels to short-circuit form at es2020`() {
         val out = js("let a: number | undefined; a ||= 1;")
-        assertContains(out, "a || (a = 1)")
-        assertFalse("||=" in out, "logical or-assign must be downleveled at es2020, got:\n$out")
+        assert("a || (a = 1)" in out)
+        assert(!("||=" in out))
     }
 
     @Test
     fun `identifier and-assign downlevels to short-circuit form`() {
         val out = js("let a: number | undefined; a &&= 2;")
-        assertContains(out, "a && (a = 2)")
-        assertFalse("&&=" in out)
+        assert("a && (a = 2)" in out)
+        assert(!("&&=" in out))
     }
 
     @Test
     fun `identifier nullish-assign downlevels keeping native nullish coalescing at es2020`() {
         val out = js("let a: number | undefined; a ??= 3;")
-        assertContains(out, "a ?? (a = 3)")
-        assertFalse("??=" in out)
+        assert("a ?? (a = 3)" in out)
+        assert(!("??=" in out))
     }
 
     @Test
@@ -75,7 +75,7 @@ class LogicalAssignmentDownlevelTest {
             }
             """.trimIndent(),
         )
-        assertContains(out, "this.x || (this.x = 4)")
+        assert("this.x || (this.x = 4)" in out)
     }
 
     @Test
@@ -86,7 +86,7 @@ class LogicalAssignmentDownlevelTest {
             f().x ??= 5;
             """.trimIndent(),
         )
-        assertContains(out, "(_a = f()).x ?? (_a.x = 5)")
+        assert("(_a = f()).x ?? (_a.x = 5)" in out)
     }
 
     @Test
@@ -98,12 +98,12 @@ class LogicalAssignmentDownlevelTest {
             obj()[key()] ||= 6;
             """.trimIndent(),
         )
-        assertContains(out, "(_a = obj())[_b = key()] || (_a[_b] = 6)")
+        assert("(_a = obj())[_b = key()] || (_a[_b] = 6)" in out)
     }
 
     @Test
     fun `es2021 target keeps the operator verbatim`() {
         val out = js("let a: number | undefined; a ??= 7;", target = "es2021")
-        assertContains(out, "a ??= 7")
+        assert("a ??= 7" in out)
     }
 }

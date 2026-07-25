@@ -143,7 +143,7 @@ class EnumDiscriminantNarrowingTest {
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
         result.diagnostics should {
-            have(none { it.code == 2339 }, "a barrel-imported enum discriminant must still narrow (both `===` and `switch`)")
+            have(none { it.code == 2339 })
         }
     }
 

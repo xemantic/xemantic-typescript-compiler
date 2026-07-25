@@ -1,3 +1,293 @@
+**Round 674 (2026-07-25) — EP.2a fixed: string-valued const enums in array
+literals stopped doubling their comment, 128 → 1.** The first emit fix made with
+the gate in place, and the gate is what makes the claim checkable.
+
+**The bug.** We emitted `".cts" /* Ext.Cts */ /* Ext.Cts */` where tsc emits one
+comment. `emitArrayLiteral` re-emits each element's same-line trailing comments
+after `emitExpression(element)`, guarded by `element !is NumericLiteralNode`
+because a numeric literal already emits its own inside `emitExpression`. A
+`StringLiteralNode` does exactly the same and was NOT excluded — so only
+string-valued const enums doubled, which is why every one of the 128 occurrences
+was an `Extension.*`.
+
+**Two debugging notes worth keeping.** (1) BOTH array branches carry that guard,
+and I patched the MULTILINE one first — the repro did not change, because the
+repro's array is single-line. That non-result is what located the real trigger;
+both are now fixed (the multiline half was a latent instance of the same bug).
+(2) An emitter probe — a temporary env-gated println of
+`node.trailingComments.size` — showed the NODE carried exactly ONE comment,
+which ruled out the transformer and localised the fault to the emitter in a
+single run. Removed before commit.
+
+**Measured (the gate):**
+
+    double-comment occurrences   128 → 1     (residual is a different shape)
+    total differing hunks      1,335 → 1,307
+    byte-identical files          31 / 78    (unchanged)
+
+**Reporting all three is the point.** The defect is essentially gone at hunk
+level while the file-level headline does not move, because those hunks sit in
+files that still differ for other reasons. Conflating hunk-level and file-level
+progress is exactly what made round 672's "96% closed" read as more progress
+than it was, so this round states both.
+
+**Gates:** 6 pins (`ArrayLiteralConstEnumCommentTest`) covering single-line,
+multiline, numeric, non-array and nested/call-argument shapes, plus a negative
+control that a GENUINE source trailing comment on an array element still
+survives the guard. The pins COUNT occurrences rather than asserting a
+substring — a substring check passes on doubled output, which is precisely how
+this survived until the gate exposed it. Suite 12,520 → **12,526/0** (3 skipped)
+with every JS baseline byte-exact despite touching the printer the corpus pins;
+warning-clean.
+
+**NEXT: EP.2b** — the 675-read const-enum residual, 638 of which are
+`CharacterCodes`. First question is why that one enum resists while SymbolFlags
+and Extension inline, since all three live in types.ts.
+
+**Round 673 (2026-07-25) — EP.2 RE-SCOPED by measurement: the residual is NOT
+mostly formatting, and the largest single finding is a 128-occurrence emit
+DEFECT with a three-line repro.** With the gate live, the honest first move was
+to classify the residual rather than start writing printer code against the
+family name in the item.
+
+**Classification of all 1,335 differing hunks across the 47 remaining files:**
+**482 residual qualified access**, 173 other, **128 whitespace/wrap only**. So
+"multi-line expression formatting" — the entire premise of EP.2 — is under 10%
+of what is left, while the const-enum family that round 672 reported as "96%
+closed" still dominates the diff. Closing 96% of the READS left a long tail of
+HUNKS, which is a good reminder that a count-based percentage and a diff-based
+one measure different things.
+
+**EP.2a — the defect, and it is real output corruption, not cosmetics.** We
+emit `".jsx" /* Extension.Jsx */ /* Extension.Jsx */` where tsc emits one
+comment; 128 occurrences. Reproduced in three lines (saved at
+`scratchpad/dblcomment`): with a const enum imported cross-module,
+`export const arr = [Ext.Cts, Ext.Cjs]` labels each element TWICE while a plain
+`const one = Ext.Cts` is correct — so the ARRAY-LITERAL element path transforms
+the element twice. The real shape is checker.ts:2550
+`fileExtensionIsOneOf(fileName, [Extension.Cts, Extension.Cjs])`. This is now
+first in the queue: malformed output outranks formatting.
+
+**EP.2b — the 675-read const-enum residual is essentially ONE enum:**
+`CharacterCodes` accounts for 638 of the qualified-access occurrences. It is
+declared in types.ts alongside SymbolFlags and Extension, which DO inline, so
+the difference is in how its members are reached or valued (it is large and
+char-code-valued) — that question is the first thing to answer, not a
+speculative fix. Also surfaced: `tracing.Phase.Bind` (a const enum behind a
+namespace) and one unrelated import-elision difference (`ts_js_1.version` vs
+`version` in builder.js).
+
+**EP.2c — the original formatting item is LAST**, deliberately: ~128 hunks,
+lowest count, and the highest corpus-regression risk of the three since it is
+the printer the 12,520-test corpus pins. One placement rule per commit, full
+suite after each, gate re-run to confirm the diff shrinks rather than merely
+changes.
+
+No code changed this round (classification + repro construction); tree clean;
+suite untouched at 12,520/0/3.
+
+**Round 672 (2026-07-25) — the owner authorised a network install, the emit-diff
+gate went LIVE, and its FIRST RUN falsified my own round-669 conclusion within
+minutes. Fixing what it exposed took const-enum inlining from 1,618 to 17,443
+reads and byte-identical files from 9 to 31 of 78.** This is the largest
+emit-parity movement in the project's history, and none of it was findable
+offline.
+
+**EP.0 (the gate).** Node v24.18.0 + `typescript@6.0.3` installed under
+`build/tools` — tarball rather than apt, so no system mutation, and `build/` is
+gitignored so no binaries enter the repo. `scripts/emit-diff-tsc.sh` runs.
+
+**It immediately contradicted me.** Round 669 reported that EP.1 had "ZERO
+effect on the tsc profiles" and that the profile "already inlines everything". I
+had grepped the emitted dist for residual `ts_[0-9]+\.X\.Y` — a pattern that
+requires digits straight after `ts_`, while the real barrel alias is **`ts_js_1`**.
+It matched nothing and I read that as "no residual". The gate's first run:
+**xtsc 1,618 inlined const-enum reads vs tsc 18,118.** The lesson is not subtle
+and I want it recorded plainly: **I hand-rolled a pattern instead of using the
+tool built for the job, and shipped a confidently wrong conclusion that stood
+for three rounds.** The tool existed; it just could not run, and I substituted a
+guess for it rather than saying "unmeasurable here".
+
+**The real root cause, once visible.** `constEnumSymbolThroughStars` (round 669)
+resolved the IMPORT specifier via `resolveModuleSpecifier`/`-Relative`, neither
+of which strips `.js`. tsc's own layout imports barrels as ESM
+`./_namespaces/ts.js`, and those barrels re-export `../core.js` — so the helper
+could not resolve tsc's layout AT ALL. It only ever worked on the extensionless
+repro I had written it against, which is exactly the trap CLAUDE.md warns about
+("the tsc-source profiles CANNOT catch this class... verify with a path-shaped
+scratch project"), inverted: my scratch project could not catch the tsc class.
+Fixed by reusing `resolveBarrelStarTarget` — the tested `.js`/`.jsx`-stripping
+resolver the star-follower already uses internally.
+
+**Measured (compiler profile, the gate):**
+
+    const-enum inlined reads   1,618 → 17,443   (tsc 18,118 — ~96% of the gap closed)
+    byte-identical files           9 → 31 / 78  (3.4×)
+    differing files               69 → 47 / 78
+    logical-assign operators   xtsc 15 vs tsc 15 (EP.3 confirmed at parity)
+
+**Gates:** suite 12,520/0 (3 skipped) with every JS baseline still byte-exact —
+the corpus is the emit gate and it did not budge; `--listAll` ×8 byte-identical
+on all eight profiles, so no diagnostic moved; warning-clean.
+
+**Also, a self-inflicted scare worth logging:** my queue-edit script did
+`open(p,"w").write(open(p).read().replace(...))` — the `"w"` TRUNCATES before
+the nested read runs, so PLAN-PHASE-5.md went to 0 bytes. Recovered instantly
+with `git checkout` because the code fix had already been committed separately.
+Two habits paid off: commit the code before touching the docs, and never nest a
+read inside a write of the same path.
+
+**NEXT: EP.2** is now unblocked and is the largest remaining family — 47/78
+files still differ with const-enum 96% closed, so most of that is formatting
+(tsc puts a wrapped ternary's `:` at line start; xtsc trails it). Residual
+const-enum gap is 675 reads.
+
+**Round 671 (2026-07-25) — the queue boundary VERIFIED, and the last live
+non-backlog item turned out to be a stale checkbox. Phase 17's offline work is
+complete; what remains needs an owner decision.** Round 670 suggested the queue
+had reached a boundary; this round tested that claim item by item rather than
+asserting it.
+
+**(ccet-m2) was the one candidate that looked live, and it is not.** It is the
+frame skeleton for the THIRD giant (checkCallExpressionTypes), and two in-code
+comments still read "inert until the anchors land". Both are stale: verified in
+code that `ccetSpineEnter` and `ccetSpineFileReset` are called unconditionally
+from `spineEnterNode` and the per-file loop, so the frames are ALWAYS-ON — and
+its dependents `(ccet-m3)` (round 591) and `(ccet-retire)` (round 592, "ALL
+THREE GIANTS OFF EMIT-TWICE") could not have landed otherwise. Box checked,
+comments corrected. Worth noting as a process point: a stale `- [ ]` next to
+landed work is exactly what makes a queue look like it still has runway, and
+this one survived ~80 rounds.
+
+**The boundary, item by item.** 15 unchecked items remain and every one is
+unavailable to an offline agent:
+  - **EP.0, EP.2** — blocked offline; verified round 667 that this box has no
+    `node`, no `npx`, no `tsc`, no `tsc.js`, and `emit-diff-tsc.sh` needs a
+    reference tsc.
+  - **INV.7 / INV.7b / (6e)** — INV.7b is explicitly PARKED-BY-OWNER; INV.7 is
+    native re-enable + release productization, and (6e) parallel emit sits on
+    the M2 finding that this 4-core box cannot demonstrate scaling.
+  - **M2.4, M3.0, M3.5, M4.1–M4.7** — the Post-v1 backlog, which CLAUDE.md
+    instructs the loop to SKIP until v1 lands.
+
+**And v1's status is itself the decision.** Its offline definition of done was
+met at round 481 (all 8 profiles zero real FPs, all files emitted, exit 0, no
+crashes). The remaining leg — byte-correct emit diffing against real tsc — was
+always documented as network-gated. So "has v1 landed?" is a scope question only
+the owner can answer, and it is the same question that unparks the backlog.
+
+**Options for the owner** (recorded here so the next session does not
+re-derive them):
+  1. **Authorise a network install** (node + `typescript`, or build tsc at the
+     pinned commit) → unblocks EP.0/EP.2 and completes v1's byte-parity leg.
+  2. **Declare v1 landed on its offline definition** → unparks the post-v1
+     backlog (M3.5 per-file scopes is the highest-value item there: it is
+     Blocker #3, the root of several documented FP families).
+  3. **Take the one remaining perf lever** — full name atomization (M0.3(i)),
+     multi-session and PRICED first per round 670.
+  4. **Stop Phase 17.** The corpus is green at 12,520/0/3, the 8 profiles are at
+     their FP floor, and both the PERF and EP arcs are closed with ledgers.
+
+Gates: comment-only code change (two stale notes corrected); suite 12,520/0
+(3 skipped); tree clean.
+
+**Round 670 (2026-07-25) — M0.3 CLOSED, and a
+correction to my own round-666 record: the PERF arc was NOT fully closed then —
+M0.3 still had three unchecked slices, and this round prices them out properly.**
+Surveying what remained workable offline after PERF and EP both "closed" turned
+up (M0.3) still unchecked with real sub-items, which makes round 666's "THE PERF
+ARC, CLOSED" an overstatement. Correcting it is the point of this round.
+
+**The measurement.** (M0.3)(i)'s cheap half is a globals-miss short-circuit, and
+its stated evidence is "the 1.48M probes are 99% miss". Measured live, that is
+exactly right: **1,234,034 globals lookups, 1,219,892 misses = 98.9%**. But the
+item never priced it, and the arithmetic is decisive: skipping 1.22M HashMap
+probes at a realistic 20–40 ns each saves **25–50 ms of a ~28 s compile =
+0.09–0.17%**; even a generous 100 ns per probe gives 0.44%. That is an order of
+magnitude inside the ±2% band the PERF ground rules refuse to land on. (v)'s
+undo-log is the same size (JFR: 1.1% of samples — and round 623 established that
+a JFR self-% is not a wall price).
+
+**So M0.3's remaining slices cannot land alone**, by the arc's own rule that
+anything below the drift band folds into a structural item rather than landing
+on its own. What is left worth anything is (ii) NodeLinks/SymbolLinks
+consolidation and (i)'s FULL form — Identifier → Int atom at scan time plus
+int-keyed scope/member maps — both multi-session structural changes touching the
+binder and every map.
+
+**One forward-looking note, because it is the only lever left.** Full atomization
+is the same CLASS as the arc's three winners: those replaced allocation-heavy
+per-call structures on hot paths (LongKeyMap, IntKeyMap, NarrowSeen), and
+atomization removes String hashing/equality from hot map traffic. So it is
+plausibly real — but the item's opening evidence ("JFR-evidenced ~15% of wall in
+HashMap+String equality") is exactly the kind of figure this arc has repeatedly
+found unreliable, so it must be PRICED by instrumenting the actual time in the
+operations it would replace before a line is written. That instruction is now in
+the queue item.
+
+**This makes the arc genuinely closed, with the ledger unchanged**: M0.1 (tail
+deletion: ~6.2 s advertised → 59 ms), M0.2/M0.3 (dispatch + layout: −3.3%,
+−3.9%, −2.2%, −2.6% landed; remainder priced out here), M0.4 (35 spine
+migrations: neutral), M1 (−2.93%, the only live win), M2 (23% divisible, w4
+flat, parked). Five families, one win, and the recurring cause of the gap
+between advertised and measured was always the same: an aggregate ratio applied
+to a non-uniform population — which is precisely the error this round avoided by
+multiplying 1.22M by a per-probe cost before building anything.
+
+Gates: no code changed (pricing + bookkeeping correction); tree clean; suite
+untouched at 12,520/0/3.
+
+**Round 669 (2026-07-25) — EP.1 DONE: barrel-reached const enums now inline —
+and measuring it falsified EP.1's dashboard premise as well, the way round 667
+falsified its technical one.** This completes the barrel-hop pair begun in round
+668 (the checker-side TS2694 FP); same root cause, same suppression-safe shape,
+and the same lesson about checking a stale claim before believing its size.
+
+**The fix.** Through a barrel the emit kept `barrel_1.Kind.B`, retained a real
+`require("./barrel")` and dragged in the entire `__importStar` helper tsc
+elides. It now emits `1 /* Kind.B */`, `0 /* B.Kind.A */`,
+`"x" /* Names.X */` with the import fully elided. Cause: both const-enum entry
+points (`resolveConstEnumMemberAccess`, `isConstEnumAlias`) reach the enum via
+`resolveAlias`/`resolveNamePath`, which walk `symbol.exports` — and a star
+re-export never populates the barrel's own export table.
+`constEnumSymbolThroughStars` resolves the importing statement (named OR
+namespace form), follows the target module's star closure, and returns a symbol
+ONLY when it carries `SymbolFlags.ConstEnum`. **Const-enum-only by
+construction** — it can never feed a general type resolution, which is precisely
+what keeps it clear of the documented dead-end where star-following inside
+`resolveAlias` flooded TS2315 ×466.
+
+**The honest headline: ZERO effect on the tsc profiles.** Before AND after, the
+emitted `compiler` dist contains 1,663 numeric + 18 string const-enum inlines
+and **0 residual `ts_N.X.Y`** accesses — identical. I measured that with a
+stash/rebuild specifically because attributing those 1,681 inlines to this
+change would have been wrong, and this arc has already produced three
+mis-attributions from exactly that reflex. So EP.1's "highest impact, ~93% of
+the changed lines" sizing is stale in the same way its technical premise was:
+the tsc profile already inlines everything, and the barrel gap is a shape those
+profiles never hit. The fix is kept because the gap is real — the repro and pins
+prove it — but it is **general-correctness value for the post-v1 "any TypeScript
+project" horizon, not a dashboard win**, and the queue now says so.
+
+**Where that leaves EP.** EP.3 done (round 484), EP.1a done (668), EP.1 done
+(669) — and all three of the "systematic families" round 483 identified are now
+either fixed or found already-fixed. EP.2 (multi-line printer formatting) and
+EP.0 (the diff gate) remain blocked offline: no `node`, no `tsc`, no `tsc.js` on
+this box. So **the EP family is finished to the extent it can be, offline**, and
+what remains needs either a user-provided reference tsc or a decision that
+byte-parity is not worth the network dependency.
+
+Gates: 7 pins (`BarrelConstEnumInliningTest` — named/namespace/string-valued
+inlining, import elision, a two-barrel chain, plus two negative controls proving
+a REGULAR enum and `preserveConstEnums`/`isolatedModules` keep their runtime
+access); suite 12,513 → **12,520/0** (3 skipped) with every JS baseline still
+byte-exact — the corpus is the real emit gate here; `--listAll` ×8
+byte-identical on all eight profiles; warning-clean.
+
+Re-learned the hard way, and worth repeating because CLAUDE.md documents it: a
+literal `/*` inside a KDoc opens a NESTED block comment and breaks the file. The
+doc comment now describes tsc's inlined form in words instead.
+
 **Round 668 (2026-07-25) — EP.1a DONE: the `export *` barrel namespace-import
 false positive (TS2694) is fixed, gated offline, and inert on all eight
 profiles.** Round 667's triage found this while checking EP.1's premise; it was

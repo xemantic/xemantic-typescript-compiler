@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * INV.1(a) (round 491): the import-graph crawl became a cold Flow collected
@@ -66,30 +66,29 @@ class Inv1SequentialCrawlOrderTest {
     @Test
     fun `program files preserve seed-then-BFS discovery order with first-discovery dedup`() {
         val result = ProjectCompiler(diamondProject()).build("/p", noEmit = true)
-        assertEquals(
-            listOf(
-                "/p/src/index.ts", // the sole seed (tsconfig `files`)
-                "/p/src/a.ts",     // index's imports, specifier order
+        assert(
+            result.programFiles == listOf(
+                "/p/src/index.ts",  // the sole seed (tsconfig `files`)
+                "/p/src/a.ts",      // index's imports, specifier order
                 "/p/src/b.ts",
                 "/p/src/shared.ts", // a's import — first discovery wins the position
                 "/p/src/c.ts",      // b's import (its `./shared` dedups away)
-            ),
-            result.programFiles,
+            )
         )
     }
 
     @Test
     fun `unresolved bare specifiers are attributed to their importer`() {
         val result = ProjectCompiler(diamondProject()).build("/p", noEmit = true)
-        assertEquals(listOf("/p/src/index.ts" to "totally-missing-pkg"), result.unresolved)
+        assert(result.unresolved == listOf("/p/src/index.ts" to "totally-missing-pkg"))
     }
 
     @Test
     fun `two identical builds are byte-deterministic - the INV1b invariant`() {
         val r1 = ProjectCompiler(diamondProject()).build("/p", noEmit = true)
         val r2 = ProjectCompiler(diamondProject()).build("/p", noEmit = true)
-        assertEquals(r1.programFiles, r2.programFiles)
-        assertEquals(r1.diagnostics, r2.diagnostics)
-        assertEquals(r1.unresolved, r2.unresolved)
+        assert(r2.programFiles == r1.programFiles)
+        assert(r2.diagnostics == r1.diagnostics)
+        assert(r2.unresolved == r1.unresolved)
     }
 }

@@ -77,10 +77,9 @@ class NamespaceLocalBaseInheritanceTest {
             """,
         ) should {
             have(none { it.code == 2353 })
-            have(
-                none { it.code == 2739 || it.code == 2740 || it.code == 2741 },
-                "the object literal provides every own+inherited member, so no missing-property error",
-            )
+            // the object literal provides every own+inherited member, so no
+            // missing-property error
+            have(none { it.code == 2739 || it.code == 2740 || it.code == 2741 })
         }
     }
 

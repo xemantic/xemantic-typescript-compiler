@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 630): pins for the checkSameTargetReferenceCastOverlap
@@ -59,7 +59,7 @@ class M04CastOverlapSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nconst c = <Box<string>>nb;"
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 && it.message.startsWith("Conversion of type") &&
                 it.messageChain.any { m -> "is not comparable to type" in m } })
@@ -131,7 +131,7 @@ class M04CastOverlapSpineMigrationTest {
         val ds = diagnose(
             """const a = <{ id: number; }[]>[{ foo: "s" }];"""
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 && it.length == 3 &&
                 it.messageChain.any { m ->
@@ -147,7 +147,7 @@ class M04CastOverlapSpineMigrationTest {
         val ds = diagnose(
             """const f = <{ (): number; }>function() { return "err"; };"""
         )
-        assertEquals(1, ds.count { it.code == 2352 })
+        assert(ds.count { it.code == 2352 } == 1)
         ds should {
             have(any { it.code == 2352 &&
                 it.messageChain.any { m -> "'string' is not comparable to type 'number'" in m } })

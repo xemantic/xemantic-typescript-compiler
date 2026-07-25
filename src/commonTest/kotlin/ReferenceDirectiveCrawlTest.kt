@@ -25,10 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * M4.8 (round 680): the CRAWL half — a `/// <reference path|types>` target must
@@ -64,11 +62,9 @@ class ReferenceDirectiveCrawlTest {
                     "/// <reference path=\"globals.d.ts\" />\nexport const x = myGlobal + 1;\n",
             )
         )
-        assertTrue(
-            r.programFiles.any { it.endsWith("globals.d.ts") },
-            "referenced file must join the program, got: ${r.programFiles}",
-        )
-        assertEquals(0, r.diagnostics.count { it.code == 2304 }, "no unresolved name: ${r.diagnostics}")
+        // The referenced file must join the program, and its declarations resolve.
+        assert(r.programFiles.any { it.endsWith("globals.d.ts") })
+        assert(r.diagnostics.count { it.code == 2304 } == 0)
     }
 
     @Test
@@ -82,8 +78,8 @@ class ReferenceDirectiveCrawlTest {
                     "/// <reference path=\"entry.d.ts\" />\nexport const x = deep.length;\n",
             )
         )
-        assertTrue(r.programFiles.any { it.endsWith("globals.d.ts") }, "transitive target missing")
-        assertEquals(0, r.diagnostics.count { it.code == 2304 })
+        assert(r.programFiles.any { it.endsWith("globals.d.ts") })
+        assert(r.diagnostics.count { it.code == 2304 } == 0)
     }
 
     @Test
@@ -95,8 +91,8 @@ class ReferenceDirectiveCrawlTest {
                     "/// <reference path=\"./types/g.d.ts\" />\nexport const x = nested;\n",
             )
         )
-        assertTrue(r.programFiles.any { it.endsWith("g.d.ts") }, "got: ${r.programFiles}")
-        assertEquals(0, r.diagnostics.count { it.code == 2304 })
+        assert(r.programFiles.any { it.endsWith("g.d.ts") })
+        assert(r.diagnostics.count { it.code == 2304 } == 0)
     }
 
     @Test
@@ -108,8 +104,8 @@ class ReferenceDirectiveCrawlTest {
                     "/// <reference path=\"../g.d.ts\" />\nexport const x = up;\n",
             )
         )
-        assertTrue(r.programFiles.any { it.endsWith("g.d.ts") }, "got: ${r.programFiles}")
-        assertEquals(0, r.diagnostics.count { it.code == 2304 })
+        assert(r.programFiles.any { it.endsWith("g.d.ts") })
+        assert(r.diagnostics.count { it.code == 2304 } == 0)
     }
 
     @Test
@@ -120,7 +116,7 @@ class ReferenceDirectiveCrawlTest {
                 "/proj/src/m.ts" to "/// <reference path=\"g.d.ts\" />\nexport const x = ok;\n",
             )
         )
-        assertEquals(0, r.diagnostics.count { it.code == 6053 }, "got: ${r.diagnostics}")
+        assert(r.diagnostics.count { it.code == 6053 } == 0)
     }
 
     // ── negative controls ─────────────────────────────────────────────────
@@ -130,7 +126,7 @@ class ReferenceDirectiveCrawlTest {
         val r = build(
             mapOf("/proj/src/m.ts" to "/// <reference path=\"nope.d.ts\" />\nexport const x = 1;\n")
         )
-        assertEquals(1, r.diagnostics.count { it.code == 6053 }, "got: ${r.diagnostics}")
+        assert(r.diagnostics.count { it.code == 6053 } == 1)
     }
 
     @Test
@@ -143,16 +139,14 @@ class ReferenceDirectiveCrawlTest {
                 "/proj/src/m.ts" to "/// <reference path=\"globals.d.ts\" />\nexport const x = sib;\n",
             )
         )
-        assertFalse(
-            r.unresolved.any { it.second == "globals.d.ts" },
-            "must not be attempted as a module specifier, got: ${r.unresolved}",
-        )
+        // It must not be attempted as a module specifier.
+        assert(!r.unresolved.any { it.second == "globals.d.ts" })
     }
 
     @Test
     fun `negative control - a file with no directives loads only itself`() {
         val r = build(mapOf("/proj/src/m.ts" to "export const x = 1;\n"))
-        assertEquals(1, r.programFiles.size, "got: ${r.programFiles}")
+        assert(r.programFiles.size == 1)
     }
 
     @Test
@@ -163,7 +157,7 @@ class ReferenceDirectiveCrawlTest {
                 "/proj/src/m.ts" to "import { d } from \"./dep.js\";\nexport const x = d;\n",
             )
         )
-        assertTrue(r.programFiles.any { it.endsWith("dep.ts") }, "got: ${r.programFiles}")
-        assertEquals(0, r.diagnostics.count { it.code == 2304 })
+        assert(r.programFiles.any { it.endsWith("dep.ts") })
+        assert(r.diagnostics.count { it.code == 2304 } == 0)
     }
 }

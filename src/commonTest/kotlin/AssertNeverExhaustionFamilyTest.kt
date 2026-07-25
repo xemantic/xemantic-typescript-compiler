@@ -70,7 +70,7 @@ class AssertNeverExhaustionFamilyTest {
                     return message;
                 }
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2345 })
         }
     }
@@ -88,7 +88,7 @@ class AssertNeverExhaustionFamilyTest {
                     default: assertNever(reason);
                 }
             }
-        """.trimIndent()) should {
+        """) should {
             have(any { it.code == 2345 })
         }
     }
@@ -121,7 +121,7 @@ class AssertNeverExhaustionFamilyTest {
                     }
                 }
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2345 })
         }
     }
@@ -156,7 +156,7 @@ class AssertNeverExhaustionFamilyTest {
                         return false;
                 }
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2345 })
         }
     }
@@ -183,7 +183,7 @@ class AssertNeverExhaustionFamilyTest {
                         return false;
                 }
             }
-        """.trimIndent()) should {
+        """) should {
             have(any { it.code == 2345 })
         }
     }

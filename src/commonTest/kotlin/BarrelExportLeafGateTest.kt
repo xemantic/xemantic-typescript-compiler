@@ -26,8 +26,9 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * M3.4 (round 413): pins the `export *` leaf-export gate in
@@ -80,15 +81,12 @@ class BarrelExportLeafGateTest {
     private val barrel = """export * from "./core.js";
 export * from "./dbg.js";"""
 
-    private fun files(indexBody: String): Map<String, String> = mapOf(
+    private fun files(@Language("typescript") indexBody: String): Map<String, String> = mapOf(
         "/proj/src/dbg.ts" to dbgLeaf,
         "/proj/src/core.ts" to coreImporter,
         "/proj/src/barrel.ts" to barrel,
         "/proj/src/index.ts" to indexBody,
     )
-
-    private fun codes(result: ProjectCompiler.Result, code: Int): List<String> =
-        result.diagnostics.filter { it.code == code }.map { it.message }
 
     /**
      * The load-bearing case: `Dbg.assert(isString(x))` is a bare assert wrapping a type
@@ -96,7 +94,7 @@ export * from "./dbg.js";"""
      * the core.ts import-alias collision to debug.ts's real namespace.
      */
     @Test
-    fun barrelNamespaceAssertNarrowsPastImportAliasCollision() {
+    fun `a barrel namespace assert narrows past the import-alias collision`() {
         val result = build(
             files(
                 """
@@ -109,12 +107,9 @@ export * from "./dbg.js";"""
                 """.trimIndent()
             )
         )
-        assertEquals(
-            emptyList(),
-            codes(result, 2322),
-            "Dbg.assert(isString(x)) must narrow x to string — the barrel `Dbg` must " +
-                "resolve past core.ts's non-exported import alias to debug.ts's namespace",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2322 })
+        }
     }
 
     /**
@@ -122,7 +117,7 @@ export * from "./dbg.js";"""
      * `string` — proves the positive above is not vacuous.
      */
     @Test
-    fun withoutAssertTheAssignmentStillErrors() {
+    fun `negative control - without the assert the assignment still errors`() {
         val result = build(
             files(
                 """
@@ -133,7 +128,9 @@ export * from "./dbg.js";"""
                 """.trimIndent()
             )
         )
-        have(result.diagnostics.any { it.code == 2322 })
+        result.diagnostics should {
+            have(any { it.code == 2322 })
+        }
     }
 
     /**
@@ -143,7 +140,7 @@ export * from "./dbg.js";"""
      * rejecting the non-exported import alias.
      */
     @Test
-    fun aRealExportInTheCollisionModuleStillResolves() {
+    fun `a real export in the collision module still resolves`() {
         val result = build(
             mapOf(
                 "/proj/src/dbg.ts" to dbgLeaf,
@@ -167,10 +164,8 @@ export * from "./dbg.js";"""
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            codes(result, 2345),
-            "a genuinely-exported guard from the collision module must still narrow",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 }

@@ -25,10 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
 
 /**
  * EP.2h (round 678): consecutive `//` comments in an INNER position must not be
@@ -45,7 +44,7 @@ import kotlin.test.assertFalse
  */
 class InnerCommentBlankLineTest {
 
-    private fun emit(src: String): String =
+    private fun emit(@Language("typescript") src: String): String =
         TypeScriptCompiler().compile("// @target: es2020\n" + src.trimIndent()).javascript
             ?: error("no js")
 
@@ -79,8 +78,8 @@ class InnerCommentBlankLineTest {
             }
             """
         )
-        assertEquals(0, blanksBetweenComments(js), "no blank between comment lines, got:\n$js")
-        assertContains(js, "// first comment line\n    // second comment line")
+        assert(blanksBetweenComments(js) == 0)
+        assert("// first comment line\n    // second comment line" in js)
     }
 
     @Test
@@ -100,7 +99,7 @@ class InnerCommentBlankLineTest {
             }
             """
         )
-        assertEquals(0, blanksBetweenComments(js), "got:\n$js")
+        assert(blanksBetweenComments(js) == 0)
     }
 
     @Test
@@ -119,8 +118,8 @@ class InnerCommentBlankLineTest {
             }
             """
         )
-        assertContains(js, "// alpha")
-        assertContains(js, "// beta")
+        assert("// alpha" in js)
+        assert("// beta" in js)
     }
 
     @Test
@@ -139,9 +138,10 @@ class InnerCommentBlankLineTest {
             }
             """
         )
-        assertContains(js, "/* block */")
-        assertContains(js, "// line")
-        assertFalse("/* block */ // line" in js, "the two must not collapse onto one line, got:\n$js")
+        assert("/* block */" in js)
+        assert("// line" in js)
+        // The two must not collapse onto one line.
+        assert("/* block */ // line" !in js)
     }
 
     @Test
@@ -159,12 +159,12 @@ class InnerCommentBlankLineTest {
             }
             """
         )
-        assertContains(js, "// only one")
-        assertEquals(0, blanksBetweenComments(js))
+        assert("// only one" in js)
+        assert(blanksBetweenComments(js) == 0)
     }
 
     @Test
-    fun `a blank line between the comments IN SOURCE is collapsed, as tsc does`() {
+    fun `a blank line between the comments IN SOURCE is collapsed - as tsc does`() {
         // The boundary this fix defines: we no longer emit a blank between two
         // line comments even when the source had one. Verified byte-identical
         // against reference tsc 6.0.3, which collapses it the same way — so the
@@ -184,8 +184,8 @@ class InnerCommentBlankLineTest {
             }
             """
         )
-        assertEquals(0, blanksBetweenComments(js), "tsc collapses this too, got:\n$js")
-        assertContains(js, "// first")
-        assertContains(js, "// second")
+        assert(blanksBetweenComments(js) == 0)
+        assert("// first" in js)
+        assert("// second" in js)
     }
 }

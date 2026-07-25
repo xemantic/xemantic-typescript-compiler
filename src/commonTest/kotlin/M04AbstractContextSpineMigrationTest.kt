@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 651): pins for the checkAbstractMemberContext (TS1253 —
@@ -72,10 +72,10 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
-        assertEquals(0, ts7008(ds)) // has a type annotation
+        assert(ts1253(ds) == 1)
+        assert(ts7008(ds) == 0) // has a type annotation
         val d = ds.single { it.code == 1253 }
-        assertEquals("abstract".length, d.length)
+        assert(d.length == "abstract".length)
     }
 
     @Test
@@ -87,8 +87,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1244(ds))
-        assertEquals(0, ts1253(ds))
+        assert(ts1244(ds) == 1)
+        assert(ts1253(ds) == 0)
     }
 
     @Test
@@ -100,7 +100,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1244(ds))
+        assert(ts1244(ds) == 1)
     }
 
     @Test
@@ -112,8 +112,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
-        assertEquals(1, ts7008(ds))
+        assert(ts1253(ds) == 1)
+        assert(ts7008(ds) == 1)
     }
 
     @Test
@@ -127,8 +127,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
-        assertEquals(1, ts7008(ds))
+        assert(ts1253(ds) == 0)
+        assert(ts7008(ds) == 1)
     }
 
     @Test
@@ -141,9 +141,9 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
-        assertEquals(0, ts1244(ds))
-        assertEquals(0, ts7008(ds))
+        assert(ts1253(ds) == 0)
+        assert(ts1244(ds) == 0)
+        assert(ts7008(ds) == 0)
     }
 
     @Test
@@ -156,8 +156,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
-        assertEquals(1, ts1244(ds))
+        assert(ts1253(ds) == 1)
+        assert(ts1244(ds) == 1)
     }
 
     @Test
@@ -170,8 +170,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
-        assertEquals(0, ts1244(ds))
+        assert(ts1253(ds) == 0)
+        assert(ts1244(ds) == 0)
     }
 
     @Test
@@ -184,8 +184,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
-        assertEquals(0, ts1244(ds))
+        assert(ts1253(ds) == 0)
+        assert(ts1244(ds) == 0)
     }
 
     // ── Ambient gating (the downward inAmbient flag) ───────────────────────
@@ -201,7 +201,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
+        assert(ts1253(ds) == 0)
     }
 
     @Test
@@ -215,7 +215,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -231,7 +231,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
+        assert(ts1253(ds) == 0)
     }
 
     @Test
@@ -250,8 +250,8 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1253(ds))
-        assertEquals(0, ts1244(ds))
+        assert(ts1253(ds) == 0)
+        assert(ts1244(ds) == 0)
     }
 
     // ── Reach — nested classes REACHED (emission fires) ────────────────────
@@ -269,7 +269,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -283,7 +283,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -297,7 +297,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -311,7 +311,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -327,7 +327,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -341,7 +341,7 @@ class M04AbstractContextSpineMigrationTest {
             } catch (e) {}
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -357,7 +357,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     // ── Reach — the Ab-vs-CP differences (full arrow body, subject, cond) ──
@@ -377,7 +377,7 @@ class M04AbstractContextSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -391,7 +391,7 @@ class M04AbstractContextSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts1253(ds))
+        assert(ts1253(ds) == 1)
     }
 
     @Test
@@ -403,7 +403,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts1244(ds))
+        assert(ts1244(ds) == 1)
     }
 
     @Test
@@ -414,7 +414,7 @@ class M04AbstractContextSpineMigrationTest {
             const r = (class Z { abstract m(): void; }) ? 1 : 2;
             """
         )
-        assertEquals(1, ts1244(ds))
+        assert(ts1244(ds) == 1)
     }
 
     // ── Reach — class expressions in ordinary expression positions ─────────
@@ -426,7 +426,7 @@ class M04AbstractContextSpineMigrationTest {
             const X = class { abstract m(): void; };
             """
         )
-        assertEquals(1, ts1244(ds))
+        assert(ts1244(ds) == 1)
     }
 
     @Test
@@ -436,7 +436,7 @@ class M04AbstractContextSpineMigrationTest {
             [class Z { abstract m(): void; }];
             """
         )
-        assertEquals(1, ts1244(ds))
+        assert(ts1244(ds) == 1)
     }
 
     // ── Reach — NOT reached (no emission) ──────────────────────────────────
@@ -452,7 +452,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1244(ds))
+        assert(ts1244(ds) == 0)
     }
 
     @Test
@@ -463,7 +463,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1244(ds))
+        assert(ts1244(ds) == 0)
     }
 
     @Test
@@ -474,7 +474,7 @@ class M04AbstractContextSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts1244(ds))
+        assert(ts1244(ds) == 0)
     }
 
     // ── File-kind gate ─────────────────────────────────────────────────────
@@ -492,7 +492,7 @@ class M04AbstractContextSpineMigrationTest {
             """,
             fileName = "t.d.ts",
         )
-        assertEquals(0, ts1253(ds))
-        assertEquals(0, ts1244(ds))
+        assert(ts1253(ds) == 0)
+        assert(ts1244(ds) == 0)
     }
 }

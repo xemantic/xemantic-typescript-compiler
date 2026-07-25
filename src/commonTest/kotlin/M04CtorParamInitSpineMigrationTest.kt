@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 650): pins for the checkConstructorParamInInitializers
@@ -66,9 +66,9 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
         val d = ds.single { it.code == 2301 }
-        assertEquals("param".length, d.length)
+        assert(d.length == "param".length)
     }
 
     @Test
@@ -83,11 +83,11 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
-    fun `negative control - ctor body let does NOT count (only var is hoisted)`() {
+    fun `negative control - ctor body let does NOT count - only var is hoisted`() {
         val ds = diagnose(
             """
             class C {
@@ -98,7 +98,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     @Test
@@ -111,7 +111,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     // ── TS2663 — parameter-property variant (calibrated) ───────────────────
@@ -126,9 +126,9 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
         // The message is unique to the instance-member suggestion.
-        assertEquals(true, ds.any { it.code == 2663 && it.message.contains("this.param") })
+        assert(ds.any { it.code == 2663 && it.message.contains("this.param") } == true)
     }
 
     @Test
@@ -145,7 +145,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -158,7 +158,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     // ── REACH: statement-walk positions (reached) ──────────────────────────
@@ -175,7 +175,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -190,7 +190,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -206,7 +206,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -222,7 +222,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -237,7 +237,7 @@ class M04CtorParamInitSpineMigrationTest {
             } catch (e) {}
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -252,7 +252,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -269,7 +269,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     // ── REACH: expression-walk positions (reached) ─────────────────────────
@@ -284,7 +284,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -298,7 +298,7 @@ class M04CtorParamInitSpineMigrationTest {
             });
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -311,7 +311,7 @@ class M04CtorParamInitSpineMigrationTest {
             }];
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -324,7 +324,7 @@ class M04CtorParamInitSpineMigrationTest {
             } };
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -338,7 +338,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -352,7 +352,7 @@ class M04CtorParamInitSpineMigrationTest {
             } : null;
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     // ── REACH: expression-walk positions (NOT reached) ─────────────────────
@@ -367,7 +367,7 @@ class M04CtorParamInitSpineMigrationTest {
             }) ? 1 : 2;
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     // ── REACH: class member descent (DECL vs EXPR asymmetry) ───────────────
@@ -386,7 +386,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -403,7 +403,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     @Test
@@ -418,7 +418,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -433,7 +433,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     // ── REACH: arrow / function-expression restricted body ─────────────────
@@ -450,7 +450,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -467,7 +467,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     @Test
@@ -480,7 +480,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -498,7 +498,7 @@ class M04CtorParamInitSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     // ── EMISSION: nested-scope shadowing inside the class's own initializer ─
@@ -513,7 +513,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     @Test
@@ -526,11 +526,11 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2301(ds))
+        assert(ts2301(ds) == 0)
     }
 
     @Test
-    fun `an EXPRESSION-bodied arrow param does NOT shadow the ctor param (frozen quirk)`() {
+    fun `an EXPRESSION-bodied arrow param does NOT shadow the ctor param - frozen quirk`() {
         // The emission leaf collects arrow params for shadowing only for a
         // BLOCK body; an expression-bodied arrow walks its body with the
         // UN-shadowed ctor-name set, so the ctor param still fires.
@@ -542,7 +542,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2301(ds))
+        assert(ts2301(ds) == 1)
     }
 
     // ── declare class ──────────────────────────────────────────────────────
@@ -557,7 +557,7 @@ class M04CtorParamInitSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2301(ds))
-        assertEquals(0, ts2663(ds))
+        assert(ts2301(ds) == 0)
+        assert(ts2663(ds) == 0)
     }
 }

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
@@ -92,20 +93,22 @@ class AssertNarrowingScalingTest {
      * positive tests below are not vacuous (a checker that never compared the
      * assignment would "pass" them without any narrowing at all).
      */
-    @Test fun unnarrowedUnknownToStringErrors() {
+    @Test
+    fun `negative control - an unnarrowed unknown assigned to string errors`() {
         val source = """
             // @strict: true
             declare const x: unknown;
             const y: string = x;
         """.trimIndent() + "\n"
         val result = TypeScriptCompiler().compile(source, "control.ts")
-        have(result.diagnostics.any { it.code == 2322 })
+        assert(result.diagnostics.any { it.code == 2322 })
     }
 
     /** Positive control at trivial depth: the `x is string` predicate narrows → clean. */
-    @Test fun predicateNarrowingStillApplies() {
+    @Test
+    fun `predicate narrowing still applies`() {
         val result = TypeScriptCompiler().compile(callDenseSource(calls = 2), "narrowed.ts")
-        have(result.diagnostics.isEmpty())
+        assert(result.diagnostics.isEmpty())
     }
 
     /**
@@ -117,13 +120,14 @@ class AssertNarrowingScalingTest {
      * The compile must ALSO stay clean: the trailing predicate guard narrows through
      * the same memoized walk the dense calls exercised.
      */
-    @Test fun callDenseNarrowingScalesNearLinearly() {
+    @Test
+    fun `call-dense narrowing scales near-linearly`() {
         // Warm-up at a smaller size (JIT + embedded-lib parse dominate the first compile).
         TypeScriptCompiler().compile(callDenseSource(calls = 30), "warmup.ts")
         val (result, elapsed) = measureTimedValue {
             TypeScriptCompiler().compile(callDenseSource(calls = 120), "dense.ts")
         }
-        have(result.diagnostics.isEmpty())
-        have(elapsed < 60.seconds, "superlinear re-entry is back")
+        assert(result.diagnostics.isEmpty())
+        assert(elapsed < 60.seconds)
     }
 }

@@ -25,10 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * EP.2g (round 678): a const enum reached through a VARIABLE whose declared type
@@ -66,7 +65,7 @@ class TypeofNamespaceConstEnumTest {
         // @filename: main.ts
     """.trimIndent() + "\n"
 
-    private fun emit(main: String): String =
+    private fun emit(@Language("typescript") main: String): String =
         TypeScriptCompiler().compile(prelude + main.trimIndent(), "main.ts")
             .jsOutputs.joinToString("\n") { it.second }
 
@@ -78,7 +77,7 @@ class TypeofNamespaceConstEnumTest {
             export function f() { tracing?.push(tracing.Phase.Bind, "x"); }
             """
         )
-        assertContains(js, "\"bind\" /* tracing.Phase.Bind */")
+        assert("\"bind\" /* tracing.Phase.Bind */" in js)
     }
 
     @Test
@@ -98,7 +97,7 @@ class TypeofNamespaceConstEnumTest {
             """.trimIndent(),
             "main.ts",
         ).jsOutputs.joinToString("\n") { it.second }
-        assertContains(js, "\"bind\" /* tracing.Phase.Bind */")
+        assert("\"bind\" /* tracing.Phase.Bind */" in js)
     }
 
     @Test
@@ -110,20 +109,20 @@ class TypeofNamespaceConstEnumTest {
             export function f() { return t.Phase.Parse; }
             """
         )
-        assertContains(js, "\"parse\"")
+        assert("\"parse\"" in js)
     }
 
     // ── negative controls: the VARIABLE is real runtime state ──────────────
 
     @Test
-    fun `the receiver's own access survives — only the member is substituted`() {
+    fun `the receiver's own access survives - only the member is substituted`() {
         val js = emit(
             """
             import { tracing } from "./barrel";
             export function f() { tracing?.push(tracing.Phase.Bind, "x"); }
             """
         )
-        assertTrue("tracing?.push" in js, "the receiver call must survive, got:\n$js")
+        assert("tracing?.push" in js)
     }
 
     @Test
@@ -135,7 +134,8 @@ class TypeofNamespaceConstEnumTest {
             export function f() { tracing?.push(tracing.Phase.Bind, "x"); }
             """
         )
-        assertTrue("require(\"./barrel\")" in js, "a real binding's import must survive, got:\n$js")
+        // A real runtime binding keeps its import.
+        assert("require(\"./barrel\")" in js)
     }
 
     @Test
@@ -152,7 +152,7 @@ class TypeofNamespaceConstEnumTest {
             """.trimIndent(),
             "main.ts",
         ).jsOutputs.joinToString("\n") { it.second }
-        assertFalse("\"bind\" /* ns.Phase.Bind */" in js, "a regular enum keeps its access, got:\n$js")
+        assert("\"bind\" /* ns.Phase.Bind */" !in js)
     }
 
     @Test
@@ -169,6 +169,7 @@ class TypeofNamespaceConstEnumTest {
             """.trimIndent(),
             "main.ts",
         ).jsOutputs.joinToString("\n") { it.second }
-        assertTrue("h.Phase" in js, "an ordinary property access must survive, got:\n$js")
+        // An ordinary property access must survive untouched.
+        assert("h.Phase" in js)
     }
 }

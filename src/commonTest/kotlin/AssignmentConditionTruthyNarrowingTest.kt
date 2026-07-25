@@ -66,7 +66,7 @@ class AssignmentConditionTruthyNarrowingTest {
                 }
                 return childTypeTag;
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2322 })
         }
     }
@@ -82,7 +82,7 @@ class AssignmentConditionTruthyNarrowingTest {
                 }
                 return childTypeTag;
             }
-        """.trimIndent()) should {
+        """) should {
             have(any { it.code == 2322 })
         }
     }

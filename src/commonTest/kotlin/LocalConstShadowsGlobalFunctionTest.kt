@@ -85,7 +85,7 @@ class LocalConstShadowsGlobalFunctionTest {
     }
 
     @Test
-    fun `an ANNOTATED shadow keeps its concrete type, so a genuine mismatch still fires - negative control`() {
+    fun `an ANNOTATED shadow keeps its concrete type - so a genuine mismatch still fires - negative control`() {
         // `const clone: Ident = …` — the annotated branch records the concrete `Ident` type
         // (not anyType), so assigning it to a `number` still fires TS2322. Proves the fix is
         // scoped to UN-annotated global shadows and does not blanket-suppress.

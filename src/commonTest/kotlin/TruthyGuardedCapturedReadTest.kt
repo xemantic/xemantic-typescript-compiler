@@ -94,7 +94,7 @@ class TruthyGuardedCapturedReadTest {
     }
 
     @Test
-    fun `negative control - an unguarded captured read still fires (f10)`() {
+    fun `negative control - an unguarded captured read still fires - f10`() {
         diagnose(
             """
             declare const cond: boolean;

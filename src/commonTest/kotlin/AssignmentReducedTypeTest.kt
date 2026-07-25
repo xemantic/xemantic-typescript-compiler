@@ -63,7 +63,7 @@ class AssignmentReducedTypeTest {
                     expected.kind;
                 }
             }
-            """.trimIndent(),
+            """
         ) should {
             have(none { it.code == 2339 })
         }
@@ -78,7 +78,7 @@ class AssignmentReducedTypeTest {
                 expected = typeof expected !== "string" ? expected : { name: expected };
                 expected.insertText;
             }
-            """.trimIndent(),
+            """
         ) should {
             have(none { it.code == 2339 })
         }
@@ -94,7 +94,7 @@ class AssignmentReducedTypeTest {
                 source.files;
                 source.main;
             }
-            """.trimIndent(),
+            """
         ) should {
             have(none { it.code == 2339 })
         }
@@ -112,7 +112,7 @@ class AssignmentReducedTypeTest {
                 }
                 expected.map(e => e.name);
             }
-            """.trimIndent(),
+            """
         ) should {
             have(none { it.code == 2339 })
         }
@@ -126,7 +126,7 @@ class AssignmentReducedTypeTest {
             function verify(expected: Entry): void {
                 expected.insertText;
             }
-            """.trimIndent(),
+            """
         ) should {
             have(any { it.code == 2339 })
         }
@@ -142,7 +142,7 @@ class AssignmentReducedTypeTest {
                 expected = typeof expected === "string" ? pick() : expected;
                 expected.insertText;
             }
-            """.trimIndent(),
+            """
         ) should {
             // pick() can return a string again — the reads must keep failing.
             have(any { it.code == 2339 })

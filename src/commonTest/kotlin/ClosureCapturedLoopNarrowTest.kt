@@ -46,7 +46,7 @@ import kotlin.test.Test
 class ClosureCapturedLoopNarrowTest {
 
     @Test
-    fun `captured param guarded before a for-loop, used inside - no TS18048`() {
+    fun `captured param guarded before a for-loop - used inside - no TS18048`() {
         diagnose(
             """
             export function f(expandedParams: readonly number[] | undefined): void {
@@ -63,7 +63,7 @@ class ClosureCapturedLoopNarrowTest {
     }
 
     @Test
-    fun `captured param guarded before a while-loop, used inside - no TS18048`() {
+    fun `captured param guarded before a while-loop - used inside - no TS18048`() {
         diagnose(
             """
             export function f(state: { count: number } | undefined): void {

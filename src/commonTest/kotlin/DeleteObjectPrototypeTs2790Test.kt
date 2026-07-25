@@ -52,12 +52,11 @@ class DeleteObjectPrototypeTs2790Test {
     private val embedded = "// @target: es2015"
 
     @Test
-    fun `real libs - delete Array_toString fires TS2790 (the keywordExpressionInternalComments fix)`() {
+    fun `real libs - delete Array_toString fires TS2790 - the keywordExpressionInternalComments fix`() {
         diagnose("delete Array.toString;", directives = realLibs) should {
-            have(
-                any { it.code == 2790 },
-                "delete Array.toString must be TS2790 under real libs (toString inherited from Object.prototype)",
-            )
+            // delete Array.toString must be TS2790 under real libs (toString inherited
+            // from Object.prototype)
+            have(any { it.code == 2790 })
         }
     }
 
@@ -69,7 +68,7 @@ class DeleteObjectPrototypeTs2790Test {
     }
 
     @Test
-    fun `embedded lib - delete Array_toString still fires TS2790 (regression control)`() {
+    fun `embedded lib - delete Array_toString still fires TS2790 - regression control`() {
         // Under the embedded lib the member is found as an OWN declaration, exercising the
         // pre-existing branch — this pins that the refactor did not disturb it.
         diagnose("delete Array.toString;", directives = embedded) should {
@@ -78,7 +77,7 @@ class DeleteObjectPrototypeTs2790Test {
     }
 
     @Test
-    fun `own optional Object-prototype member does NOT fire (fallback not reached)`() {
+    fun `own optional Object-prototype member does NOT fire - fallback not reached`() {
         // The receiver declares `toString?` itself, so propSym is found and optional →
         // the own-member branch handles it (no TS2790). The fallback must NOT fire.
         diagnose(

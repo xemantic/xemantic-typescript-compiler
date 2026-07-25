@@ -26,8 +26,8 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the round-409 (M3.4) invariant: a user type-guard / assert imported
@@ -52,9 +52,6 @@ class BarrelImportedGuardNarrowingTest {
         return ProjectCompiler(vfs).build("/proj", noEmit = true)
     }
 
-    private fun ts2345(result: ProjectCompiler.Result): List<String> =
-        result.diagnostics.filter { it.code == 2345 }.map { it.message }
-
     // A leaf module of type guards + a barrel re-exporting it wholesale — tsc's shape.
     private val guardsLeaf =
         """
@@ -69,7 +66,7 @@ class BarrelImportedGuardNarrowingTest {
         """.trimIndent()
 
     @Test
-    fun typeGuardImportedThroughABarrelNarrowsInTheThenBranch() {
+    fun `a type guard imported through a barrel narrows in the then-branch`() {
         val result = build(
             mapOf(
                 "/proj/src/guards.ts" to guardsLeaf,
@@ -85,15 +82,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2345(result),
-            "the barrel-imported guard must narrow `x` to string in the then-branch",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun negativeTypeGuardImportedThroughABarrelNarrowsTheElseBranch() {
+    fun `a negated type guard imported through a barrel narrows the else-branch`() {
         val result = build(
             mapOf(
                 "/proj/src/guards.ts" to guardsLeaf,
@@ -109,11 +104,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(emptyList(), ts2345(result), "the else-branch must narrow `x` to number")
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun genericGuardImportedThroughABarrelNarrowsAwayUndefined() {
+    fun `a generic guard imported through a barrel narrows away undefined`() {
         val result = build(
             mapOf(
                 "/proj/src/guards.ts" to guardsLeaf,
@@ -129,15 +126,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2345(result),
-            "the generic `x is T` guard must strip undefined through the barrel",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun assertImportedThroughABarrelNarrowsAfterTheCall() {
+    fun `an assert imported through a barrel narrows after the call`() {
         val result = build(
             mapOf(
                 "/proj/src/guards.ts" to guardsLeaf,
@@ -152,15 +147,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2345(result),
-            "the barrel-imported `asserts x is string` must narrow after the call",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun multiHopBarrelChainNarrows() {
+    fun `a multi-hop barrel chain narrows`() {
         val result = build(
             mapOf(
                 "/proj/src/guards.ts" to guardsLeaf,
@@ -177,11 +170,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(emptyList(), ts2345(result), "narrowing must follow a multi-hop `export *` chain")
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun reExportSpecifierThroughABarrelNarrows() {
+    fun `a renamed re-export specifier through a barrel narrows`() {
         // `export { isString as isStr } from "./guards.js"` — a renamed re-export.
         val result = build(
             mapOf(
@@ -198,7 +193,9 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(emptyList(), ts2345(result), "a renamed re-export specifier must narrow too")
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     // A leaf module wrapping the guards in a namespace + a barrel re-exporting it —
@@ -214,7 +211,7 @@ class BarrelImportedGuardNarrowingTest {
         """.trimIndent()
 
     @Test
-    fun namespaceMemberAssertImportedThroughABarrelNarrows() {
+    fun `a namespace-member assert imported through a barrel narrows`() {
         val result = build(
             mapOf(
                 "/proj/src/guard.ts" to nsGuardsLeaf,
@@ -229,15 +226,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2345(result),
-            "a namespace-member `asserts` imported through a barrel must narrow",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun namespaceMemberGuardImportedThroughABarrelNarrows() {
+    fun `a namespace-member guard imported through a barrel narrows`() {
         val result = build(
             mapOf(
                 "/proj/src/guard.ts" to nsGuardsLeaf,
@@ -253,15 +248,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        assertEquals(
-            emptyList(),
-            ts2345(result),
-            "a namespace-member type guard imported through a barrel must narrow",
-        )
+        result.diagnostics should {
+            have(none { it.code == 2345 })
+        }
     }
 
     @Test
-    fun negativeControlNonGuardCallDoesNotNarrow() {
+    fun `negative control - a non-guard call does not narrow`() {
         // `plain` returns a plain boolean, NOT a type predicate — the guard machinery
         // must NOT invent narrowing, so `takesString(x)` in its then-branch stays an
         // error. This proves the fix resolves the declaration but respects its signature.
@@ -280,11 +273,13 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        have(ts2345(result).any { it.contains("not assignable to parameter of type 'string'") })
+        result.diagnostics should {
+            have(any { it.code == 2345 && "not assignable to parameter of type 'string'" in it.message })
+        }
     }
 
     @Test
-    fun negativeControlErrorOutsideTheGuardStillFires() {
+    fun `negative control - an error outside the guard still fires`() {
         // Sanity: the guard narrows INSIDE the branch only; the same call BEFORE the
         // guard must still error, proving we did not blanket-suppress the family.
         val result = build(
@@ -301,6 +296,8 @@ class BarrelImportedGuardNarrowingTest {
                 """.trimIndent(),
             )
         )
-        have(ts2345(result).any { it.contains("not assignable to parameter of type 'string'") })
+        result.diagnostics should {
+            have(any { it.code == 2345 && "not assignable to parameter of type 'string'" in it.message })
+        }
     }
 }

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -57,7 +58,7 @@ class Inv4SpineCtaPinsTest {
             class K { m() { const k: number = "s9"; } }
             namespace NS { const l: number = "s10"; }
         """)
-        kotlin.test.assertEquals(10, d.count { it.code == 2322 }, "expected 10 TS2322, got: ${d.filter { it.code == 2322 }}")
+        assert(d.count { it.code == 2322 } == 10)
     }
 
     @Test
@@ -70,7 +71,7 @@ class Inv4SpineCtaPinsTest {
             }
             try { const e: number = "s3"; } catch (x) { const f: number = "s4"; } finally { const g: number = "s5"; }
         """)
-        kotlin.test.assertEquals(5, d.count { it.code == 2322 }, "expected 5 TS2322, got: ${d.filter { it.code == 2322 }}")
+        assert(d.count { it.code == 2322 } == 5)
     }
 
     @Test
@@ -81,7 +82,7 @@ class Inv4SpineCtaPinsTest {
             a = "s1";
             const x = a = ("s2" as any as string);
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2322 }, "expected 2 TS2322, got: ${d.filter { it.code == 2322 }}")
+        assert(d.count { it.code == 2322 } == 2)
     }
 
     // ── returnType nearest-function threading ───────────────────────────────
@@ -97,7 +98,7 @@ class Inv4SpineCtaPinsTest {
             }
         """)
         // only inner's `return 42` mismatches (string); outer's return is fine.
-        kotlin.test.assertEquals(1, d.count { it.code == 2322 }, "expected 1 TS2322, got: ${d.filter { it.code == 2322 }}")
+        assert(d.count { it.code == 2322 } == 1)
         d should { have(any { it.code == 2322 && "'string'" in it.message }) }
     }
 
@@ -142,7 +143,7 @@ class Inv4SpineCtaPinsTest {
                 m() { this.p = "s"; }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2322 }, "expected 1 TS2322, got: $d")
+        assert(d.count { it.code == 2322 } == 1)
     }
 
     // ── B212 type-param threading into nested generics ──────────────────────
@@ -174,7 +175,7 @@ class Inv4SpineCtaPinsTest {
             declare function run(cb: () => void): void;
             run(() => { const c: number = "s3"; });
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2322 }, "expected 3 TS2322, got: ${d.filter { it.code == 2322 }}")
+        assert(d.count { it.code == 2322 } == 3)
     }
 
     @Test

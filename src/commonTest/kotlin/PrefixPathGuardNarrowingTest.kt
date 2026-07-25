@@ -58,7 +58,7 @@ class PrefixPathGuardNarrowingTest {
     """
 
     @Test
-    fun receiverGuardNarrowsPropertyPathAcrossLoops() {
+    fun `a receiver guard narrows the property path across loops`() {
         diagnose(
             prelude + """
             export function f(options: CompilerOptions, roots: string[]): string[] {
@@ -80,7 +80,7 @@ class PrefixPathGuardNarrowingTest {
     }
 
     @Test
-    fun guardNotPinningThePropertyStillFires() {
+    fun `negative control - a guard not pinning the property still fires`() {
         // The intersection pins typeRoots, NOT types — types stays optional
         // (`types?: string[]` resolves to `string[]`; the OPTIONALITY lives on
         // the symbol, which the claim must consult).
@@ -100,7 +100,7 @@ class PrefixPathGuardNarrowingTest {
     }
 
     @Test
-    fun negativeBranchProvesNothingAboutTheProperty() {
+    fun `negative control - the negative branch proves nothing about the property`() {
         diagnose(
             prelude + """
             export function h(options: CompilerOptions): string[] {

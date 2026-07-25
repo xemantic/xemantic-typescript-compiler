@@ -41,7 +41,7 @@ import kotlin.test.Test
 class NamespaceImportStaticMemberTest {
 
     @Test
-    fun `local class shadows star re-export - missing static fires TS2339, present static clean`() {
+    fun `local class shadows star re-export - missing static fires TS2339 - present static clean`() {
         diagnose(
             """
             // @module: commonjs

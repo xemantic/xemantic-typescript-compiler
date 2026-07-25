@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -64,7 +65,7 @@ class ParameterShadowsAmbientNamespaceTest {
         interface B { kind: 2; text: string }
     """.trimIndent() + "\n"
 
-    private fun check(body: String) =
+    private fun check(@Language("typescript") body: String) =
         diagnose(ambient + shapes + body.trimIndent(), "// @strict: true")
 
     @Test
@@ -100,7 +101,7 @@ class ParameterShadowsAmbientNamespaceTest {
     }
 
     @Test
-    fun `a LOCAL of the same name still resolves (control - this always worked)`() {
+    fun `a LOCAL of the same name still resolves - control - this always worked`() {
         check(
             """
             export function f() {

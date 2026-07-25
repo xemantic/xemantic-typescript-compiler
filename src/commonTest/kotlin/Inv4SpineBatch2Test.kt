@@ -220,7 +220,7 @@ class Inv4SpineBatch2Test {
     }
 
     @Test
-    fun `use-before-declaration still matches (deferred file-end resolution)`() {
+    fun `use-before-declaration still matches - deferred file-end resolution`() {
         // The old pass collected bad vars in a FULL prepass before its
         // position walk — a for-of textually BEFORE the declaration still
         // fires. The spine buffers positions and resolves at file end.

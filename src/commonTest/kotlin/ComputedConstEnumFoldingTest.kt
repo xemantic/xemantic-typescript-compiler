@@ -25,11 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
 
 /**
  * EP.2f (round 677): a const-enum member with a COMPUTED initializer must fold.
@@ -47,7 +45,7 @@ import kotlin.test.assertNull
  */
 class ComputedConstEnumFoldingTest {
 
-    private fun emit(src: String): String =
+    private fun emit(@Language("typescript") src: String): String =
         TypeScriptCompiler().compile("// @target: es2020\n" + src.trimIndent()).javascript
             ?: error("no js")
 
@@ -59,9 +57,9 @@ class ComputedConstEnumFoldingTest {
             export const v = [F.A, F.B, F.C];
             """
         )
-        assertContains(js, "1 /* F.A */")
-        assertContains(js, "2 /* F.B */")
-        assertContains(js, "16 /* F.C */")
+        assert("1 /* F.A */" in js)
+        assert("2 /* F.B */" in js)
+        assert("16 /* F.C */" in js)
     }
 
     @Test
@@ -72,7 +70,7 @@ class ComputedConstEnumFoldingTest {
             export const v = F.UpDown;
             """
         )
-        assertContains(js, "3 /* F.UpDown */")
+        assert("3 /* F.UpDown */" in js)
     }
 
     @Test
@@ -88,9 +86,9 @@ class ComputedConstEnumFoldingTest {
             export const v = [C.UpDown, C.UpDownLeft, C.UpDownLeftRight];
             """
         )
-        assertContains(js, "3 /* C.UpDown */")
-        assertContains(js, "7 /* C.UpDownLeft */")
-        assertContains(js, "15 /* C.UpDownLeftRight */")
+        assert("3 /* C.UpDown */" in js)
+        assert("7 /* C.UpDownLeft */" in js)
+        assert("15 /* C.UpDownLeftRight */" in js)
     }
 
     @Test
@@ -109,7 +107,7 @@ class ComputedConstEnumFoldingTest {
             "5 /* M.Add */", "5 /* M.Sub */", "12 /* M.Mul */", "3 /* M.Div */",
             "3 /* M.Mod */", "8 /* M.Pow */", "7 /* M.Or */", "2 /* M.And */",
             "6 /* M.Xor */", "8 /* M.Shl */", "4 /* M.Shr */", "4 /* M.UShr */",
-        ).forEach { assertContains(js, it) }
+        ).forEach { assert(it in js) }
     }
 
     @Test
@@ -120,9 +118,9 @@ class ComputedConstEnumFoldingTest {
             export const v = [P.A, P.B, P.C];
             """
         )
-        assertContains(js, "5 /* P.A */")
-        assertContains(js, "-3 /* P.B */")
-        assertContains(js, "-1 /* P.C */")
+        assert("5 /* P.A */" in js)
+        assert("-3 /* P.B */" in js)
+        assert("-1 /* P.C */" in js)
     }
 
     @Test
@@ -134,7 +132,7 @@ class ComputedConstEnumFoldingTest {
             export const v = Derived.Y;
             """
         )
-        assertContains(js, "5 /* Derived.Y */")
+        assert("5 /* Derived.Y */" in js)
     }
 
     @Test
@@ -145,9 +143,9 @@ class ComputedConstEnumFoldingTest {
             export const v = [A.P, A.Q, A.R];
             """
         )
-        assertContains(js, "4 /* A.P */")
-        assertContains(js, "5 /* A.Q */")
-        assertContains(js, "6 /* A.R */")
+        assert("4 /* A.P */" in js)
+        assert("5 /* A.Q */" in js)
+        assert("6 /* A.R */" in js)
     }
 
     @Test
@@ -162,7 +160,7 @@ class ComputedConstEnumFoldingTest {
             export const v = D.f();
             """
         )
-        assertContains(js, "3 /* C.UpDown */")
+        assert("3 /* C.UpDown */" in js)
     }
 
     // ── negative controls: non-constant initializers must NOT be invented ──
@@ -175,7 +173,7 @@ class ComputedConstEnumFoldingTest {
             export const v = F.A;
             """
         )
-        assertFalse("2 /* F.A */" in js, "a forward reference is not constant, got:\n$js")
+        assert("2 /* F.A */" !in js)
     }
 
     @Test
@@ -187,7 +185,7 @@ class ComputedConstEnumFoldingTest {
             export const v = F.B;
             """
         )
-        assertFalse("/* F.B */" in js, "a call is not constant, got:\n$js")
+        assert("/* F.B */" !in js)
     }
 
     @Test
@@ -199,7 +197,7 @@ class ComputedConstEnumFoldingTest {
             export const v = F.A;
             """
         )
-        assertFalse("/* F.A */" in js, "an outside binding is not foldable here, got:\n$js")
+        assert("/* F.A */" !in js)
     }
 
     @Test
@@ -210,26 +208,26 @@ class ComputedConstEnumFoldingTest {
             export const v = S.A;
             """
         )
-        assertContains(js, "\"x\" /* S.A */")
+        assert("\"x\" /* S.A */" in js)
     }
 
     // ── the shared operator table ─────────────────────────────────────────
 
     @Test
     fun `tsFoldNumericBinary implements JS semantics`() {
-        assertEquals(8.0, tsFoldNumericBinary(1.0, SyntaxKind.LessThanLessThan, 3.0))
-        assertEquals(4.0, tsFoldNumericBinary(16.0, SyntaxKind.GreaterThanGreaterThan, 2.0))
-        assertEquals(7.0, tsFoldNumericBinary(5.0, SyntaxKind.Bar, 2.0))
-        assertEquals(2.0, tsFoldNumericBinary(6.0, SyntaxKind.Ampersand, 3.0))
-        assertEquals(6.0, tsFoldNumericBinary(5.0, SyntaxKind.Caret, 3.0))
-        assertEquals(8.0, tsFoldNumericBinary(2.0, SyntaxKind.AsteriskAsterisk, 3.0))
+        assert(tsFoldNumericBinary(1.0, SyntaxKind.LessThanLessThan, 3.0) == 8.0)
+        assert(tsFoldNumericBinary(16.0, SyntaxKind.GreaterThanGreaterThan, 2.0) == 4.0)
+        assert(tsFoldNumericBinary(5.0, SyntaxKind.Bar, 2.0) == 7.0)
+        assert(tsFoldNumericBinary(6.0, SyntaxKind.Ampersand, 3.0) == 2.0)
+        assert(tsFoldNumericBinary(5.0, SyntaxKind.Caret, 3.0) == 6.0)
+        assert(tsFoldNumericBinary(2.0, SyntaxKind.AsteriskAsterisk, 3.0) == 8.0)
         // `>>>` is unsigned over 32 bits: -1 >>> 28 === 15
-        assertEquals(15.0, tsFoldNumericBinary(-1.0, SyntaxKind.GreaterThanGreaterThanGreaterThan, 28.0))
+        assert(tsFoldNumericBinary(-1.0, SyntaxKind.GreaterThanGreaterThanGreaterThan, 28.0) == 15.0)
     }
 
     @Test
     fun `negative control - a non-constant operator yields null`() {
-        assertNull(tsFoldNumericBinary(1.0, SyntaxKind.EqualsEqualsEquals, 1.0))
-        assertNull(tsFoldNumericBinary(1.0, SyntaxKind.AmpersandAmpersand, 1.0))
+        assert(tsFoldNumericBinary(1.0, SyntaxKind.EqualsEqualsEquals, 1.0) == null)
+        assert(tsFoldNumericBinary(1.0, SyntaxKind.AmpersandAmpersand, 1.0) == null)
     }
 }

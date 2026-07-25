@@ -56,7 +56,8 @@ class ReturnPathNarrowingTest {
     """.trimIndent()
 
     /** A type-guard narrows the returned value to the subtype that has the missing props. */
-    @Test fun guardNarrowedReturnToSubtype() {
+    @Test
+    fun `a guard-narrowed return to a subtype relates`() {
         val source = guardDecls + "\n" + """
             function g(x: Small): Big {
                 if (isDefined(x)) {
@@ -71,7 +72,8 @@ class ReturnPathNarrowingTest {
     }
 
     /** The bare-assert form (`assertDefined(x); return x;`) — builder.ts's exact idiom. */
-    @Test fun assertNarrowedReturnToSubtype() {
+    @Test
+    fun `an assert-narrowed return to a subtype relates`() {
         val source = guardDecls + "\n" + """
             function g(x: Small): Big {
                 assertDefined(x);
@@ -87,7 +89,8 @@ class ReturnPathNarrowingTest {
      * Negative control: WITHOUT the guard, `Base` is missing `Defined`'s required props —
      * the return check must still fire (proves the narrowing, not a blanket suppression).
      */
-    @Test fun unnarrowedReturnStillErrors() {
+    @Test
+    fun `negative control - an unnarrowed return still errors`() {
         val source = guardDecls + "\n" + """
             function g(x: Small): Big {
                 return x;
@@ -102,7 +105,8 @@ class ReturnPathNarrowingTest {
      * Negative control: a narrowed value returned where an UNRELATED interface is expected
      * still errors — the narrowed type must FAIL the relation (not be blanket-substituted).
      */
-    @Test fun narrowedButUnrelatedReturnErrors() {
+    @Test
+    fun `negative control - a narrowed but unrelated return errors`() {
         val source = guardDecls + "\n" + """
             type Other = { q: string; r: string };
             function g(x: Small): Other {

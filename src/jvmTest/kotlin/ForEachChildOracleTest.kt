@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import java.io.File
 import java.lang.reflect.Method
 import java.util.Collections
@@ -104,7 +104,7 @@ class ForEachChildOracleTest {
         val actualSet = identitySet(actual)
         val missing = expected.filter { it !in actualSet }
         val extra = actual.filter { it !in expectedSet }
-        // Plain fail(), NOT have(): power-assert renders every subexpression's toString on
+        // Plain fail(), NOT assert(): power-assert renders every subexpression's toString on
         // failure, and a Node/List<Node> subexpression dumps (or overflows on) whole subtrees.
         if (missing.isNotEmpty() || extra.isNotEmpty() || actual.size != expected.size) {
             fail(
@@ -125,13 +125,13 @@ class ForEachChildOracleTest {
     @Test
     fun `forEachChild matches data-class node properties across the rich fixture`() {
         val checked = assertOracleAgreesOnTree(Parser(INV2_RICH_FIXTURE, "rich.ts").parse(), "rich.ts")
-        have(checked > 400, "rich fixture unexpectedly small: $checked nodes")
+        assert(checked > 400)
     }
 
     @Test
     fun `forEachChild matches data-class node properties across the jsx fixture`() {
         val checked = assertOracleAgreesOnTree(Parser(INV2_JSX_FIXTURE, "t.tsx").parse(), "t.tsx")
-        have(checked > 30, "jsx fixture unexpectedly small: $checked nodes")
+        assert(checked > 30)
     }
 
     @Test
@@ -171,12 +171,12 @@ class ForEachChildOracleTest {
             return
         }
         val files = sourceDir.walkTopDown().filter { it.isFile && it.extension == "ts" }.toList()
-        have(files.isNotEmpty(), "bench src dir present but empty: $sourceDir")
+        assert(files.isNotEmpty())
         var checked = 0
         for (file in files) {
             checked += assertOracleAgreesOnTree(Parser(file.readText(), file.name).parse(), file.name)
         }
-        have(checked > 100_000, "real-source sweep unexpectedly small: $checked nodes over ${files.size} files")
+        assert(checked > 100_000)
     }
 
     @Test
@@ -212,6 +212,6 @@ class ForEachChildOracleTest {
             for (i in buf.indices.reversed()) stack.add(buf[i])
         }
         assertEquals(index, sourceFile.nodeCount, "${file.name}: nodeCount mismatch")
-        have(index > 10_000, "${file.name}: suspiciously few nodes ($index) for the largest tsc source")
+        assert(index > 10_000)
     }
 }

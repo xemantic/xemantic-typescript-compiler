@@ -56,7 +56,7 @@ class ArithmeticShadowedFunctionLocalTest {
                 let i = 0;
                 while (i < length) { i = i + 1; }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2365 })
         }
@@ -78,14 +78,14 @@ class ArithmeticShadowedFunctionLocalTest {
                     while (i < length) { i = i + 1; }
                 }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2365 })
         }
     }
 
     @Test
-    fun `genuine number-lt-function (not shadowed) STILL fires TS2365 - negative control`() {
+    fun `genuine number-lt-function not shadowed STILL fires TS2365 - negative control`() {
         // FP-safety: a bare function used as a comparison operand (not shadowed by any local) must
         // still error — the fix only records LOCAL const declarations that shadow a function.
         diagnose(
@@ -94,7 +94,7 @@ class ArithmeticShadowedFunctionLocalTest {
             export function h(): boolean {
                 return 5 < g;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2365 })
         }
@@ -117,7 +117,7 @@ class ArithmeticShadowedFunctionLocalTest {
                 for (const n of args) { if (n < min) min = n; max = Math.max(max, n); }
                 if (min < args.length && args.length < max) { return; }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2365 })
         }

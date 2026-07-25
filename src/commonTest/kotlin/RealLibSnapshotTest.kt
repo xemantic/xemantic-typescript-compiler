@@ -25,9 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 import kotlin.test.assertSame
 import kotlin.test.assertNotSame
 
@@ -43,24 +42,24 @@ class RealLibSnapshotTest {
     fun `parses each lib file once - identical AST instance across calls and selections`() {
         val first = RealLibSnapshots.parsedLibFile("es5")
         val again = RealLibSnapshots.parsedLibFile("es5")
-        assertSame(first, again, "es5 must be parsed once and shared")
+        assert(again === first)
         // The same instance serves any selection that includes es5.
         val viaSelection = RealLibSnapshots.parsedLibFiles(listOf("es2015"), ScriptTarget.ES5)
-        assertSame(first, viaSelection.first { it.fileName == "lib.es5.d.ts" })
+        assert(viaSelection.first { it.fileName == "lib.es5.d.ts" } === first)
     }
 
     @Test
     fun `parsed lib files carry distributed file names and real declarations`() {
         val es5 = RealLibSnapshots.parsedLibFile("es5")
-        assertEquals("lib.es5.d.ts", es5.fileName)
+        assert(es5.fileName == "lib.es5.d.ts")
         val interfaceNames = es5.statements
             .filterIsInstance<InterfaceDeclaration>().map { it.name.text }.toSet()
         for (name in listOf("Array", "Object", "String", "RegExp", "Promise", "PromiseLike")) {
-            have(name in interfaceNames)
+            assert(name in interfaceNames)
         }
         // The target-default selection uses the dist alias names.
         val defaults = RealLibSnapshots.parsedLibFiles(null, ScriptTarget.ES5)
-        assertEquals("lib.d.ts", defaults.first().fileName)
+        assert(defaults.first().fileName == "lib.d.ts")
     }
 
     @Test
@@ -76,13 +75,13 @@ class RealLibSnapshotTest {
         // one program's lib symbols must never pollute the next program's.
         assertNotSame(es5A.locals["Array"], es5B.locals["Array"], "bound symbols must not be shared")
         for (name in listOf("Array", "Object", "Math", "JSON", "parseInt")) {
-            have(es5A.locals.containsKey(name))
+            assert(es5A.locals.containsKey(name))
         }
     }
 
     @Test
     fun `useRealLibs flag exists and defaults off`() {
-        assertEquals(false, CompilerOptions().useRealLibs)
-        assertEquals(true, CompilerOptions(useRealLibs = true).useRealLibs)
+        assert(CompilerOptions().useRealLibs == false)
+        assert(CompilerOptions(useRealLibs = true).useRealLibs == true)
     }
 }

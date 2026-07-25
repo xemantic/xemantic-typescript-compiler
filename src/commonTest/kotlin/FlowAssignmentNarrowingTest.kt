@@ -25,7 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -46,21 +47,22 @@ import kotlin.test.Test
  */
 class FlowAssignmentNarrowingTest {
 
-    private fun diagnosticsOf(source: String) =
+    private fun diagnosticsOf(@Language("typescript") source: String) =
         TypeScriptCompiler().compile(source, "flowassign.ts").diagnostics
 
-    private fun assertNone(source: String, vararg codes: Int) {
+    private fun assertNone(@Language("typescript") source: String, vararg codes: Int) {
         val hits = diagnosticsOf(source).filter { it.code in codes.toSet() }
-        have(hits.isEmpty())
+        assert(hits.isEmpty())
     }
 
-    private fun assertSome(source: String, vararg codes: Int) {
+    private fun assertSome(@Language("typescript") source: String, vararg codes: Int) {
         val diags = diagnosticsOf(source)
-        have(diags.any { it.code in codes.toSet() }, "negative control lost")
+        assert(diags.any { it.code in codes.toSet() })
     }
 
     /** Negative controls: unassigned optional member call / maybe-undefined args error. */
-    @Test fun withoutAssignmentSignalsFire() {
+    @Test
+    fun `negative control - without the assignment the signals fire`() {
         assertSome(
             """
             // @strict: true
@@ -83,7 +85,8 @@ class FlowAssignmentNarrowingTest {
     }
 
     /** A property-path `=` with an arrow RHS narrows the optional member before a call. */
-    @Test fun propertyAssignArrowNarrowsOptionalCall() {
+    @Test
+    fun `a property assigned an arrow narrows the optional call`() {
         assertNone(
             """
             // @strict: true
@@ -97,7 +100,8 @@ class FlowAssignmentNarrowingTest {
     }
 
     /** A property-path `=` with a new-expression RHS (through a cast) narrows too. */
-    @Test fun propertyAssignNewThroughCastNarrows() {
+    @Test
+    fun `a property assigned a new-expression through a cast narrows`() {
         assertNone(
             """
             // @strict: true
@@ -111,7 +115,8 @@ class FlowAssignmentNarrowingTest {
     }
 
     /** A property-path `=` with a template-literal RHS narrows a string|undefined member. */
-    @Test fun propertyAssignTemplateNarrowsArg() {
+    @Test
+    fun `a property assigned a template narrows the argument`() {
         assertNone(
             """
             // @strict: true
@@ -126,7 +131,8 @@ class FlowAssignmentNarrowingTest {
     }
 
     /** `x ??= <non-nullish>` leaves the identifier non-nullish. */
-    @Test fun identifierNullishAssignNarrows() {
+    @Test
+    fun `an identifier nullish-assign narrows`() {
         assertNone(
             """
             // @strict: true
@@ -141,7 +147,8 @@ class FlowAssignmentNarrowingTest {
     }
 
     /** `c.p ??= <non-nullish>` narrows the property path. */
-    @Test fun propertyNullishAssignNarrows() {
+    @Test
+    fun `a property nullish-assign narrows`() {
         assertNone(
             """
             // @strict: true
@@ -156,7 +163,8 @@ class FlowAssignmentNarrowingTest {
     }
 
     /** `&&=` must NOT narrow — a nullish LHS is left unassigned by it. */
-    @Test fun andAndAssignDoesNotNarrow() {
+    @Test
+    fun `negative control - an and-and-assign does not narrow`() {
         assertSome(
             """
             // @strict: true

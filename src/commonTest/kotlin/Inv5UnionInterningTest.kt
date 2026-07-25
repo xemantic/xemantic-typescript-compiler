@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -74,7 +75,7 @@ class Inv5UnionInterningTest {
             declare const arr: number[];
             var x: [number] = arr;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2322 }, "expected 1 TS2322, got: $d")
+        assert(d.count { it.code == 2322 } == 1)
     }
 
     @Test

@@ -49,7 +49,7 @@ class CallRhsNonNullishReturnNarrowingTest {
     """
 
     @Test
-    fun callRhsWithNonNullishReturnAnnotationNarrows() {
+    fun `a call RHS with a non-nullish return annotation narrows`() {
         diagnose(
             prelude + """
             declare function instantiate(t: Ty): Ty;
@@ -64,7 +64,7 @@ class CallRhsNonNullishReturnNarrowingTest {
     }
 
     @Test
-    fun aliasReturnAnnotationResolvesThroughTypeAlias() {
+    fun `an alias return annotation resolves through the type alias`() {
         diagnose(
             prelude + """
             type Instantiated = Ty;
@@ -80,7 +80,7 @@ class CallRhsNonNullishReturnNarrowingTest {
     }
 
     @Test
-    fun nullableReturnAnnotationStillFires() {
+    fun `negative control - a nullable return annotation still fires`() {
         diagnose(
             prelude + """
             declare function maybe(t: Ty): Ty | undefined;
@@ -95,7 +95,7 @@ class CallRhsNonNullishReturnNarrowingTest {
     }
 
     @Test
-    fun optionalChainedCallStillFires() {
+    fun `negative control - an optional-chained call still fires`() {
         diagnose(
             prelude + """
             declare const factory: { make(t: Ty): Ty } | undefined;
@@ -110,7 +110,7 @@ class CallRhsNonNullishReturnNarrowingTest {
     }
 
     @Test
-    fun genericOwnTypeParamReturnStillFires() {
+    fun `negative control - a callee own type-param return still fires`() {
         diagnose(
             prelude + """
             declare function ident<T>(x: T): T;

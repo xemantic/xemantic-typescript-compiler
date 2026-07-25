@@ -25,9 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * M4.9 (round 681): `skipLibCheck` drops SEMANTIC diagnostics reported inside
@@ -57,25 +58,19 @@ class SkipLibCheckTest {
     }
 
     private fun diags(skip: Boolean): List<Diagnostic> =
-        TypeScriptCompiler().compile(sources(skip), "main.ts").diagnostics
+        diagnose(sources(skip), directives = "", fileName = "main.ts")
 
     @Test
     fun `skipLibCheck true suppresses semantic errors inside a d-ts`() {
-        val ds = diags(skip = true)
-        assertTrue(
-            ds.none { it.fileName?.endsWith(".d.ts") == true },
-            "no diagnostic may come from a declaration file, got: $ds",
-        )
+        // No diagnostic may come from a declaration file.
+        diags(skip = true) should { have(none { it.fileName?.endsWith(".d.ts") == true }) }
     }
 
     @Test
     fun `default is OFF - the same d-ts error still reports`() {
         // The control that makes the test above meaningful.
-        val ds = diags(skip = false)
-        assertTrue(
-            ds.any { it.fileName?.endsWith(".d.ts") == true },
-            "without skipLibCheck the declaration error must report, got: $ds",
-        )
+        // Without skipLibCheck the declaration error must report.
+        diags(skip = false) should { have(any { it.fileName?.endsWith(".d.ts") == true }) }
     }
 
     @Test
@@ -86,8 +81,8 @@ class SkipLibCheckTest {
             // @filename: main.ts
             export const n: number = "not a number";
         """.trimIndent()
-        val ds = TypeScriptCompiler().compile(src, "main.ts").diagnostics
-        assertEquals(1, ds.count { it.code == 2322 }, "got: $ds")
+        val ds = diagnose(src, directives = "", fileName = "main.ts")
+        assert(ds.count { it.code == 2322 } == 1)
     }
 
     @Test
@@ -101,7 +96,7 @@ class SkipLibCheckTest {
             import { ok } from "./lib";
             export const r: string = ok(1);
         """.trimIndent()
-        val ds = TypeScriptCompiler().compile(src, "main.ts").diagnostics
-        assertEquals(0, ds.size, "got: $ds")
+        val ds = diagnose(src, directives = "", fileName = "main.ts")
+        assert(ds.isEmpty())
     }
 }

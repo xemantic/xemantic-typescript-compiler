@@ -25,11 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertNull
 
 /**
  * EP.2b (round 675): a const enum whose members are written in a NON-DECIMAL
@@ -50,7 +48,7 @@ import kotlin.test.assertNull
  */
 class HexConstEnumInliningTest {
 
-    private fun emitMulti(main: String): String {
+    private fun emitMulti(@Language("typescript") main: String): String {
         val source = """
             // @module: commonjs
             // @filename: e.ts
@@ -66,24 +64,25 @@ class HexConstEnumInliningTest {
     }
 
     @Test
-    fun `same-file hex const enum inlines (Transformer collector)`() {
+    fun `same-file hex const enum inlines - Transformer collector`() {
         val js = TypeScriptCompiler().compile(
             "// @target: es2020\nconst enum L { hex = 0x7F, dec = 127 }\nexport const a = L.hex;\nexport const b = L.dec;"
         ).javascript ?: error("no js")
-        assertContains(js, "127 /* L.hex */")
-        assertContains(js, "127 /* L.dec */")
+        assert("127 /* L.hex */" in js)
+        assert("127 /* L.dec */" in js)
     }
 
     @Test
-    fun `cross-module hex const enum inlines (Checker enumValues)`() {
+    fun `cross-module hex const enum inlines - Checker enumValues`() {
         val js = emitMulti(
             """
             import { Hex } from "./e";
             export const a = Hex.maxAscii;
             """.trimIndent()
         )
-        assertContains(js, "127 /* Hex.maxAscii */")
-        assertFalse("e_1.Hex" in js, "must not keep a qualified access, got:\n$js")
+        assert("127 /* Hex.maxAscii */" in js)
+        // Inlined: no qualified access to the imported enum may remain.
+        assert("e_1.Hex" !in js)
     }
 
     @Test
@@ -94,7 +93,7 @@ class HexConstEnumInliningTest {
             export const a = Hex.lf;
             """.trimIndent()
         )
-        assertContains(js, "10 /* Hex.lf */")
+        assert("10 /* Hex.lf */" in js)
     }
 
     @Test
@@ -106,12 +105,12 @@ class HexConstEnumInliningTest {
             export const b = Oct.a;
             """.trimIndent()
         )
-        assertContains(js, "10 /* Bin.a */")
-        assertContains(js, "15 /* Oct.a */")
+        assert("10 /* Bin.a */" in js)
+        assert("15 /* Oct.a */" in js)
     }
 
     @Test
-    fun `a negative and a zero member still inline (regression guard)`() {
+    fun `a negative and a zero member still inline - regression guard`() {
         val js = emitMulti(
             """
             import { Hex } from "./e";
@@ -119,32 +118,32 @@ class HexConstEnumInliningTest {
             export const b = Hex.nul;
             """.trimIndent()
         )
-        assertContains(js, "-1 /* Hex.EOF */")
-        assertContains(js, "0 /* Hex.nul */")
+        assert("-1 /* Hex.EOF */" in js)
+        assert("0 /* Hex.nul */" in js)
     }
 
     // ── the shared parser itself ──────────────────────────────────────────
 
     @Test
     fun `tsNumericLiteralToDouble handles every base and separators`() {
-        assertEquals(127.0, tsNumericLiteralToDouble("0x7F"))
-        assertEquals(127.0, tsNumericLiteralToDouble("0X7f"))
-        assertEquals(10.0, tsNumericLiteralToDouble("0b1010"))
-        assertEquals(15.0, tsNumericLiteralToDouble("0o17"))
-        assertEquals(1000000.0, tsNumericLiteralToDouble("1_000_000"))
-        assertEquals(255.0, tsNumericLiteralToDouble("0xF_F"))
-        assertEquals(1.5, tsNumericLiteralToDouble("1.5"))
-        assertEquals(1500.0, tsNumericLiteralToDouble("1.5e3"))
+        assert(tsNumericLiteralToDouble("0x7F") == 127.0)
+        assert(tsNumericLiteralToDouble("0X7f") == 127.0)
+        assert(tsNumericLiteralToDouble("0b1010") == 10.0)
+        assert(tsNumericLiteralToDouble("0o17") == 15.0)
+        assert(tsNumericLiteralToDouble("1_000_000") == 1000000.0)
+        assert(tsNumericLiteralToDouble("0xF_F") == 255.0)
+        assert(tsNumericLiteralToDouble("1.5") == 1.5)
+        assert(tsNumericLiteralToDouble("1.5e3") == 1500.0)
     }
 
     @Test
     fun `negative control - a BigInt literal is not a const enum value`() {
-        assertNull(tsNumericLiteralToDouble("123n"))
+        assert(tsNumericLiteralToDouble("123n") == null)
     }
 
     @Test
     fun `negative control - garbage text yields null rather than a wrong value`() {
-        assertNull(tsNumericLiteralToDouble("0xZZ"))
-        assertNull(tsNumericLiteralToDouble("nonsense"))
+        assert(tsNumericLiteralToDouble("0xZZ") == null)
+        assert(tsNumericLiteralToDouble("nonsense") == null)
     }
 }

@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 637): pins for the checkGenericIndexWrite (TS2862 "Type 'T'
@@ -161,11 +161,11 @@ class M04GenericIndexWriteSpineMigrationTest {
             }
             """
         ).count { it.code == 2862 }
-        assertEquals(2, count)
+        assert(count == 2)
     }
 
     @Test
-    fun `negative control - a compound assignment write never fires (Equals only)`() {
+    fun `negative control - a compound assignment write never fires - Equals only`() {
         diagnose(
             """
             function f<T extends Record<string, number>>(t: T, k: string) {
@@ -357,7 +357,7 @@ class M04GenericIndexWriteSpineMigrationTest {
     }
 
     @Test
-    fun `TS2862 - a get-accessor body's LOCALS are collected (no params)`() {
+    fun `TS2862 - a get-accessor body's LOCALS are collected - no params`() {
         diagnose(
             """
             class C<T extends Record<string, any>> {
@@ -466,7 +466,7 @@ class M04GenericIndexWriteSpineMigrationTest {
     }
 
     @Test
-    fun `TS2862 - reached statement positions - switch clause, try-finally, labeled, loop bodies`() {
+    fun `TS2862 - reached statement positions - switch clause - try-finally - labeled - loop bodies`() {
         diagnose(
             """
             function f<T extends Record<string, any>>(t: T, k: string, n: number) {

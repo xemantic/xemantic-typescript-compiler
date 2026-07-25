@@ -53,7 +53,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(mode: Mode | undefined): boolean {
                 return !!(mode && mode & Mode.A);
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 })
         }
@@ -68,7 +68,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(checkMode: CheckMode | undefined): boolean {
                 return !!(checkMode && (checkMode & CheckMode.Inferential) && !(checkMode & CheckMode.SkipContextSensitive));
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 })
         }
@@ -84,7 +84,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(flags: Flags | undefined): number {
                 return flags & Flags.A;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2362 })
         }
@@ -98,7 +98,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(mode: Mode | undefined): number {
                 return mode !== undefined && (mode & Mode.A) ? 1 : 0;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 })
         }
@@ -116,7 +116,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(x: Flags | undefined): number {
                 return (false || (x & Flags.A)) ? 1 : 0;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2362 })
         }
@@ -131,7 +131,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(start: number | undefined, length: number | undefined, textLen: number): number {
                 return length === undefined ? textLen : start! + length;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2365 || it.code == 2362 || it.code == 2363 })
         }
@@ -144,7 +144,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(label: number | undefined): number {
                 return label ? label + 1 : 0;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2365 || it.code == 2362 || it.code == 2363 })
         }
@@ -162,7 +162,7 @@ class ArithmeticAmpAmpNarrowingTest {
             export function f(x: Flags | undefined): number {
                 return x ? 0 : (x & Flags.A);
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2362 })
         }

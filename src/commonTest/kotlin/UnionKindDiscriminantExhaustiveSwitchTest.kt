@@ -125,7 +125,7 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
             """,
             directives = "// @strict: true\n// @noImplicitReturns: true",
         ) should {
-            have(any { it.code == 2366 }, "an optional `kind?:` means the value set includes undefined — TS2366 must stand")
+            have(any { it.code == 2366 })
         }
     }
 
@@ -172,10 +172,9 @@ class UnionKindDiscriminantExhaustiveSwitchTest {
             """,
             directives = "// @strict: true\n// @noImplicitReturns: true",
         ) should {
-            have(
-                none { it.code == 2366 || it.code == 7030 },
-                "string-literal kinds join the key space (`lit:s:`), so the mix proves exhaustive",
-            )
+            // string-literal kinds join the key space (`lit:s:`), so the mix proves
+            // exhaustive
+            have(none { it.code == 2366 || it.code == 7030 })
         }
     }
 }

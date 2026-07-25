@@ -25,9 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * INV.6(6a): the share-nothing partition contract (docs/parallel-caching.md
@@ -77,7 +76,7 @@ class SpinePartitionEquivalenceTest {
     fun `two complementary partitions merge to the full run byte-identically`() {
         val full = Checker(options, bind(*fixture), isMultiFileSource = true).getDiagnostics()
         val fullKeys = sortedKeys(full)
-        assertTrue(fullKeys.isNotEmpty(), "fixture must produce diagnostics")
+        assert(fullKeys.isNotEmpty())
 
         val w1 = Checker(
             options, bind(*fixture), isMultiFileSource = true,
@@ -88,7 +87,7 @@ class SpinePartitionEquivalenceTest {
             assignedFileNames = setOf("/proj/b.ts"),
         ).getDiagnostics()
 
-        assertEquals(fullKeys, sortedKeys(w1 + w2))
+        assert(sortedKeys(w1 + w2) == fullKeys)
     }
 
     @Test
@@ -103,7 +102,7 @@ class SpinePartitionEquivalenceTest {
             // A singleton worker's output for ITS file must match the full run's
             // slice; fileName-null diagnostics (program-level) may be duplicated
             // across workers and are compared per-worker against the full slice.
-            assertEquals(expected, sortedKeys(worker), "partition {$fileName} diverges from the full run")
+            assert(sortedKeys(worker) == expected)
         }
     }
 
@@ -113,17 +112,14 @@ class SpinePartitionEquivalenceTest {
             options, bind(*fixture), isMultiFileSource = true,
             assignedFileNames = setOf("/proj/b.ts"),
         ).getDiagnostics()
-        assertTrue(worker.none { it.fileName != null && it.fileName != "/proj/b.ts" })
+        assert(worker.none { it.fileName != null && it.fileName != "/proj/b.ts" })
     }
 
     @Test
     fun `negative control - the full run still reports each file's spine error`() {
         val full = Checker(options, bind(*fixture), isMultiFileSource = true).getDiagnostics()
         for (fileName in listOf("/proj/a.ts", "/proj/b.ts", "/proj/c.ts")) {
-            assertTrue(
-                full.any { it.fileName == fileName && it.code == 2322 },
-                "expected a TS2322 in $fileName",
-            )
+            assert(full.any { it.fileName == fileName && it.code == 2322 })
         }
     }
 }

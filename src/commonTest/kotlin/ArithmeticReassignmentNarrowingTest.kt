@@ -62,7 +62,7 @@ class ArithmeticReassignmentNarrowingTest {
                 length = end - start;
                 return length - 5;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 })
         }
@@ -77,7 +77,7 @@ class ArithmeticReassignmentNarrowingTest {
                 flags = flags || Flags.None;
                 return flags & Flags.NoTrunc;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 })
         }
@@ -90,7 +90,7 @@ class ArithmeticReassignmentNarrowingTest {
             export function g(indent: number, margin: number | undefined): void {
                 if (margin !== undefined) { indent += margin; }
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 || it.code == 2365 })
         }
@@ -104,7 +104,7 @@ class ArithmeticReassignmentNarrowingTest {
                 flags = flags || 0;
                 return flags & 1;
             }
-            """,
+            """
         ) should {
             have(none { it.code == 2362 || it.code == 2363 })
         }
@@ -117,7 +117,7 @@ class ArithmeticReassignmentNarrowingTest {
             export function neg(a: number | undefined): number {
                 return a - 1;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2362 })
         }
@@ -133,7 +133,7 @@ class ArithmeticReassignmentNarrowingTest {
                 x = y;
                 return x - 1;
             }
-            """,
+            """
         ) should {
             have(any { it.code == 2362 })
         }

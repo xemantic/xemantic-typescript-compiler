@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -57,7 +58,7 @@ class Inv4SpineBatch30Test {
             declare const y: boolean;
             const a = ({}) || y;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2872 }, "expected 1 TS2872, got: $d")
+        assert(d.count { it.code == 2872 } == 1)
     }
 
     @Test
@@ -66,12 +67,12 @@ class Inv4SpineBatch30Test {
             declare const y: number;
             const a = 1 || y;
         """)
-        kotlin.test.assertEquals(1, d1.count { it.code == 2872 }, "top level: expected 1 TS2872, got: $d1")
+        assert(d1.count { it.code == 2872 } == 1)
         val d2 = diagnose("""
             declare const y: number;
             const f = () => 1 || y;
         """)
-        kotlin.test.assertEquals(0, d2.count { it.code == 2872 }, "arrow expr body: expected 0 TS2872, got: $d2")
+        assert(d2.count { it.code == 2872 } == 0)
     }
 
     @Test
@@ -92,7 +93,7 @@ class Inv4SpineBatch30Test {
             declare const x: number;
             if (void x) { }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2873 }, "expected 1 TS2873, got: $d")
+        assert(d.count { it.code == 2873 } == 1)
     }
 
     @Test
@@ -100,7 +101,7 @@ class Inv4SpineBatch30Test {
         val d = diagnose("""
             const b = !(void 0);
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2873 }, "expected 1 TS2873, got: $d")
+        assert(d.count { it.code == 2873 } == 1)
     }
 
     @Test
@@ -109,7 +110,7 @@ class Inv4SpineBatch30Test {
             function v(): void { }
             if (v()) { }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 1345 }, "expected 1 TS1345, got: $d")
+        assert(d.count { it.code == 1345 } == 1)
     }
 
     @Test
@@ -120,7 +121,7 @@ class Inv4SpineBatch30Test {
             declare const b: number;
             const r = E.Zero ? a : b;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2845 }, "expected 1 TS2845, got: $d")
+        assert(d.count { it.code == 2845 } == 1)
     }
 
     @Test
@@ -130,7 +131,7 @@ class Inv4SpineBatch30Test {
             declare const b: number;
             const r = (void 0) ? a : b;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2873 }, "expected 1 TS2873, got: $d")
+        assert(d.count { it.code == 2873 } == 1)
     }
 
     // ── condition sub-expression reach quirks ───────────────────────────────
@@ -154,7 +155,7 @@ class Inv4SpineBatch30Test {
             declare const x: boolean;
             for (; ({}) || x;) { break; }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2872 }, "expected 1 TS2872, got: $d")
+        assert(d.count { it.code == 2872 } == 1)
     }
 
     @Test
@@ -185,7 +186,7 @@ class Inv4SpineBatch30Test {
             namespace NS { const a = 1 || y; }
             const t = `x${'$'}{1 || y}`;
         """)
-        kotlin.test.assertEquals(8, d.count { it.code == 2872 }, "expected 8 TS2872, got: ${d.filter { it.code == 2872 }}")
+        assert(d.count { it.code == 2872 } == 8)
     }
 
     @Test
@@ -197,6 +198,6 @@ class Inv4SpineBatch30Test {
         """)
         // 1||y left (numeric), the whole (1||y) as left of the outer || is NOT
         // always-truthy-syntactic... expected: the two numeric-literal lefts.
-        kotlin.test.assertEquals(2, d.count { it.code == 2872 }, "expected 2 TS2872, got: ${d.filter { it.code == 2872 }}")
+        assert(d.count { it.code == 2872 } == 2)
     }
 }

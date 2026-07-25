@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the round-432 perf refactor: the program-wide `spec in bindings.elements`
@@ -62,7 +62,7 @@ class EnclosingImportIndexTest {
         result.diagnostics.filter { it.code == 2322 }.mapNotNull { it.fileName }.sorted()
 
     @Test
-    fun structurallyIdenticalImportsInTwoFilesBothResolve() {
+    fun `structurally identical imports in two files both resolve`() {
         // f1.ts and f2.ts are byte-identical → their ImportSpecifier nodes are
         // structurally equal (index-key collision, one entry list for both files).
         val importer = "import { A } from \"./lib\";\nconst x: number = A;\n"
@@ -73,16 +73,11 @@ class EnclosingImportIndexTest {
                 "/proj/src/f2.ts" to importer,
             )
         )
-        assertEquals(
-            listOf("/proj/src/f1.ts", "/proj/src/f2.ts"),
-            ts2322Files(result),
-            "both structurally-colliding imports must resolve (string → number = TS2322 in each file); " +
-                "diagnostics: ${result.diagnostics.map { "${it.fileName}: TS${it.code} ${it.message}" }}"
-        )
+        assert(ts2322Files(result) == listOf("/proj/src/f1.ts", "/proj/src/f2.ts"))
     }
 
     @Test
-    fun structurallyDistinctImportsResolveThroughTheirOwnStatements() {
+    fun `structurally distinct imports resolve through their own statements`() {
         // Same import statement text, but g2's leading comment shifts its node
         // positions → the ImportSpecifier nodes are structurally DISTINCT and
         // land on SEPARATE index keys. Each file must resolve through its own
@@ -101,11 +96,6 @@ class EnclosingImportIndexTest {
                 "/proj/src/g2.ts" to "// offset-shifting comment\nimport { A } from \"./lib\";\nconst z: number = A;\n",
             )
         )
-        assertEquals(
-            listOf("/proj/src/g1.ts", "/proj/src/g2.ts"),
-            ts2322Files(result),
-            "both structurally-distinct imports must resolve through their own statements; " +
-                "diagnostics: ${result.diagnostics.map { "${it.fileName}: TS${it.code} ${it.message}" }}"
-        )
+        assert(ts2322Files(result) == listOf("/proj/src/g1.ts", "/proj/src/g2.ts"))
     }
 }

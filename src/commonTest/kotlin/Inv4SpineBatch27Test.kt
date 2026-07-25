@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -65,8 +66,8 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454 co-emit, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -77,8 +78,8 @@ class Inv4SpineBatch27Test {
                 const x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
-        kotlin.test.assertEquals(0, d.count { it.code == 2454 }, "expected 0 TS2454, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
+        assert(d.count { it.code == 2454 } == 0)
     }
 
     @Test
@@ -90,8 +91,8 @@ class Inv4SpineBatch27Test {
                 const x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
-        kotlin.test.assertEquals(1, d.count { it.code == 2454 }, "expected 1 TS2454, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
+        assert(d.count { it.code == 2454 } == 1)
     }
 
     @Test
@@ -100,7 +101,7 @@ class Inv4SpineBatch27Test {
             const c = new C();
             class C {}
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2449 }, "expected 1 TS2449, got: $d")
+        assert(d.count { it.code == 2449 } == 1)
     }
 
     @Test
@@ -109,7 +110,7 @@ class Inv4SpineBatch27Test {
             const e = E.A;
             enum E { A }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2450 }, "expected 1 TS2450, got: $d")
+        assert(d.count { it.code == 2450 } == 1)
     }
 
     @Test
@@ -167,11 +168,11 @@ class Inv4SpineBatch27Test {
                 let x = x;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     @Test
-    fun `binding-pattern defaults - later element self-ref fires, earlier is available`() {
+    fun `binding-pattern defaults - later element self-ref fires - earlier is available`() {
         val d = diagnose("""
             declare const obj: any;
             function f() {
@@ -179,7 +180,7 @@ class Inv4SpineBatch27Test {
                 const { a, d = a } = obj;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected exactly 1 TS2448 (the b = c default), got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     @Test
@@ -189,7 +190,7 @@ class Inv4SpineBatch27Test {
                 for (let i = i; ;) { break; }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     @Test
@@ -199,7 +200,7 @@ class Inv4SpineBatch27Test {
                 for (const a of a) {}
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     // ── IIFE eager evaluation ───────────────────────────────────────────────
@@ -211,7 +212,7 @@ class Inv4SpineBatch27Test {
                 let y = (() => y)();
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     @Test
@@ -233,7 +234,7 @@ class Inv4SpineBatch27Test {
                 let z = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     @Test
@@ -269,7 +270,7 @@ class Inv4SpineBatch27Test {
             class D extends B {}
             class B {}
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2449 }, "expected 1 TS2449, got: $d")
+        assert(d.count { it.code == 2449 } == 1)
     }
 
     @Test
@@ -308,7 +309,7 @@ class Inv4SpineBatch27Test {
             };
             let later = 1;
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     // ── ForwardRefs statement-position reach quirks ─────────────────────────
@@ -322,7 +323,7 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d1.count { it.code == 2448 }, "unbraced: expected 1 TS2448, got: $d1")
+        assert(d1.count { it.code == 2448 } == 1)
         val d2 = diagnose("""
             declare const c: boolean;
             function f() {
@@ -330,7 +331,7 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(0, d2.count { it.code == 2448 }, "braced: expected 0 TS2448, got: $d2")
+        assert(d2.count { it.code == 2448 } == 0)
     }
 
     @Test
@@ -341,7 +342,7 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d1.count { it.code == 2448 }, "condition: expected 1 TS2448, got: $d1")
+        assert(d1.count { it.code == 2448 } == 1)
         val d2 = diagnose("""
             declare const c: boolean;
             function f() {
@@ -349,7 +350,7 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(0, d2.count { it.code == 2448 }, "body: expected 0 TS2448, got: $d2")
+        assert(d2.count { it.code == 2448 } == 0)
     }
 
     @Test
@@ -386,7 +387,7 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "subject: expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
         val d2 = diagnose("""
             declare const c: number;
             function f() {
@@ -394,7 +395,7 @@ class Inv4SpineBatch27Test {
                 let x = 1;
             }
         """)
-        kotlin.test.assertEquals(0, d2.count { it.code == 2448 }, "clause: expected 0 TS2448, got: $d2")
+        assert(d2.count { it.code == 2448 } == 0)
     }
 
     @Test
@@ -422,7 +423,7 @@ class Inv4SpineBatch27Test {
                 let b = 1;
             }
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2448 }, "expected 2 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 2)
     }
 
     // ── nested-scope activations ────────────────────────────────────────────
@@ -445,7 +446,7 @@ class Inv4SpineBatch27Test {
                 let h = 1;
             }
         """)
-        kotlin.test.assertEquals(7, d.count { it.code == 2448 }, "expected 7 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 7)
     }
 
     @Test
@@ -464,7 +465,7 @@ class Inv4SpineBatch27Test {
                 } catch (e) {}
             }
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2448 }, "expected 2 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 2)
     }
 
     // ── cross-file leg ──────────────────────────────────────────────────────
@@ -479,7 +480,7 @@ class Inv4SpineBatch27Test {
             let crossLet: number;
             """,
         )
-        kotlin.test.assertEquals(1, d.count { it.code == 2448 }, "expected 1 TS2448, got: $d")
+        assert(d.count { it.code == 2448 } == 1)
     }
 
     @Test

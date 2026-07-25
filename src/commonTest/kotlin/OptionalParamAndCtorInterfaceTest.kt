@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -46,56 +47,64 @@ import kotlin.test.Test
  */
 class OptionalParamAndCtorInterfaceTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
     private val tok = """
         interface Tok<T> { k: T; }
     """.trimIndent()
 
-    @Test fun explicitUndefinedIsLegalForOptionalReferenceParam() {
+    @Test
+    fun `an explicit undefined is legal for an optional reference param`() {
         compile("$tok\ndeclare function f(a: number, q?: Tok<number>): void;\nf(1, undefined);\n") should {
             have(diagnostics.none { it.code == 2345 })
         }
     }
 
-    @Test fun explicitUndefinedIsLegalForDefaultedReferenceParam() {
+    @Test
+    fun `an explicit undefined is legal for a defaulted reference param`() {
         compile("$tok\nfunction g(a: number, q: Tok<number> = { k: 1 }): void {}\ng(1, undefined);\n") should {
             have(diagnostics.none { it.code == 2345 })
         }
     }
 
-    @Test fun nullIsStillRejectedForOptionalReferenceParam() {
+    @Test
+    fun `negative control - null is still rejected for an optional reference param`() {
         compile("$tok\ndeclare function f(a: number, q?: Tok<number>): void;\nf(1, null);\n") should {
             have(diagnostics.any { it.code == 2345 && it.message.contains("'null'") })
         }
     }
 
-    @Test fun undefinedIsStillRejectedForRequiredReferenceParam() {
+    @Test
+    fun `negative control - undefined is still rejected for a required reference param`() {
         compile("$tok\ndeclare function h(q: Tok<number>): void;\nh(undefined);\n") should {
             have(diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
         }
     }
 
-    @Test fun explicitUndefinedIsLegalForOptionalFunctionTypedParam() {
+    @Test
+    fun `an explicit undefined is legal for an optional function-typed param`() {
         compile("declare function j<T>(x: T, cb?: (a: T) => number): void;\nj(1, undefined);\n") should {
             have(diagnostics.none { it.code == 2345 })
         }
     }
 
-    @Test fun newMapWithExplicitTypeArgsYieldsInstanceType() {
+    @Test
+    fun `a new Map with explicit type args yields the instance type`() {
         compile("const m = new Map<string, number>();\nm.set(\"a\", 1);\nconst v = m.get(\"a\");\n") should {
             have(diagnostics.none { it.code == 2339 })
         }
     }
 
-    @Test fun newMapWithoutTypeArgsStillYieldsInstanceType() {
+    @Test
+    fun `a new Map without type args still yields the instance type`() {
         compile("const m = new Map();\nm.set(\"a\", 1);\n") should {
             have(diagnostics.none { it.code == 2339 })
         }
     }
 
-    @Test fun userDeclaredCtorInterfaceWithExplicitTypeArgs() {
+    @Test
+    fun `a user-declared ctor interface with explicit type args`() {
         compile(
             """
             interface Box<T> { val: T; boxed(): T; }

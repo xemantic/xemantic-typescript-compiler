@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 649): pins for the checkDeleteOperator (TS1102
@@ -51,15 +52,15 @@ class M04DeleteOpSpineMigrationTest {
     // ── TS1102/TS2703 — the per-file isStrict routing ──────────────────────
 
     @Test
-    fun `strict via @strict - delete identifier draws TS1102 and TS2703`() {
+    fun `strict via the strict directive - delete identifier draws TS1102 and TS2703`() {
         val ds = diagnose(
             """
             $declX
             delete x;
             """
         )
-        assertEquals(1, ds.count { it.code == 1102 })
-        assertEquals(1, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 1102 } == 1)
+        assert(ds.count { it.code == 2703 } == 1)
     }
 
     @Test
@@ -71,7 +72,7 @@ class M04DeleteOpSpineMigrationTest {
             """
         )
         val d = ds.single { it.code == 1102 }
-        assertEquals(1, d.length)
+        assert(d.length == 1)
     }
 
     @Test
@@ -83,8 +84,8 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(0, ds.count { it.code == 1102 })
-        assertEquals(1, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 1102 } == 0)
+        assert(ds.count { it.code == 2703 } == 1)
     }
 
     @Test
@@ -97,8 +98,8 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(1, ds.count { it.code == 1102 })
-        assertEquals(1, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 1102 } == 1)
+        assert(ds.count { it.code == 2703 } == 1)
     }
 
     @Test
@@ -111,7 +112,7 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(1, ds.count { it.code == 1102 })
+        assert(ds.count { it.code == 1102 } == 1)
     }
 
     @Test
@@ -123,7 +124,7 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false\n// @target: es2015"
         )
-        assertEquals(1, ds.count { it.code == 1102 })
+        assert(ds.count { it.code == 1102 } == 1)
     }
 
     @Test
@@ -139,8 +140,8 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(0, ds.count { it.code == 1102 })
-        assertEquals(1, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 1102 } == 0)
+        assert(ds.count { it.code == 2703 } == 1)
     }
 
     @Test
@@ -151,8 +152,8 @@ class M04DeleteOpSpineMigrationTest {
             delete (x, x);
             """
         )
-        assertEquals(0, ds.count { it.code == 1102 })
-        assertEquals(1, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 1102 } == 0)
+        assert(ds.count { it.code == 2703 } == 1)
     }
 
     @Test
@@ -164,7 +165,7 @@ class M04DeleteOpSpineMigrationTest {
             delete obj["a"];
             """
         )
-        assertEquals(0, ds.count { it.code in setOf(1102, 2703, 2790, 2704, 2542) })
+        assert(ds.count { it.code in setOf(1102, 2703, 2790, 2704, 2542) } == 0)
     }
 
     @Test
@@ -176,13 +177,13 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(2, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 2703 } == 2)
     }
 
     // ── TS2790 (strictNullChecks) ──────────────────────────────────────────
 
     @Test
-    fun `TS2790 - required property fires, optional and undefined-union do not`() {
+    fun `TS2790 - required property fires - optional and undefined-union do not`() {
         val ds = diagnose(
             """
             interface I { a: number; b?: number; c: number | undefined }
@@ -192,7 +193,7 @@ class M04DeleteOpSpineMigrationTest {
             delete i.c;
             """
         )
-        assertEquals(1, ds.count { it.code == 2790 })
+        assert(ds.count { it.code == 2790 } == 1)
     }
 
     @Test
@@ -203,7 +204,7 @@ class M04DeleteOpSpineMigrationTest {
             delete o.toString;
             """
         )
-        assertEquals(1, ds.count { it.code == 2790 })
+        assert(ds.count { it.code == 2790 } == 1)
     }
 
     @Test
@@ -216,7 +217,7 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(0, ds.count { it.code == 2790 })
+        assert(ds.count { it.code == 2790 } == 0)
     }
 
     // ── TS2704 / TS2542 (readonly, strict-independent) ─────────────────────
@@ -231,7 +232,7 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(1, ds.count { it.code == 2704 })
+        assert(ds.count { it.code == 2704 } == 1)
     }
 
     @Test
@@ -243,8 +244,8 @@ class M04DeleteOpSpineMigrationTest {
             delete i.a;
             """
         )
-        assertEquals(1, ds.count { it.code == 2704 })
-        assertEquals(0, ds.count { it.code == 2790 })
+        assert(ds.count { it.code == 2704 } == 1)
+        assert(ds.count { it.code == 2790 } == 0)
     }
 
     @Test
@@ -256,7 +257,7 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(1, ds.count { it.code == 2704 })
+        assert(ds.count { it.code == 2704 } == 1)
     }
 
     @Test
@@ -269,17 +270,17 @@ class M04DeleteOpSpineMigrationTest {
             """,
             directives = "// @strict: false"
         )
-        assertEquals(1, ds.count { it.code == 2542 })
+        assert(ds.count { it.code == 2542 } == 1)
     }
 
     // ── Reached positions (TS2703 as the reach signal, non-strict) ─────────
 
-    private fun reach(source: String, expected: Int = 1) {
+    private fun reach(@Language("typescript") source: String, expected: Int = 1) {
         val ds = diagnose(
             "declare var x: any;\ndeclare var obj: any;\n" + source.trimIndent(),
             directives = "// @strict: false"
         )
-        assertEquals(expected, ds.count { it.code == 2703 })
+        assert(ds.count { it.code == 2703 } == expected)
     }
 
     @Test
@@ -477,7 +478,7 @@ class M04DeleteOpSpineMigrationTest {
             """,
             fileName = "t.d.ts"
         )
-        assertEquals(0, ds.count { it.code == 2703 })
-        assertEquals(0, ds.count { it.code == 1102 })
+        assert(ds.count { it.code == 2703 } == 0)
+        assert(ds.count { it.code == 1102 } == 0)
     }
 }

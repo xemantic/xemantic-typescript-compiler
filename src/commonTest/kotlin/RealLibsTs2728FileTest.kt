@@ -25,8 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -42,13 +44,13 @@ import kotlin.test.Test
  */
 class RealLibsTs2728FileTest {
 
-    private fun related(source: String): List<Diagnostic> =
+    private fun related(@Language("typescript") source: String): List<Diagnostic> =
         TypeScriptCompiler().compile(source, "t.ts").diagnostics
             .flatMap { it.relatedInformation }
             .filter { it.code == 2728 }
 
     @Test
-    fun `TS2728 for a non-es5 lib member points at its real lib file, masked`() {
+    fun `TS2728 for a non-es5 lib member points at its real lib file - masked`() {
         // `includes` lives in a post-es5 lib layer (es2016.array.include). Before the fix
         // the position fell through to the FIRST lib file (es5) or a user-file false-match.
         related(
@@ -71,14 +73,14 @@ class RealLibsTs2728FileTest {
     }
 
     @Test
-    fun `TS2728 for an es5 lib member points at lib_es5_d_ts, not the user file`() {
+    fun `TS2728 for an es5 lib member points at lib_es5_d_ts - not the user file`() {
         related(
             """
             // @useRealLibs: true
             Object.getOwnPropertyNamess(null);
             """.trimIndent(),
         ) should {
-            have(any { it.fileName == "lib.es5.d.ts" && it.line == null }, "an es5 lib member must render lib.es5.d.ts:--:--")
+            have(any { it.fileName == "lib.es5.d.ts" && it.line == null })
             have(none { it.fileName == "t.ts" })
         }
     }
@@ -99,7 +101,7 @@ class RealLibsTs2728FileTest {
     }
 
     @Test
-    fun `TS2728 from the CJS string-import spelling suggestion attributes to the lib, not the user file`() {
+    fun `TS2728 from the CJS string-import spelling suggestion attributes to the lib - not the user file`() {
         // Round 394: the B553 emitCjsStringImportMethodAccess walker built its TS2728 with
         // the position-based resolveDeclarationSourceFile, so under real libs `fixed` (on the
         // real String interface, a DEPRECATED HTML helper) false-matched the large /index.ts
@@ -132,10 +134,8 @@ class RealLibsTs2728FileTest {
         ).diagnostics
         diags.firstOrNull { it.code == 2551 && it.message.contains("toFixed") } should {
             val rel = relatedInformation.filter { it.code == 2728 }
-            have(
-                rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null },
-                "the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--",
-            )
+            // the 'fixed' TS2728 must be masked to lib.es2015.core.d.ts:--:--
+            assert(rel.any { it.fileName == "lib.es2015.core.d.ts" && it.line == null && it.character == null })
             have(rel.none { (it.fileName ?: "").endsWith("index.ts") })
         }
     }

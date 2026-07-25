@@ -112,7 +112,7 @@ class LogicalTernaryOperandNarrowingTest {
     }
 
     @Test
-    fun `negative control - ternary false branch narrowed to the else-type, not the condition`() {
+    fun `negative control - ternary false branch narrowed to the else-type - not the condition`() {
         // `typeof x === "string" ? x : x` : the FALSE branch must narrow `x` to
         // `number` (condition false), NOT to `string`. So the result is `string |
         // number` and `const r: string` fires TS2322 on the `number` — proving the

@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -43,7 +44,7 @@ import kotlin.test.Test
  */
 class Round475BatchThreeTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile(source.trimIndent(), "entry.ts").diagnostics
 
     @Test
@@ -213,7 +214,7 @@ class Round475BatchThreeTest {
     }
 
     @Test
-    fun `conflated alias with un-modeled body - return is unknowable, no TS2322`() {
+    fun `conflated alias with un-modeled body - return is unknowable - no TS2322`() {
         // jsTyping's `type SafeList = ReadonlyMap<string, string>` (ReadonlyMap has no
         // modeled interface) loses the merge to editorServices' `interface SafeList` —
         // the body is unresolvable, so the verdict is unknowable (FN-not-FP).

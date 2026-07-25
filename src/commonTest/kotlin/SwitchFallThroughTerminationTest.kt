@@ -40,7 +40,8 @@ import kotlin.test.Test
  */
 class SwitchFallThroughTerminationTest {
 
-    @Test fun caseFallsThroughToReturningDefaultDrawsNothing() {
+    @Test
+    fun `a case falling through to a returning default draws nothing`() {
         // The parseSimpleUnaryExpression shape.
         diagnose(
             """
@@ -65,7 +66,8 @@ class SwitchFallThroughTerminationTest {
         }
     }
 
-    @Test fun emptyCaseFallThroughChainDrawsNothing() {
+    @Test
+    fun `an empty-case fall-through chain draws nothing`() {
         // case 1: case 2: case 3: return x; — stacked empty labels.
         diagnose(
             """
@@ -86,7 +88,8 @@ class SwitchFallThroughTerminationTest {
         }
     }
 
-    @Test fun allCasesReturnDrawsNothing() {
+    @Test
+    fun `a switch where all cases return draws nothing`() {
         // Regression sanity: the previously-working case must still pass.
         diagnose(
             """
@@ -106,7 +109,8 @@ class SwitchFallThroughTerminationTest {
 
     // --- negative controls ---
 
-    @Test fun caseThatBreaksOutStillFires() {
+    @Test
+    fun `negative control - a case that breaks out still fires`() {
         // A `break` escapes the switch → control reaches the end with no return.
         diagnose(
             """
@@ -127,7 +131,8 @@ class SwitchFallThroughTerminationTest {
         }
     }
 
-    @Test fun nonExhaustiveSwitchWithoutDefaultStillFires() {
+    @Test
+    fun `negative control - a non-exhaustive switch without a default still fires`() {
         // No default over a `number` discriminant → not exhaustive → endpoint reachable.
         diagnose(
             """
@@ -144,7 +149,8 @@ class SwitchFallThroughTerminationTest {
         }
     }
 
-    @Test fun defaultThatFallsThroughToNothingStillFires() {
+    @Test
+    fun `negative control - a default that falls through to nothing still fires`() {
         // The default is the LAST clause and completes normally (no return) → escapes.
         diagnose(
             """

@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
@@ -79,27 +79,28 @@ class LinearFlowDepthNarrowingTest {
      * path consults flow narrowing, so it compiles clean ONLY if the walk reached the
      * top-of-function assert past the deep chain.
      */
-    @Test fun assertNarrowingSurvivesDeepLinearChain() {
+    @Test
+    fun `assert narrowing survives a deep linear chain`() {
         val source = assertChainSource(chain)
         // Warm up (JIT + embedded-lib parse dominate the first compile).
         TypeScriptCompiler().compile(assertChainSource(30), "warmup.ts")
         val (result, elapsed) = measureTimedValue {
             TypeScriptCompiler().compile(source, "deepAssert.ts")
         }
-        have(
-            result.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "assert narrowing lost past a $chain-node linear chain (NARROW_MAX_DEPTH=2000)",
-        )
+        // The walk must reach the top-of-function assert past the chain
+        // (NARROW_MAX_DEPTH=2000).
+        assert(result.diagnostics.none { it.code == 2322 || it.code == 2345 })
         // Iterating a linear chain is trivial work — a truncation-storm regression would
         // be visibly slower, but the slack bound just guards against pathology.
-        have(elapsed < 60.seconds, "deep-chain narrowing took $elapsed — non-linear walk")
+        assert(elapsed < 60.seconds)
     }
 
     /**
      * Same shape with a `typeof x === "string"` guard at the top of a block instead of an
      * assert — the FlowCondition sits above the deep pass-through chain.
      */
-    @Test fun conditionNarrowingSurvivesDeepLinearChain() {
+    @Test
+    fun `condition narrowing survives a deep linear chain`() {
         val source = """
             // @strict: true
             declare const x: unknown;
@@ -109,10 +110,8 @@ class LinearFlowDepthNarrowingTest {
             }
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "deepCond.ts")
-        have(
-            result.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "condition narrowing lost past a $chain-node linear chain",
-        )
+        // The walk must reach the top-of-block condition past the chain.
+        assert(result.diagnostics.none { it.code == 2322 || it.code == 2345 })
     }
 
     /**
@@ -120,7 +119,8 @@ class LinearFlowDepthNarrowingTest {
      * top narrowing and the read — these follow tsc's `getTypeAtFlowCall`-returns-undefined
      * iteration and must not consume depth either.
      */
-    @Test fun assertNarrowingSurvivesDeepCallChain() {
+    @Test
+    fun `assert narrowing survives a deep call chain`() {
         val source = """
             // @strict: true
             declare function assertIsString(v: unknown): asserts v is string;
@@ -135,10 +135,8 @@ class LinearFlowDepthNarrowingTest {
             "// @strict: true\ndeclare function sink(n: number): void;\nsink(1);\n", "warmup2.ts",
         )
         val result = TypeScriptCompiler().compile(source, "deepCall.ts")
-        have(
-            result.diagnostics.none { it.code == 2322 || it.code == 2345 },
-            "assert narrowing lost past a $chain-call pass-through chain",
-        )
+        // The walk must reach the assert past the pass-through call chain.
+        assert(result.diagnostics.none { it.code == 2322 || it.code == 2345 })
     }
 
     /**
@@ -146,7 +144,8 @@ class LinearFlowDepthNarrowingTest {
      * a genuine TS2322 — proves the positives above are not vacuous (a walk that silently
      * bailed to declared type would still "pass" them).
      */
-    @Test fun unnarrowedReadAfterChainStillErrors() {
+    @Test
+    fun `negative control - an unnarrowed read after the chain still errors`() {
         val source = """
             // @strict: true
             function f(x: unknown): void {
@@ -155,18 +154,17 @@ class LinearFlowDepthNarrowingTest {
             }
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "controlDeep.ts")
-        have(
-            result.diagnostics.any { it.code == 2322 },
-            "negative control lost: unnarrowed unknown → string must be TS2322",
-        )
+        // Control: an unnarrowed unknown assigned to string is TS2322.
+        assert(result.diagnostics.any { it.code == 2322 })
     }
 
     /**
      * Trivial-depth positive control: the same assert narrowing with a short chain must be
      * clean — pins that the machinery narrows at all (not just that deep chains truncate).
      */
-    @Test fun assertNarrowingAtTrivialDepth() {
+    @Test
+    fun `assert narrowing at trivial depth`() {
         val result = TypeScriptCompiler().compile(assertChainSource(3), "shallow.ts")
-        have(result.diagnostics.none { it.code == 2322 })
+        assert(result.diagnostics.none { it.code == 2322 })
     }
 }

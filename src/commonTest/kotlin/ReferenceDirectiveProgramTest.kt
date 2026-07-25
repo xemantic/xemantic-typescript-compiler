@@ -25,10 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertNotNull
-import kotlin.test.assertTrue
 
 /**
  * M4.8 (round 680): the PARSER half — `/// <reference path>` and
@@ -46,79 +45,82 @@ import kotlin.test.assertTrue
  */
 class ReferenceDirectiveProgramTest {
 
-    private fun parse(src: String): SourceFile =
-        Parser(src, "/proj/t.d.ts").parse()
+    // Each helper returns a plain string list: a SourceFile must never reach a
+    // power-assert subexpression, which would toString the whole AST on failure.
+    private fun paths(@Language("typescript") src: String): List<String> =
+        Parser(src, "/proj/t.d.ts").parse().referencedPaths
+
+    private fun types(@Language("typescript") src: String): List<String> =
+        Parser(src, "/proj/t.d.ts").parse().referencedTypes
+
+    private fun specifiers(@Language("typescript") src: String): List<String> =
+        Parser(src, "/proj/t.d.ts").parse().moduleSpecifiers
 
     @Test
-    fun `a reference path is recorded as a path, not a module specifier`() {
-        val sf = parse("/// <reference path=\"globals.d.ts\" />\nexport {};\n")
-        assertEquals(listOf("globals.d.ts"), sf.referencedPaths)
-        assertTrue(sf.moduleSpecifiers.isEmpty(), "must not leak into moduleSpecifiers: ${sf.moduleSpecifiers}")
+    fun `a reference path is recorded as a path - not a module specifier`() {
+        val src = "/// <reference path=\"globals.d.ts\" />\nexport {};\n"
+        assert(paths(src) == listOf("globals.d.ts"))
+        // It must not leak into moduleSpecifiers.
+        assert(specifiers(src).isEmpty())
     }
 
     @Test
     fun `a reference types is recorded separately from a reference path`() {
-        val sf = parse(
-            "/// <reference types=\"node\" />\n/// <reference path=\"./a.d.ts\" />\nexport {};\n"
-        )
-        assertEquals(listOf("node"), sf.referencedTypes)
-        assertEquals(listOf("./a.d.ts"), sf.referencedPaths)
+        val src = "/// <reference types=\"node\" />\n/// <reference path=\"./a.d.ts\" />\nexport {};\n"
+        assert(types(src) == listOf("node"))
+        assert(paths(src) == listOf("./a.d.ts"))
     }
 
     @Test
     fun `many reference paths keep source order`() {
         // @types/node's index.d.ts is 64 consecutive reference lines.
         val src = (1..5).joinToString("\n") { "/// <reference path=\"f$it.d.ts\" />" } + "\nexport {};\n"
-        assertEquals(listOf("f1.d.ts", "f2.d.ts", "f3.d.ts", "f4.d.ts", "f5.d.ts"), parse(src).referencedPaths)
+        assert(paths(src) == listOf("f1.d.ts", "f2.d.ts", "f3.d.ts", "f4.d.ts", "f5.d.ts"))
     }
 
     @Test
     fun `directives after a leading BLOCK comment are still recorded`() {
         // @types/node opens with a long license block comment before its
         // reference lines — the parser must see past it.
-        val sf = parse("/* license\n   text */\n/// <reference path=\"globals.d.ts\" />\nexport {};\n")
-        assertEquals(listOf("globals.d.ts"), sf.referencedPaths)
+        assert(paths("/* license\n   text */\n/// <reference path=\"globals.d.ts\" />\nexport {};\n") == listOf("globals.d.ts"))
     }
 
     @Test
     fun `real module specifiers are still recorded normally`() {
-        val sf = parse("/// <reference path=\"a.d.ts\" />\nimport { x } from \"./b\";\nexport { x };\n")
-        assertEquals(listOf("a.d.ts"), sf.referencedPaths)
-        assertTrue("./b" in sf.moduleSpecifiers, "the import must still be a module specifier")
+        val src = "/// <reference path=\"a.d.ts\" />\nimport { x } from \"./b\";\nexport { x };\n"
+        assert(paths(src) == listOf("a.d.ts"))
+        // The import must still be a module specifier.
+        assert("./b" in specifiers(src))
     }
 
     // ── negative controls ─────────────────────────────────────────────────
 
     @Test
     fun `negative control - a directive AFTER the first code token is a plain comment`() {
-        val sf = parse("export {};\n/// <reference path=\"late.d.ts\" />\n")
-        assertTrue(sf.referencedPaths.isEmpty(), "past first code token, got: ${sf.referencedPaths}")
+        assert(paths("export {};\n/// <reference path=\"late.d.ts\" />\n").isEmpty())
     }
 
     @Test
     fun `negative control - a lib reference is not treated as a path`() {
-        val sf = parse("/// <reference lib=\"es2015\" />\nexport {};\n")
-        assertTrue(sf.referencedPaths.isEmpty())
-        assertTrue(sf.referencedTypes.isEmpty())
+        val src = "/// <reference lib=\"es2015\" />\nexport {};\n"
+        assert(paths(src).isEmpty())
+        assert(types(src).isEmpty())
     }
 
     @Test
     fun `negative control - directive text inside a string literal contributes nothing`() {
-        val sf = parse("export const s = '/// <reference path=\"nope.d.ts\" />';\n")
-        assertTrue(sf.referencedPaths.isEmpty(), "got: ${sf.referencedPaths}")
+        assert(paths("export const s = '/// <reference path=\"nope.d.ts\" />';\n").isEmpty())
     }
 
     @Test
     fun `negative control - an empty target is ignored`() {
-        val sf = parse("/// <reference path=\"\" />\nexport {};\n")
-        assertTrue(sf.referencedPaths.isEmpty())
+        assert(paths("/// <reference path=\"\" />\nexport {};\n").isEmpty())
     }
 
     @Test
     fun `the SourceFile carries the fields even with no directives`() {
-        val sf = parse("export const a = 1;\n")
-        assertNotNull(sf.referencedPaths)
-        assertNotNull(sf.referencedTypes)
-        assertTrue(sf.referencedPaths.isEmpty() && sf.referencedTypes.isEmpty())
+        val src = "export const a = 1;\n"
+        assert(paths(src).isEmpty())
+        assert(types(src).isEmpty())
     }
 }

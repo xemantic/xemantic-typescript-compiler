@@ -61,7 +61,7 @@ class ArrayElementFlowNarrowingTest {
                 }
                 return [sourceFile];
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2322 })
         }
     }
@@ -76,7 +76,7 @@ class ArrayElementFlowNarrowingTest {
                     next: details === undefined || Array.isArray(details) ? details : [details],
                 };
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2322 })
         }
     }
@@ -90,7 +90,7 @@ class ArrayElementFlowNarrowingTest {
                     takeArr(x);
                 }
             }
-        """.trimIndent()) should {
+        """) should {
             have(none { it.code == 2345 })
         }
     }
@@ -104,7 +104,7 @@ class ArrayElementFlowNarrowingTest {
                 const sourceFile = getSF(p);
                 return [sourceFile];
             }
-        """.trimIndent()) should {
+        """) should {
             have(any { it.code == 2322 })
         }
     }

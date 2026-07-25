@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
-import kotlin.test.assertFalse
 
 /**
  * EP.2d (round 677): a PARAMETER DEFAULT VALUE must be transformed like any
@@ -61,7 +61,7 @@ class ParameterDefaultTransformTest {
     """.trimIndent() + "\n"
 
     /** Emits at ES2020 — the target where the early return used to fire. */
-    private fun emit(main: String): String {
+    private fun emit(@Language("typescript") main: String): String {
         val source = "// @module: commonjs\n// @target: es2020\n" + enums +
             "// @filename: m.ts\n" + main
         return TypeScriptCompiler().compile(source, "m.ts").jsOutputs
@@ -78,8 +78,9 @@ class ParameterDefaultTransformTest {
             export function f(x: number, flags = Flags.A) { return x + flags; }
             """.trimIndent()
         )
-        assertContains(js, "1 /* Flags.A */")
-        assertFalse("e_1.Flags" in js, "must not keep a qualified access, got:\n$js")
+        assert("1 /* Flags.A */" in js)
+        // Inlined: no qualified access to the imported enum may remain.
+        assert("e_1.Flags" !in js)
     }
 
     @Test
@@ -90,8 +91,8 @@ class ParameterDefaultTransformTest {
             export function g(x: number, flags = Flags.A | Flags.B) { return x + flags; }
             """.trimIndent()
         )
-        assertContains(js, "1 /* Flags.A */")
-        assertContains(js, "2 /* Flags.B */")
+        assert("1 /* Flags.A */" in js)
+        assert("2 /* Flags.B */" in js)
     }
 
     @Test
@@ -102,7 +103,7 @@ class ParameterDefaultTransformTest {
             export const fe = function (flags = Flags.B) { return flags; };
             """.trimIndent()
         )
-        assertContains(js, "2 /* Flags.B */")
+        assert("2 /* Flags.B */" in js)
     }
 
     @Test
@@ -113,7 +114,7 @@ class ParameterDefaultTransformTest {
             export const ar = (flags = Flags.B) => flags;
             """.trimIndent()
         )
-        assertContains(js, "2 /* Flags.B */")
+        assert("2 /* Flags.B */" in js)
     }
 
     @Test
@@ -127,7 +128,7 @@ class ParameterDefaultTransformTest {
             }
             """.trimIndent()
         )
-        assertContains(js, "1 /* Flags.A */")
+        assert("1 /* Flags.A */" in js)
     }
 
     @Test
@@ -140,7 +141,7 @@ class ParameterDefaultTransformTest {
             export class D { m(flags = Flags.B) { return flags; } }
             """.trimIndent()
         )
-        assertContains(js, "2 /* Flags.B */")
+        assert("2 /* Flags.B */" in js)
     }
 
     @Test
@@ -151,7 +152,7 @@ class ParameterDefaultTransformTest {
             export function f(flags = Flags.A) { return flags; }
             """.trimIndent()
         )
-        assertFalse("require(\"./e\")" in js, "import must be elided, got:\n$js")
+        assert("require(\"./e\")" !in js)
     }
 
     // ── the transform is restored WHOLESALE, not just const enums ──────────
@@ -167,7 +168,7 @@ class ParameterDefaultTransformTest {
         ).javascript ?: error("no js")
         // ES2019 has no native optional chaining: it must be downleveled, not
         // passed through verbatim.
-        assertFalse("?." in js, "optional chain must be lowered at es2019, got:\n$js")
+        assert("?." !in js)
     }
 
     @Test
@@ -183,8 +184,8 @@ class ParameterDefaultTransformTest {
                 """.trimIndent(),
             "m.ts",
         ).jsOutputs.joinToString("\n") { it.second }
-        assertContains(js, "__rest")
-        assertContains(js, "1 /* Flags.A */")
+        assert("__rest" in js)
+        assert("1 /* Flags.A */" in js)
     }
 
     // ── negative controls: the async branches never used this path ─────────
@@ -197,7 +198,7 @@ class ParameterDefaultTransformTest {
             export async function af(flags = Flags.A) { return flags; }
             """.trimIndent()
         )
-        assertContains(js, "1 /* Flags.A */")
+        assert("1 /* Flags.A */" in js)
     }
 
     @Test
@@ -208,7 +209,7 @@ class ParameterDefaultTransformTest {
             export async function* ag(flags = Flags.B) { yield flags; }
             """.trimIndent()
         )
-        assertContains(js, "2 /* Flags.B */")
+        assert("2 /* Flags.B */" in js)
     }
 
     @Test
@@ -219,7 +220,7 @@ class ParameterDefaultTransformTest {
             export function n(a: number, b: string) { return a + b; }
             """.trimIndent()
         )
-        assertContains(js, "function n(a, b)")
+        assert("function n(a, b)" in js)
     }
 
     @Test
@@ -232,7 +233,8 @@ class ParameterDefaultTransformTest {
             export function r({ a, ...rest }: { a: number; b?: number }) { return a; }
             """.trimIndent()
         ).javascript ?: error("no js")
-        assertContains(js, "__rest")
-        assertFalse("function r({" in js, "the pattern must be replaced by a temp, got:\n$js")
+        assert("__rest" in js)
+        // The binding pattern must be replaced by a temp parameter.
+        assert("function r({" !in js)
     }
 }

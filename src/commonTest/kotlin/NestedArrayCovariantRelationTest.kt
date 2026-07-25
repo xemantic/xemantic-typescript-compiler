@@ -71,7 +71,7 @@ class NestedArrayCovariantRelationTest {
     }
 
     @Test
-    fun `array-of-array element covariance is checked (nested container)`() {
+    fun `array-of-array element covariance is checked - nested container`() {
         diagnose(
             """
             interface Inner { x: number; }

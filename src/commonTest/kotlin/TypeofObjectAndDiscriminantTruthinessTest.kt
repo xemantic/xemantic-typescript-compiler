@@ -73,7 +73,7 @@ class TypeofObjectAndDiscriminantTruthinessTest {
             }
             """
         ) should {
-            have(none { it.code == 2339 || it.code == 2349 }, "a function member reports typeof 'function', not 'object'")
+            have(none { it.code == 2339 || it.code == 2349 })
         }
     }
 

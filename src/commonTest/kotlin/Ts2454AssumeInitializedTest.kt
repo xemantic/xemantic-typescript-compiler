@@ -21,8 +21,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -48,15 +50,16 @@ import kotlin.test.Test
  */
 class Ts2454AssumeInitializedTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
-    private fun ts2454s(source: String) =
+    private fun ts2454s(@Language("typescript") source: String) =
         compile(source).diagnostics.filter { it.code == 2454 }
 
     /** tsc's `(sourceStack ??= []).push(…)` in a nested closure: the `??=` is a
      *  DEFINITE assignment, so neither its own read nor later captured reads fire. */
-    @Test fun coalescingAssignInNestedClosureSuppressesCapturedReads() {
+    @Test
+    fun `a coalescing assign in a nested closure suppresses captured reads`() {
         ts2454s(
             """
             export function outer() {
@@ -77,7 +80,8 @@ class Ts2454AssumeInitializedTest {
     }
 
     /** `||=` and `&&=` are likewise definite. */
-    @Test fun logicalAssignsAreDefinite() {
+    @Test
+    fun `logical assigns are definite`() {
         ts2454s(
             """
             export function outer() {
@@ -107,7 +111,8 @@ class Ts2454AssumeInitializedTest {
      *  the in-arrow assignment is invisible to the outer control flow). A comma
      *  expression nests the assignment on the LEFT spine of a BinaryExpression,
      *  which an outer-only target check silently skips. */
-    @Test fun commaNestedAssignInArrowIsDefinite() {
+    @Test
+    fun `a comma-nested assign in an arrow is definite`() {
         ts2454s(
             """
             declare function every(f: (t: number) => boolean): boolean;
@@ -129,7 +134,8 @@ class Ts2454AssumeInitializedTest {
      *  inUncheckedBody path (nested-if conditions are walked flagged), a DIFFERENT
      *  emitter than the top-level variant above. Both must honor the
      *  definitely-assigned-in-arrow exemption. */
-    @Test fun commaNestedAssignInArrowInsideIfBlockIsDefinite() {
+    @Test
+    fun `a comma-nested assign in an arrow inside an if-block is definite`() {
         ts2454s(
             """
             declare function every(f: (t: number) => boolean): boolean;
@@ -150,7 +156,8 @@ class Ts2454AssumeInitializedTest {
 
     /** NEGATIVE control (unusedLocalsInMethod4's transformClassFields): a compound
      *  `|=` is read-modify-write, NOT definite — the captured read still fires. */
-    @Test fun compoundAssignDoesNotSuppressCapturedRead() {
+    @Test
+    fun `negative control - a compound assign does not suppress a captured read`() {
         ts2454s(
             """
             export function outer() {
@@ -163,13 +170,14 @@ class Ts2454AssumeInitializedTest {
             }
             """.trimIndent()
         ) should {
-            have(isNotEmpty(), "a compound |= must NOT count as the first assignment — tsc still emits TS2454")
+            assert(isNotEmpty())
         }
     }
 
     /** NEGATIVE control (B78.2 base behavior): no assignment anywhere — the
      *  captured read fires. */
-    @Test fun neverAssignedCapturedReadStillFires() {
+    @Test
+    fun `negative control - a never-assigned captured read still fires`() {
         ts2454s(
             """
             export function outer() {
@@ -187,7 +195,8 @@ class Ts2454AssumeInitializedTest {
 
     /** tsc core.ts `or()`: `let lastResult: U;` conditionally assigned in a loop,
      *  then `return lastResult!` — the `!` assumes initialized. */
-    @Test fun nonNullAssertedReadAssumesInitialized() {
+    @Test
+    fun `a non-null asserted read assumes initialized`() {
         ts2454s(
             """
             export function orFn(fs: (() => number)[]) {
@@ -205,7 +214,8 @@ class Ts2454AssumeInitializedTest {
     }
 
     /** `x!.prop` — the identifier's DIRECT parent is the assertion, exempt too. */
-    @Test fun nonNullAssertedReceiverAssumesInitialized() {
+    @Test
+    fun `a non-null asserted receiver assumes initialized`() {
         ts2454s(
             """
             export function f(cond: boolean) {
@@ -220,7 +230,8 @@ class Ts2454AssumeInitializedTest {
     }
 
     /** NEGATIVE control: the same shapes WITHOUT `!` still fire. */
-    @Test fun plainReadWithoutAssertionStillFires() {
+    @Test
+    fun `negative control - a plain read without the assertion still fires`() {
         ts2454s(
             """
             export function f() {

@@ -25,10 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * INV.1(b) (round 493): the import-graph crawl reads+decodes each frontier's
@@ -73,7 +71,7 @@ class Inv1ConcurrentCrawlTest {
         val result = ProjectCompiler(InMemoryVfs(wideProject(30))).build("/w", noEmit = true)
         val expected = listOf("/w/src/index.ts") +
             (0 until 30).map { "/w/src/m" + it.toString().padStart(2, '0') + ".ts" }
-        assertEquals(expected, result.programFiles)
+        assert(result.programFiles == expected)
     }
 
     @Test
@@ -85,7 +83,7 @@ class Inv1ConcurrentCrawlTest {
         // (m19's own ./s19 dedups against the earlier discovery).
         val frontier2 = listOf("/w/src/s00.ts", "/w/src/s19.ts") +
             (1 until 19).map { "/w/src/s" + it.toString().padStart(2, '0') + ".ts" }
-        assertEquals(listOf("/w/src/index.ts") + frontier1 + frontier2, result.programFiles)
+        assert(result.programFiles == listOf("/w/src/index.ts") + frontier1 + frontier2)
     }
 
     @Test
@@ -101,10 +99,7 @@ class Inv1ConcurrentCrawlTest {
             )
         )
         val result = ProjectCompiler(vfs).build("/d", noEmit = true)
-        assertEquals(
-            listOf("/d/src/a.ts", "/d/src/b.ts", "/d/src/c.ts", "/d/src/d.ts", "/d/src/e.ts"),
-            result.programFiles,
-        )
+        assert(result.programFiles == listOf("/d/src/a.ts", "/d/src/b.ts", "/d/src/c.ts", "/d/src/d.ts", "/d/src/e.ts"))
     }
 
     @Test
@@ -123,9 +118,9 @@ class Inv1ConcurrentCrawlTest {
         )
         val vfs = UnreadableVfs(base, setOf("/u/src/gone.ts"))
         val result = ProjectCompiler(vfs).build("/u", noEmit = true)
-        assertEquals(listOf("/u/src/index.ts", "/u/src/ok.ts"), result.programFiles)
+        assert(result.programFiles == listOf("/u/src/index.ts", "/u/src/ok.ts"))
         // `./gone` RESOLVED (the file exists) — it is unreadable, not unresolved.
-        assertTrue(result.unresolved.isEmpty(), "expected no unresolved, got ${result.unresolved}")
+        assert(result.unresolved.isEmpty())
     }
 
     @Test
@@ -141,7 +136,7 @@ class Inv1ConcurrentCrawlTest {
         val result = ProjectCompiler(vfs).build("/s", noEmit = true)
         // Seeds are read unconditionally: the unreadable seed keeps its program
         // slot (as ""), unlike an unreadable DISCOVERED file (skipped entirely).
-        assertEquals(listOf("/s/src/index.ts", "/s/src/other.ts"), result.programFiles)
+        assert(result.programFiles == listOf("/s/src/index.ts", "/s/src/other.ts"))
     }
 
     @Test
@@ -150,11 +145,11 @@ class Inv1ConcurrentCrawlTest {
         val first = ProjectCompiler(InMemoryVfs(files)).build("/w", noEmit = true)
         repeat(2) {
             val again = ProjectCompiler(InMemoryVfs(files)).build("/w", noEmit = true)
-            assertEquals(first.programFiles, again.programFiles)
-            assertEquals(first.diagnostics, again.diagnostics)
-            assertEquals(first.unresolved, again.unresolved)
+            assert(again.programFiles == first.programFiles)
+            assert(again.diagnostics == first.diagnostics)
+            assert(again.unresolved == first.unresolved)
         }
-        assertFalse(first.programFiles.isEmpty())
+        assert(!first.programFiles.isEmpty())
     }
 }
 

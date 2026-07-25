@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 488 (M5.2): [Checker.isOptionalProperty] was reordered to test the
@@ -50,11 +50,8 @@ class IsOptionalPropertyReorderTest {
             let d: Dst = s;
             """.trimIndent(),
         ).firstOrNull { it.code == 2322 }
-        assertTrue(d != null, "expected TS2322")
-        assertTrue(
-            d.messageChain.any { it.contains("number | undefined") },
-            "chain: ${d.messageChain}",
-        )
+        assert(d != null)
+        assert(d.messageChain.any { it.contains("number | undefined") })
     }
 
     @Test
@@ -67,7 +64,7 @@ class IsOptionalPropertyReorderTest {
             function f(t: [a?: number]) { const x: [number] = t; }
             """.trimIndent(),
         ).filter { it.code == 2322 }
-        assertTrue(errs.isNotEmpty(), "expected TS2322 for optional tuple element vs required")
+        assert(errs.isNotEmpty())
     }
 
     @Test
@@ -80,6 +77,6 @@ class IsOptionalPropertyReorderTest {
             let d: Dst = s;
             """.trimIndent(),
         ).filter { it.code == 2322 }
-        assertTrue(errs.isEmpty(), "required→required must not error: $errs")
+        assert(errs.isEmpty())
     }
 }

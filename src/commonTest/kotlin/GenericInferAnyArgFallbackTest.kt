@@ -46,7 +46,7 @@ import kotlin.test.Test
 class GenericInferAnyArgFallbackTest {
 
     @Test
-    fun `generic call with an any-typed arg returns any, not un-inferred T`() {
+    fun `generic call with an any-typed arg returns any - not un-inferred T`() {
         diagnose(
             """
             namespace Debug {

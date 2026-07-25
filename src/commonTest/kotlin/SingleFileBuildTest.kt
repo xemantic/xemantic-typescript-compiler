@@ -25,9 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * Round 458: `xtsc foo.ts` — a bare SOURCE-file argument — must be compiled as a
@@ -41,24 +40,18 @@ import kotlin.test.assertTrue
 class SingleFileBuildTest {
 
     @Test
-    fun `a bare source file compiles cleanly (no crash, no spurious diagnostics)`() {
+    fun `a bare source file compiles cleanly - no crash - no spurious diagnostics`() {
         val vfs = InMemoryVfs(mapOf("/work/a.ts" to "const x: number = 1;\nexport const y = x + 1;\n"))
         val result = ProjectCompiler(vfs).build("/work/a.ts", noEmit = true)
-        assertEquals(
-            emptyList(), result.diagnostics,
-            "a bare source file must compile without diagnostics (and must not crash)",
-        )
-        assertTrue("/work/a.ts" in result.programFiles, "the file itself is the single root")
+        assert(result.diagnostics.isEmpty())
+        assert("/work/a.ts" in result.programFiles)
     }
 
     @Test
     fun `a bare source file with a real type error reports it`() {
         val vfs = InMemoryVfs(mapOf("/work/bad.ts" to "const n: number = \"not a number\";\n"))
         val result = ProjectCompiler(vfs).build("/work/bad.ts", noEmit = true)
-        assertTrue(
-            result.diagnostics.any { it.code == 2322 },
-            "a bare source file is still type-checked — TS2322 must fire; got ${result.diagnostics.map { it.code }}",
-        )
+        assert(result.diagnostics.any { it.code == 2322 })
     }
 
     @Test
@@ -70,7 +63,7 @@ class SingleFileBuildTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/work/main.ts", noEmit = true)
-        assertEquals(emptyList(), result.diagnostics, "the imported module resolves and type-checks")
-        assertTrue("/work/math.ts" in result.programFiles, "the relative import is walked into the program")
+        assert(result.diagnostics.isEmpty())
+        assert("/work/math.ts" in result.programFiles)
     }
 }

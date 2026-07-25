@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertContains
 
 /**
  * M1.3: tsconfig `types` / `typeRoots` / `node_modules/@types` acquisition in
@@ -47,7 +47,7 @@ class TypesAcquisitionTest {
      * `index.d.ts` fallback) declare ambient globals and are never imported —
      * only type acquisition can pull their files into the program.
      */
-    private fun project(tsconfig: String, extra: Map<String, String> = emptyMap()) = InMemoryVfs(
+    private fun project(@Language("typescript") tsconfig: String, extra: Map<String, String> = emptyMap()) = InMemoryVfs(
         mapOf(
             "/proj/tsconfig.json" to tsconfig,
             "/proj/src/index.ts" to "export const total: number = gadget + widget;",
@@ -61,54 +61,50 @@ class TypesAcquisitionTest {
         result.diagnostics.any { it.code == 2304 && it.message.contains("'$name'") }
 
     @Test
-    fun autoIncludesEveryTypePackageWhenTypesUnspecified() {
+    fun `auto-includes every type package when types is unspecified`() {
         val result = ProjectCompiler(project("""{ "include": ["src/**/*.ts"] }"""))
             .build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertContains(program, gadgetEntry, "entry via package.json 'types' field")
-        assertContains(program, widgetEntry, "entry via index.d.ts fallback")
-        have(result.diagnostics.none { it.code == 2304 })
+        assert(gadgetEntry in program)
+        assert(widgetEntry in program)
+        assert(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
-    fun typesFieldSelectsSubset() {
+    fun `the types field selects a subset`() {
         val result = ProjectCompiler(
             project("""{ "compilerOptions": { "types": ["gadget"] }, "include": ["src/**/*.ts"] }"""),
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertContains(program, gadgetEntry)
-        have(widgetEntry !in program, "'types' must exclude unlisted packages")
-        have(!cannotFindName(result, "gadget"), "listed package's global resolves")
-        have(cannotFindName(result, "widget"), "unlisted package's global must NOT resolve")
+        assert(gadgetEntry in program)
+        assert(widgetEntry !in program)
+        assert(!cannotFindName(result, "gadget"))
+        assert(cannotFindName(result, "widget"))
     }
 
     @Test
-    fun emptyTypesDisablesAutoInclusion() {
+    fun `an empty types array disables auto-inclusion`() {
         val result = ProjectCompiler(
             project("""{ "compilerOptions": { "types": [] }, "include": ["src/**/*.ts"] }"""),
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        have(gadgetEntry !in program && widgetEntry !in program, "types:[] disables acquisition")
-        have(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
+        assert(gadgetEntry !in program && widgetEntry !in program)
+        assert(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
     }
 
     @Test
-    fun missingRequestedTypesPackageReportsTs2688() {
+    fun `a missing requested types package reports TS2688`() {
         val result = ProjectCompiler(
             project("""{ "compilerOptions": { "types": ["gadget", "nope"] }, "include": ["src/**/*.ts"] }"""),
         ).build("/proj", noEmit = true)
-        have(
-            result.diagnostics.any { it.code == 2688 && it.message.contains("'nope'") },
-            "explicitly requested but unresolvable name reports TS2688",
-        )
-        have(
-            result.diagnostics.none { it.code == 2688 && it.message.contains("'gadget'") },
-            "resolvable requested name must not report TS2688",
-        )
+        // explicitly requested but unresolvable name reports TS2688
+        assert(result.diagnostics.any { it.code == 2688 && it.message.contains("'nope'") })
+        // resolvable requested name must not report TS2688
+        assert(result.diagnostics.none { it.code == 2688 && it.message.contains("'gadget'") })
     }
 
     @Test
-    fun typeRootsReplacesDefaultAtTypesScan() {
+    fun `typeRoots replaces the default at-types scan`() {
         val result = ProjectCompiler(
             project(
                 """{ "compilerOptions": { "typeRoots": ["./typings"] }, "include": ["src/**/*.ts"] }""",
@@ -116,16 +112,15 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
-        assertContains(program, "/proj/typings/env/index.d.ts")
-        have(
-            gadgetEntry !in program && widgetEntry !in program,
-            "explicit typeRoots must REPLACE the node_modules/@types default, not extend it",
-        )
-        have(result.diagnostics.none { it.code == 2304 })
+        assert("/proj/typings/env/index.d.ts" in program)
+        // explicit typeRoots must REPLACE the node_modules/@types default, not extend
+        // it
+        assert(gadgetEntry !in program && widgetEntry !in program)
+        assert(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
-    fun typeRootWalkUpFindsAncestorNodeModules() {
+    fun `the typeRoot walk-up finds ancestor node_modules`() {
         val vfs = InMemoryVfs(
             mapOf(
                 "/repo/packages/app/tsconfig.json" to """{ "include": ["src/**/*.ts"] }""",
@@ -135,12 +130,12 @@ class TypesAcquisitionTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/repo/packages/app", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/repo/node_modules/@types/hoistedlib/index.d.ts")
-        have(result.diagnostics.none { it.code == 2304 })
+        assert("/repo/node_modules/@types/hoistedlib/index.d.ts" in result.programFiles.toSet())
+        assert(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
-    fun scopeDirInsideTypeRootAutoDiscovered() {
+    fun `a scope dir inside a typeRoot is auto-discovered`() {
         val result = ProjectCompiler(
             project(
                 """{ "include": ["src/**/*.ts"] }""",
@@ -150,12 +145,12 @@ class TypesAcquisitionTest {
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/@myscope/thing/index.d.ts")
-        have(!cannotFindName(result, "scopedThing"))
+        assert("/proj/node_modules/@types/@myscope/thing/index.d.ts" in result.programFiles.toSet())
+        assert(!cannotFindName(result, "scopedThing"))
     }
 
     @Test
-    fun scopedTypesNameResolvesViaMangledDirectory() {
+    fun `a scoped types name resolves via the mangled directory`() {
         val result = ProjectCompiler(
             project(
                 """{ "compilerOptions": { "types": ["@myscope/thing"] }, "include": ["src/**/*.ts"] }""",
@@ -166,13 +161,13 @@ class TypesAcquisitionTest {
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/myscope__thing/index.d.ts")
-        have(result.diagnostics.none { it.code == 2688 }, "mangled probe must satisfy the request")
-        have(!cannotFindName(result, "scopedThing"))
+        assert("/proj/node_modules/@types/myscope__thing/index.d.ts" in result.programFiles.toSet())
+        assert(result.diagnostics.none { it.code == 2688 })
+        assert(!cannotFindName(result, "scopedThing"))
     }
 
     @Test
-    fun referenceTypesDirectiveResolvesEvenWithEmptyTypes() {
+    fun `a reference-types directive resolves even with empty types`() {
         // `types: []` disables AUTOMATIC inclusion only — an explicit
         // `/// <reference types="..." />` still pulls the package in (the parser
         // records the directive as a module specifier; the resolver's @types
@@ -187,7 +182,7 @@ class TypesAcquisitionTest {
                 ),
             ),
         ).build("/proj", noEmit = true)
-        assertContains(result.programFiles.toSet(), "/proj/node_modules/@types/reflib/index.d.ts")
-        have(!cannotFindName(result, "refthing"))
+        assert("/proj/node_modules/@types/reflib/index.d.ts" in result.programFiles.toSet())
+        assert(!cannotFindName(result, "refthing"))
     }
 }

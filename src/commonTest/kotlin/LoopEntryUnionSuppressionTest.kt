@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -58,11 +59,11 @@ class LoopEntryUnionSuppressionTest {
     """
 
     private fun assertNo2339(d: List<Diagnostic>, what: String) {
-        have(d.none { it.code == 2339 }, "$what must not fire TS2339")
+        assert(d.none { it.code == 2339 })
     }
 
     @Test
-    fun guardedUnionReadInsideWhileTrueLoopDoesNotFire2339() {
+    fun `a guarded union read inside a while-true loop does not fire TS2339`() {
         val d = diagnose(
             prelude + """
             export function f(fileName: string) {
@@ -78,7 +79,7 @@ class LoopEntryUnionSuppressionTest {
     }
 
     @Test
-    fun guardedReadAfterInnerLoopWithCompoundConditionDoesNotFire2339() {
+    fun `a guarded read after an inner loop with a compound condition does not fire TS2339`() {
         // The identity-gate trap: the inner while's `&&` condition puts a
         // 2-antecedent FlowBranchLabel on the walked path, so the plain walk
         // returns a FRESH structurally-identical union — the retry gate must
@@ -102,7 +103,7 @@ class LoopEntryUnionSuppressionTest {
     }
 
     @Test
-    fun compoundIfConditionInsideLoopDoesNotFire2339() {
+    fun `a compound if-condition inside a loop does not fire TS2339`() {
         val d = diagnose(
             prelude + """
             export function f(fileName: string, pos: number) {
@@ -119,7 +120,7 @@ class LoopEntryUnionSuppressionTest {
     }
 
     @Test
-    fun unguardedUnionReadInsideLoopStillFires2339() {
+    fun `negative control - an unguarded union read inside a loop still fires TS2339`() {
         // Negative control: with NO guard the loop-entry retry finds no
         // narrowing (the pre-loop flow still carries the full union), so the
         // genuine TS2339 must stand.
@@ -138,7 +139,7 @@ class LoopEntryUnionSuppressionTest {
     }
 
     @Test
-    fun oppositeGuardPolarityInsideLoopStillFires2339() {
+    fun `negative control - the opposite guard polarity inside a loop still fires TS2339`() {
         // Negative control: the guard proves the WRONG branch (positive branch
         // returns) — past the if, text is Diagnostic, so a string member read
         // must keep firing.

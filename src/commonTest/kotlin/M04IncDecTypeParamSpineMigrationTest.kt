@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 654): pins for the checkIncDecTypeParamOperands (TS2356 — a
@@ -72,9 +72,9 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
         val d = ds.single { it.code == 2356 }
-        assertEquals("this.a".length, d.length)
+        assert(d.length == "this.a".length)
     }
 
     @Test
@@ -87,12 +87,12 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
-        assertEquals("x".length, ds.single { it.code == 2356 }.length)
+        assert(ts2356(ds) == 1)
+        assert(ds.single { it.code == 2356 }.length == "x".length)
     }
 
     @Test
-    fun `prefix and postfix, increment and decrement all fire`() {
+    fun `prefix and postfix - increment and decrement all fire`() {
         val ds = diagnose(
             """
             function f<T>(): void {
@@ -104,7 +104,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(4, ts2356(ds))
+        assert(ts2356(ds) == 4)
     }
 
     @Test
@@ -117,7 +117,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -134,7 +134,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -147,7 +147,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -160,7 +160,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -173,7 +173,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     // ── Type-param scope accumulation ─────────────────────────────────────
@@ -190,7 +190,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -207,7 +207,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -222,7 +222,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -235,7 +235,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -249,7 +249,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ts2356(ds))
+        assert(ts2356(ds) == 2)
     }
 
     @Test
@@ -267,7 +267,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -280,7 +280,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -293,7 +293,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     // ── Never-walked function-like boundaries ─────────────────────────────
@@ -307,7 +307,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -319,7 +319,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -332,7 +332,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     // ── Statement-walk reach ──────────────────────────────────────────────
@@ -351,11 +351,11 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(6, ts2356(ds))
+        assert(ts2356(ds) == 6)
     }
 
     @Test
-    fun `loop HEADS are walked - for init, condition and incrementor`() {
+    fun `loop HEADS are walked - for init - condition and incrementor`() {
         val ds = diagnose(
             """
             function f<T>(): void {
@@ -364,7 +364,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts2356(ds))
+        assert(ts2356(ds) == 3)
     }
 
     @Test
@@ -378,7 +378,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ts2356(ds))
+        assert(ts2356(ds) == 2)
     }
 
     @Test
@@ -391,7 +391,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -407,11 +407,11 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts2356(ds))
+        assert(ts2356(ds) == 3)
     }
 
     @Test
-    fun `try, catch and finally blocks are walked`() {
+    fun `try - catch and finally blocks are walked`() {
         val ds = diagnose(
             """
             function f<T>(): void {
@@ -420,11 +420,11 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts2356(ds))
+        assert(ts2356(ds) == 3)
     }
 
     @Test
-    fun `return, throw and variable initializers are walked`() {
+    fun `return - throw and variable initializers are walked`() {
         val ds = diagnose(
             """
             function f<T>(): any {
@@ -435,7 +435,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts2356(ds))
+        assert(ts2356(ds) == 3)
     }
 
     @Test
@@ -450,13 +450,13 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     // ── Expression-walk reach ─────────────────────────────────────────────
 
     @Test
-    fun `call callees and arguments, element access, ternaries and array literals are walked`() {
+    fun `call callees and arguments - element access - ternaries and array literals are walked`() {
         val ds = diagnose(
             """
             declare function g(a: any, b: any): any;
@@ -471,7 +471,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(9, ts2356(ds))
+        assert(ts2356(ds) == 9)
     }
 
     @Test
@@ -487,7 +487,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(4, ts2356(ds))
+        assert(ts2356(ds) == 4)
     }
 
     @Test
@@ -500,7 +500,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts2356(ds))
+        assert(ts2356(ds) == 3)
     }
 
     @Test
@@ -513,7 +513,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -526,11 +526,11 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
-    fun `negative control - template spans, typeof, void, delete and await operands are not walked`() {
+    fun `negative control - template spans - typeof - void - delete and await operands are not walked`() {
         val ds = diagnose(
             """
             async function f<T>(): Promise<void> {
@@ -542,7 +542,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -556,7 +556,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     // ── tpLocals: the body-wide prepass and its narrower descent ──────────
@@ -573,7 +573,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -585,7 +585,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -600,7 +600,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2356(ds))
+        assert(ts2356(ds) == 1)
     }
 
     @Test
@@ -611,7 +611,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             function b(): void { x++; }
             """
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     // ── File gates ────────────────────────────────────────────────────────
@@ -624,7 +624,7 @@ class M04IncDecTypeParamSpineMigrationTest {
             """,
             fileName = "t.d.ts",
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 
     @Test
@@ -639,6 +639,6 @@ class M04IncDecTypeParamSpineMigrationTest {
             directives = "// @allowJs: true\n// @checkJs: true",
             fileName = "t.js",
         )
-        assertEquals(0, ts2356(ds))
+        assert(ts2356(ds) == 0)
     }
 }

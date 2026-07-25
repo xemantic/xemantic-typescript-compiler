@@ -88,7 +88,7 @@ class DestructuredTypeKeywordShadowTest {
     }
 
     @Test
-    fun `the bare symbol type keyword used as a value STILL fires TS2693 (negative control)`() {
+    fun `the bare symbol type keyword used as a value STILL fires TS2693 - negative control`() {
         // No binding — `symbol` is the type keyword used in a value position, which is TS2693.
         diagnose(
             """

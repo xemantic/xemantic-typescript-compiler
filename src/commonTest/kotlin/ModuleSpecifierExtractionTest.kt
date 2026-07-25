@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the parse-based module-specifier extraction invariant (M0.3): the parser
@@ -38,11 +38,20 @@ import kotlin.test.assertEquals
  */
 class ModuleSpecifierExtractionTest {
 
-    private fun specifiersOf(source: String, fileName: String = "/proj/test.ts"): Set<String> =
+    private fun specifiersOf(@Language("typescript") source: String, fileName: String = "/proj/test.ts"): Set<String> =
         Parser(source, fileName).parse().moduleSpecifiers.toSet()
 
+    // M4.8: reference directives land on their own fields, not on moduleSpecifiers.
+    // Both helpers return plain string lists — never let the SourceFile itself reach
+    // a power-assert subexpression (it would toString the whole AST on failure).
+    private fun referencedPathsOf(@Language("typescript") source: String, fileName: String = "/proj/test.ts"): List<String> =
+        Parser(source, fileName).parse().referencedPaths
+
+    private fun referencedTypesOf(@Language("typescript") source: String, fileName: String = "/proj/test.ts"): List<String> =
+        Parser(source, fileName).parse().referencedTypes
+
     @Test
-    fun collectsEveryRealImportKind() {
+    fun `collects every real import kind`() {
         val src = """
             /// <reference path="./ref-path.ts" />
             /// <reference types="ref-types" />
@@ -63,22 +72,21 @@ class ModuleSpecifierExtractionTest {
         // M4.8 (round 680): reference directives are NO LONGER module specifiers —
         // they resolve as relative FILE paths / type packages, not through the module
         // resolver, and are recorded on their own fields (asserted just below).
-        assertEquals(listOf("./ref-path.ts"), Parser(src, "/proj/test.ts").parse().referencedPaths)
-        assertEquals(listOf("ref-types"), Parser(src, "/proj/test.ts").parse().referencedTypes)
-        assertEquals(
-            setOf(
+        assert(referencedPathsOf(src) == listOf("./ref-path.ts"))
+        assert(referencedTypesOf(src) == listOf("ref-types"))
+        assert(
+            specifiersOf(src) == setOf(
                 "./static-default", "./static-named", "./static-namespace", "./side-effect",
                 "./type-only", "./import-equals",
                 "./export-star", "./export-named", "./export-type",
                 "./dynamic-top", "./require-top",
                 "./import-type", "./import-typeof",
-            ),
-            specifiersOf(src),
+            )
         )
     }
 
     @Test
-    fun stringLiteralsCommentsTemplatesAndRegexesNeverContribute() {
+    fun `string literals comments templates and regexes never contribute`() {
         // Every "garbage-N" below sits in a lexical context a text scan would match
         // but the parser must not: plain strings, template literals (including one
         // whose content spans lines and starts a line with a reference directive —
@@ -99,14 +107,14 @@ class ModuleSpecifierExtractionTest {
             const s3 = "from 'garbage-8'";
         """.trimIndent()
         val specs = specifiersOf(src)
-        have(specs.none { it.contains("garbage") })
+        assert(specs.none { it.contains("garbage") })
         // Real specifiers still found — including a dynamic import INSIDE a template
         // substitution (real code position) right next to template text that is not.
-        assertEquals(setOf("./real", "./real-in-template"), specs)
+        assert(specs == setOf("./real", "./real-in-template"))
     }
 
     @Test
-    fun findsDynamicImportsAndRequiresAtAnyDepth() {
+    fun `finds dynamic imports and requires at any depth`() {
         val src = """
             export class C {
                 async m() {
@@ -120,14 +128,13 @@ class ModuleSpecifierExtractionTest {
             function f(): import("./deep-type").T { return null as any; }
             const generic = require<{ x: number }>("./generic-require");
         """.trimIndent()
-        assertEquals(
-            setOf("./deep-dynamic", "./deep-require", "./deep-prop", "./deep-type", "./generic-require"),
-            specifiersOf(src),
+        assert(
+            specifiersOf(src) == setOf("./deep-dynamic", "./deep-require", "./deep-prop", "./deep-type", "./generic-require")
         )
     }
 
     @Test
-    fun nonLiteralArgumentsAreIgnored() {
+    fun `non-literal arguments are ignored`() {
         val src = """
             const name = "./computed";
             const a = import(name);
@@ -136,11 +143,11 @@ class ModuleSpecifierExtractionTest {
             const d = other("./not-an-import");
             const e = obj.require("./method-not-require");
         """.trimIndent()
-        assertEquals(emptySet(), specifiersOf(src))
+        assert(specifiersOf(src).isEmpty())
     }
 
     @Test
-    fun referenceDirectivesSurviveABlockCommentHeader() {
+    fun `reference directives survive a block-comment header`() {
         // tsc honors triple-slash directives after a leading block-comment (license
         // header) — they are trivia before the first token. Directives after the
         // first statement are plain comments. This shape is exactly @types/node's
@@ -154,12 +161,12 @@ class ModuleSpecifierExtractionTest {
             import { x } from "./real";
             /// <reference path="./too-late.ts" />
         """.trimIndent()
-        assertEquals(setOf("./real"), specifiersOf(src))
-        assertEquals(listOf("./after-header.ts"), Parser(src, "/proj/test.ts").parse().referencedPaths)
+        assert(specifiersOf(src) == setOf("./real"))
+        assert(referencedPathsOf(src) == listOf("./after-header.ts"))
     }
 
     @Test
-    fun projectBuildReportsNoGarbageUnresolvedImports() {
+    fun `a project build reports no garbage unresolved imports`() {
         // End-to-end wiring: ProjectCompiler's graph walk must consume the parser's
         // specifier set, so import-shaped text in string literals neither shows up in
         // `unresolved` nor pulls files into the program.
@@ -178,14 +185,8 @@ class ModuleSpecifierExtractionTest {
             )
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        assertEquals(
-            listOf("/proj/src/index.ts" to "./genuinely-missing.js"),
-            result.unresolved,
-            "only the genuinely missing import is unresolved",
-        )
-        have(
-            result.programFiles.none { it.contains("some-package") },
-            "a string-literal mention must not pull a file into the program",
-        )
+        assert(result.unresolved == listOf("/proj/src/index.ts" to "./genuinely-missing.js"))
+        // a string-literal mention must not pull a file into the program
+        assert(result.programFiles.none { it.contains("some-package") })
     }
 }

@@ -55,7 +55,7 @@ class AssignmentInGuardNarrowTest {
                 if (!state.m) { state.m = new Map<string, string>(); }
                 state.m.set(k, k);
             }
-            """,
+            """
         ) should {
             have(none { it.code == 18048 })
         }
@@ -70,7 +70,7 @@ class AssignmentInGuardNarrowTest {
                 if (!state.m) state.m = new Map<string, string>();
                 state.m.set(k, k);
             }
-            """,
+            """
         ) should {
             have(none { it.code == 18048 })
         }
@@ -84,7 +84,7 @@ class AssignmentInGuardNarrowTest {
                 if (!m) { m = new Map<string, string>(); }
                 m.set(k, k);
             }
-            """,
+            """
         ) should {
             have(none { it.code == 18048 })
         }
@@ -101,7 +101,7 @@ class AssignmentInGuardNarrowTest {
                 if (!state.m) { state.m = other; }
                 state.m.set(k, k);
             }
-            """,
+            """
         ) should {
             have(any { it.code == 18048 })
         }

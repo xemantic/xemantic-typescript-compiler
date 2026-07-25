@@ -104,7 +104,7 @@ class UncalledFunctionShadowedByLocalTest {
     }
 
     @Test
-    fun `an unshadowed always-defined function still fires TS2774 (negative control)`() {
+    fun `an unshadowed always-defined function still fires TS2774 - negative control`() {
         diagnose(
             """
             function isReady(): boolean { return true; }

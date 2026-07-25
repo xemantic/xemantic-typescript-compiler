@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -49,7 +50,7 @@ class Inv4SpineG1PinsExprTest {
         val d = diagnose(prelude + """
             const r = o.m1 + o.m2 + o.m3;
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2339 }, "expected 3 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 3)
     }
 
     @Test
@@ -57,7 +58,7 @@ class Inv4SpineG1PinsExprTest {
         val d = diagnose(prelude + """
             const r = o.m1 ? o.m2 : o.m3;
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2339 }, "expected 3 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 3)
     }
 
     @Test
@@ -74,7 +75,7 @@ class Inv4SpineG1PinsExprTest {
             async function h() { return await o.m7; }
             const arr = [...(o.m8 as any as unknown[])];
         """)
-        kotlin.test.assertEquals(8, d.count { it.code == 2339 }, "expected 8 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 8)
     }
 
     @Test
@@ -85,7 +86,7 @@ class Inv4SpineG1PinsExprTest {
             fn(o.m1);
             new C(o.m2);
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2339 }, "expected 2 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 2)
     }
 
     @Test
@@ -94,7 +95,7 @@ class Inv4SpineG1PinsExprTest {
             declare const m: { [k: string]: number };
             const r = m[o.m1 as any as string] + (o.m2 as any as number[])[0];
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 2339 }, "expected 2 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 2)
     }
 
     @Test
@@ -104,7 +105,7 @@ class Inv4SpineG1PinsExprTest {
             const b = { p: o.m2 };
             const t = `x${'$'}{o.m3}`;
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2339 }, "expected 3 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 3)
     }
 
     @Test
@@ -112,7 +113,7 @@ class Inv4SpineG1PinsExprTest {
         val d = diagnose(prelude + """
             function* g() { yield o.m1; }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2339 }, "expected 1 TS2339, got: $d")
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     // ── reach quirks (bug-compat) ───────────────────────────────────────────
@@ -155,11 +156,11 @@ class Inv4SpineG1PinsExprTest {
                 return f;
             }
         """, directives = "// @strict: false")
-        kotlin.test.assertEquals(0, d1.count { it.code == 2339 }, "unannotated: expected 0, got: $d1")
+        assert(d1.count { it.code == 2339 } == 0)
         val d2 = diagnose(prelude + """
             const f = function (s: Rec) { return s.missing; };
         """)
-        kotlin.test.assertEquals(1, d2.count { it.code == 2339 }, "annotated: expected 1, got: $d2")
+        assert(d2.count { it.code == 2339 } == 1)
     }
 
     @Test
@@ -212,6 +213,6 @@ class Inv4SpineG1PinsExprTest {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2339 }, "expected 1 TS2339, got: $d")
+        assert(d.count { it.code == 2339 } == 1)
     }
 }

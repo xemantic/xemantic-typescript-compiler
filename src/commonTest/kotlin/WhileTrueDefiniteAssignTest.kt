@@ -43,7 +43,7 @@ import kotlin.test.Test
 class WhileTrueDefiniteAssignTest {
 
     @Test
-    fun `while(true) with assign-before-every-break definitely assigns`() {
+    fun `while true with assign-before-every-break definitely assigns`() {
         diagnose(
             """
             function scan(text: string, end: number): number {
@@ -63,7 +63,7 @@ class WhileTrueDefiniteAssignTest {
     }
 
     @Test
-    fun `while(true) with if-else both assigning and breaking`() {
+    fun `while true with if-else both assigning and breaking`() {
         diagnose(
             """
             function scan(end: number): number {

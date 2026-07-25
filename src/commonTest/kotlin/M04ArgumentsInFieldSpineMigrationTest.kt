@@ -25,8 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 655 tail): pins for the checkArgumentsInClassFieldInitializers
@@ -61,25 +62,25 @@ class M04ArgumentsInFieldSpineMigrationTest {
 
     private fun ts2815(ds: List<Diagnostic>) = ds.count { it.code == 2815 }
 
-    private fun run(body: String) = diagnose(body.trimIndent(), "// @target: esnext")
+    private fun run(@Language("typescript") body: String) = diagnose(body.trimIndent(), "// @target: esnext")
 
     // ── Core emissions ────────────────────────────────────────────────────
 
     @Test
     fun `arguments in a property initializer draws TS2815 at the identifier`() {
         val ds = run("class C { p = arguments; }")
-        assertEquals(1, ts2815(ds))
-        assertEquals("arguments".length, ds.single { it.code == 2815 }.length)
+        assert(ts2815(ds) == 1)
+        assert(ds.single { it.code == 2815 }.length == "arguments".length)
     }
 
     @Test
     fun `arguments in a static block draws TS2815`() {
-        assertEquals(1, ts2815(run("class C { static { arguments; } }")))
+        assert(ts2815(run("class C { static { arguments; } }")) == 1)
     }
 
     @Test
     fun `an arrow in a property initializer stays in the emission walk`() {
-        assertEquals(1, ts2815(run("class C { p = () => arguments; }")))
+        assert(ts2815(run("class C { p = () => arguments; }")) == 1)
     }
 
     @Test
@@ -91,44 +92,44 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(2, ts2815(ds))
+        assert(ts2815(ds) == 2)
     }
 
     @Test
     fun `negative control - a method body binds its own arguments`() {
-        assertEquals(0, ts2815(run("class C { m() { return arguments; } }")))
+        assert(ts2815(run("class C { m() { return arguments; } }")) == 0)
     }
 
     @Test
     fun `negative control - a function EXPRESSION in an initializer binds its own arguments`() {
-        assertEquals(0, ts2815(run("class C { p = function () { return arguments; }; }")))
+        assert(ts2815(run("class C { p = function () { return arguments; }; }")) == 0)
     }
 
     @Test
     fun `negative control - a function DECLARATION in a static block binds its own arguments`() {
-        assertEquals(0, ts2815(run("class C { static { function f() { return arguments; } } }")))
+        assert(ts2815(run("class C { static { function f() { return arguments; } } }")) == 0)
     }
 
     @Test
     fun `negative control - an object-literal method in an initializer binds its own arguments`() {
-        assertEquals(0, ts2815(run("class C { p = { m() { return arguments; } }; }")))
+        assert(ts2815(run("class C { p = { m() { return arguments; } }; }")) == 0)
     }
 
     @Test
     fun `an object-literal property VALUE stays in the emission walk`() {
-        assertEquals(1, ts2815(run("class C { p = { k: arguments }; }")))
+        assert(ts2815(run("class C { p = { k: arguments }; }")) == 1)
     }
 
     @Test
     fun `negative control - a declare class is skipped`() {
-        assertEquals(0, ts2815(run("declare class C { p = arguments; }")))
+        assert(ts2815(run("declare class C { p = arguments; }")) == 0)
     }
 
     // ── The re-entry boundary (emission walk → routing walk → members) ─────
 
     @Test
     fun `a class nested in a method body is still found by the routing walk`() {
-        assertEquals(1, ts2815(run("class C { m() { class D { q = arguments; } } }")))
+        assert(ts2815(run("class C { m() { class D { q = arguments; } } }")) == 1)
     }
 
     @Test
@@ -140,17 +141,17 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2815(ds))
+        assert(ts2815(ds) == 1)
     }
 
     @Test
     fun `a class DECLARATION inside a static block reaches its members`() {
-        assertEquals(1, ts2815(run("class C { static { class D { q = arguments; } } }")))
+        assert(ts2815(run("class C { static { class D { q = arguments; } } }")) == 1)
     }
 
     @Test
     fun `a class EXPRESSION inside a property initializer reaches its members`() {
-        assertEquals(1, ts2815(run("class C { p = class { q = arguments; }; }")))
+        assert(ts2815(run("class C { p = class { q = arguments; }; }")) == 1)
     }
 
     @Test
@@ -163,7 +164,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(1, ts2815(ds))
+        assert(ts2815(ds) == 1)
     }
 
     // ── ROUTING-walk reach (finding classes outside any initializer) ───────
@@ -178,7 +179,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             try { class D { p = arguments; } } catch (e) { class E { p = arguments; } }
             """
         )
-        assertEquals(5, ts2815(ds))
+        assert(ts2815(ds) == 5)
     }
 
     @Test
@@ -190,23 +191,23 @@ class M04ArgumentsInFieldSpineMigrationTest {
             take(class { p = arguments; });
             """
         )
-        assertEquals(2, ts2815(ds))
+        assert(ts2815(ds) == 2)
     }
 
     @Test
     fun `negative control - the routing walk does NOT descend an if CONDITION`() {
-        assertEquals(0, ts2815(run("if ((class { p = arguments })) { }")))
+        assert(ts2815(run("if ((class { p = arguments })) { }")) == 0)
     }
 
     @Test
     fun `negative control - the routing walk does NOT descend a for HEAD`() {
         val ds = run("for (let i = (class { p = arguments }); false; ) { }")
-        assertEquals(0, ts2815(ds))
+        assert(ts2815(ds) == 0)
     }
 
     @Test
     fun `negative control - the routing walk does NOT descend a while CONDITION`() {
-        assertEquals(0, ts2815(run("while ((class { p = arguments })) { break; }")))
+        assert(ts2815(run("while ((class { p = arguments })) { break; }")) == 0)
     }
 
     @Test
@@ -218,7 +219,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             switch (anyVal) { case (class { q = arguments }): break; }
             """
         )
-        assertEquals(0, ts2815(ds))
+        assert(ts2815(ds) == 0)
     }
 
     @Test
@@ -230,14 +231,14 @@ class M04ArgumentsInFieldSpineMigrationTest {
             switch (anyVal) { case 1: { class B { p = arguments; } } break; }
             """
         )
-        assertEquals(2, ts2815(ds))
+        assert(ts2815(ds) == 2)
     }
 
     // ── EMISSION-walk reach (the asymmetry: heads ARE walked here) ─────────
 
     @Test
     fun `the emission walk descends an if CONDITION unlike the routing walk`() {
-        assertEquals(1, ts2815(run("class C { static { if (arguments) { } } }")))
+        assert(ts2815(run("class C { static { if (arguments) { } } }")) == 1)
     }
 
     @Test
@@ -249,7 +250,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(4, ts2815(ds))
+        assert(ts2815(ds) == 4)
     }
 
     @Test
@@ -266,7 +267,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(4, ts2815(ds))
+        assert(ts2815(ds) == 4)
     }
 
     @Test
@@ -283,7 +284,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(9, ts2815(ds))
+        assert(ts2815(ds) == 9)
     }
 
     @Test
@@ -303,7 +304,7 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(12, ts2815(ds))
+        assert(ts2815(ds) == 12)
     }
 
     @Test
@@ -319,16 +320,16 @@ class M04ArgumentsInFieldSpineMigrationTest {
             }
             """
         )
-        assertEquals(5, ts2815(ds))
+        assert(ts2815(ds) == 5)
     }
 
     @Test
     fun `a nested arrow chain keeps the emission context`() {
-        assertEquals(1, ts2815(run("class C { p = () => () => () => arguments; }")))
+        assert(ts2815(run("class C { p = () => () => () => arguments; }")) == 1)
     }
 
     @Test
     fun `negative control - a plain identifier named otherwise never emits`() {
-        assertEquals(0, ts2815(run("class C { p = someArgs; }")))
+        assert(ts2815(run("class C { p = someArgs; }")) == 0)
     }
 }

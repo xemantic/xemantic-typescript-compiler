@@ -25,9 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Local corner-case tests for the faithful TS2563 depth-trip semantics
@@ -70,42 +71,40 @@ class CfaTooLargeBailTest {
         if (b) { const w: number = v; }
     """.trimIndent()
 
-    /** Control: small CFG — no TS2563, and the TS2454 emitter DOES fire. */
-    @Test fun smallCfgKeepsDefiniteAssignmentAnalysis() {
+    /**
+     * Control: small CFG — 100 branch joins stay under the 2000-recursion trip,
+     * so no TS2563, and the TS2454 emitter DOES fire.
+     */
+    @Test
+    fun `a small CFG keeps definite-assignment analysis`() {
         val result = TypeScriptCompiler().compile(branchChainSource(ifs = 100), "small.ts")
-        have(
-            result.diagnostics.none { it.code == 2563 },
-            "control broken: 100 branch joins must stay under the 2000-recursion trip"
-        )
-        have(
-            result.diagnostics.any { it.code == 2454 },
-            "control broken: conditional-assign-then-read must be TS2454 on a small CFG"
-        )
+        result.diagnostics should {
+            have(none { it.code == 2563 })
+            have(any { it.code == 2454 })
+        }
     }
 
     /** A 3000-join walk trips the depth limit: exactly ONE TS2563 (one-shot per
      *  container), and every TS2454 in the tripped container is suppressed
      *  (tsc's flow analysis returns errorType there). */
-    @Test fun deepBranchChainTripsDepthLimit() {
+    @Test
+    fun `a deep branch chain trips the depth limit`() {
         val result = TypeScriptCompiler().compile(branchChainSource(ifs = 3000), "big.ts")
-        assertEquals(
-            1, result.diagnostics.count { it.code == 2563 },
-            "expected exactly ONE TS2563 for the tripped module container, got: " +
-                result.diagnostics.filter { it.code == 2563 }.joinToString { "${it.line}:${it.character}" }
-        )
-        have(
-            result.diagnostics.none { it.code == 2454 },
-            "TS2454 must be suppressed in the tripped container (tsc emits TS2563 OR TS2454, never both)"
-        )
+        assert(result.diagnostics.count { it.code == 2563 } == 1)
+        // tsc emits TS2563 OR TS2454, never both — the tripped container is silent.
+        result.diagnostics should {
+            have(none { it.code == 2454 })
+        }
         // tsc reports at the containing block's first token — module container ⇒ the
         // first statement (line 1; line 0 is the directive comment).
-        assertEquals(1, result.diagnostics.first { it.code == 2563 }.line, "TS2563 must anchor at the file's first statement")
+        assert(result.diagnostics.first { it.code == 2563 }.line == 1)
     }
 
     /** The disable is PER-CONTAINER: a trip inside `big()` reports TS2563 at ITS
      *  body's first statement and suppresses only ITS TS2454 — the sibling
      *  function's TS2454 still fires (the old per-file proxy suppressed it). */
-    @Test fun tripIsPerContainerNotPerFile() {
+    @Test
+    fun `the trip is per-container not per-file`() {
         val source = """
             // @strict: true
             declare const b: boolean;
@@ -121,19 +120,14 @@ class CfaTooLargeBailTest {
             }
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "percontainer.ts")
-        assertEquals(1, result.diagnostics.count { it.code == 2563 }, "one trip, one TS2563")
+        assert(result.diagnostics.count { it.code == 2563 } == 1)
         val ts2563 = result.diagnostics.first { it.code == 2563 }
-        assertEquals(3, ts2563.line, "TS2563 anchors at big()'s first statement (let p), not the file top")
-        val ts2454s = result.diagnostics.filter { it.code == 2454 }
-        assertEquals(
-            1, ts2454s.size,
-            "the sibling function's TS2454 must SURVIVE the trip in big(), got: " +
-                result.diagnostics.joinToString { "TS${it.code}@${it.line}" }
-        )
-        have(
-            ts2454s.single().message.contains("'q'"),
-            "the surviving TS2454 must be small()'s 'q'"
-        )
+        assert(ts2563.line == 3)
+        // The surviving TS2454 must be small()'s 'q'.
+        result.diagnostics.filter { it.code == 2454 } should {
+            have(size == 1)
+            have("'q'" in single().message)
+        }
     }
 
     /** Round 426b: a >2000-chain of NON-assert calls that merely MENTION the walked
@@ -143,7 +137,8 @@ class CfaTooLargeBailTest {
      *  diagnosticInformationMap.generated.ts (~2,100 `diag(…, DiagnosticCategory.Error,
      *  …)` statements). The union-receiver property access at the end forces a
      *  narrowing walk back through the whole chain. */
-    @Test fun nonAssertCallChainDoesNotConsumeDepth() {
+    @Test
+    fun `a non-assert call chain does not consume depth`() {
         val source = """
             // @strict: true
             declare function noop(v: unknown): void;
@@ -155,15 +150,12 @@ class CfaTooLargeBailTest {
             x.p;
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "nonassert.ts")
-        have(
-            result.diagnostics.none { it.code == 2563 },
-            "a non-assert call chain must not consume walk depth (tsc getEffectsSignature " +
-                "is undefined for 'noop' -> the while loop iterates)"
-        )
-        have(
-            result.diagnostics.any { it.code == 2339 },
-            "control broken: the un-narrowed union access x.p must still report TS2339"
-        )
+        result.diagnostics should {
+            // tsc getEffectsSignature is undefined for 'noop' -> the while loop iterates.
+            have(none { it.code == 2563 })
+            // Control: the un-narrowed union access x.p must still report TS2339.
+            have(any { it.code == 2339 })
+        }
     }
 
     /** Positive control for the round-426b gate: an ASSERTS-annotated callee DOES
@@ -171,7 +163,8 @@ class CfaTooLargeBailTest {
      *  effects signature), so the same-length chain trips exactly one TS2563 —
      *  guards against a too-lax gate that iterates past real assertion narrowing
      *  (the round-413 landmine). */
-    @Test fun assertCallChainConsumesDepth() {
+    @Test
+    fun `an assert call chain consumes depth`() {
         val source = """
             // @strict: true
             declare function check(v: unknown): asserts v;
@@ -183,11 +176,7 @@ class CfaTooLargeBailTest {
             x.p;
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "assertchain.ts")
-        assertEquals(
-            1, result.diagnostics.count { it.code == 2563 },
-            "an asserts-callee chain must trip the depth limit exactly once, got: " +
-                result.diagnostics.map { "TS${it.code}" }.distinct().joinToString()
-        )
+        assert(result.diagnostics.count { it.code == 2563 } == 1)
     }
 
     /** The corpus-motivated shape (largeControlFlowGraph, whose generated test is
@@ -197,42 +186,37 @@ class CfaTooLargeBailTest {
      *  the evolving array recurses (getTypeAtFlowAssignment/getTypeAtFlowArrayMutation),
      *  so the >2000-write chain trips TS2563 — ours via the dedicated
      *  `evolvingArrayWalkTrips` init walk. Reported once, at the first statement. */
-    @Test fun evolvingArrayWriteChainTrips() {
+    @Test
+    fun `an evolving-array write chain trips`() {
         val source = """
             // @strict: true
             const data = [];
             ${List(3000) { "data[0] = 0;" }.joinToString("\n            ")}
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "evolving.ts")
-        assertEquals(
-            1, result.diagnostics.count { it.code == 2563 },
-            "a 3000-write evolving-array chain must trip exactly one TS2563, got: " +
-                result.diagnostics.map { "TS${it.code}" }.distinct().joinToString()
-        )
-        assertEquals(
-            1, result.diagnostics.first { it.code == 2563 }.line,
-            "TS2563 must anchor at the module's first statement (const data, line 1 after the directive)"
-        )
+        assert(result.diagnostics.count { it.code == 2563 } == 1)
+        assert(result.diagnostics.first { it.code == 2563 }.line == 1)
     }
 
-    /** Control: a small evolving-array chain stays under the trip — no TS2563. */
-    @Test fun smallEvolvingArrayDoesNotTrip() {
+    /** Control: 100 evolving-array writes stay under the 2000-depth trip — no TS2563. */
+    @Test
+    fun `a small evolving-array chain does not trip`() {
         val source = """
             // @strict: true
             const data = [];
             ${List(100) { "data[0] = 0;" }.joinToString("\n            ")}
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "evolvingsmall.ts")
-        have(
-            result.diagnostics.none { it.code == 2563 },
-            "100 evolving-array writes must stay under the 2000-depth trip"
-        )
+        result.diagnostics should {
+            have(none { it.code == 2563 })
+        }
     }
 
     /** Negative control: a straight-line chain of the SAME length does NOT trip —
      *  linear pass-through antecedents are followed iteratively without consuming
      *  depth (tsc getTypeAtFlowNode's while(true) loop) — and the TS2454 fires. */
-    @Test fun straightLineChainDoesNotTrip() {
+    @Test
+    fun `a straight-line chain does not trip`() {
         val source = """
             // @strict: true
             declare const b: boolean;
@@ -242,13 +226,10 @@ class CfaTooLargeBailTest {
             if (b) { const w: number = v; }
         """.trimIndent()
         val result = TypeScriptCompiler().compile(source, "straight.ts")
-        have(
-            result.diagnostics.none { it.code == 2563 },
-            "a straight-line chain must NOT trip the depth limit (fast-forward consumes no depth)"
-        )
-        have(
-            result.diagnostics.any { it.code == 2454 },
-            "the TS2454 must still fire when nothing tripped"
-        )
+        result.diagnostics should {
+            // Fast-forward consumes no depth, so nothing trips and the TS2454 still fires.
+            have(none { it.code == 2563 })
+            have(any { it.code == 2454 })
+        }
     }
 }

@@ -49,7 +49,7 @@ class ArrayLiteralTupleUnionReturnTest {
     }
 
     @Test
-    fun `head-only array literal (empty rest) matches the variadic tuple`() {
+    fun `head-only array literal empty rest matches the variadic tuple`() {
         diagnose(
             """
             type Msg = string | [head: string, ...args: number[]];
@@ -88,7 +88,7 @@ class ArrayLiteralTupleUnionReturnTest {
     }
 
     @Test
-    fun `fixed tuple (no rest) in a union matches an array literal`() {
+    fun `fixed tuple no rest in a union matches an array literal`() {
         diagnose(
             """
             type P = number | [string, string];
@@ -100,7 +100,7 @@ class ArrayLiteralTupleUnionReturnTest {
     }
 
     @Test
-    fun `direct tuple target (no union) matches an array literal return`() {
+    fun `direct tuple target no union matches an array literal return`() {
         diagnose(
             """
             type Q = [head: string, ...args: number[]];

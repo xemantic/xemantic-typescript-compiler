@@ -58,7 +58,7 @@ class AliasedConditionClosureCaptureTest {
     """
 
     @Test
-    fun capturedAliasNarrowsInsideClosureAcrossIfElseJoin() {
+    fun `a captured alias narrows inside a closure across an if-else join`() {
         diagnose(
             """
             $prelude
@@ -86,7 +86,7 @@ class AliasedConditionClosureCaptureTest {
     }
 
     @Test
-    fun reassignmentInsideClosureBeforeTestStillFires() {
+    fun `negative control - a reassignment inside the closure before the test still fires`() {
         diagnose(
             """
             $prelude
@@ -106,7 +106,7 @@ class AliasedConditionClosureCaptureTest {
     }
 
     @Test
-    fun reassignmentAfterClosureStillFires() {
+    fun `negative control - a reassignment after the closure still fires`() {
         // The B464 reassignedAfterNames gate: an assignment at/after the closure
         // in the enclosing function withholds the captured narrowing (the closure
         // may run after the reassignment).
@@ -129,7 +129,7 @@ class AliasedConditionClosureCaptureTest {
     }
 
     @Test
-    fun mutableAliasReassignedBetweenDeclAndClosureStillFires() {
+    fun `negative control - a mutable alias reassigned between decl and closure still fires`() {
         diagnose(
             """
             $prelude

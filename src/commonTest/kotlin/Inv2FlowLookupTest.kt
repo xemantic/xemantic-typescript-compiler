@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 import kotlin.test.fail
 
@@ -75,8 +75,8 @@ class Inv2FlowLookupTest {
             checked++
             if (legacy != null) recorded++
         }
-        have(checked > 400, "fixture unexpectedly small: $checked nodes")
-        have(recorded > 50, "fixture unexpectedly flow-poor: $recorded recorded nodes")
+        assert(checked > 400)
+        assert(recorded > 50)
     }
 
     @Test
@@ -89,8 +89,8 @@ class Inv2FlowLookupTest {
         val ghost = Identifier(text = "ghost", pos = recordedNode.pos, end = recordedNode.end)
         val viaGhost = graph.flowAt(ghost)
         val legacy = graph.nodeToFlow[nodeKey(ghost)]
-        have(viaGhost != null, "ghost lookup lost the legacy map hit")
-        have(viaGhost === legacy, "ghost lookup must be the exact legacy map answer")
+        assert(viaGhost != null)
+        assert(viaGhost === legacy)
     }
 
     @Test

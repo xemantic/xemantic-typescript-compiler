@@ -25,6 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -41,17 +43,17 @@ class CcetAnchorTest {
         declare function f(x: number): void;
     """
 
-    private fun count2345(source: String): Int =
+    private fun count2345(@Language("typescript") source: String): Int =
         diagnose(prelude + source).count { it.code == 2345 }
 
     @Test
     fun `top-level and fn-body call args emit exactly once`() {
         val nTop = count2345("""f("s");""")
-        assert(nTop == 1) { "top-level: expected exactly 1 TS2345, got $nTop" }
+        assert(nTop == 1)
         val nFn = count2345("""
             function g() { f("s"); }
         """)
-        assert(nFn == 1) { "fn body: expected exactly 1 TS2345, got $nFn" }
+        assert(nFn == 1)
     }
 
     @Test
@@ -59,15 +61,15 @@ class CcetAnchorTest {
         val nMethod = count2345("""
             class C { m() { f("s"); } }
         """)
-        assert(nMethod == 1) { "method: expected exactly 1 TS2345, got $nMethod" }
+        assert(nMethod == 1)
         val nArrow = count2345("""
             const g = () => { f("s"); };
         """)
-        assert(nArrow == 1) { "arrow: expected exactly 1 TS2345, got $nArrow" }
+        assert(nArrow == 1)
         val nNs = count2345("""
             namespace N { f("s"); }
         """)
-        assert(nNs == 1) { "namespace: expected exactly 1 TS2345, got $nNs" }
+        assert(nNs == 1)
     }
 
     @Test
@@ -76,12 +78,12 @@ class CcetAnchorTest {
             class K { constructor(x: number) {} }
             const k = new K("s");
         """)
-        assert(nNew == 1) { "new: expected exactly 1 TS2345, got $nNew" }
+        assert(nNew == 1)
         val nSuper = count2345("""
             class B { constructor(x: number) {} }
             class D extends B { constructor() { super("s"); } }
         """)
-        assert(nSuper == 1) { "super: expected exactly 1 TS2345, got $nSuper" }
+        assert(nSuper == 1)
     }
 
     @Test
@@ -89,7 +91,7 @@ class CcetAnchorTest {
         val n = diagnose(prelude + """
             function g() { f(); }
         """).count { it.code == 2554 }
-        assert(n == 1) { "expected exactly 1 TS2554, got $n" }
+        assert(n == 1)
     }
 
     @Test
@@ -109,9 +111,7 @@ class CcetAnchorTest {
                 }
             }
         """)
-        assert(d.none { it.code == 2345 }) {
-            "static class-T new must not draw TS2345, got: ${d.filter { it.code == 2345 }.map { it.message }}"
-        }
+        assert(d.none { it.code == 2345 })
     }
 
     @Test
@@ -121,6 +121,6 @@ class CcetAnchorTest {
             function g() { f(2); }
             const a = () => { f(3); };
         """)
-        assert(n == 0) { "expected 0 TS2345, got $n" }
+        assert(n == 0)
     }
 }

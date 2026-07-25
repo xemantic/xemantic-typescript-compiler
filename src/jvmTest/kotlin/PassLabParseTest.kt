@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * M0.1 (round 619): pins the PURE parser of the pass-lab file. The file-loading
@@ -50,21 +50,16 @@ class PassLabParseTest {
                 "unknown directive is ignored",
             ),
         )
-        assertEquals(true, config.census)
-        assertEquals(
-            setOf(
-                "checkObjectSpreadInvalidTypes",
-                "checkSymbolToStringConversions",
-                "checkAbstractClassInstantiation",
-            ),
-            config.disabled,
+        assert(config.census == true)
+        assert(
+            config.disabled == setOf( "checkObjectSpreadInvalidTypes", "checkSymbolToStringConversions", "checkAbstractClassInstantiation", )
         )
     }
 
     @Test
     fun `negative control - an empty file configures nothing`() {
         val config = parsePassLabLines(emptyList())
-        assertEquals(false, config.census)
-        assertEquals(emptySet(), config.disabled)
+        assert(config.census == false)
+        assert(config.disabled.isEmpty())
     }
 }

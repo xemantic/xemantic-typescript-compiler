@@ -56,7 +56,7 @@ class QualifiedAliasShadowedInterfaceTest {
     """.trimIndent()
 
     @Test
-    fun `qualified reference resolves the protocol interface, not the local alias`() {
+    fun `qualified reference resolves the protocol interface - not the local alias`() {
         diagnose(
             decls + """
 

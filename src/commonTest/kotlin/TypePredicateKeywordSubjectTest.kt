@@ -65,7 +65,7 @@ class TypePredicateKeywordSubjectTest {
     }
 
     @Test
-    fun `chained '&&' re-narrowing with a 'symbol'-param guard - no TS2339`() {
+    fun `chained 'AND' re-narrowing with a 'symbol'-param guard - no TS2339`() {
         diagnose(
             prelude +
                 """

@@ -25,9 +25,9 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * (M0.4, round 655): pins for the checkImplicitAnyNewExpressions (TS7009 —
@@ -63,7 +63,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
 
     private fun ts7009(ds: List<Diagnostic>) = ds.count { it.code == 7009 }
 
-    private fun run(body: String, directives: String = "// @strict: true", fileName: String = "t.ts") =
+    private fun run(@Language("typescript") body: String, directives: String = "// @strict: true", fileName: String = "t.ts") =
         diagnose(prelude + body.trimIndent(), directives, fileName)
 
     // ── Core emission + the leaf's own gates ──────────────────────────────
@@ -71,9 +71,9 @@ class M04ImplicitAnyNewSpineMigrationTest {
     @Test
     fun `new on a plain function draws TS7009 spanning the whole new expression`() {
         val ds = run("new F();")
-        assertEquals(1, ts7009(ds))
+        assert(ts7009(ds) == 1)
         val d = ds.single { it.code == 7009 }
-        assertEquals("new F()".length, d.length)
+        assert(d.length == "new F()".length)
     }
 
     @Test
@@ -84,7 +84,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             new C();
             """
         )
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
@@ -95,19 +95,19 @@ class M04ImplicitAnyNewSpineMigrationTest {
             new Ctor();
             """
         )
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
     fun `negative control - a leading type argument suppresses the emission`() {
         val ds = run("const z = new <any>F();")
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
     fun `negative control - an unresolvable callee draws nothing`() {
         val ds = diagnose("new NoSuchThing();")
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     // ── Run gate (the legacy dispatch gate moves with the pass) ────────────
@@ -115,31 +115,31 @@ class M04ImplicitAnyNewSpineMigrationTest {
     @Test
     fun `the pass runs under noImplicitAny alone`() {
         val ds = run("new F();", directives = "// @noImplicitAny: true")
-        assertEquals(1, ts7009(ds))
+        assert(ts7009(ds) == 1)
     }
 
     @Test
     fun `negative control - strict false disables the whole family`() {
         val ds = run("new F();", directives = "// @strict: false")
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
     fun `negative control - a js file is skipped`() {
         val ds = run("new F();", fileName = "t.js")
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     // ── Statement-walk reach ──────────────────────────────────────────────
 
     @Test
     fun `a variable initializer is reached`() {
-        assertEquals(1, ts7009(run("const v = new F();")))
+        assert(ts7009(run("const v = new F();")) == 1)
     }
 
     @Test
     fun `a nested block is reached`() {
-        assertEquals(1, ts7009(run("{ new F(); }")))
+        assert(ts7009(run("{ new F(); }")) == 1)
     }
 
     @Test
@@ -149,7 +149,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             if (new F()) { new F(); } else { new F(); }
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     @Test
@@ -159,7 +159,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             for (let i = new F(); new F(); new F()) { new F(); }
             """
         )
-        assertEquals(4, ts7009(ds))
+        assert(ts7009(ds) == 4)
     }
 
     @Test
@@ -170,7 +170,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             for (const e of [1]) { new F(); }
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     @Test
@@ -181,17 +181,17 @@ class M04ImplicitAnyNewSpineMigrationTest {
             do { new F(); } while (new F());
             """
         )
-        assertEquals(4, ts7009(ds))
+        assert(ts7009(ds) == 4)
     }
 
     @Test
     fun `a function declaration body is reached`() {
-        assertEquals(1, ts7009(run("function g() { new F(); }")))
+        assert(ts7009(run("function g() { new F(); }")) == 1)
     }
 
     @Test
     fun `a namespace body is reached`() {
-        assertEquals(1, ts7009(run("namespace N { new F(); }")))
+        assert(ts7009(run("namespace N { new F(); }")) == 1)
     }
 
     @Test
@@ -201,7 +201,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             try { new F(); } catch (e) { new F(); } finally { new F(); }
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     @Test
@@ -214,7 +214,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             }
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     @Test
@@ -226,7 +226,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             function h(): never { throw new F(); }
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     // ── Class-member reach ────────────────────────────────────────────────
@@ -244,7 +244,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             }
             """
         )
-        assertEquals(5, ts7009(ds))
+        assert(ts7009(ds) == 5)
     }
 
     @Test
@@ -256,7 +256,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             }
             """
         )
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
@@ -269,7 +269,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             };
             """
         )
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     // ── Expression-walk reach ─────────────────────────────────────────────
@@ -287,15 +287,15 @@ class M04ImplicitAnyNewSpineMigrationTest {
         // 1 (call arg) + 2 (outer new + its argument) + 1 (the new CALLEE —
         // the outer `new (…)()` itself has a non-Identifier callee, so only
         // the inner one emits).
-        assertEquals(4, ts7009(ds))
+        assert(ts7009(ds) == 4)
     }
 
     @Test
     fun `an outer new is reported before its argument new`() {
         val ds = run("new F(new F());").filter { it.code == 7009 }.sortedBy { it.start ?: 0 }
-        assertEquals(2, ds.size)
-        assertTrue((ds[0].start ?: 0) < (ds[1].start ?: 0))
-        assertEquals("new F(new F())".length, ds[0].length)
+        assert(ds.size == 2)
+        assert((ds[0].start ?: 0) < (ds[1].start ?: 0))
+        assert(ds[0].length == "new F(new F())".length)
     }
 
     @Test
@@ -309,7 +309,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             const e = anyVal ? new F() : new F();
             """
         )
-        assertEquals(7, ts7009(ds))
+        assert(ts7009(ds) == 7)
     }
 
     @Test
@@ -320,7 +320,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             const o = { k: new F(), ...(new F()) };
             """
         )
-        assertEquals(4, ts7009(ds))
+        assert(ts7009(ds) == 4)
     }
 
     @Test
@@ -334,7 +334,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             };
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     @Test
@@ -347,12 +347,12 @@ class M04ImplicitAnyNewSpineMigrationTest {
             async function g() { await new F(); }
             """
         )
-        assertEquals(4, ts7009(ds))
+        assert(ts7009(ds) == 4)
     }
 
     @Test
     fun `template spans are reached`() {
-        assertEquals(1, ts7009(run("const t = `x\${new F()}y`;")))
+        assert(ts7009(run("const t = `x\${new F()}y`;")) == 1)
     }
 
     @Test
@@ -364,7 +364,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             const c = function () { new F(); };
             """
         )
-        assertEquals(3, ts7009(ds))
+        assert(ts7009(ds) == 3)
     }
 
     @Test
@@ -374,7 +374,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             const a = (new F() as any)!;
             """
         )
-        assertEquals(1, ts7009(ds))
+        assert(ts7009(ds) == 1)
     }
 
     @Test
@@ -384,19 +384,19 @@ class M04ImplicitAnyNewSpineMigrationTest {
             function* g(): any { yield new F(); }
             """
         )
-        assertEquals(1, ts7009(ds))
+        assert(ts7009(ds) == 1)
     }
 
     // ── Frozen NEGATIVE reach quirks ──────────────────────────────────────
 
     @Test
     fun `negative control - a type-assertion cast is NOT walked`() {
-        assertEquals(0, ts7009(run("const a = <any>new F();")))
+        assert(ts7009(run("const a = <any>new F();")) == 0)
     }
 
     @Test
     fun `negative control - a satisfies cast is NOT walked`() {
-        assertEquals(0, ts7009(run("const a = new F() satisfies any;")))
+        assert(ts7009(run("const a = new F() satisfies any;")) == 0)
     }
 
     @Test
@@ -407,7 +407,7 @@ class M04ImplicitAnyNewSpineMigrationTest {
             tag`x${'$'}{new F()}y`;
             """
         )
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
@@ -418,14 +418,14 @@ class M04ImplicitAnyNewSpineMigrationTest {
             class C { m(b = new F()) {} }
             """
         )
-        assertEquals(0, ts7009(ds))
+        assert(ts7009(ds) == 0)
     }
 
     @Test
     fun `negative control - a postfix operand is walked but a decorator is not`() {
         // PrefixUnary/PostfixUnary operands ARE walked...
-        assertEquals(1, ts7009(run("const n = !new F();")))
+        assert(ts7009(run("const n = !new F();")) == 1)
         // ...while an interface / type position never is.
-        assertEquals(0, ts7009(run("interface I { m(): void }")))
+        assert(ts7009(run("interface I { m(): void }")) == 0)
     }
 }

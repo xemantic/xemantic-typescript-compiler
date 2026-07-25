@@ -89,7 +89,7 @@ class UncalledFunctionParamTypeTest {
     }
 
     @Test
-    fun `let x = localFunction still fires TS2774 - negative control (no over-suppression)`() {
+    fun `let x = localFunction still fires TS2774 - negative control - no over-suppression`() {
         // FP-safety boundary: a same-scope binding that is genuinely a FUNCTION is recorded as
         // callable, so aliasing it and testing it in a condition must STILL fire TS2774. This is
         // exactly what distinguishes the fix from a blanket bail on bare-identifier initializers.

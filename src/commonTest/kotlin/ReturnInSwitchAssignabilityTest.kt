@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -193,7 +194,7 @@ class ReturnInSwitchAssignabilityTest {
             }
             """
         )
-        kotlin.test.assertEquals(2, d.count { it.code == 2322 }, "expected 2 concrete TS2322s, got: $d")
+        assert(d.count { it.code == 2322 } == 2)
     }
 
     @Test

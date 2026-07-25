@@ -54,7 +54,7 @@ class M04SpreadSpineMigrationTest {
     }
 
     @Test
-    fun `negative control - annotation AFTER the spread is not visible (statement order)`() {
+    fun `negative control - annotation AFTER the spread is not visible - statement order`() {
         diagnose(
             """
             function f() {

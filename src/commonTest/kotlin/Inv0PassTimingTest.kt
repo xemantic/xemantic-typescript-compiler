@@ -25,11 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertTrue
 
 /**
  * INV.0 (round 491): the opt-in pass-time instrumentation must be strictly
@@ -75,26 +74,20 @@ class Inv0PassTimingTest {
         } finally {
             PassTiming.enabled = false
         }
-        assertEquals(off, on, "diagnostics must be byte-identical with instrumentation on")
+        assert(on == off)
         // The probe source draws the TS2322 both ways (sanity that parity is non-vacuous).
-        assertTrue(off.any { it.code == 2322 }, "probe must emit TS2322")
+        assert(off.any { it.code == 2322 })
 
         // The enabled run recorded the dispatch and the counters.
-        assertTrue(PassTiming.passNanos.size > 100, "expected the ~513-pass dispatch to record")
-        assertTrue(PassTiming.passCalls.values.all { it >= 1 })
-        assertTrue(PassTiming.getTypeOfExpressionCalls > 0)
-        assertTrue(PassTiming.getTypeOfExpressionDistinct.isNotEmpty())
-        assertTrue(
-            PassTiming.getTypeOfExpressionDistinct.size.toLong() <= PassTiming.getTypeOfExpressionCalls,
-            "distinct nodes can never exceed invocations",
-        )
-        assertTrue(
-            PassTiming.typeNodeCacheable + PassTiming.typeNodeBypassed > 0,
-            "annotation resolutions must be classified",
-        )
-        assertTrue(PassTiming.typeNodeCacheHits <= PassTiming.typeNodeCacheable)
-        assertTrue(PassTiming.narrowWalks > 0, "the guard read must launch a narrowing walk")
-        assertTrue(PassTiming.checkerInitNanos > 0)
+        assert(PassTiming.passNanos.size > 100)
+        assert(PassTiming.passCalls.values.all { it >= 1 })
+        assert(PassTiming.getTypeOfExpressionCalls > 0)
+        assert(PassTiming.getTypeOfExpressionDistinct.isNotEmpty())
+        assert(PassTiming.getTypeOfExpressionDistinct.size.toLong() <= PassTiming.getTypeOfExpressionCalls)
+        assert(PassTiming.typeNodeCacheable + PassTiming.typeNodeBypassed > 0)
+        assert(PassTiming.typeNodeCacheHits <= PassTiming.typeNodeCacheable)
+        assert(PassTiming.narrowWalks > 0)
+        assert(PassTiming.checkerInitNanos > 0)
         PassTiming.reset()
     }
 
@@ -105,11 +98,11 @@ class Inv0PassTimingTest {
         diagnose(probeSource) should {
             have(any { it.code == 2322 })
         }
-        assertTrue(PassTiming.passNanos.isEmpty())
-        assertEquals(0L, PassTiming.getTypeOfExpressionCalls)
-        assertEquals(0L, PassTiming.typeNodeCacheable + PassTiming.typeNodeBypassed)
-        assertEquals(0L, PassTiming.narrowWalks)
-        assertEquals(0L, PassTiming.checkerInitNanos)
+        assert(PassTiming.passNanos.isEmpty())
+        assert(PassTiming.getTypeOfExpressionCalls == 0L)
+        assert(PassTiming.typeNodeCacheable + PassTiming.typeNodeBypassed == 0L)
+        assert(PassTiming.narrowWalks == 0L)
+        assert(PassTiming.checkerInitNanos == 0L)
     }
 
     @Test
@@ -118,13 +111,13 @@ class Inv0PassTimingTest {
         PassTiming.notePass("alpha", 100)
         PassTiming.notePass("alpha", 50)
         PassTiming.notePass("beta", 7)
-        assertEquals(150L, PassTiming.passNanos["alpha"])
-        assertEquals(2, PassTiming.passCalls["alpha"])
-        assertEquals(7L, PassTiming.passNanos["beta"])
-        assertEquals(1, PassTiming.passCalls["beta"])
+        assert(PassTiming.passNanos["alpha"] == 150L)
+        assert(PassTiming.passCalls["alpha"] == 2)
+        assert(PassTiming.passNanos["beta"] == 7L)
+        assert(PassTiming.passCalls["beta"] == 1)
         PassTiming.reset()
-        assertTrue(PassTiming.passNanos.isEmpty())
-        assertTrue(PassTiming.passCalls.isEmpty())
+        assert(PassTiming.passNanos.isEmpty())
+        assert(PassTiming.passCalls.isEmpty())
     }
 
     @Test
@@ -136,20 +129,20 @@ class Inv0PassTimingTest {
                 PassTiming.noteGetTypeOfExpression(1, 2)
                 pass("inner") {
                     PassTiming.noteNarrowWalk()
-                    assertEquals("inner", PassTiming.currentPass)
+                    assert(PassTiming.currentPass == "inner")
                 }
-                assertEquals("outer", PassTiming.currentPass)
+                assert(PassTiming.currentPass == "outer")
                 PassTiming.noteGetTypeOfExpression(3, 4)
             }
         } finally {
             PassTiming.enabled = false
         }
-        assertEquals(null, PassTiming.currentPass, "attribution must be restored after the pass")
-        assertEquals(2L, PassTiming.getTypeOfExpressionByPass["outer"])
-        assertEquals(1L, PassTiming.narrowWalksByPass["inner"])
-        assertEquals(2L, PassTiming.getTypeOfExpressionCalls)
-        assertEquals(2, PassTiming.getTypeOfExpressionDistinct.size)
-        assertTrue("outer" in PassTiming.passNanos && "inner" in PassTiming.passNanos)
+        assert(PassTiming.currentPass == null)
+        assert(PassTiming.getTypeOfExpressionByPass["outer"] == 2L)
+        assert(PassTiming.narrowWalksByPass["inner"] == 1L)
+        assert(PassTiming.getTypeOfExpressionCalls == 2L)
+        assert(PassTiming.getTypeOfExpressionDistinct.size == 2)
+        assert("outer" in PassTiming.passNanos && "inner" in PassTiming.passNanos)
         PassTiming.reset()
     }
 
@@ -170,16 +163,16 @@ class Inv0PassTimingTest {
         } finally {
             PassTiming.enabled = false
         }
-        assertEquals(3, PassTiming.diagsByPass["emitter"])
-        assertEquals(null, PassTiming.diagsByPass["silent"])
-        assertEquals(null, PassTiming.diagsByPass["retractor"])
-        assertEquals(4, PassTiming.diagsByPass["innerEmit"])
+        assert(PassTiming.diagsByPass["emitter"] == 3)
+        assert(PassTiming.diagsByPass["silent"] == null)
+        assert(PassTiming.diagsByPass["retractor"] == null)
+        assert(PassTiming.diagsByPass["innerEmit"] == 4)
         // Documented census semantics: a nested pass's emissions ALSO count into
         // the enclosing pass (safe in the KEEP direction for the tail triage).
-        assertEquals(5, PassTiming.diagsByPass["outerEmit"])
+        assert(PassTiming.diagsByPass["outerEmit"] == 5)
         PassTiming.reset()
-        assertTrue(PassTiming.diagsByPass.isEmpty())
-        assertEquals(null, PassTiming.diagnosticsSize)
+        assert(PassTiming.diagsByPass.isEmpty())
+        assert(PassTiming.diagnosticsSize == null)
     }
 
     @Test
@@ -187,7 +180,7 @@ class Inv0PassTimingTest {
         PassTiming.enabled = false
         PassTiming.reset()
         diagnose(probeSource)
-        assertTrue(PassTiming.nodeKindHistogram.isEmpty(), "disabled run must record no node kinds")
+        assert(PassTiming.nodeKindHistogram.isEmpty())
         PassTiming.reset()
         PassTiming.enabled = true
         try {
@@ -196,8 +189,8 @@ class Inv0PassTimingTest {
             PassTiming.enabled = false
         }
         val identifiers = PassTiming.nodeKindHistogram["Identifier"] ?: 0L
-        assertTrue(identifiers > 0, "the probe source must index Identifier nodes")
-        assertTrue((PassTiming.nodeKindHistogram["IfStatement"] ?: 0L) >= 1L)
+        assert(identifiers > 0)
+        assert((PassTiming.nodeKindHistogram["IfStatement"] ?: 0L) >= 1L)
         PassTiming.reset()
     }
 
@@ -217,15 +210,15 @@ class Inv0PassTimingTest {
             var otherRan = false
             pass("ghostDisabled") { disabledRan = true }
             pass("other") { otherRan = true }
-            assertTrue(!disabledRan, "a disabled pass body must be skipped")
-            assertTrue(otherRan, "a non-disabled pass must run")
+            assert(!disabledRan)
+            assert(otherRan)
         } finally {
             PassTiming.disabledPasses = saved
         }
         // With ghostDisabled no longer in the set, the same pass runs again.
         var ran = false
         pass("ghostDisabled") { ran = true }
-        assertTrue(ran)
+        assert(ran)
         PassTiming.reset()
     }
 
@@ -254,17 +247,15 @@ class Inv0PassTimingTest {
         } finally {
             PassTiming.censusMode = savedCensus
         }
-        assertEquals(2, PassTiming.censusByPass["lightEmitter"])
-        assertEquals(null, PassTiming.censusByPass["lightSilent"])
-        assertEquals(null, PassTiming.censusByPass["wipeAndPin"],
-            "a wipe-and-pin pass (net 0) must be census-silent — the blindness this pin documents")
-        assertEquals(null, PassTiming.censusByPass["retractor"],
-            "a retractor (net < 0) must be census-silent")
-        assertTrue(PassTiming.passNanos.isEmpty(), "censusMode must not record pass times")
-        assertEquals(0L, PassTiming.getTypeOfExpressionCalls)
+        assert(PassTiming.censusByPass["lightEmitter"] == 2)
+        assert(PassTiming.censusByPass["lightSilent"] == null)
+        assert(PassTiming.censusByPass["wipeAndPin"] == null)
+        assert(PassTiming.censusByPass["retractor"] == null)
+        assert(PassTiming.passNanos.isEmpty())
+        assert(PassTiming.getTypeOfExpressionCalls == 0L)
         // reset() must NOT clear the census accumulator (the mid-suite wipe hazard).
         PassTiming.reset()
-        assertEquals(2, PassTiming.censusByPass["lightEmitter"])
+        assert(PassTiming.censusByPass["lightEmitter"] == 2)
         PassTiming.censusByPass.clear()
     }
 
@@ -281,12 +272,9 @@ class Inv0PassTimingTest {
         } finally {
             PassTiming.censusMode = savedCensus
         }
-        assertEquals(off, on, "diagnostics must be byte-identical with censusMode on")
-        assertTrue(
-            PassTiming.censusByPass.isNotEmpty(),
-            "the probe TS2322 must be attributed to some pass",
-        )
-        assertTrue(PassTiming.passNanos.isEmpty(), "censusMode must not record pass times")
+        assert(on == off)
+        assert(PassTiming.censusByPass.isNotEmpty())
+        assert(PassTiming.passNanos.isEmpty())
         PassTiming.censusByPass.clear()
         PassTiming.reset()
     }
@@ -302,9 +290,9 @@ class Inv0PassTimingTest {
             } catch (_: IllegalStateException) {
                 thrown = true
             }
-            assertTrue(thrown)
-            assertEquals(null, PassTiming.currentPass)
-            assertTrue("boom" in PassTiming.passNanos, "time is recorded even on a throwing body")
+            assert(thrown)
+            assert(PassTiming.currentPass == null)
+            assert("boom" in PassTiming.passNanos)
         } finally {
             PassTiming.enabled = false
         }
@@ -317,12 +305,12 @@ class Inv0PassTimingTest {
         PassTiming.enabled = false
         var ran = false
         pass("ghost") { ran = true }
-        assertTrue(ran)
-        assertTrue(PassTiming.passNanos.isEmpty())
+        assert(ran)
+        assert(PassTiming.passNanos.isEmpty())
     }
 
     @Test
-    fun `dump renders the table header, rows, and counters`() {
+    fun `dump renders the table header - rows - and counters`() {
         PassTiming.reset()
         PassTiming.notePass("checkSomething", 2_500_000) // 2.5 ms
         PassTiming.noteGetTypeOfExpression(10, 20)
@@ -332,16 +320,16 @@ class Inv0PassTimingTest {
         val out = StringBuilder()
         PassTiming.dump { out.appendLine(it) }
         val text = out.toString()
-        assertTrue("== xtsc pass timing (INV.0) ==" in text)
-        assertTrue("checkSomething" in text)
-        assertTrue("2.5" in text, "millisecond rendering with one decimal")
-        assertTrue("== emissions by pass" in text)
-        assertTrue("== node kinds" in text)
-        assertTrue("total 1 nodes" in text)
-        assertTrue("== counters ==" in text)
-        assertTrue("getTypeOfExpression: 1 calls" in text)
-        assertTrue("getTypeFromTypeNode:" in text)
-        assertTrue("flow-narrowing walks: 1" in text)
+        assert("== xtsc pass timing (INV.0) ==" in text)
+        assert("checkSomething" in text)
+        assert("2.5" in text)
+        assert("== emissions by pass" in text)
+        assert("== node kinds" in text)
+        assert("total 1 nodes" in text)
+        assert("== counters ==" in text)
+        assert("getTypeOfExpression: 1 calls" in text)
+        assert("getTypeFromTypeNode:" in text)
+        assert("flow-narrowing walks: 1" in text)
         PassTiming.reset()
     }
 }

@@ -25,8 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertTrue
 
 /**
  * Round 488 (M5.1): `checkMultiBaseInStatement`'s TS2320 same-generic-base check
@@ -46,11 +46,8 @@ class MultiBaseTs2320OccOfTest {
             interface C extends A<string>, A<number> {}
             """.trimIndent(),
         ).firstOrNull { it.code == 2320 }
-        assertTrue(d != null, "expected TS2320")
-        assertTrue(
-            d.message.contains("A<string>") && d.message.contains("A<number>"),
-            d.message,
-        )
+        assert(d != null)
+        assert(d.message.contains("A<string>") && d.message.contains("A<number>"))
     }
 
     @Test
@@ -63,7 +60,7 @@ class MultiBaseTs2320OccOfTest {
             interface X extends P, Q {}
             """.trimIndent(),
         ).filter { it.code == 2320 }
-        assertTrue(errs.isEmpty(), "distinct bases must not fire TS2320: $errs")
+        assert(errs.isEmpty())
     }
 
     @Test
@@ -75,6 +72,6 @@ class MultiBaseTs2320OccOfTest {
             interface C extends A<string>, A<string> {}
             """.trimIndent(),
         ).filter { it.code == 2320 }
-        assertTrue(errs.isEmpty(), "identical args must not fire TS2320: $errs")
+        assert(errs.isEmpty())
     }
 }

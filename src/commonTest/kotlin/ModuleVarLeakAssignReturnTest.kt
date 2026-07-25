@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -40,11 +41,11 @@ import kotlin.test.Test
  */
 class ModuleVarLeakAssignReturnTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile(source.trimIndent(), "entry.ts").diagnostics
 
     @Test
-    fun `return and assignment of a destructured local resolve its member type, not a foreign module var`() {
+    fun `return and assignment of a destructured local resolve its member type - not a foreign module var`() {
         compile(
             """
             // @strict: true

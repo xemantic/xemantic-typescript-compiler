@@ -25,11 +25,11 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 
 /**
  * INV.2(c) phase (i) invariants for the Binder's ADDITIVE lexical-binding pass:
@@ -44,7 +44,7 @@ import kotlin.test.assertNull
  */
 class Inv2LexicalScopeTest {
 
-    private fun bind(source: String, fileName: String = "t.ts"): BinderResult {
+    private fun bind(@Language("typescript") source: String, fileName: String = "t.ts"): BinderResult {
         val sourceFile = Parser(source.trimIndent(), fileName).parse()
         return Binder(CompilerOptions()).bind(sourceFile)
     }
@@ -104,13 +104,13 @@ class Inv2LexicalScopeTest {
         val aliasOk = flagsByName["T"]?.hasAny(SymbolFlags.TypeAlias) == true
         val enumOk = flagsByName["E"]?.hasAny(SymbolFlags.RegularEnum) == true
         val constEnumOk = flagsByName["CE"]?.hasAny(SymbolFlags.ConstEnum) == true
-        have(paramOk && varOk && letOk && constOk && fnOk && classOk && ifaceOk && aliasOk && enumOk && constEnumOk)
+        assert(paramOk && varOk && letOk && constOk && fnOk && classOk && ifaceOk && aliasOk && enumOk && constEnumOk)
         // Sharp B83.5 signal: none of these leak into the main binder's tables.
         val localsHasBodyDecl = listOf("a", "v", "l", "g", "K", "I", "T", "E", "CE").any { it in result.locals }
-        have(!localsHasBodyDecl)
+        assert(!localsHasBodyDecl)
         // Declarations point at the AST decl nodes (consumable by INV.2(d) pilots).
         val classDeclIsAst = scope.symbols["K"]?.declarations?.singleOrNull() is ClassDeclaration
-        have(classDeclIsAst)
+        assert(classDeclIsAst)
     }
 
     @Test
@@ -134,21 +134,21 @@ class Inv2LexicalScopeTest {
         val hoistedOk = scope.symbols["hoisted"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
         val forVarOk = scope.symbols["i"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
         val catchVarOk = scope.symbols["inCatch"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
-        have(hoistedOk && forVarOk && catchVarOk)
+        assert(hoistedOk && forVarOk && catchVarOk)
         // Phase (ii): block-scoped declarations bind into their OWN containers,
         // never leaking into the function scope.
         val blockScopedNames = listOf("blockLet", "BlockClass", "blockFn", "j", "err")
         val leakedIntoFn = blockScopedNames.filter { it in scope.symbols }
-        assertEquals(emptyList(), leakedIntoFn, "block-scoped declarations must not leak into the function scope")
+        assert(leakedIntoFn.isEmpty())
         val nodes = descendants(result.sourceFile)
         val ifBlock = nodes.filterIsInstance<IfStatement>().single().thenStatement
         val ifScope = assertNotNull(result.scopeOf(ifBlock), "if-body block must own a scope")
-        assertEquals(setOf("blockLet", "BlockClass", "blockFn"), ifScope.symbols.keys)
+        assert(ifScope.symbols.keys == setOf("blockLet", "BlockClass", "blockFn"))
         val letIsBlockScoped = ifScope.symbols["blockLet"]?.flags?.hasAny(SymbolFlags.BlockScopedVariable) == true
         val fnIsFunction = ifScope.symbols["blockFn"]?.flags?.hasAny(SymbolFlags.Function) == true
-        have(letIsBlockScoped && fnIsFunction)
+        assert(letIsBlockScoped && fnIsFunction)
         val ifScopeChainsToFn = ifScope.parent === scope
-        have(ifScopeChainsToFn)
+        assert(ifScopeChainsToFn)
         // For-header: `var i` hoisted to the fn scope, its FOR scope stays empty;
         // `let j` binds into ITS for scope.
         val forScopes = nodes.filterIsInstance<ForStatement>().map { assertNotNull(result.scopeOf(it)) }
@@ -159,7 +159,7 @@ class Inv2LexicalScopeTest {
         val catchScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<CatchClause>().single()))
         assertEquals(setOf("err"), catchScope.symbols.keys)
         val errIsBlockScoped = catchScope.symbols["err"]?.flags?.hasAny(SymbolFlags.BlockScopedVariable) == true
-        have(errIsBlockScoped)
+        assert(errIsBlockScoped)
     }
 
     @Test
@@ -189,7 +189,7 @@ class Inv2LexicalScopeTest {
         val switchScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<SwitchStatement>().single()))
         assertEquals(setOf("caseLet", "caseFn", "caseConst"), switchScope.symbols.keys)
         val switchChainsToFn = switchScope.parent === fnScope
-        have(switchChainsToFn)
+        assert(switchChainsToFn)
         // Nested bare blocks: each owns a scope, chained inner → outer → fn.
         val fnBody = nodes.filterIsInstance<FunctionDeclaration>().first { it.name?.text == "f" }.body
         val bareBlocks = nodes.filterIsInstance<Block>().filter { it !== fnBody && result.scopeOf(it) != null }
@@ -197,7 +197,7 @@ class Inv2LexicalScopeTest {
         val innerBlock = bareBlocks.first { result.scopeOf(it)!!.symbols.containsKey("inner") }
         val innerChainsThroughOuter = result.scopeOf(innerBlock)!!.parent === result.scopeOf(outerBlock)
         val outerChainsToFn = result.scopeOf(outerBlock)!!.parent === fnScope
-        have(innerChainsThroughOuter && outerChainsToFn)
+        assert(innerChainsThroughOuter && outerChainsToFn)
     }
 
     @Test
@@ -212,12 +212,12 @@ class Inv2LexicalScopeTest {
         val nodes = descendants(result.sourceFile)
         val fn = nodes.filterIsInstance<FunctionDeclaration>().single()
         val bodyScopeIsNull = result.scopeOf(assertNotNull(fn.body)) == null
-        have(bodyScopeIsNull)
+        assert(bodyScopeIsNull)
         val moduleBlockScopeIsNull = result.scopeOf(nodes.filterIsInstance<ModuleBlock>().single()) == null
-        have(moduleBlockScopeIsNull)
+        assert(moduleBlockScopeIsNull)
         // x binds into the FUNCTION scope (the body block shares it).
         val xInFnScope = "x" in result.functionScope("f").symbols
-        have(xInFnScope)
+        assert(xInFnScope)
     }
 
     @Test
@@ -234,17 +234,17 @@ class Inv2LexicalScopeTest {
         val classScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<ClassDeclaration>().single()))
         assertEquals(setOf("T"), classScope.symbols.keys)
         val classChainsToRoot = classScope.parent === result.scopeOf(result.sourceFile)
-        have(classChainsToRoot)
+        assert(classChainsToRoot)
         val methodM = nodes.filterIsInstance<MethodDeclaration>().first { (it.name as? Identifier)?.text == "m" }
         val mChainsThroughClass = assertNotNull(result.scopeOf(methodM)).parent === classScope
-        have(mChainsThroughClass)
+        assert(mChainsThroughClass)
         val exprScope = assertNotNull(result.scopeOf(nodes.filterIsInstance<ClassExpression>().single()))
         assertEquals(setOf("Named", "U"), exprScope.symbols.keys)
         val selfIsClass = exprScope.symbols["Named"]?.flags?.hasAny(SymbolFlags.Class) == true
         val uIsTypeParam = exprScope.symbols["U"]?.flags?.hasAny(SymbolFlags.TypeParameter) == true
-        have(selfIsClass && uIsTypeParam)
+        assert(selfIsClass && uIsTypeParam)
         val namedLeaks = "Named" in result.locals || "Named" in assertNotNull(result.scopeOf(result.sourceFile)).symbols
-        have(!namedLeaks)
+        assert(!namedLeaks)
     }
 
     @Test
@@ -262,7 +262,7 @@ class Inv2LexicalScopeTest {
         assertEquals(setOf("K", "V"), aliasScope.symbols.keys)
         val allTypeParams = (ifaceScope.symbols.values + aliasScope.symbols.values)
             .all { it.flags.hasAny(SymbolFlags.TypeParameter) }
-        have(allTypeParams)
+        assert(allTypeParams)
     }
 
     @Test
@@ -278,25 +278,28 @@ class Inv2LexicalScopeTest {
         val nodes = descendants(result.sourceFile)
         val enums = nodes.filterIsInstance<EnumDeclaration>()
         val topDecl = enums.first { it.name.text == "Top" }
-        val topScope = assertNotNull(result.scopeOf(topDecl))
+        val topScope = result.scopeOf(topDecl)
+        assert(topScope != null)
         // Main-bound enum: the scope ALIASES the main symbol's exports (identity).
         val topAliasesMainExports = topScope.existing === assertNotNull(result.locals["Top"]).exports
-        have(topAliasesMainExports)
-        assertEquals(emptySet<String>(), topScope.symbols.keys)
+        assert(topAliasesMainExports)
+        assert(topScope.symbols.keys == emptySet<String>())
         // Nested enum: scope-space members, published on the scope symbol's exports.
         val nestedDecl = enums.first { it.name.text == "Nested" }
-        val nestedScope = assertNotNull(result.scopeOf(nestedDecl))
-        assertEquals(setOf("X", "Y"), nestedScope.symbols.keys)
+        val nestedScope = result.scopeOf(nestedDecl)
+        assert(nestedScope != null)
+        assert(nestedScope.symbols.keys == setOf("X", "Y"))
         val fnScope = result.functionScope("f")
-        val nestedSymbol = assertNotNull(fnScope.symbols["Nested"])
+        val nestedSymbol = fnScope.symbols["Nested"]
+        assert(nestedSymbol != null)
         val nestedIdIsScopeSpace = nestedSymbol.id <= -2
-        have(nestedIdIsScopeSpace)
+        assert(nestedIdIsScopeSpace)
         val nestedExportKeys: Set<String> = assertNotNull(nestedSymbol.exports).keys
-        assertEquals(setOf("X", "Y"), nestedExportKeys)
+        assert(nestedExportKeys == setOf("X", "Y"))
         val memberParentIsEnum = nestedScope.symbols["X"]?.parent === nestedSymbol
-        have(memberParentIsEnum)
+        assert(memberParentIsEnum)
         val membersAreScopeSpace = nestedScope.symbols.values.all { it.id <= -2 }
-        have(membersAreScopeSpace)
+        assert(membersAreScopeSpace)
     }
 
     @Test
@@ -314,12 +317,12 @@ class Inv2LexicalScopeTest {
         assertEquals(setOf("message", "s"), catchScope.symbols.keys)
         val forOf = nodes.filterIsInstance<ForOfStatement>().single()
         val forScope = assertNotNull(result.scopeOf(forOf))
-        assertEquals(setOf("k", "v"), forScope.symbols.keys)
+        assert(forScope.symbols.keys == setOf("k", "v"))
         // The loop BODY block owns a child scope under the for scope.
         val bodyScope = assertNotNull(result.scopeOf(forOf.statement))
-        assertEquals(setOf("bodyLocal"), bodyScope.symbols.keys)
+        assert(bodyScope.symbols.keys == setOf("bodyLocal"))
         val bodyChainsThroughFor = bodyScope.parent === forScope
-        have(bodyChainsThroughFor)
+        assert(bodyChainsThroughFor)
     }
 
     @Test
@@ -335,16 +338,16 @@ class Inv2LexicalScopeTest {
         )
         val root = assertNotNull(result.scopeOf(result.sourceFile), "missing root scope")
         val aliasesLocals = root.existing === result.locals
-        have(aliasesLocals)
+        assert(aliasesLocals)
         val nestedBound = root.symbols["nested"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
-        have(nestedBound)
+        assert(nestedBound)
         // `top` already has a file-level binding — the existing symbol stands untouched:
         // no scope-space duplicate, no declaration appended to the main binder's symbol.
-        assertNull(root.symbols["top"])
+        assert(root.symbols["top"] == null)
         val topDeclCount = result.locals["top"]?.declarations?.size
-        assertEquals(1, topDeclCount, "main binder symbol must stay byte-unchanged")
+        assert(topDeclCount == 1)
         val localsHasNested = "nested" in result.locals
-        have(!localsHasNested)
+        assert(!localsHasNested)
     }
 
     @Test
@@ -356,9 +359,9 @@ class Inv2LexicalScopeTest {
         )
         val scope = result.functionScope("f")
         val names = scope.symbols.keys
-        assertEquals(setOf("a", "b", "d", "rest"), names)
+        assert(names == setOf("a", "b", "d", "rest"))
         val allParamsFunctionScoped = scope.symbols.values.all { it.flags.hasAny(SymbolFlags.FunctionScopedVariable) }
-        have(allParamsFunctionScoped)
+        assert(allParamsFunctionScoped)
     }
 
     @Test
@@ -371,9 +374,9 @@ class Inv2LexicalScopeTest {
         val scope = result.functionScope("f")
         val tOk = scope.symbols["T"]?.flags?.hasAny(SymbolFlags.TypeParameter) == true
         val uOk = scope.symbols["U"]?.flags?.hasAny(SymbolFlags.TypeParameter) == true
-        have(tOk && uOk)
+        assert(tOk && uOk)
         val tHasNoValueDecl = scope.symbols["T"]?.valueDeclaration == null
-        have(tHasNoValueDecl)
+        assert(tHasNoValueDecl)
     }
 
     @Test
@@ -394,15 +397,12 @@ class Inv2LexicalScopeTest {
         val probeMid = Symbol(SymbolFlags.None, "probe").id
         bind(withoutBodies)
         val probeAfter = Symbol(SymbolFlags.None, "probe").id
-        assertEquals(
-            probeAfter - probeMid, probeMid - probeBefore,
-            "lexical binding must not consume global symbol ids"
-        )
+        assert(probeMid - probeBefore == probeAfter - probeMid)
         val scope = rich.functionScope("f")
         val allScopeIdsNegative = scope.symbols.values.all { it.id <= -2 }
-        have(allScopeIdsNegative)
+        assert(allScopeIdsNegative)
         val allLocalIdsPositive = rich.locals.values.all { it.id >= 1 }
-        have(allLocalIdsPositive)
+        assert(allLocalIdsPositive)
     }
 
     @Test
@@ -417,25 +417,28 @@ class Inv2LexicalScopeTest {
         )
         val moduleDecl = result.sourceFile.statements.filterIsInstance<ModuleDeclaration>().single()
         val inner = assertNotNull(result.scopeOf(moduleDecl), "missing namespace scope")
-        val symbolA = assertNotNull(result.locals["A"])
-        val symbolB = assertNotNull(symbolA.exports?.get("B"))
+        val symbolA = result.locals["A"]
+        assert(symbolA != null)
+        val symbolB = symbolA.exports?.get("B")
+        assert(symbolB != null)
         val innerAliasesB = inner.existing === symbolB.exports
-        have(innerAliasesB)
-        val outer = assertNotNull(inner.parent, "dotted namespace must chain a scope per segment")
+        assert(innerAliasesB)
+        val outer = inner.parent
+        assert(outer != null)
         val outerAliasesA = outer.existing === symbolA.exports
-        have(outerAliasesA)
+        assert(outerAliasesA)
         val outerParentIsRoot = outer.parent === result.scopeOf(result.sourceFile)
-        have(outerParentIsRoot)
+        assert(outerParentIsRoot)
         // f is the main binder's (in B.exports) — not re-bound; the block-hoisted var is ours.
-        assertNull(inner.symbols["f"])
+        assert(inner.symbols["f"] == null)
         val hoistedOk = inner.symbols["hoistedInNs"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
-        have(hoistedOk)
+        assert(hoistedOk)
         // The function scope chains to the innermost namespace level.
         val fnScope = result.functionScope("f")
         val fnParentIsInner = fnScope.parent === inner
-        have(fnParentIsInner)
+        assert(fnParentIsInner)
         val vOk = fnScope.symbols["v"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
-        have(vOk)
+        assert(vOk)
     }
 
     @Test
@@ -453,19 +456,19 @@ class Inv2LexicalScopeTest {
         // The self-name is visible only inside the expression's own body.
         val selfNameOk = fnScope.symbols["named"]?.flags?.hasAny(SymbolFlags.Function) == true
         val xOk = fnScope.symbols["x"]?.flags?.hasAny(SymbolFlags.FunctionScopedVariable) == true
-        have(selfNameOk && xOk)
+        assert(selfNameOk && xOk)
         val namedLeaks = "named" in result.locals
-        have(!namedLeaks)
+        assert(!namedLeaks)
         val arrow = nodes.filterIsInstance<ArrowFunction>().single()
         val arrowScope = assertNotNull(result.scopeOf(arrow))
-        assertEquals(setOf("y", "w"), arrowScope.symbols.keys)
+        assert(arrowScope.symbols.keys == setOf("y", "w"))
         val method = nodes.filterIsInstance<MethodDeclaration>().single()
         val methodScope = assertNotNull(result.scopeOf(method))
         assertEquals(setOf("z", "mv"), methodScope.symbols.keys)
         // All three chain to the file root.
         val root = result.scopeOf(result.sourceFile)
         val allChainToRoot = fnScope.parent === root && arrowScope.parent === root && methodScope.parent === root
-        have(allChainToRoot)
+        assert(allChainToRoot)
     }
 
     @Test
@@ -502,12 +505,13 @@ class Inv2LexicalScopeTest {
             """
         )
         val scope = result.functionScope("f")
-        val sym = assertNotNull(scope.symbols["x"])
-        assertEquals(2, sym.declarations.size, "param + var redeclaration must merge (param first)")
+        val sym = scope.symbols["x"]
+        assert(sym != null)
+        assert(sym.declarations.size == 2)
         val firstIsParam = sym.declarations.first() is Parameter
-        have(firstIsParam)
+        assert(firstIsParam)
         val valueDeclIsParam = sym.valueDeclaration is Parameter
-        have(valueDeclIsParam)
+        assert(valueDeclIsParam)
     }
 
     @Test
@@ -521,8 +525,9 @@ class Inv2LexicalScopeTest {
             """
         )
         val scope = result.functionScope("outer")
-        val sym = assertNotNull(scope.symbols["g"])
-        assertEquals(2, sym.declarations.size)
+        val sym = scope.symbols["g"]
+        assert(sym != null)
+        assert(sym.declarations.size == 2)
     }
 
     @Test
@@ -534,7 +539,7 @@ class Inv2LexicalScopeTest {
         val result = bind(source)
         val scope = result.functionScope("f")
         val rBound = "r" in scope.symbols
-        have(rBound)
+        assert(rBound)
     }
 
     @Test
@@ -548,9 +553,9 @@ class Inv2LexicalScopeTest {
         val sourceFile = SourceFile(fileName = "hand.ts", statements = listOf(statement), text = "")
         assertEquals(0, sourceFile.nodeCount, "hand-built tree must be unindexed")
         val result = Binder(CompilerOptions()).bind(sourceFile)
-        assertEquals(emptyMap(), result.lexicalScopes)
+        assert(result.lexicalScopes.isEmpty())
         val xBound = "x" in result.locals
-        have(xBound)
+        assert(xBound)
     }
 
     @Test
@@ -558,17 +563,17 @@ class Inv2LexicalScopeTest {
         val result = bind(INV2_RICH_FIXTURE, "rich.ts")
         val root = assertNotNull(result.scopeOf(result.sourceFile))
         val rootAliasesLocals = root.existing === result.locals
-        have(rootAliasesLocals)
+        assert(rootAliasesLocals)
         val gen = descendants(result.sourceFile).filterIsInstance<MethodDeclaration>()
             .first { (it.name as? Identifier)?.text == "gen" }
         val genScope = assertNotNull(result.scopeOf(gen))
         val genParamNames = listOf("a", "d1", "d2", "e1", "e2")
         val genParamsBound = genParamNames.all { it in genScope.symbols }
-        have(genParamsBound)
+        assert(genParamsBound)
         val fnScope = result.functionScope("fn")
         // fn<T>(a, b, ...rest) with body locals o/arr/t/... and nested fn `inner`.
         val fnNames = listOf("T", "a", "b", "rest", "o", "arr", "inner")
         val fnNamesBound = fnNames.all { it in fnScope.symbols }
-        have(fnNamesBound)
+        assert(fnNamesBound)
     }
 }

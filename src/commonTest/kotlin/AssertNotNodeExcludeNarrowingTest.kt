@@ -94,7 +94,7 @@ class AssertNotNodeExcludeNarrowingTest {
     }
 
     @Test
-    fun `assertNotNode excludes an intersection-typed member (NonNullChain shape)`() {
+    fun `assertNotNode excludes an intersection-typed member - NonNullChain shape`() {
         diagnose(
             """
             interface Base { expr: number; }

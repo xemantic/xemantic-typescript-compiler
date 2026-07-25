@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.sameAs
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -70,7 +71,7 @@ class CrlfSameAsIssueTest {
      * Structure: source echo section (LF endings) followed by JS output section (CRLF endings).
      * This mirrors the real files in `typescript-repo/tests/baselines/reference/`.
      */
-    private fun makeBaseline(jsLine: String): String = buildString {
+    private fun makeBaseline(@Language("typescript") jsLine: String): String = buildString {
         // Source echo: LF endings (preserved from the original .ts file)
         append("//// [example.ts]\n")
         append("export const x = 1;\n")
@@ -99,7 +100,7 @@ class CrlfSameAsIssueTest {
      */
     @kotlin.test.Ignore
     @Test
-    fun crlfDiffOutputIsGarbledInTerminal() {
+    fun `a CRLF diff output is garbled in the terminal`() {
         val expected = makeBaseline("export const x = 1;")
         val actual   = makeBaseline("export const x = 2;")   // one character differs
         // The diff message will be unreadable: \r in content lines overwrites the -/+ prefix
@@ -118,7 +119,7 @@ class CrlfSameAsIssueTest {
      */
     @kotlin.test.Ignore
     @Test
-    fun lfDiffOutputIsReadableForComparison() {
+    fun `an LF diff output is readable for comparison`() {
         val expected = makeBaseline("export const x = 1;").replace("\r\n", "\n")
         val actual   = makeBaseline("export const x = 2;").replace("\r\n", "\n")
         // The diff message is clean: "-export const x = 1;" / "+export const x = 2;"
@@ -135,7 +136,7 @@ class CrlfSameAsIssueTest {
      */
     @kotlin.test.Ignore
     @Test
-    fun minimalCrlfReproduction() {
+    fun `a minimal CRLF reproduction`() {
         val expected = "unchanged line\r\nexpected content\r\n"
         val actual   = "unchanged line\r\nactual content\r\n"
         // In a terminal the diff shows only "actual content" with no -/+ sign visible,

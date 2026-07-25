@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
@@ -69,7 +69,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        have(ts2344(result).isEmpty())
+        assert(ts2344(result).isEmpty())
     }
 
     @Test
@@ -90,7 +90,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        have(ts2344(result).isEmpty())
+        assert(ts2344(result).isEmpty())
     }
 
     @Test
@@ -115,7 +115,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        have(ts2344(result).isEmpty())
+        assert(ts2344(result).isEmpty())
     }
 
     @Test
@@ -133,7 +133,7 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        have(result.diagnostics.filter { it.code == 2344 || it.code == 2339 }.isEmpty())
+        assert(result.diagnostics.filter { it.code == 2344 || it.code == 2339 }.isEmpty())
     }
 
     @Test
@@ -152,6 +152,6 @@ class TypeParamInternKeyTest {
                 """.trimIndent(),
             )
         )
-        have(ts2344(result).any { it.contains("'string'") && it.contains("'number'") })
+        assert(ts2344(result).any { it.contains("'string'") && it.contains("'number'") })
     }
 }

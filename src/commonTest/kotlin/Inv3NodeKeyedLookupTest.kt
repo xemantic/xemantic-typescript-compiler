@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
-import kotlin.test.assertSame
 
 /**
  * INV.3(c)(i) (round 504): `lookupPerFileForNode` — the NODE-keyed per-file
@@ -81,7 +81,7 @@ class Inv3NodeKeyedLookupTest {
             .filterIsInstance<InterfaceDeclaration>().single()
         val member = iface.members.filterIsInstance<PropertyDeclaration>().single()
         val annotation = member.type
-        assertNotNull(annotation)
+        assert(annotation != null)
         return annotation
     }
 
@@ -89,16 +89,16 @@ class Inv3NodeKeyedLookupTest {
     fun `a foreign file's annotation node resolves the name under its OWNING file's visibility`() {
         val (checker, results) = buildChecker(declaringFile, foreignFile)
         val declared = results.getValue("/proj/a.ts").locals["KindEnum"]
-        assertNotNull(declared)
+        assert(declared != null)
         val resolved = checker.lookupPerFileForNode(kindAnnotationNode(results), "KindEnum")
-        assertSame(declared, resolved)
+        assert(resolved === declared)
     }
 
     @Test
     fun `a node owned by a file where the name has no meaning yields null - the leak killed`() {
         val (checker, results) = buildChecker(declaringFile, foreignFile)
         val bNode = results.getValue("/proj/b.ts").sourceFile.statements.first()
-        assertNull(checker.lookupPerFileForNode(bNode, "KindEnum"))
+        assert(checker.lookupPerFileForNode(bNode, "KindEnum") == null)
     }
 
     @Test
@@ -111,9 +111,9 @@ class Inv3NodeKeyedLookupTest {
             """,
         )
         val declared = results.getValue("/proj/a.ts").locals["KindEnum"]
-        assertNotNull(declared)
+        assert(declared != null)
         val cNode = results.getValue("/proj/c.ts").sourceFile.statements.first()
-        assertSame(declared, checker.lookupPerFileForNode(cNode, "KindEnum"))
+        assert(checker.lookupPerFileForNode(cNode, "KindEnum") === declared)
     }
 
     @Test
@@ -137,8 +137,8 @@ class Inv3NodeKeyedLookupTest {
         val (_, results) = buildChecker(declaringFile, foreignFile)
         val aFile = results.getValue("/proj/a.ts").sourceFile
         val owner = owningSourceFile(kindAnnotationNode(results))
-        assertNotNull(owner)
-        assertSame(aFile, owner)
+        assert(owner != null)
+        assert(owner === aFile)
     }
 
     @Test
@@ -146,6 +146,6 @@ class Inv3NodeKeyedLookupTest {
         val (checker, results) = buildChecker(declaringFile, foreignFile)
         val bNode = results.getValue("/proj/b.ts").sourceFile.statements.first()
         // `Array` is lib-visible everywhere — never module-only, never nulled.
-        assertNotNull(checker.lookupPerFileForNode(bNode, "Array"))
+        assert(checker.lookupPerFileForNode(bNode, "Array") != null)
     }
 }

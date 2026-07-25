@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -49,7 +50,7 @@ class Inv4SpineG1PinsTest {
     @Test
     fun `top-level expression statement fires TS2339`() {
         val d = diagnose(prelude + "\no.missing;\n")
-        kotlin.test.assertEquals(1, d.count { it.code == 2339 }, "expected 1 TS2339, got: $d")
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     @Test
@@ -66,7 +67,7 @@ class Inv4SpineG1PinsTest {
             function f() { return o.m2; }
             function g() { throw o.m3; }
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2339 }, "expected 3 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 3)
     }
 
     @Test
@@ -78,7 +79,7 @@ class Inv4SpineG1PinsTest {
             do { o.m5; } while (c);
             lbl: { o.m6; }
         """)
-        kotlin.test.assertEquals(6, d.count { it.code == 2339 }, "expected 6 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 6)
     }
 
     @Test
@@ -89,7 +90,7 @@ class Inv4SpineG1PinsTest {
                 default: o.m4; break;
             }
         """)
-        kotlin.test.assertEquals(4, d.count { it.code == 2339 }, "expected 4 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 4)
     }
 
     @Test
@@ -97,7 +98,7 @@ class Inv4SpineG1PinsTest {
         val d = diagnose(prelude + """
             try { o.m1; } catch (e) { o.m2; } finally { o.m3; }
         """)
-        kotlin.test.assertEquals(3, d.count { it.code == 2339 }, "expected 3 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 3)
     }
 
     @Test
@@ -105,7 +106,7 @@ class Inv4SpineG1PinsTest {
         val d = diagnose(prelude + """
             enum E { A = 1, B = o.m1 }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2339 }, "expected 1 TS2339, got: $d")
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     @Test
@@ -113,7 +114,7 @@ class Inv4SpineG1PinsTest {
         val d = diagnose(prelude + """
             namespace NS { const a = o.m1; }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2339 }, "expected 1 TS2339, got: $d")
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     // ── the for-statement reach quirk ───────────────────────────────────────
@@ -127,11 +128,11 @@ class Inv4SpineG1PinsTest {
         val d1 = diagnose(prelude + """
             for (let i = 0; o.m1; o.m2) { o.m3; }
         """)
-        kotlin.test.assertEquals(3, d1.count { it.code == 2339 }, "cond/incr/body: expected 3, got: ${d1.filter { it.code == 2339 }}")
+        assert(d1.count { it.code == 2339 } == 3)
         val d2 = diagnose(prelude + """
             for (let a = o.m1; ;) { break; }
         """)
-        kotlin.test.assertEquals(0, d2.count { it.code == 2339 }, "for-init: expected 0 (unreached), got: $d2")
+        assert(d2.count { it.code == 2339 } == 0)
     }
 
     // ── loop-variable typing state ──────────────────────────────────────────
@@ -168,7 +169,7 @@ class Inv4SpineG1PinsTest {
                 constructor() { this.m5; }
             }
         """)
-        kotlin.test.assertEquals(5, d.count { it.code == 2339 }, "expected 5 TS2339, got: ${d.filter { it.code == 2339 }}")
+        assert(d.count { it.code == 2339 } == 5)
     }
 
     @Test
@@ -201,7 +202,7 @@ class Inv4SpineG1PinsTest {
                 }
             }
         """)
-        kotlin.test.assertEquals(1, d.count { it.code == 2339 }, "expected 1 TS2339, got: $d")
+        assert(d.count { it.code == 2339 } == 1)
     }
 
     @Test
@@ -216,7 +217,7 @@ class Inv4SpineG1PinsTest {
             }
         """)
         // the near-miss member name draws the TS2551 spelling variant
-        kotlin.test.assertEquals(1, d.count { it.code == 2551 }, "expected 1 TS2551, got: $d")
+        assert(d.count { it.code == 2551 } == 1)
     }
 
     @Test

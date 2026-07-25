@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -43,11 +44,11 @@ import kotlin.test.Test
  */
 class CrossFileCalleeCollisionTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile(source.trimIndent(), "b.ts").diagnostics
 
     @Test
-    fun `callee resolves to the current file's own function, not another file's`() {
+    fun `callee resolves to the current file's own function - not another file's`() {
         // a.ts has getInfo(file: string, ...); b.ts has its own getInfo(State, ...).
         // The call in b.ts passes a State — must pick b.ts's getInfo.
         compile(

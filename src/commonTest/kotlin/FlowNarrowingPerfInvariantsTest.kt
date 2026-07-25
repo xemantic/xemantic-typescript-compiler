@@ -25,9 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * Pins the round-433 perf refactors' semantic invariants:
@@ -48,7 +49,7 @@ import kotlin.test.assertEquals
  */
 class FlowNarrowingPerfInvariantsTest {
 
-    private fun build(source: String): ProjectCompiler.Result {
+    private fun build(@Language("typescript") source: String): ProjectCompiler.Result {
         val vfs = InMemoryVfs(
             mapOf(
                 "/proj/src/main.ts" to source,
@@ -63,7 +64,7 @@ class FlowNarrowingPerfInvariantsTest {
         result.diagnostics.filter { it.code == 18048 }.map { it.line }
 
     @Test
-    fun sharedReassignScanKeepsPerClosurePastLastAssignmentSemantics() {
+    fun `the shared reassign scan keeps per-closure past-last-assignment semantics`() {
         // Both closures share the enclosing function (one cached scan, two starts —
         // g's query FILTERS f's cached scan): captured PARAM `a` is reassigned
         // AFTER f → a's narrowing is withheld in f → TS18048 on `a`; `b` is never
@@ -81,16 +82,13 @@ class FlowNarrowingPerfInvariantsTest {
             }
             """.trimIndent()
         )
-        assertEquals(
-            listOf("'a' is possibly 'undefined'."),
-            result.diagnostics.filter { it.code == 18048 }.map { it.message },
-            "expected exactly the withheld-narrowing TS18048 on `a` (not `b`); " +
-                "diagnostics: ${result.diagnostics.map { "${it.line}: TS${it.code} ${it.message}" }}"
+        assert(
+            result.diagnostics.filter { it.code == 18048 }.map { it.message } == listOf("'a' is possibly 'undefined'.")
         )
     }
 
     @Test
-    fun branchSiblingWalksStayIsolatedAcrossSharedUpstreamNodes() {
+    fun `branch sibling walks stay isolated across shared upstream nodes`() {
         // The diamond (if/else) join sits BETWEEN the closure and the `if (x)`
         // guard: the join's antecedents share every upstream path node. Narrowing
         // must survive into the closure (no TS18048) — sibling-poisoning of the
@@ -106,15 +104,11 @@ class FlowNarrowingPerfInvariantsTest {
             }
             """.trimIndent()
         )
-        assertEquals(
-            emptyList<Int?>(), ts18048Lines(result),
-            "narrowing must survive the diamond join into the closure; " +
-                "diagnostics: ${result.diagnostics.map { "${it.line}: TS${it.code} ${it.message}" }}"
-        )
+        assert(ts18048Lines(result) == emptyList<Int?>())
     }
 
     @Test
-    fun branchIsolationNegativeControl() {
+    fun `negative control - branch isolation`() {
         // Positive control for the emitter used above: without the guard the
         // captured maybe-undefined receiver DOES fire — proving the silent case
         // in the previous test is narrowing at work, not a dead emitter.
@@ -126,9 +120,8 @@ class FlowNarrowingPerfInvariantsTest {
             }
             """.trimIndent()
         )
-        have(
-            ts18048Lines(result).isNotEmpty(),
-            "unguarded captured maybe-undefined receiver must fire TS18048 (emitter active)",
-        )
+        // unguarded captured maybe-undefined receiver must fire TS18048 (emitter
+        // active)
+        assert(ts18048Lines(result).isNotEmpty())
     }
 }

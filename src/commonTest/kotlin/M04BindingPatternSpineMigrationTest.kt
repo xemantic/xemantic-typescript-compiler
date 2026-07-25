@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4, round 631): pins for the checkBindingPatternComputedIndexSig
@@ -60,7 +60,7 @@ class M04BindingPatternSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nconst f = ({[key]: v}) => v;"
         )
-        assertEquals(1, ds.count { it.code == 2537 })
+        assert(ds.count { it.code == 2537 } == 1)
         ds should {
             have(any { it.code == 2537 &&
                 it.message == "Type '{}' has no matching index signature for type 'string'." })
@@ -206,8 +206,8 @@ class M04BindingPatternSpineMigrationTest {
         val ds = diagnose(
             prelude + "\nlet {[a]: a} = x;"
         )
-        assertEquals(1, ds.count { it.code == 2448 })
-        assertEquals(1, ds.count { it.code == 2538 })
+        assert(ds.count { it.code == 2448 } == 1)
+        assert(ds.count { it.code == 2538 } == 1)
         ds should {
             have(any { it.code == 2448 &&
                 it.message == "Block-scoped variable 'a' used before its declaration." &&

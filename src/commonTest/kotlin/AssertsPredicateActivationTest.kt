@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
@@ -45,78 +46,66 @@ import kotlin.test.Test
  */
 class AssertsPredicateActivationTest {
 
-    private fun diagnosticsOf(source: String, name: String = "asserts.ts") =
-        TypeScriptCompiler().compile(source, name).diagnostics
-
-    private fun assertNone(source: String, vararg codes: Int) {
-        val diags = diagnosticsOf(source)
-        val hits = diags.filter { it.code in codes.toSet() }
-        have(hits.isEmpty())
-    }
-
-    private fun assertSome(source: String, vararg codes: Int) {
-        val diags = diagnosticsOf(source)
-        have(diags.any { it.code in codes.toSet() })
-    }
-
-    /**
-     * Negative controls: without any assertion, (a) the union → member var-decl
-     * assignment errors TS2322, and (b) passing a maybe-undefined union to a
-     * `string` parameter errors TS2345 (the B469 flow-narrowed call-arg consumer —
-     * the var-decl path is lenient for undefined-unions, so the nullish-shaped
-     * positive tests below use the call-arg signal instead).
-     */
-    @Test fun withoutAssertUnionToMemberErrors() {
-        assertSome(
+    @Test
+    fun `negative control - without an assertion a union assigned to a member errors TS2322`() {
+        diagnose(
             """
-            // @strict: true
             function h(x: number | string) {
                 const y: number = x;
             }
-            """.trimIndent() + "\n",
-            2322,
-        )
-        assertSome(
             """
-            // @strict: true
+        ) should {
+            have(any { it.code == 2322 })
+        }
+    }
+
+    /**
+     * The B469 flow-narrowed call-arg consumer — the var-decl path is lenient for
+     * undefined-unions, so the nullish-shaped positive tests below use this signal.
+     */
+    @Test
+    fun `negative control - without an assertion a maybe-undefined arg errors TS2345`() {
+        diagnose(
+            """
             declare function takesString(s: string): void;
             function f(x: string | undefined) {
                 takesString(x);
             }
-            """.trimIndent() + "\n",
-            2345,
-        )
+            """
+        ) should {
+            have(any { it.code == 2345 })
+        }
     }
 
-    /** `asserts x is T` with a concrete T narrows the union after the call. */
-    @Test fun assertsIsTNarrowsUnionAfterCall() {
-        assertNone(
+    @Test
+    fun `asserts x is T with a concrete T narrows the union after the call`() {
+        diagnose(
             """
-            // @strict: true
             declare function assertNum(x: unknown): asserts x is number;
             function h(x: number | string) {
                 assertNum(x);
                 const y: number = x;
             }
-            """.trimIndent() + "\n",
-            2322,
-        )
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
-    /** Bare `asserts x` with the reference passed directly narrows by truthiness. */
-    @Test fun bareAssertsNarrowsDirectArgByTruthiness() {
-        assertNone(
+    @Test
+    fun `bare asserts x with the reference passed directly narrows by truthiness`() {
+        diagnose(
             """
-            // @strict: true
             declare function assert(x: unknown): asserts x;
             declare function takesString(s: string): void;
             function f(x: string | undefined) {
                 assert(x);
                 takesString(x);
             }
-            """.trimIndent() + "\n",
-            2345,
-        )
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     /**
@@ -125,34 +114,35 @@ class AssertsPredicateActivationTest {
      * walked reference (this is what the round-385 pre-check had to widen to
      * path-containment for).
      */
-    @Test fun bareAssertsNarrowsByConditionArg() {
-        assertNone(
+    @Test
+    fun `bare asserts cond narrows by the asserted condition argument`() {
+        diagnose(
             """
-            // @strict: true
             declare function assert(cond: unknown): asserts cond;
             declare function takesString(s: string): void;
             function f(x: string | undefined) {
                 assert(x !== undefined);
                 takesString(x);
             }
-            """.trimIndent() + "\n",
-            2345,
-        )
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
-    /** Condition-arg narrowing composes with typeof narrowing. */
-    @Test fun bareAssertsNarrowsByTypeofCondition() {
-        assertNone(
+    @Test
+    fun `condition-argument narrowing composes with typeof narrowing`() {
+        diagnose(
             """
-            // @strict: true
             declare function assert(cond: unknown): asserts cond;
             function f(x: string | number) {
                 assert(typeof x === "string");
                 const y: string = x;
             }
-            """.trimIndent() + "\n",
-            2322,
-        )
+            """
+        ) should {
+            have(none { it.code == 2322 })
+        }
     }
 
     /**
@@ -161,10 +151,10 @@ class AssertsPredicateActivationTest {
      * whose target is `NonNullable<T>` (unmodeled utility → special-cased as
      * null/undefined exclusion).
      */
-    @Test fun namespaceAssertIsDefinedNonNullableNarrows() {
-        assertNone(
+    @Test
+    fun `a namespace-member assert with a NonNullable target narrows away undefined`() {
+        diagnose(
             """
-            // @strict: true
             declare namespace Debug {
                 function assertIsDefined<T>(value: T, message?: string): asserts value is NonNullable<T>;
             }
@@ -173,9 +163,10 @@ class AssertsPredicateActivationTest {
                 Debug.assertIsDefined(x);
                 takesString(x);
             }
-            """.trimIndent() + "\n",
-            2345,
-        )
+            """
+        ) should {
+            have(none { it.code == 2345 })
+        }
     }
 
     /**
@@ -183,29 +174,30 @@ class AssertsPredicateActivationTest {
      * statement must draw none of the implicit-return family (pre-fix, `asserts x is
      * string` parsed as bare `string` → a return-less body was flagged).
      */
-    @Test fun assertsBodyNeedsNoReturn() {
-        assertNone(
+    @Test
+    fun `an asserts body needs no return statement`() {
+        diagnose(
             """
-            // @strict: true
             function assertIsString(x: unknown): asserts x is string {
                 if (typeof x !== "string") throw new Error("not a string");
             }
             assertIsString("ok");
-            """.trimIndent() + "\n",
-            2355, 2366, 7030,
-        )
+            """
+        ) should {
+            have(none { it.code in setOf(2355, 2366, 7030) })
+        }
     }
 
-    /** Control: a non-asserts `x is T` guard still requires value-returning paths. */
-    @Test fun plainPredicateStillRequiresReturns() {
-        assertSome(
+    @Test
+    fun `negative control - a non-asserts x is T guard still requires value-returning paths`() {
+        diagnose(
             """
-            // @strict: true
             function isString(x: unknown): x is string {
             }
             isString("ok");
-            """.trimIndent() + "\n",
-            2355, 2366, 7030,
-        )
+            """
+        ) should {
+            have(any { it.code in setOf(2355, 2366, 7030) })
+        }
     }
 }

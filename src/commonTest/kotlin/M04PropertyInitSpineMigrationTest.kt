@@ -25,10 +25,10 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
-import kotlin.test.assertEquals
 
 /**
  * (M0.4): pins for the checkPropertyInitialization spine migration (TS2564
@@ -122,7 +122,7 @@ class M04PropertyInitSpineMigrationTest {
                 ["comp"]: number;
             }
         """.trimIndent())
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
         ds should {
             have(any { it.code == 2564 && it.message.contains("[\"comp\"]") })
         }
@@ -178,7 +178,7 @@ class M04PropertyInitSpineMigrationTest {
     @Test
     fun `class in a function body fires once`() {
         val ds = diagnose("function f() { class C { p: number; } }")
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     @Test
@@ -187,7 +187,7 @@ class M04PropertyInitSpineMigrationTest {
             if (true) { class A { p: number; } }
             outer: while (true) { class B { q: string; } }
         """.trimIndent())
-        assertEquals(2, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 2)
     }
 
     @Test
@@ -196,7 +196,7 @@ class M04PropertyInitSpineMigrationTest {
             switch (1) { case 1: { class A { p: number; } } }
             try { class B { q: string; } } catch (e) { class C { r: string; } }
         """.trimIndent())
-        assertEquals(3, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 3)
     }
 
     // ── reach: the multiplicity quirk ──────────────────────────────────────
@@ -208,7 +208,7 @@ class M04PropertyInitSpineMigrationTest {
                 m() { class Inner { p: number; } }
             }
         """.trimIndent())
-        assertEquals(2, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 2)
     }
 
     @Test
@@ -218,7 +218,7 @@ class M04PropertyInitSpineMigrationTest {
                 constructor() { class Inner { p: number; } }
             }
         """.trimIndent())
-        assertEquals(2, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 2)
     }
 
     @Test
@@ -232,7 +232,7 @@ class M04PropertyInitSpineMigrationTest {
                 }
             }
         """.trimIndent())
-        assertEquals(4, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 4)
     }
 
     @Test
@@ -242,7 +242,7 @@ class M04PropertyInitSpineMigrationTest {
                 static { class Inner { p: number; } }
             }
         """.trimIndent())
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     @Test
@@ -252,7 +252,7 @@ class M04PropertyInitSpineMigrationTest {
                 f = class Inner { p: number; };
             }
         """.trimIndent())
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     @Test
@@ -262,7 +262,7 @@ class M04PropertyInitSpineMigrationTest {
                 m() { class Inner { p: number; } }
             };
         """.trimIndent())
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     // ── reach: expression positions ────────────────────────────────────────
@@ -270,7 +270,7 @@ class M04PropertyInitSpineMigrationTest {
     @Test
     fun `class expression in a variable initializer fires`() {
         val ds = diagnose("const x = class C { p: number; };")
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     // NOTE: checkPropertyInitInExpr's abstract-ClassExpression gate is
@@ -282,7 +282,7 @@ class M04PropertyInitSpineMigrationTest {
     @Test
     fun `abstract class expression recovery parses a statement class and fires`() {
         val ds = diagnose("const x = abstract class C { p: number; };")
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     @Test
@@ -292,7 +292,7 @@ class M04PropertyInitSpineMigrationTest {
                 m() { class Inner { p: number; } }
             };
         """.trimIndent())
-        assertEquals(2, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 2)
     }
 
     @Test
@@ -306,7 +306,7 @@ class M04PropertyInitSpineMigrationTest {
             const o = { v: class E { t: number; } };
             declare function f(x: any): void;
         """.trimIndent())
-        assertEquals(5, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 5)
     }
 
     @Test
@@ -317,7 +317,7 @@ class M04PropertyInitSpineMigrationTest {
             const u = (class Cond { x: number; } as any) ? 1 : 2;
             const s = `x${'$'}{class T { y: number; }}`;
         """.trimIndent())
-        assertEquals(3, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 3)
     }
 
     @Test
@@ -334,7 +334,7 @@ class M04PropertyInitSpineMigrationTest {
     @Test
     fun `for-of expression is reached`() {
         val ds = diagnose("for (const v of [class A { p: number; }]) { }")
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     @Test
@@ -344,7 +344,7 @@ class M04PropertyInitSpineMigrationTest {
             const g = () => { if (true) { const c = class B { q: number; } } };
             const h = () => class R { r: number; };
         """.trimIndent())
-        assertEquals(2, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 2)
         ds should {
             have(none { it.code == 2564 && it.message.contains("'q'") })
         }
@@ -353,7 +353,7 @@ class M04PropertyInitSpineMigrationTest {
     @Test
     fun `function expression body direct return is reached`() {
         val ds = diagnose("const f = function () { return class A { p: number; }; };")
-        assertEquals(1, ds.count { it.code == 2564 })
+        assert(ds.count { it.code == 2564 } == 1)
     }
 
     @Test

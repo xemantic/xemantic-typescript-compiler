@@ -118,7 +118,7 @@ class M04UndefinedNameSpineMigrationTest {
     // ── name reach: walked statement positions fire ────────────────────────
 
     @Test
-    fun `TS2414 - name positions inside blocks, namespaces, and control flow fire`() {
+    fun `TS2414 - name positions inside blocks - namespaces - and control flow fire`() {
         diagnose(
             """
             {
@@ -298,7 +298,7 @@ class M04UndefinedNameSpineMigrationTest {
     }
 
     @Test
-    fun `function-expression generator state - starred silent, unstarred fires`() {
+    fun `function-expression generator state - starred silent - unstarred fires`() {
         diagnose(
             """
             function f() {
@@ -313,7 +313,7 @@ class M04UndefinedNameSpineMigrationTest {
     }
 
     @Test
-    fun `object-literal method generator state - starred silent, unstarred fires`() {
+    fun `object-literal method generator state - starred silent - unstarred fires`() {
         diagnose(
             """
             function f() {
@@ -345,7 +345,7 @@ class M04UndefinedNameSpineMigrationTest {
     }
 
     @Test
-    fun `class-declaration members inside a walked fn body - methods, ctor, and prop initializers`() {
+    fun `class-declaration members inside a walked fn body - methods - ctor - and prop initializers`() {
         diagnose(
             """
             function f() {
@@ -491,7 +491,7 @@ class M04UndefinedNameSpineMigrationTest {
     }
 
     @Test
-    fun `TS1163 - variable initializers, returns, and template spans are yield-walked`() {
+    fun `TS1163 - variable initializers - returns - and template spans are yield-walked`() {
         diagnose(
             """
             function f() {

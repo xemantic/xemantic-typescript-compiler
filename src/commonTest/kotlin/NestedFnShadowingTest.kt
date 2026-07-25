@@ -25,7 +25,8 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
+import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
 /**
@@ -44,12 +45,13 @@ import kotlin.test.Test
  */
 class NestedFnShadowingTest {
 
-    private fun compile(source: String) =
+    private fun compile(@Language("typescript") source: String) =
         TypeScriptCompiler().compile("// @strict: true\n" + source, "t.ts")
 
     private fun ts2554(r: CompilationResult) = r.diagnostics.filter { it.code == 2554 }
 
-    @Test fun fnTypedParamShadowsFileLevelFunctionForArity() {
+    @Test
+    fun `a fn-typed param shadows a file-level function for arity`() {
         // utilities.ts shape: `writeFileEnsuringDirectories(..., writeFile: (a,b,c)=>void)`
         // calls its 3-param PARAM while the file exports a 5-param `writeFile`.
         val r = compile(
@@ -60,10 +62,11 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
-    @Test fun controlUnshadowedWrongArityCallStillFires() {
+    @Test
+    fun `negative control - an unshadowed wrong-arity call still fires`() {
         val r = compile(
             """
             export function writeFile(host: object, diag: object, fileName: string, text: string, bom: boolean): void {}
@@ -72,10 +75,11 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(ts2554(r).any { it.message == "Expected 5 arguments, but got 2." })
+        assert(ts2554(r).any { it.message == "Expected 5 arguments, but got 2." })
     }
 
-    @Test fun destructuredParamShadowsFileLevelDeclare() {
+    @Test
+    fun `a destructured param shadows a file-level declare`() {
         // sys.ts shape: `declare function setTimeout(handler, timeout)` at file level;
         // an enclosing function destructures a rest-taking `setTimeout` from its host param.
         val r = compile(
@@ -87,10 +91,11 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
-    @Test fun bodyLocalConstShadowsEnclosingFunctionName() {
+    @Test
+    fun `a body-local const shadows the enclosing function name`() {
         // program.ts shape: a body-local `const` named like the ENCLOSING function
         // rebinds the name for calls in that body.
         val r = compile(
@@ -103,10 +108,11 @@ class NestedFnShadowingTest {
             export const top = existsUsingSource("p", true);
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
-    @Test fun namespaceInternalFunctionDoesNotLeakToFileLevel() {
+    @Test
+    fun `a namespace-internal function does not leak to file level`() {
         // parser.ts shape: `namespace Parser { function visit(x) {} }` must not
         // hijack the file-level 2-param `visit` for calls OUTSIDE the namespace —
         // while the namespace-scoped signature still governs calls INSIDE it.
@@ -124,14 +130,13 @@ class NestedFnShadowingTest {
             """.trimIndent()
         )
         val msgs = ts2554(r).map { it.message }
-        have(
-            msgs == listOf("Expected 1 arguments, but got 3."),
-            "file-level call must use the file signature (no error) and the in-namespace " +
-                "3-arg call must fail against the NAMESPACE-local 1-param fn",
-        )
+        // file-level call must use the file signature (no error) and the in-namespace
+        // 3-arg call must fail against the NAMESPACE-local 1-param fn
+        assert(msgs == listOf("Expected 1 arguments, but got 3."))
     }
 
-    @Test fun constructorOverloadsUseTheArityRange() {
+    @Test
+    fun `constructor overloads use the arity range`() {
         // semver.ts shape: `constructor(text: string); constructor(major, minor?, ...)` —
         // a call within ANY overload's arity must not be checked against just the first.
         val r = compile(
@@ -145,10 +150,11 @@ class NestedFnShadowingTest {
             export const w = new Version("1.2.3");
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
-    @Test fun controlSingleCtorWrongArityStillFires() {
+    @Test
+    fun `negative control - a single ctor with wrong arity still fires`() {
         val r = compile(
             """
             export class Single {
@@ -157,10 +163,11 @@ class NestedFnShadowingTest {
             export const s = new Single("a", 2);
             """.trimIndent()
         )
-        have(ts2554(r).any { it.message == "Expected 1 arguments, but got 2." })
+        assert(ts2554(r).any { it.message == "Expected 1 arguments, but got 2." })
     }
 
-    @Test fun spreadArgumentSuppressesTooFew() {
+    @Test
+    fun `a spread argument suppresses too-few`() {
         // commandLineParser.ts shape: `createDiagnostic(...args)` — the spread counts
         // as one argument but expands to N, so a too-FEW conclusion is unsound.
         val r = compile(
@@ -170,20 +177,22 @@ class NestedFnShadowingTest {
             three(...tup);
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
-    @Test fun controlPlainTooFewStillFires() {
+    @Test
+    fun `negative control - a plain too-few still fires`() {
         val r = compile(
             """
             declare function three(a: string, b: string, c: string): void;
             three("x");
             """.trimIndent()
         )
-        have(ts2554(r).any { it.message == "Expected 3 arguments, but got 1." })
+        assert(ts2554(r).any { it.message == "Expected 3 arguments, but got 1." })
     }
 
-    @Test fun fnDefaultParamShadowsFileLevelFunctionInArgPosition() {
+    @Test
+    fun `a fn default param shadows a file-level function in argument position`() {
         // emitter.ts shape: `getOutputName(input, gcsd = (): string => "")` passes the
         // PARAM through as an argument typed `() => string` — must not resolve the
         // file-level 4-param `gcsd` (TS2345 fn-type mismatch FP).
@@ -196,10 +205,11 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(r.diagnostics.none { it.code == 2345 })
+        assert(r.diagnostics.none { it.code == 2345 })
     }
 
-    @Test fun controlFileLevelFnAsWrongArgStillFires() {
+    @Test
+    fun `negative control - a file-level fn as a wrong argument still fires`() {
         val r = compile(
             """
             export function gcsd(options: string, files: string, cwd: string, canonical: string): string { return ""; }
@@ -207,7 +217,7 @@ class NestedFnShadowingTest {
             export const out = worker("in", gcsd);
             """.trimIndent()
         )
-        have(r.diagnostics.any { it.code == 2345 })
+        assert(r.diagnostics.any { it.code == 2345 })
     }
 
     // --- Type path: a body-nested SIBLING function shadows a same-named IMPORT
@@ -228,7 +238,8 @@ class NestedFnShadowingTest {
         return ProjectCompiler(vfs).build("/proj", noEmit = true)
     }
 
-    @Test fun nestedSiblingFunctionShadowsImportOnTheTypePath() {
+    @Test
+    fun `a nested sibling function shadows an import on the type path`() {
         val r = buildProject(
             """
             import { writeFile } from "./util.js";
@@ -241,16 +252,17 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(r.diagnostics.none { it.code == 2345 })
+        assert(r.diagnostics.none { it.code == 2345 })
     }
 
-    @Test fun controlImportedFnUndefinedArgStillFires() {
+    @Test
+    fun `negative control - an imported fn with an undefined argument still fires`() {
         val r = buildProject(
             """
             import { writeFile } from "./util.js";
             writeFile({ h: 1 }, { d: 2 }, undefined);
             """.trimIndent()
         )
-        have(r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
+        assert(r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
     }
 }

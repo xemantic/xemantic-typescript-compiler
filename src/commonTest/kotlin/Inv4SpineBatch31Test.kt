@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -55,7 +56,7 @@ class Inv4SpineBatch31Test {
             const a = null + 1;
             const b = 1 * undefined;
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 18050 }, "expected 2 TS18050, got: ${d.filter { it.code == 18050 }}")
+        assert(d.count { it.code == 18050 } == 2)
     }
 
     @Test
@@ -64,7 +65,7 @@ class Inv4SpineBatch31Test {
             const a = null.foo;
             const b = undefined[0];
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 18050 }, "expected 2 TS18050, got: $d")
+        assert(d.count { it.code == 18050 } == 2)
     }
 
     @Test
@@ -74,7 +75,7 @@ class Inv4SpineBatch31Test {
             const a = null in o;
             const b = "" in null;
         """, directives = "// @strict: false")
-        kotlin.test.assertEquals(2, d.count { it.code == 18050 }, "expected 2 TS18050, got: $d")
+        assert(d.count { it.code == 18050 } == 2)
     }
 
     @Test
@@ -103,7 +104,7 @@ class Inv4SpineBatch31Test {
             const arrow = () => null.a2;
             const fe = function () { return undefined.f2; };
         """)
-        kotlin.test.assertEquals(7, d.count { it.code == 18050 }, "expected 7 TS18050, got: ${d.filter { it.code == 18050 }}")
+        assert(d.count { it.code == 18050 } == 7)
     }
 
     @Test
@@ -116,7 +117,7 @@ class Inv4SpineBatch31Test {
                 }
             }
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 18050 }, "expected 2 TS18050, got: $d")
+        assert(d.count { it.code == 18050 } == 2)
     }
 
     @Test
@@ -187,6 +188,6 @@ class Inv4SpineBatch31Test {
         val d = diagnose("""
             const o = { p: null.a, ...undefined.b };
         """)
-        kotlin.test.assertEquals(2, d.count { it.code == 18050 }, "expected 2 TS18050, got: $d")
+        assert(d.count { it.code == 18050 } == 2)
     }
 }

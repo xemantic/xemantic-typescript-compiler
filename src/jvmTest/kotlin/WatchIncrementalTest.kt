@@ -27,10 +27,8 @@ package com.xemantic.typescript.compiler
 
 import java.nio.file.Files
 import java.nio.file.Path
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
-import kotlin.test.assertEquals
-import kotlin.test.assertFalse
-import kotlin.test.assertTrue
 
 /**
  * INV.7(d1): the incremental-recheck contract — an incremental (partitioned)
@@ -80,13 +78,10 @@ class WatchIncrementalTest {
         val project = dir.toString()
         val prev = ProjectCompiler(SystemVfs).build(project, noEmit = true)
         val changedAbs = changed.map { dir.resolve(it).toString() }.toSet()
-        assertTrue(
-            WatchIncremental.incrementalEligible(changedAbs, prev) { SystemVfs.readText(it) },
-            "fixture change should be incremental-eligible",
-        )
+        assert(WatchIncremental.incrementalEligible(changedAbs, prev) { SystemVfs.readText(it) })
         val closure = WatchIncremental.recheckClosure(changedAbs, prev.importEdges)
         val fresh = ProjectCompiler(SystemVfs).build(project, noEmit = true, recheckOnly = closure)
-        assertTrue(WatchIncremental.incrementalOutcomeValid(changedAbs, prev, fresh))
+        assert(WatchIncremental.incrementalOutcomeValid(changedAbs, prev, fresh))
         val merged = WatchIncremental.mergeDiagnostics(prev, fresh.diagnostics, closure)
         val full = ProjectCompiler(SystemVfs).build(project, noEmit = true)
         return diagKeys(merged) to diagKeys(full.diagnostics)
@@ -112,8 +107,8 @@ class WatchIncrementalTest {
             const fresh: number = "still bad";
         """)
         val (merged, full) = incrementalVsFull(dir, setOf("src/c.ts"))
-        assertEquals(full, merged)
-        assertTrue(full.any { "still bad" in it || it.contains("TS2322") || it.contains("|2322|") })
+        assert(merged == full)
+        assert(full.any { "still bad" in it || it.contains("TS2322") || it.contains("|2322|") })
     }
 
     @Test
@@ -124,20 +119,14 @@ class WatchIncrementalTest {
             export const origin: Point = { x: 0 };
         """)
         val (merged, full) = incrementalVsFull(dir, setOf("src/a.ts"))
-        assertEquals(full, merged)
+        assert(merged == full)
     }
 
     @Test
     fun `the closure follows reverse edges transitively`() {
         val edges = listOf("/p/b.ts" to "/p/a.ts", "/p/c.ts" to "/p/b.ts", "/p/d.ts" to "/p/x.ts")
-        assertEquals(
-            setOf("/p/a.ts", "/p/b.ts", "/p/c.ts"),
-            WatchIncremental.recheckClosure(setOf("/p/a.ts"), edges),
-        )
-        assertEquals(
-            setOf("/p/b.ts", "/p/c.ts"),
-            WatchIncremental.recheckClosure(setOf("/p/b.ts"), edges),
-        )
+        assert(WatchIncremental.recheckClosure(setOf("/p/a.ts"), edges) == setOf("/p/a.ts", "/p/b.ts", "/p/c.ts"))
+        assert(WatchIncremental.recheckClosure(setOf("/p/b.ts"), edges) == setOf("/p/b.ts", "/p/c.ts"))
     }
 
     @Test
@@ -157,14 +146,11 @@ class WatchIncrementalTest {
             ))
             val prev = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true)
             val types = dir.resolve("src/types.ts").toString()
-            assertTrue(types in prev.sharedNameFiles, "interface Symbol should mark the file lib-shared")
-            assertFalse(
-                WatchIncremental.incrementalEligible(setOf(types), prev) { SystemVfs.readText(it) },
-                "a lib-shared-declaring file must force a full rebuild",
-            )
+            assert(types in prev.sharedNameFiles)
+            assert(!WatchIncremental.incrementalEligible(setOf(types), prev) { SystemVfs.readText(it) })
             // The sibling module WITHOUT shared names stays eligible.
             val use = dir.resolve("src/use.ts").toString()
-            assertTrue(WatchIncremental.incrementalEligible(setOf(use), prev) { SystemVfs.readText(it) })
+            assert(WatchIncremental.incrementalEligible(setOf(use), prev) { SystemVfs.readText(it) })
         } finally {
             dir.toFile().deleteRecursively()
         }
@@ -174,7 +160,7 @@ class WatchIncrementalTest {
     fun `a module NEWLY declaring a shared name fails outcome validation`() = withProject { dir ->
         val prev = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true)
         val c = dir.resolve("src/c.ts").toString()
-        assertTrue(WatchIncremental.incrementalEligible(setOf(c), prev) { SystemVfs.readText(it) })
+        assert(WatchIncremental.incrementalEligible(setOf(c), prev) { SystemVfs.readText(it) })
         // The edit ADDS a lib-shared interface — eligibility (based on prev) passes,
         // but the outcome validation on the fresh build must reject the merge.
         edit(dir, "src/c.ts", """
@@ -185,7 +171,7 @@ class WatchIncrementalTest {
         """)
         val closure = WatchIncremental.recheckClosure(setOf(c), prev.importEdges)
         val fresh = ProjectCompiler(SystemVfs).build(dir.toString(), noEmit = true, recheckOnly = closure)
-        assertFalse(WatchIncremental.incrementalOutcomeValid(setOf(c), prev, fresh))
+        assert(!WatchIncremental.incrementalOutcomeValid(setOf(c), prev, fresh))
     }
 
     @Test
@@ -194,11 +180,11 @@ class WatchIncrementalTest {
         val a = dir.resolve("src/a.ts").toString()
         fun eligible(paths: Set<String>, read: (String) -> String? = { SystemVfs.readText(it) }) =
             WatchIncremental.incrementalEligible(paths, prev, read)
-        assertFalse(eligible(setOf(dir.resolve("tsconfig.json").toString())))
-        assertFalse(eligible(setOf(dir.resolve("src/new.ts").toString())))            // not in program
-        assertFalse(eligible(setOf(a)) { null })                                      // deleted
-        assertFalse(eligible(setOf(a)) { "declare global { interface X {} }" })       // global augmentation
-        assertFalse(eligible(setOf("$a.d.ts")))                                       // .d.ts (also not in program)
-        assertTrue(eligible(setOf(a)))                                                // the positive control
+        assert(!eligible(setOf(dir.resolve("tsconfig.json").toString())))
+        assert(!eligible(setOf(dir.resolve("src/new.ts").toString())))            // not in program
+        assert(!eligible(setOf(a)) { null })                                      // deleted
+        assert(!eligible(setOf(a)) { "declare global { interface X {} }" })       // global augmentation
+        assert(!eligible(setOf("$a.d.ts")))                                       // .d.ts (also not in program)
+        assert(eligible(setOf(a)))                                                // the positive control
     }
 }
