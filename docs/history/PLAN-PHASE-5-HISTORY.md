@@ -1,3 +1,87 @@
+**Round 651 (2026-07-24) — (M0.4) twenty-eighth tail-pass migration:
+checkAbstractMemberContext (TS1253 abstract properties + TS1244 abstract
+methods/accessors in a non-abstract class + TS7008 abstract property without a
+type annotation; 81.6 ms at the round-647 table — the #28 per-file tail pass)
+is ON THE SPINE; the legacy driver + the mutually-recursive
+walkClassesForAbstractContext/walkExprForAbstractContext routing recursion
+(~161 lines — whose SOLE job was to REACH every nested class
+declaration/expression while threading a downward `inAmbient` flag) DELETED;
+the emission leaf processClassForAbstractContext (+
+emitAbstractMemberInNonAbstractClass / AbstractMemberInfo) survives
+anchor-called at ClassDeclaration/ClassExpression enters.** THE NEW TEMPLATE
+MOVE — **a downward BOOLEAN that is a pure function of the ancestor chain does
+NOT need to ride the classifier status (the round-641 boolean-as-status shape)
+NOR a frame stack: it can be re-derived by a SEPARATE, cheaper ancestor
+climb**, halving the status space. Here `inAmbient` is threaded monotonically
+(`inAmbient || Declare in modifiers` at ClassDeclaration and ModuleDeclaration;
+every other arm passes it through unchanged), and the ONLY walked edges out of
+those two node kinds are into member BODIES / the MODULE BLOCK — so for a
+REACHED node, "some `declare` ClassDeclaration/ModuleDeclaration ancestor
+exists" is exactly equivalent to the threaded OR. `spineAbInAmbient` is that
+climb; the reach classifier therefore carries no ambient channel at all
+(AB_STMT/AB_EXPR/AB_MEMBER only, where round 641's shape would have needed a
+doubled set). SOUNDNESS PRECONDITION worth stating for the next migrator: the
+climb is called ONLY after the reach check passes (spineAbEnterNode tests
+spineAbStatus first) — on an UNREACHED node the equivalence does NOT hold,
+since the path to it need not run through the contributing edge. Reach = the
+memoized classifier spineAbStatus/spineAbFold reproducing the two deleted walks
+verbatim: AB_STMT (the walkClasses walk), AB_EXPR (the walkExpr walk), AB_MEMBER
+(the class-member conduit — Method/Ctor/Get/Set/StaticBlock → body/AB_STMT).
+Unlike round 650's CP fold there is NO PropertyDeclaration in the conduit: Ab
+recurses member BODIES only, never property initializers, so BOTH class
+DECLARATIONS and class EXPRESSIONS share ONE conduit (no DECL/EXPR asymmetry to
+encode). Fully syntactic — NO ambient sandwich (the emission leaf reads only its
+`source`/`fileName` args + `options`, all immutable). Frozen quirks pinned both
+directions, including the FOUR deliberate divergences from the same-shaped
+round-650 CP fold (the easy-to-copy-wrong ones, since the two passes' walkers
+look nearly identical): (1) NO declare-skip anywhere — `declare`
+classes/modules/functions ARE walked, the flag suppresses only the EMISSION;
+(2) arrow/fn-expr Block bodies are the FULL statement walk, so a class
+DECLARATION directly in an arrow body IS reached (CP restricts to
+Expression/Return/Variable statements → NOT reached); (3) the switch SUBJECT IS
+walked (CP: not); (4) the ternary CONDITION IS walked (CP: not). Also pinned:
+class property INITIALIZERS unreached, if/loop/switch HEADS and for-INITIALIZERS
+unreached. CALIBRATION FIND (an emitter-scope fact, not a migration change): the
+abstract-property TS7008 is gated on `!isAmbient` but NOT on class abstractness,
+so an untyped `abstract prop;` in an ABSTRACT class still draws TS7008 while
+drawing no TS1253 — pinned. Two initial pins over-asserted `TS7008 == 0` by
+conflating this pass's TS7008 with the SEPARATE ambient-class implicit-any
+TS7008 (which fires independently inside a `declare namespace`); corrected to
+assert the UNIQUE codes TS1253/TS1244 — the only `to 1253`/`to 1244` mappings in
+Checker.kt, hence a clean reach signal. GATE NOTE: these three codes never fire
+on the clean tsc sources (0 occurrences across all 8 profiles), so `--listAll`
+×8 here proves PURE NON-PERTURBATION (that interleaving the emissions into the
+spine walk disturbs no other pass); the behavioral-equivalence burden rests on
+the 30 pins verified against the LEGACY pass first + the corpus suite, which
+does exercise abstract-member shapes. binderResults driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8. Gates: 30 local pins
+(M04AbstractContextSpineMigrationTest) green against the LEGACY pass FIRST
+(30/30 after the TS7008 calibration above), 30/30 on the spine; suite 12,225 →
+12,255/0 (3 skipped); `--listAll` ×8 byte-identical pre-vs-post on all 8
+profiles (sorted error lines; 46×7/94 — captured from a LEGACY build and a
+MIGRATION build of the same tree and diffed, not merely count-compared);
+`--partitionCheck 2` EQUIVALENT ×8 (46×7/94); pass table 412 → 411 (the
+81.6 ms row gone — `--passTiming` reports "411 passes recorded" and zero
+checkAbstractMemberContext rows; checkSpine 20.0 s single-run, in-band with
+rounds 646–650's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`).
+M0.4 running total: top TWENTY-EIGHT tail passes migrated.
+NEXT (from the FRESH round-651 table captured this session — the top-28 rows
+are gone and **the tail is now FLAT: no row above 110 ms**, so per-pass wall
+value is small and the arc's remaining value is the aggregate ~5 s across ~90
+passes >20 ms): #29 is **checkImplicitAnyYieldExpressions 107.2 ms** (TS7057,
+walkYield7057Stmt/-Expr over a downward `inGen` boolean) — IMPORTANT for the
+migrator: `inGen` is RESET by any nested function-like and set true only by a
+generator FunctionDeclaration, so it is NOT monotone and THIS round's
+ambient-climb variant does NOT apply; it is the round-641
+boolean-as-status shape (the flag rides the classifier status). After it:
+checkAbstractMemberAccessInConstructor 68.4, checkIncDecTypeParamOperands
+68.3, checkConflictMarkers 67.8, checkImplicitAnyNewExpressions 66.9,
+checkArgumentsInClassFieldInitializers 65.0, checkSpreadPropertyOverrides
+60.4, checkTypeParamTypedOps 60.0 (checkCrossFileModuleAugmentationDuplicates,
+now 91.8 ms, stays SKIP — cross-file). The usual next step is the #29
+slot-move pre-gate; note the round-651 `--listAll` ×8 captures (46×7/94) are
+the valid PRE baseline for it, since HEAD is that build.
+
 **Round 650 (2026-07-24) — (M0.4) twenty-seventh tail-pass migration:
 checkConstructorParamInInitializers (TS2301 — an instance field initializer
 referencing a ctor param / ctor-body `var`; TS2663 — the parameter-property

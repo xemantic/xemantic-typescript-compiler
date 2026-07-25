@@ -20,6 +20,84 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 660 (2026-07-25) — (M1)(a) THE EPOCH-CHURN ATTRIBUTION: the item's
+premise was wrong in two ways, "fence per map" is dead before it was tried, and
+M1's prize is ~11–13%, not the 30–45% the queue claimed.** The first (M1) step
+was stated as "attribute the epoch churn: 80k of 111k walks run at fresh epochs
+because the walk's own recordings bump the fences — split read-relevant vs
+record-only state, or fence per-map". Measuring it says the diagnosis, the cause
+and the size were all off.
+
+**The instrument** (behind `--passTiming`, off-mode additive-only): every one of
+the 21 fence bumps is now TAGGED with the field or collection that moved
+(`bumpExprEpoch(src)`, inline with a constant tag → `epochBumps`), and the walk
+probe's single `walkMiss` counter is SPLIT — cold (first sighting of this
+reference) vs epoch-invalidated repeat — with, for the latter, the recomputed
+result compared against the pre-invalidation one (identical / structural / diff),
+the epoch delta, and a blame tag naming the last bumper.
+
+**Finding 1 — most misses are COLD, not churn.** Of 80,034 misses: **cold 45,476
+(57%)**, epoch-invalidated 34,558 (43%). The old framing conflated the two; no
+fence design whatsoever recovers the cold half.
+
+**Finding 2 — but the fence really is far too coarse.** Of the 34,558
+invalidated repeats, **34,424 (99.6%) recompute to an IDENTICAL result** — 1
+structural, 133 genuinely different. So essentially every invalidation is
+spurious *for the reference being walked*.
+
+**Finding 3 — and the coarseness is NOT noise, which kills "fence per map".**
+`meanEpochDelta` is **218**: between two successive walks of the SAME reference
+the fence moves ~218 times. Blame concentrates in exactly two sources —
+**currentLocalTypes swaps 67%, currentFlowGraph swaps 29% = 96%** — which are
+the spine's per-scope and per-file installs, i.e. GENUINE state changes, not
+bookkeeping. A finer fence over the same key space still trips on them.
+
+**Landed alongside, sound and zero-risk: no-op guards on all 13 fenced setters**
+(`if (field !== v) { field = v; bump }`) — an assignment that does not change the
+field cannot invalidate anything. That removes **1,461,277 pure no-op bumps
+(28% of all fence traffic**: currentTypeParamScope 466,906, contextualType
+223,699, currentSuperBaseType/Sig 186,004 each, currentEnumConstrainedParams
+181,336, currentClassForThis 152,548, currentFlowGraph 63,670 — i.e. save/restore
+round-trips and re-installs of the same instance) and drops meanEpochDelta
+218 → 154. **HONEST RESULT: it recovers ~200 of the 34.5k invalidated repeats —
+0.6%.** Killing the noise does not kill the churn; that is Finding 3 measured
+from the other side. Kept anyway because it is correct, it sharpens the blame
+table to genuine changes only, and a live memo will need it. Worth stating
+plainly: **the epoch is PROBE-ONLY today** — `spineExprEpoch` is read only by
+the two `--passTiming` shadow probes — so nothing in this round can alter
+compiler output, which is why a fence change of this size is a zero-risk commit.
+
+**What (b) becomes.** Not "split read-relevant vs record-only", not "fence per
+map", but **DEPENDENCY-KEYED validity**: a walk of reference R reads only state
+reachable from R's ROOT NAME, so a memo entry should record the
+`(rootName, generation)` it read and be served while that pair still matches —
+a per-NAME generation counter on the localTypes family (bumped on put/remove of
+that key; a swap = a new generation id for the whole map). Its second half is
+unchanged and is the part both earlier dead-ends were blocked on: canonicalize
+narrowing OUTPUTS (filters over interned unions must yield interned results;
+literal interning; instantiated-member caching ON the Type.Reference, deleting
+resolveGenericPropertyType's fresh-minting), because a valid memo hit that
+returns a fresh-but-equal Type still misses every downstream id-keyed cache.
+
+**Ceiling recalibration — the number to carry forward.** narrowWalks cost
+3,942 ms over 111,248 walks ≈ **35 µs/walk**, so a PERFECT walk memo saves the
+1,000 ms of already-identical repeats plus ~34.2k × 35 µs ≈ 1.2 s → **~2.2 s**;
+the getTypeOfExpression shadow memo could serve 149,742 of 484,628 calls (31%)
+≈ **1.1 s**. Together **≈ 3.3 s of ~29 s = 11–13%.** That is still the biggest
+single lever left — 3× the entire remaining M0.4 tail — but the item's
+"≤15–20 s path" (30–45%) was never measured and is now retired from the queue.
+Sizing the work to the real number is the point of paying for measurement first;
+this is the second consecutive round where doing so changed the plan.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); off-mode `--listAll` on the
+compiler profile byte-identical vs the round-658 capture (only `time:` differs) —
+sufficient here because the change is confined to probe counters and a fence
+that nothing outside `--passTiming` reads; warning-clean (the
+`NOTHING_TO_INLINE` suppression on `bumpExprEpoch` is deliberate: inlining keeps
+off-mode at one increment plus one static boolean test). NEXT: (M1)(b) —
+per-name generation counters on the localTypes family, shadow-gated
+(`hitWRONG` must stay 0), then canonical narrowing outputs.
+
 **Round 659 (2026-07-25) — (M0.4-AB) THE ARC MEASUREMENT, PAID: the M0.4
 migration arc is NOT a wall-clock lever, and the mechanism is measured. M0.4 is
 CLOSED at 35 passes; (M1) identity stability is next.** This round landed no
@@ -636,90 +714,6 @@ round-627 collector-prepass variant is the template (per-file setup state for
 the map + a memoized reach classifier for the `this.X` anchors, with the
 nested-function-body skip — deferred `this` — as frozen reach edges).
 
-**Round 651 (2026-07-24) — (M0.4) twenty-eighth tail-pass migration:
-checkAbstractMemberContext (TS1253 abstract properties + TS1244 abstract
-methods/accessors in a non-abstract class + TS7008 abstract property without a
-type annotation; 81.6 ms at the round-647 table — the #28 per-file tail pass)
-is ON THE SPINE; the legacy driver + the mutually-recursive
-walkClassesForAbstractContext/walkExprForAbstractContext routing recursion
-(~161 lines — whose SOLE job was to REACH every nested class
-declaration/expression while threading a downward `inAmbient` flag) DELETED;
-the emission leaf processClassForAbstractContext (+
-emitAbstractMemberInNonAbstractClass / AbstractMemberInfo) survives
-anchor-called at ClassDeclaration/ClassExpression enters.** THE NEW TEMPLATE
-MOVE — **a downward BOOLEAN that is a pure function of the ancestor chain does
-NOT need to ride the classifier status (the round-641 boolean-as-status shape)
-NOR a frame stack: it can be re-derived by a SEPARATE, cheaper ancestor
-climb**, halving the status space. Here `inAmbient` is threaded monotonically
-(`inAmbient || Declare in modifiers` at ClassDeclaration and ModuleDeclaration;
-every other arm passes it through unchanged), and the ONLY walked edges out of
-those two node kinds are into member BODIES / the MODULE BLOCK — so for a
-REACHED node, "some `declare` ClassDeclaration/ModuleDeclaration ancestor
-exists" is exactly equivalent to the threaded OR. `spineAbInAmbient` is that
-climb; the reach classifier therefore carries no ambient channel at all
-(AB_STMT/AB_EXPR/AB_MEMBER only, where round 641's shape would have needed a
-doubled set). SOUNDNESS PRECONDITION worth stating for the next migrator: the
-climb is called ONLY after the reach check passes (spineAbEnterNode tests
-spineAbStatus first) — on an UNREACHED node the equivalence does NOT hold,
-since the path to it need not run through the contributing edge. Reach = the
-memoized classifier spineAbStatus/spineAbFold reproducing the two deleted walks
-verbatim: AB_STMT (the walkClasses walk), AB_EXPR (the walkExpr walk), AB_MEMBER
-(the class-member conduit — Method/Ctor/Get/Set/StaticBlock → body/AB_STMT).
-Unlike round 650's CP fold there is NO PropertyDeclaration in the conduit: Ab
-recurses member BODIES only, never property initializers, so BOTH class
-DECLARATIONS and class EXPRESSIONS share ONE conduit (no DECL/EXPR asymmetry to
-encode). Fully syntactic — NO ambient sandwich (the emission leaf reads only its
-`source`/`fileName` args + `options`, all immutable). Frozen quirks pinned both
-directions, including the FOUR deliberate divergences from the same-shaped
-round-650 CP fold (the easy-to-copy-wrong ones, since the two passes' walkers
-look nearly identical): (1) NO declare-skip anywhere — `declare`
-classes/modules/functions ARE walked, the flag suppresses only the EMISSION;
-(2) arrow/fn-expr Block bodies are the FULL statement walk, so a class
-DECLARATION directly in an arrow body IS reached (CP restricts to
-Expression/Return/Variable statements → NOT reached); (3) the switch SUBJECT IS
-walked (CP: not); (4) the ternary CONDITION IS walked (CP: not). Also pinned:
-class property INITIALIZERS unreached, if/loop/switch HEADS and for-INITIALIZERS
-unreached. CALIBRATION FIND (an emitter-scope fact, not a migration change): the
-abstract-property TS7008 is gated on `!isAmbient` but NOT on class abstractness,
-so an untyped `abstract prop;` in an ABSTRACT class still draws TS7008 while
-drawing no TS1253 — pinned. Two initial pins over-asserted `TS7008 == 0` by
-conflating this pass's TS7008 with the SEPARATE ambient-class implicit-any
-TS7008 (which fires independently inside a `declare namespace`); corrected to
-assert the UNIQUE codes TS1253/TS1244 — the only `to 1253`/`to 1244` mappings in
-Checker.kt, hence a clean reach signal. GATE NOTE: these three codes never fire
-on the clean tsc sources (0 occurrences across all 8 profiles), so `--listAll`
-×8 here proves PURE NON-PERTURBATION (that interleaving the emissions into the
-spine walk disturbs no other pass); the behavioral-equivalence burden rests on
-the 30 pins verified against the LEGACY pass first + the corpus suite, which
-does exercise abstract-member shapes. binderResults driver → the spine's
-partition view, gated `--partitionCheck 2` EQUIVALENT ×8. Gates: 30 local pins
-(M04AbstractContextSpineMigrationTest) green against the LEGACY pass FIRST
-(30/30 after the TS7008 calibration above), 30/30 on the spine; suite 12,225 →
-12,255/0 (3 skipped); `--listAll` ×8 byte-identical pre-vs-post on all 8
-profiles (sorted error lines; 46×7/94 — captured from a LEGACY build and a
-MIGRATION build of the same tree and diffed, not merely count-compared);
-`--partitionCheck 2` EQUIVALENT ×8 (46×7/94); pass table 412 → 411 (the
-81.6 ms row gone — `--passTiming` reports "411 passes recorded" and zero
-checkAbstractMemberContext rows; checkSpine 20.0 s single-run, in-band with
-rounds 646–650's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`).
-M0.4 running total: top TWENTY-EIGHT tail passes migrated.
-NEXT (from the FRESH round-651 table captured this session — the top-28 rows
-are gone and **the tail is now FLAT: no row above 110 ms**, so per-pass wall
-value is small and the arc's remaining value is the aggregate ~5 s across ~90
-passes >20 ms): #29 is **checkImplicitAnyYieldExpressions 107.2 ms** (TS7057,
-walkYield7057Stmt/-Expr over a downward `inGen` boolean) — IMPORTANT for the
-migrator: `inGen` is RESET by any nested function-like and set true only by a
-generator FunctionDeclaration, so it is NOT monotone and THIS round's
-ambient-climb variant does NOT apply; it is the round-641
-boolean-as-status shape (the flag rides the classifier status). After it:
-checkAbstractMemberAccessInConstructor 68.4, checkIncDecTypeParamOperands
-68.3, checkConflictMarkers 67.8, checkImplicitAnyNewExpressions 66.9,
-checkArgumentsInClassFieldInitializers 65.0, checkSpreadPropertyOverrides
-60.4, checkTypeParamTypedOps 60.0 (checkCrossFileModuleAugmentationDuplicates,
-now 91.8 ms, stays SKIP — cross-file). The usual next step is the #29
-slot-move pre-gate; note the round-651 `--listAll` ×8 captures (46×7/94) are
-the valid PRE baseline for it, since HEAD is that build.
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1265,18 +1259,52 @@ structural item instead of landing alone.**
   only when it is on the path of another change. Bench TSV rows carry both
   medians locally (`bench/` is gitignored — the round-659 session note is the
   durable record and carries every per-pair number).
-- [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
-  path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
-  existence proof that the (f2) fold works once types are canonical).
-  (a) attribute the epoch churn: 80k of 111k walks run at fresh epochs because
-  the walk's own recordings bump the fences — split read-relevant vs
-  record-only state, or fence per-map; (b) canonicalize narrowing outputs
-  (filters over interned unions must yield interned results; literal interning;
-  instantiated-member caching ON the Type.Reference, deleting
-  resolveGenericPropertyType's fresh-minting); (c) re-attempt the (f2)
-  per-(reference, flowNode) fold SHADOW-FIRST (the round-595 epoch
-  infrastructure + shadow memo are the instruments), then (f1). Revert rules
-  per the INV ground rules.
+- [ ] **(M1) Identity stability → the two memo designs, RE-SCOPED by the
+  round-660 measurement. Realistic prize ~3.3 s of ~29 s = 11–13% — NOT the
+  "≤15–20 s path" this item used to claim (that figure was never measured; it
+  is retired).** Ceiling arithmetic, from the round-660 `--passTiming` run:
+  narrowWalks cost 3,942 ms over 111,248 walks ≈ 35 µs/walk, so a PERFECT walk
+  memo saves the 1,000 ms of already-identical repeats plus ~34.2k × 35 µs
+  ≈ 1.2 s → ~2.2 s; the getTypeOfExpression shadow memo could serve 149,742 of
+  484,628 calls (31%) ≈ 1.1 s. Both together ≈ 3.3 s. Still the biggest single
+  lever left (3× the whole remaining M0.4 tail), but size the work to it.
+  - [x] **(a) DONE round 660 — attribution instrumented, and the item's premise
+    was WRONG.** Every fence bump is now tagged (`bumpExprEpoch(src)` →
+    `epochBumps`) and the walk probe's `walkMiss` is split cold vs
+    epoch-invalidated with a result comparison + blame tag. (1) Of 80,034
+    misses, **45,476 (57%) are COLD** — a first sighting of that reference, so
+    no fence design recovers them; the old "80k walks run at fresh epochs"
+    framing conflated cold with churn. (2) But the fence IS far too coarse: of
+    the 34,558 invalidated repeats **99.6% recompute to an IDENTICAL result**
+    (only 133 differ). (3) The coarseness is NOT noise, so **"fence per map"
+    will not fix it**: meanEpochDelta is 218 (the fence moves ~218× between two
+    walks of one reference) and blame concentrates in currentLocalTypes swaps
+    (67%) + currentFlowGraph swaps (29%) = 96% — the spine's per-scope and
+    per-file installs, i.e. GENUINE state changes. ALSO LANDED: no-op guards on
+    all 13 fenced setters (`if (field !== v)`), which remove 1.46 M pure no-op
+    bumps (28% of fence traffic) and drop meanEpochDelta to 154 — but recover
+    only ~200 of the 34.5k invalidated repeats (0.6%), which is finding (3)
+    measured from the other side. Kept: correct, sharpens the blame table, and
+    the live memo will need it. (The epoch is PROBE-ONLY today — read only under
+    `--passTiming` — so none of this can change compiler behaviour.)
+  - [ ] **(b) DEPENDENCY-KEYED validity, not a finer fence** (this is what (a)
+    redefined). A walk of reference R reads only the state REACHABLE FROM R's
+    root name, so memo validity should be keyed on that name's own generation,
+    not on a program-wide fence: give the localTypes family a per-NAME
+    generation counter (bump on put/remove of that key, and on a swap treat the
+    whole map as a new generation id), record with each memo entry the
+    (rootName, generation) pair it read, and serve while those match. Second
+    half unchanged from the original item: canonicalize narrowing OUTPUTS so
+    filters over interned unions yield interned results (literal interning;
+    instantiated-member caching ON the Type.Reference, deleting
+    resolveGenericPropertyType's fresh-minting) — without that, even a valid
+    memo hit returns a fresh-but-equal Type and the downstream id-keyed caches
+    still miss. Gate each step SHADOW-FIRST: `hitWRONG` must stay 0.
+  - [ ] **(c) then the (f2) per-(reference, flowNode) fold, shadow-first, then
+    (f1).** The round-595/599 instruments (epoch, shadowExprMemo, walkShadow)
+    are in place and now attribute correctly. Revert rules per the INV ground
+    rules; the round-596/599 dead-ends stay dead until (b) lands — both were
+    blocked on exactly canonical outputs.
 - [ ] **(M2) Parallel scaling Phase 1** — shared frozen collectors: compute the
   318 program-wide collectors once, freeze, share read-only (the immutability
   audit in docs/parallel-caching.md). Sequenced AFTER M1 (canonical types
