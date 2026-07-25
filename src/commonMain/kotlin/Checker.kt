@@ -5939,6 +5939,22 @@ class Checker(
         // code's sole emitter and the sibling 17.170 `new` emitter is
         // gate-DISJOINT (its TS2350 arm fires only with noImplicitAny/strict
         // OFF, exactly when these anchors are inert).
+        // 12d' (M0.4 slot-move pre-gate, round 655 tail):
+        // checkArgumentsInClassFieldInitializers (TS2815 — an `arguments`
+        // reference in a class PROPERTY INITIALIZER or a class STATIC BLOCK,
+        // arrow functions transparent, ordinary function expressions opaque
+        // because they bind their own `arguments`) moved intact from slot 12d
+        // ahead of its spine migration. Coupling surface: self-contained —
+        // FULLY SYNTACTIC (identifier TEXT + member kinds + modifiers +
+        // source positions; NOT type-resolving → no first-touch hazard, no
+        // ambient install at all), the walk threads NO downward value beyond
+        // the walk IDENTITY (routing-for-classes vs inside-an-initializer),
+        // and grep-verified NO pass scans/dedups/retracts TS2815 — this is
+        // the code's sole emitter. Shape for the migration: the round-640
+        // TWO-INTERLEAVED-WALKS variant with the round-653 re-entry split
+        // (the emission walk's FunctionExpression/ClassExpression arms
+        // re-enter the routing walk).
+        pass("checkArgumentsInClassFieldInitializers") { checkArgumentsInClassFieldInitializers() }
         // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
         // (TS2715 — a `this.X` reference inside a constructor body or a
         // class-field initializer where X is an abstract member of the
@@ -6156,8 +6172,9 @@ class Checker(
         pass("checkClassStrictModeIdentifiers") { checkClassStrictModeIdentifiers() }
         // 12c. TS1042/TS1184 (modifiers on object-literal members) migrated to
         // the check spine (INV.4(b) batch 12) — see spineCheckObjLitModifiers.
-        // 12d. Check 'arguments' in class field initializers / static blocks (TS2815)
-        pass("checkArgumentsInClassFieldInitializers") { checkArgumentsInClassFieldInitializers() }
+        // 12d. TS2815 ('arguments' in class field initializers / static blocks)
+        // MOVED to the post-spine slot (M0.4 slot-move pre-gate, round 655
+        // tail) ahead of its spine migration — see the pass("checkSpine") site.
         // 13. Check export= in ES module files (TS1203)
         pass("checkExportAssignmentInEsModule") { checkExportAssignmentInEsModule() }
         // 14. Check unresolved module specifiers (TS2307)
