@@ -1,3 +1,84 @@
+**Round 654 (2026-07-25) — (M0.4) thirty-first tail-pass migration:
+checkIncDecTypeParamOperands (TS2356 — a `++`/`--` whose operand is a local,
+or a `this.<prop>` access, annotated as a bare UNCONSTRAINED type parameter;
+68.3 ms at the round-651 table — the #31 per-file tail pass) is ON THE SPINE;
+the driver + the whole incDec recursion (incDecHandleBody /
+incDecScanStatements / incDecScanStatement / incDecCheckExpr) are DELETED and
+the emission leaf (emitTS2356IfTypeParamOperand) is anchor-called at
+Prefix/Postfix `++`/`--` enters.** THE CHEAPEST MIGRATION CLASS, worth naming
+for the next migrator: **when the tail table's next pass is a STRUCTURAL TWIN
+of an already-migrated one, the migration is a transcription, and the whole
+cost is (a) diffing the two legacy walkers' arm sets and (b) pinning the
+differences.** Here the twin is round 637's checkGenericIndexWrite (the gx
+pass — whose own source comment says it "mirrors checkIncDecTypeParamOperands'
+scope threading"; the two walkers were written as siblings), so this round
+reuses the gx shape verbatim: the same boundary-child set
+(FunctionDeclaration / method / ctor / accessor BODIES + class-property
+INITIALIZERS), the same pull-based per-anchor ctx rebuild memoized per
+boundary child (spineIdcCtxAt/spineIdcCtxFor), and the same memoized binary
+reach classifier (spineIdcStatus over spineIdcEdge). The downward triple is
+gx's with SETS instead of maps: `tparams` ACCUMULATE (class + fn-declaration +
+method own TPs), `tpProps` REBUILD from the nearest enclosing class
+DECLARATION's bare-TP-annotated properties (RESET to ∅ by a nested
+FunctionDeclaration), `tpLocals` REBUILD per fn-like BODY from the body-WIDE
+collectTpLocals prepass — so the ctx is a pure function of the ancestor chain
+and `tparams` is consulted only by nested rebuilds, never by the emission.
+The arm diff against gx was exactly TWO expression arms —
+`<T>expr` TypeAssertions and `satisfies` are TRANSPARENT to this walk but
+absent from gx's — plus one already-shared quirk (the case-clause EXPRESSION
+is NOT walked, unlike the round-628 sy classifier). Frozen quirks pinned both
+directions: only ClassDeclaration and FunctionDeclaration open scopes, so
+arrows, function EXPRESSIONS and class EXPRESSIONS are NEVER walked (a `++`
+inside them is unreached, not merely unnamed); a class PROPERTY INITIALIZER is
+walked with BOTH name sets EMPTIED and a class STATIC BLOCK is not walked at
+all; loop HEADS (for init/condition/incrementor, for-in/of head expressions),
+if conditions, the switch subject, try/catch/finally, namespace bodies, call
+callees + arguments, element access, ternaries, array literals, spreads and
+all four cast forms ARE walked, while object literals, template spans and
+typeof/void/delete/await operands are NOT; and the tpLocals prepass is body-WIDE
+and block-BLIND (a `let x!: T` inside an if-block registers for the whole body,
+a for-INIT declaration registers) yet never descends a nested function body.
+Fully syntactic — NO ambient sandwich (the emission leaf reads only its
+source/fileName/name-set args). The legacy binderResults driver → the spine's
+partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule).
+GATE NOTE: TS2356 fires 0 times across all 8 tsc-source profiles (the shape —
+`++` on a bare-unconstrained-TP-typed operand — is always an error, so real
+code never carries it), and the generated corpus's TS2356 baselines are
+`.errors.txt` subtests, so `--listAll` ×8 pins PURE NON-PERTURBATION and the
+40 pins carry the behavioral-equivalence burden. Gates: 40 local pins
+(M04IncDecTypeParamSpineMigrationTest, written last session green against the
+LEGACY pass) 40/40 on the spine on the FIRST run — no calibration; suite
+12,335 → 12,375/0 (3 skipped); `--listAll` ×8 byte-identical vs the round-653 legacy capture
+(sorted error lines, 46×7/94 — main sources were unchanged between that
+capture and this migration, git-verified); `--partitionCheck 2` EQUIVALENT ×8;
+pass table 409 → 408 (zero checkIncDecTypeParamOperands rows; checkSpine 20.5 s — in-band); warning-clean.
+M0.4 running total: top THIRTY-ONE tail passes migrated. THE SESSION TAIL — the #32 pass is NOT spine
+material, and saying so is the finding: **checkConflictMarkers (TS1185, 67.8 ms
+at the round-651 table) does NO AST walk at all — it is a per-file SOURCE-TEXT
+scan — so there is nothing to fold into the spine and its cost is INTRINSIC;
+the lever is ALGORITHMIC.** A conflict marker is meaningful only at a LINE
+START, so the scan now visits line starts (one JDK-intrinsified
+`indexOf('\n')` hop per line) instead of testing every character. Measured on
+the compiler profile under the same single-run `--passTiming` methodology:
+67.8 ms (the legacy per-character loop) → 45.1 (an intermediate cut, four
+`indexOf(marker)` scans — REJECTED: `=`/`<`/`>` are so common in TS source
+that each scan pays for a false start on nearly every line, and it needed a
+hit list + sort to preserve emission order) → **26.5 ms** (line starts, 2.6×,
+emissions naturally left-to-right so no list and no sort). Equivalent by
+construction: exactly the legacy line-start positions are tested, the
+seven-identical-character test IS the legacy substring compare, and the
+`pos + 6 < length` bound is unchanged. Gates: 9 new pins
+(ConflictMarkerScanTest) green against the LEGACY scan FIRST and then
+unchanged across both rewrites; suite 12,375 → 12,384/0 (3 skipped);
+`--listAll` ×8 byte-identical (TS1185 fires 0 times on the tsc sources — but
+unlike most tail passes the CORPUS is a strong gate here: the generated
+conflictMarker* / conflictMarkerDiff3* `.errors.txt` subtests are ACTIVE and
+pin byte-exact TS1185 positions); pass table stays 408 (the pass keeps its own
+slot deliberately); warning-clean. NEXT (round-651 table): #33
+checkImplicitAnyNewExpressions 66.9 ms, then
+checkArgumentsInClassFieldInitializers 65.0, checkSpreadPropertyOverrides
+60.4, checkTypeParamTypedOps 60.0.
+
 **Round 653 (2026-07-24) — (M0.4) thirtieth tail-pass migration:
 checkAbstractMemberAccessInConstructor (TS2715 — a `this.X` reference inside a
 constructor body or a class-field initializer where X is an abstract member of

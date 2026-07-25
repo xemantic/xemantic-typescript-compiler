@@ -198,6 +198,9 @@ object PassTiming {
         depServeIdentical = 0; depServeStructural = 0; depServeWrong = 0
         depCold = 0; depNoPath = 0; depInvalidated = 0; depInvalidatedBy.clear()
         depWrongBy.clear(); depWrongSamples.clear()
+        exprResultKind.clear()
+        unstableRepeatStructural = 0; unstableRepeatDiff = 0; unstableRepeatCold = 0
+        unstableStructuralBy.clear()
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -325,6 +328,34 @@ object PassTiming {
     // name-enumerable and that is (b1)'s falsifiable answer.
     val depWrongBy = HashMap<String, Long>()
     val depWrongSamples = ArrayList<String>()
+
+    // (M1)(b2) round 663: measure the CANONICAL-OUTPUT prize directly. The
+    // expression shadow only admits instance-stable result kinds
+    // (Intrinsic/Interface/Reference) because unions and literal types are
+    // freshly minted per call — that IS the non-canonical-output problem, and
+    // it silently excludes those calls from the memo's denominator. These
+    // counters put them back: how often each kind is returned, and for the
+    // NON-stable ones whether a same-epoch repeat is STRUCTURALLY equal (i.e.
+    // interning the output would make it servable) or genuinely different.
+    val exprResultKind = HashMap<String, Long>()
+    var unstableRepeatStructural: Long = 0
+    var unstableRepeatDiff: Long = 0
+    var unstableRepeatCold: Long = 0
+
+    /** (M1)(b2): the structural-repeat population SPLIT BY KIND — decisive,
+     *  because unions are safely internable while object-literal freshness is
+     *  semantically load-bearing (the freshObjLitRange relation machinery), so
+     *  only part of this population is actually reachable. */
+    val unstableStructuralBy = HashMap<String, Long>()
+
+    fun noteUnstableStructural(kind: String) {
+        unstableRepeatStructural++
+        unstableStructuralBy[kind] = (unstableStructuralBy[kind] ?: 0L) + 1L
+    }
+
+    fun noteExprResultKind(kind: String) {
+        exprResultKind[kind] = (exprResultKind[kind] ?: 0L) + 1L
+    }
 
     fun noteDepWrong(shape: String, sample: String) {
         depServeWrong++
@@ -468,6 +499,10 @@ object PassTiming {
             " cold=$depCold invalidated=$depInvalidated noPath=$depNoPath\n" +
             "depInvalidatedBy: ${topCounts(depInvalidatedBy, 6)}\n" +
             "depWrongBy: ${topCounts(depWrongBy, 10)}\n" +
+            "exprResultKinds: ${topCounts(exprResultKind, 8)}\n" +
+            "unstable-kind repeats (the canonical-output prize): structural=$unstableRepeatStructural" +
+            " diff=$unstableRepeatDiff cold=$unstableRepeatCold\n" +
+            "  structural by kind: ${topCounts(unstableStructuralBy, 8)}\n" +
             depWrongSamples.joinToString("") { "   wrongSample: $it\n" } +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +

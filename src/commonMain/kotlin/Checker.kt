@@ -333,6 +333,11 @@ class Checker(
     )
     private val depWalkShadow = HashMap<Long, DepShadowEntry>()
 
+    /** (M1)(b2) round 663: same-epoch repeats of NON-instance-stable
+     *  getTypeOfExpression results (unions, literal types) — the population the
+     *  memo whitelist excludes. Declared BEFORE `init` (the init-order trap). */
+    private val shadowExprUnstable = HashMap<Int, Pair<Long, Type>>()
+
     private var tnProbeDepth = 0
     private var mrProbeDepth = 0
 
@@ -103351,6 +103356,26 @@ interface DataView {
             // transitions can never be served). shadowExprMemo value: epoch to
             // (result, confirmed).
             val stable = r is Type.Intrinsic || r is Type.Interface || r is Type.Reference
+            // (M1)(b2) round 663: the whitelist above EXCLUDES the freshly-minted
+            // kinds from the memo's denominator entirely, which hides the
+            // canonical-output prize. Count every call by result kind, and for a
+            // NON-stable result classify a same-epoch repeat as structurally
+            // equal (interning the output would make it servable) or genuinely
+            // different.
+            PassTiming.noteExprResultKind(depTypeShape(r))
+            if (!stable) {
+                val uid = (expr as NodeBase).nodeId
+                if (uid >= 0) {
+                    val prevU = shadowExprUnstable.put(uid, spineExprEpoch to r)
+                    when {
+                        prevU == null || prevU.first != spineExprEpoch ->
+                            PassTiming.unstableRepeatCold++
+                        typesStructurallyEqualForShadow(prevU.second, r) ->
+                            PassTiming.noteUnstableStructural(depTypeShape(r))
+                        else -> PassTiming.unstableRepeatDiff++
+                    }
+                }
+            }
             val id = if (!stable) -1 else (expr as NodeBase).nodeId
             if (id >= 0) {
                 val prev = shadowExprMemo[id]
@@ -103702,6 +103727,22 @@ interface DataView {
         is Type.TypeParam -> "tp"
         is Boolean -> "bool"
         else -> v::class.simpleName ?: "?"
+    }
+
+    /** Structural equality ENOUGH for the canonicality probe: same union member
+     *  id-set, or equal literal value, or plain identity. If this returns true
+     *  for two distinct instances, interning the output would have made the
+     *  second one a memo hit. */
+    private fun typesStructurallyEqualForShadow(a: Type, b: Type): Boolean = when {
+        a === b -> true
+        a is Type.Union && b is Type.Union ->
+            a.types.map { it.id }.sorted() == b.types.map { it.id }.sorted()
+        a is Type.StringLiteral && b is Type.StringLiteral -> a.value == b.value
+        a is Type.NumberLiteral && b is Type.NumberLiteral -> a.value == b.value
+        a is Type.BigIntLiteral && b is Type.BigIntLiteral -> a.value == b.value
+        a is Type.Intersection && b is Type.Intersection ->
+            a.types.map { it.id }.sorted() == b.types.map { it.id }.sorted()
+        else -> false
     }
 
     private fun depTypeBrief(v: Any?): String = when (v) {

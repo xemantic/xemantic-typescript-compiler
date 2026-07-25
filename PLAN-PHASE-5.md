@@ -20,6 +20,56 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 663 (2026-07-25) — (M1)(b2) MEASURED AND DROPPED: the canonical-output
+prize is ~0.1 s reachable, because 76% of it sits behind object-type freshness
+the relation engine deliberately depends on. (c) goes straight to the live walk
+memo.** Round 662 queued (b2) with an explicit "re-measure before investing"
+instruction; this round paid that and the instruction earned its keep.
+
+**Where the prize was hiding.** The expression shadow admits only
+instance-stable result kinds (Intrinsic / Interface / Reference) *because* unions
+and literal types are freshly minted per call — which IS the non-canonical-output
+problem, and it means those calls were never in the memo's denominator at all.
+Counting every `getTypeOfExpression` call by result kind: intrinsic 331,636,
+iface 125,683, **obj 102,102**, ref 27,309, union2 24,498, union3 3,773,
+Intersection 1,719, union7 1,165 … So the whitelist admits 484,628 (exactly the
+shadowMemo denominator, a nice self-check) and EXCLUDES ~134 k calls (22%).
+
+**The prize, and then the deciding split.** Of the excluded calls, **62,949 are
+same-epoch STRUCTURAL repeats** — freshly minted but structurally equal, so
+interning the output would make them servable — against only 347 that genuinely
+differ. That looks like ~0.45 s at the shadow's ~7.2 µs/hit. But split by kind it
+collapses: **obj = 47,629 (76%)**, unions ≈ 12.7 k, Intersection 495. Object-type
+freshness is DELIBERATELY load-bearing — the round-435 `freshObjLitRange`
+relation machinery depends on it, and the whitelist's own comment says so — so
+that 47.6 k / ~0.34 s half is unavailable without reopening relation semantics.
+The safely internable union+intersection remainder is ~13.2 k ≈ **~0.1 s**.
+
+**Verdict: drop (b2).** ~0.1 s of reachable gain, with its larger half gated
+behind semantics we depend on, against a ~1.4 s live walk memo that is already
+sound at `depServeWrong` = 0. Revisit only if union interning becomes desirable
+for another reason (INV.5 canonical types would subsume it anyway). This is the
+fourth consecutive round where measuring first changed the plan — and the second
+where it *cancelled* work rather than resizing it.
+
+**(c) is now an implementation task, not a research one**, and round 663 also
+banked the three hazards it must handle, all found while reasoning about going
+live: (i) **the walk is not pure** — it can trip `flowDepthTripped` → TS2563 via
+`reportFlowControlError`, and it consumes the global visit BUDGET, so a served
+hit changes both; the conservative rule is do not memoize a walk that tripped,
+and note a served hit consumes no budget so trips should become RARER, never more
+frequent (`--listAll` ×8 is the gate); (ii) the wrapper is generic and
+`isAssignedAtFlow` returns Boolean while the others return Type, so the cache
+stores `Any?` and casts — sound ONLY because `walkKind` is part of the key, which
+must be documented at the cast; (iii) the `inputId` fold is lossy in principle
+(32-bit path hash), so keep the shadow classification available under
+`--passTiming` so a collision surfaces as a wrong serve instead of silently. And
+unlike every M0.4 round, ~1.4 s ≈ 5% is ABOVE the drift band, so (c) owes a real
+interleaved A/B.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — every counter added
+this round is behind `--passTiming`; warning-clean.
+
 **Round 662 (2026-07-25) — (M1)(b1) ANSWERED WITHOUT BUILDING IT: the 165 wrong
 serves were a KEY COLLISION, not a dependency gap. `depServeWrong` is now 0, the
 dependency-keyed fence is SOUND as it stands — and the prize corrects down again,
@@ -575,87 +625,6 @@ routing descends only statement BODIES (if conditions, loop heads, the switch
 subject and case expressions are all silent) while emission descends every one
 of them — so the classifier needs a walk-IDENTITY channel and the pins already
 fix both directions.
-
-**Round 654 (2026-07-25) — (M0.4) thirty-first tail-pass migration:
-checkIncDecTypeParamOperands (TS2356 — a `++`/`--` whose operand is a local,
-or a `this.<prop>` access, annotated as a bare UNCONSTRAINED type parameter;
-68.3 ms at the round-651 table — the #31 per-file tail pass) is ON THE SPINE;
-the driver + the whole incDec recursion (incDecHandleBody /
-incDecScanStatements / incDecScanStatement / incDecCheckExpr) are DELETED and
-the emission leaf (emitTS2356IfTypeParamOperand) is anchor-called at
-Prefix/Postfix `++`/`--` enters.** THE CHEAPEST MIGRATION CLASS, worth naming
-for the next migrator: **when the tail table's next pass is a STRUCTURAL TWIN
-of an already-migrated one, the migration is a transcription, and the whole
-cost is (a) diffing the two legacy walkers' arm sets and (b) pinning the
-differences.** Here the twin is round 637's checkGenericIndexWrite (the gx
-pass — whose own source comment says it "mirrors checkIncDecTypeParamOperands'
-scope threading"; the two walkers were written as siblings), so this round
-reuses the gx shape verbatim: the same boundary-child set
-(FunctionDeclaration / method / ctor / accessor BODIES + class-property
-INITIALIZERS), the same pull-based per-anchor ctx rebuild memoized per
-boundary child (spineIdcCtxAt/spineIdcCtxFor), and the same memoized binary
-reach classifier (spineIdcStatus over spineIdcEdge). The downward triple is
-gx's with SETS instead of maps: `tparams` ACCUMULATE (class + fn-declaration +
-method own TPs), `tpProps` REBUILD from the nearest enclosing class
-DECLARATION's bare-TP-annotated properties (RESET to ∅ by a nested
-FunctionDeclaration), `tpLocals` REBUILD per fn-like BODY from the body-WIDE
-collectTpLocals prepass — so the ctx is a pure function of the ancestor chain
-and `tparams` is consulted only by nested rebuilds, never by the emission.
-The arm diff against gx was exactly TWO expression arms —
-`<T>expr` TypeAssertions and `satisfies` are TRANSPARENT to this walk but
-absent from gx's — plus one already-shared quirk (the case-clause EXPRESSION
-is NOT walked, unlike the round-628 sy classifier). Frozen quirks pinned both
-directions: only ClassDeclaration and FunctionDeclaration open scopes, so
-arrows, function EXPRESSIONS and class EXPRESSIONS are NEVER walked (a `++`
-inside them is unreached, not merely unnamed); a class PROPERTY INITIALIZER is
-walked with BOTH name sets EMPTIED and a class STATIC BLOCK is not walked at
-all; loop HEADS (for init/condition/incrementor, for-in/of head expressions),
-if conditions, the switch subject, try/catch/finally, namespace bodies, call
-callees + arguments, element access, ternaries, array literals, spreads and
-all four cast forms ARE walked, while object literals, template spans and
-typeof/void/delete/await operands are NOT; and the tpLocals prepass is body-WIDE
-and block-BLIND (a `let x!: T` inside an if-block registers for the whole body,
-a for-INIT declaration registers) yet never descends a nested function body.
-Fully syntactic — NO ambient sandwich (the emission leaf reads only its
-source/fileName/name-set args). The legacy binderResults driver → the spine's
-partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule).
-GATE NOTE: TS2356 fires 0 times across all 8 tsc-source profiles (the shape —
-`++` on a bare-unconstrained-TP-typed operand — is always an error, so real
-code never carries it), and the generated corpus's TS2356 baselines are
-`.errors.txt` subtests, so `--listAll` ×8 pins PURE NON-PERTURBATION and the
-40 pins carry the behavioral-equivalence burden. Gates: 40 local pins
-(M04IncDecTypeParamSpineMigrationTest, written last session green against the
-LEGACY pass) 40/40 on the spine on the FIRST run — no calibration; suite
-12,335 → 12,375/0 (3 skipped); `--listAll` ×8 byte-identical vs the round-653 legacy capture
-(sorted error lines, 46×7/94 — main sources were unchanged between that
-capture and this migration, git-verified); `--partitionCheck 2` EQUIVALENT ×8;
-pass table 409 → 408 (zero checkIncDecTypeParamOperands rows; checkSpine 20.5 s — in-band); warning-clean.
-M0.4 running total: top THIRTY-ONE tail passes migrated. THE SESSION TAIL — the #32 pass is NOT spine
-material, and saying so is the finding: **checkConflictMarkers (TS1185, 67.8 ms
-at the round-651 table) does NO AST walk at all — it is a per-file SOURCE-TEXT
-scan — so there is nothing to fold into the spine and its cost is INTRINSIC;
-the lever is ALGORITHMIC.** A conflict marker is meaningful only at a LINE
-START, so the scan now visits line starts (one JDK-intrinsified
-`indexOf('\n')` hop per line) instead of testing every character. Measured on
-the compiler profile under the same single-run `--passTiming` methodology:
-67.8 ms (the legacy per-character loop) → 45.1 (an intermediate cut, four
-`indexOf(marker)` scans — REJECTED: `=`/`<`/`>` are so common in TS source
-that each scan pays for a false start on nearly every line, and it needed a
-hit list + sort to preserve emission order) → **26.5 ms** (line starts, 2.6×,
-emissions naturally left-to-right so no list and no sort). Equivalent by
-construction: exactly the legacy line-start positions are tested, the
-seven-identical-character test IS the legacy substring compare, and the
-`pos + 6 < length` bound is unchanged. Gates: 9 new pins
-(ConflictMarkerScanTest) green against the LEGACY scan FIRST and then
-unchanged across both rewrites; suite 12,375 → 12,384/0 (3 skipped);
-`--listAll` ×8 byte-identical (TS1185 fires 0 times on the tsc sources — but
-unlike most tail passes the CORPUS is a strong gate here: the generated
-conflictMarker* / conflictMarkerDiff3* `.errors.txt` subtests are ACTIVE and
-pin byte-exact TS1185 positions); pass table stays 408 (the pass keeps its own
-slot deliberately); warning-clean. NEXT (round-651 table): #33
-checkImplicitAnyNewExpressions 66.9 ms, then
-checkArgumentsInClassFieldInitializers 65.0, checkSpreadPropertyOverrides
-60.4, checkTypeParamTypedOps 60.0.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1248,22 +1217,47 @@ structural item instead of landing alone.**
     correction: ~34 µs/walk × 41,389 = **~1.4 s** for the walk half (not the
     ~2.2 s rounds 660/661 reported off the coarse key), so M1's total lands at
     **~2.5 s ≈ 8–9%** with typeOfExpr's ~1.1 s.
-    - [ ] **(b2) canonicalize narrowing OUTPUTS** — unchanged, and still what
-      both earlier memo dead-ends were blocked on: filters over interned unions
-      must yield interned results; literal interning; instantiated-member
-      caching ON the Type.Reference, deleting resolveGenericPropertyType's
-      fresh-minting. Without it a valid memo hit returns a fresh-but-equal Type
-      and every downstream id-keyed cache still misses. NOTE the corrected-key
-      shadow reports `structural = 0`, i.e. on the flow-walk path canonicality
-      is already effectively holding — so (b2)'s payoff now looks like it lives
-      on the getTypeOfExpression / relation side, not here. Re-measure before
-      investing: if the id-keyed caches downstream of a walk are not actually
-      missing, (b2) may be droppable and (c) can go straight to the live memo.
-  - [ ] **(c) then the (f2) per-(reference, flowNode) fold, shadow-first, then
-    (f1).** The round-595/599 instruments (epoch, shadowExprMemo, walkShadow)
-    are in place and now attribute correctly. Revert rules per the INV ground
-    rules; the round-596/599 dead-ends stay dead until (b) lands — both were
-    blocked on exactly canonical outputs.
+    - [x] **(b2) DROPPED round 663 — measured, and the reachable prize is
+      ~0.1 s.** The re-measure-before-investing instruction paid off. The
+      expression memo's whitelist (Intrinsic/Interface/Reference) silently
+      excludes ~134 k of ~618 k getTypeOfExpression calls (22%) — obj 102,102,
+      unions ~29 k, Intersection 1,719 — precisely because those kinds are
+      "freshly minted per call", which IS the non-canonical-output problem. Of
+      those excluded calls, **62,949 are same-epoch STRUCTURAL repeats** (only
+      347 genuinely differ), so interning would make them servable. But the
+      by-kind split is the deciding number: **obj = 47,629 (76%)**, unions
+      ≈ 12.7 k, Intersection 495. Object-type freshness is DELIBERATELY
+      load-bearing (the round-435 freshObjLitRange relation machinery — the
+      whitelist comment says so explicitly), so the 47.6 k / ~0.34 s half is
+      not available without reopening relation semantics; the safely internable
+      union+intersection part is ~13.2 k ≈ **~0.1 s**. Against the ~1.4 s live
+      walk memo that is already sound at zero wrong serves, that is not worth
+      the risk — so (b2) is dropped and (c) goes straight to the live memo.
+      Revisit only if union interning becomes desirable for another reason
+      (INV.5 canonical types would subsume it).
+  - [ ] **(c) GO LIVE with the walk memo — the design is settled and gated,
+    this is now an implementation task worth ~1.4 s (~5%).** Serve from
+    `(reference nodeId, fileHash, walkKind, inputId)` → `(graph, rootLocalType,
+    rootNarrowedType, result)`, returning the cached result when all three
+    dependencies still match; the shadow reports 41,389 serves with
+    `depServeWrong` = 0, so correctness is established BEFORE the first line of
+    live code. Economics check already done: per-walk overhead is a key compute
+    plus 1–2 map gets against a ~34 µs walk, and 41.4 k of 111.2 k walks are
+    skipped. THREE hazards to handle explicitly, all identified in round 663:
+    (i) the walk is NOT pure — it can trip `flowDepthTripped` and emit TS2563
+    via `reportFlowControlError`, and it consumes the global visit BUDGET, so a
+    served hit changes both; the conservative rule is DO NOT memoize a walk that
+    tripped, and re-verify TS2563 counts on all 8 profiles (a served hit
+    consumes no budget, so trips should become RARER, never more frequent, and
+    `--listAll` is the gate); (ii) the wrapper is generic (`<T>`) and
+    `isAssignedAtFlow` returns Boolean while the others return Type — the cache
+    must store `Any?` and cast, which is sound only because `walkKind` is part
+    of the key (document that, and keep the `@Suppress("UNCHECKED_CAST")`
+    local); (iii) the `inputId` fold is lossy in principle (32-bit path hash) —
+    keep the shadow classification available under `--passTiming` so a
+    collision would surface as a wrong serve rather than silently. Gates: corpus
+    suite, `--listAll` ×8 byte-identical, `--partitionCheck 2` ×8, and — unlike
+    every M0.4 round — a REAL interleaved A/B, since ~5% is above the drift band.
 - [ ] **(M2) Parallel scaling Phase 1** — shared frozen collectors: compute the
   318 program-wide collectors once, freeze, share read-only (the immutability
   audit in docs/parallel-caching.md). Sequenced AFTER M1 (canonical types
