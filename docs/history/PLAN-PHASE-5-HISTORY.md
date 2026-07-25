@@ -1,3 +1,79 @@
+**Round 657 (2026-07-25) — (M0.4) thirty-fourth tail-pass migration:
+checkArrayToClassCastOverlap (TS2352 for a `<C<X>>arr` angle-bracket cast from
+an ARRAY-typed source to a different GENERIC CLASS target missing a required
+non-prototype property; 72.5 ms at the round-656 table — the #35 row) is ON THE
+SPINE, and it is THE CHEAPEST MIGRATION CLASS THERE IS: the pass OWNED NO
+WALK.** Worth naming for the next migrator, because the tell is one grep:
+**a tail pass whose driver only DRIVES A SHARED WALKER with its emitter as the
+callback has no reach of its own — and if a sibling driving the SAME walker is
+already on the spine, the migration is a FOLD-IN: add the leaf call to that
+sibling's arm, delete the driver, done.** Here the sibling is round 630's
+checkSameTargetReferenceCastOverlap (later joined by round 632's
+checkNullTypeAssertionOverlap and round 633's flag-arm lift), whose
+`spineCoStatus`/`spineCoEdge` already reproduce
+walkTypeAssertionsInStmt/-InExpr exactly — so CO_REACHED IS this pass's reach
+BY CONSTRUCTION: no new classifier, no edge set to diff (the round-654/655
+lesson about transcription-vs-diffing does not even arise), no frames, no ctx
+rebuild, no status channel, no setup/teardown, no memo. The entire diff is one
+call plus the driver's deletion (−26 lines net in Checker.kt after the
+replacement doc comment). Two placement details carry the whole correctness
+content: (1) the leaf goes **LAST** in the TypeAssertionExpression arm because
+its legacy slot (14''c) ran AFTER the two round-630/632 passes — that keeps the
+insertion order of two TS2352s at one shared position byte-exact (the stable
+diagnostic sort hides insertion order EXCEPT on exact start/length/code/message
+ties); (2) the legacy per-file ambient needs NO new install — checkSpine's own
+per-file loop already sets `currentFileLocals` to the file's binder locals
+(which is exactly what the deleted driver installed) and the shared arm already
+installs `currentCheckFileName` while nulling `currentFlowGraph`, matching the
+legacy post-spine slots. The shared walker itself SURVIVES (the round-630 sync
+rule) — its last remaining owner is the option-gated `checkErasableSyntaxOnly`,
+which is dispatched conditionally and never appears in the compiler profile's
+pass table. PIN CALIBRATION (one, and it is a useful trap): a negative control
+asserting "a non-Array source draws nothing" was WRONG — `<C<string>>s` for
+`s: string` DOES draw a TS2352, from a SIBLING cast-overlap emitter (a genuine
+non-overlap), so on a shared anchor a "this leaf stays silent" pin must
+discriminate by the emitter's own message CHAIN ("… is missing in type …"), not
+by the code count. Gates: 23 pins
+(M04ArrayToClassCastSpineMigrationTest, written green against the LEGACY pass
+in a preceding commit — the third consecutive round using that discipline)
+unchanged and green on the fold-in; suite 12,451 → 12,474/0 (3 skipped);
+`--listAll` ×8 byte-identical vs the round-656 capture taken from this same
+tree (46×7/94 — the only changed line per profile is `time:`, so the round-656
+capture doubled as this round's pre-migration baseline at zero cost, a trick
+worth reusing whenever consecutive rounds touch only the migrating pass);
+`--partitionCheck 2` EQUIVALENT ×8; pass table 406 → 405 (zero
+checkArrayToClassCastOverlap rows; checkSpine 20.9 s — in-band);
+warning-clean. M0.4 running total: top THIRTY-FOUR tail passes migrated.
+NEXT by cost (round-656 table): checkTypeParamTypedOps 71.0 ms,
+checkVarHoistRedeclaration 68.9, checkCallTypeArgCount 66.2,
+checkIllegalSuperCallsInNestedFunctions 62.7, checkTypeArgumentConstraints
+62.7, checkSpreadPropertyOverrides 62.5
+(checkCrossFileModuleAugmentationDuplicates, 109.7 ms, stays SKIP —
+cross-file). Before picking the next one, grep its driver for a SHARED walker
+call: another fold-in is worth two orders of magnitude less work than a
+classifier migration. THE SESSION TAIL — the #36 pass
+(checkTypeParamTypedOps, 71.0 ms) is PREPARED and is NOT a fold-in (it owns
+its own statement+expression recursion): no slot-move pre-gate is needed
+(it already sits AFTER checkSpine at slot 14''g) and its 33 migration pins
+are green against the LEGACY walkers on the FIRST run (suite 12,507/0).
+The shape is diagnosed: a DOWNWARD-MAP migration of the round-635
+ORDER-DEPENDENT flavour — `tpVars` (name → TypeParameter AST) is MUTATED in
+STATEMENT ORDER (only statements after a `var x: T` see the recording), it
+LEAKS through if/loop/try/namespace descents (one map object threaded down),
+and every FUNCTION-LIKE body REBUILDS it from its own parameters so nothing
+leaks INWARD — plus the pass's one ambient, `withInternedTpScope` re-pushing
+the TP scope at each fn-like body (and `currentFileLocals = result.locals`
+per file, which checkSpine already installs). Reach is unusually NARROW and
+pinned both directions: class DECLARATION method/ctor/get/set bodies are
+walked, while arrow and function-EXPRESSION bodies, class property
+initializers, `for` HEADS and `switch` statements have NO arm at all.
+Whether the order-dependence needs round 635's PUSH-based LIFO frames or
+just a pull-based per-fn-body rebuild is the open design call: the map's
+only writers are VariableStatement declarations, so a pull rebuild would
+have to fold PRECEDING SIBLINGS at every enclosing list level — cheap if
+anchors stay rare (the round-644 pre-gate trick: anchors pre-filter on the
+receiver being a plain Identifier before the climb).
+
 **Round 656 (2026-07-25) — (M0.4) thirty-third tail-pass migration:
 checkArgumentsInClassFieldInitializers (TS2815 — an `arguments` reference in a
 class PROPERTY INITIALIZER or a class STATIC BLOCK; 82.9 ms at the round-655

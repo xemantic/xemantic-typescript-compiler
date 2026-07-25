@@ -20,6 +20,68 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 666 (2026-07-25) — (M2) SIZED BEFORE ANY CODE AND PARKED: only 23% of
+the run divides, w4 is flat, and the 4-core box — not the design — is the binding
+constraint. The PERF arc closes here.** Round 665 ended with "size (M2) with a
+probe before writing code, the same way (d) was killed for 30 ms". Done, and the
+probe was cheap because the `--workers N` share-nothing mode already exists
+(INV.6(6c1)) — no new machinery was needed to measure the thing.
+
+**Measured** (compiler profile, 2 reps each, same JVM settings):
+
+    seq 27,873 ms  |  w2 24,669 (−11.5%)  |  w4 27,905 (+0.1%)
+
+w2 helps, w4 is flat — the "w4 flat" the item recorded, and still flat after
+M1's memo landed, so the M1-shrinks-warmup hypothesis in the item's own text is
+falsified. Solving seq-vs-w2 as `seq = R + P` and `w2 = R + P/2` gives
+**P ≈ 6.4 s (23%) divisible** against **R ≈ 21.5 s (77%) non-divisible**, i.e. an
+infinite-worker floor of ~21.5 s — a 23% best case before contention is even
+considered.
+
+**Why, from the code rather than from theory.** Each worker runs
+`sourceList.map { workerBinder.bind(it) }` — a FULL re-bind of EVERY file — and
+then constructs a full `Checker` in which all ~318 program-wide collectors run;
+only the per-file spine is narrowed by `assignedFileNames`. So the entire
+duplicated term IS R. Phase 1 as specified (compute the collectors once, freeze,
+share read-only) attacks at most the non-spine part of checker-init, which the
+pass table puts at **~3.3 s** (checker-init 24.2 s − checkSpine 20.9 s, plus
+outside-pass). On four already-saturated cores that reclaims CPU but buys no
+wall time — and w4 regressing against w2 is that saturation showing.
+
+**Verdict: park it.** The design is sound and would matter on a bigger host, but
+on 4 cores / 7.7 GB it cannot be demonstrated, and this arc's standing rule is
+not to land unmeasurable perf work. Two things would change the verdict, both
+recorded in the queue item: a host with ≥8 real cores (re-run this exact probe
+first), or a redesign that shrinks R instead of dividing P — and the full
+per-worker re-bind is the single largest identified duplication, so it is the
+honest first target if M2 is ever revived.
+
+**THE PERF ARC, CLOSED — the whole ledger in one place.** Every item was
+measured; almost every advertised number shrank on contact:
+
+| item | advertised | measured outcome |
+|---|---|---|
+| M0.1 tail deletion | ~6.2 s tail | 59 ms deletable — the tail is corpus-pinned |
+| M0.2/M0.3 dispatch+layout | — | −3.3%, −3.9%, −2.2%, −2.6% (landed) |
+| M0.4 spine migration (35 passes) | ~6.2 s | **+0.24% / −1.6% = neutral**; 75% of each pass's cost reappears in checkSpine |
+| M1 identity stability | "≤15–20 s path" (30–45%) | **−2.93% (0.83 s)** from the live walk memo; the expression half was 30 ms, not 1.1 s |
+| M2 parallel Phase 1 | scaling | 23% divisible, w4 flat — not demonstrable on this box |
+
+The durable lesson across all five: **an aggregate ratio applied to a
+non-uniform population is the arc's characteristic error** — it produced M0.4's
+"the tail is redundant traversal", M1's 1.1 s expression estimate (35× off), and
+round 662's 165 phantom wrong serves. Every correction came from measuring the
+specific population, and the shadow-classifier pattern made each correction cost
+one probe run instead of a build-and-revert cycle. That pattern, the tagged
+epoch, and the live dependency-keyed walk memo are what the arc leaves behind.
+
+**NEXT:** with PERF complete, the remaining unchecked queue items are the EP
+(emit-parity) family — EP.2 multi-line expression formatting, EP.1 cross-module
+const-enum inlining, EP.0 wiring the emit-diff gate into the dashboard.
+
+Gates: no code changed this round (probe only); tree clean; suite untouched at
+12,507/0/3.
+
 **Round 665 (2026-07-25) — (M1)(d) DEAD BEFORE IT WAS BUILT: an expression memo
 would save 30 ms, not the ~1.1 s on the books. M1 CLOSES with 0.83 s banked.**
 Round 664 wrote "measure the mean served-call cost BEFORE building" into this
@@ -506,82 +568,6 @@ cross-file). The per-pass wall value is now clearly below the noise floor
 (~65 ms on a ~25 s checker-init), so the honest next milestone is the ARC-level
 interleaved A/B once a few more land — or a decision to stop the arc and take
 (M1) identity stability, which carries the ≤15–20 s path.
-
-**Round 657 (2026-07-25) — (M0.4) thirty-fourth tail-pass migration:
-checkArrayToClassCastOverlap (TS2352 for a `<C<X>>arr` angle-bracket cast from
-an ARRAY-typed source to a different GENERIC CLASS target missing a required
-non-prototype property; 72.5 ms at the round-656 table — the #35 row) is ON THE
-SPINE, and it is THE CHEAPEST MIGRATION CLASS THERE IS: the pass OWNED NO
-WALK.** Worth naming for the next migrator, because the tell is one grep:
-**a tail pass whose driver only DRIVES A SHARED WALKER with its emitter as the
-callback has no reach of its own — and if a sibling driving the SAME walker is
-already on the spine, the migration is a FOLD-IN: add the leaf call to that
-sibling's arm, delete the driver, done.** Here the sibling is round 630's
-checkSameTargetReferenceCastOverlap (later joined by round 632's
-checkNullTypeAssertionOverlap and round 633's flag-arm lift), whose
-`spineCoStatus`/`spineCoEdge` already reproduce
-walkTypeAssertionsInStmt/-InExpr exactly — so CO_REACHED IS this pass's reach
-BY CONSTRUCTION: no new classifier, no edge set to diff (the round-654/655
-lesson about transcription-vs-diffing does not even arise), no frames, no ctx
-rebuild, no status channel, no setup/teardown, no memo. The entire diff is one
-call plus the driver's deletion (−26 lines net in Checker.kt after the
-replacement doc comment). Two placement details carry the whole correctness
-content: (1) the leaf goes **LAST** in the TypeAssertionExpression arm because
-its legacy slot (14''c) ran AFTER the two round-630/632 passes — that keeps the
-insertion order of two TS2352s at one shared position byte-exact (the stable
-diagnostic sort hides insertion order EXCEPT on exact start/length/code/message
-ties); (2) the legacy per-file ambient needs NO new install — checkSpine's own
-per-file loop already sets `currentFileLocals` to the file's binder locals
-(which is exactly what the deleted driver installed) and the shared arm already
-installs `currentCheckFileName` while nulling `currentFlowGraph`, matching the
-legacy post-spine slots. The shared walker itself SURVIVES (the round-630 sync
-rule) — its last remaining owner is the option-gated `checkErasableSyntaxOnly`,
-which is dispatched conditionally and never appears in the compiler profile's
-pass table. PIN CALIBRATION (one, and it is a useful trap): a negative control
-asserting "a non-Array source draws nothing" was WRONG — `<C<string>>s` for
-`s: string` DOES draw a TS2352, from a SIBLING cast-overlap emitter (a genuine
-non-overlap), so on a shared anchor a "this leaf stays silent" pin must
-discriminate by the emitter's own message CHAIN ("… is missing in type …"), not
-by the code count. Gates: 23 pins
-(M04ArrayToClassCastSpineMigrationTest, written green against the LEGACY pass
-in a preceding commit — the third consecutive round using that discipline)
-unchanged and green on the fold-in; suite 12,451 → 12,474/0 (3 skipped);
-`--listAll` ×8 byte-identical vs the round-656 capture taken from this same
-tree (46×7/94 — the only changed line per profile is `time:`, so the round-656
-capture doubled as this round's pre-migration baseline at zero cost, a trick
-worth reusing whenever consecutive rounds touch only the migrating pass);
-`--partitionCheck 2` EQUIVALENT ×8; pass table 406 → 405 (zero
-checkArrayToClassCastOverlap rows; checkSpine 20.9 s — in-band);
-warning-clean. M0.4 running total: top THIRTY-FOUR tail passes migrated.
-NEXT by cost (round-656 table): checkTypeParamTypedOps 71.0 ms,
-checkVarHoistRedeclaration 68.9, checkCallTypeArgCount 66.2,
-checkIllegalSuperCallsInNestedFunctions 62.7, checkTypeArgumentConstraints
-62.7, checkSpreadPropertyOverrides 62.5
-(checkCrossFileModuleAugmentationDuplicates, 109.7 ms, stays SKIP —
-cross-file). Before picking the next one, grep its driver for a SHARED walker
-call: another fold-in is worth two orders of magnitude less work than a
-classifier migration. THE SESSION TAIL — the #36 pass
-(checkTypeParamTypedOps, 71.0 ms) is PREPARED and is NOT a fold-in (it owns
-its own statement+expression recursion): no slot-move pre-gate is needed
-(it already sits AFTER checkSpine at slot 14''g) and its 33 migration pins
-are green against the LEGACY walkers on the FIRST run (suite 12,507/0).
-The shape is diagnosed: a DOWNWARD-MAP migration of the round-635
-ORDER-DEPENDENT flavour — `tpVars` (name → TypeParameter AST) is MUTATED in
-STATEMENT ORDER (only statements after a `var x: T` see the recording), it
-LEAKS through if/loop/try/namespace descents (one map object threaded down),
-and every FUNCTION-LIKE body REBUILDS it from its own parameters so nothing
-leaks INWARD — plus the pass's one ambient, `withInternedTpScope` re-pushing
-the TP scope at each fn-like body (and `currentFileLocals = result.locals`
-per file, which checkSpine already installs). Reach is unusually NARROW and
-pinned both directions: class DECLARATION method/ctor/get/set bodies are
-walked, while arrow and function-EXPRESSION bodies, class property
-initializers, `for` HEADS and `switch` statements have NO arm at all.
-Whether the order-dependence needs round 635's PUSH-based LIFO frames or
-just a pull-based per-fn-body rebuild is the open design call: the map's
-only writers are VariableStatement declarations, so a pull rebuild would
-have to fold PRECEDING SIBLINGS at every enclosing list level — cheap if
-anchors stay rare (the round-644 pre-gate trick: anchors pre-filter on the
-receiver being a plain Identifier before the climb).
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1236,11 +1222,29 @@ structural item instead of landing alone.**
     explanation. Do not revive without a NEW mechanism that makes the expensive
     calls servable — canonical types (INV.5) would be that mechanism, not a
     better fence.
-- [ ] **(M2) Parallel scaling Phase 1** — shared frozen collectors: compute the
-  318 program-wide collectors once, freeze, share read-only (the immutability
-  audit in docs/parallel-caching.md). Sequenced AFTER M1 (canonical types
-  shrink the per-worker warmup that capped w4 flat). Honest cap: the
-  4-core/7.7 GB box limits what scaling we can demonstrate locally.
+- [x] **(M2) SIZED round 666 and PARKED as not-locally-demonstrable — the box,
+  not the design, is the binding constraint.** Probed BEFORE writing code (the
+  discipline round 665 asked for), using the `--workers N` share-nothing mode
+  that already exists (INV.6(6c1)). Compiler profile, 2 reps each:
+  **seq 27,873 ms | w2 24,669 (−11.5%) | w4 27,905 (+0.1%)** — w2 helps, w4 is
+  flat, exactly the "w4 flat" the item recorded, and STILL flat after M1's memo.
+  Solving seq-vs-w2 as `seq = R + P`, `w2 = R + P/2`: only **P ≈ 6.4 s (23%)
+  divides**, with **R ≈ 21.5 s (77%) non-divisible**, so the infinite-worker
+  floor is ~21.5 s = a 23% best case even before contention. WHY, from the code:
+  each worker does `sourceList.map { workerBinder.bind(it) }` — a FULL re-bind of
+  EVERY file — and then builds a full `Checker` whose ~318 program-wide
+  collectors all run; only the per-file spine is narrowed by
+  `assignedFileNames`. So the duplicated-per-worker term is the whole of R, and
+  Phase 1 (compute the collectors once, freeze, share) attacks at most the
+  non-spine part of checker-init, measured at **~3.3 s** (checker-init 24.2 s −
+  checkSpine 20.9 s + outside-pass). On 4 saturated cores that is ~2.5 s of CPU
+  reclaimed but no wall win — w4 is already contention-bound, which is why it
+  regresses against w2. VERDICT: the work is sound and would matter on a bigger
+  machine, but on 4 cores / 7.7 GB it cannot be demonstrated, and this arc's rule
+  is not to land unmeasurable perf work. What would change the verdict: a host
+  with ≥8 real cores (re-run this exact probe first), or a redesign that shrinks
+  R rather than dividing P — the full per-worker re-bind is the single biggest
+  identified duplication and is the honest first target if M2 is revived.
 
 **EP — Emit parity (owner-authorized 2026-07-12: "output parity, including reported errors").**
 The offline v1 DoD checked emit COMPLETENESS (all files emitted, exit 0) but not
