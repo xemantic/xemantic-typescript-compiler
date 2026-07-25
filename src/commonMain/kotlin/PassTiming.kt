@@ -195,6 +195,8 @@ object PassTiming {
         walkMissCold = 0; walkMissEpochIdentical = 0; walkMissEpochStructural = 0
         walkMissEpochDiff = 0; walkMissEpochDeltaSum = 0
         epochBumps.clear(); epochBlame.clear(); epochNoops.clear()
+        depServeIdentical = 0; depServeStructural = 0; depServeWrong = 0
+        depCold = 0; depNoPath = 0; depInvalidated = 0; depInvalidatedBy.clear()
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
         getTypeOfExpressionDistinct.clear()
@@ -287,6 +289,32 @@ object PassTiming {
 
     fun noteEpochNoop(src: String) {
         epochNoops[src] = (epochNoops[src] ?: 0L) + 1L
+    }
+
+    // (M1)(b) round 661: the DEPENDENCY-KEYED validity shadow. Round 660 showed
+    // the global fence invalidates ~34.5 k walk repeats that would recompute
+    // IDENTICALLY, and that a finer fence over the same key space cannot help
+    // (96% of blame is genuine currentLocalTypes/currentFlowGraph SWAPS). So
+    // this shadow fences on what a walk of reference R actually READS instead:
+    // the identity of the FlowGraph plus the Type currently bound to R's ROOT
+    // NAME in the localTypes family. A swap to a different map that still binds
+    // the root to the same Type instance is then NOT an invalidation — which is
+    // exactly the population the global fence throws away.
+    // Probe-only; `depServeWrong` MUST be 0 before any live memo is considered.
+    var depServeIdentical: Long = 0
+    var depServeStructural: Long = 0
+    var depServeWrong: Long = 0
+    var depCold: Long = 0
+    var depNoPath: Long = 0
+    var depInvalidated: Long = 0
+    /** Which dependency differed on an invalidated repeat (graph / localType /
+     *  narrowed / several) — says whether the remaining churn is the flow graph
+     *  or the scope binding. */
+    val depInvalidatedBy = HashMap<String, Long>()
+
+    fun noteDepInvalidated(what: String) {
+        depInvalidated++
+        depInvalidatedBy[what] = (depInvalidatedBy[what] ?: 0L) + 1L
     }
 
     var relationNanos: Long = 0
@@ -420,6 +448,10 @@ object PassTiming {
             "epochBumps: ${topCounts(epochBumps, 8)}\n" +
             "epochBlame (last bump before an invalidated repeat): ${topCounts(epochBlame, 8)}\n" +
             "epochNoops (same-value assignments, bump SKIPPED): ${topCounts(epochNoops, 8)}\n" +
+            "depKeyed shadow: serve=${depServeIdentical + depServeStructural + depServeWrong}" +
+            " (identical=$depServeIdentical structural=$depServeStructural WRONG=$depServeWrong)" +
+            " cold=$depCold invalidated=$depInvalidated noPath=$depNoPath\n" +
+            "depInvalidatedBy: ${topCounts(depInvalidatedBy, 6)}\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "shadowMemo: hitCorrect=$shadowMemoHitCorrect hitWRONG=$shadowMemoHitWrong miss=$shadowMemoMiss\n" +

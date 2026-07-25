@@ -321,6 +321,18 @@ class Checker(
      *  (epoch, result). Probe-only. */
     private val walkShadow = HashMap<Long, Pair<Long, Any?>>()
 
+    /** (M1)(b) round 661: the dependency-keyed validity shadow's store — see
+     *  [depKeyedShadowClassify]. Declared BEFORE `init` (the init-order trap:
+     *  `init` runs the whole check pipeline, so a field declared further down
+     *  the file is still null while the probes fire). */
+    private class DepShadowEntry(
+        val graph: FlowGraph?,
+        val localType: Type?,
+        val narrowedType: Type?,
+        val result: Any?,
+    )
+    private val depWalkShadow = HashMap<Long, DepShadowEntry>()
+
     private var tnProbeDepth = 0
     private var mrProbeDepth = 0
 
@@ -103637,6 +103649,52 @@ interface DataView {
      * [isAssignedAtFlow] must route through this wrapper — an unwrapped entry would
      * leave a stale [flowDepthTripped] for the NEXT wrapped walk to mis-attribute.
      */
+    /** (M1)(b) round 661: the DEPENDENCY-KEYED validity shadow — probe-only.
+     *
+     * Round 660 established that the global [spineExprEpoch] fence discards
+     * ~34.4 k walk repeats that would recompute IDENTICALLY, and that a finer
+     * fence over the same key space cannot recover them because 96% of the
+     * invalidating bumps are GENUINE `currentLocalTypes` / `currentFlowGraph`
+     * swaps. This classifier tests the alternative: fence on what a walk of
+     * reference R actually READS — the FlowGraph identity plus the Type instance
+     * currently bound to R's ROOT NAME in the localTypes family (and its
+     * narrowed-declared companion). A swap to a DIFFERENT map that still binds
+     * the root to the SAME Type instance is then not an invalidation.
+     *
+     * `depServeWrong` is the gate: it must be 0 before a live memo is built on
+     * this key, since it counts entries this fence would have served with a
+     * result the live recompute disagrees with.
+     */
+    private fun depKeyedShadowClassify(key: Long, reference: Node, result: Any?) {
+        val path = (reference as? Expression)?.let { getReferencePath(it) }
+        if (path == null) { PassTiming.depNoPath++; return }
+        val root = flowPathRoot(path)
+        val graph = currentFlowGraph
+        val localType = currentLocalTypes[root]
+        val narrowedType = narrowedDeclaredTypes[root]
+        val prev = depWalkShadow.put(key, DepShadowEntry(graph, localType, narrowedType, result))
+        if (prev == null) { PassTiming.depCold++; return }
+        if (prev.graph === graph && prev.localType === localType &&
+            prev.narrowedType === narrowedType
+        ) {
+            val pv = prev.result
+            when {
+                pv === result -> PassTiming.depServeIdentical++
+                pv is Type.Union && result is Type.Union &&
+                    pv.types.map { it.id }.sorted() == result.types.map { it.id }.sorted() ->
+                    PassTiming.depServeStructural++
+                else -> PassTiming.depServeWrong++
+            }
+            return
+        }
+        val what = buildString {
+            if (prev.graph !== graph) append("graph")
+            if (prev.localType !== localType) { if (isNotEmpty()) append('+'); append("localType") }
+            if (prev.narrowedType !== narrowedType) { if (isNotEmpty()) append('+'); append("narrowed") }
+        }
+        PassTiming.noteDepInvalidated(what)
+    }
+
     private inline fun <T> flowWalkWithTripCheck(reference: Node, walk: () -> T): T? {
         if (isFlowAnalysisDisabledAt(reference.pos)) return null
         // INV.0 walks-launched counter — inert unless --passTiming enabled it.
@@ -103689,6 +103747,7 @@ interface DataView {
                         else -> PassTiming.walkRepeatDiff++
                     }
                 }
+                depKeyedShadowClassify(key, reference, result)
             }
             if (flowDepthTripped && !ctaM3RecordOnlySuppress) reportFlowControlError(reference)
             return result
