@@ -20,6 +20,61 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 664 (2026-07-25) — (M1)(c) THE FLOW-WALK MEMO IS LIVE: −2.93% wall
+(−833 ms), 40,542 walks skipped, and every diagnostic on all eight profiles
+byte-identical. The first measured WIN of the whole M5 performance arc.** Rounds
+660–663 were measurement; this one is the payoff, and it landed on the first
+attempt because the correctness argument was already finished.
+
+**What landed.** `flowWalkWithTripCheck` serves from a memo keyed
+`(reference nodeId, fileHash, walkKind, inputId)` whose value carries the
+dependencies the walk actually read — the FlowGraph instance plus the Type
+instances bound to the reference's ROOT NAME in `currentLocalTypes` and
+`narrowedDeclaredTypes` — returning the cached result while all three still
+match. A swap to a DIFFERENT scope map that still binds the root to the SAME
+instance is deliberately not an invalidation; that tolerance IS the design, and
+it is exactly the population the global epoch fence discarded (round 660).
+
+**Measured, interleaved, 6 pairs, alternating within-pair order, both class dirs
+kept with no recompile between measurements:**
+
+    pre  median 28,433 ms      post median 27,600 ms
+    delta −833 ms = −2.93%,    post wins 5/6
+    per-pair: −1124 −1540 −720 −1434 −810 +524
+
+Instrumented on the same profile: walks executed **111,248 → 69,859** (40,542
+served), narrowWalks **3,791 → 2,756 ms**, checker-init ~25.4 → 23.6 s.
+
+**The honest gap, and the lesson for the next memo.** The net (−0.83 s) is
+SMALLER than the ~1.4 s the shadow predicted, because the memo pays key +
+dependency lookup on ALL 111 k walks in order to skip 37% of them. Shadow
+"servable time" is an upper bound, not a forecast — the overhead side never
+appears in a shadow, by construction. That matters directly for (d): the
+expression path has ~6× the call count and a much cheaper mean call (~7 µs vs
+~34 µs), so its overhead fraction is far worse and the memo may not pay at all;
+the queue item now says to measure the mean served-call cost BEFORE building.
+
+**Correctness was finished before the first line of live code** — rounds 661–663
+ran this exact key as a shadow classifier and drove `depServeWrong` to 0 over
+41,389 serves — and all three round-663 hazards are handled: a walk that TRIPPED
+is never stored (its result is truncated and its TS2563 side effect must keep
+firing; a served hit runs no walk at all, so it consumes no visit budget and
+trips can only become RARER); the cache stores `Any?` and casts, sound because
+`walkKind` is part of the key so the Boolean-returning `isAssignedAtFlow` walks
+never share a key with Type-returning ones; and the shadow classification stays
+available under `--passTiming` so a lossy-`inputId` collision would surface as a
+wrong serve rather than silently.
+
+**Gates:** suite 12,507/0 (3 skipped, unchanged); `--listAll` ×8
+**byte-identical on all eight profiles** vs the round-658 capture (only `time:`
+differs) — so the memo moves no diagnostic anywhere, TS2563 included;
+`--partitionCheck 2` EQUIVALENT ×8; warning-clean.
+
+Arc position after five rounds of M1: the queue's original "≤15–20 s path"
+(30–45%) was retired at round 660 in favour of a measured ~3.3 s, corrected to
+~2.5 s at round 662, of which this round banks 0.83 s. The remaining (d) is the
+expression memo, and it is now the last M1 item.
+
 **Round 663 (2026-07-25) — (M1)(b2) MEASURED AND DROPPED: the canonical-output
 prize is ~0.1 s reachable, because 76% of it sits behind object-type freshness
 the relation engine deliberately depends on. (c) goes straight to the live walk
@@ -548,83 +603,6 @@ material). The tail is now VERY flat — no per-file row above 73 ms and ~90
 passes above 20 ms carrying the residual ~4.3 s — so per-pass wall value keeps
 shrinking and the arc-level interleaved A/B (owed once several more land) is
 the only honest wall evidence left.
-
-**Round 655 (2026-07-25) — (M0.4) thirty-second tail-pass migration:
-checkImplicitAnyNewExpressions (TS7009 — `new F()` whose target `F` is a plain
-FUNCTION symbol, so it carries no construct signature and the expression
-implicitly has type `any`; 66.9 ms at the round-651 table — the #33 row, #32
-having been the not-spine-material checkConflictMarkers) is ON THE SPINE; the
-driver and the whole walkNewImplicitAnyStmts / walkNewImplicitAnyStmt /
-walkNewImplicitAnyClassMember / walkNewImplicitAnyInExpr recursion (~8.8 KB) are
-DELETED and the emission leaf (checkNewExprImplicitAny) is anchor-called at
-NewExpression enters.** THE SIMPLEST MIGRATION CLASS, worth naming alongside
-round 654's structural twin: **a pass whose walk threads NO DOWNWARD VALUE AT
-ALL — only the invariant `source`/`fileName` pair — needs no ctx rebuild, no
-frames, no leave hook and no status channel; the entire migration is a memoized
-BINARY reach classifier plus an anchor.** The whole zoo of downward machinery
-accumulated since round 624 (pull-based ctx folds, per-boundary memos, LIFO
-frames, boolean-as-status, ambient climbs, INT multiplicities) collapses to
-nothing when the legacy recursion's parameter list is constant, and the tell is
-exactly that: grep the deleted walker's signature — if every recursive call
-passes the same arguments it received, the migration is spineDelStatus (round
-649) with a different edge set. Here reach is `spineNaStatus` over `spineNaEdge`
-(the deleted arms verbatim), the per-file gates ride setup (`spineNaRunActive` =
-the legacy `noImplicitAny || strict` dispatch gate; the `.d.ts`/JS-like skips
-are `spineNaSetup`'s file gate), and the leaf's ONE ambient read
-(`currentFileLocals ?: globals` on the callee name — flags-only, never
-`getTypeOfSymbol`, so no first-touch hazard) is reproduced by a PER-DISPATCH
-install of the FILE's own binder locals. That last choice is deliberate and is
-the second small lesson: where rounds 624/625/631/649 captured the spine-entry
-RESTING `currentFileLocals` (because their legacy slot ran outside the spine's
-per-file install), this pass's legacy driver installed `result.locals` ITSELF —
-so the faithful reproduction is the file's own locals, which is ALSO immune to
-any other handler's ambient rather than depending on the spine's resting value
-staying untouched. Frozen reach quirks pinned in BOTH directions: class
-EXPRESSIONS, `<T>expr` type assertions, `satisfies` casts, tagged templates,
-parameter DEFAULTS and class STATIC BLOCKS are NOT walked (a `new F()` inside
-them is unreached, not merely unnamed), while class-DECLARATION property
-initializers, objlit method/accessor bodies, `for`-head DECL-LIST initializers
-and switch case EXPRESSIONS ARE — the last three being exactly where this
-classifier DIVERGES from the same-shaped round-649 `del` one, which is the arm
-diff a transcription would have got wrong (the two walkers look alike; they are
-not). Fully syntactic otherwise — no flow, no type resolution, no
-currentCheckFileName. The legacy binderResults driver → the spine's partition
-view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule). GATE NOTE:
-TS7009 fires 0 times across all 8 tsc-source profiles (real code does not `new`
-a plain function), and the generated corpus's TS7009 baselines are
-`.errors.txt` subtests, so `--listAll` ×8 pins PURE NON-PERTURBATION and the 37
-pins carry the behavioral-equivalence burden. Gates: 37 local pins
-(M04ImplicitAnyNewSpineMigrationTest, written earlier this session green against
-the LEGACY walker at its slot-move slot) 37/37 on the spine on the FIRST run —
-no calibration; suite 12,384 → 12,421/0 (3 skipped); `--listAll` ×8
-byte-identical vs the pre-migration capture (46×7/94, captured from the legacy
-build and re-captured from the migration build); `--partitionCheck 2` EQUIVALENT
-×8; pass table 408 → 407 (zero checkImplicitAnyNewExpressions rows; checkSpine
-20.8 s — in-band); warning-clean. M0.4 running total: top THIRTY-TWO tail passes
-migrated. NEXT (fresh round-655 table, the migrated rows gone):
-checkArgumentsInClassFieldInitializers 82.9 ms, checkTypeParamTypedOps 72.0,
-checkArrayToClassCastOverlap 69.4, checkIllegalSuperCallsInNestedFunctions 62.2
-(checkCrossFileModuleAugmentationDuplicates, 106.9 ms, stays SKIP — cross-file
-aggregation, not per-file spine material); the tail remains FLAT — no per-file
-row above 83 ms. THE SESSION TAIL — the #34 pass
-(checkArgumentsInClassFieldInitializers, TS2815 `arguments` in a class PROPERTY
-INITIALIZER or STATIC BLOCK, 82.9 ms) is PREPARED: the slot-move pre-gate LANDED
-(moved intact from slot 12d to the post-spine slot; suite 12,421/0; `--listAll`
-×8 byte-identical pre-vs-post; self-contained — FULLY SYNTACTIC, no ambient
-install at all, grep-verified no TS2815 list consumers) and its 30 migration
-pins are green against the LEGACY walkers (30/30 first run, suite 12,451/0).
-The migration shape is already diagnosed: the round-640 TWO-INTERLEAVED-WALKS
-variant with the round-653 re-entry split — a ROUTING walk that only finds
-non-`declare` classes and an EMISSION walk that runs inside property
-initializers / static-block bodies, each RE-ENTERING the other (a
-FunctionExpression / FunctionDeclaration / objlit-method body binds its OWN
-`arguments` so it hands back to routing; a ClassExpression hands to the member
-dispatch; arrows stay in the emission walk, parameter DEFAULTS included). The
-migration's whole risk surface is that the two walks reach DIFFERENT positions —
-routing descends only statement BODIES (if conditions, loop heads, the switch
-subject and case expressions are all silent) while emission descends every one
-of them — so the classifier needs a walk-IDENTITY channel and the pins already
-fix both directions.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1235,29 +1213,36 @@ structural item instead of landing alone.**
       the risk — so (b2) is dropped and (c) goes straight to the live memo.
       Revisit only if union interning becomes desirable for another reason
       (INV.5 canonical types would subsume it).
-  - [ ] **(c) GO LIVE with the walk memo — the design is settled and gated,
-    this is now an implementation task worth ~1.4 s (~5%).** Serve from
-    `(reference nodeId, fileHash, walkKind, inputId)` → `(graph, rootLocalType,
-    rootNarrowedType, result)`, returning the cached result when all three
-    dependencies still match; the shadow reports 41,389 serves with
-    `depServeWrong` = 0, so correctness is established BEFORE the first line of
-    live code. Economics check already done: per-walk overhead is a key compute
-    plus 1–2 map gets against a ~34 µs walk, and 41.4 k of 111.2 k walks are
-    skipped. THREE hazards to handle explicitly, all identified in round 663:
-    (i) the walk is NOT pure — it can trip `flowDepthTripped` and emit TS2563
-    via `reportFlowControlError`, and it consumes the global visit BUDGET, so a
-    served hit changes both; the conservative rule is DO NOT memoize a walk that
-    tripped, and re-verify TS2563 counts on all 8 profiles (a served hit
-    consumes no budget, so trips should become RARER, never more frequent, and
-    `--listAll` is the gate); (ii) the wrapper is generic (`<T>`) and
-    `isAssignedAtFlow` returns Boolean while the others return Type — the cache
-    must store `Any?` and cast, which is sound only because `walkKind` is part
-    of the key (document that, and keep the `@Suppress("UNCHECKED_CAST")`
-    local); (iii) the `inputId` fold is lossy in principle (32-bit path hash) —
-    keep the shadow classification available under `--passTiming` so a
-    collision would surface as a wrong serve rather than silently. Gates: corpus
-    suite, `--listAll` ×8 byte-identical, `--partitionCheck 2` ×8, and — unlike
-    every M0.4 round — a REAL interleaved A/B, since ~5% is above the drift band.
+  - [x] **(c) LIVE — landed round 664 at −2.93% wall (−833 ms), the arc's
+    first measured win.** `flowWalkWithTripCheck` serves from a memo keyed
+    `(reference nodeId, fileHash, walkKind, inputId)` carrying the dependencies
+    the walk read (FlowGraph instance + the Type instances bound to the
+    reference's ROOT NAME in currentLocalTypes / narrowedDeclaredTypes).
+    Interleaved A/B, 6 pairs, alternating order, no recompile between
+    measurements: pre median 28,433 ms → post 27,600 ms, **−833 ms = −2.93%,
+    post wins 5/6**. Instrumented: walks executed 111,248 → 69,859 (40,542
+    served), narrowWalks 3,791 → 2,756 ms. The net is SMALLER than the ~1.4 s
+    the shadow predicted because the memo pays key+dependency lookup on ALL
+    walks to skip 37% — worth remembering when sizing the next memo: shadow
+    "servable time" is an upper bound, not a forecast. All three round-663
+    hazards handled (never store a tripped walk; `Any?` + cast sound because
+    walkKind is in the key; shadow classification retained under
+    `--passTiming`). Gates: suite 12,507/0; `--listAll` ×8 byte-identical on all
+    eight profiles — no diagnostic moves anywhere, including no TS2563 drift;
+    `--partitionCheck 2` EQUIVALENT ×8; warning-clean.
+  - [ ] **(d) NEXT — the same treatment for `getTypeOfExpression`, worth ~1.1 s
+    on paper but expect less.** The shadow already reports hitCorrect 151,710 /
+    hitWRONG 0 / miss 332,918 under the GLOBAL epoch fence and a result-kind
+    whitelist. Apply the round-661→664 recipe: (i) check the key for
+    input-collisions first (round 662's lesson — the expression memo keys on
+    nodeId alone, and `getTypeOfExpression` results depend on ambient context
+    the node does not identify, so this is the likely blocker); (ii) replace the
+    epoch fence with a dependency key; (iii) shadow until `hitWRONG` = 0; (iv)
+    go live with the same gate set INCLUDING an interleaved A/B. Do NOT reuse
+    round 664's per-walk overhead assumption — the expression path has ~6× the
+    call count and a much cheaper mean call (~7 µs vs ~34 µs), so the overhead
+    fraction is far worse and the memo may not pay at all. Measure the mean
+    served-call cost BEFORE building.
 - [ ] **(M2) Parallel scaling Phase 1** — shared frozen collectors: compute the
   318 program-wide collectors once, freeze, share read-only (the immutability
   audit in docs/parallel-caching.md). Sequenced AFTER M1 (canonical types
