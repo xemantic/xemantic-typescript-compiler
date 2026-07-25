@@ -33921,6 +33921,8 @@ class Checker(
             // via the target file's AST before emitting (emitDecoratorMetadata_isolatedModules:
             // `t1.T1` where type1.ts has `interface T1 {}; export type { T1 }`).
             if (namespaceImportMemberExportedViaClause(segments.firstOrNull(), rightId.text, fileName)) return
+            // EP.1a: reachable through the target module's `export *` chain.
+            if (namespaceImportMemberViaStarExports(segments.firstOrNull(), rightId.text, fileName)) return
             // Member doesn't exist at all — try spelling suggestion (TS2724)
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName, exports = exports)
         } else if (!isMemberAccessible(member, symbol)) {
@@ -33928,6 +33930,7 @@ class Checker(
             // export type { T1 }`) has no export MODIFIER, so isMemberAccessible says
             // no — recognize the export clause via the target module's AST.
             if (namespaceImportMemberExportedViaClause(segments.firstOrNull(), rightId.text, fileName)) return
+            if (namespaceImportMemberViaStarExports(segments.firstOrNull(), rightId.text, fileName)) return
             // Member exists but is not exported from a non-declare namespace
             emitTS2694(namespacePath, rightId.text, rightId, source, fileName)
         } else {
@@ -34230,6 +34233,47 @@ class Checker(
                 }
             }
             return false
+        }
+        return false
+    }
+
+    /**
+     * EP.1a (round 668): is [memberName] reachable from the module that
+     * `import * as [rootName]` targets, THROUGH that module's `export * from`
+     * chain? The direct `symbol.exports` lookup in [checkQualifiedNameExports]
+     * cannot see it — a star re-export never populates the barrel's own export
+     * table — so `import * as B from "./barrel"` (barrel = `export * from
+     * "./enums"`) wrongly reported TS2694 for `B.Kind` on valid TypeScript.
+     *
+     * SUPPRESSION-ONLY BY CONSTRUCTION: it can only prevent an emission, never
+     * cause one, and it resolves no types. That is exactly why it is safe here
+     * while star-following inside the general `resolveAlias` is a documented
+     * dead-end (that FLOODED TS2315 x466 on the self-compile by resolving
+     * barrel-imported TYPES and then arity-checking them — see the CLAUDE.md
+     * module-resolution gotcha). Nothing here resolves a type.
+     *
+     * Follows the M1.1 discipline: a NULL from [getModuleExportsFollowingStars]
+     * means UNKNOWABLE (a star target is bare/unresolvable/`export =`), and the
+     * caller must then SKIP the absence emission rather than guess.
+     */
+    private fun namespaceImportMemberViaStarExports(
+        rootName: String?, memberName: String, fileName: String,
+    ): Boolean {
+        if (rootName == null) return false
+        val importer = binderResults.firstOrNull { it.sourceFile.fileName == fileName } ?: return false
+        for (stmt in importer.sourceFile.statements) {
+            val imp = stmt as? ImportDeclaration ?: continue
+            val ns = imp.importClause?.namedBindings as? NamespaceImport ?: continue
+            if (ns.name.text != rootName) continue
+            val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            // The bare resolver only knows flat corpus-style keys; a path-shaped
+            // project needs the relative leg too (the round-511 lesson).
+            val targetFile = resolveModuleSpecifier(spec, imp.moduleSpecifier)
+                ?: resolveModuleSpecifierRelative(spec, fileName)
+                ?: return false
+            val target = fileResults[targetFile] ?: return false
+            val names = getModuleExportsFollowingStars(target.sourceFile) ?: return true
+            return memberName in names
         }
         return false
     }
