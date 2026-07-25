@@ -63,7 +63,8 @@ class AssertsBarrelResolutionTest {
     )
 
     /** Negative control: without the assert, the maybe-undefined arg fires TS2345. */
-    @Test fun withoutAssertMaybeUndefinedArgErrors() {
+    @Test
+    fun `negative control - without the assert a maybe-undefined argument errors`() {
         val result = ProjectCompiler(project(
             """
             import { Debug } from "./barrel.js";
@@ -77,7 +78,8 @@ class AssertsBarrelResolutionTest {
     }
 
     /** A namespace assert imported THROUGH an export-star barrel narrows after the call. */
-    @Test fun barrelImportedNamespaceAssertNarrows() {
+    @Test
+    fun `a barrel-imported namespace assert narrows`() {
         val result = ProjectCompiler(project(
             """
             import { Debug } from "./barrel.js";
@@ -93,7 +95,8 @@ class AssertsBarrelResolutionTest {
     }
 
     /** Same shape imported DIRECTLY (no barrel) — the simpler topology also narrows. */
-    @Test fun directlyImportedNamespaceAssertNarrows() {
+    @Test
+    fun `a directly imported namespace assert narrows`() {
         val result = ProjectCompiler(project(
             """
             import { Debug } from "./debug.js";

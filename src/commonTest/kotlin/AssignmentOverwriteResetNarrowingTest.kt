@@ -59,7 +59,7 @@ class AssignmentOverwriteResetNarrowingTest {
     """
 
     @Test
-    fun shadowingRedeclarationAfterFalsyGuardDoesNotCollapseToNever() {
+    fun `a shadowing redeclaration after a falsy guard does not collapse to never`() {
         diagnose(
             prelude + """
             export function f(name: string, features: number) {
@@ -82,7 +82,7 @@ class AssignmentOverwriteResetNarrowingTest {
     }
 
     @Test
-    fun reassignmentFromCallResetsToTheCallReturnType() {
+    fun `a reassignment from a call resets to the call return type`() {
         // Same-variable `let` reassignment from a call: the post-assignment
         // state is the RHS call's resolved return type — a preceding guard's
         // narrowing must not leak past the overwrite (here it would wrongly
@@ -108,7 +108,7 @@ class AssignmentOverwriteResetNarrowingTest {
     }
 
     @Test
-    fun genuineMissingMemberOnUnionStillFires() {
+    fun `negative control - a genuine missing member on a union still fires`() {
         // Negative control: the overwrite reset must not suppress a genuine
         // missing-member TS2339 on the declaration's own (union) type.
         diagnose(

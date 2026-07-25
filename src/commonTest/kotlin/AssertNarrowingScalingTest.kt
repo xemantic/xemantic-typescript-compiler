@@ -93,7 +93,8 @@ class AssertNarrowingScalingTest {
      * positive tests below are not vacuous (a checker that never compared the
      * assignment would "pass" them without any narrowing at all).
      */
-    @Test fun unnarrowedUnknownToStringErrors() {
+    @Test
+    fun `negative control - an unnarrowed unknown assigned to string errors`() {
         val source = """
             // @strict: true
             declare const x: unknown;
@@ -104,7 +105,8 @@ class AssertNarrowingScalingTest {
     }
 
     /** Positive control at trivial depth: the `x is string` predicate narrows → clean. */
-    @Test fun predicateNarrowingStillApplies() {
+    @Test
+    fun `predicate narrowing still applies`() {
         val result = TypeScriptCompiler().compile(callDenseSource(calls = 2), "narrowed.ts")
         assert(result.diagnostics.isEmpty())
     }
@@ -118,7 +120,8 @@ class AssertNarrowingScalingTest {
      * The compile must ALSO stay clean: the trailing predicate guard narrows through
      * the same memoized walk the dense calls exercised.
      */
-    @Test fun callDenseNarrowingScalesNearLinearly() {
+    @Test
+    fun `call-dense narrowing scales near-linearly`() {
         // Warm-up at a smaller size (JIT + embedded-lib parse dominate the first compile).
         TypeScriptCompiler().compile(callDenseSource(calls = 30), "warmup.ts")
         val (result, elapsed) = measureTimedValue {

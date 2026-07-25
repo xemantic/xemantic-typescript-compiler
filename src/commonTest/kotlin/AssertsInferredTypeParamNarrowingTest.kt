@@ -50,7 +50,7 @@ class AssertsInferredTypeParamNarrowingTest {
     """
 
     @Test
-    fun assertsInferredTpWithNonNullishConstraintChainNarrows() {
+    fun `an asserts with an inferred type param and a non-nullish constraint chain narrows`() {
         diagnose(
             prelude + """
             declare namespace Debug {
@@ -68,7 +68,7 @@ class AssertsInferredTypeParamNarrowingTest {
     }
 
     @Test
-    fun overloadedAssertWithAnnotationLessImplNarrows() {
+    fun `an overloaded assert with an annotation-less impl narrows`() {
         // The real Debug.assertNode shape: an overload cluster whose
         // valueDeclaration is the annotation-less impl — the resolver must
         // prefer the TypePredicate-bearing overload, else every consumer bails
@@ -91,7 +91,7 @@ class AssertsInferredTypeParamNarrowingTest {
     }
 
     @Test
-    fun testArgInfersPredicateTargetPrecisely() {
+    fun `the test argument infers the predicate target precisely`() {
         // The inferred U must come from the TEST argument's own predicate
         // (`isIdent: node is Ident`), narrowing a union receiver down to Ident —
         // the constraint-chain minimal claim alone (drop-nullish) would leave
@@ -116,7 +116,7 @@ class AssertsInferredTypeParamNarrowingTest {
     }
 
     @Test
-    fun assertsUnconstrainedTpStillFires() {
+    fun `negative control - an asserts with an unconstrained type param still fires`() {
         diagnose(
             prelude + """
             declare namespace Dbg {
