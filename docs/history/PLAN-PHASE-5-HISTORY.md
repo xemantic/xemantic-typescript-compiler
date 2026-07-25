@@ -1,3 +1,70 @@
+**Round 647 (2026-07-23) — (M0.4) twenty-fourth tail-pass migration:
+checkSuperInObjectLiterals (TS2659 super-in-objlit-member below ES2015 /
+TS2660 super-in-objlit-property-fn; 91 ms at the round-642 table — the
+#24 per-file tail pass) is ON THE SPINE; the legacy driver +
+walkForObjLitSuper/walkObjLitSuperInStmt/walkObjLitSuperInExpr recursion
+(~230 lines) DELETED; the bounded findObjLitSuperRefs leaves +
+emitObjLitSuperError survive anchor-called.** The round-641
+boolean-as-status shape's second application, with two new moves: (1)
+the anchors are OBJECT LITERALS (spineSuEnterNode — not SR's rare-name
+identifiers), pre-gated on the emission SHAPE before the memoized climb
+(a method/accessor property below ES2015, or a PropertyAssignment with a
+DIRECT fn-expr/arrow initializer); (2) the legacy ObjectLiteralExpression
+arm SPLITS — its per-property EMISSION half becomes the anchor-called
+emitObjLitSuperProperties (running the bounded leaves in property order),
+while its walk-CONTINUATION half dissolves into classifier edges: objlit
+method/accessor bodies → SU_VALID via the SU_OMEMBER carrier, and a
+PropertyAssignment initializer is a plain PRESERVE edge — the legacy
+per-initializer dispatch (fn-expr walks superValid=false, arrow preserves,
+else preserve) reproduces EXACTLY on the general FunctionExpression-resets/
+ArrowFunction-preserves arms, so no special initializer handling exists in
+the fold at all. Class-member bodies + property initializers become
+VALID/INVALID from the containing class's `extends` clause via the two
+carriers SU_CMEMBER_EXT/SU_CMEMBER_NOEXT — the classHasExtends boolean
+rides the CARRIER CHOICE, not a separate channel. Frozen quirks pinned
+both directions: class EXPRESSIONS never walked; a for-head
+DECLARATION-LIST initializer never walked while an EXPRESSION initializer
+is; for-condition/incrementor never; for-in/of head EXPRESSIONS + throw +
+ExportAssignment ARE walked (wider than SR); only DIRECT fn-expr/arrow
+initializers emit (a comma/paren-wrapped fn-expr takes the preserve arm —
+silent); an arrow-returning-arrow hides super from the leaf (the leaf
+bails on nested arrows/fn-exprs/objlits — a nested literal is its own
+anchor, pinned exactly-once); leaf statement coverage frozen at
+if/while/for-expr/block/return/var (throw/try/switch INSIDE a member body
+silent); the leaf never descends new/element-access. Fully syntactic — no
+ambient sandwich; binderResults driver → the partition view,
+`--partitionCheck 2` EQUIVALENT ×8 (46×7/94). Gates: 41 local pins
+(M04ObjLitSuperSpineMigrationTest) green against the LEGACY pass FIRST
+(41/41 on the first run); suite 12,075 → 12,116/0; `--listAll` ×8
+byte-identical (sorted, non-time lines) vs the pre-migration baseline;
+pass table 416 → 415 (the 91 ms row gone; checkSpine 20.7 s single-run —
+in-band; compiler-profile wall parity 31.4 s); warning-clean. M0.4
+running total: top TWENTY-FOUR tail passes migrated. SESSION TAIL: the
+checkTypeParamStrictSubtypeCast (#25, 93.7 ms — B60.3/B402 TS2352 for
+`<TypeParam>concrete` strict-subtype-of-constraint casts + the
+empty-object-to-nullish-constrained-TP AsExpression arm) slot-move
+pre-gate LANDED (moved intact from slot 14''e to the post-spine slot;
+suite 12,116/0; listAll ×8 byte-identical; coupling surface verified
+self-contained — emptyObjectCastLocals + inTypeParamCastPass are
+pass-private, no TS2352 diagnostics-list consumers; the pass is
+TYPE-RESOLVING (getTypeFromTypeNode on method params, withInternedTpScope
+pushes, an EpochMap currentLocalTypes scope), so the slot-move gate is
+the empirical first-touch check — it passed). Scope map for the
+migrator: walkStmtsForTypeParamCasts recursion — fn-decl bodies / class
+method+ctor bodies under interned TP scopes with method-PARAM typing /
+namespace ModuleBlocks; every OTHER statement kind routes through the
+SHARED walkTypeAssertionsInStmt walker (the round-630 spineCo
+anchor/edge family) with the emitTS2352IfTypeParamStrictSubtypeCast
+callback, and the AsExpression arm fires
+emitTS2352IfEmptyObjectCastToTypeParam under the inTypeParamCastPass
+flag — the round-633 flag-arm-lift shape applies; PLUS the
+per-statement-LIST empty-objlit-local prepass (whole-list,
+added-then-removed around the list walk — order-independent). NEXT
+session starts at that migration; after it by cost (round-647 table):
+checkDeleteOperator 86.8 ms, checkConstructorParamInInitializers 85.5 ms
+(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
+cross-file).**
+
 **Round 646 (2026-07-23) — (M0.4) twenty-third tail-pass migration:
 checkConstLiteralComparisons (B98.r101 — TS2367 for a for-INIT `const x =
 <bare literal>` compared to a DIFFERENT literal via ==/===/!=/!==; 95 ms

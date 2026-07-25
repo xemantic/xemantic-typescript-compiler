@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 656 (2026-07-25) — (M0.4) thirty-third tail-pass migration:
+checkArgumentsInClassFieldInitializers (TS2815 — an `arguments` reference in a
+class PROPERTY INITIALIZER or a class STATIC BLOCK; 82.9 ms at the round-655
+table — the #34 row) is ON THE SPINE; the driver and the whole
+findClassesForTS2815InStatements / findClassesForTS2815InExpr (ROUTING) +
+checkClassMembersForTS2815 (MEMBER dispatch) + checkExprForTS2815Arguments /
+checkStatementsForTS2815Arguments / checkStatementForTS2815Arguments (EMISSION)
+recursion is DELETED, and `emitTS2815` is anchor-called at `arguments`
+Identifier enters.** The shape was pre-diagnosed last session — the round-640
+TWO-INTERLEAVED-WALKS variant with the round-653 re-entry boundary — and it
+held, but the round-640 template needed ONE structural change worth naming for
+the next migrator: **when two interleaved walks share MOST of their arms, write
+the fold keyed on the node KIND (not on the status) and branch on `pStatus`
+only inside the arms where the walks actually differ.** Round 640's Uy fold is
+`when (pStatus) { … when (pNode) … }` because its two walks had almost
+DISJOINT node sets (a statement-only name walk vs a yield walk); here the two
+walks overlap on ~30 of ~45 arms, and in every overlapping arm the child set is
+identical and the child simply keeps the parent's status — so the walk identity
+"rides along" a pass-through arm for free (`-> pStatus`) and the outer-status
+form would have duplicated those 30 arms verbatim, which is exactly how an arm
+diff silently drifts. Reach is `spineAfStatus` over `spineAfFold` with three
+statuses: AF_ROUTE (a position the class-finding routing walk visited),
+AF_EMIT (a position inside a property initializer / static block, where an
+`arguments` Identifier anchor fires), AF_MEMBER (the class-or-objlit MEMBER
+conduit, where the member KIND decides which walk resumes — a property
+initializer / static block → AF_EMIT, a method/ctor/accessor body → AF_ROUTE,
+because those bind their own `arguments`). The re-entries that make the walks
+inseparable are ordinary edges in that scheme: EMISSION → FunctionExpression /
+FunctionDeclaration body → AF_ROUTE, EMISSION → ClassExpression → AF_MEMBER,
+ROUTING → any non-`declare` class → AF_MEMBER. The whole risk surface is that
+the two walks REACH DIFFERENT POSITIONS, and all five asymmetries are pinned in
+both directions: (1) if/loop HEADS, the switch SUBJECT and case EXPRESSIONS are
+EMISSION-only (routing descends statement BODIES only); (2) an object literal's
+METHOD/ACCESSOR bodies are EMISSION-only (routing's objlit arm walks property
+VALUES and spreads only); (3) an arrow's parameter DEFAULTS are EMISSION-only
+(a Parameter is reached ONLY through an EMISSION-walked arrow, and only its
+initializer — so a parameter *named* `arguments` draws nothing); (4) a
+ClassExpression is `declare`-gated in ROUTING and UNGATED in EMISSION — a
+frozen legacy asymmetry, the emission arm simply has no modifier test; (5)
+namespaces and `export =` are ROUTING-only (the emission statement walk has
+neither arm, so a `namespace` inside a static block is unreached). Multiplicity
+is 1 everywhere — no legacy arm visits a child twice — so no INT-valued
+(round 636) classifier is needed, and the pass is FULLY SYNTACTIC (identifier
+TEXT + member kinds + modifiers + positions): no type resolution, no flow, no
+ambient install AT ALL, which is the first tail pass since round 650 needing no
+sandwich of any kind. The anchor pre-gates on `text == "arguments"` BEFORE the
+reach climb — Identifier enters are the single most frequent node kind, the
+name is rare. The legacy binderResults driver → the spine's partition view.
+GATE NOTE: TS2815 fires 0 times across all 8 tsc-source profiles (real code
+does not reference `arguments` in a field initializer) and the generated
+corpus's TS2815 baselines are `.errors.txt` subtests, so `--listAll` ×8 pins
+PURE NON-PERTURBATION and the 30 pins carry the behavioural-equivalence
+burden. Gates: 30 pins (M04ArgumentsInFieldSpineMigrationTest, written last
+session green against the LEGACY walkers at their slot-move slot) 30/30 on the
+spine on the FIRST run — no calibration, the second consecutive round where
+pre-writing the pins against the legacy pass made the migration a
+single-attempt change; suite 12,451/0 (3 skipped, unchanged from the
+round-655-tail baseline); `--listAll` ×8 byte-identical vs a purpose-built
+LEGACY capture from this same tree (46×7/94; the only changed line per profile
+is `time:`); `--partitionCheck 2` EQUIVALENT ×8; pass table 407 → 406 (zero
+checkArgumentsInClassFieldInitializers rows; checkSpine 21.1 s — in-band);
+warning-clean. M0.4 running total: top THIRTY-THREE tail passes migrated.
+NEXT (fresh round-656 table, the migrated rows gone):
+checkArrayToClassCastOverlap 72.5 ms, checkTypeParamTypedOps 71.0,
+checkVarHoistRedeclaration 68.9, checkCallTypeArgCount 66.2,
+checkIllegalSuperCallsInNestedFunctions 62.7, checkTypeArgumentConstraints
+62.7, checkSpreadPropertyOverrides 62.5 (checkCrossFileModuleAugmentationDuplicates,
+now 109.7 ms, stays SKIP — cross-file aggregation, not per-file spine
+material). The tail is now VERY flat — no per-file row above 73 ms and ~90
+passes above 20 ms carrying the residual ~4.3 s — so per-pass wall value keeps
+shrinking and the arc-level interleaved A/B (owed once several more land) is
+the only honest wall evidence left.
+
 **Round 655 (2026-07-25) — (M0.4) thirty-second tail-pass migration:
 checkImplicitAnyNewExpressions (TS7009 — `new F()` whose target `F` is a plain
 FUNCTION symbol, so it carries no construct signature and the expression
@@ -648,72 +721,6 @@ checkConstructorParamInInitializers 85.5 ms
 (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
 cross-file).**
 
-**Round 647 (2026-07-23) — (M0.4) twenty-fourth tail-pass migration:
-checkSuperInObjectLiterals (TS2659 super-in-objlit-member below ES2015 /
-TS2660 super-in-objlit-property-fn; 91 ms at the round-642 table — the
-#24 per-file tail pass) is ON THE SPINE; the legacy driver +
-walkForObjLitSuper/walkObjLitSuperInStmt/walkObjLitSuperInExpr recursion
-(~230 lines) DELETED; the bounded findObjLitSuperRefs leaves +
-emitObjLitSuperError survive anchor-called.** The round-641
-boolean-as-status shape's second application, with two new moves: (1)
-the anchors are OBJECT LITERALS (spineSuEnterNode — not SR's rare-name
-identifiers), pre-gated on the emission SHAPE before the memoized climb
-(a method/accessor property below ES2015, or a PropertyAssignment with a
-DIRECT fn-expr/arrow initializer); (2) the legacy ObjectLiteralExpression
-arm SPLITS — its per-property EMISSION half becomes the anchor-called
-emitObjLitSuperProperties (running the bounded leaves in property order),
-while its walk-CONTINUATION half dissolves into classifier edges: objlit
-method/accessor bodies → SU_VALID via the SU_OMEMBER carrier, and a
-PropertyAssignment initializer is a plain PRESERVE edge — the legacy
-per-initializer dispatch (fn-expr walks superValid=false, arrow preserves,
-else preserve) reproduces EXACTLY on the general FunctionExpression-resets/
-ArrowFunction-preserves arms, so no special initializer handling exists in
-the fold at all. Class-member bodies + property initializers become
-VALID/INVALID from the containing class's `extends` clause via the two
-carriers SU_CMEMBER_EXT/SU_CMEMBER_NOEXT — the classHasExtends boolean
-rides the CARRIER CHOICE, not a separate channel. Frozen quirks pinned
-both directions: class EXPRESSIONS never walked; a for-head
-DECLARATION-LIST initializer never walked while an EXPRESSION initializer
-is; for-condition/incrementor never; for-in/of head EXPRESSIONS + throw +
-ExportAssignment ARE walked (wider than SR); only DIRECT fn-expr/arrow
-initializers emit (a comma/paren-wrapped fn-expr takes the preserve arm —
-silent); an arrow-returning-arrow hides super from the leaf (the leaf
-bails on nested arrows/fn-exprs/objlits — a nested literal is its own
-anchor, pinned exactly-once); leaf statement coverage frozen at
-if/while/for-expr/block/return/var (throw/try/switch INSIDE a member body
-silent); the leaf never descends new/element-access. Fully syntactic — no
-ambient sandwich; binderResults driver → the partition view,
-`--partitionCheck 2` EQUIVALENT ×8 (46×7/94). Gates: 41 local pins
-(M04ObjLitSuperSpineMigrationTest) green against the LEGACY pass FIRST
-(41/41 on the first run); suite 12,075 → 12,116/0; `--listAll` ×8
-byte-identical (sorted, non-time lines) vs the pre-migration baseline;
-pass table 416 → 415 (the 91 ms row gone; checkSpine 20.7 s single-run —
-in-band; compiler-profile wall parity 31.4 s); warning-clean. M0.4
-running total: top TWENTY-FOUR tail passes migrated. SESSION TAIL: the
-checkTypeParamStrictSubtypeCast (#25, 93.7 ms — B60.3/B402 TS2352 for
-`<TypeParam>concrete` strict-subtype-of-constraint casts + the
-empty-object-to-nullish-constrained-TP AsExpression arm) slot-move
-pre-gate LANDED (moved intact from slot 14''e to the post-spine slot;
-suite 12,116/0; listAll ×8 byte-identical; coupling surface verified
-self-contained — emptyObjectCastLocals + inTypeParamCastPass are
-pass-private, no TS2352 diagnostics-list consumers; the pass is
-TYPE-RESOLVING (getTypeFromTypeNode on method params, withInternedTpScope
-pushes, an EpochMap currentLocalTypes scope), so the slot-move gate is
-the empirical first-touch check — it passed). Scope map for the
-migrator: walkStmtsForTypeParamCasts recursion — fn-decl bodies / class
-method+ctor bodies under interned TP scopes with method-PARAM typing /
-namespace ModuleBlocks; every OTHER statement kind routes through the
-SHARED walkTypeAssertionsInStmt walker (the round-630 spineCo
-anchor/edge family) with the emitTS2352IfTypeParamStrictSubtypeCast
-callback, and the AsExpression arm fires
-emitTS2352IfEmptyObjectCastToTypeParam under the inTypeParamCastPass
-flag — the round-633 flag-arm-lift shape applies; PLUS the
-per-statement-LIST empty-objlit-local prepass (whole-list,
-added-then-removed around the list walk — order-independent). NEXT
-session starts at that migration; after it by cost (round-647 table):
-checkDeleteOperator 86.8 ms, checkConstructorParamInInitializers 85.5 ms
-(checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
-cross-file).**
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1153,17 +1160,36 @@ structural item instead of landing alone.**
   same-shaped `del` classifier is real — objlit method/accessor bodies,
   `for`-head DECL-LIST initializers and switch case EXPRESSIONS are
   walked here and not there);
-  next per-file candidates by cost (round-655 table, the migrated rows
-  gone): **checkArgumentsInClassFieldInitializers 82.9 ms** — slot-move
-  pre-gate + 30 legacy-green pins LANDED round 655 tail, so the next
-  session starts at its migration (the round-640 two-interleaved-walks
-  shape with the round-653 re-entry split) —,
-  checkTypeParamTypedOps 72.0 ms, checkArrayToClassCastOverlap 69.4 ms,
-  checkIllegalSuperCallsInNestedFunctions 62.2 ms
-  (checkCrossFileModuleAugmentationDuplicates, now 106.9 ms, stays
+  checkArgumentsInClassFieldInitializers 82.9 ms — **MIGRATED round 656**
+  (the round-640 TWO-INTERLEAVED-WALKS variant's second application, with
+  one template refinement: when two interleaved walks share MOST of their
+  arms — here ~30 of ~45, every shared arm having an identical child set
+  whose child simply KEEPS the parent's status — write the fold keyed on
+  the node KIND and branch on `pStatus` only inside the differing arms,
+  so the walk identity "rides along" a pass-through arm (`-> pStatus`)
+  instead of duplicating 30 arms under an outer `when (pStatus)`; round
+  640's outer-status form is right only when the two walks' node sets are
+  near-DISJOINT. Three statuses: AF_ROUTE (class-finding), AF_EMIT
+  (inside a property initializer / static block, where the `arguments`
+  Identifier anchor fires), AF_MEMBER (the class/objlit member conduit
+  whose member KIND picks the resuming walk); the five reach asymmetries
+  — EMISSION-only if/loop heads + switch subject + case expressions,
+  EMISSION-only objlit method/accessor bodies, EMISSION-only arrow
+  parameter defaults, a ClassExpression `declare`-gated in ROUTING and
+  UNGATED in EMISSION, ROUTING-only namespaces and `export =` — are the
+  whole risk surface and are pinned both directions; multiplicity 1
+  everywhere, fully syntactic, NO ambient install at all);
+  next per-file candidates by cost (round-656 table, the migrated rows
+  gone): **checkArrayToClassCastOverlap 72.5 ms**,
+  checkTypeParamTypedOps 71.0 ms, checkVarHoistRedeclaration 68.9 ms,
+  checkCallTypeArgCount 66.2 ms,
+  checkIllegalSuperCallsInNestedFunctions 62.7 ms,
+  checkTypeArgumentConstraints 62.7 ms, checkSpreadPropertyOverrides
+  62.5 ms
+  (checkCrossFileModuleAugmentationDuplicates, now 109.7 ms, stays
   SKIP — cross-file aggregation, not per-file spine material; the tail is
-  now FLAT — no per-file row above 83 ms, so per-pass wall value is small
-  and the remaining ~90 passes >20 ms carry the residual ~5 s). Migration protocol per
+  now VERY FLAT — no per-file row above 73 ms, so per-pass wall value is
+  small and the remaining ~90 passes >20 ms carry the residual ~4.3 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient
