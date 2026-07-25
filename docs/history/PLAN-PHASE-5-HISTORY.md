@@ -1,3 +1,69 @@
+**Round 659 (2026-07-25) — (M0.4-AB) THE ARC MEASUREMENT, PAID: the M0.4
+migration arc is NOT a wall-clock lever, and the mechanism is measured. M0.4 is
+CLOSED at 35 passes; (M1) identity stability is next.** This round landed no
+compiler change — it paid a debt the arc had carried since round 624 ("A/B the
+ARC once several passes land") and turned it into a decision, which is worth
+more than a 36th migration would have been.
+
+**Method** (as queued at round 658): pre-arc binary `4b0dfcc7` (round-623 HEAD,
+the commit before round 624's first migration) vs HEAD `e9d8279d`; both class
+dirs snapshotted to scratch and NO recompile between measurements (the
+round-493 rule); alternating within-pair order so session drift cannot favour
+either side; medians, never batch-then-batch.
+
+**Numbers.** compiler profile, 6 interleaved pairs: pre median **28,945 ms** →
+post **29,015 ms** = **+0.24%**, post wins **3/6**, per-pair deltas
+−667/−295/−76/+786/+985/+1,190 ms. harness profile, 2 pairs: **40,256 →
+39,605 = −1.6%**, post wins 2/2. The per-pair spread (~4% of total) is an order
+of magnitude larger than the effect, so the honest statement is: the arc's true
+value is a SMALL gain somewhere in 0–2%, entirely inside the ±2% band the PERF
+ground rules refuse to land on. A LESSON ABOUT THE INSTRUMENTS, incidentally
+confirmed: the FIRST single un-interleaved `--passTiming` sample this session
+showed pre 24.86 s vs post 25.35 s — the post looking 0.5 s SLOWER — which is
+exactly the artefact the interleaving rule exists to kill; a session that had
+taken that sample at face value would have "discovered" a regression that is
+not there.
+
+**The mechanism, measured — the transferable finding: 75% of a migrated pass's
+cost REAPPEARS INSIDE checkSpine.** Same-run `--passTiming` on both binaries:
+the 35 rows present pre and absent post summed **3,146 ms**, while checkSpine's
+own row grew **18,896 → 21,253 = +2,358 ms** (75%). So the premise the arc rested
+on — that the ~6 s tail is mostly REDUNDANT TRAVERSAL that one walk eliminates —
+is wrong for these passes. Their cost is per-node work that a single walk still
+has to do, and folding them in converts "N walks over the tree" into "N
+`when (kindId)` dispatches plus memoized ancestor-climb reach classifiers on
+every node of every file" — the same order of multiplication, just relocated.
+That also explains why every single-pass round measured neutral in isolation:
+each was genuinely ~25%-of-its-row, i.e. ~15 ms.
+
+**The rate arithmetic that closes the arc.** Residual ≈ 25% of migrated cost.
+The remaining tail is ~90 rows >20 ms ≈ 4.3 s, so finishing it buys
+~25% × 4.3 s ≈ **1.1 s ≈ 4% of wall, for ~90 single-pass rounds**. (M1) targets
+≤15–20 s from ~29 s = **30–45%**. Stopping is not a retreat: the 35 landed
+migrations are behaviour-preserving, deleted ~8 k lines of hand-rolled walker
+recursion, and made the spine the single place per-node checks live — all of
+which is architectural value the INV arc wanted anyway. What is retired is the
+CLAIM that continuing buys speed. Rule written into the queue: **do not migrate
+another tail pass FOR PERFORMANCE; migrate one only when it is on the path of
+another change**, and keep M0.4's migration-pattern zoo as the reference for HOW
+(it is complete — 20+ documented shapes from the round-624 template through
+round 658's ambient-region capture).
+
+Both medians are appended to the local `bench/self-compile-tsc.tsv` (label
+`round659 (M0.4-AB) arc A/B`) — but `bench/` is GITIGNORED, so the durable
+record of this A/B is THIS NOTE: every per-pair number above is the artifact
+(`bench-history/README.md` is CI-maintained for 3-way runs and must not be
+hand-edited). Suite untouched at 12,507/0/3 (no code change);
+no listAll/partitionCheck run needed for a measurement-only round. NEXT:
+**(M1) identity stability** — (a) attribute the epoch churn (80k of 111k
+narrowing walks run at fresh epochs because the walk's own recordings bump the
+fences), (b) canonicalize narrowing outputs so filters over interned unions
+yield interned results, (c) re-attempt the (f2) per-(reference, flowNode) fold
+SHADOW-FIRST using the round-595 epoch infrastructure. Note for whoever starts
+it: the round-596/599 dead-ends are documented in CLAUDE.md's measured-dead-ends
+section and BOTH were revived-as-blocked pending exactly (b) — canonical types
+are the unblocker, so (b) is the real first step, not (c).
+
 **Round 658 (2026-07-25) — (M0.4) thirty-fifth tail-pass migration:
 checkTypeParamTypedOps (B60.12 — TS2339 / TS2349 / TS2351 for property access,
 call and `new` on a value whose type is an EFFECTIVELY UNCONSTRAINED type
