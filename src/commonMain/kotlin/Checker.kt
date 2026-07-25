@@ -8331,15 +8331,65 @@ class Checker(
      * Resolve a const enum member access like `E.A` to its constant value.
      * Returns null if `enumName` is not a const enum or `memberName` is not found.
      */
+    /**
+     * EP.1 (round 669): resolve [path] — a bare name (`Kind`, from a named
+     * import) or a namespace-qualified one (`B.Kind`, from `import * as B`) —
+     * to a CONST ENUM symbol through the imported module's `export * from`
+     * chain. Neither [resolveNamePath] nor [resolveAlias] can follow that chain:
+     * both walk `symbol.exports`, and a star re-export never populates the
+     * barrel's own export table (the same root cause as round 668's TS2694 FP).
+     * Without this, a const enum imported through a barrel — tsc's own
+     * `_namespaces/ts.js` layout — kept `barrel_1.Kind.B` in the emit instead of
+     * inlining `1 /* Kind.B */`.
+     *
+     * CONST-ENUM-ONLY BY CONSTRUCTION: it returns a symbol ONLY when the target
+     * carries `SymbolFlags.ConstEnum`, so it can never feed a general type
+     * resolution. That is what keeps it clear of the documented dead-end where
+     * star-following inside the general [resolveAlias] flooded TS2315 x466 by
+     * resolving barrel-imported TYPES and arity-checking them.
+     */
+    private fun constEnumSymbolThroughStars(path: String, sourceFileName: String): Symbol? {
+        val importer = fileResults[sourceFileName] ?: return null
+        val parts = path.split(".")
+        val rootName = parts[0]
+        val memberSeg = parts.getOrNull(1)
+        for (stmt in importer.sourceFile.statements) {
+            val imp = stmt as? ImportDeclaration ?: continue
+            val spec = (imp.moduleSpecifier as? StringLiteralNode)?.text ?: continue
+            val clause = imp.importClause ?: continue
+            // Which name are we looking for in the TARGET module's star closure?
+            val exportedName: String = when (val nb = clause.namedBindings) {
+                is NamespaceImport ->
+                    if (nb.name.text == rootName && memberSeg != null) memberSeg else continue
+                is NamedImports -> {
+                    val el = nb.elements.firstOrNull { it.name.text == rootName } ?: continue
+                    (el.propertyName ?: el.name).text
+                }
+                else -> continue
+            }
+            // The bare resolver only knows flat corpus-style keys; a path-shaped
+            // project needs the relative leg too (the round-511 lesson).
+            val targetFile = resolveModuleSpecifier(spec, imp.moduleSpecifier)
+                ?: resolveModuleSpecifierRelative(spec, sourceFileName)
+                ?: continue
+            val target = fileResults[targetFile] ?: continue
+            val sym = resolveExportedSymbolThroughStars(target.sourceFile, exportedName) ?: continue
+            val resolved = resolveAlias(sym)
+            if (resolved.flags.hasAny(SymbolFlags.ConstEnum)) return resolved
+        }
+        return null
+    }
+
     fun resolveConstEnumMemberAccess(
         enumName: String,
         memberName: String,
         sourceFileName: String,
     ): ConstantValue? {
         val result = fileResults[sourceFileName] ?: return null
-        val symbol = resolveNamePath(enumName, result) ?: return null
-        val target = resolveAlias(symbol)
-        if (!target.flags.hasAny(SymbolFlags.ConstEnum)) return null
+        val direct = resolveNamePath(enumName, result)?.let { resolveAlias(it) }
+            ?.takeIf { it.flags.hasAny(SymbolFlags.ConstEnum) }
+        // EP.1: fall back to the `export *` chain (barrels) — see the helper.
+        val target = direct ?: constEnumSymbolThroughStars(enumName, sourceFileName) ?: return null
         return enumValues[target.id]?.get(memberName)
     }
 
@@ -8349,9 +8399,12 @@ class Checker(
      */
     fun isConstEnumAlias(name: String, sourceFileName: String): Boolean {
         val result = fileResults[sourceFileName] ?: return false
-        val symbol = result.locals[name] ?: globals[name] ?: return false
-        val target = resolveAlias(symbol)
-        return target.flags.hasAny(SymbolFlags.ConstEnum)
+        val symbol = result.locals[name] ?: globals[name]
+        if (symbol != null && resolveAlias(symbol).flags.hasAny(SymbolFlags.ConstEnum)) return true
+        // EP.1 (round 669): the alias may reach the const enum only through an
+        // `export *` barrel, which resolveAlias cannot follow — without this the
+        // import of a barrel-reached const enum is not elided after inlining.
+        return constEnumSymbolThroughStars(name, sourceFileName) != null
     }
 
     /**
