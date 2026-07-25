@@ -192,7 +192,7 @@ object PassTiming {
         relationNanos = 0; typeNodeNanos = 0; memberResolveNanos = 0
         walkRepeatIdentical = 0; walkRepeatStructuralUnion = 0; walkRepeatDiff = 0; walkMiss = 0
         walkRepeatNanos = 0
-        walkMissCold = 0; walkMissEpochIdentical = 0; walkMissEpochStructural = 0
+        walkMemoServed = 0; walkMissCold = 0; walkMissEpochIdentical = 0; walkMissEpochStructural = 0
         walkMissEpochDiff = 0; walkMissEpochDeltaSum = 0
         epochBumps.clear(); epochBlame.clear(); epochNoops.clear()
         depServeIdentical = 0; depServeStructural = 0; depServeWrong = 0
@@ -259,6 +259,8 @@ object PassTiming {
     // that reference: an epoch-invalidated repeat whose recomputed result is
     // IDENTICAL is a fence that is too coarse, i.e. directly recoverable by
     // splitting read-relevant from record-only state (or fencing per map).
+    /** (M1)(c) round 664: LIVE memo serves (walks skipped entirely). */
+    var walkMemoServed: Long = 0
     var walkMissCold: Long = 0
     var walkMissEpochIdentical: Long = 0
     var walkMissEpochStructural: Long = 0
@@ -488,6 +490,7 @@ object PassTiming {
         val factor = if (distinct > 0) (getTypeOfExpressionCalls * 10 / distinct) else 0L
         appendLine(
             "walkRepeats: identical=$walkRepeatIdentical structuralUnion=$walkRepeatStructuralUnion diff=$walkRepeatDiff miss=$walkMiss savableNanos=${walkRepeatNanos / 1_000_000}ms\n" +
+            "LIVE walkMemo served (walks skipped): $walkMemoServed\n" +
             "walkMiss split: cold=$walkMissCold epochInvalidated=${walkMissEpochIdentical + walkMissEpochStructural + walkMissEpochDiff}" +
             " (identical=$walkMissEpochIdentical structural=$walkMissEpochStructural diff=$walkMissEpochDiff" +
             " meanEpochDelta=${epochDeltaMean()})\n" +
