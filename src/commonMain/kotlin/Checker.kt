@@ -6257,8 +6257,14 @@ class Checker(
         // round 630 (M0.4): see spineCoSetup/spineCoEnterNode. The two
         // emission leaves are anchor-called at TypeAssertionExpression
         // enters.
-        // 14''c. Check array-source -> class-target cast non-overlap for TS2352
-        pass("checkArrayToClassCastOverlap") { checkArrayToClassCastOverlap() }
+        // 14''c. checkArrayToClassCastOverlap is ON THE SPINE (M0.4, round
+        // 657) — the cheapest migration class of all: the pass owned NO walk,
+        // it drove the SHARED walkTypeAssertionsInStmt/-InExpr recursion with
+        // emitTS2352IfArrayToClassMismatch as the callback, so its reach IS
+        // spineCoStatus/spineCoEdge and the migration is a FOLD-IN of one more
+        // leaf call into the existing TypeAssertionExpression arm (see
+        // spineCoEnterNode at the pass("checkSpine") site), placed LAST there
+        // to keep this slot's after-14''/14''b insertion order.
         // 14''d. Check JSDoc `/** @type {T} */(void 0)` cast in JS files for TS2352
         pass("checkJSDocVoidCastNonOverlap") { checkJSDocVoidCastNonOverlap() }
         // 14''e. checkTypeParamStrictSubtypeCast is ON THE SPINE since round
@@ -63193,6 +63199,13 @@ interface DataView {
                     emitTS2352IfSameTargetMismatch(node, spineSource, spineFileName)
                     emitTS2352IfFunctionReturnMismatch(node, spineSource, spineFileName)
                     emitTS2352IfNullCast(node, spineSource, spineFileName)
+                    // (M0.4) round 657: checkArrayToClassCastOverlap FOLDED IN
+                    // — it drove the SAME shared walker with this leaf as its
+                    // callback, so its reach IS CO_REACHED and nothing but the
+                    // call is needed. LAST in the arm because its legacy slot
+                    // (14''c) ran AFTER the two round-630/632 passes, keeping
+                    // the insertion order at a shared position byte-exact.
+                    emitTS2352IfArrayToClassMismatch(node, spineSource, spineFileName)
                 } finally {
                     currentCheckFileName = savedCheckFileName
                     currentFlowGraph = savedFlow
@@ -80262,27 +80275,14 @@ interface DataView {
      * named class with at least one required non-prototype property. Conservative gates:
      * source target.symbol.name == "Array"; target target is a Class (Type.Interface with
      * SymbolFlags.Class) different from Array; first missing prop drives the chain message.
+     *
+     * (M0.4, round 657) The DRIVER is deleted — this leaf is anchor-called from
+     * [spineCoEnterNode]. The pass never owned a walk: it drove the SHARED
+     * walkTypeAssertionsInStmt/-InExpr recursion with this function as the callback, so its
+     * reach is CO_REACHED by construction and the legacy per-file ambient (the file's binder
+     * locals — installed by checkSpine's own per-file loop — plus currentCheckFileName, which
+     * the shared arm installs) is reproduced there.
      */
-    private fun checkArrayToClassCastOverlap() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            val savedCheckFileName = currentCheckFileName
-            currentFileLocals = result.locals
-            currentCheckFileName = fileName
-            try {
-                for (stmt in result.sourceFile.statements) {
-                    walkTypeAssertionsInStmt(stmt, source, fileName, ::emitTS2352IfArrayToClassMismatch)
-                }
-            } finally {
-                currentFileLocals = savedLocals
-                currentCheckFileName = savedCheckFileName
-            }
-        }
-    }
-
     private fun emitTS2352IfArrayToClassMismatch(
         expr: TypeAssertionExpression, source: String, fileName: String,
     ) {

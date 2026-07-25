@@ -63,7 +63,7 @@ class M04ArrayToClassCastSpineMigrationTest {
      *  none), so a shape that draws one of theirs is not a counter-example to
      *  this leaf staying silent. */
     private fun ts2352MissingProp(ds: List<Diagnostic>) = ds.count { d ->
-        d.code == 2352 && d.messageChain.orEmpty().any { it.contains("is missing in type") }
+        d.code == 2352 && d.messageChain.any { it.contains("is missing in type") }
     }
 
     private fun run(body: String) = diagnose(body.trimIndent(), "// @target: esnext")
@@ -97,7 +97,7 @@ class M04ArrayToClassCastSpineMigrationTest {
     @Test
     fun `the related info points at the missing property declaration`() {
         val d = run(cls + "const c = <C<number>>[1, 2, 3];").single { it.code == 2352 }
-        val rel = d.relatedInformation.orEmpty().single()
+        val rel = d.relatedInformation.single()
         assertEquals(2728, rel.code)
         assertEquals("'item' is declared here.", rel.message)
     }
