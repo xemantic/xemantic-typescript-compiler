@@ -4277,15 +4277,22 @@ class Emitter(
      */
     private fun emitInnerComments(comments: List<Comment>?, trailingSpace: Boolean = true) {
         if (options.removeComments || comments.isNullOrEmpty()) return
+        // A `//` comment already terminates its own line, so the NEXT comment must
+        // not write a second newline for its `hasPrecedingNewLine` — that is what
+        // put a blank line between every pair of consecutive line comments in an
+        // inner position (EP.2h, round 678; the archetype is a two-line comment
+        // block before an `else if`, 32 occurrences on the compiler profile).
+        var atLineStart = false
         for (comment in comments) {
             if (comment.hasPrecedingNewLine) {
-                writeNewLine()
+                if (!atLineStart) writeNewLine()
                 writeIndent()
             } else {
                 write(" ")
             }
             write(comment.text)
-            if (comment.text.startsWith("//")) {
+            atLineStart = comment.text.startsWith("//")
+            if (atLineStart) {
                 writeNewLine()
             }
         }
