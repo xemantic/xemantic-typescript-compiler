@@ -1,3 +1,99 @@
+**Round 653 (2026-07-24) — (M0.4) thirtieth tail-pass migration:
+checkAbstractMemberAccessInConstructor (TS2715 — a `this.X` reference inside a
+constructor body or a class-field initializer where X is an abstract member of
+the surrounding class, own or inherited; 68.4 ms at the round-651 table — the
+#30 per-file tail pass) is ON THE SPINE; the whole-file driver is DELETED and
+the emission half is anchored at ClassDeclaration / ClassExpression enters.**
+THE NEW TEMPLATE MOVE — **a pass whose per-anchor leaf can RE-ENTER the pass on
+a nested anchor migrates by SPLITTING the leaf at the re-entry boundary and
+KEEPING the routing walkers alive: the spine reproduces the ROOT-driven reach,
+the surviving recursion reproduces the LEAF-driven reach, and the two compose to
+the legacy multiplicity with no INT-valued (round 636) classifier.** Here the
+legacy `processClassForAbstractAccess` did TWO jobs per reached class — (a) an
+unconditional member-BODY descent back into the routing walk and (b) the
+emission walk over constructor bodies + non-abstract non-static field
+initializers — while the EMISSION walk's own ClassExpression arm re-entered
+`processClassForAbstractAccess` for a nested class. So a class expression
+sitting in a PROCESSED constructor is legitimately processed TWICE (routing
+reach + inline reach) and its own TS2715 emitted twice; pinned both ways (the
+same class in a NON-processed constructor is processed once). The split is: (a)
+becomes classifier edges, (b) becomes the new anchor leaf
+`emitAbstractAccessInClass`, and `walkClassesForAbstractAccess` /
+`walkExprForNestedClasses` SURVIVE for the inline path (the round-630
+shared-walker rule — `spineAaFold` must stay IN SYNC with their arms).
+SECOND move: **the legacy VariableStatement arm's NAME OVERRIDE (an anonymous
+`const C = class {…}` taking the variable's name) is recovered ANCHOR-side**,
+by asking the parent VariableDeclaration's own classifier status — round 652's
+anchor-side-gate applied to a NAME rather than a skip: that arm's REACH is
+identical to the plain initializer→AA_EXPR edge, so encoding the override as a
+status would have doubled the state space for a naming detail. It fires only in
+statement mode (AA_STMT); the RESTRICTED arrow/fn-expression body walk
+(AA_RSTMT) routes initializers through the plain expression arm, so an anonymous
+class there stays nameless and draws NOTHING, and a parenthesized initializer
+never matched the arm's `init is ClassExpression` test — both pinned. Reach =
+the memoized classifier spineAaStatus/spineAaFold (AA_STMT / AA_EXPR / AA_RSTMT
+/ AA_MEMBER), PURELY STRUCTURAL — the routing walk threads no downward value at
+all, and the emission walk's `inDeferredFn` flag lives entirely inside the
+surviving leaf, so unlike rounds 641/651/652 there is neither a status channel
+nor an ancestor climb. Frozen quirks pinned both directions, including three
+divergences from the same-shaped round-651 Ab fold: arrow/fn-expr Block bodies
+are the RESTRICTED three-statement-kind walk (a class DECLARATION in an arrow
+body is NEVER reached — Ab reaches it), object-literal METHOD bodies are not
+routing positions (property VALUES and spreads are), and the EMISSION walk has
+NO TryStatement arm (a `try { this.p }` inside a constructor draws nothing even
+though the ROUTING walk descends try/catch/finally) — the first calibration the
+pins caught; the second was the routing walk's switch SUBJECT, which IS walked
+(if/loop HEADS and for-INITIALIZERS are not). The file-scoped
+`buildClassDeclarationMap` prepass (heritage lookup for INHERITED abstract
+names) rides spineAaSetup (the round-627 collector shape); fully syntactic — NO
+ambient sandwich (both leaves read only their source/fileName args).
+GATE NOTE: unlike round 652 the CORPUS is a real behavioural gate here —
+`abstractPropertyInConstructor`'s `.errors.txt` subtest is generated and active
+(byte-exact TS2715 positions/messages), as is `errorInUnnamedClassExpression` —
+while TS2715 fires 0 times across all 8 tsc-source profiles, so `--listAll` ×8
+pins pure non-perturbation. Gates: 44 local pins
+(M04AbstractAccessSpineMigrationTest) green against the LEGACY pass FIRST
+(2 calibrations, above), 44/44 on the spine; suite 12,291 → 12,335/0 (3
+skipped); `--listAll` ×8 byte-identical pre-vs-post on all 8 profiles (sorted
+error lines, 46×7/94 — captured from a LEGACY build and a MIGRATION build of the
+same tree and diffed); `--partitionCheck 2` EQUIVALENT ×8; pass table 410 → 409
+(zero checkAbstractMemberAccessInConstructor rows); warning-clean. M0.4 running
+total: top THIRTY tail passes migrated. NEXT (round-651 table): #31
+checkIncDecTypeParamOperands 68.3 ms, then checkConflictMarkers 67.8,
+checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
+65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
+(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file). The SESSION TAIL: the #31 slot-move pre-gate LANDED —
+checkIncDecTypeParamOperands (TS2356, a `++`/`--` whose operand is `this.X` for
+a class property, or a local, annotated as a bare UNCONSTRAINED type parameter)
+moved intact from slot 64d3 to the post-spine slot. Coupling surface:
+self-contained — FULLY SYNTACTIC (annotations matched structurally: a bare
+TypeReference to an in-scope type-param name, no type args, null constraint; NOT
+type-resolving → no first-touch hazard, no ambient install); grep-verified NO
+pass scans/dedups/retracts TS2356 (the other emitters —
+checkForInNumericForRedeclare's for-in redeclare set, the arithmetic pass, a
+corpus-unique pinDiag walker — are position-disjoint and dedup only among
+themselves). Gates: suite 12,335/0; `--listAll` ×8 byte-identical pre-vs-post on
+all 8 profiles (46×7/94). NEXT session starts at its migration: the round-628
+downward-SETS / round-637 downward-MAP shape over `++`/`--` anchors, with a
+triple of name sets rebuilt pull-based — `tparams` ACCUMULATE at
+ClassDeclaration/FunctionDeclaration/method boundaries, `tpProps` REBUILD from
+the nearest enclosing class DECLARATION's bare-TP-annotated properties, and
+`tpLocals` rebuild per fn-like BODY from a body-wide collectTpLocals prepass
+whose descent is NARROWER than the scan's (no nested fn/class bodies). Frozen
+quirks to pin: only ClassDeclaration and FunctionDeclaration create scopes —
+class EXPRESSIONS, arrows and fn-EXPRESSIONS have NO arm at all, so a `++`
+inside them is UNREACHED — and a class PROPERTY INITIALIZER is walked with BOTH
+sets EMPTIED (so `this.tp++` in an initializer draws nothing). ALSO LANDED this session (ahead of schedule, so the next session
+starts directly at the implementation): the 40 round-654 migration PINS
+(M04IncDecTypeParamSpineMigrationTest) — 40/40 green against the LEGACY pass on
+the first run, no calibration — covering the core this-property/local emissions
+and spans, all four operator forms, the constrained / type-argument-bearing /
+concrete / non-this negative controls, scope accumulation across class + method
++ nested function-declaration boundaries, and every frozen reach quirk above
+(plus: the tpLocals prepass is body-WIDE and block-BLIND — a `let x!: T` inside
+an if-block registers for the whole body — yet never descends a nested function
+body, while a for-INIT declaration does register).
+
 **Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
 checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
 implicitly `any` because its containing generator FUNCTION DECLARATION lacks a
