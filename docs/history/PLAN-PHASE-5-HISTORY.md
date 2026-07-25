@@ -1,3 +1,58 @@
+**Round 667 (2026-07-25) — EP triage: two of the four items are BLOCKED OFFLINE,
+EP.1's premise is partly FALSIFIED, and the residual turns out to be one shape —
+`export *` barrels — which also emits a FALSE POSITIVE TS2694 that matters more
+than the emit bytes.** No code this round; the PERF arc's habit of checking a
+premise before building it transferred straight to EP and paid immediately.
+
+**Blocked offline (recorded so nobody re-attempts it).** This box has **no
+`node`, no `npx`, no `tsc`, and no `tsc.js` anywhere** — the tsc/tsgo columns in
+`bench-history/README.md` come from CI. So **EP.0** (wire the emit-diff gate)
+cannot run, and **EP.2** cannot start either, because its own text requires "the
+emit-diff gate in place" — without it there is no way to tell whether a printer
+change moves the diff toward or away from tsc, and the printer is precisely what
+the green corpus pins. Unblocking needs a network install of node + `typescript`
+or a tsc built at the pinned commit; both are outside the offline envelope, so
+that is a user-gated decision rather than agent work.
+
+**EP.1's premise is stale.** The round-483 claim was that xtsc "keeps
+`mod.Enum.Member` for const enums imported across modules". Cross-module
+inlining in fact already works, for both import forms and both value kinds,
+verified two independent ways: (1) the corpus test
+`constEnumNamespaceReferenceCausesNoImport` is an ACTIVE JS-emit subtest whose
+tsc baseline is `case 0 /* Foo.ConstFooEnum.Some */` — and it passes in a
+12,507/0 suite; (2) a scratch project emits `1 /* Kind.B */` for a named import,
+`"x" /* Names.X */` for a string-valued one, and `1 /* E.Kind.B */` for
+`import * as`. Somewhere in the ~180 rounds since round 483 this was fixed, and
+the item was never re-checked.
+
+**What actually fails is the barrel hop** — and that is exactly tsc's own
+`_namespaces/ts.js` layout, which is why round 483 saw the symptom in
+`utilities.js`. With `barrel.ts = export * from "./enums"`:
+`import { Kind } from "./barrel"` emits `barrel_1.Kind.B`, `import * as B` emits
+`B.Kind.A`, and both drag in a real `require("./barrel")` plus the entire
+`__importStar` helper that tsc elides. So EP.1 is not "teach the checker
+whole-program const-enum resolution" (that machinery exists) but "follow
+`export *` when resolving a const-enum member". The likely lever is visible:
+`Transformer.collectConstEnumValues` walks statements directly, while the
+barrel-following resolvers (`resolveExportedSymbolThroughStars` /
+`getModuleExportsFollowingStars`, M1.1 round 413) live in the Checker — the two
+are not connected.
+
+**The finding worth more than the emit bytes.** The same two-file barrel shape
+also produces a FALSE POSITIVE: `import * as B from "./barrel"` then `B.Kind`
+reports *"Namespace '"viaBarrel".B' has no exported member 'Kind'"* (TS2694) on
+valid TypeScript. **FPs are the v1 metric**, so EP.1a is sequenced ahead of the
+byte-fidelity half; presumably the same missing star-hop fixes both. Note it does
+NOT show on the 8 tsc-source profiles (still 46×7/94), so it is a shape those
+profiles never reach — it belongs in a local pin, not a dashboard expectation,
+and it is a reminder that "zero FPs on the profiles" is not "zero FPs".
+
+**Both EP.1 and EP.1a are gateable OFFLINE** (local pin + corpus, no reference
+tsc), which makes them the only workable EP items here. The repro is saved at
+`scratchpad/eptest` (enums / named / star / barrel / viaBarrel + tsconfig).
+
+Gates: no code changed (triage only); tree clean; suite untouched at 12,507/0/3.
+
 **Round 666 (2026-07-25) — (M2) SIZED BEFORE ANY CODE AND PARKED: only 23% of
 the run divides, w4 is flat, and the 4-core box — not the design — is the binding
 constraint. The PERF arc closes here.** Round 665 ended with "size (M2) with a

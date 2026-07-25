@@ -20,6 +20,45 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 676 (2026-07-25) — EP.2c SIZED: it is a subsystem project, not a
+placement rule. 132 hunks in three shapes, and the recommendation is an explicit
+go/no-go rather than drifting into it.**
+
+**What the residual formatting actually is.** Classifying the 132
+formatting-only hunks: **78** have the SAME line count but a different
+continuation INDENT DEPTH — and it differs in BOTH directions (checker.js has us
+indenting 4 spaces too many in one wrapped `&&` chain and 4 too few in another),
+so no single constant fixes it; **47** are places where tsc has MORE lines
+because we COLLAPSE a wrap it keeps — binder.ts's
+`const name = isComputedName ? A` / `    : B ? C` / `    : D` is the archetype,
+and tsc reproduces the SOURCE's own line structure with `:` at line start;
+**7** are the reverse, a wrap we add and tsc does not.
+
+**Why that makes it a project.** All three need the emitter to model tsc's
+line-breaking AND indentation decisions for wrapped binary and ternary
+expressions — source-structure preservation for expressions, analogous to the
+existing `multiLine` flags on object and array literals but considerably
+broader. It is not a token-placement tweak one commit lands.
+
+**Honest sizing.** 132 of the 1,307 remaining hunks (~10%); few files would flip
+to byte-identical on its own because they carry other differences too; and it is
+the highest corpus-regression risk anywhere here, since the printer it touches
+is pinned by all 12,534 tests. Moderate payoff, high risk, subsystem scope is
+exactly the profile this arc has learned to price before committing, so the
+queue item asks for a decision rather than assuming one.
+
+**Where EP stands after five rounds with the gate.** EP.0 live (672), EP.1
+completed via the `.js`-aware barrel fix (672), EP.1a the TS2694 false positive
+(668), EP.2a the double-comment defect 128 → 1 (674), EP.2b hex const enums with
+the gap 675 → 70 (675). Cumulatively: **byte-identical files 9 → 31 of 78** and
+**const-enum inlined reads 1,618 → 18,048** against tsc's 18,118, with
+logical-assign already at parity. What remains is EP.2c plus a small tail: 70
+const-enum reads, `tracing.Phase.Bind` (a const enum behind a namespace), one
+import-elision difference, and a single double-comment of a different shape.
+
+No code changed this round (classification only); tree clean; suite untouched at
+12,534/0/3.
+
 **Round 675 (2026-07-25) — EP.2b: the `CharacterCodes` mystery
 was HEX LITERALS. Const-enum residual 675 → 70 reads.** Round 673 asked why one
 enum accounted for 638 of the un-inlined reads while its own file-mates inlined
@@ -406,61 +445,6 @@ CHECKER resolves the barrel hop, the remaining work is connecting
 same star-following resolution. Gateable offline the same way (local pin +
 corpus), so it is the next EP item; EP.2 and EP.0 remain blocked on a reference
 tsc that does not exist on this box.
-
-**Round 667 (2026-07-25) — EP triage: two of the four items are BLOCKED OFFLINE,
-EP.1's premise is partly FALSIFIED, and the residual turns out to be one shape —
-`export *` barrels — which also emits a FALSE POSITIVE TS2694 that matters more
-than the emit bytes.** No code this round; the PERF arc's habit of checking a
-premise before building it transferred straight to EP and paid immediately.
-
-**Blocked offline (recorded so nobody re-attempts it).** This box has **no
-`node`, no `npx`, no `tsc`, and no `tsc.js` anywhere** — the tsc/tsgo columns in
-`bench-history/README.md` come from CI. So **EP.0** (wire the emit-diff gate)
-cannot run, and **EP.2** cannot start either, because its own text requires "the
-emit-diff gate in place" — without it there is no way to tell whether a printer
-change moves the diff toward or away from tsc, and the printer is precisely what
-the green corpus pins. Unblocking needs a network install of node + `typescript`
-or a tsc built at the pinned commit; both are outside the offline envelope, so
-that is a user-gated decision rather than agent work.
-
-**EP.1's premise is stale.** The round-483 claim was that xtsc "keeps
-`mod.Enum.Member` for const enums imported across modules". Cross-module
-inlining in fact already works, for both import forms and both value kinds,
-verified two independent ways: (1) the corpus test
-`constEnumNamespaceReferenceCausesNoImport` is an ACTIVE JS-emit subtest whose
-tsc baseline is `case 0 /* Foo.ConstFooEnum.Some */` — and it passes in a
-12,507/0 suite; (2) a scratch project emits `1 /* Kind.B */` for a named import,
-`"x" /* Names.X */` for a string-valued one, and `1 /* E.Kind.B */` for
-`import * as`. Somewhere in the ~180 rounds since round 483 this was fixed, and
-the item was never re-checked.
-
-**What actually fails is the barrel hop** — and that is exactly tsc's own
-`_namespaces/ts.js` layout, which is why round 483 saw the symptom in
-`utilities.js`. With `barrel.ts = export * from "./enums"`:
-`import { Kind } from "./barrel"` emits `barrel_1.Kind.B`, `import * as B` emits
-`B.Kind.A`, and both drag in a real `require("./barrel")` plus the entire
-`__importStar` helper that tsc elides. So EP.1 is not "teach the checker
-whole-program const-enum resolution" (that machinery exists) but "follow
-`export *` when resolving a const-enum member". The likely lever is visible:
-`Transformer.collectConstEnumValues` walks statements directly, while the
-barrel-following resolvers (`resolveExportedSymbolThroughStars` /
-`getModuleExportsFollowingStars`, M1.1 round 413) live in the Checker — the two
-are not connected.
-
-**The finding worth more than the emit bytes.** The same two-file barrel shape
-also produces a FALSE POSITIVE: `import * as B from "./barrel"` then `B.Kind`
-reports *"Namespace '"viaBarrel".B' has no exported member 'Kind'"* (TS2694) on
-valid TypeScript. **FPs are the v1 metric**, so EP.1a is sequenced ahead of the
-byte-fidelity half; presumably the same missing star-hop fixes both. Note it does
-NOT show on the 8 tsc-source profiles (still 46×7/94), so it is a shape those
-profiles never reach — it belongs in a local pin, not a dashboard expectation,
-and it is a reminder that "zero FPs on the profiles" is not "zero FPs".
-
-**Both EP.1 and EP.1a are gateable OFFLINE** (local pin + corpus, no reference
-tsc), which makes them the only workable EP items here. The repro is saved at
-`scratchpad/eptest` (enums / named / star / barrel / viaBarrel + tsconfig).
-
-Gates: no code changed (triage only); tree clean; suite untouched at 12,507/0/3.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1238,7 +1222,24 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
     char-code-valued). Also visible: `tracing.Phase.Bind` (a const enum behind
     a namespace) and one import-elision difference (`ts_js_1.version` vs
     `version` in builder.js).
-  - [ ] **EP.2c Multi-line expression formatting** — the original item, now
+  - [ ] **EP.2c SIZED round 676 — a subsystem project, not a placement rule;
+    132 hunks in THREE shapes, recommend an explicit go/no-go.** Classified:
+    **78 same line count but different continuation INDENT DEPTH**, differing in
+    BOTH directions (checker.js has us indenting 4 too many in one wrapped `&&`
+    chain and 4 too few in another — no single constant fixes it); **47 where
+    tsc has MORE lines** because we COLLAPSE a wrap it keeps (binder.ts's
+    `const name = isComputedName ? A` / `    : B ? C` / `    : D` — tsc
+    reproduces the SOURCE's line structure with `:` at line start); **7 where we
+    ADD a wrap** tsc does not. All three need the emitter to model tsc's
+    line-breaking AND indent decisions for wrapped binary/ternary expressions —
+    source-structure preservation for expressions, analogous to the existing
+    `multiLine` flags on object/array literals but much broader. SIZING: 132 of
+    1,307 residual hunks (~10%), few files would flip to byte-identical on its
+    own (they carry other diffs), and it is the highest corpus-regression risk
+    in the codebase — this printer is pinned by all 12,534 tests. If it goes
+    ahead: one rule per commit, full suite after each, gate re-run to confirm
+    the diff SHRINKS.
+  - [ ] ~~EP.2c (original)~~ — **Multi-line expression formatting** — the original item, now
     known to be ~128 hunks: tsc puts a wrapped ternary's `:` at LINE START
     (`? [...]` / newline / `: [`) where xtsc trails it. Highest
     corpus-regression risk (this is the printer the 12,520-test corpus pins),
