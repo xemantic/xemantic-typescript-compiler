@@ -3763,6 +3763,36 @@ class Checker(
     /** Reusable ascent buffer for [spineNaStatus]. */
     private val spineNaChain = ArrayList<Node>()
 
+    // ── (M0.4) round 656: checkArgumentsInClassFieldInitializers on the spine
+    // TS2815 — an `arguments` reference in a class PROPERTY INITIALIZER or a
+    // class STATIC BLOCK. The legacy pass ran TWO INTERLEAVED walks that
+    // RE-ENTER each other (the round-640 shape with the round-653 re-entry
+    // boundary): a ROUTING walk whose only job is to find non-`declare`
+    // classes, and an EMISSION walk entered at each property initializer and
+    // static-block body, where a bare `arguments` Identifier emits. The
+    // re-entries are what make them inseparable — inside the EMISSION walk an
+    // ordinary FunctionExpression / FunctionDeclaration / objlit-method body
+    // binds its OWN `arguments`, so it hands back to ROUTING (a class nested
+    // there is still found), while a ClassExpression hands to the member
+    // dispatch; arrows stay in EMISSION (they inherit `arguments`), parameter
+    // DEFAULTS included. Both walks therefore ride ONE classifier
+    // ([spineAfStatus] over [spineAfFold]) whose status IS the walk identity,
+    // with AF_MEMBER as the class/objlit-member conduit. The two walks reach
+    // DIFFERENT positions and that asymmetry is the whole risk surface (all
+    // pinned both directions): ROUTING descends statement BODIES only — no if
+    // condition, no loop head, no switch subject, no case expression, no
+    // objlit method body, no arrow parameter default — while EMISSION descends
+    // every one of them; conversely namespaces and `export =` are ROUTING
+    // positions only, and a ClassExpression is `declare`-gated in ROUTING but
+    // UNGATED in EMISSION (a frozen legacy asymmetry). Fully syntactic
+    // (identifier TEXT + member kinds + modifiers + positions) — no type
+    // resolution, no flow, no ambient install at all. Fields PRE-init.
+    private var spineAfActive = false
+    /** Per-file nodeId memo for [spineAfStatus] — 0 unknown, else AF_*. */
+    private var spineAfReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineAfStatus]. */
+    private val spineAfChain = ArrayList<Node>()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5939,22 +5969,21 @@ class Checker(
         // code's sole emitter and the sibling 17.170 `new` emitter is
         // gate-DISJOINT (its TS2350 arm fires only with noImplicitAny/strict
         // OFF, exactly when these anchors are inert).
-        // 12d' (M0.4 slot-move pre-gate, round 655 tail):
-        // checkArgumentsInClassFieldInitializers (TS2815 — an `arguments`
-        // reference in a class PROPERTY INITIALIZER or a class STATIC BLOCK,
-        // arrow functions transparent, ordinary function expressions opaque
-        // because they bind their own `arguments`) moved intact from slot 12d
-        // ahead of its spine migration. Coupling surface: self-contained —
-        // FULLY SYNTACTIC (identifier TEXT + member kinds + modifiers +
-        // source positions; NOT type-resolving → no first-touch hazard, no
-        // ambient install at all), the walk threads NO downward value beyond
-        // the walk IDENTITY (routing-for-classes vs inside-an-initializer),
-        // and grep-verified NO pass scans/dedups/retracts TS2815 — this is
-        // the code's sole emitter. Shape for the migration: the round-640
-        // TWO-INTERLEAVED-WALKS variant with the round-653 re-entry split
-        // (the emission walk's FunctionExpression/ClassExpression arms
-        // re-enter the routing walk).
-        pass("checkArgumentsInClassFieldInitializers") { checkArgumentsInClassFieldInitializers() }
+        // 12d' (M0.4, round 656): checkArgumentsInClassFieldInitializers
+        // (TS2815 — an `arguments` reference in a class PROPERTY INITIALIZER
+        // or a class STATIC BLOCK, arrow functions transparent, ordinary
+        // function expressions opaque because they bind their own
+        // `arguments`) is ON THE SPINE — anchors at `arguments` Identifier
+        // enters (spineAfEnterNode) under the multi-state classifier
+        // spineAfStatus/spineAfFold, which carries the pass's TWO
+        // INTERLEAVED walks AS the status (AF_ROUTE = the class-finding
+        // routing walk, AF_EMIT = the emission walk inside a property
+        // initializer / static block, AF_MEMBER = the class/objlit member
+        // conduit deciding which walk resumes). Fully syntactic — no ambient
+        // install at all; grep-verified NO pass scans/dedups/retracts TS2815
+        // (this is the code's sole emitter). The legacy binderResults driver
+        // → the spine's partition view, gated `--partitionCheck 2`
+        // EQUIVALENT ×8 (the round-633 rule).
         // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
         // (TS2715 — a `this.X` reference inside a constructor body or a
         // class-field initializer where X is an abstract member of the
@@ -21591,6 +21620,7 @@ class Checker(
                 spineAaSetup(result)
                 spineIdcSetup(result)
                 spineNaSetup(result)
+                spineAfSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21644,6 +21674,7 @@ class Checker(
                     spineAaTeardown()
                     spineIdcTeardown()
                     spineNaTeardown()
+                    spineAfTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -21962,6 +21993,11 @@ class Checker(
         // classifier, run with the FILE's own binder locals installed (the
         // deleted driver's ambient); no frames/leave hook.
         if (spineNaActive) spineNaEnterNode(node)
+        // (M0.4) round 656: the TS2815 anchors (`arguments` Identifier enters)
+        // — the emission leaf under the multi-state classifier carrying the
+        // pass's two interleaved walks as the status; fully syntactic, no
+        // frames/leave hook, no ambient sandwich.
+        if (spineAfActive) spineAfEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48147,6 +48183,26 @@ class Checker(
         private const val NA_REACHED = 1
         private const val NA_NONE = 2
         private const val NA_ROOT = 3
+
+        // (M0.4) round 656: spineAfStatus states
+        // (checkArgumentsInClassFieldInitializers reach — the pass's TWO
+        // interleaved walks carried AS the status + the transient SourceFile
+        // root). AF_ROUTE = a position the deleted ROUTING walk
+        // (findClassesForTS2815InStatements/-InExpr) visited, whose only
+        // effect is finding classes; AF_EMIT = a position the deleted
+        // EMISSION walk (checkExprForTS2815Arguments /
+        // checkStatement(s)ForTS2815Arguments) visited, where an
+        // `arguments` Identifier anchor fires TS2815; AF_MEMBER = a class or
+        // object-literal MEMBER on the path from its reached container to
+        // its body/initializer (the member kind decides which walk resumes:
+        // a property initializer / static block → AF_EMIT, a
+        // method/ctor/accessor body → AF_ROUTE, since those bind their own
+        // `arguments`).
+        private const val AF_ROUTE = 1
+        private const val AF_NONE = 2
+        private const val AF_ROOT = 3
+        private const val AF_EMIT = 4
+        private const val AF_MEMBER = 5
 
         // (M0.4) round 638: spineAcStatus states (checkArgumentsCollision
         // reach — binary + the transient SourceFile root).
@@ -84333,359 +84389,286 @@ interface DataView {
     /**
      * TS2815: "'arguments' cannot be referenced in property initializers
      * or class static initialization blocks."
-     * Fires when `arguments` appears in:
-     *   - PropertyDeclaration initializers (including arrow functions inside)
-     *   - ClassStaticBlockDeclaration bodies
-     * Does NOT fire inside regular function expressions/declarations (they have their own `arguments`).
-     * Fires unconditionally (not gated by strict/noImplicitAny).
+     *
+     * (M0.4, round 656) ON THE SPINE — the legacy driver and the whole
+     * findClassesForTS2815InStatements / findClassesForTS2815InExpr (the
+     * ROUTING walk) + checkClassMembersForTS2815 (the MEMBER dispatch) +
+     * checkExprForTS2815Arguments / checkStatement(s)ForTS2815Arguments (the
+     * EMISSION walk) recursion is DELETED; the reach they encoded lives in
+     * [spineAfFold] and [emitTS2815] is anchor-called at `arguments`
+     * Identifier enters ([spineAfEnterNode]).
      */
-    private fun checkArgumentsInClassFieldInitializers() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            findClassesForTS2815InStatements(result.sourceFile.statements, source, fileName)
+    private fun spineAfSetup(result: BinderResult) {
+        // The legacy driver's per-file gate, verbatim (its ONLY gate — the
+        // pass ran unconditionally otherwise, any options).
+        spineAfActive = !spineIsDts
+        spineAfReachMemo = if (!spineAfActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
         }
     }
 
-    private fun findClassesForTS2815InStatements(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) {
-            when (stmt) {
-                is ClassDeclaration -> {
-                    if (ModifierFlag.Declare !in stmt.modifiers) {
-                        checkClassMembersForTS2815(stmt.members, source, fileName)
-                    }
-                }
-                is ModuleDeclaration -> {
-                    val body = stmt.body
-                    if (body is ModuleBlock) findClassesForTS2815InStatements(body.statements, source, fileName)
-                }
-                is FunctionDeclaration -> {
-                    stmt.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-                }
-                is Block -> findClassesForTS2815InStatements(stmt.statements, source, fileName)
-                is IfStatement -> {
-                    findClassesForTS2815InStatements(listOf(stmt.thenStatement), source, fileName)
-                    stmt.elseStatement?.let { findClassesForTS2815InStatements(listOf(it), source, fileName) }
-                }
-                is ReturnStatement -> {
-                    stmt.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
-                }
-                is ExpressionStatement -> findClassesForTS2815InExpr(stmt.expression, source, fileName)
-                is ForStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
-                is ForInStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
-                is ForOfStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
-                is WhileStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
-                is DoStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
-                is SwitchStatement -> for (clause in stmt.caseBlock) {
-                    when (clause) {
-                        is CaseClause -> findClassesForTS2815InStatements(clause.statements, source, fileName)
-                        is DefaultClause -> findClassesForTS2815InStatements(clause.statements, source, fileName)
-                        else -> {}
-                    }
-                }
-                is TryStatement -> {
-                    findClassesForTS2815InStatements(stmt.tryBlock.statements, source, fileName)
-                    stmt.catchClause?.let { findClassesForTS2815InStatements(it.block.statements, source, fileName) }
-                    stmt.finallyBlock?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-                }
-                is LabeledStatement -> findClassesForTS2815InStatements(listOf(stmt.statement), source, fileName)
-                is ThrowStatement -> stmt.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
-                is ExportAssignment -> findClassesForTS2815InExpr(stmt.expression, source, fileName)
-                is VariableStatement -> {
-                    for (decl in stmt.declarationList.declarations) {
-                        decl.initializer?.let { findClassesForTS2815InExpr(it, source, fileName) }
-                    }
-                }
-                else -> {}
-            }
-        }
+    private fun spineAfTeardown() {
+        spineAfActive = false
+        spineAfReachMemo = ByteArray(0)
     }
 
-    private fun findClassesForTS2815InExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is ClassExpression -> {
-                if (ModifierFlag.Declare !in expr.modifiers) {
-                    checkClassMembersForTS2815(expr.members, source, fileName)
-                }
-            }
-            is NewExpression -> {
-                findClassesForTS2815InExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { findClassesForTS2815InExpr(it, source, fileName) }
-            }
-            is CallExpression -> {
-                findClassesForTS2815InExpr(expr.expression, source, fileName)
-                for (arg in expr.arguments) findClassesForTS2815InExpr(arg, source, fileName)
-            }
-            is ParenthesizedExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is AsExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is TypeAssertionExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is SatisfiesExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is NonNullExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is BinaryExpression -> {
-                var cur: Expression = expr
-                val rightStack = ArrayDeque<Expression>()
-                while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
-                findClassesForTS2815InExpr(cur, source, fileName)
-                while (rightStack.isNotEmpty()) findClassesForTS2815InExpr(rightStack.removeLast(), source, fileName)
-            }
-            is ConditionalExpression -> {
-                findClassesForTS2815InExpr(expr.condition, source, fileName)
-                findClassesForTS2815InExpr(expr.whenTrue, source, fileName)
-                findClassesForTS2815InExpr(expr.whenFalse, source, fileName)
-            }
-            is PropertyAccessExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                findClassesForTS2815InExpr(expr.expression, source, fileName)
-                findClassesForTS2815InExpr(expr.argumentExpression, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) findClassesForTS2815InExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) {
-                when (p) {
-                    is PropertyAssignment -> findClassesForTS2815InExpr(p.initializer, source, fileName)
-                    is SpreadAssignment -> findClassesForTS2815InExpr(p.expression, source, fileName)
-                    else -> {}
-                }
-            }
-            is SpreadElement -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> findClassesForTS2815InExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> findClassesForTS2815InExpr(expr.operand, source, fileName)
-            is AwaitExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { findClassesForTS2815InExpr(it, source, fileName) }
-            is VoidExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is DeleteExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> findClassesForTS2815InExpr(expr.expression, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) findClassesForTS2815InExpr(span.expression, source, fileName)
-            is TaggedTemplateExpression -> {
-                findClassesForTS2815InExpr(expr.tag, source, fileName)
-                if (expr.template is TemplateExpression) {
-                    for (span in (expr.template).templateSpans) findClassesForTS2815InExpr(span.expression, source, fileName)
-                }
-            }
-            is CommaListExpression -> for (e in expr.elements) findClassesForTS2815InExpr(e, source, fileName)
-            // FunctionExpression/ArrowFunction as the TOP-LEVEL return — look for class inside
-            is FunctionExpression -> {
-                findClassesForTS2815InStatements(expr.body.statements, source, fileName)
-            }
-            is ArrowFunction -> {
-                val body = expr.body
-                if (body is Block) findClassesForTS2815InStatements(body.statements, source, fileName)
-                else if (body is Expression) findClassesForTS2815InExpr(body, source, fileName)
-            }
-            else -> {}
-        }
+    /** ENTER dispatch: an Identifier whose TEXT is `arguments` (the pre-gate
+     *  runs BEFORE the reach climb — the name is rare, Identifier enters are
+     *  not) sitting at an EMISSION-walk position. */
+    private fun spineAfEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.IDENTIFIER) return
+        node as Identifier
+        if (node.text != "arguments") return
+        if (spineAfStatus(node) != AF_EMIT) return
+        emitTS2815(node.pos, spineSource, spineFileName)
     }
 
-    private fun checkClassMembersForTS2815(members: List<ClassElement>, source: String, fileName: String) {
-        for (member in members) {
-            when (member) {
-                is PropertyDeclaration -> {
-                    // Check initializer expression — not method bodies
-                    member.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
-                }
-                is ClassStaticBlockDeclaration -> {
-                    // Check static block body
-                    checkStatementsForTS2815Arguments(member.body.statements, source, fileName)
-                }
-                else -> {
-                    // Constructor, MethodDeclaration, GetAccessor, SetAccessor — skip (they have their own arguments)
-                    // But recurse into nested classes
-                    val body = when (member) {
-                        is MethodDeclaration -> member.body
-                        is Constructor -> member.body
-                        is GetAccessor -> member.body
-                        is SetAccessor -> member.body
-                        else -> null
-                    }
-                    body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-                }
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineAfFold] back down (the spineUyStatus
+     *  pattern). The SourceFile anchor carries the transient AF_ROOT status
+     *  (never memoized) whose sole edge is `child is Statement` → AF_ROUTE
+     *  (the deleted driver's entry into the ROUTING walk). */
+    private fun spineAfStatus(node: Node): Int {
+        if (node is SourceFile) return AF_ROOT
+        val memo = spineAfReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
         }
+        val chain = spineAfChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = AF_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = AF_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = AF_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> AF_NONE
+                pStatus == AF_ROOT -> if (c is Statement) AF_ROUTE else AF_NONE
+                pStatus == AF_ROUTE || pStatus == AF_EMIT || pStatus == AF_MEMBER ->
+                    spineAfFold(pNode, pStatus, c)
+                else -> AF_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
     }
 
-    /**
-     * Walk an expression in a "class field initializer context" — looking for `arguments` identifiers.
-     * Stop recursing into FunctionExpression/FunctionDeclaration bodies (they have their own arguments).
-     * Arrow functions DO propagate the class field context.
+    /** The deleted ROUTING walk (findClassesForTS2815InStatements/-InExpr),
+     *  MEMBER dispatch (checkClassMembersForTS2815) and EMISSION walk
+     *  (checkExprForTS2815Arguments / checkStatement(s)ForTS2815Arguments)
+     *  arms, verbatim, as (parent, parent-status) → child-status transitions.
+     *
+     *  Organised by node KIND rather than by status because the two walks
+     *  AGREE on most arms (a pass-through arm simply propagates `pStatus`, so
+     *  the walk identity rides along); the kinds where they DIFFER branch on
+     *  [pStatus] inline and are the pass's whole risk surface:
+     *   - if/loop HEADS, the switch SUBJECT and case EXPRESSIONS are EMISSION
+     *     positions only — the ROUTING walk descends statement BODIES only;
+     *   - an object literal's METHOD/ACCESSOR bodies are reached from the
+     *     EMISSION walk only (they bind their own `arguments`, so they hand
+     *     back to ROUTING through AF_MEMBER);
+     *   - an arrow's parameter DEFAULTS are EMISSION positions only;
+     *   - a ClassExpression is `declare`-gated in ROUTING and UNGATED in
+     *     EMISSION (a frozen legacy asymmetry — the emission arm has no
+     *     modifier test);
+     *   - namespaces and `export =` are ROUTING positions only.
+     *
+     *  Unlisted (parent, status) pairs are the legacy `else -> {}`s: every
+     *  name, type annotation, decorator, computed member name, heritage
+     *  clause, catch variable, shorthand property, template head and the
+     *  parameter lists of everything but an EMISSION-walked arrow.
      */
-    private fun checkExprForTS2815Arguments(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is Identifier -> {
-                if (expr.text == "arguments") {
-                    emitTS2815(expr.pos, source, fileName)
-                }
-            }
-            is ArrowFunction -> {
-                // Arrow functions: parameters with defaults, body
-                for (param in expr.parameters) {
-                    param.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
-                }
-                val body = expr.body
-                if (body is Block) checkStatementsForTS2815Arguments(body.statements, source, fileName)
-                else if (body is Expression) checkExprForTS2815Arguments(body, source, fileName)
-            }
-            // FunctionExpression: has own `arguments` — do not emit TS2815, but look for inner classes
-            is FunctionExpression -> {
-                findClassesForTS2815InStatements(expr.body.statements, source, fileName)
-            }
-            // ClassExpression inside field initializer — recurse into its members
-            is ClassExpression -> {
-                checkClassMembersForTS2815(expr.members, source, fileName)
-            }
-            // Other complex expressions — recurse
-            is CallExpression -> {
-                checkExprForTS2815Arguments(expr.expression, source, fileName)
-                for (arg in expr.arguments) checkExprForTS2815Arguments(arg, source, fileName)
-            }
-            is NewExpression -> {
-                checkExprForTS2815Arguments(expr.expression, source, fileName)
-                expr.arguments?.forEach { checkExprForTS2815Arguments(it, source, fileName) }
-            }
-            is BinaryExpression -> {
-                checkExprForTS2815Arguments(expr.left, source, fileName)
-                checkExprForTS2815Arguments(expr.right, source, fileName)
-            }
-            is PropertyAccessExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is ElementAccessExpression -> {
-                checkExprForTS2815Arguments(expr.expression, source, fileName)
-                checkExprForTS2815Arguments(expr.argumentExpression, source, fileName)
-            }
-            is ParenthesizedExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is ConditionalExpression -> {
-                checkExprForTS2815Arguments(expr.condition, source, fileName)
-                checkExprForTS2815Arguments(expr.whenTrue, source, fileName)
-                checkExprForTS2815Arguments(expr.whenFalse, source, fileName)
-            }
-            is PrefixUnaryExpression -> checkExprForTS2815Arguments(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> checkExprForTS2815Arguments(expr.operand, source, fileName)
-            is TypeAssertionExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is AsExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is SatisfiesExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is NonNullExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is AwaitExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { checkExprForTS2815Arguments(it, source, fileName) }
-            is DeleteExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is VoidExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is TypeOfExpression -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is CommaListExpression -> expr.elements.forEach { checkExprForTS2815Arguments(it, source, fileName) }
-            is SpreadElement -> checkExprForTS2815Arguments(expr.expression, source, fileName)
-            is ObjectLiteralExpression -> {
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> checkExprForTS2815Arguments(prop.initializer, source, fileName)
-                        is ShorthandPropertyAssignment -> {
-                            // no initializer to check
-                        }
-                        is SpreadAssignment -> checkExprForTS2815Arguments(prop.expression, source, fileName)
-                        is MethodDeclaration -> {
-                            // Method in object literal — has its own arguments
-                            prop.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-                        }
-                        is GetAccessor -> prop.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-                        is SetAccessor -> prop.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-                        else -> {}
-                    }
-                }
-            }
-            is ArrayLiteralExpression -> {
-                for (elem in expr.elements) checkExprForTS2815Arguments(elem, source, fileName)
-            }
-            is TemplateExpression -> {
-                for (span in expr.templateSpans) checkExprForTS2815Arguments(span.expression, source, fileName)
-            }
-            is TaggedTemplateExpression -> {
-                checkExprForTS2815Arguments(expr.tag, source, fileName)
-                val tmpl = expr.template
-                if (tmpl is TemplateExpression) {
-                    for (span in tmpl.templateSpans) checkExprForTS2815Arguments(span.expression, source, fileName)
-                }
-            }
-            else -> {}
+    private fun spineAfFold(pNode: Node, pStatus: Int, child: Node): Int = when (pNode) {
+        // ── the class/function CROSSING arms — identical in BOTH walks ──────
+        // A class DECLARATION hands its members to the MEMBER dispatch;
+        // `declare` classes are skipped whole (both walks test it).
+        is ClassDeclaration ->
+            if (ModifierFlag.Declare !in pNode.modifiers && child is ClassElement) AF_MEMBER
+            else AF_NONE
+        // A class EXPRESSION: `declare`-gated in ROUTING, UNGATED in EMISSION.
+        is ClassExpression -> when {
+            child !is ClassElement -> AF_NONE
+            pStatus == AF_EMIT -> AF_MEMBER
+            ModifierFlag.Declare !in pNode.modifiers -> AF_MEMBER
+            else -> AF_NONE
         }
-    }
-
-    /**
-     * Walk statements in a "class field initializer context" (like static block bodies).
-     * Stops recursing at FunctionDeclaration bodies.
-     */
-    private fun checkStatementsForTS2815Arguments(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) checkStatementForTS2815Arguments(stmt, source, fileName)
-    }
-
-    private fun checkStatementForTS2815Arguments(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is ExpressionStatement -> checkExprForTS2815Arguments(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { checkExprForTS2815Arguments(it, source, fileName) }
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
-                }
-            }
-            is Block -> checkStatementsForTS2815Arguments(stmt.statements, source, fileName)
-            is IfStatement -> {
-                checkExprForTS2815Arguments(stmt.expression, source, fileName)
-                checkStatementForTS2815Arguments(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { checkStatementForTS2815Arguments(it, source, fileName) }
-            }
-            is ForStatement -> {
-                when (val init = stmt.initializer) {
-                    is VariableDeclarationList -> {
-                        for (decl in init.declarations) {
-                            decl.initializer?.let { checkExprForTS2815Arguments(it, source, fileName) }
-                        }
-                    }
-                    is Expression -> checkExprForTS2815Arguments(init, source, fileName)
-                    else -> {}
-                }
-                stmt.condition?.let { checkExprForTS2815Arguments(it, source, fileName) }
-                stmt.incrementor?.let { checkExprForTS2815Arguments(it, source, fileName) }
-                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> {
-                checkExprForTS2815Arguments(stmt.expression, source, fileName)
-                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
-            }
-            is ForOfStatement -> {
-                checkExprForTS2815Arguments(stmt.expression, source, fileName)
-                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
-            }
-            is WhileStatement -> {
-                checkExprForTS2815Arguments(stmt.expression, source, fileName)
-                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
-            }
-            is DoStatement -> {
-                checkStatementForTS2815Arguments(stmt.statement, source, fileName)
-                checkExprForTS2815Arguments(stmt.expression, source, fileName)
-            }
-            is SwitchStatement -> {
-                checkExprForTS2815Arguments(stmt.expression, source, fileName)
-                for (clause in stmt.caseBlock) {
-                    val clauseStmts = when (clause) {
-                        is CaseClause -> { checkExprForTS2815Arguments(clause.expression, source, fileName); clause.statements }
-                        is DefaultClause -> clause.statements
-                        else -> emptyList()
-                    }
-                    checkStatementsForTS2815Arguments(clauseStmts, source, fileName)
-                }
-            }
-            is TryStatement -> {
-                checkStatementsForTS2815Arguments(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.block?.let { checkStatementsForTS2815Arguments(it.statements, source, fileName) }
-                stmt.finallyBlock?.let { checkStatementsForTS2815Arguments(it.statements, source, fileName) }
-            }
-            is ThrowStatement -> stmt.expression?.let { checkExprForTS2815Arguments(it, source, fileName) }
-            is LabeledStatement -> checkStatementForTS2815Arguments(stmt.statement, source, fileName)
-            // FunctionDeclaration inside static block: has own arguments — skip body but recurse for inner classes
-            is FunctionDeclaration -> {
-                stmt.body?.let { findClassesForTS2815InStatements(it.statements, source, fileName) }
-            }
-            is ClassDeclaration -> {
-                if (ModifierFlag.Declare !in stmt.modifiers) {
-                    checkClassMembersForTS2815(stmt.members, source, fileName)
-                }
-            }
-            else -> {}
+        // A function DECLARATION / EXPRESSION binds its own `arguments`, so
+        // its body is a ROUTING position from BOTH walks (a class nested there
+        // is still found — the re-entry boundary).
+        is FunctionDeclaration -> if (child === pNode.body) AF_ROUTE else AF_NONE
+        is FunctionExpression -> if (child === pNode.body) AF_ROUTE else AF_NONE
+        // An arrow INHERITS `arguments`: its body keeps the current walk, and
+        // in EMISSION its parameter DEFAULTS are emission positions too.
+        is ArrowFunction -> when {
+            child === pNode.body -> pStatus
+            pStatus == AF_EMIT && child is Parameter -> AF_EMIT
+            else -> AF_NONE
         }
+
+        // ── the MEMBER dispatch (checkClassMembersForTS2815) ────────────────
+        // These kinds only ever carry AF_MEMBER (a class member / an
+        // EMISSION-reached objlit method or accessor).
+        is PropertyDeclaration ->
+            if (pStatus == AF_MEMBER && child === pNode.initializer) AF_EMIT else AF_NONE
+        is ClassStaticBlockDeclaration ->
+            if (pStatus == AF_MEMBER && child === pNode.body) AF_EMIT else AF_NONE
+        is MethodDeclaration ->
+            if (pStatus == AF_MEMBER && child === pNode.body) AF_ROUTE else AF_NONE
+        is Constructor ->
+            if (pStatus == AF_MEMBER && child === pNode.body) AF_ROUTE else AF_NONE
+        is GetAccessor ->
+            if (pStatus == AF_MEMBER && child === pNode.body) AF_ROUTE else AF_NONE
+        is SetAccessor ->
+            if (pStatus == AF_MEMBER && child === pNode.body) AF_ROUTE else AF_NONE
+
+        // ── statement arms where the two walks DIFFER (the risk surface) ────
+        is IfStatement -> when {
+            child === pNode.thenStatement || child === pNode.elseStatement -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is ForStatement -> when {
+            child === pNode.statement -> pStatus
+            pStatus == AF_EMIT && (child === pNode.initializer ||
+                child === pNode.condition || child === pNode.incrementor) -> AF_EMIT
+            else -> AF_NONE
+        }
+        is ForInStatement -> when {
+            child === pNode.statement -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is ForOfStatement -> when {
+            child === pNode.statement -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is WhileStatement -> when {
+            child === pNode.statement -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is DoStatement -> when {
+            child === pNode.statement -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is SwitchStatement -> when {
+            child is CaseClause || child is DefaultClause -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is CaseClause -> when {
+            child is Statement -> pStatus
+            pStatus == AF_EMIT && child === pNode.expression -> AF_EMIT
+            else -> AF_NONE
+        }
+        is DefaultClause -> if (child is Statement) pStatus else AF_NONE
+        // Object literals: property VALUES and spreads in both walks; METHOD
+        // and ACCESSOR bodies from EMISSION only (they bind their own
+        // `arguments` → AF_MEMBER hands their body back to ROUTING).
+        is ObjectLiteralExpression -> when {
+            child is PropertyAssignment || child is SpreadAssignment -> pStatus
+            pStatus == AF_EMIT && (child is MethodDeclaration ||
+                child is GetAccessor || child is SetAccessor) -> AF_MEMBER
+            else -> AF_NONE
+        }
+
+        // ── ROUTING-only arms (the EMISSION statement walk has no
+        //    ModuleDeclaration or `export =` arm) ────────────────────────────
+        is ModuleDeclaration ->
+            if (pStatus == AF_ROUTE && child === pNode.body && child is ModuleBlock) AF_ROUTE
+            else AF_NONE
+        is ModuleBlock -> if (pStatus == AF_ROUTE && child is Statement) AF_ROUTE else AF_NONE
+        is ExportAssignment ->
+            if (pStatus == AF_ROUTE && child === pNode.expression) AF_ROUTE else AF_NONE
+
+        // ── EMISSION-only arms ──────────────────────────────────────────────
+        // A Parameter is reached only through an EMISSION-walked arrow, and
+        // only its DEFAULT (never its name — so a parameter *named*
+        // `arguments` draws nothing).
+        is Parameter ->
+            if (pStatus == AF_EMIT && child === pNode.initializer) AF_EMIT else AF_NONE
+
+        // ── arms the two walks share verbatim (the status propagates) ───────
+        is Block -> if (child is Statement) pStatus else AF_NONE
+        is ExpressionStatement -> if (child === pNode.expression) pStatus else AF_NONE
+        is ReturnStatement -> if (child === pNode.expression) pStatus else AF_NONE
+        is ThrowStatement -> if (child === pNode.expression) pStatus else AF_NONE
+        is LabeledStatement -> if (child === pNode.statement) pStatus else AF_NONE
+        is VariableStatement -> if (child === pNode.declarationList) pStatus else AF_NONE
+        is VariableDeclarationList -> if (child is VariableDeclaration) pStatus else AF_NONE
+        is VariableDeclaration -> if (child === pNode.initializer) pStatus else AF_NONE
+        is TryStatement ->
+            if (child === pNode.tryBlock || child is CatchClause ||
+                child === pNode.finallyBlock) pStatus
+            else AF_NONE
+        is CatchClause -> if (child === pNode.block) pStatus else AF_NONE
+        is NewExpression ->
+            if (child === pNode.expression ||
+                pNode.arguments?.any { it === child } == true) pStatus
+            else AF_NONE
+        is CallExpression ->
+            if (child === pNode.expression || pNode.arguments.any { it === child }) pStatus
+            else AF_NONE
+        is BinaryExpression ->
+            if (child === pNode.left || child === pNode.right) pStatus else AF_NONE
+        is ConditionalExpression ->
+            if (child === pNode.condition || child === pNode.whenTrue ||
+                child === pNode.whenFalse) pStatus
+            else AF_NONE
+        is ParenthesizedExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is AsExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is TypeAssertionExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is SatisfiesExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is NonNullExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is PropertyAccessExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is ElementAccessExpression ->
+            if (child === pNode.expression || child === pNode.argumentExpression) pStatus
+            else AF_NONE
+        is ArrayLiteralExpression -> if (pNode.elements.any { it === child }) pStatus else AF_NONE
+        is PropertyAssignment -> if (child === pNode.initializer) pStatus else AF_NONE
+        is SpreadAssignment -> if (child === pNode.expression) pStatus else AF_NONE
+        is SpreadElement -> if (child === pNode.expression) pStatus else AF_NONE
+        is PrefixUnaryExpression -> if (child === pNode.operand) pStatus else AF_NONE
+        is PostfixUnaryExpression -> if (child === pNode.operand) pStatus else AF_NONE
+        is AwaitExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is YieldExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is VoidExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is DeleteExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        is TypeOfExpression -> if (child === pNode.expression) pStatus else AF_NONE
+        // The tagged-template arm walks the tag and — only when the template
+        // is a substituting TemplateExpression — its spans; handing the
+        // template node the status is equivalent (a non-substituting literal
+        // has no walked child).
+        is TaggedTemplateExpression ->
+            if (child === pNode.tag || child === pNode.template) pStatus else AF_NONE
+        is TemplateExpression -> if (child is TemplateSpan) pStatus else AF_NONE
+        is TemplateSpan -> if (child === pNode.expression) pStatus else AF_NONE
+        is CommaListExpression -> if (pNode.elements.any { it === child }) pStatus else AF_NONE
+        else -> AF_NONE
     }
 
     private fun emitTS2815(start: Int, source: String, fileName: String) {
