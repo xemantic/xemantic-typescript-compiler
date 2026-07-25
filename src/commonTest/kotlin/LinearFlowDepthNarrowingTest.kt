@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.measureTimedValue
@@ -166,6 +165,6 @@ class LinearFlowDepthNarrowingTest {
     @Test
     fun `assert narrowing at trivial depth`() {
         val result = TypeScriptCompiler().compile(assertChainSource(3), "shallow.ts")
-        have(result.diagnostics.none { it.code == 2322 })
+        assert(result.diagnostics.none { it.code == 2322 })
     }
 }

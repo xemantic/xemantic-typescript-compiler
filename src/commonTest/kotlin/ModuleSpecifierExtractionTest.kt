@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
@@ -88,7 +87,7 @@ class ModuleSpecifierExtractionTest {
             const s3 = "from 'garbage-8'";
         """.trimIndent()
         val specs = specifiersOf(src)
-        have(specs.none { it.contains("garbage") })
+        assert(specs.none { it.contains("garbage") })
         // Real specifiers still found — including a dynamic import INSIDE a template
         // substitution (real code position) right next to template text that is not.
         assert(specs == setOf("./real", "./real-in-template"))

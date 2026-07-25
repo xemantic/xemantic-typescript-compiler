@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import java.io.File
 import java.lang.reflect.Modifier
 import kotlin.test.Test
@@ -53,7 +52,7 @@ class NodeKindIdTest {
             val node = stack.removeAt(stack.size - 1)
             val stamped = (node as NodeBase).kindId
             val expected = nodeKindIdOf(node)
-            // Plain fail(), NOT have(): power-assert would toString whole node subtrees.
+            // Plain fail(), NOT assert(): power-assert would toString whole node subtrees.
             if (stamped != expected) {
                 fail(
                     "$label: ${node::class.simpleName} at pos ${node.pos} has stamped " +
@@ -72,7 +71,7 @@ class NodeKindIdTest {
         val values = NodeKind::class.java.declaredFields
             .filter { Modifier.isStatic(it.modifiers) && it.type == Int::class.javaPrimitiveType }
             .map { it.also { f -> f.isAccessible = true }.getInt(null) }
-        have(values.isNotEmpty())
+        assert(values.isNotEmpty())
         val expected = (0 until values.size).toSet()
         val actual = values.toSet()
         assert(actual == expected)
@@ -119,14 +118,14 @@ class NodeKindIdTest {
     fun `copy re-stamps kindId - the Transformer-synthesized-node invariant`() {
         val ident = Identifier(text = "x")
         val copied = ident.copy(text = "y")
-        have(copied.kindId == NodeKind.IDENTIFIER)
+        assert(copied.kindId == NodeKind.IDENTIFIER)
         val block = Block(statements = listOf(ExpressionStatement(expression = ident)))
-        have(block.copy(multiLine = false).kindId == NodeKind.BLOCK)
+        assert(block.copy(multiLine = false).kindId == NodeKind.BLOCK)
         // And forEachChild dispatches the copy correctly (would hit the loud else
         // if copy() lost the stamp).
         val visited = ArrayList<Node>()
         forEachChild(block.copy()) { visited.add(it) }
-        have(visited.size == 1)
+        assert(visited.size == 1)
     }
 
     @Test

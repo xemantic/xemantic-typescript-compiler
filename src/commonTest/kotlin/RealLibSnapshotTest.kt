@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertSame
 import kotlin.test.assertNotSame
@@ -56,7 +55,7 @@ class RealLibSnapshotTest {
         val interfaceNames = es5.statements
             .filterIsInstance<InterfaceDeclaration>().map { it.name.text }.toSet()
         for (name in listOf("Array", "Object", "String", "RegExp", "Promise", "PromiseLike")) {
-            have(name in interfaceNames)
+            assert(name in interfaceNames)
         }
         // The target-default selection uses the dist alias names.
         val defaults = RealLibSnapshots.parsedLibFiles(null, ScriptTarget.ES5)
@@ -76,7 +75,7 @@ class RealLibSnapshotTest {
         // one program's lib symbols must never pollute the next program's.
         assertNotSame(es5A.locals["Array"], es5B.locals["Array"], "bound symbols must not be shared")
         for (name in listOf("Array", "Object", "Math", "JSON", "parseInt")) {
-            have(es5A.locals.containsKey(name))
+            assert(es5A.locals.containsKey(name))
         }
     }
 

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Test
@@ -180,7 +181,7 @@ class UnionCandidateGuardNarrowingTest {
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
         val fps = result.diagnostics.filter { it.code == 2339 }
-        have(fps.isEmpty())
+        assert(fps.isEmpty())
     }
 
     @Test

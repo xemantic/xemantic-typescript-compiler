@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 
@@ -42,10 +41,10 @@ class LongKeyMapTest {
     @Test
     fun `get on empty and missing keys returns null`() {
         val m = LongKeyMap<String>()
-        have(m.get(1L shl 32) == null)
+        assert(m.get(1L shl 32) == null)
         m.put((1L shl 32) or 2L, "a")
-        have(m.get((1L shl 32) or 3L) == null)
-        have(m.get((2L shl 32) or 2L) == null)
+        assert(m.get((1L shl 32) or 3L) == null)
+        assert(m.get((2L shl 32) or 2L) == null)
     }
 
     @Test
@@ -64,7 +63,7 @@ class LongKeyMapTest {
         val m = LongKeyMap<String>()
         assertFailsWith<IllegalArgumentException> { m.put(0L, "x") }
         // get(0) harmlessly returns null (matches the empty-slot sentinel).
-        have(m.get(0L) == null)
+        assert(m.get(0L) == null)
     }
 
     @Test
@@ -87,7 +86,7 @@ class LongKeyMapTest {
             assert(m.get(key) == expected)
         }
         // Distinct keys never alias: flip hi/lo of an existing pair.
-        have(m.get((5L shl 32) or 6L) != m.get((6L shl 32) or 5L) ||
+        assert(m.get((5L shl 32) or 6L) != m.get((6L shl 32) or 5L) ||
             oracle[(5L shl 32) or 6L] == oracle[(6L shl 32) or 5L])
     }
 

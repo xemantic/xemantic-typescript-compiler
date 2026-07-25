@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
@@ -68,7 +67,7 @@ class TypesAcquisitionTest {
         val program = result.programFiles.toSet()
         assert(gadgetEntry in program)
         assert(widgetEntry in program)
-        have(result.diagnostics.none { it.code == 2304 })
+        assert(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
@@ -90,7 +89,7 @@ class TypesAcquisitionTest {
         ).build("/proj", noEmit = true)
         val program = result.programFiles.toSet()
         assert(gadgetEntry !in program && widgetEntry !in program)
-        have(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
+        assert(cannotFindName(result, "gadget") && cannotFindName(result, "widget"))
     }
 
     @Test
@@ -117,7 +116,7 @@ class TypesAcquisitionTest {
         // explicit typeRoots must REPLACE the node_modules/@types default, not extend
         // it
         assert(gadgetEntry !in program && widgetEntry !in program)
-        have(result.diagnostics.none { it.code == 2304 })
+        assert(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
@@ -132,7 +131,7 @@ class TypesAcquisitionTest {
         )
         val result = ProjectCompiler(vfs).build("/repo/packages/app", noEmit = true)
         assert("/repo/node_modules/@types/hoistedlib/index.d.ts" in result.programFiles.toSet())
-        have(result.diagnostics.none { it.code == 2304 })
+        assert(result.diagnostics.none { it.code == 2304 })
     }
 
     @Test
@@ -147,7 +146,7 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         assert("/proj/node_modules/@types/@myscope/thing/index.d.ts" in result.programFiles.toSet())
-        have(!cannotFindName(result, "scopedThing"))
+        assert(!cannotFindName(result, "scopedThing"))
     }
 
     @Test
@@ -164,7 +163,7 @@ class TypesAcquisitionTest {
         ).build("/proj", noEmit = true)
         assert("/proj/node_modules/@types/myscope__thing/index.d.ts" in result.programFiles.toSet())
         assert(result.diagnostics.none { it.code == 2688 })
-        have(!cannotFindName(result, "scopedThing"))
+        assert(!cannotFindName(result, "scopedThing"))
     }
 
     @Test
@@ -184,6 +183,6 @@ class TypesAcquisitionTest {
             ),
         ).build("/proj", noEmit = true)
         assert("/proj/node_modules/@types/reflib/index.d.ts" in result.programFiles.toSet())
-        have(!cannotFindName(result, "refthing"))
+        assert(!cannotFindName(result, "refthing"))
     }
 }

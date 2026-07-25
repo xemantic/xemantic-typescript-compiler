@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
-import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
@@ -68,7 +68,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        have(ts2440(result).isEmpty())
+        assert(ts2440(result).isEmpty())
     }
 
     @Test
@@ -86,7 +86,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        have(ts2440(result).isEmpty())
+        assert(ts2440(result).isEmpty())
     }
 
     @Test
@@ -104,7 +104,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        have(ts2440(result).isEmpty())
+        assert(ts2440(result).isEmpty())
     }
 
     @Test
@@ -122,7 +122,7 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        have(ts2440(result).any { it.contains("'Widget'") })
+        assert(ts2440(result).any { it.contains("'Widget'") })
     }
 
     @Test
@@ -141,6 +141,6 @@ class ImportTypeOnlyBarrelMergeTest {
                 """.trimIndent(),
             )
         )
-        have(ts2440(result).any { it.contains("'Node'") })
+        assert(ts2440(result).any { it.contains("'Node'") })
     }
 }

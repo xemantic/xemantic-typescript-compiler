@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertFailsWith
 
@@ -46,10 +45,10 @@ class IntKeyMapTest {
     @Test
     fun `get on empty and missing keys returns null`() {
         val m = IntKeyMap<String>()
-        have(m[1] == null)
+        assert(m[1] == null)
         m[2] = "a"
-        have(m[3] == null)
-        have(m[-2] == null)
+        assert(m[3] == null)
+        assert(m[-2] == null)
     }
 
     @Test
@@ -71,7 +70,7 @@ class IntKeyMapTest {
         assert(m[-2] == "scope")
         assert(m[2] == "main")
         assert(m[0] == "zero")
-        have(m[-3] == null)
+        assert(m[-3] == null)
     }
 
     @Test
@@ -79,7 +78,7 @@ class IntKeyMapTest {
         val m = IntKeyMap<String>()
         assertFailsWith<IllegalArgumentException> { m[Int.MIN_VALUE] = "x" }
         // get harmlessly returns null (matches an empty slot).
-        have(m[Int.MIN_VALUE] == null)
+        assert(m[Int.MIN_VALUE] == null)
     }
 
     @Test
@@ -98,10 +97,10 @@ class IntKeyMapTest {
         assert(m.entryCount == oracle.size)
         for ((k, expected) in oracle) {
             val got = m[k]
-            have(got == expected)
+            assert(got == expected)
         }
-        have(m[5001] == null)
-        have(m[-5003] == null)
+        assert(m[5001] == null)
+        assert(m[-5003] == null)
     }
 
     private val t1: Type = Type.Intrinsic(TypeFlags.Any, "memo-t1")
@@ -112,13 +111,13 @@ class IntKeyMapTest {
         val memo = NarrowFlowMemo()
         memo.putIfDeeper(id = 5, depth = 3, type = t1)
         // depth <= storedDepth → served
-        have(memo.served(5, 3) === t1)
-        have(memo.served(5, 2) === t1)
-        have(memo.served(5, 0) === t1)
+        assert(memo.served(5, 3) === t1)
+        assert(memo.served(5, 2) === t1)
+        assert(memo.served(5, 0) === t1)
         // depth > storedDepth → NOT served (the over-narrowing guard)
-        have(memo.served(5, 4) == null)
+        assert(memo.served(5, 4) == null)
         // absent id → null regardless of depth
-        have(memo.served(6, 0) == null)
+        assert(memo.served(6, 0) == null)
     }
 
     @Test
@@ -127,13 +126,13 @@ class IntKeyMapTest {
         memo.putIfDeeper(9, 5, t1)
         // shallower and equal depths do NOT overwrite (prev.first < depth rule)
         memo.putIfDeeper(9, 4, t2)
-        have(memo.served(9, 5) === t1)
+        assert(memo.served(9, 5) === t1)
         memo.putIfDeeper(9, 5, t2)
-        have(memo.served(9, 5) === t1)
+        assert(memo.served(9, 5) === t1)
         // strictly deeper overwrites value AND raises the serve ceiling
         memo.putIfDeeper(9, 6, t2)
-        have(memo.served(9, 6) === t2)
-        have(memo.served(9, 5) === t2)
+        assert(memo.served(9, 6) === t2)
+        assert(memo.served(9, 5) === t2)
     }
 
     @Test
@@ -144,29 +143,29 @@ class IntKeyMapTest {
         }
         for (id in 0 until 4000) {
             val expected = if (id % 2 == 0) t1 else t2
-            have(memo.served(id, id % 7) === expected)
-            have(memo.served(id, id % 7 + 1) == null)
+            assert(memo.served(id, id % 7) === expected)
+            assert(memo.served(id, id % 7 + 1) == null)
         }
-        have(memo.served(4000, 0) == null)
+        assert(memo.served(4000, 0) == null)
     }
 
     @Test
     fun `NarrowSeen add dedups and popToMark restores exact membership`() {
         val seen = NarrowSeen()
-        have(seen.add(1))
-        have(seen.add(2))
-        have(!seen.add(1))
+        assert(seen.add(1))
+        assert(seen.add(2))
+        assert(!seen.add(1))
         val m = seen.mark()
-        have(seen.add(3))
-        have(seen.add(4))
-        have(!seen.add(2))
+        assert(seen.add(3))
+        assert(seen.add(4))
+        assert(!seen.add(2))
         seen.popToMark(m)
         // 3 and 4 removed; 1 and 2 kept
-        have(seen.add(3))
+        assert(seen.add(3))
         seen.popToMark(m)
-        have(!seen.add(1))
-        have(!seen.add(2))
-        have(seen.add(4))
+        assert(!seen.add(1))
+        assert(!seen.add(2))
+        assert(seen.add(4))
     }
 
     @Test
@@ -188,9 +187,9 @@ class IntKeyMapTest {
                     val expected = ids.add(id)
                     if (expected) log.add(id)
                     val actual = seen.add(id)
-                    have(actual == expected)
+                    assert(actual == expected)
                 }
-                7 -> marks.addLast(seen.mark().also { have(it == log.size) })
+                7 -> marks.addLast(seen.mark().also { assert(it == log.size) })
                 else -> if (marks.isNotEmpty()) {
                     val m = marks.removeLast()
                     seen.popToMark(m)
@@ -203,7 +202,7 @@ class IntKeyMapTest {
         for (id in 0 until 3000) {
             val member = id in ids
             val actual = seen.add(id)
-            have(actual != member)
+            assert(actual != member)
         }
     }
 }

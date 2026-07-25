@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 
 /**
@@ -109,9 +108,9 @@ class ProjectBuildTest {
         assert("/proj/dist/index.js" in written)
         assert("/proj/dist/math.js" in written)
         val mathJs = vfs.readText("/proj/dist/math.js")
-        have(mathJs != null && mathJs.contains("function add"))
+        assert(mathJs != null && mathJs.contains("function add"))
         // node_modules outputs are never written.
-        have(written.none { it.contains("/node_modules/") })
+        assert(written.none { it.contains("/node_modules/") })
     }
 
     /** Nested source dirs + same-basename files in two directories (output-layout regressions). */
@@ -137,7 +136,7 @@ class ProjectBuildTest {
         assert("/proj/dist/index.js" in written)
         assert("/proj/dist/helpers/util.js" in written)
         val utilJs = vfs.readText("/proj/dist/helpers/util.js")
-        have(utilJs != null && utilJs.contains("utilMarker"))
+        assert(utilJs != null && utilJs.contains("utilMarker"))
         assert(vfs.readText("/proj/dist/util.js") == null)
     }
 
@@ -148,7 +147,7 @@ class ProjectBuildTest {
         assert(result.written.size == 3)
         val rootIndex = vfs.readText("/proj/dist/index.js")
         val localeIndex = vfs.readText("/proj/dist/locales/index.js")
-        have(rootIndex != null && rootIndex.contains("rootMarker"))
+        assert(rootIndex != null && rootIndex.contains("rootMarker"))
         // locales/index.js written separately, not overwritten by a basename collision
         assert(localeIndex != null && localeIndex.contains("localeMarker"))
     }
@@ -157,7 +156,7 @@ class ProjectBuildTest {
     fun `written outputs end with exactly one trailing newline`() {
         val vfs = nestedProject()
         val result = ProjectCompiler(vfs).build("/proj")
-        have(result.written.isNotEmpty())
+        assert(result.written.isNotEmpty())
         for ((path, _) in result.written) {
             val text = vfs.readText(path)
             assert(text != null && text.endsWith("\n") && !text.endsWith("\n\n"))
@@ -173,7 +172,7 @@ class ProjectBuildTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        have(result.diagnostics.any { it.code == 5014 })
+        assert(result.diagnostics.any { it.code == 5014 })
     }
 
     @Test
@@ -185,7 +184,7 @@ class ProjectBuildTest {
             ),
         )
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        have(result.diagnostics.any { it.code == 6053 })
+        assert(result.diagnostics.any { it.code == 6053 })
     }
 
     @Test
@@ -193,7 +192,7 @@ class ProjectBuildTest {
         // Point at a directory with no tsconfig.json.
         val vfs = InMemoryVfs(mapOf("/proj/src/index.ts" to "export const x = 1;"))
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
-        have(result.diagnostics.any { it.code == 5083 })
+        assert(result.diagnostics.any { it.code == 5083 })
     }
 }
 

@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
@@ -194,7 +193,7 @@ class Inv2NodeIndexTest {
                 )
                 cursor = parent
                 steps++
-                have(steps <= total, "$label: parent chain longer than the tree — cycle?")
+                assert(steps <= total)
             }
         }
     }
@@ -205,7 +204,7 @@ class Inv2NodeIndexTest {
         // Locals only inside have() conditions: power-assert renders every subexpression's
         // toString on failure, and a SourceFile receiver would dump/overflow the whole tree.
         val nodeCount = sourceFile.nodeCount
-        have(nodeCount > 400, "rich fixture unexpectedly small: $nodeCount nodes")
+        assert(nodeCount > 400)
         assertDensePreorderAndParents(sourceFile, "rich.ts")
     }
 
@@ -216,7 +215,7 @@ class Inv2NodeIndexTest {
         val jsxKindsPresent = nodes.any { it is JsxElement } && nodes.any { it is JsxSelfClosingElement } &&
             nodes.any { it is JsxFragment } && nodes.any { it is JsxText } &&
             nodes.any { it is JsxAttribute } && nodes.any { it is JsxSpreadAttribute }
-        have(jsxKindsPresent, "jsx fixture did not produce the expected Jsx* node kinds")
+        assert(jsxKindsPresent)
         assertDensePreorderAndParents(sourceFile, "t.tsx")
     }
 
@@ -226,8 +225,8 @@ class Inv2NodeIndexTest {
         val identifier = preorder(sourceFile).filterIsInstance<Identifier>().first()
         val parsedId = identifier.nodeId
         val parsedParent = identifier.parent
-        have(parsedId > 0, "parsed identifier should be indexed")
-        have(parsedParent != null, "parsed identifier should have a parent")
+        assert(parsedId > 0)
+        assert(parsedParent != null)
         val copy = identifier.copy()
         assertEquals(-1, copy.nodeId, "copy() must yield an UNINDEXED node")
         assertEquals(null, copy.parent, "copy() must yield a parent-less node")
@@ -245,7 +244,7 @@ class Inv2NodeIndexTest {
         val sourceFile = Parser(source, "deep.ts").parse()
         // The chain alone is (terms − 1) BinaryExpressions + terms Identifiers = 2·terms − 1.
         val nodeCount = sourceFile.nodeCount
-        have(nodeCount >= 2 * terms - 1, "chain undercounted: $nodeCount nodes")
+        assert(nodeCount >= 2 * terms - 1)
         // Deepest leaf's parent chain walks the whole left spine — iteratively.
         val nodes = preorder(sourceFile)
         nodes.forEachIndexed { index, node ->

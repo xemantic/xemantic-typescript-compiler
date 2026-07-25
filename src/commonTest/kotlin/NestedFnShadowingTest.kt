@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.kotlin.test.have
 import org.intellij.lang.annotations.Language
 import kotlin.test.Test
 
@@ -63,7 +62,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
     @Test
@@ -76,7 +75,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(ts2554(r).any { it.message == "Expected 5 arguments, but got 2." })
+        assert(ts2554(r).any { it.message == "Expected 5 arguments, but got 2." })
     }
 
     @Test
@@ -92,7 +91,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
     @Test
@@ -109,7 +108,7 @@ class NestedFnShadowingTest {
             export const top = existsUsingSource("p", true);
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
     @Test
@@ -151,7 +150,7 @@ class NestedFnShadowingTest {
             export const w = new Version("1.2.3");
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
     @Test
@@ -164,7 +163,7 @@ class NestedFnShadowingTest {
             export const s = new Single("a", 2);
             """.trimIndent()
         )
-        have(ts2554(r).any { it.message == "Expected 1 arguments, but got 2." })
+        assert(ts2554(r).any { it.message == "Expected 1 arguments, but got 2." })
     }
 
     @Test
@@ -178,7 +177,7 @@ class NestedFnShadowingTest {
             three(...tup);
             """.trimIndent()
         )
-        have(ts2554(r).isEmpty())
+        assert(ts2554(r).isEmpty())
     }
 
     @Test
@@ -189,7 +188,7 @@ class NestedFnShadowingTest {
             three("x");
             """.trimIndent()
         )
-        have(ts2554(r).any { it.message == "Expected 3 arguments, but got 1." })
+        assert(ts2554(r).any { it.message == "Expected 3 arguments, but got 1." })
     }
 
     @Test
@@ -206,7 +205,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(r.diagnostics.none { it.code == 2345 })
+        assert(r.diagnostics.none { it.code == 2345 })
     }
 
     @Test
@@ -218,7 +217,7 @@ class NestedFnShadowingTest {
             export const out = worker("in", gcsd);
             """.trimIndent()
         )
-        have(r.diagnostics.any { it.code == 2345 })
+        assert(r.diagnostics.any { it.code == 2345 })
     }
 
     // --- Type path: a body-nested SIBLING function shadows a same-named IMPORT
@@ -253,7 +252,7 @@ class NestedFnShadowingTest {
             }
             """.trimIndent()
         )
-        have(r.diagnostics.none { it.code == 2345 })
+        assert(r.diagnostics.none { it.code == 2345 })
     }
 
     @Test
@@ -264,6 +263,6 @@ class NestedFnShadowingTest {
             writeFile({ h: 1 }, { d: 2 }, undefined);
             """.trimIndent()
         )
-        have(r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
+        assert(r.diagnostics.any { it.code == 2345 && it.message.contains("'undefined'") })
     }
 }
