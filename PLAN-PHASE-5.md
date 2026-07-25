@@ -20,6 +20,55 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 671 (2026-07-25) — the queue boundary VERIFIED, and the last live
+non-backlog item turned out to be a stale checkbox. Phase 17's offline work is
+complete; what remains needs an owner decision.** Round 670 suggested the queue
+had reached a boundary; this round tested that claim item by item rather than
+asserting it.
+
+**(ccet-m2) was the one candidate that looked live, and it is not.** It is the
+frame skeleton for the THIRD giant (checkCallExpressionTypes), and two in-code
+comments still read "inert until the anchors land". Both are stale: verified in
+code that `ccetSpineEnter` and `ccetSpineFileReset` are called unconditionally
+from `spineEnterNode` and the per-file loop, so the frames are ALWAYS-ON — and
+its dependents `(ccet-m3)` (round 591) and `(ccet-retire)` (round 592, "ALL
+THREE GIANTS OFF EMIT-TWICE") could not have landed otherwise. Box checked,
+comments corrected. Worth noting as a process point: a stale `- [ ]` next to
+landed work is exactly what makes a queue look like it still has runway, and
+this one survived ~80 rounds.
+
+**The boundary, item by item.** 15 unchecked items remain and every one is
+unavailable to an offline agent:
+  - **EP.0, EP.2** — blocked offline; verified round 667 that this box has no
+    `node`, no `npx`, no `tsc`, no `tsc.js`, and `emit-diff-tsc.sh` needs a
+    reference tsc.
+  - **INV.7 / INV.7b / (6e)** — INV.7b is explicitly PARKED-BY-OWNER; INV.7 is
+    native re-enable + release productization, and (6e) parallel emit sits on
+    the M2 finding that this 4-core box cannot demonstrate scaling.
+  - **M2.4, M3.0, M3.5, M4.1–M4.7** — the Post-v1 backlog, which CLAUDE.md
+    instructs the loop to SKIP until v1 lands.
+
+**And v1's status is itself the decision.** Its offline definition of done was
+met at round 481 (all 8 profiles zero real FPs, all files emitted, exit 0, no
+crashes). The remaining leg — byte-correct emit diffing against real tsc — was
+always documented as network-gated. So "has v1 landed?" is a scope question only
+the owner can answer, and it is the same question that unparks the backlog.
+
+**Options for the owner** (recorded here so the next session does not
+re-derive them):
+  1. **Authorise a network install** (node + `typescript`, or build tsc at the
+     pinned commit) → unblocks EP.0/EP.2 and completes v1's byte-parity leg.
+  2. **Declare v1 landed on its offline definition** → unparks the post-v1
+     backlog (M3.5 per-file scopes is the highest-value item there: it is
+     Blocker #3, the root of several documented FP families).
+  3. **Take the one remaining perf lever** — full name atomization (M0.3(i)),
+     multi-session and PRICED first per round 670.
+  4. **Stop Phase 17.** The corpus is green at 12,520/0/3, the 8 profiles are at
+     their FP floor, and both the PERF and EP arcs are closed with ledgers.
+
+Gates: comment-only code change (two stale notes corrected); suite 12,520/0
+(3 skipped); tree clean.
+
 **Round 670 (2026-07-25) — M0.3 CLOSED, and a
 correction to my own round-666 record: the PERF arc was NOT fully closed then —
 M0.3 still had three unchecked slices, and this round prices them out properly.**
@@ -442,68 +491,6 @@ interleaved A/B.
 
 Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — every counter added
 this round is behind `--passTiming`; warning-clean.
-
-**Round 662 (2026-07-25) — (M1)(b1) ANSWERED WITHOUT BUILDING IT: the 165 wrong
-serves were a KEY COLLISION, not a dependency gap. `depServeWrong` is now 0, the
-dependency-keyed fence is SOUND as it stands — and the prize corrects down again,
-to ~1.4 s.** Round 661 queued (b1) as "record the walk's read-set", a large piece
-of work since the walk's call tree reaches the whole expression typer. Triaging
-the 165 first — classifying each wrong serve by reference shape and by the shape
-of the disagreement — showed the recorder was never needed.
-
-**The triage.** Samples came out like
-
-    text @commandLineParser.ts  was=string | Diagnostic  now=string   (and the reverse)
-    extendedResult              was=any                  now=true
-
-The same key alternating between a declared union and its narrowed form, and one
-case returning a **Boolean**. That is not a stale dependency: it is three
-different walk FUNCTIONS (`narrowTypeFromFlow` /
-`narrowTypeFromFlowFollowLoopEntry` / `isAssignedAtFlow`) across 11 call sites,
-each starting from a DIFFERENT declared type and walking a DIFFERENT path, all
-colliding on round 661's `(reference, file)` key. **My key was too coarse on the
-walk's INPUTS, not on its dependencies** — the wrong serves were an artifact of
-the instrument, not evidence about the design.
-
-**The fix and the numbers.** `flowWalkWithTripCheck` now takes a `kind` tag
-(`WK_*` per call site) plus an `inputId` folding the starting type's id with the
-path hash; both shadows key on `(reference, file, kind, inputId)`.
-
-    round 661 key:  serve 65,575 (identical 65,359  structural 51  WRONG 165)
-                    cold 45,476   invalidated 197
-    corrected key:  serve 41,389 (identical 41,389  structural 0    WRONG 0)
-                    cold 69,790   invalidated 69
-
-So **(b) is sound and its gate is met**, and (b1) closes without the recorder:
-the walk's dependencies ARE name-enumerable (graph identity + the root's bound
-Type instance), and every disagreement counter across both shadows is now zero.
-`depInvalidatedBy` stays localType 68 / localType+narrowed 1 — the graph identity
-still never invalidates alone.
-
-**The honest trade, and exactly why shadow-first exists.** Correcting the key
-DROPS serves 65,575 → 41,389 and raises cold 45,476 → 69,790, because the old
-count was inflated by cross-walk collisions that happened to agree. At ~34 µs/walk
-the walk-memo prize is therefore **~1.4 s, not the ~2.2 s** rounds 660 and 661
-reported — and note those two figures "corroborated" each other only because both
-rested on the same coarse key, which is a good reminder that agreement between
-two derivations of the same flawed measurement is not confirmation. With
-typeOfExpr's ~1.1 s, M1's realistic total is **~2.5 s ≈ 8–9%** of ~29 s. Third
-consecutive round where measuring moved the number DOWN; the design is sound, it
-is just smaller than advertised at every step.
-
-**What this does to (b2).** The corrected shadow reports `structural = 0`, i.e.
-on the flow-walk path the outputs are already effectively canonical — so (b2)'s
-payoff, if any, lives on the getTypeOfExpression / relation side rather than
-here. Queued with an explicit instruction to re-measure before investing: if the
-id-keyed caches downstream of a walk are not actually missing, (b2) is droppable
-and (c) can go straight to the live memo.
-
-Caveat recorded: the `inputId` fold is lossy in principle (32-bit path hash); a
-collision would surface as a wrong serve, and there are none.
-
-Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — both shadows and the
-epoch are read solely under `--passTiming`, and the `WK_*` tags are inert
-arguments otherwise; warning-clean.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -2671,7 +2658,13 @@ interrupt the arc).
       corpus-gates instead of the full fingerprint audit; the audit earned
       its keep on cta/cpa quirk EXTRACTION, so keep it only if the frame
       skeleton's first corpus gates diff untraceably.
-    - [ ] **(ccet-m2) Spine-side frame skeleton — FULL SPEC (round 588c
+    - [x] **(ccet-m2) LANDED round 589 — box checked round 671 after verifying
+      in code** (`ccetSpineEnter` / `ccetSpineFileReset` are called
+      unconditionally from spineEnterNode and the per-file loop, so the frames
+      are always-on; its dependent (ccet-m3) landed round 591 and
+      (ccet-retire) round 592, which could not have happened otherwise). The
+      two in-code "inert until the anchors land" comments were stale and are
+      corrected. Spec retained below for reference. FULL SPEC (round 588c
       in-code read of every arm):** CcetFrame fields: localTypes(HashMap) +
       paramBindings(HashSet) [copied at fn-decl/method/ctor/contextual-fn
       boundaries + arrow/fn-expr expr-arms], tpScope+tpAst [fn-decl pushes

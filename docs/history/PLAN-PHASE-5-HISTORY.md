@@ -1,3 +1,65 @@
+**Round 662 (2026-07-25) — (M1)(b1) ANSWERED WITHOUT BUILDING IT: the 165 wrong
+serves were a KEY COLLISION, not a dependency gap. `depServeWrong` is now 0, the
+dependency-keyed fence is SOUND as it stands — and the prize corrects down again,
+to ~1.4 s.** Round 661 queued (b1) as "record the walk's read-set", a large piece
+of work since the walk's call tree reaches the whole expression typer. Triaging
+the 165 first — classifying each wrong serve by reference shape and by the shape
+of the disagreement — showed the recorder was never needed.
+
+**The triage.** Samples came out like
+
+    text @commandLineParser.ts  was=string | Diagnostic  now=string   (and the reverse)
+    extendedResult              was=any                  now=true
+
+The same key alternating between a declared union and its narrowed form, and one
+case returning a **Boolean**. That is not a stale dependency: it is three
+different walk FUNCTIONS (`narrowTypeFromFlow` /
+`narrowTypeFromFlowFollowLoopEntry` / `isAssignedAtFlow`) across 11 call sites,
+each starting from a DIFFERENT declared type and walking a DIFFERENT path, all
+colliding on round 661's `(reference, file)` key. **My key was too coarse on the
+walk's INPUTS, not on its dependencies** — the wrong serves were an artifact of
+the instrument, not evidence about the design.
+
+**The fix and the numbers.** `flowWalkWithTripCheck` now takes a `kind` tag
+(`WK_*` per call site) plus an `inputId` folding the starting type's id with the
+path hash; both shadows key on `(reference, file, kind, inputId)`.
+
+    round 661 key:  serve 65,575 (identical 65,359  structural 51  WRONG 165)
+                    cold 45,476   invalidated 197
+    corrected key:  serve 41,389 (identical 41,389  structural 0    WRONG 0)
+                    cold 69,790   invalidated 69
+
+So **(b) is sound and its gate is met**, and (b1) closes without the recorder:
+the walk's dependencies ARE name-enumerable (graph identity + the root's bound
+Type instance), and every disagreement counter across both shadows is now zero.
+`depInvalidatedBy` stays localType 68 / localType+narrowed 1 — the graph identity
+still never invalidates alone.
+
+**The honest trade, and exactly why shadow-first exists.** Correcting the key
+DROPS serves 65,575 → 41,389 and raises cold 45,476 → 69,790, because the old
+count was inflated by cross-walk collisions that happened to agree. At ~34 µs/walk
+the walk-memo prize is therefore **~1.4 s, not the ~2.2 s** rounds 660 and 661
+reported — and note those two figures "corroborated" each other only because both
+rested on the same coarse key, which is a good reminder that agreement between
+two derivations of the same flawed measurement is not confirmation. With
+typeOfExpr's ~1.1 s, M1's realistic total is **~2.5 s ≈ 8–9%** of ~29 s. Third
+consecutive round where measuring moved the number DOWN; the design is sound, it
+is just smaller than advertised at every step.
+
+**What this does to (b2).** The corrected shadow reports `structural = 0`, i.e.
+on the flow-walk path the outputs are already effectively canonical — so (b2)'s
+payoff, if any, lives on the getTypeOfExpression / relation side rather than
+here. Queued with an explicit instruction to re-measure before investing: if the
+id-keyed caches downstream of a walk are not actually missing, (b2) is droppable
+and (c) can go straight to the live memo.
+
+Caveat recorded: the `inputId` fold is lossy in principle (32-bit path hash); a
+collision would surface as a wrong serve, and there are none.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — both shadows and the
+epoch are read solely under `--passTiming`, and the `WK_*` tags are inert
+arguments otherwise; warning-clean.
+
 **Round 661 (2026-07-25) — (M1)(b) THE DEPENDENCY-KEYED FENCE WORKS: 65.6 k
 serves against the global fence's 31.2 k, invalidations 34,359 → 197 — and it is
 blocked on exactly one number, 165 wrong serves.** Round 660 redefined (b) away

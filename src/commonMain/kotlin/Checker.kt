@@ -21680,7 +21680,8 @@ class Checker(
                 // (cpa-m3a): frames always-on — the anchors consume them.
                 cpaSpineFileReset(sf)
                 cpaM3LexicalScopes = result.lexicalScopes
-                // (ccet-m2): the g3 frames — inert until the anchors land.
+                // (ccet-m2): the g3 frames — ALWAYS-ON since round 589; the
+                // round-591 anchors and the round-592 retire consume them.
                 ccetSpineFileReset(sf)
                 ctaM3FlowGraph = result.flowGraph
                 // Batch 14 per-file strict-mode flags (the deleted
@@ -21916,7 +21917,8 @@ class Checker(
         // (cpa-m2a/m3a): the g2 frame skeleton — always-on since the first
         // emission moves.
         cpaSpineEnter(node)
-        // (ccet-m2): the g3 frame skeleton — inert until the anchors land.
+        // (ccet-m2): the g3 frame skeleton — ALWAYS-ON since round 589 (the
+        // "inert" note was stale from before the round-591 anchors landed).
         ccetSpineEnter(node)
         // (cta-m3k): class property initializers — members, not statements.
         if (node is PropertyDeclaration && !spineIsDts) {
