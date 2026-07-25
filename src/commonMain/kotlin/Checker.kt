@@ -3793,6 +3793,48 @@ class Checker(
     /** Reusable ascent buffer for [spineAfStatus]. */
     private val spineAfChain = ArrayList<Node>()
 
+    // ── (M0.4) round 658: checkTypeParamTypedOps on the spine ──────────────
+    // B60.12 — TS2339/TS2349/TS2351 for property access / call / `new` on a
+    // value whose type is an EFFECTIVELY UNCONSTRAINED type parameter (apparent
+    // type `{}`: no call/construct signatures, no own properties). The legacy
+    // pass threaded a downward `tpVars` (name → TypeParameter AST) map that is
+    // MUTATED IN STATEMENT ORDER and LEAKS through block/if/loop/try/namespace
+    // descents while being REBUILT at every function-like body from that body's
+    // own parameters — the round-635 ORDER-DEPENDENT shape — so it migrates
+    // PUSH-based: a LIFO of [TpoFrame]s pushed at the boundaries the legacy
+    // walkers created a new map / TP scope at (a reached ClassDeclaration's
+    // member scope; a reached fn-like's BODY) and popped at the owner's leave.
+    // The pass's ONE ambient is the TP-scope pair the legacy
+    // withInternedTpScope installed (`currentTypeParamScope` +
+    // `currentTypeParamAstForOps`), carried on the frame and installed ONLY
+    // around each recording/emission dispatch (never walk-wide — the round-538
+    // rule). Reach is the memoized multi-state [spineTpoStatus] over
+    // [spineTpoFold]; it is unusually NARROW (arrow and function-EXPRESSION
+    // bodies, class property initializers, `for` HEADS and `switch` have NO arm
+    // at all). Fields PRE-init.
+    private class TpoFrame(
+        val owner: Node,
+        val savedVars: HashMap<String, TypeParameter>,
+        val savedScope: Map<String, Type.TypeParam>?,
+        val savedAst: Map<String, TypeParameter>?,
+    )
+    private var spineTpoActive = false
+    /** Per-file nodeId memo for [spineTpoStatus] — 0 unknown, else TPO_*. */
+    private var spineTpoReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineTpoStatus]. */
+    private val spineTpoChain = ArrayList<Node>()
+    private val spineTpoFrames = ArrayList<TpoFrame>()
+    /** The threaded `tpVars` — mutated in statement order, leaking outward. */
+    private var spineTpoVars = HashMap<String, TypeParameter>()
+    /** The current frame's TP-scope pair (the legacy withInternedTpScope). */
+    private var spineTpoScope: Map<String, Type.TypeParam>? = null
+    private var spineTpoAst: Map<String, TypeParameter>? = null
+    /** The spine-entry RESTING TP-scope pair — the file-level base, since the
+     *  legacy driver installed only `currentFileLocals` and inherited whatever
+     *  its slot's ambient was. */
+    private var spineTpoRestingScope: Map<String, Type.TypeParam>? = null
+    private var spineTpoRestingAst: Map<String, TypeParameter>? = null
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -6276,7 +6318,11 @@ class Checker(
         // (TS2313 ×2); the existing TypeReference-chain check breaks on a mapped-type constraint.
         pass("checkCircularMappedTypeConstraint") { checkCircularMappedTypeConstraint() }
         // 14''g. TS2339/TS2349/TS2351 for ops on effectively-unconstrained TypeParam vars (B60.12)
-        pass("checkTypeParamTypedOps") { checkTypeParamTypedOps() }
+        // checkTypeParamTypedOps is ON THE SPINE (M0.4, round 658) — the
+        // property-access / call / `new` anchors, the order-dependent `tpVars`
+        // frames and the withInternedTpScope ambient live in
+        // spineTpoEnterNode / spineTpoLeaveNode / spineTpoFold; see the
+        // pass("checkSpine") site.
         // 14a'. Check relative imports/exports inside `declare module "X"` augmentations (TS2439)
         pass("checkRelativeImportsInAmbientModules") { checkRelativeImportsInAmbientModules() }
         // 14a. Check invalid module augmentations (TS2664)
@@ -21501,6 +21547,11 @@ class Checker(
         // legacy slot-7a' dispatch gate, verbatim: TS7009 needs
         // noImplicitAny/strict explicitly — it is NOT a harness default).
         spineNaRunActive = options.noImplicitAny || options.strict
+        // (M0.4) round 658: the B60.12 pass's file-level TP-scope base — its
+        // legacy driver installed only currentFileLocals, inheriting whatever
+        // its slot's ambient held (expected null: every installer restores).
+        spineTpoRestingScope = currentTypeParamScope
+        spineTpoRestingAst = currentTypeParamAstForOps
         spineEvRestingLocals = currentFileLocals
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
@@ -21627,6 +21678,7 @@ class Checker(
                 spineIdcSetup(result)
                 spineNaSetup(result)
                 spineAfSetup(result)
+                spineTpoSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21681,6 +21733,7 @@ class Checker(
                     spineIdcTeardown()
                     spineNaTeardown()
                     spineAfTeardown()
+                    spineTpoTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22004,6 +22057,11 @@ class Checker(
         // pass's two interleaved walks as the status; fully syntactic, no
         // frames/leave hook, no ambient sandwich.
         if (spineAfActive) spineAfEnterNode(node)
+        // (M0.4) round 658: the B60.12 TypeParam-op anchors (property access /
+        // call / `new` enters) plus the frame boundaries and the
+        // VariableStatement recording — the order-dependent tpVars map and the
+        // TP-scope ambient are frame-maintained (round-635 shape).
+        if (spineTpoActive) spineTpoEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -22243,6 +22301,9 @@ class Checker(
         // (M0.4) round 635: the protected-member-read pass's frame pops +
         // per-declaration vars recordings (VariableDeclaration leaves).
         if (spinePmrActive) spinePmrLeaveNode(node)
+        // (M0.4) round 658: the B60.12 pass's frame pops (a reached class's
+        // member TP scope; a reached fn-like's body map + own TP scope).
+        if (spineTpoActive) spineTpoLeaveNode(node)
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -48209,6 +48270,20 @@ class Checker(
         private const val AF_ROOT = 3
         private const val AF_EMIT = 4
         private const val AF_MEMBER = 5
+
+        // (M0.4) round 658: spineTpoStatus states (checkTypeParamTypedOps
+        // reach — multi-state + the transient SourceFile root). TPO_STMT = a
+        // statement position the deleted walkStmtForTypeParamOps visited (with
+        // the threaded tpVars map); TPO_EXPR = an expression position the
+        // deleted emitTypeParamTypedOps visited (where the property-access /
+        // call / `new` anchors fire); TPO_MEMBER = a class method / ctor /
+        // accessor on the path from its reached class DECLARATION to its BODY
+        // (property initializers and static blocks are never reached).
+        private const val TPO_STMT = 1
+        private const val TPO_NONE = 2
+        private const val TPO_ROOT = 3
+        private const val TPO_EXPR = 4
+        private const val TPO_MEMBER = 5
 
         // (M0.4) round 638: spineAcStatus states (checkArgumentsCollision
         // reach — binary + the transient SourceFile root).
@@ -79733,167 +79808,432 @@ interface DataView {
      * TypeScript's apparent type for such a TypeParam is `{}`, which has no
      * call/construct signatures and no own properties.
      */
-    private fun checkTypeParamTypedOps() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            currentFileLocals = result.locals
-            try {
-                walkStmtsForTypeParamOps(result.sourceFile.statements, source, fileName)
-            } finally {
-                currentFileLocals = savedLocals
+    /**
+     * (M0.4, round 658) The DRIVER and the whole walkStmtsForTypeParamOps /
+     * walkStmtForTypeParamOps / walkFnLikeBodyForTypeParamOps /
+     * emitTypeParamTypedOps recursion are DELETED — the pass is ON THE SPINE.
+     * What survives here is the machinery those walkers used: the frame stack
+     * that reproduces the ORDER-DEPENDENT `tpVars` map plus the
+     * withInternedTpScope installs ([spineTpoPushBody]/[spineTpoPushScopeOnly]),
+     * the recording loop ([spineTpoRecord]), the reach classifier
+     * ([spineTpoStatus] over [spineTpoFold]) and the three emission anchors
+     * ([spineTpoEnterNode]).
+     */
+    private fun spineTpoSetup(result: BinderResult) {
+        spineTpoFrames.clear()
+        spineTpoVars = HashMap()
+        // The legacy driver installed `currentFileLocals = result.locals`
+        // (which checkSpine's own per-file loop already does) and NOTHING else
+        // — so the file-level TP scope is whatever was RESTING at its slot,
+        // captured at spine entry (both are expected null; every installer in
+        // the pipeline save-set-restores).
+        spineTpoScope = spineTpoRestingScope
+        spineTpoAst = spineTpoRestingAst
+        spineTpoActive = !spineIsDts
+        spineTpoReachMemo = if (!spineTpoActive) ByteArray(0) else {
+            val n = result.sourceFile.nodeCount
+            if (n > 0) ByteArray(n) else ByteArray(0)
+        }
+    }
+
+    private fun spineTpoTeardown() {
+        spineTpoActive = false
+        spineTpoReachMemo = ByteArray(0)
+        spineTpoFrames.clear()
+        spineTpoVars = HashMap()
+        spineTpoScope = null
+        spineTpoAst = null
+    }
+
+    /** Install the current frame's TP-scope pair — the pass's ONE ambient (the
+     *  legacy withInternedTpScope region). Wrapped around each recording /
+     *  emission dispatch ONLY, never the subtree walk (the round-538 rule). */
+    private inline fun withTpoAmbient(block: () -> Unit) {
+        val sScope = currentTypeParamScope
+        val sAst = currentTypeParamAstForOps
+        currentTypeParamScope = spineTpoScope
+        currentTypeParamAstForOps = spineTpoAst
+        try { block() } finally {
+            currentTypeParamScope = sScope
+            currentTypeParamAstForOps = sAst
+        }
+    }
+
+    /** Layer [tps] onto the frame's scope pair — the legacy
+     *  `withInternedTpScope(tps, withAst = true)` install, run for its interning
+     *  and constraint-materialization side effects and for the resulting maps.
+     *  Null/empty [tps] is the legacy no-install path (the scope stays). */
+    private fun spineTpoInternInto(tps: List<TypeParameter>?) {
+        if (tps.isNullOrEmpty()) return
+        var scope: Map<String, Type.TypeParam>? = null
+        var ast: Map<String, TypeParameter>? = null
+        withTpoAmbient {
+            withInternedTpScope(tps, withAst = true) {
+                scope = currentTypeParamScope
+                ast = currentTypeParamAstForOps
+            }
+        }
+        spineTpoScope = scope
+        spineTpoAst = ast
+    }
+
+    /** The legacy ClassDeclaration arm: the class's own TPs are layered for the
+     *  member loop. `tpVars` is irrelevant across that edge (every member body
+     *  REBUILDS it) but rides the frame so the leave restores symmetrically. */
+    private fun spineTpoPushScopeOnly(owner: Node, tps: List<TypeParameter>?) {
+        spineTpoFrames.add(TpoFrame(owner, spineTpoVars, spineTpoScope, spineTpoAst))
+        spineTpoInternInto(tps)
+    }
+
+    /** The legacy walkFnLikeBodyForTypeParamOps: own TPs layered, then a FRESH
+     *  `tpVars` built from the parameters annotated as effectively-unconstrained
+     *  TypeParams — so nothing leaks INTO a function-like body. */
+    private fun spineTpoPushBody(owner: Node, ownTps: List<TypeParameter>?, params: List<Parameter>?) {
+        spineTpoFrames.add(TpoFrame(owner, spineTpoVars, spineTpoScope, spineTpoAst))
+        spineTpoInternInto(ownTps)
+        val bodyVars = HashMap<String, TypeParameter>()
+        if (params != null) withTpoAmbient {
+            for (p in params) {
+                val typeRef = p.type as? TypeReference ?: continue
+                val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
+                val tp = currentTypeParamScope?.get(typeName) ?: continue
+                val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
+                val paramName = (p.name as? Identifier)?.text ?: continue
+                bodyVars[paramName] = tpAst
+            }
+        }
+        spineTpoVars = bodyVars
+    }
+
+    /** The legacy VariableStatement arm's RECORDING loop, verbatim — it runs at
+     *  the statement's ENTER (before any child is walked), which reproduces the
+     *  legacy "record every declaration first, then emit on the initializers"
+     *  order, and it MUTATES the threaded map so the recording is visible to
+     *  every later statement AND leaks out of nested blocks. */
+    private fun spineTpoRecord(stmt: VariableStatement) {
+        val tpVars = spineTpoVars
+        for (decl in stmt.declarationList.declarations) {
+            val typeRef = decl.type as? TypeReference
+            val varName = (decl.name as? Identifier)?.text ?: continue
+            // Annotated `var x: U` form.
+            if (typeRef != null) {
+                val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
+                val tp = currentTypeParamScope?.get(typeName) ?: continue
+                val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
+                if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
+                tpVars[varName] = tpAst
+                continue
+            }
+            // B63.37: Inferred TypeParam from initializer. Two narrow patterns:
+            //   (a) `var y = x` where x is itself a tracked TypeParam-typed var.
+            //   (b) `var y = f(x)` where f is a generic function with a single
+            //       type parameter T and at least one bare-T param, called with
+            //       x being a tracked TypeParam-typed var — and f's return type
+            //       is also bare T. The inferred return is the TypeParam of x.
+            val init = decl.initializer ?: continue
+            if (decl.type != null) continue
+            when (init) {
+                is Identifier -> {
+                    val srcTp = tpVars[init.text] ?: continue
+                    tpVars[varName] = srcTp
+                }
+                is CallExpression -> {
+                    val callee = init.expression as? Identifier ?: continue
+                    val callArgs = init.arguments
+                    val tpName = callArgs.firstNotNullOfOrNull { arg ->
+                        (arg as? Identifier)?.let { tpVars[it.text]?.name?.text }
+                    } ?: continue
+                    val tpAst = currentTypeParamAstForOps?.get(tpName) ?: continue
+                    // Verify callee is a generic function with single TP and bare-T return.
+                    val sym = currentFileLocals?.get(callee.text)
+                        ?: globals[callee.text] ?: continue
+                    val fnDecl = sym.declarations.firstOrNull { it is FunctionDeclaration }
+                        as? FunctionDeclaration ?: continue
+                    val fnTps = fnDecl.typeParameters ?: continue
+                    if (fnTps.size != 1) continue
+                    val fnReturnTypeRef = fnDecl.type as? TypeReference ?: continue
+                    val fnReturnName = (fnReturnTypeRef.typeName as? Identifier)?.text ?: continue
+                    if (fnReturnName != fnTps[0].name.text) continue
+                    tpVars[varName] = tpAst
+                }
+                else -> {}
             }
         }
     }
 
-    private fun walkStmtsForTypeParamOps(stmts: List<Statement>, source: String, fileName: String) {
-        val emptyVars = mutableMapOf<String, TypeParameter>()
-        for (stmt in stmts) walkStmtForTypeParamOps(stmt, source, fileName, emptyVars)
-    }
-
-    private fun walkStmtForTypeParamOps(
-        stmt: Statement, source: String, fileName: String,
-        tpVars: MutableMap<String, TypeParameter>,
-    ) {
-        when (stmt) {
-            is ClassDeclaration -> withInternedTpScope(stmt.typeParameters, withAst = true) {
-                for (m in stmt.members) {
-                    when (m) {
-                        is MethodDeclaration -> walkFnLikeBodyForTypeParamOps(
-                            m.typeParameters, m.parameters, m.body?.statements, source, fileName,
+    /** ENTER dispatch: the frame boundaries (a reached ClassDeclaration's
+     *  member scope; a reached function-like's BODY frame — skipped when the
+     *  body is absent, the legacy early return, so no interning happens
+     *  either), the VariableStatement recording, and the three emission
+     *  anchors, each the corresponding arm of the deleted
+     *  emitTypeParamTypedOps verbatim. */
+    private fun spineTpoEnterNode(node: Node) {
+        when ((node as NodeBase).kindId) {
+            NodeKind.CLASS_DECLARATION -> {
+                node as ClassDeclaration
+                if (spineTpoStatus(node) != TPO_STMT) return
+                spineTpoPushScopeOnly(node, node.typeParameters)
+            }
+            NodeKind.FUNCTION_DECLARATION -> {
+                node as FunctionDeclaration
+                if (node.body == null) return
+                if (spineTpoStatus(node) != TPO_STMT) return
+                spineTpoPushBody(node, node.typeParameters, node.parameters)
+            }
+            NodeKind.METHOD_DECLARATION -> {
+                node as MethodDeclaration
+                if (node.body == null) return
+                if (spineTpoStatus(node) != TPO_MEMBER) return
+                spineTpoPushBody(node, node.typeParameters, node.parameters)
+            }
+            NodeKind.CONSTRUCTOR -> {
+                node as Constructor
+                if (node.body == null) return
+                if (spineTpoStatus(node) != TPO_MEMBER) return
+                spineTpoPushBody(node, null, node.parameters)
+            }
+            NodeKind.GET_ACCESSOR -> {
+                node as GetAccessor
+                if (node.body == null) return
+                if (spineTpoStatus(node) != TPO_MEMBER) return
+                // The legacy arm passes NO parameters for a getter.
+                spineTpoPushBody(node, null, null)
+            }
+            NodeKind.SET_ACCESSOR -> {
+                node as SetAccessor
+                if (node.body == null) return
+                if (spineTpoStatus(node) != TPO_MEMBER) return
+                spineTpoPushBody(node, null, node.parameters)
+            }
+            NodeKind.VARIABLE_STATEMENT -> {
+                node as VariableStatement
+                if (spineTpoStatus(node) != TPO_STMT) return
+                withTpoAmbient { spineTpoRecord(node) }
+            }
+            NodeKind.PROPERTY_ACCESS_EXPRESSION -> {
+                node as PropertyAccessExpression
+                if (spineTpoStatus(node) != TPO_EXPR) return
+                val recvTp = (node.expression as? Identifier)?.let { spineTpoVars[it.text] } ?: return
+                val tpName = recvTp.name.text
+                val propName = node.name.text
+                // Under strictNullChecks, TypeParam apparent = unknown → every
+                // property access fires TS2339. Under non-strict, apparent is
+                // `{}` which inherits Object.prototype methods — skip those
+                // names so `t.toString` for unconstrained T does not FP.
+                val isObjectProtoMember = propName in OBJECT_PROTOTYPE_IMPLICIT
+                if (propName.isEmpty() || (!strictNullChecks && isObjectProtoMember)) return
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, node.name.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type '$tpName'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = spineFileName, line = line, character = character,
+                    start = node.name.pos, length = propName.length,
+                ))
+            }
+            NodeKind.CALL_EXPRESSION -> {
+                node as CallExpression
+                if (spineTpoStatus(node) != TPO_EXPR) return
+                val callee = node.expression
+                val calleeTp = (callee as? Identifier)?.let { spineTpoVars[it.text] }
+                if (calleeTp != null) {
+                    val (line, character) = getLineAndCharacterOfPosition(spineSource, callee.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = spineFileName, line = line, character = character,
+                        start = callee.pos, length = callee.text.length,
+                        messageChain = listOf("  Type '{}' has no call signatures."),
+                    ))
+                } else {
+                    // B60.12c (the legacy ELSE branch): `f(t)` where t is a bare
+                    // effectively-unconstrained TP arg and f's param is a
+                    // constrained TP → TS2345 + TS2208 related info.
+                    withTpoAmbient {
+                        emitTs2345ForBareTpArgToConstrainedTpParam(
+                            node, spineTpoVars, spineSource, spineFileName,
                         )
-                        is Constructor -> walkFnLikeBodyForTypeParamOps(
-                            null, m.parameters, m.body?.statements, source, fileName,
-                        )
-                        is GetAccessor -> walkFnLikeBodyForTypeParamOps(
-                            null, null, m.body?.statements, source, fileName,
-                        )
-                        is SetAccessor -> walkFnLikeBodyForTypeParamOps(
-                            null, m.parameters, m.body?.statements, source, fileName,
-                        )
-                        else -> {}
                     }
                 }
             }
-            is FunctionDeclaration -> walkFnLikeBodyForTypeParamOps(
-                stmt.typeParameters, stmt.parameters, stmt.body?.statements, source, fileName,
-            )
-            is VariableStatement -> {
-                for (decl in stmt.declarationList.declarations) {
-                    val typeRef = decl.type as? TypeReference
-                    val varName = (decl.name as? Identifier)?.text ?: continue
-                    // Annotated `var x: U` form.
-                    if (typeRef != null) {
-                        val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
-                        val tp = currentTypeParamScope?.get(typeName) ?: continue
-                        val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
-                        if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
-                        tpVars[varName] = tpAst
-                        continue
-                    }
-                    // B63.37: Inferred TypeParam from initializer. Two narrow patterns:
-                    //   (a) `var y = x` where x is itself a tracked TypeParam-typed var.
-                    //   (b) `var y = f(x)` where f is a generic function with a single
-                    //       type parameter T and at least one bare-T param, called with
-                    //       x being a tracked TypeParam-typed var — and f's return type
-                    //       is also bare T. The inferred return is the TypeParam of x.
-                    val init = decl.initializer ?: continue
-                    if (decl.type != null) continue
-                    when (init) {
-                        is Identifier -> {
-                            val srcTp = tpVars[init.text] ?: continue
-                            tpVars[varName] = srcTp
-                        }
-                        is CallExpression -> {
-                            val callee = init.expression as? Identifier ?: continue
-                            val callArgs = init.arguments
-                            val tpName = callArgs.firstNotNullOfOrNull { arg ->
-                                (arg as? Identifier)?.let { tpVars[it.text]?.name?.text }
-                            } ?: continue
-                            val tpAst = currentTypeParamAstForOps?.get(tpName) ?: continue
-                            // Verify callee is a generic function with single TP and bare-T return.
-                            val sym = currentFileLocals?.get(callee.text)
-                                ?: globals[callee.text] ?: continue
-                            val fnDecl = sym.declarations.firstOrNull { it is FunctionDeclaration }
-                                as? FunctionDeclaration ?: continue
-                            val fnTps = fnDecl.typeParameters ?: continue
-                            if (fnTps.size != 1) continue
-                            val fnReturnTypeRef = fnDecl.type as? TypeReference ?: continue
-                            val fnReturnName = (fnReturnTypeRef.typeName as? Identifier)?.text ?: continue
-                            if (fnReturnName != fnTps[0].name.text) continue
-                            tpVars[varName] = tpAst
-                        }
-                        else -> {}
-                    }
-                }
-                for (decl in stmt.declarationList.declarations) {
-                    decl.initializer?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
-                }
-            }
-            is ExpressionStatement -> emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
-            is IfStatement -> {
-                emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
-                walkStmtForTypeParamOps(stmt.thenStatement, source, fileName, tpVars)
-                stmt.elseStatement?.let { walkStmtForTypeParamOps(it, source, fileName, tpVars) }
-            }
-            is Block -> {
-                for (s in stmt.statements) walkStmtForTypeParamOps(s, source, fileName, tpVars)
-            }
-            is ForStatement -> {
-                stmt.condition?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
-                stmt.incrementor?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
-                walkStmtForTypeParamOps(stmt.statement, source, fileName, tpVars)
-            }
-            is WhileStatement -> {
-                emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
-                walkStmtForTypeParamOps(stmt.statement, source, fileName, tpVars)
-            }
-            is DoStatement -> {
-                emitTypeParamTypedOps(stmt.expression, tpVars, source, fileName)
-                walkStmtForTypeParamOps(stmt.statement, source, fileName, tpVars)
-            }
-            is TryStatement -> {
-                for (s in stmt.tryBlock.statements) walkStmtForTypeParamOps(s, source, fileName, tpVars)
-                stmt.catchClause?.block?.statements?.forEach {
-                    walkStmtForTypeParamOps(it, source, fileName, tpVars)
-                }
-                stmt.finallyBlock?.statements?.forEach {
-                    walkStmtForTypeParamOps(it, source, fileName, tpVars)
-                }
-            }
-            is ThrowStatement -> stmt.expression?.let { emitTypeParamTypedOps(it, tpVars, source, fileName) }
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.statements?.let {
-                for (s in it) walkStmtForTypeParamOps(s, source, fileName, tpVars)
+            NodeKind.NEW_EXPRESSION -> {
+                node as NewExpression
+                if (spineTpoStatus(node) != TPO_EXPR) return
+                val callee = node.expression as? Identifier ?: return
+                if (callee.text !in spineTpoVars) return
+                val (line, character) = getLineAndCharacterOfPosition(spineSource, callee.pos)
+                diagnostics.add(Diagnostic(
+                    message = "This expression is not constructable.",
+                    category = DiagnosticCategory.Error, code = 2351,
+                    fileName = spineFileName, line = line, character = character,
+                    start = callee.pos, length = callee.text.length,
+                    messageChain = listOf("  Type '{}' has no construct signatures."),
+                ))
             }
             else -> {}
         }
     }
 
-    private fun walkFnLikeBodyForTypeParamOps(
-        ownTps: List<TypeParameter>?, parameters: List<Parameter>?,
-        bodyStmts: List<Statement>?,
-        source: String, fileName: String,
-    ) {
-        if (bodyStmts == null) return
-        withInternedTpScope(ownTps, withAst = true) {
-            val bodyVars = mutableMapOf<String, TypeParameter>()
-            // Track parameters typed as effectively-unconstrained (or `extends any`) TypeParams.
-            if (parameters != null) {
-                for (p in parameters) {
-                    val typeRef = p.type as? TypeReference ?: continue
-                    val typeName = (typeRef.typeName as? Identifier)?.text ?: continue
-                    val tp = currentTypeParamScope?.get(typeName) ?: continue
-                    val tpAst = currentTypeParamAstForOps?.get(typeName) ?: continue
-                    if (!isTypeParamUnconstrainedOrExplicitAny(tp, tpAst)) continue
-                    val paramName = (p.name as? Identifier)?.text ?: continue
-                    bodyVars[paramName] = tpAst
-                }
+    /** LEAVE dispatch: pop the frame this node owns (the legacy region exit). */
+    private fun spineTpoLeaveNode(node: Node) {
+        val frames = spineTpoFrames
+        if (frames.isEmpty()) return
+        val top = frames[frames.size - 1]
+        if (top.owner !== node) return
+        frames.removeAt(frames.size - 1)
+        spineTpoVars = top.savedVars
+        spineTpoScope = top.savedScope
+        spineTpoAst = top.savedAst
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineTpoFold] back down (the spineUyStatus
+     *  pattern). The SourceFile anchor carries the transient TPO_ROOT status
+     *  (never memoized) whose sole edge is `child is Statement` → TPO_STMT
+     *  (the deleted walkStmtsForTypeParamOps entry). */
+    private fun spineTpoStatus(node: Node): Int {
+        if (node is SourceFile) return TPO_ROOT
+        val memo = spineTpoReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
             }
-            for (s in bodyStmts) walkStmtForTypeParamOps(s, source, fileName, bodyVars)
         }
+        val chain = spineTpoChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = TPO_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = TPO_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = TPO_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> TPO_NONE
+                pStatus == TPO_ROOT -> if (c is Statement) TPO_STMT else TPO_NONE
+                pStatus == TPO_STMT || pStatus == TPO_EXPR || pStatus == TPO_MEMBER ->
+                    spineTpoFold(pNode, pStatus, c)
+                else -> TPO_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted walkStmtForTypeParamOps (TPO_STMT), the class-member
+     *  dispatch (TPO_MEMBER) and emitTypeParamTypedOps (TPO_EXPR) arms,
+     *  verbatim, as (parent, parent-status) → child-status transitions.
+     *
+     *  The reach is unusually NARROW and every gap is deliberate: `for` HEAD
+     *  INITIALIZERS, `switch` statements (no arm at all), object literals,
+     *  array literals, template expressions, all four cast forms, await/yield,
+     *  typeof/void/delete operands, spreads, comma chains and — the big one —
+     *  ARROW and function-EXPRESSION bodies are NEVER walked, so a TypeParam
+     *  op inside any of them is unreached rather than merely unrecorded. On the
+     *  class side only method / constructor / accessor BODIES are reached:
+     *  property initializers and static blocks are not.
+     */
+    private fun spineTpoFold(pNode: Node, pStatus: Int, child: Node): Int = when (pStatus) {
+        TPO_STMT -> when (pNode) {
+            // A class DECLARATION hands its method/ctor/accessor members to the
+            // member dispatch (under the class's own TP scope — the frame).
+            is ClassDeclaration ->
+                if (child is MethodDeclaration || child is Constructor ||
+                    child is GetAccessor || child is SetAccessor) TPO_MEMBER
+                else TPO_NONE
+            // A function DECLARATION's body statements (the frame rebuilds the map).
+            is FunctionDeclaration -> if (child === pNode.body) TPO_STMT else TPO_NONE
+            is Block -> if (child is Statement) TPO_STMT else TPO_NONE
+            is ModuleDeclaration ->
+                if (child === pNode.body && child is ModuleBlock) TPO_STMT else TPO_NONE
+            is ModuleBlock -> if (child is Statement) TPO_STMT else TPO_NONE
+            // A VariableStatement records at its own enter; its declarations'
+            // INITIALIZERS are emission positions.
+            is VariableStatement -> if (child === pNode.declarationList) TPO_STMT else TPO_NONE
+            is VariableDeclarationList -> if (child is VariableDeclaration) TPO_STMT else TPO_NONE
+            is VariableDeclaration -> if (child === pNode.initializer) TPO_EXPR else TPO_NONE
+            is ExpressionStatement -> if (child === pNode.expression) TPO_EXPR else TPO_NONE
+            is ReturnStatement -> if (child === pNode.expression) TPO_EXPR else TPO_NONE
+            is ThrowStatement -> if (child === pNode.expression) TPO_EXPR else TPO_NONE
+            is IfStatement -> when {
+                child === pNode.expression -> TPO_EXPR
+                child === pNode.thenStatement || child === pNode.elseStatement -> TPO_STMT
+                else -> TPO_NONE
+            }
+            // The `for` HEAD's INITIALIZER is deliberately NOT walked.
+            is ForStatement -> when {
+                child === pNode.condition || child === pNode.incrementor -> TPO_EXPR
+                child === pNode.statement -> TPO_STMT
+                else -> TPO_NONE
+            }
+            is WhileStatement -> when {
+                child === pNode.expression -> TPO_EXPR
+                child === pNode.statement -> TPO_STMT
+                else -> TPO_NONE
+            }
+            is DoStatement -> when {
+                child === pNode.expression -> TPO_EXPR
+                child === pNode.statement -> TPO_STMT
+                else -> TPO_NONE
+            }
+            is TryStatement ->
+                if (child === pNode.tryBlock || child is CatchClause ||
+                    child === pNode.finallyBlock) TPO_STMT
+                else TPO_NONE
+            is CatchClause -> if (child === pNode.block) TPO_STMT else TPO_NONE
+            else -> TPO_NONE
+        }
+        TPO_MEMBER -> when (pNode) {
+            is MethodDeclaration -> if (child === pNode.body) TPO_STMT else TPO_NONE
+            is Constructor -> if (child === pNode.body) TPO_STMT else TPO_NONE
+            is GetAccessor -> if (child === pNode.body) TPO_STMT else TPO_NONE
+            is SetAccessor -> if (child === pNode.body) TPO_STMT else TPO_NONE
+            else -> TPO_NONE
+        }
+        TPO_EXPR -> when (pNode) {
+            // A tracked-receiver access emits and does not recurse, but the
+            // receiver of a tracked one is an Identifier (no anchors inside),
+            // so the unconditional edge is reach-equivalent.
+            is PropertyAccessExpression -> if (child === pNode.expression) TPO_EXPR else TPO_NONE
+            is CallExpression ->
+                if (child === pNode.expression || pNode.arguments.any { it === child }) TPO_EXPR
+                else TPO_NONE
+            is NewExpression ->
+                if (child === pNode.expression || pNode.arguments?.any { it === child } == true) TPO_EXPR
+                else TPO_NONE
+            // The legacy left-spine flatten emits leftmost-first then the
+            // rights in source order — identical to plain left/right edges.
+            is BinaryExpression -> if (child === pNode.left || child === pNode.right) TPO_EXPR else TPO_NONE
+            is ElementAccessExpression ->
+                if (child === pNode.expression || child === pNode.argumentExpression) TPO_EXPR
+                else TPO_NONE
+            is ParenthesizedExpression -> if (child === pNode.expression) TPO_EXPR else TPO_NONE
+            is PrefixUnaryExpression -> if (child === pNode.operand) TPO_EXPR else TPO_NONE
+            is PostfixUnaryExpression -> if (child === pNode.operand) TPO_EXPR else TPO_NONE
+            is ConditionalExpression ->
+                if (child === pNode.condition || child === pNode.whenTrue ||
+                    child === pNode.whenFalse) TPO_EXPR
+                else TPO_NONE
+            else -> TPO_NONE
+        }
+        else -> TPO_NONE
     }
 
     private fun isTypeParamEffectivelyUnconstrained(tp: Type.TypeParam): Boolean {
@@ -79948,105 +80288,6 @@ interface DataView {
                 }
             }
             else -> false
-        }
-    }
-
-    private fun emitTypeParamTypedOps(
-        expr: Expression, tpVars: Map<String, TypeParameter>, source: String, fileName: String,
-    ) {
-        when (expr) {
-            is PropertyAccessExpression -> {
-                val recv = expr.expression
-                val recvTp = (recv as? Identifier)?.let { tpVars[it.text] }
-                if (recvTp != null) {
-                    val tpName = recvTp.name.text
-                    val propName = expr.name.text
-                    // Under strictNullChecks, TypeParam apparent = unknown → every property
-                    // access fires TS2339. Under non-strict, apparent = `{}` which inherits
-                    // Object.prototype methods — skip those property names so we don't FP on
-                    // `t.toString` / `t.valueOf` / etc. for unconstrained T.
-                    val isObjectProtoMember = propName in OBJECT_PROTOTYPE_IMPLICIT
-                    val shouldEmit = propName.isNotEmpty() &&
-                        (strictNullChecks || !isObjectProtoMember)
-                    if (shouldEmit) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, expr.name.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$propName' does not exist on type '$tpName'.",
-                            category = DiagnosticCategory.Error, code = 2339,
-                            fileName = fileName, line = line, character = character,
-                            start = expr.name.pos, length = propName.length,
-                        ))
-                    }
-                } else {
-                    emitTypeParamTypedOps(expr.expression, tpVars, source, fileName)
-                }
-            }
-            is CallExpression -> {
-                val callee = expr.expression
-                val calleeTp = (callee as? Identifier)?.let { tpVars[it.text] }
-                if (calleeTp != null) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "This expression is not callable.",
-                        category = DiagnosticCategory.Error, code = 2349,
-                        fileName = fileName, line = line, character = character,
-                        start = callee.pos, length = (callee).text.length,
-                        messageChain = listOf("  Type '{}' has no call signatures."),
-                    ))
-                } else {
-                    // B60.12c: detect `f(t)` where t is bare effectively-unconstrained TP arg
-                    // and f's param is a constrained TP. Emit TS2345 + TS2208 related info.
-                    emitTs2345ForBareTpArgToConstrainedTpParam(expr, tpVars, source, fileName)
-                    emitTypeParamTypedOps(callee, tpVars, source, fileName)
-                }
-                for (arg in expr.arguments) emitTypeParamTypedOps(arg, tpVars, source, fileName)
-            }
-            is NewExpression -> {
-                val callee = expr.expression
-                val calleeTp = (callee as? Identifier)?.let { tpVars[it.text] }
-                if (calleeTp != null) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, callee.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "This expression is not constructable.",
-                        category = DiagnosticCategory.Error, code = 2351,
-                        fileName = fileName, line = line, character = character,
-                        start = callee.pos, length = (callee).text.length,
-                        messageChain = listOf("  Type '{}' has no construct signatures."),
-                    ))
-                } else {
-                    emitTypeParamTypedOps(callee, tpVars, source, fileName)
-                }
-                expr.arguments?.let { for (arg in it) emitTypeParamTypedOps(arg, tpVars, source, fileName) }
-            }
-            is BinaryExpression -> {
-                // Flatten the left-spine iteratively to avoid StackOverflow on
-                // deeply nested binary chains.
-                val rightStack = ArrayDeque<Expression>()
-                var cur: Expression = expr
-                while (cur is BinaryExpression) {
-                    rightStack.addLast(cur.right)
-                    cur = cur.left
-                }
-                emitTypeParamTypedOps(cur, tpVars, source, fileName)
-                while (rightStack.isNotEmpty()) {
-                    emitTypeParamTypedOps(rightStack.removeLast(), tpVars, source, fileName)
-                }
-            }
-            is ElementAccessExpression -> {
-                // Note: `x[1]` on a TypeParam is NOT diagnosed by TypeScript here —
-                // TypeParam apparent type `{}` permits indexing through fallback rules.
-                emitTypeParamTypedOps(expr.expression, tpVars, source, fileName)
-                emitTypeParamTypedOps(expr.argumentExpression, tpVars, source, fileName)
-            }
-            is ParenthesizedExpression -> emitTypeParamTypedOps(expr.expression, tpVars, source, fileName)
-            is PrefixUnaryExpression -> emitTypeParamTypedOps(expr.operand, tpVars, source, fileName)
-            is PostfixUnaryExpression -> emitTypeParamTypedOps(expr.operand, tpVars, source, fileName)
-            is ConditionalExpression -> {
-                emitTypeParamTypedOps(expr.condition, tpVars, source, fileName)
-                emitTypeParamTypedOps(expr.whenTrue, tpVars, source, fileName)
-                emitTypeParamTypedOps(expr.whenFalse, tpVars, source, fileName)
-            }
-            else -> {}
         }
     }
 
