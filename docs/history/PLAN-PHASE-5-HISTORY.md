@@ -1,3 +1,65 @@
+**Round 666 (2026-07-25) — (M2) SIZED BEFORE ANY CODE AND PARKED: only 23% of
+the run divides, w4 is flat, and the 4-core box — not the design — is the binding
+constraint. The PERF arc closes here.** Round 665 ended with "size (M2) with a
+probe before writing code, the same way (d) was killed for 30 ms". Done, and the
+probe was cheap because the `--workers N` share-nothing mode already exists
+(INV.6(6c1)) — no new machinery was needed to measure the thing.
+
+**Measured** (compiler profile, 2 reps each, same JVM settings):
+
+    seq 27,873 ms  |  w2 24,669 (−11.5%)  |  w4 27,905 (+0.1%)
+
+w2 helps, w4 is flat — the "w4 flat" the item recorded, and still flat after
+M1's memo landed, so the M1-shrinks-warmup hypothesis in the item's own text is
+falsified. Solving seq-vs-w2 as `seq = R + P` and `w2 = R + P/2` gives
+**P ≈ 6.4 s (23%) divisible** against **R ≈ 21.5 s (77%) non-divisible**, i.e. an
+infinite-worker floor of ~21.5 s — a 23% best case before contention is even
+considered.
+
+**Why, from the code rather than from theory.** Each worker runs
+`sourceList.map { workerBinder.bind(it) }` — a FULL re-bind of EVERY file — and
+then constructs a full `Checker` in which all ~318 program-wide collectors run;
+only the per-file spine is narrowed by `assignedFileNames`. So the entire
+duplicated term IS R. Phase 1 as specified (compute the collectors once, freeze,
+share read-only) attacks at most the non-spine part of checker-init, which the
+pass table puts at **~3.3 s** (checker-init 24.2 s − checkSpine 20.9 s, plus
+outside-pass). On four already-saturated cores that reclaims CPU but buys no
+wall time — and w4 regressing against w2 is that saturation showing.
+
+**Verdict: park it.** The design is sound and would matter on a bigger host, but
+on 4 cores / 7.7 GB it cannot be demonstrated, and this arc's standing rule is
+not to land unmeasurable perf work. Two things would change the verdict, both
+recorded in the queue item: a host with ≥8 real cores (re-run this exact probe
+first), or a redesign that shrinks R instead of dividing P — and the full
+per-worker re-bind is the single largest identified duplication, so it is the
+honest first target if M2 is ever revived.
+
+**THE PERF ARC, CLOSED — the whole ledger in one place.** Every item was
+measured; almost every advertised number shrank on contact:
+
+| item | advertised | measured outcome |
+|---|---|---|
+| M0.1 tail deletion | ~6.2 s tail | 59 ms deletable — the tail is corpus-pinned |
+| M0.2/M0.3 dispatch+layout | — | −3.3%, −3.9%, −2.2%, −2.6% (landed) |
+| M0.4 spine migration (35 passes) | ~6.2 s | **+0.24% / −1.6% = neutral**; 75% of each pass's cost reappears in checkSpine |
+| M1 identity stability | "≤15–20 s path" (30–45%) | **−2.93% (0.83 s)** from the live walk memo; the expression half was 30 ms, not 1.1 s |
+| M2 parallel Phase 1 | scaling | 23% divisible, w4 flat — not demonstrable on this box |
+
+The durable lesson across all five: **an aggregate ratio applied to a
+non-uniform population is the arc's characteristic error** — it produced M0.4's
+"the tail is redundant traversal", M1's 1.1 s expression estimate (35× off), and
+round 662's 165 phantom wrong serves. Every correction came from measuring the
+specific population, and the shadow-classifier pattern made each correction cost
+one probe run instead of a build-and-revert cycle. That pattern, the tagged
+epoch, and the live dependency-keyed walk memo are what the arc leaves behind.
+
+**NEXT:** with PERF complete, the remaining unchecked queue items are the EP
+(emit-parity) family — EP.2 multi-line expression formatting, EP.1 cross-module
+const-enum inlining, EP.0 wiring the emit-diff gate into the dashboard.
+
+Gates: no code changed this round (probe only); tree clean; suite untouched at
+12,507/0/3.
+
 **Round 665 (2026-07-25) — (M1)(d) DEAD BEFORE IT WAS BUILT: an expression memo
 would save 30 ms, not the ~1.1 s on the books. M1 CLOSES with 0.83 s banked.**
 Round 664 wrote "measure the mean served-call cost BEFORE building" into this

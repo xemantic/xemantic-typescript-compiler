@@ -20,6 +20,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 675 (2026-07-25) — EP.2b: the `CharacterCodes` mystery
+was HEX LITERALS. Const-enum residual 675 → 70 reads.** Round 673 asked why one
+enum accounted for 638 of the un-inlined reads while its own file-mates inlined
+fine; the answer is that `SymbolFlags` and `Extension` are decimal- and
+string-valued and `CharacterCodes` is almost entirely hex.
+
+**The bug is small and completely silent.** All three const-enum evaluators
+parsed the member's literal with `text.toDoubleOrNull()`, which is decimal-only:
+Kotlin accepts a hex FLOAT (`0x1.8p3`) but not a hex INTEGER (`0x7F`). So the
+parse returned null, the member was recorded as non-constant, and the emit kept
+a qualified access — with no error, no diagnostic and nothing in any log. Only a
+byte-diff against real tsc could surface it, which is exactly what the round-672
+gate bought.
+
+**Three evaluators, found one at a time.** A shared
+`tsNumericLiteralToDouble` (Types.kt — hex/binary/octal, `_` separators, rejects
+BigInt) now serves the Transformer's same-file collector, the Checker's
+`literalConstantValue`, and the Checker's `evaluateEnumInitializer` (which
+builds the cross-module `enumValues` table). I wired the first two, and the
+same-file repro went green while the direct-import repro did not — that split is
+what revealed the third site. Worth noting as a pattern: the same value question
+is answered independently in three places, so a "fix" verified on one shape can
+easily be half-done.
+
+**Measured (the gate):** const-enum inlined reads **17,443 → 18,048** against
+tsc's 18,118 — the gap falls from 675 to **70**. Byte-identical files stay
+31/78 for the same reason as round 674: these hunks live in files that still
+differ for other reasons, and hunk-level progress is not file-level progress.
+
+**Gates:** 8 pins (`HexConstEnumInliningTest`) covering all three evaluator
+paths (same-file, cross-module, through a star barrel), binary and octal, a
+negative/zero regression guard, the shared parser across bases and separators,
+and two negative controls — a BigInt literal and garbage text must yield null
+rather than a wrong value, because a wrong value here would silently corrupt
+emitted constants rather than fail loudly. Suite 12,526 → **12,534/0** (3
+skipped) with every JS baseline byte-exact; `--listAll` ×8 byte-identical on all
+eight profiles, which carries more weight this round than usual since the change
+alters enum VALUES and a bad one would move diagnostics; warning-clean.
+
+**NEXT:** EP.2c (the original formatting family, ~131 whitespace/wrap hunks —
+tsc puts a wrapped ternary's `:` at line start), and the small tail: 70
+const-enum reads, `tracing.Phase.Bind` (a const enum behind a namespace), one
+import-elision difference, and the single remaining double-comment of a
+different shape.
+
 **Round 674 (2026-07-25) — EP.2a fixed: string-valued const enums in array
 literals stopped doubling their comment, 128 → 1.** The first emit fix made with
 the gate in place, and the gate is what makes the claim checkable.
@@ -416,68 +461,6 @@ tsc), which makes them the only workable EP items here. The repro is saved at
 `scratchpad/eptest` (enums / named / star / barrel / viaBarrel + tsconfig).
 
 Gates: no code changed (triage only); tree clean; suite untouched at 12,507/0/3.
-
-**Round 666 (2026-07-25) — (M2) SIZED BEFORE ANY CODE AND PARKED: only 23% of
-the run divides, w4 is flat, and the 4-core box — not the design — is the binding
-constraint. The PERF arc closes here.** Round 665 ended with "size (M2) with a
-probe before writing code, the same way (d) was killed for 30 ms". Done, and the
-probe was cheap because the `--workers N` share-nothing mode already exists
-(INV.6(6c1)) — no new machinery was needed to measure the thing.
-
-**Measured** (compiler profile, 2 reps each, same JVM settings):
-
-    seq 27,873 ms  |  w2 24,669 (−11.5%)  |  w4 27,905 (+0.1%)
-
-w2 helps, w4 is flat — the "w4 flat" the item recorded, and still flat after
-M1's memo landed, so the M1-shrinks-warmup hypothesis in the item's own text is
-falsified. Solving seq-vs-w2 as `seq = R + P` and `w2 = R + P/2` gives
-**P ≈ 6.4 s (23%) divisible** against **R ≈ 21.5 s (77%) non-divisible**, i.e. an
-infinite-worker floor of ~21.5 s — a 23% best case before contention is even
-considered.
-
-**Why, from the code rather than from theory.** Each worker runs
-`sourceList.map { workerBinder.bind(it) }` — a FULL re-bind of EVERY file — and
-then constructs a full `Checker` in which all ~318 program-wide collectors run;
-only the per-file spine is narrowed by `assignedFileNames`. So the entire
-duplicated term IS R. Phase 1 as specified (compute the collectors once, freeze,
-share read-only) attacks at most the non-spine part of checker-init, which the
-pass table puts at **~3.3 s** (checker-init 24.2 s − checkSpine 20.9 s, plus
-outside-pass). On four already-saturated cores that reclaims CPU but buys no
-wall time — and w4 regressing against w2 is that saturation showing.
-
-**Verdict: park it.** The design is sound and would matter on a bigger host, but
-on 4 cores / 7.7 GB it cannot be demonstrated, and this arc's standing rule is
-not to land unmeasurable perf work. Two things would change the verdict, both
-recorded in the queue item: a host with ≥8 real cores (re-run this exact probe
-first), or a redesign that shrinks R instead of dividing P — and the full
-per-worker re-bind is the single largest identified duplication, so it is the
-honest first target if M2 is ever revived.
-
-**THE PERF ARC, CLOSED — the whole ledger in one place.** Every item was
-measured; almost every advertised number shrank on contact:
-
-| item | advertised | measured outcome |
-|---|---|---|
-| M0.1 tail deletion | ~6.2 s tail | 59 ms deletable — the tail is corpus-pinned |
-| M0.2/M0.3 dispatch+layout | — | −3.3%, −3.9%, −2.2%, −2.6% (landed) |
-| M0.4 spine migration (35 passes) | ~6.2 s | **+0.24% / −1.6% = neutral**; 75% of each pass's cost reappears in checkSpine |
-| M1 identity stability | "≤15–20 s path" (30–45%) | **−2.93% (0.83 s)** from the live walk memo; the expression half was 30 ms, not 1.1 s |
-| M2 parallel Phase 1 | scaling | 23% divisible, w4 flat — not demonstrable on this box |
-
-The durable lesson across all five: **an aggregate ratio applied to a
-non-uniform population is the arc's characteristic error** — it produced M0.4's
-"the tail is redundant traversal", M1's 1.1 s expression estimate (35× off), and
-round 662's 165 phantom wrong serves. Every correction came from measuring the
-specific population, and the shadow-classifier pattern made each correction cost
-one probe run instead of a build-and-revert cycle. That pattern, the tagged
-epoch, and the live dependency-keyed walk memo are what the arc leaves behind.
-
-**NEXT:** with PERF complete, the remaining unchecked queue items are the EP
-(emit-parity) family — EP.2 multi-line expression formatting, EP.1 cross-module
-const-enum inlining, EP.0 wiring the emit-diff gate into the dashboard.
-
-Gates: no code changed this round (probe only); tree clean; suite untouched at
-12,507/0/3.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1227,7 +1210,27 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
     correct — so the ARRAY-LITERAL element path transforms the element twice.
     Real source shape: checker.ts:2550
     `fileExtensionIsOneOf(fileName, [Extension.Cts, Extension.Cjs])`.
-  - [ ] **EP.2b The 675-read const-enum residual, dominated by
+  - [x] **EP.2b DONE round 675 — it was HEX literals; gap 675 → 70 reads.**
+    `CharacterCodes` resisted while `SymbolFlags`/`Extension` inlined from the
+    same types.ts because those are decimal/string-valued and CharacterCodes is
+    almost entirely hex. All THREE const-enum evaluators parsed with
+    `text.toDoubleOrNull()` — decimal-only (Kotlin takes a hex FLOAT `0x1.8p3`
+    but not a hex INTEGER `0x7F`), so the member became silently un-inlinable
+    with no error at all. Fixed with one shared `tsNumericLiteralToDouble`
+    (Types.kt: hex/binary/octal + `_` separators, rejects BigInt) wired into the
+    Transformer's same-file collector, the Checker's `literalConstantValue`, and
+    the Checker's `evaluateEnumInitializer` (the cross-module `enumValues`
+    table). Fixing the first two left cross-module broken — the same-file repro
+    went green while the direct-import one did not, which is how the third site
+    surfaced. Measured: const-enum reads 17,443 → **18,048** (tsc 18,118),
+    byte-identical files unchanged at 31/78. Gates: 8 pins
+    (HexConstEnumInliningTest — all three paths, binary/octal, negative+zero
+    guard, the parser across bases, plus BigInt/garbage negative controls since
+    a wrong value would silently corrupt emitted constants); suite 12,534/0;
+    `--listAll` ×8 byte-identical, which matters here because the change alters
+    enum VALUES. RESIDUAL: 70 reads, plus `tracing.Phase.Bind` (const enum
+    behind a namespace) and one import-elision difference.
+  - [ ] ~~EP.2b (original)~~ — **The 675-read const-enum residual, dominated by
     `CharacterCodes` (638 of the qualified-access occurrences).** Why that one
     enum resists while SymbolFlags/Extension inline is the question to answer
     first — it is declared in types.ts like the others, so the difference is
