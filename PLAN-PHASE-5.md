@@ -20,6 +20,66 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 677 (2026-07-25) — the const-enum divergence family is CLOSED: 18,118
+inlined reads vs tsc's 18,118, from 18,048. Three separate gaps, each one found
+by the gate and reproduced standalone before any code changed.**
+
+**EP.2d — parameter DEFAULT VALUES were never transformed at ES2018+.** The
+residual classifier pointed at two shapes; the larger was
+`function isNonLocalAlias(symbol, excludes = ts_js_1.SymbolFlags.Value | ...)`
+where tsc inlines. Root cause is not const-enum-specific at all:
+`flattenRestParameters` opened with `if (effectiveTarget >= ES2018) return
+Pair(params, body)` — returning the parameters **raw**. That helper owns the
+parameters of the plain (non-async) FunctionDeclaration branch, function and
+arrow expressions, and constructors, so at any modern target every default value
+in those positions skipped `transformExpression` entirely. The sub-ES2018 path
+had always applied the per-parameter treatment, which is exactly why a
+downlevel-heavy corpus of 12.5k tests never noticed: the bug is invisible below
+the very threshold most emit tests sit under. The fix restores the *whole*
+transform, so the pins cover an optional chain and a `this`-capturing arrow in
+default position, not just enums.
+
+**EP.2e — a const enum nested in a NAMESPACE did not inline through a barrel.**
+The barrel's star closure yields the NAMESPACE for the first path segment, and
+the binder sets `SymbolFlags.ConstEnum` on a namespace holding only const enums
+— so the flag test *passed* on the namespace while the `enumValues` lookup,
+keyed by the ENUM's symbol id, silently missed. `descendToConstEnum` walks the
+remaining segments through namespace exports, stopping at the first genuine
+`EnumDeclaration`.
+
+**EP.2f — computed initializers did not fold in the same-file collector.** This
+one only surfaced because EP.2e did *not* move the number. I had predicted the
+residual was tsc's `tracing.Phase`; the count stayed at 18,085 after the fix, so
+instead of theorising I re-ran the gate with `--keep` and counted per file:
+`debug.js` was short 25, and every missing member was a `Connection.*`. The
+source is `const enum Connection { Up = 1 << 0, ..., UpDown = Up | Down }` —
+computed. The Transformer's collector accepted only a literal (or a negated
+numeric) and returned null, "non-constant, don't inline", for everything else,
+while the Checker's cross-module evaluator had folded shifts and bitwise
+operators all along. Two evaluators, silently divergent, and the drift ends
+inlining for every member *after* the first computed one. The operator table now
+lives once in `tsFoldNumericBinary` and both call it.
+
+**The lesson repeats, and it is the same one as rounds 669 and 672.** My
+namespace-barrel prediction was well-reasoned, reproduced cleanly in a scratch
+project, and was *not what tsc's source does*. What corrected it was the gate
+plus a per-file count — 20 seconds of measurement against a confident wrong
+model. The standing rule holds: when a fix does not move the metric, do not
+explain why it should have; go read the residual.
+
+**Gates.** Corpus 12,566 / 0 / 3 (+32 hand-written tests across three new
+classes). `--listAll` ×8 unchanged: 46 on seven profiles, 94 on harness, zero
+crashes. Emit-diff const-enum reads 18,118 vs tsc 18,118. byte-identical files
+stay 31/78 — the remaining 47 are entirely family 2 (EP.2c), untouched.
+
+**NEXT:** the low-risk EP tail is now exhausted — families 1 and 3 are both at
+parity. What is left in emit parity is EP.2c alone, still sized as a subsystem
+project (see round 676) and still awaiting an explicit go/no-go rather than
+drift. Absent that steer, the queue's next unchecked non-EP item is the correct
+pick.
+
+---
+
 **Round 676 (2026-07-25) — EP.2c SIZED: it is a subsystem project, not a
 placement rule. 132 hunks in three shapes, and the recommendation is an explicit
 go/no-go rather than drifting into it.**
@@ -393,59 +453,6 @@ byte-identical on all eight profiles; warning-clean.
 Re-learned the hard way, and worth repeating because CLAUDE.md documents it: a
 literal `/*` inside a KDoc opens a NESTED block comment and breaks the file. The
 doc comment now describes tsc's inlined form in words instead.
-
-**Round 668 (2026-07-25) — EP.1a DONE: the `export *` barrel namespace-import
-false positive (TS2694) is fixed, gated offline, and inert on all eight
-profiles.** Round 667's triage found this while checking EP.1's premise; it was
-sequenced ahead of the emit-byte half because FPs are the v1 metric, and it
-turned out to be a two-line resolution gap rather than anything structural.
-
-**The bug.** `import * as B from "./barrel"` where `barrel.ts` is
-`export * from "./enums"`, then `B.Kind` in TYPE position, reported *"Namespace
-'"x".B' has no exported member 'Kind'"* on valid TypeScript — exactly tsc's own
-`_namespaces/ts.js` layout. `checkQualifiedNameExports` looks the final segment
-up in `symbol.exports`, and **a star re-export never populates the barrel's own
-export table**. The emitter already carried two narrow fallbacks for this class
-(ambient `export =`, and local `export { X }` clauses); the star chain was the
-missing third.
-
-**Finding it cost one run.** Rather than reading the four candidate TS2694
-emitters, I used the technique CLAUDE.md documents for exactly this — a
-temporary env-gated `init` block on the `Diagnostic` data class printing a stack
-trace for `code == 2694` — and it named `checkQualifiedNameExports` immediately.
-The note in CLAUDE.md is accurate and worth reaching for sooner.
-
-**The fix and why it is safe.** `namespaceImportMemberViaStarExports` consults
-`getModuleExportsFollowingStars` (M1.1) for the imported module and withholds
-the emission when the member is reachable through the star chain — or when that
-returns NULL, which per the M1.1 discipline means UNKNOWABLE (bare/unresolvable/
-`export =` star target) and callers must skip absence emission rather than
-guess. Resolution uses the bare resolver with the relative leg as fallback (the
-round-511 lesson: the bare one only knows flat corpus-style keys, so a
-path-shaped project needs both). Crucially this is **SUPPRESSION-ONLY by
-construction** — it can only withhold an emission, never produce one, and it
-resolves no types. That is precisely the distinction that makes it safe where
-the same idea inside the general `resolveAlias` is a measured dead-end (it
-flooded TS2315 ×466 on the self-compile by resolving barrel-imported TYPES and
-arity-checking them). A suppression that resolves nothing cannot reach that
-failure mode.
-
-**Gates:** 6 new pins (`BarrelStarExportNamespaceMemberTest`) — three positive
-shapes including a two-barrel chain, and **three negative controls** proving a
-genuinely absent member still reports, which is the assertion that actually
-matters for a suppression; suite 12,507 → **12,513/0** (3 skipped); `--listAll`
-×8 **byte-identical on all eight profiles** vs the round-664 capture (46×7/94),
-so the change is inert everywhere it should be; warning-clean.
-
-**Still open on EP.1** (the emit half): through a barrel, const-enum members
-still emit `barrel_1.Kind.B` / `B.Kind.A` instead of `1 /* Kind.B */`, and drag
-in a real `require` plus the `__importStar` helper tsc elides. Now that the
-CHECKER resolves the barrel hop, the remaining work is connecting
-`Transformer.collectConstEnumValues` — which walks statements directly — to the
-same star-following resolution. Gateable offline the same way (local pin +
-corpus), so it is the next EP item; EP.2 and EP.0 remain blocked on a reference
-tsc that does not exist on this box.
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 

@@ -1,3 +1,55 @@
+**Round 668 (2026-07-25) — EP.1a DONE: the `export *` barrel namespace-import
+false positive (TS2694) is fixed, gated offline, and inert on all eight
+profiles.** Round 667's triage found this while checking EP.1's premise; it was
+sequenced ahead of the emit-byte half because FPs are the v1 metric, and it
+turned out to be a two-line resolution gap rather than anything structural.
+
+**The bug.** `import * as B from "./barrel"` where `barrel.ts` is
+`export * from "./enums"`, then `B.Kind` in TYPE position, reported *"Namespace
+'"x".B' has no exported member 'Kind'"* on valid TypeScript — exactly tsc's own
+`_namespaces/ts.js` layout. `checkQualifiedNameExports` looks the final segment
+up in `symbol.exports`, and **a star re-export never populates the barrel's own
+export table**. The emitter already carried two narrow fallbacks for this class
+(ambient `export =`, and local `export { X }` clauses); the star chain was the
+missing third.
+
+**Finding it cost one run.** Rather than reading the four candidate TS2694
+emitters, I used the technique CLAUDE.md documents for exactly this — a
+temporary env-gated `init` block on the `Diagnostic` data class printing a stack
+trace for `code == 2694` — and it named `checkQualifiedNameExports` immediately.
+The note in CLAUDE.md is accurate and worth reaching for sooner.
+
+**The fix and why it is safe.** `namespaceImportMemberViaStarExports` consults
+`getModuleExportsFollowingStars` (M1.1) for the imported module and withholds
+the emission when the member is reachable through the star chain — or when that
+returns NULL, which per the M1.1 discipline means UNKNOWABLE (bare/unresolvable/
+`export =` star target) and callers must skip absence emission rather than
+guess. Resolution uses the bare resolver with the relative leg as fallback (the
+round-511 lesson: the bare one only knows flat corpus-style keys, so a
+path-shaped project needs both). Crucially this is **SUPPRESSION-ONLY by
+construction** — it can only withhold an emission, never produce one, and it
+resolves no types. That is precisely the distinction that makes it safe where
+the same idea inside the general `resolveAlias` is a measured dead-end (it
+flooded TS2315 ×466 on the self-compile by resolving barrel-imported TYPES and
+arity-checking them). A suppression that resolves nothing cannot reach that
+failure mode.
+
+**Gates:** 6 new pins (`BarrelStarExportNamespaceMemberTest`) — three positive
+shapes including a two-barrel chain, and **three negative controls** proving a
+genuinely absent member still reports, which is the assertion that actually
+matters for a suppression; suite 12,507 → **12,513/0** (3 skipped); `--listAll`
+×8 **byte-identical on all eight profiles** vs the round-664 capture (46×7/94),
+so the change is inert everywhere it should be; warning-clean.
+
+**Still open on EP.1** (the emit half): through a barrel, const-enum members
+still emit `barrel_1.Kind.B` / `B.Kind.A` instead of `1 /* Kind.B */`, and drag
+in a real `require` plus the `__importStar` helper tsc elides. Now that the
+CHECKER resolves the barrel hop, the remaining work is connecting
+`Transformer.collectConstEnumValues` — which walks statements directly — to the
+same star-following resolution. Gateable offline the same way (local pin +
+corpus), so it is the next EP item; EP.2 and EP.0 remain blocked on a reference
+tsc that does not exist on this box.
+
 **Round 667 (2026-07-25) — EP triage: two of the four items are BLOCKED OFFLINE,
 EP.1's premise is partly FALSIFIED, and the residual turns out to be one shape —
 `export *` barrels — which also emits a FALSE POSITIVE TS2694 that matters more
