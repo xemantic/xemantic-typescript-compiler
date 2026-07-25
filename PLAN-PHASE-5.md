@@ -20,9 +20,10 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 678 (2026-07-25) — the const-enum family is ACTUALLY closed now (true
-gap 34 → 0, byte-identical files 31 → 32), and round 677's "closed at parity"
-claim was WRONG. The gate's own summary metric lied, and I believed it.**
+**Round 678 (2026-07-25) — two fixes: the const-enum family is ACTUALLY closed
+(true gap 34 → 0) and a printer blank-line defect cleared 66 hunks. Byte-identical
+files 31 → 33/78. Round 677's "closed at parity" claim was WRONG — the gate's own
+summary metric lied, and I believed it.**
 
 **The correction first, because it is the point.** Round 677 declared the family
 closed on the strength of the emit-diff script's family-1 line reading
@@ -65,13 +66,33 @@ seven, 94 on harness). True const-enum comment gap 0. Zero live `tracing.Phase`
 reads. byte-identical 31 → **32**/78 — the first file-level movement from this
 family, since the other 46 differ for family-2 reasons too.
 
-**NEXT:** emit families 1 and 3 are now genuinely at parity, verified by a
-measure that can actually see the thing. What remains is EP.2c, and the
-residual-hunk classification run this round refines its shape: of 368 differing
-hunks, 300 are CONTENT (dominated by the ternary/binary wrap-and-indent
-structure), 35 indent-only, 32 where we add a blank line tsc lacks, 1 collapsed
-wrap. The 32 blank-line hunks look like the smallest genuinely separable slice
-and are the recommended next EP step if EP.2c stays parked.
+**Then EP.2h — and it was NOT part of EP.2c's subsystem at all.** Classifying
+the 368 residual hunks put 32 in a "we emit a line tsc lacks" bucket, which I
+took as the smallest separable slice of the formatting family. It turned out to
+be an ordinary printer defect, fixed in four lines: `emitInnerComments` writes a
+newline after a `//` comment (it terminates its own line) and then the NEXT
+comment wrote a second one for its `hasPrecedingNewLine`, so every pair of
+consecutive line comments gained a blank between them. tsc keeps a multi-line
+comment block before an `else if` adjacent. An `atLineStart` flag suppresses
+only the redundant newline; the indent is still written. Verified BYTE-IDENTICAL
+against tsc on an 11-line repro — including when the SOURCE has a blank line
+between the two comments, which tsc collapses too, so the behaviour is faithful
+and not merely convenient (that case is pinned separately, being the boundary
+the fix defines). Measured: hunks **368 → 302**, the add-a-line family **32 →
+0** (it also cleared 34 entangled CONTENT hunks), byte-identical **32 → 33**/78.
+Suite 12,579/0/3 with every JS baseline byte-exact despite touching the printer.
+
+**The reusable point:** a bucket in a classification is a hypothesis about
+cause, not a finding. Two of the three "formatting" shapes I sized as a
+subsystem in round 676 have now turned out to be plain defects (EP.2a's double
+comment, EP.2h's blank line). Before committing to the expensive reading of a
+classification, check whether the cheap one explains it.
+
+**NEXT:** emit families 1 and 3 are at parity, verified by a measure that can
+see the thing. The residual is 302 hunks: **266 CONTENT** (the ternary/binary
+wrap-and-indent structure — the genuine EP.2c subsystem), **35 indent-only**,
+**1 collapsed wrap**. Nothing cheap is left in it; EP.2c remains a real project
+and still wants an explicit go/no-go.
 
 ---
 
@@ -1311,12 +1332,21 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
     family-1 counter requires a NUMERIC value, so string-valued enums are
     invisible to it on both sides. Measure with a per-file count of all
     `/* X.Y */` comments. Suite 12,573/0/3, `--listAll` ×8 unchanged.
+  - [x] **EP.2h DONE round 678 — the 32 "extra blank line" hunks were an
+    ordinary printer defect, not part of the formatting subsystem.**
+    `emitInnerComments` wrote a newline after a `//` comment and then the next
+    comment wrote a second for its `hasPrecedingNewLine`, so consecutive line
+    comments gained a blank between them (tsc keeps a comment block before an
+    `else if` adjacent). Four lines, byte-identical to tsc on the repro
+    including the source-has-a-blank case. Hunks **368 → 302**, add-a-line
+    family **32 → 0** (also cleared 34 entangled CONTENT hunks), byte-identical
+    **32 → 33**/78. Suite 12,579/0/3, all JS baselines byte-exact.
   - [ ] **EP.2c SIZED round 676 — a subsystem project, not a placement rule;
-    132 hunks in THREE shapes, recommend an explicit go/no-go.** Round 678
-    re-classified the current 368 differing hunks: 300 CONTENT (dominated by the
-    ternary/binary wrap-and-indent structure), 35 indent-only, **32 where we
-    emit a blank line tsc does not**, 1 collapsed wrap. Those 32 look like the
-    smallest genuinely separable slice if a first step is wanted. Classified:
+    recommend an explicit go/no-go.** After rounds 677–678 the residual is
+    **302 hunks: 266 CONTENT** (the ternary/binary wrap-and-indent structure —
+    the genuine subsystem), **35 indent-only**, **1 collapsed wrap**. Nothing
+    cheap remains: the two shapes that looked separable (EP.2a's double comment,
+    EP.2h's blank line) were both ordinary defects and are fixed. Classified:
     **78 same line count but different continuation INDENT DEPTH**, differing in
     BOTH directions (checker.js has us indenting 4 too many in one wrapped `&&`
     chain and 4 too few in another — no single constant fixes it); **47 where
