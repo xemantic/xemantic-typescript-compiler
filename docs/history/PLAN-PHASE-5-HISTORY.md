@@ -1,3 +1,76 @@
+**Round 656 (2026-07-25) — (M0.4) thirty-third tail-pass migration:
+checkArgumentsInClassFieldInitializers (TS2815 — an `arguments` reference in a
+class PROPERTY INITIALIZER or a class STATIC BLOCK; 82.9 ms at the round-655
+table — the #34 row) is ON THE SPINE; the driver and the whole
+findClassesForTS2815InStatements / findClassesForTS2815InExpr (ROUTING) +
+checkClassMembersForTS2815 (MEMBER dispatch) + checkExprForTS2815Arguments /
+checkStatementsForTS2815Arguments / checkStatementForTS2815Arguments (EMISSION)
+recursion is DELETED, and `emitTS2815` is anchor-called at `arguments`
+Identifier enters.** The shape was pre-diagnosed last session — the round-640
+TWO-INTERLEAVED-WALKS variant with the round-653 re-entry boundary — and it
+held, but the round-640 template needed ONE structural change worth naming for
+the next migrator: **when two interleaved walks share MOST of their arms, write
+the fold keyed on the node KIND (not on the status) and branch on `pStatus`
+only inside the arms where the walks actually differ.** Round 640's Uy fold is
+`when (pStatus) { … when (pNode) … }` because its two walks had almost
+DISJOINT node sets (a statement-only name walk vs a yield walk); here the two
+walks overlap on ~30 of ~45 arms, and in every overlapping arm the child set is
+identical and the child simply keeps the parent's status — so the walk identity
+"rides along" a pass-through arm for free (`-> pStatus`) and the outer-status
+form would have duplicated those 30 arms verbatim, which is exactly how an arm
+diff silently drifts. Reach is `spineAfStatus` over `spineAfFold` with three
+statuses: AF_ROUTE (a position the class-finding routing walk visited),
+AF_EMIT (a position inside a property initializer / static block, where an
+`arguments` Identifier anchor fires), AF_MEMBER (the class-or-objlit MEMBER
+conduit, where the member KIND decides which walk resumes — a property
+initializer / static block → AF_EMIT, a method/ctor/accessor body → AF_ROUTE,
+because those bind their own `arguments`). The re-entries that make the walks
+inseparable are ordinary edges in that scheme: EMISSION → FunctionExpression /
+FunctionDeclaration body → AF_ROUTE, EMISSION → ClassExpression → AF_MEMBER,
+ROUTING → any non-`declare` class → AF_MEMBER. The whole risk surface is that
+the two walks REACH DIFFERENT POSITIONS, and all five asymmetries are pinned in
+both directions: (1) if/loop HEADS, the switch SUBJECT and case EXPRESSIONS are
+EMISSION-only (routing descends statement BODIES only); (2) an object literal's
+METHOD/ACCESSOR bodies are EMISSION-only (routing's objlit arm walks property
+VALUES and spreads only); (3) an arrow's parameter DEFAULTS are EMISSION-only
+(a Parameter is reached ONLY through an EMISSION-walked arrow, and only its
+initializer — so a parameter *named* `arguments` draws nothing); (4) a
+ClassExpression is `declare`-gated in ROUTING and UNGATED in EMISSION — a
+frozen legacy asymmetry, the emission arm simply has no modifier test; (5)
+namespaces and `export =` are ROUTING-only (the emission statement walk has
+neither arm, so a `namespace` inside a static block is unreached). Multiplicity
+is 1 everywhere — no legacy arm visits a child twice — so no INT-valued
+(round 636) classifier is needed, and the pass is FULLY SYNTACTIC (identifier
+TEXT + member kinds + modifiers + positions): no type resolution, no flow, no
+ambient install AT ALL, which is the first tail pass since round 650 needing no
+sandwich of any kind. The anchor pre-gates on `text == "arguments"` BEFORE the
+reach climb — Identifier enters are the single most frequent node kind, the
+name is rare. The legacy binderResults driver → the spine's partition view.
+GATE NOTE: TS2815 fires 0 times across all 8 tsc-source profiles (real code
+does not reference `arguments` in a field initializer) and the generated
+corpus's TS2815 baselines are `.errors.txt` subtests, so `--listAll` ×8 pins
+PURE NON-PERTURBATION and the 30 pins carry the behavioural-equivalence
+burden. Gates: 30 pins (M04ArgumentsInFieldSpineMigrationTest, written last
+session green against the LEGACY walkers at their slot-move slot) 30/30 on the
+spine on the FIRST run — no calibration, the second consecutive round where
+pre-writing the pins against the legacy pass made the migration a
+single-attempt change; suite 12,451/0 (3 skipped, unchanged from the
+round-655-tail baseline); `--listAll` ×8 byte-identical vs a purpose-built
+LEGACY capture from this same tree (46×7/94; the only changed line per profile
+is `time:`); `--partitionCheck 2` EQUIVALENT ×8; pass table 407 → 406 (zero
+checkArgumentsInClassFieldInitializers rows; checkSpine 21.1 s — in-band);
+warning-clean. M0.4 running total: top THIRTY-THREE tail passes migrated.
+NEXT (fresh round-656 table, the migrated rows gone):
+checkArrayToClassCastOverlap 72.5 ms, checkTypeParamTypedOps 71.0,
+checkVarHoistRedeclaration 68.9, checkCallTypeArgCount 66.2,
+checkIllegalSuperCallsInNestedFunctions 62.7, checkTypeArgumentConstraints
+62.7, checkSpreadPropertyOverrides 62.5 (checkCrossFileModuleAugmentationDuplicates,
+now 109.7 ms, stays SKIP — cross-file aggregation, not per-file spine
+material). The tail is now VERY flat — no per-file row above 73 ms and ~90
+passes above 20 ms carrying the residual ~4.3 s — so per-pass wall value keeps
+shrinking and the arc-level interleaved A/B (owed once several more land) is
+the only honest wall evidence left.
+
 **Round 655 (2026-07-25) — (M0.4) thirty-second tail-pass migration:
 checkImplicitAnyNewExpressions (TS7009 — `new F()` whose target `F` is a plain
 FUNCTION symbol, so it carries no construct signature and the expression

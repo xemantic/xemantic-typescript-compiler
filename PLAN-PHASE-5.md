@@ -20,6 +20,58 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 665 (2026-07-25) — (M1)(d) DEAD BEFORE IT WAS BUILT: an expression memo
+would save 30 ms, not the ~1.1 s on the books. M1 CLOSES with 0.83 s banked.**
+Round 664 wrote "measure the mean served-call cost BEFORE building" into this
+item precisely because the walk memo had just netted 60% of its shadow estimate.
+The measurement went much further than expected.
+
+**The instrument.** For each `getTypeOfExpression` call: decide with EXACTLY the
+live test (a CONFIRMED shadow entry at the current epoch), decide BEFORE the core
+runs so the timed region is precisely what serving would skip, and accumulate the
+core time of the OUTERMOST servable call only — serving an outer call skips its
+whole subtree, so counting nested servable calls would double-count.
+
+**The result: 30 ms over 71,310 outermost served calls** — ~0.42 µs each, 0.12%
+of a ~24 s compile. A live memo would pay per-call overhead on ~618 k calls to
+collect that, so it cannot break even. (d) is dead.
+
+**Why the round-660 estimate was 35× off, and it is a repeat offence.** That
+estimate multiplied the shadow's 149,742 hits by a MEAN call cost. But the
+servable population is not average — it is the **cheap tail**: trivial
+identifiers and literals whose underlying resolution is already cached. The
+expensive calls (fresh minting, narrowing, relation work) are exactly the ones
+whose results are not instance-stable, so the whitelist excludes them by
+construction. Applying an aggregate mean to a non-uniform population is the same
+error class as round 662's key collision — twice in this arc now, and both times
+the fix was to measure the specific population rather than scale a ratio.
+
+**It also explains a documented dead-end.** CLAUDE.md already records that a LIVE
+per-node `getTypeOfExpression` memo measured **1–3% SLOWER** interleaved (round
+596). That was observed but never explained; 30 ms is the explanation. Worth
+saying plainly: my round-660 estimate contradicted an existing MEASURED result,
+and I should have weighted the measurement above a fresh multiplication. The
+CLAUDE.md dead-end entry now has its mechanism.
+
+**M1's ledger, closed.** Original claim "≤15–20 s path" (30–45%) → retired at
+round 660 for a measured ~3.3 s → corrected to ~2.5 s at round 662 when a key
+collision turned up in my own instrument → round 664 banked **0.83 s (−2.93%)**
+with the live dependency-keyed flow-walk memo, the arc's only live win → round
+665 shows the remaining ~1.1 s was never there. What survives as reusable
+machinery: the tagged epoch (`bumpExprEpoch`), the live walk memo, and three
+shadow classifiers that made every one of those corrections cheap — each
+correction cost one probe run rather than a build-and-revert cycle.
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — the measurement is
+behind `--passTiming` and adds no live code path; warning-clean.
+
+**NEXT: (M2) parallel scaling Phase 1** (shared frozen collectors), the last
+unchecked PERF item. Honest note for whoever takes it: the box is 4-core /
+7.7 GB, the queue itself says that caps what can be demonstrated locally, and
+this arc's record is that every advertised number shrank on measurement — so
+size (M2) with a probe before writing code, the same way (d) was killed for
+30 ms.
+
 **Round 664 (2026-07-25) — (M1)(c) THE FLOW-WALK MEMO IS LIVE: −2.93% wall
 (−833 ms), 40,542 walks skipped, and every diagnostic on all eight profiles
 byte-identical. The first measured WIN of the whole M5 performance arc.** Rounds
@@ -530,79 +582,6 @@ only writers are VariableStatement declarations, so a pull rebuild would
 have to fold PRECEDING SIBLINGS at every enclosing list level — cheap if
 anchors stay rare (the round-644 pre-gate trick: anchors pre-filter on the
 receiver being a plain Identifier before the climb).
-
-**Round 656 (2026-07-25) — (M0.4) thirty-third tail-pass migration:
-checkArgumentsInClassFieldInitializers (TS2815 — an `arguments` reference in a
-class PROPERTY INITIALIZER or a class STATIC BLOCK; 82.9 ms at the round-655
-table — the #34 row) is ON THE SPINE; the driver and the whole
-findClassesForTS2815InStatements / findClassesForTS2815InExpr (ROUTING) +
-checkClassMembersForTS2815 (MEMBER dispatch) + checkExprForTS2815Arguments /
-checkStatementsForTS2815Arguments / checkStatementForTS2815Arguments (EMISSION)
-recursion is DELETED, and `emitTS2815` is anchor-called at `arguments`
-Identifier enters.** The shape was pre-diagnosed last session — the round-640
-TWO-INTERLEAVED-WALKS variant with the round-653 re-entry boundary — and it
-held, but the round-640 template needed ONE structural change worth naming for
-the next migrator: **when two interleaved walks share MOST of their arms, write
-the fold keyed on the node KIND (not on the status) and branch on `pStatus`
-only inside the arms where the walks actually differ.** Round 640's Uy fold is
-`when (pStatus) { … when (pNode) … }` because its two walks had almost
-DISJOINT node sets (a statement-only name walk vs a yield walk); here the two
-walks overlap on ~30 of ~45 arms, and in every overlapping arm the child set is
-identical and the child simply keeps the parent's status — so the walk identity
-"rides along" a pass-through arm for free (`-> pStatus`) and the outer-status
-form would have duplicated those 30 arms verbatim, which is exactly how an arm
-diff silently drifts. Reach is `spineAfStatus` over `spineAfFold` with three
-statuses: AF_ROUTE (a position the class-finding routing walk visited),
-AF_EMIT (a position inside a property initializer / static block, where an
-`arguments` Identifier anchor fires), AF_MEMBER (the class-or-objlit MEMBER
-conduit, where the member KIND decides which walk resumes — a property
-initializer / static block → AF_EMIT, a method/ctor/accessor body → AF_ROUTE,
-because those bind their own `arguments`). The re-entries that make the walks
-inseparable are ordinary edges in that scheme: EMISSION → FunctionExpression /
-FunctionDeclaration body → AF_ROUTE, EMISSION → ClassExpression → AF_MEMBER,
-ROUTING → any non-`declare` class → AF_MEMBER. The whole risk surface is that
-the two walks REACH DIFFERENT POSITIONS, and all five asymmetries are pinned in
-both directions: (1) if/loop HEADS, the switch SUBJECT and case EXPRESSIONS are
-EMISSION-only (routing descends statement BODIES only); (2) an object literal's
-METHOD/ACCESSOR bodies are EMISSION-only (routing's objlit arm walks property
-VALUES and spreads only); (3) an arrow's parameter DEFAULTS are EMISSION-only
-(a Parameter is reached ONLY through an EMISSION-walked arrow, and only its
-initializer — so a parameter *named* `arguments` draws nothing); (4) a
-ClassExpression is `declare`-gated in ROUTING and UNGATED in EMISSION — a
-frozen legacy asymmetry, the emission arm simply has no modifier test; (5)
-namespaces and `export =` are ROUTING-only (the emission statement walk has
-neither arm, so a `namespace` inside a static block is unreached). Multiplicity
-is 1 everywhere — no legacy arm visits a child twice — so no INT-valued
-(round 636) classifier is needed, and the pass is FULLY SYNTACTIC (identifier
-TEXT + member kinds + modifiers + positions): no type resolution, no flow, no
-ambient install AT ALL, which is the first tail pass since round 650 needing no
-sandwich of any kind. The anchor pre-gates on `text == "arguments"` BEFORE the
-reach climb — Identifier enters are the single most frequent node kind, the
-name is rare. The legacy binderResults driver → the spine's partition view.
-GATE NOTE: TS2815 fires 0 times across all 8 tsc-source profiles (real code
-does not reference `arguments` in a field initializer) and the generated
-corpus's TS2815 baselines are `.errors.txt` subtests, so `--listAll` ×8 pins
-PURE NON-PERTURBATION and the 30 pins carry the behavioural-equivalence
-burden. Gates: 30 pins (M04ArgumentsInFieldSpineMigrationTest, written last
-session green against the LEGACY walkers at their slot-move slot) 30/30 on the
-spine on the FIRST run — no calibration, the second consecutive round where
-pre-writing the pins against the legacy pass made the migration a
-single-attempt change; suite 12,451/0 (3 skipped, unchanged from the
-round-655-tail baseline); `--listAll` ×8 byte-identical vs a purpose-built
-LEGACY capture from this same tree (46×7/94; the only changed line per profile
-is `time:`); `--partitionCheck 2` EQUIVALENT ×8; pass table 407 → 406 (zero
-checkArgumentsInClassFieldInitializers rows; checkSpine 21.1 s — in-band);
-warning-clean. M0.4 running total: top THIRTY-THREE tail passes migrated.
-NEXT (fresh round-656 table, the migrated rows gone):
-checkArrayToClassCastOverlap 72.5 ms, checkTypeParamTypedOps 71.0,
-checkVarHoistRedeclaration 68.9, checkCallTypeArgCount 66.2,
-checkIllegalSuperCallsInNestedFunctions 62.7, checkTypeArgumentConstraints
-62.7, checkSpreadPropertyOverrides 62.5 (checkCrossFileModuleAugmentationDuplicates,
-now 109.7 ms, stays SKIP — cross-file aggregation, not per-file spine
-material). The tail is now VERY flat — no per-file row above 73 ms and ~90
-passes above 20 ms carrying the residual ~4.3 s — so per-pass wall value keeps
-shrinking and the arc-level interleaved A/B (owed once several more land) is
-the only honest wall evidence left.
 
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
@@ -1149,8 +1128,16 @@ structural item instead of landing alone.**
   only when it is on the path of another change. Bench TSV rows carry both
   medians locally (`bench/` is gitignored — the round-659 session note is the
   durable record and carries every per-pair number).
-- [ ] **(M1) Identity stability → the two memo designs, RE-SCOPED by the
-  round-660 measurement. Realistic prize ~3.3 s of ~29 s = 11–13% — NOT the
+- [x] **(M1) COMPLETE (rounds 660–665) — banked 0.83 s (−2.93%), which is the
+  arc's only live win; the rest of the advertised prize was never there.**
+  Ledger: an original "≤15–20 s path" (30–45%), retired at round 660 for a
+  measured ~3.3 s, corrected to ~2.5 s at round 662 when a key collision was
+  found in the instrument, of which round 664's live dependency-keyed flow-walk
+  memo banked 0.83 s and round 665 showed the remaining ~1.1 s expression half
+  was a 35× over-estimate (real value 30 ms). What survives as reusable
+  machinery: the tagged epoch (`bumpExprEpoch`), the dependency-keyed live walk
+  memo, and three shadow classifiers that made every one of those corrections
+  cheap. Original framing, retained for context. Realistic prize ~3.3 s of ~29 s = 11–13% — NOT the
   "≤15–20 s path" this item used to claim (that figure was never measured; it
   is retired).** Ceiling arithmetic, from the round-660 `--passTiming` run:
   narrowWalks cost 3,942 ms over 111,248 walks ≈ 35 µs/walk, so a PERFECT walk
@@ -1230,19 +1217,25 @@ structural item instead of landing alone.**
     `--passTiming`). Gates: suite 12,507/0; `--listAll` ×8 byte-identical on all
     eight profiles — no diagnostic moves anywhere, including no TS2563 drift;
     `--partitionCheck 2` EQUIVALENT ×8; warning-clean.
-  - [ ] **(d) NEXT — the same treatment for `getTypeOfExpression`, worth ~1.1 s
-    on paper but expect less.** The shadow already reports hitCorrect 151,710 /
-    hitWRONG 0 / miss 332,918 under the GLOBAL epoch fence and a result-kind
-    whitelist. Apply the round-661→664 recipe: (i) check the key for
-    input-collisions first (round 662's lesson — the expression memo keys on
-    nodeId alone, and `getTypeOfExpression` results depend on ambient context
-    the node does not identify, so this is the likely blocker); (ii) replace the
-    epoch fence with a dependency key; (iii) shadow until `hitWRONG` = 0; (iv)
-    go live with the same gate set INCLUDING an interleaved A/B. Do NOT reuse
-    round 664's per-walk overhead assumption — the expression path has ~6× the
-    call count and a much cheaper mean call (~7 µs vs ~34 µs), so the overhead
-    fraction is far worse and the memo may not pay at all. Measure the mean
-    served-call cost BEFORE building.
+  - [x] **(d) DEAD before it was built — round 665 measured the would-save at
+    30 ms, not ~1.1 s.** The measure-before-building instruction round 664 wrote
+    into this item is what caught it. Instrument: decide with EXACTLY the live
+    test (a confirmed shadow entry at the current epoch), decide BEFORE the core
+    runs, and accumulate the core time of the OUTERMOST servable call only.
+    Result: **30 ms over 71,310 outermost served calls ≈ 0.42 µs each = 0.12%**
+    of a ~24 s compile — and a live memo would pay per-call overhead on ~618 k
+    calls to collect it, so it must LOSE. WHY the round-660 estimate was 35×
+    off: it multiplied the shadow's 149,742 hits by a MEAN call cost, but the
+    servable population is the CHEAP TAIL (trivial identifiers/literals whose
+    resolution is already cached) while the expensive calls — fresh minting,
+    narrowing, relation work — are precisely the non-instance-stable ones the
+    whitelist excludes. Applying an aggregate mean to a non-uniform population
+    is the same error class as round 662's key collision. It also EXPLAINS the
+    documented round-596 dead-end (a live per-node expression memo measured 1–3%
+    SLOWER interleaved): that was observed but unexplained, and 30 ms is the
+    explanation. Do not revive without a NEW mechanism that makes the expensive
+    calls servable — canonical types (INV.5) would be that mechanism, not a
+    better fence.
 - [ ] **(M2) Parallel scaling Phase 1** — shared frozen collectors: compute the
   318 program-wide collectors once, freeze, share read-only (the immutability
   audit in docs/parallel-caching.md). Sequenced AFTER M1 (canonical types
