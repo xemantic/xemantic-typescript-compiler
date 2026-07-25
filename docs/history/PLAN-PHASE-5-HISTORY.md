@@ -1,3 +1,81 @@
+**Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
+checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
+implicitly `any` because its containing generator FUNCTION DECLARATION lacks a
+return-type annotation; 107.2 ms at the fresh round-651 table — the #29
+per-file tail pass) is ON THE SPINE; the legacy driver + the
+walkYield7057Stmts/walkYield7057Stmt/walkYield7057Expr recursion (~154 lines —
+whose SOLE job was to REACH every expression position while threading the
+downward `inGen` flag) DELETED; only the diagnostic-building leaf survives
+(emitImplicitAnyYield), anchor-called at YieldExpression enters.** Shape = the
+round-641 BOOLEAN-AS-STATUS variant (IY_GEN / IY_NON carry `inGen`), explicitly
+NOT round 651's ambient climb: `inGen` is RESET by every nested function-like,
+so it is not monotone in the ancestor chain and no cheaper separate climb can
+re-derive it — the migrator's rule of thumb is now **monotone downward boolean →
+separate climb (651); reset-bearing downward boolean → classifier status
+(641/652)**. THE NEW TEMPLATE MOVE — **a frozen EMISSION SKIP whose condition is
+decidable from the ANCHOR's OWN parent chain migrates as an ANCHOR-SIDE GATE,
+not as a reach state.** Here the round-479 discarded-result rule (a
+statement-position `yield x;` — parentheses transparent — draws nothing because
+tsc's `expressionResultIsUnused` holds, while its OPERAND is still walked) would
+have DOUBLED the status space had it been folded into the classifier (a skip
+state per `inGen` value); as a four-line paren-climb at the anchor it costs
+nothing and the operand keeps reaching through the ordinary ExpressionStatement
+→ ParenthesizedExpression → YieldExpression pass-through edges. Reach = the
+memoized classifier spineIyStatus/spineIyFold reproducing the two deleted walks
+arm-for-arm in ONE arm set (statement and expression node classes are disjoint,
+so no walk-identity channel is needed — unlike rounds 640/645), with IY_MEMBER
+as the class-member conduit (Method/Ctor/Get/Set bodies AND PropertyDeclaration
+initializers → IY_NON — this pass resets the flag for both, so the conduit needs
+no DECL/EXPR asymmetry and class EXPRESSIONS are never walked at all). Frozen
+quirks pinned both directions: the WHOLE for-head is walked (declaration-list
+initializers, condition, incrementor — wider than the round-641 Sr fold), as are
+if/while/do conditions, the switch subject, case expressions, catch and finally
+blocks, object-literal computed NAMES and spreads; object-literal METHOD bodies,
+static blocks, `with` bodies, catch VARIABLES and for-in/of INITIALIZERS are
+not. Fully syntactic — NO ambient sandwich (the leaf reads only its
+pos/source/fileName args); the run-level dispatch gate (`noImplicitAny ||
+strict`) becomes spineIyRunActive, the per-file dts skip rides spineIySetup;
+binderResults driver → the spine's partition view, gated `--partitionCheck 2`
+EQUIVALENT ×8. GATE NOTE: TS7057 fires 0 times across all 8 tsc-source profiles
+AND only 2 generated corpus files mention `yield` at all — so `--listAll` ×8
+proves PURE NON-PERTURBATION and the corpus is a WEAK gate here; the
+behavioral-equivalence burden rests on the 36 pins
+(M04ImplicitAnyYieldSpineMigrationTest), which were green against the LEGACY
+walker FIRST (36/36 on the first run — no calibration needed, the only mid-run
+addition being four decisive edge pins: the fn-expression body, the class
+property initializer, the objlit computed name/spread, and the never-walked
+objlit method body). Gates: 36 local pins
+(M04ImplicitAnyYieldSpineMigrationTest) green against the LEGACY pass FIRST,
+36/36 on the spine; suite 12,255 → 12,291/0 (3 skipped); `--listAll` ×8
+byte-identical pre-vs-post on all 8 profiles (sorted error lines; 46×7/94 —
+captured from a LEGACY build and a MIGRATION build of the same tree and
+diffed, not merely count-compared); `--partitionCheck 2` EQUIVALENT ×8;
+pass table 411 → 410 (`--passTiming` reports "410 passes recorded" and zero
+checkImplicitAnyYieldExpressions rows; checkSpine 21.1 s single-run, in-band
+with rounds 646–651's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`). M0.4 running total: top TWENTY-NINE tail passes migrated.
+NEXT (round-651 table, the top-29 rows gone; the tail stays FLAT — no row
+above 110 ms): #30 is **checkAbstractMemberAccessInConstructor 68.4 ms**,
+then checkIncDecTypeParamOperands 68.3, checkConflictMarkers 67.8,
+checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
+65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
+(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file). The
+SESSION TAIL: the #30 slot-move pre-gate LANDED —
+checkAbstractMemberAccessInConstructor (TS2715, a `this.X` reference inside a
+constructor body or class-field initializer where X is an abstract member of
+the surrounding class, own or inherited) moved intact from slot 27e to the
+post-spine slot. Coupling surface: self-contained — FULLY SYNTACTIC (member
+modifiers/names + heritage Identifier names + source text; NOT type-resolving →
+no first-touch hazard, no ambient install); its per-file
+buildClassDeclarationMap prepass is a FILE-scoped collector (the round-627
+migration shape); grep-verified NO pass scans/dedups/retracts TS2715 (this pass
+is the code's only mention of the code), and TS2715 fires 0 times on all 8
+profiles. Gates: suite 12,291/0; `--listAll` ×8 byte-identical pre-vs-post on
+all 8 profiles (46×7/94). NEXT session starts at its migration — the walk is a
+class-anchored routing recursion over a FILE-scoped classMap prepass, so the
+round-627 collector-prepass variant is the template (per-file setup state for
+the map + a memoized reach classifier for the `this.X` anchors, with the
+nested-function-body skip — deferred `this` — as frozen reach edges).
+
 **Round 651 (2026-07-24) — (M0.4) twenty-eighth tail-pass migration:
 checkAbstractMemberContext (TS1253 abstract properties + TS1244 abstract
 methods/accessors in a non-abstract class + TS7008 abstract property without a

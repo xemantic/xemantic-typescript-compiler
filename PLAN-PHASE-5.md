@@ -20,6 +20,61 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 661 (2026-07-25) — (M1)(b) THE DEPENDENCY-KEYED FENCE WORKS: 65.6 k
+serves against the global fence's 31.2 k, invalidations 34,359 → 197 — and it is
+blocked on exactly one number, 165 wrong serves.** Round 660 redefined (b) away
+from "fence per map"; this round implements the redefinition as a SHADOW
+classifier (probe-only, `--passTiming`) and the design is validated.
+
+**The key.** A walk of reference R reads what is reachable from R's ROOT NAME, so
+each memo entry records the FlowGraph identity plus the Type INSTANCE currently
+bound to that root in `currentLocalTypes` and in `narrowedDeclaredTypes`; a
+repeat is served while all three still match. The point is what that tolerates:
+a swap to a DIFFERENT scope map that still binds the root to the SAME Type
+instance is not an invalidation — and that is precisely the population the
+global fence discards (round 660's 34.4 k invalidated-but-identical repeats).
+
+    global fence:      serve  31,213   miss 79,835 (cold 45,476 + invalidated 34,359)
+    dependency-keyed:  serve  65,575   cold 45,476   invalidated 197   noPath 0
+                       (identical 65,359   structural 51   WRONG 165)
+
+At ~34 µs/walk (3,791 ms / 111,248) those 65,575 serves are **~2.2 s** — which
+independently reproduces round 660's walk-memo ceiling from a completely
+different direction, so the two estimates now corroborate rather than assume.
+
+**Two structural findings for the live design.** (1) The FlowGraph identity NEVER
+invalidated on its own — `depInvalidatedBy` is localType=189, localType+narrowed=8,
+**graph=0** — so carrying the graph in the key is free and the scope binding is
+the only real invalidator; that simplifies the live form. (2) **`depServeWrong`
+= 165 (0.25% of serves), and that counter is a GATE, not a tolerance.** The key
+is INCOMPLETE: the walk reads more than its root's binding —
+`currentFileLocals` / `currentParamBindingNames` / `currentShadowedNames` for
+resolution, other names' bindings through the aliased-condition back-walk, and
+`getTypeOfExpression` state inside `narrowByAssignmentRhs`.
+
+**What (b1) must therefore be, and what it must NOT be.** Not "add the
+dependencies I can think of" — that is exactly how these 165 got here. Instead
+have the walk RECORD its read-set (the names it actually consults in the
+localTypes family, plus the graph) and key validity on that set. And the
+falsifiable form matters: if a recorded read-set cannot drive `depServeWrong` to
+0, the honest conclusion is that the walk's dependencies are not
+name-enumerable, (c) stays dead, and that verdict gets written down — rather
+than the gate being loosened to 0.25%. Sequenced before (b2) because a memo that
+serves wrong results is worthless however canonical its outputs are.
+
+**Self-inflicted stumble worth recording:** the shadow store hit the
+documented pre-`init` field trap. I declared it next to its function deep in
+Checker.kt, so it was still null while `init` ran the whole pipeline — NPE on the
+first walk, and the stack line (38135) needed the +65536 wrap to read. CLAUDE.md
+warns about this in two places and I still walked into it; the field now lives in
+the pre-init probe block with a comment naming the trap. General rule for the
+next agent: **any new Checker field a probe or check touches goes in the pre-init
+block, no matter where its consumer lives.**
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only so no output can change
+(the epoch/shadow machinery is read solely under `--passTiming`); warning-clean.
+NEXT: (M1)(b1) — the recorded read-set, same shadow gate.
+
 **Round 660 (2026-07-25) — (M1)(a) THE EPOCH-CHURN ATTRIBUTION: the item's
 premise was wrong in two ways, "fence per map" is dead before it was tried, and
 M1's prize is ~11–13%, not the 30–45% the queue claimed.** The first (M1) step
@@ -636,84 +691,6 @@ concrete / non-this negative controls, scope accumulation across class + method
 an if-block registers for the whole body — yet never descends a nested function
 body, while a for-INIT declaration does register).
 
-**Round 652 (2026-07-24) — (M0.4) twenty-ninth tail-pass migration:
-checkImplicitAnyYieldExpressions (TS7057 — a `yield` whose result type is
-implicitly `any` because its containing generator FUNCTION DECLARATION lacks a
-return-type annotation; 107.2 ms at the fresh round-651 table — the #29
-per-file tail pass) is ON THE SPINE; the legacy driver + the
-walkYield7057Stmts/walkYield7057Stmt/walkYield7057Expr recursion (~154 lines —
-whose SOLE job was to REACH every expression position while threading the
-downward `inGen` flag) DELETED; only the diagnostic-building leaf survives
-(emitImplicitAnyYield), anchor-called at YieldExpression enters.** Shape = the
-round-641 BOOLEAN-AS-STATUS variant (IY_GEN / IY_NON carry `inGen`), explicitly
-NOT round 651's ambient climb: `inGen` is RESET by every nested function-like,
-so it is not monotone in the ancestor chain and no cheaper separate climb can
-re-derive it — the migrator's rule of thumb is now **monotone downward boolean →
-separate climb (651); reset-bearing downward boolean → classifier status
-(641/652)**. THE NEW TEMPLATE MOVE — **a frozen EMISSION SKIP whose condition is
-decidable from the ANCHOR's OWN parent chain migrates as an ANCHOR-SIDE GATE,
-not as a reach state.** Here the round-479 discarded-result rule (a
-statement-position `yield x;` — parentheses transparent — draws nothing because
-tsc's `expressionResultIsUnused` holds, while its OPERAND is still walked) would
-have DOUBLED the status space had it been folded into the classifier (a skip
-state per `inGen` value); as a four-line paren-climb at the anchor it costs
-nothing and the operand keeps reaching through the ordinary ExpressionStatement
-→ ParenthesizedExpression → YieldExpression pass-through edges. Reach = the
-memoized classifier spineIyStatus/spineIyFold reproducing the two deleted walks
-arm-for-arm in ONE arm set (statement and expression node classes are disjoint,
-so no walk-identity channel is needed — unlike rounds 640/645), with IY_MEMBER
-as the class-member conduit (Method/Ctor/Get/Set bodies AND PropertyDeclaration
-initializers → IY_NON — this pass resets the flag for both, so the conduit needs
-no DECL/EXPR asymmetry and class EXPRESSIONS are never walked at all). Frozen
-quirks pinned both directions: the WHOLE for-head is walked (declaration-list
-initializers, condition, incrementor — wider than the round-641 Sr fold), as are
-if/while/do conditions, the switch subject, case expressions, catch and finally
-blocks, object-literal computed NAMES and spreads; object-literal METHOD bodies,
-static blocks, `with` bodies, catch VARIABLES and for-in/of INITIALIZERS are
-not. Fully syntactic — NO ambient sandwich (the leaf reads only its
-pos/source/fileName args); the run-level dispatch gate (`noImplicitAny ||
-strict`) becomes spineIyRunActive, the per-file dts skip rides spineIySetup;
-binderResults driver → the spine's partition view, gated `--partitionCheck 2`
-EQUIVALENT ×8. GATE NOTE: TS7057 fires 0 times across all 8 tsc-source profiles
-AND only 2 generated corpus files mention `yield` at all — so `--listAll` ×8
-proves PURE NON-PERTURBATION and the corpus is a WEAK gate here; the
-behavioral-equivalence burden rests on the 36 pins
-(M04ImplicitAnyYieldSpineMigrationTest), which were green against the LEGACY
-walker FIRST (36/36 on the first run — no calibration needed, the only mid-run
-addition being four decisive edge pins: the fn-expression body, the class
-property initializer, the objlit computed name/spread, and the never-walked
-objlit method body). Gates: 36 local pins
-(M04ImplicitAnyYieldSpineMigrationTest) green against the LEGACY pass FIRST,
-36/36 on the spine; suite 12,255 → 12,291/0 (3 skipped); `--listAll` ×8
-byte-identical pre-vs-post on all 8 profiles (sorted error lines; 46×7/94 —
-captured from a LEGACY build and a MIGRATION build of the same tree and
-diffed, not merely count-compared); `--partitionCheck 2` EQUIVALENT ×8;
-pass table 411 → 410 (`--passTiming` reports "410 passes recorded" and zero
-checkImplicitAnyYieldExpressions rows; checkSpine 21.1 s single-run, in-band
-with rounds 646–651's 20.0–21.5 s); warning-clean (`--rerun-tasks`, zero `w:`). M0.4 running total: top TWENTY-NINE tail passes migrated.
-NEXT (round-651 table, the top-29 rows gone; the tail stays FLAT — no row
-above 110 ms): #30 is **checkAbstractMemberAccessInConstructor 68.4 ms**,
-then checkIncDecTypeParamOperands 68.3, checkConflictMarkers 67.8,
-checkImplicitAnyNewExpressions 66.9, checkArgumentsInClassFieldInitializers
-65.0, checkSpreadPropertyOverrides 60.4, checkTypeParamTypedOps 60.0
-(checkCrossFileModuleAugmentationDuplicates stays SKIP — cross-file). The
-SESSION TAIL: the #30 slot-move pre-gate LANDED —
-checkAbstractMemberAccessInConstructor (TS2715, a `this.X` reference inside a
-constructor body or class-field initializer where X is an abstract member of
-the surrounding class, own or inherited) moved intact from slot 27e to the
-post-spine slot. Coupling surface: self-contained — FULLY SYNTACTIC (member
-modifiers/names + heritage Identifier names + source text; NOT type-resolving →
-no first-touch hazard, no ambient install); its per-file
-buildClassDeclarationMap prepass is a FILE-scoped collector (the round-627
-migration shape); grep-verified NO pass scans/dedups/retracts TS2715 (this pass
-is the code's only mention of the code), and TS2715 fires 0 times on all 8
-profiles. Gates: suite 12,291/0; `--listAll` ×8 byte-identical pre-vs-post on
-all 8 profiles (46×7/94). NEXT session starts at its migration — the walk is a
-class-anchored routing recursion over a FILE-scoped classMap prepass, so the
-round-627 collector-prepass variant is the template (per-file setup state for
-the map + a memoized reach classifier for the `this.X` anchors, with the
-nested-function-body skip — deferred `this` — as frozen reach edges).
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1287,19 +1264,40 @@ structural item instead of landing alone.**
     measured from the other side. Kept: correct, sharpens the blame table, and
     the live memo will need it. (The epoch is PROBE-ONLY today — read only under
     `--passTiming` — so none of this can change compiler behaviour.)
-  - [ ] **(b) DEPENDENCY-KEYED validity, not a finer fence** (this is what (a)
-    redefined). A walk of reference R reads only the state REACHABLE FROM R's
-    root name, so memo validity should be keyed on that name's own generation,
-    not on a program-wide fence: give the localTypes family a per-NAME
-    generation counter (bump on put/remove of that key, and on a swap treat the
-    whole map as a new generation id), record with each memo entry the
-    (rootName, generation) pair it read, and serve while those match. Second
-    half unchanged from the original item: canonicalize narrowing OUTPUTS so
-    filters over interned unions yield interned results (literal interning;
-    instantiated-member caching ON the Type.Reference, deleting
-    resolveGenericPropertyType's fresh-minting) — without that, even a valid
-    memo hit returns a fresh-but-equal Type and the downstream id-keyed caches
-    still miss. Gate each step SHADOW-FIRST: `hitWRONG` must stay 0.
+  - [~] **(b) DEPENDENCY-KEYED validity — the key is VALIDATED in shadow
+    (round 661), blocked on completing its read-set.** Implemented as a
+    probe-only classifier: each memo entry records the FlowGraph identity plus
+    the Type INSTANCE bound to the reference's ROOT NAME in currentLocalTypes
+    and narrowedDeclaredTypes, and a repeat is served while all three match.
+    Result vs the global fence — **serve 31,213 → 65,575** (identical 65,359,
+    structural 51), **invalidations 34,359 → 197**, cold unchanged at 45,476,
+    noPath 0. At ~34 µs/walk that is **~2.2 s**, independently reproducing
+    round 660's ceiling from another direction. Two structural findings: the
+    FlowGraph identity NEVER invalidated alone (`depInvalidatedBy` =
+    localType 189, localType+narrowed 8, graph 0) so carrying it is free and the
+    scope binding is the only real invalidator; **but `depServeWrong` = 165
+    (0.25%), and that counter is a GATE, not a tolerance** — the key is
+    incomplete because the walk reads more than its root's binding
+    (currentFileLocals / currentParamBindingNames / currentShadowedNames for
+    resolution, other names' bindings via aliased-condition back-walks,
+    getTypeOfExpression state inside narrowByAssignmentRhs).
+    - [ ] **(b1) RECORDED READ-SET — the next sub-step.** Do NOT guess more
+      dependencies (that is how the 165 got there): have the walk LOG the names
+      it actually consults (a small per-walk read-set: root plus every name
+      looked up in the localTypes family, plus the graph), key validity on that
+      set, and re-run the shadow. The gate is unchanged: `depServeWrong` must
+      reach 0 before anything goes live. If a recorded read-set cannot reach 0,
+      the honest conclusion is that the walk's dependencies are not
+      name-enumerable and (c) stays dead — write that verdict down rather than
+      loosening the gate.
+    - [ ] **(b2) canonicalize narrowing OUTPUTS** (unchanged from the original
+      item, and still what both earlier memo dead-ends were blocked on): filters
+      over interned unions must yield interned results; literal interning;
+      instantiated-member caching ON the Type.Reference, deleting
+      resolveGenericPropertyType's fresh-minting. Without it a valid memo hit
+      returns a fresh-but-equal Type and every downstream id-keyed cache still
+      misses. Note the round-661 numbers already count `structural` serves
+      separately (51) — that is this problem in miniature.
   - [ ] **(c) then the (f2) per-(reference, flowNode) fold, shadow-first, then
     (f1).** The round-595/599 instruments (epoch, shadowExprMemo, walkShadow)
     are in place and now attribute correctly. Revert rules per the INV ground
