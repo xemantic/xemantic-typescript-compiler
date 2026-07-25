@@ -20,6 +20,50 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 679 (2026-07-25) — v1 RE-VERIFIED at HEAD and the post-v1 backlog
+UNPARKED; the verification itself turned up the highest-impact remaining gap.**
+
+**v1, checked rather than assumed.** It was declared at round 481; this round
+re-ran the three legs at HEAD, 200 rounds later. All 8 profiles: exit 0, **every
+input file emitted** (81/81, 312/312, 84/84, 78/78, 274/274, 252/252, 80/80,
+88/88), zero crash frames, `--listAll` steady at 46 on seven and 94 on harness.
+And the diagnostics are not merely "offline artifacts" in a vague sense — every
+single one is a missing Node ambient (`process`, `Buffer`, `require`, `NodeJS`,
+`console`, `BufferEncoding`) under a tsconfig that sets `"types": []`, which
+DISABLES type acquisition by design. Our handling of that is correct tsc
+semantics. So the FP leg is genuinely clean.
+
+**The backlog was parked on a condition that came true 200 rounds ago.** The
+Post-v1 section says the loop skips it "until v1 lands". v1 landed at round 481.
+Nothing ever re-read the condition, so ~200 rounds of work went to M5/INV while
+the section that now holds the live work sat marked parked. It is unparked. A
+queue-hygiene failure mode worth naming: **a parked item's unpark CONDITION
+needs an owner, or it never fires.**
+
+**M4.8 — found while proving the FP leg, and it is the big one.** Trying to make
+the FP claim decisive rather than caveated, I installed `@types/node` and turned
+on `"types": ["node"]`. The diagnostics did not move — 46 before, 46 after. The
+program went from 78 files to **79**. That one file is `@types/node/index.d.ts`,
+which is 64 `/// <reference path="…" />` lines and little else; `globals.d.ts`,
+one of those 64, is what declares `var process` and `namespace NodeJS`. Our
+reference-directive handling (`TypeScriptCompiler.kt` ~2168) only ORDERS files
+already in the program, and only under `outFile`; tsc's `processReferencedFiles`
+ADDS them. So we cannot consume `@types/node` — or any `@types` package built
+the same way, which is most of them. Queued as M4.8 at the head of the backlog.
+
+**Worth noting about the method:** the check that produced this was an attempt
+to strengthen a claim I already believed. "46 env-legit artifacts" was true, and
+re-verifying it was still the highest-value thing available, because the *way*
+it failed to reach zero is what exposed the gap.
+
+**Gates.** No production code changed this round. Emit verification, `--listAll`
+×8, and the `@types/node` probe are all measurements; the probe's temporary
+tsconfig is deleted and the fixture install is gitignored under `build/`.
+
+**NEXT:** M4.8 — make `/// <reference path|types>` pull files into the program.
+
+---
+
 **Round 678 (2026-07-25) — two fixes: the const-enum family is ACTUALLY closed
 (true gap 34 → 0) and a printer blank-line defect cleared 66 hunks. Byte-identical
 files 31 → 33/78. Round 677's "closed at parity" claim was WRONG — the gate's own
@@ -3209,13 +3253,37 @@ Numeric targets (proposed, doc § 6): post INV.4/5 single-threaded compiler prof
 ≤ 10 s (≈ JS tsc) + harness RSS ≤ 1 GB; post INV.6 compiler ≤ 5 s on 4 cores;
 INV.7 stretch: native cold ≤ 2× tsgo.
 
-### Post-v1 backlog — the "any TypeScript project" horizon (parked 2026-07-03)
+### Post-v1 backlog — the "any TypeScript project" horizon (UNPARKED round 679)
 
-The top-to-bottom loop SKIPS this section until v1 (the 8 tsc-source profiles at zero
-FPs) lands. None of these block self-compiling tsc. Each returns to the live queue
-when v1 lands — or earlier if a live item genuinely needs one (promote per protocol,
-with a session note saying why). Item IDs are stable; session notes reference them.
+**UNPARKED 2026-07-25 (round 679).** v1 was declared at round 481 and was
+RE-VERIFIED at HEAD this round, 200 rounds later: all 8 profiles exit 0, emit
+EVERY input file (81/81, 312/312, 84/84, 78/78, 274/274, 252/252, 80/80,
+88/88), zero crash frames, and every one of the 140 diagnostics is a missing
+Node ambient (`process`/`Buffer`/`require`/`NodeJS`/`console`) under a
+`"types": []` tsconfig — i.e. config/env artifacts, not compiler faults. With
+EP.2c skipped by the owner and the remaining M5/INV items parked or
+zero-value on this box, **this section is now the live queue**.
 
+(Historical note: the loop was to skip this section until v1 landed. It landed
+at 481; the section stayed parked ~200 rounds because nothing re-read the
+condition. Worth remembering as a queue-hygiene failure mode in its own right.)
+
+- [ ] **M4.8 `/// <reference path|types="…" />` must ADD files to the program**
+  (found round 679; the single highest-impact gap for "any TypeScript project").
+  Our handling — `TypeScriptCompiler.kt` ~2168, gated on
+  `includeReferencePathDeps`, i.e. `outFile` only — merely ORDERS files ALREADY
+  in `allTsFileNames`. tsc's `processReferencedFiles` **pulls the referenced
+  file into the program**. Consequence, measured: `@types/node`'s `index.d.ts`
+  is 64 `/// <reference path>` lines and little else, with `globals.d.ts`
+  declaring `var process` and `namespace NodeJS` — so enabling
+  `"types": ["node"]` on the compiler profile took the program from 78 to just
+  **79** files and left all 46 diagnostics standing. Every real Node project is
+  affected the same way. Fixture already installed (gitignored) at
+  `build/bench/tsc-project-637d5746/node_modules/@types/node`; the probe config
+  was a temporary `tsconfig.node.json` (deleted — recreate by copying the
+  profile tsconfig with `"types": ["node"]`). The dashboard tsconfig
+  deliberately keeps `"types": []` and our handling of THAT is correct per tsc
+  semantics — do not "fix" the baseline; add a separate profile if one is wanted.
 - [ ] **M2.4 DOM libs as an opt-in set** (dom.generated.d.ts is 1 MB+ — measure the
   parse/bind cost; ties into the shared-snapshot design). tsc's sources don't
   reference DOM — post-v1.
