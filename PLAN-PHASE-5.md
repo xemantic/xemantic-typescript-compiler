@@ -73,7 +73,28 @@ checkIllegalSuperCallsInNestedFunctions 62.7, checkTypeArgumentConstraints
 (checkCrossFileModuleAugmentationDuplicates, 109.7 ms, stays SKIP —
 cross-file). Before picking the next one, grep its driver for a SHARED walker
 call: another fold-in is worth two orders of magnitude less work than a
-classifier migration.
+classifier migration. THE SESSION TAIL — the #36 pass
+(checkTypeParamTypedOps, 71.0 ms) is PREPARED and is NOT a fold-in (it owns
+its own statement+expression recursion): no slot-move pre-gate is needed
+(it already sits AFTER checkSpine at slot 14''g) and its 33 migration pins
+are green against the LEGACY walkers on the FIRST run (suite 12,507/0).
+The shape is diagnosed: a DOWNWARD-MAP migration of the round-635
+ORDER-DEPENDENT flavour — `tpVars` (name → TypeParameter AST) is MUTATED in
+STATEMENT ORDER (only statements after a `var x: T` see the recording), it
+LEAKS through if/loop/try/namespace descents (one map object threaded down),
+and every FUNCTION-LIKE body REBUILDS it from its own parameters so nothing
+leaks INWARD — plus the pass's one ambient, `withInternedTpScope` re-pushing
+the TP scope at each fn-like body (and `currentFileLocals = result.locals`
+per file, which checkSpine already installs). Reach is unusually NARROW and
+pinned both directions: class DECLARATION method/ctor/get/set bodies are
+walked, while arrow and function-EXPRESSION bodies, class property
+initializers, `for` HEADS and `switch` statements have NO arm at all.
+Whether the order-dependence needs round 635's PUSH-based LIFO frames or
+just a pull-based per-fn-body rebuild is the open design call: the map's
+only writers are VariableStatement declarations, so a pull rebuild would
+have to fold PRECEDING SIBLINGS at every enclosing list level — cheap if
+anchors stay rare (the round-644 pre-gate trick: anchors pre-filter on the
+receiver being a plain Identifier before the climb).
 
 **Round 656 (2026-07-25) — (M0.4) thirty-third tail-pass migration:
 checkArgumentsInClassFieldInitializers (TS2815 — an `arguments` reference in a
