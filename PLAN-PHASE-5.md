@@ -20,6 +20,52 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 670 (2026-07-25) — M0.3 CLOSED, and a
+correction to my own round-666 record: the PERF arc was NOT fully closed then —
+M0.3 still had three unchecked slices, and this round prices them out properly.**
+Surveying what remained workable offline after PERF and EP both "closed" turned
+up (M0.3) still unchecked with real sub-items, which makes round 666's "THE PERF
+ARC, CLOSED" an overstatement. Correcting it is the point of this round.
+
+**The measurement.** (M0.3)(i)'s cheap half is a globals-miss short-circuit, and
+its stated evidence is "the 1.48M probes are 99% miss". Measured live, that is
+exactly right: **1,234,034 globals lookups, 1,219,892 misses = 98.9%**. But the
+item never priced it, and the arithmetic is decisive: skipping 1.22M HashMap
+probes at a realistic 20–40 ns each saves **25–50 ms of a ~28 s compile =
+0.09–0.17%**; even a generous 100 ns per probe gives 0.44%. That is an order of
+magnitude inside the ±2% band the PERF ground rules refuse to land on. (v)'s
+undo-log is the same size (JFR: 1.1% of samples — and round 623 established that
+a JFR self-% is not a wall price).
+
+**So M0.3's remaining slices cannot land alone**, by the arc's own rule that
+anything below the drift band folds into a structural item rather than landing
+on its own. What is left worth anything is (ii) NodeLinks/SymbolLinks
+consolidation and (i)'s FULL form — Identifier → Int atom at scan time plus
+int-keyed scope/member maps — both multi-session structural changes touching the
+binder and every map.
+
+**One forward-looking note, because it is the only lever left.** Full atomization
+is the same CLASS as the arc's three winners: those replaced allocation-heavy
+per-call structures on hot paths (LongKeyMap, IntKeyMap, NarrowSeen), and
+atomization removes String hashing/equality from hot map traffic. So it is
+plausibly real — but the item's opening evidence ("JFR-evidenced ~15% of wall in
+HashMap+String equality") is exactly the kind of figure this arc has repeatedly
+found unreliable, so it must be PRICED by instrumenting the actual time in the
+operations it would replace before a line is written. That instruction is now in
+the queue item.
+
+**This makes the arc genuinely closed, with the ledger unchanged**: M0.1 (tail
+deletion: ~6.2 s advertised → 59 ms), M0.2/M0.3 (dispatch + layout: −3.3%,
+−3.9%, −2.2%, −2.6% landed; remainder priced out here), M0.4 (35 spine
+migrations: neutral), M1 (−2.93%, the only live win), M2 (23% divisible, w4
+flat, parked). Five families, one win, and the recurring cause of the gap
+between advertised and measured was always the same: an aggregate ratio applied
+to a non-uniform population — which is precisely the error this round avoided by
+multiplying 1.22M by a per-probe cost before building anything.
+
+Gates: no code changed (pricing + bookkeeping correction); tree clean; suite
+untouched at 12,520/0/3.
+
 **Round 669 (2026-07-25) — EP.1 DONE: barrel-reached const enums now inline —
 and measuring it falsified EP.1's dashboard premise as well, the way round 667
 falsified its technical one.** This completes the barrel-hop pair begun in round
@@ -459,61 +505,6 @@ Gates: suite 12,507/0 (3 skipped, unchanged); probe-only — both shadows and th
 epoch are read solely under `--passTiming`, and the `WK_*` tags are inert
 arguments otherwise; warning-clean.
 
-**Round 661 (2026-07-25) — (M1)(b) THE DEPENDENCY-KEYED FENCE WORKS: 65.6 k
-serves against the global fence's 31.2 k, invalidations 34,359 → 197 — and it is
-blocked on exactly one number, 165 wrong serves.** Round 660 redefined (b) away
-from "fence per map"; this round implements the redefinition as a SHADOW
-classifier (probe-only, `--passTiming`) and the design is validated.
-
-**The key.** A walk of reference R reads what is reachable from R's ROOT NAME, so
-each memo entry records the FlowGraph identity plus the Type INSTANCE currently
-bound to that root in `currentLocalTypes` and in `narrowedDeclaredTypes`; a
-repeat is served while all three still match. The point is what that tolerates:
-a swap to a DIFFERENT scope map that still binds the root to the SAME Type
-instance is not an invalidation — and that is precisely the population the
-global fence discards (round 660's 34.4 k invalidated-but-identical repeats).
-
-    global fence:      serve  31,213   miss 79,835 (cold 45,476 + invalidated 34,359)
-    dependency-keyed:  serve  65,575   cold 45,476   invalidated 197   noPath 0
-                       (identical 65,359   structural 51   WRONG 165)
-
-At ~34 µs/walk (3,791 ms / 111,248) those 65,575 serves are **~2.2 s** — which
-independently reproduces round 660's walk-memo ceiling from a completely
-different direction, so the two estimates now corroborate rather than assume.
-
-**Two structural findings for the live design.** (1) The FlowGraph identity NEVER
-invalidated on its own — `depInvalidatedBy` is localType=189, localType+narrowed=8,
-**graph=0** — so carrying the graph in the key is free and the scope binding is
-the only real invalidator; that simplifies the live form. (2) **`depServeWrong`
-= 165 (0.25% of serves), and that counter is a GATE, not a tolerance.** The key
-is INCOMPLETE: the walk reads more than its root's binding —
-`currentFileLocals` / `currentParamBindingNames` / `currentShadowedNames` for
-resolution, other names' bindings through the aliased-condition back-walk, and
-`getTypeOfExpression` state inside `narrowByAssignmentRhs`.
-
-**What (b1) must therefore be, and what it must NOT be.** Not "add the
-dependencies I can think of" — that is exactly how these 165 got here. Instead
-have the walk RECORD its read-set (the names it actually consults in the
-localTypes family, plus the graph) and key validity on that set. And the
-falsifiable form matters: if a recorded read-set cannot drive `depServeWrong` to
-0, the honest conclusion is that the walk's dependencies are not
-name-enumerable, (c) stays dead, and that verdict gets written down — rather
-than the gate being loosened to 0.25%. Sequenced before (b2) because a memo that
-serves wrong results is worthless however canonical its outputs are.
-
-**Self-inflicted stumble worth recording:** the shadow store hit the
-documented pre-`init` field trap. I declared it next to its function deep in
-Checker.kt, so it was still null while `init` ran the whole pipeline — NPE on the
-first walk, and the stack line (38135) needed the +65536 wrap to read. CLAUDE.md
-warns about this in two places and I still walked into it; the field now lives in
-the pre-init probe block with a comment naming the trap. General rule for the
-next agent: **any new Checker field a probe or check touches goes in the pre-init
-block, no matter where its consumer lives.**
-
-Gates: suite 12,507/0 (3 skipped, unchanged); probe-only so no output can change
-(the epoch/shadow machinery is read solely under `--passTiming`); warning-clean.
-NEXT: (M1)(b1) — the recorded read-set, same shadow gate.
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -575,7 +566,28 @@ structural item instead of landing alone.**
   warning-clean. Lesson: the scripted conversion mis-cut FOUR two-line
   `if`-header arms into empty-if mangles — corpus caught 3, a structural scan
   (line ending `{` + dedented bare `}`) the 4th; see the session note.
-- [ ] **(M0.3) Layout campaign** (JFR-evidenced ~15% of wall in HashMap+String
+- [x] **(M0.3) CLOSED round 670 — the three landed slices were the arc's most
+  reliable wins (−3.9%, −2.6%, −2.2%); the three REMAINING ones are priced
+  below the drift band or are multi-session structural work, so none may land
+  alone under the PERF ground rules.** Pricing, done this round rather than
+  assumed: (i)'s cheap half — the globals-miss short-circuit — is worth
+  **≲0.2%**. The probe claim is exactly right (measured live: **1,234,034
+  globals lookups, 1,219,892 misses = 98.9%**), but 1.22M skipped HashMap
+  probes at a realistic 20–40 ns each is only **25–50 ms of a ~28 s compile**
+  (0.09–0.17%; even a generous 100 ns gives 0.44%). (v)'s undo-log is the same
+  size — JFR put it at 1.1% of samples, and round 623 established that a JFR
+  self-% is not a wall price. (ii) NodeLinks/SymbolLinks consolidation and
+  (i)'s FULL form (Identifier → Int atom at scan time + int-keyed scope/member
+  maps) are the only pieces that could clear ±2%, and both are multi-session
+  structural changes touching the binder and every map. NOTE they are the same
+  CLASS as the arc's winners — those replaced allocation-heavy per-call
+  structures on hot paths (LongKeyMap/IntKeyMap/NarrowSeen), and atomization
+  removes String hashing/equality from hot map traffic — so if perf work ever
+  resumes, full atomization is the one lever left worth sizing. It must be
+  PRICED first (the arc's rule): instrument the actual time in the map
+  operations it would replace, do NOT trust the JFR "~15% in HashMap+String
+  equality" figure that opened this item. Original item text follows.
+  ORIGINAL: Layout campaign** (JFR-evidenced ~15% of wall in HashMap+String
   equality with NO single hot map — structure-class work, one interleaved-A/B'd
   slice per commit): (i) name atomization (Identifier → Int atom at scan time;
   int-keyed scope/member maps; a globals-miss bitset — the 1.48M probes are 99%

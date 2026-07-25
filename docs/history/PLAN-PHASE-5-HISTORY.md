@@ -1,3 +1,58 @@
+**Round 661 (2026-07-25) — (M1)(b) THE DEPENDENCY-KEYED FENCE WORKS: 65.6 k
+serves against the global fence's 31.2 k, invalidations 34,359 → 197 — and it is
+blocked on exactly one number, 165 wrong serves.** Round 660 redefined (b) away
+from "fence per map"; this round implements the redefinition as a SHADOW
+classifier (probe-only, `--passTiming`) and the design is validated.
+
+**The key.** A walk of reference R reads what is reachable from R's ROOT NAME, so
+each memo entry records the FlowGraph identity plus the Type INSTANCE currently
+bound to that root in `currentLocalTypes` and in `narrowedDeclaredTypes`; a
+repeat is served while all three still match. The point is what that tolerates:
+a swap to a DIFFERENT scope map that still binds the root to the SAME Type
+instance is not an invalidation — and that is precisely the population the
+global fence discards (round 660's 34.4 k invalidated-but-identical repeats).
+
+    global fence:      serve  31,213   miss 79,835 (cold 45,476 + invalidated 34,359)
+    dependency-keyed:  serve  65,575   cold 45,476   invalidated 197   noPath 0
+                       (identical 65,359   structural 51   WRONG 165)
+
+At ~34 µs/walk (3,791 ms / 111,248) those 65,575 serves are **~2.2 s** — which
+independently reproduces round 660's walk-memo ceiling from a completely
+different direction, so the two estimates now corroborate rather than assume.
+
+**Two structural findings for the live design.** (1) The FlowGraph identity NEVER
+invalidated on its own — `depInvalidatedBy` is localType=189, localType+narrowed=8,
+**graph=0** — so carrying the graph in the key is free and the scope binding is
+the only real invalidator; that simplifies the live form. (2) **`depServeWrong`
+= 165 (0.25% of serves), and that counter is a GATE, not a tolerance.** The key
+is INCOMPLETE: the walk reads more than its root's binding —
+`currentFileLocals` / `currentParamBindingNames` / `currentShadowedNames` for
+resolution, other names' bindings through the aliased-condition back-walk, and
+`getTypeOfExpression` state inside `narrowByAssignmentRhs`.
+
+**What (b1) must therefore be, and what it must NOT be.** Not "add the
+dependencies I can think of" — that is exactly how these 165 got here. Instead
+have the walk RECORD its read-set (the names it actually consults in the
+localTypes family, plus the graph) and key validity on that set. And the
+falsifiable form matters: if a recorded read-set cannot drive `depServeWrong` to
+0, the honest conclusion is that the walk's dependencies are not
+name-enumerable, (c) stays dead, and that verdict gets written down — rather
+than the gate being loosened to 0.25%. Sequenced before (b2) because a memo that
+serves wrong results is worthless however canonical its outputs are.
+
+**Self-inflicted stumble worth recording:** the shadow store hit the
+documented pre-`init` field trap. I declared it next to its function deep in
+Checker.kt, so it was still null while `init` ran the whole pipeline — NPE on the
+first walk, and the stack line (38135) needed the +65536 wrap to read. CLAUDE.md
+warns about this in two places and I still walked into it; the field now lives in
+the pre-init probe block with a comment naming the trap. General rule for the
+next agent: **any new Checker field a probe or check touches goes in the pre-init
+block, no matter where its consumer lives.**
+
+Gates: suite 12,507/0 (3 skipped, unchanged); probe-only so no output can change
+(the epoch/shadow machinery is read solely under `--passTiming`); warning-clean.
+NEXT: (M1)(b1) — the recorded read-set, same shadow gate.
+
 **Round 660 (2026-07-25) — (M1)(a) THE EPOCH-CHURN ATTRIBUTION: the item's
 premise was wrong in two ways, "fence per map" is dead before it was tried, and
 M1's prize is ~11–13%, not the 30–45% the queue claimed.** The first (M1) step
