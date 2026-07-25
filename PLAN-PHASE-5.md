@@ -20,6 +20,65 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 655 (2026-07-25) — (M0.4) thirty-second tail-pass migration:
+checkImplicitAnyNewExpressions (TS7009 — `new F()` whose target `F` is a plain
+FUNCTION symbol, so it carries no construct signature and the expression
+implicitly has type `any`; 66.9 ms at the round-651 table — the #33 row, #32
+having been the not-spine-material checkConflictMarkers) is ON THE SPINE; the
+driver and the whole walkNewImplicitAnyStmts / walkNewImplicitAnyStmt /
+walkNewImplicitAnyClassMember / walkNewImplicitAnyInExpr recursion (~8.8 KB) are
+DELETED and the emission leaf (checkNewExprImplicitAny) is anchor-called at
+NewExpression enters.** THE SIMPLEST MIGRATION CLASS, worth naming alongside
+round 654's structural twin: **a pass whose walk threads NO DOWNWARD VALUE AT
+ALL — only the invariant `source`/`fileName` pair — needs no ctx rebuild, no
+frames, no leave hook and no status channel; the entire migration is a memoized
+BINARY reach classifier plus an anchor.** The whole zoo of downward machinery
+accumulated since round 624 (pull-based ctx folds, per-boundary memos, LIFO
+frames, boolean-as-status, ambient climbs, INT multiplicities) collapses to
+nothing when the legacy recursion's parameter list is constant, and the tell is
+exactly that: grep the deleted walker's signature — if every recursive call
+passes the same arguments it received, the migration is spineDelStatus (round
+649) with a different edge set. Here reach is `spineNaStatus` over `spineNaEdge`
+(the deleted arms verbatim), the per-file gates ride setup (`spineNaRunActive` =
+the legacy `noImplicitAny || strict` dispatch gate; the `.d.ts`/JS-like skips
+are `spineNaSetup`'s file gate), and the leaf's ONE ambient read
+(`currentFileLocals ?: globals` on the callee name — flags-only, never
+`getTypeOfSymbol`, so no first-touch hazard) is reproduced by a PER-DISPATCH
+install of the FILE's own binder locals. That last choice is deliberate and is
+the second small lesson: where rounds 624/625/631/649 captured the spine-entry
+RESTING `currentFileLocals` (because their legacy slot ran outside the spine's
+per-file install), this pass's legacy driver installed `result.locals` ITSELF —
+so the faithful reproduction is the file's own locals, which is ALSO immune to
+any other handler's ambient rather than depending on the spine's resting value
+staying untouched. Frozen reach quirks pinned in BOTH directions: class
+EXPRESSIONS, `<T>expr` type assertions, `satisfies` casts, tagged templates,
+parameter DEFAULTS and class STATIC BLOCKS are NOT walked (a `new F()` inside
+them is unreached, not merely unnamed), while class-DECLARATION property
+initializers, objlit method/accessor bodies, `for`-head DECL-LIST initializers
+and switch case EXPRESSIONS ARE — the last three being exactly where this
+classifier DIVERGES from the same-shaped round-649 `del` one, which is the arm
+diff a transcription would have got wrong (the two walkers look alike; they are
+not). Fully syntactic otherwise — no flow, no type resolution, no
+currentCheckFileName. The legacy binderResults driver → the spine's partition
+view, gated `--partitionCheck 2` EQUIVALENT ×8 (the round-633 rule). GATE NOTE:
+TS7009 fires 0 times across all 8 tsc-source profiles (real code does not `new`
+a plain function), and the generated corpus's TS7009 baselines are
+`.errors.txt` subtests, so `--listAll` ×8 pins PURE NON-PERTURBATION and the 37
+pins carry the behavioral-equivalence burden. Gates: 37 local pins
+(M04ImplicitAnyNewSpineMigrationTest, written earlier this session green against
+the LEGACY walker at its slot-move slot) 37/37 on the spine on the FIRST run —
+no calibration; suite 12,384 → 12,421/0 (3 skipped); `--listAll` ×8
+byte-identical vs the pre-migration capture (46×7/94, captured from the legacy
+build and re-captured from the migration build); `--partitionCheck 2` EQUIVALENT
+×8; pass table 408 → 407 (zero checkImplicitAnyNewExpressions rows; checkSpine
+20.8 s — in-band); warning-clean. M0.4 running total: top THIRTY-TWO tail passes
+migrated. NEXT (fresh round-655 table, the migrated rows gone):
+checkArgumentsInClassFieldInitializers 82.9 ms, checkTypeParamTypedOps 72.0,
+checkArrayToClassCastOverlap 69.4, checkIllegalSuperCallsInNestedFunctions 62.2
+(checkCrossFileModuleAugmentationDuplicates, 106.9 ms, stays SKIP — cross-file
+aggregation, not per-file spine material); the tail remains FLAT — no per-file
+row above 83 ms.
+
 **Round 654 (2026-07-25) — (M0.4) thirty-first tail-pass migration:
 checkIncDecTypeParamOperands (TS2356 — a `++`/`--` whose operand is a local,
 or a `this.<prop>` access, annotated as a bare UNCONSTRAINED type parameter;
@@ -638,61 +697,6 @@ checkDeleteOperator 86.8 ms, checkConstructorParamInInitializers 85.5 ms
 (checkCrossFileModuleAugmentationDuplicates 107.5 ms stays SKIP —
 cross-file).**
 
-**Round 646 (2026-07-23) — (M0.4) twenty-third tail-pass migration:
-checkConstLiteralComparisons (B98.r101 — TS2367 for a for-INIT `const x =
-<bare literal>` compared to a DIFFERENT literal via ==/===/!=/!==; 95 ms
-at the round-642 table — the #23 per-file tail pass) is ON THE SPINE; the
-legacy driver + walkConstLitStatements/-Statement/-Expr recursion (~180
-lines) DELETED; emitConstLitNoOverlap (+ constLiteralOf) survives as the
-anchor-called leaf.** The SINGLE-ADDING-ARM variant (new template move):
-a downward-MAP pass where only ONE arm ADDS entries — the ForStatement
-transform (for-init `const x = <bare literal>`, no annotation, scoped to
-cond/incr/body); the whole-list shadow prepass and the fn-param
-boundaries only REMOVE — needs NO per-boundary memo: removals never
-create entries, so the map at any anchor is empty (and the emission
-impossible) unless a ForStatement ancestor's const init adds one of the
-anchor's operand names. The anchor runs a cheap parent-climb pre-filter
-for exactly that, and the precise reach+scope fold (spineClFold — the
-deleted arms verbatim, memo-free per the round-625 rare-anchor rule)
-runs only behind it. Anchors: ==/===/!=/!== binaries with ≥1 Identifier
-operand (the legacy left-spine iteration dissolves into plain left/right
-edges). Frozen quirks pinned both directions: class METHOD/ctor params
-do NOT shadow (only fn-decl/fn-expr/arrow params do); a catch VARIABLE
-does not shadow; block consts never track (a block VariableStatement
-only SHADOWS); objlit values / template spans / new-expression CALLEES /
-for-in/of HEADS / inner for-init decl-list INITIALIZERS unreached.
-Observed simplification: the legacy "for-init Expression initializer
-walks with the OUTER scope" distinction is provably unobservable — the
-inner map differs from the outer only when the initializer is a
-DECLARATION LIST, which is never expression-walked. Fully syntactic — no
-ambient sandwich; binderResults driver → the partition view, gated
-`--partitionCheck 2` EQUIVALENT ×8. Gates: 42 local pins
-(M04ConstLitSpineMigrationTest) green against the LEGACY pass FIRST
-(42/42 on the first run); suite 12,033 → 12,075/0; `--listAll` ×8
-byte-identical (sorted, non-time lines) vs the pre-migration baseline;
-pass table 417 → 416 (the 95 ms row gone; checkSpine 20.0 s single-run —
-in-band; compiler-profile wall parity 30.5 s); warning-clean. M0.4
-running total: top TWENTY-THREE tail passes migrated. SESSION TAIL: the
-checkSuperInObjectLiterals (#24, 91 ms — TS2659 super-in-objlit-member
-below ES2015 / TS2660 super-in-objlit-property-fn) slot-move pre-gate
-LANDED (moved intact from slot 27b to the post-spine slot; suite
-12,075/0; listAll ×8 byte-identical; fully syntactic + self-contained —
-options.target + AST + source only; no TS2659/TS2660 diagnostics-list
-consumers, and the sibling TS2660 emitter spineSrEnterNode is
-position-DISJOINT by construction per round 641). Scope map for the
-migrator: ONE downward boolean `superValid` (arrows/blocks/ModuleBlocks
-PRESERVE; regular fn-decls/fn-exprs reset FALSE; class member bodies +
-prop initializers set it from the containing class's `extends`; objlit
-method/accessor bodies set TRUE — the round-641 boolean-as-status shape)
-PLUS the bounded findObjLitSuperRefs leaf sub-walks started at objlit
-member/property-fn bodies (TS2659 at target < ES2015 for
-method/accessor bodies; TS2660 for property-assignment fn-expr bodies
-unconditionally and arrow bodies only when !superValid — the leaf can
-stay anchor-called). The ExportAssignment arm, for-in/of head
-EXPRESSIONS, and throw expressions ARE walked (wider than SR);
-for-head condition/incrementor are NOT. NEXT session starts at that
-migration.**
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
@@ -1119,14 +1123,26 @@ structural item instead of landing alone.**
   REJECTED at 45.1 ms because `=`/`<`/`>` false-start on nearly every
   line. The pass keeps its own slot; gated by 9 new pins + the ACTIVE
   generated conflictMarker* `.errors.txt` subtests + listAll ×8);
-  next per-file candidates by cost (round-651 table, the top-31 rows
-  gone): **checkImplicitAnyNewExpressions 66.9 ms** (#33),
-  checkArgumentsInClassFieldInitializers 65.0 ms,
-  checkSpreadPropertyOverrides 60.4 ms, checkTypeParamTypedOps 60.0 ms
-  (checkCrossFileModuleAugmentationDuplicates, now 91.8 ms, stays
+  checkImplicitAnyNewExpressions 66.9 ms — **MIGRATED round 655** (the
+  NO-DOWNWARD-VALUE variant, the simplest class: when the deleted
+  recursion's parameter list is CONSTANT — every recursive call passes
+  the arguments it received — there is no ctx rebuild, no frames, no
+  leave hook and no status channel; the whole migration is the round-649
+  spineDelStatus shape with a different edge set. Two per-migrator
+  notes: the ambient install is the FILE's own binder locals because the
+  legacy DRIVER installed them itself (unlike the resting-locals
+  captures of rounds 624/625/631/649), and the arm diff against the
+  same-shaped `del` classifier is real — objlit method/accessor bodies,
+  `for`-head DECL-LIST initializers and switch case EXPRESSIONS are
+  walked here and not there);
+  next per-file candidates by cost (round-655 table, the migrated rows
+  gone): **checkArgumentsInClassFieldInitializers 82.9 ms**,
+  checkTypeParamTypedOps 72.0 ms, checkArrayToClassCastOverlap 69.4 ms,
+  checkIllegalSuperCallsInNestedFunctions 62.2 ms
+  (checkCrossFileModuleAugmentationDuplicates, now 106.9 ms, stays
   SKIP — cross-file aggregation, not per-file spine material; the tail is
-  now FLAT — no row above 110 ms, so per-pass wall value is small and the
-  remaining ~90 passes >20 ms carry the residual ~5 s). Migration protocol per
+  now FLAT — no per-file row above 83 ms, so per-pass wall value is small
+  and the remaining ~90 passes >20 ms carry the residual ~5 s). Migration protocol per
   pass (the round-624 template): slot-move pre-gate commit (intact pass to the
   post-spine slot, corpus + listAll ×8), then the migration commit (frames at
   the legacy copy edges, memoized reach classifier, per-dispatch ambient
