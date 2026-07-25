@@ -20,6 +20,54 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 680 (2026-07-25) — M4.8 DONE: `/// <reference path|types>` now pulls
+files into the program. `@types/node` goes from contributing 1 file to 67.**
+
+**The bug was a resolution-KIND confusion, not a missing feature.** The parser
+already recorded reference directives, and the crawl already tried to resolve
+them — into `SourceFile.moduleSpecifiers`, which the crawl feeds to
+`ModuleResolver`. But the three things are different: an import specifier
+resolves as a module, a `path=` target is a FILE PATH relative to the
+referencing file (tsc `resolveTripleslashReference`), and a `types=` target is a
+package name resolved through the type roots. So `path="globals.d.ts"` — no
+`./` — was treated as a BARE package, failed, and the file never entered the
+program. The `Ast.kt` doc comment asserting that reference directives live in
+`moduleSpecifiers` was accurate about the code and wrong about what that
+achieved.
+
+**Shape of the fix.** `SourceFile` gains `referencedPaths` / `referencedTypes`;
+the parser records the two kinds separately and stops merging them into
+`moduleSpecifiers` (whose only consumer was the crawl — checked before
+changing). The crawl resolves paths relative to the referencing file and types
+through the tsconfig's type roots, adding both to the frontier, so following is
+TRANSITIVE — which is the whole point for a package whose entry file is nothing
+but reference lines.
+
+**TS6053 needed no work, and that is worth noticing.** It is emitted by the
+CHECKER, which asks whether the referenced target is in the program — so it goes
+silent exactly when resolution starts succeeding and still fires for a genuinely
+missing file. Both directions are pinned. A design that had duplicated the
+resolution in the diagnostic would have needed a second fix here.
+
+**Measured.** With `@types/node` and `"types": ["node"]` on the compiler
+profile: program **79 → 146** files, TS2591 **43 → 13**. The rest of that
+profile's errors are now newly VISIBLE real gaps the unresolved names had been
+masking — TS2339×18, TS7008×15, TS2353×7 on `fs.WatchOptions`/`typeof link`
+shapes. Queued as M4.9; they do not touch the dashboard, whose tsconfig sets
+`"types": []` deliberately and correctly.
+
+**Gates.** Corpus **12,598 / 0 / 3** (+19 pins across two new classes).
+`--listAll` ×8 unchanged (46 on seven, 94 on harness) **and program sizes
+identical** (81/312/84/78/274/252/80/88) — a pure capability addition, no
+dashboard movement. `ModuleSpecifierExtractionTest` pinned the old contract and
+was updated: its intent (directives honoured after a leading block comment,
+ignored after the first code token) is preserved against the new fields, and
+that block-comment case is exactly `@types/node`'s own layout.
+
+**NEXT:** M4.9 — the gaps `@types/node` exposes once it actually loads.
+
+---
+
 **Round 679 (2026-07-25) — v1 RE-VERIFIED at HEAD and the post-v1 backlog
 UNPARKED; the verification itself turned up the highest-impact remaining gap.**
 
@@ -3268,7 +3316,29 @@ zero-value on this box, **this section is now the live queue**.
 at 481; the section stayed parked ~200 rounds because nothing re-read the
 condition. Worth remembering as a queue-hygiene failure mode in its own right.)
 
-- [ ] **M4.8 `/// <reference path|types="…" />` must ADD files to the program**
+- [x] **M4.8 DONE round 680 — `/// <reference path|types>` pulls files into the
+  program.** Resolution-KIND confusion: the parser recorded directives into
+  `moduleSpecifiers`, which the crawl resolves as MODULE specifiers, but a
+  `path=` target is a file path relative to the referencing file and a `types=`
+  target is a type-root package. Split onto `SourceFile.referencedPaths` /
+  `referencedTypes`; the crawl resolves each correctly and TRANSITIVELY. TS6053
+  needed no change (the checker asks whether the target is in the program, so it
+  goes silent exactly when resolution succeeds — pinned both ways). Measured with
+  `@types/node`: program 79 → 146, TS2591 43 → 13. Dashboard untouched (all 8
+  profiles identical in errors AND program size); suite 12,598/0/3 (+19 pins).
+- [ ] **M4.9 The gaps `@types/node` exposes once it loads** (found round 680,
+  directly downstream of M4.8). With `"types": ["node"]` on the compiler profile
+  the missing-ambient errors mostly clear (TS2591 43 → 13) and what remains is
+  REAL, previously masked by the unresolved names: **TS2339×18** (e.g.
+  `Property 'kind' does not exist on type 'typeof link'`), **TS7008×15**
+  (implicitly-any members), **TS2353×7** (`'watchFile' does not exist in type
+  'WatchOptions'` — our `fs.WatchOptions` vs the compiler's own `WatchOptions`),
+  TS2322×2, TS7010×2, TS7006, TS2709. Reproduce by copying the profile tsconfig
+  with `"types": ["node"]` (fixture already at
+  `build/bench/tsc-project-637d5746/node_modules/@types/node`, gitignored).
+  Consider adding it as a NINTH dashboard profile so the numbers are tracked —
+  but do NOT change the existing eight, whose `"types": []` is deliberate.
+- [ ] ~~M4.8 (original)~~ — **`/// <reference path|types="…" />` must ADD files to the program**
   (found round 679; the single highest-impact gap for "any TypeScript project").
   Our handling — `TypeScriptCompiler.kt` ~2168, gated on
   `includeReferencePathDeps`, i.e. `outFile` only — merely ORDERS files ALREADY
