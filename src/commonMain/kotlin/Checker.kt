@@ -3735,6 +3735,34 @@ class Checker(
     /** The legacy per-file entry context (immutable — shared across files). */
     private val spineIdcEmptyCtx = IdcCtx(emptySet(), emptySet(), emptySet())
 
+    // ── (M0.4) round 655: checkImplicitAnyNewExpressions on the spine ──────
+    // TS7009 — `new F()` whose target is a plain FUNCTION symbol (no construct
+    // signature), so the expression implicitly has type `any`. The legacy pass
+    // is the simplest tail shape yet: a whole-file statement + expression
+    // recursion threading NO downward value at all (only source/fileName), so
+    // the migration is a memoized BINARY reach classifier ([spineNaStatus] over
+    // [spineNaEdge] — the deleted walkNewImplicitAnyStmt /
+    // walkNewImplicitAnyClassMember / walkNewImplicitAnyInExpr arms verbatim)
+    // plus anchors at NewExpression enters. Frozen quirks the arms encode:
+    // class EXPRESSIONS, `<T>expr` type assertions, `satisfies` casts and
+    // tagged templates are NOT walked, nor are parameter DEFAULTS or class
+    // static blocks — while class-DECLARATION property initializers, objlit
+    // method/accessor bodies, `for`-head DECL-LIST initializers, switch case
+    // EXPRESSIONS and the typeof/void/delete/await operands ARE. The emission
+    // leaf [checkNewExprImplicitAny] is untouched; its ONE ambient read
+    // (`currentFileLocals ?: globals` on the callee name — flags-only, never
+    // getTypeOfSymbol, so no first-touch hazard) is reproduced by a
+    // per-dispatch install of the FILE's own locals (the legacy driver's
+    // install, immune to any other handler's ambient). Fields PRE-init.
+    private var spineNaRunActive = false
+    private var spineNaActive = false
+    /** The file's binder locals — the legacy driver's per-file install. */
+    private var spineNaLocals: SymbolTable? = null
+    /** Per-file nodeId memo for [spineNaStatus] — 0 unknown, 1 reached, 2 not. */
+    private var spineNaReachMemo = ByteArray(0)
+    /** Reusable ascent buffer for [spineNaStatus]. */
+    private val spineNaChain = ArrayList<Node>()
+
     // ── (M0.4) round 631: checkBindingPatternComputedIndexSig on the spine ─
     // B9.4/B98.r40 anchors: fn-EXPRESSION-like parameter lists (arrow /
     // fn-expr / objlit method+setter / class-EXPRESSION method+ctor+setter
@@ -5891,23 +5919,26 @@ class Checker(
         // checkForInNumericForRedeclare's for-in redeclare set, the arithmetic
         // pass, a corpus-unique pinDiag walker — are position-disjoint and
         // dedup only among themselves).
-        // 7a''' (M0.4 slot-move pre-gate, round 655): checkImplicitAnyNewExpressions
-        // (TS7009 — `new F()` whose target `F` is a plain FUNCTION symbol, so it
-        // carries no construct signature and the expression implicitly has type
-        // 'any') moved intact from slot 7a' ahead of its spine migration.
-        // Coupling surface: self-contained — the emission leaf is FULLY
-        // SYNTACTIC apart from ONE symbol-table consult (`currentFileLocals ?:
-        // globals` on the callee name, flags-only: never getTypeOfSymbol → no
-        // first-touch hazard), the walk threads NO downward value at all (only
-        // source/fileName), and grep-verified NO pass scans/dedups/retracts
-        // TS7009 (the sibling `new`-expression emitter at 17.170 is
-        // gate-DISJOINT: its TS2350 arm fires only when noImplicitAny/strict is
-        // OFF, i.e. exactly when this pass does not run). The dispatch gate
-        // (round 79i: TS7009 needs noImplicitAny/strict explicitly — it is NOT a
-        // harness default like TS2683) moves with it.
-        if (options.noImplicitAny || options.strict) {
-            pass("checkImplicitAnyNewExpressions") { checkImplicitAnyNewExpressions() }
-        }
+        // 7a''' (M0.4, round 655): checkImplicitAnyNewExpressions (TS7009 —
+        // `new F()` whose target `F` is a plain FUNCTION symbol, so it carries
+        // no construct signature and the expression implicitly has type 'any')
+        // is ON THE SPINE — anchors at NewExpression enters (spineNaEnterNode);
+        // the driver and the whole walkNewImplicitAnyStmts/-Stmt/-ClassMember/
+        // -InExpr recursion are DELETED, only the emission leaf
+        // checkNewExprImplicitAny survives. Reach is the memoized BINARY
+        // classifier spineNaStatus/spineNaEdge (the deleted arms verbatim); the
+        // walk threaded NO downward value at all, so there is no ctx rebuild.
+        // The one ambient read (`currentFileLocals ?: globals` on the callee
+        // name, flags-only) is reproduced by a per-dispatch install of the
+        // file's own locals. The legacy dispatch gate (round 79i: TS7009 needs
+        // noImplicitAny/strict explicitly — it is NOT a harness default like
+        // TS2683) lives on as spineNaRunActive, the .d.ts/JS-like file skips as
+        // spineNaSetup's per-file gate. The legacy binderResults driver → the
+        // spine's partition view, gated `--partitionCheck 2` EQUIVALENT ×8 (the
+        // round-633 rule). No TS7009 dedup/scan consumers exist — this is the
+        // code's sole emitter and the sibling 17.170 `new` emitter is
+        // gate-DISJOINT (its TS2350 arm fires only with noImplicitAny/strict
+        // OFF, exactly when these anchors are inert).
         // 27e'' (M0.4, round 653): checkAbstractMemberAccessInConstructor
         // (TS2715 — a `this.X` reference inside a constructor body or a
         // class-field initializer where X is an abstract member of the
@@ -20946,21 +20977,6 @@ class Checker(
      * flip-or-be-neutral. Classes (which carry a construct signature) and
      * `any`-cast targets are excluded by the pure-`Function`-symbol gate.
      */
-    private fun checkImplicitAnyNewExpressions() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val savedLocals = currentFileLocals
-            currentFileLocals = result.locals
-            try {
-                walkNewImplicitAnyStmts(result.sourceFile.statements, source, fileName)
-            } finally {
-                currentFileLocals = savedLocals
-            }
-        }
-    }
-
     /**
      * TS7057: a `yield` expression in a generator FUNCTION DECLARATION lacking a
      * return-type annotation has implicit-any result type. Gated noImplicitAny/strict.
@@ -20987,121 +21003,6 @@ class Checker(
             start = pos,
             length = 5,
         ))
-    }
-
-    private fun walkNewImplicitAnyStmts(stmts: List<Statement>, source: String, fileName: String) {
-        for (stmt in stmts) walkNewImplicitAnyStmt(stmt, source, fileName)
-    }
-
-    private fun walkNewImplicitAnyStmt(stmt: Statement, source: String, fileName: String) {
-        when (stmt) {
-            is Block -> walkNewImplicitAnyStmts(stmt.statements, source, fileName)
-            is IfStatement -> {
-                walkNewImplicitAnyInExpr(stmt.expression, source, fileName)
-                walkNewImplicitAnyStmt(stmt.thenStatement, source, fileName)
-                stmt.elseStatement?.let { walkNewImplicitAnyStmt(it, source, fileName) }
-            }
-            is ForStatement -> {
-                (stmt.initializer as? VariableDeclarationList)?.declarations?.forEach { d ->
-                    d.initializer?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-                }
-                (stmt.initializer as? Expression)?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-                stmt.condition?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-                stmt.incrementor?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-                walkNewImplicitAnyStmt(stmt.statement, source, fileName)
-            }
-            is ForInStatement -> { walkNewImplicitAnyInExpr(stmt.expression, source, fileName); walkNewImplicitAnyStmt(stmt.statement, source, fileName) }
-            is ForOfStatement -> { walkNewImplicitAnyInExpr(stmt.expression, source, fileName); walkNewImplicitAnyStmt(stmt.statement, source, fileName) }
-            is WhileStatement -> { walkNewImplicitAnyInExpr(stmt.expression, source, fileName); walkNewImplicitAnyStmt(stmt.statement, source, fileName) }
-            is DoStatement -> { walkNewImplicitAnyStmt(stmt.statement, source, fileName); walkNewImplicitAnyInExpr(stmt.expression, source, fileName) }
-            is FunctionDeclaration -> stmt.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-            is ClassDeclaration -> for (member in stmt.members) walkNewImplicitAnyClassMember(member, source, fileName)
-            is ModuleDeclaration -> (stmt.body as? ModuleBlock)?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-            is TryStatement -> {
-                walkNewImplicitAnyStmts(stmt.tryBlock.statements, source, fileName)
-                stmt.catchClause?.block?.statements?.let { walkNewImplicitAnyStmts(it, source, fileName) }
-                stmt.finallyBlock?.statements?.let { walkNewImplicitAnyStmts(it, source, fileName) }
-            }
-            is SwitchStatement -> {
-                walkNewImplicitAnyInExpr(stmt.expression, source, fileName)
-                for (c in stmt.caseBlock) when (c) {
-                    is CaseClause -> { walkNewImplicitAnyInExpr(c.expression, source, fileName); walkNewImplicitAnyStmts(c.statements, source, fileName) }
-                    is DefaultClause -> walkNewImplicitAnyStmts(c.statements, source, fileName)
-                    else -> {}
-                }
-            }
-            is LabeledStatement -> walkNewImplicitAnyStmt(stmt.statement, source, fileName)
-            is ExpressionStatement -> walkNewImplicitAnyInExpr(stmt.expression, source, fileName)
-            is ReturnStatement -> stmt.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-            is ThrowStatement -> stmt.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-            is ExportAssignment -> stmt.expression.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-            is VariableStatement -> for (d in stmt.declarationList.declarations) {
-                d.initializer?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-            }
-            else -> {}
-        }
-    }
-
-    private fun walkNewImplicitAnyClassMember(member: ClassElement, source: String, fileName: String) {
-        when (member) {
-            is MethodDeclaration -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-            is Constructor -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-            is GetAccessor -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-            is SetAccessor -> member.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-            is PropertyDeclaration -> member.initializer?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-            else -> {}
-        }
-    }
-
-    private fun walkNewImplicitAnyInExpr(expr: Expression, source: String, fileName: String) {
-        when (expr) {
-            is NewExpression -> {
-                checkNewExprImplicitAny(expr, source, fileName)
-                walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-                expr.arguments?.forEach { walkNewImplicitAnyInExpr(it, source, fileName) }
-            }
-            is CallExpression -> {
-                walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-                expr.arguments.forEach { walkNewImplicitAnyInExpr(it, source, fileName) }
-            }
-            is BinaryExpression -> { walkNewImplicitAnyInExpr(expr.left, source, fileName); walkNewImplicitAnyInExpr(expr.right, source, fileName) }
-            is ParenthesizedExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is PropertyAccessExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is ElementAccessExpression -> { walkNewImplicitAnyInExpr(expr.expression, source, fileName); walkNewImplicitAnyInExpr(expr.argumentExpression, source, fileName) }
-            is ConditionalExpression -> {
-                walkNewImplicitAnyInExpr(expr.condition, source, fileName)
-                walkNewImplicitAnyInExpr(expr.whenTrue, source, fileName)
-                walkNewImplicitAnyInExpr(expr.whenFalse, source, fileName)
-            }
-            is ArrayLiteralExpression -> for (e in expr.elements) walkNewImplicitAnyInExpr(e, source, fileName)
-            is ObjectLiteralExpression -> for (p in expr.properties) when (p) {
-                is PropertyAssignment -> walkNewImplicitAnyInExpr(p.initializer, source, fileName)
-                is SpreadAssignment -> walkNewImplicitAnyInExpr(p.expression, source, fileName)
-                is MethodDeclaration -> p.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-                is GetAccessor -> p.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-                is SetAccessor -> p.body?.let { walkNewImplicitAnyStmts(it.statements, source, fileName) }
-                else -> {}
-            }
-            is SpreadElement -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is AwaitExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is YieldExpression -> expr.expression?.let { walkNewImplicitAnyInExpr(it, source, fileName) }
-            is VoidExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is DeleteExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is TypeOfExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is PrefixUnaryExpression -> walkNewImplicitAnyInExpr(expr.operand, source, fileName)
-            is PostfixUnaryExpression -> walkNewImplicitAnyInExpr(expr.operand, source, fileName)
-            is TemplateExpression -> for (span in expr.templateSpans) walkNewImplicitAnyInExpr(span.expression, source, fileName)
-            is CommaListExpression -> for (e in expr.elements) walkNewImplicitAnyInExpr(e, source, fileName)
-            is ArrowFunction -> when (val b = expr.body) {
-                is Block -> walkNewImplicitAnyStmts(b.statements, source, fileName)
-                is Expression -> walkNewImplicitAnyInExpr(b, source, fileName)
-                else -> {}
-            }
-            is FunctionExpression -> walkNewImplicitAnyStmts(expr.body.statements, source, fileName)
-            is AsExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            is NonNullExpression -> walkNewImplicitAnyInExpr(expr.expression, source, fileName)
-            else -> {}
-        }
     }
 
     private fun checkNewExprImplicitAny(expr: NewExpression, source: String, fileName: String) {
@@ -21544,6 +21445,10 @@ class Checker(
         // type-resolving Part-2 push check.
         spineEvRunActive = (options.noImplicitAny || options.strict) &&
             !options.noImplicitAnyExplicitlyFalse
+        // (M0.4) round 655: the implicit-any-`new` anchors' run gate (the
+        // legacy slot-7a' dispatch gate, verbatim: TS7009 needs
+        // noImplicitAny/strict explicitly — it is NOT a harness default).
+        spineNaRunActive = options.noImplicitAny || options.strict
         spineEvRestingLocals = currentFileLocals
         // INV.4(d) walker 9: the const-assignment anchors' B116 param-typing
         // rebuild starts from the PRE-SPINE resting bases.
@@ -21668,6 +21573,7 @@ class Checker(
                 spineIySetup(result)
                 spineAaSetup(result)
                 spineIdcSetup(result)
+                spineNaSetup(result)
                 // (M0.4) round 636: property-init anchors — active in every
                 // non-dts file (the legacy driver's only file gate).
                 spinePiActive = spinePiRunActive && !spineIsDts
@@ -21720,6 +21626,7 @@ class Checker(
                     spineIyTeardown()
                     spineAaTeardown()
                     spineIdcTeardown()
+                    spineNaTeardown()
                     spinePiActive = false
                 }
                 spineResolveDeferredIterationChecks()
@@ -22033,6 +21940,11 @@ class Checker(
         // (tparams, tpProps, tpLocals) triple rebuilt pull-based per anchor;
         // fully syntactic, no frames/leave hook, no ambient sandwich.
         if (spineIdcActive) spineIdcEnterNode(node)
+        // (M0.4) round 655: the implicit-any-`new` anchors (NewExpression
+        // enters) — the TS7009 emission leaf under the memoized binary reach
+        // classifier, run with the FILE's own binder locals installed (the
+        // deleted driver's ambient); no frames/leave hook.
+        if (spineNaActive) spineNaEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
         if (spineUbdActive) spineUbdEnterNode(node)
@@ -48212,6 +48124,13 @@ class Checker(
         private const val IDC_NONE = 2
         private const val IDC_ROOT = 3
 
+        // (M0.4) round 655: spineNaStatus states
+        // (checkImplicitAnyNewExpressions reach — binary + the transient
+        // SourceFile root).
+        private const val NA_REACHED = 1
+        private const val NA_NONE = 2
+        private const val NA_ROOT = 3
+
         // (M0.4) round 638: spineAcStatus states (checkArgumentsCollision
         // reach — binary + the transient SourceFile root).
         private const val AC_REACHED = 1
@@ -63646,6 +63565,181 @@ interface DataView {
         }
         TC_SHARED -> if (spineCoEdge(parent, child)) TC_SHARED else TC_NONE
         else -> TC_NONE
+    }
+
+    // ── (M0.4) round 655: checkImplicitAnyNewExpressions spine pieces ──────
+
+    private fun spineNaSetup(result: BinderResult) {
+        // The legacy driver's per-file gates, verbatim: .d.ts and JS-like
+        // files are skipped whole.
+        spineNaActive = spineNaRunActive && !spineIsDts && !spineIsJsLike
+        if (!spineNaActive) {
+            spineNaReachMemo = ByteArray(0)
+            spineNaLocals = null
+            return
+        }
+        spineNaLocals = result.locals
+        val n = result.sourceFile.nodeCount
+        spineNaReachMemo = if (n > 0) ByteArray(n) else ByteArray(0)
+    }
+
+    private fun spineNaTeardown() {
+        spineNaActive = false
+        spineNaReachMemo = ByteArray(0)
+        spineNaLocals = null
+    }
+
+    /** ENTER dispatch: NewExpression anchors run the legacy emission leaf
+     *  under the file's own binder locals (the deleted driver's install). */
+    private fun spineNaEnterNode(node: Node) {
+        if ((node as NodeBase).kindId != NodeKind.NEW_EXPRESSION) return
+        node as NewExpression
+        if (spineNaStatus(node) != NA_REACHED) return
+        val savedLocals = currentFileLocals
+        currentFileLocals = spineNaLocals
+        try {
+            checkNewExprImplicitAny(node, spineSource, spineFileName)
+        } finally {
+            currentFileLocals = savedLocals
+        }
+    }
+
+    /** Memoized reach classifier — ascends to the first memoized/terminal
+     *  ancestor, then folds [spineNaEdge] back down (the spineDelStatus
+     *  pattern). The SourceFile anchor carries the transient NA_ROOT status
+     *  (never memoized) whose sole edge is `child is Statement`. */
+    private fun spineNaStatus(node: Node): Int {
+        if (node is SourceFile) return NA_ROOT
+        val memo = spineNaReachMemo
+        run {
+            val id = (node as NodeBase).nodeId
+            if (id >= 0 && id < memo.size) {
+                val m = memo[id].toInt()
+                if (m != 0) return m
+            }
+        }
+        val chain = spineNaChain
+        chain.clear()
+        var cur: Node = node
+        val anchor: Node?
+        var anchorStatus = NA_NONE
+        while (true) {
+            chain.add(cur)
+            val parent = (cur as NodeBase).parent
+            if (parent == null) { anchor = null; break } // detached/unindexed
+            if (parent is SourceFile) { anchor = parent; anchorStatus = NA_ROOT; break }
+            val pid = (parent as NodeBase).nodeId
+            val pm = if (pid >= 0 && pid < memo.size) memo[pid].toInt() else 0
+            if (pm != 0) { anchor = parent; anchorStatus = pm; break }
+            cur = parent
+        }
+        var pNode: Node? = anchor
+        var pStatus = anchorStatus
+        var result = NA_NONE
+        for (i in chain.indices.reversed()) {
+            val c = chain[i]
+            result = when {
+                pNode == null -> NA_NONE
+                pStatus == NA_ROOT -> if (c is Statement) NA_REACHED else NA_NONE
+                pStatus == NA_REACHED -> if (spineNaEdge(pNode, c)) NA_REACHED else NA_NONE
+                else -> NA_NONE
+            }
+            val cid = (c as NodeBase).nodeId
+            if (cid >= 0 && cid < memo.size) memo[cid] = result.toByte()
+            pNode = c
+            pStatus = result
+        }
+        chain.clear()
+        return result
+    }
+
+    /** The deleted walkNewImplicitAnyStmt / walkNewImplicitAnyClassMember /
+     *  walkNewImplicitAnyInExpr descent arms, verbatim. Unlisted parents are
+     *  the walkers' `else -> {}`s (unreached children). */
+    private fun spineNaEdge(parent: Node, child: Node): Boolean = when (parent) {
+        // ---- statements (the walkNewImplicitAnyStmt arms) ----
+        is Block -> child is Statement
+        is IfStatement ->
+            child === parent.expression || child === parent.thenStatement ||
+                child === parent.elseStatement
+        // for-head: BOTH initializer forms are walked — a DECL-LIST initializer
+        // reaches each declaration's INITIALIZER through the
+        // VariableDeclarationList/VariableDeclaration edges below (unlike the
+        // round-649 del classifier, which walked the Expression form only).
+        is ForStatement ->
+            child === parent.initializer || child === parent.condition ||
+                child === parent.incrementor || child === parent.statement
+        is ForInStatement -> child === parent.expression || child === parent.statement
+        is ForOfStatement -> child === parent.expression || child === parent.statement
+        is WhileStatement -> child === parent.expression || child === parent.statement
+        is DoStatement -> child === parent.statement || child === parent.expression
+        is FunctionDeclaration -> child === parent.body
+        // class DECLARATIONS: member bodies AND property initializers (the
+        // walkNewImplicitAnyClassMember arms); static blocks are NOT walked,
+        // and a class EXPRESSION is never reached at all.
+        is ClassDeclaration ->
+            child is MethodDeclaration || child is Constructor ||
+                child is GetAccessor || child is SetAccessor ||
+                child is PropertyDeclaration
+        is ModuleDeclaration -> child === parent.body && child is ModuleBlock
+        is ModuleBlock -> child is Statement
+        is TryStatement ->
+            child === parent.tryBlock || child is CatchClause || child === parent.finallyBlock
+        is CatchClause -> child === parent.block
+        // switch: the subject, the case EXPRESSIONS and every clause statement.
+        is SwitchStatement ->
+            child === parent.expression || child is CaseClause || child is DefaultClause
+        is CaseClause -> child === parent.expression || child is Statement
+        is DefaultClause -> child is Statement
+        is LabeledStatement -> child === parent.statement
+        is ExpressionStatement -> child === parent.expression
+        is ReturnStatement -> child === parent.expression
+        is ThrowStatement -> child === parent.expression
+        is ExportAssignment -> child === parent.expression
+        is VariableStatement -> child === parent.declarationList
+        is VariableDeclarationList -> child is VariableDeclaration
+        is VariableDeclaration -> child === parent.initializer
+        // ---- member bodies / initializers (class AND object literal) ----
+        is MethodDeclaration -> child === parent.body
+        is Constructor -> child === parent.body
+        is GetAccessor -> child === parent.body
+        is SetAccessor -> child === parent.body
+        is PropertyDeclaration -> child === parent.initializer
+        // ---- expressions (the walkNewImplicitAnyInExpr arms) ----
+        is NewExpression ->
+            child === parent.expression || parent.arguments?.any { it === child } == true
+        is CallExpression -> child === parent.expression || parent.arguments.any { it === child }
+        is BinaryExpression -> child === parent.left || child === parent.right
+        is ParenthesizedExpression -> child === parent.expression
+        is PropertyAccessExpression -> child === parent.expression
+        is ElementAccessExpression ->
+            child === parent.expression || child === parent.argumentExpression
+        is ConditionalExpression ->
+            child === parent.condition || child === parent.whenTrue || child === parent.whenFalse
+        is ArrayLiteralExpression -> parent.elements.any { it === child }
+        // objlit: property VALUES, spreads AND method/accessor bodies (unlike
+        // the round-649 del classifier, which walked values/spreads only).
+        is ObjectLiteralExpression ->
+            child is PropertyAssignment || child is SpreadAssignment ||
+                child is MethodDeclaration || child is GetAccessor || child is SetAccessor
+        is PropertyAssignment -> child === parent.initializer
+        is SpreadAssignment -> child === parent.expression
+        is SpreadElement -> child === parent.expression
+        is AwaitExpression -> child === parent.expression
+        is YieldExpression -> child === parent.expression
+        is VoidExpression -> child === parent.expression
+        is DeleteExpression -> child === parent.expression
+        is TypeOfExpression -> child === parent.expression
+        is PrefixUnaryExpression -> child === parent.operand
+        is PostfixUnaryExpression -> child === parent.operand
+        is TemplateExpression -> child is TemplateSpan
+        is TemplateSpan -> child === parent.expression
+        is CommaListExpression -> parent.elements.any { it === child }
+        is ArrowFunction -> child === parent.body
+        is FunctionExpression -> child === parent.body
+        is AsExpression -> child === parent.expression
+        is NonNullExpression -> child === parent.expression
+        else -> false
     }
 
     // ── (M0.4) round 649: checkDeleteOperator spine pieces ─────────────────
