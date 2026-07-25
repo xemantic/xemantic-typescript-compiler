@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 672 (2026-07-25) — `./gradlew build` REPAIRED: `commonTest` had drifted
+native-incompatible since (INV.7a), and `jvmTest` could never have caught it.**
+Owner-requested build fix, branch `fix/build-problems`. (INV.7a) re-enabled
+linuxX64 at round 610 and the MAIN compile + link have stayed green since — but
+`compileTestKotlinLinuxX64` is also part of `build`, and ~60 rounds of new
+`commonTest` files broke it three separate ways. The tell is the asymmetry: the
+loop's gate is `./gradlew jvmTest`, which stays 100% green while `build` fails.
+
+**The three drifts** (all in `src/commonTest`, none reachable from the JVM gate):
+  - **102 backtick test names** carrying `(`, `)`, `,`, `&`, `@` across 68 files.
+    Kotlin/Native rejects these ("Name contains illegal characters"); the JVM
+    only rejects `.;[]/<>:\`, so every one of them compiles for `jvmTest`.
+    Renamed mechanically — parens dropped inline, a TRAILING parenthetical
+    rendered as ` - aside` (the readable form), `,` → ` -`, `&&` → `AND`.
+    Verified zero collisions and zero residual illegal chars.
+  - **65 `kotlin.assert` calls** (CcetAnchorTest / CpaAnchorTest /
+    CtaFnBodyAnchorTest — the three files that imported no `assert`, so they
+    bound the stdlib one). It is `@ExperimentalNativeApi`, and `@OptIn` for a
+    native-only annotation cannot be written in common code. Switched to the
+    project's own `com.xemantic.kotlin.test.assert` — multiplatform AND
+    power-assert-enabled (build.gradle.kts already lists it in
+    `powerAssert.functions`), so the calls take NO message argument: the failure
+    diagram renders every subexpression value, which is why the library's
+    `message` parameter is not meant to be used. All 65 message lambdas were
+    therefore DROPPED, not converted. This also closes a real hole —
+    `kotlin.assert` is a NO-OP when JVM assertions are off, so those 65 pins
+    were only ever load-bearing by Gradle's `enableAssertions` default.
+  - **`String.format`** (LineAndCharacterMemoTest) — JVM-only; replaced by a
+    local interpolating function.
+
+**Then, by owner decision, ALL NATIVE TARGETS WERE SWITCHED OFF** (linuxX64
+commented out alongside the Apple ones) to keep the Claude Code loop fast — the
+native test compile plus the optimizing link add ~7 min to `build`. The repair
+was still worth doing rather than reverting: it leaves the tree in a state where
+re-enabling a native target is a one-line uncomment instead of another 169-error
+cleanup.
+
+**Process point, now sharper.** The corpus suite is the loop's zero-regression
+gate, but it is a JVM-only gate, so it never saw this drift accumulating
+underneath it — and with native off, `build` will not see it either. Nothing
+mechanically enforces the three rules any more, which makes the documentation
+the only defense: the constraints and the way to check them are recorded BOTH in
+CLAUDE.md § "Known gotchas" and in a comment at the commented-out targets in
+build.gradle.kts (the place someone re-enabling them will actually read). To
+check, uncomment `linuxX64` and run `./gradlew compileTestKotlinLinuxX64`.
+
+**Also this round (owner-requested): the test suite moved to ONE assertion
+idiom — 1,009 `kotlin.test` call sites converted to power-assert `assert(...)`**
+(792 `assertEquals`, 115 `assertTrue`, 102 across
+`assertFalse`/`assertNull`/`assertNotNull`/`assertSame`/`assertContains`),
+matching the project's existing idiom (BaselineFormatterTest's
+`assert(result == expected)`).
+Messages dropped throughout — `assert`/`have` are the only power-assert-
+transformed functions (build.gradle.kts), and their diagram beats any
+hand-written message: a deliberately broken pin renders as
+`assert(ds.count { it.code == 1102 } == 99)` with the operand value `1`, the
+`false` verdict, AND the full diagnostics list underneath. That injected-failure
+check was the point — a green suite alone cannot distinguish a correct
+conversion from one that made assertions trivially true.
+
+**65 sites deliberately KEPT on `kotlin.test`** — every one in the six
+AST-centric files (Inv2LexicalScopeTest, Inv2NodeIndexTest, Inv3NodeKeyedLookupTest,
+Inv3PerFileLookupTest, RealLibSnapshotTest, ForEachChildOracleTest) whose compared
+value is an AST node, a `.copy()`, a `preorder(...)` element, a Symbol or a lexical
+scope (plus 3 there that need `assertNotNull`'s RETURN value mid-expression).
+Power-assert toStrings every subexpression, so those would trade a readable
+failure for a subtree dump (the documented SOE/OOM hazard). The empirical line:
+`List<Diagnostic>` and `CompilationResult` render usefully (strings +
+diagnostics, no AST); `SourceFile`/`NodeBase` do not.
+
+**Four mechanical-pass defects caught before shipping**, each of which a
+green-suite check would have missed or mis-attributed: Kotlin TRAILING COMMAS
+produced a phantom 4th argument (17 valid 3-arg calls silently skipped); the
+AST-hazard test was matching MESSAGE text rather than the compared values (false
+skip); collapsing a multi-line `listOf(...)` argument that carried `//` comments
+let the comment swallow the closing paren (1 site, hand-repaired with comments
+intact); and `assert(x == emptyList())` does not compile at all — `==` gives the
+compiler no inference source for the element type, so 28 sites became
+`assert(x.isEmpty())`. A fifth defect appeared in the `assertNotNull` pass: the
+value-position rewrite used the whole text before the call as the second line's
+indent, emitting `val js = assert(js != null)` — a duplicate declaration (13 sites,
+caught by the compiler, repaired). A sixth was mine to own too: the AST-hazard test
+matched hazard words INSIDE STRING LITERALS (`assertTrue("== node kinds" in text)`),
+so string masking was added and the completed `assertEquals` pass re-audited under it
+(no site had been wrongly skipped). Plus ~60 now-unused `kotlin.test` imports removed.
+Suite 12,520/0/3, unchanged at every step.
+
+**A counting correction worth keeping:** the first survey numbers came from `grep`,
+and BSD grep UNDERCOUNTED (`assertTrue` reported 102, actually 115). Every figure
+above is from the converter's own Kotlin-aware scanner; re-derive with a Python
+lookbehind regex, not grep, if these are ever re-checked.
+
+**Worth deciding later:** documentation alone did not hold last time — a
+`jvmTest`-side source scan over `src/commonTest` (assert the backtick names carry
+no native-illegal characters) would restore a mechanical gate for a few seconds
+of suite time, without any native toolchain. Not built; offered.
+
 **Round 671 (2026-07-25) — the queue boundary VERIFIED, and the last live
 non-backlog item turned out to be a stale checkbox. Phase 17's offline work is
 complete; what remains needs an owner decision.** Round 670 suggested the queue

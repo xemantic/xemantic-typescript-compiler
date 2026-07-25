@@ -116,6 +116,23 @@ kotlin {
         }
     }
 
+    // ALL NATIVE TARGETS ARE OFF (2026-07-25, owner: keep the Claude Code loop
+    // fast — the native test compile + optimizing link add ~7 min to `build`).
+    //
+    // CONSEQUENCE — READ BEFORE ADDING TO src/commonTest: with native off, the
+    // ONLY compiler that sees commonTest is the JVM one, which is LOOSER than
+    // Kotlin/Native. Nothing here will flag native-only violations any more, so
+    // they accumulate silently and cost a cleanup session whenever a native
+    // target comes back (round 672 removed 169 such errors accrued since round
+    // 610). The three rules, and how to check them, are in CLAUDE.md § "Known
+    // gotchas" — search "must compile for Kotlin/Native". In short:
+    //   1. backtick test names: letters/digits/spaces/`-`/`_`/`'` only — NO
+    //      `(`, `)`, `,`, `&`, `@` (the JVM accepts all of these; native does not)
+    //   2. no `kotlin.assert` — use `com.xemantic.kotlin.test.assert(cond)`
+    //   3. no JVM-only stdlib (e.g. `String.format`)
+    // To verify before re-enabling: uncomment linuxX64 below, then run
+    // `./gradlew compileTestKotlinLinuxX64` (NOT `jvmTest` — it cannot see this).
+    //
     // native, see https://kotlinlang.org/docs/native-target-support.html
     // tier 1
 //    macosX64 {
@@ -132,11 +149,11 @@ kotlin {
     // tier 2
     // INV.7 native re-enable (pre-approved M5 exception; round 610): host-buildable
     // target only — Apple targets stay commented until a macOS builder exists.
-    linuxX64 {
-        binaries.executable {
-            entryPoint = "com.xemantic.typescript.compiler.main"
-        }
-    }
+//    linuxX64 {
+//        binaries.executable {
+//            entryPoint = "com.xemantic.typescript.compiler.main"
+//        }
+//    }
 //    linuxArm64 {
 //        binaries.executable {
 //            entryPoint = "com.xemantic.typescript.compiler.main"
