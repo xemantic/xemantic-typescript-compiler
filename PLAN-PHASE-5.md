@@ -77,7 +77,25 @@ checkArgumentsInClassFieldInitializers 82.9 ms, checkTypeParamTypedOps 72.0,
 checkArrayToClassCastOverlap 69.4, checkIllegalSuperCallsInNestedFunctions 62.2
 (checkCrossFileModuleAugmentationDuplicates, 106.9 ms, stays SKIP — cross-file
 aggregation, not per-file spine material); the tail remains FLAT — no per-file
-row above 83 ms.
+row above 83 ms. THE SESSION TAIL — the #34 pass
+(checkArgumentsInClassFieldInitializers, TS2815 `arguments` in a class PROPERTY
+INITIALIZER or STATIC BLOCK, 82.9 ms) is PREPARED: the slot-move pre-gate LANDED
+(moved intact from slot 12d to the post-spine slot; suite 12,421/0; `--listAll`
+×8 byte-identical pre-vs-post; self-contained — FULLY SYNTACTIC, no ambient
+install at all, grep-verified no TS2815 list consumers) and its 30 migration
+pins are green against the LEGACY walkers (30/30 first run, suite 12,451/0).
+The migration shape is already diagnosed: the round-640 TWO-INTERLEAVED-WALKS
+variant with the round-653 re-entry split — a ROUTING walk that only finds
+non-`declare` classes and an EMISSION walk that runs inside property
+initializers / static-block bodies, each RE-ENTERING the other (a
+FunctionExpression / FunctionDeclaration / objlit-method body binds its OWN
+`arguments` so it hands back to routing; a ClassExpression hands to the member
+dispatch; arrows stay in the emission walk, parameter DEFAULTS included). The
+migration's whole risk surface is that the two walks reach DIFFERENT positions —
+routing descends only statement BODIES (if conditions, loop heads, the switch
+subject and case expressions are all silent) while emission descends every one
+of them — so the classifier needs a walk-IDENTITY channel and the pins already
+fix both directions.
 
 **Round 654 (2026-07-25) — (M0.4) thirty-first tail-pass migration:
 checkIncDecTypeParamOperands (TS2356 — a `++`/`--` whose operand is a local,
@@ -1136,7 +1154,10 @@ structural item instead of landing alone.**
   `for`-head DECL-LIST initializers and switch case EXPRESSIONS are
   walked here and not there);
   next per-file candidates by cost (round-655 table, the migrated rows
-  gone): **checkArgumentsInClassFieldInitializers 82.9 ms**,
+  gone): **checkArgumentsInClassFieldInitializers 82.9 ms** — slot-move
+  pre-gate + 30 legacy-green pins LANDED round 655 tail, so the next
+  session starts at its migration (the round-640 two-interleaved-walks
+  shape with the round-653 re-entry split) —,
   checkTypeParamTypedOps 72.0 ms, checkArrayToClassCastOverlap 69.4 ms,
   checkIllegalSuperCallsInNestedFunctions 62.2 ms
   (checkCrossFileModuleAugmentationDuplicates, now 106.9 ms, stays
