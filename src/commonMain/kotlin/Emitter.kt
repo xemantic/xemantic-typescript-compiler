@@ -2216,9 +2216,14 @@ class Emitter(
                 val sameLine = element.trailingComments?.filter { !it.hasPrecedingNewLine }
                 val ownLine = if (elementIsMultilineCompound) null
                               else element.trailingComments?.filter { it.hasPrecedingNewLine }
-                // NumericLiteralNode already emits same-line trailing comments in emitExpression
+                // NumericLiteralNode AND StringLiteralNode already emit their own same-line
+                // trailing comments in emitExpression — re-emitting here doubled them
+                // (EP.2a, round 674: a STRING-valued const enum in an array literal
+                // printed `".cts" /* Ext.Cts */ /* Ext.Cts */`; 128 occurrences on the
+                // tsc compiler profile, all Extension.* which are string-valued. The
+                // numeric case was already excluded, which is why only strings doubled).
                 val hasLineComment = !options.removeComments && sameLine?.any { it.text.startsWith("//") } == true
-                if (!options.removeComments && element !is NumericLiteralNode) sameLine?.forEach { write(" "); write(it.text) }
+                if (!options.removeComments && element !is NumericLiteralNode && element !is StringLiteralNode) sameLine?.forEach { write(" "); write(it.text) }
                 if (!options.removeComments && !ownLine.isNullOrEmpty()) {
                     // Own-line pre-comma comment: newline, indent, comment, " ,"
                     writeNewLine()
@@ -2363,8 +2368,16 @@ class Emitter(
                 if (classInArray) indentLevel++
                 emitExpression(element)
                 if (classInArray) indentLevel--
-                // NumericLiteralNode already emits same-line trailing comments in emitExpression
-                if (element !is NumericLiteralNode) emitTrailingComments(element)
+                // NumericLiteralNode AND StringLiteralNode already emit their own same-line
+                // trailing comments in emitExpression — re-emitting here doubles them (EP.2a,
+                // round 674: a STRING-valued const enum in a SINGLE-LINE array printed
+                // `".cts" /* Ext.Cts */ /* Ext.Cts */`). The numeric half of this guard has
+                // always been here; the string half was missing, which is why only
+                // string-valued const enums (tsc's Extension.*) doubled — 128 occurrences on
+                // the compiler profile. The multiline branch above carries the same pair.
+                if (element !is NumericLiteralNode && element !is StringLiteralNode) {
+                    emitTrailingComments(element)
+                }
             }
             if (node.hasTrailingComma) write(",")
             emitTrailingComments(node.trailingComments)
