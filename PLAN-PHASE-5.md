@@ -71,8 +71,11 @@ another change**, and keep M0.4's migration-pattern zoo as the reference for HOW
 (it is complete — 20+ documented shapes from the round-624 template through
 round 658's ambient-region capture).
 
-Bench TSV carries both medians (`bench/self-compile-tsc.tsv`, label
-`round659 (M0.4-AB) arc A/B`). Suite untouched at 12,507/0/3 (no code change);
+Both medians are appended to the local `bench/self-compile-tsc.tsv` (label
+`round659 (M0.4-AB) arc A/B`) — but `bench/` is GITIGNORED, so the durable
+record of this A/B is THIS NOTE: every per-pair number above is the artifact
+(`bench-history/README.md` is CI-maintained for 3-way runs and must not be
+hand-edited). Suite untouched at 12,507/0/3 (no code change);
 no listAll/partitionCheck run needed for a measurement-only round. NEXT:
 **(M1) identity stability** — (a) attribute the epoch churn (80k of 111k
 narrowing walks run at fresh epochs because the walk's own recordings bump the
@@ -1260,7 +1263,8 @@ structural item instead of landing alone.**
   ~8 k lines of walker recursion, and the spine is now the single place per-node
   checks live), but no further pass is migrated FOR PERFORMANCE. Migrate one
   only when it is on the path of another change. Bench TSV rows carry both
-  medians; the per-pair numbers are in the round-659 session note.
+  medians locally (`bench/` is gitignored — the round-659 session note is the
+  durable record and carries every per-pair number).
 - [ ] **(M1) Identity stability → revive the two memo designs** (the ≤15–20 s
   path; tsc's flow cache — per-(refKey, flowNode) over interned types — is the
   existence proof that the (f2) fold works once types are canonical).
