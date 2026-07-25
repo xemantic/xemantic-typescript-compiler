@@ -957,7 +957,7 @@ class TypeScriptCompiler {
             val binder = Binder(options)
             val binderResult = binder.bind(sourceFile)
             val checker = Checker(options, listOf(binderResult))
-            diagnostics.addAll(checker.getDiagnostics())
+            diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
             // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
             // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
             // braceless `if`-body (it recovers const/let there, but not `using`). tsc emits TS1156
@@ -1074,7 +1074,7 @@ class TypeScriptCompiler {
                     val binder = Binder(options)
                     val binderResults = parsedFiles.values.map { binder.bind(it) }
                     val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
-                    diagnostics.addAll(checker.getDiagnostics())
+                    diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
                 }
                 return CompilationResult(
                     fileName = fileName,
@@ -1512,7 +1512,7 @@ class TypeScriptCompiler {
                     assignedFileNames = recheckOnly,
                     allInputFileNames = allInputFileNames,
                     jsonModuleContents = jsonModules)
-                diagnostics.addAll(checker.getDiagnostics())
+                diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
                 if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
                     options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
                 )
@@ -1925,6 +1925,24 @@ class TypeScriptCompiler {
     }
 
 }
+
+/**
+ * M4.9 (round 681): apply `skipLibCheck` — drop SEMANTIC diagnostics reported
+ * inside declaration files.
+ *
+ * The option was parsed and then never consulted, which nothing noticed while
+ * `.d.ts` files came only from the corpus and the bundled libs. It became
+ * visible the moment M4.8 let `@types` packages into the program: `@types/node`
+ * is ~70 declaration files, and checking them reported 15 TS7008s against
+ * DefinitelyTyped's own code in a project that had explicitly asked not to.
+ *
+ * Applies to the CHECKER's output only — tsc's `skipLibCheck` skips type
+ * checking of declaration files, it does not suppress their SYNTAX errors, and
+ * parser diagnostics are collected separately at every call site here.
+ */
+private fun List<Diagnostic>.applySkipLibCheck(options: CompilerOptions): List<Diagnostic> =
+    if (!options.skipLibCheck) this
+    else filter { d -> d.fileName?.endsWith(".d.ts") != true }
 
 private fun normalizeRelPath(p: String): String {
     val segs = mutableListOf<String>()

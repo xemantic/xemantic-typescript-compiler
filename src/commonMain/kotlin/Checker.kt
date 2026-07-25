@@ -129842,6 +129842,40 @@ interface DataView {
             }
         }
 
+        // M4.9 (round 681): the same rule for a name that is NOT in
+        // `currentShadowedNames`. That set is populated by [applyBodyLocalShadowing]
+        // for body-local VAR declarations and deliberately excludes PARAMETER names
+        // (a var redeclaring a same-function param is a redeclaration, not a shadow),
+        // so a parameter colliding with an outer binding never took the bail above
+        // and fell through to the symbol-based branches, which resolve the receiver
+        // through globals. tsc's own
+        // `function formatJSDocLink(link: JSDocLink | …)` hit exactly that once
+        // `@types/node` entered the program: `fs.d.ts` declares
+        // `export namespace link`, our binder merges ambient-module locals into
+        // globals, and the parameter lost to the namespace — 18 TS2339s reading
+        // "Property 'kind' does not exist on type 'typeof link'". A LOCAL of the
+        // same name was already correct, which is what localised it to parameters.
+        //
+        // LOAD-BEARING gate: the bail requires the name to ALSO denote a NAMESPACE in
+        // globals — i.e. exactly the mis-resolution being repaired. A first cut that
+        // fired whenever a concrete local type resolved the member over-suppressed
+        // `instanceofWithStructurallyIdenticalTypes`, where `C1|C2|C3` is narrowed to
+        // `never` by `!isC1 && !isC2` on structurally-identical types and tsc DOES
+        // report TS2339-on-`never` — the exact "raw declared type exposes the property
+        // → suppress" shape CLAUDE.md warns about. Keying on the namespace collision
+        // keeps that test untouched: nothing there is named like a namespace.
+        if (objectExpr is Identifier && !isThisAccess && objectExpr.text !in currentShadowedNames &&
+            globals[objectExpr.text]?.flags?.hasAny(
+                SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule
+            ) == true
+        ) {
+            val paramType = currentLocalTypes[objectExpr.text]
+            if (paramType != null && paramType !== anyType && paramType !== errorType) {
+                val app = try { getApparentType(paramType) } catch (_: Exception) { null }
+                if (app != null && getPropertyOfType(app, propName) != null) return
+            }
+        }
+
         // M1.12 (round 418): single-type narrow-DOWN suppression. Now that [resolveFlowCalleeDecl]
         // resolves NESTED type-guard functions (`isTupleType`, `isGenericTupleType`, … — nested
         // in `createTypeChecker`, so the binder skips them, B83.5), the flow walk NARROWS a
