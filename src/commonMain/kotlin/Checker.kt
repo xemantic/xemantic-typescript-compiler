@@ -8367,13 +8367,20 @@ class Checker(
                 }
                 else -> continue
             }
-            // The bare resolver only knows flat corpus-style keys; a path-shaped
-            // project needs the relative leg too (the round-511 lesson).
-            val targetFile = resolveModuleSpecifier(spec, imp.moduleSpecifier)
-                ?: resolveModuleSpecifierRelative(spec, sourceFileName)
+            // Resolution must be `.js`-AWARE: tsc's own barrels are imported as
+            // ESM `./_namespaces/ts.js`, and `resolveModuleSpecifier`
+            // deliberately does NOT strip the extension (the TS2459 firewall).
+            // [resolveBarrelStarTarget] is the tested `.js`/`.jsx`-stripping
+            // resolver the star-follower itself uses; without it this helper
+            // could not resolve tsc's layout at all — round 669 shipped with
+            // the extension-blind form and inlined 0 of the ~16.5 k reads the
+            // emit-diff gate later showed were missing.
+            val targetSf = resolveBarrelStarTarget(spec, sourceFileName)
+                ?: (resolveModuleSpecifier(spec, imp.moduleSpecifier)
+                    ?: resolveModuleSpecifierRelative(spec, sourceFileName))
+                    ?.let { fileResults[it]?.sourceFile }
                 ?: continue
-            val target = fileResults[targetFile] ?: continue
-            val sym = resolveExportedSymbolThroughStars(target.sourceFile, exportedName) ?: continue
+            val sym = resolveExportedSymbolThroughStars(targetSf, exportedName) ?: continue
             val resolved = resolveAlias(sym)
             if (resolved.flags.hasAny(SymbolFlags.ConstEnum)) return resolved
         }
