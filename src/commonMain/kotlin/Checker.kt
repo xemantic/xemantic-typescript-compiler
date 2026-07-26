@@ -125405,6 +125405,40 @@ interface DataView {
     }
 
     /** Infer a simple return type from a method/function body (single return with literal). */
+    /**
+     * The inferred type of a comma expression's right operand in `return x, y`
+     * ([inferReturnTypeFromBody]'s Comma arm).
+     *
+     * Literals are typed directly; an Identifier is resolved ONLY against the owning
+     * function-like's own parameter annotations (reached through [body]'s parent), never
+     * through the ambient scope — see the call site's comment. Returns null for anything
+     * else, leaving the caller's `?: anyType` fallback in place.
+     */
+    private fun commaReturnOperandType(expr: Expression, body: Node): Type? = when (expr) {
+        is StringLiteralNode, is NoSubstitutionTemplateLiteralNode -> stringType
+        is NumericLiteralNode -> numberType
+        is BigIntLiteralNode -> bigintType
+        is Identifier -> when (expr.text) {
+            "true", "false" -> booleanType
+            else -> {
+                val owner = (body as? NodeBase)?.parent
+                val params = when (owner) {
+                    is FunctionDeclaration -> owner.parameters
+                    is FunctionExpression -> owner.parameters
+                    is ArrowFunction -> owner.parameters
+                    is MethodDeclaration -> owner.parameters
+                    else -> null
+                }
+                val annotation = params
+                    ?.firstOrNull { (it.name as? Identifier)?.text == expr.text }
+                    ?.type
+                annotation?.let { getTypeFromTypeNode(it) }
+                    ?.takeIf { it !== anyType && it !== errorType }
+            }
+        }
+        else -> null
+    }
+
     private fun inferReturnTypeFromBody(body: Node): Type? {
         val block = body as? Block ?: return null
         for (stmt in block.statements) {
@@ -125507,6 +125541,16 @@ interface DataView {
                             SyntaxKind.EqualsEquals, SyntaxKind.ExclamationEquals,
                             SyntaxKind.EqualsEqualsEquals, SyntaxKind.ExclamationEqualsEquals,
                             SyntaxKind.InstanceOfKeyword, SyntaxKind.InKeyword -> booleanType
+                            // (M3.0-gap-3 A, round 697) `return x, y` evaluates to the RIGHT
+                            // operand, so the inferred return type is the right operand's.
+                            // Deliberately NOT `getTypeOfExpression(expr.right)`: this
+                            // function runs in the CALLER's scope (it is reached while
+                            // checking a call site), where resolving a callee's parameter by
+                            // name would hit the documented shadowing hazard — which is
+                            // exactly why the `is Identifier` arm above resolves nothing but
+                            // `true`/`false`. The operand is typed from the OWNING function's
+                            // own parameter annotations instead, which is scope-independent.
+                            SyntaxKind.Comma -> commaReturnOperandType(expr.right, body)
                             else -> null
                         }
                     }
