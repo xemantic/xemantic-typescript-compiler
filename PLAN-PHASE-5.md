@@ -20,6 +20,32 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 697 (2026-07-26) — (M3.0-gap-3)'s (A) half LANDED: a comma expression's
+return type is now its right operand's. Corpus 12,725 → 12,731 / 0 / 3, all 8
+profiles byte-identical.**
+
+After three consecutive rounds that ended in a revert, I deliberately picked the
+half of the item that is independent of the risky type-parameter machinery, and
+landed it. `combineBinaryTypes` already typed a comma as its right operand;
+`inferReturnTypeFromBody` had no Comma case, so `function foo(x: number, y: string)
+{ return x, y }` inferred `any` and every call site went unchecked.
+
+**The interesting constraint is WHERE the operand's type may come from.** This
+inference runs in the CALLER's scope — it is reached while checking a call site —
+so resolving the callee's parameter by name would hit the documented shadowing
+hazard. That is exactly why the function's existing plain-Identifier arm resolves
+nothing but `true`/`false`, and copying `getTypeOfExpression` in would have been the
+easy wrong answer. The operand is typed from the OWNING function's own parameter
+annotations instead, reached through the body's parent — scope-independent, and null
+whenever it cannot be read, so the change only ever adds precision. Two of the six
+pins are that boundary from both sides: an un-annotated operand must infer NOTHING
+rather than guess, and a same-named outer binding must not leak in.
+
+This clears the first of the deferred conformance case's two missing TS2322; the
+second is (B), which stays as recorded below, so the case remains deferred.
+
+---
+
 **Round 696 (2026-07-26) — (M3.0-gap-3)(B1) diagnosed to a one-line cause, its fix
 written and MEASURED, then reverted because it must land together with chain
 parity. No production change; sources verified byte-identical to the green tree.**
@@ -4175,6 +4201,10 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `Type 'T2' is not assignable to type 'T1'` plus the "could be instantiated with an
   arbitrary type" chain line and a TS2208 related info at the `T2` declaration.
   We already emit the case's other two diagnostics (TS2454 ×2), so this is additive.
+  **(A) IS DONE (round 697)** — `inferReturnTypeFromBody` gained a Comma arm typing the
+  right operand from the OWNING function's parameter annotations (`commaReturnOperandType`);
+  corpus green, all 8 profiles byte-identical, +6 pins. Only (B) remains, so the case
+  stays deferred.
   **Round 695 isolated both halves — read this before starting, two of the obvious
   routes are already excluded.** A five-line probe (`function baz(...): string` beside
   the inferred `foo`, and a `var direct: T1 = y` beside the comma one) splits the case:
