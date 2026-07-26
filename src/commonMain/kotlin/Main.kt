@@ -63,6 +63,9 @@ fun main(args: Array<String>) {
             "--watchVerify", "--watchverify" -> { watch = true; watchVerify = true }
             "--listAll", "--listall" -> listAll = true
             "--passTiming", "--passtiming" -> passTiming = true
+            "--verifyMappedCache", "--verifymappedcache" -> {
+                passTiming = true; PassTiming.verifyMappedCache = true
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }

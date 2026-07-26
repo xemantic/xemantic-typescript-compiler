@@ -10,6 +10,80 @@ lives in PLAN-PHASE-5.md § QUEUE.*
 
 ---
 
+## 0. ROUND-716 CORRECTION — read this before §1
+
+*Owner directive 2026-07-26: "do anything needed … to increase the performance. We
+are free to completely redesign this project." Round 716 answered the sizing
+question this document has been assuming rather than measuring, and **the answer
+overturns §1's diagnosis**. §1–§5 are kept for the record; where they conflict with
+this section, this section is the measurement.*
+
+**§1 says the cost is "uncached type recomputation". It is not.** Full attribution
+of a compiler-profile run (`--passTiming`, new INV.4(g)/INV.5(c5) counters):
+
+| | ms | share of checker-init |
+|---|---:|---:|
+| `checkSpine` | 14,292 | **83%** |
+| — `spineEnterNode` | 7,166 | |
+| — `spineLeaveNode` | 5,478 | |
+| — unresolved-names family | 840 | |
+| — `forEachChild` | 255 | |
+| — scope maintenance | 25 | |
+| **the whole type system, inside the above** | **5,056** | **28%** |
+| — flow-narrowing walks (69,917) | 2,437 | |
+| — `getTypeOfExpression` (624,810 calls) | 1,804 | |
+| — relations (depth-0) | 468 | |
+| — type-node resolution (depth-0) | 311 | |
+| — member resolution | 36 | |
+| **dispatch + handler machinery (residual)** | **~7,600** | **42%** |
+
+857k nodes → **14.8 µs per node** for enter+leave, of which **8.9 µs is not type-system
+work**. `spineEnterNode` is a linear chain reaching ~118 handler entry points and
+`spineLeaveNode` 14 sub-dispatchers — **every handler is consulted about every node**.
+
+**Three cache hypotheses died in one session, all measured, none reasoned:**
+
+1. **The context-bypassed resolution prize is 68 ms** (31,571 outermost calls,
+   2.2 µs each) — 0.35% of the compile. INV.5(c)'s entire reason for existing is
+   worth a third of one percent.
+2. **Widening the INV.5(c) gate is a LOSS.** The round-548 conservative gate rejects
+   73.1% of bypassed resolutions (measured 65,000 of 88,829). Removing it lifts hits
+   5,575 → 32,104 (23% → 46%) **and runs 28% slower** (6 interleaved pairs) — the
+   composite-key hash probe costs more than the resolution it avoids. Memoizing the
+   fingerprint (builds 53,765 → 13,293) still measured **+11.9%**.
+3. **Identity keying (tsc's mapper-object approach) gets 4.1% hits** — the context
+   maps are re-allocated per install, not reused per region, so reference identity
+   finds almost nothing.
+
+This is the **third independent confirmation of one law** (after round 665's 30 ms
+expression memo and round 659's 75%-reappears migration): *in xtsc the cacheable
+population is the cheap tail. Caching in front of a resolution does not pay, because
+the resolutions that are cacheable are the ones that were already fast.* **Stop
+proposing caches.** tsc is not fast because it caches; `NodeLinks.resolvedType` is a
+field read on the node, not a keyed probe — there is no key to build.
+
+**The measured lever is consultation, not computation.** Decisive probe: skipping
+`spineEnterNode`'s entire chain for bare `Identifier` nodes (44.5% of all nodes,
+2,746 ns each = **1,048 ms**) leaves the compiler-profile diagnostics **byte-identical**.
+That time is provably unnecessary work. See queue item **(DISPATCH.1)**.
+
+**Corrected targets.** The 2.4× gap to JS tsc is not a type-system gap — our type
+system is 5 s of an 18 s compile and tsc does *more* semantic work than we do. It is
+the accumulated per-node checking machinery. Order of remaining levers, by measured
+size:
+
+| lever | measured size | risk |
+|---|---:|---|
+| (DISPATCH.1) per-kind handler table | 1.0–2.5 s | low, mechanical |
+| flow-narrowing walks (69,917 walks) | 2.4 s | medium (round 664 banked 0.83 s here) |
+| `getTypeOfExpression` call COUNT (2.8× recompute) | ≤1.8 s | medium — fewer calls, NOT a memo (round 665) |
+| context-cache work of any shape | **0.07 s** | **do not pursue** |
+
+Also measured and unchanged: 1,341,719 globals lookups at 98.9% miss (the (M0.3)(i)
+short-circuit, still priced ≲0.2%).
+
+---
+
 ## 1. The verdict
 
 Micro-optimization has hit its measured ceiling. Rounds 482–489 each produced 1–3%

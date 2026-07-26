@@ -22036,31 +22036,53 @@ class Checker(
         phases[0] = false
         val buf = ArrayList<Node>(16)
         val collect: (Node) -> Unit = { buf.add(it) }
+        val prof = PassTiming.enabled
         while (nodes.isNotEmpty()) {
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
             if (phases[top]) {
                 if (!spineUResOnly) {
+                    val t = if (prof) PassTiming.nowNanos() else 0L
                     spineLeaveNode(node)
+                    if (prof) PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
                     spineScopeLeaveIfOwner(node)
                 }
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
+            if (prof) PassTiming.spineNodes++
             if (!spineUResOnly) {
+                val t = if (prof) PassTiming.nowNanos() else 0L
                 spineScopeEnterIfOwner(node)
+                if (prof) PassTiming.spineScopeNanos += PassTiming.nowNanos() - t
                 if (spineScopeAuditActive) spineScopeAuditNode(node)
             }
             if (spineUResActive) {
+                val t = if (prof) PassTiming.nowNanos() else 0L
                 spineUResEnter(node)
                 spineUResDispatch(node)
+                if (prof) PassTiming.spineUResNanos += PassTiming.nowNanos() - t
             }
-            if (!spineUResOnly) spineEnterNode(node)
+            if (!spineUResOnly) {
+                val t = if (prof) PassTiming.nowNanos() else 0L
+                spineEnterNode(node)
+                if (prof) {
+                    val d = PassTiming.nowNanos() - t
+                    PassTiming.spineEnterNanos += d
+                    val k = (node as NodeBase).kindId
+                    PassTiming.spineKindNanos[k] = (PassTiming.spineKindNanos[k] ?: 0L) + d
+                    PassTiming.spineKindCount[k] = (PassTiming.spineKindCount[k] ?: 0L) + 1L
+                }
+            }
             buf.clear()
+            val tc = if (prof) PassTiming.nowNanos() else 0L
             forEachChild(node, collect)
+            if (prof) PassTiming.spineChildrenNanos += PassTiming.nowNanos() - tc
             if (buf.isEmpty()) {
                 if (!spineUResOnly) {
+                    val t = if (prof) PassTiming.nowNanos() else 0L
                     spineLeaveNode(node)
+                    if (prof) PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
                     spineScopeLeaveIfOwner(node)
                 }
                 if (spineUResActive) spineUResLeave(node)
@@ -101062,9 +101084,64 @@ interface DataView {
         // (currentFileLocals must be the node's OWN file's locals) so the
         // fingerprint (ns-stack ids + tpScope ids + aliasArgs ids) fully
         // determines the resolution; anything else keeps the legacy re-run.
+        // INV.5(c5): time the OUTERMOST bypassed resolution — the prize any
+        // context-keyed cache competes for. Depth guard excludes nested calls,
+        // so this is exactly what a perfect zero-cost cache could remove.
+        if (PassTiming.enabled && !bypassTimingActive) {
+            bypassTimingActive = true
+            val t0 = PassTiming.nowNanos()
+            try {
+                return getTypeFromTypeNodeBypassed(node)
+            } finally {
+                PassTiming.bypassedResolveNanos += PassTiming.nowNanos() - t0
+                PassTiming.bypassedResolveOutermost++
+                bypassTimingActive = false
+            }
+        }
+        return getTypeFromTypeNodeBypassed(node)
+    }
+
+    private var bypassTimingActive = false
+
+    private fun getTypeFromTypeNodeBypassed(node: TypeNode): Type {
         val cKey = mappedNodeTypeKey(node)
         if (cKey != null) {
-            state.mappedNodeTypes[cKey]?.let { return it }
+            state.mappedNodeTypes[cKey]?.let {
+                if (PassTiming.enabled) {
+                    PassTiming.mappedHits++
+                    // INV.5(c2) VERIFY MODE: recompute and compare, so a missing
+                    // key dimension names itself instead of being guessed at.
+                    if (PassTiming.verifyMappedCache) {
+                        val fresh = getTypeFromTypeNodeWorker(node)
+                        if (fresh.id != it.id) {
+                            // Split the two causes, because they demand OPPOSITE
+                            // fixes: a structurally-EQUAL serve is the
+                            // non-canonical-identity disease (the served type
+                            // MEANS the same thing; only id-keyed consumers
+                            // notice), while a structurally-DIFFERENT serve is a
+                            // genuinely missing key dimension.
+                            val sameShape = typeToString(it) == typeToString(fresh)
+                            if (sameShape) PassTiming.mappedServeIdOnly++
+                            else {
+                                PassTiming.mappedServeWrong++
+                                if (PassTiming.mappedServeWrong <= 25) {
+                                    val own = owningSourceFile(node)?.fileName
+                                        ?.substringAfterLast('/') ?: "?"
+                                    println(
+                                        "MAPPED-SHAPE-DIFF #${PassTiming.mappedServeWrong}: " +
+                                            "${node::class.simpleName} @$own:${node.pos} " +
+                                            "cached=${typeToString(it)} " +
+                                            "fresh=${typeToString(fresh)} " +
+                                            "ctx=${(cKey as NodeCtxKey).ctx}"
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                return it
+            }
+            if (PassTiming.enabled) PassTiming.mappedMisses++
             val type = getTypeFromTypeNodeWorker(node)
             state.mappedNodeTypes[cKey] = type
             return type
@@ -101081,14 +101158,25 @@ interface DataView {
         override fun hashCode(): Int = (node as NodeBase).nodeId * 31 + ctx.hashCode()
     }
 
+
     /** Build the (c) cache key, or null when the consult is not safely
      *  cacheable: unindexed node, or the checking-file dimension is not
      *  pinned (currentFileLocals is not the node's own file's locals). */
     private fun mappedNodeTypeKey(node: TypeNode): Any? {
         val id = (node as NodeBase).nodeId
-        if (id < 0) return null
-        val owner = owningSourceFile(node) ?: return null
-        if (fileResults[owner.fileName]?.locals !== currentFileLocals) return null
+        if (id < 0) {
+            if (PassTiming.enabled) PassTiming.mappedRejectUnindexed++
+            return null
+        }
+        val owner = owningSourceFile(node)
+        if (owner == null) {
+            if (PassTiming.enabled) PassTiming.mappedRejectNoOwner++
+            return null
+        }
+        if (fileResults[owner.fileName]?.locals !== currentFileLocals) {
+            if (PassTiming.enabled) PassTiming.mappedRejectForeignFile++
+            return null
+        }
         val fp = StringBuilder()
         for (s in inferenceNamespaceStack) fp.append('n').append(s.id)
         currentTypeParamScope?.let { m ->

@@ -118,6 +118,71 @@ object PassTiming {
      *  conflated-interface node) was active. */
     var typeNodeBypassed: Long = 0
 
+    // --- INV.5(c) context-keyed cache (`mappedNodeTypes`) attribution --------
+    // The bypassed population above is the port's whole prize: each of those
+    // resolutions is one tsc would have served from NodeLinks. These split it by
+    // WHAT actually happens, so the campaign can be sized instead of guessed.
+
+    /** Of [typeNodeBypassed], served from the context-keyed cache. */
+    var mappedHits: Long = 0
+
+    /** INV.5(c2) diagnosis: recompute every served hit and compare, so a
+     *  missing key dimension is NAMED rather than guessed. Costly — opt in. */
+    var verifyMappedCache: Boolean = false
+
+    /** Of [mappedHits], served a type whose SHAPE differs from a fresh
+     *  recompute — a genuinely missing key dimension. */
+    var mappedServeWrong: Long = 0
+
+    /** Of [mappedHits], served a structurally-IDENTICAL type that merely has a
+     *  different `Type.id` — the non-canonical-identity disease, not a keying
+     *  bug. Fresh minting is what makes these differ at all. */
+    var mappedServeIdOnly: Long = 0
+
+    /** INV.5(c4): times the context fingerprint was actually BUILT (vs served
+     *  from the one-entry memo) — the cost an interned TypeMapper removes. */
+    var ctxFingerprintBuilds: Long = 0
+
+    /** INV.5(c5): wall nanos spent inside OUTERMOST context-bypassed
+     *  `getTypeFromTypeNodeWorker` calls — the total prize any context-keyed
+     *  cache competes for. Nested calls are excluded by a depth guard, so this
+     *  is exactly the time a perfect zero-cost cache could remove. */
+    var bypassedResolveNanos: Long = 0
+    var bypassedResolveOutermost: Long = 0
+
+    /** INV.4(g) round 706: attribution INSIDE checkSpine — the walk dominates
+     *  init (83%) while the whole type system accounts for only ~30% of it, so
+     *  these split the remainder into its actual phases. */
+    var spineNodes: Long = 0
+    var spineEnterNanos: Long = 0
+    var spineLeaveNanos: Long = 0
+    var spineScopeNanos: Long = 0
+    var spineUResNanos: Long = 0
+    var spineChildrenNanos: Long = 0
+
+    /** INV.4(g): per-NodeKind enter+leave nanos and counts. If a kind almost no
+     *  handler cares about still costs microseconds, the spine's cost is
+     *  CONSULTATION (every handler asked about every node), not work — which is
+     *  the difference between a dispatch-table fix and a handler-cost fix. */
+    val spineKindNanos = HashMap<Int, Long>()
+    val spineKindCount = HashMap<Int, Long>()
+
+    /** Of [typeNodeBypassed], keyed and computed (a cold miss — unavoidable). */
+    var mappedMisses: Long = 0
+
+    /** Of [typeNodeBypassed], NOT cacheable: the node carries no nodeId. */
+    var mappedRejectUnindexed: Long = 0
+
+    /** Of [typeNodeBypassed], NOT cacheable: the node's owning file could not
+     *  be determined. */
+    var mappedRejectNoOwner: Long = 0
+
+    /** Of [typeNodeBypassed], NOT cacheable ONLY because the round-548
+     *  conservative gate demands `currentFileLocals` be the node's OWN file's
+     *  locals — i.e. every cross-file type reference. This is the number the
+     *  gate-relaxation experiment targets. */
+    var mappedRejectForeignFile: Long = 0
+
     /** Depth-0 flow-narrowing walks launched (`flowWalkWithTripCheck` entries). */
     var narrowWalks: Long = 0
 
@@ -208,6 +273,19 @@ object PassTiming {
         typeNodeCacheable = 0
         typeNodeCacheHits = 0
         typeNodeBypassed = 0
+        mappedHits = 0
+        mappedServeWrong = 0
+        mappedServeIdOnly = 0
+        ctxFingerprintBuilds = 0
+        bypassedResolveNanos = 0
+        bypassedResolveOutermost = 0
+        spineNodes = 0; spineEnterNanos = 0; spineLeaveNanos = 0
+        spineScopeNanos = 0; spineUResNanos = 0; spineChildrenNanos = 0
+        spineKindNanos.clear(); spineKindCount.clear()
+        mappedMisses = 0
+        mappedRejectUnindexed = 0
+        mappedRejectNoOwner = 0
+        mappedRejectForeignFile = 0
         narrowWalks = 0
         narrowWalksByPass.clear()
         diagnosticsSize = null
@@ -536,6 +614,49 @@ object PassTiming {
                 "misses ${typeNodeCacheable - typeNodeCacheHits}) vs bypassed $typeNodeBypassed " +
                 "(${bypassPct / 10}.${bypassPct % 10}% of resolutions bypass the cache)"
         )
+        run {
+            val rejects = mappedRejectUnindexed + mappedRejectNoOwner + mappedRejectForeignFile
+            val keyed = mappedHits + mappedMisses
+            val hitPct = if (keyed > 0) mappedHits * 1000 / keyed else 0L
+            val foreignPct = if (typeNodeBypassed > 0) mappedRejectForeignFile * 1000 / typeNodeBypassed else 0L
+            appendLine(
+                "  INV.5(c) mappedNodeTypes: keyed $keyed (hits $mappedHits = " +
+                    "${hitPct / 10}.${hitPct % 10}%, misses $mappedMisses) | " +
+                    "gate-rejected $rejects [foreign-file $mappedRejectForeignFile = " +
+                    "${foreignPct / 10}.${foreignPct % 10}% of bypassed, unindexed " +
+                    "$mappedRejectUnindexed, no-owner $mappedRejectNoOwner]"
+            )
+            if (verifyMappedCache) {
+                appendLine(
+                    "  INV.5(c2) VERIFY: served-wrong-SHAPE $mappedServeWrong " +
+                        "(a missing key dimension) | served-id-ONLY $mappedServeIdOnly " +
+                        "(structurally identical, non-canonical identity)"
+                )
+            }
+            run {
+                appendLine("  INV.5(c4) context fingerprint BUILDS: $ctxFingerprintBuilds")
+                appendLine(
+                    "  INV.5(c5) bypassed-resolution PRIZE: ${bypassedResolveNanos / 1_000_000} ms " +
+                        "over $bypassedResolveOutermost outermost calls " +
+                        "(${if (bypassedResolveOutermost > 0) bypassedResolveNanos / bypassedResolveOutermost else 0} ns each)"
+                )
+            }
+        }
+        appendLine(
+            "SPINE attribution: nodes=$spineNodes " +
+                "enter=${spineEnterNanos / 1_000_000}ms leave=${spineLeaveNanos / 1_000_000}ms " +
+                "scope=${spineScopeNanos / 1_000_000}ms ures=${spineUResNanos / 1_000_000}ms " +
+                "forEachChild=${spineChildrenNanos / 1_000_000}ms"
+        )
+        if (spineKindCount.isNotEmpty()) {
+            appendLine("  per-kind enter+leave (top 12 by total ms):")
+            spineKindNanos.entries.sortedByDescending { it.value }.take(12).forEach { (k, ns) ->
+                val c = spineKindCount[k] ?: 1L
+                appendLine(
+                    "    kind $k: ${ns / 1_000_000} ms over $c nodes = ${ns / c} ns/node"
+                )
+            }
+        }
         appendLine(
             "flow-narrowing walks: $narrowWalks " +
                 "(outside init dispatch: ${narrowWalksByPass[OUTSIDE_PASS] ?: 0L})"

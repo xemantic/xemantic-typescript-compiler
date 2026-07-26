@@ -20,6 +20,75 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 716 (2026-07-26) — the performance diagnosis was WRONG, and now it is
+measured. The type system is 28% of the compile; the dispatch machinery is 42%; the
+entire prize INV.5(c) exists for is 68 ms. Three cache hypotheses died in one
+session. One decisive probe found the real lever.**
+
+Owner directive: "do anything needed, all the necessary experiments, new
+architectural decisions, new tasks in the queue, to increase the performance. We are
+free to completely redesign this project." So this round measured instead of
+building, and the corrections are worth more than any patch would have been.
+Full write-up: `docs/ARCHITECTURE-RETHINK.md` § 0 (new, supersedes § 1's diagnosis).
+
+**What I set out to do was widen the INV.5(c) cache gate.** The reasoning looked
+strong: the round-548 gate refuses to cache any resolution whose node lives outside
+the file being checked, INV.3(c) had since made node-read names key by the node's
+OWN file, and the gate was written *after* that landed — so it looked stale.
+Instrumented: the gate rejects **65,000 of 88,829 bypassed resolutions (73.1%)**.
+The premise was right.
+
+**Then every version of the fix lost.** Widening it lifted hits 5,575 → 32,104
+(23% → 46%) and ran **28% slower** over 6 interleaved pairs. The composite-key hash
+probe costs more than the resolution it avoids. Memoizing the fingerprint against
+the installed context maps (builds 53,765 → 13,293, a 75% cut) still measured
+**+11.9%**. Pure identity keying — tsc's actual mapper-object shape — collapsed to
+**4.1%** hits, because our context maps are re-allocated per install rather than
+reused per region.
+
+**Then I measured the thing I should have measured first, and it ended the whole
+direction: the bypassed-resolution population is 68 ms.** 31,571 outermost calls at
+2.2 µs — 0.35% of the compile. Every version of that cache was competing for a third
+of one percent. This is the **third independent confirmation of one law**, after
+round 665's 30 ms expression memo and round 659's 75%-reappears migration: *the
+cacheable population is the cheap tail.* Recorded as a closed item so it is not
+re-opened a fourth time.
+
+**A real bug fell out of the failed experiment.** The widened key produced 3 profile
+FPs, and a verify mode (recompute every hit, compare) split them: **1,269
+shape-different serves**, every one a lib generic signature — `(value: T, …)` served
+where `(value: Declaration, …)` was correct, under an IDENTICAL fingerprint. So the
+context fingerprint is incomplete: the substitution input is ambient state captured
+by none of nsStack/tpScope/aliasArgs. Not fixed (its prize is 68 ms), but named, with
+the diagnostic that found it.
+
+**Where the time actually goes** — full attribution, new INV.4(g) counters:
+`checkSpine` is 83% of checker-init; inside it `spineEnterNode` 7,166 ms +
+`spineLeaveNode` 5,478 ms, while the WHOLE type system (narrowing 2,437 +
+getTypeOfExpression 1,804 + relations 468 + type-nodes 311 + members 36) is
+**5,056 ms**. That leaves **~7,600 ms of dispatch and handler machinery** — 857k
+nodes at 14.8 µs each for enter+leave, of which 8.9 µs is not type-system work.
+`spineEnterNode` reaches ~118 handler entry points and `spineLeaveNode` 14
+sub-dispatchers, and every handler is consulted about every node.
+
+**The lever, with a decisive probe rather than an argument.** Per-kind timing:
+`IDENTIFIER` is 44.5% of nodes at **2,746 ns each = 1,048 ms**. Skipping
+`spineEnterNode` entirely for bare Identifiers left the profile's 46 diagnostics
+**byte-identical**. That second is provably unnecessary. Queued as **(DISPATCH.1)**:
+a per-kind handler table, with the table DERIVED by instrumentation over the corpus
+(not read off the guards, and not derived from the profiles — they never exercise
+some kinds). Sized 1.0–2.5 s.
+
+**What landed:** the instrumentation only (opt-in, behaviour-free) — INV.5(c)
+cache attribution, the INV.5(c5) prize timer, INV.4(g) spine-phase and per-kind
+counters. Every experimental change was reverted: the widened gate, the memoized
+fingerprint, the identity key, the Identifier probe. Corpus green, profile back to
+46. **The box matters for anyone repeating this:** an M1 with Chrome running gives
+±13% wall variance, which swamps a 1 s effect — so the trustworthy numbers here are
+the in-process counters, and the wall claims are the 6-pair interleaved ones.
+
+---
+
 **Round 715 (2026-07-26) — measuring `expressions/asOperator` for adoption turned up a
 SILENT WRONG-OUTPUT bug, which landed; the category itself did not. Corpus 12,761 →
 12,765 / 0 / 3.**
@@ -233,7 +302,7 @@ start rather than the tail of a session.
 is now one diagnostic family from un-deferral. Corpus 12,756 / 0 / 3, all 8 profiles
 byte-identical.**
 
-Round 706 handled `T | undefined` operands; a reference typed exactly `undefined` was
+Round 716 handled `T | undefined` operands; a reference typed exactly `undefined` was
 still silent. The cause was a strictNullChecks early return in the arithmetic walker
 that hands operands carrying the Null/Undefined flag to TS18050 — correct for the
 LITERAL `undefined`, wrong for a reference, which tsc reports as TS18048. Offering the
@@ -255,7 +324,7 @@ checked for implicit any.
 
 ---
 
-**Round 706 (2026-07-26) — the possibly-undefined operand rule LANDED, after settling
+**Round 716 (2026-07-26) — the possibly-undefined operand rule LANDED, after settling
 the pin question with evidence rather than authority. Corpus 12,756 / 0 / 3, all 8
 profiles byte-identical.**
 
@@ -1808,6 +1877,61 @@ round-618 session note and the rewritten docs/ARCHITECTURE-RETHINK.md § 6). Gro
 rules: the INV rules unchanged, PLUS wall-clock claims are decided ONLY by
 interleaved A/B medians — anything priced below the ±2% drift band folds into a
 structural item instead of landing alone.**
+
+**ROUND-716 RE-SCOPE (owner: "do anything needed … we are free to completely
+redesign this project, if the performance gain is on the horizon"). The arc's
+diagnosis was wrong and is corrected in docs/ARCHITECTURE-RETHINK.md § 0 — READ IT
+FIRST. Headline: the type system is 5.0 s of an 18 s compile (28%); the dispatch
+and handler machinery is ~7.6 s (42%); the entire context-cache prize INV.5(c)
+exists for is 68 ms. Work (DISPATCH.1) before any further cache/identity work.**
+
+- [ ] **(DISPATCH.1) Per-kind handler dispatch table — the measured lever
+  (1.0–2.5 s, ~6–14%), and the only structural item currently backed by a
+  decisive probe.** THE MEASUREMENT (round 716, `--passTiming` on the compiler
+  profile): `spineEnterNode` reaches ~118 handler entry points and
+  `spineLeaveNode` 14 sub-dispatchers, and BOTH run for every one of the 857k
+  nodes — 14.8 µs/node enter+leave, of which only ~5.9 µs is type-system work.
+  Per-kind attribution shows the shape: `IDENTIFIER` is 381,670 nodes at
+  **2,746 ns each = 1,048 ms**, `PROPERTY_ACCESS_EXPRESSION` 67,902 at 4,221 ns,
+  `BINARY_EXPRESSION` 38,454 at 6,959 ns — leaf kinds that almost no handler
+  wants, each paying the full consultation chain. **THE DECISIVE PROBE: skipping
+  `spineEnterNode` entirely for bare Identifiers left the compiler profile's 46
+  diagnostics BYTE-IDENTICAL** (`--listAll` diff empty), so that ~1 s is
+  provably unnecessary on this profile. (The probe itself was reverted — "skip
+  identifiers" is not the fix, it is the evidence.)
+  **THE FIX:** precompute, per `NodeKind` (138 dense ids, M0.2 already gives the
+  stamped `kindId`), the exact list of handlers that can fire for that kind, and
+  dispatch only that list. Most handlers apply to 1–5 kinds, so the average node
+  should run ~2–5 handlers instead of ~130.
+  **METHOD — this is the load-bearing part, because the handler set per kind must
+  be DERIVED, not guessed:** (a) build the table by INSTRUMENTATION, not by
+  reading guards — add an opt-in mode that records, per handler entry point, the
+  set of `kindId`s for which it does anything observable (emits, writes a frame,
+  mutates a map), accumulated over BOTH the corpus suite AND all 8 profiles;
+  (b) a handler whose observable-kind set cannot be closed (it climbs ancestors,
+  or keys on parent kind) stays in the always-run list — start conservative, the
+  win comes from the leaf kinds; (c) land per handler-family, corpus + `--listAll`
+  ×8 gated each time; (d) re-measure with the INV.4(g) per-kind counters after
+  each family, since the profile shifts.
+  **TRAP:** the corpus is the only gate that sees kinds the 8 profiles never
+  exercise — a table derived from profiles alone WILL be wrong. Derive from the
+  suite run and treat the profiles as confirmation.
+  Blocks nothing; unblocks the honest re-measure of every other lever.
+
+- [ ] ~~(cache/identity work of any shape)~~ — **CLOSED round 716 by measurement,
+  do NOT re-open without new evidence.** (1) The context-bypassed resolution
+  population is **68 ms** total (31,571 outermost calls @ 2.2 µs) — 0.35% of the
+  compile. (2) Widening the round-548 INV.5(c) gate lifts hits 23% → 46% and
+  measures **+28% wall** (6 interleaved pairs); memoizing the fingerprint (builds
+  53,765 → 13,293) still measures **+11.9%**. (3) Pure identity keying (tsc's
+  mapper-object shape) gets **4.1%** hits, because the context maps are
+  re-allocated per install rather than reused per region. (4) The widened key also
+  exposed that the context fingerprint is INCOMPLETE — 1,269 shape-different
+  serves, all lib generic signatures (`(value: T, …)` served where
+  `(value: Declaration, …)` was correct), i.e. the substitution input is ambient
+  state captured by none of nsStack/tpScope/aliasArgs; that would have to be fixed
+  BEFORE any widening, for a prize of 68 ms. Third independent confirmation of the
+  round-659/665 law: **the cacheable population is the cheap tail.**
 
 - [x] **(M0.1) Tail triage — CLOSED round 620 with the deletion hypothesis doubly
   dead.** Phases (a)–(c) ran round 619 (PassLab facility, corpus census —
