@@ -51,6 +51,21 @@ Landing an inert change is the exact failure mode rounds 693/694 spent themselve
 The next round does it as one coherent change: chain parity first, then the scope
 install, then (B2), gated together.
 
+**Attempt 2, same round: 27 → 4, then reverted at the budget line.** The stack-trace
+probe in `Diagnostic`'s `init` (the documented technique) named the emitter in one
+run — `Checker.kt:31816`, i.e. real line **97352** after adding 65536, the wrap
+CLAUDE.md warns about. It is `checkReturnAssignability`'s engine emitter, which builds
+its chain for Object→Object and Union sources and simply has **no TypeParam-target
+branch**, unlike the var-decl and assignment paths. Adding that block cleared **23 of
+the 27**. The remaining four are each diagnosed on the item: two are chain-FORM
+mismatches in opposite directions (an unconstrained `T` arriving with
+`constraint == anyType` picks the constraint form where tsc uses the arbitrary one;
+an intersection source picks the arbitrary form where tsc uses the constraint one),
+and two are genuinely new emissions against targets that only became checkable once
+the scope resolved them — a mapped-type return and a DEFERRED conditional type, both
+M3-depth. I reverted rather than land four red tests or rush a gate for two FPs that
+are also the most likely to show up on the profiles.
+
 **Two rounds of suspects eliminated by measurement, in order:** `typeParams`
 threading (arrives correctly), the round-431e foreign-TP gate (never fires), the
 relation's unconstrained-TP leniency (changing it leaves the case silent; costs
@@ -4229,6 +4244,40 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   (constraint-form → arbitrary-form, `errorMessagesIntersectionTypes03`) and two genuinely
   NEW diagnostics (`Type 'Q' is not assignable to type 'InferBecauseWhyNot<Q>'`,
   `Type 'any[]' is not assignable to type 'T'`) that need their own verdict.
+  **Attempt 2 (round 696, also reverted) took it from 27 failures to FOUR — the recipe
+  below is ~5 minutes of re-typing, so start there rather than re-deriving.**
+  *Edit 1 — the scope install:* in the cta per-statement dispatch sandwich (beside
+  `currentTypeParamDecls = frame.fnTpDecls ?: emptyMap()`), save `currentTypeParamScope`,
+  set it to `frame.fnTpScope ?: <saved>`, restore it in the same `finally` as
+  `currentTypeParamDecls`.
+  *Edit 2 — chain parity* in `checkReturnAssignability`'s engine emitter, inserted
+  immediately BEFORE its "B60.6f (mirror): TS2208 related info" block: when
+  `chain.isEmpty() && targetType is Type.TypeParam`, add the constraint form
+  (`'<src>' is assignable to the constraint of type '<T>', but …`) when the constraint
+  is non-null AND `checkTypeRelatedTo(sourceType, constraint)` AND
+  `!anonymousObjectHasExcessVsConstraint(...)`, else the arbitrary form — exactly the
+  block the var-decl (~95363) and assignment (~98644) paths carry. This alone clears
+  **23 of the 27**.
+  **The FOUR residuals, each already diagnosed:**
+  (a) `declFileGenericType` — `export function F5<T>(): T { return null; }` is
+  UNCONSTRAINED, yet the interned TypeParam arrives with `constraint == anyType`, so the
+  new block picks the constraint form where tsc uses the arbitrary one. Fix: treat an
+  `any` constraint as unconstrained (the sibling TS2208 block right below already has an
+  "effectively unconstrained" notion, for the self-circular case).
+  (b) `errorMessagesIntersectionTypes03` — the reverse: tsc wants the CONSTRAINT form
+  (`'A & B' is assignable to the constraint of type 'V'…`) and we now produce the
+  arbitrary one, i.e. `constraintOk` computes false for an INTERSECTION source against
+  its own constituent constraint. Worth checking `anonymousObjectHasExcessVsConstraint`
+  first; the old string fallback got this right by comparing constraint TEXT
+  (`emitTS2322`'s B60.6c path), which is the behaviour to match.
+  (c) `deeplyNestedMappedTypes` and (d) `conditionalTypeAssignabilityWhenDeferred` are
+  genuinely NEW emissions, not chain problems — `Type 'any[]' is not assignable to type
+  'T'` and `Type 'Q' is not assignable to type 'InferBecauseWhyNot<Q>'`. Both are targets
+  that only became checkable once the scope resolved them, and both are M3-depth (a
+  mapped-type return and a DEFERRED conditional type, which tsc relates under rules we
+  do not model). Expect these two to need a gate of their own — the round-431e foreign-TP
+  gate is the family precedent — and note they are also the two most likely to appear on
+  the profiles, so `--listAll` ×8 is mandatory before landing.
 - [ ] **(M3.0-gap-4) `readonlyRestParameters` — a `readonly T[]` spread argument
   is neither rejected nor counted** (round 695, deferred error baseline). Missing
   **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
