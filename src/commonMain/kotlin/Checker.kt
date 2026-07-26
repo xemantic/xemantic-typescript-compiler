@@ -19624,7 +19624,7 @@ class Checker(
                     }
                 } ?: return null
                 val sym = getPropertyOfType(getApparentType(rhsT), propName) ?: return null
-                try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
+                getTypeOfSymbol(sym)
             }
             is ArrayLiteralExpression -> {
                 val idx = target.elements.indexOfFirst { (it as? Identifier)?.text == name }
@@ -21251,7 +21251,8 @@ class Checker(
             return
         }
         val obj = lhsType as? Type.Object ?: return
-        val sigs = try { resolveStructuredTypeMembers(obj); obj.callSignatures } catch (_: Exception) { null } ?: return
+        resolveStructuredTypeMembers(obj)
+        val sigs = obj.callSignatures ?: return
         if (sigs.isEmpty()) return
         val applicable = sigs.count { it.parameters.size >= reqArity }
         if (applicable != 1) emitVarFn7006Params(params, source, fileName)
@@ -38728,7 +38729,7 @@ class Checker(
         // type-args and resolves method signatures (method TPs kept as fresh TypeParams,
         // which the comparator binds positionally — see ts2403SignatureIdentical).
         resolveGenericPropertyType(obj, propSym)?.let { return it }
-        return try { getTypeOfSymbol(propSym) } catch (_: Exception) { null }
+        return getTypeOfSymbol(propSym)
     }
 
     private fun ts2403CombineWithMembers(a: Type.Object, b: Type.Object, depth: Int, soFar: Ts2403Cmp): Ts2403Cmp {
@@ -38773,8 +38774,8 @@ class Checker(
         try {
             var result = Ts2403Cmp.IDENTICAL
             for (i in sa.parameters.indices) {
-                val pa = try { getTypeOfSymbol(sa.parameters[i]) } catch (_: Exception) { return Ts2403Cmp.UNKNOWN }
-                val pb = try { getTypeOfSymbol(sb.parameters[i]) } catch (_: Exception) { return Ts2403Cmp.UNKNOWN }
+                val pa = getTypeOfSymbol(sa.parameters[i])
+                val pb = getTypeOfSymbol(sb.parameters[i])
                 when (ts2403Identical(pa, pb, depth + 1)) {
                     Ts2403Cmp.DIFFERENT -> return Ts2403Cmp.DIFFERENT
                     Ts2403Cmp.UNKNOWN -> result = Ts2403Cmp.UNKNOWN
@@ -78302,7 +78303,7 @@ interface DataView {
         // FP-safe (class instances / unions / arrays / `{}` are skipped).
         if (receiver !is Type.Object || receiver is Type.Interface || receiver is Type.Reference) return
         if (receiver.tupleElementTypes != null) return
-        try { resolveStructuredTypeMembers(receiver) } catch (_: Exception) {}
+        resolveStructuredTypeMembers(receiver)
         val recvEmpty = receiver.properties.isNullOrEmpty() &&
             receiver.stringIndexInfo == null && receiver.numberIndexInfo == null
         if (recvEmpty) return // owned by B9.4
@@ -78413,9 +78414,9 @@ interface DataView {
 
     private fun propTypeOfReceiver(recv: Type?, name: String): Type? {
         if (recv !is Type.Object) return null
-        try { resolveStructuredTypeMembers(recv) } catch (_: Exception) {}
+        resolveStructuredTypeMembers(recv)
         val sym = recv.properties?.firstOrNull { it.name == name } ?: recv.members?.get(name) ?: return null
-        return try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
+        return getTypeOfSymbol(sym)
     }
 
     private fun tryGetTypeFromTypeNode(node: TypeNode): Type? =
@@ -79440,7 +79441,7 @@ interface DataView {
             val nm = pName(p) ?: continue
             val tgtSym = tgtProps.find { it.name == nm } ?: continue
             val srcT = try { getTypeOfExpression(p.initializer) } catch (_: Exception) { continue }
-            val tgtT = try { getTypeOfSymbol(tgtSym) } catch (_: Exception) { continue }
+            val tgtT = getTypeOfSymbol(tgtSym)
             if (srcT === anyType || srcT === errorType || tgtT === anyType || tgtT === errorType) continue
             val comparable = checkTypeRelatedTo(srcT, tgtT, comparableRelation)
             if (!comparable) {
@@ -91711,8 +91712,8 @@ interface DataView {
                         val propName = (el.propertyName as? Identifier)?.text ?: bound
                         val sym = getPropertyOfType(memberSource, propName)
                         if (sym != null) {
-                            var mt = try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
-                            if (mt != null && mt !== errorType) {
+                            var mt = getTypeOfSymbol(sym)
+                            if (mt !== errorType) {
                                 if (mt !== anyType && isOptionalProperty(sym) && el.initializer == null &&
                                     !typeIncludesUndefined(mt)
                                 ) {
@@ -93872,7 +93873,7 @@ interface DataView {
             if (inner.text in ambiguousBlockLocalNames) continue
             val propName = (el.propertyName as? Identifier)?.text ?: inner.text
             val sym = getPropertyOfType(apparent, propName) ?: continue
-            val t = try { getTypeOfSymbol(sym) } catch (_: Exception) { null } ?: continue
+            val t = getTypeOfSymbol(sym)
             if (t === anyType || t === errorType) continue
             // FUNCTION-shaped member types stay unrecorded: re-checking a
             // destructured fn value against its interface target rides the
@@ -93882,7 +93883,7 @@ interface DataView {
             // arrive lazily-membered or wrapped `| undefined` — resolve + check
             // union constituents.
             fun fnShaped(x: Type): Boolean = (x as? Type.Object)?.let { o ->
-                try { resolveStructuredTypeMembers(o) } catch (_: Exception) {}
+                resolveStructuredTypeMembers(o)
                 !o.callSignatures.isNullOrEmpty() || !o.constructSignatures.isNullOrEmpty()
             } == true
             if (fnShaped(t) || (t is Type.Union && t.types.any { fnShaped(it) })) continue
@@ -101027,7 +101028,7 @@ interface DataView {
             val methodNameLen = info.methodNameLen
 
             val memberSym = getPropertyOfType(best, name) ?: return false
-            val memberType = try { getTypeOfSymbol(memberSym) } catch (_: Exception) { return false }
+            val memberType = getTypeOfSymbol(memberSym)
             if (memberType !is Type.Object || memberType.callSignatures.isNullOrEmpty()) return false
             val memberSig = memberType.callSignatures!!.first()
             val memberReturn = memberSig.resolvedReturnType ?: return false
@@ -103301,8 +103302,7 @@ interface DataView {
             resolveStructuredTypeMembers(type)
             val sym = type.members?.get(name)
             if (sym != null) {
-                val t = try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
-                if (t != null) listOf(t) else emptyList()
+                listOf(getTypeOfSymbol(sym))
             } else emptyList()
         }
         else -> emptyList()
@@ -103330,8 +103330,8 @@ interface DataView {
         for (sProp in srcProps) {
             if (sProp.name.isEmpty() || sProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
             val tProp = getPropertyAcrossType(targetType, sProp.name) ?: continue
-            val tPropType = try { getTypeOfSymbol(tProp) } catch (_: Exception) { continue }
-            val sPropType = try { getTypeOfSymbol(sProp) } catch (_: Exception) { continue }
+            val tPropType = getTypeOfSymbol(tProp)
+            val sPropType = getTypeOfSymbol(sProp)
             if (tPropType === anyType || tPropType === errorType ||
                 sPropType === anyType || sPropType === errorType) continue
             val tInner = weakTargetProperties(tPropType) ?: continue
@@ -113087,7 +113087,7 @@ interface DataView {
                     app.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" })
                     return app.resolvedTypeArguments?.firstOrNull()
                 if (app is Type.Object) {
-                    try { resolveStructuredTypeMembers(app) } catch (_: Exception) { return null }
+                    resolveStructuredTypeMembers(app)
                     app.numberIndexInfo?.let { return it.type }
                 }
                 return null
@@ -113102,7 +113102,7 @@ interface DataView {
         // MinimalResolutionCacheHost` resolves via CompilerOptions'
         // `[option: string]: …` (tsc documentRegistry.ts).
         if (apparent is Type.Object) {
-            try { resolveStructuredTypeMembers(apparent) } catch (_: Exception) { return null }
+            resolveStructuredTypeMembers(apparent)
             apparent.stringIndexInfo?.type?.let { return it }
         }
         return null
@@ -123166,7 +123166,7 @@ interface DataView {
             val nameId = el.name as? Identifier ?: continue
             val propName = (el.propertyName as? Identifier)?.text ?: nameId.text
             val propSym = members[propName] ?: continue
-            val propType = try { getTypeOfSymbol(propSym) } catch (_: Exception) { continue }
+            val propType = getTypeOfSymbol(propSym)
             if (propType === anyType || propType === errorType) continue
             val defType = widenType(try { getTypeOfExpression(def) } catch (_: Exception) { continue })
             if (defType === anyType || defType === errorType) continue
@@ -128255,7 +128255,7 @@ interface DataView {
             val name = (param.name as? Identifier)?.text ?: continue
             if (currentLocalTypes[name] != null) continue
             val sigParam = sig.parameters.getOrNull(i) ?: continue
-            val pType = try { getTypeOfSymbol(sigParam) } catch (_: Exception) { continue }
+            val pType = getTypeOfSymbol(sigParam)
             if (pType !== anyType && pType !== errorType) currentLocalTypes[name] = pType
         }
     }
@@ -134460,7 +134460,7 @@ interface DataView {
             if (recvType != null && recvType !== anyType && recvType !== errorType) {
                 val propSym = getPropertyOfType(recvType, memberName)
                 if (propSym != null && isOptionalProperty(propSym)) {
-                    val propType = try { getTypeOfSymbol(propSym) } catch (_: Exception) { anyType }
+                    val propType = getTypeOfSymbol(propSym)
                     // Member must be callable (else a different error owns it) and not
                     // narrowed to drop undefined.
                     if (getCallSignaturesOfType(propType).isNotEmpty() &&
@@ -142163,7 +142163,7 @@ interface DataView {
         val keyIsNumber = idxSig.parameters.first().type?.kind == SyntaxKind.NumberKeyword
         val varName = ((idxSig.type as TypeQuery).exprName as Identifier).text
         val varSym = currentFileLocals?.get(varName) ?: globals[varName] ?: return false
-        val declaredVar = try { getTypeOfSymbol(varSym) } catch (_: Exception) { return false }
+        val declaredVar = getTypeOfSymbol(varSym)
         if (declaredVar !is Type.Union) return false
         val flow = getFlowAt(flowAnchor) ?: return false
         val narrowed = try {
