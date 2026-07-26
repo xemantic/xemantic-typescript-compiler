@@ -19611,7 +19611,7 @@ class Checker(
      *  ASSIGNMENT `({ a, b: name } = rhs)` / `([name] = rhs)` — null when unresolvable
      *  (callers keep the conservative antecedent). Top-level pattern positions only. */
     private fun destructuredMemberTypeForFlow(target: Expression, rhs: Expression, name: String): Type? {
-        val rhsT = try { getTypeOfExpression(rhs) } catch (_: Exception) { null } ?: return null
+        val rhsT = getTypeOfExpression(rhs)
         if (rhsT === anyType || rhsT === errorType) return null
         return when (target) {
             is ObjectLiteralExpression -> {
@@ -21244,7 +21244,7 @@ class Checker(
         }
         if (params.none { it.type == null && it.initializer == null && !it.dotDotDotToken }) return
         val reqArity = params.count { !it.dotDotDotToken && it.initializer == null }
-        val lhsType = try { getTypeOfExpression(target) } catch (_: Exception) { return }
+        val lhsType = getTypeOfExpression(target)
         if (lhsType === anyType) {
             // Untyped / `any` target provides no contextual signature → params implicitly any.
             emitVarFn7006Params(params, source, fileName)
@@ -52456,7 +52456,7 @@ interface DataView {
                     spineArithFrames.add(SpineArithFrame(node, 1, savedCtx = spineArithCtx))
                     var lhsType: Type? = null
                     spineArithInstalled {
-                        lhsType = try { getTypeOfExpression(p.left) } catch (_: Exception) { null }
+                        lhsType = getTypeOfExpression(p.left)
                     }
                     val lt = lhsType
                     if (lt != null && lt !== anyType && lt !== errorType) spineArithCtx = lt
@@ -53886,7 +53886,7 @@ interface DataView {
         if (location is PrefixUnaryExpression || location is BinaryExpression || location is AwaitExpression) return
         val path = extractUncalledPath(location)
         val type = (if (path != null && path.isNotEmpty()) resolveUncalledOperandType(location, path) else null)
-            ?: (try { getTypeOfExpression(location) } catch (_: Exception) { return })
+            ?: (getTypeOfExpression(location))
         if (type === errorType || type === anyType || type === unknownType) return
         if (type !is Type.Reference || type.target.symbol?.name != "Promise") return
         if (typeIsPossiblyNullish(type)) return
@@ -62275,7 +62275,7 @@ interface DataView {
     private fun nuiaCheckTarget(target: Expression, source: String, fileName: String) {
         when (target) {
             is PropertyAccessExpression -> {
-                val recvType = try { getTypeOfExpression(target.expression) } catch (_: Exception) { return }
+                val recvType = getTypeOfExpression(target.expression)
                 if (recvType !is Type.Object || recvType is Type.Reference) return
                 resolveStructuredTypeMembers(recvType)
                 if (recvType.tupleElementTypes != null) return
@@ -62294,7 +62294,7 @@ interface DataView {
                 ))
             }
             is ElementAccessExpression -> {
-                val recvType = try { getTypeOfExpression(target.expression) } catch (_: Exception) { return }
+                val recvType = getTypeOfExpression(target.expression)
                 if (recvType !is Type.Object || recvType is Type.Reference) return
                 resolveStructuredTypeMembers(recvType)
                 if (recvType.tupleElementTypes != null) return
@@ -78342,7 +78342,7 @@ interface DataView {
             ))
             return
         }
-        val kt = try { getTypeOfExpression(keyExpr) } catch (_: Exception) { return }
+        val kt = getTypeOfExpression(keyExpr)
         when {
             kt.flags.hasAny(TypeFlags.Literal) || kt.flags.hasAny(TypeFlags.ESSymbolLike) -> return
             kt.flags.hasAny(TypeFlags.String) -> emitComputedKeyIndexDiag(stringType, receiver, keyStart, keyLen, source, fileName)
@@ -78360,8 +78360,8 @@ interface DataView {
         while (e is ParenthesizedExpression) e = e.expression
         if (e !is BinaryExpression) return
         if (e.operator != SyntaxKind.Plus && e.operator != SyntaxKind.PlusEquals) return
-        val lt = try { getTypeOfExpression(e.left) } catch (_: Exception) { return }
-        val rt = try { getTypeOfExpression(e.right) } catch (_: Exception) { return }
+        val lt = getTypeOfExpression(e.left)
+        val rt = getTypeOfExpression(e.right)
         if (lt === anyType || rt === anyType || lt === errorType || rt === errorType) return
         // Fire only when one side is a non-wrapper object and the other is not
         // string-like (string concatenation with an object is valid).
@@ -78525,7 +78525,7 @@ interface DataView {
                 // TypeScript treats those as property-name lookups against the empty
                 // `{}` type, not index-signature lookups — TS2537 doesn't fire.
                 if (isLiteralComputedKeyExpr(indexExpr)) continue
-                val indexType = try { getTypeOfExpression(indexExpr) } catch (_: Exception) { continue }
+                val indexType = getTypeOfExpression(indexExpr)
                 if (indexType === errorType || indexType === anyType) continue
                 // Only emit when the index type is a primitive that would require
                 // an index signature to match. TypeScript displays the widened
@@ -78557,7 +78557,7 @@ interface DataView {
             val computed = element.propertyName as? ComputedPropertyName ?: continue
             val indexExpr = computed.expression
             if (isLiteralComputedKeyExpr(indexExpr)) continue
-            val indexType = try { getTypeOfExpression(indexExpr) } catch (_: Exception) { continue }
+            val indexType = getTypeOfExpression(indexExpr)
             if (indexType === errorType || indexType === anyType) continue
             val widened = getWidenedLiteralType(indexType)
             val typeDisplay = typeToString(widened)
@@ -79410,7 +79410,7 @@ interface DataView {
         fun valDisplay(v: Expression): String = when {
             v is Identifier && v.text == "undefined" -> "undefined"
             v is Identifier && v.text == "null" -> "null"
-            else -> typeToString(getWidenedLiteralType(try { getTypeOfExpression(v) } catch (_: Exception) { return "any" }))
+            else -> typeToString(getWidenedLiteralType(getTypeOfExpression(v)))
         }
         val objDisp = "{ " + olProps.joinToString("; ") { p -> "${pName(p)}: ${valDisplay(p.initializer)}" } + "; }"
         val start = expr.pos
@@ -79440,7 +79440,7 @@ interface DataView {
         for (p in olProps) {
             val nm = pName(p) ?: continue
             val tgtSym = tgtProps.find { it.name == nm } ?: continue
-            val srcT = try { getTypeOfExpression(p.initializer) } catch (_: Exception) { continue }
+            val srcT = getTypeOfExpression(p.initializer)
             val tgtT = getTypeOfSymbol(tgtSym)
             if (srcT === anyType || srcT === errorType || tgtT === anyType || tgtT === errorType) continue
             val comparable = checkTypeRelatedTo(srcT, tgtT, comparableRelation)
@@ -79768,7 +79768,7 @@ interface DataView {
         // Emit TS2352 with "'T' could be instantiated with an arbitrary type..." chain
         // and TS2208 "This type parameter might need an `extends T` constraint." on src.
         if (tp.constraint == null) {
-            val srcType = try { getTypeOfExpression(expr.expression) } catch (_: Exception) { return }
+            val srcType = getTypeOfExpression(expr.expression)
             if (srcType !is Type.TypeParam) return
             if (srcType === tp) return
             if (srcType.constraint != null) return  // src is constrained; different shape
@@ -79805,7 +79805,7 @@ interface DataView {
         val constraint = tp.constraint ?: return
         if (constraint === anyType || constraint === errorType) return
         // Get source expression's type.
-        val srcType = try { getTypeOfExpression(expr.expression) } catch (_: Exception) { return }
+        val srcType = getTypeOfExpression(expr.expression)
         if (srcType === anyType || srcType === errorType) return
         if (srcType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return
         // B60.18b: src is also a constrained TypeParam different from tgt — emit
@@ -91449,7 +91449,7 @@ interface DataView {
             ) continue
             currentShadowedNames.add(bnName)
             if (!initResolved) {
-                initType = try { getTypeOfExpression(initializer) } catch (_: Exception) { null }
+                initType = getTypeOfExpression(initializer)
                 initResolved = true
             }
             val propName = (el.propertyName as? Identifier)?.text ?: bnName
@@ -93863,7 +93863,7 @@ interface DataView {
      *  or nested patterns are all skipped (conservative, first-decl-wins). */
     private fun recordDestructuredConstElementTypes(pattern: ObjectBindingPattern, init: Expression?) {
         if (init == null) return
-        val initT = try { getTypeOfExpression(init) } catch (_: Exception) { return }
+        val initT = getTypeOfExpression(init)
         if (initT === anyType || initT === errorType || initT === unknownType || initT is Type.Union) return
         val apparent = getApparentType(initT)
         for (el in pattern.elements) {
@@ -94306,8 +94306,8 @@ interface DataView {
                             propParts.add("$tlName: typeof import(\"$modName\");")
                         } else {
                             // Fall back to the value's primitive display if simple.
-                            val vt = try { getTypeOfExpression(olValue) } catch (_: Exception) { null }
-                            if (vt == null || vt === anyType || vt === errorType) { matched = false; break }
+                            val vt = getTypeOfExpression(olValue)
+                            if (vt === anyType || vt === errorType) { matched = false; break }
                             propParts.add("$tlName: ${typeToString(getWidenedLiteralType(vt))};")
                         }
                     }
@@ -96356,7 +96356,7 @@ interface DataView {
             val tn = memberTypes[nm] ?: continue
             val mt = getTypeFromTypeNode(tn)
             if (mt === anyType || mt === errorType) continue
-            val vt = try { getTypeOfExpression(v) } catch (_: Exception) { continue }
+            val vt = getTypeOfExpression(v)
             if (vt === anyType || vt === errorType) continue
             if (!checkTypeRelatedTo(vt, mt, assignableRelation)) return false
         }
@@ -96465,7 +96465,7 @@ interface DataView {
     private fun objectLiteralHasUnresolvedSpread(obj: ObjectLiteralExpression): Boolean {
         for (p in obj.properties) {
             if (p is SpreadAssignment) {
-                val st = try { getTypeOfExpression(p.expression) } catch (_: Exception) { return true }
+                val st = getTypeOfExpression(p.expression)
                 if (st === anyType || st === errorType) return true
             }
         }
@@ -97592,8 +97592,8 @@ interface DataView {
                 if (targetInitModuleName != null && rhsModuleName == null) {
                     // Shape (1): target is `typeof import("X")`, RHS is something else.
                     // Emit only when RHS is a simple primitive literal — conservative.
-                    val rhsType = try { getTypeOfExpression(expr.right) } catch (_: Exception) { null }
-                    if (rhsType != null && rhsType !== anyType && rhsType !== errorType &&
+                    val rhsType = getTypeOfExpression(expr.right)
+                    if (rhsType !== anyType && rhsType !== errorType &&
                         isSimpleCheckableType(rhsType)) {
                         val displaySource = typeToString(getWidenedLiteralType(rhsType))
                         val displayTarget = "typeof import(\"$targetInitModuleName\")"
@@ -99024,7 +99024,7 @@ interface DataView {
         val ol = ret.expression as? ObjectLiteralExpression ?: return null
         val pa = ol.properties.singleOrNull() as? PropertyAssignment ?: return null
         val subName = (pa.name as? Identifier)?.text ?: return null
-        val t = getWidenedLiteralType(try { getTypeOfExpression(pa.initializer) } catch (_: Exception) { return null })
+        val t = getWidenedLiteralType(getTypeOfExpression(pa.initializer))
         if (t === anyType || t === errorType) return null
         return subName to t
     }
@@ -100994,7 +100994,7 @@ interface DataView {
                         }
                         is FunctionExpression -> init.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
                     }
-                    val ft = try { getTypeOfExpression(init) } catch (_: Exception) { return false }
+                    val ft = getTypeOfExpression(init)
                     PropInfo(n, ft, re, init, -1, 0)
                 }
                 is MethodDeclaration -> {
@@ -103322,7 +103322,7 @@ interface DataView {
         val init = decl.initializer ?: return false
         val targetType = getTypeFromTypeNode(ann)
         if (targetType === errorType || targetType === anyType) return false
-        val srcType = try { getTypeOfExpression(init) } catch (_: Exception) { return false }
+        val srcType = getTypeOfExpression(init)
         if (srcType !is Type.Object) return false
         resolveStructuredTypeMembers(srcType)
         val srcProps = srcType.properties ?: return false
@@ -103515,7 +103515,7 @@ interface DataView {
             val tInnerNames = tInner.map { it.name }.filter { it.isNotEmpty() }.toSet()
             if (tInnerNames.isEmpty()) continue
             val vType = literalTypeOfExpression(v)
-                ?: try { getTypeOfExpression(v) } catch (_: Exception) { continue }
+                ?: getTypeOfExpression(v)
             if (vType === anyType || vType === errorType) continue
             val srcNames = weakSourcePropertyNames(vType) ?: continue
             if (srcNames.isEmpty()) continue
@@ -105114,8 +105114,8 @@ interface DataView {
                 SyntaxKind.BarBar, SyntaxKind.QuestionQuestion ->
                     if (rhsIsDefinitelyNonNullish(rhs.right)) true
                     else {
-                        val rt = try { getTypeOfExpression(rhs.right) } catch (_: Exception) { null }
-                        rt != null && rt !== anyType && rt !== errorType &&
+                        val rt = getTypeOfExpression(rhs.right)
+                        rt !== anyType && rt !== errorType &&
                             !typeIncludesUndefined(rt) && !typeIncludesNull(rt)
                     }
                 // Round 453: arithmetic / bitwise / shift / relational / equality /
@@ -105490,7 +105490,7 @@ interface DataView {
         if (decl.typeParameters?.none { it.name.text == retTp } != false) return null
         val p0 = decl.parameters.firstOrNull() ?: return null
         if (!paramAnnotationIsTpPlusNullish(p0.type, retTp)) return null
-        val argT = try { getTypeOfExpression(expr.arguments[0]) } catch (_: Exception) { return null }
+        val argT = getTypeOfExpression(expr.arguments[0])
         if (argT === anyType || argT === errorType || argT === unknownType) return null
         val stripped = narrowByExcludingNullUndefined(argT)
         return stripped.takeIf { !typeHasNullishConstituent(it) && it !== neverType }
@@ -109493,7 +109493,7 @@ interface DataView {
                     // (`{ id, ...thingProvidingLabel }` no longer FP's "label missing"). Additive +
                     // conservative: only adds props not already explicit; spreading nullish is a
                     // no-op so union spreads filter nullish constituents in spreadGuaranteedProps.
-                    val st = try { getTypeOfExpression(prop.expression) } catch (_: Exception) { return anyType }
+                    val st = getTypeOfExpression(prop.expression)
                     // Round 481: tsc types an object literal that spreads `any`/error as `any`
                     // (the spread poisons the whole object — the round-445 rule, now applied at
                     // the TYPE level so every consumer agrees: the partial {explicit-props} type
@@ -109647,7 +109647,7 @@ interface DataView {
                 if (lhs.text != "Array") continue
                 val rhs = expr.right
                 if (rhs !is FunctionExpression && rhs !is ArrowFunction) continue
-                val fnType = try { getTypeOfExpression(rhs) } catch (_: Exception) { continue }
+                val fnType = getTypeOfExpression(rhs)
                 val sig = (fnType as? Type.Object)?.callSignatures?.firstOrNull() ?: continue
                 val fnDisplay = signatureToString(sig, false)
                 val missing = listOf("isArray", "from", "of", "[Symbol.species]")
@@ -109864,7 +109864,7 @@ interface DataView {
                 }
                 is ShorthandPropertyAssignment -> explicitSeen.add(Triple(prop.name.text, prop.name.pos, prop.name.text.length))
                 is SpreadAssignment -> {
-                    val st = try { getTypeOfExpression(prop.expression) } catch (_: Exception) { continue }
+                    val st = getTypeOfExpression(prop.expression)
                     var guaranteed = spreadGuaranteedProps(st).keys
                     // thislessFunctionsNotContextSensitive3: `...this.options.suggestion` is typed
                     // `SuggestionOptions` (via addOptions' `{ suggestion: … as SuggestionOptions }`)
@@ -110797,7 +110797,7 @@ interface DataView {
         var elementUnion: Type.Union? = null
         for (a in call.arguments) {
             if (a === arg) continue
-            val t = try { getTypeOfExpression(a) } catch (_: Exception) { null } ?: continue
+            val t = getTypeOfExpression(a)
             val arrayT = when {
                 t is Type.Reference && (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray") -> t
                 t is Type.Union -> t.types.firstOrNull { m ->
@@ -123167,7 +123167,7 @@ interface DataView {
             val propSym = members[propName] ?: continue
             val propType = getTypeOfSymbol(propSym)
             if (propType === anyType || propType === errorType) continue
-            val defType = widenType(try { getTypeOfExpression(def) } catch (_: Exception) { continue })
+            val defType = widenType(getTypeOfExpression(def))
             if (defType === anyType || defType === errorType) continue
             if (checkTypeRelatedTo(defType, propType, assignableRelation)) continue
             val (line, ch) = getLineAndCharacterOfPosition(source, nameId.pos)
@@ -128341,8 +128341,8 @@ interface DataView {
                 // (emitter.ts passes such params straight through as call arguments →
                 // FP TS2345 against the outer function's own 5-param signature).
                 // Same B516 TP-referencing gate as the annotated branch.
-                val inferred = try { getTypeOfExpression(param.initializer) } catch (_: Exception) { null }
-                if (inferred != null && inferred !== anyType && inferred !== errorType &&
+                val inferred = getTypeOfExpression(param.initializer)
+                if (inferred !== anyType && inferred !== errorType &&
                     !isTpReferencingFnType(inferred)
                 ) {
                     currentLocalTypes[paramName.text] = inferred
@@ -128451,7 +128451,7 @@ interface DataView {
         // case resolves to `anyType` (B467, recovered below via the closure's enclosingVarDecls),
         // so `anyType` must NOT bail — it needs the closure. Behavior-preserving: the concrete
         // path returns false here exactly as the post-scan `narrowed` check would.
-        var raw = try { getTypeOfExpression(recv) } catch (_: Exception) { return false }
+        var raw = getTypeOfExpression(recv)
         if (raw !== anyType && (raw !is Type.Union || raw.types.none { it === undefinedType })) return false
         var found: FlowStart? = null
         var bestPos = -1
@@ -134455,8 +134455,8 @@ interface DataView {
         if (strictNullChecks && !expr.questionDotToken && calleeExpr is PropertyAccessExpression &&
             !calleeExpr.questionDotToken) {
             val memberName = (calleeExpr.name).text
-            val recvType = try { getTypeOfExpression(calleeExpr.expression) } catch (_: Exception) { null }
-            if (recvType != null && recvType !== anyType && recvType !== errorType) {
+            val recvType = getTypeOfExpression(calleeExpr.expression)
+            if (recvType !== anyType && recvType !== errorType) {
                 val propSym = getPropertyOfType(recvType, memberName)
                 if (propSym != null && isOptionalProperty(propSym)) {
                     val propType = getTypeOfSymbol(propSym)
@@ -138991,7 +138991,7 @@ interface DataView {
                 is TypeReference -> {
                     val refName = (ann.typeName as? Identifier)?.text ?: continue
                     val sigTp = ifaceTpToSigTp[refName] ?: continue
-                    val t = (literalTypeOfExpression(valueExpr) ?: try { getTypeOfExpression(valueExpr) } catch (_: Exception) { continue })
+                    val t = (literalTypeOfExpression(valueExpr) ?: getTypeOfExpression(valueExpr))
                     if (t === anyType || t === errorType) continue
                     bindings[sigTp] = t
                 }
@@ -139001,7 +139001,7 @@ interface DataView {
                     val sigTp = ifaceTpToSigTp[refName] ?: continue
                     val arr = valueExpr as? ArrayLiteralExpression ?: continue
                     val el = arr.elements.firstOrNull { it !is OmittedExpression && it !is SpreadElement } ?: continue
-                    val et = getWidenedLiteralType(try { getTypeOfExpression(el) } catch (_: Exception) { continue })
+                    val et = getWidenedLiteralType(getTypeOfExpression(el))
                     if (et === anyType || et === errorType) continue
                     bindings[sigTp] = et
                 }
@@ -139101,7 +139101,7 @@ interface DataView {
         // When EVERY member of the narrowed receiver declares the property
         // non-optional, the access cannot be undefined → suppress.
         run {
-            val recvRaw = try { getTypeOfExpression(arg.expression) } catch (_: Exception) { return@run }
+            val recvRaw = getTypeOfExpression(arg.expression)
             if (recvRaw === anyType || recvRaw === errorType) return@run
             val narrowed = getNarrowedTypeForReference(recvRaw, arg.expression)
             if (narrowed === recvRaw || narrowed === neverType || narrowed === anyType) return@run
@@ -144142,7 +144142,7 @@ interface DataView {
                     }
                 }
             } else {
-                val valueType = try { getTypeOfExpression(value) } catch (_: Exception) { continue }
+                val valueType = getTypeOfExpression(value)
                 if (valueType === anyType || valueType === errorType) continue
                 // Nullish value vs a target member that doesn't accept it (strictNullChecks):
                 // `children: null` vs optional `children?: IIntervalTreeNode[]`
@@ -161613,9 +161613,9 @@ interface DataView {
                 // does not skip any operator check.
                 if (expr.operator == SyntaxKind.Equals && expr.right is ObjectLiteralExpression) {
                     checkArithmeticInExpr(expr.left, source, fileName)
-                    val lhsType = try { getTypeOfExpression(expr.left) } catch (_: Exception) { null }
+                    val lhsType = getTypeOfExpression(expr.left)
                     val saved = contextualType
-                    if (lhsType != null && lhsType !== anyType && lhsType !== errorType) {
+                    if (lhsType !== anyType && lhsType !== errorType) {
                         contextualType = lhsType
                     }
                     try { checkArithmeticInExpr(expr.right, source, fileName) }
