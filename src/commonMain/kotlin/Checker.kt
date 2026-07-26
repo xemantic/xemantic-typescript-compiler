@@ -8968,6 +8968,7 @@ class Checker(
             }
 
             // Merge each augmented export into the corresponding global symbol.
+            val declaringFileIsModule = declaringFileName in moduleFiles
             for ((exportName, augSymbol) in augExports) {
                 if (!shouldAugmentSymbol(augSymbol)) continue
                 val globalSymbol = globals[exportName]
@@ -8984,7 +8985,7 @@ class Checker(
                             }
                         }
                     }
-                } else if (targetFile == null) {
+                } else if (targetFile == null && declaringFileIsModule) {
                     // New export not yet in globals — add it. INV.3(d): ONLY for an
                     // AMBIENT (fileless) augmentation target — `globals` is its sole
                     // visibility channel. A FILE-module augmentation's exports are
@@ -8994,6 +8995,14 @@ class Checker(
                     // delta then marks non-module-only, making every annotation of
                     // that name resolve to the stub (the services-profile
                     // SourceFile/Node TS2339×5355 flood, round 510).
+                    // M4.9: and only from a file that is itself an external MODULE, i.e.
+                    // a genuine AUGMENTATION. The same syntax in a script `.d.ts`
+                    // DECLARES the ambient module (`@types/node`'s
+                    // `declare module "fs" { export interface WatchOptions … }`), whose
+                    // members are reachable only through an import of "fs" — publishing
+                    // those into `globals` made them outrank a file's own import alias
+                    // of the same name (the compiler's own `WatchOptions` lost to
+                    // node's `fs.WatchOptions`).
                     globals[exportName] = augSymbol
                 }
             }
