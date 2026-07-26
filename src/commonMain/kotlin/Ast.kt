@@ -1607,6 +1607,11 @@ data class MappedType(
      *  the `Mutable<T>` idiom) — the mapped type STRIPS readonly from the source
      *  members. [readonlyToken] is also true in that case (the keyword is present). */
     val readonlyMinus: Boolean = false,
+    /** Round 718: true for the `-?` modifier form (`{ [K in keyof T]-?: T[K] }`, the
+     *  `Required<T>` idiom) — the mapped type STRIPS optionality from the source
+     *  members. [questionToken] is also true in that case (the `?` token is present),
+     *  exactly mirroring [readonlyMinus]/[readonlyToken]. */
+    val questionMinus: Boolean = false,
     override val pos: Int = 0,
     override val end: Int = 0,
     override val leadingComments: List<Comment>? = null,

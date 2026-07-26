@@ -9569,11 +9569,18 @@ class Parser(
         parseExpected(SyntaxKind.CloseBracket)
         // Optional `?`/`+?`/`-?` after `]`
         var questionToken = false
+        // Round 718: `-?` REMOVES optionality (`Required<T>`) while `?`/`+?` ADD it.
+        // Recording both as a bare `questionToken` made Required<T> behave as Partial<T>
+        // — inverted — so the minus form gets its own flag, mirroring readonlyMinus.
+        var questionMinus = false
         when (token) {
             SyntaxKind.Question -> { questionToken = true; nextToken() }
             SyntaxKind.Plus, SyntaxKind.Minus -> {
+                val isMinus = token == SyntaxKind.Minus
                 nextToken()
-                if (token == SyntaxKind.Question) { questionToken = true; nextToken() }
+                if (token == SyntaxKind.Question) {
+                    questionToken = true; questionMinus = isMinus; nextToken()
+                }
             }
             else -> {}
         }
@@ -9606,6 +9613,7 @@ class Parser(
             questionToken = questionToken,
             readonlyToken = readonlyToken,
             readonlyMinus = readonlyMinus,
+            questionMinus = questionMinus,
             pos = pos,
             end = getEnd(),
         )

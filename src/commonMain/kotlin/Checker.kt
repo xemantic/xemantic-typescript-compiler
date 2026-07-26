@@ -3128,6 +3128,15 @@ class Checker(
      *  is legal). Declared before `init` per the init-order rule. */
     private val mappedMutableMemberIds = mutableSetOf<Int>()
 
+    /** Round 718: the `?` analogue of [mappedMutableMemberIds] — ids of members synthesized
+     *  by a `-?` mapped type (`Required<T> = { [P in keyof T]-?: T[P] }`). Exactly the same
+     *  trap: a homomorphic mapped member carries its SOURCE property's declaration, so
+     *  [isOptionalProperty]'s declaration scan sees the source's `?` and calls the member
+     *  optional — which made every `Required<Pick<X, "m">>().m()` a false TS2722 (eleven of
+     *  them on tsc's own source, via `context.tracker.reportInferenceFallback`). Declared
+     *  before `init` per the init-order rule. */
+    private val mappedRequiredMemberIds = mutableSetOf<Int>()
+
     /** B435: ids of `Object.freeze(objLit)` result Type.Objects. `widenType` returns these
      *  AS-IS (no member-widening rebuild) so the readonly marking + literal member types
      *  survive the `getTypeOfSymbol` → `inferTypeFromInitializer` → `widenType` path that a
@@ -147442,12 +147451,17 @@ interface DataView {
         // byte-identical — and avoids a HashSet lookup on every isOptionalProperty call.
         val decl = symbol.valueDeclaration ?: symbol.declarations.firstOrNull()
         if (decl != null) {
-            return when (decl) {
+            val declaredOptional = when (decl) {
                 is PropertyDeclaration -> decl.questionToken
                 is Parameter -> decl.questionToken
                 is MethodDeclaration -> decl.questionToken
                 else -> false
             }
+            // Round 718: a `-?` mapped member (`Required<T>`) carries its optional SOURCE
+            // declaration but is NOT itself optional. Probed only when the declaration
+            // says optional — the short-circuit keeps the hot path (a declared-required
+            // property) free of the set lookup the comment above is about.
+            return declaredOptional && symbol.id !in mappedRequiredMemberIds
         }
         // Round 452: an optional tuple element (`[kind?: T]`) has a declaration-less member
         // symbol; its optionality lives in the side-channel [optionalTupleMemberIds].
@@ -148852,6 +148866,10 @@ interface DataView {
                 // readonly-ness the same way the Readonly<T> utility materializer does.
                 if (node.readonlyMinus) mappedMutableMemberIds.add(sym.id)
                 else if (node.readonlyToken) mappedReadonlyMemberIds.add(sym.id)
+                // Round 718: `-?` STRIPS optionality, the exact `?` analogue of the
+                // `-readonly` case above — and it needs the same side-channel for the
+                // same reason: the carried source declaration still has its `?`.
+                if (node.questionMinus) mappedRequiredMemberIds.add(sym.id)
                 members[key] = sym
                 properties.add(sym)
                 symbolTypes[sym.id] = propType
