@@ -20,6 +20,34 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 710 (2026-07-26) — correcting round 709's own finding before anyone acts on
+it. Probe-only, no production change; corpus stays 12,756 / 0 / 3.**
+
+Round 709 concluded that our two TS7006 emitters have "inverted option gates" and told
+the next round to unify them. Reading the dispatch shows that is wrong, and acting on
+it would have undone deliberate work: `checkImplicitAnyDefaultVarFunctions` runs only
+in pure-default mode and deliberately covers ONE shape, because broadening the full
+`checkImplicitAnyParameters` walker was MEASURED to regress ~19 tests. The two are
+mutually exclusive so they cannot double-emit. The "swap" my matrix showed is exactly
+that design: different modes, different walkers, different coverage.
+
+**What survives is a smaller, genuine defect:** `anyCb(j => j)` is reported in
+pure-default mode but NOT under noImplicitAny. Turning the stricter option ON should
+never lose a diagnostic, whatever the walker split is. And gap-2's
+`(f => f(12))(k => k)` is uncovered in both modes. So the target is a coverage hole in
+the full walker — argument arrows whose callee parameter provides no contextual type —
+not the gates.
+
+**The lesson is the one I wrote down last round and then broke immediately.** I said a
+wrong characterisation in the queue is worse than none, because the next round starts by
+trusting it; then I wrote "inverted gates / plain bug" from a black-box matrix without
+reading the dispatch that explains it. Two greps would have prevented it. A behavioural
+matrix tells you WHAT differs; it does not license a claim about WHY, and "this looks
+like a bug" about deliberate, documented, measurement-backed code deserves more
+suspicion of my own reading than of the code.
+
+---
+
 **Round 709 (2026-07-26) — the TS7006 gate question is settled, and the answer is a
 defect in its own right: our two emitters have INVERTED option gates. Probe-only, no
 production change; corpus stays 12,756 / 0 / 3.**
@@ -4545,8 +4573,22 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   by settling the GATE question (which shapes emit TS7006 under which options, and why
   a top-level function declaration's parameter differs from a callback's here) before
   touching the IIFE case. Do not assume the callee-typing path is at fault.
-  **ROUND 709 SETTLED IT, and the answer is a defect worth fixing on its own: our two
-  TS7006 emitters have INVERTED option gates.** Same four shapes, two configs:
+  **ROUND 710 CORRECTS ROUND 709: the two-walker split is DELIBERATE and documented, so
+  "unify the gates" is the wrong instruction — do not follow it.** `checkImplicitAny
+  DefaultVarFunctions` runs ONLY in pure-default mode and covers ONE shape
+  (`var v = <arrow|fn-expr>` with an untyped parameter), because the full
+  `checkImplicitAnyParameters` walker is gated on noImplicitAny/strict for a MEASURED
+  reason: broadening it regressed ~19 tests (FunctionDeclaration params, type-annotation
+  walking, ambient TS7005/7008, JS files, object-literal contextual-typing gaps). The two
+  are mutually exclusive by construction so they never double-emit.
+  **What survives from round 709 as a real finding** is narrower and still worth fixing:
+  `anyCb(j => j)` (an arrow argument against an `any` parameter) is reported in
+  pure-default mode but NOT under noImplicitAny — turning the stricter option ON loses a
+  diagnostic, which cannot be right whatever the walker split is. And gap-2's
+  `(f => f(12))(k => k)` is uncovered in BOTH modes. So the target is a COVERAGE hole in
+  `checkImplicitAnyParameters` (argument arrows whose callee parameter provides no
+  contextual type), not the gates. Round 709's framing below is kept only to mark the
+  correction. ORIGINAL (WRONG): **the two TS7006 emitters have INVERTED option gates.** Same four shapes, two configs:
   | shape | strictNullChecks only | + noImplicitAny |
   | `take(i => i)` (annotated context) | silent (right) | silent (right) |
   | `anyCb(j => j)` (`any` parameter) | **FIRES** | **SILENT** |
