@@ -117,14 +117,30 @@ the evidence rather than a completeness score.
 → 53), 0 restored, 1 kept by judgement, 1 bug found and fixed.** Every batch
 byte-identical on corpus + `--listAll` ×8.
 
-**Remaining** — Checker.kt 33 = **29 multi-line `try { … }` blocks** (batch 6:
-they need splicing by hand; the scripted rewrite that worked for single-line
-forms is exactly the multi-line mangle hazard CLAUDE.md documents) + the SOE
-boundary guard + the `FriBail` control-flow catch + the kept `Parser` guard, the
-last three of which STAY. Plus 20 outside Checker.kt (Transformer 5, TsBuildInfo
-4, Vfs 3, Parser 3, Emitter 2, one each in TsConfigLoader / ModuleResolver /
-Flow) — a different population (I/O and parse recovery) whose inputs are external
-like the kept site, so audit them on their own terms, not by this method.
+**Batch 6 spliced the last 28 by hand** — one exact whole-construct swap per
+site with an asserted occurrence count, because a scripted multi-line rewrite is
+the mangle hazard CLAUDE.md documents (an inserted arm-close emptying a gate so
+the body runs unconditionally). Ten collapsed to something simpler than the
+original: four `try { val t = f(x); if (t !== any && t !== error) t else null }`
+arms became `f(x).takeIf { … }`, and a `val resolved = …; when (resolved)` became
+`when (val resolved = …)`. Checker.kt 33 → **3**.
+
+**CLOSING VERDICT — 193 of Checker.kt's 197 removed, 0 restored, 3 kept, 1 bug
+found and fixed.** The three keeps each have a stated reason: the SOE boundary
+guard (load-bearing), the `FriBail` control-flow catch (never defensive), the
+`Parser(...)` on external `.json` content.
+
+**And the 20 sites outside Checker.kt are a DIFFERENT population — audited this
+round and deliberately left alone.** Vfs's 3 are filesystem I/O (a missing or
+unreadable file must yield null, not crash); Parser's 2 guard parsing of
+externally-sourced JSDoc type text; TsBuildInfo / TsConfigLoader / ModuleResolver
+NAME their exception (`SerializationException`, `IllegalArgumentException`) over
+external JSON; Transformer's one names `NumberFormatException`; Emitter's and
+Flow's grep hits are comments and emit-helper source strings. Every one either
+guards an external input or names what it absorbs — precisely what the Checker.kt
+residue did not do. So the item's opening premise ("~200 sites in commonMain, all
+the same shape") is true of Checker.kt and false of the rest, and finishing the
+count there would have been the wrong move.
 
 **Round 684 (2026-07-26) — the convention branch MERGED with rounds 674–681, and
 the ten test files those rounds added brought up to the one dialect. Round
@@ -690,8 +706,10 @@ backlog-horizon decision, not queue debt.)
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
-- [ ] **(CATCH.1) Defensive-`catch` audit — turn ~200 silent wrong-answer paths
-  into either deletions or filed bugs, in suite-gated batches.** Owner flagged
+- [x] **(CATCH.1) Defensive-`catch` audit — DONE round 685, six batches: 193 of
+  Checker.kt's 197 removed as dead residue, 3 kept with stated reasons, 1 real
+  bug found and fixed, and the 20 sites OUTSIDE Checker.kt audited and found to
+  be a different population that should NOT be removed.** Owner flagged
   `Checker.kt`'s `val app = try { getApparentType(localType) } catch (_: Exception)
   { null }` as a code smell and asked what else looks like it. **The census:** 218
   `catch` sites in `src/commonMain`, **197 in Checker.kt**, every one the same
@@ -745,11 +763,24 @@ backlog-horizon decision, not queue debt.)
   `resolveRequireModuleShape`, whose input is arbitrary external `.json` file
   content — "the corpus did not crash" is weaker evidence for an unbounded
   external input than for a compiler-internal path.*
-  **Batch 6 is what remains in Checker.kt: 29 MULTI-LINE `try { … }` blocks**
-  (plus the SOE boundary guard and the `FriBail` control-flow catch, both of
-  which STAY). They need splicing by hand — the scripted approach that worked for
-  the single-line forms is exactly the mangle hazard CLAUDE.md warns about for
-  multi-line arms.*
+  (6) round 685 — the 28 MULTI-LINE blocks, hand-spliced (one exact
+  whole-construct swap per site with an asserted occurrence count, because a
+  scripted multi-line rewrite is the documented mangle hazard); ten collapsed to
+  something simpler than the original. Checker.kt 33 → **3**.*
+  **CLOSING VERDICT.** Checker.kt's 197: **193 removed, 0 restored, 3 kept** —
+  the SOE boundary guard (load-bearing per the SOE doctrine), the `FriBail`
+  control-flow catch (never defensive), and the `Parser(...)` on external `.json`
+  content (kept on the evidence asymmetry). **One bug found and fixed.**
+  **The 20 sites outside Checker.kt are NOT the same population and were left
+  alone deliberately** — audited this round: Vfs's 3 are filesystem I/O (a missing
+  or unreadable file must yield null, not crash); Parser's 2 guard parsing of
+  externally-sourced JSDoc type text; TsBuildInfo / TsConfigLoader /
+  ModuleResolver name their exception (`SerializationException`,
+  `IllegalArgumentException`) over external JSON; Transformer's one names
+  `NumberFormatException`; Emitter's and Flow's "catch" greps are comments and
+  emit-helper source strings. Every one either guards an external input or names
+  what it absorbs — which is exactly what the residue did not do. The item's
+  premise ("~200 sites, all the same shape") holds for Checker.kt alone.*
   **Method addendum from batch 1:** write the batch's corner-case pins FIRST and
   run them against unmodified HEAD — the pins, not the removal, are what find
   bugs, and the HEAD run tells you whether a failure is pre-existing or yours.
