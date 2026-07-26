@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 717 (2026-07-26) — the two GATE items landed. Logical parity stopped being a
+rule and became a mechanism with two build-failing controls; cost stopped being an
+intention and became a counter diff. The determinism check on that gate found a racy
+counter on its first use — and it is exactly the counter (DISPATCH.1) was told to
+build its table from. Corpus 12,765 / 0 / 3, unchanged; the generated corpus is
+byte-identical.**
+
+**(PARITY.1) — a policy is only as good as its controls.** The owner's directive says
+a form-only divergence may be switched off. Written down as prose, that is an
+invitation to wave through a diff nobody read, so it landed as a mechanism instead.
+`docs/logical-parity.md` carries the decision procedure as two ALLOWLIST tables —
+seven meaning axes (a diagnostic present on one side only, a different span, a
+different code, a type denoting a different SET of values, different runtime
+semantics, a `.d.ts` a consumer would check differently, a different count of
+distinct diagnostics) and six form axes, each with the equivalence obligation it
+imposes — plus the rule that anything in neither table is MEANING by default. The
+mechanism is `logicalParityDivergences` in build.gradle.kts, keyed by baseline FILE
+name because that is exactly one generated subtest. Three properties are the point:
+the switched-off test is emitted `@Ignore`d rather than dropped, so it stays VISIBLE
+as skipped (a vanished test hides behind an unchanged total); the ledger is
+REGENERATED into the doc, so the table cannot drift from the build; and the build
+FAILS on either rot mode — a baseline matching no generated test, or a `pinnedBy`
+class that does not exist under src/commonTest. That last check is what makes
+"replace it with a test pinning the logic" mechanical rather than aspirational.
+Self-tested all three paths, then reverted to the empty list; **with no entries the
+generated tree is byte-identical** (`diff -r` before/after), so it costs nothing
+until used.
+
+**The judgement worth keeping from writing it:** a form-only diff is a *candidate*,
+not an entitlement. The directive's own cost clause — byte parity is secondary *if it
+can be achieved without extra cost* — means byte parity is still preferred where it
+is free, so a divergence needs a reason it is WORTH having (it unblocks a general
+rule, removes measurable work, deletes a special case). "Our output happens to differ
+and matching would be fiddly" is not one.
+
+**(COST.1) — `scripts/cost_gate.py`.** Twenty deterministic counters from a
+`--passTiming` run of the compiler profile, diffed against
+`docs/perf/cost-counters.txt`, failing above ±2%. Counters only, never wall time.
+Baseline at 41bedb73: 46 errors, 856,962 spine nodes, 696,933 getTypeOfExpression
+calls over 250,057 distinct nodes, 69,903 narrowing walks (40,546 memo-served),
+89,883 bypassed type-node resolutions, 1,377,511 globals lookups at 98.9% miss.
+Two design notes: the gate also pins **the compiler's ANSWER** (error count, program
+file count), because a cost drop that changes the output is not a win and the gate
+has to be able to see that; and four counters baseline at ZERO
+(`ctxFingerprint.builds`, `globals.conflated`, `narrow.walksOutsideInit`,
+`preparse.fresh`), which makes them tripwires rather than dead rows.
+
+**THE FINDING, which is why the second run was worth 90 seconds.** The premise of the
+gate is that these counters are reproducible, so I ran it twice on the same binary
+rather than asserting it. Nineteen of twenty came back bit-identical — and the AST
+census came back 857,350 vs 854,550, −0.33%. `indexSourceFile` runs on the crawl's
+CONCURRENT parse threads (`readAndScanBatch`, Dispatchers.Default,
+FRONTEND_CONCURRENCY in flight) while `PassTiming.nodeKindHistogram` is a plain
+HashMap, so increments are lost to a data race and the census always undercounts.
+Instrumentation-only, no production impact — but that census is documented as "the
+dispatch-order / kind-table design input", i.e. **precisely what (DISPATCH.1) is
+instructed to derive its per-kind handler table from**, and there a dropped rare kind
+is a WRONG TABLE, not a rounding error. Excluded from the gate, warned about at the
+source, and written onto the DISPATCH.1 item as its second trap.
+
+**The build trap, and the most reusable thing in this round.** CLAUDE.md's
+memory-freeing ritual before a self-compile is `./gradlew --stop && pkill -9 -f
+KotlinCompileDaemon`. Doing that leaves the next `compileKotlinJvm` a COLD,
+non-incremental compile, and the Kotlin daemon inherits `org.gradle.jvmargs`'
+`-Xmx2g`, which a cold build of this module does not fit in. It does not present as
+an out-of-memory error — it presents as a hang: 14 minutes, 350% CPU, RSS pinned
+exactly at the heap ceiling, `stime` ~5 s against 3,000 s of user time, and **zero
+class files written**, because Kotlin's backend only writes output at the end so
+there is no partial progress to read. The same build with
+`-Dkotlin.daemon.jvmargs=-Xmx3g` finished in **2m 33s**. Raising it permanently in
+gradle.properties is a build-system change and therefore owner-gated — queued below
+as (BUILD.1) rather than done.
+
+**Also landed:** three compiler warnings had accumulated in Checker.kt's
+(M3.0-gap-4) helpers (two `else` arms in a `when` the smart cast already makes
+exhaustive, one redundant cast). They were invisible because Gradle does not re-emit
+warnings on an up-to-date compile — the same failure mode COST.1 exists for, in a
+different dimension: **a gate that is not mechanical does not happen.** Verified
+clean with a full `--rerun-tasks` recompile.
+
+---
+
 **Round 716 (2026-07-26) — the performance diagnosis was WRONG, and now it is
 measured. The type system is 28% of the compile; the dispatch machinery is 42%; the
 entire prize INV.5(c) exists for is 68 ms. Three cache hypotheses died in one
@@ -1985,6 +2067,25 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   whole point (a laptop shows ±13% wall). Wire it into the round protocol next to the
   suite run, and record the baseline in the same commit as any accepted increase,
   with the justification.
+
+- [ ] **(BUILD.1) BLOCKED-PENDING-USER: raise the Kotlin daemon heap — a cold compile
+  does not fit in the inherited `-Xmx2g` and HANGS instead of failing.** Measured
+  round 717, and it cost that round ~30 minutes. `gradle.properties` sets
+  `org.gradle.jvmargs=-Xmx2g`, which the Kotlin compile daemon inherits. An
+  INCREMENTAL compile fits; a COLD one does not — and the failure mode is not an
+  OutOfMemoryError, it is a GC death spiral that looks exactly like a hang: 350% CPU,
+  RSS pinned at the ceiling, `stime` ~5 s against 3,000 s of user time, and **zero
+  class files** (Kotlin's backend writes output only at the end, so there is no
+  partial progress to read). It ran 14 minutes with no progress; the same build with
+  `-Dkotlin.daemon.jvmargs=-Xmx3g` took **2m 33s**. **How you get there:** the
+  documented memory ritual before a self-compile — `./gradlew --stop && pkill -9 -f
+  KotlinCompileDaemon` — is what makes the next build cold, so the trap is reachable
+  from the instructions themselves. **PROPOSAL (owner decision, build-system change =
+  Guardrail):** add `kotlin.daemon.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m` to
+  gradle.properties. Cost: up to 1 GB more resident during a compile, on a box where
+  a 4 g self-compile already needs the daemons stopped — so the trade is "compiles
+  cannot hang" against "one more GB while compiling". Workaround until then, recorded
+  in CLAUDE.md: pass `-Dkotlin.daemon.jvmargs=-Xmx3g` on the command line.
 
 - [ ] **(LIB.1) Ship the DOM/webworker libs and stop real builds silently running
   UNCHECKED — owner-approved 2026-07-26 ("yes, please fix it"), PROMOTED out of the
