@@ -22,7 +22,7 @@ Before picking any work:
 - open PLAN-PHASE-5.md and read, in order: "Mission & strategy",
   "Ground rules", the recent session notes at the top of the Phase 17
   section, and the QUEUE
-- PLAN-PHASE-4.md is ARCHIVED state (Phase 16 and earlier). Consult its
+- docs/history/PLAN-PHASE-4.md is ARCHIVED state (Phase 16 and earlier). Consult its
   "Known architectural blockers" section before starting any M3 item —
   the accumulated per-blocker analysis lives there — but do not work its
   queue.

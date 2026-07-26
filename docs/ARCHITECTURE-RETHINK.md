@@ -415,9 +415,14 @@ the profile shifts after every fix.
 
 - **No more micro-opt rounds against the flat profile** — closed as of this
   rescope, unless INV.0 data exposes a genuine ≥5% single lever.
-- **No big-bang rewrite / no 1:1 tsc-checker port.** Every broad attempt under the
-  exact-baseline gate regressed; the walkers encode 489 rounds of FP-burn-down
-  knowledge — migrate them, don't discard them.
+- ~~**No big-bang rewrite / no 1:1 tsc-checker port.**~~ **LIFTED 2026-07-26 (round
+  716, owner).** The rationale was that "every broad attempt under the exact-baseline
+  gate regressed" — but the owner has now made LOGICAL parity the bar, not byte
+  parity, which is precisely the gate those attempts failed. A redesign is
+  permitted; a broad change that alters only the FORM of a baseline is landed with a
+  new test pinning the logic and the old one switched off. The walkers still encode
+  489 rounds of FP knowledge, so prefer migrating to discarding — but that is now an
+  engineering judgement, not a prohibition.
 - **No shared concurrent maps** (per `docs/parallel-caching.md`, confirmed by
   tsgo's shipped design).
 - **No streaming through the checker**; no parallel binding before the id-space

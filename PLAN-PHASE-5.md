@@ -12,7 +12,7 @@ node + typescript installed). Then M5 (performance) completes the directive. Ite
 that do not block v1 (M2.4, M3.0, M3.5, all of M4) are parked in § "Post-v1 backlog"
 near the bottom of this file — the top-to-bottom loop skips them until v1 lands.
 
-This file is the **live queue** for Phase 17. `PLAN-PHASE-4.md` (Phase 16 and earlier)
+This file is the **live queue** for Phase 17. `docs/history/PLAN-PHASE-4.md` (Phase 16 and earlier)
 is archived state — its "Known architectural blockers" section remains the reference
 material for the M3 items below; do not work its queue.
 
@@ -1885,6 +1885,86 @@ FIRST. Headline: the type system is 5.0 s of an 18 s compile (28%); the dispatch
 and handler machinery is ~7.6 s (42%); the entire context-cache prize INV.5(c)
 exists for is 68 ms. Work (DISPATCH.1) before any further cache/identity work.**
 
+**WORK ORDER (round 716, after the owner's four decisions). The protocol says
+top-to-bottom, and the order below IS deliberate — read this before picking:**
+**(PARITY.1)** and **(COST.1)** first: both are cheap, and they are what make the
+rest safe — PARITY.1 removes the byte-gate veto that priced out general-engine work
+(and unblocks LIB.1's ~30 baselines), COST.1 stops the campaign silently
+re-accumulating the very overhead it exists to remove. Then **(LIB.1)**, the
+silent-wrong-answer fix the owner asked for. Then **(DISPATCH.1)**, the measured perf
+lever and the prerequisite for reviving the M0.4 tail migration. **(PERF.HW)** is
+opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
+
+- [ ] **(PARITY.1) Adopt the logical-parity policy in the gate — owner directive
+  2026-07-26, and the single biggest unblock in this arc.** "Logical parity is
+  important even if we don't reach byte-by-byte parity. If there are tests where we
+  diverge but the logic stays the same, create a new test case and switch off the old
+  one. The logical value of the compiler output at maximal performance should always
+  be the deciding factor; byte-by-byte parity is secondary if it can be achieved
+  without extra cost." **What this changes:** a corpus baseline that differs only in
+  FORM (union member order, an equivalent message, an equivalent elaboration shape)
+  stops being a veto — replace it with a test pinning the LOGIC and disable the old
+  one, recording the divergence and why it is equivalent. A baseline differing in
+  MEANING is still a hard regression. **Do (a) FIRST, it is cheap and it is what
+  makes the rest safe:** (a) add `docs/logical-parity.md` — the form-vs-meaning
+  decision procedure, the disable mechanism, and a running LEDGER of every
+  switched-off baseline with its justification (an unlogged disable is
+  indistinguishable from hiding a regression, so the ledger IS the control); (b)
+  extend the generator/harness so a case can be marked logically-divergent with a
+  reason string rather than commented out; (c) as engine work proceeds, re-examine
+  the "DEAD — regressed N tests" entries in CLAUDE.md and the archive — many were
+  never checked for whether the N were form or meaning, so each is now a LEAD.
+  **Do NOT** use this to wave through a diff you have not read: the burden is
+  demonstrating equivalence per case, in the note.
+
+- [ ] **(COST.1) Enforce the cost gate — owner-approved 2026-07-26 ("yes, I want to
+  enforce it, to counter performance regressions").** Round 713 added ~72k
+  `getTypeOfExpression` calls (+11.5%, ≈70–200 ms) for one conformance diagnostic and
+  nothing noticed, because the round gates are the corpus and `--listAll` and neither
+  sees cost. Over 200 rounds that is how ~118 handler consultations per node
+  accumulate. **Make it mechanical, not a habit:** a script that runs the compiler
+  profile with `--passTiming`, extracts the DETERMINISTIC counters
+  (`getTypeOfExpression` calls, `narrowWalks`, `spineNodes`, per-kind enter totals,
+  `typeNodeCacheable`/`bypassed`), writes them to a tracked file, and DIFFS against
+  the committed baseline — failing loudly above a threshold (start ±2%, tune once
+  there is history). Counters, not wall time: they are load-independent, which is the
+  whole point (a laptop shows ±13% wall). Wire it into the round protocol next to the
+  suite run, and record the baseline in the same commit as any accepted increase,
+  with the justification.
+
+- [ ] **(LIB.1) Ship the DOM/webworker libs and stop real builds silently running
+  UNCHECKED — owner-approved 2026-07-26 ("yes, please fix it"), PROMOTED out of the
+  post-v1 backlog because it is a silent wrong answer, not a missing feature.**
+  THE DEFECT (measured rounds 687–688): `RealLibFiles` ships no
+  `dom.generated`/`dom.iterable.generated`/`webworker*`, so `"lib": ["dom"]` records
+  the file in `Resolution.unavailable`, which **nothing outside RealLibs.kt ever
+  consumes** — no diagnostic, no failure. Consequence on a 3-line program:
+  `HTMLElement` resolves, `document` resolves, and `e.definitelyNotAMember` on an
+  `HTMLElement` parameter **compiles CLEAN**. A browser project gets a green build
+  with its DOM code entirely untyped. **Worse, and the real root:** `useRealLibs`
+  defaults FALSE and NOTHING in the project path sets it (`ProjectCompiler` /
+  `TsConfigLoader` never do; the only writer is a test directive), so **every real
+  build — all 8 dashboard profiles included — runs on the curated embedded
+  `BUILTIN_LIB_SOURCE`** and the whole real-lib machinery is test-only. The owner has
+  now authorised the generation change the round-688 note left owner-gated.
+  **ORDER — (a) is the decision the rest depends on:** (a) decide what a real project
+  build uses for libs at all (the embedded lib is a curated subset; the shipped real
+  libs are unreachable outside tests — that mismatch is the root, and it is a design
+  choice); (b) ship the DOM/webworker/scripthost sets (changes real-lib generation in
+  build.gradle.kts, ~1 MB of generated source); (c) report a user-REQUESTED lib that
+  is unavailable — **`Resolution.unavailable` is NOT the right key** (a `full` default
+  lib transitively references DOM/host files, so an ordinary target-default resolution
+  has a non-empty `unavailable` and must stay silent); it needs a new
+  `unavailableRequested` field, and a working implementation is in the round-688
+  reflog. **TRAP that wasted a round:** the control "does `HTMLElement` resolve?"
+  PASSES while everything is broken — when an unknown name degrades to `any`, name
+  resolution proves nothing. The decisive control is a MEMBER probe
+  (`e.notAMember` must error). **CORPUS IMPACT, now unblocked by (PARITY.1):** 259
+  corpus cases carry `@lib:`, of which 23 request `dom` plus webworker×4 and others,
+  all currently green because we silently ignore the request; reporting on the
+  embedded path moves ~30 baselines. Under the byte gate that blocked this item;
+  under logical parity, judge each as form-vs-meaning and re-pin.
+
 - [ ] **(DISPATCH.1) Per-kind handler dispatch table — the measured lever
   (1.0–2.5 s, ~6–14%), and the only structural item currently backed by a
   decisive probe.** THE MEASUREMENT (round 716, `--passTiming` on the compiler
@@ -1952,6 +2032,24 @@ exists for is 68 ms. Work (DISPATCH.1) before any further cache/identity work.**
   still consults every handler at every node. With the table, a migrated pass costs
   only its own kinds, so DISPATCH.1 changes M0.4's economics and should be
   followed by a re-measure of one migrated pass before the arc is judged again.
+
+- [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
+  my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is
+  parked with an explicit unpark condition — "a host with ≥8 real cores (re-run this
+  exact probe first)" — and the owner cannot say whether the Hetzner instance has
+  real cores. **Do not guess from the plan name** (Hetzner's shared-vCPU CX/CPX lines
+  behave very differently from the dedicated CCX line under sustained load, and this
+  workload runs saturated for ~30 s). **The probe is self-answering and costs one
+  session:** run the existing `--workers` mode at 1/2/4/8 on the compiler profile,
+  2 reps each, and read the shape — the round-666 baseline on 4 cores was seq 27.9 s
+  / w2 24.7 s (−11.5%) / w4 27.9 s (FLAT, contention-bound). If w4 and w8 keep
+  scaling, the cores are real and M2 Phase 1 (shared frozen collectors) is worth
+  reviving; if w4 goes flat again, the box is equivalent to the old one and M2 stays
+  parked with the measurement recorded. **Sequencing: this is NOT single-thread work
+  and must not preempt (DISPATCH.1)** — M2 measured 77% of the work as non-divisible
+  per-worker duplication, and that fraction is largely the dispatch machinery, so
+  shrinking it first is also what makes workers pay. Run this only when a session has
+  spare budget, and record the numbers either way.
 
 - [ ] ~~(cache/identity work of any shape)~~ — **CLOSED round 716 by measurement,
   do NOT re-open without new evidence.** (1) The context-bypassed resolution
@@ -4724,7 +4822,8 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   profile tsconfig with `"types": ["node"]`). The dashboard tsconfig
   deliberately keeps `"types": []` and our handling of THAT is correct per tsc
   semantics — do not "fix" the baseline; add a separate profile if one is wanted.
-- [ ] **M2.4 DOM libs — RE-SCOPED round 687 by measurement: the premise is wrong
+- [ ] ~~M2.4 DOM libs~~ — **SUPERSEDED round 716 by (LIB.1) at the top of the queue** (owner: "yes, please fix it"; the owner-gated lib-shipping decision it was blocked on is now granted). Body kept for its measurements.
+- [ ] ~~M2.4 (original)~~ — RE-SCOPED round 687 by measurement: the premise is wrong
   and there is a SILENT-WRONG-ANSWER bug underneath it.** The item asked to
   measure dom.generated.d.ts's parse/bind cost. That cost is **not measurable
   because the DOM libs are NOT SHIPPED**: `RealLibFiles` contains no
