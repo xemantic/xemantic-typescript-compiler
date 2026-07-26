@@ -20,6 +20,36 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 713 (2026-07-26) — the TS7006 argument-context fix LANDED. Corpus 12,756 →
+12,761 / 0 / 3, all 8 profiles byte-identical.**
+
+Round 712 had the design right and the lookup wrong: a lib METHOD's signature
+declaration lives in `builtinLibMemberDecls`, not `builtinLibDecls`, and I had tested
+the parameter against the member set and the signature against the statement set —
+each the other's. Correcting that put the compiler profile back to 46 with all three
+target shapes still firing, and the full gates came back clean.
+
+What landed is the edge asking the question it actually needs — the callee's PARAMETER
+at the argument's index — with two measured narrowings that are now pinned as controls:
+the test is SYNTACTIC because our resolved `anyType` is not tsc's `any`, and the
+embedded lib is excluded because its simplified callback signatures are placeholders
+rather than statements about the type.
+
+**Worth keeping in mind for anything that reads a parameter's type to decide whether a
+callback is contextually typed:** both narrowings are about the same confusion — our
+`any` has three quite different origins (tsc really said `any`; we failed to resolve a
+generic; our lib simplified a signature) and only the first licenses a diagnostic.
+The corpus caught the second and the profiles caught the third, which is a neat
+demonstration of why both gates are kept.
+
+**gap-2 status:** the case's TS7006 ×2 are on argument arrows in a file with only
+`@strictNullChecks`, i.e. pure-default mode, where the full walker is deliberately off —
+so `contextuallyTypedIifeStrict` still cannot un-defer. Closing it would need the narrow
+default-mode walker to cover the argument-arrow shape, which is the broadening that
+regressed ~19 tests; not worth it for one case.
+
+---
+
 **Round 712 (2026-07-26) — implemented the TS7006 argument-edge fix, spent two
 narrowings on it, and reverted at the profile gate. No production change; corpus stays
 12,756 / 0 / 3.**
