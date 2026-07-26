@@ -19623,8 +19623,7 @@ class Checker(
                         else -> null
                     }
                 } ?: return null
-                val sym = try { getPropertyOfType(getApparentType(rhsT), propName) }
-                    catch (_: Exception) { null } ?: return null
+                val sym = getPropertyOfType(getApparentType(rhsT), propName) ?: return null
                 try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
             }
             is ArrayLiteralExpression -> {
@@ -28823,7 +28822,7 @@ class Checker(
                         val declT = declaredProps[pname] ?: return@walkAccessesNoFnBoundary
                         val member = (pa.name).text
                         if (member in RUNTIME_PROPERTIES) return@walkAccessesNoFnBoundary
-                        val apparent = try { getApparentType(declT) } catch (_: Exception) { return@walkAccessesNoFnBoundary }
+                        val apparent = getApparentType(declT)
                         if (getPropertyOfType(apparent, member) != null) return@walkAccessesNoFnBoundary
                         val pos = pa.name.pos
                         if (pos < 0) return@walkAccessesNoFnBoundary
@@ -54010,8 +54009,8 @@ interface DataView {
         var t = headType
         for (i in 1 until path.size) {
             if (t === anyType || t === errorType) return null
-            val app = try { getApparentType(t) } catch (_: Exception) { return null }
-            val prop = try { getPropertyOfType(app, path[i]) } catch (_: Exception) { null } ?: return null
+            val app = getApparentType(t)
+            val prop = getPropertyOfType(app, path[i]) ?: return null
             t = try {
                 if (app is Type.Reference) {
                     resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
@@ -88855,7 +88854,7 @@ interface DataView {
                 recvType = if (nonNullish.size == 1) nonNullish[0] else getUnionType(nonNullish)
             }
         }
-        val apparent = try { getApparentType(recvType) } catch (_: Exception) { return null }
+        val apparent = getApparentType(recvType)
         return unionDiscriminantKeysOfType(apparent, propName)
     }
 
@@ -88879,11 +88878,11 @@ interface DataView {
     private fun unionDiscriminantKeysOfTypeCore(apparent: Type.Union, propName: String): Set<String>? {
         val keys = mutableSetOf<String>()
         for (member in apparent.types) {
-            val memberApparent = try { getApparentType(member) } catch (_: Exception) { return null }
+            val memberApparent = getApparentType(member)
             val objects = when (memberApparent) {
                 is Type.Object -> listOf(memberApparent)
                 is Type.Intersection -> memberApparent.types.map {
-                    (try { getApparentType(it) } catch (_: Exception) { null }) as? Type.Object
+                    getApparentType(it) as? Type.Object
                         ?: return null
                 }
                 else -> return null
@@ -89054,7 +89053,7 @@ interface DataView {
                 if (idxLit.isEmpty()) return null
                 val objType = try { getTypeFromTypeNode(node.objectType) } catch (_: Exception) { return null }
                 if (objType === anyType || objType === errorType) return null
-                val apparent = try { getApparentType(objType) } catch (_: Exception) { return null }
+                val apparent = getApparentType(objType)
                 return unionDiscriminantKeysOfType(apparent, idxLit)
             }
             else -> return null
@@ -91710,7 +91709,7 @@ interface DataView {
                     var t: Type? = null
                     if (memberSource != null && !el.dotDotDotToken) {
                         val propName = (el.propertyName as? Identifier)?.text ?: bound
-                        val sym = try { getPropertyOfType(memberSource, propName) } catch (_: Exception) { null }
+                        val sym = getPropertyOfType(memberSource, propName)
                         if (sym != null) {
                             var mt = try { getTypeOfSymbol(sym) } catch (_: Exception) { null }
                             if (mt != null && mt !== errorType) {
@@ -93865,14 +93864,14 @@ interface DataView {
         if (init == null) return
         val initT = try { getTypeOfExpression(init) } catch (_: Exception) { return }
         if (initT === anyType || initT === errorType || initT === unknownType || initT is Type.Union) return
-        val apparent = try { getApparentType(initT) } catch (_: Exception) { return }
+        val apparent = getApparentType(initT)
         for (el in pattern.elements) {
             val inner = el.name as? Identifier ?: continue
             if (inner.text.isEmpty() || el.dotDotDotToken || el.initializer != null) continue
             if (currentLocalTypes.containsKey(inner.text)) continue
             if (inner.text in ambiguousBlockLocalNames) continue
             val propName = (el.propertyName as? Identifier)?.text ?: inner.text
-            val sym = try { getPropertyOfType(apparent, propName) } catch (_: Exception) { null } ?: continue
+            val sym = getPropertyOfType(apparent, propName) ?: continue
             val t = try { getTypeOfSymbol(sym) } catch (_: Exception) { null } ?: continue
             if (t === anyType || t === errorType) continue
             // FUNCTION-shaped member types stay unrecorded: re-checking a
@@ -107560,12 +107559,12 @@ interface DataView {
      * declaring symbol's questionToken decides.
      */
     private fun resolvePrefixTailSegment(cur: Type, seg: String): Pair<Type, Boolean>? {
-        val apparent = try { getApparentType(cur) } catch (_: Exception) { return null }
+        val apparent = getApparentType(cur)
         if (apparent is Type.Intersection) {
             var anyRequired = false
             val contributed = mutableListOf<Type>()
             for (c in apparent.types) {
-                val app = try { getApparentType(c) } catch (_: Exception) { continue }
+                val app = getApparentType(c)
                 val p = getPropertyOfType(app, seg) ?: continue
                 if (!isOptionalProperty(p)) anyRequired = true
                 contributed.add(
@@ -107670,7 +107669,7 @@ interface DataView {
                 val methodName = (callee as? PropertyAccessExpression)?.name?.text
                 val allShareGuard = methodName != null && t.types.all { m ->
                     isNullishConstituent(m) || run {
-                        val app = try { getApparentType(m) } catch (_: Exception) { return@run false }
+                        val app = getApparentType(m)
                         val s = getPropertyOfType(app, methodName) ?: return@run false
                         s.valueDeclaration === decl || s.declarations.any { it === decl }
                     }
@@ -107910,7 +107909,7 @@ interface DataView {
      */
     private fun missingVsOptionalProvesNotSubtype(m: Type, target: Type): Boolean {
         val tObj = target as? Type.Object ?: return false
-        val mApp = try { getApparentType(m) } catch (_: Exception) { return false }
+        val mApp = getApparentType(m)
         val mObj = mApp as? Type.Object ?: return false
         try {
             resolveStructuredTypeMembers(tObj)
@@ -107920,7 +107919,7 @@ interface DataView {
         val tProps = tObj.properties ?: return false
         return tProps.any { tp ->
             tp.name !in OBJECT_PROTOTYPE_PROPERTIES && isOptionalProperty(tp) &&
-                (try { getPropertyOfType(mApp, tp.name) } catch (_: Exception) { null }) == null
+                getPropertyOfType(mApp, tp.name) == null
         }
     }
 
@@ -108601,7 +108600,7 @@ interface DataView {
     private fun narrowByBooleanDiscriminantTruthiness(t: Type, propName: String, truthy: Boolean): Type {
         if (t !is Type.Union) return t
         val filtered = t.types.filter { member ->
-            val apparent = try { getApparentType(member) } catch (_: Exception) { return@filter true }
+            val apparent = getApparentType(member)
             if (apparent !is Type.Object) return@filter true
             val propSym = getPropertyOfType(apparent, propName) ?: return@filter true
             when (getTypeOfSymbol(propSym)) {
@@ -108887,11 +108886,11 @@ interface DataView {
         // annotation lives on a CONSTITUENT — without folding it the member's `.kind` reads as
         // unknown and it wrongly SURVIVES a `switch (node.kind) { case … }` narrowing → the
         // over-wide union then FP's TS2339 on a case-body property (`node.moduleSpecifier`).
-        val apparent = try { getApparentType(member) } catch (_: Exception) { return null }
+        val apparent = getApparentType(member)
         val objects = when (apparent) {
             is Type.Object -> listOf(apparent)
             is Type.Intersection -> apparent.types.mapNotNull {
-                try { getApparentType(it) } catch (_: Exception) { null } as? Type.Object
+                getApparentType(it) as? Type.Object
             }
             else -> return null
         }
@@ -113004,8 +113003,8 @@ interface DataView {
         var t: Type = enclosingClassType
         for (seg in segs) {
             if (t === anyType || t === errorType) return null
-            val app = try { getApparentType(t) } catch (_: Exception) { return null }
-            val prop = try { getPropertyOfType(app, seg) } catch (_: Exception) { null } ?: return null
+            val app = getApparentType(t)
+            val prop = getPropertyOfType(app, seg) ?: return null
             t = try {
                 if (app is Type.Reference) {
                     resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
@@ -113040,7 +113039,7 @@ interface DataView {
      *  round-352 rule; `getPropertyOfType` has no Intersection branch). Returns null when the
      *  member genuinely lacks the property. Used by the B83.4e union-member fold. */
     private fun resolveMemberPropertyType(constituent: Type, propName: String): Type? {
-        val apparent = try { getApparentType(constituent) } catch (_: Exception) { return null }
+        val apparent = getApparentType(constituent)
         getPropertyOfType(apparent, propName)?.let { prop ->
             return if (apparent is Type.Reference) resolveGenericPropertyType(apparent, prop) ?: getTypeOfSymbol(prop)
             else getTypeOfSymbol(prop)
@@ -113048,7 +113047,7 @@ interface DataView {
         if (apparent is Type.Intersection) {
             val contributed = mutableListOf<Type>()
             for (c in apparent.types) {
-                val app = try { getApparentType(c) } catch (_: Exception) { continue }
+                val app = getApparentType(c)
                 val p = getPropertyOfType(app, propName) ?: continue
                 contributed.add(
                     if (app is Type.Reference) resolveGenericPropertyType(app, p) ?: getTypeOfSymbol(p)
@@ -113083,7 +113082,7 @@ interface DataView {
         // reference arg or a resolved number index signature.
         if (propName.toIntOrNull() != null) {
             fun numericElem(t: Type): Type? {
-                val app = try { getApparentType(t) } catch (_: Exception) { return null }
+                val app = getApparentType(t)
                 if (app is Type.Reference &&
                     app.target.symbol?.name.let { it == "Array" || it == "ReadonlyArray" })
                     return app.resolvedTypeArguments?.firstOrNull()
@@ -129837,8 +129836,8 @@ interface DataView {
             // branch by accident). Suppression-only.
             if (localType === anyType) return
             if (localType != null && localType !== errorType) {
-                val app = try { getApparentType(localType) } catch (_: Exception) { null }
-                if (app != null && getPropertyOfType(app, propName) != null) return
+                val app = getApparentType(localType)
+                if (getPropertyOfType(app, propName) != null) return
             }
         }
 
@@ -129871,8 +129870,8 @@ interface DataView {
         ) {
             val paramType = currentLocalTypes[objectExpr.text]
             if (paramType != null && paramType !== anyType && paramType !== errorType) {
-                val app = try { getApparentType(paramType) } catch (_: Exception) { null }
-                if (app != null && getPropertyOfType(app, propName) != null) return
+                val app = getApparentType(paramType)
+                if (getPropertyOfType(app, propName) != null) return
             }
         }
 
@@ -129924,8 +129923,8 @@ interface DataView {
                         narrowed.types.isNotEmpty() &&
                             narrowed.types.all { m -> resolveMemberPropertyType(m, propName) != null }
                     } else {
-                        val app = try { getApparentType(narrowed) } catch (_: Exception) { null }
-                        app != null && getPropertyOfType(app, propName) != null
+                        val app = getApparentType(narrowed)
+                        getPropertyOfType(app, propName) != null
                     }
                 }
                 if (suppresses(getNarrowedTypeForReference(raw, objectExpr))) return
@@ -139083,10 +139082,9 @@ interface DataView {
             if (recvRaw === anyType || recvRaw === errorType) return@run
             val narrowed = getNarrowedTypeForReference(recvRaw, arg.expression)
             if (narrowed === recvRaw || narrowed === neverType || narrowed === anyType) return@run
-            val app = try { getApparentType(narrowed) } catch (_: Exception) { return@run }
+            val app = getApparentType(narrowed)
             fun requiredOn(t: Type): Boolean {
-                val p = try { getPropertyOfType(getApparentType(t), arg.name.text) }
-                    catch (_: Exception) { null }
+                val p = getPropertyOfType(getApparentType(t), arg.name.text)
                 return p != null && !isOptionalProperty(p)
             }
             val allRequired = if (app is Type.Union) app.types.all { requiredOn(it) } else requiredOn(app)
@@ -163472,7 +163470,7 @@ interface DataView {
                         }
                         val declType = try { getDeclaredTypeOfSymbol(s) } catch (_: Exception) { return }
                         if (declType === errorType) return
-                        try { getPropertyOfType(declType, member) != null } catch (_: Exception) { return }
+                        getPropertyOfType(declType, member) != null
                     }
                     if (hasMember) {
                         emitTs2713(segs[0].pos, segs[i].pos + member.length, typeName, member, source, fileName)
