@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 702 (2026-07-26) — (M3.0-gap-4)'s TS2556 half landed. Corpus 12,740 →
+12,746 / 0 / 3, all 8 profiles byte-identical.**
+
+An unbounded array spread into a fixed-arity call cannot be arity-checked, so tsc
+rejects it; we reported nothing, because the arg-count pass suppresses a too-FEW
+conclusion whenever a spread is present and nothing took over. The rule itself is one
+condition — but it took three suite runs to find its four narrowings, and each came
+from a test rather than from thinking about it: a TUPLE spread is legal, an ARRAY
+LITERAL spread is legal (tsc counts `...[6, 7]` as two arguments), spreading INTO a
+rest parameter is legal, and when the fixed arguments already exceed the maximum tsc
+reports the COUNT rather than TS2556. The last two came from a local pin and a corpus
+baseline going red, which is exactly what those gates are for.
+
+**Inert-change discipline paid again, twice.** The first cut did not fire at all: a
+rest PARAMETER's type does not resolve in the arg-count pass, so the operand is now
+classified from its ANNOTATION when the resolved type is unavailable — which also
+handles `readonly string[]` (a TypeOperator around an ArrayType) for free. And the
+TS2554 half of the item, which I also wrote, never fired either; rather than land dead
+code I removed it and recorded the design plus the specific next diagnostic step on
+the item.
+
+---
+
 **Round 701 (2026-07-26) — (M3.0-gap-3)(B1) LANDED, six rounds after it was first
 picked up. Corpus 12,737 → 12,740 / 0 / 3, all 8 profiles byte-identical.**
 
@@ -4509,8 +4532,24 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   do not model). Expect these two to need a gate of their own — the round-431e foreign-TP
   gate is the family precedent — and note they are also the two most likely to appear on
   the profiles, so `--listAll` ×8 is mandatory before landing.
-- [ ] **(M3.0-gap-4) `readonlyRestParameters` — a `readonly T[]` spread argument
-  is neither rejected nor counted** (round 695, deferred error baseline). Missing
+- [ ] **(M3.0-gap-4) — the TS2556 half is DONE (round 702); the TS2554 half remains, so
+  the case stays deferred.** Landed: an unbounded array spread into a fixed-arity call is
+  now rejected, with the four narrowings that keep it FP-free (tuple spreads, array-literal
+  spreads, spreading into a rest parameter, and too-many taking precedence). A rest
+  parameter's type does not resolve in the arg-count pass, so the operand is classified
+  from its ANNOTATION when the resolved type is unavailable.
+  **STILL OPEN — and I wrote it, measured it INERT, and removed it rather than land dead
+  code, so do not re-derive the design:** the missing TS2554 (`f2('abc', ...args)` where
+  `f2(...args: readonly [string, string])` → "Expected 2 arguments, but got 3") needs a
+  tuple-typed REST PARAMETER treated as FIXED arity — `maxArgs = (params.size - 1) +
+  tupleLength` — and a tuple-typed spread ARGUMENT counted as its element count rather
+  than one. Both helpers were straightforward (`fixedTupleLengthOfRestParam` reading
+  through `readonly`/paren wrappers to a `TupleType` with no `RestType` element, and an
+  expanded-argument counter returning null on any unknown spread), and the emission
+  simply never fired — so the next attempt should FIRST find out why that branch is not
+  reached for a rest-parameter callee (marker probe at the `info.hasRest` branch of the
+  arg-count anchor) rather than rewriting the helpers.
+  ORIGINAL: Missing
   **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
   parameter") for `f0(...args)` where `args: readonly string[]` and `f0` has fixed
   arity, and missing **TS2554** ("Expected 2 arguments, but got 3") for
