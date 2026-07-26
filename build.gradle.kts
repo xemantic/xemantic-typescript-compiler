@@ -291,10 +291,6 @@ val conformanceCategories = listOf(
  * This is not a place to park a fresh failure — triage first, queue it, then add.
  */
 val conformanceDeferredErrorBaselines = setOf(
-    // Missing TS18033 x2 (arrow as a computed enum member value) and TS2332 x2
-    // (`this` in an enum member initializer); over-emits TS2403 x2 for a generic
-    // arrow redeclaration. See the M3.0-gap-1 queue item.
-    "arrowFunctionContexts",
     // IIFE parameters are not contextually typed from the call arguments: misses
     // TS18048 x3 / TS7006 x2 and over-emits TS7019 x3 + TS7006 x2.
     // See the M3.0-gap-2 queue item.

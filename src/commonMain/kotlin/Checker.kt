@@ -41340,6 +41340,27 @@ class Checker(
                         start = init.pos, length = (spanEnd - init.pos).coerceAtLeast(1),
                     ))
                 }
+                // M3.0-gap-1: the same rule for a FUNCTION-valued computed member
+                // (`enum E { x = () => 4 }`). Gated on the initializer being
+                // SYNTACTICALLY an arrow or function expression, which makes it FP-safe by
+                // construction: such a member can never satisfy the numeric domain, so tsc
+                // always reports it. The displayed type comes from the resolved signature,
+                // so it renders `() => number` rather than the string branch's fixed word.
+                if (evStored.value == null && ModifierFlag.Const !in decl.modifiers &&
+                    (init is ArrowFunction || init is FunctionExpression)
+                ) {
+                    val initType = getTypeOfExpression(init)
+                    if (initType !== errorType && initType !== anyType) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, init.pos)
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(initType)}' is not assignable to type 'number' " +
+                                "as required for computed enum member values.",
+                            category = DiagnosticCategory.Error, code = 18033,
+                            fileName = fileName, line = line, character = character,
+                            start = init.pos, length = (spanEnd - init.pos).coerceAtLeast(1),
+                        ))
+                    }
+                }
                 // B162: TS1281 — under isolatedModules, an enum member initializer that is a
                 // bare identifier naming a member of the SAME (merged) enum declared ONLY in
                 // ANOTHER script file is un-transpilable file-locally; TS requires the
@@ -67215,6 +67236,16 @@ interface DataView {
                 expr.arguments?.let { for (a in it) collectEnumThisInExpr(a, source, fileName, emitTs2683) }
             }
             is ParenthesizedExpression -> collectEnumThisInExpr(expr.expression, source, fileName, emitTs2683)
+            // M3.0-gap-1: an ARROW does NOT rebind `this` — its `this` is the enclosing
+            // (here: enum) one, so `enum E { y = (() => this).length }` is TS2332 exactly
+            // like a bare `this`. Function expressions and class bodies DO rebind and stay
+            // skipped. tsc reports only TS2332 for the arrow-nested form (no companion
+            // TS2683), so the descent passes emitTs2683 = false.
+            is ArrowFunction -> when (val body = expr.body) {
+                is Expression -> collectEnumThisInExpr(body, source, fileName, false)
+                is Block -> for (st in body.statements) collectEnumThisInStmt(st, source, fileName)
+                else -> {}
+            }
             is PrefixUnaryExpression -> collectEnumThisInExpr(expr.operand, source, fileName, emitTs2683)
             is PostfixUnaryExpression -> collectEnumThisInExpr(expr.operand, source, fileName, emitTs2683)
             is ConditionalExpression -> {
@@ -67371,6 +67402,26 @@ interface DataView {
             start = start,
             length = 5,
         ))
+    }
+
+    /**
+     * M3.0-gap-1: `this` inside the BLOCK body of an arrow in an enum-member
+     * initializer. Only the statement kinds that can carry an expression are walked;
+     * anything nested deeper than this is a false NEGATIVE, never a false positive,
+     * which is the right direction for a rule this narrow.
+     */
+    private fun collectEnumThisInStmt(stmt: Statement, source: String, fileName: String) {
+        when (stmt) {
+            is ReturnStatement -> stmt.expression?.let { collectEnumThisInExpr(it, source, fileName, false) }
+            is ExpressionStatement -> collectEnumThisInExpr(stmt.expression, source, fileName, false)
+            is Block -> for (st in stmt.statements) collectEnumThisInStmt(st, source, fileName)
+            is IfStatement -> {
+                collectEnumThisInExpr(stmt.expression, source, fileName, false)
+                collectEnumThisInStmt(stmt.thenStatement, source, fileName)
+                stmt.elseStatement?.let { collectEnumThisInStmt(it, source, fileName) }
+            }
+            else -> {}
+        }
     }
 
     private fun emitEnumThisErrors(thisExpr: Identifier, source: String, fileName: String, emitTs2683: Boolean) {
