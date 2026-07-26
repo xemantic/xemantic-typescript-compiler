@@ -20,6 +20,46 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 699 (2026-07-26) — (M3.0-gap-3)(B1) reached corpus ZERO with every residual
+fixed, and then the PROFILES killed it. The blocker is now known, specific, and not
+where four rounds of work had been pointing.**
+
+The recipe landed all four residuals: the errorType guard for (a); an
+apparent-constraint walk for (b), which also had to go into the ASSIGNMENT path
+(`V extends U extends A` is decided there, not in the return path — the failing case
+was an assignment all along, which I only noticed by reading the case source rather
+than trusting the item's classification); and an identity-keyed end-of-`init` dedup
+for (c)/(d), since dedicated pin walkers run AFTER the spine and own some of those
+positions with better displays. Corpus: **12,731 / 0 / 3**.
+
+**Then `--listAll` ×8 went 46 → 49 on every profile.** Three new false positives, the
+same three everywhere, all in `compiler/utilitiesPublic.ts` — and reading the source
+made them one family, not three: **type-guard-driven generic inference**.
+`getFirstJSDocTag<T extends JSDocTag>(…, predicate: (tag: JSDocTag) => tag is T)`
+returns `find(tags, predicate)`; `getAllJSDocTags` returns `…filter(predicate)`;
+the third is `nodeTest(node) ? node : undefined`. tsc binds the callee's parameter to
+the CALLER's `T` through the `tag is T` predicate, so those sources ARE `T | undefined`
+and `readonly T[]`. We bind the concrete `JSDocTag`. The mismatch was invisible while
+the return annotation resolved to `any`; resolving the target is what exposed it.
+
+**So the change cannot land, and that is the correct outcome, not a setback.** v1's
+dashboard sits at zero real FPs; trading three of them for an internally-more-correct
+type resolution would be a bad deal, and gating them away would need a heuristic that
+still lets `function f<T>(): T { return null; }` error — precisely where a heuristic
+would quietly lose real errors. The honest next step is the one that also has value on
+its own: make guard-driven inference bind the caller's type parameter. Round 430
+already built "TP-from-PREDICATE binding" for this exact family, so the question is
+why it yields `JSDocTag` here.
+
+**Worth saying plainly after five rounds on this item:** (A) shipped, (B1) is fully
+written and corpus-green but blocked behind a named M3.1 gap that is bigger than the
+conformance case it came from. The case stays deferred. If the next round does not
+close the guard-inference gap quickly, the right move is to re-scope — the conformance
+case is not worth a generic-inference project, though the generic-inference project may
+well be worth doing on its own merits.
+
+---
+
 **Round 698 (2026-07-26) — (M3.0-gap-3)(B): 4 residuals → 3, and the last two are
 now understood to be DOUBLE EMISSIONS rather than false positives. Reverted again
 (the corpus must stay green), but the remaining path is short and named.**
@@ -4341,6 +4381,40 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   NewExpression positions). (d) was not probed but shows the identical signature
   (baseline has the diagnostic; our count goes 8 → 9), so expect another dedicated
   walker and the same disposition.
+  **Attempt 4 (round 699) got the corpus to ZERO with the whole change — and then the
+  PROFILES killed it. This is the real blocker; read it before touching (B1) again.**
+  Corpus 12,731 / 0 / 3 with all four residuals fixed (see the completed recipe below),
+  but `--listAll` ×8 went 46 → **49 on every profile** (harness 94 → 97): three NEW
+  false positives, the same three everywhere, all in `compiler/utilitiesPublic.ts`:
+  `Type 'Node | undefined' is not assignable to type 'T | undefined'` (777),
+  `Type 'JSDocTag | undefined' …` (1280), `Type 'JSDocTag[]' is not assignable to type
+  'readonly T[]'` (1285). **All three are TYPE-GUARD-DRIVEN GENERIC INFERENCE:**
+  `getFirstJSDocTag<T extends JSDocTag>(…, predicate: (tag: JSDocTag) => tag is T)`
+  returns `find(tags, predicate)`, `getAllJSDocTags` returns
+  `getJSDocTags(node).filter(predicate)`, and `tryCast`-shaped code returns
+  `nodeTest(node) ? node : undefined`. tsc binds the callee's own type parameter to the
+  CALLER's `T` through the `tag is T` predicate, so the sources are `T | undefined` /
+  `readonly T[]`; we bind the concrete `JSDocTag` and therefore see a mismatch. These
+  were invisible while the return annotation resolved to `any` — resolving the target is
+  what exposes them. **v1's dashboard is at ZERO real FPs, so this cannot land until
+  they are gone.** Two ways forward: make guard-driven inference bind the caller's type
+  parameter (independently valuable — round 430 already built "TP-from-PREDICATE
+  binding" for exactly this family, so start by finding why it yields `JSDocTag` here),
+  or add a TARGET-side companion to the round-431e foreign-TP gate. Prefer the first:
+  a target-side gate must still let `function f<T>(): T { return null; }` error, which
+  the corpus pins, so it would be a heuristic in the place heuristics are most likely to
+  silently lose real errors.
+  **THE COMPLETED RECIPE (corpus-green; all four residuals fixed):** edits 1 and 2 as
+  described, plus — (a) treat `anyType` OR `errorType` as "no constraint"; (b) report
+  the APPARENT constraint by following the interned chain to its first non-TypeParam
+  link and, when that yields nothing usable, following the DECLARATION's constraint
+  chain by name and resolving its first concrete link (factored as
+  `apparentConstraintOfTypeParam`, needed by the ASSIGNMENT path too — that is where
+  `errorMessagesIntersectionTypes03`'s `V extends U extends A` is decided, not the
+  return path); (c)+(d) register every return-path engine TS2322 in a pre-`init` list
+  and, at the end of `init`, drop it by IDENTITY if another TS2322 shares its position —
+  dedicated pin walkers run after the spine and own some of these positions with better
+  displays, so the engine cannot probe for them at emission time.
   **The FOUR residuals, each already diagnosed:**
   (a) `declFileGenericType` — `export function F5<T>(): T { return null; }` is
   UNCONSTRAINED, yet the interned TypeParam arrives with `constraint == anyType`, so the
