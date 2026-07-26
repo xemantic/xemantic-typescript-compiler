@@ -20,6 +20,30 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 711 (2026-07-26) — the TS7006 coverage hole located exactly; it is a contract
+mismatch, not a missing case. Probe-only, no production change; corpus 12,756 / 0 / 3.**
+
+The argument edge is built as `typed = isCalleeResolvable(callee)` — "can I resolve the
+callee name" standing in for "does this argument have a contextual type". The two
+missing shapes are exactly where those come apart: `anyCb(j => j)` resolves its callee
+(so it suppresses) while the parameter is `any` and supplies no contextual signature;
+`(f => f(12))(k => k)` has a parenthesized ARROW callee, which falls to the function's
+default `true` and suppresses too.
+
+So the fix is to ask the question the edge actually needs — the callee's PARAMETER type
+at that argument position, with no contextual signature when it is `any`, unresolved, or
+not function-shaped. Encouragingly, `isCalleeResolvable` already contains one instance of
+this reasoning: its B182 arm returns false when a LIB_MIN_TARGET-dropped method leaves the
+callback with no contextual signature. The change generalises that arm rather than
+inventing a rule.
+
+I stopped at the diagnosis on purpose. Broadening this particular walker is the change
+CLAUDE.md records as having regressed ~19 tests, so it needs a full corpus arbitration
+plus `--listAll` ×8 — callback parameters are everywhere in tsc's own source — and that
+is a poor fit for the tail of a long session.
+
+---
+
 **Round 710 (2026-07-26) — correcting round 709's own finding before anyone acts on
 it. Probe-only, no production change; corpus stays 12,756 / 0 / 3.**
 
@@ -4587,7 +4611,23 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   diagnostic, which cannot be right whatever the walker split is. And gap-2's
   `(f => f(12))(k => k)` is uncovered in BOTH modes. So the target is a COVERAGE hole in
   `checkImplicitAnyParameters` (argument arrows whose callee parameter provides no
-  contextual type), not the gates. Round 709's framing below is kept only to mark the
+  contextual type), not the gates.
+  **ROUND 711 located it exactly: a CONTRACT MISMATCH.** The argument edge is built as
+  `SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression))` (~53248), i.e. it
+  uses "can I resolve the callee NAME" as a proxy for "does this argument have a
+  contextual type". Those come apart in precisely the two shapes that are missing:
+  `anyCb(j => j)` — the callee resolves, so `typed = true` suppresses, but its parameter
+  is `any` and therefore supplies NO contextual signature, which is why tsc reports it;
+  and `(f => f(12))(k => k)` — the callee is a parenthesized ARROW, so
+  `isCalleeResolvable` returns its default `true` and suppresses again.
+  **The fix is to consult the callee's PARAMETER TYPE at the argument's position** (no
+  contextual signature when it is `any`, unresolved, or not function-shaped) rather than
+  the callee's resolvability. Note `isCalleeResolvable` also has a deliberate B182 arm
+  (a LIB_MIN_TARGET-dropped method has no contextual signature) — the same idea, applied
+  to one case; this generalises it. **Gate carefully:** broadening this walker is the
+  change documented as having regressed ~19 tests, so expect the corpus to arbitrate,
+  and run `--listAll` ×8 as well since callback parameters are everywhere in tsc's own
+  source. Round 709's framing below is kept only to mark the
   correction. ORIGINAL (WRONG): **the two TS7006 emitters have INVERTED option gates.** Same four shapes, two configs:
   | shape | strictNullChecks only | + noImplicitAny |
   | `take(i => i)` (annotated context) | silent (right) | silent (right) |
