@@ -28782,7 +28782,7 @@ class Checker(
                     if (m !is PropertyDeclaration || ModifierFlag.Declare !in m.modifiers) continue
                     val typeNode = m.type ?: continue
                     val pname = (m.name as? Identifier)?.text ?: continue
-                    val t = try { getTypeFromTypeNode(typeNode) } catch (_: Exception) { continue }
+                    val t = getTypeFromTypeNode(typeNode)
                     if (t === errorType || t === anyType) continue
                     declaredProps[pname] = t
                 }
@@ -52179,7 +52179,7 @@ interface DataView {
      */
     private fun resolveUncalledParamType(p: Parameter): Type? {
         val pType = p.type ?: return null
-        val resolved = try { getTypeFromTypeNode(pType) } catch (_: Exception) { return null }
+        val resolved = getTypeFromTypeNode(pType)
         if (resolved === errorType || resolved === anyType) return null
         if (p.questionToken) return getUnionType(listOf(resolved, undefinedType))
         return resolved
@@ -53733,7 +53733,7 @@ interface DataView {
                         continue
                     }
                     val vName = d.name.text
-                    val annotated = d.type?.let { try { getTypeFromTypeNode(it) } catch (_: Exception) { null } }
+                    val annotated = d.type?.let { getTypeFromTypeNode(it) }
                     val init = d.initializer
                     val resolved: Type? = when {
                         annotated != null && annotated !== errorType && annotated !== anyType -> annotated
@@ -78420,7 +78420,7 @@ interface DataView {
     }
 
     private fun tryGetTypeFromTypeNode(node: TypeNode): Type? =
-        try { getTypeFromTypeNode(node).takeIf { it !== anyType && it !== errorType } } catch (_: Exception) { null }
+        getTypeFromTypeNode(node).takeIf { it !== anyType && it !== errorType }
 
     private fun tryWidenOfExpr(expr: Expression): Type? =
         try { widenType(getTypeOfExpression(expr)).takeIf { it !== anyType && it !== errorType } } catch (_: Exception) { null }
@@ -79333,7 +79333,7 @@ interface DataView {
         val calleeSym = currentFileLocals?.get(calleeIdent.text) ?: globals[calleeIdent.text] ?: return
         if (!calleeSym.flags.hasAny(SymbolFlags.Class)) return
         if (calleeSym.declarations.any { it in builtinLibDecls }) return
-        val tgt = try { getTypeFromTypeNode(tref) } catch (_: Exception) { return }
+        val tgt = getTypeFromTypeNode(tref)
         if (tgt !is Type.Interface) return
         val tsym = tgt.symbol ?: return
         if (!tsym.flags.hasAny(SymbolFlags.Interface) || tsym.flags.hasAny(SymbolFlags.Class)) return
@@ -79386,7 +79386,7 @@ interface DataView {
         var op: Expression = expr.expression
         while (op is ParenthesizedExpression) op = op.expression
         val ol = op as? ObjectLiteralExpression ?: return
-        val tgt = try { getTypeFromTypeNode(tref) } catch (_: Exception) { return }
+        val tgt = getTypeFromTypeNode(tref)
         if (tgt !is Type.Interface) return
         resolveStructuredTypeMembers(tgt)
         val tgtProps = tgt.properties ?: return
@@ -89052,7 +89052,7 @@ interface DataView {
                 val idxLit = ((node.indexType as? LiteralType)?.literal as? StringLiteralNode)
                     ?.text ?: return null
                 if (idxLit.isEmpty()) return null
-                val objType = try { getTypeFromTypeNode(node.objectType) } catch (_: Exception) { return null }
+                val objType = getTypeFromTypeNode(node.objectType)
                 if (objType === anyType || objType === errorType) return null
                 val apparent = getApparentType(objType)
                 return unionDiscriminantKeysOfType(apparent, idxLit)
@@ -91552,8 +91552,8 @@ interface DataView {
                 val sib = parameters.takeWhile { it !== param }
                     .firstOrNull { (it.name as? Identifier)?.text == sibName }
                 sib?.type?.let { tn ->
-                    val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
-                    if (t != null && t !== anyType && t !== errorType) {
+                    val t = getTypeFromTypeNode(tn)
+                    if (t !== anyType && t !== errorType) {
                         currentLocalTypes[paramName.text] = t
                     }
                 }
@@ -91696,7 +91696,7 @@ interface DataView {
      */
     private fun registerBindingPatternParamLocals(pattern: Expression, annotation: TypeNode?) {
         val annType = annotation?.let {
-            try { getTypeFromTypeNode(it) } catch (_: Exception) { null }
+            getTypeFromTypeNode(it)
         }?.takeIf { it !== anyType && it !== errorType }
         fun register(p: Expression, memberSource: Type?) {
             when (p) {
@@ -95344,8 +95344,8 @@ interface DataView {
                 // `type T = null`). FP-safe: only suppresses when checkTypeRelatedTo
                 // confirms assignability.
                 if ((exprType == "null" || exprType == "undefined") && declaredTypeStr.startsWith("@")) {
-                    val resolvedTarget = try { getTypeFromTypeNode(typeAnnotation) } catch (_: Exception) { null }
-                    if (resolvedTarget != null && resolvedTarget !== errorType) {
+                    val resolvedTarget = getTypeFromTypeNode(typeAnnotation)
+                    if (resolvedTarget !== errorType) {
                         val srcT = if (exprType == "null") nullType else undefinedType
                         if (checkTypeRelatedTo(srcT, resolvedTarget, assignableRelation)) return
                     }
@@ -96354,7 +96354,7 @@ interface DataView {
             while (v is ParenthesizedExpression) v = v.expression
             if (v is Identifier || v is PropertyAccessExpression) continue
             val tn = memberTypes[nm] ?: continue
-            val mt = try { getTypeFromTypeNode(tn) } catch (_: Exception) { continue }
+            val mt = getTypeFromTypeNode(tn)
             if (mt === anyType || mt === errorType) continue
             val vt = try { getTypeOfExpression(v) } catch (_: Exception) { continue }
             if (vt === anyType || vt === errorType) continue
@@ -97157,7 +97157,7 @@ interface DataView {
                     val bindings = mutableMapOf<String, Type>()
                     for (nm in typeParams) {
                         val c = currentTypeParamDecls[nm]?.constraint ?: continue
-                        val ct = try { getTypeFromTypeNode(c) } catch (_: Exception) { continue }
+                        val ct = getTypeFromTypeNode(c)
                         if (ct !== anyType && ct !== errorType) bindings[nm] = ct
                     }
                     if (bindings.isNotEmpty()) {
@@ -97619,7 +97619,7 @@ interface DataView {
                         ?: (tDecl as? Parameter)?.type
                         ?: (tDecl as? PropertyDeclaration)?.type
                     if (tAnno != null) {
-                        targetTypeForCheck = try { getTypeFromTypeNode(tAnno) } catch (_: Exception) { null }
+                        targetTypeForCheck = getTypeFromTypeNode(tAnno)
                     }
                     if (targetTypeForCheck == null || targetTypeForCheck === anyType || targetTypeForCheck === errorType) {
                         currentLocalTypes[target.text]?.let { lt ->
@@ -101396,8 +101396,7 @@ interface DataView {
                             for (i in declTPs.indices) {
                                 val tpConstraintNode = declTPs[i].constraint
                                 if (tpConstraintNode != null) {
-                                    val constraintType = try { getTypeFromTypeNode(tpConstraintNode) }
-                                        catch (_: Exception) { errorType }
+                                    val constraintType = getTypeFromTypeNode(tpConstraintNode)
                                     if (constraintType !== anyType && constraintType !== errorType) {
                                         if (!checkTypeRelatedTo(resolvedArgs[i], constraintType, assignableRelation)) {
                                             constraintFails = true
@@ -102950,7 +102949,7 @@ interface DataView {
                 // B419b: prefer a JSDoc `@type {T}`-declared type (resolving to a concrete,
                 // non-error Type) over the RHS-inferred type; fall back to RHS inference.
                 val jsdocType = thisAssignJsDocTypes[name]?.let { node ->
-                    try { getTypeFromTypeNode(node).takeIf { it !== errorType } } catch (_: Exception) { null }
+                    getTypeFromTypeNode(node).takeIf { it !== errorType }
                 }
                 val propType = jsdocType ?: inferJsExpandoPropType(rhsList) ?: continue
                 val propSym = Symbol(SymbolFlags.Property, name)
@@ -103321,7 +103320,7 @@ interface DataView {
     ): Boolean {
         val ann = decl.type ?: return false
         val init = decl.initializer ?: return false
-        val targetType = try { getTypeFromTypeNode(ann) } catch (_: Exception) { return false }
+        val targetType = getTypeFromTypeNode(ann)
         if (targetType === errorType || targetType === anyType) return false
         val srcType = try { getTypeOfExpression(init) } catch (_: Exception) { return false }
         if (srcType !is Type.Object) return false
@@ -103372,7 +103371,7 @@ interface DataView {
         if (init is AsExpression) {
             val t = init.type
             if (!(t is TypeReference && (t.typeName as? Identifier)?.text == "const")) {
-                val st = try { getTypeFromTypeNode(t) } catch (_: Exception) { return null }
+                val st = getTypeFromTypeNode(t)
                 if (st === errorType || st === anyType) return null
                 return st to (formatTypeForDisplay(t) ?: typeToString(st))
             }
@@ -103418,7 +103417,7 @@ interface DataView {
     ): Boolean {
         val ann = decl.type ?: return false
         val init = decl.initializer ?: return false
-        val targetType = try { getTypeFromTypeNode(ann) } catch (_: Exception) { return false }
+        val targetType = getTypeFromTypeNode(ann)
         if (targetType === errorType || targetType === anyType) return false
         val tgtProps = weakTargetProperties(targetType) ?: return false
         if (tgtProps.isEmpty() || !tgtProps.all { isOptionalProperty(it) }) return false
@@ -103509,7 +103508,7 @@ interface DataView {
                 continue
             }
             // LEAF: target prop type must be weak + value shares no property.
-            val tPropType = try { getTypeFromTypeNode(vAnn) } catch (_: Exception) { continue }
+            val tPropType = getTypeFromTypeNode(vAnn)
             if (tPropType === anyType || tPropType === errorType) continue
             val tInner = weakTargetProperties(tPropType) ?: continue
             if (tInner.isEmpty() || !tInner.all { isOptionalProperty(it) }) continue
@@ -103741,7 +103740,7 @@ interface DataView {
             // Parenthesized — honor JSDoc type cast `/** @type {T} */ (expr)` when present.
             is ParenthesizedExpression ->
                 if (expr.jsdocCastType != null) {
-                    try { getTypeFromTypeNode(expr.jsdocCastType) } catch (_: Exception) { anyType }
+                    getTypeFromTypeNode(expr.jsdocCastType)
                 } else getTypeOfExpression(expr.expression)
 
             // Literals that create objects
@@ -104967,8 +104966,8 @@ interface DataView {
             // base — the assignment only fires on the nullish part).
             if (node is VariableDeclaration) {
                 node.type?.let { tn ->
-                    val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
-                    if (t != null && t !== errorType) return t
+                    val t = getTypeFromTypeNode(tn)
+                    if (t !== errorType) return t
                 }
                 (node.initializer as? CallExpression)?.let { call ->
                     resolvedCallReturnTypeForFlow(call)?.let { return it }
@@ -105049,8 +105048,8 @@ interface DataView {
             collectTypeReferenceNames(ret, names)
             if (tps.any { it.name.text in names }) return null
         }
-        val t = try { getTypeFromTypeNode(ret) } catch (_: Exception) { null }
-        return if (t != null && t !== errorType && t !== anyType) t else null
+        val t = getTypeFromTypeNode(ret)
+        return if (t !== errorType && t !== anyType) t else null
     }
 
 
@@ -105160,7 +105159,7 @@ interface DataView {
      *  gated to a syntactic cast RHS so it stays rare on the flow-walk hot path. */
     private fun castTargetIsNonNullish(typeNode: TypeNode?): Boolean {
         if (typeNode == null) return false
-        val t = try { getTypeFromTypeNode(typeNode) } catch (_: Exception) { return false }
+        val t = getTypeFromTypeNode(typeNode)
         if (t === anyType || t === errorType || t === unknownType) return false
         return !typeIncludesUndefined(t) && !typeIncludesNull(t)
     }
@@ -106694,8 +106693,8 @@ interface DataView {
                 val tpIdx = tps.indexOfFirst { it.name.text == tpName }
                 val explicitArg = expr.typeArguments?.getOrNull(tpIdx)
                 if (tpIdx >= 0 && explicitArg != null) {
-                    val resolved = try { getTypeFromTypeNode(explicitArg) } catch (_: Exception) { null }
-                    if (resolved != null && resolved !== errorType && resolved !== anyType) {
+                    val resolved = getTypeFromTypeNode(explicitArg)
+                    if (resolved !== errorType && resolved !== anyType) {
                         inferred = resolved
                     } else {
                         // Round 460: a function-body-local alias target (B83.5-unbound)
@@ -107275,8 +107274,8 @@ interface DataView {
                         else -> getUnionType(kept)
                     }
                 }
-                val direct = try { getTypeFromTypeNode(node) } catch (_: Exception) { null }
-                if (direct != null && direct !== anyType && direct !== errorType) return direct
+                val direct = getTypeFromTypeNode(node)
+                if (direct !== anyType && direct !== errorType) return direct
                 if (name != null && node.typeArguments.isNullOrEmpty()) {
                     val aliasDecl = ((currentFileLocals?.get(name) ?: globals[name])
                         ?.declarations?.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)
@@ -107288,8 +107287,8 @@ interface DataView {
                 return null
             }
             else -> {
-                val t = try { getTypeFromTypeNode(node) } catch (_: Exception) { null }
-                return t?.takeIf { it !== anyType && it !== errorType }
+                val t = getTypeFromTypeNode(node)
+                return t.takeIf { it !== anyType && it !== errorType }
             }
         }
     }
@@ -120469,10 +120468,10 @@ interface DataView {
         }
         val ri = restInner ?: return
         val minLength = fixedBefore + fixedAfter
-        val annType = try { getTypeFromTypeNode(annNode) } catch (_: Exception) { return }
+        val annType = getTypeFromTypeNode(annNode)
         if (annType === anyType || annType === errorType) return
         val elemNodes = if (index < fixedBefore) listOf(beforeNodes[index]) else (listOf(ri) + afterNodes)
-        val elemTypes = elemNodes.map { try { getTypeFromTypeNode(it) } catch (_: Exception) { return } }
+        val elemTypes = elemNodes.map { getTypeFromTypeNode(it) }
         if (elemTypes.any { it === anyType || it === errorType }) return
         val elemType = if (elemTypes.size == 1) elemTypes[0] else getUnionType(elemTypes)
         val addUndef = options.noUncheckedIndexedAccess && strictNullChecks && index >= minLength &&
@@ -121012,8 +121011,8 @@ interface DataView {
                 val numSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
                     sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true
                 }
-                val strType = strSig?.type?.let { try { getTypeFromTypeNode(it) } catch (_: Exception) { null } }
-                val numType = numSig?.type?.let { try { getTypeFromTypeNode(it) } catch (_: Exception) { null } }
+                val strType = strSig?.type?.let { getTypeFromTypeNode(it) }
+                val numType = numSig?.type?.let { getTypeFromTypeNode(it) }
                 for (member in members) {
                     if (member !is PropertyDeclaration) continue
                     val nameNode = member.name
@@ -121038,8 +121037,8 @@ interface DataView {
                         else if (strType != null) strType to "string"
                         else null to ""
                     if (idxType != null && idxType !== anyType && idxType !== errorType) {
-                        val propType = try { getTypeFromTypeNode(propTypeNode) } catch (_: Exception) { null }
-                        if (propType != null && propType !== anyType && propType !== errorType &&
+                        val propType = getTypeFromTypeNode(propTypeNode)
+                        if (propType !== anyType && propType !== errorType &&
                             !checkTypeRelatedTo(propType, idxType, assignableRelation)
                         ) {
                             val propDisp = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
@@ -121682,8 +121681,8 @@ interface DataView {
             // = number → valid; `string | number` → valid; `"foo" | "bar"` → TS1337).
             val resolvedCode: Int? = if (!isAllowedSyntactic && !isGeneric && !isLiteral &&
                     (pType is TypeReference || pType is UnionType)) {
-                val rt = try { getTypeFromTypeNode(pType) } catch (_: Exception) { null }
-                if (rt != null) classifyIndexParamType(rt) else null
+                val rt = getTypeFromTypeNode(pType)
+                classifyIndexParamType(rt)
             } else null
             if (isAllowedSyntactic || resolvedCode == 0) {
                 // VALID index param type. indexerConstraints2: a TypeReference param that
@@ -123158,7 +123157,7 @@ interface DataView {
     private fun checkTupleDestructDecl(d: VariableDeclaration, source: String, fileName: String) {
         val pattern = d.name as? ObjectBindingPattern ?: return
         val typeNode = d.type as? TupleType ?: return
-        val tupleType = try { getTypeFromTypeNode(typeNode) } catch (_: Exception) { return }
+        val tupleType = getTypeFromTypeNode(typeNode)
         if (tupleType !is Type.Object) return
         val members = tupleType.members ?: return
         for (el in pattern.elements) {
@@ -124416,10 +124415,10 @@ interface DataView {
                         val bRet = (baseMethodDecl.type as? TypeReference)?.typeName as? Identifier
                         val dRet = (derivedMethodDecl.type as? TypeReference)?.typeName as? Identifier
                         if (bRet?.text != baseTp.name.text || dRet?.text != derivedTp.name.text) return@run null
-                        val dConType = try { getTypeFromTypeNode(dCon) } catch (_: Exception) { return@run null }
+                        val dConType = getTypeFromTypeNode(dCon)
                         if (dConType === anyType || dConType === errorType) return@run null
                         val bConType = baseTp.constraint?.let {
-                            try { getTypeFromTypeNode(it) } catch (_: Exception) { return@run null }
+                            getTypeFromTypeNode(it)
                         } ?: unknownType
                         if (checkTypeRelatedTo(bConType, dConType, assignableRelation)) return@run null
                         val dConDisp = formatTypeForDisplay(dCon).orEmpty()
@@ -128360,7 +128359,7 @@ interface DataView {
                     val sib = parameters.takeWhile { it !== param }
                         .firstOrNull { (it.name as? Identifier)?.text == sibName }
                     val sibType = sib?.type?.let { tn ->
-                        try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
+                        getTypeFromTypeNode(tn)
                     }
                     if (sibType != null && sibType !== anyType && sibType !== errorType &&
                         !isTpReferencingFnType(sibType)
@@ -128484,8 +128483,8 @@ interface DataView {
         // annotation in the enclosing function, recover the declared type directly.
         if (raw === anyType) {
             closure.enclosingVarDecls[root]?.type?.let { tn ->
-                val t = try { getTypeFromTypeNode(tn) } catch (_: Exception) { null }
-                if (t != null && t !== errorType) raw = t
+                val t = getTypeFromTypeNode(tn)
+                if (t !== errorType) raw = t
             }
         }
         // Round 416: use the loop-ENTRY-following narrowing variant (like the sibling
@@ -148102,7 +148101,7 @@ interface DataView {
             val homomorphicSourceType: Type? = (node.nameType == null).let { noRemap ->
                 if (!noRemap) null else (constraint as? TypeOperator)
                     ?.takeIf { it.operator == SyntaxKind.KeyOfKeyword }
-                    ?.let { try { getTypeFromTypeNode(it.type) } catch (_: Exception) { null } }
+                    ?.let { getTypeFromTypeNode(it.type) }
                     ?.takeIf { it !== anyType && it !== errorType }
             }
             for (key in keys) {
@@ -160029,7 +160028,7 @@ interface DataView {
         val t = getTypeOfExpression(expr)
         if (t !== anyType && t !== errorType) return t
         val ann = (expr as? Identifier)?.let { localAnns[it.text] } ?: return t
-        return try { getTypeFromTypeNode(ann) } catch (_: Exception) { t }
+        return getTypeFromTypeNode(ann)
     }
 
     private fun pdduCheckExpr(expr: Expression, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
