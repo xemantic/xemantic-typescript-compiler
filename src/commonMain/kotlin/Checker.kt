@@ -58619,6 +58619,38 @@ interface DataView {
         // tuple-typed spread covering the remaining params). Too-many stands
         // (a spread expands to ≥0, so fixed args alone exceeding max still errors).
         val hasSpreadArg = expr.arguments.any { it is SpreadElement }
+        // (M3.0-gap-4) A spread argument must have a TUPLE type unless it is passed to a
+        // REST parameter: `f0(...args)` with `args: readonly string[]` and
+        // `f0(a: string, b: string)` cannot be checked for arity at all, and tsc reports
+        // TS2556 at the spread. Only fires when the operand's type is POSITIVELY an
+        // array-that-is-not-a-tuple, so an unresolved or `any` operand stays silent; a
+        // tuple spread (`readonly [string, string]`) is legal here and must not fire.
+        // ... but ONLY when the count is not already wrong: tsc checks arity first, so
+        // `f(1, 2, ...xs)` against a one-parameter `f` is "Expected 1 arguments, but got
+        // 3", not TS2556. The spread's unknown length only matters when the call would
+        // otherwise be arity-clean.
+        if (info != null && !info.hasRest && hasSpreadArg &&
+            expr.arguments.size <= info.maxParams
+        ) {
+            for (arg in expr.arguments) {
+                val spread = arg as? SpreadElement ?: continue
+                // An ARRAY LITERAL spread has a syntactically known length, so tsc treats
+                // it as a tuple: `f(1, 2, 3, 4, 5, ...[6, 7])` is counted as seven
+                // arguments and reported as too many, never as TS2556.
+                if (spread.expression is ArrayLiteralExpression) continue
+                if (!spreadOperandIsNonTupleArray(spread.expression)) continue
+                val spreadStart = spread.pos
+                val (sl, sc) = getLineAndCharacterOfPosition(source, spreadStart)
+                diagnostics.add(Diagnostic(
+                    message = "A spread argument must either have a tuple type or be " +
+                        "passed to a rest parameter.",
+                    category = DiagnosticCategory.Error, code = 2556, fileName = fileName,
+                    line = sl, character = sc, start = spreadStart,
+                    length = expressionTrueEnd(spread.expression) - spreadStart,
+                ))
+                return
+            }
+        }
         if (info != null && !info.isOverloaded) {
             val argCount = expr.arguments.size
             if (!info.hasRest && argCount > info.maxParams) {
@@ -109331,6 +109363,51 @@ interface DataView {
      */
     /** Round 471: true when [t] is an Array/ReadonlyArray reference — the contexts in
      *  which a fresh array literal's elements are contextually typed by the element type. */
+    /**
+     * (M3.0-gap-4) Is this spread operand POSITIVELY an array that is not a tuple — the
+     * condition under which tsc reports TS2556 for a spread into a non-rest parameter?
+     *
+     * Two routes, because neither alone covers the shapes that matter. The resolved type
+     * handles an ordinary value (`declare const arr: string[]`). A rest PARAMETER's type
+     * does not resolve in the arg-count pass — its enclosing signature's parameters are
+     * not in scope there — so its ANNOTATION is read syntactically instead, which also
+     * makes `readonly string[]` (a TypeOperator wrapping an ArrayType) fall out for free.
+     * Anything unrecognised answers false, leaving the call unreported.
+     */
+    private fun spreadOperandIsNonTupleArray(operand: Expression): Boolean {
+        val resolved = getTypeOfExpression(operand)
+        if (isArrayLikeReference(resolved)) {
+            return (resolved as? Type.Object)?.tupleElementTypes == null
+        }
+        val id = operand as? Identifier ?: return false
+        var owner: Node? = (id as NodeBase).parent
+        var hops = 0
+        while (owner != null && hops++ < 64) {
+            val ownerParams = when (owner) {
+                is FunctionDeclaration -> owner.parameters
+                is FunctionExpression -> owner.parameters
+                is ArrowFunction -> owner.parameters
+                is MethodDeclaration -> owner.parameters
+                is Constructor -> owner.parameters
+                else -> null
+            }
+            val match = ownerParams?.firstOrNull { (it.name as? Identifier)?.text == id.text }
+            if (match != null) {
+                var annotation: TypeNode? = match.type
+                while (annotation is TypeOperator || annotation is ParenthesizedType) {
+                    annotation = when (annotation) {
+                        is TypeOperator -> annotation.type
+                        is ParenthesizedType -> annotation.type
+                        else -> null
+                    }
+                }
+                return annotation is ArrayType
+            }
+            owner = (owner as? NodeBase)?.parent
+        }
+        return false
+    }
+
     private fun isArrayLikeReference(t: Type): Boolean =
         t is Type.Reference &&
             (t.target.symbol?.name == "Array" || t.target.symbol?.name == "ReadonlyArray")
