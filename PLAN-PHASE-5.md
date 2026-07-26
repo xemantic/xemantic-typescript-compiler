@@ -20,6 +20,47 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 689 (2026-07-26) — M3.0's preconditions settled: the conformance corpus
+IS reachable offline, and what remains is exactly three edits.** No production
+code changed; the item now carries the findings so the next attempt starts at
+implementation.
+
+**The one that could have blocked the item outright.** `typescript-repo` is a
+**blobless partial clone** (`partialclonefilter = blob:none`, `promisor = true`)
+whose sparse checkout lists only `tests/cases/compiler` and
+`tests/baselines/reference` — the shape that normally means "the other paths need
+the network". It does not here: a `git cat-file -p HEAD:tests/cases/conformance/…`
+probe returns content, so the blobs are already local. Worth stating because the
+config alone reads as network-gated, and this box is offline.
+
+**Three more preconditions, all favourable.** Baselines need no work (the sparse
+checkout already takes the whole flat `tests/baselines/reference`). The
+conformance **variant-baseline convention is already implemented** — conformance
+writes `name(target=es5).errors.txt` and the generator's `computeVariations` /
+`paramBaselineName` produce exactly `name(key=value).ext`. And there are **ZERO
+basename collisions** between all of conformance and the 6,537 compiler cases, so
+the generated flat backtick function names need no disambiguation — I checked the
+whole set, not just the first category, because a collision anywhere would have
+forced a naming scheme change rather than a local fix.
+
+**Sizing, which picks the first category for us:** `expressions/functions` is
+**7 files**; `types/typeParameters` 46; `types/typeRelationships` 263. Seven is
+the right size to validate the generator change end-to-end before any category
+large enough to produce a triage wave.
+
+**The remaining work is three edits**, recorded on the item: `sparsePaths` gains
+the allowlisted dirs; the `testFiles` collection must walk them RECURSIVELY
+(categories have subdirs, unlike the flat compiler dir); and the generated bodies
+hardcode `typeScriptCasesDir` = `tests/cases/compiler`, so a conformance case
+needs its own path.
+
+**Why this stopped here.** The remaining edits are in `build.gradle.kts`, whose
+generator is a long `doLast` with documented editing hazards (the nested-comment
+trap that silently kills a region). That is work for a fresh context, not the
+ninth iteration of a long one — and the item is now specified precisely enough
+that the next round can go straight to it.
+
+
 **Round 688 (2026-07-26) — attempted M2.4's "small self-contained" follow-up,
 found it would be DEAD CODE, and reverted: `useRealLibs` defaults to false and
 nothing in the project path turns it on, so every real build — all eight
@@ -3726,13 +3767,37 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   showed the cost inside the noise band. Both were measuring nothing. When an
   unknown name degrades to `any`, name resolution proves nothing; the control
   that decides is a **MEMBER probe** (`e.notAMember` must error).
-- [ ] **M3.0 Conformance generator extension.** Extend `generateTypeScriptTests` with
-  a per-category allowlist for `tests/cases/conformance/` (5,907 files; keep all tsgo
-  set-B filters). Start with the categories matching M3.1 (types/typeParameters,
-  types/typeRelationships, expressions/functions). Each category lands only when its
-  failures are triaged into queue items — never leave a category half-red without
-  notes. Owner approval (2026-07-02) stands; optionally pull in early as an extra
-  regression net if an M3 campaign wants the coverage.
+- [ ] **M3.0 Conformance generator extension — PRECONDITIONS SETTLED round 689;
+  what remains is exactly three edits.** Extend `generateTypeScriptTests` with a
+  per-category allowlist for `tests/cases/conformance/` (keep all tsgo set-B
+  filters). Each category lands only when its failures are triaged into queue
+  items — never leave a category half-red without notes. Owner approval
+  (2026-07-02) stands.
+  **Verified round 689 (do NOT re-derive):**
+  1. **The sources ARE readable offline.** `typescript-repo` is a BLOBLESS partial
+     clone (`remote.origin.partialclonefilter = blob:none`, `promisor = true`) and
+     its sparse checkout lists only `tests/cases/compiler` +
+     `tests/baselines/reference` — so this looked network-gated. It is not: a
+     `git cat-file -p HEAD:tests/cases/conformance/…` probe returns content, so
+     the needed blobs are already local.
+  2. **Baselines need no work** — the sparse checkout already takes the WHOLE
+     `tests/baselines/reference`, which is flat and holds the conformance ones.
+  3. **The variant-baseline convention is ALREADY implemented.** Conformance uses
+     `name(target=es5).errors.txt`; the generator's `computeVariations` /
+     `paramBaselineName` produce exactly `name(key=value).ext`.
+  4. **ZERO basename collisions** between ALL of conformance and the 6,537
+     compiler cases, so the generated flat backtick function names need no
+     disambiguation.
+  5. **Sizing for the M3.1-matching categories:** `expressions/functions` **7
+     files** (the right first category), `types/typeParameters` 46,
+     `types/typeRelationships` 263.
+  **The three edits:** (a) `sparsePaths` (build.gradle.kts ~271) += the
+  allowlisted category dirs; (b) the `testFiles` collection (~547) currently
+  `testsDir.listFiles { flat }` must also walk the allowlisted conformance dirs
+  RECURSIVELY (categories have subdirs); (c) the generated bodies hardcode
+  `Path("${'$'}typeScriptCasesDir/<name>.ts")` where `typeScriptCasesDir` is
+  `tests/cases/compiler` (TypeScriptTestSupport.kt:38) — a conformance case needs
+  its own path, so emit a per-file relative path or add a second constant.
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility). Revisit
   before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
