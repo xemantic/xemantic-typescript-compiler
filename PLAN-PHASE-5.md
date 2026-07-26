@@ -65,12 +65,25 @@ residue (CLAUDE.md § "A UNION whose MEMBER is an INTERSECTION"), pre-existing a
 out of this item's scope; the pin now asserts only the sharp no-TS2589 signal,
 with the gap named in a comment.
 
-**Remaining population for batches 2+, by guarded helper** (Checker.kt): 41
-`getTypeOfExpression`, 39 `getTypeFromTypeNode`, 16 `getTypeOfSymbol`, 6
-`resolveStructuredTypeMembers`, 5 each `checkTypeRelatedTo` / `checkArithmeticInExpr`,
-4 each `typeToString` / `getTypeOfIdentifier` / `getDeclaredTypeOfSymbol`, and a
-~30-site tail of singletons. The big three are genuine deep resolvers, not
-dispatchers, so expect a higher find-rate and take them in smaller batches.
+**Batch 2, same round: `getTypeOfSymbol` (16) + `resolveStructuredTypeMembers`
+(6), 22 sites, also byte-neutral — 0 bugs.** These two ARE deep resolvers, so the
+prior was different; what made them safe is that each already carries the guard
+its call-site catches stood in for — `getTypeOfSymbol`'s per-symbol in-progress
+sentinel (B202.1, degrades a re-entrant resolution to `anyType`) and
+`resolveStructuredTypeMembersCore`'s heritage cycle guard. The 8 pins drive
+exactly those shapes (mutually recursive interface AND class heritage, the
+`var x = cond ? y : 0; var y = x` initializer cycle, directly and generically
+recursive members, a circular type alias, a recursive-type relation) and all pass
+at unmodified HEAD. **Rule of thumb for batches 3+: grep the guarded helper for
+its own cycle guard first — where one exists the catch is redundant by
+construction.** Checker.kt **198 → 146** over the two batches (commonMain 218 →
+166).
+
+**Remaining population, by guarded helper** (Checker.kt): 41
+`getTypeOfExpression`, 39 `getTypeFromTypeNode`, 5 each `checkTypeRelatedTo` /
+`checkArithmeticInExpr`, 4 each `typeToString` / `getTypeOfIdentifier` /
+`getDeclaredTypeOfSymbol`, and a ~30-site tail of singletons. The two big ones
+are the deep expression/type-node resolvers — take them in smaller slices.
 
 **Round 684 (2026-07-26) — the convention branch MERGED with rounds 674–681, and
 the ten test files those rounds added brought up to the one dialect. Round
@@ -670,13 +683,21 @@ backlog-horizon decision, not queue debt.)
   **Batch ledger.** *(1) round 685 — `getApparentType`/`getPropertyOfType`, 30
   sites removed, 0 restored, byte-identical on corpus + `--listAll` ×8 ⇒ all dead
   residue; 1 bug found and fixed (unguarded type-param constraint recursion →
-  stack overflow on `<T extends U, U extends T>`). Checker.kt 198 → 168.*
+  stack overflow on `<T extends U, U extends T>`). Checker.kt 198 → 168.
+  (2) round 685 — `getTypeOfSymbol` (16) / `resolveStructuredTypeMembers` (6), 22
+  removed, 0 restored, 0 bugs; byte-identical the same way. Checker.kt 168 → 146
+  (commonMain 218 → 166 over both batches). These two are deep resolvers, but each
+  already carries the guard the catches stood in for — a per-symbol in-progress
+  sentinel (B202.1) and the heritage cycle guard — so the catches were a redundant
+  outer layer.*
   **Method addendum from batch 1:** write the batch's corner-case pins FIRST and
   run them against unmodified HEAD — the pins, not the removal, are what find
   bugs, and the HEAD run tells you whether a failure is pre-existing or yours.
-  Next up, hardest-first within reach: `resolveStructuredTypeMembers` (6) and the
-  singleton tail, then `getTypeOfSymbol` (16), then the two deep resolvers
-  `getTypeFromTypeNode` (39) and `getTypeOfExpression` (41) in small slices.
+  **Rule of thumb from batch 2:** grep the guarded helper for its OWN cycle
+  guard / in-progress sentinel first; where one exists the call-site catch is
+  redundant by construction and the batch is very likely byte-neutral.
+  Next up: the two deep resolvers `getTypeFromTypeNode` (39) and
+  `getTypeOfExpression` (41) in small slices, plus the ~30-site singleton tail.
 
 **PERF — the post-inversion performance arc (owner-approved 2026-07-20, round 618:
 "proceed according to your recommendations"; measurements + rationale in the
