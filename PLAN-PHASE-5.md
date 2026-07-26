@@ -20,6 +20,32 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 707 (2026-07-26) — the last TS18048 gap closed; `contextuallyTypedIifeStrict`
+is now one diagnostic family from un-deferral. Corpus 12,756 / 0 / 3, all 8 profiles
+byte-identical.**
+
+Round 706 handled `T | undefined` operands; a reference typed exactly `undefined` was
+still silent. The cause was a strictNullChecks early return in the arithmetic walker
+that hands operands carrying the Null/Undefined flag to TS18050 — correct for the
+LITERAL `undefined`, wrong for a reference, which tsc reports as TS18048. Offering the
+operand to the possibly-undefined check before that return fixes it, and isolating it
+took one three-case probe (`a: number | undefined` fired, `c?: number` fired,
+`b: undefined` did not).
+
+**The corpus then caught the guard I had missed**, and it is a nice example of why the
+literal/reference distinction had to be explicit: `undefined` parses as an Identifier
+here, so it HAS a reference path, and the first cut emitted "'undefined' is possibly
+'undefined'" — three real baselines (operatorAddNullUndefined, binaryArithmatic2/3)
+rejected it immediately. Excluding the nullish keywords by name is exactly the TS18050
+boundary the original comment described.
+
+All three of the case's TS18048 ('j', 'k', 'o') now fire at the baseline's positions.
+The remainder is the two TS7006 for the INNER function's parameter in
+`(f => f(12))(i => i)` — an arrow passed AS an argument does not get its own parameters
+checked for implicit any.
+
+---
+
 **Round 706 (2026-07-26) — the possibly-undefined operand rule LANDED, after settling
 the pin question with evidence rather than authority. Corpus 12,756 / 0 / 3, all 8
 profiles byte-identical.**
@@ -4454,9 +4480,14 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   also mention "possibly undefined" were checked and are unrelated (their operand is a
   `delete` expression, a boolean). The nine local pins were updated to expect TS18048,
   their intent unchanged, and one paired positive control strengthened to exclude TS18048
-  too.** What remains of the case: `k`/`o` (an optional parameter with NO corresponding
-  argument types as `undefined`, and nothing fires for it yet) and the two TS7006 for the
-  INNER function's parameter in `(f => f(12))(i => i)`.
+  too.** **ROUND 707 closed the `k`/`o` half too** — a REFERENCE typed exactly `undefined`
+  now reports TS18048 like a union does (the arithmetic walker's strictNullChecks early
+  return deferred those to TS18050, which is right only for the LITERAL operand). All
+  three TS18048 of the case now fire at the baseline's positions. **What remains is only
+  the two TS7006** for the INNER function's parameter in `(f => f(12))(i => i)`: the
+  outer parameter is typed from the argument, but an arrow passed AS an argument does not
+  have its own parameters checked for implicit any. That is the last thing between this
+  case and un-deferral.
   ROUND 705's framing, kept for the reasoning: **the rule works — but it collides with
   NINE LOCAL PINS, and resolving that collision is a decision, not a patch.** The rule (a possibly-undefined
   check ahead of TS2362/TS2363/TS2365 in the three arithmetic emitters, strictNullChecks
