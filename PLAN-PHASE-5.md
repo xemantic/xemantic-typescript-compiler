@@ -79,11 +79,35 @@ its own cycle guard first — where one exists the catch is redundant by
 construction.** Checker.kt **198 → 146** over the two batches (commonMain 218 →
 166).
 
-**Remaining population, by guarded helper** (Checker.kt): 41
-`getTypeOfExpression`, 39 `getTypeFromTypeNode`, 5 each `checkTypeRelatedTo` /
+**Batches 3 and 4, same round: the two deep resolvers, 79 more sites, both
+byte-neutral — 0 bugs.** `getTypeFromTypeNode` (39) is the one that genuinely
+differed: its B202.2 in-progress sentinel covers only the CACHEABLE path — a
+resolution under `currentTypeParamScope`, a non-empty `inferenceNamespaceStack`,
+or `currentTypeAliasArgs` bypasses the cache and the sentinel with it, leaving
+the alias-substitution depth bail as the protection — so its pins drive the
+BYPASSING contexts specifically, and one pin is a control in the OTHER direction:
+an infinitely expanding alias is *supposed* to bail with TS2589, so "no TS2589"
+is not a universal sharp signal. `getTypeOfExpression` (40) holds no sentinel and
+needs none — it is a `when` over expression kinds on a finite acyclic tree,
+delegating to guarded resolvers and to the deliberately iterative walkers, so the
+only route to unbounded recursion is a DECLARATION cycle (initializer cycles,
+recursive inferred return types, an object literal spreading itself — all pinned,
+all passing at HEAD). Its two try/FINALLY blocks are untouched. Removals also
+retired one vestigial `tryGetTypeFromTypeNode` wrapper body and ~20 null checks
+the non-null returns made vacuous.
+
+**Round total: 131 of Checker.kt's 197 catches deleted (198 → 67; commonMain 218
+→ 87), 0 restored, 1 bug found and fixed.** Every batch byte-identical on corpus
++ `--listAll` ×8.
+
+**Remaining population** (Checker.kt, 67): 5 each `checkTypeRelatedTo` /
 `checkArithmeticInExpr`, 4 each `typeToString` / `getTypeOfIdentifier` /
-`getDeclaredTypeOfSymbol`, and a ~30-site tail of singletons. The two big ones
-are the deep expression/type-node resolvers — take them in smaller slices.
+`getDeclaredTypeOfSymbol`, 3 `getWidenedLiteralType`, 2 each `widenType` /
+`lookupPropertyTypeForCtx` / `getPropertiesOfType`, and a ~35-site tail of
+singletons (`resolveAlias`, `walkFunctionBodiesInExpr`, `Parser`, `block`, …).
+Plus 20 outside Checker.kt (Transformer 5, TsBuildInfo 4, Vfs 3, Parser 3,
+Emitter 2, and one each in TsConfigLoader / ModuleResolver / Flow) — those are a
+different population (I/O and parse recovery), audit them on their own terms.
 
 **Round 684 (2026-07-26) — the convention branch MERGED with rounds 674–681, and
 the ten test files those rounds added brought up to the one dialect. Round
@@ -685,11 +709,19 @@ backlog-horizon decision, not queue debt.)
   residue; 1 bug found and fixed (unguarded type-param constraint recursion →
   stack overflow on `<T extends U, U extends T>`). Checker.kt 198 → 168.
   (2) round 685 — `getTypeOfSymbol` (16) / `resolveStructuredTypeMembers` (6), 22
-  removed, 0 restored, 0 bugs; byte-identical the same way. Checker.kt 168 → 146
-  (commonMain 218 → 166 over both batches). These two are deep resolvers, but each
-  already carries the guard the catches stood in for — a per-symbol in-progress
-  sentinel (B202.1) and the heritage cycle guard — so the catches were a redundant
-  outer layer.*
+  removed, 0 restored, 0 bugs; byte-identical the same way. Checker.kt 168 → 146.
+  These two are deep resolvers, but each already carries the guard the catches
+  stood in for — a per-symbol in-progress sentinel (B202.1) and the heritage cycle
+  guard — so the catches were a redundant outer layer.
+  (3) round 685 — `getTypeFromTypeNode` (39), 0 restored, 0 bugs. Checker.kt
+  146 → 107. Its B202.2 sentinel covers only the CACHEABLE path, so the pins drive
+  the cache-BYPASSING contexts (type-param scope / inference namespace / alias
+  args), where the alias depth bail is the protection instead.
+  (4) round 685 — `getTypeOfExpression` (40), 0 restored, 0 bugs. Checker.kt
+  107 → **67** (commonMain 218 → 87 over the four batches). No sentinel and none
+  needed: it is a kind dispatcher over a finite acyclic tree, delegating to
+  guarded resolvers and iterative walkers, so only a DECLARATION cycle can recurse
+  — which the pins drive.*
   **Method addendum from batch 1:** write the batch's corner-case pins FIRST and
   run them against unmodified HEAD — the pins, not the removal, are what find
   bugs, and the HEAD run tells you whether a failure is pre-existing or yours.
