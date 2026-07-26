@@ -20,6 +20,42 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 693 (2026-07-26) — (M3.0-gap-2)'s false-positive half fixed: an IIFE's
+parameters no longer draw implicit-any. Corpus 12,685/0/3.**
+
+tsc contextually types an immediately-invoked function's parameters from the
+call's ARGUMENTS, so it reports nothing for them — including when the call passes
+none. We emitted TS7019 ×3 + TS7006 ×2 on the conformance case.
+`isImmediatelyInvokedFunctionParam` walks the parameter's owner up through
+parentheses to a CallExpression whose unwrapped callee is that function; the
+unwrapping is not decoration, since the corpus shape is routinely written
+`(function (x) { } ("!"))` and `((((function (y) { }))))("-")`.
+
+**The instructive part: my first patch changed NOTHING.** I gated
+`checkParamsForImplicitAny`, rebuilt, re-probed — byte-identical output, all three
+diagnostics still there. There are TWO TS7019 emitters, and the live one for
+these shapes is the dedicated rest-parameter walker, which carries its own TS7019
+*and* its own TS7006. Both now carry the rule, and the pins deliberately cover
+the rest-parameter shapes because those are the ones a half-fix leaves behind.
+This is the same lesson as rounds 687–688 in a new place: when a change produces
+no observable effect, find out whether the code you changed is the code that runs.
+
+**A control that was wrong about current behaviour.** My first negative control
+asserted a non-invoked arrow `const f = (first, ...rest) => rest` still draws
+TS7019. It does not — and did not before this change either: a rest parameter in
+a var-initializer arrow never reaches the rest walker. That is an unrelated
+pre-existing gap, and the structural argument settles it without a bisect (my
+gate requires a CallExpression parent, which that shape has none of). The control
+now pins TS7006 there and a plain function declaration carries the TS7019 case.
+
+**Still open in gap-2**, and the reason the case stays deferred: the parameters
+are not actually TYPED from the arguments, so the reference's TS18048 ×3 (optional
+IIFE parameters under strictNullChecks) and TS7006 ×2 (the INNER function's
+parameter in `(f => f(12))(i => i)`) do not fire. That needs real contextual
+typing from a call's arguments — `applyContextualParameterTypes` is the machinery
+to extend — not another suppression.
+
+
 **Round 692 (2026-07-26) — (M3.0-gap-1) CLOSED: the conformance case's two
 missing diagnostics implemented, the case un-deferred, corpus 12,671/0/3.**
 
@@ -3923,13 +3959,22 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `(() => this).length` in an enum initializer is just as illegal — the descent
   emits TS2332 only, because the reference baseline has no companion TS2683 for
   the arrow-nested form.
-- [ ] **(M3.0-gap-2) `contextuallyTypedIifeStrict` error baseline** — deferred the
-  same way. IIFE parameters are not contextually typed from the call arguments, so
-  we MISS **TS18048 ×3** ('j'/'k'/'o' possibly undefined) and **TS7006 ×2**, while
-  OVER-emitting **TS7019 ×3** (rest parameter implicitly `any[]`) and **TS7006 ×2**
-  — i.e. we report the parameters as implicitly-any exactly where tsc has typed
-  them from the invocation. Sibling `contextuallyTypedIife` passes its JS subtest,
-  so this is the checker's contextual-typing path, not the emitter's.
+- [ ] **(M3.0-gap-2) `contextuallyTypedIifeStrict` — the FALSE-POSITIVE half is
+  FIXED (round 693); the missing codes remain, so the case stays deferred.** tsc
+  contextually types an IIFE's parameters from the call ARGUMENTS, so it reports
+  no implicit-any for them even when the call passes none; we emitted TS7019 ×3 +
+  TS7006 ×2. `isImmediatelyInvokedFunctionParam` (owner walked up through
+  parentheses to a CallExpression whose unwrapped callee is that function)
+  suppresses both, in BOTH emitters — the general parameter walker AND the
+  dedicated rest-parameter walker, which carries its own TS7019 and TS7006 and is
+  the one live for these shapes.
+  **REMAINING:** the parameters are still not TYPED from the arguments, so the
+  reference's **TS18048 ×3** ('j'/'k'/'o' possibly undefined, from optional IIFE
+  parameters under strictNullChecks) and **TS7006 ×2** (lines 28–29 — the INNER
+  function's parameter in `(f => f(12))(i => i)`, which tsc genuinely reports)
+  do not fire. That needs real contextual parameter typing from a call's
+  arguments, not another suppression; `applyContextualParameterTypes` is the
+  existing machinery to extend.
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility). Revisit
   before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
