@@ -110064,6 +110064,36 @@ interface DataView {
 
     /** Get the type of an arrow function expression. */
     private fun getTypeOfArrowFunction(expr: ArrowFunction): Type {
+        // M3.0-gap-1: intern the arrow's OWN type parameters BEFORE resolving its
+        // parameters and return, and put them in scope for both. They used to be
+        // interned only when the Signature was constructed at the bottom, i.e. AFTER
+        // the return had been inferred — so in `<T>(n: T) => n` the annotation `T`
+        // resolved to nothing, `n` never made it into currentLocalTypes (the loop
+        // below skips any/errorType), the body typed as `any`, and the arrow came out
+        // `<T>(n: T) => any`. That silently mistyped every generic arrow and surfaced
+        // as a TS2403 false positive against an equivalent annotation. Same rule as
+        // the interface call/construct-signature one: push the owning declaration's
+        // type parameters before resolving anything that can reference them.
+        val ownTypeParams = expr.typeParameters?.map { tp ->
+            typeParamInternCache.getOrPut(internKey(tp)) {
+                val ip = Type.TypeParam()
+                ip.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
+                ip
+            }
+        }
+        val savedTpScope = currentTypeParamScope
+        if (!ownTypeParams.isNullOrEmpty()) {
+            currentTypeParamScope = (savedTpScope ?: emptyMap()) +
+                ownTypeParams.mapNotNull { tp -> tp.symbol?.name?.let { it to tp } }
+        }
+        try {
+        // Constraints and defaults resolve UNDER the arrow's own scope, so a
+        // constraint referencing a sibling type parameter resolves too.
+        expr.typeParameters?.forEachIndexed { i, tp ->
+            val ip = ownTypeParams!![i]
+            if (ip.constraint == null) tp.constraint?.let { ip.constraint = getTypeFromTypeNode(it) }
+            if (ip.default == null) tp.default?.let { ip.default = getTypeFromTypeNode(it) }
+        }
         val params = getParameterSymbols(expr.parameters, forSignatureDisplay = true)
         // Apply contextual typing: infer parameter types from contextual call signature.
         // B83.4f-c: do this BEFORE return-type inference so the body's identifier
@@ -110143,15 +110173,7 @@ interface DataView {
             // (TS2344/TS2559). Interned by node position (B59.1). Constraints/defaults are
             // resolved in the current scope — top-level constraints (`A extends ObjA`)
             // resolve fine; constraints referencing sibling params stay best-effort.
-            typeParameters = expr.typeParameters?.map { tp ->
-                typeParamInternCache.getOrPut(internKey(tp)) {
-                    val p = Type.TypeParam()
-                    p.symbol = Symbol(SymbolFlags.TypeParameter, tp.name.text)
-                    tp.constraint?.let { p.constraint = getTypeFromTypeNode(it) }
-                    tp.default?.let { p.default = getTypeFromTypeNode(it) }
-                    p
-                }
-            },
+            typeParameters = ownTypeParams,
             parameters = params,
             resolvedReturnType = returnType,
             minArgumentCount = expr.parameters.count {
@@ -110163,6 +110185,9 @@ interface DataView {
         fnType.callSignatures = listOf(sig)
         fnType.properties = emptyList()
         return fnType
+        } finally {
+            currentTypeParamScope = savedTpScope
+        }
     }
 
     /** Get the type of a function expression. */
