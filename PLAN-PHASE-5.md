@@ -20,6 +20,58 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 685 (2026-07-26) — (CATCH.1) batch 1: the 30 defensive catches around
+`getApparentType` / `getPropertyOfType` deleted as dead residue, and the audit's
+first real find fixed — an indirect circular type-parameter constraint blew the
+stack.** Two commits.
+
+**The batch.** 22 `try { getApparentType(x) } catch (_: Exception) { … }` sites,
+6 `getPropertyOfType` ones, 2 compound (`getPropertyOfType(getApparentType(…))`),
+plus the three `app != null &&` conjuncts the removals made vacuous. Checker.kt
+catch count **198 → 168** (commonMain 218 → 188). Both helpers are thin
+dispatchers — a `when` over type kinds; a `members[name]` lookup — so the whole
+throwing surface is member resolution, which is the same surface a hundred
+unguarded call sites already run on. **Ledger: 30 removed, 0 restored, 1 bug
+found.** Gate: corpus 12,617/0/3 and `--listAll` ×8 **byte-identical** against a
+pre-change baseline (46 errors on seven profiles, 94 on harness).
+
+**The find, and it came from the PINS, not the removal.** Writing the batch's
+corner-case tests surfaced that `<T extends U, U extends T>` — two lines of
+perfectly ordinary TypeScript — **overflows the stack**: `getApparentType`
+recursed type-param → constraint with no cycle guard. Confirmed by a temporary
+trace print at the `init` boundary guard: a stack of nothing but
+`getApparentType` frames. The general TS2313 walker only catches the DIRECT
+`<T extends T>` form (its own doc comment says the indirect case is "not yet
+handled"), so nothing stood between this shape and the overflow. The blast
+radius was not the crash — the boundary guard absorbs it — but that it ABORTS
+THE WHOLE FILE'S CHECKING and reports TS2589 at 0:0. Fixed by walking the
+constraint chain iteratively with a seen-set, allocated only when the chain hops
+type-param → type-param (so the common `T extends SomeInterface` allocates
+nothing); a cycle yields `anyType`, exactly like a missing constraint. Both
+commits' gates were byte-identical on all 8 profiles, i.e. no tsc-source shape
+reaches either path.
+
+**Both findings were PRE-EXISTING** — verified by running the new pins against a
+stashed HEAD, where they fail identically. That is the distinction the item's
+method turns on: the removal was byte-neutral (dead residue), while the pins
+written to justify it did the actual bug-finding. Worth carrying into batch 2:
+**write the corner-case pins first, run them against HEAD, and the deltas tell
+you which defaults were reachable.**
+
+**The other pin that failed, and why it stayed.** `switch (n.kind)` over
+`(A & { extra: true }) | (B & { extra: false })` does not narrow — the case
+bodies draw TS2339. That is the documented intersection-arm discriminant-fold
+residue (CLAUDE.md § "A UNION whose MEMBER is an INTERSECTION"), pre-existing and
+out of this item's scope; the pin now asserts only the sharp no-TS2589 signal,
+with the gap named in a comment.
+
+**Remaining population for batches 2+, by guarded helper** (Checker.kt): 41
+`getTypeOfExpression`, 39 `getTypeFromTypeNode`, 16 `getTypeOfSymbol`, 6
+`resolveStructuredTypeMembers`, 5 each `checkTypeRelatedTo` / `checkArithmeticInExpr`,
+4 each `typeToString` / `getTypeOfIdentifier` / `getDeclaredTypeOfSymbol`, and a
+~30-site tail of singletons. The big three are genuine deep resolvers, not
+dispatchers, so expect a higher find-rate and take them in smaller batches.
+
 **Round 684 (2026-07-26) — the convention branch MERGED with rounds 674–681, and
 the ten test files those rounds added brought up to the one dialect. Round
 numbers had COLLIDED across the two lines of work and are renumbered here.**
@@ -615,6 +667,16 @@ backlog-horizon decision, not queue debt.)
   `Error` reach the init boundary guard (→ TS2589) instead of becoming wrong
   output. Expect this to run over several rounds; ~200 sites is the population,
   not the target for one session.
+  **Batch ledger.** *(1) round 685 — `getApparentType`/`getPropertyOfType`, 30
+  sites removed, 0 restored, byte-identical on corpus + `--listAll` ×8 ⇒ all dead
+  residue; 1 bug found and fixed (unguarded type-param constraint recursion →
+  stack overflow on `<T extends U, U extends T>`). Checker.kt 198 → 168.*
+  **Method addendum from batch 1:** write the batch's corner-case pins FIRST and
+  run them against unmodified HEAD — the pins, not the removal, are what find
+  bugs, and the HEAD run tells you whether a failure is pre-existing or yours.
+  Next up, hardest-first within reach: `resolveStructuredTypeMembers` (6) and the
+  singleton tail, then `getTypeOfSymbol` (16), then the two deep resolvers
+  `getTypeFromTypeNode` (39) and `getTypeOfExpression` (41) in small slices.
 
 **PERF — the post-inversion performance arc (owner-approved 2026-07-20, round 618:
 "proceed according to your recommendations"; measurements + rationale in the

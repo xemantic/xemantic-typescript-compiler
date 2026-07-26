@@ -113654,12 +113654,36 @@ interface DataView {
      * for primitives, this is the corresponding wrapper type.
      */
     private fun getApparentType(type: Type): Type {
+        // The constraint chain is walked ITERATIVELY with a seen-set: an INDIRECT
+        // circular constraint (`<T extends U, U extends T>` — the general TS2313
+        // walker only catches the DIRECT `<T extends T>`) otherwise recurses
+        // forever and blows the stack. A cycle has no apparent type, so it yields
+        // the unconstrained result, exactly like a missing constraint.
+        var t: Type = type
+        if (t is Type.TypeParam) {
+            // Allocated only when the chain hops type-param → type-param, which is
+            // rare; the common single-hop `T extends SomeInterface` allocates nothing.
+            var seen: MutableSet<Int>? = null
+            while (true) {
+                val cur = t as? Type.TypeParam ?: break
+                val next = cur.constraint ?: return anyType
+                if (next is Type.TypeParam) {
+                    var ids = seen
+                    if (ids == null) {
+                        ids = HashSet()
+                        ids.add(cur.id)
+                        seen = ids
+                    }
+                    if (!ids.add(next.id)) return anyType
+                }
+                t = next
+            }
+        }
         return when {
-            type is Type.TypeParam -> type.constraint?.let { getApparentType(it) } ?: anyType
-            type.flags.hasAny(TypeFlags.StringLike) -> getBuiltinWrapperType("String") { stringWrapperType } ?.also { stringWrapperType = it } ?: anyType
-            type.flags.hasAny(TypeFlags.NumberLike) -> getBuiltinWrapperType("Number") { numberWrapperType } ?.also { numberWrapperType = it } ?: anyType
-            type.flags.hasAny(TypeFlags.BooleanLike) -> getBuiltinWrapperType("Boolean") { booleanWrapperType } ?.also { booleanWrapperType = it } ?: anyType
-            else -> type
+            t.flags.hasAny(TypeFlags.StringLike) -> getBuiltinWrapperType("String") { stringWrapperType } ?.also { stringWrapperType = it } ?: anyType
+            t.flags.hasAny(TypeFlags.NumberLike) -> getBuiltinWrapperType("Number") { numberWrapperType } ?.also { numberWrapperType = it } ?: anyType
+            t.flags.hasAny(TypeFlags.BooleanLike) -> getBuiltinWrapperType("Boolean") { booleanWrapperType } ?.also { booleanWrapperType = it } ?: anyType
+            else -> t
         }
     }
 

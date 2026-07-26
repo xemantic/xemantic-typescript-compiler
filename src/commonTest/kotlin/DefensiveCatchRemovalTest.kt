@@ -48,6 +48,56 @@ class DefensiveCatchRemovalTest {
     private fun List<Diagnostic>.hasNoDepthBail() = none { it.code == 2589 }
 
     @Test
+    fun `an indirect circular type parameter constraint does not blow the apparent-type walk`() {
+        // Found BY this audit: getApparentType used to recurse type-param →
+        // constraint with no cycle guard, so the two-line indirect cycle below
+        // overflowed the stack and reached the init boundary guard — aborting the
+        // whole file's checking and reporting TS2589 at 0:0. The general TS2313
+        // walker only catches the DIRECT `<T extends T>` form, so nothing else
+        // stood between this shape and the overflow.
+        val diagnostics = diagnose(
+            """
+            function f<T extends U, U extends T>(t: T, u: U): void {
+                t.toString();
+                u.toString();
+            }
+            """,
+        )
+        assert(diagnostics.hasNoDepthBail())
+    }
+
+    @Test
+    fun `a direct circular type parameter constraint still reports TS2313`() {
+        val diagnostics = diagnose("function f<T extends T>(t: T): void { t.toString(); }")
+        assert(diagnostics.hasNoDepthBail())
+        assert(diagnostics.any { it.code == 2313 })
+    }
+
+    @Test
+    fun `a constrained type parameter still resolves its constraint's members`() {
+        val diagnostics = diagnose(
+            """
+            interface Named { name: string }
+            function f<T extends Named>(t: T): number { return t.name.length; }
+            """,
+        )
+        assert(diagnostics.hasNoDepthBail())
+        assert(diagnostics.none { it.code == 2339 })
+    }
+
+    @Test
+    fun `a chained type parameter constraint resolves through to the interface`() {
+        val diagnostics = diagnose(
+            """
+            interface Named { name: string }
+            function f<T extends U, U extends Named>(t: T): number { return t.name.length; }
+            """,
+        )
+        assert(diagnostics.hasNoDepthBail())
+        assert(diagnostics.none { it.code == 2339 })
+    }
+
+    @Test
     fun `primitive receivers resolve through their wrapper interfaces under an es5 lib`() {
         // Each primitive receiver routes getApparentType through
         // getBuiltinWrapperType, whose members come from the lib.
