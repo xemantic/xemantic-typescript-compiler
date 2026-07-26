@@ -20,6 +20,55 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 718 (2026-07-26) — a complete fix for 11 of (LIB.1)'s 35 false positives,
+diagnosed, written, and NOT LANDED: four cold compiles in one session and none of
+them would gate it. The fix is on `wip/round718-required-minus-optional`; main is
+clean and unchanged. (BUILD.1) is escalated from nuisance to binding constraint.**
+
+**What the bug is.** `Required<T>` is `{ [P in keyof T]-?: T[P] }`, and `Parser.kt`'s
+mapped-type modifier scan records `-?` as a plain `?` — so `Required<T>` behaves
+exactly like `Partial<T>`, inverted. `-readonly` got its own flag back in M1.10; the
+`?` analogue was never written. It costs 11 of the 35: tsc declares
+`tracker: Required<Pick<SymbolTracker, "reportInferenceFallback">>`, and we called
+every `context.tracker.reportInferenceFallback(...)` possibly-undefined.
+
+**The mechanism is not the one it looks like, and that matters for the fix.** TS2722
+reads like a type-level question, so the obvious fix is "strip `undefined` from the
+member type". Wrong: the emitter gates on `isOptionalProperty(propSym)` — the
+SYMBOL's optionality — and a comment right there records that the codebase never adds
+`| undefined` for optional-member access at all. What actually happens is the M1.10
+trap repeating: a homomorphic mapped member CARRIES ITS SOURCE PROPERTY'S DECLARATION
+(for "declared here" related info), so `isOptionalProperty`'s declaration scan sees
+the source's `?`. The fix is therefore M1.10's mirror — a `mappedRequiredMemberIds`
+side-channel, probed only when the declaration says optional, which keeps the
+documented hot-path property (a declared-required property pays no set lookup).
+
+**Two dead ends, both caught by CONTROLS, which is the transferable part.** The first
+probe hand-rolled the mapped types (`type MyRequired<T> = { [P in keyof T]-?: T[P] }`)
+to stay off the lib: its two controls came back EMPTY — we emit nothing whatsoever for
+user-defined mapped types — so its three target assertions were passing vacuously and
+would have "confirmed" any fix at all, including no fix. The second cut asserted
+assignability through `Partial`, which measures an axis we do not model. Only
+`@useRealLibs` + TS2722 assertions reproduce it; verified against unmodified HEAD with
+the target FAILING and the control PASSING. **Rounds 700–704 lost four "fixes" to
+inertness; this round would have made it five without the controls, twice.**
+
+**Why it did not land.** No compile would finish. `-Xmx2g` hung (the round-717 trap),
+`-Xmx3g` ran 16 minutes before the daemon died and restarted from scratch, and only
+`-Xmx4g` got the main compile through — after which the test compile was still
+running when I stopped. Four cold compiles, ~an hour, no gate. Parking beat grinding:
+the branch carries the fix and the live repro, main stays clean and green, and the
+next round merges and gates it in one pass. (BUILD.1)'s proposal is revised 3g → 4g
+on this evidence, with a bigger box offered as the alternative the owner may prefer —
+(PERF.HW) already wants ≥8 real cores for a different reason.
+
+**Also recorded on (LIB.1):** the embedded lib declares NO utility types at all — no
+`Required`, `Pick`, `Partial`, `Omit`. That is why this whole family is invisible on
+the default path: the name is unresolved, degrades to `any`, and `any` is silent. It
+is the LIB.1 defect in miniature, on the dashboard profile, today.
+
+---
+
 **Round 717 (2026-07-26) — the two GATE items landed. Logical parity stopped being a
 rule and became a mechanism with two build-failing controls; cost stopped being an
 intention and became a counter diff. The determinism check on that gate found a racy
@@ -2094,12 +2143,25 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   `-Dkotlin.daemon.jvmargs=-Xmx3g` took **2m 33s**. **How you get there:** the
   documented memory ritual before a self-compile — `./gradlew --stop && pkill -9 -f
   KotlinCompileDaemon` — is what makes the next build cold, so the trap is reachable
-  from the instructions themselves. **PROPOSAL (owner decision, build-system change =
-  Guardrail):** add `kotlin.daemon.jvmargs=-Xmx3g -XX:MaxMetaspaceSize=512m` to
-  gradle.properties. Cost: up to 1 GB more resident during a compile, on a box where
-  a 4 g self-compile already needs the daemons stopped — so the trade is "compiles
-  cannot hang" against "one more GB while compiling". Workaround until then, recorded
-  in CLAUDE.md: pass `-Dkotlin.daemon.jvmargs=-Xmx3g` on the command line.
+  from the instructions themselves. **ESCALATED round 718 — this is now the binding
+  constraint on the edit-test loop, not a nuisance.** That round diagnosed and wrote a
+  complete fix and then could NOT LAND IT, because no compile would finish: `-Xmx2g`
+  hung (14 min, zero classes), `-Xmx3g` ran 16 minutes and the daemon died and
+  restarted from scratch, and only `-Xmx4g` got the main compile through. Four cold
+  compiles were burned in one session. The work is parked on
+  `wip/round718-required-minus-optional` purely for want of a gate.
+  **PROPOSAL (owner decision, build-system change = Guardrail):** add
+  `kotlin.daemon.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m` to gradle.properties (3g
+  was measured insufficient, so the earlier 3g proposal is superseded). Cost: up to
+  2 GB more resident during a compile on a 7.7 GB box — which means a compile and a
+  4 g self-compile can no longer overlap, and the memory ritual becomes mandatory
+  BEFORE a bench run rather than before a build. That trade is worth stating plainly:
+  today the ritual is what CAUSES the hang, and a round can lose an hour to it.
+  **A second option worth the owner's consideration:** a bigger box. This one is
+  7.7 GB / ~4 cores, the corpus suite takes 7 minutes, a cold compile 3–15, and
+  (PERF.HW) already wants ≥8 real cores to answer the parallel-scaling question.
+  Workaround until then, recorded in CLAUDE.md: pass
+  `-Dkotlin.daemon.jvmargs=-Xmx4g` on the command line.
 
 - [ ] **(LIB.1) Ship the DOM/webworker libs and stop real builds silently running
   UNCHECKED — owner-approved 2026-07-26 ("yes, please fix it"), PROMOTED out of the
@@ -2143,6 +2205,29 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   `compiler` profile only, and the bigger profiles will have their own deltas.
   Raw logs: the four arms were run at 8100a78e; reproduce by adding
   `"useRealLibs": true` to `build/bench/tsc-project-*/tsconfig.json`.
+  **(a1) FIRST FP FAMILY DIAGNOSED AND WRITTEN, round 718 — 11 of the 35, parked
+  UNVERIFIED on branch `wip/round718-required-minus-optional` because this box could
+  not complete a compile to gate it (see BUILD.1). Pick it up by merging that branch
+  and running the suite + cost gate.** THE DEFECT: `Parser.kt`'s mapped-type modifier
+  scan records `-?` as a plain `?`, so `Required<T> = { [P in keyof T]-?: T[P] }`
+  behaves exactly like `Partial<T>` — inverted. `-readonly` got its own flag in M1.10;
+  the `?` analogue was never done. THE MECHANISM IS NOT THE OBVIOUS ONE: TS2722 does
+  not look at the member TYPE for `| undefined` (the codebase deliberately never adds
+  it — the emitter says so), it gates on `isOptionalProperty(propSym)`, and a
+  homomorphic mapped member CARRIES ITS SOURCE DECLARATION for related info, so the
+  source's `?` is what it sees. The fix mirrors M1.10 exactly: a
+  `mappedRequiredMemberIds` side-channel, probed in `isOptionalProperty` only when the
+  declaration says optional (preserving the documented hot-path property).
+  **Two dead ends worth not repeating, both caught by CONTROLS:** hand-rolling the
+  mapped types locally (`type MyRequired<T> = { [P in keyof T]-?: T[P] }`) does not
+  reproduce anything — we emit NOTHING for user-defined mapped types, so the controls
+  came back empty and the target assertions passed vacuously; and asserting
+  assignability through `Partial` measures an axis we do not model. The live repro
+  needs `@useRealLibs` plus TS2722 assertions. Verified against unmodified HEAD: the
+  target fails, the control passes.
+  **Also learned:** the embedded lib declares NO utility types at all, which is why
+  the whole family is invisible on the default path — `Required<…>` is an unresolved
+  name degrading to `any`, and `any` is silent. That is the LIB.1 defect in miniature.
   **ORDER — the original (a) framing, now answered above:** (a) decide what a real
   project build uses for libs at all (the embedded lib is a curated subset; the shipped real
   libs are unreachable outside tests — that mismatch is the root, and it is a design
