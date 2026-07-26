@@ -43076,6 +43076,12 @@ class Checker(
     private fun resolveRequireModuleShape(spec: String, fileName: String): Pair<String, Set<String>>? {
         if (spec.endsWith(".json")) {
             val content = resolveJsonModuleContent(spec) ?: return null
+            // (CATCH.1) The one defensive catch kept in Checker.kt. Every other one
+            // guarded a compiler-INTERNAL path, where "the corpus and the eight
+            // tsc-source profiles did not crash" is good evidence the default was
+            // unreachable; here the input is arbitrary external `.json` file content,
+            // for which that evidence does not carry. Keep until someone characterises
+            // what it absorbs — and do NOT widen it to Throwable (see the SOE doctrine).
             val parsed = try { Parser("const __m = ($content);", fileName).parse() } catch (_: Exception) { return null }
             val vs = parsed.statements.firstOrNull() as? VariableStatement ?: return null
             val init = vs.declarationList.declarations.firstOrNull()?.initializer

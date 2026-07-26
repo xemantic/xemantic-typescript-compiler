@@ -96,18 +96,35 @@ all passing at HEAD). Its two try/FINALLY blocks are untouched. Removals also
 retired one vestigial `tryGetTypeFromTypeNode` wrapper body and ~20 null checks
 the non-null returns made vacuous.
 
-**Round total: 131 of Checker.kt's 197 catches deleted (198 → 67; commonMain 218
-→ 87), 0 restored, 1 bug found and fixed.** Every batch byte-identical on corpus
-+ `--listAll` ×8.
+**Batch 5 took the single-line tail (34 sites): the relation engine, the type
+printer, alias and heritage resolution, widening, `getTypeOfIdentifier` and the
+singletons — every one of which carries its own cycle guard
+(`relationComparisonStack` + the `isDeeplyNested` occurrence heuristic;
+`typeToStringInProgress`; a visited set; cache-before-recurse), which is the
+rule of thumb holding for the fifth time.** Its 7 pins drive those cycles
+directly (an infinitely expanding generic pair, mutually recursive interfaces
+relating, a recursive type printed into a diagnostic, a circular import-equals
+chain, circular class heritage, a recursive interface spread-widened).
 
-**Remaining population** (Checker.kt, 67): 5 each `checkTypeRelatedTo` /
-`checkArithmeticInExpr`, 4 each `typeToString` / `getTypeOfIdentifier` /
-`getDeclaredTypeOfSymbol`, 3 `getWidenedLiteralType`, 2 each `widenType` /
-`lookupPropertyTypeForCtx` / `getPropertiesOfType`, and a ~35-site tail of
-singletons (`resolveAlias`, `walkFunctionBodiesInExpr`, `Parser`, `block`, …).
-Plus 20 outside Checker.kt (Transformer 5, TsBuildInfo 4, Vfs 3, Parser 3,
-Emitter 2, and one each in TsConfigLoader / ModuleResolver / Flow) — those are a
-different population (I/O and parse recovery), audit them on their own terms.
+**ONE site kept by judgement, with a comment naming why:** the `Parser(...)` in
+`resolveRequireModuleShape` parses arbitrary external `.json` file content, not
+compiler-internal state. The whole method rests on "byte-identical over the
+corpus and eight profiles ⇒ the default was unreachable" — sound for internal
+paths, weak for an unbounded external input. Keeping it is the honest reading of
+the evidence rather than a completeness score.
+
+**Round total: 165 of Checker.kt's 197 catches deleted (198 → 33; commonMain 218
+→ 53), 0 restored, 1 kept by judgement, 1 bug found and fixed.** Every batch
+byte-identical on corpus + `--listAll` ×8.
+
+**Remaining** — Checker.kt 33 = **29 multi-line `try { … }` blocks** (batch 6:
+they need splicing by hand; the scripted rewrite that worked for single-line
+forms is exactly the multi-line mangle hazard CLAUDE.md documents) + the SOE
+boundary guard + the `FriBail` control-flow catch + the kept `Parser` guard, the
+last three of which STAY. Plus 20 outside Checker.kt (Transformer 5, TsBuildInfo
+4, Vfs 3, Parser 3, Emitter 2, one each in TsConfigLoader / ModuleResolver /
+Flow) — a different population (I/O and parse recovery) whose inputs are external
+like the kept site, so audit them on their own terms, not by this method.
 
 **Round 684 (2026-07-26) — the convention branch MERGED with rounds 674–681, and
 the ten test files those rounds added brought up to the one dialect. Round
@@ -718,10 +735,21 @@ backlog-horizon decision, not queue debt.)
   the cache-BYPASSING contexts (type-param scope / inference namespace / alias
   args), where the alias depth bail is the protection instead.
   (4) round 685 — `getTypeOfExpression` (40), 0 restored, 0 bugs. Checker.kt
-  107 → **67** (commonMain 218 → 87 over the four batches). No sentinel and none
-  needed: it is a kind dispatcher over a finite acyclic tree, delegating to
-  guarded resolvers and iterative walkers, so only a DECLARATION cycle can recurse
-  — which the pins drive.*
+  107 → 67. No sentinel and none needed: it is a kind dispatcher over a finite
+  acyclic tree, delegating to guarded resolvers and iterative walkers, so only a
+  DECLARATION cycle can recurse — which the pins drive.
+  (5) round 685 — the SINGLE-LINE tail (34: relation engine, type printer, alias
+  and heritage resolution, widening, `getTypeOfIdentifier`, singletons), 0
+  restored, 0 bugs. Checker.kt 67 → **33** (commonMain 218 → 53 over five
+  batches). **One site KEPT by judgement, with a comment**: the `Parser(...)` in
+  `resolveRequireModuleShape`, whose input is arbitrary external `.json` file
+  content — "the corpus did not crash" is weaker evidence for an unbounded
+  external input than for a compiler-internal path.*
+  **Batch 6 is what remains in Checker.kt: 29 MULTI-LINE `try { … }` blocks**
+  (plus the SOE boundary guard and the `FriBail` control-flow catch, both of
+  which STAY). They need splicing by hand — the scripted approach that worked for
+  the single-line forms is exactly the mangle hazard CLAUDE.md warns about for
+  multi-line arms.*
   **Method addendum from batch 1:** write the batch's corner-case pins FIRST and
   run them against unmodified HEAD — the pins, not the removal, are what find
   bugs, and the HEAD run tells you whether a failure is pre-existing or yours.
