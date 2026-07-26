@@ -20,6 +20,45 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 696 (2026-07-26) — (M3.0-gap-3)(B1) diagnosed to a one-line cause, its fix
+written and MEASURED, then reverted because it must land together with chain
+parity. No production change; sources verified byte-identical to the green tree.**
+
+**The cause is dead state.** The cta frame computes a type-parameter SCOPE at
+frame-build time and stores it as `CtaFrame.fnTpScope` — and `grep fnTpScope` returns
+exactly two hits: its declaration and its single write. Nothing reads it. The
+per-statement dispatch installs `currentTypeParamDecls = frame.fnTpDecls` but not the
+scope, so every annotation resolved during that dispatch sees no type parameters.
+That is why `var r: T1` resolved its target to `any` while the parameter `y: T2`
+resolved fine: parameters are resolved while building the signature, body variables
+during this dispatch. Installing the scope in the same save/restore sandwich is one
+line, and it works — probe: `T1` and `T1[]` instead of `any` and `any[]`.
+
+**The measurement is the deliverable.** 27 corpus tests fail with it — but of ~32
+changed baseline lines, **~29 are REMOVED chain lines** (`'T' could be instantiated
+with an arbitrary type which could be unrelated to 'null'/'undefined'`): the
+diagnostic still fires, only its second line is gone. With `T` resolving to a real
+`Type.TypeParam`, `return null`-in-a-generic stops falling through to the STRING
+fallback `emitTS2322(…, typeParams)`, which adds that chain, and is handled by a
+type-engine emitter that lacks it. The var-decl and assignment paths already carry a
+`tt is Type.TypeParam` chain block; the return path's engine emitter needs the same.
+Only 3 lines were additions: one chain-form flip and two genuinely new diagnostics.
+
+**Why I reverted rather than narrowed.** Scoping the install to the var-decl
+annotation alone would dodge all 27 — and be INERT, because the emission still needs
+(B2) (`canUseTypeEngine` refuses TypeParam-vs-concrete) and the relation leniency.
+Landing an inert change is the exact failure mode rounds 693/694 spent themselves on.
+The next round does it as one coherent change: chain parity first, then the scope
+install, then (B2), gated together.
+
+**Two rounds of suspects eliminated by measurement, in order:** `typeParams`
+threading (arrives correctly), the round-431e foreign-TP gate (never fires), the
+relation's unconstrained-TP leniency (changing it leaves the case silent; costs
+exactly 2 corpus tests), and now the scope install is *confirmed correct* with a
+fully-classified bill. What is left is not diagnosis but implementation.
+
+---
+
 **Round 695 (2026-07-26) — three more conformance categories adopted, chosen by
 MEASURING twelve of them in one run rather than guessing; one of their three
 failures fixed. Corpus 12,685 → 12,725 / 0 / 3.**
@@ -4168,6 +4207,28 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   keep un-inferred callee TPs out of the new emissions.
   `typeParams` threading is NOT a suspect: the probe shows it arriving correctly
   (`tp=[T]`, `tp=[T1, T2]`) and the foreign-TP gate not firing.
+  **(B1)'s ONE-LINE fix is known and was measured (round 696, attempt 1, reverted) —
+  do this as ONE change with the chain-parity work below, never alone.** The cta frame
+  ALREADY computes the type-parameter scope (`CtaFrame.fnTpScope`, built beside
+  `fnTpDecls` at frame-build time) and **never reads it** — `grep fnTpScope` returns its
+  declaration and its single write. The per-statement dispatch installs
+  `currentTypeParamDecls = frame.fnTpDecls` but not the scope, so annotations resolved
+  during that dispatch see no type parameters. Adding
+  `currentTypeParamScope = frame.fnTpScope ?: <saved>` to the same save/install/restore
+  sandwich works — probe: `var r: T1` goes `any` → `T1`, `var r2: T1[]` → `T1[]`.
+  **Its measured cost: 27 corpus tests, and the classification is the useful part** —
+  of ~32 changed baseline lines, **~29 are REMOVED `'T' could be instantiated with an
+  arbitrary type which could be unrelated to 'null'/'undefined'` chain lines**, i.e. the
+  emission survives and only its chain is lost. Mechanism: with `T` resolving to a real
+  `Type.TypeParam`, these `return null`-in-a-generic shapes stop falling through to the
+  STRING fallback `emitTS2322(..., typeParams)`, which adds that chain when
+  `targetBaseName in typeParams` (Checker.kt ~149892), and are handled by a type-engine
+  emitter that does not. The var-decl (~95363) and assignment (~98644) paths already
+  have the `tt is Type.TypeParam` chain block; the return path's engine emitter is the
+  one to give parity. Only **3** lines were additions: one chain-FORM flip
+  (constraint-form → arbitrary-form, `errorMessagesIntersectionTypes03`) and two genuinely
+  NEW diagnostics (`Type 'Q' is not assignable to type 'InferBecauseWhyNot<Q>'`,
+  `Type 'any[]' is not assignable to type 'T'`) that need their own verdict.
 - [ ] **(M3.0-gap-4) `readonlyRestParameters` — a `readonly T[]` spread argument
   is neither rejected nor counted** (round 695, deferred error baseline). Missing
   **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
