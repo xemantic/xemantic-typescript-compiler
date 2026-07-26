@@ -277,6 +277,13 @@ val typeScriptCommit = "637d5746b70257028fb95aad32ddec6b26ab0a14" // pristine ts
  */
 val conformanceCategories = listOf(
     "expressions/functions",
+    // Round 695. Adopted after measuring twelve candidate categories in one suite
+    // run (see the M3.0 queue item for the full redness table) — these three were
+    // the only ones under three failures; the other nine are 5-21 each and stay
+    // unadopted until their gaps are worked.
+    "es6/defaultParameters",
+    "es6/restParameters",
+    "expressions/commaOperator",
 )
 
 /**
@@ -295,6 +302,14 @@ val conformanceDeferredErrorBaselines = setOf<String>(
     // TS18048 x3 / TS7006 x2 and over-emits TS7019 x3 + TS7006 x2.
     // See the M3.0-gap-2 queue item.
     "contextuallyTypedIifeStrict",
+    // The comma operator's result type is not the RIGHT operand's type, so an
+    // inferred `return x, y` return and a `var r: T1 = (x, y)` assignment miss
+    // TS2322 x2. See the M3.0-gap-3 queue item.
+    "commaOperatorOtherInvalidOperation",
+    // A spread of a `readonly T[]` into a fixed-arity signature misses TS2556,
+    // and the arity check counts it as at most one argument (missing TS2554).
+    // See the M3.0-gap-4 queue item.
+    "readonlyRestParameters",
 )
 
 val cloneTypeScriptRepo by tasks.registering {

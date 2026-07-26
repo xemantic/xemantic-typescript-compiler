@@ -3949,8 +3949,22 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   showed the cost inside the noise band. Both were measuring nothing. When an
   unknown name degrades to `any`, name resolution proves nothing; the control
   that decides is a **MEMBER probe** (`e.notAMember` must error).
-- [ ] **M3.0 Conformance generator extension — INFRASTRUCTURE DONE round 690, first
-  category adopted; further categories are the remaining work.** Extend `generateTypeScriptTests` with a
+- [ ] **M3.0 Conformance generator extension — INFRASTRUCTURE DONE round 690; FOUR
+  categories adopted (round 695); the remaining categories are measured, not guessed.**
+  **Round-695 redness table** — twelve candidate categories added to the allowlist in ONE
+  suite run (+236 tests, 91 failures), then all but the tractable ones reverted. Failures
+  per category, so a future round can pick by cost instead of re-measuring:
+  `es6/defaultParameters` **0** · `es6/restParameters` **1** · `expressions/commaOperator`
+  **2** · `expressions/asOperator` 5 · `types/any` 6 · `types/conditional` 8 ·
+  `types/nonPrimitive` 9 · `statements/labeledStatements` 9 · `types/typeAliases` 9 ·
+  `expressions/contextualTyping` 9 · `expressions/typeSatisfaction` 12 ·
+  `expressions/optionalChaining` 21. The first three were adopted; the rest are each a
+  round's worth of gap work. Two caveats worth carrying: `statements/labeledStatements`
+  is 9 failures from only 8 files (proportionally the reddest), and its failures include
+  **JS-emit** subtests, which `conformanceDeferredErrorBaselines` cannot defer — an emit
+  gap must be FIXED before that category can land. Measuring a batch this way costs one
+  ~7-minute run and is much cheaper than adopting a category and discovering it is red.
+  Extend `generateTypeScriptTests` with a
   per-category allowlist for `tests/cases/conformance/` (keep all tsgo set-B
   filters). Each category lands only when its failures are triaged into queue
   items — never leave a category half-red without notes. Owner approval
@@ -4023,6 +4037,27 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   out. Expect a WIDE blast radius: it gives types to parameters that were `any`
   everywhere, in ~26 call sites' worth of walkers, so it needs the corpus and the
   `--listAll` ×8 gate and probably its own round.
+- [ ] **(M3.0-gap-3) `commaOperatorOtherInvalidOperation` — the comma operator's
+  RESULT TYPE is not the right operand's type** (round 695, deferred error baseline).
+  Two missing TS2322, both from the same root: `function foo(x: number, y: string)
+  { return x, y; }` must infer the return type `string` (so `var r: number = foo(...)`
+  errors), and `var result: T1 = (x, y)` — with `x: T1`, `y: T2` — must report
+  `Type 'T2' is not assignable to type 'T1'` plus the "could be instantiated with an
+  arbitrary type" chain line and a TS2208 related info at the `T2` declaration.
+  We already emit the case's other two diagnostics (TS2454 ×2), so this is additive.
+  Start at `combineBinaryTypes`' Comma arm and at whatever `inferReturnTypeFromBody`
+  does with a comma-expression `return`; the type-parameter half then rides the
+  existing bare-TypeParam TS2322 machinery.
+- [ ] **(M3.0-gap-4) `readonlyRestParameters` — a `readonly T[]` spread argument
+  is neither rejected nor counted** (round 695, deferred error baseline). Missing
+  **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
+  parameter") for `f0(...args)` where `args: readonly string[]` and `f0` has fixed
+  arity, and missing **TS2554** ("Expected 2 arguments, but got 3") for
+  `f2('abc', ...args)`. Both are the same gap seen from two sides: the arity walker
+  treats a spread as "suppresses too-few, never contributes too-many" (see the
+  documented spread rule in CLAUDE.md), which is right for a tuple spread but not for
+  an unbounded array spread into a fixed-arity signature — that is exactly what tsc
+  rejects with TS2556. The case's third diagnostic (TS2542) already passes.
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility). Revisit
   before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
