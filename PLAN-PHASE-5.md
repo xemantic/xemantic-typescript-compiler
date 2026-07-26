@@ -20,6 +20,32 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 703 (2026-07-26) — (M3.0-gap-4) CLOSED; `readonlyRestParameters` is
+un-deferred. Corpus 12,746 → 12,750 / 0 / 3, all 8 profiles byte-identical.**
+
+The half round 702 wrote and removed as inert needed one correction, and it was not in
+the logic: `emitTS2554TooMany` opens with `if (firstExcessIdx >= args.size) return`,
+and I had passed the EXPANDED COUNT where it wants an ARGUMENT INDEX — with two
+arguments and a count of two, it returned silently. The reference baseline states the
+same fact in a way I could have read earlier: the squiggle is on the SPREAD, because
+that is the argument the third one lives inside. Found by reading the emitter rather
+than by probing, which was quicker than the marker probe I had queued.
+
+**A process catch worth recording.** After un-deferring I expected the suite to gain
+four tests (three pins plus the recovered subtest) and it gained one. The pins were
+missing: my Python heredoc's `"""` string collided with the Kotlin raw strings inside
+it, and the script still printed its success message. The count discrepancy is what
+caught it — the same shape as round 690's stale-XML trap, and the reason to state an
+expected count before running rather than after. Rewritten with the editing tool.
+
+**Deferral ledger:** two conformance cases were deferred when the category landed;
+`arrowFunctionContexts` cleared in round 692 and `readonlyRestParameters` clears here.
+One remains — `contextuallyTypedIifeStrict` (M3.0-gap-2) — plus
+`commaOperatorOtherInvalidOperation`, whose (A) and (B1) shipped and whose (B2) is the
+relation-leniency work.
+
+---
+
 **Round 702 (2026-07-26) — (M3.0-gap-4)'s TS2556 half landed. Corpus 12,740 →
 12,746 / 0 / 3, all 8 profiles byte-identical.**
 
@@ -4532,32 +4558,20 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   do not model). Expect these two to need a gate of their own — the round-431e foreign-TP
   gate is the family precedent — and note they are also the two most likely to appear on
   the profiles, so `--listAll` ×8 is mandatory before landing.
-- [ ] **(M3.0-gap-4) — the TS2556 half is DONE (round 702); the TS2554 half remains, so
-  the case stays deferred.** Landed: an unbounded array spread into a fixed-arity call is
-  now rejected, with the four narrowings that keep it FP-free (tuple spreads, array-literal
-  spreads, spreading into a rest parameter, and too-many taking precedence). A rest
-  parameter's type does not resolve in the arg-count pass, so the operand is classified
-  from its ANNOTATION when the resolved type is unavailable.
-  **STILL OPEN — and I wrote it, measured it INERT, and removed it rather than land dead
-  code, so do not re-derive the design:** the missing TS2554 (`f2('abc', ...args)` where
-  `f2(...args: readonly [string, string])` → "Expected 2 arguments, but got 3") needs a
-  tuple-typed REST PARAMETER treated as FIXED arity — `maxArgs = (params.size - 1) +
-  tupleLength` — and a tuple-typed spread ARGUMENT counted as its element count rather
-  than one. Both helpers were straightforward (`fixedTupleLengthOfRestParam` reading
-  through `readonly`/paren wrappers to a `TupleType` with no `RestType` element, and an
-  expanded-argument counter returning null on any unknown spread), and the emission
-  simply never fired — so the next attempt should FIRST find out why that branch is not
-  reached for a rest-parameter callee (marker probe at the `info.hasRest` branch of the
-  arg-count anchor) rather than rewriting the helpers.
-  ORIGINAL: Missing
-  **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
-  parameter") for `f0(...args)` where `args: readonly string[]` and `f0` has fixed
-  arity, and missing **TS2554** ("Expected 2 arguments, but got 3") for
-  `f2('abc', ...args)`. Both are the same gap seen from two sides: the arity walker
-  treats a spread as "suppresses too-few, never contributes too-many" (see the
-  documented spread rule in CLAUDE.md), which is right for a tuple spread but not for
-  an unbounded array spread into a fixed-arity signature — that is exactly what tsc
-  rejects with TS2556. The case's third diagnostic (TS2542) already passes.
+- [x] **(M3.0-gap-4) DONE (rounds 702/703) — `readonlyRestParameters` passes and is
+  un-deferred.** Two rules, both narrower than they first look. **TS2556:** an unbounded
+  array spread into a fixed-arity call cannot be arity-checked, so tsc rejects it — with
+  four narrowings that each came from a red test rather than from reasoning (a TUPLE
+  spread is legal; an ARRAY LITERAL spread is legal, tsc counting `...[6, 7]` as two
+  arguments; spreading INTO a rest parameter is legal; and an already-too-many call
+  reports the COUNT instead). A rest parameter's type does not resolve in the arg-count
+  pass, so the operand is classified from its ANNOTATION when the resolved type is
+  unavailable, which also handles `readonly string[]` for free. **TS2554:** a rest
+  parameter annotated with a fixed TUPLE has fixed arity, and a tuple-typed spread
+  argument contributes its element count. The trap that made round 702's first attempt
+  inert: the excess anchor is an ARGUMENT INDEX, not the expanded count —
+  `emitTS2554TooMany` opens with `if (firstExcessIdx >= args.size) return`, so passing a
+  count of 2 with 2 arguments returned silently.
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility). Revisit
   before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
