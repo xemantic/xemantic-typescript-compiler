@@ -59,6 +59,19 @@ nothing to them and could not have changed their output. When a change is confin
 to one emitter, "does that emitter fire on the profiles at all" is a stronger and
 cheaper check than diffing two full runs.
 
+**A bounded experiment at the tail, reverted — and the revert is the finding.**
+(M3.0-gap-3)'s type-parameter half looked like the relation engine's leniency
+("two unconstrained type parameters always relate"), so I tried the correct rule
+(relate only when their names match — identity is unusable, interning is
+per-AST-position). Cost: exactly **2** corpus tests, both
+`Type 'SetOf<B>' is not assignable to type 'SetOf<B>'` — identical display, which
+means the leniency is masking an un-substituted class type parameter in a member,
+an M3.1 substitution gap. But the decisive probe was the other one: with the strict
+rule in place `var direct: T1 = y` was **still silent**, so the relation was never
+the blocker — the emission is suppressed upstream. Reverted; both facts are on the
+item so the next round starts inside the right subsystem. Same discipline as rounds
+693/694: the probe has to be one that FAILS if the change works.
+
 **Deferred with queue items** (the two remaining failures, both error baselines):
 (M3.0-gap-3) the comma operator's result type is not the right operand's type, so
 `return x, y` and `var r: T1 = (x, y)` miss TS2322 ×2; (M3.0-gap-4) a
@@ -4093,9 +4106,32 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `Type 'T2' is not assignable to type 'T1'` plus the "could be instantiated with an
   arbitrary type" chain line and a TS2208 related info at the `T2` declaration.
   We already emit the case's other two diagnostics (TS2454 ×2), so this is additive.
-  Start at `combineBinaryTypes`' Comma arm and at whatever `inferReturnTypeFromBody`
-  does with a comma-expression `return`; the type-parameter half then rides the
-  existing bare-TypeParam TS2322 machinery.
+  **Round 695 isolated both halves — read this before starting, two of the obvious
+  routes are already excluded.** A five-line probe (`function baz(...): string` beside
+  the inferred `foo`, and a `var direct: T1 = y` beside the comma one) splits the case:
+  **(A)** the comma itself is only half the story — `combineBinaryTypes` ALREADY types
+  a comma as its right operand (`SyntaxKind.Comma -> getTypeOfExpression(right)`), and
+  the annotated `baz` errors correctly, so what is missing is
+  `inferReturnTypeFromBody`, whose `BinaryExpression` arm has no Comma case. Note its
+  deliberate conservatism: its `Identifier` arm returns null for anything but
+  `true`/`false`, because it runs in the CALLER's scope, where resolving a callee's
+  parameter by name would hit the documented shadowing hazard. So a Comma arm cannot
+  just call `getTypeOfExpression(right)` — the honest fix types the right operand
+  against the OWNING function's parameter annotations (reachable via the body's
+  `parent`), which also fixes the more general `return <param>` gap.
+  **(B)** is NOT a comma problem at all — `var direct: T1 = y` (no comma) is equally
+  silent — and, measured, it is **not the TypeParam-vs-TypeParam relation either**:
+  making two unconstrained type parameters relate only when their names match left the
+  case silent, so the emission is suppressed UPSTREAM (the round-431e foreign-TP source
+  gate on the var-decl path is the prime suspect — `T2` is a TypeParam in the source).
+  Start there, not in the relation engine.
+  **Measured cost of the correct relation rule, recorded so nobody re-runs it:** exactly
+  **2** corpus tests (`inferFromGenericFunctionReturnTypes1`/`2`), both the same
+  `Type 'SetOf<B>' is not assignable to type 'SetOf<B>'` shape — identical display, so
+  the leniency is masking an UN-SUBSTITUTED class type parameter in a member (`_store:
+  A[]` substituted on one side only). Restricting the strict rule to top-level
+  comparisons (`relationComparisonStack.size <= 1`) dodges both regressions, but buys
+  nothing while (B)'s real blocker stands.
 - [ ] **(M3.0-gap-4) `readonlyRestParameters` — a `readonly T[]` spread argument
   is neither rejected nor counted** (round 695, deferred error baseline). Missing
   **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
