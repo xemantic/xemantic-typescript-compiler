@@ -20,6 +20,32 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 706 (2026-07-26) — the possibly-undefined operand rule LANDED, after settling
+the pin question with evidence rather than authority. Corpus 12,756 / 0 / 3, all 8
+profiles byte-identical.**
+
+Round 705 left this deliberately unlanded: the rule was right by one baseline, but it
+flipped nine of our own pins, and rewriting other rounds' pins on a single data point
+is not a patch. The cheap way to settle it turned out to be the reference baselines
+themselves — `git grep` over `tests/baselines/reference` for TS18048 (418 occurrences)
+and for TS2362 co-occurring with "possibly undefined" (two files). The second baseline,
+`circularOptionalityRemoval`, reports TS18048 for `x > 0` with `x: number | undefined`
+— a different operator from the additive case, so the rule is about the OPERAND, not
+one syntax. And the two apparent counter-examples are not: their TS2362 operand is a
+`delete` expression, i.e. a boolean.
+
+With the direction established, the nine pins were updated — intent unchanged ("narrowing
+did not apply, so it still fires"), only the expected code — and one paired positive
+control strengthened to exclude TS18048 as well, so a future regression cannot make the
+NARROWED case start reporting it unnoticed.
+
+**The reusable point:** when a change turns your own pins red, the question is which of
+the two encodes the reference behaviour, and that is usually answerable from the
+baselines in a couple of greps. Deferring it one round cost nothing and produced a
+better-supported change than landing it under time pressure would have.
+
+---
+
 **Round 705 (2026-07-26) — the TS18048 rule for a possibly-undefined arithmetic
 operand: written, working, and REVERTED because it collides with nine of our own pins.
 No production change; corpus stays 12,756 / 0 / 3.**
@@ -4422,8 +4448,17 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   fails the arithmetic operand classifier. tsc checks possibly-undefined FIRST, so the
   fix is a nullish-operand rule ahead of TS2362/2363/2365 in the arithmetic pass.
   That is what still keeps the case deferred.
-  **ROUND 705 wrote that rule, and it works — but it collides with NINE LOCAL PINS, and
-  resolving that collision is a decision, not a patch.** The rule (a possibly-undefined
+  **ROUND 706: the rule LANDED — direction confirmed against a SECOND reference baseline
+  (`circularOptionalityRemoval` reports TS18048 for `x > 0` with `x: number | undefined`,
+  as `contextuallyTypedIifeStrict` does for `j + 1`), and the two TS2362 baselines that
+  also mention "possibly undefined" were checked and are unrelated (their operand is a
+  `delete` expression, a boolean). The nine local pins were updated to expect TS18048,
+  their intent unchanged, and one paired positive control strengthened to exclude TS18048
+  too.** What remains of the case: `k`/`o` (an optional parameter with NO corresponding
+  argument types as `undefined`, and nothing fires for it yet) and the two TS7006 for the
+  INNER function's parameter in `(f => f(12))(i => i)`.
+  ROUND 705's framing, kept for the reasoning: **the rule works — but it collides with
+  NINE LOCAL PINS, and resolving that collision is a decision, not a patch.** The rule (a possibly-undefined
   check ahead of TS2362/TS2363/TS2365 in the three arithmetic emitters, strictNullChecks
   only, plain references only, `any`/`unknown` excluded) turns `((j?) => j + 1)(12)` into
   the TS18048 the reference baseline wants. The CORPUS stays green — but nine hand-written
