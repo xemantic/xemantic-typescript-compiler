@@ -20,6 +20,46 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 687 (2026-07-26) — queue hygiene, then M2.4 re-scoped by measurement:
+the DOM libs are not shipped, and `"lib": ["dom"]` is a SILENT no-op that turns
+every DOM-typed expression into an unchecked `any`.** No production code changed.
+
+**Queue hygiene first (the file's own documented failure mode).** Two parent
+items still read `- [ ]` while every live child was done or owner-gated: **EP.2**
+(2a/2b/2d-f/2g/2h all landed, 2c skipped-by-owner) and **INV.7** (7a/7c1/7d1/7d2/
+7d3 landed, only the parked 7b left). Both reconciled to `[x]`. Also stated the
+file's **reading convention** at the head of the QUEUE, because it cost me a scan:
+a superseded item is kept as `- [ ] ~~Name (original)~~` directly below the `[x]`
+that replaced it, so a top-down search for the next `- [ ]` must skip `~~…~~`
+titles AND parents whose live children are all done or parked. With those fixed
+the live queue is exactly ten items, M2.4 first.
+
+**M2.4 — the measurement falsified the premise.** The item asked for
+dom.generated.d.ts's parse/bind cost. It has none, because **`RealLibFiles` does
+not ship the DOM set at all** — its only "dom" occurrences are
+`/// <reference lib="dom" />` lines inside other libs' text.
+`RealLibResolver.resolve` puts the file in `Resolution.unavailable` and filters
+it out of `ordered`; **`unavailable` is never consumed outside RealLibs.kt**, so
+nothing is reported. Measured on three lines: `HTMLElement` resolves, `document`
+resolves, and `e.definitelyNotAMember` on an `HTMLElement` parameter compiles
+**clean**. A browser project therefore gets a green build with its DOM code
+entirely unchecked — which is a worse defect than any parse cost would have been.
+Follow-ups recorded on the item: (i) surface `unavailable` as a diagnostic
+(small, no build change); (ii) shipping the DOM set is an **owner-gated
+build-system change** (~1 MB of generated source), and only then is the original
+cost question answerable.
+
+**The near-miss, which is the transferable part.** My first control — "does
+`HTMLElement` resolve when `dom` is in `lib`?" — PASSED. A clean 5-pair
+interleaved A/B then put the cost inside the noise band (+38/−68/+34/−22/−23 ms),
+and I was one step from reporting "DOM is free". Both measurements were of
+nothing. **When an unknown name degrades to `any`, name resolution proves
+nothing; the control that decides is a MEMBER probe** — `e.notAMember` must
+error. The tell that sent me back was structural, not empirical: 1 MB of
+declarations cannot cost 0 ms, so I went looking for what the run was actually
+loading.
+
+
 **Round 686 (2026-07-26) — M4.9 DONE: one gate on `mergeModuleAugmentations`
 took the `"types": ["node"]` compiler profile from 30 diagnostics to 13, and
 every survivor is env-legit.** Also the queue-state finding that (CATCH.1) was
@@ -733,6 +773,12 @@ import-elision difference, and the single remaining double-comment of a
 different shape.
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
+
+**Reading convention (stated round 687, after it cost a scan):** a superseded
+item is kept for its history as `- [ ] ~~Name (original)~~ — …` directly BELOW
+the `- [x]` entry that replaced it. Those struck-through lines are INERT — a
+top-down scan for the next `- [ ]` must skip anything whose title is `~~…~~`,
+and must also skip a parent whose every live child is `[x]` or owner-parked.
 
 (Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
 swept into PLAN-PHASE-5-HISTORY.md by an over-eager session-note trim; they are
@@ -1532,8 +1578,9 @@ cheap-first to shrink the diff before tackling the hard cross-file one):
   `LogicalAssignmentDownlevelTest` only. KNOWN RESIDUAL: a `??=` target BELOW ES2020
   keeps a native `??` (not further downleveled — ES2020 is the tested/dashboard
   target); close when a sub-ES2020 `??=` case appears.
-- [ ] **EP.2 — RE-SCOPED round 673 by classifying the residual: it is NOT
-  mostly formatting.** Every differing hunk in the 47 remaining files was
+- [x] **EP.2 CLOSED — every live sub-item landed (2a, 2b, 2d/e/f, 2g, 2h) and
+  2c was SKIPPED-BY-OWNER; checkbox reconciled round 687. RE-SCOPED round 673
+  by classifying the residual: it is NOT mostly formatting.** Every differing hunk in the 47 remaining files was
   classified (1,335 hunks total): **482 residual qualified access**, 173 other,
   **128 whitespace/wrap only**. So formatting is under 10% of the residual and
   the const-enum family — supposedly 96% closed — still dominates. Three
@@ -3453,7 +3500,9 @@ interrupt the arc).
     queue that only after INV.5 canonical types or on a >4-core box.
   - [ ] **(6e) Parallel emit** on Default + IO write sink (INV.1's Flow
     foundation; no dashboard delta expected — benches are --noEmit).
-- [ ] **INV.7 Productization** (absorbs M5.5/M5.6). Native re-enable (the big-input
+- [x] **INV.7 Productization — CLOSED for queue purposes (checkbox reconciled
+  round 687): 7a/7c1/7d1/7d2/7d3 all landed and the only remaining child, (7b)
+  release binary + native bench row, is PARKED-BY-OWNER.** (absorbs M5.5/M5.6). Native re-enable (the big-input
   GC inversion should largely dissolve post INV.4/5); watch mode driven by a
   file-event Flow; `.tsbuildinfo`-style incremental reuse.
   - [x] **(INV.7c1) `--watch` minimal watch mode** — DONE round 613 (full
@@ -3578,9 +3627,32 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   profile tsconfig with `"types": ["node"]`). The dashboard tsconfig
   deliberately keeps `"types": []` and our handling of THAT is correct per tsc
   semantics — do not "fix" the baseline; add a separate profile if one is wanted.
-- [ ] **M2.4 DOM libs as an opt-in set** (dom.generated.d.ts is 1 MB+ — measure the
-  parse/bind cost; ties into the shared-snapshot design). tsc's sources don't
-  reference DOM — post-v1.
+- [ ] **M2.4 DOM libs — RE-SCOPED round 687 by measurement: the premise is wrong
+  and there is a SILENT-WRONG-ANSWER bug underneath it.** The item asked to
+  measure dom.generated.d.ts's parse/bind cost. That cost is **not measurable
+  because the DOM libs are NOT SHIPPED**: `RealLibFiles` contains no
+  `dom.generated` / `dom.iterable.generated` / `webworker*` entry (its only "dom"
+  occurrences are `/// <reference lib="dom" />` lines inside OTHER libs' text).
+  **What `"lib": ["dom"]` does today:** `RealLibResolver.resolve` records the file
+  in `Resolution.unavailable` and the final `ordered` list filters it out —
+  and `Resolution.unavailable` is **never consumed outside RealLibs.kt**, so
+  nothing is reported. Measured consequence on a 3-line program: `HTMLElement`
+  resolves, `document` resolves, and `e.definitelyNotAMember` on an `HTMLElement`
+  parameter compiles **CLEAN** — i.e. a browser project gets a green build with
+  its DOM code entirely unchecked. (Without `dom` in `lib` the same name draws
+  TS2552 "Did you mean 'HTMLLIElement'?", because DOM names are in KNOWN_GLOBALS
+  for the TS2304 walker — which is why adding `dom` LOOKS like it worked.)
+  **Two separable follow-ups, in value order:** (i) **surface
+  `Resolution.unavailable`** as a diagnostic (or refuse the lib) so the silence
+  ends — small, self-contained, no build change; (ii) **ship the DOM lib set** —
+  this changes the real-lib GENERATION in build.gradle.kts and adds ~1 MB of
+  generated source, so it is an **owner-gated build-system change**; only then
+  does the original cost question become answerable.
+  **Method note worth keeping:** the first control I ran — "does `HTMLElement`
+  resolve with `dom` in lib?" — PASSED, and a clean 5-pair interleaved A/B then
+  showed the cost inside the noise band. Both were measuring nothing. When an
+  unknown name degrades to `any`, name resolution proves nothing; the control
+  that decides is a **MEMBER probe** (`e.notAMember` must error).
 - [ ] **M3.0 Conformance generator extension.** Extend `generateTypeScriptTests` with
   a per-category allowlist for `tests/cases/conformance/` (5,907 files; keep all tsgo
   set-B filters). Start with the categories matching M3.1 (types/typeParameters,
