@@ -20,6 +20,31 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 704 (2026-07-26) — an IIFE's parameters are now contextually typed from the
+call arguments. Corpus 12,750 → 12,756 / 0 / 3, all 8 profiles byte-identical.**
+
+Round 694 wrote this in the wrong place and measured it inert; the hook is
+`populateParameterLocalTypes`, because the body walkers read `currentLocalTypes` and
+nothing else. Written there, the decisive probe flips: `((a) => a.nope)("x")` reports
+TS2339 on `string` — widened, as tsc widens the argument's literal type.
+
+**Two pieces of the case remain, and the second is the more interesting.** Only ARROWS
+are typed — a function EXPRESSION IIFE is not, and the branch I expected to be
+responsible (the blanket `any` for a callback's own parameters) turned out not to be:
+deferring there changed nothing. That is now a LIMITATION PIN rather than folklore, so
+the next person knows both the gap and one place it is not. And the typed parameters
+now produce the right analysis under the wrong code: `((j?) => j + 1)(12)` reports
+TS2365 where tsc reports TS18048, which is the documented round-415 hazard — a union
+carrying `undefined` fails the arithmetic operand classifier. tsc checks
+possibly-undefined first, so a nullish-operand rule ahead of TS2362/2363/2365 is what
+closes the case.
+
+**Four times this session a first patch turned out to be inert** (rounds 700, 702, 704
+twice), and every one was caught immediately because the probe was built to fail if the
+change worked. That is the single most valuable habit this run reinforced.
+
+---
+
 **Round 703 (2026-07-26) — (M3.0-gap-4) CLOSED; `readonlyRestParameters` is
 un-deferred. Corpus 12,746 → 12,750 / 0 / 3, all 8 profiles byte-identical.**
 
@@ -4358,8 +4383,20 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   suppresses both, in BOTH emitters — the general parameter walker AND the
   dedicated rest-parameter walker, which carries its own TS7019 and TS7006 and is
   the one live for these shapes.
-  **REMAINING:** the parameters are still not TYPED from the arguments, so the
-  reference's **TS18048 ×3** ('j'/'k'/'o' possibly undefined, from optional IIFE
+  **ROUND 704: the parameters ARE now typed from the arguments** (in
+  `populateParameterLocalTypes`, per the round-694 finding — `((a) => a.nope)("x")`
+  reports TS2339 on `string`), with two pieces still open. **(i)** Only ARROWS are
+  typed; a function EXPRESSION IIFE is not, and the site responsible is NOT the
+  no-contextual-annotation branch that blanket-registers `any` for a callback's own
+  parameters (deferring there was measured inert). A limitation pin records this.
+  **(ii)** The typed parameters now produce the RIGHT analysis with the WRONG code:
+  `((j?) => j + 1)(12)` reports **TS2365** ("Operator '+' cannot be applied to types
+  'number | undefined' and '1'") where tsc reports **TS18048** ('j' is possibly
+  'undefined') — the documented round-415 hazard, where a union carrying `undefined`
+  fails the arithmetic operand classifier. tsc checks possibly-undefined FIRST, so the
+  fix is a nullish-operand rule ahead of TS2362/2363/2365 in the arithmetic pass.
+  That is what still keeps the case deferred.
+  **ORIGINAL REMAINING:** the reference's **TS18048 ×3** ('j'/'k'/'o' possibly undefined, from optional IIFE
   parameters under strictNullChecks) and **TS7006 ×2** (lines 28–29 — the INNER
   function's parameter in `(f => f(12))(i => i)`, which tsc genuinely reports)
   do not fire.
