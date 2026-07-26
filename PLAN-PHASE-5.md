@@ -20,6 +20,46 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 686 (2026-07-26) — M4.9 DONE: one gate on `mergeModuleAugmentations`
+took the `"types": ["node"]` compiler profile from 30 diagnostics to 13, and
+every survivor is env-legit.** Also the queue-state finding that (CATCH.1) was
+the last live PERF/EP/INV item.
+
+**The bug.** `mergeModuleAugmentations` published every export of a FILELESS
+`declare module "spec"` into `globals`. For an AUGMENTATION that is right —
+globals is its only visibility channel (round 510's rationale, preserved). For
+the identical syntax in a SCRIPT `.d.ts` it is wrong: that DECLARES the ambient
+module, and its members are reachable only through an import of the specifier.
+So `@types/node`'s `declare module "fs" { export interface WatchOptions … }` put
+`WatchOptions` in globals, where it **outranked tsc's own import alias of the
+same name** — sys.ts's `WatchOptions` resolved to node's `fs.WatchOptions` and
+every downstream check disagreed with the source. The gate is the declaring file
+being an external module, which is exactly tsc's augmentation-vs-declaration
+distinction; `moduleFiles` is already populated before this pass runs.
+
+**One gate, eight codes.** TS2353×7, TS2339×3, TS2322×2, TS2345, TS7006, TS1345,
+TS2709, TS2558 — all downstream of the same pollution, all gone. What remains is
+13 TS2591 (`require`/`process` in files that never import node types), the same
+env class the eight dashboard profiles carry by design.
+
+**Found by discrimination, not search.** A four-file repro reproduced it in
+under a minute; then one probe settled the mechanism: an interface declared ONLY
+inside the ambient module drew TS2304 (so the name is NOT in the TS2304 walker's
+scope) while its MEMBERS resolved through the annotation (so the type IS in the
+type-position scope). Two scopes disagreeing is a much narrower target than
+"resolution is wrong somewhere", and it named the publishing site in one run.
+The earlier globals-leak hypothesis had been *falsified* by a no-import probe
+file getting a correct TS2304 — worth noting, because that near-miss would have
+sent a search-first approach into the per-file scoping machinery instead.
+
+**Queue state.** Working top-down, the PERF arc (M0.1–M0.4, M1, M2), the EP arc
+and INV.0–INV.7 are all closed or owner-parked: EP.2c was skipped by the owner,
+INV.7b is parked-by-owner, and (M0.3)'s remaining slices are priced below the
+±2% drift band. So the live queue is the **Post-v1 backlog** (unparked round
+679), and M4.9 was its first unchecked item. Next: M2.4 / M3.0 / M3.5 / M4.1–M4.7,
+plus the still-worthwhile ninth dashboard profile for `"types": ["node"]`.
+
+
 **Round 685 (2026-07-26) — (CATCH.1) batch 1: the 30 defensive catches around
 `getApparentType` / `getPropertyOfType` deleted as dead residue, and the audit's
 first real find fixed — an indirect circular type-parameter constraint blew the
@@ -3473,7 +3513,30 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   goes silent exactly when resolution succeeds — pinned both ways). Measured with
   `@types/node`: program 79 → 146, TS2591 43 → 13. Dashboard untouched (all 8
   profiles identical in errors AND program size); suite 12,598/0/3 (+19 pins).
-- [ ] **M4.9 (PARTLY DONE round 681 — 60 → 30 on the profile).** Landed:
+- [x] **M4.9 DONE round 686 — 30 → 13 on the `"types": ["node"]` profile, and
+  every survivor is the env-legit TS2591 class** (a file using
+  `require`/`process` without importing node types — the same class the eight
+  dashboard profiles carry by design). ONE cause behind the whole residual:
+  `mergeModuleAugmentations` published every export of a FILELESS `declare module
+  "spec"` into `globals`. Right for an AUGMENTATION (globals is its only
+  visibility channel); wrong for the identical syntax in a SCRIPT `.d.ts`, which
+  DECLARES the ambient module — those members are reachable only through an
+  import of the specifier. The damage was not a stray name but a WRONG WINNER:
+  the published member outranked a file's own import alias, so tsc's sys.ts
+  resolved its own `WatchOptions` to `@types/node`'s `fs.WatchOptions` and every
+  downstream check disagreed with the source. Gating on the declaring file being
+  an external module (tsc's own augmentation-vs-declaration distinction;
+  `moduleFiles` is already populated before this pass) cleared TS2353×7,
+  TS2339×3, TS2322×2, TS2345, TS7006, TS1345, TS2709 and TS2558 at a stroke.
+  **Found by discrimination, not search:** a four-file repro, then a probe type
+  declared ONLY inside the ambient module — it drew TS2304 (not in the TS2304
+  walker's scope) while its MEMBERS resolved (in the type-position scope), which
+  located the split in one run. Gates: suite 12,651/0/3 (+4 pins), `--listAll` ×8
+  byte-identical (the dashboard's `"types": []` keeps it off this path).
+  Round-681 part 1 (below) landed `skipLibCheck` and the parameter-shadows-
+  namespace bail. **A NINTH dashboard profile for `"types": ["node"]` is still
+  worth adding** — do NOT alter the existing eight.
+- [ ] ~~M4.9 (part 1, round 681)~~ — Landed:
   `skipLibCheck` is now honoured (it was parsed and never consulted — TS7008×15
   + TS7010×2 were being reported against DefinitelyTyped's own declaration
   files), and a PARAMETER now shadows a same-named namespace that reached
