@@ -109633,7 +109633,6 @@ interface DataView {
             annotation = when (annotation) {
                 is TypeOperator -> annotation.type
                 is ParenthesizedType -> annotation.type
-                else -> null
             }
         }
         val tuple = annotation as? TupleType ?: return null
@@ -109647,7 +109646,7 @@ interface DataView {
     private fun argumentExpansionCount(arg: Expression): Int? {
         val spread = arg as? SpreadElement ?: return 1
         if (spread.expression is ArrayLiteralExpression) {
-            return (spread.expression as ArrayLiteralExpression).elements.size
+            return spread.expression.elements.size
         }
         (getTypeOfExpression(spread.expression) as? Type.Object)?.tupleElementTypes
             ?.let { return it.size }
@@ -109705,7 +109704,6 @@ interface DataView {
                     annotation = when (annotation) {
                         is TypeOperator -> annotation.type
                         is ParenthesizedType -> annotation.type
-                        else -> null
                     }
                 }
                 return annotation is ArrayType
