@@ -306,10 +306,6 @@ val conformanceDeferredErrorBaselines = setOf<String>(
     // inferred `return x, y` return and a `var r: T1 = (x, y)` assignment miss
     // TS2322 x2. See the M3.0-gap-3 queue item.
     "commaOperatorOtherInvalidOperation",
-    // A spread of a `readonly T[]` into a fixed-arity signature misses TS2556,
-    // and the arity check counts it as at most one argument (missing TS2554).
-    // See the M3.0-gap-4 queue item.
-    "readonlyRestParameters",
 )
 
 val cloneTypeScriptRepo by tasks.registering {

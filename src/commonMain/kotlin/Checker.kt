@@ -58651,6 +58651,33 @@ interface DataView {
                 return
             }
         }
+        // (M3.0-gap-4) A rest parameter annotated with a fixed TUPLE has fixed arity, so
+        // the usual "a rest parameter accepts anything" exemption does not apply:
+        // `f2(...args: readonly [string, string])` takes exactly two, and a tuple-typed
+        // spread ARGUMENT contributes its element count. The excess anchor is an
+        // ARGUMENT INDEX, not the expanded count — for `f2('abc', ...args)` the third
+        // argument lives inside the spread, so tsc squiggles the spread itself.
+        if (info != null && !info.isOverloaded && info.hasRest) {
+            val restTupleLen = fixedTupleLengthOfRestParam(info.parameters.lastOrNull())
+            if (restTupleLen != null) {
+                val maxArgs = (info.parameters.size - 1) + restTupleLen
+                var expanded = 0
+                var excessIdx = -1
+                var allKnown = true
+                for ((i, a) in expr.arguments.withIndex()) {
+                    val n = argumentExpansionCount(a)
+                    if (n == null) { allKnown = false; break }
+                    expanded += n
+                    if (expanded > maxArgs && excessIdx < 0) excessIdx = i
+                }
+                if (allKnown && excessIdx >= 0) {
+                    emitTS2554TooMany(
+                        maxArgs, maxArgs, expanded, expr.arguments, excessIdx, source, fileName,
+                    )
+                    return
+                }
+            }
+        }
         if (info != null && !info.isOverloaded) {
             val argCount = expr.arguments.size
             if (!info.hasRest && argCount > info.maxParams) {
@@ -109363,6 +109390,54 @@ interface DataView {
      */
     /** Round 471: true when [t] is an Array/ReadonlyArray reference — the contexts in
      *  which a fresh array literal's elements are contextually typed by the element type. */
+    /** (M3.0-gap-4) The element count of a rest parameter annotated with a fixed tuple
+     *  (`...args: readonly [string, string]` → 2). Null for an array rest, a tuple with a
+     *  rest element of its own, or anything unrecognised — all of which keep the rest
+     *  parameter's usual unbounded treatment. */
+    private fun fixedTupleLengthOfRestParam(param: Parameter?): Int? {
+        if (param == null || !param.dotDotDotToken) return null
+        var annotation: TypeNode? = param.type
+        while (annotation is TypeOperator || annotation is ParenthesizedType) {
+            annotation = when (annotation) {
+                is TypeOperator -> annotation.type
+                is ParenthesizedType -> annotation.type
+                else -> null
+            }
+        }
+        val tuple = annotation as? TupleType ?: return null
+        if (tuple.elements.any { it is RestType }) return null
+        return tuple.elements.size
+    }
+
+    /** (M3.0-gap-4) How many arguments one argument expression contributes: 1 normally,
+     *  a tuple spread's element count for `...tup`. Null when a spread's length is not
+     *  known, so the caller skips the whole call rather than guessing. */
+    private fun argumentExpansionCount(arg: Expression): Int? {
+        val spread = arg as? SpreadElement ?: return 1
+        if (spread.expression is ArrayLiteralExpression) {
+            return (spread.expression as ArrayLiteralExpression).elements.size
+        }
+        (getTypeOfExpression(spread.expression) as? Type.Object)?.tupleElementTypes
+            ?.let { return it.size }
+        val id = spread.expression as? Identifier ?: return null
+        var owner: Node? = (id as NodeBase).parent
+        var hops = 0
+        while (owner != null && hops++ < 64) {
+            val ownerParams = when (owner) {
+                is FunctionDeclaration -> owner.parameters
+                is FunctionExpression -> owner.parameters
+                is ArrowFunction -> owner.parameters
+                is MethodDeclaration -> owner.parameters
+                is Constructor -> owner.parameters
+                else -> null
+            }
+            val match = ownerParams?.firstOrNull { (it.name as? Identifier)?.text == id.text }
+            if (match != null) return fixedTupleLengthOfRestParam(match)
+            owner = (owner as? NodeBase)?.parent
+        }
+        return null
+    }
+
     /**
      * (M3.0-gap-4) Is this spread operand POSITIVELY an array that is not a tuple — the
      * condition under which tsc reports TS2556 for a spread into a non-rest parameter?

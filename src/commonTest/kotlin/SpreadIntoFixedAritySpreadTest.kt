@@ -108,6 +108,43 @@ class SpreadIntoFixedAritySpreadTest {
     }
 
     @Test
+    fun `a TUPLE-typed rest parameter has FIXED arity`() {
+        // The "a rest parameter accepts anything" exemption does not apply to a tuple:
+        // f2 takes exactly two, and the spread contributes its two elements, so this call
+        // passes three. The squiggle anchors on the SPREAD, because that is the argument
+        // the third one lives inside — an expanded COUNT is not an argument index, and
+        // passing one as the index made the emitter return silently.
+        val diags = diagnose(
+            """
+            function f2(...args: readonly [string, string]) { f2('abc', ...args); }
+            """
+        ).filter { it.code == 2554 }
+        assert(diags.size == 1)
+        assert(diags[0].message == "Expected 2 arguments, but got 3.")
+        assert(diags[0].length == 7)
+    }
+
+    @Test
+    fun `negative control - an exact tuple spread into its own tuple rest is legal`() {
+        val diags = diagnose(
+            """
+            function f2(...args: readonly [string, string]) { f2(...args); f2('a', 'b'); }
+            """
+        ).filter { it.code == 2554 || it.code == 2556 }
+        assert(diags.isEmpty())
+    }
+
+    @Test
+    fun `negative control - an ARRAY rest parameter stays unbounded`() {
+        val diags = diagnose(
+            """
+            function f1(...args: readonly string[]) { f1('a', 'b', 'c', 'd'); }
+            """
+        ).filter { it.code == 2554 || it.code == 2556 }
+        assert(diags.isEmpty())
+    }
+
+    @Test
     fun `negative control - an already-too-many call reports the COUNT, not TS2556`() {
         val diags = diagnose(
             """
