@@ -298,9 +298,13 @@ val conformanceCategories = listOf(
  * This is not a place to park a fresh failure — triage first, queue it, then add.
  */
 val conformanceDeferredErrorBaselines = setOf<String>(
-    // IIFE parameters are not contextually typed from the call arguments: misses
-    // TS18048 x3 / TS7006 x2 and over-emits TS7019 x3 + TS7006 x2.
-    // See the M3.0-gap-2 queue item.
+    // PARKED (round 714), not in progress: the case's TS18048 x3 and the over-emitted
+    // TS7019/TS7006 are FIXED (rounds 693/704/706/707). What is left is its TS7006 x2 on
+    // argument arrows in a file whose only directive is @strictNullChecks, i.e.
+    // PURE-DEFAULT mode, where the full implicit-any walker is deliberately off and the
+    // narrow default-mode one covers a single shape on purpose. Closing it means
+    // broadening that walker — the change recorded as having regressed ~19 tests — which
+    // is not worth it for one case. See the M3.0-gap-2 queue item.
     "contextuallyTypedIifeStrict",
     // The comma operator's result type is not the RIGHT operand's type, so an
     // inferred `return x, y` return and a `var r: T1 = (x, y)` assignment miss

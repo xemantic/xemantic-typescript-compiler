@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 714 (2026-07-26) — (M3.0-gap-2) PARKED with its reasoning, closing an
+ambiguity in the queue rather than leaving it open-ended. Corpus 12,761 / 0 / 3.**
+
+The item still read as work-in-progress while the decision had effectively been made
+last round, and an item that reads "in progress" is an instruction to the next session.
+Everything worth having from this case has shipped — the over-emitted TS7019/TS7006,
+the contextual typing of an IIFE's parameters from the call arguments, all three
+TS18048 including the pure-`undefined` reference and its literal-vs-reference boundary
+against TS18050, and (round 713) the argument-context TS7006 hole it exposed.
+
+What remains cannot be had cheaply: the case's TS7006 ×2 sit in PURE-DEFAULT mode,
+where the full implicit-any walker is deliberately off and the narrow one covers a
+single shape on purpose. Closing it means broadening that walker — the change on record
+as having regressed ~19 tests — for one conformance case. Both the queue item and the
+deferral comment in build.gradle.kts now say PARKED and why, so nobody re-derives the
+attempt.
+
+**The general point:** a deferral entry that explains a MISSING capability invites
+someone to go build it; one that records a DECISION and its cost does not. These two
+had drifted into the first kind while the answer was already the second.
+
+---
+
 **Round 713 (2026-07-26) — the TS7006 argument-context fix LANDED. Corpus 12,756 →
 12,761 / 0 / 3, all 8 profiles byte-identical.**
 
@@ -4613,8 +4636,21 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `(() => this).length` in an enum initializer is just as illegal — the descent
   emits TS2332 only, because the reference baseline has no companion TS2683 for
   the arrow-nested form.
-- [ ] **(M3.0-gap-2) `contextuallyTypedIifeStrict` — the FALSE-POSITIVE half is
-  FIXED (round 693); the missing codes remain, so the case stays deferred.** tsc
+- [ ] **(M3.0-gap-2) PARKED round 714 — everything worth having from this case has
+  shipped; the case itself stays deferred by DECISION, not by omission.** Fixed across
+  rounds 693/704/706/707: the over-emitted TS7019/TS7006 (IIFE parameters are
+  contextually typed, so tsc reports nothing for them), the contextual TYPING itself
+  (from the call's arguments, in `populateParameterLocalTypes`), and all three TS18048 —
+  including the pure-`undefined` reference case, which also fixed the literal-vs-reference
+  boundary against TS18050. Round 713 additionally closed the argument-context TS7006
+  hole the case exposed, under noImplicitAny.
+  **Why it will not un-defer:** its remaining TS7006 ×2 are on argument arrows in a file
+  whose only directive is `@strictNullChecks` — pure-default mode, where the full
+  implicit-any walker is deliberately OFF and the narrow default-mode walker covers one
+  shape on purpose. Closing it requires broadening that walker, which is the change
+  recorded as having regressed ~19 tests. Not worth it for one conformance case; revisit
+  only if the default-mode walker is broadened for its own reasons.
+  ORIGINAL: **the FALSE-POSITIVE half is FIXED (round 693); the missing codes remain.** tsc
   contextually types an IIFE's parameters from the call ARGUMENTS, so it reports
   no implicit-any for them even when the call passes none; we emitted TS7019 ×3 +
   TS7006 ×2. `isImmediatelyInvokedFunctionParam` (owner walked up through
