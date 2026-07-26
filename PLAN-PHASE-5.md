@@ -20,6 +20,39 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 691 (2026-07-26) — the first bug the new conformance category caught:
+EVERY generic arrow was silently mistyped `<T>(n: T) => any`.**
+
+`getTypeOfArrowFunction` interned the arrow's OWN type parameters only when it
+constructed the `Signature` — at the bottom of the function, AFTER the return had
+been inferred. So while inferring `<T>(n: T) => n`, the parameter annotation `T`
+resolved to nothing, `n` never entered `currentLocalTypes` (that loop skips
+any/errorType), the body typed as `any`, and the arrow's type came out
+`<T>(n: T) => any`. The visible symptom was one TS2403 false positive; the actual
+scope was every generic arrow in every program.
+
+**Isolation did the work.** Three two-line cases, run together: a NON-generic
+arrow with the same array-literal body (`(n: number) => [n]`) was already
+correct, while a generic IDENTITY arrow (`<T>(n: T) => n`) was not. That single
+run ruled out return inference in general AND the TS2403 comparator — which the
+error message had been pointing at, since it renders a fn-type against a
+call-signature object — leaving type-parameter scope as the only candidate. The
+fix is the rule CLAUDE.md already states for interface call/construct signatures:
+push the owning declaration's type parameters before resolving anything that can
+reference them. Constraints and defaults now resolve under that scope too, so a
+constraint naming a sibling type parameter resolves.
+
+**Gates.** Corpus 12,663/0/3 (+7 pins, including non-generic controls that
+localise a future regression to the scope rather than to inference), `--listAll`
+×8 byte-identical on all eight profiles. The dashboard not moving is worth
+stating rather than assuming: tsc's own sources use generic arrows heavily, so
+byte-identity means the mistyping had been masked there — the `any` return was
+being absorbed by paths that accept it — not that the shape is rare.
+
+**What this says about M3.0.** The category cost one round to adopt and found a
+whole-program mistyping in the next. Seven files.
+
+
 **Round 690 (2026-07-26) — M3.0's infrastructure LANDED and the first
 conformance category adopted: `expressions/functions`, 12 test functions, corpus
 12,651 → 12,663 with zero regressions.**
@@ -3837,8 +3870,16 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `Path("${'$'}typeScriptCasesDir/<name>.ts")` where `typeScriptCasesDir` is
   `tests/cases/compiler` (TypeScriptTestSupport.kt:38) — a conformance case needs
   its own path, so emit a per-file relative path or add a second constant.
-- [ ] **(M3.0-gap-1) `arrowFunctionContexts` error baseline** — deferred via
-  `conformanceDeferredErrorBaselines`; its JS subtests pass. We MISS **TS18033 ×2**
+- [ ] **(M3.0-gap-1) `arrowFunctionContexts` error baseline — the OVER-emitted
+  half is FIXED (round 691); the two missing codes remain.** The TS2403 ×2 false
+  positive was a generic arrow being mistyped `<T>(n: T) => any`:
+  `getTypeOfArrowFunction` interned the arrow's own type parameters only when it
+  built the `Signature`, i.e. AFTER inferring the return, so `T` resolved to
+  nothing and the body typed as `any`. Fixed by hoisting the interning and pushing
+  the type parameters onto `currentTypeParamScope` for parameter AND return
+  resolution — the rule already documented for interface call/construct
+  signatures. Still deferred via `conformanceDeferredErrorBaselines` for the
+  REMAINDER below. We MISS **TS18033 ×2**
   ("Type '() => number' is not assignable to type 'number' as required for computed
   enum member values" — an arrow used as an enum member value) and **TS2332 ×2**
   ("'this' cannot be referenced in current location" — `this` inside an enum member
