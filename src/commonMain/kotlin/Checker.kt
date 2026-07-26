@@ -53758,10 +53758,8 @@ interface DataView {
                         // keeps firing.
                         init is Identifier && init.text in shadowed -> into[init.text]
                         init is Identifier && isUncalledShadowed(init.text) -> lookupUncalledTypedLocal(init.text)
-                        init != null -> try {
-                            val t = getTypeOfExpression(init)
-                            if (t === anyType || t === errorType) null else t
-                        } catch (_: Exception) { null }
+                        init != null -> getTypeOfExpression(init)
+                            .takeIf { it !== anyType && it !== errorType }
                         else -> null
                     }
                     // A local var/const/let ALWAYS shadows an outer binding of the
@@ -54018,13 +54016,11 @@ interface DataView {
             if (t === anyType || t === errorType) return null
             val app = getApparentType(t)
             val prop = getPropertyOfType(app, path[i]) ?: return null
-            t = try {
-                if (app is Type.Reference) {
-                    resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
-                } else {
-                    getTypeOfSymbol(prop)
-                }
-            } catch (_: Exception) { return null }
+            t = if (app is Type.Reference) {
+                resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
+            } else {
+                getTypeOfSymbol(prop)
+            }
             // Honor optional class properties / interface members: `foo?: T`
             // adds undefined to the property type for nullish-detection purposes.
             // Round 479: ANY optional declaration counts — a cross-file
@@ -78327,11 +78323,9 @@ interface DataView {
         // (4) Call / property-access / binary / parenthesized keys: route through the
         // real expression checkers so TS2349/TS2339/TS2365 fire, then classify.
         val before = diagnostics.size
-        try {
-            checkCallTypesInExpr(keyExpr, source, fileName)
-            checkPropertyAccessInExpr(keyExpr, source, fileName, null)
-            checkArithmeticInExpr(keyExpr, source, fileName)
-        } catch (_: Exception) { /* best-effort */ }
+        checkCallTypesInExpr(keyExpr, source, fileName)
+        checkPropertyAccessInExpr(keyExpr, source, fileName, null)
+        checkArithmeticInExpr(keyExpr, source, fileName)
         // checkArithmeticInExpr deliberately SKIPS `+` with a non-wrapper object
         // operand (it defers object operands to other checks). For a computed
         // destructuring key tsc DOES report TS2365 there (`[(1 + {})]`), so emit it
@@ -79822,8 +79816,7 @@ interface DataView {
         if (srcType is Type.TypeParam && srcType !== tp) {
             val srcConstraint = srcType.constraint
             if (srcConstraint != null && srcConstraint !== anyType && srcConstraint !== errorType) {
-                val srcAssignableToTgtConstraint = try { checkTypeRelatedTo(srcConstraint, constraint, assignableRelation) }
-                    catch (_: Exception) { false }
+                val srcAssignableToTgtConstraint = checkTypeRelatedTo(srcConstraint, constraint, assignableRelation)
                 if (srcAssignableToTgtConstraint) {
                     val srcName = srcType.symbol?.name ?: return
                     val tgtName = typeName.text
@@ -79848,11 +79841,9 @@ interface DataView {
             }
         }
         // Strict subtype: src ≤ constraint AND constraint NOT ≤ src.
-        val srcToConstraint = try { checkTypeRelatedTo(srcType, constraint, assignableRelation) }
-            catch (_: Exception) { return }
+        val srcToConstraint = checkTypeRelatedTo(srcType, constraint, assignableRelation)
         if (!srcToConstraint) return
-        val constraintToSrc = try { checkTypeRelatedTo(constraint, srcType, assignableRelation) }
-            catch (_: Exception) { return }
+        val constraintToSrc = checkTypeRelatedTo(constraint, srcType, assignableRelation)
         if (constraintToSrc) return  // bidirectional → sufficient overlap
         // Emit TS2352 at the assertion span.
         val start = expr.pos
@@ -91460,8 +91451,7 @@ interface DataView {
             }
             val propName = (el.propertyName as? Identifier)?.text ?: bnName
             val pt = if (initType != null && initType !== anyType && initType !== errorType) {
-                try { getPropertyOfType(getApparentType(initType), propName)?.let { getTypeOfSymbol(it) } }
-                catch (_: Exception) { null }
+                getPropertyOfType(getApparentType(initType), propName)?.let { getTypeOfSymbol(it) }
             } else null
             if (pt != null && pt !== anyType && pt !== errorType) currentLocalTypes[bnName] = pt
             else currentLocalTypes.remove(bnName)
@@ -95264,10 +95254,9 @@ interface DataView {
                     // with excess props relative to the constraint, TypeScript emits the
                     // "arbitrary unrelated" form (excess-property check overrides the
                     // structural-assignability result). Matches `errorElaborationDivesIntoApparentlyPresentPropsOnly`.
-                    val constraintOk = constraint != null && try {
+                    val constraintOk = constraint != null &&
                         checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
-                            !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
-                    } catch (_: Exception) { false }
+                        !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
                     if (constraintOk) {
                         chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint)}'.")
                         // B60.6d: lib `Object` source hint
@@ -98540,10 +98529,9 @@ interface DataView {
                                 // B60.2: same logic as the var-decl path at ~39819.
                                 // B62.1: excess-property override (see helper docstring).
                                 val constraint = tt.constraint
-                                val constraintOk = constraint != null && try {
+                                val constraintOk = constraint != null &&
                                     checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
-                                        !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
-                                } catch (_: Exception) { false }
+                                    !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
                                 if (constraintOk) {
                                     chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint)}'.")
                                     // B60.6d: lib `Object` source hint
@@ -101095,8 +101083,7 @@ interface DataView {
                 // method name (or value) with the missing-property chain. No related.
                 val chain = mutableListOf<String>()
                 if (srcReturn is Type.Object && memberReturn is Type.Object) {
-                    val missing = try { collectMissingProperties(srcReturn, memberReturn) }
-                        catch (_: Exception) { emptyList() }
+                    val missing = collectMissingProperties(srcReturn, memberReturn)
                     if (missing.isNotEmpty()) {
                         chain.add("  " + formatTs2740Message(typeToString(srcReturn), typeToString(memberReturn), missing))
                     }
@@ -107916,10 +107903,8 @@ interface DataView {
         val tObj = target as? Type.Object ?: return false
         val mApp = getApparentType(m)
         val mObj = mApp as? Type.Object ?: return false
-        try {
-            resolveStructuredTypeMembers(tObj)
-            resolveStructuredTypeMembers(mObj)
-        } catch (_: Exception) { return false }
+        resolveStructuredTypeMembers(tObj)
+        resolveStructuredTypeMembers(mObj)
         if (mObj.stringIndexInfo != null) return false
         val tProps = tObj.properties ?: return false
         return tProps.any { tp ->
@@ -110272,10 +110257,8 @@ interface DataView {
         // stays narrow. Improves display from `() => any` to `() => C` for patterns
         // like `var a: I4 = function() { return new C2(); }` (interfaceImplementation1).
         if (retExpr is NewExpression) {
-            try {
-                val t = getReturnTypeOfNewExpression(retExpr)
-                if (t !== anyType && t !== errorType) return t
-            } catch (_: Exception) { /* fall through */ }
+            val newT = getReturnTypeOfNewExpression(retExpr)
+            if (newT !== anyType && newT !== errorType) return newT
         }
         // B112: `return { name: "joe" }` infers the WIDENED object-literal type
         // (`{ name: string }`) so a function-expression source displays as
@@ -110283,10 +110266,8 @@ interface DataView {
         // FunctionExpression single-return path (narrow blast radius vs the shared
         // inferReturnTypeFromBody). Only return a CONCRETE result (non-any/error).
         if (retExpr is ObjectLiteralExpression) {
-            try {
-                val t = widenType(getTypeOfObjectLiteral(retExpr))
-                if (t !== anyType && t !== errorType) return t
-            } catch (_: Exception) { /* fall through */ }
+            val olT = widenType(getTypeOfObjectLiteral(retExpr))
+            if (olT !== anyType && olT !== errorType) return olT
         }
         return inferReturnTypeFromBody(body)
     }
@@ -113010,13 +112991,11 @@ interface DataView {
             if (t === anyType || t === errorType) return null
             val app = getApparentType(t)
             val prop = getPropertyOfType(app, seg) ?: return null
-            t = try {
-                if (app is Type.Reference) {
-                    resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
-                } else {
-                    getTypeOfSymbol(prop)
-                }
-            } catch (_: Exception) { return null }
+            t = if (app is Type.Reference) {
+                resolveGenericPropertyType(app, prop) ?: getTypeOfSymbol(prop)
+            } else {
+                getTypeOfSymbol(prop)
+            }
         }
         if (t === anyType || t === errorType) return null
         return t
@@ -117120,11 +117099,9 @@ interface DataView {
         // compatible iff the overload return is assignable to the impl return OR vice versa. So
         // `(x:"hi"):D` vs impl `(x:string):C` is compatible (D extends C → D→C ✓), but
         // `(x:"bye"):E` vs C is NOT (E and C are unrelated, neither direction holds) → TS2394.
-        val ovToImpl = try { checkTypeRelatedTo(ovType, implType, assignableRelation) }
-            catch (_: Exception) { return true }
+        val ovToImpl = checkTypeRelatedTo(ovType, implType, assignableRelation)
         if (ovToImpl) return true
-        return try { checkTypeRelatedTo(implType, ovType, assignableRelation) }
-            catch (_: Exception) { true }
+        return checkTypeRelatedTo(implType, ovType, assignableRelation)
     }
 
     /**
@@ -125340,10 +125317,8 @@ interface DataView {
                     // the callee via getTypeOfIdentifier / getTypeOfPropertyAccess, which
                     // consult currentLocalTypes (where contextual typing has pushed `x: number`).
                     is CallExpression -> {
-                        try {
-                            val t = getReturnTypeOfCallExpression(expr)
-                            if (t !== anyType && t !== errorType) t else null
-                        } catch (_: Exception) { null }
+                        getReturnTypeOfCallExpression(expr)
+                            .takeIf { it !== anyType && it !== errorType }
                     }
                     is TypeOfExpression -> stringType
                     is VoidExpression -> undefinedType
@@ -125358,10 +125333,8 @@ interface DataView {
                     // Only return a CONCRETE result so the `?: anyType` fallback is
                     // unchanged for unresolvable cast targets.
                     is AsExpression -> {
-                        try {
-                            val t = getTypeFromTypeNode(expr.type)
-                            if (t !== anyType && t !== errorType) t else null
-                        } catch (_: Exception) { null }
+                        getTypeFromTypeNode(expr.type)
+                            .takeIf { it !== anyType && it !== errorType }
                     }
                     // B96-UNBLOCKER: `return [123]` infers the array-literal type
                     // (`number[]`) so an object-literal method value can be checked
@@ -125369,21 +125342,17 @@ interface DataView {
                     // CONCRETE result (non-any/error) so the `?: anyType` fallback is
                     // unchanged for arrays whose element type can't be determined.
                     is ArrayLiteralExpression -> {
-                        try {
-                            val t = getTypeOfArrayLiteral(expr)
-                            if (t !== anyType && t !== errorType) t else null
-                        } catch (_: Exception) { null }
+                        getTypeOfArrayLiteral(expr)
+                            .takeIf { it !== anyType && it !== errorType }
                     }
                     is NewExpression -> {
                         // 17.156: mirror 17.154's FunctionExpression inference into the
                         // broader callable family (MethodDeclaration / FunctionDeclaration /
                         // GetAccessor). `class Foo { make() { return new Bar(); } }` infers
-                        // `() => Bar` instead of `() => any`. Cycle protection in
-                        // getReturnTypeOfNewExpression is wrapped in try/catch.
-                        try {
-                            val t = getReturnTypeOfNewExpression(expr)
-                            if (t !== anyType && t !== errorType) t else null
-                        } catch (_: Exception) { null }
+                        // `() => Bar` instead of `() => any`. Cycle protection lives in
+                        // getReturnTypeOfNewExpression itself.
+                        getReturnTypeOfNewExpression(expr)
+                            .takeIf { it !== anyType && it !== errorType }
                     }
                     is BinaryExpression -> {
                         // B64.1: arithmetic binary ops always produce `number`. JS spec
@@ -125437,7 +125406,7 @@ interface DataView {
                         val memberName = (expr.name).text
                         if (clsSym != null && recv is Identifier && recv.text == "this" &&
                             strictNullChecks) {
-                            try {
+                            run {
                                 val clsType = getDeclaredTypeOfSymbol(clsSym)
                                 val propSym = getPropertyOfType(clsType, memberName)
                                 if (propSym != null && isOptionalProperty(propSym)) {
@@ -125446,7 +125415,7 @@ interface DataView {
                                         getUnionType(listOf(baseT, undefinedType))
                                     else null
                                 } else null
-                            } catch (_: Exception) { null }
+                            }
                         } else null
                     }
                     else -> null
@@ -129933,10 +129902,8 @@ interface DataView {
             // them. Behavior-preserving: a concrete property-present receiver emits nothing
             // either way (a member-table lookup is far cheaper than two flow walks per access).
             if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType &&
-                !(try {
-                    getPropertyOfType(raw, propName) != null ||
-                        getPropertyOfType(getApparentType(raw), propName) != null
-                } catch (_: Exception) { false })
+                !(getPropertyOfType(raw, propName) != null ||
+                    getPropertyOfType(getApparentType(raw), propName) != null)
             ) {
                 // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
                 // narrows a single-type receiver to a UNION — the access is safe iff
@@ -134312,9 +134279,7 @@ interface DataView {
         // the optional-member-invoke TS2722 inside the loop. Retry with the loop-entry-following
         // variant (follows antecedent[0], so the pre-loop narrowing flows in) — suppression-only,
         // so proving non-null MORE only removes FPs (mirrors emitTs18048ForClosureCaptured…).
-        val loopNarrowed = try {
-            getNarrowedTypeForReferenceFollowLoopEntry(withUndef, pa)
-        } catch (_: Exception) { return false }
+        val loopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(withUndef, pa)
         return !typeIncludesUndefined(loopNarrowed)
     }
 
@@ -142171,11 +142136,9 @@ interface DataView {
         val declaredVar = getTypeOfSymbol(varSym)
         if (declaredVar !is Type.Union) return false
         val flow = getFlowAt(flowAnchor) ?: return false
-        val narrowed = try {
-            flowWalkWithTripCheck(flowAnchor, WK_FLOW_ANCHOR, declaredVar.id.toLong() shl 32 or (varName.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(varName)) {
-                narrowTypeFromFlow(declaredVar, flow, varName, NarrowSeen(), 0)
-            } ?: return false
-        } catch (_: Exception) { return false }
+        val narrowed = flowWalkWithTripCheck(flowAnchor, WK_FLOW_ANCHOR, declaredVar.id.toLong() shl 32 or (varName.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(varName)) {
+            narrowTypeFromFlow(declaredVar, flow, varName, NarrowSeen(), 0)
+        } ?: return false
         if (narrowed === declaredVar || !isSimpleCheckableType(narrowed)) return false
         var emitted = false
         for (p in init.properties) {
@@ -143964,10 +143927,8 @@ interface DataView {
             .filter { !(it is Type.Reference && it.target.symbol?.name == "Array") }
         if (objs.size < 2) return null
         val matching = objs.filter { o ->
-            try {
-                resolveStructuredTypeMembers(o)
-                names.all { n -> getPropertyOfType(o, n) != null }
-            } catch (_: Exception) { false }
+            resolveStructuredTypeMembers(o)
+            names.all { n -> getPropertyOfType(o, n) != null }
         }
         return matching.singleOrNull()
     }
@@ -149037,15 +148998,12 @@ interface DataView {
                         if (sym != null && sym.flags.hasAny(SymbolFlags.TypeAlias)) {
                             val decl = sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                             if (decl != null && decl.typeParameters.isNullOrEmpty()) {
-                                try {
-                                    val resolved = getDeclaredTypeOfSymbol(sym)
-                                    when (resolved) {
-                                        is Type.NumberLiteral -> return resolved.toString()
-                                        is Type.StringLiteral -> return "\"${resolved.value}\""
-                                        is Type.BigIntLiteral -> return resolved.toString()
-                                        else -> {}
-                                    }
-                                } catch (_: Exception) { /* fall through */ }
+                                when (val resolved = getDeclaredTypeOfSymbol(sym)) {
+                                    is Type.NumberLiteral -> return resolved.toString()
+                                    is Type.StringLiteral -> return "\"${resolved.value}\""
+                                    is Type.BigIntLiteral -> return resolved.toString()
+                                    else -> {}
+                                }
                             }
                         }
                         baseName
@@ -150297,9 +150255,7 @@ interface DataView {
                 if (s != null && s.flags.hasAny(SymbolFlags.Enum)) { spread2698Emit(el, source, fileName); return }
             }
         }
-        val t = try {
-            if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(operand)
-        } catch (_: Exception) { return }
+        val t = if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(operand)
         if (isDefinitelyInvalidSpreadType(t)) spread2698Emit(el, source, fileName)
     }
 
@@ -150333,9 +150289,7 @@ interface DataView {
                 if (s != null && s.flags.hasAny(SymbolFlags.Enum)) { rest2700Emit(rest, source, fileName); return }
             }
         }
-        val t = try {
-            if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(init)
-        } catch (_: Exception) { return }
+        val t = if (annType != null) getTypeFromTypeNode(annType) else getTypeOfExpression(init)
         if (isDefinitelyInvalidSpreadType(t)) rest2700Emit(rest, source, fileName)
     }
 
