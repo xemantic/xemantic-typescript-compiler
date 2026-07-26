@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 708 (2026-07-26) — probe-only on gap-2's last piece; it is not the gap the
+item described. No production change; corpus stays 12,756 / 0 / 3.**
+
+The item said an arrow passed AS an argument does not get its parameters checked for
+implicit any. Four contrasted shapes in one file say otherwise: `anyCb(j => j)` against
+an `any` parameter DOES fire TS7006, and `take(i => i)` against an annotated parameter
+is correctly silent — so the walker reaches argument arrows and distinguishes
+contextually-typed ones. `(f => f(12))(k => k)` is silent, which is the gap; but in the
+same file a plain `function plain(m) { return m; }` is silent too, and that has nothing
+to do with IIFEs or arguments.
+
+So the next step is not the callee-typing path the item pointed at: it is to settle
+which shapes emit TS7006 under which options, since a top-level function declaration's
+parameter and a callback's parameter evidently disagree here. Recorded on the item with
+the four probe results, so that round starts from evidence rather than from my earlier
+framing.
+
+I stopped at the probe deliberately: this is a different subsystem from the last three
+rounds' work, my context for the session is long, and a gate question deserves a clean
+start rather than the tail of a session.
+
+---
+
 **Round 707 (2026-07-26) — the last TS18048 gap closed; `contextuallyTypedIifeStrict`
 is now one diagnostic family from un-deferral. Corpus 12,756 / 0 / 3, all 8 profiles
 byte-identical.**
@@ -4484,10 +4507,17 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   now reports TS18048 like a union does (the arithmetic walker's strictNullChecks early
   return deferred those to TS18050, which is right only for the LITERAL operand). All
   three TS18048 of the case now fire at the baseline's positions. **What remains is only
-  the two TS7006** for the INNER function's parameter in `(f => f(12))(i => i)`: the
-  outer parameter is typed from the argument, but an arrow passed AS an argument does not
-  have its own parameters checked for implicit any. That is the last thing between this
-  case and un-deferral.
+  the two TS7006** for the INNER function's parameter in `(f => f(12))(i => i)`.
+  **ROUND 708 probed it and the framing "argument arrows are not reached" is WRONG** —
+  four contrasted shapes under `@strictNullChecks: true`: `take(i => i)` against an
+  annotated `(x: number) => number` parameter is correctly SILENT; `anyCb(j => j)`
+  against an `any` parameter correctly FIRES, so the walker does reach an argument
+  arrow and does emit there; `(f => f(12))(k => k)` is silent (the gap); and — the
+  surprise — a plain `function plain(m) { return m; }` is ALSO silent in the same file.
+  That last one is not about IIFEs or arguments at all, so the next round should start
+  by settling the GATE question (which shapes emit TS7006 under which options, and why
+  a top-level function declaration's parameter differs from a callback's here) before
+  touching the IIFE case. Do not assume the callee-typing path is at fault.
   ROUND 705's framing, kept for the reasoning: **the rule works — but it collides with
   NINE LOCAL PINS, and resolving that collision is a decision, not a patch.** The rule (a possibly-undefined
   check ahead of TS2362/TS2363/TS2365 in the three arithmetic emitters, strictNullChecks
