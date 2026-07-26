@@ -162495,8 +162495,19 @@ interface DataView {
         // Null/undefined operands: under strictNullChecks, TS18050 fires (checkNullUndefinedUsage)
         // so we skip here. Under non-strict, let TS2365 fire for `3 + null` etc.
         if (strictNullChecks) {
-            if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
-            if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return
+            // ... but a REFERENCE whose type IS `undefined` (`function t(b: undefined)`,
+            // or an optional IIFE parameter the call passed nothing for) is TS18048 at
+            // the operand, exactly as a `T | undefined` union is. TS18050 belongs to the
+            // LITERAL `undefined`/`null` operand, which has no reference path and so
+            // never matches here.
+            if (leftType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
+                emitPossiblyUndefinedOperand(expr.left, leftType, source, fileName)
+                return
+            }
+            if (rightType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)) {
+                emitPossiblyUndefinedOperand(expr.right, rightType, source, fileName)
+                return
+            }
         }
         // Non-wrapper Object operand (class instance / interface / anonymous object).
         // EXCEPTION: relational comparison (`<`/`>`/`<=`/`>=`) of a non-comparable object
@@ -163122,6 +163133,10 @@ interface DataView {
         if (type === anyType || type === unknownType || type === errorType) return false
         if (!typeIncludesUndefined(type)) return false
         val path = getReferencePath(operand) ?: return false
+        // The LITERAL `undefined`/`null` parses as an Identifier here, so it HAS a
+        // reference path — but "'undefined' is possibly 'undefined'" is nonsense, and
+        // tsc reports TS18050 for those operands instead.
+        if (path == "undefined" || path == "null") return false
         val start = operand.pos
         val (line, character) = getLineAndCharacterOfPosition(source, start)
         diagnostics.add(Diagnostic(
