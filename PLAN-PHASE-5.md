@@ -20,6 +20,54 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 695 (2026-07-26) — three more conformance categories adopted, chosen by
+MEASURING twelve of them in one run rather than guessing; one of their three
+failures fixed. Corpus 12,685 → 12,725 / 0 / 3.**
+
+**The method is the point.** Round 690 adopted a category and then discovered how
+red it was. Adopting is cheap to try and expensive to guess at, so this round put
+TWELVE candidate categories into the allowlist at once (+236 tests), ran the suite
+ONCE, and mapped the 91 failures back to their categories — then reverted all but
+the tractable ones. That is a ~7-minute run for a table that tells every future
+round what each category costs: `es6/defaultParameters` **0**, `es6/restParameters`
+**1**, `expressions/commaOperator` **2**, then `asOperator` 5, `types/any` 6,
+`conditional` 8, `nonPrimitive` 9, `labeledStatements` 9, `typeAliases` 9,
+`contextualTyping` 9, `typeSatisfaction` 12, `optionalChaining` 21. The three
+cheapest are adopted; the table lives on the M3.0 item.
+
+**One number in it is a trap worth naming:** `statements/labeledStatements` is 9
+failures from only 8 files, and several are **JS-emit** subtests. The deferral
+mechanism only covers `.errors.txt`, so that category cannot be adopted at all
+until the emit gap is fixed — a category's failure COUNT does not tell you whether
+it is adoptable; the failure KIND does.
+
+**The fix: a missing comma operand's TS2695 span.** `(, ANY)` has no left operand.
+Our recovery synthesizes an empty-text Identifier at the offending token, while
+tsc anchors its missing node at the FULL START — the end of the previous token,
+before trivia — with no width. Both halves are load-bearing and only one is
+visible in the obvious test shape: the POSITION differs only when trivia separates
+`(` from `,` (`( , )` → tsc reports at the `(`'s end, we reported at the `,`), and
+the zero LENGTH is what sorts TS2695 before the same-position TS1109, because the
+comparator is start → length → code and 2695 > 1109. I kept the fix in the comma
+emitter rather than the parser's shared missing-expression recovery, which anchors
+many other diagnostics; tsc reaches this position per-site too.
+
+**A gate that was decisive instead of merely reassuring.** The `--listAll` ×8 came
+back at the usual 46 ×7 / 94 harness, but the number that actually settles it is
+that those profiles emit **zero TS2695** — so the touched emitter contributes
+nothing to them and could not have changed their output. When a change is confined
+to one emitter, "does that emitter fire on the profiles at all" is a stronger and
+cheaper check than diffing two full runs.
+
+**Deferred with queue items** (the two remaining failures, both error baselines):
+(M3.0-gap-3) the comma operator's result type is not the right operand's type, so
+`return x, y` and `var r: T1 = (x, y)` miss TS2322 ×2; (M3.0-gap-4) a
+`readonly T[]` spread argument is neither rejected with TS2556 nor counted for
+TS2554 — the spread rule that is right for a tuple is wrong for an unbounded array
+into a fixed-arity signature.
+
+---
+
 **Round 694 (2026-07-26) — attempted the rest of (M3.0-gap-2), found the
 implementation UNOBSERVABLE, reverted it, and located the real hook.** No
 production code changed; corpus stays 12,685/0/3.
