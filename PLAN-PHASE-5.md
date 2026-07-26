@@ -20,6 +20,46 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 692 (2026-07-26) — (M3.0-gap-1) CLOSED: the conformance case's two
+missing diagnostics implemented, the case un-deferred, corpus 12,671/0/3.**
+
+**TS18033 for a function-valued computed enum member.** The emitter existed but
+was gated on the initializer being STRING-typed, so `enum E { x = () => 4 }` drew
+nothing. Extended to an initializer that is SYNTACTICALLY an arrow or function
+expression — FP-safe by construction, since a function can never satisfy a
+computed member's numeric domain, so tsc always reports it. The message renders
+the resolved signature, which is why it reads `Type '() => number' …` rather than
+the string branch's fixed word; that depends on round 691's generic-arrow fix
+having landed, and is a small example of one fix making the next one's output
+correct for free.
+
+**TS2332 for `this` inside an arrow in an enum initializer.** The walker's own
+doc said it "Skips function/class/arrow boundaries (those rebind `this`)" — but
+an ARROW DOES NOT REBIND `this`. That is the entire point of arrow functions, and
+it is why tsc reports `enum E { y = (() => this).length }`. The descent now
+covers arrow expression and block bodies while function expressions and class
+bodies stay skipped. One detail the baseline settled rather than intuition: the
+arrow-nested form gets TS2332 ONLY, with no companion TS2683, unlike the bare
+`this` — so the descent passes `emitTs2683 = false`. I checked the reference
+before wiring it rather than assuming symmetry.
+
+**Gates.** Corpus 12,671/0/3 (+6 pins, including a function-expression negative
+control that pins the rebinding boundary — the one thing a future refactor of
+that walker is most likely to get wrong), `--listAll` ×8 byte-identical.
+
+**An infrastructure blip worth not misreading.** One suite run reported BUILD
+FAILED after 10m45s with ZERO result XMLs, between two clean green runs of the
+same tree. No compile error, no test failure — nothing to attribute it to, and
+`compileTestKotlinJvm` was clean immediately after. Most likely the results
+directory being removed while Gradle held it. If a run fails with no XMLs at all,
+re-run before investigating: a real failure leaves evidence.
+
+**M3.0 scoreboard so far.** Seven conformance files, adopted in round 690, have
+now yielded one whole-program mistyping (every generic arrow) and two missing
+diagnostics. One deferral remains: (M3.0-gap-2), contextual typing of IIFE
+parameters.
+
+
 **Round 691 (2026-07-26) — the first bug the new conformance category caught:
 EVERY generic arrow was silently mistyped `<T>(n: T) => any`.**
 
@@ -3870,22 +3910,19 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `Path("${'$'}typeScriptCasesDir/<name>.ts")` where `typeScriptCasesDir` is
   `tests/cases/compiler` (TypeScriptTestSupport.kt:38) — a conformance case needs
   its own path, so emit a per-file relative path or add a second constant.
-- [ ] **(M3.0-gap-1) `arrowFunctionContexts` error baseline — the OVER-emitted
-  half is FIXED (round 691); the two missing codes remain.** The TS2403 ×2 false
-  positive was a generic arrow being mistyped `<T>(n: T) => any`:
-  `getTypeOfArrowFunction` interned the arrow's own type parameters only when it
-  built the `Signature`, i.e. AFTER inferring the return, so `T` resolved to
-  nothing and the body typed as `any`. Fixed by hoisting the interning and pushing
-  the type parameters onto `currentTypeParamScope` for parameter AND return
-  resolution — the rule already documented for interface call/construct
-  signatures. Still deferred via `conformanceDeferredErrorBaselines` for the
-  REMAINDER below. We MISS **TS18033 ×2**
-  ("Type '() => number' is not assignable to type 'number' as required for computed
-  enum member values" — an arrow used as an enum member value) and **TS2332 ×2**
-  ("'this' cannot be referenced in current location" — `this` inside an enum member
-  initializer), and we OVER-emit **TS2403 ×2** ("Subsequent variable declarations
-  must have the same type. Variable 'generic1' must be of type '<T>(n: T) => any'")
-  for a generic-arrow redeclaration. Remove the deferral entry when it lands.
+- [x] **(M3.0-gap-1) DONE round 692 — `arrowFunctionContexts` passes and is
+  un-deferred.** Three defects, one per round-690 triage line. The TS2403 ×2 FALSE
+  POSITIVE was a generic arrow mistyped `<T>(n: T) => any` (round 691: the arrow's
+  own type parameters were interned only when the `Signature` was built, i.e.
+  after the return had been inferred). The two MISSING codes landed this round:
+  TS18033 fired only for a STRING-typed computed member, so a function-valued one
+  (`enum E { x = () => 4 }`) drew nothing — extended to a syntactically
+  arrow/function-expression initializer, FP-safe by construction since such a
+  member can never satisfy the numeric domain; and the TS2332 walker skipped arrow
+  bodies alongside function bodies, but an ARROW DOES NOT REBIND `this`, so
+  `(() => this).length` in an enum initializer is just as illegal — the descent
+  emits TS2332 only, because the reference baseline has no companion TS2683 for
+  the arrow-nested form.
 - [ ] **(M3.0-gap-2) `contextuallyTypedIifeStrict` error baseline** — deferred the
   same way. IIFE parameters are not contextually typed from the call arguments, so
   we MISS **TS18048 ×3** ('j'/'k'/'o' possibly undefined) and **TS7006 ×2**, while
