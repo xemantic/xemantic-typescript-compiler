@@ -20,6 +20,31 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 715 (2026-07-26) — measuring `expressions/asOperator` for adoption turned up a
+SILENT WRONG-OUTPUT bug, which landed; the category itself did not. Corpus 12,761 →
+12,765 / 0 / 3.**
+
+`(x + 1 as number) * 3` emitted `x + 1 * 3`. Erasing the cast dropped the parentheses
+with it and the `*` re-associated into the sum — the emitted program means something
+else. `typeAssertionResultNeedsParens` listed class/arrow/unary/typeof/void/delete/
+await/yield but not BinaryExpression or ConditionalExpression, which are precisely the
+kinds with a precedence to lose. The conformance case says it in a comment: "Must emit
+as (x + 1) * 3".
+
+**The category is not adopted, for the reason round 695's own table warned about.** Its
+remaining blocker (`asOperatorASI`) is a JS-EMIT test, and `conformanceDeferredError
+Baselines` only defers `.errors.txt` — so failure KIND, not count, decides adoptability,
+and this one needs the documented `hasPrecedingLineBreak` ASI divergence fixed in the
+parser first (`var x = 10 \n as \`Hello\`` is two statements in tsc, one cast to us).
+The three `.errors.txt` failures would have been deferrable; the emit one is not.
+
+**Worth noting about the measurement table generally:** it ranks categories by failure
+count, and this round shows count alone can mislead — a 5-failure category can be
+unadoptable while a 9-failure one whose failures are all error baselines is fine. When
+picking the next category, check the KINDS first.
+
+---
+
 **Round 714 (2026-07-26) — (M3.0-gap-2) PARKED with its reasoning, closing an
 ambiguity in the queue rather than leaving it open-ended. Corpus 12,761 / 0 / 3.**
 
