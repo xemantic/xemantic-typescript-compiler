@@ -16009,6 +16009,12 @@ class Transformer(
      * - Prefix unary / keyword-prefix ops: needs `()` for member access — `(-A).x` ≠ `-A.x`
      */
     private fun typeAssertionResultNeedsParens(expr: Expression): Boolean = when (expr) {
+        // A BINARY or CONDITIONAL result must keep its parens: erasing the cast from
+        // `(x + 1 as number) * 3` and dropping them re-associates the `*` into the sum
+        // and emits `x + 1 * 3` — silently different JavaScript, not merely different
+        // formatting. (asOpEmitParens, whose comment says "Must emit as (x + 1) * 3".)
+        is BinaryExpression -> true
+        is ConditionalExpression -> true
         is ClassExpression -> true
         is ArrowFunction -> true
         is PrefixUnaryExpression -> true
