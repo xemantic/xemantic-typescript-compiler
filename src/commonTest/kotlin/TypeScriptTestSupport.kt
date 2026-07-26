@@ -37,6 +37,12 @@ internal const val typeScriptRepoDir = "typescript-repo"
 /** Directory containing the official TypeScript compiler test cases. */
 internal const val typeScriptCasesDir = "$typeScriptRepoDir/tests/cases/compiler"
 
+/**
+ * M3.0: root of the conformance corpus. Cases there nest in category directories,
+ * so a generated test appends its own relative path rather than a bare basename.
+ */
+internal const val typeScriptConformanceDir = "$typeScriptRepoDir/tests/cases/conformance"
+
 /** Directory containing the TypeScript baseline reference files. */
 internal const val typeScriptBaselineDir = "$typeScriptRepoDir/tests/baselines/reference"
 

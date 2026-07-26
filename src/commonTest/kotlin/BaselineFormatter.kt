@@ -26,15 +26,22 @@
 package com.xemantic.typescript.compiler
 
 /**
+ * The corpus directory a baseline's provenance header names. Defaults to the
+ * flat compiler corpus; M3.0 conformance cases pass their own category path,
+ * because the reference baseline echoes the case's REAL location.
+ */
+const val DEFAULT_CASES_DIR = "tests/cases/compiler"
+
+/**
  * Formats a [CompilationResult] as a TypeScript baseline string for comparison
  * against official test suite reference files.
  */
-fun CompilationResult.toBaseline(): String {
+fun CompilationResult.toBaseline(casesDir: String = DEFAULT_CASES_DIR): String {
     if (jsOutputs.isEmpty()) {
         return if (!isMultiFile) {
-            formatSourceOnlyBaseline(fileName, sourceEchoes.first().second)
+            formatSourceOnlyBaseline(fileName, sourceEchoes.first().second, casesDir)
         } else {
-            formatMultiFileBaseline(fileName, sourceEchoes, emptyList())
+            formatMultiFileBaseline(fileName, sourceEchoes, emptyList(), casesDir = casesDir)
         }
     }
     if (!isMultiFile) {
@@ -43,13 +50,13 @@ fun CompilationResult.toBaseline(): String {
             sourceEchoes.first().second,
             jsOutputs.first().second,
             options.sourceMap, options.newLine, options.jsx, options.mapRoot, options.outFile,
-            options.inlineSourceMap, options.sourceRoot, options.emitBOM,
+            options.inlineSourceMap, options.sourceRoot, options.emitBOM, casesDir,
         )
     }
     return formatMultiFileBaseline(
         fileName, sourceEchoes, jsOutputs, options.sourceMap,
         options.inlineSourceMap, options.sourceRoot, options.outFile,
-        options.inlineSources, options.mapRoot, options.outDir,
+        options.inlineSources, options.mapRoot, options.outDir, casesDir,
     )
 }
 
@@ -61,9 +68,9 @@ fun CompilationResult.toBaseline(): String {
  * - Echoed source preserves original LF endings
  * - JavaScript output uses CRLF
  */
-private fun TextBuilder.sourceEcho(fileName: String, cleanedSource: String) {
+private fun TextBuilder.sourceEcho(fileName: String, cleanedSource: String, casesDir: String) {
     val baseName = fileName.substringAfterLast('/')
-    +"//// [tests/cases/compiler/"
+    +"//// [$casesDir/"
     +baseName
     +"] ////\r\n"
     +"\r\n"
@@ -80,8 +87,9 @@ private fun TextBuilder.sourceEcho(fileName: String, cleanedSource: String) {
 fun formatSourceOnlyBaseline(
     fileName: String,
     cleanedSource: String,
+    casesDir: String = DEFAULT_CASES_DIR,
 ): String = text {
-    sourceEcho(fileName, cleanedSource)
+    sourceEcho(fileName, cleanedSource, casesDir)
 }
 
 fun formatBaseline(
@@ -96,6 +104,7 @@ fun formatBaseline(
     inlineSourceMap: Boolean = false,
     sourceRoot: String? = null,
     emitBOM: Boolean = false,
+    casesDir: String = DEFAULT_CASES_DIR,
 ): String = text {
     val baseName = fileName.substringAfterLast('/')
     val tsxExtension = if (jsx?.lowercase() == "preserve") ".jsx" else ".js"
@@ -107,7 +116,7 @@ fun formatBaseline(
             .replace(".ts", ".js")
     val useLF = newLine?.lowercase() == "lf"
 
-    sourceEcho(fileName, cleanedSource)
+    sourceEcho(fileName, cleanedSource, casesDir)
     +"\r\n"
     if (emitBOM) {
         // tsc harness quirk for @emitBOM: the emitted js starts with a UTF-8 BOM whose
@@ -181,10 +190,11 @@ fun formatMultiFileBaseline(
     inlineSources: Boolean = false,
     mapRoot: String? = null,
     outDir: String? = null,
+    casesDir: String = DEFAULT_CASES_DIR,
 ): String = text {
     val baseName = testFileName.substringAfterLast('/')
 
-    +"//// [tests/cases/compiler/"
+    +"//// [$casesDir/"
     +baseName
     +"] ////\r\n"
     +"\r\n"

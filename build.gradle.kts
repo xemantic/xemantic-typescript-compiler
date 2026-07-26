@@ -261,6 +261,46 @@ val typeScriptCommit = "637d5746b70257028fb95aad32ddec6b26ab0a14" // pristine ts
  * ./gradlew jvmTest
  * ```
  */
+/**
+ * M3.0: the conformance-category ALLOWLIST, as paths under
+ * `tests/cases/conformance`. Adopting the whole conformance tree at once would
+ * bury real regressions under a red wave, so categories land one at a time and
+ * only when their failures are triaged into queue items.
+ *
+ * Each entry widens the sparse checkout AND the generated corpus. The category's
+ * files are walked RECURSIVELY (conformance categories nest, unlike the flat
+ * `tests/cases/compiler`), and their basenames are known not to collide with the
+ * compiler corpus, so the generated backtick function names need no
+ * disambiguation. Baselines need nothing: the sparse checkout already takes the
+ * whole flat `tests/baselines/reference`, and the generator's existing
+ * `paramBaselineName` already produces conformance's `name(target=es5).ext` form.
+ */
+val conformanceCategories = listOf(
+    "expressions/functions",
+)
+
+/**
+ * M3.0: conformance cases whose ERROR baseline exposes a known, QUEUED compiler
+ * gap. Their JS-emit subtests still run — only the `.errors.txt` comparison is
+ * deferred, so the category is adopted rather than withheld while the gap is
+ * open.
+ *
+ * The corpus is a hard zero-failure gate that every round's verification depends
+ * on, so a known-red test would degrade that gate for everyone. Each entry MUST
+ * have a queue item naming the missing behaviour; delete the entry when it lands.
+ * This is not a place to park a fresh failure — triage first, queue it, then add.
+ */
+val conformanceDeferredErrorBaselines = setOf(
+    // Missing TS18033 x2 (arrow as a computed enum member value) and TS2332 x2
+    // (`this` in an enum member initializer); over-emits TS2403 x2 for a generic
+    // arrow redeclaration. See the M3.0-gap-1 queue item.
+    "arrowFunctionContexts",
+    // IIFE parameters are not contextually typed from the call arguments: misses
+    // TS18048 x3 / TS7006 x2 and over-emits TS7019 x3 + TS7006 x2.
+    // See the M3.0-gap-2 queue item.
+    "contextuallyTypedIifeStrict",
+)
+
 val cloneTypeScriptRepo by tasks.registering {
     group = "typescript"
     description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo's submodule commit."
@@ -268,7 +308,8 @@ val cloneTypeScriptRepo by tasks.registering {
     outputs.dir(typeScriptRepoDir)
 
     doLast {
-        val sparsePaths = arrayOf("tests/cases/compiler", "tests/baselines/reference")
+        val sparsePaths = arrayOf("tests/cases/compiler", "tests/baselines/reference") +
+            conformanceCategories.map { "tests/cases/conformance/$it" }
 
         if (typeScriptRepoDir.resolve(".git").exists()) {
             // Re-pin an existing clone. `fetch --depth=1 <sha>` grabs just the pinned
@@ -526,10 +567,17 @@ val generateTypeScriptTests by tasks.registering {
     dependsOn(cloneTypeScriptRepo)
 
     val testsDir = typeScriptRepoDir.resolve("tests/cases/compiler")
+    val conformanceRootDir = typeScriptRepoDir.resolve("tests/cases/conformance")
     val baselinesDir = typeScriptRepoDir.resolve("tests/baselines/reference")
     val outputDir = layout.buildDirectory.dir("generated/typescript-tests")
 
     inputs.dir(testsDir).optional()
+    // M3.0: re-generate when the allowlist changes, or when an allowlisted
+    // category's sources do.
+    inputs.property("conformanceCategories", conformanceCategories)
+    for (category in conformanceCategories) {
+        inputs.dir(conformanceRootDir.resolve(category)).optional()
+    }
     outputs.dir(outputDir)
 
     doLast {
@@ -543,9 +591,19 @@ val generateTypeScriptTests by tasks.registering {
             return@doLast
         }
 
-        val testFiles = testsDir.listFiles { f -> f.isFile && f.extension == "ts" }
-            ?.sortedBy { it.name }
-            ?: emptyList()
+        // M3.0: the flat compiler corpus PLUS every allowlisted conformance category,
+        // walked recursively because conformance categories nest. Sorted by basename so
+        // the alphabetical class grouping below is unaffected by which corpus a case
+        // came from; basenames are collision-free across the two, so the generated
+        // function names stay unique.
+        val compilerFiles = testsDir.listFiles { f -> f.isFile && f.extension == "ts" }
+            ?.toList() ?: emptyList()
+        val conformanceFiles = conformanceCategories.flatMap { category ->
+            conformanceRootDir.resolve(category).walkTopDown()
+                .filter { it.isFile && it.extension == "ts" }
+                .toList()
+        }
+        val testFiles = (compilerFiles + conformanceFiles).sortedBy { it.name }
 
         logger.lifecycle("Generating Kotlin tests for ${testFiles.size} TypeScript test cases...")
 
@@ -727,6 +785,24 @@ val generateTypeScriptTests by tasks.registering {
 
             for (file in files) {
                 val name = file.nameWithoutExtension
+                // M3.0: a conformance case lives in a nested directory, so it cannot use
+                // the flat `typeScriptCasesDir`. Emit its path relative to the conformance
+                // root instead; compiler cases keep their existing expression verbatim, so
+                // their generated bodies are unchanged.
+                val isConformance = file.absolutePath.startsWith(conformanceRootDir.absolutePath)
+                val casePathExpr = if (isConformance) {
+                    "${D}typeScriptConformanceDir/" +
+                        file.relativeTo(conformanceRootDir).invariantSeparatorsPath
+                } else {
+                    "${D}typeScriptCasesDir/$name.ts"
+                }
+                // The reference baseline's provenance header echoes the case's REAL
+                // corpus path, so a conformance case must tell the formatter its
+                // category; compiler cases keep the default and emit unchanged.
+                val baselineArgs = if (isConformance) {
+                    val rel = file.parentFile.relativeTo(conformanceRootDir).invariantSeparatorsPath
+                    "\"tests/cases/conformance/$rel\""
+                } else ""
                 // Kotlin 2.x does not allow dots in JVM method names, even in backtick-quoted identifiers.
                 // Replace every dot in the base name with an underscore for the function identifier.
                 val id = name.replace('.', '_')
@@ -757,8 +833,8 @@ val generateTypeScriptTests by tasks.registering {
                     sb.appendLine()
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
-                    sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
-                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").toBaseline()")
+                    sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
+                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").toBaseline($baselineArgs)")
                     sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
                     sb.appendLine("    }")
                 }
@@ -785,8 +861,8 @@ val generateTypeScriptTests by tasks.registering {
                         sb.appendLine()
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__compiles to JavaScript matching baseline`() {")
-                        sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
-                        sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr)).toBaseline()")
+                        sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
+                        sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr)).toBaseline($baselineArgs)")
                         sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$paramName\"))")
                         sb.appendLine("    }")
                     }
@@ -795,12 +871,13 @@ val generateTypeScriptTests by tasks.registering {
                 // .errors.txt baseline test (bare-name). tsgo skips the WHOLE config (the error
                 // baseline too, not just emit) for a removed-feature option, so gate on bareUnsupported.
                 val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
-                if (errorsBaseline.exists() && !bareUnsupported) {
+                val errorBaselineDeferred = isConformance && name in conformanceDeferredErrorBaselines
+                if (errorsBaseline.exists() && !bareUnsupported && !errorBaselineDeferred) {
                     totalErrorTests++
                     sb.appendLine()
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts has expected errors matching ${id}_errors_txt`() {")
-                    sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                    sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
                     sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\")")
                     sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$name.errors.txt\"))")
                     sb.appendLine("    }")
@@ -810,7 +887,9 @@ val generateTypeScriptTests by tasks.registering {
                 for (config in variations) {
                     val paramErrorName = paramBaselineName(name, config, "errors.txt")
                     val paramErrorBaseline = baselinesDir.resolve(paramErrorName)
-                    if (paramErrorBaseline.exists() && !usesUnsupportedOption(directives, config)) {
+                    if (paramErrorBaseline.exists() && !usesUnsupportedOption(directives, config) &&
+                        !errorBaselineDeferred
+                    ) {
                         totalErrorTests++
                         val configId = config.entries.sortedBy { it.key }
                             .joinToString("_") { "${it.key}_${it.value}" }
@@ -820,7 +899,7 @@ val generateTypeScriptTests by tasks.registering {
                         sb.appendLine()
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__has expected errors matching baseline`() {")
-                        sb.appendLine("        val source = Path(\"${D}typeScriptCasesDir/$name.ts\").readText()")
+                        sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
                         sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr))")
                         sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$paramErrorName\"))")
                         sb.appendLine("    }")
