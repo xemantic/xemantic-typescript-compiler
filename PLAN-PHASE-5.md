@@ -32,27 +32,31 @@ was still running ~40 minutes later, having produced zero class files, and I sto
 it — it did not fail on its own, and might eventually have finished; what it would not
 do is finish inside a round.
 
-**What the instrumentation says, and it is NOT simply "out of heap".** Sampling the
-Kotlin daemon twice, 2.5 minutes apart: same PID, `utime` 210.7 s → 277.2 s, RSS
-2.38 GB against a 4 GB ceiling, `stime` ~1.5 s. That is the signature of real work —
-NOT the round-717 death spiral, which sat pinned exactly at the ceiling. Yet round
-717's cold compile of the same module at 3 g finished in **2m 33s**. A compile that
-takes 2.5 minutes on a quiet box and >40 minutes here is a CONTENTION story, not a
-heap story.
+**What the instrumentation says, and it is NOT "out of heap".** Sampling the Kotlin
+daemon twice, 2.5 minutes apart: same PID, `utime` 210.7 s → 277.2 s, RSS 2.38 GB
+against a 4 GB ceiling, `stime` ~1.5 s. That is the signature of real work — NOT the
+round-717 death spiral, which sat pinned exactly at the ceiling with nothing to show.
+At 4 g the compiler is computing; it is just slow.
 
-**And there is a contender.** `chore(bench): 3-way run @ …` commits landed on origin
-DURING this session (three of them across rounds 717–719), which this session did not
-make — so something else periodically builds this project and commits to this repo.
-That is very likely what killed the round-718 compiles too, and it means the
-round-718 note's "cold compile does not fit -Xmx2g" is **over-confident**: the 2 g run
-DID show the pinned-at-ceiling thrash signature, but the 3 g and 4 g failures look
-like contention instead. Corrected on (BUILD.1) rather than left standing.
+**A WRONG HYPOTHESIS, corrected here so nobody chases it.** I first blamed contention:
+round 717's compile of the same module took **2m 33s**, three `chore(bench): 3-way run`
+commits landed on origin during this session that I did not make, and a shared box
+would explain everything. Both halves are wrong. Those commits are authored by
+`github-actions[bot]` — they run in REMOTE CI and never touch this machine. And the
+2m 33s is not the same measurement: Gradle re-executing `compileKotlinJvm` does NOT
+imply a non-incremental Kotlin compile, so that run was almost certainly incremental
+against warm caches, while these were genuinely from scratch.
 
-**What the owner needs to decide** — the queue item carries both options: raise
-`kotlin.daemon.jvmargs`, and/or give the agent loop a box it is not sharing (or tell
-it when the bench loop runs, so the two can interleave instead of colliding).
-(PERF.HW) already wants ≥8 real cores for the parallel-scaling question, so one
-machine settles both.
+**The actual constraint, stated carefully.** A FROM-SCRATCH compile of this module —
+~110k lines of Checker.kt plus a 566 KB generated lib file — takes tens of minutes on
+this box and needs ≥3–4 GB, while an incremental one takes ~2 minutes. What turns the
+cheap case into the expensive one is invalidating the incremental caches, and the
+documented memory ritual (`pkill -9 -f KotlinCompileDaemon`) does exactly that. So the
+operational rule is narrower and more useful than "get a bigger box": **do not hard-kill
+the Kotlin daemon**, and budget 4 g when a from-scratch compile is unavoidable.
+
+**What the owner still needs to decide** is only the heap default; the sharing question
+was my error and is withdrawn.
 
 **Judgement recorded, because a future round will face the same choice:** parking beat
 grinding. Two rounds produced a correct, well-understood, fully-diagnosed fix with a
@@ -2192,23 +2196,25 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   restarted from scratch, and only `-Xmx4g` got the main compile through. Four cold
   compiles were burned in one session. The work is parked on
   `wip/round718-required-minus-optional` purely for want of a gate.
-  **CORRECTED round 719 — the heap story is only half of it, and the other half
-  matters more.** A round-719 retry at 4 g, on a box verified quiet, sat in
+  **REFINED round 719 — the distinction that actually matters is INCREMENTAL vs
+  FROM-SCRATCH, not the heap number.** A retry at 4 g on a quiet box sat in
   `compileKotlinJvm` for 40+ minutes with the daemon showing REAL WORK (same PID,
-  utime 210 s → 277 s over 2.5 min, RSS 2.38 GB against a 4 GB ceiling, stime ~1.5 s)
-  — not the round-717 pinned-at-ceiling death spiral. The same cold compile took
-  **2m 33s** at 3 g in round 717. That is CONTENTION, not heap. And there is a
-  contender: `chore(bench): 3-way run @ …` commits landed on origin three times
-  during rounds 717–719, which the agent did not make — something else builds this
-  project and commits here on a schedule. So the round-718 claim "a cold compile does
-  not fit -Xmx2g" is over-stated: the 2 g run really did thrash, but the 3 g and 4 g
-  failures are better explained by sharing the box.
+  utime 210 s → 277 s over 2.5 min, RSS 2.38 GB under a 4 GB ceiling, stime ~1.5 s) —
+  not the round-717 pinned-at-ceiling spiral. Round 717's **2m 33s** figure for "the
+  same cold compile" is NOT comparable: Gradle re-executing the task does not force a
+  non-incremental Kotlin compile, so that one ran against warm caches. A genuinely
+  from-scratch compile of ~110k lines of Checker.kt plus a 566 KB generated lib file
+  simply costs tens of minutes here. (An earlier version of this entry blamed a
+  competing local bench loop; that was wrong — the `chore(bench)` commits are authored
+  by `github-actions[bot]` and run in remote CI.)
+  **So the operational rule comes first, and it is free:** do NOT hard-kill the Kotlin
+  daemon (`pkill -9`), because that is what converts a 2-minute incremental compile
+  into a 40-minute from-scratch one — the documented memory ritual is the trap.
   **PROPOSAL (owner decision, build-system change = Guardrail):** add
-  `kotlin.daemon.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m` to gradle.properties,
-  **AND/OR settle the sharing** — either give the agent loop a box the bench loop is
-  not on, or publish when the bench loop runs so the two interleave rather than
-  collide. The second is probably the bigger win: a 2.5-minute compile turning into
-  40+ minutes costs a whole round, and no heap setting fixes that. Cost: up to
+  `kotlin.daemon.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m` to gradle.properties, so
+  that when a from-scratch compile IS unavoidable it does not thrash at 2 g. Cost: up
+  to 2 GB more resident during a compile on a 7.7 GB box, which means a compile and a
+  4 g self-compile can no longer overlap. Cost: up to
   2 GB more resident during a compile on a 7.7 GB box — which means a compile and a
   4 g self-compile can no longer overlap, and the memory ritual becomes mandatory
   BEFORE a bench run rather than before a build. That trade is worth stating plainly:
