@@ -20,6 +20,48 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 719 (2026-07-26) — second attempt to gate round 718's fix; the build again did
+not converge, so the loop is STOPPING on (BUILD.1) rather than burning a third round
+on it. Main is at the last gated commit and clean; the fix stays on
+`wip/round718-required-minus-optional`, pushed.**
+
+Method was deliberately minimal after round 718's thrash: quiet box confirmed (no JVMs,
+6.0 GB available), merge the branch locally, run ONE `jvmTest` with
+`-Dkotlin.daemon.jvmargs=-Xmx4g`, touch nothing until it returns. `compileKotlinJvm`
+was still running ~40 minutes later, having produced zero class files, and I stopped
+it — it did not fail on its own, and might eventually have finished; what it would not
+do is finish inside a round.
+
+**What the instrumentation says, and it is NOT simply "out of heap".** Sampling the
+Kotlin daemon twice, 2.5 minutes apart: same PID, `utime` 210.7 s → 277.2 s, RSS
+2.38 GB against a 4 GB ceiling, `stime` ~1.5 s. That is the signature of real work —
+NOT the round-717 death spiral, which sat pinned exactly at the ceiling. Yet round
+717's cold compile of the same module at 3 g finished in **2m 33s**. A compile that
+takes 2.5 minutes on a quiet box and >40 minutes here is a CONTENTION story, not a
+heap story.
+
+**And there is a contender.** `chore(bench): 3-way run @ …` commits landed on origin
+DURING this session (three of them across rounds 717–719), which this session did not
+make — so something else periodically builds this project and commits to this repo.
+That is very likely what killed the round-718 compiles too, and it means the
+round-718 note's "cold compile does not fit -Xmx2g" is **over-confident**: the 2 g run
+DID show the pinned-at-ceiling thrash signature, but the 3 g and 4 g failures look
+like contention instead. Corrected on (BUILD.1) rather than left standing.
+
+**What the owner needs to decide** — the queue item carries both options: raise
+`kotlin.daemon.jvmargs`, and/or give the agent loop a box it is not sharing (or tell
+it when the bench loop runs, so the two can interleave instead of colliding).
+(PERF.HW) already wants ≥8 real cores for the parallel-scaling question, so one
+machine settles both.
+
+**Judgement recorded, because a future round will face the same choice:** parking beat
+grinding. Two rounds produced a correct, well-understood, fully-diagnosed fix with a
+live repro; a third round of the same failing cycle would have produced nothing and
+risked landing something ungated. The branch plus the diagnosis is worth more than a
+red main.
+
+---
+
 **Round 718 (2026-07-26) — a complete fix for 11 of (LIB.1)'s 35 false positives,
 diagnosed, written, and NOT LANDED: four cold compiles in one session and none of
 them would gate it. The fix is on `wip/round718-required-minus-optional`; main is
@@ -2150,9 +2192,23 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   restarted from scratch, and only `-Xmx4g` got the main compile through. Four cold
   compiles were burned in one session. The work is parked on
   `wip/round718-required-minus-optional` purely for want of a gate.
+  **CORRECTED round 719 — the heap story is only half of it, and the other half
+  matters more.** A round-719 retry at 4 g, on a box verified quiet, sat in
+  `compileKotlinJvm` for 40+ minutes with the daemon showing REAL WORK (same PID,
+  utime 210 s → 277 s over 2.5 min, RSS 2.38 GB against a 4 GB ceiling, stime ~1.5 s)
+  — not the round-717 pinned-at-ceiling death spiral. The same cold compile took
+  **2m 33s** at 3 g in round 717. That is CONTENTION, not heap. And there is a
+  contender: `chore(bench): 3-way run @ …` commits landed on origin three times
+  during rounds 717–719, which the agent did not make — something else builds this
+  project and commits here on a schedule. So the round-718 claim "a cold compile does
+  not fit -Xmx2g" is over-stated: the 2 g run really did thrash, but the 3 g and 4 g
+  failures are better explained by sharing the box.
   **PROPOSAL (owner decision, build-system change = Guardrail):** add
-  `kotlin.daemon.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m` to gradle.properties (3g
-  was measured insufficient, so the earlier 3g proposal is superseded). Cost: up to
+  `kotlin.daemon.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=512m` to gradle.properties,
+  **AND/OR settle the sharing** — either give the agent loop a box the bench loop is
+  not on, or publish when the bench loop runs so the two interleave rather than
+  collide. The second is probably the bigger win: a 2.5-minute compile turning into
+  40+ minutes costs a whole round, and no heap setting fixes that. Cost: up to
   2 GB more resident during a compile on a 7.7 GB box — which means a compile and a
   4 g self-compile can no longer overlap, and the memory ritual becomes mandatory
   BEFORE a bench run rather than before a build. That trade is worth stating plainly:
