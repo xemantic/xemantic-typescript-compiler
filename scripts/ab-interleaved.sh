@@ -118,19 +118,41 @@ for ((i = 1; i <= PAIRS; i++)); do
     [[ "$a_err" == "$b_err" ]] || echo "  !! ERROR COUNTS DIFFER — B is not behaviour-preserving; the timing is not comparable"
 done
 
-median() { printf '%s\n' "$@" | sort -n | awk '{v[NR]=$1} END{print (NR%2)?v[(NR+1)/2]:int((v[NR/2]+v[NR/2+1])/2)}'; }
-MA="$(median "${A_MS[@]}")"; MB="$(median "${B_MS[@]}")"
-PCT="$(python3 -c "print(f'{($MB-$MA)/$MA*100:+.2f}%')")"
 echo "---"
-echo "MEDIAN self-time: A=${MA}ms  B=${MB}ms  delta=$((MB - MA))ms ($PCT)   B wins $B_WINS/$PAIRS"
-python3 - "$MA" "$MB" <<'PY'
-import sys
-a, b = int(sys.argv[1]), int(sys.argv[2])
-pct = (b - a) / a * 100
-if abs(pct) < 2:
+# The verdict must survive a NOISY box. Round 716 hit the failure mode this
+# guards against: 6 pairs whose median said "12.8% WIN" while B won only 2 of 6,
+# because one outlier pair (-8.5 s) dragged the median. A median over a handful
+# of samples whose per-pair spread exceeds the effect is not a measurement.
+python3 - "$PAIRS" "$B_WINS" "${A_MS[@]}" -- "${B_MS[@]}" <<'PY'
+import sys, statistics
+argv = sys.argv[1:]
+pairs, wins = int(argv[0]), int(argv[1])
+sep = argv.index('--')
+A = [int(x) for x in argv[2:sep]]
+B = [int(x) for x in argv[sep + 1:]]
+deltas = [b - a for a, b in zip(A, B)]
+ma, mb = statistics.median(A), statistics.median(B)
+pct = (mb - ma) / ma * 100
+spread = max(deltas) - min(deltas)
+med_delta = statistics.median(deltas)
+print(f"MEDIAN self-time: A={ma:.0f}ms  B={mb:.0f}ms  delta={mb-ma:+.0f}ms ({pct:+.2f}%)   B wins {wins}/{pairs}")
+print(f"per-pair delta: median={med_delta:+.0f}ms  spread={spread:.0f}ms  "
+      f"range=[{min(deltas):+.0f}, {max(deltas):+.0f}]")
+noisy = spread > abs(med_delta) * 3 or spread > 0.25 * ma
+split = 0.25 < wins / pairs < 0.75
+if noisy:
+    print("VERDICT: NOISE-DOMINATED — the per-pair spread dwarfs the effect. This run "
+          "decides NOTHING in either direction.")
+    print("  Do: quiesce the box (close browsers/IDEs), raise the pair count, or — "
+          "better — decide on an IN-PROCESS counter (--passTiming), which is "
+          "deterministic and immune to load.")
+elif split and abs(pct) >= 2:
+    print(f"VERDICT: INCONSISTENT — median says {abs(pct):.1f}% but B wins only {wins}/{pairs}. "
+          "Treat as undecided and re-run with more pairs.")
+elif abs(pct) < 2:
     print("VERDICT: inside the +/-2% drift band — NO EFFECT. Per the ground rules this "
           "does not land alone; fold it into a structural item.")
 else:
-    print(f"VERDICT: {'REGRESSION' if pct > 0 else 'WIN'} of {abs(pct):.1f}% — outside the drift band. "
-          "Confirm with more pairs before acting on it.")
+    print(f"VERDICT: {'REGRESSION' if pct > 0 else 'WIN'} of {abs(pct):.1f}% "
+          f"(B wins {wins}/{pairs}) — outside the drift band. Confirm before acting.")
 PY

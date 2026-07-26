@@ -22030,59 +22030,118 @@ class Checker(
      * re-pushed, halving stack traffic.
      */
     private fun spineWalkFile(sf: SourceFile) {
+        // INV.4(g) round 716: the profiled walk is a SEPARATE function, so the
+        // production loop below is byte-identical to the pre-instrumentation one.
+        // This loop is the hottest in the compiler (857k nodes) and the subject of
+        // (DISPATCH.1); interleaving `if (prof)` timing into it risks perturbing
+        // JIT inlining of the very code being measured, and the box noise (±13%)
+        // cannot resolve a 3% question either way. Duplication is the honest trade.
+        if (PassTiming.enabled) { spineWalkFileProfiled(sf); return }
         val nodes = ArrayList<Node>(256)
         var phases = BooleanArray(256)
         nodes.add(sf)
         phases[0] = false
         val buf = ArrayList<Node>(16)
         val collect: (Node) -> Unit = { buf.add(it) }
-        val prof = PassTiming.enabled
         while (nodes.isNotEmpty()) {
             val top = nodes.size - 1
             val node = nodes.removeAt(top)
             if (phases[top]) {
                 if (!spineUResOnly) {
-                    val t = if (prof) PassTiming.nowNanos() else 0L
                     spineLeaveNode(node)
-                    if (prof) PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
                     spineScopeLeaveIfOwner(node)
                 }
                 if (spineUResActive) spineUResLeave(node)
                 continue
             }
-            if (prof) PassTiming.spineNodes++
             if (!spineUResOnly) {
-                val t = if (prof) PassTiming.nowNanos() else 0L
                 spineScopeEnterIfOwner(node)
-                if (prof) PassTiming.spineScopeNanos += PassTiming.nowNanos() - t
                 if (spineScopeAuditActive) spineScopeAuditNode(node)
             }
             if (spineUResActive) {
-                val t = if (prof) PassTiming.nowNanos() else 0L
                 spineUResEnter(node)
                 spineUResDispatch(node)
-                if (prof) PassTiming.spineUResNanos += PassTiming.nowNanos() - t
             }
-            if (!spineUResOnly) {
-                val t = if (prof) PassTiming.nowNanos() else 0L
-                spineEnterNode(node)
-                if (prof) {
-                    val d = PassTiming.nowNanos() - t
-                    PassTiming.spineEnterNanos += d
-                    val k = (node as NodeBase).kindId
-                    PassTiming.spineKindNanos[k] = (PassTiming.spineKindNanos[k] ?: 0L) + d
-                    PassTiming.spineKindCount[k] = (PassTiming.spineKindCount[k] ?: 0L) + 1L
-                }
-            }
+            if (!spineUResOnly) spineEnterNode(node)
             buf.clear()
-            val tc = if (prof) PassTiming.nowNanos() else 0L
             forEachChild(node, collect)
-            if (prof) PassTiming.spineChildrenNanos += PassTiming.nowNanos() - tc
             if (buf.isEmpty()) {
                 if (!spineUResOnly) {
-                    val t = if (prof) PassTiming.nowNanos() else 0L
                     spineLeaveNode(node)
-                    if (prof) PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
+                    spineScopeLeaveIfOwner(node)
+                }
+                if (spineUResActive) spineUResLeave(node)
+                continue
+            }
+            if (nodes.size + buf.size + 1 > phases.size) {
+                phases = phases.copyOf(maxOf(phases.size * 2, nodes.size + buf.size + 1))
+            }
+            phases[nodes.size] = true
+            nodes.add(node)
+            for (j in buf.indices.reversed()) {
+                phases[nodes.size] = false
+                nodes.add(buf[j])
+            }
+        }
+    }
+
+    /**
+     * INV.4(g): the `--passTiming` twin of [spineWalkFile] — same traversal, plus
+     * per-phase and per-kind attribution. Kept separate so the production walk
+     * carries zero instrumentation. A change to the traversal MUST be mirrored in
+     * both (Inv4SpineWalkTwinTest pins that they visit identically).
+     */
+    private fun spineWalkFileProfiled(sf: SourceFile) {
+        val nodes = ArrayList<Node>(256)
+        var phases = BooleanArray(256)
+        nodes.add(sf)
+        phases[0] = false
+        val buf = ArrayList<Node>(16)
+        val collect: (Node) -> Unit = { buf.add(it) }
+        while (nodes.isNotEmpty()) {
+            val top = nodes.size - 1
+            val node = nodes.removeAt(top)
+            if (phases[top]) {
+                if (!spineUResOnly) {
+                    val t = PassTiming.nowNanos()
+                    spineLeaveNode(node)
+                    PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
+                    spineScopeLeaveIfOwner(node)
+                }
+                if (spineUResActive) spineUResLeave(node)
+                continue
+            }
+            PassTiming.spineNodes++
+            if (!spineUResOnly) {
+                val t = PassTiming.nowNanos()
+                spineScopeEnterIfOwner(node)
+                PassTiming.spineScopeNanos += PassTiming.nowNanos() - t
+                if (spineScopeAuditActive) spineScopeAuditNode(node)
+            }
+            if (spineUResActive) {
+                val t = PassTiming.nowNanos()
+                spineUResEnter(node)
+                spineUResDispatch(node)
+                PassTiming.spineUResNanos += PassTiming.nowNanos() - t
+            }
+            if (!spineUResOnly) {
+                val t = PassTiming.nowNanos()
+                spineEnterNode(node)
+                val d = PassTiming.nowNanos() - t
+                PassTiming.spineEnterNanos += d
+                val k = (node as NodeBase).kindId
+                PassTiming.spineKindNanos[k] = (PassTiming.spineKindNanos[k] ?: 0L) + d
+                PassTiming.spineKindCount[k] = (PassTiming.spineKindCount[k] ?: 0L) + 1L
+            }
+            buf.clear()
+            val tc = PassTiming.nowNanos()
+            forEachChild(node, collect)
+            PassTiming.spineChildrenNanos += PassTiming.nowNanos() - tc
+            if (buf.isEmpty()) {
+                if (!spineUResOnly) {
+                    val t = PassTiming.nowNanos()
+                    spineLeaveNode(node)
+                    PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
                     spineScopeLeaveIfOwner(node)
                 }
                 if (spineUResActive) spineUResLeave(node)
@@ -101086,7 +101145,9 @@ interface DataView {
         // determines the resolution; anything else keeps the legacy re-run.
         // INV.5(c5): time the OUTERMOST bypassed resolution — the prize any
         // context-keyed cache competes for. Depth guard excludes nested calls,
-        // so this is exactly what a perfect zero-cost cache could remove.
+        // so this is exactly what a perfect zero-cost cache could remove. Reads
+        // ONE static boolean on the production path (this is not the hot loop —
+        // 88k calls, vs 857k nodes in spineWalkFile, which gets a separate twin).
         if (PassTiming.enabled && !bypassTimingActive) {
             bypassTimingActive = true
             val t0 = PassTiming.nowNanos()
