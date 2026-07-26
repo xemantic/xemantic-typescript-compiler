@@ -20,6 +20,35 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 712 (2026-07-26) — implemented the TS7006 argument-edge fix, spent two
+narrowings on it, and reverted at the profile gate. No production change; corpus stays
+12,756 / 0 / 3.**
+
+The edge change works: with the argument index taken at the consumer, all three target
+shapes fire under noImplicitAny (including gap-2's `(f => f(12))(k => k)`) while the
+contextually-typed control stays silent. What it cost was two lessons about what "no
+contextual type" may be inferred FROM.
+
+**Our `anyType` is not tsc's `any`.** Deciding on the RESOLVED parameter type red-lined
+three corpus baselines: a parameter annotated with a generic or mapped type we cannot
+resolve lands on `anyType` too, and those genuinely have contextual types. The test has
+to be syntactic — the annotation is literally the `any` keyword, or absent. That turned
+the corpus green.
+
+**The embedded lib's `any`s are placeholders, not statements about the type.** With the
+syntactic rule the profiles gained FPs on `.replace(/\./g, s => …)` and
+`JSON.stringify(f, (_, v) => …)`, because our lib simplifies those callback signatures
+where tsc states them precisely. Excluding the builtin-lib decl sets is the right move
+and well-precedented, but my exclusion missed the `.replace` site, so the next attempt
+starts by finding which set actually holds a resolved lib METHOD's parameter for a
+PropertyAccess callee.
+
+Reverted rather than landed because profile FPs violate the v1 invariant — and the
+corpus was GREEN at that point, so the profiles are what caught it. Both narrowings are
+on the item so the next attempt begins two steps in.
+
+---
+
 **Round 711 (2026-07-26) — the TS7006 coverage hole located exactly; it is a contract
 mismatch, not a missing case. Probe-only, no production change; corpus 12,756 / 0 / 3.**
 
@@ -4628,6 +4657,25 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   change documented as having regressed ~19 tests, so expect the corpus to arbitrate,
   and run `--listAll` ×8 as well since callback parameters are everywhere in tsc's own
   source. Round 709's framing below is kept only to mark the
+  **ROUND 712 IMPLEMENTED IT AND REVERTED — two narrowings are already spent, start
+  from them.** The edge change is small and works: at the argument consumer (~53370) the
+  index IS available (`p.arguments.indexOfFirst { it === node }`), so `typed` becomes
+  `callCtx.typed && !calleeParamIsPositivelyAny(p, idx)`; with it all three target shapes
+  fire under noImplicitAny — including gap-2's `(f => f(12))(k => k)` — and
+  `take(i => i)` stays silent. **(1) Our resolved `anyType` is NOT tsc's `any`:** deciding
+  on the RESOLVED parameter type red-lined three corpus baselines
+  (contextualPropertyOfGenericFilteringMappedType,
+  contextualTypeFunctionObjectPropertyIntersection, normalizedIntersectionTooComplex),
+  because a generic or mapped annotation we cannot resolve lands on `anyType` too and
+  those DO have contextual types — the test must be SYNTACTIC (the annotation is literally
+  the `any` keyword, or absent), which makes the corpus green. **(2) The EMBEDDED LIB's
+  `any`s are placeholders:** with the syntactic rule the PROFILES gain FPs (46 → 47,
+  harness 94 → 98) on `.replace(/\./g, s => s.substring(1))` and
+  `JSON.stringify(f, (_, v) => …)`, since our lib simplifies those callback signatures
+  where tsc states them precisely. Excluding the builtin-lib decl sets is the right
+  direction and is precedented (the TS2554 lib gate), but the exclusion I wrote did NOT
+  catch the `.replace` site — establish first which set holds a resolved lib METHOD's
+  parameter for a PropertyAccess callee, then it should land.
   correction. ORIGINAL (WRONG): **the two TS7006 emitters have INVERTED option gates.** Same four shapes, two configs:
   | shape | strictNullChecks only | + noImplicitAny |
   | `take(i => i)` (annotated context) | silent (right) | silent (right) |
