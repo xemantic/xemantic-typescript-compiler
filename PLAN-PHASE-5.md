@@ -20,6 +20,37 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 700 (2026-07-26) — the guard-inference gap round 699 named is CLOSED and
+landed. Corpus 12,731 → 12,737 / 0 / 3, all 8 profiles byte-identical.**
+
+Round 699 ended with (B1) blocked behind three profile FPs that turned out to be one
+family. This round attacked that family directly, which was the right call: it is a
+real gap in its own right, and closing it is what unblocks (B1).
+
+**Making it observable came first.** With (B1) reverted the target resolves to `any`,
+so the FPs cannot be reproduced — the gap is invisible from the diagnostic side. The
+probe that exposes it is to assign the call result to a deliberately wrong concrete
+type and read the inferred type out of the MESSAGE. Four contrasted cases in one file
+then localised it precisely: a guard with a CONCRETE target inferred correctly
+(`Special | undefined`) while the same call with the caller's `T` inferred the element
+type — so the machinery worked and only the type-parameter case did not.
+
+**Two independent halves were missing**, and the first fix alone was INERT — caught
+immediately, because the probe was built to fail if the change worked:
+(1) `predicateTargetTypeOfGuardExpr` resolved a guard only from a function
+DECLARATION, but here it arrives as a PARAMETER, whose annotation carries the
+predicate; it now walks out to the nearest enclosing signature declaring that name,
+innermost-first. (2) The target is then the caller's `T`, which does not resolve
+through the ambient scope there, so it is interned from the enclosing signature's own
+TypeParameter declaration. With both, `find(tags, predicate)` gives `T | undefined`
+and `tags.filter(predicate)` gives `T[]` — what tsc gives.
+
+The six pins keep the halves separable: the concrete-target controls distinguish "the
+guard was found" from "its target resolved", so a future regression localises to one
+of them rather than to the pair.
+
+---
+
 **Round 699 (2026-07-26) — (M3.0-gap-3)(B1) reached corpus ZERO with every residual
 fixed, and then the PROFILES killed it. The blocker is now known, specific, and not
 where four rounds of work had been pointing.**
