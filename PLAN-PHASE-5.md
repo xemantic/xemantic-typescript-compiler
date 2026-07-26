@@ -20,6 +20,40 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 694 (2026-07-26) — attempted the rest of (M3.0-gap-2), found the
+implementation UNOBSERVABLE, reverted it, and located the real hook.** No
+production code changed; corpus stays 12,685/0/3.
+
+**What I built.** `applyIifeParameterTypes` next to `applyContextualParameterTypes`
+in `getTypeOfArrowFunction`: for an immediately-invoked arrow, type each
+un-annotated parameter from the corresponding call ARGUMENT (rest parameter → array
+of the union of the remaining arguments; optional parameter → `T | undefined`;
+missing argument for an optional → `undefined`). It compiled, and the corpus stayed
+green.
+
+**Why it was reverted.** It does nothing. The decisive probe was not the
+conformance shapes — those merely stayed silent, which is ambiguous — but
+`((a) => a.nope)("x")`, which MUST report TS2339 if `a` is typed `string`. It
+reported nothing. The reason: the body walkers do not read `symbolTypes` for
+parameters. They read `currentLocalTypes`, filled by
+`populateParameterLocalTypes`, whose very first condition is
+`if (paramType != null && paramName is Identifier)` — it records a parameter ONLY
+when it has an ANNOTATION. An un-annotated parameter is invisible to them however
+the signature is typed.
+
+**Third time this session.** Rounds 687, 688 and 693 each turned on the same
+question, and this is the sharpest instance: a change can compile, keep the corpus
+green, and be entirely inert. The discipline that catches it is a probe that must
+FAIL if the change works — `a.nope` had to become an error — rather than a probe
+that merely observes the target case still being quiet.
+
+**Where the fix belongs**, recorded on the item: `populateParameterLocalTypes`,
+using the parent-walk from round 693's `isImmediatelyInvokedFunctionParam`. Expect
+a wide blast radius — it hands types to parameters that are currently `any` across
+~26 walker call sites — so it wants its own round with the corpus and `--listAll`
+×8 gates, not the tail of one.
+
+
 **Round 693 (2026-07-26) — (M3.0-gap-2)'s false-positive half fixed: an IIFE's
 parameters no longer draw implicit-any. Corpus 12,685/0/3.**
 
@@ -3972,9 +4006,23 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   reference's **TS18048 ×3** ('j'/'k'/'o' possibly undefined, from optional IIFE
   parameters under strictNullChecks) and **TS7006 ×2** (lines 28–29 — the INNER
   function's parameter in `(f => f(12))(i => i)`, which tsc genuinely reports)
-  do not fire. That needs real contextual parameter typing from a call's
-  arguments, not another suppression; `applyContextualParameterTypes` is the
-  existing machinery to extend.
+  do not fire.
+  **Round 694 established WHERE the hook must go, by writing it in the wrong place
+  first.** Typing the parameters in `getTypeOfArrowFunction` (next to
+  `applyContextualParameterTypes`, writing `symbolTypes[param.id]`) is
+  UNOBSERVABLE: `((a) => a.nope)("x")` still reports nothing, because the BODY
+  walkers do not read `symbolTypes` for parameters — they read `currentLocalTypes`,
+  filled by **`populateParameterLocalTypes`**, which records a parameter ONLY when
+  it carries an ANNOTATION (`if (paramType != null && paramName is Identifier)`).
+  So an un-annotated parameter is invisible to them no matter what the signature
+  says. That implementation was written, measured, and REVERTED rather than landed.
+  **The real change is therefore in `populateParameterLocalTypes`** (or wherever
+  else a walker derives parameter locals): record an argument-derived type for an
+  un-annotated parameter whose owner is an IIFE callee — reusing
+  `immediatelyInvokingCall`-style parent-walking, which round 693 already proved
+  out. Expect a WIDE blast radius: it gives types to parameters that were `any`
+  everywhere, in ~26 call sites' worth of walkers, so it needs the corpus and the
+  `--listAll` ×8 gate and probably its own round.
 - [ ] **M3.5 Per-file scopes** (Blocker #3: stop merging all file locals into
   `globals`; per-file scope construction with explicit import visibility). Revisit
   before v1 ONLY if dashboard FPs trace to cross-file scope conflation on tsc sources.
