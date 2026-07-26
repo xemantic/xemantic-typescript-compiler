@@ -20,6 +20,32 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 705 (2026-07-26) — the TS18048 rule for a possibly-undefined arithmetic
+operand: written, working, and REVERTED because it collides with nine of our own pins.
+No production change; corpus stays 12,756 / 0 / 3.**
+
+tsc checks possibly-undefined BEFORE it checks operand kinds, so `j + 1` with
+`j: number | undefined` is "'j' is possibly 'undefined'", not a complaint about the
+operator. Adding that check ahead of the three arithmetic emitters produces exactly the
+TS18048 the reference baseline wants.
+
+**Then nine LOCAL pins went red — and not one corpus test.** They live in four
+arithmetic narrowing test classes and assert that a maybe-undefined operand fires
+**TS2362**, with names like "negative control - genuinely maybe-undefined operand still
+fires TS2362". Their intent is "narrowing did not apply, so it still fires", which
+TS18048 satisfies; only the code differs.
+
+**Which is right matters more than which is convenient.** The evidence: the
+`contextuallyTypedIifeStrict` reference baseline — real tsc output — reports TS18048 for
+exactly this shape, and the corpus is green with or without the change, so it does not
+discriminate. That points at the pins encoding OUR old behaviour rather than tsc's. But
+rewriting nine pins written by earlier rounds, at the end of a long session, on the
+strength of one baseline, is a decision rather than a patch: I reverted, recorded the
+rule and the evidence on the item, and left it to a round that can confirm the direction
+against another baseline first and re-gate properly.
+
+---
+
 **Round 704 (2026-07-26) — an IIFE's parameters are now contextually typed from the
 call arguments. Corpus 12,750 → 12,756 / 0 / 3, all 8 profiles byte-identical.**
 
@@ -4396,6 +4422,24 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   fails the arithmetic operand classifier. tsc checks possibly-undefined FIRST, so the
   fix is a nullish-operand rule ahead of TS2362/2363/2365 in the arithmetic pass.
   That is what still keeps the case deferred.
+  **ROUND 705 wrote that rule, and it works — but it collides with NINE LOCAL PINS, and
+  resolving that collision is a decision, not a patch.** The rule (a possibly-undefined
+  check ahead of TS2362/TS2363/TS2365 in the three arithmetic emitters, strictNullChecks
+  only, plain references only, `any`/`unknown` excluded) turns `((j?) => j + 1)(12)` into
+  the TS18048 the reference baseline wants. The CORPUS stays green — but nine hand-written
+  pins in ArithmeticAmpAmpNarrowingTest, ArithmeticReassignmentNarrowingTest,
+  Inv4SpineBatch22Test and NonNullArithmeticOperandTest assert that a maybe-undefined
+  operand fires **TS2362**, e.g. `negative control - genuinely maybe-undefined operand
+  still fires TS2362`. **The evidence says those pins encode OUR old behaviour rather than
+  tsc's:** the `contextuallyTypedIifeStrict` reference baseline reports TS18048 for exactly
+  this shape (`j: number | undefined`, `j + 1`), and the corpus is green either way, so it
+  does not discriminate. Their INTENT — "narrowing did not apply, so it still fires" — is
+  preserved by TS18048; only the code changes. So the next round should update those nine
+  to expect TS18048, having first confirmed the direction against one more real baseline,
+  and then re-gate. The rule was reverted rather than landed with nine red pins.
+  **Still missing after it, for the record:** `k`/`o` (an optional parameter with NO
+  corresponding argument types as `undefined`, and nothing fires for it yet) and the two
+  TS7006 for the INNER function's parameter in `(f => f(12))(i => i)`.
   **ORIGINAL REMAINING:** the reference's **TS18048 ×3** ('j'/'k'/'o' possibly undefined, from optional IIFE
   parameters under strictNullChecks) and **TS7006 ×2** (lines 28–29 — the INNER
   function's parameter in `(f => f(12))(i => i)`, which tsc genuinely reports)
