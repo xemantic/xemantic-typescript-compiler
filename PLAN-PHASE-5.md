@@ -68,9 +68,24 @@ per-AST-position). Cost: exactly **2** corpus tests, both
 means the leniency is masking an un-substituted class type parameter in a member,
 an M3.1 substitution gap. But the decisive probe was the other one: with the strict
 rule in place `var direct: T1 = y` was **still silent**, so the relation was never
-the blocker — the emission is suppressed upstream. Reverted; both facts are on the
-item so the next round starts inside the right subsystem. Same discipline as rounds
-693/694: the probe has to be one that FAILS if the change works.
+the blocker. Reverted; the measured cost is on the item so nobody re-runs it. Same
+discipline as rounds 693/694: the probe has to be one that FAILS if the change works.
+
+**Then a marker probe found what (B) actually is, and it is two things, neither of
+them the relation.** Printing both sides' `typeToString` plus
+`canUseTypeEngine`/`checkTypeRelatedTo` at `checkVarDeclAssignability`'s gate, over
+four deliberately-contrasted cases: **(B1)** `var r: T1` resolves its target to
+**`any`** — a type-parameter annotation on a function-BODY variable never reaches the
+type parameter, while the PARAMETER annotation `y: T2` resolves fine, because a
+parameter is resolved while building the signature with the TPs in
+`currentTypeParamScope` and a body variable is not. That is round 691's generic-arrow
+bug one scope level out, and it means no relation could ever have failed here.
+**(B2)** for `var s: string = x` the relation ALREADY returns the correct `false`, but
+`canUseTypeEngine` refuses a TypeParam-vs-concrete pair, so the correct verdict is
+never emitted. The threading the queue item warned about is fine — the probe shows
+`tp=[T]` / `tp=[T1, T2]` arriving and the foreign-TP gate not firing. Three plausible
+suspects (threading, foreign-TP gate, relation leniency) excluded by measurement, and
+the two real ones named, in one probe cycle.
 
 **Deferred with queue items** (the two remaining failures, both error baselines):
 (M3.0-gap-3) the comma operator's result type is not the right operand's type, so
@@ -4131,7 +4146,28 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   the leniency is masking an UN-SUBSTITUTED class type parameter in a member (`_store:
   A[]` substituted on one side only). Restricting the strict rule to top-level
   comparisons (`relationComparisonStack.size <= 1`) dodges both regressions, but buys
-  nothing while (B)'s real blocker stands.
+  nothing while (B)'s real blockers stand.
+  **(B)'s real blockers, found by marker probe (round 695 tail) — TWO of them, and
+  neither is the relation.** A four-case probe (`f1<T>(x: T) { var s: string = x }`,
+  `f2<T1,T2>(y: T2) { var r: T1 = y }`, an array variant, and a fully concrete control)
+  printing `typeToString` of both sides plus `canUseTypeEngine`/`checkTypeRelatedTo`
+  at `checkVarDeclAssignability`'s gate reports:
+  **(B1) a type-parameter annotation on a function-BODY variable resolves to `any`** —
+  `var r: T1` gives `tgt=any` (and `var r2: T1[]` gives `any[]`) while the PARAMETER
+  annotation `y: T2` resolves correctly, because a parameter is resolved while building
+  the signature with the type parameters in `currentTypeParamScope` and a body variable
+  annotation is not. So no relation could ever fail here — the same class of bug as
+  round 691's generic arrow, one scope level out.
+  **(B2) `canUseTypeEngine` refuses a TypeParam-vs-concrete pair** — for `var s: string
+  = x` the relation ALREADY returns the correct `false` (`foreign=false`, `rel=false`),
+  but `canUse=false` means the emission never runs. tsc reports TS2322 there.
+  Fix (B1) first (it is the one that makes `T1` a real type at all); (B2) then decides
+  whether the correct verdict is allowed to be emitted. Both have M3.1-flavoured blast
+  radius — body variables annotated with type parameters stop being `any` — so each
+  wants the corpus and `--listAll` ×8, and the round-431e foreign-TP gate is what should
+  keep un-inferred callee TPs out of the new emissions.
+  `typeParams` threading is NOT a suspect: the probe shows it arriving correctly
+  (`tp=[T]`, `tp=[T1, T2]`) and the foreign-TP gate not firing.
 - [ ] **(M3.0-gap-4) `readonlyRestParameters` — a `readonly T[]` spread argument
   is neither rejected nor counted** (round 695, deferred error baseline). Missing
   **TS2556** ("A spread argument must either have a tuple type or be passed to a rest
