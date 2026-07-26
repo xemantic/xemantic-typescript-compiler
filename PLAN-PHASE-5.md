@@ -4036,7 +4036,16 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   declaration output.
 - [ ] **M4.3 JSX end-to-end** (`jsx: react-jsx`/`react`/`preserve` transforms on real
   React-shaped code).
-- [ ] **M4.4 External sourcemaps** (`.js.map` files; inline maps exist).
+- [ ] **M4.4 Sourcemaps — the parenthetical "inline maps exist" is STALE (checked
+  round 695): NOTHING generates map content.** `grep sourceMappingURL` over
+  `src/commonMain` hits only `TypeScriptCompiler.kt`'s option-conflict validation
+  (TS5053 for `mapRoot`/`sourceMap` with `inlineSourceMap`), and `Emitter.kt` has
+  no mappings emitter at all. `BaselineFormatter` takes `sourceMap`/
+  `inlineSourceMap`/`sourceRoot`/`mapRoot` parameters, which is presumably where
+  the belief came from — those shape the BASELINE layout, not the output. So this
+  is a full implementation (segment tracking through the transformer, VLQ
+  encoding, the `//# sourceMappingURL=` trailer, sidecar `.js.map` writing), not
+  the small "also write the file" task the entry implied.
 - [ ] **M4.5 Decision point**: project references / composite / incremental scope
   (tsgo supports them; needed for large monorepos — decide build vs defer with owner).
 - [ ] **M4.6 `package.json "type": "module"` module-format detection in
