@@ -312,6 +312,37 @@ val conformanceDeferredErrorBaselines = setOf<String>(
     "commaOperatorOtherInvalidOperation",
 )
 
+/**
+ * PARITY.1: one corpus baseline switched off because our output diverges from
+ * pristine tsc's in FORM but not in MEANING (owner directive 2026-07-26 — see
+ * `docs/logical-parity.md` for the form-vs-meaning decision procedure).
+ *
+ * This list is the single source of truth: the generator emits the matching test
+ * `@Ignore`d (so it stays VISIBLE as skipped rather than vanishing from the total),
+ * regenerates the ledger in `docs/logical-parity.md`, and FAILS the build on a stale
+ * entry or a missing [pinnedBy] class. An unlogged disable is indistinguishable from
+ * a hidden regression, which is why the declaration — not the ledger — is the input.
+ *
+ * NOT the same thing as [conformanceDeferredErrorBaselines], which defers a case
+ * where we are genuinely WRONG. Do not move an entry between the two.
+ */
+data class LogicalParityDivergence(
+    /** Exact baseline file name under `tests/baselines/reference` (e.g. `foo.errors.txt`). */
+    val baseline: String,
+    /** The round that switched it off. */
+    val round: Int,
+    /** Test class pinning the LOGIC the baseline used to pin; must exist in src/commonTest. */
+    val pinnedBy: String,
+    /** Which form axis differs, and why the meaning is preserved. Per case, no boilerplate. */
+    val reason: String,
+)
+
+/**
+ * The live set. Empty is the healthy state — an entry is a deliberate, argued
+ * divergence, added only via the procedure in `docs/logical-parity.md`.
+ */
+val logicalParityDivergences = listOf<LogicalParityDivergence>()
+
 val cloneTypeScriptRepo by tasks.registering {
     group = "typescript"
     description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo's submodule commit."
@@ -581,6 +612,13 @@ val generateTypeScriptTests by tasks.registering {
     val conformanceRootDir = typeScriptRepoDir.resolve("tests/cases/conformance")
     val baselinesDir = typeScriptRepoDir.resolve("tests/baselines/reference")
     val outputDir = layout.buildDirectory.dir("generated/typescript-tests")
+    // PARITY.1: the ledger doc is rewritten from `logicalParityDivergences` (see
+    // below), and the declared `pinnedBy` classes are looked up here. Deliberately
+    // NOT declared as a task output — it carries hand-written prose that Gradle's
+    // stale-output handling has no business touching.
+    val logicalParityDoc = layout.projectDirectory.file("docs/logical-parity.md").asFile
+    val commonTestDir = layout.projectDirectory.dir("src/commonTest/kotlin").asFile
+    val divergences = logicalParityDivergences
 
     inputs.dir(testsDir).optional()
     // M3.0: re-generate when the allowlist changes, or when an allowlisted
@@ -589,6 +627,9 @@ val generateTypeScriptTests by tasks.registering {
     for (category in conformanceCategories) {
         inputs.dir(conformanceRootDir.resolve(category)).optional()
     }
+    // PARITY.1: re-generate (and re-validate, and rewrite the ledger) when a
+    // divergence is declared, edited, or removed.
+    inputs.property("logicalParityDivergences", divergences.map { it.toString() })
     outputs.dir(outputDir)
 
     doLast {
@@ -770,6 +811,44 @@ val generateTypeScriptTests by tasks.registering {
             return false
         }
 
+        // PARITY.1 — a baseline whose divergence from pristine tsc is FORM, not
+        // MEANING, is switched off HERE and nowhere else: the emission stays, carrying
+        // `@Ignore` plus the reason, so the case remains visible as SKIPPED instead of
+        // disappearing from the total. Keyed by baseline FILE name because that is
+        // exactly one generated subtest — bare or parameterized, errors or emit.
+        val divergenceByBaseline = divergences.associateBy { it.baseline }
+        check(divergenceByBaseline.size == divergences.size) {
+            "logicalParityDivergences declares the same baseline twice: " +
+                divergences.groupingBy { it.baseline }.eachCount().filterValues { it > 1 }.keys
+        }
+        val usedDivergences = mutableSetOf<String>()
+
+        /**
+         * Emits the divergence preamble when [baseline] is declared, and records the
+         * declaration as used (an unused one fails the build below — a rotted ledger
+         * is indistinguishable from a hidden regression).
+         */
+        fun StringBuilder.appendDivergence(baseline: String) {
+            val d = divergenceByBaseline[baseline] ?: return
+            usedDivergences += baseline
+            appendLine("    // LOGICAL-PARITY DIVERGENCE (round ${d.round}): switched off deliberately —")
+            appendLine("    // our output differs from tsc's in FORM, not in MEANING, and the LOGIC is")
+            appendLine("    // pinned by ${d.pinnedBy}. Declared in build.gradle.kts")
+            appendLine("    // `logicalParityDivergences`; procedure + ledger in docs/logical-parity.md.")
+            // Line comments, not KDoc: a reason quoting TypeScript or JSDoc could carry
+            // `/*` or `*/` and silently swallow the rest of the file (see CLAUDE.md).
+            var line = StringBuilder()
+            for (word in d.reason.split(Regex("\\s+")).filter { it.isNotEmpty() }) {
+                if (line.isNotEmpty() && line.length + 1 + word.length > 84) {
+                    appendLine("    // $line"); line = StringBuilder()
+                }
+                if (line.isNotEmpty()) line.append(' ')
+                line.append(word)
+            }
+            if (line.isNotEmpty()) appendLine("    // $line")
+            appendLine("    @kotlin.test.Ignore")
+        }
+
         // Group by first character to keep individual files manageable
         val groups = testFiles.groupBy { file ->
             val ch = file.nameWithoutExtension.first()
@@ -842,6 +921,7 @@ val generateTypeScriptTests by tasks.registering {
                 if (jsBaseline.exists() && !bareUnsupported) {
                     totalBareTests++
                     sb.appendLine()
+                    sb.appendDivergence("$name.js")
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
                     sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -870,6 +950,7 @@ val generateTypeScriptTests by tasks.registering {
                         val overridesStr = config.entries.sortedBy { it.key }
                             .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
                         sb.appendLine()
+                        sb.appendDivergence(paramName)
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__compiles to JavaScript matching baseline`() {")
                         sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -886,6 +967,7 @@ val generateTypeScriptTests by tasks.registering {
                 if (errorsBaseline.exists() && !bareUnsupported && !errorBaselineDeferred) {
                     totalErrorTests++
                     sb.appendLine()
+                    sb.appendDivergence("$name.errors.txt")
                     sb.appendLine("    @Test")
                     sb.appendLine("    fun `${id}_ts has expected errors matching ${id}_errors_txt`() {")
                     sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -908,6 +990,7 @@ val generateTypeScriptTests by tasks.registering {
                         val overridesStr = config.entries.sortedBy { it.key }
                             .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
                         sb.appendLine()
+                        sb.appendDivergence(paramErrorName)
                         sb.appendLine("    @Test")
                         sb.appendLine("    fun `${id}_ts__${configId}__has expected errors matching baseline`() {")
                         sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
@@ -924,7 +1007,70 @@ val generateTypeScriptTests by tasks.registering {
             packageDir.resolve("$className.kt").writeText(sb.toString())
         }
 
-        logger.lifecycle("Generated $totalBareTests bare-name JS + $totalParamTests parameterized JS + $totalErrorTests error baseline = ${totalBareTests + totalParamTests + totalErrorTests} test functions across ${groups.size} files in: $packageDir")
+        // PARITY.1 validation — the two controls that keep the ledger honest.
+        val stale = divergences.filter { it.baseline !in usedDivergences }
+        check(stale.isEmpty()) {
+            "logicalParityDivergences has ${stale.size} entr(y|ies) matching no generated test:\n" +
+                stale.joinToString("\n") { "  - ${it.baseline} (round ${it.round}, ${it.pinnedBy})" } +
+                "\nEither the baseline was renamed/removed, or its test is already skipped for " +
+                "another reason (tsgo-removed option, deferred error baseline). A ledger entry " +
+                "that switches nothing off is indistinguishable from a hidden regression — " +
+                "delete it or fix the baseline name. See docs/logical-parity.md."
+        }
+        if (divergences.isNotEmpty()) {
+            val testSources = commonTestDir.walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .map { it.readText() }
+                .toList()
+            val unpinned = divergences.filter { d ->
+                val decl = Regex("\\bclass\\s+${Regex.escape(d.pinnedBy)}\\b")
+                testSources.none { decl.containsMatchIn(it) }
+            }
+            check(unpinned.isEmpty()) {
+                "logicalParityDivergences names ${unpinned.size} pinnedBy class(es) that do not " +
+                    "exist under src/commonTest/kotlin:\n" +
+                    unpinned.joinToString("\n") { "  - ${it.pinnedBy} (for ${it.baseline})" } +
+                    "\nSwitching a baseline off REQUIRES a test pinning the logic it used to " +
+                    "pin — that is the whole policy. See docs/logical-parity.md § 2 step 2."
+            }
+        }
+
+        // PARITY.1 — rewrite the ledger from the declarations so the doc cannot drift.
+        val ledger = if (divergences.isEmpty()) {
+            "_No baseline is currently switched off under the logical-parity policy._"
+        } else {
+            buildString {
+                appendLine("| baseline | round | logic pinned by | why this is FORM, not MEANING |")
+                appendLine("|---|---:|---|---|")
+                for (d in divergences.sortedWith(compareBy({ it.round }, { it.baseline }))) {
+                    val reason = d.reason.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                        .joinToString(" ").replace("|", "\\|")
+                    appendLine("| `${d.baseline}` | ${d.round} | `${d.pinnedBy}` | $reason |")
+                }
+                append("\n**${divergences.size} baseline(s) switched off.**")
+            }
+        }
+        val beginMarker = "<!-- BEGIN GENERATED LEDGER -->"
+        val endMarker = "<!-- END GENERATED LEDGER -->"
+        check(logicalParityDoc.isFile) {
+            "docs/logical-parity.md is missing — it is part of the PARITY.1 mechanism, " +
+                "not decoration; restore it before generating."
+        }
+        val docText = logicalParityDoc.readText()
+        val begin = docText.indexOf(beginMarker)
+        val end = docText.indexOf(endMarker)
+        check(begin >= 0 && end > begin) {
+            "docs/logical-parity.md lost its $beginMarker / $endMarker region — the ledger " +
+                "is generated into it and cannot be hand-maintained."
+        }
+        val updated = docText.substring(0, begin + beginMarker.length) +
+            "\n" + ledger + "\n" + docText.substring(end)
+        if (updated != docText) {
+            logicalParityDoc.writeText(updated)
+            logger.lifecycle("Rewrote the logical-parity ledger in ${logicalParityDoc.name}.")
+        }
+
+        logger.lifecycle("Generated $totalBareTests bare-name JS + $totalParamTests parameterized JS + $totalErrorTests error baseline = ${totalBareTests + totalParamTests + totalErrorTests} test functions across ${groups.size} files in: $packageDir (${divergences.size} logical-parity divergence(s) switched off)")
     }
 }
 

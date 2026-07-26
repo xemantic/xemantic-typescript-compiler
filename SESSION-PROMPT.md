@@ -73,9 +73,12 @@ Your loop (per CLAUDE.md § Execution protocol):
 
    Zero regressions in MEANING. Under the owner's LOGICAL-PARITY directive
    (round 716) a baseline that differs only in FORM is not a blocker: replace it
-   with a test pinning the logic, switch the old one off, and LOG it in the
-   (PARITY.1) ledger with the justification. An unlogged disable is
-   indistinguishable from hiding a regression.
+   with a test pinning the logic, then switch the old one off by adding a
+   `LogicalParityDivergence` to `logicalParityDivergences` in build.gradle.kts —
+   the ONLY sanctioned way (it keeps the case visible as skipped, regenerates the
+   ledger, and fails the build on a stale entry). Read docs/logical-parity.md § 2
+   before classifying anything as form: the burden is per case, and an unlogged
+   disable is indistinguishable from hiding a regression.
 
 4. For anything touching the checker, record the cost counters and justify any
    increase (the (COST.1) gate). Round 713 added ~72k getTypeOfExpression calls

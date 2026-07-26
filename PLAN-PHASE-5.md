@@ -1895,8 +1895,33 @@ silent-wrong-answer fix the owner asked for. Then **(DISPATCH.1)**, the measured
 lever and the prerequisite for reviving the M0.4 tail migration. **(PERF.HW)** is
 opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
 
-- [ ] **(PARITY.1) Adopt the logical-parity policy in the gate — owner directive
-  2026-07-26, and the single biggest unblock in this arc.** "Logical parity is
+- [x] **(PARITY.1) DONE round 717 — the policy is now a MECHANISM, not a habit.**
+  (a) `docs/logical-parity.md`: the owner directive, the form-vs-meaning decision
+  procedure as two ALLOWLIST tables (7 meaning axes / 6 form axes, each form axis
+  carrying its equivalence obligation; anything in neither table is MEANING by
+  default), the four-step per-case procedure, and the generated ledger. (b) The
+  mechanism: a `LogicalParityDivergence(baseline, round, pinnedBy, reason)` in
+  build.gradle.kts's `logicalParityDivergences` is the SINGLE source of truth — the
+  generator emits that subtest `@kotlin.test.Ignore`d with the reason inline (so it
+  stays VISIBLE as skipped: a silently-dropped test cannot hide behind an unchanged
+  total), rewrites the ledger region in the doc, and FAILS the build on either of the
+  two rot modes — a baseline matching no generated test, or a `pinnedBy` class that
+  does not exist under src/commonTest. Keyed by baseline FILE name because that is
+  exactly one generated subtest (bare/parameterized × errors/emit), all four emission
+  sites wired. Self-tested all three paths (valid entry → `@Ignore` + ledger row;
+  stale baseline → build fails; missing `pinnedBy` → build fails), then reverted to
+  the empty list, which is the healthy state. **Gate: with no entries the generated
+  corpus is BYTE-IDENTICAL** (diff -r of the whole generated tree, before vs after),
+  so the mechanism costs nothing until used; suite 12,765/0/3 unchanged. (c) is a
+  STANDING rule rather than a deliverable, and is written into the doc § 1: every
+  "DEAD — regressed N tests" entry in CLAUDE.md and the archive is now a LEAD, and
+  re-examining one means re-running the change and classifying its N diffs.
+  **The judgement worth keeping:** a form-only diff is a *candidate*, not an
+  entitlement — the owner's cost clause ("byte parity is secondary *if it can be
+  achieved without extra cost*") means byte parity is still preferred where it is
+  free, so a divergence needs a reason it is WORTH having.
+- [ ] ~~(PARITY.1) Adopt the logical-parity policy in the gate (original)~~ —
+  **owner directive 2026-07-26, and the single biggest unblock in this arc.** "Logical parity is
   important even if we don't reach byte-by-byte parity. If there are tests where we
   diverge but the logic stays the same, create a new test case and switch off the old
   one. The logical value of the compiler output at maximal performance should always
