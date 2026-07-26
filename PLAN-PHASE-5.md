@@ -20,6 +20,40 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 701 (2026-07-26) — (M3.0-gap-3)(B1) LANDED, six rounds after it was first
+picked up. Corpus 12,737 → 12,740 / 0 / 3, all 8 profiles byte-identical.**
+
+The recorded recipe re-applied cleanly and the corpus went green immediately; the
+question was only the profiles. Round 700's guard-parameter INFERENCE fix removed two
+of the three FPs. The survivor was the third shape — `return nodeTest(node) ? node :
+undefined` in `getOriginalNode` — which is the same parameter-borne guard used for
+NARROWING rather than inference, and `narrowByCallPredicate` bails the moment
+`resolveFlowCalleeDecl` returns null. Giving it the same fallback
+(`parameterGuardFunctionType`: the parameter's FunctionType annotation supplies exactly
+the declaration triple it needs) cleared it, and all eight profiles returned to their
+baseline.
+
+**Observability was measured, not assumed.** B1's corpus effect is neutral by
+construction — it fixed exactly the regressions it caused — so before committing I
+A/B'd a candidate pin against the stashed tree: without the scope the snippet draws
+NOTHING (`y` is `any`, so `y.v` is too), with it the TS2322 appears. That is what makes
+it a landable fix rather than an unpinnable refactor, and it is the check I would have
+skipped three rounds ago.
+
+**One of my own pins failed and the compiler was right.** I asserted the
+arbitrary-type chain under `@strict: false`, where a `null` return is assignable to
+anything and there is no diagnostic at all. The power-assert diagram showed
+`diags == []` immediately. Worth noting because the reflex is to suspect the change.
+
+**What is still open on the item:** the deferred conformance case needs the second
+TS2322 (`var result: T1 = (x, y)`), which is TypeParam-vs-TypeParam and gated by the
+relation leniency measured back in round 695 at exactly 2 corpus tests. That is (B2)
+territory, and the case stays deferred. The engine work landed here — body-variable
+type resolution, chain parity, apparent constraints, and both halves of
+parameter-borne guard handling — is worth more than the case that surfaced it.
+
+---
+
 **Round 700 (2026-07-26) — the guard-inference gap round 699 named is CLOSED and
 landed. Corpus 12,731 → 12,737 / 0 / 3, all 8 profiles byte-identical.**
 
@@ -4296,8 +4330,14 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   out. Expect a WIDE blast radius: it gives types to parameters that were `any`
   everywhere, in ~26 call sites' worth of walkers, so it needs the corpus and the
   `--listAll` ×8 gate and probably its own round.
-- [ ] **(M3.0-gap-3) `commaOperatorOtherInvalidOperation` — the comma operator's
-  RESULT TYPE is not the right operand's type** (round 695, deferred error baseline).
+- [ ] **(M3.0-gap-3) `commaOperatorOtherInvalidOperation` — (A) and (B1) are DONE
+  (rounds 697/700/701); only (B2) remains, so the case stays deferred.** What is left is
+  the second TS2322, `var result: T1 = (x, y)` — TypeParam-vs-TypeParam, blocked by the
+  relation's "two unconstrained type parameters always relate" leniency, whose correct
+  form was measured in round 695 at exactly 2 corpus tests (both masking an
+  un-substituted class type parameter in a member) — plus `canUseTypeEngine` refusing a
+  TypeParam-vs-concrete pair, which is what keeps `var s: string = x` silent even though
+  the relation already answers correctly. ORIGINAL TEXT follows.
   Two missing TS2322, both from the same root: `function foo(x: number, y: string)
   { return x, y; }` must infer the return type `string` (so `var r: number = foo(...)`
   errors), and `var result: T1 = (x, y)` — with `x: T1`, `y: T2` — must report
