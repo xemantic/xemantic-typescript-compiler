@@ -1,77 +1,109 @@
 # Session starter
 
-Copy the block below into a new Claude Code session to work Phase 17
-(self-compile the TypeScript compiler, then performance — re-scoped
-2026-07-03; "any TypeScript project" is post-v1). The block is self-contained —
-it points the agent at `CLAUDE.md` for the execution protocol and at
-`PLAN-PHASE-5.md` for the live queue and dashboard.
+Copy the block below into a new Claude Code session. Phase 17's v1 goal
+(fully compile the TypeScript compiler) LANDED at round 481 and was re-verified
+at round 679; since round 716 the live mission is **single-thread performance**,
+under the owner's logical-parity directive. The block is self-contained — it
+points at `CLAUDE.md` for the protocol and `PLAN-PHASE-5.md` for the queue.
 
 ---
 
 ```
-Work the Phase 17 queue in PLAN-PHASE-5.md.
+Work the Phase 17 queue in PLAN-PHASE-5.md. The live mission is SINGLE-THREAD
+PERFORMANCE — matching tsc — not conformance.
 
-(This session may be running as one iteration of `scripts/run-loop.sh`.
-Commit + push every completed sub-step individually. Do NOT leave
-uncommitted changes at session end — the loop driver aborts if it sees
-them, so partial state would freeze the loop until a human investigates.)
+(This session may be one iteration of `scripts/run-loop.sh`. Commit + push every
+completed sub-step individually. Do NOT leave uncommitted changes at session end
+— the loop driver aborts on a dirty tree.)
 
 Before picking any work:
-- read STATUS.md for the current corpus count + dashboard state
-- read CLAUDE.md's "AI agent mission" and "Execution protocol" sections
-- open PLAN-PHASE-5.md and read, in order: "Mission & strategy",
-  "Ground rules", the recent session notes at the top of the Phase 17
-  section, and the QUEUE
-- docs/history/PLAN-PHASE-4.md is ARCHIVED state (Phase 16 and earlier). Consult its
-  "Known architectural blockers" section before starting any M3 item —
-  the accumulated per-blocker analysis lives there — but do not work its
-  queue.
+- read STATUS.md (corpus count + latest round notes)
+- read docs/ARCHITECTURE-RETHINK.md § 0 and § 0.1 FIRST — § 0 is the round-716
+  measured correction that supersedes § 1's diagnosis, and § 0.1 is the budget
+  for what single-thread parity actually costs. Do not plan perf work without it.
+- read CLAUDE.md's "AI agent mission" + "Execution protocol"
+- open PLAN-PHASE-5.md and read the WORK ORDER note at the top of the QUEUE,
+  then the recent session notes
+
+THE THREE THINGS THAT WILL OTHERWISE COST YOU A ROUND:
+
+1. MEASURE THE PRIZE BEFORE BUILDING A FIX. Three cache hypotheses died in
+   round 716 alone, each after real implementation work, because nobody had
+   first timed the population they intended to serve (it was 68 ms). Every
+   over-estimate in this codebase came from `hits x mean-call-cost`. Time the
+   outermost calls of the target population FIRST; if it is small, stop.
+
+2. COUNTERS DECIDE, WALL TIME CONFIRMS. The --passTiming counters are
+   deterministic and comparable across runs and machines. Wall time is not: a
+   loaded box shows +/-13%, which swamps a 1 s effect. Price candidates with
+   `scripts/ab-interleaved.sh <dirA> <dirB> <pairs>` (it refuses a verdict when
+   the spread dwarfs the effect) and never trust a median without its win rate.
+
+3. NEVER RUN ANY GRADLE TASK WHILE `jvmTest` IS IN FLIGHT. The documented trap
+   is recompiling during a self-compile A/B; the inverse also bites — a gradlew
+   classpath resolution during a suite run kills it silently, leaving an empty
+   results dir and no XMLs.
 
 Your loop (per CLAUDE.md § Execution protocol):
 
-1. Pick the first unchecked `- [ ]` item in the PLAN-PHASE-5.md QUEUE
-   (or the next unfinished sub-step of an IN PROGRESS item). If it is
-   blocked on missing infrastructure, promote the smallest unblocker to
-   the top of the queue and work that instead — never skip silently.
+1. Pick the first unchecked `- [ ]` item in the QUEUE, honouring the WORK ORDER
+   note. If it is blocked on missing infrastructure, promote the smallest
+   unblocker to the top and work that — never skip silently.
 
 2. Implement it. Every fix ships hand-written LOCAL corner-case tests
-   (src/commonTest, kotlin.test) pinning the fix's INVARIANT beyond the
-   corpus shapes, asserting the sharp signal.
+   (src/commonTest, com.xemantic.kotlin.test `assert`/`have` — power-assert, no
+   message argument) pinning the fix's INVARIANT, asserting the sharp signal.
+   Build the probe so it FAILS if the change works — four "fixes" in rounds
+   700-704 turned out inert and were caught only because of this.
 
-3. Gate every commit on the full corpus suite staying green:
+3. Gate every commit on the full corpus suite:
 
-       rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest 2>&1 | grep -a "tests completed"
+       rm -rf build/test-results/jvmTest && ./gradlew jvmTest
 
-   (~4-6 min — run it in the background and prepare the next step while
-   it runs. Zero regressions, no +1/-1 swaps.)
+   then count with a real XML parser (NEVER a regex — JUnit self-closes passed
+   testcases and a regex mis-attributes failures):
 
-4. When the item plausibly moves a dashboard metric (FP counts,
-   throughput, crash count), re-run the relevant benchmark and record
-   the delta:
+       python3 -c "
+       import glob,xml.etree.ElementTree as ET
+       t=f=s=0
+       for p in glob.glob('build/test-results/jvmTest/*.xml'):
+           r=ET.parse(p).getroot(); t+=int(r.get('tests',0))
+           f+=int(r.get('failures',0))+int(r.get('errors',0)); s+=int(r.get('skipped',0))
+       print(t,f,s)"
 
-       scripts/bench-compile-tsc.sh --label "<what changed>"
+   Zero regressions in MEANING. Under the owner's LOGICAL-PARITY directive
+   (round 716) a baseline that differs only in FORM is not a blocker: replace it
+   with a test pinning the logic, switch the old one off, and LOG it in the
+   (PARITY.1) ledger with the justification. An unlogged disable is
+   indistinguishable from hiding a regression.
 
-   Results append to bench/self-compile-tsc.tsv with a vs-previous
-   delta. Diagnostics-by-code shrinking (never growing) is the Phase 17
-   headline metric.
+4. For anything touching the checker, record the cost counters and justify any
+   increase (the (COST.1) gate). Round 713 added ~72k getTypeOfExpression calls
+   for one diagnostic and nothing noticed.
 
-5. After each item: check it off, add a session note at the top of the
-   Phase 17 section in PLAN-PHASE-5.md (what changed, dashboard delta,
-   surprises), add a CLAUDE.md gotcha only for non-obvious invariants a
-   future agent would otherwise break, bump STATUS.md (trim-on-write),
-   commit + push. One commit per sub-step — keep history bisectable.
+5. For a perf claim, also run the profile and record it:
 
-6. Loop back to step 1. Stop cleanly (commit first) when the context
-   budget runs low, or when every remaining item is user-gated — never
-   end with analysis-only output while unchecked items remain workable.
+       scripts/bench-compile-tsc.sh --project compiler --no-emit --label "<what>"
 
-Phase 17 specifics worth remembering:
-- Deleting superseded pin walkers is part of the job: when an engine
-  feature lands, remove the corpus-unique walkers it replaces in the
-  same commit (suite-gated) and note the net walker count.
-- Any crash/hang/OOM on any input is a P0: insert a repro item at the
-  top of the queue and fix it before resuming.
-- The tsc sources, real lib .d.ts files, and the conformance corpus are
-  all available OFFLINE in typescript-repo's object DB (see
-  PLAN-PHASE-5.md § "Offline asset inventory").
+   (creates build/bench/tsc-project-* on first run; on macOS its TSV stat
+   columns log 0 per the BSD-grep gotcha — wall_ms and the run log are real.)
+
+6. After each item: check it off, add a session note at the TOP of the Phase 17
+   section in PLAN-PHASE-5.md (what changed, deltas, surprises — including what
+   did NOT work and why, which is worth more than the fix), add a CLAUDE.md
+   gotcha ONLY for a non-obvious invariant a future agent would break, bump
+   STATUS.md (trim-on-write, 5 notes max), commit + push. One commit per
+   sub-step.
+
+7. Loop to step 1. Stop cleanly (commit first) when context runs low. Never end
+   with analysis-only output while workable items remain.
+
+Specifics worth remembering:
+- CLAUDE.md was trimmed 425 KB -> 91 KB (round 716). Per-diagnostic and
+  per-walker knowledge lives in docs/history/CLAUDE-GOTCHAS-ARCHIVE.md — GREP IT
+  before touching a walker, a TS code, or a corpus regression. A missing entry
+  means "look in the archive", never "no such constraint exists".
+- Any crash/hang/OOM on any input is a P0: repro item at the top of the queue.
+- The tsc sources, real lib .d.ts, and the conformance corpus are all available
+  OFFLINE in typescript-repo's object DB.
 ```
