@@ -93,6 +93,20 @@ there is no partial progress to read. The same build with
 gradle.properties is a build-system change and therefore owner-gated — queued below
 as (BUILD.1) rather than done.
 
+**(LIB.1)(a) measured, not started.** With the two gates in, I took the next queue
+item's decision step — "decide what a real project build uses for libs at all" — and
+found it answerable with zero code: every `compilerOptions` key flows through
+`applyDirective`, so `"useRealLibs": true` in the bench tsconfig flips the entire
+real-lib path on. Four arms (table on the item): the real-lib switch costs **exactly
+35 checker FPs and no measurable wall time**, and today's 46 "env-legit" FPs decompose
+as 33 node globals + 13 stub residue. The decision is therefore *yes, real builds
+should use real libs*, with the 35 burned down BEFORE the default flips so the
+dashboard never goes red — TS2722 ×11 is over a third of them and looks like one
+narrowing shape. **The reusable part:** the item read like a design fork needing an
+argument, and it was a measurement needing one tsconfig line. Its own text even said
+the decisive control is a MEMBER probe rather than name resolution — the same lesson
+one level up.
+
 **Also landed:** three compiler warnings had accumulated in Checker.kt's
 (M3.0-gap-4) helpers (two `else` arms in a `when` the smart cast already makes
 exhaustive, one redundant cast). They were invisible because Gradle does not re-emit
@@ -2102,8 +2116,35 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   build — all 8 dashboard profiles included — runs on the curated embedded
   `BUILTIN_LIB_SOURCE`** and the whole real-lib machinery is test-only. The owner has
   now authorised the generation change the round-688 note left owner-gated.
-  **ORDER — (a) is the decision the rest depends on:** (a) decide what a real project
-  build uses for libs at all (the embedded lib is a curated subset; the shipped real
+  **(a) IS NOW MEASURED (round 717) — the answer is affordable, and the number is 35.**
+  No code was needed: every `compilerOptions` key flows through `applyDirective`, so
+  `"useRealLibs": true` in the bench project's tsconfig flips the whole real-lib path
+  on. Four arms of the `compiler` profile, `--noEmit --listAll`:
+  | libs | `types` | errors | composition |
+  |---|---|---:|---|
+  | embedded | `[]` | 46 | the dashboard number — ALL env-legit |
+  | real | `[]` | 81 | +33 node globals (`process`/`global`), +35 real |
+  | real | `["node"]` | 48 | 13 env + **35 real** |
+  | embedded | `["node"]` | **13** | 13 env (TS2591 only), nothing else |
+  So the real-lib switch costs **exactly 35 checker FPs** — TS2722 ×11 ("Cannot
+  invoke an object which is possibly 'undefined'" — a narrowing gap on lib members
+  the curated lib declared non-optional), TS2322 ×8, TS2345 ×4, TS2344 ×4, TS2339 ×4,
+  TS2349 ×2, TS2769, TS2739 — and **no measurable wall time** (28.7 s, inside the
+  band). Two corollaries worth having: (i) today's "46 FPs, env-legit only" is
+  13 stub-residue + 33 node globals, confirmed by arm D collapsing to 13; (ii) the
+  embedded lib is quietly MORE PERMISSIVE than the real one, which is what makes the
+  silent-unchecked defect possible in the first place.
+  **DECISION for (a), on that evidence: a real project build should use the REAL
+  libs** — the mismatch is the root defect, the cost is bounded and enumerable rather
+  than open-ended, and it buys faithfulness on every future project. Sequencing:
+  burn the 35 down FIRST (they are ordinary FP work, TS2722 being over a third of
+  them and probably one narrowing shape), THEN flip the default, so the dashboard
+  never goes red. Re-measure services/server/harness before flipping — this is the
+  `compiler` profile only, and the bigger profiles will have their own deltas.
+  Raw logs: the four arms were run at 8100a78e; reproduce by adding
+  `"useRealLibs": true` to `build/bench/tsc-project-*/tsconfig.json`.
+  **ORDER — the original (a) framing, now answered above:** (a) decide what a real
+  project build uses for libs at all (the embedded lib is a curated subset; the shipped real
   libs are unreachable outside tests — that mismatch is the root, and it is a design
   choice); (b) ship the DOM/webworker/scripthost sets (changes real-lib generation in
   build.gradle.kts, ~1 MB of generated source); (c) report a user-REQUESTED lib that
