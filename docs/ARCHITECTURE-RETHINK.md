@@ -82,6 +82,73 @@ size:
 Also measured and unchanged: 1,341,719 globals lookups at 98.9% miss (the (M0.3)(i)
 short-circuit, still priced ≲0.2%).
 
+### 0.1 What single-thread parity with tsc actually costs
+
+The budget, from the attribution above. Take the whole compile as 100 units
+(checker-init is 80 of them; the front end — read/parse/bind/crawl — is the other
+20, never yet profiled because the checker always dominated):
+
+```
+checker-init                    80
+  ├─ dispatch + handlers        34      (42% of init)
+  ├─ type system                22      (28%)
+  ├─ tail passes (~403)         14      (17%)
+  └─ unresolved-names, misc     10
+front-end                       20
+```
+
+Matching JS tsc means 100 → 42 (the CI ratio is 2.4×). Working backwards:
+
+| if we removed… | result | still |
+|---|---:|---:|
+| ALL dispatch overhead | 66 | 1.5× |
+| \+ ALL 403 tail passes | 53 | 1.9× |
+| \+ HALF the type system | 42 | **parity** |
+
+**So parity is not one lever — it needs all three, and the third is hard.** State
+that plainly to anyone who proposes a single change that "gets us to tsc". What is
+realistically reachable from the staged plan below is ~1.4–1.7× of today, i.e.
+roughly 1.5× slower than tsc rather than 2.4×.
+
+**The staged plan (each stage enables the next):**
+
+1. **(DISPATCH.1) per-kind handler table** — 11–19%. *Prerequisite for everything
+   below.* Low risk, mechanical, decisive probe in hand.
+2. **Resume the M0.4 tail migration** — worth ~14% AFTER stage 1, versus the 4%
+   round 659 measured before it. Round 659's "75% reappears" was measured without
+   a dispatch table, where one walk still consults every handler at every node.
+   **The INV.4 inversion was not wrong, it was mis-ordered**; stage 1 retroactively
+   unlocks it.
+3. **Cut the `getTypeOfExpression` recompute factor (2.7×)** — up to ~9%. FEWER
+   CALLS, not a memo (round 665 priced the memo at 30 ms). The factor exists
+   because several handlers independently type the same node; single-visit
+   discipline is what removes it.
+4. **Flow narrowing** (69,917 walks, 18% of init) — round 664 banked 0.83 s; ~57%
+   of misses are COLD, so the rest needs tsc's shape (a flow type computed once per
+   reference and carried IN the type), not another memo.
+5. **Front-end (20%)** — unprofiled. Worth a look once it is a fifth of a smaller
+   number.
+
+**Explicitly NOT on the list:** anything cache-shaped (three independent
+measurements), and parallelism until after stage 2 — M2 measured 77% of the work as
+non-divisible per-worker duplication, and that fraction is largely the dispatch
+machinery, so shrinking it is also what makes workers pay.
+
+**The endgame, stated honestly:** after stages 1–5 the residue is the shape of the
+checks themselves — 1,005 `check*` functions where a general engine would have
+rules. That redundancy is what the byte-identical corpus gate incentivised
+(narrow verifiable walkers beat broad engine rules, and every broad attempt
+regressed). Removing it is a SCOPE decision, not a perf task, and it trades the
+property that made the corpus reachable.
+
+**PROCESS — the cost gate this arc lacked.** Round 713 added ~72k
+`getTypeOfExpression` calls (624,961 → 696,953, +11.5%) for one conformance
+diagnostic, ≈70–200 ms, and nothing noticed: the round gates are the corpus and
+`--listAll`, neither of which sees cost. Over 200 rounds that is exactly how ~118
+handler entry points per node accumulate. Every round that touches the checker
+should now record `getTypeOfExpression` calls, `narrowWalks`, and the spine
+per-kind numbers, and justify an increase.
+
 ---
 
 ## 1. The verdict

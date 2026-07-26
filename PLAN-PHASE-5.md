@@ -1917,6 +1917,41 @@ exists for is 68 ms. Work (DISPATCH.1) before any further cache/identity work.**
   exercise — a table derived from profiles alone WILL be wrong. Derive from the
   suite run and treat the profiles as confirmation.
   Blocks nothing; unblocks the honest re-measure of every other lever.
+  **TOOLING — everything needed is landed (round 716); no setup decisions:**
+  (1) create the bench project once —
+  `scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log`
+  (it builds `build/bench/tsc-project-<sha>` from `typescript-repo`; on macOS its
+  TSV stat columns log 0 per the BSD-grep gotcha, `wall_ms` and the run log are
+  real; on Linux/VPS all columns are real);
+  (2) attribute with `--passTiming` — the counters this item is built on are
+  `SPINE attribution` (per-phase enter/leave/scope/ures/forEachChild),
+  `per-kind enter+leave (top 12)`, `INV.5(c5) bypassed-resolution PRIZE`, and the
+  existing `time split` line;
+  (3) price every candidate with `scripts/ab-interleaved.sh <dirA> <dirB> <pairs>`
+  — it alternates within pairs, reports medians + win rate, flags differing error
+  counts (B not behaviour-preserving ⇒ timing incomparable) and applies the ±2%
+  drift-band verdict.
+  **MEASUREMENT DISCIPLINE (round 716, learned the hard way):** the per-kind and
+  phase counters are DETERMINISTIC and comparable across runs and boxes; wall time
+  on a loaded box is not (±13% observed on an M1 with a browser running, which
+  swamps a 1 s effect). When the effect is smaller than the box spread, decide on
+  counters and use wall only for confirmation. **Never run any gradle task while
+  `jvmTest` is in flight** — the documented trap is recompiling during a
+  self-compile A/B; the INVERSE also bites (a `gradlew` classpath resolution
+  during a suite run killed it silently, leaving an empty results dir).
+  **THE EXPECTED-VALUE STATEMENT, so a future round can falsify this item rather
+  than drift:** DISPATCH.1 should remove 1.0–2.5 s of a ~17 s compile (6–14%).
+  If a landed slice measures below the drift band on interleaved medians AND the
+  per-kind counters do not fall, the premise is wrong — say so and stop, do not
+  grind. The premise is that ~130 handler entry points are consulted per node
+  while ~2–5 apply; the probe evidence is IDENTIFIER (44.5% of nodes, 2,746 ns,
+  byte-identical output when skipped entirely).
+  **SECOND-ORDER VALUE (why this is first):** round 659 measured that migrating a
+  tail pass onto the spine recovers only 25% of its cost, and STOPPED the M0.4 arc
+  on that basis — but that was measured WITHOUT a dispatch table, where "one walk"
+  still consults every handler at every node. With the table, a migrated pass costs
+  only its own kinds, so DISPATCH.1 changes M0.4's economics and should be
+  followed by a re-measure of one migrated pass before the arc is judged again.
 
 - [ ] ~~(cache/identity work of any shape)~~ — **CLOSED round 716 by measurement,
   do NOT re-open without new evidence.** (1) The context-bypassed resolution
@@ -4597,6 +4632,18 @@ Node ambient (`process`/`Buffer`/`require`/`NodeJS`/`console`) under a
 `"types": []` tsconfig — i.e. config/env artifacts, not compiler faults. With
 EP.2c skipped by the owner and the remaining M5/INV items parked or
 zero-value on this box, **this section is now the live queue**.
+
+**SUPERSEDED 2026-07-26 (round 716) — THIS SECTION IS NO LONGER FIRST.** Owner
+directive: "do anything needed … to increase the performance", followed by "how
+should we proceed to match the tsc performance on a single thread". The PERF
+section above is the live queue again, and **(DISPATCH.1) is the top unchecked
+item**; work it before anything here. This section stays OPEN and unparked — it
+is not cancelled, and it holds the only known SILENT-WRONG-ANSWER defect in the
+codebase (M2.4: with `"lib": ["dom"]` a browser project's DOM code compiles
+CLEAN and entirely unchecked) plus the "real project" gaps (declaration emit,
+sourcemaps, JSX, nodenext). **The trade being made is explicit: matching tsc's
+speed is being prioritised over making the compiler usable on non-tsc projects.**
+Revisit when the perf arc reaches its staged target or stalls.
 
 (Historical note: the loop was to skip this section until v1 landed. It landed
 at 481; the section stayed parked ~200 rounds because nothing re-read the
