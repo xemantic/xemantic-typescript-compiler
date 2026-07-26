@@ -20,6 +20,33 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 709 (2026-07-26) — the TS7006 gate question is settled, and the answer is a
+defect in its own right: our two emitters have INVERTED option gates. Probe-only, no
+production change; corpus stays 12,756 / 0 / 3.**
+
+Running round 708's four shapes under two configurations gives a matrix no single
+option setting can satisfy: with `strictNullChecks` alone, `anyCb(j => j)` fires and
+`function plain(m) {}` does not; add `noImplicitAny` and they swap. Turning the option
+ON switches OFF the emitter that was firing. `anyCb(j => j)` going silent under
+noImplicitAny is simply wrong — tsc reports it.
+
+**Which convention is right is answerable from the corpus:** 12 of 22 sampled TS7006
+baselines have no `@noImplicitAny`/`@strict` directive, so TS7006 fires by DEFAULT in
+the reference, and the codebase's `!strictExplicitlyFalse` convention is the one that
+matches it. The `noImplicitAny || strict` gate on the other emitter is the outlier.
+
+So the next round's job is to unify the two gates on the default-on convention and
+re-gate — not to work on IIFEs. The gap-2 shape may fall out of that, since the
+conformance case sets only `@strictNullChecks: true`; if it does not, at least it will
+be failing for one reason instead of two.
+
+This is the second round running where the recorded framing of the "last small piece"
+turned out to be wrong, and both times a two-configuration probe was enough to replace
+a guess with a matrix. Worth preferring that over one-config probes when a diagnostic's
+presence could plausibly depend on options.
+
+---
+
 **Round 708 (2026-07-26) — probe-only on gap-2's last piece; it is not the gap the
 item described. No production change; corpus stays 12,756 / 0 / 3.**
 
@@ -4518,6 +4545,22 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   by settling the GATE question (which shapes emit TS7006 under which options, and why
   a top-level function declaration's parameter differs from a callback's here) before
   touching the IIFE case. Do not assume the callee-typing path is at fault.
+  **ROUND 709 SETTLED IT, and the answer is a defect worth fixing on its own: our two
+  TS7006 emitters have INVERTED option gates.** Same four shapes, two configs:
+  | shape | strictNullChecks only | + noImplicitAny |
+  | `take(i => i)` (annotated context) | silent (right) | silent (right) |
+  | `anyCb(j => j)` (`any` parameter) | **FIRES** | **SILENT** |
+  | `(f => f(12))(k => k)` | silent | silent |
+  | `function plain(m) {}` | **SILENT** | **FIRES** |
+  Turning `noImplicitAny` ON switches OFF the emitter that was firing, and vice versa —
+  so no single configuration reports both shapes, and `anyCb(j => j)` going silent under
+  noImplicitAny is a plain bug (tsc reports it). Relevant context for whoever fixes this:
+  TS7006 fires BY DEFAULT in the corpus — 12 of 22 sampled TS7006 baselines have no
+  `@noImplicitAny`/`@strict` directive at all — so the default-on convention
+  (`!strictExplicitlyFalse`) is the one that matches the reference, and the
+  `noImplicitAny || strict` gate is the odd one out. Unify the two gates on the
+  default-on convention FIRST, re-gate, and only then look at the IIFE shape; it may
+  well fall out, since the conformance case sets only `@strictNullChecks: true`.
   ROUND 705's framing, kept for the reasoning: **the rule works — but it collides with
   NINE LOCAL PINS, and resolving that collision is a decision, not a patch.** The rule (a possibly-undefined
   check ahead of TS2362/TS2363/TS2365 in the three arithmetic emitters, strictNullChecks
