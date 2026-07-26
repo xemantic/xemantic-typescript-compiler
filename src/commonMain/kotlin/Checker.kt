@@ -31275,6 +31275,46 @@ class Checker(
      * access, etc.), return true so TS7006 stays suppressed — the current
      * default. Only a bare Identifier that resolves NOWHERE yields false.
      */
+    /**
+     * Does the callee's parameter at [argIndex] provably supply NO contextual type, so a
+     * function argument's own parameters are implicitly `any` (TS7006)?
+     *
+     * The implicit-any argument edge otherwise uses [isCalleeResolvable] — "can I resolve
+     * the callee NAME" — as its proxy for "does this argument have a contextual type".
+     * They come apart when the callee resolves but its parameter says nothing:
+     * `declare function anyCb(cb: any): void; anyCb(j => j)` is a TS7006 in tsc, as is the
+     * callback in `(f => f(12))(i => i)`, whose callee is an arrow with an un-annotated
+     * parameter. [isCalleeResolvable] already carries one case of this reasoning (its
+     * B182 arm, for a LIB_MIN_TARGET-dropped method); this asks it per-argument.
+     *
+     * Two narrowings, both MEASURED, without which this over-emits (round 712):
+     *  - the test is SYNTACTIC (the annotation is literally `any`, or absent). Our
+     *    RESOLVED `anyType` is not tsc's `any` — a generic or mapped annotation we cannot
+     *    resolve lands there too, and those DO have contextual types.
+     *  - the EMBEDDED LIB is excluded. Its callback signatures are deliberately simplified
+     *    (`String.replace`'s replacer, `JSON.stringify`'s), so their `any`s are
+     *    placeholders for signatures tsc states precisely.
+     */
+    private fun calleeParamGivesNoContext(call: CallExpression, argIndex: Int): Boolean {
+        if (argIndex < 0) return false
+        val calleeType = getTypeOfExpression(call.expression)
+        if (calleeType === errorType || calleeType === anyType) return false
+        val sig = (calleeType as? Type.Object)?.callSignatures?.singleOrNull() ?: return false
+        val sigDecl = sig.declaration
+        if (sigDecl != null && (sigDecl in builtinLibMemberDecls || sigDecl in builtinLibDecls)) {
+            return false
+        }
+        val params = sig.parameters
+        val param = params.getOrNull(argIndex)
+            ?: params.lastOrNull()
+                ?.takeIf { (it.valueDeclaration as? Parameter)?.dotDotDotToken == true }
+            ?: return false
+        val paramDecl = param.valueDeclaration as? Parameter
+        val annotation = paramDecl?.type
+        return annotation == null ||
+            (annotation as? KeywordTypeNode)?.kind == SyntaxKind.AnyKeyword
+    }
+
     private fun isCalleeResolvable(callee: Expression): Boolean {
         // B182: a method call on a builtin receiver where the method was dropped by the
         // LIB_MIN_TARGET filter (e.g. `arr.findLastIndex(...)` under @target: es5) has NO
@@ -53367,8 +53407,9 @@ interface DataView {
                     }
                 }
                 val callCtx = spineIanyCtx
-                spineIanyDefineCtx(node, if (callCtx != null && callCtx.kind == 1 && callCtx.typed)
-                    SpineIanyCtx(kind = 0, typed = true) else null)
+                val argHasCtx = callCtx != null && callCtx.kind == 1 && callCtx.typed &&
+                    !calleeParamGivesNoContext(p, p.arguments.indexOfFirst { it === node })
+                spineIanyDefineCtx(node, if (argHasCtx) SpineIanyCtx(kind = 0, typed = true) else null)
             }
             is NewExpression -> if (p.arguments?.any { it === node } == true && spineIanyReached(node)) {
                 val callCtx = spineIanyCtx
