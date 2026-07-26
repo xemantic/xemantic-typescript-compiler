@@ -20,6 +20,38 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 698 (2026-07-26) — (M3.0-gap-3)(B): 4 residuals → 3, and the last two are
+now understood to be DOUBLE EMISSIONS rather than false positives. Reverted again
+(the corpus must stay green), but the remaining path is short and named.**
+
+Two findings, both of which change what the next round should do.
+
+**Residual (a) fell to a one-word widening.** `declFileGenericType`'s unconstrained
+`<T>` was reading as `constraint 'any'` — but that is not the `anyType` singleton, it
+is **errorType**, which DISPLAYS as `'any'` (B58.1). Guarding the chain block against
+`anyType || errorType` fixes it. Worth remembering generally: "the display says any"
+never distinguishes anyType from an unresolved type, so a guard written against the
+display's meaning has to test both.
+
+**(c) and (d) are not FPs — I had mis-classified them.** Reading the reference
+baselines shows both diagnostics ARE expected; what changes is our error COUNT (5 → 6,
+8 → 9). The `Diagnostic`-init probe named (c)'s other emitter: the dedicated pin walker
+`checkDeeplyNestedMappedTypes`, which exists *because* the engine could not produce
+that diagnostic — and its display is the CORRECT one, while the engine renders the
+source as `any[]` (the case's mapped aliases resolve to any). So the engine does not
+supersede that walker, and the walker must not be deleted. The ORDER decides the fix:
+the engine emits FIRST, the walker later, so an "already reported here?" probe in the
+engine cannot see it — the retraction belongs in the walker, for which the codebase
+has precedent.
+
+**Reverted rather than landed** because three corpus tests would be red, and the
+corpus is the gate every round leans on. The recipe on the item now carries the
+errorType guard, so the next round re-applies it and starts at THREE failures, each
+with a named fix: a syntactic constraint-text fallback for (b), and walker-side
+retraction for (c)/(d).
+
+---
+
 **Round 697 (2026-07-26) — (M3.0-gap-3)'s (A) half LANDED: a comma expression's
 return type is now its right operand's. Corpus 12,725 → 12,731 / 0 / 3, all 8
 profiles byte-identical.**
@@ -4288,6 +4320,27 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `!anonymousObjectHasExcessVsConstraint(...)`, else the arbitrary form — exactly the
   block the var-decl (~95363) and assignment (~98644) paths carry. This alone clears
   **23 of the 27**.
+  **Attempt 3 (round 698) took it to THREE, and named the mechanism behind the last
+  two. Add to the recipe:** in the new chain block, the constraint must be treated as
+  absent when it is `anyType` **OR `errorType`** — an unconstrained `<T>` arrives here
+  with an UNRESOLVED constraint, and errorType DISPLAYS as `'any'` (B58.1), which is
+  what made `declFileGenericType` read as `constraint 'any'`. That one guard fixes
+  residual (a). Remaining: (b), (c), (d) below.
+  **(c) and (d) are DOUBLE EMISSIONS, not false positives — the baselines contain both
+  diagnostics, our error COUNT grows by one.** The `Diagnostic`-init stack-trace probe
+  named the other emitter for (c): the dedicated pin walker
+  **`checkDeeplyNestedMappedTypes`**, which exists precisely because the engine could
+  not produce that diagnostic — and its display is the CORRECT one
+  (`{ level1: { level2: { foo: string; }; }; }[]`) while the engine renders the source
+  as `any[]`, because the case's `Input`/`Output` mapped aliases resolve to any. So the
+  engine does NOT supersede the walker here and the walker must not be deleted. Note
+  the ORDER, which decides the fix: the engine (cta anchor) emits FIRST and the walker
+  later, so a "has anything already reported here?" probe in the engine cannot see it —
+  the retraction has to live in the WALKER (documented precedent: a later pass that
+  retracts/edits an earlier pass's diagnostics, cf. checkCloduleTest2 removing TS2554 at
+  NewExpression positions). (d) was not probed but shows the identical signature
+  (baseline has the diagnostic; our count goes 8 → 9), so expect another dedicated
+  walker and the same disposition.
   **The FOUR residuals, each already diagnosed:**
   (a) `declFileGenericType` — `export function F5<T>(): T { return null; }` is
   UNCONSTRAINED, yet the interned TypeParam arrives with `constraint == anyType`, so the
@@ -4295,11 +4348,14 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   `any` constraint as unconstrained (the sibling TS2208 block right below already has an
   "effectively unconstrained" notion, for the self-circular case).
   (b) `errorMessagesIntersectionTypes03` — the reverse: tsc wants the CONSTRAINT form
-  (`'A & B' is assignable to the constraint of type 'V'…`) and we now produce the
-  arbitrary one, i.e. `constraintOk` computes false for an INTERSECTION source against
-  its own constituent constraint. Worth checking `anonymousObjectHasExcessVsConstraint`
-  first; the old string fallback got this right by comparing constraint TEXT
-  (`emitTS2322`'s B60.6c path), which is the behaviour to match.
+  (`'A & B' is assignable to the constraint of type 'V'…`) and we produce the arbitrary
+  one. Round 698 narrowed the cause: the constraint does not RESOLVE (same errorType
+  situation as (a)), so no relation can be run and the engine has no `'A'` to print —
+  which is exactly why the old string fallback got it right, reading the constraint
+  TEXT out of `currentTypeParamDecls` (`emitTS2322`'s B60.6c path). The fix is to give
+  the engine block the same syntactic fallback: when the RESOLVED constraint is
+  unusable, take the declaration's constraint node text and decide the form the way
+  B60.6c does, rather than dropping to the arbitrary form.
   (c) `deeplyNestedMappedTypes` and (d) `conditionalTypeAssignabilityWhenDeferred` are
   genuinely NEW emissions, not chain problems — `Type 'any[]' is not assignable to type
   'T'` and `Type 'Q' is not assignable to type 'InferBecauseWhyNot<Q>'`. Both are targets
