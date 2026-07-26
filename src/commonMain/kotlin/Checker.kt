@@ -21527,6 +21527,11 @@ class Checker(
             if (!param.dotDotDotToken) continue
             if (param.isCommentPlaceholder) continue
             if (param.type != null) continue  // has type annotation — no TS7019
+            // (M3.0-gap-2) An IIFE's rest parameter is contextually typed from the call
+            // arguments, so tsc reports nothing. Mirror of the gate in
+            // checkParamsForImplicitAny — this is the SECOND TS7019 emitter, reached by
+            // the dedicated rest-parameter walker; both must carry the rule.
+            if (isImmediatelyInvokedFunctionParam(param)) continue
             val name = param.name
             if (name !is Identifier) continue
             hasUntypedRest = true
@@ -21558,6 +21563,8 @@ class Checker(
                 val name = param.name
                 if (name !is Identifier || name.text.isEmpty() || name.text == "this") continue
                 if (param.modifiers.any { isParameterPropertyModifier(it) }) continue  // handled separately
+                // (M3.0-gap-2) contextually typed from the IIFE's call arguments.
+                if (isImmediatelyInvokedFunctionParam(param)) continue
                 val start = name.pos
                 val length = if (param.questionToken) name.text.length + 1 else name.text.length
                 val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -31519,6 +31526,31 @@ class Checker(
         }
     }
 
+    /**
+     * (M3.0-gap-2) Is [param] a parameter of an IMMEDIATELY-INVOKED function
+     * expression or arrow? tsc contextually types such parameters from the call's
+     * ARGUMENTS (`((...numbers) => …)(5,6,7)` gives `numbers: number[]`), so it never
+     * reports implicit-any for them — including when the call passes no arguments.
+     *
+     * Suppression-only, so it can remove a false positive but never add a diagnostic.
+     * The callee is unwrapped through parentheses because the shape is routinely
+     * written `(function (x) { } ("!"))` or `((((function (y) { }))))("-")`.
+     */
+    private fun isImmediatelyInvokedFunctionParam(param: Parameter): Boolean {
+        val owner = param.parent
+        if (owner !is ArrowFunction && owner !is FunctionExpression) return false
+        var node: Node? = owner
+        var parent = (owner as NodeBase).parent
+        while (parent is ParenthesizedExpression) {
+            node = parent
+            parent = parent.parent
+        }
+        val call = parent as? CallExpression ?: return false
+        var callee: Expression = call.expression
+        while (callee is ParenthesizedExpression) callee = callee.expression
+        return callee === node || callee === owner
+    }
+
     private fun checkParamsForImplicitAny(
         parameters: List<Parameter>,
         source: String,
@@ -31527,6 +31559,9 @@ class Checker(
     ) {
         for ((paramIndex, param) in parameters.withIndex()) {
             if (param.isCommentPlaceholder) continue
+            // (M3.0-gap-2) An IIFE's parameters are contextually typed from the call
+            // arguments, so tsc reports no implicit-any for them.
+            if (param.type == null && isImmediatelyInvokedFunctionParam(param)) continue
             // Recurse into nested function-type/type-literal annotations even if this
             // param has a type — catches `funcLit: (y2) => number` (y2 gets TS7006) and
             // `x: { v; w }` (v/w get TS7008).

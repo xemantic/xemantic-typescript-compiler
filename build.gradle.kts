@@ -290,7 +290,7 @@ val conformanceCategories = listOf(
  * have a queue item naming the missing behaviour; delete the entry when it lands.
  * This is not a place to park a fresh failure — triage first, queue it, then add.
  */
-val conformanceDeferredErrorBaselines = setOf(
+val conformanceDeferredErrorBaselines = setOf<String>(
     // IIFE parameters are not contextually typed from the call arguments: misses
     // TS18048 x3 / TS7006 x2 and over-emits TS7019 x3 + TS7006 x2.
     // See the M3.0-gap-2 queue item.
