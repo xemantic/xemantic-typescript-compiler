@@ -20,6 +20,55 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 688 (2026-07-26) — attempted M2.4's "small self-contained" follow-up,
+found it would be DEAD CODE, and reverted: `useRealLibs` defaults to false and
+nothing in the project path turns it on, so every real build — all eight
+dashboard profiles included — runs on the EMBEDDED lib and the whole real-lib
+subsystem is test-only.** No production code changed.
+
+**What I set out to do.** Round 687 recorded follow-up (i): surface
+`Resolution.unavailable` so `"lib": ["dom"]` stops being a silent no-op. It
+looked small — one field, one call site, no build change.
+
+**Two things the attempt established before it died.** First, **`unavailable` is
+the wrong key**: a `full` default lib (`lib.d.ts`, `lib.es2020.full.d.ts`)
+transitively references the DOM/host files, so an ordinary target-default
+resolution ALREADY has a non-empty `unavailable` (RealLibResolverTest pins
+exactly that), and keying on it would fire on every default build. Only a name
+the USER wrote is reportable, which needs a new `unavailableRequested` field —
+implemented, and it works. Second, **the corpus blocks the embedded-path
+variant**: 259 corpus cases carry `@lib:`, including **23 requesting `dom`**
+plus webworker×7, scripthost, esnext.temporal, esnext.intl — all unshipped, all
+currently green, because their baselines came from a real tsc that HAS those
+libs.
+
+**Then the diagnostic did not fire, and that was the real finding.** Wired into
+`bindRealLibs` and gated on an explicit request, it produced nothing on
+`"lib": ["es2020", "dom"]`. The reason is not a bug in the wiring:
+`CompilerOptions.useRealLibs` defaults to **false**, and its only writer is the
+`usereallibs` test directive — `ProjectCompiler` and `TsConfigLoader` never set
+it. So `bindRealLibs` never runs for a real build, and the entire real-lib
+machinery (RealLibResolver, RealLibSnapshots, `Resolution.unavailable`) is
+reachable only from tests that opt in. The change was reverted rather than
+landed: dead code that *looks* like the hole is closed is worse than the
+documented hole.
+
+**Which means M2.4's root is a design question, not a patch.** Real project
+builds type-check against a curated embedded lib while the shipped real libs sit
+unreachable; the DOM silence is one symptom of that mismatch. Recorded on the
+item, in order: decide what real builds should use for libs at all; then ship the
+DOM/webworker/scripthost sets (owner-gated build change); only then is the
+original cost question answerable and an unshipped-lib diagnostic both correct
+and reachable.
+
+**Method note.** Three rounds in a row here, the deciding evidence was a
+NEGATIVE: round 687's member probe (`e.notAMember` must error), and this round's
+"the diagnostic did not fire". Both times the tempting reading was that the
+measurement was fine and the subject was cheap/absent; both times the subject was
+simply not running. When a change to a subsystem produces no observable effect,
+establish that the subsystem EXECUTES before concluding anything about it.
+
+
 **Round 687 (2026-07-26) — queue hygiene, then M2.4 re-scoped by measurement:
 the DOM libs are not shipped, and `"lib": ["dom"]` is a SILENT no-op that turns
 every DOM-typed expression into an unchecked `any`.** No production code changed.
@@ -3642,12 +3691,36 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   its DOM code entirely unchecked. (Without `dom` in `lib` the same name draws
   TS2552 "Did you mean 'HTMLLIElement'?", because DOM names are in KNOWN_GLOBALS
   for the TS2304 walker — which is why adding `dom` LOOKS like it worked.)
-  **Two separable follow-ups, in value order:** (i) **surface
-  `Resolution.unavailable`** as a diagnostic (or refuse the lib) so the silence
-  ends — small, self-contained, no build change; (ii) **ship the DOM lib set** —
-  this changes the real-lib GENERATION in build.gradle.kts and adds ~1 MB of
-  generated source, so it is an **owner-gated build-system change**; only then
-  does the original cost question become answerable.
+  **Round 688 CORRECTION — follow-up (i) was attempted and REVERTED as dead
+  code, which uncovered the bigger fact: `useRealLibs` defaults to FALSE and
+  NOTHING in the project path turns it on** (`ProjectCompiler`/`TsConfigLoader`
+  never set it; the only writer is the `usereallibs` test directive). So the
+  entire real-lib machinery — `RealLibResolver`, `RealLibSnapshots`,
+  `Checker.bindRealLibs`, and `Resolution.unavailable` with it — is exercised
+  ONLY by tests that opt in. **Every real project build, including all eight
+  dashboard profiles, runs on the EMBEDDED `BUILTIN_LIB_SOURCE`.** A diagnostic
+  wired into `bindRealLibs` therefore never executes; it was implemented, seen
+  not to fire, and reverted rather than landed. Two further facts the attempt
+  established, both needed by whoever picks this up: **(a) `unavailable` must not
+  be the key** — a `full` default lib (`lib.d.ts`, `lib.es2020.full.d.ts`)
+  transitively references the DOM/host files, so an ordinary target-default
+  resolution has a non-empty `unavailable` and must stay silent; only a name the
+  USER wrote is reportable, which needs a new field, not the existing one (a
+  working `unavailableRequested` implementation is in the round-688 reflog if
+  wanted). **(b) the corpus blocks the embedded-path fix**: 259 corpus cases
+  carry `@lib:`, of which **23 request `dom`** plus `webworker`×4,
+  `webworker.iterable`×2, `webworker.asynciterable`, `scripthost`,
+  `esnext.temporal`, `esnext.intl` — all unshipped, all currently GREEN, so
+  reporting on the embedded path breaks ~30 baselines that were generated by a
+  real tsc which HAS those libs.
+  **So the real follow-ups are, in order:** (i) **decide what real project builds
+  should use for libs at all** — the embedded lib is a curated subset while the
+  shipped real libs are unreachable outside tests; that mismatch is the root, and
+  it is a design decision, not a patch; (ii) **ship the DOM/webworker/scripthost
+  sets** — changes the real-lib GENERATION in build.gradle.kts and adds ~1 MB of
+  generated source, so **owner-gated**; (iii) only then is the original
+  parse/bind cost question answerable, and only then can an unshipped-lib
+  diagnostic be both correct and reachable.
   **Method note worth keeping:** the first control I ran — "does `HTMLElement`
   resolve with `dom` in lib?" — PASSED, and a clean 5-pair interleaved A/B then
   showed the cost inside the noise band. Both were measuring nothing. When an
