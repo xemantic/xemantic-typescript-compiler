@@ -31567,6 +31567,48 @@ class Checker(
      * The callee is unwrapped through parentheses because the shape is routinely
      * written `(function (x) { } ("!"))` or `((((function (y) { }))))("-")`.
      */
+    /**
+     * (M3.0-gap-2) The call that immediately invokes [param]'s owner, or null.
+     * See [isImmediatelyInvokedFunctionParam] for why the callee is unwrapped through
+     * parentheses.
+     */
+    private fun immediatelyInvokingCall(param: Parameter): CallExpression? {
+        val owner = param.parent
+        if (owner !is ArrowFunction && owner !is FunctionExpression) return null
+        var node: Node? = owner
+        var parent = (owner as NodeBase).parent
+        while (parent is ParenthesizedExpression) {
+            node = parent
+            parent = parent.parent
+        }
+        val call = parent as? CallExpression ?: return null
+        var callee: Expression = call.expression
+        while (callee is ParenthesizedExpression) callee = callee.expression
+        return if (callee === node || callee === owner) call else null
+    }
+
+    /**
+     * (M3.0-gap-2) The contextual type of an IIFE's un-annotated parameter, taken from
+     * the call's ARGUMENTS (tsc `getContextuallyTypedParameterType`).
+     *
+     * Argument types are WIDENED — a parameter typed by `("x")` is `string`, not `"x"`.
+     * An OPTIONAL parameter adds `undefined` (it may be omitted at a later call of the
+     * same function value), and one with no corresponding argument IS `undefined`, which
+     * is what makes tsc report `k + 1` in `((k?) => k + 1)()`. A parameter with its own
+     * initializer is left alone — its default already types it. Rest parameters and
+     * binding patterns return null: the caller then leaves them exactly as before.
+     */
+    private fun iifeParameterType(param: Parameter, index: Int, call: CallExpression): Type? {
+        if (param.dotDotDotToken || param.initializer != null) return null
+        if (param.name !is Identifier) return null
+        val optional = param.questionToken
+        val arg = call.arguments.getOrNull(index)
+        if (arg == null) return if (optional) undefinedType else null
+        val argType = getWidenedLiteralType(getTypeOfExpression(arg))
+        if (argType === errorType) return null
+        return if (optional) getUnionType(listOf(argType, undefinedType)) else argType
+    }
+
     private fun isImmediatelyInvokedFunctionParam(param: Parameter): Boolean {
         val owner = param.parent
         if (owner !is ArrowFunction && owner !is FunctionExpression) return false
@@ -128853,6 +128895,24 @@ interface DataView {
                         !isTpReferencingFnType(sibType)
                     ) {
                         currentLocalTypes[paramName.text] = sibType
+                        true
+                    } else false
+                }
+            ) {
+                // handled in the guard above
+            } else if (paramType == null && paramName is Identifier &&
+                run {
+                    // (M3.0-gap-2) An IIFE's parameters are contextually typed from the
+                    // call's ARGUMENTS, so they are not implicitly `any` and their uses
+                    // must be checked against the argument type. This is the only place
+                    // that matters: the body walkers read `currentLocalTypes`, never the
+                    // signature's symbol types.
+                    val call = immediatelyInvokingCall(param)
+                    val ctxType = call?.let {
+                        iifeParameterType(param, parameters.indexOf(param), it)
+                    }
+                    if (ctxType != null && ctxType !== anyType) {
+                        currentLocalTypes[paramName.text] = ctxType
                         true
                     } else false
                 }
