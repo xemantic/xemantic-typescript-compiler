@@ -106896,11 +106896,60 @@ interface DataView {
             is MethodDeclaration -> decl.type
             else -> null
         }
-        val pred = ret as? TypePredicate ?: return null
+        // A guard can also arrive as a PARAMETER — `getFirstJSDocTag<T extends JSDocTag>(
+        // …, predicate: (tag: JSDocTag) => tag is T)` passes `predicate` straight into
+        // `find`/`filter`. There is no declaration to resolve then; the predicate lives on
+        // the parameter's own annotation, so walk out to the nearest enclosing signature
+        // that declares this name. Innermost-first, so a shadowing parameter wins. Without
+        // this the guard overload never binds and the call falls back to the non-guard one
+        // (`JSDocTag | undefined` where tsc infers the CALLER's `T | undefined`).
+        val enclosingTypeParams = mutableListOf<TypeParameter>()
+        val predFromParam: TypePredicate? = if (ret == null && e is Identifier) {
+            var owner: Node? = (e as NodeBase).parent
+            var found: TypePredicate? = null
+            var hops = 0
+            while (owner != null && hops++ < 64) {
+                val ownerParams = when (owner) {
+                    is FunctionDeclaration -> owner.parameters
+                    is FunctionExpression -> owner.parameters
+                    is ArrowFunction -> owner.parameters
+                    is MethodDeclaration -> owner.parameters
+                    is Constructor -> owner.parameters
+                    else -> null
+                }
+                when (owner) {
+                    is FunctionDeclaration -> owner.typeParameters
+                    is FunctionExpression -> owner.typeParameters
+                    is ArrowFunction -> owner.typeParameters
+                    is MethodDeclaration -> owner.typeParameters
+                    else -> null
+                }?.let { enclosingTypeParams.addAll(it) }
+                val match = ownerParams?.firstOrNull { (it.name as? Identifier)?.text == e.text }
+                if (match != null) {
+                    found = (match.type as? FunctionType)?.type as? TypePredicate
+                    break
+                }
+                owner = (owner as? NodeBase)?.parent
+            }
+            found
+        } else null
+        val pred = (ret as? TypePredicate) ?: predFromParam ?: return null
         if (pred.assertsModifier) return null
         val tt = pred.type ?: return null
         val resolved = getTypeFromTypeNode(tt)
-        return if (resolved === errorType || resolved === anyType) null else resolved
+        if (resolved !== errorType && resolved !== anyType) return resolved
+        // The guard's target may be the CALLER's own type parameter
+        // (`predicate: (tag: JSDocTag) => tag is T`), which does not resolve through the
+        // ambient scope here — so intern it straight from the enclosing signature's
+        // declaration. tsc binds the callee's parameter to that `T`, which is what makes
+        // `find(tags, predicate)` return `T | undefined` rather than the element type.
+        val refName = ((tt as? TypeReference)?.typeName as? Identifier)?.text ?: return null
+        val tpDecl = enclosingTypeParams.firstOrNull { it.name.text == refName } ?: return null
+        return typeParamInternCache.getOrPut(internKey(tpDecl)) {
+            val p = Type.TypeParam()
+            p.symbol = Symbol(SymbolFlags.TypeParameter, tpDecl.name.text)
+            p
+        }
     }
 
     /**
