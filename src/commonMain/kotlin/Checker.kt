@@ -521,6 +521,15 @@ class Checker(
      *  0), so two unrelated params in different files shared one instance and stomped its
      *  `.constraint`/`.default`. A single-file compile stamps every param with the same
      *  salt, so the key is a bijection with `pos` and interning is byte-identical there. */
+    /**
+     * (M3.0-gap-3 B1) TS2322s the return path's engine emitter produced. A dedicated pin
+     * walker may own the same position with a better display, and those walkers run AFTER
+     * the check spine, so the duplicate can only be resolved at the end of init — by
+     * identity, and only when a second TS2322 actually lands there.
+     * Declared before `init` (Kotlin init-order: the pipeline runs inside it).
+     */
+    private val tpTargetReturnDiags: MutableList<Diagnostic> = mutableListOf()
+
     private val typeParamInternCache: MutableMap<Long, Type.TypeParam> = mutableMapOf()
 
     /** M1.13: file-aware intern-cache key. See [typeParamInternCache] / TypeParameter.internSalt. */
@@ -2472,11 +2481,20 @@ class Checker(
         val sAsync = inAsyncFunctionBody
         val sGen = inGeneratorFunctionBody
         val sTpDecls = currentTypeParamDecls
+        val sTpScope = currentTypeParamScope
         currentClassForThis = frame.classForThis
         inNonArrowFunctionBody = frame.inFn
         inAsyncFunctionBody = frame.inAsync
         inGeneratorFunctionBody = frame.inGen
         currentTypeParamDecls = frame.fnTpDecls ?: emptyMap()
+        // (M3.0-gap-3 B1) Install the frame's TYPE-PARAMETER SCOPE, not just its
+        // declaration map. `frame.fnTpScope` is computed at frame-build time and was
+        // never read, so a body variable's annotation (`function f<T>() { var x: T }`)
+        // resolved with a null scope — i.e. to `any` — while a PARAMETER annotation
+        // resolved correctly, parameters being resolved while building the signature.
+        // Everything downstream (the relation, the foreign-TP gate) was deciding about
+        // `any`, so such a target could not be checked however the relation behaved.
+        currentTypeParamScope = frame.fnTpScope ?: sTpScope
         currentCheckFileName = spineFileName
         currentFlowGraph = ctaM3FlowGraph
         currentScopeStatements = scopeStatements
@@ -2607,6 +2625,7 @@ class Checker(
             inAsyncFunctionBody = sAsync
             inGeneratorFunctionBody = sGen
             currentTypeParamDecls = sTpDecls
+            currentTypeParamScope = sTpScope
         }
     }
 
@@ -7458,6 +7477,18 @@ class Checker(
             diagnostics.removeAll { d ->
                 d.code == 2454 && d.start != null &&
                     flowDisabledRanges[d.fileName]?.any { r -> d.start in r } == true
+            }
+        }
+        // (M3.0-gap-3 B1) Drop a return-path engine TS2322 whose position a dedicated pin
+        // walker also reported — see [tpTargetReturnDiags]. Identity-keyed and conditional
+        // on an actual duplicate, so a diagnostic alone at its position always survives.
+        for (d in tpTargetReturnDiags) {
+            val samePosition = diagnostics.count {
+                it.code == 2322 && it.fileName == d.fileName && it.start == d.start
+            }
+            if (samePosition > 1) {
+                val idx = diagnostics.indexOfFirst { it === d }
+                if (idx >= 0) diagnostics.removeAt(idx)
             }
         }
         } // end if (!declarationOnly)
@@ -97318,6 +97349,32 @@ interface DataView {
                         chain.add("  Type '${typeToString(lastFailingConstituent)}' is not assignable to type '$displayTarget'.")
                     }
                 }
+                // (M3.0-gap-3 B1) TypeParam TARGET chain — the parity the var-decl
+                // (~95363) and assignment (~98644) paths already have. Until the frame's
+                // type-parameter scope was installed a `T` return annotation resolved to
+                // `any`, so these shapes fell through to the STRING fallback
+                // `emitTS2322(..., typeParams)`, which adds this line when the target name
+                // is one of the enclosing function's; with `T` now a real Type.TypeParam
+                // the engine path owns them and must carry the same chain.
+                if (chain.isEmpty() && targetType is Type.TypeParam) {
+                    val tgtTpName = targetType.symbol?.name ?: "T"
+                    val tgtConstraint = apparentConstraintOfTypeParam(targetType, tgtTpName)
+                    val constraintOk = tgtConstraint != null &&
+                        checkTypeRelatedTo(sourceType, tgtConstraint, assignableRelation) &&
+                        !anonymousObjectHasExcessVsConstraint(sourceType, tgtConstraint)
+                    if (constraintOk) {
+                        chain.add(
+                            "  '$displaySource' is assignable to the constraint of type " +
+                                "'$tgtTpName', but '$tgtTpName' could be instantiated with a " +
+                                "different subtype of constraint '${typeToString(tgtConstraint)}'."
+                        )
+                    } else {
+                        chain.add(
+                            "  '$tgtTpName' could be instantiated with an arbitrary type " +
+                                "which could be unrelated to '$displaySource'."
+                        )
+                    }
+                }
                 // B60.6f (mirror): TS2208 related info for TypeParam source mismatch.
                 val relatedInfo = mutableListOf<Diagnostic>()
                 if (sourceType is Type.TypeParam) {
@@ -97346,7 +97403,7 @@ interface DataView {
                         }
                     }
                 }
-                diagnostics.add(Diagnostic(
+                val engineReturnDiag = Diagnostic(
                     message = message,
                     category = DiagnosticCategory.Error,
                     code = 2322,
@@ -97357,7 +97414,15 @@ interface DataView {
                     length = returnKeywordLength,
                     messageChain = chain,
                     relatedInformation = if (relatedInfo.isEmpty()) emptyList() else relatedInfo.toList(),
-                ))
+                )
+                diagnostics.add(engineReturnDiag)
+                // (M3.0-gap-3 B1) A dedicated pin walker may OWN this position with a
+                // better display (`checkDeeplyNestedMappedTypes` renders a source type the
+                // engine can only show as `any[]`), and those walkers run AFTER this
+                // anchor, so an "already reported here?" probe cannot see them. Register
+                // the instance and drop it at the end of init IF another TS2322 lands on
+                // the same position.
+                tpTargetReturnDiags.add(engineReturnDiag)
                 return
             }
         }
@@ -98636,7 +98701,7 @@ interface DataView {
                                 val targetName = tt.symbol?.name ?: "T"
                                 // B60.2: same logic as the var-decl path at ~39819.
                                 // B62.1: excess-property override (see helper docstring).
-                                val constraint = tt.constraint
+                                val constraint = apparentConstraintOfTypeParam(tt, targetName)
                                 val constraintOk = constraint != null &&
                                     checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
                                     !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
@@ -107772,10 +107837,19 @@ interface DataView {
         if (expr.arguments.none { pathMatches(getReferencePath(it)) } && !pathMatches(calleeReceiverPath)) return t
         // round 43 iter9: PropertyAccess callee — `obj.isMethod(x)` where
         // `obj`'s type has a method `isMethod` with `x is T` return type.
-        val decl: Node? = resolveFlowCalleeDecl(expr, callee) ?: return t
-        val (params, returnTypeNode, typeParams) = when (decl) {
-            is FunctionDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
-            is MethodDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
+        val decl: Node? = resolveFlowCalleeDecl(expr, callee)
+        // A guard can also be a PARAMETER — tsc's `getOriginalNode<T extends Node>(node,
+        // nodeTest: (node: Node) => node is T)` narrows with `nodeTest(node) ? node :
+        // undefined`. There is no declaration to resolve then: the signature lives on the
+        // parameter's own FunctionType annotation, which supplies exactly the same triple.
+        val paramGuardType: FunctionType? = if (decl == null) {
+            (callee as? Identifier)?.let { id -> parameterGuardFunctionType(id) }
+        } else null
+        val (params, returnTypeNode, typeParams) = when {
+            decl is FunctionDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
+            decl is MethodDeclaration -> Triple(decl.parameters, decl.type, decl.typeParameters)
+            paramGuardType != null ->
+                Triple(paramGuardType.parameters, paramGuardType.type, paramGuardType.typeParameters)
             else -> return t
         }
         val predicate = returnTypeNode as? TypePredicate ?: return t
@@ -125486,6 +125560,67 @@ interface DataView {
             }
         }
         else -> null
+    }
+
+    /**
+     * The FunctionType annotation of an enclosing signature's PARAMETER named after
+     * [id], when that annotation returns a type predicate — i.e. a type guard passed in
+     * as a parameter. Innermost-first, so a shadowing parameter wins. Null for anything
+     * else, leaving every caller on its existing path.
+     */
+    private fun parameterGuardFunctionType(id: Identifier): FunctionType? {
+        var owner: Node? = (id as NodeBase).parent
+        var hops = 0
+        while (owner != null && hops++ < 64) {
+            val ownerParams = when (owner) {
+                is FunctionDeclaration -> owner.parameters
+                is FunctionExpression -> owner.parameters
+                is ArrowFunction -> owner.parameters
+                is MethodDeclaration -> owner.parameters
+                is Constructor -> owner.parameters
+                else -> null
+            }
+            val match = ownerParams?.firstOrNull { (it.name as? Identifier)?.text == id.text }
+            if (match != null) {
+                val fnType = match.type as? FunctionType ?: return null
+                return if (fnType.type is TypePredicate) fnType else null
+            }
+            owner = (owner as? NodeBase)?.parent
+        }
+        return null
+    }
+
+    /**
+     * The constraint to REPORT for a type parameter in a TS2322 chain: tsc names the
+     * APPARENT constraint, so `V extends U extends A` reports `A`, not `U`.
+     *
+     * The interned chain is followed to its first non-TypeParam link; when that yields
+     * nothing usable — `any`, or an UNRESOLVED constraint, which DISPLAYS as `'any'`
+     * (B58.1) and so is indistinguishable from an unconstrained parameter by display
+     * alone — the DECLARATION's constraint chain is followed by name instead and its
+     * first concrete link resolved. That second path is what the old string fallback
+     * effectively did. Returns null for an (effectively) unconstrained parameter, which
+     * callers render as the "arbitrary type" form.
+     */
+    private fun apparentConstraintOfTypeParam(tp: Type.TypeParam, tpName: String): Type? {
+        var apparent = tp.constraint
+        var hops = 0
+        while (apparent is Type.TypeParam && hops++ < 8) apparent = apparent.constraint
+        apparent?.takeIf { it !== anyType && it !== errorType }?.let { return it }
+        var declName: String? = tpName
+        var node: TypeNode? = null
+        var declHops = 0
+        while (declName != null && declHops++ < 8) {
+            val constraintNode = currentTypeParamDecls[declName]?.constraint ?: break
+            val refName = ((constraintNode as? TypeReference)?.typeName as? Identifier)?.text
+            if (refName != null && currentTypeParamDecls.containsKey(refName)) {
+                declName = refName
+                continue
+            }
+            node = constraintNode
+            break
+        }
+        return node?.let { getTypeFromTypeNode(it) }?.takeIf { it !== anyType && it !== errorType }
     }
 
     private fun inferReturnTypeFromBody(body: Node): Type? {
