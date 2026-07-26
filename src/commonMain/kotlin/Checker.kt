@@ -54398,8 +54398,21 @@ interface DataView {
         if (node.operator != SyntaxKind.Comma) return
         if (spineCmStatus(node) != CM_EXPR) return
         if (!hasSideEffects(node.left) && !isIndirectCallComma(node)) {
-            val start = node.left.pos
-            val length = commaLeftSpanLength(node.left, start)
+            // A MISSING left operand (`(, ANY)`) is an empty-text Identifier the
+            // recovery anchors at the offending token. tsc anchors its missing node at
+            // the FULL START — the end of the previous token, before trivia — and
+            // squiggles nothing, so `( , )` reports at the `(`'s end, not at the `,`.
+            // The zero length is also what orders this BEFORE the same-position TS1109
+            // (the diagnostic comparator is start → length → code).
+            val missingLeft = (node.left as? Identifier)?.text?.isEmpty() == true
+            var start = node.left.pos
+            val length: Int
+            if (missingLeft) {
+                while (start > 0 && spineSource[start - 1].isWhitespace()) start--
+                length = 0
+            } else {
+                length = commaLeftSpanLength(node.left, start)
+            }
             val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
             diagnostics.add(Diagnostic(
                 message = "Left side of comma operator is unused and has no side effects.",
