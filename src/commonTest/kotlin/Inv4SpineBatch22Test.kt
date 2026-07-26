@@ -247,7 +247,7 @@ class Inv4SpineBatch22Test {
             declare var u: number | undefined;
             u * 2;
         """) should {
-            have(any { it.code == 2362 })
+            have(any { it.code == 18048 })
         }
     }
 
@@ -294,7 +294,7 @@ class Inv4SpineBatch22Test {
             declare var u: number | undefined;
             u === undefined ? u * 2 : 0;
         """) should {
-            have(any { it.code == 2362 })
+            have(any { it.code == 18048 })
         }
     }
 
@@ -333,7 +333,7 @@ class Inv4SpineBatch22Test {
         diagnose("""
             const f = (u: number | undefined) => u * 2;
         """) should {
-            have(any { it.code == 2362 })
+            have(any { it.code == 18048 })
         }
     }
 
@@ -342,7 +342,7 @@ class Inv4SpineBatch22Test {
         diagnose("""
             const f = (u: number | undefined) => u && u * 2;
         """) should {
-            have(none { it.code == 2362 })
+            have(none { it.code == 2362 || it.code == 18048 })
         }
     }
 

@@ -163096,10 +163096,50 @@ interface DataView {
         }
     }
 
+    /**
+     * tsc checks POSSIBLY-UNDEFINED before it checks operand kinds: an arithmetic or
+     * relational operand whose type carries `undefined` is TS18048 ("'x' is possibly
+     * 'undefined'") at the operand, not TS2362/TS2363/TS2365 about the operation. Ours
+     * reported the latter because a union carrying `undefined` fails the operand
+     * classifiers outright (the round-415 hazard).
+     *
+     * Confirmed against two independent reference baselines, on two different operators:
+     * `contextuallyTypedIifeStrict` (`j + 1`, `j: number | undefined`) and
+     * `circularOptionalityRemoval` (`x > 0`, same type). The TS2362 baselines that also
+     * mention "possibly undefined" are unrelated — their operand is a `delete`
+     * expression, i.e. a boolean.
+     *
+     * Deliberately narrow: strictNullChecks only (without it `undefined` is not in the
+     * type), a plain reference so there is a name to report, and `any`/`unknown`
+     * excluded — [typeIncludesUndefined] answers true for those and neither is "possibly
+     * undefined" in tsc's sense. Returns whether it reported, so the caller skips its own
+     * diagnostic.
+     */
+    private fun emitPossiblyUndefinedOperand(
+        operand: Expression, type: Type, source: String, fileName: String,
+    ): Boolean {
+        if (!strictNullChecks) return false
+        if (type === anyType || type === unknownType || type === errorType) return false
+        if (!typeIncludesUndefined(type)) return false
+        val path = getReferencePath(operand) ?: return false
+        val start = operand.pos
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = "'$path' is possibly 'undefined'.",
+            category = DiagnosticCategory.Error, code = 18048,
+            fileName = fileName, line = line, character = character,
+            start = start, length = expressionTrueEnd(operand) - start,
+        ))
+        return true
+    }
+
     private fun emitTs2365(
         expr: BinaryExpression, op: SyntaxKind, leftType: Type, rightType: Type, source: String, fileName: String,
         leftDisplayOverride: String? = null, rightDisplayOverride: String? = null,
     ) {
+        var reported = emitPossiblyUndefinedOperand(expr.left, leftType, source, fileName)
+        if (emitPossiblyUndefinedOperand(expr.right, rightType, source, fileName)) reported = true
+        if (reported) return
         val opText = getOperatorText(op)
         val leftStr = leftDisplayOverride ?: ts2365OperandDisplay(expr.left, leftType)
         val rightStr = rightDisplayOverride ?: ts2365OperandDisplay(expr.right, rightType)
@@ -163115,6 +163155,7 @@ interface DataView {
     }
 
     private fun emitTs2362(operand: Expression, source: String, fileName: String) {
+        if (emitPossiblyUndefinedOperand(operand, getTypeOfExpression(operand), source, fileName)) return
         val start = operand.pos
         val length = expressionTrueEnd(operand) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)
@@ -163127,6 +163168,7 @@ interface DataView {
     }
 
     private fun emitTs2363(operand: Expression, source: String, fileName: String) {
+        if (emitPossiblyUndefinedOperand(operand, getTypeOfExpression(operand), source, fileName)) return
         val start = operand.pos
         val length = expressionTrueEnd(operand) - start
         val (line, character) = getLineAndCharacterOfPosition(source, start)

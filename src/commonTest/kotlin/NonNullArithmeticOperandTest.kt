@@ -119,7 +119,7 @@ class NonNullArithmeticOperandTest {
             }
             """,
         ) should {
-            have(any { it.code == 2362 })
+            have(any { it.code == 18048 })
         }
     }
 }

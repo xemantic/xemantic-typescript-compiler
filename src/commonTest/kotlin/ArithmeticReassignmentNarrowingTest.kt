@@ -119,7 +119,7 @@ class ArithmeticReassignmentNarrowingTest {
             }
             """
         ) should {
-            have(any { it.code == 2362 })
+            have(any { it.code == 18048 })
         }
     }
 
@@ -135,7 +135,7 @@ class ArithmeticReassignmentNarrowingTest {
             }
             """
         ) should {
-            have(any { it.code == 2362 })
+            have(any { it.code == 18048 })
         }
     }
 }
