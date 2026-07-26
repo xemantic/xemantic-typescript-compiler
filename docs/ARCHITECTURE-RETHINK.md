@@ -402,7 +402,10 @@ asset. tsgo-class times (2–4 s) are out of scope for this arc. For the edit lo
 the perf problem is already largely solved by watch/incremental — these targets
 are about the cold full build.
 
-Invariants at EVERY step: corpus suite 100% green; the 8-profile FP floors
+Invariants at EVERY step: corpus suite 100% green; **the COST.1 counter gate
+(`scripts/cost_gate.py`) clean, or the increase justified and rebaselined in the
+same commit** — added round 717, because the round-713 +11.5% went unnoticed by
+every gate listed here; the 8-profile FP floors
 unchanged (env-legit only); a bench TSV row per landed item;
 diagnostics/emit byte-diffs (`--listAll`, `emit-diff-tsc.sh`) empty vs the
 pre-change binary for behavior-preserving steps; wall-clock claims decided by

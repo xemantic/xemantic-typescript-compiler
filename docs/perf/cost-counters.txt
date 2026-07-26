@@ -1,0 +1,31 @@
+# COST.1 baseline — deterministic checker cost counters.
+#
+# Produced by: scripts/cost_gate.py --update  (profile: compiler)
+# Recorded:    2026-07-26 at 41bedb73dfff+dirty
+#
+# These are COUNTS, not times: they are identical across runs and boxes,
+# which is the whole point — a laptop's wall clock swings +/-13% and cannot
+# see a 70 ms regression. Any change here is a real change in how much work
+# the compiler does. Rebaselining is allowed and expected; doing it WITHOUT
+# a justification in the session note is the failure mode this file exists
+# to prevent.
+output.errors            46
+output.programFiles      78
+preparse.reused          78
+preparse.fresh           0
+spine.nodes              856962
+typeOfExpr.calls         696933
+typeOfExpr.distinct      250057
+typeOfExpr.outsideInit   80
+narrow.walks             69903
+narrow.walksOutsideInit  0
+narrow.memoServed        40546
+typeNode.cacheable       210397
+typeNode.cacheHits       153439
+typeNode.bypassed        89883
+mapped.keyed             23883
+mapped.hits              5589
+ctxFingerprint.builds    0
+globals.lookups          1377511
+globals.conflated        0
+globals.misses           1362223

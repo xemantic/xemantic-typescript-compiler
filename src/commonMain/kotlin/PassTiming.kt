@@ -202,7 +202,18 @@ object PassTiming {
 
     /** M0 census: node instances per node-class simple name, counted once per
      *  indexed node by `indexSourceFile` — the dispatch-order / kind-table
-     *  design input. */
+     *  design input.
+     *
+     *  **APPROXIMATE, AND ALWAYS LOW (measured round 717).** `indexSourceFile`
+     *  runs on the crawl's CONCURRENT parse threads (ProjectCompiler
+     *  `readAndScanBatch` — `Dispatchers.Default`, FRONTEND_CONCURRENCY in
+     *  flight) and this is a plain HashMap, so increments are lost to a data
+     *  race: two runs of the same binary measured 857,350 and 854,550 (−0.33%)
+     *  while every single-threaded counter was bit-identical. Fine for "which
+     *  kinds dominate" (the error is a fraction of a percent, spread over the
+     *  hot kinds); NOT fine as a gate value or as an exact per-kind population —
+     *  see (DISPATCH.1), whose handler table must be derived from an exact
+     *  census. Excluded from the COST.1 gate for this reason. */
     val nodeKindHistogram = HashMap<String, Long>()
 
     fun noteNodeKind(node: Any) {

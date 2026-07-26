@@ -80,9 +80,15 @@ Your loop (per CLAUDE.md § Execution protocol):
    before classifying anything as form: the burden is per case, and an unlogged
    disable is indistinguishable from hiding a regression.
 
-4. For anything touching the checker, record the cost counters and justify any
-   increase (the (COST.1) gate). Round 713 added ~72k getTypeOfExpression calls
-   for one diagnostic and nothing noticed.
+4. For anything touching the checker, run the COST.1 gate next to the suite (but
+   NEVER at the same time):
+
+       python3 scripts/cost_gate.py
+
+   It diffs deterministic --passTiming counters against docs/perf/cost-counters.txt
+   and fails above +/-2%. An increase is not a veto — justify it in the note and
+   rebaseline with --update in the same commit. Round 713 added ~72k
+   getTypeOfExpression calls for one diagnostic and nothing noticed.
 
 5. For a perf claim, also run the profile and record it:
 

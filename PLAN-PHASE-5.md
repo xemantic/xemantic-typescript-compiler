@@ -1942,8 +1942,37 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **Do NOT** use this to wave through a diff you have not read: the burden is
   demonstrating equivalence per case, in the note.
 
-- [ ] **(COST.1) Enforce the cost gate — owner-approved 2026-07-26 ("yes, I want to
-  enforce it, to counter performance regressions").** Round 713 added ~72k
+- [x] **(COST.1) DONE round 717 — `scripts/cost_gate.py`, and the determinism check
+  caught a racy counter on its first use.** Runs the compiler profile with
+  `--passTiming`, extracts 20 deterministic counters, diffs them against the tracked
+  `docs/perf/cost-counters.txt`, fails above ±2% (per-counter), and exits nonzero so it
+  drops into the round gate next to the suite. `--update` rebaselines, `--from-log`
+  re-parses an existing run (free re-scoring, and how the rebaseline below was done),
+  `--tolerance` tunes the bar. Coverage: the front end (pre-parse reuse), the spine
+  (nodes walked), the type system (getTypeOfExpression calls/distinct/outside-init,
+  narrowing walks, memo serves), type-node resolution (cacheable/hits/bypassed, the
+  INV.5(c) mapped cache, fingerprint builds), name resolution (globals
+  lookups/conflated/misses) — **plus the compiler's ANSWER (error count, program file
+  count), because a cost drop that changes the output is not a win and the gate has
+  to be able to see that.** Four counters baseline at ZERO
+  (`ctxFingerprint.builds`, `globals.conflated`, `narrow.walksOutsideInit`,
+  `preparse.fresh`) and are therefore tripwires: any nonzero value is flagged.
+  **Baseline at 41bedb73:** errors 46, spine.nodes 856,962, typeOfExpr 696,933 calls
+  over 250,057 distinct nodes, narrowWalks 69,903 (40,546 memo-served), typeNode
+  210,397 cacheable / 89,883 bypassed, globals 1,377,511 lookups at 98.9% miss.
+  **THE FINDING — the AST census is racy, and it is exactly what (DISPATCH.1) was
+  told to derive its table from.** Two runs of the same binary: every counter
+  bit-identical EXCEPT the `indexSourceFile` node census, 857,350 vs 854,550
+  (−0.33%). `indexSourceFile` runs on the crawl's concurrent parse threads
+  (`readAndScanBatch`, Dispatchers.Default, FRONTEND_CONCURRENCY in flight) and
+  `PassTiming.nodeKindHistogram` is a plain HashMap, so increments are lost and the
+  census always undercounts. Instrumentation-only (no production impact), but it
+  means the census is sound for "which kinds dominate" and NOT sound as an exact
+  per-kind population. Excluded from the gate (a nondeterministic row teaches people
+  to ignore the gate) and warned about at the source in PassTiming.kt; DISPATCH.1's
+  derivation needs an exact census — see the note on that item.
+- [ ] ~~(COST.1) Enforce the cost gate (original)~~ — **owner-approved 2026-07-26
+  ("yes, I want to enforce it, to counter performance regressions").** Round 713 added ~72k
   `getTypeOfExpression` calls (+11.5%, ≈70–200 ms) for one conformance diagnostic and
   nothing noticed, because the round gates are the corpus and `--listAll` and neither
   sees cost. Over 200 rounds that is how ~118 handler consultations per node
@@ -2021,6 +2050,17 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **TRAP:** the corpus is the only gate that sees kinds the 8 profiles never
   exercise — a table derived from profiles alone WILL be wrong. Derive from the
   suite run and treat the profiles as confirmation.
+  **SECOND TRAP, found round 717 while building the COST.1 gate: do NOT derive the
+  table from the existing `nodeKindHistogram` census — it is RACY and always low.**
+  `indexSourceFile` runs on the crawl's concurrent parse threads
+  (`readAndScanBatch`, Dispatchers.Default) and the histogram is a plain HashMap,
+  so two runs of the same binary measured 857,350 vs 854,550 nodes (−0.33%) while
+  every single-threaded counter was bit-identical. Losing a third of a percent of
+  nodes to a race is harmless for "which kinds dominate" and fatal for "which kinds
+  can this handler fire on" — a kind that appears rarely could be dropped entirely
+  from a thread's map. The new instrumentation this item calls for must accumulate
+  per-handler kind sets from the SINGLE-THREADED check spine (or be made
+  thread-safe explicitly), never from the parse-time census.
   Blocks nothing; unblocks the honest re-measure of every other lever.
   **TOOLING — everything needed is landed (round 716); no setup decisions:**
   (1) create the bench project once —
