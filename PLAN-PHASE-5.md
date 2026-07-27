@@ -25,7 +25,7 @@ are SHIPPED, so a browser or worker project is type-CHECKED instead of silently 
 unchecked. The cost was NOT where the item predicted — the payload is 3.14 MB, not ~1 MB,
 and it broke the KOTLIN COMPILE, not the compiler; splitting the emission over 16 part
 files fixed that and made a cold compile CHEAPER than before (2m25s). Corpus 12,857 →
-12,874 / 0 / 3 (+17 pins). Cost gate PASSES with every counter at +0.00%; dashboard
+12,876 / 0 / 3 (+19 pins). Cost gate PASSES with every counter at +0.00%; dashboard
 unmoved (compiler 46, services 46, harness 94).**
 
 **THE DEFECT, restated because it is the whole point.** `generateRealLibSources` filtered
@@ -110,6 +110,15 @@ ES2015 layer, which is also what tsc does (pinned in `RealLibResolverTest`).
   DOM and keeps CRLF for es5, which is the sharper claim — a generator that normalised
   either way would fail one of the two.
 - The HTMLElement TS2339 draft above.
+
+**(c)'s ZERO-RISK HALF LANDED WITH IT — the empty `unavailable` is now an INVARIANT, not
+an accident.** Two pins in `RealLibResolverTest`: every name in `libMap` and every
+`ScriptTarget` default resolves with both `unavailable` and `unknownNames` empty, and
+every distributed lib file name round-trips `distFileNameToKey` → `keyToDistFileName`
+unchanged. The second would have caught this round's own `lib.dom.generated.d.ts` bug;
+the first turns "a pin bump added a lib name we do not ship" from a silent `any` into a
+test failure. That is the half of (c) with no corpus exposure, so it did not need to wait
+for the design decision below.
 
 **NEXT — and (c) IS A DIFFERENT, SMALLER PROBLEM NOW than the item describes.** (LIB.1)(c)
 was scoped as "report a REQUESTED lib that is unavailable". After this round
@@ -1156,7 +1165,12 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   which a COLD compile takes 2m25s, i.e. CHEAPER than the old single-file shape at
   a sixth of the payload. Dashboard unmoved (profiles pin `"lib": ["es2020"]`),
   corpus unmoved (still the embedded lib), cost gate +0.00% on every counter.
-  **REMAINING: (c) only — and it SHRANK.** With everything shipped,
+  **(c)'s zero-risk half landed here too:** `RealLibResolverTest` now pins that
+  every `libMap` name and every `ScriptTarget` default resolves with `unavailable`
+  AND `unknownNames` empty, and that every distributed lib file name round-trips
+  through `distFileNameToKey`/`keyToDistFileName` unchanged (which is what the
+  `lib.dom.generated.d.ts` bug above would have tripped).
+  **REMAINING: (c)'s user-facing half — and it SHRANK.** With everything shipped,
   `Resolution.unavailable` is EMPTY for every resolution (pinned), so the
   "requested but unshipped" case (c) was written for no longer exists — a
   non-empty `unavailable` can now only mean a pin bump outran the generator, which

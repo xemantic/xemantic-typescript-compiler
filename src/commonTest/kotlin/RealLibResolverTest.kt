@@ -169,4 +169,50 @@ class RealLibResolverTest {
             have(orderedKeys.last() == "decorators.legacy")
         }
     }
+
+    // ---- (LIB.1)(b/c): every lib tsc knows about is one we actually ship --------
+
+    @Test
+    fun `every lib name and every target default resolves with nothing unavailable`() {
+        // This is the maintained form of what (LIB.1)(b) fixed. Before it, a `lib`
+        // request for an unshipped file landed in `Resolution.unavailable` — a list
+        // NOTHING consumed, so the lib silently degraded to `any` instead of failing.
+        // The set is empty now, and this keeps it empty: a pin bump that adds a lib
+        // name to `libMap` without a matching shipped file, or renames a source file
+        // out from under `distFileNameToKey`, fails HERE rather than going quiet.
+        val offenders = mutableListOf<String>()
+        for (name in RealLibResolver.libMap.keys) {
+            val resolution = RealLibResolver.resolve(listOf(name), ScriptTarget.ES5)
+            if (resolution.unavailable.isNotEmpty() || resolution.unknownNames.isNotEmpty()) {
+                offenders.add(name)
+            }
+        }
+        for (target in ScriptTarget.entries) {
+            val resolution = RealLibResolver.resolve(null, target)
+            if (resolution.unavailable.isNotEmpty() || resolution.unknownNames.isNotEmpty()) {
+                offenders.add("target:$target")
+            }
+        }
+        assert(offenders.isEmpty())
+    }
+
+    @Test
+    fun `every distributed lib file name round-trips through the key mapping`() {
+        // The asymmetry that bit round 731: `distFileNameToKey` mapped
+        // `lib.dom.d.ts` -> `dom.generated` while `keyToDistFileName` had no inverse,
+        // so a DOM lib file's SourceFile.fileName came out as `lib.dom.generated.d.ts`
+        // — a name that exists in no TypeScript distribution, and one that a
+        // lib-declaration diagnostic (TS2728's "declared here") would print.
+        val offenders = mutableListOf<String>()
+        val distNames = RealLibResolver.libMap.values.toMutableSet()
+        for (target in ScriptTarget.entries) distNames.add(RealLibResolver.defaultLibFileName(target))
+        for (dist in distNames) {
+            val key = RealLibResolver.distFileNameToKey(dist)
+            if (key !in RealLibFiles.files) offenders.add("$dist -> $key (not shipped)")
+            else if (RealLibResolver.keyToDistFileName(key) != dist) {
+                offenders.add("$dist -> $key -> ${RealLibResolver.keyToDistFileName(key)}")
+            }
+        }
+        assert(offenders.isEmpty())
+    }
 }
