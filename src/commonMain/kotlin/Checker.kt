@@ -137874,6 +137874,9 @@ interface DataView {
                 // (`this._walk(path, true, (err, res) => { … return "retry"; …
                 // return "throw"; })` vs `(…) => "retry" | "throw"`, vfsUtil.ts).
                 if (argFnLiteralReturnsSatisfyParam(arg, paramType)) continue
+                // Round 728: an OBJECT-LITERAL arg whose only failure is a WIDENED
+                // literal property (`{ usage: "sort" }` vs `usage?: "sort" | "search"`).
+                if (objLitLiteralPropsSatisfyParam(arg, argType, paramType)) continue
                 // B70.15: Bivariant fallback for function-vs-function under @strict: false.
                 // Also try reverse direction; if param accepts arg's shape going either way,
                 // count as match. Only fires for anonymous function-typed Type.Object pairs
@@ -137889,6 +137892,68 @@ interface DataView {
                 }
                 return false
             }
+        }
+        return true
+    }
+
+    /**
+     * Round 728: does an OBJECT-LITERAL argument satisfy [paramType] once its
+     * literal-valued properties are read as their LITERAL types?
+     *
+     * We have no fresh-literal machinery — [getTypeOfExpressionCore] types `"sort"` as
+     * `string` — so an overload parameter carrying a literal-union property
+     * (`usage?: "sort" | "search"`) rejects `{ usage: "sort" }`, which tsc accepts by
+     * contextually typing each CANDIDATE's arguments (tsc core.ts's `new
+     * Intl.Collator(locale, { usage: "sort", … })`; the single-signature path already
+     * contextually types the literal, which is why only OVERLOADED callees exhibit it).
+     * The plain-argument analogue is the `overloadingOnConstants2` rule at the call
+     * sites above; this is that rule one level in, per property.
+     *
+     * Evaluated ONLY after [checkTypeRelatedTo] has already FAILED, so it costs nothing
+     * on the happy path, and it is SUPPRESSION-ONLY and narrow: every literal property
+     * must still be present on the target (an EXCESS property still rejects), every
+     * required target property must still be supplied, and a property failing for any
+     * reason other than literal widening still rejects. At least one property must
+     * actually be rescued by its literal type, so a relation that failed for an
+     * unrelated reason can never be accepted here.
+     */
+    private fun objLitLiteralPropsSatisfyParam(arg: Expression, argType: Type, paramType: Type): Boolean {
+        if (arg !is ObjectLiteralExpression) return false
+        val src = argType as? Type.Object ?: return false
+        if (src is Type.Interface || src is Type.Reference) return false
+        // An optional parameter is `T | undefined`: take the single non-nullish object
+        // constituent, exactly as the object-literal contextual-type selection does.
+        val tgt: Type.Object = when (paramType) {
+            is Type.Union -> (paramType.types
+                .filter { !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) }
+                .singleOrNull() as? Type.Object) ?: return false
+            is Type.Object -> paramType
+            else -> return false
+        }
+        if (tgt is Type.Reference) return false
+        // An inherited required property would not be enumerated below, so a target with
+        // base types is left to the plain relation.
+        if (tgt is Type.Interface && !tgt.baseTypes.isNullOrEmpty()) return false
+        resolveStructuredTypeMembers(tgt)
+        resolveStructuredTypeMembers(src)
+        var anyLiteralRescue = false
+        for (p in src.properties ?: return false) {
+            val tp = getPropertyOfType(tgt, p.name) ?: return false  // excess property still rejects
+            val tpt = getTypeOfSymbol(tp)
+            if (tpt === anyType || tpt === errorType) continue
+            val spt = getTypeOfSymbol(p)
+            if (spt === anyType || spt === errorType) continue
+            if (checkTypeRelatedTo(spt, tpt, assignableRelation)) continue
+            if (!propTypeContainsLiteral(tpt)) return false
+            val init = (p.valueDeclaration as? PropertyAssignment)?.initializer ?: return false
+            val lit = literalTypeOfExpression(init) ?: return false
+            if (!checkTypeRelatedTo(lit, tpt, assignableRelation)) return false
+            anyLiteralRescue = true
+        }
+        if (!anyLiteralRescue) return false
+        for (tp in tgt.properties ?: return false) {
+            if (isOptionalProperty(tp)) continue
+            if (getPropertyOfType(src, tp.name) == null) return false
         }
         return true
     }
