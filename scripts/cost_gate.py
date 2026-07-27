@@ -236,8 +236,7 @@ def warn_on_low_memory():
             "           ./gradlew --stop && pkill -f 'KotlinCompile[D]aemon'\n"
             "         (no -9: killing the Kotlin daemon hard forces the next build to be a\n"
             "          COLD compile, which does not fit the inherited -Xmx2g and presents\n"
-            "          as a hang — see CLAUDE.md. Add\n"
-            "          -Dkotlin.daemon.jvmargs=-Xmx3g if you hit it.)\n"
+            "          as a hang — see CLAUDE.md; gradle.properties now sets 5g.)\n"
             % (avail / 1024.0 / 1024.0)
         )
 

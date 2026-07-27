@@ -20,6 +20,49 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 720 (2026-07-26/27) — the owner approved the heap raise, and everything that
+had been stuck landed at once: `Required<T>` fixed, real-lib FPs 35 → 24, corpus
+12,765 → 12,770 / 0 / 3, and the cost gate reports ZERO movement on every counter.
+Two of my own earlier diagnoses turned out wrong and are corrected here.**
+
+**The fix (rounds 718's work, finally gated).** `Required<T>` is
+`{ [P in keyof T]-?: T[P] }`; the parser recorded `-?` as a plain `?`, so it behaved
+as `Partial<T>` — inverted. The FP mechanism is NOT type-level: TS2722 gates on
+`isOptionalProperty(propSym)`, and a homomorphic mapped member carries its SOURCE
+property's declaration, so the source's `?` is what the scan sees. Fixed exactly as
+M1.10 fixed `-readonly`: a `mappedRequiredMemberIds` side-channel, probed only when
+the declaration already says optional, so the documented hot path pays nothing —
+which the cost gate then confirmed at zero counters moved. Real-lib arm C: 48 → 37
+(TS2722 ×11 → 0, no other code touched).
+
+**BUILD.1, settled with a measured ladder.** 2g GC-thrashes forever, 3g dies
+mid-compile, **4g fails in ~6 min with an explicit `Not enough memory to run
+compilation`**, 5g succeeds in ~6.5 min. Gradle's own daemon was cut 2g → 1g to make
+room: 5g + 2g oversubscribed the 7.7 GB box and the kernel killed the compile daemon
+mid-run leaving nothing in any log. Checker.kt being ~110k lines in ONE file, plus
+RealLibFiles.kt's ~566 KB of string constants, is why a single module wants 5 GB.
+
+**TWO WRONG DIAGNOSES OF MY OWN, both corrected — this is the reusable part.**
+(1) Round 719 blamed a competing local bench loop for builds that would not finish.
+Those `chore(bench)` commits are authored by `github-actions[bot]`: remote CI, never
+on this box. (2) Far worse, rounds 718–719 recorded "40-minute compiles" that were
+really ~6-minute ones being **restarted by my own polling** — each new Bash call
+preempted the previous backgrounded one, so the `sleep`s never ran and the build died
+with the shell. I diagnosed a hardware/heap crisis out of an artefact of how I was
+waiting. **The rule that follows: launch a long build DETACHED (`nohup … &`) and wait
+on exactly ONE timer; never poll a foreground background-task build.** Process ages
+(`ps -o etime`) are the tell — if the thing you have been waiting 25 minutes for is
+90 seconds old, you are killing it.
+
+**Method note worth keeping:** the explicit error message that ended this only
+appeared at 4g. At 2g and 3g the failure mode was silence — a hang and a restart —
+which is what sent two rounds chasing contention and hardware. When a build fails
+silently, raising the resource until it can TELL you what it wants is cheaper than
+inferring it from symptoms.
+
+---
+
+
 **Round 719 (2026-07-26) — second attempt to gate round 718's fix; the build again did
 not converge, so the loop is STOPPING on (BUILD.1) rather than burning a third round
 on it. Main is at the last gated commit and clean; the fix stays on
@@ -2177,7 +2220,19 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   suite run, and record the baseline in the same commit as any accepted increase,
   with the justification.
 
-- [ ] **(BUILD.1) BLOCKED-PENDING-USER: raise the Kotlin daemon heap — a cold compile
+- [x] **(BUILD.1) DONE round 720 — owner approved the heap raise; the settled figure is
+  5g for the Kotlin daemon plus a 2g→1g cut to Gradle's own, and the from-scratch
+  compile now completes in ~6.5 min.** The measured ladder: 2g GC-thrashes forever
+  (looks exactly like a hang — zero class files, because Kotlin writes output only at
+  the end), 3g dies mid-compile, 4g fails in ~6 min with an explicit `Not enough memory
+  to run compilation`, 5g succeeds. Gradle's daemon had to shrink because 5g + 2g
+  oversubscribed the 7.7 GB box and the kernel killed the compile daemon mid-run with
+  nothing in any log. **Both earlier diagnoses were wrong and are corrected in place:**
+  round 719 blamed a local bench loop (those commits are `github-actions[bot]`, remote),
+  and rounds 718–719 read "40-minute compiles" that were really ~6-minute ones being
+  restarted — the agent's own polling was preempting its builds, so the sleeps never ran.
+  Launch long builds DETACHED (`nohup … &`) and wait on ONE timer. Original item below.
+- [ ] ~~(BUILD.1) BLOCKED-PENDING-USER: raise the Kotlin daemon heap (original)~~ — **a cold compile
   does not fit in the inherited `-Xmx2g` and HANGS instead of failing.** Measured
   round 717, and it cost that round ~30 minutes. `gradle.properties` sets
   `org.gradle.jvmargs=-Xmx2g`, which the Kotlin compile daemon inherits. An
@@ -2267,10 +2322,9 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   `compiler` profile only, and the bigger profiles will have their own deltas.
   Raw logs: the four arms were run at 8100a78e; reproduce by adding
   `"useRealLibs": true` to `build/bench/tsc-project-*/tsconfig.json`.
-  **(a1) FIRST FP FAMILY DIAGNOSED AND WRITTEN, round 718 — 11 of the 35, parked
-  UNVERIFIED on branch `wip/round718-required-minus-optional` because this box could
-  not complete a compile to gate it (see BUILD.1). Pick it up by merging that branch
-  and running the suite + cost gate.** THE DEFECT: `Parser.kt`'s mapped-type modifier
+  **(a1) LANDED round 720 — 11 of the 35 gone; real-lib FPs 35 → 24, and the fix is
+  FREE (every cost counter unchanged). Corpus 12,765 → 12,770 / 0 / 3 (+5 pins), the
+  embedded-lib profile still 46.** THE DEFECT: `Parser.kt`'s mapped-type modifier
   scan records `-?` as a plain `?`, so `Required<T> = { [P in keyof T]-?: T[P] }`
   behaves exactly like `Partial<T>` — inverted. `-readonly` got its own flag in M1.10;
   the `?` analogue was never done. THE MECHANISM IS NOT THE OBVIOUS ONE: TS2722 does
