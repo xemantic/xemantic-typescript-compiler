@@ -20,6 +20,146 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 728 (2026-07-27) — THREE causes cracked in one session, and the three that remain
+are now isolated in lib-free repros instead of described. Real-lib false positives 7 → 3
+(arm C 20 → 16, MEASURED both sides, TS2349 ×2 → 0, TS2769 ×1 → 0, TS2322 ×3 → ×2, no
+other code moved by even one). Corpus 12,804 → 12,822 / 0 / 3 (+18 pins). Cost gate
+PASSES — largest counter −0.68%, an improvement, nothing rebaselined. Embedded-lib
+compiler profile still 46.**
+
+**THE METHOD, unchanged and now five-for-five: triage by CAUSE first.** The seven sites
+did NOT split the way the histogram suggested. Three of them reproduced in a synthetic
+probe on the FIRST attempt — 8, 5 and 6 lines respectively, none needing the real libs —
+because the shapes were legible from the message plus the source line. The remaining
+four cost the rest of the session and produced three isolated repros and zero fixes.
+
+**CAUSE A — TS2349 ×2, one cause.** `resolutions.forEach(…)` on a
+`Set<Resolution> | Map<string, Resolution>` (resolutionCache.ts:1478) and
+`program.fileInfos.forEach(…)` on a union of two readonly arrays (builder.ts:2407). The
+B516 combining gate required every parameter to be REQUIRED
+(`minArgumentCount == parameters.size`), so every lib method with a trailing optional —
+`forEach(callbackfn, thisArg?)` above all — fell through to the "none of those signatures
+are compatible with each other" path. tsc's `combineSignaturesOfUnionMembers` demands
+nothing of the kind: longest parameter list, position-wise intersection (a position the
+shorter signature lacks contributes `unknown`), combined `minArgumentCount` = the MAX.
+Rest parameters stay excluded — the rest-tuple branch below owns them. **Only three
+corpus baselines pin that TS2349 message at all** (`betterErrorForUnionCall`,
+`unionTypeCallSignatures6`, `newOperator`), and all three survive on other gates: two
+differ in type parameters, one has arity 0 after the `this` drop.
+
+**CAUSE B — TS2322 ×1, and it is round 718's defect in the mirror.** A mapped type has
+FOUR modifiers and the materializer recorded three: `readonly` and `-readonly` since
+M1.10, `-?` since round 718, never the plain `?`. A homomorphic mapped member CARRIES ITS
+SOURCE DECLARATION and `isOptionalProperty` reads optionality off that declaration, so
+`Partial<T>`'s member of a REQUIRED source property stayed required — tsc's own
+`lookupFromPackageJson(): Partial<CreateSourceFileOptions>` (program.ts:1366) was rejected
+for omitting `languageVersion`. **The marker is a `SymbolFlags` BIT, not the id-keyed side
+channel its `-?` sibling uses**: the arm that must consult it is the hot one (every
+declared-REQUIRED property in the program reaches it), and a boxed-Int set lookup there
+would be paid on the whole program. The cost gate confirms the bit is free. Unlike `-?`,
+this one DOES reproduce on a hand-rolled mapped type.
+
+**CAUSE C — TS2769 ×1, found by a probe MATRIX rather than a single probe.** We have no
+fresh-literal machinery — `getTypeOfExpressionCore` types `"sort"` as `string`. Five
+variants of tsc's `new Intl.Collator(locale, { usage: "sort", … })` (core.ts:2100) said
+which ingredient mattered: single call signature CLEAN, two optional parameters CLEAN,
+single construct signature CLEAN — only the OVERLOADED call and construct forms reproduce,
+because overload resolution compares each candidate against the RAW argument type while
+the single-signature path contextually types the literal. The fix gives the existing
+`overloadingOnConstants2` rule (keep the literal against a LITERAL parameter) its
+per-property analogue, evaluated ONLY inside the already-failing branch — round 720/725's
+shape, and free for the same reason. Suppression-only and narrow: an excess property still
+rejects, a missing required target property still rejects, a property failing for any
+other reason still rejects, and at least one property must actually be rescued by its
+literal type.
+
+**THE THREE THAT REMAIN, each now with a minimal repro that did not exist before.**
+
+1. **parser.ts:3558, TS2322 — a TYPE-PARAMETER NAME COLLISION, not the `NonNullable`
+   shape round 726 predicted.** A four-case matrix isolates it exactly, with no lib types
+   and no `NonNullable` anywhere:
+
+       interface NodeX { kind: number }
+       interface NodeArrayX<T extends NodeX> extends ReadonlyArray<T> { pos: number }
+       declare function mkSame<T extends NodeX>(elements: readonly T[], pos: number): NodeArrayX<T>
+       function pG<T extends NodeX>(): NodeArrayX<T & { m: 1 }> {
+           const list: (T & { m: 1 })[] = []
+           return mkSame(list, 0)          // TS2322: NodeArrayX<T> vs NodeArrayX<T & { m: 1; }>
+       }
+
+   Rename the CALLEE's type parameter to `E`, or the CALLER's to `U`, and it is CLEAN.
+   Keep the collision but pass a CONCRETE element (`Conc[]`) — CLEAN. Keep the collision
+   and pass a concrete INTERSECTION (`(Conc & { m: 1 })[]`) — CLEAN. So the trigger is
+   precisely: **the argument's element type is an intersection whose TypeParam constituent
+   shares its NAME with the callee's type parameter.** `NonNullable<T>` is incidental (it
+   is just `T & {}`), and the constraint-checking family round 725 fixed is not involved.
+   Warming the callee's signature from a non-generic context first does NOT change the
+   outcome, so it is not a poisoned `symbolTypes` entry. `withInternedTpScope` and
+   `getTypeOfFunctionSymbol`'s `fnScope` both overlay by NAME
+   (`scope[tp.name.text] = typeParam`), which is where to start looking; `isArrayOfTypeParam`
+   compares the element by IDENTITY (`args0[0] === tp`), so a by-name capture anywhere in
+   that chain silently yields "no candidate" and the un-inferred return. Not instrumented —
+   that is the next round's first move, and it should take one compile.
+2. **utilities.ts:4258, TS2322 — `Exclude<…>` is never evaluated.** `getTypeFromTypeNode`
+   returns the raw union with `Identifier` still in it; the only place that DOES evaluate
+   `Exclude` is `resolveAssertTargetTypeNode`, which is assert-target-only. A repro exists
+   (below) but note it needed the INTERSECTION member to reproduce — the flat
+   `Ident | PropAcc` version is CLEAN:
+
+       interface Ident { kind: 1; escapedText: string }
+       interface PropAcc { kind: 2; expression: Ident | PropAcc }
+       interface ElemAcc { kind: 3; expression: Ident | PropAcc | ElemAcc }
+       interface Decl { d: 1 }
+       type LitElemAcc = ElemAcc & Decl & { readonly arg: string } & { readonly expression: any }
+       type Names = Ident | PropAcc | LitElemAcc
+       type Access = PropAcc | ElemAcc
+       declare const lhs: Access
+       function f() {
+           let nextToLast = lhs
+           while (nextToLast.expression.kind !== 1) {
+               nextToLast = nextToLast.expression as Exclude<Names, Ident>   // TS2322
+           }
+       }
+
+   **The gating question before writing this one:** `isLibOnlyTypeName("Exclude")` returns
+   TRUE when the name resolves to nothing at all, and the EMBEDDED lib declares no utility
+   types — so a materializer gated that way would start firing on corpus tests that
+   currently report TS2304 for an undeclared `Exclude`. Gate on the alias actually
+   resolving to a conditional-typed `TypeAliasDeclaration` instead, or evaluate the
+   conditional properly.
+3. **utilities.ts:12082, TS2345 `assertType<never>(node)` — NOT reproduced, twice.**
+   Neither a plain 2-member discriminated union with an exhaustive switch, nor the same
+   union arriving through an `asserts v is T` call (tsc's `Debug.type<HasInferredType>(node)`),
+   emits anything. Note that the FIRST `assertType<never>` in the same file (line 12050)
+   does NOT false-positive while this one does, so the discriminator is something about
+   `HasInferredType` specifically — 12 members, several sharing a `kind` domain — not about
+   exhaustive-switch narrowing in general. Least tractable of the three; leave it last.
+
+**A DEFECT FOUND IN PASSING, not on the list and not fixed.** An EXPLICIT call type
+argument of the round-725 shape still emits TS2344:
+`createNodeArrayX<NonNullable<U>>(list, 0)` where `U extends NodeX | undefined` reports
+"Type 'NonNullable<U>' does not satisfy the constraint 'NodeX'". Round 725's
+`intersectionSatisfiesViaTypeParamConstraint` evidently is not consulted at the
+CALL-type-argument site, only at the type-REFERENCE site. Worth a look when the parser.ts
+family is next touched — it may be why that family is fragile.
+
+**PROBE DISCIPLINE — what the controls bought this time.** Cause A's discriminating control
+runs in the direction round 727 recommended: with the members combined, `((x: number, …) |
+((x: boolean, …)` intersects to `never`, so `g("nope")` must report **TS2345, a diagnostic
+that did not exist on HEAD** (it reported TS2349 there). A fix that makes a new diagnostic
+APPEAR is far easier to prove than one that removes a class of them. Causes B and C are
+strictly suppression-only, so any control asserting a diagnostic that still fires WITH the
+fix necessarily fired without it. Every target was verified failing on unmodified HEAD via
+the CLI before the fix was written.
+
+**MEASUREMENT.** Arm C's 20-line HEAD listing was reused from round 727's own run rather
+than re-measured (same commit, same binary, nothing between them), and re-run after the
+three fixes: 16 = 13 env TS2591 + 3 real, with the diff a clean four-line removal and
+nothing added. tsconfig restored and verified by `grep -c useRealLibs` = 0; the embedded
+profile re-checked at 46 independently of the cost gate's `output.errors`.
+
+---
+
 **Round 727 (2026-07-27) — TWO families cracked, both by triaging all eight remaining sites
 by CAUSE before touching anything. Real-lib false positives 14 → 7 (arm C 27 → 23 → 20,
 MEASURED at every step, TS2339 ×4 → 0 and TS2345 ×4 → ×1, no other code moved by even one).
@@ -1087,6 +1227,34 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **REMAINING 7:** TS2322 ×3, TS2349 ×2, TS2769 ×1, TS2345 ×1 — the last TS2345 is
   utilities.ts:12082, a lone exhaustive-switch `assertType<never>(node)`, i.e. a
   full-switch-narrowing question with nothing in common with the three just fixed.
+  **(a9)/(a10)/(a11) LANDED round 728 — THREE causes in one session; real-lib FPs 7 → 3
+  (arm C 20 → 16, both sides MEASURED: TS2349 ×2 → 0, TS2769 ×1 → 0, TS2322 ×3 → ×2, no
+  other code moved). Corpus 12,804 → 12,822 / 0 / 3 (+18 pins), cost gate PASSES with the
+  largest counter −0.68%, embedded-lib profile still 46.** (a9) TS2349 ×2: the B516
+  combining gate required every parameter to be REQUIRED, so a trailing optional
+  (`forEach(cb, thisArg?)`) sent the union down the "none of those signatures are
+  compatible" path; tsc's `combineSignaturesOfUnionMembers` takes the longest parameter
+  list, intersects position-wise and maxes the minArgumentCount. Only three corpus
+  baselines pin that message and all survive on other gates. (a10) TS2322 ×1: the mapped
+  materializer never recorded the plain `?`, so `Partial<T>`'s member of a required source
+  property stayed required — round 718's `-?` defect in the mirror, marked by a
+  `SymbolFlags` BIT because that arm is the hot one. (a11) TS2769 ×1: an object literal's
+  string-literal property widens to `string`, and overload resolution compares each
+  candidate against the RAW argument type while the single-signature path contextually
+  types it — the `overloadingOnConstants2` rule now has a per-property analogue, evaluated
+  only inside the already-failing branch.
+  **REMAINING 3, each now with a minimal repro (see the round-728 session note for the
+  code):** parser.ts:3558 is a TYPE-PARAMETER NAME COLLISION — a four-case matrix shows it
+  needs the argument's element type to be an intersection whose TypeParam constituent
+  SHARES ITS NAME with the callee's type parameter; rename either side and it is clean, and
+  `NonNullable` is incidental (it is just `T & {}`), so round 726's "the round-725 shape one
+  level in" reading is DISPROVEN. utilities.ts:4258 is `Exclude<…>` never being evaluated
+  outside `resolveAssertTargetTypeNode` — a repro exists but needs an INTERSECTION member,
+  and the gating question is that `isLibOnlyTypeName("Exclude")` is TRUE for an UNDECLARED
+  name, so a materializer gated that way would start firing on corpus tests that report
+  TS2304 today. utilities.ts:12082 did NOT reproduce in two shapes; the discriminator is
+  something about `HasInferredType` specifically, since the same file's other
+  `assertType<never>` (line 12050) does not false-positive.
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;
