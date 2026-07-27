@@ -112594,7 +112594,20 @@ interface DataView {
             // constraint as effective param type) from being bypassed.
             val constraint = tp.constraint
             if (constraint != null) {
-                val ok = checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
+                // Round 729: the round-725 rule's THIRD arm. An INFERRED candidate that is an
+                // intersection carrying a TypeParam constituent (`T & { m: 1 }` — and, since
+                // the real lib spells `NonNullable<T>` as `T & {}`, every non-nullable form of
+                // a type parameter) satisfies the callee's constraint whenever that
+                // constituent's own constraint does, because `T ⊆ constraint(T)`. The relation
+                // has no TypeParam-source-via-constraint rule on purpose (round 456), so
+                // without this the whole inference bails and the callee's return type stays
+                // OPEN — which then FPs against a concrete consumer. Evaluated only inside the
+                // already-failing branch, so it costs nothing on the passing path.
+                var ok = checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
+                if (!ok && firstWidened is Type.Intersection &&
+                    intersectionSatisfiesViaTypeParamConstraint(firstWidened, constraint)) {
+                    ok = true
+                }
                 if (!ok) {
                     // B98.r118: a PRIMITIVE arg whose inferred type fails the type
                     // param's STRUCTURED constraint (a named interface or an anonymous
