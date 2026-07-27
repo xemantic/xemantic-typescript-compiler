@@ -93,6 +93,16 @@ fun main(args: Array<String>) {
             "--argSectionsCoarse", "--argsectionscoarse" -> {
                 ArgSections.reset(); ArgSections.mode = ArgSections.COARSE
             }
+            // (CALL.3)(a): the opt-in attribution INSIDE narrowTypeFromFlow — the
+            // arrivals-vs-distinct census plus the per-arrival split. `Coarse`
+            // keeps only the whole-walk anchor, so an ON-vs-COARSE pair prices
+            // the probe boundary differentially.
+            "--narrowSections", "--narrowsections" -> {
+                NarrowSections.reset(); NarrowSections.mode = NarrowSections.ON
+            }
+            "--narrowSectionsCoarse", "--narrowsectionscoarse" -> {
+                NarrowSections.reset(); NarrowSections.mode = NarrowSections.COARSE
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -162,6 +172,13 @@ fun main(args: Array<String>) {
         print(ArgSections.csv())
         println("== (CALL.2) csv end ==")
         ArgSections.mode = ArgSections.OFF
+    }
+    if (NarrowSections.mode != NarrowSections.OFF) {
+        println(NarrowSections.report())
+        println("== (CALL.3) csv ==")
+        print(NarrowSections.csv())
+        println("== (CALL.3) csv end ==")
+        NarrowSections.mode = NarrowSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -296,6 +313,8 @@ private fun printUsage() {
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
+          --narrowSections   (CALL.3) intra-walk attribution of narrowTypeFromFlow (arrivals vs distinct)
+          --narrowSectionsCoarse  the same, whole-walk anchor only — the calibration counterpart
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)

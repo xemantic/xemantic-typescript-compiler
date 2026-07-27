@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 736 (2026-07-27) — (CALL.3) DONE, AND THE ARC HAS ITS FIRST LANDED WIN:
+`-4.53%` median, B wins 6/6, outside the +-2% band by 2.3x.** Round 735 handed forward
+394 walks costing 1,485 ms and forbade designing before two numbers existed. Both were
+measured with a new opt-in probe (`NarrowSections`/`NarrowProbe`, `--narrowSections{,Coarse}`),
+and they point at one line. **(i) ARRIVALS vs DISTINCT: a tail walk arrives at 1,900 flow
+nodes but only 214 DISTINCT ones — revisit factor 8.85 against 1.48 for a typical walk.
+The tail is not a bigger graph; it is the same small graph walked nine times.
+(ii) THE PER-ARRIVAL SPLIT: 51% of the whole narrowing population is
+`applyConditionNarrowing` (1,412 ms over 759,784 calls at 1,858 ns), and the tail's
+arrival MIX is what makes its arrivals 6.3x costlier — `FlowCondition` is 41% of tail
+arrivals against 18% overall, `FlowBranchLabel` 22% against 9%, while cheap `FlowCall`
+pass-throughs fall 57% -> 19%.**
+
+**THE FIX, and it is a soundness argument rather than a green suite.**
+`NarrowFlowMemo.served(id, depth)` required `depth <= storedDepth`, so a node reached
+again by a LONGER path recomputed its whole antecedent subtree — 631,585 arrivals
+compile-wide, **426,753 of them at `FlowCondition` nodes**, versus 290,011 serves. That
+condition guards exactly ONE thing: a deeper entry has less depth budget and might
+truncate at `NARROW_MAX_DEPTH`=2000 where the stored computation did not. That is
+**decidable**: `depth` influences the result through no other channel (grep the walker —
+it appears only in the cap test, the two memo calls, and `depth + 1`), and only
+NON-truncated results are ever stored. So an entry now carries `hi`, the max depth its
+own subtree reached, and serves a deeper probe iff `depth + (hi - storedDepth) < maxDepth`.
+**The one non-obvious part: a served hit must fold `depth + servedHeight` into the
+CALLER's height, or an ancestor records the shortcut's height instead of a fresh
+recomputation's and the disjunct goes unsound under nesting.** Mirrored into
+`narrowTypeFromFlowFollowLoopEntry` per the walker-mirror invariant.
+
+**EFFECT (counters, deterministic): `narrowTypeFromFlowCore` invocations 1,455,915 ->
+659,592 (-55%); arrivals 4,759,476 -> 3,500,214 (-26%) with DISTINCT nodes UNCHANGED at
+3,212,764; `applyConditionNarrowing` calls 759,784 -> 333,031 (-56%); `getUnionType` at
+branch labels -59%; the `>=1 ms` tail 429 walks -> 230 and its arrivals 815,259 -> 34,490
+(-96%), revisit factor 8.85 -> 1.34.** Distinct unchanged to the node is the signature of
+a correct memoisation change: the same work is discovered, it is simply not repeated.
+Measured context that made the argument checkable: maxDepth reached is **249 of 2000**,
+and depth/budget/cycle truncations are **0/0/0** (the cycle bail is structurally
+unreachable here — the only back-edges are loop back-edges and `narrowTypeFromFlow`
+returns the declared type at `FlowLoopLabel` without recursing, so it is a DAG walk).
+
+**WHAT DID NOT WORK — two candidates priced and rejected, record them.** (1) **A "does
+this condition mention the name" pre-test in front of `applyConditionNarrowing`**:
+95.6% of its calls return their INPUT unchanged, which reads like a huge prize and is a
+trap — the identity calls cost **949 ns each against 21,708 ns for the calls that
+narrow**, so the whole population is 689 ms raw before this round's fix and 468 ms after,
+~410 ms net = 1.3%, INSIDE the band before paying for the pre-test. Section 0's law in a
+shape that is not a cache: *what you can skip cheaply is what was already cheap*.
+(2) **Memoising the fast-forward chain's pass-through nodes**: `FlowCall` is 57% of all
+arrivals with 2,743,997 memo absences — the biggest miss population in the table and the
+cheapest, ~131 ns per arrival, so its entire revisit share is <=120 ms against a 74 ns
+extra `putIfDeeper` per invocation to capture it.
+
+**METHOD carried forward.** The per-arrival population (4.8 M) is large enough that one
+timestamp PAIR per arrival would have added ~850 ms to a 2.75 s population — the probe
+would have BEEN the measurement. So the two per-arrival structures are priced in **probe
+STEPS** (a deterministic counter inside their open-addressing loops), not nanos. And:
+one profile run in this round was taken at 239 MB available and reported the walk anchor
+at **83,074 ms against a true 2,751 ms** (30x) while its COUNTERS were byte-identical to
+the clean run — which is exactly why the decisive numbers here are counters.
+
+Suite 12,899 -> **12,910 / 0 / 3** (+4 `IntKeyMapTest` height pins, +7 `NarrowMemoDepthTest`);
+profile `--listAll` **byte-identical A vs B** (46 errors); cost gate: `output.errors`,
+`spine.nodes`, `narrow.walks`, `typeOfExpr.distinct`, `mapped.*` all +0.00%, and **four
+counters FELL and were rebaselined in this commit** — `typeNode.cacheable` -10.6%,
+`typeNode.cacheHits` -14.6%, `globals.lookups` -8.4%, `globals.misses` -8.5%, all
+downstream of the 56% cut in `applyConditionNarrowing` (which resolves names and type
+nodes). Full derivation: **`docs/perf/narrow-walk-attribution.md`**.
+**A TEST-DISCIPLINE NOTE worth keeping**: two of this round's negative controls failed on
+first run (TS2339 for `x.toFixed(2)` on a `string`-narrowed reference, and for a
+loop-widened receiver). Both fail IDENTICALLY on the baseline build — pre-existing
+emitter gaps, not regressions — and were rewritten onto TS2345 at a call argument, the
+path this round actually profiles. **Run a failing negative control against the baseline
+before believing OR dismissing it.**
+
 **Round 735 (2026-07-27) — (CALL.2) DONE. THE PRIOR HOLDS BY 48x, AND ITS SUPPORTING
 EVIDENCE POINTS AT THE WRONG TERM.** The item's falsifiable expectation was "most of the
 61 us is argument TYPE computation, not `checkTypeRelatedTo`". **It is: 924 ms of the
@@ -1705,37 +1778,51 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   compile-wide narrow-walk histogram in `PassTiming`, and
   `ArgSectionProbeTest`. Follow-on: **(CALL.3)** below.
 
-- [ ] **(CALL.3) Attribute INSIDE a monster narrowing walk — 394 walks of
-  70,037 (0.56%) cost 1,485 ms = 47% of all flow narrowing and 4.9% of a 30.5 s
-  compile (round 735).** This is the FIRST single target measured above the
-  +-2% drift band (~610 ms) since round 731, by 2.4x. By kind: WK_NARROW 336,
-  WK_NARROW_LOOP 47, WK_BASE_EXPR 11 — one walk function, not one caller.
-  **Do NOT propose a cache and do NOT re-test these three, all already
-  DISPROVED in round 735 on this profile:** they do not TRIP
-  (`narrowWalk tripped: 0`), they do not exhaust the 1,000,000-visit budget
-  (630,641 arrivals total, 1,601 each, max 19,515), and the walk memo cannot
-  reach them (`walkMiss cold=69,968` of 70,037 — essentially every launched
-  walk is a first sighting). **STEP (a): two numbers, then design.** (i) node
-  ARRIVALS versus DISTINCT flow nodes per walk — the intra-walk memo
-  `NarrowFlowMemo` (tsc's `sharedFlowNodes`) serves only entries stored at a
-  same-or-deeper entry depth (`served(id, depth)` requires `depth <= stored`),
-  so a revisit reached by a LONGER path misses and recomputes; if arrivals >>
-  distinct, relaxing that depth condition is the lever and the question becomes
-  whether it can change a TRUNCATED result. (ii) the per-arrival split of
-  `narrowTypeFromFlow` — the monsters run at **2,354 ns per arrival** against a
-  372 ns all-walk mean, which is not graph traversal, so split
-  `applyConditionNarrowing` / `flowAssignmentMightNarrow` /
-  `flowCallMightNarrow` / the `FlowBranchLabel` fan-out and its
-  `mark`/`popToMark`. The `ArgSections` harness generalises (new section
-  constants only), and its calibration is now a MODE: measure ON versus a
-  COARSE anchors-only run and divide by the extra boundary count — the in-situ
-  unrolled empty span has now over-read by 3.6x and 4.4x in consecutive rounds
-  and must not be trusted. **CAUTION carried forward from rounds 732-735:** all
-  four predicted a lever from a plausible reading of an aggregate and were
-  wrong by 5x, 6-17x, >=2x and (here) by naming the wrong term inside a correct
-  verdict. Price the population BEFORE building anything; counters decide,
-  `scripts/ab-interleaved.sh` medians AND win rate confirm. Gate: corpus suite
-  + `--listAll` + `cost_gate.py`.
+- [x] **(CALL.3) Attribute INSIDE a monster narrowing walk — DONE round 736,
+  and it LANDED THE ARC'S FIRST WIN: `-4.53%` median, B wins 6/6, outside the
+  +-2% band by 2.3x.** Both numbers the item demanded were measured first.
+  (i) A `>= 1 ms` walk arrives at **1,900 flow nodes but only 214 DISTINCT**
+  ones — revisit factor **8.85 against 1.48** for a typical walk; the tail is
+  the same small graph walked nine times, not a bigger graph. (ii) The
+  per-arrival split: **51% of the whole narrowing population is
+  `applyConditionNarrowing`** (1,412 ms / 759,784 calls / 1,858 ns), and the
+  tail's arrivals are 6.3x costlier because of their MIX — `FlowCondition` 41%
+  of tail arrivals vs 18% overall, `FlowBranchLabel` 22% vs 9%, cheap
+  `FlowCall` pass-throughs 57% -> 19%. **THE FIX:** `NarrowFlowMemo.served`
+  required `depth <= storedDepth`, costing 631,585 recomputes compile-wide
+  (426,753 at `FlowCondition`); an entry now carries `hi` = the max depth its
+  own subtree reached and also serves when `depth + (hi - storedDepth) <
+  NARROW_MAX_DEPTH`, which is the exact condition under which a fresh
+  computation cannot trip and therefore provably reproduces the value. Result:
+  invocations -55%, arrivals -26% with DISTINCT UNCHANGED, the `>= 1 ms` tail
+  429 -> 230 walks and its arrivals -96%. Suite **12,910 / 0 / 3**, `--listAll`
+  byte-identical, four cost counters FELL and were rebaselined. LANDED:
+  `NarrowSections`/`NarrowProbe` + `--narrowSections{,Coarse}` (opt-in,
+  behaviour-free when off), the memo height disjunct in both walker mirrors,
+  `IntKeyMapTest` height pins and `NarrowMemoDepthTest`. Full derivation, the
+  soundness argument and the two priced-and-rejected candidates:
+  **`docs/perf/narrow-walk-attribution.md`**. Follow-on: **(CALL.4)** below.
+
+- [ ] **(CALL.4) `applyConditionNarrowing`'s 33,307 genuinely-narrowing calls
+  at 21,708 ns each — the largest unattributed per-call number this arc has
+  produced (round 736).** After (CALL.3) the function is 333,031 calls / ~1,016
+  ms, of which 93% return their input unchanged for **468 ms raw (~410 ms net,
+  1.3%)** and the remaining 7% carry the rest. **Do NOT re-propose the "does
+  this condition mention the name" pre-test — round 736 priced it at ~410 ms,
+  INSIDE the band, before the pre-test's own cost** (the identity calls are the
+  CHEAP tail at 949 ns against 21,708 ns; § 0's law again, in a shape that is
+  not a cache). The open question is what the 21,708 ns IS: split
+  `narrowByEquality` / `narrowByInstanceOf` / `narrowByInOperator` /
+  `narrowByCallPredicate` / `narrowByTruthiness` and the `getReferencePath`
+  string building they all key on, using the `NarrowSections` harness (new
+  section constants only). **Note the size honestly before starting: the whole
+  narrowing population is now ~723 ms of genuinely-narrowing work = 2.4% of the
+  compile, only just outside the band** — so a partial win here is in-band and
+  the item may well end as a measurement. Also still open from round 735 and
+  NOT reached by any round yet: attribute the 701,463 `getTypeOfExpression`
+  calls **BY CALLER**, which is the only way to find § 0.1 stage 3's x2.7
+  recompute factor. Gate: corpus suite + `--listAll` + `cost_gate.py` +
+  `scripts/ab-interleaved.sh` medians AND win rate.
 
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is

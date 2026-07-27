@@ -1358,3 +1358,486 @@ object ArgSections {
         }
     }
 }
+
+/**
+ * (CALL.3)(a) round 736: the opt-in attribution INSIDE `narrowTypeFromFlow` —
+ * the fifth in the 732→736 sequence, and the first whose target was measured
+ * ABOVE the ±2% drift band before the round started (round 735: **394 of
+ * 70,037 walks carry 1,485 ms = 47% of all flow narrowing**, at 2,354 ns per
+ * flow-node arrival against a 372 ns all-walk mean).
+ *
+ * The item names two numbers that must exist before anything is designed, and
+ * this object produces exactly those:
+ *
+ * 1. **Node ARRIVALS versus DISTINCT flow nodes per walk.** An arrival is one
+ *    iteration of the fast-forward `while (true)` loop; a distinct node is a
+ *    flow-node id first seen in this walk. `NarrowFlowMemo.served(id, depth)`
+ *    only answers when `depth <= storedDepth`, so a revisit reached by a
+ *    LONGER path misses and recomputes — [memoMissDepth] separates that miss
+ *    (an entry EXISTS but was stored too shallow) from [memoMissAbsent] (never
+ *    computed). If arrivals are much larger than distinct AND the misses are
+ *    depth misses, the depth condition is the lever; if the misses are
+ *    absences, it is not.
+ * 2. **The per-arrival split.** Nested sub-measures around every leaf call the
+ *    walk makes — each excludes the recursion by construction, because the
+ *    recursive `narrowTypeFromFlow` call is a separate statement in every arm
+ *    — so the rows are self time and sum toward the walk total.
+ *
+ * ## Why counters, not timestamps, inside the arrival loop
+ *
+ * Rounds 734/735 measured a timestamp read at 86–89 ns. The compile makes
+ * ~8.5 M arrivals, so a single timestamp PAIR per arrival would add ~1.5 s to
+ * a 3.2 s population — the probe would be the measurement. The two per-arrival
+ * structures are therefore priced in **probe steps** ([NarrowProbe]), a
+ * deterministic integer counter incremented inside the open-addressing loops
+ * of `NarrowFlowMemo` and `NarrowSeen`. Steps are exactly what those data
+ * structures cost, and the probe cannot inflate them.
+ *
+ * ## Calibration
+ *
+ * [COARSE] keeps only the [S_WALK] anchor (2 reads per depth-0 walk, ~140 k
+ * for the whole compile = ~12 ms, negligible), so an ON-vs-COARSE pair divided
+ * by the extra boundary count gives the per-read cost with no cold-start and
+ * no safepoint artifact. This is the same differential rounds 734 and 735
+ * landed on independently; the in-situ empty span has over-read by 3.6x and
+ * 4.4x in consecutive rounds and is not used here at all.
+ */
+object NarrowSections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Anchor only ([S_WALK]) — the calibration counterpart of [ON]. */
+    const val COARSE = 2
+
+    /** Opt-in; [OFF] in production. Set by `--narrowSections{,Coarse}`. */
+    var mode: Int = OFF
+
+    // -- sections: nested sub-measures, NOT a partition (the function recurses)
+    /** The outermost `narrowTypeFromFlow` call — the anchor, and the total. */
+    const val S_WALK = 0
+    /** The fast-forward `while (true)` loop, per INVOCATION (self, no recursion). */
+    const val S_FF = 1
+    /** `applyConditionNarrowing` at a `FlowCondition`. */
+    const val S_COND = 2
+    /** `getUnionType(branchTypes)` at a `FlowBranchLabel`. */
+    const val S_UNION = 3
+    /** `narrowByAssignmentRhs` at a narrowing `FlowAssignment`. */
+    const val S_ASSIGN = 4
+    /** `narrowByAssertCall` at a narrowing `FlowCall`. */
+    const val S_ASSERT = 5
+    /** `narrowBySwitchClause` at a `FlowSwitchClause`. */
+    const val S_SWITCH = 6
+    /** `outerFlowForCapturedName` at a `FlowStart` (B464 closure capture). */
+    const val S_START = 7
+    /** `memo.putIfDeeper` on a clean completion. */
+    const val S_PUT = 8
+
+    const val N = 9
+
+    val names: Array<String> = arrayOf(
+        "the whole walk (outermost entry)",
+        "  fast-forward loop (per invocation)",
+        "  applyConditionNarrowing",
+        "  getUnionType at a branch label",
+        "  narrowByAssignmentRhs",
+        "  narrowByAssertCall",
+        "  narrowBySwitchClause",
+        "  outerFlowForCapturedName",
+        "  memo.putIfDeeper",
+    )
+
+    var nanos: LongArray = LongArray(N)
+    var calls: LongArray = LongArray(N)
+
+    // -- flow-node kinds, for the arrival census -------------------------------
+    const val K_START = 0
+    const val K_UNREACHABLE = 1
+    const val K_CONDITION = 2
+    const val K_BRANCH = 3
+    const val K_LOOP = 4
+    const val K_ASSIGNMENT = 5
+    const val K_CALL = 6
+    const val K_SWITCH = 7
+    const val K_ARRAY_MUTATION = 8
+    const val NKINDS = 9
+
+    val kindNames: Array<String> = arrayOf(
+        "FlowStart", "FlowUnreachable", "FlowCondition", "FlowBranchLabel",
+        "FlowLoopLabel", "FlowAssignment", "FlowCall", "FlowSwitchClause",
+        "FlowArrayMutation",
+    )
+
+    /** Arrivals by flow-node kind, over ALL walks. */
+    var arrivalsByKind: LongArray = LongArray(NKINDS)
+    /** The same, restricted to walks that took >= 1 ms (the round-735 tail). */
+    var hugeArrivalsByKind: LongArray = LongArray(NKINDS)
+    /** Scratch for the walk in progress, folded into one of the two above. */
+    var walkArrivalsByKind: LongArray = LongArray(NKINDS)
+
+    /** Depth-0 walks, and how many of them landed in the >= 1 ms tail. */
+    var walks: Long = 0
+    var hugeWalks: Long = 0
+    /** `narrowTypeFromFlow` invocations (recursive ones included). */
+    var invocations: Long = 0
+    var hugeInvocations: Long = 0
+    /** Arrivals (fast-forward loop iterations) and DISTINCT flow-node ids. */
+    var arrivals: Long = 0
+    var distinct: Long = 0
+    var hugeArrivals: Long = 0
+    var hugeDistinct: Long = 0
+    /** Max arrivals and max distinct over the tail — the mean hides the shape. */
+    var hugeArrivalsMax: Long = 0
+    var hugeDistinctMax: Long = 0
+
+    /** Intra-walk memo outcomes, split by WHY a probe did not serve. */
+    var memoServe: Long = 0
+    var memoMissAbsent: Long = 0
+    var memoMissDepth: Long = 0
+    var hugeMemoServe: Long = 0
+    var hugeMemoMissAbsent: Long = 0
+    var hugeMemoMissDepth: Long = 0
+    /** `seen.add` returned false — the path-cycle bail (a TRUNCATING exit). */
+    var seenCycle: Long = 0
+    var hugeSeenCycle: Long = 0
+    /** Walks whose result was the declared type they started from. */
+    var identityWalks: Long = 0
+    var hugeIdentityWalks: Long = 0
+
+    /** Scratch counters for the walk in progress. */
+    var wArrivals: Long = 0
+    var wDistinct: Long = 0
+    var wInvocations: Long = 0
+    var wMemoServe: Long = 0
+    var wMemoMissAbsent: Long = 0
+    var wMemoMissDepth: Long = 0
+    var wSeenCycle: Long = 0
+
+    /** Open-addressing probe steps in the two per-arrival structures. */
+    var probeStepsMemo: Long = 0
+    var probeStepsSeen: Long = 0
+    var hugeProbeSteps: Long = 0
+
+    /**
+     * The memo outcome split BY FLOW-NODE KIND. This is what decides whether
+     * relaxing the depth condition is worth anything: a `missTooShallow` at a
+     * `FlowCondition` costs an `applyConditionNarrowing` plus the whole
+     * antecedent recursion, while one at a pass-through node costs a pointer
+     * hop. `[0]` = served, `[1]` = missAbsent, `[2]` = missTooShallow.
+     */
+    var memoOutcomeByKind: Array<LongArray> = Array(3) { LongArray(NKINDS) }
+    var hugeMemoOutcomeByKind: Array<LongArray> = Array(3) { LongArray(NKINDS) }
+    var walkMemoOutcomeByKind: Array<LongArray> = Array(3) { LongArray(NKINDS) }
+
+    /**
+     * The depth actually reached, against `NARROW_MAX_DEPTH` = 2000. The memo's
+     * depth condition exists ONLY because a deeper entry has less depth budget
+     * and might truncate where the stored computation did not; if the observed
+     * maximum is two orders of magnitude below the limit, the condition is
+     * rejecting serves for a truncation that cannot happen.
+     */
+    var maxDepth: Long = 0
+    /** The three truncating exits, counted (round 735 measured trips at 0). */
+    var truncDepth: Long = 0
+    var truncBudget: Long = 0
+
+    /**
+     * `applyConditionNarrowing` calls that returned their INPUT type unchanged
+     * — the condition said nothing about the walked reference. This is the
+     * upper bound on any cheap "does this condition mention the name" pre-test.
+     */
+    var condCalls: Long = 0
+    var condIdentity: Long = 0
+    var condIdentityNanos: Long = 0
+
+    fun reset() {
+        nanos = LongArray(N); calls = LongArray(N)
+        arrivalsByKind = LongArray(NKINDS)
+        hugeArrivalsByKind = LongArray(NKINDS)
+        walkArrivalsByKind = LongArray(NKINDS)
+        walks = 0; hugeWalks = 0; invocations = 0; hugeInvocations = 0
+        arrivals = 0; distinct = 0; hugeArrivals = 0; hugeDistinct = 0
+        hugeArrivalsMax = 0; hugeDistinctMax = 0
+        memoServe = 0; memoMissAbsent = 0; memoMissDepth = 0
+        hugeMemoServe = 0; hugeMemoMissAbsent = 0; hugeMemoMissDepth = 0
+        seenCycle = 0; hugeSeenCycle = 0
+        identityWalks = 0; hugeIdentityWalks = 0
+        probeStepsMemo = 0; probeStepsSeen = 0; hugeProbeSteps = 0
+        memoOutcomeByKind = Array(3) { LongArray(NKINDS) }
+        hugeMemoOutcomeByKind = Array(3) { LongArray(NKINDS) }
+        walkMemoOutcomeByKind = Array(3) { LongArray(NKINDS) }
+        maxDepth = 0; truncDepth = 0; truncBudget = 0
+        condCalls = 0; condIdentity = 0; condIdentityNanos = 0
+        clearWalk()
+    }
+
+    fun clearWalk() {
+        wArrivals = 0; wDistinct = 0; wInvocations = 0
+        wMemoServe = 0; wMemoMissAbsent = 0; wMemoMissDepth = 0
+        wSeenCycle = 0
+        for (k in 0 until NKINDS) walkArrivalsByKind[k] = 0
+        for (o in 0 until 3) for (k in 0 until NKINDS) walkMemoOutcomeByKind[o][k] = 0
+    }
+
+    /** Record a memo probe outcome ([o]: 0 served, 1 absent, 2 too shallow). */
+    fun memoOutcome(o: Int) {
+        walkMemoOutcomeByKind[o][NarrowProbe.curKind]++
+    }
+
+    /** Start of a depth-0 walk. Returns the anchor timestamp. */
+    fun beginWalk(): Long {
+        clearWalk()
+        NarrowProbe.on = true
+        NarrowProbe.steps = 0
+        NarrowProbe.clearDistinct()
+        return PassTiming.nowNanos()
+    }
+
+    /**
+     * End of a depth-0 walk: fold the scratch into the ALL accumulators and,
+     * when the walk took >= 1 ms, into the tail accumulators too. `>= 1 ms` is
+     * round 735's own tail definition, so the two rounds' populations match.
+     */
+    fun endWalk(t0: Long, identity: Boolean) {
+        val took = PassTiming.nowNanos() - t0
+        NarrowProbe.on = false
+        val steps = NarrowProbe.steps
+        if (mode == ON) { nanos[S_WALK] += took; calls[S_WALK]++ }
+        walks++
+        arrivals += wArrivals; distinct += wDistinct; invocations += wInvocations
+        memoServe += wMemoServe
+        memoMissAbsent += wMemoMissAbsent; memoMissDepth += wMemoMissDepth
+        seenCycle += wSeenCycle
+        if (identity) identityWalks++
+        for (k in 0 until NKINDS) arrivalsByKind[k] += walkArrivalsByKind[k]
+        for (o in 0 until 3) for (k in 0 until NKINDS) {
+            memoOutcomeByKind[o][k] += walkMemoOutcomeByKind[o][k]
+        }
+        if (took >= 1_000_000L) {
+            for (o in 0 until 3) for (k in 0 until NKINDS) {
+                hugeMemoOutcomeByKind[o][k] += walkMemoOutcomeByKind[o][k]
+            }
+        }
+        if (took >= 1_000_000L) {
+            hugeWalks++
+            hugeArrivals += wArrivals; hugeDistinct += wDistinct
+            hugeInvocations += wInvocations
+            hugeMemoServe += wMemoServe
+            hugeMemoMissAbsent += wMemoMissAbsent; hugeMemoMissDepth += wMemoMissDepth
+            hugeSeenCycle += wSeenCycle
+            hugeProbeSteps += steps
+            if (identity) hugeIdentityWalks++
+            if (wArrivals > hugeArrivalsMax) hugeArrivalsMax = wArrivals
+            if (wDistinct > hugeDistinctMax) hugeDistinctMax = wDistinct
+            for (k in 0 until NKINDS) hugeArrivalsByKind[k] += walkArrivalsByKind[k]
+        }
+    }
+
+    /** One arrival at flow node [id] of [kind]. Counter-only — never a timestamp. */
+    fun arrival(id: Int, kind: Int, depth: Int) {
+        wArrivals++
+        walkArrivalsByKind[kind]++
+        NarrowProbe.curKind = kind
+        if (depth > maxDepth) maxDepth = depth.toLong()
+        if (NarrowProbe.noteDistinct(id)) wDistinct++
+    }
+
+    /** Close one `applyConditionNarrowing`, flagging an identity result. */
+    fun closeCond(t0: Long, identity: Boolean) {
+        condCalls++
+        if (mode == ON) {
+            val d = PassTiming.nowNanos() - t0
+            nanos[S_COND] += d; calls[S_COND]++
+            if (identity) { condIdentity++; condIdentityNanos += d }
+        } else if (identity) condIdentity++
+    }
+
+    /** Start a nested sub-measure, or 0 when not in [ON]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
+
+    /** Close a nested sub-measure opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun close(sec: Int, t0: Long) {
+        if (mode != ON) return
+        nanos[sec] += PassTiming.nowNanos() - t0
+        calls[sec]++
+    }
+
+    private fun ms(n: Long) = (n / 1_000_000).toString().padStart(5)
+
+    /** `a / d` to two decimals, without `String.format` (JVM-only). */
+    private fun ratio(a: Long, d: Long): String {
+        if (d <= 0L) return "-"
+        val hundredths = a * 100 / d
+        return "${hundredths / 100}.${(hundredths % 100).toString().padStart(2, '0')}"
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (CALL.3) intra-walk attribution: narrowTypeFromFlow ==")
+        appendLine("mode: ${if (mode == COARSE) "COARSE (anchor only)" else "ON"}")
+        appendLine(
+            "walks: $walks   of which >= 1 ms: $hugeWalks   " +
+                "invocations: $invocations (tail $hugeInvocations)"
+        )
+        appendLine("-- (i) ARRIVALS versus DISTINCT flow nodes --")
+        appendLine(
+            "  all walks : arrivals=$arrivals distinct=$distinct " +
+                "revisitFactor=${ratio(arrivals, distinct)}  " +
+                "(${if (walks > 0) arrivals / walks else 0} / ${
+                    if (walks > 0) distinct / walks else 0
+                } per walk)"
+        )
+        appendLine(
+            "  >= 1 ms   : arrivals=$hugeArrivals distinct=$hugeDistinct " +
+                "revisitFactor=${ratio(hugeArrivals, hugeDistinct)}  " +
+                "(${if (hugeWalks > 0) hugeArrivals / hugeWalks else 0} / ${
+                    if (hugeWalks > 0) hugeDistinct / hugeWalks else 0
+                } per walk; max $hugeArrivalsMax / $hugeDistinctMax)"
+        )
+        appendLine("-- the intra-walk memo, split by why a probe did not serve --")
+        appendLine(
+            "  all walks : served=$memoServe missAbsent=$memoMissAbsent " +
+                "missTooShallow=$memoMissDepth  seenCycleBail=$seenCycle"
+        )
+        appendLine(
+            "  >= 1 ms   : served=$hugeMemoServe missAbsent=$hugeMemoMissAbsent " +
+                "missTooShallow=$hugeMemoMissDepth  seenCycleBail=$hugeSeenCycle"
+        )
+        appendLine(
+            "  probe steps (open addressing): memo=$probeStepsMemo seen=$probeStepsSeen " +
+                "tail=$hugeProbeSteps (${
+                    if (hugeArrivals > 0) hugeProbeSteps / hugeArrivals else 0
+                } per tail arrival)"
+        )
+        appendLine(
+            "  walks returning the DECLARED type unchanged: $identityWalks (tail $hugeIdentityWalks)"
+        )
+        appendLine(
+            "  maxDepth reached: $maxDepth of NARROW_MAX_DEPTH=2000   " +
+                "truncations: depth=$truncDepth budget=$truncBudget cycle=$seenCycle"
+        )
+        appendLine(
+            "  applyConditionNarrowing: $condCalls calls, $condIdentity returned the INPUT " +
+                "unchanged (${if (condCalls > 0) condIdentity * 100 / condCalls else 0}%, ${
+                    ms(condIdentityNanos)
+                } ms)"
+        )
+        appendLine("-- memo outcome by flow-node kind (served / absent / tooShallow) --")
+        for (k in 0 until NKINDS) {
+            val s = memoOutcomeByKind[0][k]
+            val a = memoOutcomeByKind[1][k]
+            val d = memoOutcomeByKind[2][k]
+            if (s + a + d == 0L) continue
+            appendLine(
+                "  ${kindNames[k].padEnd(18)} all ${s.toString().padStart(8)} / ${
+                    a.toString().padStart(8)
+                } / ${d.toString().padStart(8)}   tail ${
+                    hugeMemoOutcomeByKind[0][k].toString().padStart(7)
+                } / ${hugeMemoOutcomeByKind[1][k].toString().padStart(7)} / ${
+                    hugeMemoOutcomeByKind[2][k].toString().padStart(7)
+                }"
+            )
+        }
+        appendLine("-- arrivals by flow-node kind --")
+        for (k in 0 until NKINDS) {
+            if (arrivalsByKind[k] == 0L && hugeArrivalsByKind[k] == 0L) continue
+            val a = arrivalsByKind[k]
+            val h = hugeArrivalsByKind[k]
+            appendLine(
+                "  ${kindNames[k].padEnd(18)} ${a.toString().padStart(9)} all  " +
+                    "${h.toString().padStart(9)} tail  " +
+                    "(${if (arrivals > 0) a * 100 / arrivals else 0}% / ${
+                        if (hugeArrivals > 0) h * 100 / hugeArrivals else 0
+                    }%)"
+            )
+        }
+        if (mode == ON) {
+            appendLine("-- (ii) the per-arrival split (nested sub-measures, self time) --")
+            for (s in 0 until N) {
+                val c = calls[s]
+                if (c == 0L) continue
+                appendLine(
+                    "  ${names[s].padEnd(38)} ${ms(nanos[s])} ms over ${
+                        c.toString().padStart(9)
+                    } = ${nanos[s] / c} ns each"
+                )
+            }
+            var leaves = 0L
+            for (s in 1 until N) leaves += nanos[s]
+            appendLine("  sum of the rows below the anchor: ${ms(leaves)} ms")
+        }
+    }
+
+    fun csv(): String = buildString {
+        appendLine("section,reached,nanos")
+        for (s in 0 until N) {
+            if (calls[s] == 0L) continue
+            appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
+        }
+    }
+}
+
+/**
+ * (CALL.3)(a): probe-step counting for the two open-addressed structures the
+ * narrowing walk touches once per ARRIVAL (`NarrowFlowMemo`, `NarrowSeen`).
+ *
+ * A timestamp pair per arrival would cost ~1.5 s against a 3.2 s population
+ * (rounds 734/735: 86–89 ns per read, ~8.5 M arrivals), so the per-arrival
+ * cost is priced in PROBE STEPS instead: a deterministic integer that is
+ * exactly what an open-addressing table costs, and that the probe cannot
+ * inflate. Off in production — [on] is set only for the duration of a depth-0
+ * walk under `--narrowSections`.
+ */
+object NarrowProbe {
+    var on: Boolean = false
+    var steps: Long = 0
+
+    /** The kind of the flow node the current arrival is at — see [NarrowSections.memoOutcome]. */
+    var curKind: Int = 0
+
+    /**
+     * The per-walk DISTINCT flow-node set. It cannot be read off `NarrowSeen`:
+     * that structure is PATH membership, emptied back to a mark at every
+     * branch antecedent, so a node revisited on a sibling path re-enters it.
+     * The distinct count needs a set that is only ever added to.
+     */
+    private const val EMPTY = Int.MIN_VALUE
+    private var capacity = 1024
+    private var slots = IntArray(capacity) { EMPTY }
+    private var live = 0
+
+    fun clearDistinct() {
+        if (live != 0) { slots.fill(EMPTY); live = 0 }
+    }
+
+    /** Record an arrival at flow node [id]; true when it is the first this walk. */
+    fun noteDistinct(id: Int): Boolean {
+        val mask = capacity - 1
+        var i = (id * -0x61c88647).let { it xor (it ushr 16) } and mask
+        while (true) {
+            val s = slots[i]
+            if (s == id) return false
+            if (s == EMPTY) {
+                slots[i] = id
+                live++
+                if (live * 2 >= capacity) grow()
+                return true
+            }
+            i = (i + 1) and mask
+        }
+    }
+
+    private fun grow() {
+        val old = slots
+        capacity = capacity shl 1
+        slots = IntArray(capacity) { EMPTY }
+        val mask = capacity - 1
+        for (s in old) {
+            if (s == EMPTY) continue
+            var i = (s * -0x61c88647).let { it xor (it ushr 16) } and mask
+            while (slots[i] != EMPTY) i = (i + 1) and mask
+            slots[i] = s
+        }
+    }
+}

@@ -136,13 +136,46 @@ internal class IntKeyMap<V : Any>(initialCapacity: Int = 1024) {
  *  - [served]: a stored entry answers a probe iff `depth <= storedDepth`;
  *  - [putIfDeeper]: insert, or overwrite only when `storedDepth < depth`
  *    (the old `prev == null || prev.first < depth` rule).
+ *
+ * **(CALL.3) round 736 — the HEIGHT disjunct.** The depth condition above is
+ * the reason 631,585 of a compiler-profile compile's 4.76 M flow-node arrivals
+ * recompute a value that is already in this table (426,753 of them at
+ * `FlowCondition` nodes, whose recomputation runs `applyConditionNarrowing`
+ * plus the whole antecedent subtree). The condition exists for exactly ONE
+ * reason: a deeper entry has less depth budget left and might truncate at
+ * `NARROW_MAX_DEPTH` where the stored computation did not, and serving the
+ * untruncated result there would over-narrow. That is decidable rather than
+ * approximable — a stored entry now also carries [his], the maximum depth its
+ * own subtree reached, so its HEIGHT is `hi − storedDepth`, and a query at
+ * `depth` can be answered whenever `depth + height < maxDepth`: a fresh
+ * computation from there provably cannot reach the cap, so it provably
+ * produces the same value. The old `depth <= storedDepth` disjunct is kept as
+ * the (unconditionally sound) fast path.
+ *
+ * Only NON-truncated results are ever stored (the caller's
+ * `if (!narrowWalkTruncated)` gate), so a stored entry's subtree is known to
+ * have completed without a depth cap, a cycle bail OR a visit-budget
+ * exhaustion — the height disjunct therefore adds no exposure of its own to
+ * the other two truncation sources, which the shallower-direction serve
+ * already had, and which the compiler profile measures at zero.
  */
 internal class NarrowFlowMemo(initialCapacity: Int = 32) {
     private var capacity = highestOneBit(maxOf(initialCapacity, 16))
     private var keys = emptyKeys(capacity)
     private var depths = IntArray(capacity)
+    private var his = IntArray(capacity)
     private var types = arrayOfNulls<Type>(capacity)
     private var size = 0
+
+    /**
+     * The HEIGHT (`hi − storedDepth`) of the entry the last [served] call hit,
+     * valid only immediately after a non-null return. The caller folds
+     * `depth + height` into its own subtree height, so a memo shortcut never
+     * makes an ancestor's recorded height smaller than a fresh recomputation's
+     * would be — which is what keeps the disjunct sound under nesting.
+     */
+    var lastHitHeight: Int = 0
+        private set
 
     private companion object {
         const val EMPTY = Int.MIN_VALUE
@@ -163,20 +196,55 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
         }
     }
 
-    /** The stored type iff an entry exists for [id] with `depth <= storedDepth`. */
-    fun served(id: Int, depth: Int): Type? {
+    /**
+     * The stored type iff an entry exists for [id] that a fresh computation at
+     * [depth] would reproduce: either the entry was computed at a same-or-deeper
+     * entry depth, or its own subtree HEIGHT still fits under [maxDepth] from
+     * here. See the class doc for why those two are the whole condition.
+     */
+    fun served(id: Int, depth: Int, maxDepth: Int): Type? {
         val mask = capacity - 1
         var i = bucket(id, mask)
+        var steps = 0L
         while (true) {
+            steps++
             val k = keys[i]
-            if (k == id) return if (depth <= depths[i]) types[i] else null
-            if (k == EMPTY) return null
+            if (k == id) {
+                val storedDepth = depths[i]
+                val height = his[i] - storedDepth
+                val hit = depth <= storedDepth || depth + height < maxDepth
+                if (NarrowProbe.on) {
+                    NarrowProbe.steps += steps
+                    NarrowSections.probeStepsMemo += steps
+                    if (depth <= storedDepth) {
+                        NarrowSections.wMemoServe++; NarrowSections.memoOutcome(0)
+                    } else {
+                        NarrowSections.wMemoMissDepth++; NarrowSections.memoOutcome(2)
+                    }
+                }
+                if (!hit) return null
+                lastHitHeight = height
+                return types[i]
+            }
+            if (k == EMPTY) {
+                if (NarrowProbe.on) {
+                    NarrowProbe.steps += steps
+                    NarrowSections.probeStepsMemo += steps
+                    NarrowSections.wMemoMissAbsent++
+                    NarrowSections.memoOutcome(1)
+                }
+                return null
+            }
             i = (i + 1) and mask
         }
     }
 
-    /** Insert, or overwrite only when [depth] exceeds the stored depth. */
-    fun putIfDeeper(id: Int, depth: Int, type: Type) {
+    /**
+     * Insert, or overwrite only when [depth] exceeds the stored depth. [hi] is
+     * the maximum depth the stored subtree reached, and travels with [depth] —
+     * the pair must stay consistent, so an overwrite replaces both.
+     */
+    fun putIfDeeper(id: Int, depth: Int, hi: Int, type: Type) {
         if (size * 2 >= capacity) grow()
         val mask = capacity - 1
         var i = bucket(id, mask)
@@ -185,6 +253,7 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
             if (k == EMPTY) {
                 keys[i] = id
                 depths[i] = depth
+                his[i] = hi
                 types[i] = type
                 size++
                 return
@@ -192,6 +261,7 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
             if (k == id) {
                 if (depths[i] < depth) {
                     depths[i] = depth
+                    his[i] = hi
                     types[i] = type
                 }
                 return
@@ -203,10 +273,12 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
     private fun grow() {
         val oldKeys = keys
         val oldDepths = depths
+        val oldHis = his
         val oldTypes = types
         capacity = capacity shl 1
         keys = emptyKeys(capacity)
         depths = IntArray(capacity)
+        his = IntArray(capacity)
         types = arrayOfNulls(capacity)
         val mask = capacity - 1
         for (j in oldKeys.indices) {
@@ -216,6 +288,7 @@ internal class NarrowFlowMemo(initialCapacity: Int = 32) {
             while (keys[i] != EMPTY) i = (i + 1) and mask
             keys[i] = k
             depths[i] = oldDepths[j]
+            his[i] = oldHis[j]
             types[i] = oldTypes[j]
         }
     }
@@ -263,12 +336,22 @@ internal class NarrowSeen {
         val mask = capacity - 1
         var i = bucket(id, mask)
         var free = -1
+        var steps = 0L
         while (true) {
+            steps++
             val s = slots[i]
-            if (s == id) return false
+            if (s == id) {
+                if (NarrowProbe.on) {
+                    NarrowProbe.steps += steps; NarrowSections.probeStepsSeen += steps
+                }
+                return false
+            }
             if (s == EMPTY) break
             if (s == DELETED && free < 0) free = i
             i = (i + 1) and mask
+        }
+        if (NarrowProbe.on) {
+            NarrowProbe.steps += steps; NarrowSections.probeStepsSeen += steps
         }
         if (free >= 0) {
             slots[free] = id // reuse a tombstone: `used` already counts it

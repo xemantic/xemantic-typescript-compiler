@@ -5526,6 +5526,17 @@ class Checker(
      *  exhaustion — such results are entry-context-dependent and must NOT be memoized. */
     private var narrowWalkTruncated = false
 
+    /**
+     * (CALL.3) round 736: the maximum `depth` reached inside the flow-walk
+     * subtree currently being computed, so a clean result can be memoized with
+     * its own HEIGHT and served at a deeper entry whenever that height still
+     * fits under [NARROW_MAX_DEPTH]. Maintained exactly like
+     * [narrowWalkTruncated] — set to the node's own depth before the subtree
+     * computation, raised by every child, folded back into the parent's value
+     * afterwards. Meaningful only while a walk is live.
+     */
+    private var narrowWalkHiDepth = 0
+
     /** P0 (services hang): per-outermost-request memo of flow-call `nodeKey` → resolved
      *  callee declaration (tsc caches the same thing persistently as
      *  `links.effectsSignature`; ours is scoped to one request because resolution reads
@@ -105312,11 +105323,37 @@ interface DataView {
         }
     }
 
+    /**
+     * (CALL.3)(a) round 736: the instrumented wrapper. Off, it is one static
+     * read and a not-taken branch in front of [narrowTypeFromFlowCore]; on, it
+     * brackets the OUTERMOST entry only (`narrowLiveDepth == 0`), which is the
+     * population round 735's `>= 1 ms` tail is defined over. The recursion
+     * calls the core directly, so a nested entry costs nothing extra.
+     */
     private fun narrowTypeFromFlow(
         declaredType: Type, flowNodeIn: FlowNode, name: String,
         seen: NarrowSeen, depth: Int,
         memo: NarrowFlowMemo = NarrowFlowMemo(),
     ): Type {
+        if (NarrowSections.mode == NarrowSections.OFF || narrowLiveDepth != 0) {
+            return narrowTypeFromFlowCore(declaredType, flowNodeIn, name, seen, depth, memo)
+        }
+        val t0 = NarrowSections.beginWalk()
+        var result: Type = declaredType
+        try {
+            result = narrowTypeFromFlowCore(declaredType, flowNodeIn, name, seen, depth, memo)
+            return result
+        } finally {
+            NarrowSections.endWalk(t0, result === declaredType)
+        }
+    }
+
+    private fun narrowTypeFromFlowCore(
+        declaredType: Type, flowNodeIn: FlowNode, name: String,
+        seen: NarrowSeen, depth: Int,
+        memo: NarrowFlowMemo = NarrowFlowMemo(),
+    ): Type {
+        if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.wInvocations++
         // P0 (services hang): reset the per-request budget + callee-decl cache at an
         // OUTERMOST entry (narrowLiveDepth == 0 ⇔ not inside any walk, including
         // re-entrant walks triggered by callee resolution below).
@@ -105334,6 +105371,7 @@ interface DataView {
         // Budget / memo / seen / truncation semantics are unchanged from the pre-loop code
         // — only the pass-through recursion is replaced by iteration.
         var flowNode = flowNodeIn
+        val tFF = NarrowSections.t()
         while (true) {
             if (depth >= NARROW_MAX_DEPTH) {
                 // Round 426 (faithful TS2563): tsc `getTypeAtFlowNode`'s
@@ -105341,6 +105379,8 @@ interface DataView {
                 // reference) reports TS2563 + disables the container.
                 narrowWalkTruncated = true
                 flowDepthTripped = true
+                if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.truncDepth++
+                NarrowSections.close(NarrowSections.S_FF, tFF)
                 return declaredType
             }
             if (narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
@@ -105349,14 +105389,31 @@ interface DataView {
                 // Our OWN re-entry/visit budgets (services-perf firewalls, not tsc
                 // semantics) — truncate SILENTLY, never TS2563.
                 narrowWalkTruncated = true
+                if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.truncBudget++
+                NarrowSections.close(NarrowSections.S_FF, tFF)
                 return declaredType
             }
-            // Per-invocation flow-node memo (tsc's sharedFlowNodes): serve only entries
-            // computed at a same-or-deeper entry depth — a clean completion there proves a
-            // shallower(-or-equal)-entry revisit would recompute the identical value.
-            memo.served(flowNode.id, depth)?.let { return it }
+            if (NarrowSections.mode != NarrowSections.OFF) {
+                NarrowSections.arrival(flowNode.id, narrowProbeKindOf(flowNode), depth)
+            }
+            // Per-invocation flow-node memo (tsc's sharedFlowNodes): serve an entry
+            // computed at a same-or-deeper entry depth (a clean completion there proves a
+            // shallower(-or-equal)-entry revisit would recompute the identical value), OR
+            // — round 736 — one whose own subtree HEIGHT still fits under
+            // NARROW_MAX_DEPTH from here, which proves the same thing in the deeper
+            // direction. The served entry's height is folded into this subtree's height
+            // so an ancestor's recorded height is never smaller than a fresh
+            // recomputation's would be.
+            memo.served(flowNode.id, depth, NARROW_MAX_DEPTH)?.let {
+                val h = depth + memo.lastHitHeight
+                if (h > narrowWalkHiDepth) narrowWalkHiDepth = h
+                NarrowSections.close(NarrowSections.S_FF, tFF)
+                return it
+            }
             if (!seen.add(flowNode.id)) {
                 narrowWalkTruncated = true
+                if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.wSeenCycle++
+                NarrowSections.close(NarrowSections.S_FF, tFF)
                 return declaredType
             }
             // Pass-through node ⇒ follow its antecedent (loop); narrowing / branch /
@@ -105369,23 +105426,35 @@ interface DataView {
             } ?: break
             flowNode = ante
         }
+        NarrowSections.close(NarrowSections.S_FF, tFF)
         val node = flowNode
         val savedTruncated = narrowWalkTruncated
         narrowWalkTruncated = false
+        // (CALL.3) round 736: measure this subtree's own height (see
+        // [narrowWalkHiDepth] and [NarrowFlowMemo.served]).
+        val savedHi = narrowWalkHiDepth
+        narrowWalkHiDepth = depth
         narrowLiveDepth++
         val result = try {
             when (node) {
             is FlowStart -> {
                 // B464: flow outer narrowing into a closure for a captured const-like
                 // variable (see [outerFlowForCapturedName] / FlowStart doc).
+                val tS = NarrowSections.t()
                 val outer = outerFlowForCapturedName(node, name)
-                if (outer != null) narrowTypeFromFlow(declaredType, outer, name, seen, depth + 1, memo)
+                NarrowSections.close(NarrowSections.S_START, tS)
+                if (outer != null) narrowTypeFromFlowCore(declaredType, outer, name, seen, depth + 1, memo)
                 else declaredType
             }
             is FlowUnreachable -> neverType
             is FlowCondition -> {
-                val antecedent = narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
-                applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
+                val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
+                val tC = NarrowSections.t()
+                val r = applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
+                if (NarrowSections.mode != NarrowSections.OFF) {
+                    NarrowSections.closeCond(tC, r === antecedent)
+                }
+                r
             }
             is FlowBranchLabel -> {
                 if (node.antecedents.isEmpty()) neverType
@@ -105394,11 +105463,14 @@ interface DataView {
                         // Each antecedent walks against the path-so-far membership;
                         // popToMark restores it (≡ the old fresh-copy-per-antecedent).
                         val mark = seen.mark()
-                        val t = narrowTypeFromFlow(declaredType, it, name, seen, depth + 1, memo)
+                        val t = narrowTypeFromFlowCore(declaredType, it, name, seen, depth + 1, memo)
                         seen.popToMark(mark)
                         t
                     }
-                    getUnionType(branchTypes)
+                    val tU = NarrowSections.t()
+                    val r = getUnionType(branchTypes)
+                    NarrowSections.close(NarrowSections.S_UNION, tU)
+                    r
                 }
             }
             // Loop back-edge handling would require widening to declared on cycle —
@@ -105410,35 +105482,61 @@ interface DataView {
                 // identifier AND property-path targets, incl. ??=/||=) — shared with
                 // the FollowLoopEntry mirror via [narrowByAssignmentRhs]. Reached only
                 // when [flowAssignmentMightNarrow] gated the fast-forward loop above.
-                val antecedent = narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
-                narrowByAssignmentRhs(node.node, name, antecedent, declaredType)
+                val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
+                val tA = NarrowSections.t()
+                val r = narrowByAssignmentRhs(node.node, name, antecedent, declaredType)
+                NarrowSections.close(NarrowSections.S_ASSIGN, tA)
+                r
             }
             is FlowCall -> {
-                val antecedent = narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
+                val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
                 // round 43 iter3: assert-function narrowing — when the call's callee is
                 // `function assertX(x): asserts x is T`, after the call returns, x is
                 // narrowed to T.
-                narrowByAssertCall(antecedent, node.node, name) ?: antecedent
+                val tR = NarrowSections.t()
+                val r = narrowByAssertCall(antecedent, node.node, name) ?: antecedent
+                NarrowSections.close(NarrowSections.S_ASSERT, tR)
+                r
             }
             is FlowSwitchClause -> {
-                val antecedent = narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
+                val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
                 // round 43 iter5: switch-case discriminant narrowing. When `switch (X) { case <lit>: ... }`
                 // and X's reference path matches [name], narrow [antecedent] (a union)
                 // by filtering to members assignable from the case literal.
-                narrowBySwitchClause(antecedent, node, name) ?: antecedent
+                val tW = NarrowSections.t()
+                val r = narrowBySwitchClause(antecedent, node, name) ?: antecedent
+                NarrowSections.close(NarrowSections.S_SWITCH, tW)
+                r
             }
             // Unreachable (the fast-forward loop always iterates FlowArrayMutation) — kept
             // for `when`-exhaustiveness over the sealed FlowNode.
-            is FlowArrayMutation -> narrowTypeFromFlow(declaredType, node.antecedent, name, seen, depth + 1, memo)
+            is FlowArrayMutation -> narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
             }
         } finally {
             narrowLiveDepth--
         }
+        val hi = narrowWalkHiDepth
         if (!narrowWalkTruncated) {
-            memo.putIfDeeper(node.id, depth, result)
+            val tP = NarrowSections.t()
+            memo.putIfDeeper(node.id, depth, hi, result)
+            NarrowSections.close(NarrowSections.S_PUT, tP)
         }
+        narrowWalkHiDepth = if (savedHi > hi) savedHi else hi
         narrowWalkTruncated = narrowWalkTruncated || savedTruncated
         return result
+    }
+
+    /** (CALL.3)(a): the flow-node kind id used by the arrival census. */
+    private fun narrowProbeKindOf(fn: FlowNode): Int = when (fn) {
+        is FlowStart -> NarrowSections.K_START
+        is FlowUnreachable -> NarrowSections.K_UNREACHABLE
+        is FlowCondition -> NarrowSections.K_CONDITION
+        is FlowBranchLabel -> NarrowSections.K_BRANCH
+        is FlowLoopLabel -> NarrowSections.K_LOOP
+        is FlowAssignment -> NarrowSections.K_ASSIGNMENT
+        is FlowCall -> NarrowSections.K_CALL
+        is FlowSwitchClause -> NarrowSections.K_SWITCH
+        is FlowArrayMutation -> NarrowSections.K_ARRAY_MUTATION
     }
 
     /**
@@ -130438,7 +130536,12 @@ interface DataView {
                 narrowWalkTruncated = true
                 return declaredType
             }
-            memo.served(flowNode.id, depth)?.let { return it }
+            // Round 736: the height disjunct, mirrored (see [NarrowFlowMemo.served]).
+            memo.served(flowNode.id, depth, NARROW_MAX_DEPTH)?.let {
+                val h = depth + memo.lastHitHeight
+                if (h > narrowWalkHiDepth) narrowWalkHiDepth = h
+                return it
+            }
             if (!seen.add(flowNode.id)) {
                 narrowWalkTruncated = true
                 return declaredType
@@ -130454,6 +130557,8 @@ interface DataView {
         val node = flowNode
         val savedTruncated = narrowWalkTruncated
         narrowWalkTruncated = false
+        val savedHi = narrowWalkHiDepth
+        narrowWalkHiDepth = depth
         narrowLiveDepth++
         val result = try {
             when (node) {
@@ -130527,9 +130632,11 @@ interface DataView {
         } finally {
             narrowLiveDepth--
         }
+        val hi = narrowWalkHiDepth
         if (!narrowWalkTruncated) {
-            memo.putIfDeeper(node.id, depth, result)
+            memo.putIfDeeper(node.id, depth, hi, result)
         }
+        narrowWalkHiDepth = if (savedHi > hi) savedHi else hi
         narrowWalkTruncated = narrowWalkTruncated || savedTruncated
         return result
     }

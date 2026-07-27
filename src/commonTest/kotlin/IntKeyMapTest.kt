@@ -109,44 +109,96 @@ class IntKeyMapTest {
     @Test
     fun `NarrowFlowMemo serves only at same-or-shallower probe depth`() {
         val memo = NarrowFlowMemo()
-        memo.putIfDeeper(id = 5, depth = 3, type = t1)
+        // A zero-budget maxDepth switches the round-736 height disjunct OFF, so
+        // this pins the original depth rule on its own.
+        memo.putIfDeeper(id = 5, depth = 3, hi = 3, type = t1)
         // depth <= storedDepth → served
-        assert(memo.served(5, 3) === t1)
-        assert(memo.served(5, 2) === t1)
-        assert(memo.served(5, 0) === t1)
+        assert(memo.served(5, 3, 0) === t1)
+        assert(memo.served(5, 2, 0) === t1)
+        assert(memo.served(5, 0, 0) === t1)
         // depth > storedDepth → NOT served (the over-narrowing guard)
-        assert(memo.served(5, 4) == null)
+        assert(memo.served(5, 4, 0) == null)
         // absent id → null regardless of depth
-        assert(memo.served(6, 0) == null)
+        assert(memo.served(6, 0, 0) == null)
     }
 
     @Test
     fun `NarrowFlowMemo putIfDeeper overwrites only at strictly deeper depth`() {
         val memo = NarrowFlowMemo()
-        memo.putIfDeeper(9, 5, t1)
+        memo.putIfDeeper(9, 5, 5, t1)
         // shallower and equal depths do NOT overwrite (prev.first < depth rule)
-        memo.putIfDeeper(9, 4, t2)
-        assert(memo.served(9, 5) === t1)
-        memo.putIfDeeper(9, 5, t2)
-        assert(memo.served(9, 5) === t1)
+        memo.putIfDeeper(9, 4, 4, t2)
+        assert(memo.served(9, 5, 0) === t1)
+        memo.putIfDeeper(9, 5, 5, t2)
+        assert(memo.served(9, 5, 0) === t1)
         // strictly deeper overwrites value AND raises the serve ceiling
-        memo.putIfDeeper(9, 6, t2)
-        assert(memo.served(9, 6) === t2)
-        assert(memo.served(9, 5) === t2)
+        memo.putIfDeeper(9, 6, 6, t2)
+        assert(memo.served(9, 6, 0) === t2)
+        assert(memo.served(9, 5, 0) === t2)
     }
 
     @Test
     fun `NarrowFlowMemo survives growth with many flow-node ids`() {
         val memo = NarrowFlowMemo(16)
         for (id in 0 until 4000) {
-            memo.putIfDeeper(id, id % 7, if (id % 2 == 0) t1 else t2)
+            memo.putIfDeeper(id, id % 7, id % 7, if (id % 2 == 0) t1 else t2)
         }
         for (id in 0 until 4000) {
             val expected = if (id % 2 == 0) t1 else t2
-            assert(memo.served(id, id % 7) === expected)
-            assert(memo.served(id, id % 7 + 1) == null)
+            assert(memo.served(id, id % 7, 0) === expected)
+            assert(memo.served(id, id % 7 + 1, 0) == null)
         }
-        assert(memo.served(4000, 0) == null)
+        assert(memo.served(4000, 0, 0) == null)
+    }
+
+    // -- (CALL.3) round 736: the HEIGHT disjunct -----------------------------
+
+    @Test
+    fun `NarrowFlowMemo serves a deeper probe when the stored height still fits`() {
+        val memo = NarrowFlowMemo()
+        // stored at depth 3, subtree reached depth 10 → height 7
+        memo.putIfDeeper(id = 5, depth = 3, hi = 10, type = t1)
+        // a DEEPER probe at 4: a fresh walk would reach 4 + 7 = 11 < 2000, so
+        // it provably cannot hit the depth cap and provably reproduces t1
+        assert(memo.served(5, 4, 2000) === t1)
+        assert(memo.served(5, 500, 2000) === t1)
+        // the served entry reports the height the caller must fold upward
+        assert(memo.lastHitHeight == 7)
+    }
+
+    @Test
+    fun `NarrowFlowMemo refuses a deeper probe whose recomputation would hit the cap`() {
+        val memo = NarrowFlowMemo()
+        memo.putIfDeeper(id = 5, depth = 3, hi = 10, type = t1)
+        // maxDepth 20, height 7: depth 12 would reach 19 (< 20) → served
+        assert(memo.served(5, 12, 20) === t1)
+        // depth 13 would reach exactly 20 = the cap → truncation possible → refuse
+        assert(memo.served(5, 13, 20) == null)
+        assert(memo.served(5, 19, 20) == null)
+        // the shallow disjunct is unaffected by maxDepth
+        assert(memo.served(5, 3, 20) === t1)
+    }
+
+    @Test
+    fun `NarrowFlowMemo height travels with the depth it was stored at`() {
+        val memo = NarrowFlowMemo()
+        memo.putIfDeeper(7, 2, 4, t1)     // height 2
+        memo.putIfDeeper(7, 6, 40, t2)    // deeper → overwrites BOTH, height 34
+        assert(memo.served(7, 6, 2000) === t2)
+        assert(memo.lastHitHeight == 34)
+        // and a non-overwriting shallower put leaves the pair intact
+        memo.putIfDeeper(7, 1, 1, t1)
+        assert(memo.served(7, 7, 2000) === t2)
+        assert(memo.lastHitHeight == 34)
+    }
+
+    @Test
+    fun `negative control - a zero-height entry is still refused past the cap`() {
+        val memo = NarrowFlowMemo()
+        memo.putIfDeeper(3, 0, 0, t1)
+        assert(memo.served(3, 9, 10) === t1)
+        assert(memo.served(3, 10, 10) == null)
+        assert(memo.served(3, 11, 10) == null)
     }
 
     @Test

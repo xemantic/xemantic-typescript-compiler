@@ -66,6 +66,32 @@
 > them; they run at **2,354 ns per flow-node arrival against a 372 ns
 > all-walk mean**. Follow-on: **(CALL.3)**. Full derivation:
 > `docs/perf/argument-check-attribution.md`.
+> **ROUND-736 RESOLUTION — AND THE ARC'S FIRST LANDED WIN, `-4.53%` median with
+> a 6/6 win rate.** The 394 monsters were neither a bigger graph nor expensive
+> traversal: **they arrive at 1,900 flow nodes but only 214 DISTINCT ones —
+> revisit factor 8.85 against 1.48 for a typical walk — and 51% of the whole
+> narrowing population is `applyConditionNarrowing`** (1,858 ns × 759,784
+> calls), which the tail hits disproportionately (`FlowCondition` is 41% of
+> tail arrivals against 18% overall). The cause was one condition: the
+> intra-walk memo `NarrowFlowMemo.served(id, depth)` answered only when
+> `depth <= storedDepth`, so a node reached again by a LONGER path recomputed
+> its whole antecedent subtree — **631,585 arrivals compile-wide, 426,753 of
+> them at `FlowCondition` nodes, against 290,011 serves.** That condition
+> guards exactly one thing (a deeper entry has less budget before
+> `NARROW_MAX_DEPTH`), and that is decidable rather than approximable: an entry
+> now carries the maximum depth its own subtree reached, and a deeper probe is
+> served iff `depth + height < maxDepth`. Invocations −55%, arrivals −26% with
+> DISTINCT UNCHANGED, `applyConditionNarrowing` calls −56%, the `>= 1 ms` tail
+> 429 → 230 walks with −96% of its arrivals; `--listAll` byte-identical and
+> four cost counters FELL. **Two lessons for this section. (1) "The cache
+> cannot reach them" (round 735, correct about the INTER-walk memo) hid a memo
+> failure one level down — when a cache measures as not helping, check whether
+> a different cache at a different SCOPE is the one failing.** (2) The obvious
+> follow-on — a pre-test skipping the 95.6% of `applyConditionNarrowing` calls
+> that return their input unchanged — is priced at ~410 ms, INSIDE the band,
+> because those identity calls cost 949 ns against 21,708 ns for the ones that
+> narrow: **§ 0's law holds in a shape that is not a cache at all.** Follow-on:
+> **(CALL.4)**. Full derivation: `docs/perf/narrow-walk-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
