@@ -142246,6 +142246,16 @@ interface DataView {
                         continue
                     }
                 }
+                // Round 729: the same question one level in. An EXPLICIT call type argument
+                // spelled `NonNullable<U>` is `U & {}`, so the TypeParam arm above never sees
+                // it — round 725 taught the type-REFERENCE site to look through the
+                // intersection and this site was left behind (`createNodeArray<NonNullable<T>>
+                // (…)`). Shares the helper, so both arms strip nullish only when the `& {}`
+                // marker is present and both leave a constituent-less intersection alone.
+                if (argType is Type.Intersection &&
+                    intersectionSatisfiesViaTypeParamConstraint(argType, instantiatedConstraint)) {
+                    continue
+                }
                 val argNode = typeArgNodes[i]
                 val argDisplay = formatTypeForDisplay(argNode) ?: typeToString(argType)
                 // 16.4gb: For anonymous Type.Object constraints where instantiateType
