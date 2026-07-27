@@ -20,6 +20,128 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 730 (2026-07-27) — (LIB.1) IS CLOSED. A real project build now uses the REAL
+TypeScript libs, and the flip is FREE: all 8 profiles report the SAME diagnostics CODE FOR
+CODE under both lib sets. The +5 the gating measurement first found were ONE lib-free
+defect — a `this` pseudo-parameter counted as a required argument, which made a
+`this`-carrying function type non-assignable to ITSELF. Corpus 12,842 → 12,857 / 0 / 3
+(+15 pins). Cost gate REBASELINED with a real, justified movement (`mapped.keyed` +3.81%).**
+
+**THE MEASUREMENT — four arms × 8 profiles, `--noEmit --listAll`, bucketed by code.** This
+is the table every future round compares against. Arms: **A** embedded libs + `types: []`
+(the dashboard), **B** real libs + `types: []` (what the dashboard BECOMES after the flip),
+**D** embedded + `types: ["node"]` (the env-legit floor), **C** real + `types: ["node"]`
+(a realistic project). Real-lib FP cost is `C − D`; dashboard cost is `B − A`.
+
+| profile | A before | B before | A/B after | D before | D after | C before | C after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| compiler | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| tsc-cli | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| jsTyping | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| deprecatedCompat | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| typingsInstallerCore | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| services | 46 | **47** | 46 | 13 | 13 | **14** | 13 |
+| server | 46 | **48** | 46 | 18 | 18 | **15** | 13 |
+| harness | 94 | **96** | 94 | 48 | 48 | **45** | 43 |
+
+Composition: the 46 is `TS2591 ×43 + TS2304 ×2 + TS2584 ×1` on the seven; the 13 is
+`TS2591 ×13`; harness carries `TS2591 ×66 + TS2304 ×10 + TS2503 ×6 + TS2584 ×6 + TS7006 ×3
++ TS2339 ×2 + TS2593 ×1`. **All env-legit** (offline: no real `@types/node` on the
+dashboard path, no `mocha`/`chai`). The only NON-env entries anywhere in the table were the
+bolded ones — every one a TS2322, and every one the single defect below. `harness` arm C
+retains one TS2322 (`vfsUtil.ts:1381`, `string | number | symbol` → `string | undefined`)
+which is present under arm **D** too — a node-types artifact, NOT a real-lib one, and off
+the dashboard path.
+
+**Two readings worth keeping.** (i) Arm D `server` 18 vs arm A 46 is not just the node
+globals: under the EMBEDDED lib, adding `@types/node` INTRODUCES five
+`Type 'Array<T>' is not assignable to type 'X[]'` FPs that the real lib does not have — the
+embedded `ArrayConstructor` is the cause, and real libs fix all five. (ii) The real-lib arm
+is the STABLE one: its TS2322 count is the same with and without node types, while the
+embedded arm swings 0 → 5. That is the mismatch this item existed to remove.
+
+**THE DEFECT — `this` IS NOT A CALL ARGUMENT, and it made a function type non-assignable to
+ITSELF.** `buildSignatureForFunctionLikeTypeNode` (Checker.kt, the FunctionType /
+ConstructorType ANNOTATION path) counted the `this` pseudo-parameter into
+`Signature.minArgumentCount`, while `getParameterSymbols` drops it from
+`Signature.parameters`. So `minArgumentCount` EXCEEDED `parameters.size`, and every arity
+gate — `signaturesRelatedTo`, the TS2554 emitters, the TS2322/TS2345 elaborations — read
+that as "target signature provides too few arguments". **The tell is the self-contradictory
+chain `Expected 3 or more, but got 3`**: whenever the two numbers are equal, suspect a
+`parameters`/`minArgumentCount` population mismatch, not an arity rule.
+
+The same builder ALSO zipped the surviving symbols POSITIONALLY against the DECLARATION's
+parameter list, so with a `this` param every parameter TYPE shifted by one — the real lib's
+`flatMap(cb: (this: This, value: T, index: number, array: T[]) => …)` printed as
+`(this: This, value: This, index: T, array: number)`. Round 460 fixed BOTH of these at the
+function-DECLARATION site and left the type-node site alone. The arity rule is now one
+`requiredParameterCount` helper used at **all 19** signature builders, of which **16** were
+counting `this`; the this-aware type resolution mirrors round 460's verbatim, and the
+legacy positional zip is preserved unchanged for `this`-free parameter lists (a
+binding-pattern param is dropped from `ps` too, and call-site arg alignment relies on it).
+
+**IT IS INVISIBLE UNDER THE EMBEDDED LIB**, which declares no `this` parameters at all.
+Under real libs it made every `Array`/`ReadonlyArray` member taking a `thisArg` mutually
+non-assignable — and through them `SortedArray<T>` vs `SortedReadonlyArray<T>`
+(server/utilitiesPublic.ts:22) and `T[][]` vs `any[][]` (services/organizeImports.ts:240).
+**One cause, both symptoms, all 5 sites** — and the second symptom was NOT predicted: the
+`organizeImports` chain blamed `concat(...)`, which is a red herring; the structural walk
+had already failed on the `thisArg` members and reported on the first member it could name.
+A message chain names where the walk STOPPED, not what broke.
+
+**THE FLIP.** `projectDefaults()` (CompilerOptions.kt) is the starting point for the two
+project entry points — `TsConfigLoader.load` and `ProjectCompiler.build`'s bare-source-file
+path. The CONSTRUCTOR default stays `false`, which is what keeps the corpus path (bare
+`CompilerOptions()` + `@directives`, ~13k baselines generated against the embedded lib)
+completely untouched; a tsconfig may still opt out with `"useRealLibs": false`, because
+`applyDirective` runs after. Verified end to end: with NO flag in the tsconfig,
+`Required<{a?: number}>` now correctly reports TS2741, and with `"useRealLibs": false` it
+goes silent again.
+
+**THE CONTROL DISCIPLINE THAT MATTERS HERE (the item's own recorded trap, and it is real).**
+"Does the name resolve?" proves NOTHING — an unknown name degrades to `any`, and `any` is
+silent, so `Required<…>` "resolved" under the embedded lib while meaning nothing. The
+decisive control is a MEMBER or REQUIREDNESS probe. Every pin added this round is of that
+kind, and the negative controls discriminate by MESSAGE, not by presence: the
+parameter-mismatch control errored BEFORE the fix too, just with the arity message instead
+of naming `b`.
+
+**COST GATE — rebaselined, and the movement is real, not noise.** `mapped.keyed` +3.81% is
+the direct price of resolving the real lib's mapped utility types
+(`Partial`/`Required`/`Pick`/`Readonly`/`Record`) — the embedded lib declares NONE of them,
+which is exactly why they used to degrade to `any`. `typeNode.bypassed` −7.74% is an
+improvement. `spine.nodes` (856,962), `globals.lookups` and `output.errors` are UNMOVED —
+lib files are not on the check spine, so the flip does not widen the checked program.
+Profile wall time stays inside the band (compiler 29.9–32.5 s across all arms).
+
+**WHAT DID NOT WORK / cost time.**
+
+- The first services/server/harness arm-D and arm-C runs were GARBAGE and looked like a
+  real regression (services D = 47 with a TS2688, TS2591 stuck at 43): those project dirs
+  had **no `node_modules/@types/node`**. Only `tsc-project-*` (the compiler profile) carried
+  the real @types/node v22.20.1 from an earlier online session — `bench-compile-tsc.sh`
+  `rm -rf`s it on any run without `--node-stub`. **An arm-D/C measurement on a fresh bench
+  project is meaningless until @types/node is copied in**; the tell is TS2591 not falling
+  from 43 to 13.
+- Guessing the cause from the printed types burned two probe rounds. The shifted display
+  (`value: This, index: T, array: number`) encodes the bug exactly, but I could not read it
+  backwards; the lib-free four-case probe (method / property / direct assignment / control)
+  answered it in one run. **Reach for a lib-free probe matrix before instrumenting** — it
+  was cheaper than the dump this time, precisely because the shape was small.
+- The first organizeImports repro attempt (`const group: T[][] = []` with a constrained `T`)
+  came back CLEAN and would have sent the round after a nonexistent second cause. It was the
+  same defect all along, reachable only through the real lib's `thisArg` members.
+
+**NEXT.** (LIB.1)'s remaining legs are (b) ship the DOM/webworker/scripthost sets and (c)
+report a user-REQUESTED lib that is unavailable — both still open, both now unblocked by the
+flip, and (c) needs a new `unavailableRequested` field (`Resolution.unavailable` is NOT the
+key: a `full` default lib transitively references DOM/host files, so an ordinary resolution
+has a non-empty `unavailable` and must stay silent). Corpus impact of (c) is ~30 baselines
+(259 cases carry `@lib:`, 23 request `dom`, 4 webworker) — judge each form-vs-meaning under
+(PARITY.1) and re-pin; the ONLY sanctioned disable is a `LogicalParityDivergence` entry.
+
+---
+
 **Round 729 (2026-07-27) — (LIB.1) IS DONE: the real-lib false-positive count is ZERO.
 Arm C 16 → 13, and all 13 remaining are the env-legit TS2591 — the burn-down that started
 at 35 (round 717) is finished. Corpus 12,822 → 12,842 / 0 / 3 (+20 pins). Cost gate PASSES
@@ -626,49 +748,6 @@ whole module; incremental cycles after that are cheap.
 ---
 
 
-**Round 720 (2026-07-26/27) — the owner approved the heap raise, and everything that
-had been stuck landed at once: `Required<T>` fixed, real-lib FPs 35 → 24, corpus
-12,765 → 12,770 / 0 / 3, and the cost gate reports ZERO movement on every counter.
-Two of my own earlier diagnoses turned out wrong and are corrected here.**
-
-**The fix (rounds 718's work, finally gated).** `Required<T>` is
-`{ [P in keyof T]-?: T[P] }`; the parser recorded `-?` as a plain `?`, so it behaved
-as `Partial<T>` — inverted. The FP mechanism is NOT type-level: TS2722 gates on
-`isOptionalProperty(propSym)`, and a homomorphic mapped member carries its SOURCE
-property's declaration, so the source's `?` is what the scan sees. Fixed exactly as
-M1.10 fixed `-readonly`: a `mappedRequiredMemberIds` side-channel, probed only when
-the declaration already says optional, so the documented hot path pays nothing —
-which the cost gate then confirmed at zero counters moved. Real-lib arm C: 48 → 37
-(TS2722 ×11 → 0, no other code touched).
-
-**BUILD.1, settled with a measured ladder.** 2g GC-thrashes forever, 3g dies
-mid-compile, **4g fails in ~6 min with an explicit `Not enough memory to run
-compilation`**, 5g succeeds in ~6.5 min. Gradle's own daemon was cut 2g → 1g to make
-room: 5g + 2g oversubscribed the 7.7 GB box and the kernel killed the compile daemon
-mid-run leaving nothing in any log. Checker.kt being ~110k lines in ONE file, plus
-RealLibFiles.kt's ~566 KB of string constants, is why a single module wants 5 GB.
-
-**TWO WRONG DIAGNOSES OF MY OWN, both corrected — this is the reusable part.**
-(1) Round 719 blamed a competing local bench loop for builds that would not finish.
-Those `chore(bench)` commits are authored by `github-actions[bot]`: remote CI, never
-on this box. (2) Far worse, rounds 718–719 recorded "40-minute compiles" that were
-really ~6-minute ones being **restarted by my own polling** — each new Bash call
-preempted the previous backgrounded one, so the `sleep`s never ran and the build died
-with the shell. I diagnosed a hardware/heap crisis out of an artefact of how I was
-waiting. **The rule that follows: launch a long build DETACHED (`nohup … &`) and wait
-on exactly ONE timer; never poll a foreground background-task build.** Process ages
-(`ps -o etime`) are the tell — if the thing you have been waiting 25 minutes for is
-90 seconds old, you are killing it.
-
-**Method note worth keeping:** the explicit error message that ended this only
-appeared at 4g. At 2g and 3g the failure mode was silence — a hang and a restart —
-which is what sent two rounds chasing contention and hardware. When a build fails
-silently, raising the resource until it can TELL you what it wants is cheaper than
-inferring it from symptoms.
-
----
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **Reading convention (stated round 687, after it cost a scan):** a superseded
@@ -975,6 +1054,19 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
 - [ ] **(LIB.1) Ship the DOM/webworker libs and stop real builds silently running
   UNCHECKED — owner-approved 2026-07-26 ("yes, please fix it"), PROMOTED out of the
   post-v1 backlog because it is a silent wrong answer, not a missing feature.**
+  **(a) IS DONE (round 730): the flip LANDED and it is FREE.** `projectDefaults()`
+  (CompilerOptions.kt) now starts both project entry points — `TsConfigLoader.load`
+  and `ProjectCompiler.build`'s bare-source-file path — with `useRealLibs = true`;
+  the CONSTRUCTOR default stays false so the corpus path is untouched, and a
+  tsconfig may still opt out with `"useRealLibs": false`. Gated by a four-arm ×
+  8-profile measurement (the table is in the round-730 session note): the embedded
+  and real arms are IDENTICAL code for code (46/46/46/46/46/46/46/94), and under
+  `types: ["node"]` the real arm is strictly BETTER (server 18 → 13, harness 48 →
+  43). The +5 that measurement first found on services/server/harness were ONE
+  lib-free defect — a `this` pseudo-parameter counted into `minArgumentCount` while
+  dropped from `parameters`, so a `this`-carrying function type was not assignable
+  to ITSELF — now fixed at all 19 signature builders. **REMAINING: (b) and (c)
+  below.**
   THE DEFECT (measured rounds 687–688): `RealLibFiles` ships no
   `dom.generated`/`dom.iterable.generated`/`webworker*`, so `"lib": ["dom"]` records
   the file in `Resolution.unavailable`, which **nothing outside RealLibs.kt ever
@@ -1198,9 +1290,26 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **ALSO LANDED round 729, not on this list:** round 725's rule now has all THREE arms —
   `checkCallTypeArgConstraints` (the EXPLICIT `f<NonNullable<U>>(…)` site round 728 found
   in passing) shares the same helper as the type-reference and inference sites.
-  **NEXT for this item: (a) is now unblocked — re-measure services/server/harness under
-  real libs, then flip `useRealLibs` on by default.** The compiler profile is at zero; the
-  bigger profiles have their own deltas and were never measured.
+  **(a14) LANDED round 730 — the measurement AND the flip.** The four-arm × 8-profile
+  table is in the round-730 session note and is the baseline every future round compares
+  against. The bigger profiles carried exactly 5 non-env diagnostics, all TS2322 and all
+  ONE cause: `buildSignatureForFunctionLikeTypeNode` counted the `this` pseudo-parameter
+  into `minArgumentCount` while `getParameterSymbols` dropped it from `parameters`, so
+  `minArgumentCount` EXCEEDED `parameters.size` and every arity gate read the signature as
+  "target provides too few arguments" — a `this`-carrying function type was not assignable
+  to ITSELF (tell: the self-contradictory "Expected 3 or more, but got 3"). The same
+  builder also zipped the surviving symbols POSITIONALLY against the declaration list,
+  shifting every parameter type by one. Round 460 had fixed both at the function-
+  DECLARATION site only; the arity rule is now one `requiredParameterCount` helper at all
+  19 builders (16 were counting `this`). Invisible under the embedded lib (it declares no
+  `this` parameters); under real libs it made every `Array`/`ReadonlyArray` member taking a
+  `thisArg` mutually non-assignable, and through them `SortedArray<T>` vs
+  `SortedReadonlyArray<T>` and `T[][]` vs `any[][]`. **NOT predicted:** the second symptom's
+  chain blamed `concat(...)` — a message chain names where the structural walk STOPPED, not
+  what broke. Cost gate rebaselined: `mapped.keyed` +3.81% is the price of resolving the
+  real lib's mapped utility types (the embedded lib declares none), `typeNode.bypassed`
+  −7.74% is an improvement, `spine.nodes`/`globals.lookups`/`output.errors` unmoved.
+  **NEXT for this item: (b) and (c) below — both now unblocked by the flip.**
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;

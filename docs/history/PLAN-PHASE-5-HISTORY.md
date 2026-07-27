@@ -1,7 +1,50 @@
+**Round 720 (2026-07-26/27) — the owner approved the heap raise, and everything that
+had been stuck landed at once: `Required<T>` fixed, real-lib FPs 35 → 24, corpus
+12,765 → 12,770 / 0 / 3, and the cost gate reports ZERO movement on every counter.
+Two of my own earlier diagnoses turned out wrong and are corrected here.**
+
+**The fix (rounds 718's work, finally gated).** `Required<T>` is
+`{ [P in keyof T]-?: T[P] }`; the parser recorded `-?` as a plain `?`, so it behaved
+as `Partial<T>` — inverted. The FP mechanism is NOT type-level: TS2722 gates on
+`isOptionalProperty(propSym)`, and a homomorphic mapped member carries its SOURCE
+property's declaration, so the source's `?` is what the scan sees. Fixed exactly as
+M1.10 fixed `-readonly`: a `mappedRequiredMemberIds` side-channel, probed only when
+the declaration already says optional, so the documented hot path pays nothing —
+which the cost gate then confirmed at zero counters moved. Real-lib arm C: 48 → 37
+(TS2722 ×11 → 0, no other code touched).
+
+**BUILD.1, settled with a measured ladder.** 2g GC-thrashes forever, 3g dies
+mid-compile, **4g fails in ~6 min with an explicit `Not enough memory to run
+compilation`**, 5g succeeds in ~6.5 min. Gradle's own daemon was cut 2g → 1g to make
+room: 5g + 2g oversubscribed the 7.7 GB box and the kernel killed the compile daemon
+mid-run leaving nothing in any log. Checker.kt being ~110k lines in ONE file, plus
+RealLibFiles.kt's ~566 KB of string constants, is why a single module wants 5 GB.
+
+**TWO WRONG DIAGNOSES OF MY OWN, both corrected — this is the reusable part.**
+(1) Round 719 blamed a competing local bench loop for builds that would not finish.
+Those `chore(bench)` commits are authored by `github-actions[bot]`: remote CI, never
+on this box. (2) Far worse, rounds 718–719 recorded "40-minute compiles" that were
+really ~6-minute ones being **restarted by my own polling** — each new Bash call
+preempted the previous backgrounded one, so the `sleep`s never ran and the build died
+with the shell. I diagnosed a hardware/heap crisis out of an artefact of how I was
+waiting. **The rule that follows: launch a long build DETACHED (`nohup … &`) and wait
+on exactly ONE timer; never poll a foreground background-task build.** Process ages
+(`ps -o etime`) are the tell — if the thing you have been waiting 25 minutes for is
+90 seconds old, you are killing it.
+
+**Method note worth keeping:** the explicit error message that ended this only
+appeared at 4g. At 2g and 3g the failure mode was silence — a hang and a restart —
+which is what sent two rounds chasing contention and hardware. When a build fails
+silently, raising the resource until it can TELL you what it wants is cheaper than
+inferring it from symptoms.
+
+---
+
 **Round 719 (2026-07-26) — second attempt to gate round 718's fix; the build again did
 not converge, so the loop is STOPPING on (BUILD.1) rather than burning a third round
 on it. Main is at the last gated commit and clean; the fix stays on
 `wip/round718-required-minus-optional`, pushed.**
+
 
 Method was deliberately minimal after round 718's thrash: quiet box confirmed (no JVMs,
 6.0 GB available), merge the branch locally, run ONE `jvmTest` with
