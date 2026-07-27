@@ -20,6 +20,78 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 726 (2026-07-27) — the TS2322 family cracked, by DUMPING the relation instead of
+guessing a third time. Real-lib false positives 18 → 14 (arm C 31 → 27, MEASURED both
+sides, TS2322 ×7 → ×3, no other code moved by even one). Corpus 12,788 → 12,795 / 0 / 3
+(+7 pins). Cost gate PASSES — largest counter −0.68%, an improvement. Embedded-lib
+compiler profile still 46.**
+
+**THE DEFECT.** `getTypeFromTypeReference` instantiated `Iface<A>` into a `Type.Reference`
+only when EVERY type argument resolved, and otherwise fell through to
+`getDeclaredTypeOfSymbol(Iface)` — the RAW OPEN GENERIC. That is not a lenient
+approximation: the open generic carries its OWN type parameter and is a *different type*
+from any instantiation of it, and nothing in the relation engine relates a
+`Type.Reference` to it. Every comparison against such an annotation therefore failed.
+
+The dumped structure is the whole story (parser.ts:3583, `return result` in
+`parseBracketedList<T extends Node>(): NodeArray<T>`):
+
+    src = Ref#17913{tgt=NodeArray#2742, args=[TP#17912{T, cons=Node}]}
+    tgt = Iface#2742{NodeArray, tps=[T#2743], bases=[Ref{ReadonlyArray, args=[TP#2743]}, …]}
+
+A `Reference` on the left, the bare `Interface` on the right — and the interface being
+compared against is literally the source's own `target`. The instrumented fall-through
+named the cause outright:
+
+    XDBG RAW NodeArray args=[T] resolved=[ERROR] tpScope=null aliasArgs=null
+
+The return annotation is resolved with **no `currentTypeParamScope` installed**, so the
+function's own `T` resolves to `errorType`, the all-args-resolved guard fails, and the
+annotation silently becomes the open generic. That is exactly why the message read
+`Type 'NodeArray<T>' is not assignable to type 'NodeArray<T>'` — identical text, because
+the DISPLAY renders the annotation node while the COMPARISON used the raw generic. Two
+prior rounds read that message and theorised about generic identity; the message was
+never describing the types being compared.
+
+**THE FIX** mirrors tsc, where `errorType` is Any-flagged (ours is too:
+`Type.Intrinsic(TypeFlags.Any, "error")`) and instantiation proceeds regardless of it:
+substitute `any` for the unresolved argument positions and instantiate anyway. The
+unresolved name is already reported by TS2304 on its own; this only stops the cascade.
+Four sites cleared — parser.ts:3583, watchPublic.ts:371, watchPublic.ts:383,
+utilities.ts:12378 — and the arm-C diff is a clean four-line removal with nothing added.
+
+**WHAT DID NOT WORK, and it is the reusable part.** Three synthetic probes came back
+CLEAN and nearly sent the round the way of (a2) and (a4): a plain cross-function generic
+call; the full parser.ts shape (overloaded callee, constrained TP, callback-parameter
+inference, interface extending `ReadonlyArray`); and the same multi-file with
+`useRealLibs` on. The degradation is only OBSERVABLE once the interface reaches its type
+parameter through a GENERIC BASE — `interface B<T> extends ReadonlyArray<T>` reproduces,
+`interface Box<T> { v: T }` does NOT, because a flat interface relates to its own raw
+form anyway. A pin built on the flat shape is silent before AND after the fix and proves
+nothing; mine was, until I checked it against unmodified HEAD and got byte-identical
+output. **Verify the discriminating power of a probe on HEAD before trusting it** — that
+check is what turned this from a third eliminated hypothesis into a landed fix.
+
+**THE INSTRUMENTATION LESSON, which cost two compiles.** My first dump printed NOTHING
+and read as "wrong code path" — it was the right code path. The helper's file filter was
+a `private val` declared AFTER the class's `init` block, and `init` is where the checker
+runs every pass, so the property was still null when the emission fired. Hooking
+`Diagnostic`'s constructor instead (`init` on the data class + a filtered stack trace)
+named the true emission site and the `Checker.kt:32150` frame in ONE run — remember the
+line-number wrap, that frame is line 97686. When a checker probe prints nothing, suspect
+initialization order before suspecting the path.
+
+**THE REMAINING 14, by code:** TS2345 ×4, TS2339 ×4, TS2322 ×3, TS2349 ×2, TS2769 ×1. The
+three surviving TS2322 are three DISTINCT causes, none of them this one: parser.ts:3558
+(`NodeArray<T>` vs `NodeArray<NonNullable<T>>` — the type ARGUMENT is
+`Intersection[TP & {}]` with a different TypeParam instance, the round-725 shape moved one
+level in), utilities.ts:4258 (an `Exclude<…>` conditional type), program.ts:1366 (an
+object literal vs `Partial<CreateSourceFileOptions>`). The by-code histogram keeps
+overstating how many distinct causes remain — as round 723 also found.
+
+---
+
+
 **Round 725 (2026-07-27) — round 724's confirmed defect FIXED, and the fix is free.
 Real-lib false positives 22 → 18 (arm C 35 → 31, MEASURED both sides, TS2344 ×4 → 0,
 no other code moved by even one). Corpus 12,781 → 12,788 / 0 / 3. Cost gate: all 20
@@ -2592,6 +2664,30 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **REMAINING 18, by code:** TS2322 ×7, TS2345 ×4, TS2339 ×4, TS2349 ×2, TS2769 ×1 —
   the TS2322 group is the one with two eliminated hypotheses already ((a2), (a4)); per
   that note, dump the actual relation failure rather than guess a third time.
+  **(a6) LANDED round 726 — the TS2322 family is mostly gone; real-lib FPs 18 → 14 (arm C
+  31 → 27, both sides MEASURED, TS2322 ×7 → ×3, no other code moved). Corpus 12,788 →
+  12,795 / 0 / 3 (+7 pins), cost gate PASSES (largest counter −0.68%, an improvement),
+  embedded-lib profile still 46.** THE DEFECT, found by DUMPING the relation as the note
+  above demanded: `getTypeFromTypeReference` built a `Type.Reference` only when EVERY type
+  argument resolved, and otherwise returned `getDeclaredTypeOfSymbol(Iface)` — the RAW OPEN
+  GENERIC, which carries its own type parameter and relates to no `Type.Reference`. A
+  return annotation is resolved with `currentTypeParamScope == null`, so the function's own
+  `T` came back errorType and the annotation silently became the open generic — hence the
+  identical-looking `NodeArray<T>` → `NodeArray<T>`: the display renders the ANNOTATION,
+  the comparison used the RAW GENERIC. THE FIX mirrors tsc (whose `errorType` is
+  Any-flagged and instantiates regardless): substitute `any` for unresolved argument
+  positions and instantiate anyway; TS2304 already reports the name. Sites: parser.ts:3583,
+  watchPublic.ts:371/383, utilities.ts:12378. **THE PROBE TRAP, and why (a2)/(a4) missed
+  it:** the degradation is invisible unless the interface reaches its TP through a GENERIC
+  BASE (`extends ReadonlyArray<T>`); a flat `interface Box<T> { v: T }` relates to its own
+  raw form anyway, so a pin built on one is silent before AND after — verified by running
+  the pin against unmodified HEAD and getting byte-identical output. Three negative
+  controls guard the fix (a resolvable-but-wrong argument still errors, an unresolvable one
+  masks neither an unrelated source nor missing members). **REMAINING 14:** TS2345 ×4,
+  TS2339 ×4, TS2322 ×3, TS2349 ×2, TS2769 ×1 — the three TS2322 are three DISTINCT causes
+  (parser.ts:3558 an `Intersection[TP & {}]` type ARGUMENT, utilities.ts:4258 an `Exclude<…>`
+  conditional, program.ts:1366 an object literal vs `Partial<…>`), so pick the next family
+  by cause, not by histogram height.
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;

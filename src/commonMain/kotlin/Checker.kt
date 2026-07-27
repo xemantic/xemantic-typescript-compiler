@@ -101975,10 +101975,23 @@ interface DataView {
                 val typeArgs = node.typeArguments
                 if (typeParams != null && typeParams.isNotEmpty() && typeArgs != null && typeArgs.isNotEmpty()) {
                     val resolvedArgs = typeArgs.map { getTypeFromTypeNode(it) }
-                    // Only create Reference if all args resolved (no errorType)
                     if (resolvedArgs.none { it === errorType }) {
                         return getOrInternReference(declaredType, resolvedArgs)
                     }
+                    // Round 726: an argument we could not resolve must NOT degrade the
+                    // whole reference to the RAW UNINSTANTIATED generic — `NodeArray`
+                    // (the open generic, carrying its OWN type parameter) is a different
+                    // type from `NodeArray<X>`, and nothing relates a `Type.Reference` to
+                    // it, so every comparison against such an annotation FP'd (real-lib
+                    // TS2322 ×4: a return annotation is resolved with no
+                    // `currentTypeParamScope` installed, so its own `T` resolves to
+                    // errorType). tsc's `errorType` is Any-flagged and instantiation
+                    // proceeds regardless; mirror that by substituting `any` for the
+                    // unresolved positions. The name that failed to resolve is reported
+                    // by TS2304 on its own; this only stops the cascade.
+                    return getOrInternReference(
+                        declaredType, resolvedArgs.map { if (it === errorType) anyType else it },
+                    )
                 }
             }
             return declaredType
