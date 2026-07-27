@@ -20,6 +20,70 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 732 (2026-07-27) — (DISPATCH.1) step (a) DONE, and it FALSIFIES the item.** The
+per-kind handler table was DERIVED (not guessed) and VERIFIED (whole corpus suite run
+with the table applied, byte-identical profile `--listAll`), and the measured prize is
+**883 ms of an 18.5 s spine — an upper bound inflated by the probe's own indirection;
+production-realistic is ~100-300 ms (0.3-1%), not the 1.0-2.5 s / 6-14% predicted.** The
+item's own falsification clause applies. Full derivation, per-handler table and
+reproduction steps: `docs/perf/dispatch-table.md`. Suite 12,876 -> **12,882 / 0 / 3**
+(+6 pins, `SpineDispatchProbeTest`); cost gate all 20 counters +0.00%.
+
+**WHAT WAS BUILT.** `SpineDispatch.kt` + three hooks in Checker.kt, opt-in and
+behaviour-free when off (`spineEnterNode`/`spineLeaveNode` branch once on
+`SpineDispatch.mode != OFF`): by-id twins of both prologues (`spineEnterHandlerById` /
+`spineLeaveHandlerById` — same 46 enter and 13 leave calls, same guards, same order),
+a PROBE mode recording per-(handler, kind) consults/nanos/observed-WORK, a GATED mode
+running only the table, and 23 `SpineDispatch.work()` call sites inside the OPEN
+handlers. Two extractions made every handler reachable by id: the three inline `cta-m3`
+blocks became named handlers, and the `when (kindId)` tail became
+`spineEnterKindDispatch`. Node populations come from the single-threaded spine, never
+from the racy parse-time `nodeKindHistogram` (round 717's trap, obeyed).
+
+**THE TABLE.** 46 enter handlers: 35 closed, 11 OPEN. 13 leave handlers: 3 closed, 10
+OPEN. A closure is accepted only on a SYNTACTIC justification (a top-level
+`when (kindId)` / `if (kindId != K) return`) or an `is Statement` gate
+(`STATEMENT_KINDS`, 32 kinds). Parent-keyed edges, nodeId registries
+(`ctaM3NarrowThen`, `ccetRestores`, `cpaLoopVarRestores`) and frame-owner identity stay
+OPEN; an OBSERVED work set is never promoted to a closure. Two handlers look closed and
+are not — `spineArithLeaveNode` has a frame pop AFTER its own-kind `when` (29 working
+kinds measured) and `spineNpLeaveNode`'s `else` arm reaches every Expression kind.
+
+**THE NUMBERS.** 856,962 nodes; consultations 59/node -> 21.65/node = 64% removed; the
+removed 32.0 M consultations are worth **883 ms**, the kept 18.6 M are worth 17,609 ms.
+**64% of the consultations are 4.8% of the time.** Two independent confirmations: (1)
+`--dispatchGated` measured SLOWER than production (spine enter 11,699 vs 11,157 ms,
+leave 8,683 vs 8,087) — skipping 37 of 59 handlers did not pay for the array-indexed
+`when(h)`; a production straight-line per-kind `when` would not lose that way, but it
+bounds the headroom. (2) IDENTIFIER — the item's own evidence — keeps **1,142 ms** and
+can skip **340 ms**: `spineIanyEnterNode` (376 ms), `ccetSpineEnter` (187 ms),
+`spineCeEnterNode` (178 ms) all do real per-identifier work, and only 10/46 enter +
+12/13 leave are skippable there.
+
+**WHY ROUND 716's ESTIMATE WAS WRONG.** It read "IDENTIFIER costs 2,746 ns/node and
+almost no handler wants an identifier" and inferred consultation overhead. 22 of the 59
+handlers genuinely ACT at an identifier, because the unclosable ones (parent edges,
+frame identity, nodeId registries) are exactly the expensive ones. The decisive probe
+("skip `spineEnterNode` for bare Identifiers -> byte-identical") skipped real work the
+compiler profile happens not to need; it never measured consultation.
+
+**WHERE THE TIME ACTUALLY IS — the finding to carry forward.** Six handlers are 71% of
+the measured spine: `cpaSpineLeave` 4,366 ms, `ccetSpineLeave` 3,046 ms,
+`spineCtaM3StatementAnchor` 2,900 ms, `spineIanyEnterNode` 1,025 ms, `ccetSpineEnter`
+920 ms, `ctaSpineEnter` 586 ms. The other 53 handlers together are ~4.8 s. These are the
+cta/cpa/ccet legacy-parity frame skeletons plus the implicit-any pass — per-node
+BOOKKEEPING, not dispatch and not the type system. `cpaSpineLeave` costs 5.4 us and
+`ccetSpineLeave` 3.5 us PER NODE OF THE PROGRAM. Per kind the same shape:
+CALL_EXPRESSION 3,636 ms over 52,509 nodes (69 us each), VARIABLE_STATEMENT 2,835 ms
+over 14,712 (193 us each).
+
+**WHAT DID NOT WORK / WHAT WAS NOT DONE.** (a) Step (c) — landing the dispatch — is
+deliberately NOT done, and should not be done as specified; see the new (SPINE.1) item.
+(b) `spineOsEnterNode`'s parent-keyed arms have no `work()` call, so its observed set
+reads 0 — not instrumented, not "does nothing". (c) The per-handler nanos are
+probe-inflated (a `when(h)` call plus a timestamp pair per handler per node, 38 ns
+subtracted); they are sound for RELATIVE attribution, not as absolute production costs.
+
 **Round 731 (2026-07-27) — (LIB.1)(b) LANDED: the DOM, webworker and scripthost lib sets
 are SHIPPED, so a browser or worker project is type-CHECKED instead of silently running
 unchecked. The cost was NOT where the item predicted — the payload is 3.14 MB, not ~1 MB,
@@ -1447,85 +1511,69 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   embedded path moves ~30 baselines. Under the byte gate that blocked this item;
   under logical parity, judge each as form-vs-meaning and re-pin.
 
-- [ ] **(DISPATCH.1) Per-kind handler dispatch table — the measured lever
-  (1.0–2.5 s, ~6–14%), and the only structural item currently backed by a
-  decisive probe.** THE MEASUREMENT (round 716, `--passTiming` on the compiler
-  profile): `spineEnterNode` reaches ~118 handler entry points and
-  `spineLeaveNode` 14 sub-dispatchers, and BOTH run for every one of the 857k
-  nodes — 14.8 µs/node enter+leave, of which only ~5.9 µs is type-system work.
-  Per-kind attribution shows the shape: `IDENTIFIER` is 381,670 nodes at
-  **2,746 ns each = 1,048 ms**, `PROPERTY_ACCESS_EXPRESSION` 67,902 at 4,221 ns,
-  `BINARY_EXPRESSION` 38,454 at 6,959 ns — leaf kinds that almost no handler
-  wants, each paying the full consultation chain. **THE DECISIVE PROBE: skipping
-  `spineEnterNode` entirely for bare Identifiers left the compiler profile's 46
-  diagnostics BYTE-IDENTICAL** (`--listAll` diff empty), so that ~1 s is
-  provably unnecessary on this profile. (The probe itself was reverted — "skip
-  identifiers" is not the fix, it is the evidence.)
-  **THE FIX:** precompute, per `NodeKind` (138 dense ids, M0.2 already gives the
-  stamped `kindId`), the exact list of handlers that can fire for that kind, and
-  dispatch only that list. Most handlers apply to 1–5 kinds, so the average node
-  should run ~2–5 handlers instead of ~130.
-  **METHOD — this is the load-bearing part, because the handler set per kind must
-  be DERIVED, not guessed:** (a) build the table by INSTRUMENTATION, not by
-  reading guards — add an opt-in mode that records, per handler entry point, the
-  set of `kindId`s for which it does anything observable (emits, writes a frame,
-  mutates a map), accumulated over BOTH the corpus suite AND all 8 profiles;
-  (b) a handler whose observable-kind set cannot be closed (it climbs ancestors,
-  or keys on parent kind) stays in the always-run list — start conservative, the
-  win comes from the leaf kinds; (c) land per handler-family, corpus + `--listAll`
-  ×8 gated each time; (d) re-measure with the INV.4(g) per-kind counters after
-  each family, since the profile shifts.
-  **TRAP:** the corpus is the only gate that sees kinds the 8 profiles never
-  exercise — a table derived from profiles alone WILL be wrong. Derive from the
-  suite run and treat the profiles as confirmation.
-  **SECOND TRAP, found round 717 while building the COST.1 gate: do NOT derive the
-  table from the existing `nodeKindHistogram` census — it is RACY and always low.**
-  `indexSourceFile` runs on the crawl's concurrent parse threads
-  (`readAndScanBatch`, Dispatchers.Default) and the histogram is a plain HashMap,
-  so two runs of the same binary measured 857,350 vs 854,550 nodes (−0.33%) while
-  every single-threaded counter was bit-identical. Losing a third of a percent of
-  nodes to a race is harmless for "which kinds dominate" and fatal for "which kinds
-  can this handler fire on" — a kind that appears rarely could be dropped entirely
-  from a thread's map. The new instrumentation this item calls for must accumulate
-  per-handler kind sets from the SINGLE-THREADED check spine (or be made
-  thread-safe explicitly), never from the parse-time census.
-  Blocks nothing; unblocks the honest re-measure of every other lever.
-  **TOOLING — everything needed is landed (round 716); no setup decisions:**
-  (1) create the bench project once —
-  `scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log`
-  (it builds `build/bench/tsc-project-<sha>` from `typescript-repo`; on macOS its
-  TSV stat columns log 0 per the BSD-grep gotcha, `wall_ms` and the run log are
-  real; on Linux/VPS all columns are real);
-  (2) attribute with `--passTiming` — the counters this item is built on are
-  `SPINE attribution` (per-phase enter/leave/scope/ures/forEachChild),
-  `per-kind enter+leave (top 12)`, `INV.5(c5) bypassed-resolution PRIZE`, and the
-  existing `time split` line;
-  (3) price every candidate with `scripts/ab-interleaved.sh <dirA> <dirB> <pairs>`
-  — it alternates within pairs, reports medians + win rate, flags differing error
-  counts (B not behaviour-preserving ⇒ timing incomparable) and applies the ±2%
-  drift-band verdict.
-  **MEASUREMENT DISCIPLINE (round 716, learned the hard way):** the per-kind and
-  phase counters are DETERMINISTIC and comparable across runs and boxes; wall time
-  on a loaded box is not (±13% observed on an M1 with a browser running, which
-  swamps a 1 s effect). When the effect is smaller than the box spread, decide on
-  counters and use wall only for confirmation. **Never run any gradle task while
-  `jvmTest` is in flight** — the documented trap is recompiling during a
-  self-compile A/B; the INVERSE also bites (a `gradlew` classpath resolution
-  during a suite run killed it silently, leaving an empty results dir).
-  **THE EXPECTED-VALUE STATEMENT, so a future round can falsify this item rather
-  than drift:** DISPATCH.1 should remove 1.0–2.5 s of a ~17 s compile (6–14%).
-  If a landed slice measures below the drift band on interleaved medians AND the
-  per-kind counters do not fall, the premise is wrong — say so and stop, do not
-  grind. The premise is that ~130 handler entry points are consulted per node
-  while ~2–5 apply; the probe evidence is IDENTIFIER (44.5% of nodes, 2,746 ns,
-  byte-identical output when skipped entirely).
-  **SECOND-ORDER VALUE (why this is first):** round 659 measured that migrating a
-  tail pass onto the spine recovers only 25% of its cost, and STOPPED the M0.4 arc
-  on that basis — but that was measured WITHOUT a dispatch table, where "one walk"
-  still consults every handler at every node. With the table, a migrated pass costs
-  only its own kinds, so DISPATCH.1 changes M0.4's economics and should be
-  followed by a re-measure of one migrated pass before the arc is judged again.
+- [x] **(DISPATCH.1) Per-kind handler dispatch table — DERIVED AND FALSIFIED
+  (round 732). Steps (a) DONE; (b)/(c)/(d) CLOSED — do NOT land the dispatch as
+  specified.** The table was derived by instrumentation, not guessed, and
+  verified by running the WHOLE corpus suite with it applied (12,882 / 0 / 3)
+  plus a byte-identical compiler-profile `--listAll`. **The measured prize is
+  883 ms of an 18.5 s spine — an UPPER bound, inflated by the probe's own
+  `when(h)` indirection; production-realistic is ~100-300 ms (0.3-1%), against
+  the 1.0-2.5 s / 6-14% this item predicted.** The item's own falsification
+  clause therefore applies: *"If a landed slice measures below the drift band
+  AND the per-kind counters do not fall, the premise is wrong — say so and
+  stop."* Consultations do fall (59/node -> 21.65/node, 64% removed) — and
+  **64% of the consultations are 4.8% of the time.**
+  **THE MECHANISM OF THE ERROR (for the next estimate):** round 716 inferred
+  consultation overhead from "IDENTIFIER costs 2,746 ns/node and almost no
+  handler wants an identifier". In fact 22 of the 59 handlers ACT at an
+  identifier — the ones keyed on PARENT edges, FRAME-owner identity and nodeId
+  REGISTRIES cannot be closed by the node's own kind, and they are also the
+  expensive ones. The "skip `spineEnterNode` for bare Identifiers ->
+  byte-identical" probe skipped real work the compiler profile happens not to
+  need; it never measured consultation.
+  **WHAT LANDED AND STAYS:** `SpineDispatch.kt` (the opt-in `--dispatchProbe` /
+  `--dispatchGated` harness, behaviour-free when off), the by-id twins
+  `spineEnterHandlerById`/`spineLeaveHandlerById`, `spineEnterKindDispatch`,
+  the three named `spineCtaM3*Anchor` handlers, 23 `SpineDispatch.work()`
+  probes, and `SpineDispatchProbeTest`. The derived table, its per-handler
+  soundness justification, the OPEN list and the reproduction steps are in
+  **`docs/perf/dispatch-table.md`** — read that before proposing anything
+  shaped like this again.
 
+- [ ] **(SPINE.1) Attribute and shrink `cpaSpineLeave` + `ccetSpineLeave` —
+  7.4 s, 40% of the spine, measured round 732. THIS is where the spine's time
+  is; (DISPATCH.1) proved it is not dispatch.** The round-732 per-handler
+  attribution (`--dispatchProbe`, compiler profile, 856,962 nodes) found six
+  handlers holding 71% of the 18.5 s spine: `cpaSpineLeave` 4,366 ms,
+  `ccetSpineLeave` 3,046 ms, `spineCtaM3StatementAnchor` 2,900 ms,
+  `spineIanyEnterNode` 1,025 ms, `ccetSpineEnter` 920 ms, `ctaSpineEnter`
+  586 ms — while the other 53 handlers TOGETHER are ~4.8 s. `cpaSpineLeave`
+  costs **5.4 us per node of the whole program** and `ccetSpineLeave` 3.5 us;
+  both are OPEN (parent-keyed `run{}` blocks, nodeId restore lists, frame pops),
+  so no kind table touches them. These are the cta/cpa/ccet legacy-parity frame
+  SKELETONS — per-node bookkeeping that exists to reproduce the deleted
+  walkers' ambient state, not type-system work and not dispatch.
+  **STEP (a): attribute INSIDE the two handlers** — the same technique that
+  worked in round 732: an opt-in by-id split of each handler's top-level
+  sections (for `cpaSpineLeave`: the anchor `if`, the `owner`-when `run{}`, the
+  `ExpressionWithTypeArguments` `run{}`, the PropertyDeclaration arm, the
+  loop-var restore loop, the VariableDeclaration arm, the frame pop) with
+  per-(section, kind) nanos. Do NOT guess which section is hot — round 732's
+  whole lesson is that the guess was wrong by 5x.
+  **STEP (b):** the likely shapes, to be confirmed by (a), are a per-node
+  `cpaM2StmtPosition`/`cpaM2ChainOk` ancestor climb that could be nodeId-memoized
+  (the `spineXxStatus` pattern every migrated pass already uses), and the
+  parent-keyed `run{}` blocks which are cheap to gate on the PARENT's kindId
+  (a second dispatch axis the round-732 table deliberately did not use).
+  **EXPECTED VALUE, stated so it can be falsified:** if the ancestor climbs
+  dominate, memoizing them should remove 1-3 s; if the cost is spread evenly
+  over genuinely necessary bookkeeping, it will not, and the honest answer is
+  that legacy-parity scaffolding is the price of the INV.4 migration and the
+  next lever is elsewhere. Gate: corpus suite + `--listAll` x8 + `cost_gate.py`.
+  Per-kind cross-check: CALL_EXPRESSION 3,636 ms over 52,509 nodes (69 us each),
+  VARIABLE_STATEMENT 2,835 ms over 14,712 (193 us each), RETURN_STATEMENT
+  1,839 ms over 15,662 (117 us each) — a fix that does not move those is not
+  the fix.
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is
   parked with an explicit unpark condition — "a host with ≥8 real cores (re-run this

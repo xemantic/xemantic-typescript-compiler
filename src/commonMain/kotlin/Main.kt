@@ -66,6 +66,13 @@ fun main(args: Array<String>) {
             "--verifyMappedCache", "--verifymappedcache" -> {
                 passTiming = true; PassTiming.verifyMappedCache = true
             }
+            // (DISPATCH.1)(a): the opt-in per-kind handler-table derivation.
+            "--dispatchProbe", "--dispatchprobe" -> {
+                SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.PROBE
+            }
+            "--dispatchGated", "--dispatchgated" -> {
+                SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.GATED
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -108,6 +115,13 @@ fun main(args: Array<String>) {
     PartitionCheck.reportLines.forEach { println(it) }
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
+    if (SpineDispatch.mode == SpineDispatch.PROBE) {
+        println(SpineDispatch.report())
+        println("== (DISPATCH.1) csv ==")
+        print(SpineDispatch.csv())
+        println("== (DISPATCH.1) csv end ==")
+        SpineDispatch.mode = SpineDispatch.OFF
+    }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
 }
@@ -235,6 +249,8 @@ private fun printUsage() {
           --noEmit           type-check only; do not write outputs
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
+          --dispatchProbe    (DISPATCH.1) per-handler/per-kind spine attribution
+          --dispatchGated    (DISPATCH.1) run only the derived per-kind handler table
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)

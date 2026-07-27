@@ -1335,6 +1335,7 @@ class Checker(
                 }
                 val id = (node as NodeBase).nodeId
                 if (colliding.isNotEmpty() && id >= 0) {
+                    SpineDispatch.work()
                     val prev = colliding.map { topF.localTypes[it] }
                     val had = colliding.map { topF.localTypes.containsKey(it) }
                     val added = colliding.filter { it !in topF.paramBindings }
@@ -1359,6 +1360,7 @@ class Checker(
             val name = vn
             val t = uType
             if (name != null && t != null && id >= 0) {
+                SpineDispatch.work()
                 ccetRestores.addLast(CcetRestore(id, topF, listOf(name),
                     listOf(topF.localTypes[name]), listOf(topF.localTypes.containsKey(name)),
                     emptyList()))
@@ -1402,6 +1404,7 @@ class Checker(
         val id = (node as NodeBase).nodeId
         // Scoped override restores (If-narrowing, loop-var shadows).
         while (ccetRestores.isNotEmpty() && ccetRestores.last().nodeId == id && id >= 0) {
+            SpineDispatch.work()
             val r = ccetRestores.removeLast()
             for ((i, nm) in r.names.withIndex()) {
                 if (r.hadPrev[i]) r.frame.localTypes[nm] = r.prevTypes[i]!!
@@ -2060,6 +2063,7 @@ class Checker(
                     if (overrideType != null) {
                         val bodyId = (node as NodeBase).nodeId
                         if (bodyId >= 0) {
+                            SpineDispatch.work()
                             cpaLoopVarRestores.addLast(CpaLoopVarRestore(bodyId, name,
                                 top.localTypes.containsKey(name), top.localTypes[name]))
                             top.localTypes[name] = overrideType
@@ -2219,6 +2223,7 @@ class Checker(
         val id = (node as NodeBase).nodeId
         // Loop-var override restores.
         while (cpaLoopVarRestores.isNotEmpty() && cpaLoopVarRestores.last().bodyId == id && id >= 0) {
+            SpineDispatch.work()
             val r = cpaLoopVarRestores.removeLast()
             val top = cpaFrames.last()
             if (r.hadPrev) top.localTypes[r.name] = r.prev!! else top.localTypes.remove(r.name)
@@ -2835,6 +2840,7 @@ class Checker(
             val nid = (node as NodeBase).nodeId
             val narrowing = if (nid >= 0) ctaM3NarrowThen[nid] else null
             if (narrowing != null) {
+                SpineDispatch.work()
                 ctaM3NarrowFramePushed = true
                 val top = ctaFrames.last()
                 val (varName, narrowedType) = narrowing
@@ -3043,7 +3049,10 @@ class Checker(
     }
 
     private fun ctaSpineLeave(node: Node) {
-        if (ctaFrames.size > 1 && ctaFrames.last().owner === node) ctaFrames.removeLast()
+        if (ctaFrames.size > 1 && ctaFrames.last().owner === node) {
+            SpineDispatch.work()
+            ctaFrames.removeLast()
+        }
     }
 
     /** B72.1: value-scope tracking for mixin-class TS2545 check —
@@ -16551,6 +16560,7 @@ class Checker(
     private fun spineDaLeaveNode(node: Node) {
         val frames = spineDaFrames
         while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            SpineDispatch.work()
             frames.removeAt(frames.size - 1)
         }
     }
@@ -16897,6 +16907,7 @@ class Checker(
     private fun spineOsLeaveNode(node: Node) {
         val frames = spineOsFrames
         while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            SpineDispatch.work()
             frames.removeAt(frames.size - 1)
         }
     }
@@ -17190,6 +17201,7 @@ class Checker(
     private fun spinePdLeaveNode(node: Node) {
         val frames = spinePdFrames
         while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            SpineDispatch.work()
             frames.removeAt(frames.size - 1)
         }
     }
@@ -22170,6 +22182,10 @@ class Checker(
 
     /** Per-node dispatch, preorder position (before children). */
     private fun spineEnterNode(node: Node) {
+        // (DISPATCH.1)(a): the opt-in derivation harness. OFF in production, so
+        // this is one static field read + a perfectly-predicted branch; the
+        // straight-line prologue below is byte-identical to the pre-probe one.
+        if (SpineDispatch.mode != SpineDispatch.OFF) { spineEnterNodeProbed(node); return }
         ctaSpineEnter(node)
         // (cpa-m2a/m3a): the g2 frame skeleton — always-on since the first
         // emission moves.
@@ -22177,7 +22193,165 @@ class Checker(
         // (ccet-m2): the g3 frame skeleton — ALWAYS-ON since round 589 (the
         // "inert" note was stale from before the round-591 anchors landed).
         ccetSpineEnter(node)
-        // (cta-m3k): class property initializers — members, not statements.
+        spineCtaM3PropertyAnchor(node)
+        spineCtaM3BodyWalkerAnchor(node)
+        spineCtaM3StatementAnchor(node)
+        // INV.4(d) walker 2: edge-triggered scope frames + enter-position
+        // emissions for the arithmetic pass (must precede the kind dispatch —
+        // a node's own frames nest inside its parent-edge frames).
+        if (spineArithActive) spineArithEnterNode(node)
+        // INV.4(d) walker 3: the implicit-any pass (same edge-first discipline).
+        if (spineIanyActive) spineIanyEnterNode(node)
+        // INV.4(d) walker 5: the set-based definite-assignment pass — the
+        // per-statement frame step + core-frame spawns.
+        if (spineDaActive) spineDaEnterNode(node)
+        if (spineOsActive) spineOsEnterNode(node)
+        if (spinePdActive) spinePdEnterNode(node)
+        if (spineItFileActive) spineItEnterNode(node)
+        if (spineFpActive) spineFpEnterNode(node)
+        if (spineAiActive) spineAiEnterNode(node)
+        if (spineSyActive) spineSyEnterNode(node)
+        if (spineCoActive) spineCoEnterNode(node)
+        if (spineB94Active) spineB94EnterNode(node)
+        if (spineCeActive) spineCeEnterNode(node)
+        if (spinePmrActive) spinePmrEnterNode(node)
+        if (spinePiActive) spinePiEnterNode(node)
+        if (spineGxActive) spineGxEnterNode(node)
+        if (spineAcActive) spineAcEnterNode(node)
+        if (spineEvActive) spineEvEnterNode(node)
+        if (spineUyActive) spineUyEnterNode(node)
+        if (spineSrActive) spineSrEnterNode(node)
+        if (spineIaActive) spineIaEnterNode(node)
+        if (spineTdActive) spineTdEnterNode(node)
+        if (spineExActive) spineExEnterNode(node)
+        if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
+        if (spineClActive) spineClEnterNode(node)
+        if (spineSuActive) spineSuEnterNode(node)
+        if (spineTcActive) spineTcEnterNode(node)
+        if (spineDelActive) spineDelEnterNode(node)
+        if (spineCpActive) spineCpEnterNode(node)
+        if (spineAbActive) spineAbEnterNode(node)
+        if (spineIyActive) spineIyEnterNode(node)
+        if (spineAaActive) spineAaEnterNode(node)
+        if (spineIdcActive) spineIdcEnterNode(node)
+        if (spineNaActive) spineNaEnterNode(node)
+        if (spineAfActive) spineAfEnterNode(node)
+        if (spineTpoActive) spineTpoEnterNode(node)
+        // INV.4(d) walker 7: the use-before-declaration pass — the per-list
+        // ForwardRefs anchor + loop-header self-ref checks.
+        if (spineUbdActive) spineUbdEnterNode(node)
+        // INV.4(d) walker 9: the const-assignment pass — frame steps/spawns +
+        // assignment/inc-dec/regex anchors.
+        if (spineCaActive) spineCaEnterNode(node)
+        // INV.4(d) walker 10: the always-truthy pass — condition/operand
+        // anchors.
+        if (spineAtActive) spineAtEnterNode(node)
+        // INV.4(d) walker 11: the null/undefined-usage pass — TS18050 anchors.
+        if (spineNuActive) spineNuEnterNode(node)
+        // INV.4(d) walker 12: the comma-operator pass — TS2695 anchors
+        // (ENTER = the legacy pre-order; also keeps same-position pairs
+        // comma-before-np, since the np anchors fire at LEAVES).
+        if (spineCmActive) spineCmEnterNode(node)
+        spineEnterKindDispatch(node)
+    }
+
+    /**
+     * (DISPATCH.1)(a): the by-id twin of [spineEnterNode]'s prologue — the SAME
+     * calls with the SAME guards in the SAME order, reachable one at a time so
+     * the probe can time and attribute each. Index-aligned with
+     * [SpineDispatch.enterNames]; a new prologue handler must be added to BOTH
+     * (SpineDispatchProbeTest pins that probe mode reproduces production output
+     * byte-for-byte, which is what catches a missed arm).
+     */
+    private fun spineEnterHandlerById(h: Int, node: Node) {
+        when (h) {
+            0 -> ctaSpineEnter(node)
+            1 -> cpaSpineEnter(node)
+            2 -> ccetSpineEnter(node)
+            3 -> spineCtaM3PropertyAnchor(node)
+            4 -> spineCtaM3BodyWalkerAnchor(node)
+            5 -> spineCtaM3StatementAnchor(node)
+            6 -> if (spineArithActive) spineArithEnterNode(node)
+            7 -> if (spineIanyActive) spineIanyEnterNode(node)
+            8 -> if (spineDaActive) spineDaEnterNode(node)
+            9 -> if (spineOsActive) spineOsEnterNode(node)
+            10 -> if (spinePdActive) spinePdEnterNode(node)
+            11 -> if (spineItFileActive) spineItEnterNode(node)
+            12 -> if (spineFpActive) spineFpEnterNode(node)
+            13 -> if (spineAiActive) spineAiEnterNode(node)
+            14 -> if (spineSyActive) spineSyEnterNode(node)
+            15 -> if (spineCoActive) spineCoEnterNode(node)
+            16 -> if (spineB94Active) spineB94EnterNode(node)
+            17 -> if (spineCeActive) spineCeEnterNode(node)
+            18 -> if (spinePmrActive) spinePmrEnterNode(node)
+            19 -> if (spinePiActive) spinePiEnterNode(node)
+            20 -> if (spineGxActive) spineGxEnterNode(node)
+            21 -> if (spineAcActive) spineAcEnterNode(node)
+            22 -> if (spineEvActive) spineEvEnterNode(node)
+            23 -> if (spineUyActive) spineUyEnterNode(node)
+            24 -> if (spineSrActive) spineSrEnterNode(node)
+            25 -> if (spineIaActive) spineIaEnterNode(node)
+            26 -> if (spineTdActive) spineTdEnterNode(node)
+            27 -> if (spineExActive) spineExEnterNode(node)
+            28 -> if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
+            29 -> if (spineClActive) spineClEnterNode(node)
+            30 -> if (spineSuActive) spineSuEnterNode(node)
+            31 -> if (spineTcActive) spineTcEnterNode(node)
+            32 -> if (spineDelActive) spineDelEnterNode(node)
+            33 -> if (spineCpActive) spineCpEnterNode(node)
+            34 -> if (spineAbActive) spineAbEnterNode(node)
+            35 -> if (spineIyActive) spineIyEnterNode(node)
+            36 -> if (spineAaActive) spineAaEnterNode(node)
+            37 -> if (spineIdcActive) spineIdcEnterNode(node)
+            38 -> if (spineNaActive) spineNaEnterNode(node)
+            39 -> if (spineAfActive) spineAfEnterNode(node)
+            40 -> if (spineTpoActive) spineTpoEnterNode(node)
+            41 -> if (spineUbdActive) spineUbdEnterNode(node)
+            42 -> if (spineCaActive) spineCaEnterNode(node)
+            43 -> if (spineAtActive) spineAtEnterNode(node)
+            44 -> if (spineNuActive) spineNuEnterNode(node)
+            45 -> if (spineCmActive) spineCmEnterNode(node)
+            else -> {}
+        }
+    }
+
+    /** (DISPATCH.1)(a): the probe/gated enter path. Never taken in production. */
+    private fun spineEnterNodeProbed(node: Node) {
+        val kid = (node as NodeBase).kindId
+        if (SpineDispatch.mode == SpineDispatch.GATED) {
+            val tbl = SpineDispatch.enterTable[kid]
+            for (i in tbl.indices) spineEnterHandlerById(tbl[i], node)
+            spineEnterKindDispatch(node)
+            return
+        }
+        SpineDispatch.kindNodes[kid]++
+        SpineDispatch.currentKind = kid
+        SpineDispatch.currentIsLeave = false
+        val consult = SpineDispatch.enterConsult
+        val nanos = SpineDispatch.enterNanos
+        val t0 = PassTiming.nowNanos()
+        for (h in 0 until SpineDispatch.enterCount) {
+            SpineDispatch.current = h
+            val t = PassTiming.nowNanos()
+            spineEnterHandlerById(h, node)
+            nanos[h][kid] += PassTiming.nowNanos() - t
+            consult[h][kid]++
+        }
+        SpineDispatch.current = -1
+        // The empty slot: its measured mean IS one timestamp pair's cost, so a
+        // per-handler net time can be stated without the probe's own tax.
+        val tOvh = PassTiming.nowNanos()
+        spineEnterHandlerById(SpineDispatch.enterCount, node)
+        SpineDispatch.probeOverheadNanos += PassTiming.nowNanos() - tOvh
+        SpineDispatch.probeOverheadCalls++
+        val t1 = PassTiming.nowNanos()
+        SpineDispatch.prologueNanos[kid] += t1 - t0
+        spineEnterKindDispatch(node)
+        SpineDispatch.tailNanos[kid] += PassTiming.nowNanos() - t1
+    }
+
+    /** (cta-m3k): class property initializers — members, not statements. */
+    private fun spineCtaM3PropertyAnchor(node: Node) {
         if (node is PropertyDeclaration && !spineIsDts) {
             val cls = (node as NodeBase).parent
             if (cls is ClassDeclaration && ctaM3NestedChainOk((cls as NodeBase).parent ?: cls)) {
@@ -22187,16 +22361,21 @@ class Checker(
                 }
             }
         }
-        // (cta-m3l): the checkFunctionBody BODY-LEVEL walkers (B442 for-in /
-        // numeric-for redeclare + B205 FlatArray depth-param) — ambient-
-        // independent AST scans the legacy runs at checkFunctionBody entry.
-        // Anchored at the body Block's enter for the checkFunctionBody-routed
-        // owners on eligible chains: FunctionDeclaration bodies and class
-        // Method/GetAccessor bodies (ctor/SetAccessor bodies never route
-        // through checkFunctionBody; objlit methods and arrows/fn-exprs stay
-        // legacy-owned — their walkFunctionBodiesInExpr dispatch already
-        // emit-twice-truncates at the containing statement). The legacy call
-        // pair skips via the recorded set keyed on the Block's nodeId.
+    }
+
+    /**
+     * (cta-m3l): the checkFunctionBody BODY-LEVEL walkers (B442 for-in /
+     * numeric-for redeclare + B205 FlatArray depth-param) — ambient-
+     * independent AST scans the legacy runs at checkFunctionBody entry.
+     * Anchored at the body Block's enter for the checkFunctionBody-routed
+     * owners on eligible chains: FunctionDeclaration bodies and class
+     * Method/GetAccessor bodies (ctor/SetAccessor bodies never route
+     * through checkFunctionBody; objlit methods and arrows/fn-exprs stay
+     * legacy-owned — their walkFunctionBodiesInExpr dispatch already
+     * emit-twice-truncates at the containing statement). The legacy call
+     * pair skips via the recorded set keyed on the Block's nodeId.
+     */
+    private fun spineCtaM3BodyWalkerAnchor(node: Node) {
         if (node is Block && ctaM3BodyWalkersEligible(node)) {
             ctaM3MarkAnchored(node)
             checkForInNumericForRedeclare(node.statements, spineSource, spineFileName)
@@ -22210,6 +22389,11 @@ class Checker(
                 else -> {}
             }
         }
+    }
+
+    /** (cta-m3d/m3e/m3h1): the statement-position cta anchors + the
+     *  non-anchored VariableStatement's recording-only dispatch. */
+    private fun spineCtaM3StatementAnchor(node: Node) {
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement || node is IfStatement) && !spineIsDts) {
             val p = (node as NodeBase).parent
             val anchored = when (p) {
@@ -22260,183 +22444,14 @@ class Checker(
                 ctaM3StmtAnchor(node as Statement, list, recordOnly = true)
             }
         }
-        // INV.4(d) walker 2: edge-triggered scope frames + enter-position
-        // emissions for the arithmetic pass (must precede the kind dispatch —
-        // a node's own frames nest inside its parent-edge frames).
-        if (spineArithActive) spineArithEnterNode(node)
-        // INV.4(d) walker 3: the implicit-any pass (same edge-first discipline).
-        if (spineIanyActive) spineIanyEnterNode(node)
-        // INV.4(d) walker 5: the set-based definite-assignment pass — the
-        // per-statement frame step + core-frame spawns.
-        if (spineDaActive) spineDaEnterNode(node)
-        if (spineOsActive) spineOsEnterNode(node)
-        if (spinePdActive) spinePdEnterNode(node)
-        // (M0.4) round 625: the implicit-this anchors (`this` Identifiers,
-        // `this.<name>` accesses) — pull-based context, no frames/leave hook.
-        if (spineItFileActive) spineItEnterNode(node)
-        // (M0.4) round 626: the fn-typed-param-call anchors (CallExpressions)
-        // — pull-based FnParamCtx, no frames/leave hook.
-        if (spineFpActive) spineFpEnterNode(node)
-        // (M0.4) round 627: the abstract-class-instantiation anchors
-        // (NewExpressions with an Identifier callee) — pull-based overlay
-        // sets, no frames/leave hook, no ambient sandwich.
-        if (spineAiActive) spineAiEnterNode(node)
-        // (M0.4) round 628: the symbol-to-string anchors (binary `+`/`+=`,
-        // unary `+`, template spans with bare-Identifier operands) —
-        // pull-based (symbolNames, tpNames) context, no frames/leave hook,
-        // no ambient sandwich.
-        if (spineSyActive) spineSyEnterNode(node)
-        // (M0.4) round 630: the cast-overlap anchors (TypeAssertionExpression
-        // nodes) — the two TS2352 emission leaves under the
-        // currentCheckFileName/null-flow sandwich; no frames/leave hook.
-        if (spineCoActive) spineCoEnterNode(node)
-        // (M0.4) round 631: the binding-pattern computed-key anchors
-        // (VariableStatement / for-head decl lists / fn-EXPRESSION-like
-        // parameter lists) — TS2537 under the resting-locals sandwich,
-        // TS2448/TS2538 pure-AST; no frames/leave hook.
-        if (spineB94Active) spineB94EnterNode(node)
-        // (M0.4) round 632: the const-enum cluster anchors (const
-        // EnumDeclarations, bare Identifiers, ElementAccessExpressions) —
-        // active only in files DECLARING a namespace-reachable const enum;
-        // no frames/leave hook, no ambient sandwich.
-        if (spineCeActive) spineCeEnterNode(node)
-        // (M0.4) round 635: the protected-member-read anchors
-        // (PropertyAccessExpression reads + `=`-LHS write checks) and the
-        // push-based boundary frames — active in every non-dts/non-js file;
-        // no ambient sandwich.
-        if (spinePmrActive) spinePmrEnterNode(node)
-        // (M0.4) round 636: the property-init anchors (ClassDeclaration/
-        // ClassExpression enters) — the TS2564 per-class emission, repeated
-        // per the legacy walk's multiplicity; no frames/leave hook, no
-        // ambient sandwich.
-        if (spinePiActive) spinePiEnterNode(node)
-        // (M0.4) round 637: the generic-index-write anchors (`=` binaries
-        // with an ElementAccess LHS) — pull-based (tparams, tpProps, refs)
-        // triple, no frames/leave hook, no ambient sandwich.
-        if (spineGxActive) spineGxEnterNode(node)
-        // (M0.4) round 638: the args-collision anchors (fn-like enters with
-        // an `arguments`-named param) — one constant-per-file isModule
-        // boolean, no frames/leave hook, no ambient sandwich.
-        if (spineAcActive) spineAcEnterNode(node)
-        // (M0.4) round 639 — see spineEvEnterNode.
-        if (spineEvActive) spineEvEnterNode(node)
-        // (M0.4) round 640: the predefined-type-name + yield anchors
-        // (class/interface/type-alias enters with a name pre-gate,
-        // YieldExpression enters) — two interleaved reach shapes in one
-        // classifier; no frames/leave hook, no ambient sandwich.
-        if (spineUyActive) spineUyEnterNode(node)
-        // (M0.4) round 641: the super-in-rebinding-scope anchors (`super`
-        // Identifiers with a text pre-gate) — the one downward `rebound`
-        // boolean carried as the classifier status; no frames/leave hook,
-        // no ambient sandwich.
-        if (spineSrActive) spineSrEnterNode(node)
-        // (M0.4) round 642: the invalid-assignment-target anchors
-        // (BinaryExpressions with an assignment operator) — reach is the
-        // shared-checkDepth INT-depth classifier (spineIaDepth); no
-        // frames/leave hook, no ambient sandwich.
-        if (spineIaActive) spineIaEnterNode(node)
-        // (M0.4) round 643: the type-parameter-defaults anchors (the ten
-        // TP-list-bearing construct kinds, non-empty-typeParameters
-        // pre-gate) — TS2368/TS2744; the circularDefaultTypeParamCount
-        // side-set write stays in the pre-spine producer
-        // populateCircularTpDefaults; no frames/leave hook, no ambient
-        // sandwich.
-        if (spineTdActive) spineTdEnterNode(node)
-        // (M0.4) round 644: the expando-nested-read anchors
-        // (PropertyAccessExpressions with a candidate-receiver text
-        // pre-gate) — active only in files with expando candidates; the
-        // write collector ran at file setup, so anchors emit inline; no
-        // frames/leave hook, no ambient sandwich.
-        if (spineExActive) spineExEnterNode(node)
-        // (M0.4) round 645: the strict-mode-identifier anchors
-        // (VariableStatement / fn-decl / interface / fn-expr / arrow /
-        // assignment binary / ++,-- unary / for-head / try-catch enters,
-        // restricted-name pre-gates) — the per-file routing mode decided at
-        // setup, the walk identity carried by the classifier; no
-        // frames/leave hook, no ambient sandwich.
-        if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
-        // (M0.4) round 646: the const-literal-comparison anchors (==/===/
-        // !=/!== binaries with an Identifier operand) — the downward
-        // for-init const-literal map rebuilds pull-based per anchor behind
-        // a cheap for-ancestor pre-filter; no frames/leave hook, no
-        // ambient sandwich.
-        if (spineClActive) spineClEnterNode(node)
-        // (M0.4) round 647: the super-in-object-literal anchors
-        // (ObjectLiteralExpression enters with an emission-shape pre-gate)
-        // — the one downward `superValid` boolean carried as the
-        // classifier status; emissions run the bounded findObjLitSuperRefs
-        // leaves per property; no frames/leave hook, no ambient sandwich.
-        if (spineSuActive) spineSuEnterNode(node)
-        // (M0.4) round 648: the type-param-cast anchors
-        // (TypeAssertionExpression / AsExpression enters with a
-        // bare-Identifier-target pre-gate) — the TS2352 emitters under the
-        // pull-based TP-scope/param-typing ambient rebuild; no frames/leave
-        // hook.
-        if (spineTcActive) spineTcEnterNode(node)
-        // (M0.4) round 649: the delete-operator anchors (DeleteExpression
-        // enters) — the TS1102/TS2703/TS2790/TS2704/TS2542 emission under
-        // the resting-locals + null-flow sandwich; no frames/leave hook.
-        if (spineDelActive) spineDelEnterNode(node)
-        // (M0.4) round 650: the constructor-param-in-initializer anchors
-        // (ClassDeclaration / ClassExpression enters, declare-gated) — the
-        // TS2301/TS2663 emission leaf under the multi-state reach
-        // classifier; fully syntactic, no frames/leave hook, no ambient
-        // sandwich.
-        if (spineCpActive) spineCpEnterNode(node)
-        // (M0.4) round 651: the abstract-member-context anchors (ClassDeclaration
-        // / ClassExpression enters) — the TS1253/TS1244/TS7008 emission leaf
-        // under the single-state reach classifier + the per-anchor
-        // declare-ancestor `inAmbient` climb; fully syntactic, no frames/leave
-        // hook, no ambient sandwich.
-        if (spineAbActive) spineAbEnterNode(node)
-        // (M0.4) round 652: the implicit-any-yield anchors (YieldExpression
-        // enters) — the TS7057 emission under the classifier whose status
-        // carries the walk's downward `inGen` boolean, plus the anchor-side
-        // discarded-statement-result gate; fully syntactic, no frames/leave
-        // hook, no ambient sandwich.
-        if (spineIyActive) spineIyEnterNode(node)
-        // (M0.4) round 653: the abstract-member-access anchors
-        // (ClassDeclaration / ClassExpression enters) — the TS2715 emission
-        // half under the memoized structural reach classifier, with the
-        // file-scoped classMap prepass in setup; fully syntactic, no
-        // frames/leave hook, no ambient sandwich.
-        if (spineAaActive) spineAaEnterNode(node)
-        // (M0.4) round 654: the inc/dec type-param-operand anchors (Prefix/
-        // Postfix `++`/`--` enters) — the TS2356 emission leaf under the
-        // memoized binary reach classifier, with the downward
-        // (tparams, tpProps, tpLocals) triple rebuilt pull-based per anchor;
-        // fully syntactic, no frames/leave hook, no ambient sandwich.
-        if (spineIdcActive) spineIdcEnterNode(node)
-        // (M0.4) round 655: the implicit-any-`new` anchors (NewExpression
-        // enters) — the TS7009 emission leaf under the memoized binary reach
-        // classifier, run with the FILE's own binder locals installed (the
-        // deleted driver's ambient); no frames/leave hook.
-        if (spineNaActive) spineNaEnterNode(node)
-        // (M0.4) round 656: the TS2815 anchors (`arguments` Identifier enters)
-        // — the emission leaf under the multi-state classifier carrying the
-        // pass's two interleaved walks as the status; fully syntactic, no
-        // frames/leave hook, no ambient sandwich.
-        if (spineAfActive) spineAfEnterNode(node)
-        // (M0.4) round 658: the B60.12 TypeParam-op anchors (property access /
-        // call / `new` enters) plus the frame boundaries and the
-        // VariableStatement recording — the order-dependent tpVars map and the
-        // TP-scope ambient are frame-maintained (round-635 shape).
-        if (spineTpoActive) spineTpoEnterNode(node)
-        // INV.4(d) walker 7: the use-before-declaration pass — the per-list
-        // ForwardRefs anchor + loop-header self-ref checks.
-        if (spineUbdActive) spineUbdEnterNode(node)
-        // INV.4(d) walker 9: the const-assignment pass — frame steps/spawns +
-        // assignment/inc-dec/regex anchors.
-        if (spineCaActive) spineCaEnterNode(node)
-        // INV.4(d) walker 10: the always-truthy pass — condition/operand
-        // anchors.
-        if (spineAtActive) spineAtEnterNode(node)
-        // INV.4(d) walker 11: the null/undefined-usage pass — TS18050 anchors.
-        if (spineNuActive) spineNuEnterNode(node)
-        // INV.4(d) walker 12: the comma-operator pass — TS2695 anchors
-        // (ENTER = the legacy pre-order; also keeps same-position pairs
-        // comma-before-np, since the np anchors fire at LEAVES).
-        if (spineCmActive) spineCmEnterNode(node)
+    }
+
+    /**
+     * (DISPATCH.1)(a): the per-kind tail of [spineEnterNode], extracted so the
+     * probe path can time it separately from the prologue and reach it without
+     * duplicating 190 lines. Single hot call site in production.
+     */
+    private fun spineEnterKindDispatch(node: Node) {
         when ((node as NodeBase).kindId) {
             NodeKind.IDENTIFIER -> { node as Identifier; spineTavIdentifier(node) }
             NodeKind.PROPERTY_DECLARATION -> {
@@ -22632,6 +22647,8 @@ class Checker(
 
     /** Per-node dispatch, postorder position (after all children). */
     private fun spineLeaveNode(node: Node) {
+        // (DISPATCH.1)(a): see [spineEnterNode] — OFF in production.
+        if (SpineDispatch.mode != SpineDispatch.OFF) { spineLeaveNodeProbed(node); return }
         ctaSpineLeave(node)
         // (cpa-m2a): frame pops / loop-var restores / per-decl recordings.
         cpaSpineLeave(node)
@@ -22664,6 +22681,50 @@ class Checker(
         // (M0.4) round 658: the B60.12 pass's frame pops (a reached class's
         // member TP scope; a reached fn-like's body map + own TP scope).
         if (spineTpoActive) spineTpoLeaveNode(node)
+    }
+
+    /** (DISPATCH.1)(a): the by-id twin of [spineLeaveNode], index-aligned with
+     *  [SpineDispatch.leaveNames]. Same calls, same guards, same order. */
+    private fun spineLeaveHandlerById(h: Int, node: Node) {
+        when (h) {
+            0 -> ctaSpineLeave(node)
+            1 -> cpaSpineLeave(node)
+            2 -> ccetSpineLeave(node)
+            3 -> if (spineArithActive) spineArithLeaveNode(node)
+            4 -> if (spineIanyActive) spineIanyLeaveNode(node)
+            5 -> if (spineDaActive) spineDaLeaveNode(node)
+            6 -> if (spineOsActive) spineOsLeaveNode(node)
+            7 -> if (spinePdActive) spinePdLeaveNode(node)
+            8 -> if (spineCaActive) spineCaLeaveNode(node)
+            9 -> if (spineNpActive) spineNpLeaveNode(node)
+            10 -> if (spineIrActive) spineIrLeaveNode(node)
+            11 -> if (spinePmrActive) spinePmrLeaveNode(node)
+            12 -> if (spineTpoActive) spineTpoLeaveNode(node)
+            else -> {}
+        }
+    }
+
+    /** (DISPATCH.1)(a): the probe/gated leave path. Never taken in production. */
+    private fun spineLeaveNodeProbed(node: Node) {
+        val kid = (node as NodeBase).kindId
+        if (SpineDispatch.mode == SpineDispatch.GATED) {
+            val tbl = SpineDispatch.leaveTable[kid]
+            for (i in tbl.indices) spineLeaveHandlerById(tbl[i], node)
+            return
+        }
+        SpineDispatch.currentKind = kid
+        SpineDispatch.currentIsLeave = true
+        val consult = SpineDispatch.leaveConsult
+        val nanos = SpineDispatch.leaveNanos
+        for (h in 0 until SpineDispatch.leaveCount) {
+            SpineDispatch.current = h
+            val t = PassTiming.nowNanos()
+            spineLeaveHandlerById(h, node)
+            nanos[h][kid] += PassTiming.nowNanos() - t
+            consult[h][kid]++
+        }
+        SpineDispatch.current = -1
+        SpineDispatch.currentIsLeave = false
     }
 
     // ── INV.4(c)(i) spine-maintained lexical scope state ───────────────────
@@ -52710,6 +52771,7 @@ interface DataView {
         when (val p = (node as NodeBase).parent) {
             is IfStatement -> if ((node === p.thenStatement || node === p.elseStatement) &&
                 spineArithReached(node)) {
+                SpineDispatch.work()
                 // B283: the legacy arm computed the guard set once before both
                 // branches; collectTypeofGuardNames is pure/syntactic, so
                 // computing per branch is state-identical.
@@ -52719,6 +52781,7 @@ interface DataView {
             }
             is BinaryExpression -> if (node === p.right && !spineArithChainAbsorbed(p) &&
                 spineArithReached(node)) {
+                SpineDispatch.work()
                 if (p.operator == SyntaxKind.AmpersandAmpersand) {
                     spineArithFrames.add(SpineArithFrame(node, 3, savedSet = arithTruthyNarrowedNames))
                     val truthy = collectArithTruthyNarrowableNames(p.left)
@@ -52737,6 +52800,7 @@ interface DataView {
                 }
             }
             is ConditionalExpression -> if (spineArithReached(node)) {
+                SpineDispatch.work()
                 if (node === p.whenTrue) {
                     spineArithFrames.add(SpineArithFrame(node, 3, savedSet = arithTruthyNarrowedNames))
                     val names = collectArithTruthyNarrowableNames(p.condition)
@@ -52748,6 +52812,7 @@ interface DataView {
                 }
             }
             is ForInStatement -> if (node === p.statement && spineArithReached(node)) {
+                SpineDispatch.work()
                 val forInVar = ((p.initializer as? VariableDeclarationList)
                     ?.declarations?.singleOrNull()?.name as? Identifier)?.text
                 if (forInVar != null) {
@@ -52757,6 +52822,7 @@ interface DataView {
                 }
             }
             is PropertyAssignment -> if (node === p.initializer && spineArithReached(node)) {
+                SpineDispatch.work()
                 // B475 property-value contextual typing: only when the enclosing
                 // object literal is contextually typed AND the property's value
                 // type resolves — otherwise the ambient ctx is INHERITED
@@ -52912,6 +52978,7 @@ interface DataView {
         // Pop every frame this node pushed (LIFO — restores in reverse).
         val frames = spineArithFrames
         while (frames.isNotEmpty() && frames[frames.size - 1].node === node) {
+            SpineDispatch.work()
             val f = frames.removeAt(frames.size - 1)
             when (f.kind) {
                 0 -> spineArithLocals = f.savedLocals!!
@@ -53261,6 +53328,7 @@ interface DataView {
     private fun spineIanyDefineCtx(child: Node, newCtx: SpineIanyCtx?) {
         val cur = spineIanyCtx
         if (cur == null && newCtx == null) return
+        SpineDispatch.work()
         spineIanyFrames.add(SpineIanyFrame(child, 0, savedCtx = cur))
         spineIanyCtx = newCtx
     }
@@ -53268,6 +53336,7 @@ interface DataView {
     /** The legacy function-body scope push (pushImplicitAnyScope around the
      *  body walk), keyed on the BODY node so the leave pops it. */
     private fun spineIanyPushScope(bodyNode: Node, params: List<Parameter>) {
+        SpineDispatch.work()
         pushImplicitAnyScope(params)
         spineIanyFrames.add(SpineIanyFrame(bodyNode, 1))
     }
@@ -53396,6 +53465,7 @@ interface DataView {
     private fun spineIanyLeaveNode(node: Node) {
         val frames = spineIanyFrames
         while (frames.isNotEmpty() && frames[frames.size - 1].node === node) {
+            SpineDispatch.work()
             val f = frames.removeAt(frames.size - 1)
             when (f.kind) {
                 0 -> spineIanyCtx = f.savedCtx
@@ -53447,6 +53517,7 @@ interface DataView {
                     it.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)
                 }
                 if (nsSym != null) {
+                    SpineDispatch.work()
                     implicitAnyNsStack.addLast(nsSym)
                     spineIanyFrames.add(SpineIanyFrame(node, 2))
                 }
@@ -66363,6 +66434,7 @@ interface DataView {
     private fun spinePmrLeaveNode(node: Node) {
         val frames = spinePmrFrames
         if (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            SpineDispatch.work()
             val f = frames.removeAt(frames.size - 1)
             spinePmrVars = f.savedVars
             spinePmrThis = f.savedThis
@@ -68917,6 +68989,7 @@ interface DataView {
     private fun spineCaLeaveNode(node: Node) {
         val frames = spineCaFrames
         while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+            SpineDispatch.work()
             frames.removeAt(frames.size - 1)
         }
     }
@@ -80733,6 +80806,7 @@ interface DataView {
         if (frames.isEmpty()) return
         val top = frames[frames.size - 1]
         if (top.owner !== node) return
+        SpineDispatch.work()
         frames.removeAt(frames.size - 1)
         spineTpoVars = top.savedVars
         spineTpoScope = top.savedScope

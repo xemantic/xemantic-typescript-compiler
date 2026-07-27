@@ -1,5 +1,28 @@
 # Architecture rethink — the M5 inversion arc (INV)
 
+> **ROUND-732 CORRECTION TO § 0 — READ FIRST.** § 0 below concludes "the measured
+> lever is consultation, not computation" and sizes (DISPATCH.1) at 1.0–2.5 s.
+> **That is wrong, and it was measured wrong.** Round 732 derived the per-kind
+> handler table by instrumentation and verified it over the whole corpus: the
+> table removes **64% of the handler consultations and 4.8% of the time** —
+> 883 ms of an 18.5 s spine as an UPPER bound, ~100–300 ms realistically.
+> The error was inferring consultation overhead from "IDENTIFIER costs 2,746 ns
+> and almost no handler wants it": in fact **22 of the 59 handlers genuinely act
+> at an identifier**, because handlers keyed on PARENT edges, FRAME-owner
+> identity and nodeId REGISTRIES cannot be closed by the node's own kind — and
+> those are the expensive ones. The "skip `spineEnterNode` for bare Identifiers
+> → byte-identical" probe skipped real work the compiler profile happens not to
+> need. **The real shape: six handlers hold 71% of the spine** —
+> `cpaSpineLeave` 4,366 ms, `ccetSpineLeave` 3,046 ms,
+> `spineCtaM3StatementAnchor` 2,900 ms, `spineIanyEnterNode` 1,025 ms,
+> `ccetSpineEnter` 920 ms, `ctaSpineEnter` 586 ms; the other 53 together are
+> ~4.8 s. That is the cta/cpa/ccet legacy-parity frame bookkeeping, and shrinking
+> it is a PER-HANDLER problem. Full derivation: `docs/perf/dispatch-table.md`;
+> follow-on queue item: **(SPINE.1)**. Stage 1 of § 0.1's staged plan is
+> therefore NOT worth 11–19%, and stage 2's "DISPATCH.1 retroactively unlocks
+> M0.4" does not follow — a migrated pass costs its own work either way.
+
+
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
 towards reaching the overall goal", plus the owner's measured finding that
 `Flow<String>` outperforms `Sequence<String>` and that reading/decoding files on
