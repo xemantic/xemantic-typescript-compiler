@@ -7759,7 +7759,7 @@ class Checker(
         val sig = Signature(
             parameters = sigParams,
             resolvedReturnType = returnType,
-            minArgumentCount = fnDecl.parameters.count { (!it.questionToken && it.initializer == null && !it.dotDotDotToken) },
+            minArgumentCount = requiredParameterCount(fnDecl.parameters),
         )
         val obj = Type.Object()
         obj.callSignatures = listOf(sig)
@@ -100000,9 +100000,7 @@ interface DataView {
                                 typeParameters = methodTypeParams,
                                 parameters = params,
                                 resolvedReturnType = returnType,
-                                minArgumentCount = md.parameters.count {
-                                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                                },
+                                minArgumentCount = requiredParameterCount(md.parameters),
                             )
                         }
                     }
@@ -101478,7 +101476,7 @@ interface DataView {
                     val params = getParameterSymbols(prop.parameters)
                     val sig = Signature(
                         declaration = prop, parameters = params, resolvedReturnType = returnType,
-                        minArgumentCount = prop.parameters.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+                        minArgumentCount = requiredParameterCount(prop.parameters),
                     )
                     val ft = Type.Object()
                     ft.callSignatures = listOf(sig)
@@ -102778,9 +102776,7 @@ interface DataView {
                             typeParameters = typeParams,
                             parameters = paramSymbols,
                             resolvedReturnType = returnType,
-                            minArgumentCount = md.parameters.count {
-                                !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                            },
+                            minArgumentCount = requiredParameterCount(md.parameters),
                         )
                     }
                 } else {
@@ -102789,9 +102785,7 @@ interface DataView {
                         declaration = decl,
                         parameters = getParameterSymbols(decl.parameters),
                         resolvedReturnType = returnType,
-                        minArgumentCount = decl.parameters.count {
-                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                        },
+                        minArgumentCount = requiredParameterCount(decl.parameters),
                     ))
                 }
                 fnType
@@ -102937,10 +102931,7 @@ interface DataView {
                 resolvedReturnType = returnType,
                 // Round 460: a `this` pseudo-parameter is not a call argument — do not
                 // count it toward the required arity.
-                minArgumentCount = decl.parameters.count {
-                    !it.questionToken && !it.dotDotDotToken && it.initializer == null &&
-                        (it.name as? Identifier)?.text != "this"
-                },
+                minArgumentCount = requiredParameterCount(decl.parameters),
             )
         } } finally {
             if (fnNsPushed) inferenceNamespaceStack.removeLast()
@@ -102961,6 +102952,28 @@ interface DataView {
      * non-display call sites (function declarations, methods, constructors, type
      * literals) where arity may already be authoritative downstream.
      */
+    /**
+     * Required-argument count of a DECLARATION's parameter list — the value that
+     * belongs in [Signature.minArgumentCount].
+     *
+     * Round 730: a `this` PSEUDO-parameter is never a call argument, and EVERY
+     * builder that turns a parameter list into `Signature.parameters` drops it
+     * ([getParameterSymbols] and the inline `mapNotNull` builders alike). Counting
+     * it here therefore makes `minArgumentCount` EXCEED `parameters.size`, which
+     * every arity gate (`signaturesRelatedTo`, the TS2554 emitters, the
+     * TS2322/TS2345 elaborations) reads as "target signature provides too few
+     * arguments" — so a `this`-carrying function type was not assignable to
+     * ITSELF (`(this: any, a: number) => void`, and through it every real-lib
+     * `Array`/`ReadonlyArray` member that takes a `thisArg`). Round 460 fixed
+     * this at the function-DECLARATION site only; this helper is the invariant
+     * for all of them. Use it instead of counting a parameter list inline.
+     */
+    private fun requiredParameterCount(params: List<Parameter>): Int =
+        params.count {
+            !it.questionToken && !it.dotDotDotToken && it.initializer == null &&
+                (it.name as? Identifier)?.text != "this"
+        }
+
     private fun getParameterSymbols(
         params: List<Parameter>,
         forSignatureDisplay: Boolean = false,
@@ -103286,9 +103299,7 @@ interface DataView {
                                 typeParameters = sigOwnTps,
                                 parameters = paramSymbols,
                                 resolvedReturnType = returnType,
-                                minArgumentCount = member.parameters.count {
-                                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                                },
+                                minArgumentCount = requiredParameterCount(member.parameters),
                             )
                             if (name.isEmpty()) ownCallSignatures.add(newSig)
                             else ownConstructSignatures.add(newSig)
@@ -103325,9 +103336,7 @@ interface DataView {
                             declaration = member,
                             parameters = getParameterSymbols(member.parameters),
                             resolvedReturnType = returnType,
-                            minArgumentCount = member.parameters.count {
-                                !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                            },
+                            minArgumentCount = requiredParameterCount(member.parameters),
                         )
                         ownConstructSignatures.add(sig)
                         // Also add parameter properties as members
@@ -110171,9 +110180,7 @@ interface DataView {
                         declaration = prop,
                         parameters = params,
                         resolvedReturnType = returnType,
-                        minArgumentCount = prop.parameters.count {
-                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                        },
+                        minArgumentCount = requiredParameterCount(prop.parameters),
                     )
                     val methodType = Type.Object()
                     methodType.callSignatures = listOf(sig)
@@ -110869,10 +110876,7 @@ interface DataView {
             typeParameters = ownTypeParams,
             parameters = params,
             resolvedReturnType = returnType,
-            minArgumentCount = expr.parameters.count {
-                (it.name as? Identifier)?.text != "this" &&
-                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-            },
+            minArgumentCount = requiredParameterCount(expr.parameters),
         )
         val fnType = Type.Object()
         fnType.callSignatures = listOf(sig)
@@ -110936,10 +110940,7 @@ interface DataView {
             typeParameters = sigTypeParams,
             parameters = params,
             resolvedReturnType = returnType,
-            minArgumentCount = expr.parameters.count {
-                (it.name as? Identifier)?.text != "this" &&
-                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-            },
+            minArgumentCount = requiredParameterCount(expr.parameters),
         )
         val fnType = Type.Object()
         fnType.callSignatures = listOf(sig)
@@ -126020,9 +126021,7 @@ interface DataView {
             typeParameters = typeParameters,
             parameters = paramSymbols,
             resolvedReturnType = returnType,
-            minArgumentCount = params.count {
-                !it.questionToken && !it.dotDotDotToken && it.initializer == null
-            },
+            minArgumentCount = requiredParameterCount(params),
         )
         fnType.callSignatures = listOf(sig)
         return fnType
@@ -136580,9 +136579,7 @@ interface DataView {
                 declaration = implDecl,
                 parameters = getParameterSymbols(implDecl.parameters),
                 resolvedReturnType = returnType,
-                minArgumentCount = implDecl.parameters.count {
-                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                },
+                minArgumentCount = requiredParameterCount(implDecl.parameters),
             )
         }
         // 17.137a: Method overloads — find the impl among sibling methods of the
@@ -136603,9 +136600,7 @@ interface DataView {
                     declaration = implDecl,
                     parameters = getParameterSymbols(implDecl.parameters),
                     resolvedReturnType = returnType,
-                    minArgumentCount = implDecl.parameters.count {
-                        !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                    },
+                    minArgumentCount = requiredParameterCount(implDecl.parameters),
                 )
             }
         }
@@ -136620,9 +136615,7 @@ interface DataView {
                     declaration = implDecl,
                     parameters = getParameterSymbols(implDecl.parameters),
                     resolvedReturnType = overloadSig.resolvedReturnType,
-                    minArgumentCount = implDecl.parameters.count {
-                        !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                    },
+                    minArgumentCount = requiredParameterCount(implDecl.parameters),
                 )
             }
         }
@@ -148487,9 +148480,7 @@ interface DataView {
                 declaration = ctor,
                 parameters = getParameterSymbols(ctor.parameters),
                 resolvedReturnType = classType,
-                minArgumentCount = ctor.parameters.count {
-                    !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                },
+                minArgumentCount = requiredParameterCount(ctor.parameters),
                 isAbstract = isAbstract,
             )
         }
@@ -148790,10 +148781,29 @@ interface DataView {
                 typeParamDecls[i].constraint?.let { tp.constraint = getTypeFromTypeNode(it) }
                 typeParamDecls[i].default?.let { tp.default = getTypeFromTypeNode(it) }
             }
-            for ((pi, param) in ps.withIndex()) {
-                if (pi < params.size) {
-                    params[pi].type?.let { typeNode ->
+            if ((params.firstOrNull()?.name as? Identifier)?.text == "this") {
+                // Round 730 (mirrors round 460 at the function-DECLARATION site):
+                // getParameterSymbols DROPS the `this` pseudo-parameter, so the
+                // positional zip below shifted every parameter type by one for a
+                // this-carrying FunctionType/ConstructorType annotation — the real
+                // lib's `flatMap(cb: (this: This, value: T, index: number, array:
+                // T[]) => …)` displayed `value: This, index: T, array: number`.
+                // Resolve each symbol's type from its OWN valueDeclaration instead.
+                for (param in ps) {
+                    (param.valueDeclaration as? Parameter)?.type?.let { typeNode ->
                         symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                    }
+                }
+            } else {
+                // Legacy positional zip — DELIBERATELY kept for parameter lists
+                // without a `this` param (a binding-pattern param is also dropped
+                // from `ps`, and the shift keeps sig.parameters[i] carrying
+                // params[i]'s type, which call-site arg alignment relies on).
+                for ((pi, param) in ps.withIndex()) {
+                    if (pi < params.size) {
+                        params[pi].type?.let { typeNode ->
+                            symbolTypes[param.id] = getTypeFromTypeNode(typeNode)
+                        }
                     }
                 }
             }
@@ -148804,7 +148814,7 @@ interface DataView {
             typeParameters = sigTypeParams,
             parameters = paramSyms,
             resolvedReturnType = returnType,
-            minArgumentCount = params.count { !it.questionToken && !it.dotDotDotToken && it.initializer == null },
+            minArgumentCount = requiredParameterCount(params),
         )
     }
 
@@ -148895,9 +148905,7 @@ interface DataView {
                         typeParameters = sigTypeParams,
                         parameters = params,
                         resolvedReturnType = returnType,
-                        minArgumentCount = member.parameters.count {
-                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                        },
+                        minArgumentCount = requiredParameterCount(member.parameters),
                     )
                     if (name.isEmpty()) {
                         // Call signature: MethodDeclaration with empty name
@@ -148938,9 +148946,7 @@ interface DataView {
                         declaration = member,
                         parameters = params,
                         resolvedReturnType = anyType,
-                        minArgumentCount = member.parameters.count {
-                            !it.questionToken && !it.dotDotDotToken && it.initializer == null
-                        },
+                        minArgumentCount = requiredParameterCount(member.parameters),
                     ))
                 }
                 else -> continue
