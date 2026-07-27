@@ -135529,30 +135529,41 @@ interface DataView {
                     // type-param gate keeps `fnUnion2`/`F3|F4`-style genuinely-incompatible
                     // unions on the TS2349 path; the `this`-param gate (params drop `this`
                     // at build, so a this-only sig has arity 0) excludes `unionTypeCallSignatures6`.
+                    // Round 728: tsc's `combineSignaturesOfUnionMembers` does NOT demand equal
+                    // arity or all-required parameters — it takes the LONGEST parameter list,
+                    // intersects position-wise (a position the shorter signature lacks contributes
+                    // `unknown`, i.e. nothing) and sets the combined minArgumentCount to the MAX.
+                    // Our gate demanded `minArgumentCount == pc`, so EVERY lib method carrying a
+                    // trailing optional — `forEach(cb, thisArg?)` above all — fell through to the
+                    // (incorrect) TS2349 "none of those signatures are compatible" path. REST
+                    // parameters stay excluded: the rest-tuple union below owns them.
+                    val combinedParamCount = sigs.maxOf { it.parameters.size }
                     val combinable = run {
-                        val pc = sigs[0].parameters.size
-                        if (pc == 0) return@run false
+                        if (combinedParamCount == 0) return@run false
                         for (s in sigs) {
                             if (!s.typeParameters.isNullOrEmpty()) return@run false
-                            if (s.parameters.size != pc) return@run false
-                            if (s.minArgumentCount != pc) return@run false // all required, no optional/rest
+                            if (s.parameters.any {
+                                    (it.valueDeclaration as? Parameter)?.dotDotDotToken == true
+                                }) return@run false
                         }
                         // require at least one position where the param types differ
-                        (0 until pc).any { i ->
-                            val t0 = getTypeOfSymbol(sigs[0].parameters[i])
-                            sigs.any { getTypeOfSymbol(it.parameters[i]) !== t0 }
+                        (0 until combinedParamCount).any { i ->
+                            val t0 = sigs[0].parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
+                            sigs.any { s -> s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) } !== t0 }
                         }
                     }
                     if (combinable) {
-                        val pc = sigs[0].parameters.size
+                        val pc = combinedParamCount
                         val args = expr.arguments
                         if (args.size > pc) {
-                            emitTS2554TooMany(pc, pc, args.size, args, pc, source, fileName)
+                            emitTS2554TooMany(sigs.maxOf { it.minArgumentCount }, pc, args.size, args, pc, source, fileName)
                             return
                         }
                         for (i in 0 until minOf(args.size, pc)) {
                             val combinedParamType =
-                                getIntersectionType(sigs.map { getTypeOfSymbol(it.parameters[i]) })
+                                getIntersectionType(sigs.mapNotNull { s ->
+                                    s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
+                                })
                             val arg = args[i]
                             if (arg is SpreadElement) continue
                             val argType = getTypeOfExpression(arg)
