@@ -137,7 +137,14 @@ data class CompilerOptions(
     val lib: List<String> = emptyList(),
     /** M2.1(c): resolve the default library from the REAL TypeScript lib .d.ts set
      *  ([RealLibFiles] via [RealLibSnapshots]) instead of the embedded simplified
-     *  BUILTIN_LIB_SOURCE. Off by default until the M2.2 corpus A/B flips it. */
+     *  BUILTIN_LIB_SOURCE.
+     *
+     *  The DEFAULT stays `false` because the generated corpus suite builds its
+     *  options from this constructor plus `@directives`, and its ~13k baselines were
+     *  produced against the embedded lib. A REAL PROJECT BUILD flips it on —
+     *  see [projectDefaults], used by `TsConfigLoader`/`ProjectCompiler`; an
+     *  explicit `"useRealLibs": false` in a tsconfig still turns it back off,
+     *  because [applyDirective] runs after. */
     val useRealLibs: Boolean = false,
     val outDir: String? = null,
     val rootDir: String? = null,
@@ -595,6 +602,26 @@ internal fun applyImpliedAllowJs(options: CompilerOptions): CompilerOptions =
     if (options.checkJs && !options.allowJs && !options.allowJsExplicitlyFalse)
         options.copy(allowJs = true)
     else options
+
+/**
+ * The starting options for a REAL PROJECT BUILD (`TsConfigLoader.load`,
+ * `ProjectCompiler.build`'s bare-source-file path) — as opposed to the generated
+ * corpus suite, which starts from a bare [CompilerOptions] plus `@directives`.
+ *
+ * Round 730 (owner-approved 2026-07-26): a project build resolves the default
+ * library from the REAL TypeScript lib `.d.ts` set. Before this, `useRealLibs`
+ * defaulted false and NOTHING in the project path ever set it, so every real build
+ * ran on the curated embedded `BUILTIN_LIB_SOURCE` — which declares no utility
+ * types at all, so `Required<…>`/`Exclude<…>` silently degraded to `any`, and the
+ * whole real-lib machinery was reachable only from a test directive.
+ *
+ * MEASURED before flipping (all 8 tsc-source profiles, `--noEmit --listAll`): the
+ * embedded and real arms are IDENTICAL code-for-code — 46/46/46/46/46/46/46/94 —
+ * and under `types: ["node"]` the real arm is strictly better (server 18 → 13,
+ * harness 48 → 43). A tsconfig may still opt out with `"useRealLibs": false`,
+ * since [applyDirective] runs after this.
+ */
+internal fun projectDefaults(): CompilerOptions = CompilerOptions(useRealLibs = true)
 
 internal fun applyDirective(options: CompilerOptions, key: String, value: String): CompilerOptions {
     val boolValue = value.lowercase() == "true"

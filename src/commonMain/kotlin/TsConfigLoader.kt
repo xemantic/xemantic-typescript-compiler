@@ -72,11 +72,11 @@ class TsConfigLoader(private val vfs: Vfs) {
         val diags = mutableListOf<Diagnostic>()
         val merged = loadMerged(tsconfigPath, mutableSetOf(), diags)
             ?: return LoadedTsConfig(
-                CompilerOptions(), configDir, defaultInclude, defaultExclude, emptyList(), emptyList(), diags,
+                projectDefaults(), configDir, defaultInclude, defaultExclude, emptyList(), emptyList(), diags,
             )
 
         val co = merged.compilerOptions ?: JsonObject(emptyMap())
-        var options = CompilerOptions()
+        var options = projectDefaults()
         for ((rawKey, value) in co) {
             val directiveValue = jsonToDirectiveValue(value) ?: continue
             options = applyDirective(options, rawKey.lowercase(), directiveValue)

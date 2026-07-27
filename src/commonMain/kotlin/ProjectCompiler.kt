@@ -104,7 +104,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         val configPath = if (isBareSourceFile) absPath else resolveConfigPath(absPath)
         val config = if (isBareSourceFile) {
             LoadedTsConfig(
-                options = CompilerOptions(),
+                options = projectDefaults(),
                 configDir = PathUtil.dirname(absPath),
                 include = emptyList(),
                 exclude = emptyList(),

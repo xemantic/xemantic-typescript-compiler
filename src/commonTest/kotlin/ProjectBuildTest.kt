@@ -194,6 +194,51 @@ class ProjectBuildTest {
         val result = ProjectCompiler(vfs).build("/proj", noEmit = true)
         assert(result.diagnostics.any { it.code == 5083 })
     }
+
+    // ---- round 730: a real project build uses the REAL libs ----------------
+    //
+    // Before the flip, `useRealLibs` defaulted false and NOTHING in the project
+    // path set it, so every real build ran on the curated embedded lib — which
+    // declares no utility types at all, so `Required<…>` degraded to `any` and
+    // went silent. The decisive control is a MEMBER/REQUIREDNESS probe: name
+    // resolution proves nothing, because an unknown name degrades to `any`.
+
+    private fun utilityTypeProject(extraOptions: String) = InMemoryVfs(
+        mapOf(
+            "/proj/tsconfig.json" to
+                """{ "compilerOptions": { "target": "es2020"$extraOptions }, "include": ["src/**/*.ts"] }""",
+            // `Required<T>` is declared ONLY by the real lib.
+            "/proj/src/index.ts" to """
+                type R = Required<{ a?: number }>;
+                export const r: R = {};
+            """.trimIndent(),
+        ),
+    )
+
+    @Test
+    fun `a project build defaults to the real libs`() {
+        assert(TsConfigLoader(utilityTypeProject("")).load("/proj/tsconfig.json").options.useRealLibs)
+        val result = ProjectCompiler(utilityTypeProject("")).build("/proj", noEmit = true)
+        assert(result.diagnostics.any { it.code == 2741 })
+    }
+
+    @Test
+    fun `a tsconfig can still opt out of the real libs`() {
+        val opts = utilityTypeProject(""", "useRealLibs": false""")
+        assert(!TsConfigLoader(opts).load("/proj/tsconfig.json").options.useRealLibs)
+        // Embedded lib: `Required` is unresolved, degrades to `any`, and is silent.
+        val result = ProjectCompiler(utilityTypeProject(""", "useRealLibs": false""")).build("/proj", noEmit = true)
+        assert(result.diagnostics.none { it.code == 2741 })
+    }
+
+    @Test
+    fun `a bare source file build defaults to the real libs`() {
+        val vfs = InMemoryVfs(
+            mapOf("/proj/only.ts" to "type R = Required<{ a?: number }>;\nexport const r: R = {};\n"),
+        )
+        val result = ProjectCompiler(vfs).build("/proj/only.ts", noEmit = true)
+        assert(result.diagnostics.any { it.code == 2741 })
+    }
 }
 
 /** An in-memory [Vfs] for deterministic tests (and a reference Vfs implementation). */
