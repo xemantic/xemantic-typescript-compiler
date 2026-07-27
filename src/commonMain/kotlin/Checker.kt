@@ -101847,7 +101847,20 @@ interface DataView {
             if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) {
                 val typeArgs = node.typeArguments
                 if (!typeArgs.isNullOrEmpty()) {
-                    val decl = symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    // Round 729: when a USER alias shadows a lib one of the same name the two
+                    // declarations merge onto ONE symbol, and `firstOrNull` handed back
+                    // whichever was bound first — in practice the LIB's, so a local
+                    // `type Omit<T, K> = { [P in keyof T]: T[P] }` silently resolved through
+                    // `Pick<T, Exclude<keyof T, K>>` instead. Invisible until distribution
+                    // started working (`Exclude` used to be an identity function, which made
+                    // the lib body behave like the user's identity one). Only consulted when
+                    // the symbol actually carries several declarations.
+                    val decl = if (symbol.declarations.size > 1) {
+                        symbol.declarations.firstOrNull { it is TypeAliasDeclaration && it !in builtinLibDecls }
+                            ?: symbol.declarations.firstOrNull { it is TypeAliasDeclaration }
+                    } else {
+                        symbol.declarations.firstOrNull { it is TypeAliasDeclaration }
+                    } as? TypeAliasDeclaration
                     val declTPs = decl?.typeParameters
                     if (decl != null && !declTPs.isNullOrEmpty() && declTPs.size == typeArgs.size
                     ) {
@@ -149187,13 +149200,50 @@ interface DataView {
         if (extendsType === anyType || extendsType === errorType) return anyType
         // Distribution over unions
         if (checkType is Type.Union) {
+            // Round 729: inside a DISTRIBUTIVE conditional the check type parameter denotes
+            // the CONSTITUENT being tested, not the whole union — `Exclude<T, U> = T extends U
+            // ? never : T` is exactly that, and its `T` branch is the only thing that makes it
+            // a filter. Without the rebinding, every non-matching constituent contributed the
+            // ENTIRE union back and `Exclude` was an identity function: tsc's
+            // `Exclude<BindableStaticNameExpression, Identifier>` (utilities.ts:4258) kept
+            // `Identifier` and then failed to assign to `AccessExpression`. Only a NAKED type
+            // parameter distributes, so the rebinding is keyed on the check type NODE being a
+            // bare reference to one — every other shape keeps the previous evaluation.
+            val distributedName = nakedCheckTypeParamName(node.checkType)
             val results = checkType.types.map { constituent ->
-                evaluateConditional(constituent, extendsType, node)
+                if (distributedName == null) evaluateConditional(constituent, extendsType, node)
+                else withInstantiationContext(
+                    distributionMapper(distributedName, constituent),
+                ) { evaluateConditional(constituent, extendsType, node) }
             }
             return getUnionType(results)
         }
         return evaluateConditional(checkType, extendsType, node)
     }
+
+    /**
+     * Round 729: the name of the check type's NAKED type parameter, when [node] is a bare
+     * reference to one currently bound as a type-alias argument — the condition under which
+     * tsc makes a conditional type DISTRIBUTIVE. Null for every other check-type shape
+     * (`[T] extends [U]`, a concrete union, an instantiated reference), which is what keeps
+     * the rebinding from reaching a non-distributive conditional.
+     */
+    private fun nakedCheckTypeParamName(node: TypeNode): String? {
+        val ref = node as? TypeReference ?: return null
+        if (!ref.typeArguments.isNullOrEmpty()) return null
+        val name = (ref.typeName as? Identifier)?.text ?: return null
+        return if (currentTypeAliasArgs?.containsKey(name) == true) name else null
+    }
+
+    /** Round 729: the ambient context with [name] rebound to one distribution [constituent].
+     *  The type-param scope is consulted BEFORE the alias args in [getTypeFromTypeReference],
+     *  so a same-named scope entry must be dropped or it would shadow the binding. */
+    private fun distributionMapper(name: String, constituent: Type): InstantiationMapper =
+        InstantiationMapper(
+            (currentTypeAliasArgs ?: emptyMap()) + (name to constituent),
+            currentTypeParamScope?.let { if (name in it) it - name else it },
+            inferenceNamespaceStack.size,
+        )
 
     /**
      * B119: positional `infer` unification for `X extends Ref<...> ? ... : ...`.
@@ -149236,8 +149286,18 @@ interface DataView {
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
         // Check if checkType extends extendsType
-        val related = isSimpleTypeRelatedTo(checkType, extendsType) ||
-                checkTypeRelatedTo(checkType, extendsType, assignableRelation)
+        val related = (isSimpleTypeRelatedTo(checkType, extendsType) ||
+            checkTypeRelatedTo(checkType, extendsType, assignableRelation)) &&
+            // Round 729: the round-472 `.kind` DOMAIN veto. Enum-member types do not
+            // discriminate in our relation (`kind: SyntaxKind.Identifier` accepts
+            // `SyntaxKind.PrivateIdentifier`), so a structural verdict alone reports
+            // sibling AST interfaces as mutually assignable. Harmless while `Exclude` was
+            // an identity function; the moment distribution started working it silently
+            // DROPPED constituents — `Exclude<PropertyName, PrivateIdentifier>` lost
+            // `Identifier` too, because the two differ only in that discriminant.
+            // Consulted only on the already-related path, and only when BOTH domains read
+            // (an unreadable side leaves the structural verdict alone).
+            !kindDomainKeysExceed(checkType, kindDomainKeysOfType(extendsType))
         return if (related) {
             getTypeFromTypeNode(node.trueType)
         } else {
