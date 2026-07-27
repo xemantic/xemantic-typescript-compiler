@@ -147634,15 +147634,21 @@ interface DataView {
                 is MethodDeclaration -> decl.questionToken
                 else -> false
             }
+            // Round 728: the MIRROR of the round-718 case below — a `?` mapped member
+            // (`Partial<T>`) IS optional even though the source declaration it carries
+            // for related info is REQUIRED. This arm is the hot one (every declared-required
+            // property lands here), so the marker is a [SymbolFlags.MappedOptional] bit
+            // rather than an id-keyed set: a bitwise AND, not a boxed-Int lookup.
+            if (!declaredOptional) return SymbolFlags.MappedOptional in symbol.flags
             // Round 718: a `-?` mapped member (`Required<T>`) carries its optional SOURCE
             // declaration but is NOT itself optional. Probed only when the declaration
             // says optional — the short-circuit keeps the hot path (a declared-required
             // property) free of the set lookup the comment above is about.
-            return declaredOptional && symbol.id !in mappedRequiredMemberIds
+            return symbol.id !in mappedRequiredMemberIds
         }
         // Round 452: an optional tuple element (`[kind?: T]`) has a declaration-less member
         // symbol; its optionality lives in the side-channel [optionalTupleMemberIds].
-        return symbol.id in optionalTupleMemberIds
+        return SymbolFlags.MappedOptional in symbol.flags || symbol.id in optionalTupleMemberIds
     }
 
     /**
@@ -149047,6 +149053,11 @@ interface DataView {
                 // `-readonly` case above — and it needs the same side-channel for the
                 // same reason: the carried source declaration still has its `?`.
                 if (node.questionMinus) mappedRequiredMemberIds.add(sym.id)
+                // Round 728: the plain `?` token ADDS optionality (`Partial<T>`), exactly
+                // as the plain `readonly` token above adds readonly-ness — and it was the
+                // one modifier of the four never recorded, so `Partial<T>`'s members stayed
+                // REQUIRED unless the source property happened to be optional too.
+                else if (node.questionToken) sym.flags = sym.flags or SymbolFlags.MappedOptional
                 members[key] = sym
                 properties.add(sym)
                 symbolTypes[sym.id] = propType

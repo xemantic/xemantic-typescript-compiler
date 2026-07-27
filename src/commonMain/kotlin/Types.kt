@@ -67,6 +67,18 @@ value class SymbolFlags(val value: Int) {
         val SetAccessor = SymbolFlags(1 shl 16)
         val TypeParameter = SymbolFlags(1 shl 17)
 
+        /**
+         * Round 728: this member was made OPTIONAL by a `?` mapped-type modifier
+         * (`Partial<T>` = `{ [P in keyof T]?: T[P] }`). It is not a binder flag —
+         * only [Checker]'s mapped-type materializer sets it, and only
+         * `isOptionalProperty` reads it. A flag bit rather than an id-keyed
+         * side-channel (the `-?` analogue [Checker.mappedRequiredMemberIds] is one)
+         * because the arm that must consult it is the HOT one: every
+         * declared-REQUIRED property reaches it, so a boxed-Int set lookup there
+         * would be paid on the whole program.
+         */
+        val MappedOptional = SymbolFlags(1 shl 18)
+
         // Composite flags
         val Variable = FunctionScopedVariable or BlockScopedVariable
         val Enum = RegularEnum or ConstEnum
