@@ -83,6 +83,16 @@ fun main(args: Array<String>) {
             "--callSections", "--callsections" -> {
                 CallSections.reset(); CallSections.mode = CallSections.ON
             }
+            // (CALL.2)(a): the opt-in intra-function attribution of
+            // checkArgumentsAgainstSignature. The `Coarse` variant keeps only the
+            // anchors, so an ON-vs-COARSE pair gives the per-boundary cost
+            // differentially — the only calibration round 734 found trustworthy.
+            "--argSections", "--argsections" -> {
+                ArgSections.reset(); ArgSections.mode = ArgSections.ON
+            }
+            "--argSectionsCoarse", "--argsectionscoarse" -> {
+                ArgSections.reset(); ArgSections.mode = ArgSections.COARSE
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -145,6 +155,13 @@ fun main(args: Array<String>) {
         print(CallSections.csv())
         println("== (CALL.1) csv end ==")
         CallSections.mode = CallSections.OFF
+    }
+    if (ArgSections.mode != ArgSections.OFF) {
+        println(ArgSections.report())
+        println("== (CALL.2) csv ==")
+        print(ArgSections.csv())
+        println("== (CALL.2) csv end ==")
+        ArgSections.mode = ArgSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -277,6 +294,8 @@ private fun printUsage() {
           --dispatchGated    (DISPATCH.1) run only the derived per-kind handler table
           --spineSections    (SPINE.1) intra-handler attribution of the two hot leaves
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
+          --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
+          --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)

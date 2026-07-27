@@ -47,6 +47,25 @@
 > (M3.1), reached via **(CALL.2)**: `checkArgumentsAgainstSignature`, 61 µs per
 > call over 22,145 calls in a 1,534-line function. Full derivation:
 > `docs/perf/call-expression-attribution.md`.
+> **ROUND-735 RESOLUTION, AND IT REDIRECTS THE STAGED PLAN IN § 0.1: inside
+> `checkArgumentsAgainstSignature` the argument TYPE computation is 924 ms of
+> 1,624 ms while the whole `checkTypeRelatedTo`+TS2345 section is 19 ms — so
+> the lever is NOT the relation engine either.** Of that 924 ms, **flow
+> narrowing is 600 ms (37% of the function) and `getTypeOfExpression` only
+> 196 ms (12%)**. Two consequences for the plan below. **Stage 3 ("cut the
+> `getTypeOfExpression` ×2.7 recompute", up to ~9%) is NOT reachable through
+> the call path**: this function types each argument exactly once and makes
+> 5.3% of the compile's calls at the compile-mean 5.6 µs, so it is not a
+> recompute site — finding the recompute needs the 701,736 calls attributed
+> **by CALLER**, which no round has done. **Stage 4 (flow narrowing) is where
+> the call path actually lands, and it now has a shape instead of a total:
+> 394 of 70,037 walks (0.56%) cost 1,485 ms — 47% of all narrowing and 4.9% of
+> a 30.5 s compile, the first single target measured above the ±2% band since
+> round 731.** They do not trip, do not exhaust the 1,000,000-visit budget
+> (1,601 arrivals each, max 19,515) and are 99.9% cold, so no cache reaches
+> them; they run at **2,354 ns per flow-node arrival against a 372 ns
+> all-walk mean**. Follow-on: **(CALL.3)**. Full derivation:
+> `docs/perf/argument-check-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope

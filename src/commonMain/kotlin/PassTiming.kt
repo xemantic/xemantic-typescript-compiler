@@ -299,6 +299,14 @@ object PassTiming {
         mappedRejectForeignFile = 0
         narrowWalks = 0
         narrowWalksByPass.clear()
+        narrowWalkBucketCalls = LongArray(4)
+        narrowWalkBucketNanos = LongArray(4)
+        narrowWalkTripped = 0
+        narrowWalkTrippedNanos = 0
+        narrowWalkHugeByKind.clear()
+        narrowWalkHugeVisits = 0
+        narrowWalkHugeVisitsMax = 0
+        narrowWalkAllVisits = 0
         diagnosticsSize = null
         diagsByPass.clear()
         nodeKindHistogram.clear()
@@ -357,6 +365,54 @@ object PassTiming {
      *  the expression path has ~6x the calls at a fraction of the cost each. */
     var exprSavableNanos: Long = 0
     var exprSavableCalls: Long = 0
+
+    /**
+     * (CALL.2) round 735: the flow-narrowing walk COST DISTRIBUTION,
+     * `[<10 us, <100 us, <1 ms, >=1 ms]`, plus the trip correlation. Round 735
+     * measured the 9,615 walks launched from `checkArgumentsAgainstSignature`
+     * and found 0.9% of them (87 walks at >=1 ms) carrying 55% of the cost —
+     * a mean of 62 us describes NEITHER population. Whether that shape holds
+     * compile-wide, and whether the monsters are the TRIPPED walks (which are
+     * deliberately never memoized, so they re-run in full at every visit),
+     * decides what a stage-4 fix would even be.
+     */
+    var narrowWalkBucketCalls: LongArray = LongArray(4)
+    var narrowWalkBucketNanos: LongArray = LongArray(4)
+    var narrowWalkTripped: Long = 0
+    var narrowWalkTrippedNanos: Long = 0
+    /** Walks at >= 1 ms, by walk kind — is the tail one call site or all of them? */
+    val narrowWalkHugeByKind = HashMap<String, Long>()
+
+    /**
+     * Flow-node VISITS consumed by the >= 1 ms walks. A walk is bounded by
+     * `NARROW_VISIT_BUDGET` = 1,000,000 node arrivals, and the decisive
+     * question about the tail is whether a 4 ms walk is a walk that arrives at
+     * ~1 M nodes (an intra-walk revisit blow-up the per-node memo is failing to
+     * damp) or a small walk whose per-node work is expensive.
+     */
+    var narrowWalkHugeVisits: Long = 0
+    var narrowWalkHugeVisitsMax: Long = 0
+    var narrowWalkAllVisits: Long = 0
+
+    fun noteNarrowWalkVisits(visits: Long, huge: Boolean) {
+        narrowWalkAllVisits += visits
+        if (huge) {
+            narrowWalkHugeVisits += visits
+            if (visits > narrowWalkHugeVisitsMax) narrowWalkHugeVisitsMax = visits
+        }
+    }
+
+    fun noteNarrowWalkCost(nanos: Long, tripped: Boolean, kind: Int) {
+        val b = if (nanos < 10_000L) 0 else if (nanos < 100_000L) 1
+        else if (nanos < 1_000_000L) 2 else 3
+        narrowWalkBucketCalls[b]++
+        narrowWalkBucketNanos[b] += nanos
+        if (tripped) { narrowWalkTripped++; narrowWalkTrippedNanos += nanos }
+        if (b == 3) {
+            val k = "k$kind${if (tripped) "-TRIP" else ""}"
+            narrowWalkHugeByKind[k] = (narrowWalkHugeByKind[k] ?: 0L) + 1
+        }
+    }
 
     /** (M1)(c) round 664: LIVE memo serves (walks skipped entirely). */
     var walkMemoServed: Long = 0
@@ -606,6 +662,15 @@ object PassTiming {
             " diff=$unstableRepeatDiff cold=$unstableRepeatCold\n" +
             "  structural by kind: ${topCounts(unstableStructuralBy, 8)}\n" +
             depWrongSamples.joinToString("") { "   wrongSample: $it\n" } +
+            "narrowWalk cost distribution: " +
+                (0 until 4).joinToString(" ") {
+                    "${arrayOf("<10us", "<100us", "<1ms", ">=1ms")[it]}=" +
+                        "${narrowWalkBucketCalls[it]}/${narrowWalkBucketNanos[it] / 1_000_000}ms"
+                } + "\n" +
+            "narrowWalk visits: all=$narrowWalkAllVisits huge(>=1ms)=$narrowWalkHugeVisits " +
+                "max=$narrowWalkHugeVisitsMax\n" +
+            "narrowWalk tripped: $narrowWalkTripped walks, ${narrowWalkTrippedNanos / 1_000_000}ms; " +
+                ">=1ms by kind: ${topCounts(narrowWalkHugeByKind, 10)}\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "exprMemo would-save: ${exprSavableNanos / 1_000_000}ms over $exprSavableCalls outermost served calls\n" +

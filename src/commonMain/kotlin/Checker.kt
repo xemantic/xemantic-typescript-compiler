@@ -104847,6 +104847,19 @@ interface DataView {
                 }
                 depKeyedShadowClassify(key, reference, result)
             }
+            // (CALL.2) round 735: the walk's own cost, bucketed, with the trip
+            // correlation — a mean says nothing when 0.9% of walks carry 55%.
+            if (PassTiming.enabled) {
+                val took = PassTiming.nowNanos() - probeStart
+                PassTiming.noteNarrowWalkCost(took, flowDepthTripped, kind)
+                // Visits are only meaningful for the kinds that run
+                // narrowTypeFromFlow (which resets the budget at its outermost
+                // entry); the >= 1 ms tail is 85% WK_NARROW, so the tail figure
+                // is sound even though the all-walks total is not.
+                PassTiming.noteNarrowWalkVisits(
+                    (NARROW_VISIT_BUDGET - narrowVisitsLeft).toLong(), took >= 1_000_000L
+                )
+            }
             // Never memoize a walk that TRIPPED: its result reflects a
             // truncated walk and its TS2563 side effect must keep firing.
             if (!flowDepthTripped) walkMemoStore(memoKey, rootName, result)
@@ -140793,7 +140806,38 @@ interface DataView {
         return checkTypeRelatedTo(stripped, paramType, assignableRelation)
     }
 
+    /**
+     * (CALL.2)(a): the opt-in intra-function attribution boundary. OFF in
+     * production — the core is then called directly, with no `try`/`finally`
+     * and no bookkeeping. When on, [ArgSections.end] closes whatever section
+     * is still running, which is what makes the partition survive the early
+     * `return`s in the prologue and inside the per-argument loop.
+     */
     private fun checkArgumentsAgainstSignature(
+        args: List<Expression>,
+        sigIn: Signature,
+        source: String,
+        fileName: String,
+        implementationRelated: Diagnostic? = null,
+        calleeGenericInstantiation: Boolean = false,
+    ) {
+        if (ArgSections.mode == ArgSections.OFF) {
+            checkArgumentsAgainstSignatureCore(
+                args, sigIn, source, fileName, implementationRelated, calleeGenericInstantiation
+            )
+            return
+        }
+        ArgSections.begin()
+        try {
+            checkArgumentsAgainstSignatureCore(
+                args, sigIn, source, fileName, implementationRelated, calleeGenericInstantiation
+            )
+        } finally {
+            ArgSections.end()
+        }
+    }
+
+    private fun checkArgumentsAgainstSignatureCore(
         args: List<Expression>,
         sigIn: Signature,
         source: String,
@@ -140805,6 +140849,26 @@ interface DataView {
         // callback param TypeScript keeps the coarse whole-argument TS2345.
         calleeGenericInstantiation: Boolean = false,
     ) {
+        // (CALL.2)(a): nine boundaries back-to-back. The first closes the wrapper
+        // transition; the second closes the invocation's FIRST empty span; the
+        // remaining seven close steady-state empty spans, whose mean is a
+        // PESSIMISTIC in-situ upper bound on one boundary (round 734 measured this
+        // construction at 306 ns against a differential of ~86 ns — the honest
+        // figure comes from an ON-vs-COARSE run, not from here). UNROLLED
+        // deliberately: a `repeat(8)` puts a loop back-edge, and so a safepoint
+        // poll, inside every empty span.
+        if (ArgSections.mode == ArgSections.ON) {
+            ArgSections.at(ArgSections.OVERHEAD_FIRST)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+            ArgSections.at(ArgSections.OVERHEAD)
+        }
+        ArgSections.at(ArgSections.PRO)
         // 17.31a: Single-typeParam inference for non-overloaded sigs.
         // When the gate matches, instantiate the signature with the inferred T so
         // subsequent T-typed parameters are checked against the substituted type
@@ -140850,10 +140914,12 @@ interface DataView {
         // not the widened `'string'`/`'number'` the standard path shows.
         if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
             tryEmitBareTypeParamConflictLiteralTs2345(args, sigIn, source, fileName)) return
+        ArgSections.at(ArgSections.INFER)
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
         }
+        ArgSections.at(ArgSections.PRO2)
         // B199: identity-shaped generic fn arg vs an instantiated call-sig interface
         // param (`_.all([true, 1, null, 'yes'], _.identity)` — T anchors to the array
         // literal's element union, and `<U>(value: U) => U` unifies U=T, failing iff
@@ -140873,7 +140939,10 @@ interface DataView {
         // post-loop rest-args helper doesn't double-fire (TypeScript reports
         // only the first failing arg per call).
         val initialDiagCount = diagnostics.size
+        val loopT = ArgSections.t()
         for ((i, arg) in args.withIndex()) {
+            ArgSections.at(ArgSections.L_PARAM)
+            ArgSections.iteration()
             if (i >= params.size) break // extra args handled by TS2554
             // Skip spread arguments — complex handling
             if (arg is SpreadElement) continue
@@ -140886,6 +140955,7 @@ interface DataView {
             // e.g. `f2({ toString: (s) => s })` against param `I { toString: (t: string)
             // => string }` types `s` as `string`, so the TS2345 source displays
             // `{ toString: (s: string) => string }` (not `(s: any) => any`).
+            ArgSections.at(ArgSections.L_ARGTYPE)
             val savedContextual = contextualType
             val useCtx = paramType is Type.Object &&
                 (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression)
@@ -140896,7 +140966,9 @@ interface DataView {
             // type instead of widening to the primitive — matches TypeScript's
             // bidirectional contextual-typing rule for TS2345 source display.
             val argType = try {
+                val gtoeT = ArgSections.t()
                 val raw = getTypeOfExpression(arg)
+                ArgSections.close(ArgSections.N_GET_TYPE_OF_EXPR, gtoeT)
                 // voidArrayLit: a zero-arg IIFE of a parameterless, no-return,
                 // un-annotated arrow/fn-expr returns `void`. `getReturnTypeOfCallExpression`
                 // yields `anyType` for an arrow/fn-expr callee, so detect the shape here and
@@ -140904,9 +140976,11 @@ interface DataView {
                 // call-return path, which would cascade `void` into currentLocalTypes /
                 // var-init inference (the `isFromCall` rule).
                 val widened = if (raw === anyType) (voidIifeArgType(arg) ?: raw) else raw
+                val litT = ArgSections.t()
                 val ctxAppliedRaw = if (propTypeContainsLiteral(paramType)) {
                     literalTypeOfExpression(arg) ?: widened
                 } else widened
+                ArgSections.close(ArgSections.N_LITERAL, litT)
                 // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
                 // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
                 val ctxApplied = stripNullishForNonNullArg(arg, ctxAppliedRaw)
@@ -140915,7 +140989,10 @@ interface DataView {
                 // args do not (getTypeOfIdentifier never consults narrowing), so narrow
                 // them explicitly here. Only Union types can be refined.
                 if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
-                    getNarrowedTypeForReference(ctxApplied, arg)
+                    val nwT = ArgSections.t()
+                    val nw = getNarrowedTypeForReference(ctxApplied, arg)
+                    ArgSections.closeNarrow(ArgSections.N_NARROW_UNION, nwT, nw !== ctxApplied)
+                    nw
                 } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     paramType === neverType && ctxApplied !is Type.Union) {
                     // Round 441: `assertNever(x)` / `assertType<never>(x)` whose arg has a
@@ -140927,7 +141004,9 @@ interface DataView {
                     // the SAME TS2345 the pre-narrow path emitted, so no manufactured FP;
                     // this is the FP-safe subset of the exclusion the comment below warns
                     // about, now that the exhaustive default narrows to `never`).
+                    val nwT = ArgSections.t()
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
+                    ArgSections.closeNarrow(ArgSections.N_NARROW_NEVER, nwT, n !== ctxApplied)
                     if (n === neverType) n else ctxApplied
                 } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
@@ -140948,7 +141027,9 @@ interface DataView {
                     // refinement (a union of case-matched members) would take the
                     // union-arg emission path and manufacture an FP where the declared
                     // interface previously stayed silent.
+                    val nwT = ArgSections.t()
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
+                    ArgSections.closeNarrow(ArgSections.N_NARROW_M34, nwT, n !== ctxApplied)
                     // Round 462: the refinement gate `n <: declared` under-accepts —
                     // tsc's getNarrowedType(assumeTrue) legitimately narrows to a guard
                     // target that is NOT a declared-type subtype (isPropertyNameLiteral's
@@ -140958,13 +141039,17 @@ interface DataView {
                     // the narrowed type when it makes the PARAM relation pass — the same
                     // substitute-only-when-the-relation-passes monotone rule the
                     // assignment/return/var-decl gates use (pure suppression).
-                    if (n !== ctxApplied && n !== neverType &&
+                    val agrT = ArgSections.t()
+                    val refined = n !== ctxApplied && n !== neverType &&
                         (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
-                            checkTypeRelatedTo(n, paramType, assignableRelation))) n else ctxApplied
+                            checkTypeRelatedTo(n, paramType, assignableRelation))
+                    ArgSections.close(ArgSections.N_ARGTYPE_REL, agrT)
+                    if (refined) n else ctxApplied
                 } else ctxApplied
             } finally {
                 if (useCtx) contextualType = savedContextual
             }
+            ArgSections.at(ArgSections.L_PRE)
             if (argType === anyType || argType === errorType) continue
             // Round 468 (M3.1): a CALL-EXPRESSION arg whose type carries an un-inferred
             // FOREIGN type param — a generic callee's un-substituted result, e.g.
@@ -140999,6 +141084,7 @@ interface DataView {
                     (t.typeName).let { it.pos + it.text.length }
                 else expressionTrueEnd(arg)
             } else expressionTrueEnd(arg)
+            ArgSections.at(ArgSections.L_WEAK)
             if (tryEmitWeakTypeAssignment(argType, weakTarget, arg.pos,
                     weakArgEnd - arg.pos, source, fileName,
                     displayType = literalTypeOfExpression(arg) ?: argType)) {
@@ -141010,6 +141096,7 @@ interface DataView {
             // function-type return, mirroring B491's RETURN-context drill at the
             // call-arg position. FP-firewalled inside tryDrillReturnArrowOrArray
             // (single non-generic call sig, concrete object return, simple-leaf only).
+            ArgSections.at(ArgSections.L_WALKERS)
             if (!isRestParam && (arg is ArrowFunction || arg is FunctionExpression) &&
                 paramType is Type.Object &&
                 tryDrillReturnArrowOrArray(arg, paramType, source, fileName, unfoldAliasForTs6500 = true)) {
@@ -141097,6 +141184,7 @@ interface DataView {
                 tryEmitUnionDiscriminantPropMismatch(arg, paramType, params[i], source, fileName)) {
                 break
             }
+            ArgSections.at(ArgSections.L_OBJLIT)
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
                 resolveStructuredTypeMembers(paramType)
                 // Only emit TS2353 if target has known named properties — skip
@@ -141455,6 +141543,7 @@ interface DataView {
             // some non-null constraint), TypeScript rejects `null` arguments with
             // `Argument of type 'null' is not assignable to parameter of type '<C> | undefined'`.
             // Emit TS2345 with constraint-based display.
+            ArgSections.at(ArgSections.L_NULLISH)
             if (!isRestParam && paramType is Type.TypeParam && argType.flags.hasAny(TypeFlags.Null)) {
                 val paramDecl = params[i].valueDeclaration as? Parameter
                 val isOptional = paramDecl?.questionToken == true
@@ -141645,6 +141734,7 @@ interface DataView {
             // with `fn({ x: null })` should emit TS2322 at `x` for null-vs-string. Only
             // the per-property loop extends to this case — excess/missing-required are
             // skipped because generic-param constraints have different semantics for those.
+            ArgSections.at(ArgSections.L_OBJLIT_TP)
             if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.TypeParam) {
                 val constraint = paramType.constraint
                 if (constraint is Type.Object) {
@@ -141717,6 +141807,7 @@ interface DataView {
             // doesn't satisfy the constraint, report TS2345 using the constraint as
             // the effective parameter type (the type parameter would be inferred as
             // the argument type, which would then fail the constraint check).
+            ArgSections.at(ArgSections.L_TYPEPARAM)
             if (paramType is Type.TypeParam) {
                 val constraint = paramType.constraint
                 if (constraint != null &&
@@ -141793,6 +141884,7 @@ interface DataView {
             // class cases (e.g. namespace-nested `m.variable` vs top-level `variable`).
             // collectMissingProperties uses resolveStructuredTypeMembers which flattens
             // base-type members, so subclass-of-target safely returns empty (no FP).
+            ArgSections.at(ArgSections.L_ARGKIND)
             val argIsRefForArgCheck = argType is Type.Reference
             val argIsDistinctNamedClass = argType is Type.Interface && argType.symbol != null &&
                 paramType is Type.Interface && argType.symbol !== paramType.symbol
@@ -141893,7 +141985,11 @@ interface DataView {
             // 16.4dk: Additionally check when both sides are named class interfaces AND the
             // structural comparison would fail on a private-brand mismatch — that's a nominal
             // brand check with no FP risk (same-class private props pass trivially).
-            if (!isSimpleCheckableType(paramType)) {
+            ArgSections.at(ArgSections.L_NOTSIMPLE)
+            val isT = ArgSections.t()
+            val paramNotSimple = !isSimpleCheckableType(paramType)
+            ArgSections.close(ArgSections.N_ISSIMPLE, isT)
+            if (paramNotSimple) {
                 val argIsPrimitive = isSimpleCheckableType(argType)
                 val paramIsNamedType = paramType is Type.Interface && paramType.symbol != null
                 val argIsNamedType = argType is Type.Interface && argType.symbol != null
@@ -142097,6 +142193,7 @@ interface DataView {
             // `undefined`. Under strictNullChecks, this is incompatible — even though
             // `isSimpleTypeRelatedTo` treats void→undefined as assignable globally.
             // Force a relation failure so TS2345 emits with the standard chain.
+            ArgSections.at(ArgSections.L_TAILGATE)
             val forceVoidUndefinedFail = strictNullChecks &&
                 argType is Type.Object && argType.symbol != null &&
                 argType.symbol!!.declarations.any { it is FunctionDeclaration } &&
@@ -142134,7 +142231,12 @@ interface DataView {
             // string | Path>` → `changeAnyExtension(path, …)`.)
             if (argType is Type.TypeParam && argType.constraint != null &&
                 checkTypeRelatedTo(argType.constraint!!, paramType, assignableRelation)) continue
-            if (forceVoidUndefinedFail || !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+            ArgSections.at(ArgSections.L_RELATION)
+            val relT = ArgSections.t()
+            val relFails = forceVoidUndefinedFail ||
+                !checkTypeRelatedTo(argType, paramType, assignableRelation)
+            ArgSections.close(ArgSections.N_REL_CALL, relT)
+            if (relFails) {
                 // B291: a MIXED bigint/number literal-union argument is the
                 // typeof-discrimination idiom (`0 | 1n` narrowed by
                 // `typeof x === "bigint"` before the call) — the call-arg path has no
@@ -142304,6 +142406,8 @@ interface DataView {
                 break // TypeScript reports only the first failing argument per call
             }
         }
+        ArgSections.close(ArgSections.N_LOOP, loopT)
+        ArgSections.at(ArgSections.POST)
         // 17.31c: emit TS2345 for trailing args matched at a rest parameter
         // position whose element type is a fully-resolved primitive/named type.
         // The standard loop above only iterates `i in 0 until params.size`, so

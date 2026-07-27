@@ -20,6 +20,70 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 735 (2026-07-27) — (CALL.2) DONE. THE PRIOR HOLDS BY 48x, AND ITS SUPPORTING
+EVIDENCE POINTS AT THE WRONG TERM.** The item's falsifiable expectation was "most of the
+61 us is argument TYPE computation, not `checkTypeRelatedTo`". **It is: 924 ms of the
+function's 1,624 ms is the `argType` computation against 19 ms for the whole
+`checkTypeRelatedTo`+TS2345 section (10 ms for the relation call itself).** But the prior
+reasoned from `getTypeOfExpression` (3,911 ms, recompute x2.7) — and **inside this
+function `getTypeOfExpression` is 196 ms (12%) while FLOW NARROWING is 600 ms (37%)**.
+So (CALL.2) does NOT reach ARCHITECTURE-RETHINK section 0.1 **stage 3**; it reaches
+**stage 4**. Full derivation: `docs/perf/argument-check-attribution.md`. Suite 12,892 ->
+**12,899 / 0 / 3** (+7 pins, `ArgSectionProbeTest`); cost gate all 20 counters +0.00%;
+profile `--listAll` identical in production, `--argSections` and `--argSectionsCoarse`
+(46 errors). **No optimisation was landed** — every candidate inside this function prices
+below the +-2% band, and the one target that is ABOVE it was disproved three times over
+in the same run (below).
+
+**THE COMPILE-WIDE FINDING, and it is the round's real product.** The walk histogram was
+also added to `flowWalkWithTripCheck` under `--passTiming`, so it covers all 70,037 walks
+from all 11 call-site kinds: `<10us=40,046/159ms  <100us=25,695/811ms  <1ms=3,902/827ms`
+and **`>=1ms=394 walks/1,485 ms`**. **394 walks (0.56%) carry 47% of all flow narrowing
+and 4.9% of a 30.5 s compile** — the first single target measured ABOVE the +-2% drift
+band (~610 ms) since round 731, by 2.4x. By kind: WK_NARROW 336, WK_NARROW_LOOP 47,
+WK_BASE_EXPR 11, so it is one walk function, not one caller.
+
+**WHAT DID NOT WORK — three mechanisms for those 394, all DISPROVED by the same run.**
+(1) "They are TRIPPED walks, which are deliberately never memoized, so they re-run in
+full at every visit" — **FALSE, `narrowWalk tripped: 0 walks`; nothing trips on this
+profile.** (2) "They exhaust the 1,000,000-visit budget" — **FALSE: the 394 consume
+630,641 flow-node arrivals TOTAL, 1,601 each, max 19,515**, two orders of magnitude
+below it. (3) "The walk memo would serve them" — **FALSE: `walkMiss split: cold=69,968
+epochInvalidated=69`**, so essentially every launched walk is a first sighting and no
+cache reaches it (section 0's law from a fourth direction; the LIVE memo already serves
+40,709). What is left is arithmetic: all walks average **372 ns per node arrival**, the
+394 monsters **2,354 ns** — 13x more arrivals AND 6.3x more expensive arrivals, and
+neither factor alone explains it.
+
+**ALSO PRICED AND BELOW BAND, so recorded rather than attempted.** 86% of this function's
+9,615 narrowing walks (8,299) return the INPUT type unchanged, costing 237 ms — so a
+pre-test proving "this reference has no flow facts" is worth at most 0.8% of the compile.
+And the exit profile: **only 10,146 of 38,247 loop iterations (27%) ever reach the
+assignability check** (14,663 leave at the weak-target section, 12,280 in the
+`!isSimpleCheckableType` function-vs-function block) — yet all 37,379 pay the full
+`argType` computation, because every intervening block consumes `argType`. That is a real
+structural observation, not a lever: the work cannot be deferred past its consumers.
+
+**THE CALIBRATION, THIRD TIME, AND THE FIX IS NOW A MODE.** Round 734's lesson was
+"calibrate DIFFERENTIALLY, not with an empty span". This round generalises it:
+`--argSectionsCoarse` keeps only three anchors, so every other boundary costs a static
+read and a not-taken branch while the partition still spans the same wall time. ON is
+1,624 ms over 404,358 boundaries + ~293k nested reads; COARSE is **1,569 ms over 83,085**
+-> **89 ns per timestamp read**, independently reproducing round 734's 86-92 ns by a
+different construction. The unrolled in-situ empty-span calibration in the SAME run
+reported **391 ns — 4.4x too high**, the identical error round 734 saw at 306 vs 86.
+**Total probe inflation 55 ms of 1,624 = 3.4%.**
+
+**THE NEXT UNIT is (CALL.3), and it needs two numbers before anything is designed.**
+(a) Node ARRIVALS versus DISTINCT flow nodes per monster walk: the intra-walk memo
+(`NarrowFlowMemo`, tsc's `sharedFlowNodes`) serves only entries stored at a
+same-or-deeper entry depth (`served(id, depth)` requires `depth <= stored`), so a revisit
+reached by a LONGER path misses — if arrivals >> distinct, that depth condition is the
+lever. (b) The per-arrival split of `narrowTypeFromFlow` (`applyConditionNarrowing`,
+`flowAssignmentMightNarrow`, `flowCallMightNarrow`, the `FlowBranchLabel` fan-out) —
+2,354 ns is not graph traversal. Anything proposed before those exist repeats the error
+of rounds 732/733/734, which predicted levers 5x, 6-17x and >=2x too large.
+
 **Round 734 (2026-07-27) — (CALL.1) DONE. THE MEASUREMENT CHOSE BRANCH B, by 4x, and
 Branch A is disproved on TWO independent grounds.** The item asked which of two things
 `checkSingleCallExpressionTypes`'s 2.9 s is: (A) per-call PRE-work that never-firing
@@ -884,71 +948,6 @@ overstating how many distinct causes remain — as round 723 also found.
 ---
 
 
-**Round 725 (2026-07-27) — round 724's confirmed defect FIXED, and the fix is free.
-Real-lib false positives 22 → 18 (arm C 35 → 31, MEASURED both sides, TS2344 ×4 → 0,
-no other code moved by even one). Corpus 12,781 → 12,788 / 0 / 3. Cost gate: all 20
-counters +0.00%. Embedded-lib compiler profile still 46.**
-
-**THE DEFECT, and why round 724 was right to disprove the obvious one first.** The real
-lib declares `type NonNullable<T> = T & {}`, so a `Visitor<NonNullable<TIn>, …>` type
-argument resolves to an INTERSECTION. Instrumenting the emission site printed it exactly:
-
-    arg=Intersection[TypeParam(TIn, constraint=Union[undefined | Node]) & Object(props=[])]  constraint=Interface(Node)
-    arg=Intersection[TypeParam(TIn, constraint=Interface(Node))         & Object(props=[])]  constraint=Interface(Node)
-
-The second line is the whole story. `TIn`'s constraint IS `Node`, there is nothing
-nullish to strip, and it still failed — because `checkConstraintsForTypeArgs` applies the
-constraint chain only to a BARE `Type.TypeParam` argument (and, since round 440-b, to a
-`Type.Union` argument). Wrapped in an intersection, the constituent's constraint is never
-consulted at all. The relation cannot save it either: our engine has no
-TypeParam-source-via-constraint rule, deliberately — round 456 measured adding one to the
-ENGINE as net-zero and reverted it, so the rule lives per emission site. This is the
-third arm of a rule that already had two.
-
-**THE FIX** is that third arm, in the shape of round 720's: a bail evaluated ONLY inside
-the already-failing branch, so it cannot cost anything on the happy path (and the cost
-gate agrees — every counter unchanged). `intersectionSatisfiesViaTypeParamConstraint`
-walks the intersection's TypeParam constituents, takes each one's constraint (sound:
-`T ⊆ constraint(T)`), and compares. The nullish strip is a SECOND, separately-gated step:
-an `{}` constituent is tsc's non-nullish marker (`X & {}` really is `X` minus
-null/undefined/void), so when one is present the constraint's nullish members are dropped
-first — which is what lets `TIn extends Node | undefined` satisfy `Node`. Non-TypeParam
-constituents are deliberately left alone: `checkTypeRelatedTo` has already run and
-implements "some constituent relates" together with its merged-contradiction guard, so
-this adds only the step that was missing.
-
-**WHAT DID NOT WORK, and what nearly did.** Round 724's hypothesis — "strip the nullish
-part of the constraint" — would have made the FIRST test pass and read as progress while
-leaving the second failing for an unrelated reason; that is exactly the trap its probe
-was built to spring, and it worked. The temptation on seeing "intersection source" is the
-blanket bail `argType is Type.Intersection -> continue`, which passes every target case
-and silently deletes a real diagnostic class; four negative controls now pin against it —
-an intersection with NO type parameter (`A & B`) that genuinely violates, `NonNullable`
-of an UNCONSTRAINED parameter (`unknown & {}` satisfies nothing), `NonNullable` of a
-parameter constrained to an unrelated type (proves the constraint is compared, not merely
-found), and a nullable-constrained parameter used WITHOUT `NonNullable` (proves the strip
-is tied to the `& {}` marker rather than applied to every constraint). All five controls
-fail correctly with the fix in.
-
-**MEASUREMENT DISCIPLINE.** The before-number was re-measured rather than taken from the
-round-723 note: revert Checker.kt, recompile, run arm C, restore. It came back 35 with
-TS2344 ×4 at parser.ts:3491/3492 and visitorPublic.ts:124/144 — the four sites round 724
-predicted — and 31 with TS2344 ×0 afterwards, every other code identical
-(TS2591 ×13 env, TS2322 ×7, TS2345 ×4, TS2339 ×4, TS2349 ×2, TS2769 ×1). Two compiles
-for that confirmation was the right trade: it is what turns "consistent with the
-documented baseline" into a measurement.
-
-**OPERATIONAL, and it cost two turns.** A subagent CANNOT wait on a detached build:
-`nohup … &` hides it from the harness, and ending a turn to await a notification
-terminates the agent rather than parking it. Run gradle in the FOREGROUND, one command
-per call, `timeout: 600000`. The first attempt combined `nohup … &` WITH the harness's
-background mode and produced two concurrent builds racing on the same output directory,
-which killed the Kotlin daemon on a 7.7 GB box. Related: `pgrep`/`ps` for a gradle client
-must match `gradle-wrapper.jar`, not `GradleWrapperMain` — the wrong pattern reported
-"nothing running" while a build was live, which is what let the race start.
-
----
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1682,6 +1681,59 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   carried forward from rounds 732, 733 and 734:** all three predicted a lever
   from a plausible reading of an aggregate and were wrong by 5x, 6-17x and
   >=2x. Price the population BEFORE building anything; counters decide,
+  `scripts/ab-interleaved.sh` medians AND win rate confirm. Gate: corpus suite
+  + `--listAll` + `cost_gate.py`.
+  **>>> DONE round 735. THE PRIOR HOLDS BY 48x — AND ITS EVIDENCE MISNAMED THE
+  MECHANISM. <<<** The split the item asked for: argument TYPE computation
+  **924 ms** of the function's 1,624 ms raw, against **19 ms** for the whole
+  `checkTypeRelatedTo`+TS2345 section (**10 ms** for the relation call itself).
+  But the prior reasoned from `getTypeOfExpression`, and inside this function
+  that is only **196 ms (12%)** while **flow narrowing is 600 ms (37%)** —
+  9,615 walks at 62 us, of which the B469 union-argument site is 284 ms/2,339
+  walks and the M3.4 site 316 ms/7,271. **So (CALL.2) does NOT reach section 0.1
+  stage 3 (the `getTypeOfExpression` x2.7 recompute): this function types each
+  argument exactly ONCE and makes 5.3% of the compile's calls at the
+  compile-mean cost, so it is not a recompute site. It reaches stage 4.**
+  Secondary answers: 86% of the narrowing walks (8,299) return the INPUT type,
+  worth at most 237 ms; and only 10,146 of 38,247 loop iterations (27%) reach
+  the assignability check at all, yet all 37,379 pay the full `argType`
+  computation because every intervening block consumes it. NOTHING was landed
+  but the harness. Full derivation, the exit profile, the three disproved
+  mechanisms and the calibration mode:
+  **`docs/perf/argument-check-attribution.md`**. LANDED: `ArgSections` +
+  `--argSections`/`--argSectionsCoarse` (opt-in, behaviour-free when off), the
+  compile-wide narrow-walk histogram in `PassTiming`, and
+  `ArgSectionProbeTest`. Follow-on: **(CALL.3)** below.
+
+- [ ] **(CALL.3) Attribute INSIDE a monster narrowing walk — 394 walks of
+  70,037 (0.56%) cost 1,485 ms = 47% of all flow narrowing and 4.9% of a 30.5 s
+  compile (round 735).** This is the FIRST single target measured above the
+  +-2% drift band (~610 ms) since round 731, by 2.4x. By kind: WK_NARROW 336,
+  WK_NARROW_LOOP 47, WK_BASE_EXPR 11 — one walk function, not one caller.
+  **Do NOT propose a cache and do NOT re-test these three, all already
+  DISPROVED in round 735 on this profile:** they do not TRIP
+  (`narrowWalk tripped: 0`), they do not exhaust the 1,000,000-visit budget
+  (630,641 arrivals total, 1,601 each, max 19,515), and the walk memo cannot
+  reach them (`walkMiss cold=69,968` of 70,037 — essentially every launched
+  walk is a first sighting). **STEP (a): two numbers, then design.** (i) node
+  ARRIVALS versus DISTINCT flow nodes per walk — the intra-walk memo
+  `NarrowFlowMemo` (tsc's `sharedFlowNodes`) serves only entries stored at a
+  same-or-deeper entry depth (`served(id, depth)` requires `depth <= stored`),
+  so a revisit reached by a LONGER path misses and recomputes; if arrivals >>
+  distinct, relaxing that depth condition is the lever and the question becomes
+  whether it can change a TRUNCATED result. (ii) the per-arrival split of
+  `narrowTypeFromFlow` — the monsters run at **2,354 ns per arrival** against a
+  372 ns all-walk mean, which is not graph traversal, so split
+  `applyConditionNarrowing` / `flowAssignmentMightNarrow` /
+  `flowCallMightNarrow` / the `FlowBranchLabel` fan-out and its
+  `mark`/`popToMark`. The `ArgSections` harness generalises (new section
+  constants only), and its calibration is now a MODE: measure ON versus a
+  COARSE anchors-only run and divide by the extra boundary count — the in-situ
+  unrolled empty span has now over-read by 3.6x and 4.4x in consecutive rounds
+  and must not be trusted. **CAUTION carried forward from rounds 732-735:** all
+  four predicted a lever from a plausible reading of an aggregate and were
+  wrong by 5x, 6-17x, >=2x and (here) by naming the wrong term inside a correct
+  verdict. Price the population BEFORE building anything; counters decide,
   `scripts/ab-interleaved.sh` medians AND win rate confirm. Gate: corpus suite
   + `--listAll` + `cost_gate.py`.
 

@@ -1001,3 +1001,360 @@ object CallSections {
         }
     }
 }
+
+/**
+ * (CALL.2)(a): the opt-in intra-function attribution of
+ * `checkArgumentsAgainstSignature` — 1,357 ms over 22,145 calls = 61 µs each
+ * on the compiler profile (round 734), the largest single measured cost in
+ * this compiler and a 1,534-line function.
+ *
+ * Same construction as [CallSections] — a running-section partition closed by
+ * [end] from the wrapper's `finally`, so it survives the function's early
+ * exits — with ONE structural difference that matters when reading the
+ * report: **most of the sections are inside the per-ARGUMENT loop**, so
+ * `calls[s]` counts LOOP ITERATIONS that reached `s`, not invocations. The
+ * drop between two consecutive loop sections is therefore the number of
+ * iterations that `continue`d inside the earlier one — still free, still the
+ * exit profile, but per argument. [invocations] and [iterations] are counted
+ * separately so the two populations never get mixed up.
+ *
+ * ## The question this exists to answer
+ *
+ * The (CALL.2) prior: *most of the 61 µs is argument TYPE computation, not
+ * `checkTypeRelatedTo`.* The decisive rows are the two nested sub-measures
+ * [N_GET_TYPE_OF_EXPR] and [N_REL_CALL] — each is a single timestamp pair
+ * around a single call, so they are directly comparable to each other
+ * regardless of how boundary-inflated the surrounding partition is.
+ *
+ * ## Calibration ([COARSE])
+ *
+ * Round 734 recorded two failed calibrations (a cold 922 ns span; a `repeat`
+ * loop whose back-edge safepoint poll read 360 ns) and settled on a
+ * DIFFERENTIAL: the same code measured at N boundaries and at 1. [COARSE]
+ * generalises that — it keeps only the anchors in [coarseAnchor], so every
+ * other boundary costs a static read and a not-taken branch instead of a
+ * timestamp pair. Running the same profile at [ON] and at [COARSE] and
+ * dividing the difference by the extra boundary count (which [ON]'s own
+ * `calls` array reports) gives the per-boundary cost with no cold-start and
+ * no safepoint artifact. Per-section nanos remain sound for RELATIVE
+ * attribution only.
+ */
+object ArgSections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Anchors only — the calibration counterpart of [ON]. See the class doc. */
+    const val COARSE = 2
+
+    /** Opt-in; [OFF] in production. Set by `--argSections` / `--argSectionsCoarse`. */
+    var mode: Int = OFF
+
+    // ── pre-loop ─────────────────────────────────────────────────────────────
+    /** The ten `tryEmit*` prologue walkers (mostly generic-signature gated). */
+    const val PRO = 0
+    /** `tryInferSingleTypeParamFromArgs` + `instantiateSignature` (17.31a). */
+    const val INFER = 1
+    /** The three single-type-parameter walkers (B199/B204/B219) + `sig.parameters`. */
+    const val PRO2 = 2
+
+    // ── the per-ARGUMENT loop body, in source order ───────────────────────────
+    /** Loop top: the arity/spread gates, `getTypeOfSymbol(params[i])`, contextual install. */
+    const val L_PARAM = 3
+    /** The `argType = try { … } finally { … }` block — argument TYPE computation. */
+    const val L_ARGTYPE = 4
+    /** Foreign-TP probe, rest-param test, weak target, `expressionTrueEnd`. */
+    const val L_PRE = 5
+    /** `tryEmitWeakTypeAssignment` (TS2559/TS2560). */
+    const val L_WEAK = 6
+    /** The arrow-drill / array-literal / objlit-intersection / union walkers. */
+    const val L_WALKERS = 7
+    /** The 353-line object-literal-vs-`Type.Object` block. */
+    const val L_OBJLIT = 8
+    /** The TypeParam-null gate and the three nullish-argument blocks. */
+    const val L_NULLISH = 9
+    /** Object literal vs a `Type.TypeParam` parameter. */
+    const val L_OBJLIT_TP = 10
+    /** `paramType is Type.TypeParam` — constraint checking. */
+    const val L_TYPEPARAM = 11
+    /** The argument-kind flags plus the class/interface/index-signature block. */
+    const val L_ARGKIND = 12
+    /** The `!isSimpleCheckableType(paramType)` block (function-vs-function, 196 lines). */
+    const val L_NOTSIMPLE = 13
+    /** `forceVoidUndefinedFail` plus the optional-parameter/undefined gates. */
+    const val L_TAILGATE = 14
+    /** The `checkTypeRelatedTo(argType, paramType, …)` gate and the TS2345 emission. */
+    const val L_RELATION = 15
+
+    // ── post-loop ────────────────────────────────────────────────────────────
+    /** `checkRestArgsAgainstArrayElementType` behind the no-diagnostic gate. */
+    const val POST = 16
+
+    /** The first index that is a nested sub-measure rather than a partition row. */
+    const val FIRST_NESTED = 17
+
+    // ── nested sub-measures (INSIDE the sections above) ───────────────────────
+    /** `getTypeOfExpression(arg)` alone, inside [L_ARGTYPE]. */
+    const val N_GET_TYPE_OF_EXPR = 17
+    /** The three `getNarrowedTypeForReference` sites inside [L_ARGTYPE]. */
+    const val N_NARROW = 18
+    /** The M3.4 refinement gate's two `checkTypeRelatedTo` calls inside [L_ARGTYPE]. */
+    const val N_ARGTYPE_REL = 19
+    /** `literalTypeOfExpression`/`propTypeContainsLiteral` inside [L_ARGTYPE]. */
+    const val N_LITERAL = 20
+    /** The `checkTypeRelatedTo(argType, paramType, assignableRelation)` gate itself. */
+    const val N_REL_CALL = 21
+    /** `isSimpleCheckableType(paramType)` — the [L_NOTSIMPLE] gate. */
+    const val N_ISSIMPLE = 22
+    /**
+     * The whole `for` loop as ONE span, for the same differential the
+     * per-boundary calibration uses. Undercounts by whatever `return`s inside
+     * the loop (two sites, both in [L_OBJLIT]); `calls[N_LOOP]` versus
+     * [invocations] makes that visible.
+     */
+    const val N_LOOP = 23
+
+    // -- the three narrowing sites, split (round 735) -------------------------
+    /** B469 site: a UNION-typed Identifier/PropertyAccess argument. */
+    const val N_NARROW_UNION = 24
+    /** Round-441 site: a `never` parameter with a non-union argument. */
+    const val N_NARROW_NEVER = 25
+    /** M3.4 site: Interface/unknown/string/number argument, non-`never` parameter. */
+    const val N_NARROW_M34 = 26
+
+    /**
+     * The subset of ALL THREE narrowing sites whose walk returned the input
+     * type UNCHANGED — provably wasted work, and therefore the upper bound on
+     * any pre-test that could skip the walk.
+     */
+    const val N_NARROW_IDENTITY = 27
+
+    /** The wrapper's own transition. Probe-only; absent in production. */
+    const val ENTRY = 28
+
+    /** The FIRST empty boundary span of an invocation — not steady state. */
+    const val OVERHEAD_FIRST = 29
+
+    /** In-situ steady-state empty boundaries; a pessimistic upper bound (round 734). */
+    const val OVERHEAD = 30
+
+    const val N = 31
+
+    val names: Array<String> = arrayOf(
+        "prologue walkers (10, generic-gated)",
+        "tryInferSingleTypeParamFromArgs",
+        "B199/B204/B219 single-TP walkers",
+        "loop: gates + getTypeOfSymbol(param)",
+        "loop: argType computation",
+        "loop: foreign-TP + rest + weak target",
+        "loop: tryEmitWeakTypeAssignment",
+        "loop: drill/array/objlit/union walkers",
+        "loop: object-literal vs Object (353 ln)",
+        "loop: nullish-argument blocks",
+        "loop: object-literal vs TypeParam",
+        "loop: paramType is TypeParam",
+        "loop: arg-kind + class/index-sig block",
+        "loop: !isSimpleCheckableType (196 ln)",
+        "loop: optional-param / undefined gates",
+        "loop: checkTypeRelatedTo + TS2345 emit",
+        "post-loop rest-args check",
+        "  of which getTypeOfExpression(arg)",
+        "  of which getNarrowedTypeForReference",
+        "  of which argType-gate checkTypeRelatedTo",
+        "  of which literalTypeOfExpression",
+        "  of which the TS2345 checkTypeRelatedTo",
+        "  of which isSimpleCheckableType(param)",
+        "  of which the whole loop as ONE span",
+        "    narrow site B469 (union arg)",
+        "    narrow site round-441 (never param)",
+        "    narrow site M3.4 (iface/str/num arg)",
+        "    narrow calls returning the INPUT type",
+        "  wrapper transition (probe-only)",
+        "  probe boundary, first of the invocation",
+        "  probe boundary (in situ, steady state)",
+    )
+
+    /**
+     * [COARSE]'s active boundaries. The three anchors still PARTITION the
+     * function (pre-loop / loop / post-loop), so the partition total stays
+     * comparable with [ON]'s; every other boundary is skipped before its
+     * timestamp read.
+     */
+    val coarseAnchor: BooleanArray = BooleanArray(N).also {
+        it[PRO] = true; it[L_PARAM] = true; it[POST] = true; it[ENTRY] = true
+    }
+
+    var nanos: LongArray = LongArray(N)
+    var calls: LongArray = LongArray(N)
+
+    /** Invocations of the instrumented function (nested ones excluded). */
+    var invocations: Long = 0
+
+    /** Loop iterations entered — the population most sections are measured over. */
+    var iterations: Long = 0
+
+    /**
+     * Cost distribution of the narrowing walks: `[<10 us, <100 us, <1 ms, >=1 ms]`.
+     * A mean of 59 us over 9,615 walks is compatible with two very different
+     * shapes — a uniformly expensive population (which a skip pre-test would
+     * fix) and a handful of monsters (which it would not) — so the buckets
+     * decide before anything is designed.
+     */
+    var narrowBucketCalls: LongArray = LongArray(4)
+    var narrowBucketNanos: LongArray = LongArray(4)
+
+    /** The running section and its start timestamp; `-1` = none open. */
+    var cur: Int = -1
+    var curT: Long = 0
+    var depth: Int = 0
+
+    fun reset() {
+        nanos = LongArray(N)
+        calls = LongArray(N)
+        invocations = 0
+        iterations = 0
+        narrowBucketCalls = LongArray(4)
+        narrowBucketNanos = LongArray(4)
+        cur = -1
+        curT = 0
+        depth = 0
+    }
+
+    // The entry points are `inline` so a production call is a static read plus
+    // a not-taken branch rather than a call, matching [CallSections].
+
+    /** Open the partition for one invocation, starting at [ENTRY]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun begin() {
+        if (mode == OFF) return
+        depth++
+        if (depth != 1) return
+        invocations++
+        cur = ENTRY
+        curT = PassTiming.nowNanos()
+    }
+
+    /** Close the running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun at(sec: Int) {
+        if (mode == OFF || depth != 1) return
+        if (mode == COARSE && !coarseAnchor[sec]) return
+        val now = PassTiming.nowNanos()
+        nanos[cur] += now - curT
+        calls[cur]++
+        cur = sec
+        curT = now
+    }
+
+    /** Count one loop iteration (free of any timestamp). */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun iteration() {
+        if (mode == OFF || depth != 1) return
+        iterations++
+    }
+
+    /** Close whatever section is still open (the invocation may have returned). */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun end() {
+        if (mode == OFF) return
+        if (depth == 1 && cur >= 0) {
+            nanos[cur] += PassTiming.nowNanos() - curT
+            calls[cur]++
+            cur = -1
+        }
+        depth--
+    }
+
+    /** Start a NESTED sub-measure, or 0 when off. Never active under [COARSE]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
+
+    /** Close a NESTED sub-measure opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun close(sec: Int, t0: Long) {
+        if (mode != ON) return
+        nanos[sec] += PassTiming.nowNanos() - t0
+        calls[sec]++
+    }
+
+    /**
+     * Close one narrowing walk: charge it to its own site, to the combined
+     * [N_NARROW] row, to a cost bucket, and — when [changed] is false — to
+     * [N_NARROW_IDENTITY], the walk that could in principle have been skipped.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun closeNarrow(site: Int, t0: Long, changed: Boolean) {
+        if (mode != ON) return
+        val d = PassTiming.nowNanos() - t0
+        nanos[site] += d; calls[site]++
+        nanos[N_NARROW] += d; calls[N_NARROW]++
+        if (!changed) { nanos[N_NARROW_IDENTITY] += d; calls[N_NARROW_IDENTITY]++ }
+        val b = if (d < 10_000L) 0 else if (d < 100_000L) 1 else if (d < 1_000_000L) 2 else 3
+        narrowBucketCalls[b]++; narrowBucketNanos[b] += d
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (CALL.2) intra-function attribution: checkArgumentsAgainstSignature ==")
+        appendLine("mode: ${if (mode == COARSE) "COARSE (anchors only)" else "ON"}")
+        appendLine("invocations: $invocations   loop iterations: $iterations")
+        val ovhCalls = calls[OVERHEAD]
+        val ovh = if (ovhCalls > 0) nanos[OVERHEAD] / ovhCalls else 0L
+        val firstOvh = if (calls[OVERHEAD_FIRST] > 0)
+            nanos[OVERHEAD_FIRST] / calls[OVERHEAD_FIRST] else 0L
+        appendLine(
+            "probe boundary overhead: $ovh ns in situ, steady state (over $ovhCalls empty " +
+                "sections); $firstOvh ns for the invocation's FIRST boundary"
+        )
+        var partition = 0L
+        var raw = 0L
+        var boundaries = 0L
+        for (s in 0 until FIRST_NESTED) {
+            partition += nanos[s] - ovh * calls[s]; raw += nanos[s]; boundaries += calls[s]
+        }
+        appendLine(
+            "partition total: ${partition / 1_000_000} ms net, ${raw / 1_000_000} ms raw " +
+                "over $boundaries boundaries"
+        )
+        appendLine("-- sections (disjoint, source order; ms net of probe overhead) --")
+        for (s in 0 until N) {
+            val c = calls[s]
+            if (s == FIRST_NESTED) appendLine("-- nested sub-measures (INSIDE the sections above) --")
+            if (c == 0L) continue
+            val ns = nanos[s] - ovh * c
+            appendLine(
+                "  ${names[s].padEnd(42)} ${(ns / 1_000_000).toString().padStart(5)} ms net " +
+                    "(${(nanos[s] / 1_000_000).toString().padStart(5)} raw) reached ${
+                        c.toString().padStart(7)
+                    } = ${if (c > 0) ns / c else 0} ns each" +
+                    if (s in L_PARAM until POST) ", leftIn=${leftIn(s)}" else ""
+            )
+        }
+        appendLine("-- narrowing-walk cost distribution (all three sites) --")
+        val labels = arrayOf("< 10 us", "10-100 us", "0.1-1 ms", ">= 1 ms")
+        for (b in 0 until 4) {
+            appendLine(
+                "  ${labels[b].padEnd(12)} ${narrowBucketCalls[b].toString().padStart(7)} walks, " +
+                    "${(narrowBucketNanos[b] / 1_000_000).toString().padStart(5)} ms"
+            )
+        }
+    }
+
+    /**
+     * Loop iterations that left section [sec] other than by falling through to
+     * the next one — i.e. `continue`d, `break`ed or returned inside it. The
+     * loop sections are strictly sequential, so the drop to the next section
+     * is exactly that count; [L_RELATION] is the last, so everything reaching
+     * it leaves inside it.
+     */
+    fun leftIn(sec: Int): Long =
+        if (sec in L_PARAM until L_RELATION) calls[sec] - calls[sec + 1] else calls[sec]
+
+    /** Machine-readable dump: one line per section. */
+    fun csv(): String = buildString {
+        appendLine("section,reached,nanos")
+        for (s in 0 until N) {
+            if (calls[s] == 0L) continue
+            appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
+        }
+    }
+}
