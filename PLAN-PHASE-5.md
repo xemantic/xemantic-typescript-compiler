@@ -20,6 +20,29 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 724 (2026-07-27) — the TS2344 ×4 family is CONFIRMED and its obvious explanation
+is DISPROVEN, before any fix was written. Parked on
+`wip/round724-nonnullable-constraint`; main clean at 12,781 / 0 / 3.**
+
+Four of the remaining 22 read `Type 'NonNullable<T>' does not satisfy the constraint
+'Node'`, from tsc's `visitNode<TIn extends Node | undefined>(…, visitor:
+Visitor<NonNullable<TIn>, …>)` where `Visitor`'s first parameter requires `extends Node`.
+The natural reading is that we compare against `TIn`'s RAW constraint `Node | undefined`,
+which genuinely does not satisfy `Node`, and that stripping the nullish part fixes it.
+
+**The probe says otherwise, and this is the whole value of the round:** the case where
+the parameter is already non-null — `TIn extends Node`, nothing to strip — fails in
+exactly the same way. So we derive NO constraint for `NonNullable<T>` at all; nullish has
+nothing to do with it. Had I written the plausible fix first, it would have made one of
+the two cases pass and looked like progress while the family stayed broken.
+
+Control (an unconstrained type parameter) still reports TS2344, so the probe
+discriminates. Same family as round 720's `Required<T>` — a real-lib utility type whose
+effect we do not apply — and invisible on the curated-lib path for the same reason.
+
+---
+
+
 **Round 723 (2026-07-27) — the round-722 defect is FIXED and it took two false positives
 with it, not one. Real-lib FPs 24 → 22; corpus 12,775 → 12,781 / 0 / 3; the cost gate
 tripped, was justified, and was rebaselined in the same commit.**
