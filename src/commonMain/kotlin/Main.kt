@@ -66,6 +66,14 @@ fun main(args: Array<String>) {
             "--verifyMappedCache", "--verifymappedcache" -> {
                 passTiming = true; PassTiming.verifyMappedCache = true
             }
+            // (TYPE.1)(a): attribute the getTypeOfExpression calls BY CALLER —
+            // the only measurement that can test ARCHITECTURE-RETHINK § 0.1
+            // stage 3's claim that "several handlers independently type the
+            // same node". Costs a stack walk per OUTERMOST call, so it is an
+            // offline attribution mode, never a production one.
+            "--typeOfExprCallers", "--typeofexprcallers" -> {
+                passTiming = true; PassTiming.callerAttr = true
+            }
             // (DISPATCH.1)(a): the opt-in per-kind handler-table derivation.
             "--dispatchProbe", "--dispatchprobe" -> {
                 SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.PROBE
@@ -315,6 +323,7 @@ private fun printUsage() {
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
           --narrowSections   (CALL.3) intra-walk attribution of narrowTypeFromFlow (arrivals vs distinct)
           --narrowSectionsCoarse  the same, whole-walk anchor only — the calibration counterpart
+          --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)

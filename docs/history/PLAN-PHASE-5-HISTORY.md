@@ -1,3 +1,182 @@
+**Round 727 (2026-07-27) — TWO families cracked, both by triaging all eight remaining sites
+by CAUSE before touching anything. Real-lib false positives 14 → 7 (arm C 27 → 23 → 20,
+MEASURED at every step, TS2339 ×4 → 0 and TS2345 ×4 → ×1, no other code moved by even one).
+Corpus 12,795 → 12,804 / 0 / 3 (+9 pins). Cost gate PASSES — largest counter −0.68%, an
+improvement. Embedded-lib compiler profile still 46.**
+
+**THE TRIAGE, which is the reusable part.** The brief said "pick by cause, not by histogram
+height", and the eight untriaged sites split three ways, not two:
+
+- **TS2339 ×4** — esDecorators.ts:2066/2069/2070/2071, all inside ONE function, one cause.
+- **TS2345 ×3** — builderState.ts:396/457 + resolutionCache.ts:1109, identical message
+  (`'Path' is not assignable to parameter of type 'Path & T'`), one cause, three files.
+- **TS2345 ×1** — utilities.ts:12082 `assertType<never>(node)`, an exhaustive-switch
+  narrowing question with nothing in common with the other three.
+
+Both families reproduced in a HAND-WRITTEN probe of ~15 lines each, on the first attempt,
+with no lib types involved at all — after two rounds in which synthetic probes came back
+clean, that is worth recording: the shapes here were legible from the message plus the
+source line, and did not need the real libs to exhibit.
+
+**THE DEFECT (TS2339).** `narrowByCallPredicate`'s SINGLE-TYPE positive branch was
+
+    checkTypeRelatedTo(targetType, t) -> targetType
+    checkTypeRelatedTo(t, targetType) -> t
+    else                              -> targetType
+
+Both comparisons are against the guard target AS A WHOLE. tsc's `getNarrowedType` never
+compares against the whole candidate — it `mapType`s over the CANDIDATE and keeps, per
+constituent `c`, whichever of `t`/`c` is the subtype, dropping `c` when neither direction
+relates. So on a UNION target where neither whole-union relation holds, we handed back the
+entire candidate union. The live shape is `visitAssignmentElement`:
+
+    if (isAssignmentExpression(node, /*excludeCompoundAssignment*/ true)) {
+        if (isNamedEvaluation(node, isAnonymousClassNeedingAssignedName)) { … node.right … }
+        … node.left … node.operatorToken …
+
+`NamedEvaluation` is a 9-member union of `PropertyAssignment & {…}` / `VariableDeclaration
+& {…}` / … intersections. Only the `AssignmentExpression & {…}` members are reachable from
+the already-narrowed `node`, but all nine survived, and a union's property set is the
+INTERSECTION of its members' — hence four TS2339 on properties the reference certainly has.
+The fix filters the constituents, is reached ONLY on the previously-`else` path (so the two
+relating branches stay byte-identical), and keeps the old whole-union fallback when nothing
+survives.
+
+**WHAT THE FIX IS PARTLY LEANING ON, stated plainly because it is not visible in the
+numbers.** In the esDecorators shape exactly ONE constituent survives, so the narrowed type
+is a single `X & { … }` intersection — and our TS2339 walker does not fire on an
+intersection receiver at all (nor on a plain interface receiver: `declare const s: SubA;
+s.nope` is silent today — the B153 "only the class-AST-chain path" gate). So part of the
+suppression here comes from a diagnostic class that does not exist rather than from the
+narrowing. The narrowing itself is independently correct — dumped via revealing TS2322s,
+`isNamed2` after `isAssign` yields exactly `SubAssign`, `isNamed` yields exactly
+`Assign & { left: Ident; right: NodeX }`, and an unnarrowed reference still yields the whole
+union — and where two constituents survive the result is a union on which TS2339 does fire.
+That is what the second pin exercises.
+
+**PROBE DISCIPLINE, with a first attempt that was useless.** My first two negative controls
+(`node.nope` and a dropped constituent's `node.initializer`) came back silent WITH the fix
+and read as "the fix deleted a diagnostic class" — they had actually landed on the
+intersection/interface gate above, and would have been silent on HEAD too for a shape one
+step simpler. The control that DISCRIMINATES keeps two constituents alive: candidates
+`PropAssign | SubA | SubB` narrowed against `Assign` drop `PropAssign` and yield
+`SubA | SubB`, so `node.op` (which `PropAssign` lacks) must become legal while `node.extra`
+(on only one survivor) must STAY an error. Both target tests were then run against
+unmodified HEAD: both FAIL there, both controls PASS there. A control is only a control if
+you know which side of the fix it is measuring.
+
+**MEASUREMENT.** Arm C re-run at HEAD before any edit (27 = 13 env TS2591 + 14 real) and
+after (23), the diff a clean four-line removal with nothing added; embedded-lib profile
+re-checked at 46 with the tsconfig restored; `output.errors` in the cost gate confirms the
+same 46 independently.
+
+**THE SECOND FAMILY WAS TRIAGED THE SAME WAY AND FIXED IN THE SAME SESSION (arm C 23 →
+20, TS2345 ×4 → ×1).** The three are `(state.hasCalledUpdateShapeSignature ||= new
+Set()).add(path)`. The receiver is a union — `Set<Path> | Set<T>` — because `new Set()`
+yields the RAW `Set<T>` with the CONSTRUCT SIGNATURE's own type parameter leaking. Dumped
+at the emission site as
+
+    XDBG combinable constituents=Object#89[(value: string & { __pathBrand: any; }) => any]
+                                | Object#90[(value: T) => any]
+
+which is what makes the B516 union-of-callables rule intersect the two `add` parameters
+into `Path & T` — and that rule is CORRECT tsc behaviour, so the bug was never there. The
+fix substitutes an uninferred signature type parameter's DECLARED DEFAULT (TypeScript's own
+rule), only where one exists and only at the return reference's top level. Two facts found
+while triaging, both worth keeping: `new Map()` does NOT reproduce, because the real
+`MapConstructor` has a non-generic `new(): Map<any, any>` overload that wins while
+`SetConstructor` has only `new <T = any>(…)`; and a bare `const s = new Set(); s.add(path)`
+is silent, so the leak is harmless until a union puts the raw `T` into an intersection —
+which is exactly why a narrower probe would have "disproven" it.
+
+**AND THE CORPUS CANNOT SEE IT, which is the reason this was safe to land:** the EMBEDDED
+lib declares `interface SetConstructor { new(): Set<any> }` — non-generic — so no baseline
+can move through `Set`/`Map`. The pins therefore declare their own constructor interface
+rather than relying on `@useRealLibs`. Its discriminating control runs in the OPPOSITE
+direction from the usual one: `new Holder().put("x")` where `HolderConstructor` is
+`new <T = number>(): Holder<T>` must START erroring, because the raw `T` accepted every
+argument — a fix that makes a new diagnostic APPEAR is much easier to prove than one that
+removes a class of them, and it pins the substitution itself rather than its consequence.
+
+**OPERATIONAL.** Two builds were lost to OOM, both with `available` under 1 GB at launch —
+one of them a full `jvmTest` that ran 7m31s and produced ZERO result XMLs, which reads
+exactly like a catastrophic test failure. Check `free -m` before every gradle call, and read
+an empty results directory as "the build died", not as "everything failed".
+
+---
+
+
+**Round 726 (2026-07-27) — the TS2322 family cracked, by DUMPING the relation instead of
+guessing a third time. Real-lib false positives 18 → 14 (arm C 31 → 27, MEASURED both
+sides, TS2322 ×7 → ×3, no other code moved by even one). Corpus 12,788 → 12,795 / 0 / 3
+(+7 pins). Cost gate PASSES — largest counter −0.68%, an improvement. Embedded-lib
+compiler profile still 46.**
+
+**THE DEFECT.** `getTypeFromTypeReference` instantiated `Iface<A>` into a `Type.Reference`
+only when EVERY type argument resolved, and otherwise fell through to
+`getDeclaredTypeOfSymbol(Iface)` — the RAW OPEN GENERIC. That is not a lenient
+approximation: the open generic carries its OWN type parameter and is a *different type*
+from any instantiation of it, and nothing in the relation engine relates a
+`Type.Reference` to it. Every comparison against such an annotation therefore failed.
+
+The dumped structure is the whole story (parser.ts:3583, `return result` in
+`parseBracketedList<T extends Node>(): NodeArray<T>`):
+
+    src = Ref#17913{tgt=NodeArray#2742, args=[TP#17912{T, cons=Node}]}
+    tgt = Iface#2742{NodeArray, tps=[T#2743], bases=[Ref{ReadonlyArray, args=[TP#2743]}, …]}
+
+A `Reference` on the left, the bare `Interface` on the right — and the interface being
+compared against is literally the source's own `target`. The instrumented fall-through
+named the cause outright:
+
+    XDBG RAW NodeArray args=[T] resolved=[ERROR] tpScope=null aliasArgs=null
+
+The return annotation is resolved with **no `currentTypeParamScope` installed**, so the
+function's own `T` resolves to `errorType`, the all-args-resolved guard fails, and the
+annotation silently becomes the open generic. That is exactly why the message read
+`Type 'NodeArray<T>' is not assignable to type 'NodeArray<T>'` — identical text, because
+the DISPLAY renders the annotation node while the COMPARISON used the raw generic. Two
+prior rounds read that message and theorised about generic identity; the message was
+never describing the types being compared.
+
+**THE FIX** mirrors tsc, where `errorType` is Any-flagged (ours is too:
+`Type.Intrinsic(TypeFlags.Any, "error")`) and instantiation proceeds regardless of it:
+substitute `any` for the unresolved argument positions and instantiate anyway. The
+unresolved name is already reported by TS2304 on its own; this only stops the cascade.
+Four sites cleared — parser.ts:3583, watchPublic.ts:371, watchPublic.ts:383,
+utilities.ts:12378 — and the arm-C diff is a clean four-line removal with nothing added.
+
+**WHAT DID NOT WORK, and it is the reusable part.** Three synthetic probes came back
+CLEAN and nearly sent the round the way of (a2) and (a4): a plain cross-function generic
+call; the full parser.ts shape (overloaded callee, constrained TP, callback-parameter
+inference, interface extending `ReadonlyArray`); and the same multi-file with
+`useRealLibs` on. The degradation is only OBSERVABLE once the interface reaches its type
+parameter through a GENERIC BASE — `interface B<T> extends ReadonlyArray<T>` reproduces,
+`interface Box<T> { v: T }` does NOT, because a flat interface relates to its own raw
+form anyway. A pin built on the flat shape is silent before AND after the fix and proves
+nothing; mine was, until I checked it against unmodified HEAD and got byte-identical
+output. **Verify the discriminating power of a probe on HEAD before trusting it** — that
+check is what turned this from a third eliminated hypothesis into a landed fix.
+
+**THE INSTRUMENTATION LESSON, which cost two compiles.** My first dump printed NOTHING
+and read as "wrong code path" — it was the right code path. The helper's file filter was
+a `private val` declared AFTER the class's `init` block, and `init` is where the checker
+runs every pass, so the property was still null when the emission fired. Hooking
+`Diagnostic`'s constructor instead (`init` on the data class + a filtered stack trace)
+named the true emission site and the `Checker.kt:32150` frame in ONE run — remember the
+line-number wrap, that frame is line 97686. When a checker probe prints nothing, suspect
+initialization order before suspecting the path.
+
+**THE REMAINING 14, by code:** TS2345 ×4, TS2339 ×4, TS2322 ×3, TS2349 ×2, TS2769 ×1. The
+three surviving TS2322 are three DISTINCT causes, none of them this one: parser.ts:3558
+(`NodeArray<T>` vs `NodeArray<NonNullable<T>>` — the type ARGUMENT is
+`Intersection[TP & {}]` with a different TypeParam instance, the round-725 shape moved one
+level in), utilities.ts:4258 (an `Exclude<…>` conditional type), program.ts:1366 (an
+object literal vs `Partial<CreateSourceFileOptions>`). The by-code histogram keeps
+overstating how many distinct causes remain — as round 723 also found.
+
+---
+
 **Round 724 (2026-07-27) — the TS2344 ×4 family is CONFIRMED and its obvious explanation
 is DISPROVEN, before any fix was written. Parked on
 `wip/round724-nonnullable-constraint`; main clean at 12,781 / 0 / 3.**

@@ -279,6 +279,7 @@ object PassTiming {
         unstableStructuralBy.clear()
         typeOfExprRepeatSame = 0
         typeOfExprRepeatDiff = 0
+        resetCallerAttribution()
         getTypeOfExpressionDistinct.clear()
         getTypeOfExpressionByPass.clear()
         typeNodeCacheable = 0
@@ -553,6 +554,222 @@ object PassTiming {
         narrowWalksByPass[p] = (narrowWalksByPass[p] ?: 0L) + 1
     }
 
+    // ---------------------------------------------------------------------
+    // (TYPE.1) round 737 — attribute the getTypeOfExpression calls BY CALLER.
+    //
+    // ARCHITECTURE-RETHINK § 0.1 stage 3 sizes "cut the x2.7 recompute factor"
+    // at up to ~9% and names its mechanism as "several handlers independently
+    // type the same node". That is a CO-OCCURRENCE claim, and no round had
+    // tested it: the aggregate factor cannot distinguish it from ordinary
+    // recursion (typing `a.b.c` makes three calls at three distinct nodes and
+    // recomputes nothing).
+    //
+    // The measurement therefore records, per call, the ORIGIN — the caller of
+    // the OUTERMOST `getTypeOfExpression` on the stack. Nested calls inherit
+    // it, so a whole expression subtree is attributed to the handler that
+    // asked for it, and the recursion never inflates a caller's factor.
+    //
+    // Enabled by `--typeOfExprCallers` only; `callerAttr` is a MODE, so
+    // [reset] must not clear it (same contract as `verifyMappedCache`).
+    // ---------------------------------------------------------------------
+
+    /** Attribution mode. Never true in a production compile. */
+    var callerAttr = false
+
+    /** Site ids are dense; 256 fit the four-word per-node mask below. */
+    const val MAX_CALLER_SITES = 256
+
+    private val callerSiteIds = HashMap<String, Int>()
+    val callerSiteNames = ArrayList<String>()
+    val callerSiteCalls = LongArray(MAX_CALLER_SITES)
+    val callerSiteOutermost = LongArray(MAX_CALLER_SITES)
+    val callerSiteNanos = LongArray(MAX_CALLER_SITES)
+
+    /** Methods whose frames are the probe itself, never an attributable caller. */
+    val callerSkipMethods = setOf(
+        "captureCallerFrames", "getTypeOfExpression", "internCallerSite"
+    )
+
+    /**
+     * Per expression node: which origins typed it, how often, and whether a
+     * repeat was a fresh OUTERMOST typing (the only kind single-visit
+     * discipline could remove).
+     */
+    class ExprNodeAttr {
+        var m0: Long = 0; var m1: Long = 0; var m2: Long = 0; var m3: Long = 0
+        var calls: Int = 0
+        var outermost: Int = 0
+        var firstOrigin: Int = -1
+    }
+
+    val exprNodeAttrs = HashMap<Long, ExprNodeAttr>()
+
+    /** Node keys re-salted by the file being checked — the collision census. */
+    val saltedNodeKeys = HashSet<Long>()
+
+    /**
+     * Time spent in OUTERMOST typings of a node that had ALREADY been
+     * outermost-typed — the upper bound on stage 3's prize, since typing every
+     * node at most once at top level is the most single-visit discipline can
+     * buy. Nested repeats are excluded on purpose: they are already inside
+     * some outermost typing's time.
+     */
+    var redundantOutermostNanos: Long = 0
+    var redundantOutermostCalls: Long = 0
+
+    /** `(firstOrigin, repeatOrigin)` -> nanos / count of those redundant typings. */
+    val redundantPairNanos = HashMap<Long, Long>()
+    val redundantPairCalls = HashMap<Long, Long>()
+
+    fun resetCallerAttribution() {
+        callerSiteIds.clear(); callerSiteNames.clear()
+        callerSiteCalls.fill(0); callerSiteOutermost.fill(0); callerSiteNanos.fill(0)
+        exprNodeAttrs.clear(); saltedNodeKeys.clear()
+        perfectMemoNanos = 0; perfectMemoCalls = 0
+        redundantOutermostNanos = 0; redundantOutermostCalls = 0
+        redundantPairNanos.clear(); redundantPairCalls.clear()
+    }
+
+    fun internCallerSite(sig: String): Int {
+        val key = sig.ifEmpty { "(unattributed)" }
+        callerSiteIds[key]?.let { return it }
+        if (callerSiteNames.size >= MAX_CALLER_SITES - 1) {
+            // Site 255 is the overflow bucket; it is never interned by name, so
+            // the table stays dense and the mask stays four words.
+            return MAX_CALLER_SITES - 1
+        }
+        val id = callerSiteNames.size
+        callerSiteNames.add(key)
+        callerSiteIds[key] = id
+        return id
+    }
+
+    /**
+     * The ABSOLUTE ceiling for stage 3 in any shape: the inclusive time of
+     * every call a PERFECT per-node type cache (`NodeLinks.resolvedType`,
+     * ignoring soundness and every ambient context) would have skipped, each
+     * skipped subtree counted once. Nothing that removes recomputation — a
+     * memo, single-visit discipline, or a handler merge — can beat it.
+     */
+    var perfectMemoNanos: Long = 0
+    var perfectMemoCalls: Long = 0
+
+    /** Records one call; returns how many calls this node has now had.
+     *  [outermost] means `depth == 0` on entry. */
+    fun noteTypeOfExprCaller(site: Int, nodeKey: Long, outermost: Boolean): Int {
+        callerSiteCalls[site]++
+        if (outermost) callerSiteOutermost[site]++
+        val a = exprNodeAttrs.getOrPut(nodeKey) { ExprNodeAttr() }
+        a.calls++
+        when (site ushr 6) {
+            0 -> a.m0 = a.m0 or (1L shl (site and 63))
+            1 -> a.m1 = a.m1 or (1L shl (site and 63))
+            2 -> a.m2 = a.m2 or (1L shl (site and 63))
+            else -> a.m3 = a.m3 or (1L shl (site and 63))
+        }
+        return a.calls
+    }
+
+    /** Records the INCLUSIVE time of one completed outermost typing. */
+    fun noteTypeOfExprOutermostDone(site: Int, nodeKey: Long, nanos: Long) {
+        callerSiteNanos[site] += nanos
+        val a = exprNodeAttrs[nodeKey] ?: return
+        val repeat = a.outermost > 0
+        a.outermost++
+        if (a.firstOrigin < 0) a.firstOrigin = site
+        if (repeat) {
+            redundantOutermostNanos += nanos
+            redundantOutermostCalls++
+            val k = (a.firstOrigin.toLong() shl 32) or site.toLong()
+            redundantPairNanos[k] = (redundantPairNanos[k] ?: 0L) + nanos
+            redundantPairCalls[k] = (redundantPairCalls[k] ?: 0L) + 1L
+        }
+    }
+
+    private fun siteName(id: Int): String =
+        if (id in callerSiteNames.indices) callerSiteNames[id] else "(overflow)"
+
+    /** The (TYPE.1) report; emitted only when the attribution ran. */
+    fun dumpCallerAttribution(appendLine: (String) -> Unit) {
+        if (exprNodeAttrs.isEmpty()) return
+        appendLine("== (TYPE.1) getTypeOfExpression BY CALLER ==")
+        val totalCalls = callerSiteCalls.sum()
+        val totalOuter = callerSiteOutermost.sum()
+        val totalNanos = callerSiteNanos.sum()
+        appendLine(
+            "sites=${callerSiteNames.size} calls=$totalCalls outermost=$totalOuter " +
+                "distinctNodes=${exprNodeAttrs.size} (fileSalted ${saltedNodeKeys.size}) " +
+                "inclusiveMs=${totalNanos / 1_000_000}"
+        )
+        // Per-site distinct-node counts, from the masks.
+        val distinctBySite = LongArray(MAX_CALLER_SITES)
+        val originsPerNode = HashMap<Int, Long>()
+        var multiOriginNodes = 0L
+        var multiOriginCalls = 0L
+        for (a in exprNodeAttrs.values) {
+            var n = 0
+            var w = a.m0; var base = 0
+            while (base < 256) {
+                var bits = w
+                while (bits != 0L) {
+                    val b = bits.countTrailingZeroBits()
+                    distinctBySite[base + b]++
+                    n++
+                    bits = bits and (bits - 1)
+                }
+                base += 64
+                w = when (base) { 64 -> a.m1; 128 -> a.m2; 192 -> a.m3; else -> 0L }
+            }
+            originsPerNode[n] = (originsPerNode[n] ?: 0L) + 1L
+            if (n > 1) { multiOriginNodes++; multiOriginCalls += a.calls }
+        }
+        appendLine(
+            "${"calls".padStart(9)} ${"outer".padStart(8)} ${"distinct".padStart(9)} " +
+                "${"factor".padStart(7)} ${"incl.ms".padStart(8)}  origin"
+        )
+        val order = (0 until MAX_CALLER_SITES).sortedByDescending { callerSiteCalls[it] }
+        for (s in order) {
+            if (callerSiteCalls[s] == 0L) continue
+            val d = distinctBySite[s]
+            val f = if (d > 0) callerSiteCalls[s] * 100 / d else 0L
+            appendLine(
+                "${callerSiteCalls[s].toString().padStart(9)} " +
+                    "${callerSiteOutermost[s].toString().padStart(8)} " +
+                    "${d.toString().padStart(9)} " +
+                    "${"${f / 100}.${(f % 100).toString().padStart(2, '0')}".padStart(7)} " +
+                    "${(callerSiteNanos[s] / 1_000_000).toString().padStart(8)}  ${siteName(s)}"
+            )
+        }
+        appendLine("-- origins per node (the co-occurrence the stage-3 claim needs) --")
+        for ((n, c) in originsPerNode.entries.sortedBy { it.key }) {
+            appendLine("  ${n.toString().padStart(3)} origins: ${c.toString().padStart(9)} nodes")
+        }
+        appendLine(
+            "  nodes with >1 origin: $multiOriginNodes of ${exprNodeAttrs.size} " +
+                "(${multiOriginCalls} of $totalCalls calls land on them)"
+        )
+        appendLine(
+            "-- REDUNDANT OUTERMOST typings (what single-visit discipline removes) --\n" +
+                "  ${redundantOutermostCalls} repeat typings, " +
+                "${redundantOutermostNanos / 1_000_000} ms inclusive"
+        )
+        appendLine(
+            "-- PERFECT per-node cache (the ceiling for stage 3 in ANY shape) --\n" +
+                "  ${perfectMemoCalls} served subtree roots, " +
+                "${perfectMemoNanos / 1_000_000} ms inclusive"
+        )
+        appendLine("${"ms".padStart(8)} ${"calls".padStart(9)}  firstOrigin -> repeatOrigin")
+        for ((k, v) in redundantPairNanos.entries.sortedByDescending { it.value }.take(40)) {
+            val a = (k ushr 32).toInt()
+            val b = (k and 0xFFFF_FFFFL).toInt()
+            appendLine(
+                "${(v / 1_000_000).toString().padStart(8)} " +
+                    "${(redundantPairCalls[k] ?: 0L).toString().padStart(9)}  " +
+                    "${siteName(a)} -> ${siteName(b)}"
+            )
+        }
+    }
+
     internal fun noteGlobalsLookup(cls: GlobalsLookupClass, name: String) {
         globalsLookups++
         when (cls) {
@@ -683,6 +900,7 @@ object PassTiming {
         )
         val outsideExpr = getTypeOfExpressionByPass[OUTSIDE_PASS] ?: 0L
         appendLine("getTypeOfExpression outside init dispatch: $outsideExpr calls")
+        dumpCallerAttribution(appendLine)
         val typeNodeTotal = typeNodeCacheable + typeNodeBypassed
         val bypassPct = if (typeNodeTotal > 0) typeNodeBypassed * 1000 / typeNodeTotal else 0L
         appendLine(

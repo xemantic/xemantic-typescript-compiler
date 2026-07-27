@@ -104267,6 +104267,33 @@ interface DataView {
     // Expression type inference (Phase 4 item 3a)
     // -----------------------------------------------------------------------
 
+    // (TYPE.1) round 737 — attribution state. Both are written ONLY under
+    // `PassTiming.callerAttr`, so a production compile never touches them.
+    /** Nesting depth of [getTypeOfExpression]; 0 on entry means outermost. */
+    private var typeOfExprDepth: Int = 0
+
+    /** Site id of the caller of the outermost in-flight [getTypeOfExpression]. */
+    private var typeOfExprOrigin: Int = -1
+
+    /** True inside a subtree a perfect per-node cache would already have served. */
+    private var exprRepeatGuard: Boolean = false
+
+    /**
+     * A program-unique-enough key for an expression node: `nodeId` is only
+     * per-FILE preorder and `pos`/`end` are per-file offsets, so all three are
+     * mixed. Two DISTINCT nodes collide only if they sit at the same preorder
+     * index with an identical span in two different files — the report prints
+     * a file-salted distinct count next to the unsalted one so the residual
+     * noise is measured rather than assumed.
+     */
+    private fun typeOfExprNodeKey(expr: Expression): Long {
+        val n = expr as NodeBase
+        var h = expr.pos.toLong() * -7046029254386353131L
+        h = h xor (expr.end.toLong() * -4658895280553007687L)
+        h = h xor (n.nodeId.toLong() * -7723592293110705685L)
+        return h xor (h ushr 31)
+    }
+
     /**
      * Get the type of an expression. This is the main entry point for
      * expression type inference, replacing the string-based inferSimpleExprType.
@@ -104275,6 +104302,36 @@ interface DataView {
         // INV.0 recompute-factor counter — inert unless --passTiming enabled it.
         if (PassTiming.enabled) {
             PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
+            // (TYPE.1) round 737: attribute this call BY CALLER. Only an
+            // OUTERMOST call walks the stack; a nested one inherits the origin,
+            // so an expression subtree is attributed to the handler that asked
+            // for it and the recursion cannot inflate a caller's factor.
+            val attr = PassTiming.callerAttr
+            var myOrigin = -1
+            var myKey = 0L
+            var repeatRoot = false
+            if (attr) {
+                if (typeOfExprDepth == 0) {
+                    typeOfExprOrigin =
+                        PassTiming.internCallerSite(captureCallerFrames(PassTiming.callerSkipMethods))
+                }
+                myOrigin = typeOfExprOrigin
+                myKey = typeOfExprNodeKey(expr)
+                val nCalls = PassTiming.noteTypeOfExprCaller(myOrigin, myKey, typeOfExprDepth == 0)
+                // The perfect-cache ceiling: this call is the ROOT of a subtree a
+                // node-keyed cache would have served whole, so its inclusive time
+                // is counted once and its nested repeats are suppressed.
+                repeatRoot = nCalls > 1 && !exprRepeatGuard
+                if (repeatRoot) exprRepeatGuard = true
+                // Collision/cross-file diagnostic: the same key re-salted by the
+                // file being checked. saltedDistinct == distinct proves both that
+                // no two files' nodes collide AND that no node is typed while a
+                // different file is being checked.
+                PassTiming.saltedNodeKeys.add(
+                    myKey xor (currentCheckFileName?.hashCode()?.toLong() ?: 0L)
+                )
+                typeOfExprDepth++
+            }
             // (M1)(d) round 665: would a LIVE memo have served THIS call? The
             // test is exactly the live one (a CONFIRMED entry at the current
             // epoch) and is made BEFORE the core runs, so the time measured is
@@ -104288,9 +104345,21 @@ interface DataView {
             val t0 = PassTiming.nowNanos()
             val r = try { getTypeOfExpressionCore(expr) } finally {
                 if (wouldServe) exprSavableGuard = false
+                if (attr) {
+                    typeOfExprDepth--
+                    typeOfExprOrigin = if (typeOfExprDepth == 0) -1 else myOrigin
+                    if (repeatRoot) exprRepeatGuard = false
+                }
             }
             val dt = PassTiming.nowNanos() - t0
             PassTiming.typeOfExprNanos += dt
+            if (attr && typeOfExprDepth == 0) {
+                PassTiming.noteTypeOfExprOutermostDone(myOrigin, myKey, dt)
+            }
+            if (repeatRoot) {
+                PassTiming.perfectMemoNanos += dt
+                PassTiming.perfectMemoCalls++
+            }
             if (wouldServe) {
                 PassTiming.exprSavableNanos += dt
                 PassTiming.exprSavableCalls++

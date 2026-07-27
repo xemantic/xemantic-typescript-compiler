@@ -20,6 +20,78 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 737 (2026-07-27) — (TYPE.1) DONE. ARCHITECTURE-RETHINK section 0.1 STAGE 3 IS
+STRUCK: its MECHANISM is exactly right and its SIZE is wrong by 3.2x.** The 701,463
+`getTypeOfExpression` calls were attributed BY CALLER for the first time
+(`--typeOfExprCallers`, opt-in; only the OUTERMOST call walks the stack, so a whole
+expression subtree is attributed to the handler that ASKED for it and the recursion
+cannot inflate a caller's own factor). **The claim "several handlers independently type
+the same node" is CONFIRMED and pervasive: 177 sites initiate typing, 45.2% of the
+254,069 typed nodes (114,750) carry MORE THAN ONE origin — modal count three, maximum
+17 — and 75.8% of all calls land on those nodes. The x2.76 factor decomposes cleanly as
+2.05x CROSS-HANDLER times 1.34x recursion, and per-caller factors are 1.00-1.11
+everywhere: no handler re-types anything by itself.** **The money is not there.** A
+PERFECT per-node cache — the ceiling for this stage in ANY shape, ignoring soundness and
+every ambient install — saves **823 ms = 2.9% of a 28.7 s compile**; single-visit
+discipline (repeat OUTERMOST typings only) **670 ms = 2.3%**; the largest single
+handler-pair merge in the compiler **166 ms = 0.58%** against a re-derived +-2% band of
+~590 ms; and the SOUND memo re-measures at **46 ms**. **NOTHING WAS LANDED**, correctly.
+
+**TWO CORRECTIONS THE ROUND FORCES.** (1) **"getTypeOfExpression = 3,911 ms" is a DOUBLE
+COUNT** — `typeOfExprNanos` sums every call's span including nested ones, charging a
+subtree once per level. **The true total cost of all expression typing is 2,439 ms =
+8.5% of checker-init**, so 8.5% was always stage 3's ceiling even if typing were free.
+(2) **74.4% of the calls are OUTERMOST, not nested** — the intuitive "the factor is just
+recursion" reading (which was this round's stated prior P1) is false by 3x.
+
+**SECTION 0's LAW AGAIN, IN ITS SHARPEST INSTANCE AND WITH NO CACHE IN IT.** Sorted by
+COUNT the co-occurrence head is 141,388 repeat typings worth **71 ms (0.5 us each)** —
+the property-access receiver trio (`emitTs18048ForClosureCapturedUndefinedReceiver` +
+`checkMemberAccessMissing` x2, 90,948 repeats for 51 ms), `getTypeOfObjectLiteral`
+re-entering itself (30,040 for 6 ms), `calleeParamGivesNoContext` re-entering itself
+(27,133 for 23 ms). Sorted by TIME the head is **2,603 repeat typings worth 166 ms
+(64 us each)**, `collectUncalledTypedLocalsFromBody -> checkVarDeclAssignability`. The
+two orderings share nothing. Cross-origin repeats are 547 ms over 188,068 typings,
+same-origin only 68 ms over 61,215 — the redundancy is genuinely BETWEEN handlers, and
+it is genuinely cheap.
+
+**PREDICTION SCORED (stated in full before the run): P1 FALSIFIED** (>50% nested; really
+25.6%), **P2 HELD** (0.5-2.0 s prize; really 670 ms), **P3 HELD** (top-3 pairs <50% of
+the redundant time; really 41%), **P4 FALSIFIED** (top-5 origins >=60% of outermost;
+really 52.5%). The falsifier — any single pair >600 ms — was not met, by 3.6x. Two of
+four wrong, the same hit rate as 732-735; the one that mattered was P1, where the reason
+to distrust stage 3 turned out to be the OPPOSITE of the expected one and the mechanism
+section 0.1 named was right all along.
+
+**WHAT DID NOT WORK.** (a) A per-node type cache of any shape: ceiling 823 ms, and that
+ceiling assumes ignoring `currentFlowGraph`/`currentLocalTypes`/`currentTypeParamScope`
+and the object-literal freshness rule — the SOUND version measures 46 ms in the same run.
+(b) Merging the property-access receiver trio, the biggest co-occurrence GROUP in the
+compiler at 90,948 repeat typings: **51 ms**. (c) Merging the var-decl cluster, the most
+EXPENSIVE group (~12,100 repeats, ~326 ms): spread over five ordered pairs whose members
+type under different ambient installs — which is exactly why the same node costs 64 us
+when `checkVarDeclAssignability` re-types it and 21 us when `collectUncalledTypedLocals`
+first does, and exactly why round 596's memo across them was unsound.
+
+**METHOD.** The probe costs **16.7 us per attributed outermost call** (checker-init
+37,429 ms attributed vs 28,694 ms plain, over 522,102 `StackWalker` walks) — 190x round
+735's 89 ns timestamp read — so this round is deliberately COUNT-heavy: every
+deterministic counter is byte-identical between the two runs and to `cost-counters.txt`,
+which makes the calls / distinct / outermost / co-occurrence figures exact and
+load-independent, while every millisecond is RELATIVE (nested probe work inflates an
+outermost span by ~4%). Node keys mix pos+end+nodeId because `nodeId` is only PER-FILE
+preorder; the report prints a file-salted distinct count beside the unsalted one
+(254,069 vs 272,124, a 7.1% gap) so the residual is measured rather than assumed.
+
+Suite 12,910 -> **12,916 / 0 / 3** (+6 `TypeOfExprCallerAttributionTest` pins); profile
+`--listAll` **byte-identical** production vs attribution (46 errors); cost gate **all 20
+counters +0.00%** (the probe is additive-only inside the existing `PassTiming.enabled`
+guard). Full derivation: **`docs/perf/type-of-expression-attribution.md`**. Follow-on:
+**(TYPE.2)** — the by-caller table's own pointer, `checkVarDeclAssignability` under
+`spineCtaM3StatementAnchor`: the largest single typing origin (431 ms over 11,933
+top-level initializers = 36 us each) inside the third-largest spine handler (2,900 ms,
+round 732) that no round has opened, and its typing is only 15% of it.
+
 **Round 736 (2026-07-27) — (CALL.3) DONE, AND THE ARC HAS ITS FIRST LANDED WIN:
 `-4.53%` median, B wins 6/6, outside the +-2% band by 2.3x.** Round 735 handed forward
 394 walks costing 1,485 ms and forbade designing before two numbers existed. Both were
@@ -841,187 +913,6 @@ profile re-checked at 46 independently of the cost gate's `output.errors`.
 
 ---
 
-**Round 727 (2026-07-27) — TWO families cracked, both by triaging all eight remaining sites
-by CAUSE before touching anything. Real-lib false positives 14 → 7 (arm C 27 → 23 → 20,
-MEASURED at every step, TS2339 ×4 → 0 and TS2345 ×4 → ×1, no other code moved by even one).
-Corpus 12,795 → 12,804 / 0 / 3 (+9 pins). Cost gate PASSES — largest counter −0.68%, an
-improvement. Embedded-lib compiler profile still 46.**
-
-**THE TRIAGE, which is the reusable part.** The brief said "pick by cause, not by histogram
-height", and the eight untriaged sites split three ways, not two:
-
-- **TS2339 ×4** — esDecorators.ts:2066/2069/2070/2071, all inside ONE function, one cause.
-- **TS2345 ×3** — builderState.ts:396/457 + resolutionCache.ts:1109, identical message
-  (`'Path' is not assignable to parameter of type 'Path & T'`), one cause, three files.
-- **TS2345 ×1** — utilities.ts:12082 `assertType<never>(node)`, an exhaustive-switch
-  narrowing question with nothing in common with the other three.
-
-Both families reproduced in a HAND-WRITTEN probe of ~15 lines each, on the first attempt,
-with no lib types involved at all — after two rounds in which synthetic probes came back
-clean, that is worth recording: the shapes here were legible from the message plus the
-source line, and did not need the real libs to exhibit.
-
-**THE DEFECT (TS2339).** `narrowByCallPredicate`'s SINGLE-TYPE positive branch was
-
-    checkTypeRelatedTo(targetType, t) -> targetType
-    checkTypeRelatedTo(t, targetType) -> t
-    else                              -> targetType
-
-Both comparisons are against the guard target AS A WHOLE. tsc's `getNarrowedType` never
-compares against the whole candidate — it `mapType`s over the CANDIDATE and keeps, per
-constituent `c`, whichever of `t`/`c` is the subtype, dropping `c` when neither direction
-relates. So on a UNION target where neither whole-union relation holds, we handed back the
-entire candidate union. The live shape is `visitAssignmentElement`:
-
-    if (isAssignmentExpression(node, /*excludeCompoundAssignment*/ true)) {
-        if (isNamedEvaluation(node, isAnonymousClassNeedingAssignedName)) { … node.right … }
-        … node.left … node.operatorToken …
-
-`NamedEvaluation` is a 9-member union of `PropertyAssignment & {…}` / `VariableDeclaration
-& {…}` / … intersections. Only the `AssignmentExpression & {…}` members are reachable from
-the already-narrowed `node`, but all nine survived, and a union's property set is the
-INTERSECTION of its members' — hence four TS2339 on properties the reference certainly has.
-The fix filters the constituents, is reached ONLY on the previously-`else` path (so the two
-relating branches stay byte-identical), and keeps the old whole-union fallback when nothing
-survives.
-
-**WHAT THE FIX IS PARTLY LEANING ON, stated plainly because it is not visible in the
-numbers.** In the esDecorators shape exactly ONE constituent survives, so the narrowed type
-is a single `X & { … }` intersection — and our TS2339 walker does not fire on an
-intersection receiver at all (nor on a plain interface receiver: `declare const s: SubA;
-s.nope` is silent today — the B153 "only the class-AST-chain path" gate). So part of the
-suppression here comes from a diagnostic class that does not exist rather than from the
-narrowing. The narrowing itself is independently correct — dumped via revealing TS2322s,
-`isNamed2` after `isAssign` yields exactly `SubAssign`, `isNamed` yields exactly
-`Assign & { left: Ident; right: NodeX }`, and an unnarrowed reference still yields the whole
-union — and where two constituents survive the result is a union on which TS2339 does fire.
-That is what the second pin exercises.
-
-**PROBE DISCIPLINE, with a first attempt that was useless.** My first two negative controls
-(`node.nope` and a dropped constituent's `node.initializer`) came back silent WITH the fix
-and read as "the fix deleted a diagnostic class" — they had actually landed on the
-intersection/interface gate above, and would have been silent on HEAD too for a shape one
-step simpler. The control that DISCRIMINATES keeps two constituents alive: candidates
-`PropAssign | SubA | SubB` narrowed against `Assign` drop `PropAssign` and yield
-`SubA | SubB`, so `node.op` (which `PropAssign` lacks) must become legal while `node.extra`
-(on only one survivor) must STAY an error. Both target tests were then run against
-unmodified HEAD: both FAIL there, both controls PASS there. A control is only a control if
-you know which side of the fix it is measuring.
-
-**MEASUREMENT.** Arm C re-run at HEAD before any edit (27 = 13 env TS2591 + 14 real) and
-after (23), the diff a clean four-line removal with nothing added; embedded-lib profile
-re-checked at 46 with the tsconfig restored; `output.errors` in the cost gate confirms the
-same 46 independently.
-
-**THE SECOND FAMILY WAS TRIAGED THE SAME WAY AND FIXED IN THE SAME SESSION (arm C 23 →
-20, TS2345 ×4 → ×1).** The three are `(state.hasCalledUpdateShapeSignature ||= new
-Set()).add(path)`. The receiver is a union — `Set<Path> | Set<T>` — because `new Set()`
-yields the RAW `Set<T>` with the CONSTRUCT SIGNATURE's own type parameter leaking. Dumped
-at the emission site as
-
-    XDBG combinable constituents=Object#89[(value: string & { __pathBrand: any; }) => any]
-                                | Object#90[(value: T) => any]
-
-which is what makes the B516 union-of-callables rule intersect the two `add` parameters
-into `Path & T` — and that rule is CORRECT tsc behaviour, so the bug was never there. The
-fix substitutes an uninferred signature type parameter's DECLARED DEFAULT (TypeScript's own
-rule), only where one exists and only at the return reference's top level. Two facts found
-while triaging, both worth keeping: `new Map()` does NOT reproduce, because the real
-`MapConstructor` has a non-generic `new(): Map<any, any>` overload that wins while
-`SetConstructor` has only `new <T = any>(…)`; and a bare `const s = new Set(); s.add(path)`
-is silent, so the leak is harmless until a union puts the raw `T` into an intersection —
-which is exactly why a narrower probe would have "disproven" it.
-
-**AND THE CORPUS CANNOT SEE IT, which is the reason this was safe to land:** the EMBEDDED
-lib declares `interface SetConstructor { new(): Set<any> }` — non-generic — so no baseline
-can move through `Set`/`Map`. The pins therefore declare their own constructor interface
-rather than relying on `@useRealLibs`. Its discriminating control runs in the OPPOSITE
-direction from the usual one: `new Holder().put("x")` where `HolderConstructor` is
-`new <T = number>(): Holder<T>` must START erroring, because the raw `T` accepted every
-argument — a fix that makes a new diagnostic APPEAR is much easier to prove than one that
-removes a class of them, and it pins the substitution itself rather than its consequence.
-
-**OPERATIONAL.** Two builds were lost to OOM, both with `available` under 1 GB at launch —
-one of them a full `jvmTest` that ran 7m31s and produced ZERO result XMLs, which reads
-exactly like a catastrophic test failure. Check `free -m` before every gradle call, and read
-an empty results directory as "the build died", not as "everything failed".
-
----
-
-
-**Round 726 (2026-07-27) — the TS2322 family cracked, by DUMPING the relation instead of
-guessing a third time. Real-lib false positives 18 → 14 (arm C 31 → 27, MEASURED both
-sides, TS2322 ×7 → ×3, no other code moved by even one). Corpus 12,788 → 12,795 / 0 / 3
-(+7 pins). Cost gate PASSES — largest counter −0.68%, an improvement. Embedded-lib
-compiler profile still 46.**
-
-**THE DEFECT.** `getTypeFromTypeReference` instantiated `Iface<A>` into a `Type.Reference`
-only when EVERY type argument resolved, and otherwise fell through to
-`getDeclaredTypeOfSymbol(Iface)` — the RAW OPEN GENERIC. That is not a lenient
-approximation: the open generic carries its OWN type parameter and is a *different type*
-from any instantiation of it, and nothing in the relation engine relates a
-`Type.Reference` to it. Every comparison against such an annotation therefore failed.
-
-The dumped structure is the whole story (parser.ts:3583, `return result` in
-`parseBracketedList<T extends Node>(): NodeArray<T>`):
-
-    src = Ref#17913{tgt=NodeArray#2742, args=[TP#17912{T, cons=Node}]}
-    tgt = Iface#2742{NodeArray, tps=[T#2743], bases=[Ref{ReadonlyArray, args=[TP#2743]}, …]}
-
-A `Reference` on the left, the bare `Interface` on the right — and the interface being
-compared against is literally the source's own `target`. The instrumented fall-through
-named the cause outright:
-
-    XDBG RAW NodeArray args=[T] resolved=[ERROR] tpScope=null aliasArgs=null
-
-The return annotation is resolved with **no `currentTypeParamScope` installed**, so the
-function's own `T` resolves to `errorType`, the all-args-resolved guard fails, and the
-annotation silently becomes the open generic. That is exactly why the message read
-`Type 'NodeArray<T>' is not assignable to type 'NodeArray<T>'` — identical text, because
-the DISPLAY renders the annotation node while the COMPARISON used the raw generic. Two
-prior rounds read that message and theorised about generic identity; the message was
-never describing the types being compared.
-
-**THE FIX** mirrors tsc, where `errorType` is Any-flagged (ours is too:
-`Type.Intrinsic(TypeFlags.Any, "error")`) and instantiation proceeds regardless of it:
-substitute `any` for the unresolved argument positions and instantiate anyway. The
-unresolved name is already reported by TS2304 on its own; this only stops the cascade.
-Four sites cleared — parser.ts:3583, watchPublic.ts:371, watchPublic.ts:383,
-utilities.ts:12378 — and the arm-C diff is a clean four-line removal with nothing added.
-
-**WHAT DID NOT WORK, and it is the reusable part.** Three synthetic probes came back
-CLEAN and nearly sent the round the way of (a2) and (a4): a plain cross-function generic
-call; the full parser.ts shape (overloaded callee, constrained TP, callback-parameter
-inference, interface extending `ReadonlyArray`); and the same multi-file with
-`useRealLibs` on. The degradation is only OBSERVABLE once the interface reaches its type
-parameter through a GENERIC BASE — `interface B<T> extends ReadonlyArray<T>` reproduces,
-`interface Box<T> { v: T }` does NOT, because a flat interface relates to its own raw
-form anyway. A pin built on the flat shape is silent before AND after the fix and proves
-nothing; mine was, until I checked it against unmodified HEAD and got byte-identical
-output. **Verify the discriminating power of a probe on HEAD before trusting it** — that
-check is what turned this from a third eliminated hypothesis into a landed fix.
-
-**THE INSTRUMENTATION LESSON, which cost two compiles.** My first dump printed NOTHING
-and read as "wrong code path" — it was the right code path. The helper's file filter was
-a `private val` declared AFTER the class's `init` block, and `init` is where the checker
-runs every pass, so the property was still null when the emission fired. Hooking
-`Diagnostic`'s constructor instead (`init` on the data class + a filtered stack trace)
-named the true emission site and the `Checker.kt:32150` frame in ONE run — remember the
-line-number wrap, that frame is line 97686. When a checker probe prints nothing, suspect
-initialization order before suspecting the path.
-
-**THE REMAINING 14, by code:** TS2345 ×4, TS2339 ×4, TS2322 ×3, TS2349 ×2, TS2769 ×1. The
-three surviving TS2322 are three DISTINCT causes, none of them this one: parser.ts:3558
-(`NodeArray<T>` vs `NodeArray<NonNullable<T>>` — the type ARGUMENT is
-`Intersection[TP & {}]` with a different TypeParam instance, the round-725 shape moved one
-level in), utilities.ts:4258 (an `Exclude<…>` conditional type), program.ts:1366 (an
-object literal vs `Partial<CreateSourceFileOptions>`). The by-code histogram keeps
-overstating how many distinct causes remain — as round 723 also found.
-
----
-
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **Reading convention (stated round 687, after it cost a scan):** a superseded
@@ -1818,11 +1709,56 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   section constants only). **Note the size honestly before starting: the whole
   narrowing population is now ~723 ms of genuinely-narrowing work = 2.4% of the
   compile, only just outside the band** — so a partial win here is in-band and
-  the item may well end as a measurement. Also still open from round 735 and
-  NOT reached by any round yet: attribute the 701,463 `getTypeOfExpression`
-  calls **BY CALLER**, which is the only way to find § 0.1 stage 3's x2.7
-  recompute factor. Gate: corpus suite + `--listAll` + `cost_gate.py` +
-  `scripts/ab-interleaved.sh` medians AND win rate.
+  the item may well end as a measurement. (The "attribute the 701,463
+  `getTypeOfExpression` calls BY CALLER" leg that used to hang off this item is
+  DONE — see (TYPE.1) below.) Gate: corpus suite + `--listAll` +
+  `cost_gate.py` + `scripts/ab-interleaved.sh` medians AND win rate.
+
+- [x] **(TYPE.1) Attribute the 701,463 `getTypeOfExpression` calls BY CALLER —
+  DONE round 737, and it STRIKES § 0.1 stage 3.** Stage 3's mechanism
+  ("several handlers independently type the same node") is **CONFIRMED and
+  pervasive** — 177 initiating sites, **45.2% of the 254,069 typed nodes carry
+  more than one origin** (modal three, max 17), 75.8% of calls land on them,
+  and the ×2.76 factor decomposes as **2.05× cross-handler × 1.34× recursion**
+  with per-caller factors of 1.00–1.11 (no handler re-types alone). **Its size
+  is wrong by 3.2×**: a PERFECT per-node cache saves **823 ms (2.9%)**,
+  single-visit discipline **670 ms (2.3%)**, the largest handler-pair merge
+  **166 ms (0.58%)**, the SOUND memo **46 ms** — against a ±2% band of ~590 ms.
+  **NOTHING LANDED**, correctly. Two corrections forced: "3,911 ms" is a DOUBLE
+  COUNT (`typeOfExprNanos` charges a subtree once per nesting level; the true
+  total is **2,439 ms = 8.5% of checker-init**), and **74.4% of the calls are
+  OUTERMOST**, so recursion never was the explanation. § 0's law in a
+  cache-free shape: the four biggest co-occurrence pairs by COUNT are 141,388
+  repeats worth 71 ms (0.5 µs each), the biggest by TIME is 2,603 repeats worth
+  166 ms (64 µs each). LANDED: `--typeOfExprCallers` + the
+  `captureCallerFrames` expect/actual (JVM `StackWalker`, native `""`), the
+  outermost-only walk with inherited origin, the co-occurrence masks, the
+  single-visit and PERFECT-cache prize meters, and
+  `TypeOfExprCallerAttributionTest`. Suite **12,916 / 0 / 3**, `--listAll`
+  byte-identical, cost gate all 20 counters +0.00%. Full derivation:
+  **`docs/perf/type-of-expression-attribution.md`**. Follow-on: **(TYPE.2)**.
+
+- [ ] **(TYPE.2) Attribute inside `checkVarDeclAssignability` /
+  `spineCtaM3StatementAnchor` — the third-largest spine handler, 2,900 ms, and
+  no round has opened it (pointed at by round 737's by-caller table).**
+  `checkVarDeclAssignability:29166` under `ctaM3StmtAnchor` is the **largest
+  single expression-typing origin in the compiler**: 33,653 calls, 11,933
+  top-level typings, 431 ms of typing at **36 µs per initializer**, factor 1.05
+  — expensive, not redundant. Its typing is only ~15% of the enclosing
+  handler's 2,900 ms (round 732's per-handler table), so ~2,470 ms is
+  unattributed and the handler is ~10% of a 28.7 s checker-init — **the largest
+  un-opened single target left**. Method: round 735's verbatim — split the
+  function into a wrapper + `…Core`, add partition rows plus a `Coarse` mode for
+  the differential calibration, and price the sections; round 736's lesson adds
+  "look for a memo or a condition failing one level down", not only for raw
+  work. **State a falsifiable expectation first.** Two priors worth testing:
+  (i) that the 36 µs per initializer is mostly flow narrowing, as round 735
+  found for the argument path (37%) — if so it is (CALL.4)'s population, not a
+  new one; (ii) that the ~2,470 ms outside the typing is the assignability
+  RELATION — round 735 found that term to be 1.2% on the argument path, i.e.
+  the same prior was wrong by 48× one function over. Gate: corpus suite +
+  `--listAll` + `cost_gate.py` + `ab-interleaved.sh` medians AND win rate if
+  anything lands.
 
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is

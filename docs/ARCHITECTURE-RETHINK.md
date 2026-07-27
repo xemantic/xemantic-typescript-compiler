@@ -92,6 +92,30 @@
 > because those identity calls cost 949 ns against 21,708 ns for the ones that
 > narrow: **§ 0's law holds in a shape that is not a cache at all.** Follow-on:
 > **(CALL.4)**. Full derivation: `docs/perf/narrow-walk-attribution.md`.
+> **ROUND-737 RESOLUTION — § 0.1 STAGE 3 IS STRUCK, AND THE ESTIMATE'S OWN
+> EVIDENCE WAS A DOUBLE COUNT.** The 701,463 `getTypeOfExpression` calls were
+> attributed BY CALLER (`--typeOfExprCallers`; only the OUTERMOST call walks the
+> stack, so a subtree is attributed to the handler that asked for it).
+> **Stage 3's mechanism — "several handlers independently type the same node" —
+> is CONFIRMED and pervasive**: 177 initiating sites, **45.2% of the 254,069
+> typed nodes carry more than one origin** (modal count: three), and the ×2.76
+> factor decomposes as **2.05× cross-handler × 1.34× recursion**, with
+> per-caller factors of 1.00–1.11 (no handler re-types anything alone).
+> **Its size is wrong by 3.2×**: a PERFECT per-node cache saves **823 ms
+> (2.9%)**, single-visit discipline **670 ms (2.3%)**, the largest handler-pair
+> merge **166 ms (0.58%)**, and the SOUND memo **46 ms** — against a ±2% band of
+> ~590 ms. The estimate also leaned on "3,911 ms", which is `typeOfExprNanos`
+> charging a subtree once per nesting level; **the true total cost of all
+> expression typing is 2,439 ms = 8.5% of checker-init**, so 8.5% was always the
+> ceiling. § 0's law appears here in a shape with no cache in it: the four
+> biggest co-occurrence pairs by COUNT are 141,388 repeat typings worth 71 ms
+> (0.5 µs each) while the biggest by TIME is 2,603 typings worth 166 ms (64 µs
+> each) — **what is redundantly recomputed is what was already cheap.** No
+> optimisation was landed. Follow-on: **(TYPE.2)** — the by-caller table's own
+> pointer, `checkVarDeclAssignability` under `spineCtaM3StatementAnchor`
+> (431 ms of typing over 11,933 initializers inside a 2,900 ms handler that no
+> round has opened). Full derivation:
+> `docs/perf/type-of-expression-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
@@ -170,7 +194,7 @@ size:
 |---|---:|---|
 | (DISPATCH.1) per-kind handler table | 1.0–2.5 s | low, mechanical |
 | flow-narrowing walks (69,917 walks) | 2.4 s | medium (round 664 banked 0.83 s here) |
-| `getTypeOfExpression` call COUNT (2.8× recompute) | ≤1.8 s | medium — fewer calls, NOT a memo (round 665) |
+| ~~`getTypeOfExpression` call COUNT (2.8× recompute)~~ | **0.67–0.82 s** | **do not pursue — round 737 measured it; the ceiling is an unsound cache, the sound residue is 46 ms** |
 | context-cache work of any shape | **0.07 s** | **do not pursue** |
 
 Also measured and unchanged: 1,341,719 globals lookups at 98.9% miss (the (M0.3)(i)
@@ -213,10 +237,29 @@ roughly 1.5× slower than tsc rather than 2.4×.
    a dispatch table, where one walk still consults every handler at every node.
    **The INV.4 inversion was not wrong, it was mis-ordered**; stage 1 retroactively
    unlocks it.
-3. **Cut the `getTypeOfExpression` recompute factor (2.7×)** — up to ~9%. FEWER
-   CALLS, not a memo (round 665 priced the memo at 30 ms). The factor exists
-   because several handlers independently type the same node; single-visit
-   discipline is what removes it.
+3. ~~**Cut the `getTypeOfExpression` recompute factor (2.7×)** — up to ~9%.~~
+   **STRUCK, round 737, by measurement (`docs/perf/type-of-expression-attribution.md`).
+   The MECHANISM stated here is exactly right and its SIZE was wrong by 3.2×.**
+   Attributing all 701,463 calls by CALLER confirms the claim: 177 sites
+   initiate typing, **45.2% of the 254,069 typed nodes are typed by more than
+   one of them**, and the factor decomposes as **2.05× cross-handler × 1.34×
+   recursion** — co-occurrence is the dominant term and no handler re-types
+   anything by itself (per-caller factors are 1.00–1.11). **But a PERFECT
+   per-node cache — the ceiling for this stage in any shape — saves 823 ms
+   (2.9% of a 28.7 s compile); single-visit discipline saves 670 ms (2.3%); the
+   largest handler-pair merge is 166 ms (0.58%) against a ±2% band of ~590 ms;
+   and the SOUND memo measures 46 ms.** § 0's law again, and this time without
+   a cache in sight: the four biggest co-occurrence pairs by COUNT are 141,388
+   repeat typings worth 71 ms (0.5 µs each) while the biggest by TIME is 2,603
+   typings worth 166 ms (64 µs each) — **the redundantly-typed nodes are the
+   cheap ones.** Also corrected here: the "3,911 ms" this estimate leaned on is
+   a DOUBLE COUNT (`typeOfExprNanos` charges a subtree once per nesting level);
+   the true total cost of all expression typing is **2,439 ms = 8.5% of
+   checker-init**, which caps this stage at 8.5% even if typing were free.
+   Follow-on, and the first thing this attribution points at: **(TYPE.2)**
+   `checkVarDeclAssignability` under `spineCtaM3StatementAnchor` — the largest
+   single typing origin (431 ms over 11,933 top-level initializers, 36 µs each)
+   inside the third-largest and still-unopened spine handler (2,900 ms).
 4. **Flow narrowing** (69,917 walks, 18% of init) — round 664 banked 0.83 s; ~57%
    of misses are COLD, so the rest needs tsc's shape (a flow type computed once per
    reference and carried IN the type), not another memo.
