@@ -20,10 +20,10 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 727 (2026-07-27) — the TS2339 family cracked in one compile, by triaging all eight
-remaining sites by CAUSE before touching anything. Real-lib false positives 14 → 10 (arm C
-27 → 23, MEASURED both sides, TS2339 ×4 → 0, no other code moved by even one). Corpus
-12,795 → 12,799 / 0 / 3 (+4 pins). Cost gate PASSES — largest counter −0.68%, an
+**Round 727 (2026-07-27) — TWO families cracked, both by triaging all eight remaining sites
+by CAUSE before touching anything. Real-lib false positives 14 → 7 (arm C 27 → 23 → 20,
+MEASURED at every step, TS2339 ×4 → 0 and TS2345 ×4 → ×1, no other code moved by even one).
+Corpus 12,795 → 12,804 / 0 / 3 (+9 pins). Cost gate PASSES — largest counter −0.68%, an
 improvement. Embedded-lib compiler profile still 46.**
 
 **THE TRIAGE, which is the reusable part.** The brief said "pick by cause, not by histogram
@@ -92,21 +92,33 @@ after (23), the diff a clean four-line removal with nothing added; embedded-lib 
 re-checked at 46 with the tsconfig restored; `output.errors` in the cost gate confirms the
 same 46 independently.
 
-**THE NEXT FAMILY IS TRIAGED AND DUMPED, so the next round can start from the fix.** The
-TS2345 ×3 are `(state.hasCalledUpdateShapeSignature ||= new Set()).add(path)`. The receiver
-is a union — `Set<Path> | Set<T>` — because `new Set()` yields the RAW `Set<T>` with the
-lib's own type parameter leaking (tsc infers `T = Path` from the contextual type, or at
-worst defaults `T = any`). The B516 union-of-callables path then combines the two `add`
-signatures by INTERSECTING the parameters, which is correct tsc behaviour, giving the
-`Path & T` in the message. Dumped at the emission site as
+**THE SECOND FAMILY WAS TRIAGED THE SAME WAY AND FIXED IN THE SAME SESSION (arm C 23 →
+20, TS2345 ×4 → ×1).** The three are `(state.hasCalledUpdateShapeSignature ||= new
+Set()).add(path)`. The receiver is a union — `Set<Path> | Set<T>` — because `new Set()`
+yields the RAW `Set<T>` with the CONSTRUCT SIGNATURE's own type parameter leaking. Dumped
+at the emission site as
 
     XDBG combinable constituents=Object#89[(value: string & { __pathBrand: any; }) => any]
                                 | Object#90[(value: T) => any]
 
-Two facts that narrow it further: `new Map()` does NOT reproduce (the real `MapConstructor`
-has a non-generic `new(): Map<any, any>` overload that wins, while `SetConstructor` has only
-`new <T = any>(…)`); and a bare `const s = new Set(); s.add(path)` is silent, so the leak is
-harmless until a union puts the raw `T` into an intersection.
+which is what makes the B516 union-of-callables rule intersect the two `add` parameters
+into `Path & T` — and that rule is CORRECT tsc behaviour, so the bug was never there. The
+fix substitutes an uninferred signature type parameter's DECLARED DEFAULT (TypeScript's own
+rule), only where one exists and only at the return reference's top level. Two facts found
+while triaging, both worth keeping: `new Map()` does NOT reproduce, because the real
+`MapConstructor` has a non-generic `new(): Map<any, any>` overload that wins while
+`SetConstructor` has only `new <T = any>(…)`; and a bare `const s = new Set(); s.add(path)`
+is silent, so the leak is harmless until a union puts the raw `T` into an intersection —
+which is exactly why a narrower probe would have "disproven" it.
+
+**AND THE CORPUS CANNOT SEE IT, which is the reason this was safe to land:** the EMBEDDED
+lib declares `interface SetConstructor { new(): Set<any> }` — non-generic — so no baseline
+can move through `Set`/`Map`. The pins therefore declare their own constructor interface
+rather than relying on `@useRealLibs`. Its discriminating control runs in the OPPOSITE
+direction from the usual one: `new Holder().put("x")` where `HolderConstructor` is
+`new <T = number>(): Holder<T>` must START erroring, because the raw `T` accepted every
+argument — a fix that makes a new diagnostic APPEAR is much easier to prove than one that
+removes a class of them, and it pins the substitution itself rather than its consequence.
 
 **OPERATIONAL.** Two builds were lost to OOM, both with `available` under 1 GB at launch —
 one of them a full `jvmTest` that ran 7m31s and produced ZERO result XMLs, which reads
@@ -1054,14 +1066,27 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   common property set. THE FIX filters the candidate constituents, reached ONLY on the
   previously-`else` path (both relating branches stay byte-identical) and falling back to
   the whole union when nothing survives. Sites: esDecorators.ts:2066/2069/2070/2071.
-  **REMAINING 10:** TS2345 ×4, TS2322 ×3, TS2349 ×2, TS2769 ×1 — and the TS2345 ×4 are
-  now TRIAGED as 3 + 1: builderState.ts:396/457 and resolutionCache.ts:1109 are ONE cause
-  (`(x ??= new Set()).add(y)` — `new Set()` yields `Set<T>` with the lib's own type
-  parameter leaking instead of `Set<Path>`/`Set<any>`, so the B516 union-of-callables
-  combined signature intersects the parameters into `Path & T`; dumped as
-  `constituents = Object[(value: Path) => any] | Object[(value: T) => any]`, and note
-  `new Map()` does NOT reproduce because `MapConstructor` has a non-generic `new()`
-  overload); utilities.ts:12082 is a lone exhaustive-switch `assertType<never>(node)`.
+  **(a8) LANDED round 727 (same session) — the TS2345 group too; real-lib FPs 10 → 7 (arm
+  C 23 → 20, both sides MEASURED, TS2345 ×4 → ×1, no other code moved). Corpus 12,799 →
+  12,804 / 0 / 3 (+5 pins), cost gate byte-identical to the (a7) run, embedded-lib profile
+  still 46.** THE DEFECT: a CONSTRUCT SIGNATURE's own type parameter escaped into the
+  new-expression's type. The real lib declares
+  `interface SetConstructor { new <T = any>(values?: readonly T[] | null): Set<T> }`, so
+  `new Set()` yielded `Set<T>` — the raw signature TP — and
+  `(state.hasCalledUpdateShapeSignature ||= new Set()).add(path)` resolved `.add` on the
+  UNION `Set<Path> | Set<T>`, where the B516 union-of-callables rule CORRECTLY intersects
+  the two parameters into `Path & T`. The combining rule was never the bug; the leaked TP
+  was. THE FIX substitutes an uninferred signature TP's DECLARED DEFAULT (what TypeScript
+  specifies), only for TPs that HAVE one and only at the return reference's top level — a
+  defaultless TP keeps today's behaviour. This is the construct-signature analogue of the
+  B56.1 rule already applied to a generic CLASS callee, which cannot fire here because a
+  constructor interface carries no type parameters of its own. Sites: builderState.ts:396/457,
+  resolutionCache.ts:1109. **WHY IT IS LOW-RISK ON THE CORPUS:** the EMBEDDED lib declares
+  `SetConstructor { new(): Set<any> }` — non-generic — so no corpus baseline can move
+  through `Set`/`Map` at all; the pins therefore declare their own constructor interface.
+  **REMAINING 7:** TS2322 ×3, TS2349 ×2, TS2769 ×1, TS2345 ×1 — the last TS2345 is
+  utilities.ts:12082, a lone exhaustive-switch `assertType<never>(node)`, i.e. a
+  full-switch-narrowing question with nothing in common with the three just fixed.
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;

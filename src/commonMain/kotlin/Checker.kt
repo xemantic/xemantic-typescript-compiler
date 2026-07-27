@@ -113633,7 +113633,9 @@ interface DataView {
                     val sigs = calleeType.constructSignatures
                     if (!sigs.isNullOrEmpty()) {
                         val ret = sigs[0].resolvedReturnType
-                        if (ret != null && ret !== errorType) return ret
+                        if (ret != null && ret !== errorType) {
+                            return substituteSigTypeParamDefaults(sigs[0], ret)
+                        }
                     }
                 }
             } else if (typeParams.isNullOrEmpty()) {
@@ -113669,6 +113671,37 @@ interface DataView {
         val sigs = calleeType.constructSignatures
         if (sigs.isNullOrEmpty()) return anyType
         return sigs[0].resolvedReturnType ?: anyType
+    }
+
+    /**
+     * Round 727: a CONSTRUCT SIGNATURE's own type parameter must never escape into
+     * the new-expression's type. The REAL lib declares
+     * `interface SetConstructor { new <T = any>(values?: readonly T[] | null): Set<T> }`
+     * (the embedded one declares a non-generic `new(): Set<any>`, which is why this is
+     * invisible by default), so `new Set()` yielded `Set<T>` — the raw signature TP.
+     * `(state.hasCalledUpdateShapeSignature ||= new Set()).add(path)` then resolved
+     * `.add` on the UNION `Set<Path> | Set<T>`, and the B516 union-of-callables rule
+     * correctly intersected the two parameters into `Path & T`, which nothing satisfies
+     * (tsc builderState.ts:396/457, resolutionCache.ts:1109).
+     *
+     * TypeScript substitutes an uninferred type parameter's DECLARED DEFAULT; this does
+     * exactly that, and no more — a TP with no default keeps today's behaviour, and only
+     * the return reference's TOP-LEVEL arguments are substituted, so nothing else in the
+     * new-expression path changes shape. (This is the construct-signature analogue of the
+     * B56.1 rule already applied a few lines above to a generic CLASS callee, which cannot
+     * fire here: a constructor interface carries no type parameters of its own — they live
+     * on the signature.)
+     */
+    private fun substituteSigTypeParamDefaults(sig: Signature, ret: Type): Type {
+        val tps = sig.typeParameters
+        if (tps.isNullOrEmpty() || ret !is Type.Reference) return ret
+        val args = ret.resolvedTypeArguments ?: return ret
+        var changed = false
+        val substituted = args.map { a ->
+            val def = (a as? Type.TypeParam)?.takeIf { p -> tps.any { it === p } }?.default
+            if (def != null && def !== errorType) { changed = true; def } else a
+        }
+        return if (changed) getOrInternReference(ret.target, substituted) else ret
     }
 
     /**
