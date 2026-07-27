@@ -20,6 +20,40 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 723 (2026-07-27) — the round-722 defect is FIXED and it took two false positives
+with it, not one. Real-lib FPs 24 → 22; corpus 12,775 → 12,781 / 0 / 3; the cost gate
+tripped, was justified, and was rebaselined in the same commit.**
+
+**The fix, and how small it turned out to be.** `getTypeOfObjectLiteral` named a computed
+key with `computedLiteralKey(n) ?: continue`, and that helper accepts only string and
+numeric literals — so `[Symbol.iterator]: …` matched nothing and the member was silently
+DROPPED. Not mis-typed, not mis-named: absent. The target then correctly reported it
+missing. `computedSymbolKey` now names a DOTTED path as `[Symbol.iterator]`, matching how
+symbol members are named everywhere else (it is exactly what TS2739 prints back). Wired
+into both the PropertyAssignment and MethodDeclaration branches — the method form
+(`{ [Symbol.iterator]() {…} }`) did not handle computed names at all.
+
+**Where I deliberately stopped short.** A bare `[foo]` key is genuinely dynamic; naming
+it `[foo]` would let any literal satisfy an unrelated symbol-keyed member, so it still
+gets skipped. That is pinned by its own control, because the tempting over-broad version
+would have passed every other test in the file.
+
+**It fixed more than it was aimed at.** Predicted: TS2739 ×1. Actual: TS2739 ×1 → 0 AND
+TS2322 8 → 7 — a dropped member was also failing an assignability comparison elsewhere.
+Worth noting for the remaining 22: a single structural gap can surface under several
+different codes, so the by-code histogram overstates how many distinct causes are left.
+
+**The cost gate did its job.** It failed the round on `mapped.keyed` +3.12% and
+`mapped.hits` +6.66%. That is the honest price of typing members that were previously
+discarded — +744 keyed lookups, +372 of them hits, ≈1.6 ms at the round-716 per-call
+cost — and the alternative to that work was wrong output. Accepted and rebaselined in the
+landing commit, which is precisely the workflow (COST.1) was built for: not a veto, an
+accounting demand. Note the percentages look alarming only because `mapped.keyed` is a
+small counter; the absolute deltas are three digits.
+
+---
+
+
 **Round 722 (2026-07-27) — a CONFIRMED, isolated defect behind (LIB.1)'s TS2739, with a
 four-line repro and a live control; parked on `wip/round722-symbol-keyed-members`
 because the failing case must not sit on main. Main clean at 12,775 / 0 / 3. Also: the
@@ -2425,11 +2459,21 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   reports TS2739 "missing `[Symbol.iterator]`, `[Symbol.toStringTag]` from `Set<T>`" —
   and `NodeArray<T> extends ReadonlyArray<T>`, which carries exactly those in the real
   lib but not in the curated one. Probe that under `@useRealLibs`.
-  **(a3) CONFIRMED DEFECT round 722 — computed well-known-symbol keys in an object
-  literal are not registered as members**, which is the TS2739 (`core.ts:1637`, a
-  `Set<TElement>` literal that DOES declare `[Symbol.iterator]`/`[Symbol.toStringTag]`).
-  Four-line repro + live control parked on `wip/round722-symbol-keyed-members`; the fix
-  is not written. Merge that branch and make its one failing case green.
+  **(a3) LANDED round 723 — computed well-known-symbol keys in an object literal are
+  members now; real-lib FPs 24 → 22.** `getTypeOfObjectLiteral` named a computed key via
+  `computedLiteralKey(n) ?: continue`, which accepts only string/numeric literals — so
+  `[Symbol.iterator]: …` was DROPPED and the target then reported it missing. New
+  `computedSymbolKey` names a DOTTED path (`Symbol.iterator`) as `[Symbol.iterator]`,
+  matching how symbol members are named everywhere else (it is what TS2739 prints);
+  wired into BOTH the PropertyAssignment and MethodDeclaration branches — the method
+  form did not handle computed names at all. Deliberately NOT applied to a bare `[foo]`
+  dynamic key, since naming that would let any literal satisfy a symbol-keyed target —
+  pinned by its own control. **It fixed one MORE than predicted:** TS2739 ×1 → 0 AND
+  TS2322 8 → 7, so a dropped member was failing an assignability check too. Corpus
+  12,775 → 12,781 / 0 / 3. **COST.1 tripped and was accepted:** `mapped.keyed` +3.12%,
+  `mapped.hits` +6.66% (+744 keyed lookups, +372 hits, ≈1.6 ms) — the direct price of
+  typing members we previously discarded, and the hits rose faster than the keys, so the
+  added lookups are mostly the cheap kind. Rebaselined in the landing commit.
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;

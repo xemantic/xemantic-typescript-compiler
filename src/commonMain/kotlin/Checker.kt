@@ -103573,6 +103573,30 @@ interface DataView {
     }
 
     /**
+     * Round 723: the member name for a computed WELL-KNOWN-SYMBOL key — `[Symbol.iterator]`
+     * for `[Symbol.iterator]: …`. Symbol-keyed members are named by their bracketed dotted
+     * text throughout (it is what TS2739 prints), so an object literal has to produce the
+     * SAME string or its member is invisible to the target's member lookup. That is exactly
+     * how tsc's own `Set<TElement>` literal — which declares `[Symbol.iterator]` and
+     * `[Symbol.toStringTag]` — came to be reported as MISSING both of them.
+     *
+     * Deliberately narrow: a DOTTED path only (`Symbol.iterator`, `NS.wellKnown`). A bare
+     * `[foo]` is a genuinely dynamic key whose value is unknown, and inventing the name
+     * `[foo]` for it would let it satisfy an unrelated member; the caller keeps skipping
+     * those, which is the pre-existing behaviour.
+     */
+    private fun computedSymbolKey(name: NameNode): String? {
+        val cpn = name as? ComputedPropertyName ?: return null
+        val access = cpn.expression as? PropertyAccessExpression ?: return null
+        fun dotted(e: Expression): String? = when (e) {
+            is Identifier -> e.text
+            is PropertyAccessExpression -> dotted(e.expression)?.let { "$it.${e.name.text}" }
+            else -> null
+        }
+        return dotted(access)?.let { "[$it]" }
+    }
+
+    /**
      * Get the properties of a type, triggering lazy resolution if needed.
      */
     private fun getPropertiesOfType(type: Type): List<Symbol> {
@@ -109944,7 +109968,10 @@ interface DataView {
                         is Identifier -> n.text
                         is StringLiteralNode -> n.text
                         is NumericLiteralNode -> n.text
-                        is ComputedPropertyName -> computedLiteralKey(n) ?: continue
+                        // Round 723: a well-known-symbol key is a real member; without
+                        // computedSymbolKey it was DROPPED and the target then reported it
+                        // missing (tsc's own Set<TElement> literal).
+                        is ComputedPropertyName -> computedLiteralKey(n) ?: computedSymbolKey(n) ?: continue
                         else -> continue
                     }
                     val propCtx = ctxObj?.members?.get(name)?.let { sym ->
@@ -110069,6 +110096,9 @@ interface DataView {
                     val name = when (val n = prop.name) {
                         is Identifier -> n.text
                         is StringLiteralNode -> n.text
+                        // Round 723: the METHOD form `{ [Symbol.iterator]() {…} }` — the
+                        // same member the PropertyAssignment branch above now keeps.
+                        is ComputedPropertyName -> computedLiteralKey(n) ?: computedSymbolKey(n) ?: continue
                         else -> continue
                     }
                     val sym = Symbol(SymbolFlags.Property or SymbolFlags.Function, name)

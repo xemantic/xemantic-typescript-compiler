@@ -93,6 +93,46 @@ class SymbolKeyedMemberTest {
     }
 
     @Test
+    fun `the method form of a computed Symbol key is also a member`() {
+        val diagnostics = diagnose(
+            """
+            interface Bag<T> {
+                size: number
+                [Symbol.iterator](): Iterator<T>
+            }
+            declare const inner: Iterator<string>
+            const bag: Bag<string> = {
+                size: 0,
+                [Symbol.iterator]() { return inner },
+            }
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.none { it.code == 2739 || it.code == 2741 })
+    }
+
+    @Test
+    fun `a genuinely dynamic computed key is still not treated as a named member`() {
+        val diagnostics = diagnose(
+            """
+            interface Bag<T> {
+                size: number
+                [Symbol.iterator](): Iterator<T>
+            }
+            declare const dynamicKey: string
+            const bag: Bag<string> = {
+                size: 0,
+                [dynamicKey]: 1,
+            }
+            """,
+            directives = realLibs,
+        )
+        // `[dynamicKey]` must NOT be mistaken for the required symbol member: naming a
+        // dynamic key would let any literal satisfy any symbol-keyed target.
+        assert(diagnostics.any { it.code == 2739 || it.code == 2741 })
+    }
+
+    @Test
     fun `an interface extending ReadonlyArray is assignable to itself`() {
         val diagnostics = diagnose(
             """
