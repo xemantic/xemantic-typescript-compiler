@@ -1841,3 +1841,441 @@ object NarrowProbe {
         }
     }
 }
+
+/**
+ * (TYPE.2) round 738: the opt-in attribution INSIDE `spineCtaM3StatementAnchor`
+ * — the sixth in the 732→737 sequence, and the first to open the third-largest
+ * spine handler (2,900 ms, round 732's per-handler table) which no round had
+ * touched. Round 737's by-caller table pointed here: `checkVarDeclAssignability`
+ * is the compiler's largest single expression-typing origin (33,653 calls,
+ * 11,933 top-level typings, 431 ms at 36 µs per initializer, factor 1.05 —
+ * expensive, not redundant), and that typing is only ~15% of the handler.
+ *
+ * ## Two partitions in one object
+ *
+ * The handler and the function nest, so this object runs **two independent
+ * running-section partitions** with their own depth counters:
+ *
+ * * **level A** — `ctaM3StmtAnchor`, split by CALLEE (`checkVarDeclAssignability`,
+ *   `checkAssignmentExpression`, `walkFunctionBodiesInExpr`,
+ *   `checkReturnAssignability`, `checkPropertyInitAssignability`,
+ *   `checkFlowNoOverlapCondition`, `registerConstLiteralUnionNarrowing`) plus
+ *   the ambient install/restore, so "what carries the 2,900 ms" is answered
+ *   before anything inside a callee is opened.
+ * * **level B** — `checkVarDeclAssignability`, split into its prologue walker
+ *   groups, the source/target type computations, the narrowing site, the
+ *   relation, the elaboration and the tail.
+ *
+ * Level B is nested inside level A's [A_VDECL] row, so B's partition total is
+ * that row minus B's own boundary cost; both are reported and neither is
+ * assumed.
+ *
+ * ## Calibration
+ *
+ * [COARSE] keeps only the anchors that still PARTITION each level, so an
+ * ON-vs-COARSE pair divided by the extra boundary count prices a timestamp
+ * read differentially — the only calibration rounds 734/735 found trustworthy
+ * (the in-situ empty span over-read by 3.6× and 4.4× in consecutive rounds and
+ * is reported here for the record only).
+ */
+object CtaSections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Anchors only — the calibration counterpart of [ON]. */
+    const val COARSE = 2
+
+    /** Opt-in; [OFF] in production. Set by `--ctaSections` / `--ctaSectionsCoarse`. */
+    var mode: Int = OFF
+
+    // ── level A: the whole handler, by callee ────────────────────────────────
+    /**
+     * The handler's own ELIGIBILITY decision — the kind test, the parent test
+     * and the `ctaM3NestedChainOk` / `ctaM3FnBodyAnchorScope` / `ctaM3NearestList`
+     * parent-chain climbs — plus everything after an anchor returns. This is the
+     * CONSULTATION cost § 0 named, isolated: it is paid at every reached node,
+     * including the ones that do not anchor.
+     */
+    const val A_GATE = 0
+    /** Frame lookup, the twelve ambient saves, the installs, the ns pushes. */
+    const val A_SETUP = 1
+    /** `checkVarDeclAssignability` (all four dispatch branches). */
+    const val A_VDECL = 2
+    /** `registerConstLiteralUnionNarrowing` (const declaration lists only). */
+    const val A_CONSTNARROW = 3
+    /** `contextualizeFnExprFromAnnotation` + `walkFunctionBodiesInExpr`. */
+    const val A_WALKFN = 4
+    /** `checkAssignmentExpression` (var-init `=`, expression statements). */
+    const val A_ASSIGN = 5
+    /** `checkReturnAssignability`. */
+    const val A_RETURN = 6
+    /** `checkPropertyInitAssignability` (the cta-m3k class-member arm). */
+    const val A_PROPINIT = 7
+    /** `checkFlowNoOverlapCondition` (the cta-m3j if-condition arm). */
+    const val A_IFCOND = 8
+    /** The `when` dispatch, the declaration loop, `withCtaFrameLocals`. */
+    const val A_DISPATCH = 9
+    /** The `finally`: diagnostic truncation, ns pops, the twelve restores. */
+    const val A_RESTORE = 10
+
+    // ── level B: checkVarDeclAssignability, in source order ───────────────────
+    /** The `ObjectBindingPattern` branch (five destructuring walkers). */
+    const val B_BINDPAT = 11
+    /** Variance + B526 + TS2820/B554/B470 — the first prologue group. */
+    const val B_PRO1 = 12
+    /** The three B482 weak-type walkers + B582. */
+    const val B_WEAK = 13
+    /** B286/B422/B294/B296/B298 — the JS/union/objlit prologue group. */
+    const val B_PRO2 = 14
+    /** B101/B206/B181/B208 — the last prologue group before the annotation split. */
+    const val B_PRO3 = 15
+    /** The `typeAnnotation == null` branch: infer the type of an unannotated init. */
+    const val B_UNANNOT = 16
+    /** `resolveSimpleTypeName` + the varTypes / currentLocalTypes recordings. */
+    const val B_RECORD = 17
+    /** The `noUncheckedIndexedAccess` block. */
+    const val B_NUIA = 18
+    /** `null!` shape + the B85.3 ternary-vs-TypeLiteral block. */
+    const val B_PRE2 = 19
+    /** `getTypeFromTypeNode(typeAnnotation)` — the TARGET type. */
+    const val B_TARGET = 20
+    /** B590 clodule + B96-nested + B231 + class-ident + class-expression blocks. */
+    const val B_NESTED = 21
+    /** The SOURCE type: `literalTypeOfExpression`/`getTypeOfExpression` + 17.43. */
+    const val B_SRCTYPE = 22
+    /** The flow-narrowing block (`getNarrowedTypeForReference`, both arms). */
+    const val B_NARROW = 23
+    /** Foreign-TP gate + B112 construct-sig + B207 ternary-of-functions. */
+    const val B_MID = 24
+    /** `canUseTypeEngine` + `checkTypeRelatedTo` — the ASSIGNABILITY RELATION. */
+    const val B_RELATION = 25
+    /** B103 through the array/objlit excess-property walkers (~30 gates). */
+    const val B_POST = 26
+    /** The 408-line `canUse && !isAssignable` TS2322 elaboration + emission. */
+    const val B_ELAB = 27
+    /** The numeric-literal recording + the `declaredTypeStr` tail. */
+    const val B_TAIL = 28
+
+    /** The first index that is a nested sub-measure rather than a partition row. */
+    const val FIRST_NESTED = 29
+
+    // ── nested sub-measures (INSIDE the rows above) ───────────────────────────
+    /** `getTypeOfExpression(init)` alone, inside [B_SRCTYPE]. */
+    const val N_GET_TYPE_OF_EXPR = 29
+    /** `getNarrowedTypeForReference` alone, inside [B_NARROW]. */
+    const val N_NARROW_CALL = 30
+    /** The narrowing block's confirming `checkTypeRelatedTo`, inside [B_NARROW]. */
+    const val N_NARROW_REL = 31
+    /** `getTypeFromTypeNode(typeAnnotation)` alone, inside [B_TARGET]. */
+    const val N_TYPE_NODE = 32
+    /** `canUseTypeEngine(sourceType, targetType)` alone, inside [B_RELATION]. */
+    const val N_CANUSE = 33
+    /** The `checkTypeRelatedTo(sourceType, targetType)` call itself. */
+    const val N_REL_CALL = 34
+    /** Level-B walks whose narrowing returned the INPUT type unchanged. */
+    const val N_NARROW_IDENTITY = 35
+
+    /** Level A's wrapper transition. Probe-only; absent in production. */
+    const val A_ENTRY = 36
+    /** Level B's wrapper transition. Probe-only; absent in production. */
+    const val B_ENTRY = 37
+
+    /** The FIRST empty boundary span of an invocation — not steady state. */
+    const val OVERHEAD_FIRST = 38
+    /** In-situ steady-state empty boundaries; a pessimistic upper bound. */
+    const val OVERHEAD = 39
+
+    const val N = 40
+
+    val names: Array<String> = arrayOf(
+        "A: eligibility gate + parent climbs",
+        "A: frame + ambient install + ns push",
+        "A: checkVarDeclAssignability",
+        "A: registerConstLiteralUnionNarrowing",
+        "A: walkFunctionBodiesInExpr",
+        "A: checkAssignmentExpression",
+        "A: checkReturnAssignability",
+        "A: checkPropertyInitAssignability",
+        "A: checkFlowNoOverlapCondition",
+        "A: dispatch + decl loop",
+        "A: finally (truncate + restore)",
+        "B: ObjectBindingPattern branch",
+        "B: prologue 1 (variance/B526/2820/554/470)",
+        "B: prologue weak (B482 x3 + B582)",
+        "B: prologue 2 (B286/422/294/296/298)",
+        "B: prologue 3 (B101/206/181/208)",
+        "B: unannotated-init inference",
+        "B: varTypes / localTypes recording",
+        "B: noUncheckedIndexedAccess block",
+        "B: null! + B85.3 ternary block",
+        "B: getTypeFromTypeNode (TARGET)",
+        "B: clodule/B96/B231/class blocks",
+        "B: SOURCE type computation",
+        "B: flow narrowing block",
+        "B: foreign-TP + B112 + B207",
+        "B: canUseTypeEngine + RELATION",
+        "B: post-relation walkers (~30)",
+        "B: TS2322 elaboration (408 ln)",
+        "B: tail (numeric literal + varTypes)",
+        "  of which getTypeOfExpression(init)",
+        "  of which getNarrowedTypeForReference",
+        "  of which the narrowing confirm relation",
+        "  of which getTypeFromTypeNode",
+        "  of which canUseTypeEngine",
+        "  of which checkTypeRelatedTo (the relation)",
+        "  of which narrow calls returning the INPUT",
+        "  A wrapper transition (probe-only)",
+        "  B wrapper transition (probe-only)",
+        "  probe boundary, first of the invocation",
+        "  probe boundary (in situ, steady state)",
+    )
+
+    /**
+     * [COARSE]'s active boundaries: the two entry anchors plus one interior
+     * anchor per level, so each level's partition still spans the same wall
+     * time while every other boundary costs a static read and a not-taken
+     * branch instead of a timestamp pair.
+     */
+    val coarseAnchor: BooleanArray = BooleanArray(N).also {
+        it[A_GATE] = true; it[A_VDECL] = true; it[A_ENTRY] = true
+        it[B_BINDPAT] = true; it[B_ENTRY] = true
+    }
+
+    var nanos: LongArray = LongArray(N)
+    var calls: LongArray = LongArray(N)
+
+    /** Level-A invocations (`ctaM3StmtAnchor`, nested ones excluded). */
+    var invocationsA: Long = 0
+    /** Level-B invocations (`checkVarDeclAssignability`). */
+    var invocationsB: Long = 0
+    /** Level-B invocations reached from level A rather than a legacy walker. */
+    var invocationsBFromA: Long = 0
+    /** Declarations visited by level A's `VariableStatement` loops. */
+    var declarations: Long = 0
+
+    /** Level-A invocations by statement kind: var / expr / return / if / property / other. */
+    var stmtKind: LongArray = LongArray(6)
+
+    /** Level-A invocations by mode: normal list arm / bareSurface / recordOnly. */
+    var anchorMode: LongArray = LongArray(3)
+
+    /** Level-B exits by the row they returned inside — the exit profile. */
+    var exitIn: LongArray = LongArray(N)
+
+    /** Cost distribution of level-B invocations: `[<10 us, <100 us, <1 ms, >=1 ms]`. */
+    var vdBucketCalls: LongArray = LongArray(4)
+    var vdBucketNanos: LongArray = LongArray(4)
+
+    /** Level A's running section and start timestamp; `-1` = none open. */
+    var curA: Int = -1
+    var curTA: Long = 0
+    var depthA: Int = 0
+
+    /** Level B's running section and start timestamp; `-1` = none open. */
+    var curB: Int = -1
+    var curTB: Long = 0
+    var depthB: Int = 0
+    var startB: Long = 0
+
+    fun reset() {
+        nanos = LongArray(N)
+        calls = LongArray(N)
+        invocationsA = 0; invocationsB = 0; invocationsBFromA = 0; declarations = 0
+        stmtKind = LongArray(6)
+        anchorMode = LongArray(3)
+        exitIn = LongArray(N)
+        vdBucketCalls = LongArray(4)
+        vdBucketNanos = LongArray(4)
+        curA = -1; curTA = 0; depthA = 0
+        curB = -1; curTB = 0; depthB = 0; startB = 0
+    }
+
+    // The entry points are `inline` so a production call is a static read plus a
+    // not-taken branch rather than a call, matching [ArgSections].
+
+    /** Open level A's partition for one invocation, starting at [A_ENTRY]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginA() {
+        if (mode == OFF) return
+        depthA++
+        if (depthA != 1) return
+        invocationsA++
+        curA = A_ENTRY
+        curTA = PassTiming.nowNanos()
+    }
+
+    /** Close level A's running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atA(sec: Int) {
+        if (mode == OFF || depthA != 1) return
+        if (mode == COARSE && !coarseAnchor[sec]) return
+        val now = PassTiming.nowNanos()
+        nanos[curA] += now - curTA
+        calls[curA]++
+        curA = sec
+        curTA = now
+    }
+
+    /** Close whatever level-A section is still open. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endA() {
+        if (mode == OFF) return
+        if (depthA == 1 && curA >= 0) {
+            nanos[curA] += PassTiming.nowNanos() - curTA
+            calls[curA]++
+            curA = -1
+        }
+        depthA--
+    }
+
+    /** Open level B's partition for one invocation, starting at [B_ENTRY]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginB() {
+        if (mode == OFF) return
+        depthB++
+        if (depthB != 1) return
+        invocationsB++
+        if (depthA == 1) invocationsBFromA++
+        curB = B_ENTRY
+        startB = PassTiming.nowNanos()
+        curTB = startB
+    }
+
+    /** Close level B's running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atB(sec: Int) {
+        if (mode == OFF || depthB != 1) return
+        if (mode == COARSE && !coarseAnchor[sec]) return
+        val now = PassTiming.nowNanos()
+        nanos[curB] += now - curTB
+        calls[curB]++
+        curB = sec
+        curTB = now
+    }
+
+    /**
+     * Close whatever level-B section is still open, recording WHICH row the
+     * invocation left in (the exit profile comes free, as in round 735) and
+     * bucketing the invocation's total cost.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endB() {
+        if (mode == OFF) return
+        if (depthB == 1 && curB >= 0) {
+            val now = PassTiming.nowNanos()
+            nanos[curB] += now - curTB
+            calls[curB]++
+            exitIn[curB]++
+            val d = now - startB
+            val b = if (d < 10_000L) 0 else if (d < 100_000L) 1 else if (d < 1_000_000L) 2 else 3
+            vdBucketCalls[b]++; vdBucketNanos[b] += d
+            curB = -1
+        }
+        depthB--
+    }
+
+    /** Start a NESTED sub-measure, or 0 when off. Never active under [COARSE]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
+
+    /** Close a NESTED sub-measure opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun close(sec: Int, t0: Long) {
+        if (mode != ON) return
+        nanos[sec] += PassTiming.nowNanos() - t0
+        calls[sec]++
+    }
+
+    /**
+     * Close one narrowing walk: charge it to [N_NARROW_CALL] and — when
+     * [changed] is false — to [N_NARROW_IDENTITY], the upper bound on any
+     * pre-test that could prove the walk unnecessary.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun closeNarrow(t0: Long, changed: Boolean) {
+        if (mode != ON) return
+        val d = PassTiming.nowNanos() - t0
+        nanos[N_NARROW_CALL] += d; calls[N_NARROW_CALL]++
+        if (!changed) { nanos[N_NARROW_IDENTITY] += d; calls[N_NARROW_IDENTITY]++ }
+    }
+
+    /** Count one declaration visited by a level-A `VariableStatement` loop. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun declaration() {
+        if (mode == OFF || depthA != 1) return
+        declarations++
+    }
+
+    /** Record the statement kind ([k]) and anchor mode ([m]) of a level-A invocation. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteAnchor(k: Int, m: Int) {
+        if (mode == OFF || depthA != 1) return
+        stmtKind[k]++
+        anchorMode[m]++
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (TYPE.2) intra-handler attribution: spineCtaM3StatementAnchor / checkVarDeclAssignability ==")
+        appendLine("mode: ${if (mode == COARSE) "COARSE (anchors only)" else "ON"}")
+        appendLine(
+            "level A invocations: $invocationsA (declarations $declarations)   " +
+                "level B invocations: $invocationsB (of which $invocationsBFromA from level A)"
+        )
+        appendLine(
+            "level A by statement kind: var=${stmtKind[0]} expr=${stmtKind[1]} return=${stmtKind[2]} " +
+                "if=${stmtKind[3]} property=${stmtKind[4]} other=${stmtKind[5]}"
+        )
+        appendLine(
+            "level A by mode: list=${anchorMode[0]} bare=${anchorMode[1]} recordOnly=${anchorMode[2]}"
+        )
+        val ovhCalls = calls[OVERHEAD]
+        val ovh = if (ovhCalls > 0) nanos[OVERHEAD] / ovhCalls else 0L
+        appendLine(
+            if (ovhCalls > 0) "probe boundary overhead: $ovh ns in situ (over $ovhCalls empty sections)"
+            else "probe boundary overhead: NOT measured in situ — rounds 734/735 found that " +
+                "construction over-reads by 3.6-4.4x; calibrate by an ON-vs-COARSE differential"
+        )
+        var partA = 0L; var rawA = 0L; var bA = 0L
+        for (s in A_GATE..A_RESTORE) { partA += nanos[s] - ovh * calls[s]; rawA += nanos[s]; bA += calls[s] }
+        var partB = 0L; var rawB = 0L; var bB = 0L
+        for (s in B_BINDPAT..B_TAIL) { partB += nanos[s] - ovh * calls[s]; rawB += nanos[s]; bB += calls[s] }
+        appendLine(
+            "level A partition: ${partA / 1_000_000} ms net, ${rawA / 1_000_000} ms raw over $bA boundaries"
+        )
+        appendLine(
+            "level B partition: ${partB / 1_000_000} ms net, ${rawB / 1_000_000} ms raw over $bB boundaries"
+        )
+        appendLine("-- sections (disjoint per level, source order; ms net of probe overhead) --")
+        for (s in 0 until N) {
+            val c = calls[s]
+            if (s == FIRST_NESTED) appendLine("-- nested sub-measures (INSIDE the rows above) --")
+            if (c == 0L) continue
+            val ns = nanos[s] - ovh * c
+            appendLine(
+                "  ${names[s].padEnd(42)} ${(ns / 1_000_000).toString().padStart(5)} ms net " +
+                    "(${(nanos[s] / 1_000_000).toString().padStart(5)} raw) reached ${
+                        c.toString().padStart(7)
+                    } = ${if (c > 0) ns / c else 0} ns each" +
+                    if (s in B_BINDPAT..B_TAIL && exitIn[s] > 0) ", exitedIn=${exitIn[s]}" else ""
+            )
+        }
+        appendLine("-- checkVarDeclAssignability invocation cost distribution --")
+        val labels = arrayOf("< 10 us", "10-100 us", "0.1-1 ms", ">= 1 ms")
+        for (b in 0 until 4) {
+            appendLine(
+                "  ${labels[b].padEnd(12)} ${vdBucketCalls[b].toString().padStart(7)} invocations, " +
+                    "${(vdBucketNanos[b] / 1_000_000).toString().padStart(5)} ms"
+            )
+        }
+    }
+
+    /** Machine-readable dump: one line per section. */
+    fun csv(): String = buildString {
+        appendLine("section,reached,nanos,exitedIn")
+        for (s in 0 until N) {
+            if (calls[s] == 0L) continue
+            appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]},${exitIn[s]}")
+        }
+    }
+}

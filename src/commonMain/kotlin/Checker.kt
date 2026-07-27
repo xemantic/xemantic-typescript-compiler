@@ -2554,7 +2554,41 @@ class Checker(
     }
 
 
+    /**
+     * (TYPE.2)(a): the [CtaSections] level-A wrapper. The production path
+     * branches once on a static read and calls the core; the probe path opens
+     * the partition and closes it from a `finally`, so it survives every early
+     * exit inside the core.
+     */
     private fun ctaM3StmtAnchor(stmt: Node, scopeStatements: List<Statement>, recordOnly: Boolean = false, bareSurface: Boolean = false) {
+        if (CtaSections.mode == CtaSections.OFF) {
+            ctaM3StmtAnchorCore(stmt, scopeStatements, recordOnly, bareSurface)
+            return
+        }
+        // The statement handler already opened the partition; the PROPERTY anchor
+        // (a different spine handler) has not, so open one for it here.
+        val ctaOwnPartition = CtaSections.depthA == 0
+        if (ctaOwnPartition) CtaSections.beginA()
+        CtaSections.noteAnchor(
+            when (stmt) {
+                is VariableStatement -> 0
+                is ExpressionStatement -> 1
+                is ReturnStatement -> 2
+                is IfStatement -> 3
+                is PropertyDeclaration -> 4
+                else -> 5
+            },
+            if (recordOnly) 2 else if (bareSurface) 1 else 0,
+        )
+        try {
+            ctaM3StmtAnchorCore(stmt, scopeStatements, recordOnly, bareSurface)
+        } finally {
+            if (ctaOwnPartition) CtaSections.endA()
+        }
+    }
+
+    private fun ctaM3StmtAnchorCore(stmt: Node, scopeStatements: List<Statement>, recordOnly: Boolean, bareSurface: Boolean) {
+        CtaSections.atA(CtaSections.A_SETUP)
         val frame = ctaFrames.last()
         // (cta-m3e): recordOnly reproduces the legacy NESTED dispatch's map
         // evolution for a non-anchored VariableStatement — the map writes are
@@ -2604,15 +2638,21 @@ class Checker(
             inferenceNamespaceStack.addLast(s)
             nsPushed++
         }
+        CtaSections.atA(CtaSections.A_DISPATCH)
         try {
             withCtaFrameLocals(frame) {
                 if (recordOnly) {
                     if (stmt is VariableStatement) {
                         for (decl in stmt.declarationList.declarations) {
+                            CtaSections.declaration()
+                            CtaSections.atA(CtaSections.A_VDECL)
                             checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            CtaSections.atA(CtaSections.A_DISPATCH)
                             val init = decl.initializer
                             if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                                CtaSections.atA(CtaSections.A_ASSIGN)
                                 checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             }
                         }
                     }
@@ -2636,7 +2676,9 @@ class Checker(
                                 currentTypeParamDecls = merged
                             }
                             try {
+                                CtaSections.atA(CtaSections.A_PROPINIT)
                                 checkPropertyInitAssignability(pn, ann, init, spineSource, spineFileName, collectTypeParamNames(cls.typeParameters))
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             } finally {
                                 currentClassForThis = sThis2
                                 currentTypeParamDecls = sDecls2
@@ -2647,7 +2689,9 @@ class Checker(
                     // (cta-m3j): the B417 flow-aware TS2367 at the if-CONDITION —
                     // the IDENTICAL emission in both legacy dispatchers' arms
                     // (the then/else dispatches are recursion, owned elsewhere).
+                    CtaSections.atA(CtaSections.A_IFCOND)
                     checkFlowNoOverlapCondition(stmt.expression, spineSource, spineFileName)
+                    CtaSections.atA(CtaSections.A_DISPATCH)
                 } else if (bareSurface) {
                     // (cta-m3h1): BARE statement positions (if-then/else, loop
                     // bodies, labeled) run the checkTypeAssignabilityInStmt arm
@@ -2658,19 +2702,28 @@ class Checker(
                     when (stmt) {
                         is VariableStatement -> {
                             for (decl in stmt.declarationList.declarations) {
+                                CtaSections.declaration()
+                                CtaSections.atA(CtaSections.A_VDECL)
                                 checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                                 val init = decl.initializer
                                 if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                                    CtaSections.atA(CtaSections.A_ASSIGN)
                                     checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                    CtaSections.atA(CtaSections.A_DISPATCH)
                                 }
                             }
                         }
                         is ExpressionStatement -> {
+                            CtaSections.atA(CtaSections.A_ASSIGN)
                             checkAssignmentExpression(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            CtaSections.atA(CtaSections.A_DISPATCH)
                         }
                         is ReturnStatement -> {
                             if (frame.returnType != null || frame.returnTypeNode != null) {
+                                CtaSections.atA(CtaSections.A_RETURN)
                                 checkReturnAssignability(stmt, frame.returnType ?: "", spineSource, spineFileName, frame.varTypes, frame.typeParams, frame.returnTypeNode)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             }
                         }
                         else -> {}
@@ -2678,31 +2731,47 @@ class Checker(
                 } else when (stmt) {
                     is VariableStatement -> {
                         for (decl in stmt.declarationList.declarations) {
+                            CtaSections.declaration()
                             if (stmt.declarationList.flags == SyntaxKind.ConstKeyword) {
+                                CtaSections.atA(CtaSections.A_CONSTNARROW)
                                 registerConstLiteralUnionNarrowing(decl)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             }
+                            CtaSections.atA(CtaSections.A_VDECL)
                             checkVarDeclAssignability(decl, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                            CtaSections.atA(CtaSections.A_DISPATCH)
                             decl.initializer?.let {
+                                CtaSections.atA(CtaSections.A_WALKFN)
                                 val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
                                 walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             }
                             val init = decl.initializer
                             if (init is BinaryExpression && init.operator == SyntaxKind.Equals) {
+                                CtaSections.atA(CtaSections.A_ASSIGN)
                                 checkAssignmentExpression(init, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             }
                         }
                     }
                     is ExpressionStatement -> {
+                        CtaSections.atA(CtaSections.A_ASSIGN)
                         checkAssignmentExpression(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                        CtaSections.atA(CtaSections.A_WALKFN)
                         walkFunctionBodiesInExpr(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                        CtaSections.atA(CtaSections.A_DISPATCH)
                     }
                     is ReturnStatement -> {
                         if (frame.returnType != null || frame.returnTypeNode != null) {
+                            CtaSections.atA(CtaSections.A_RETURN)
                             checkReturnAssignability(stmt, frame.returnType ?: "", spineSource, spineFileName, frame.varTypes, frame.typeParams, frame.returnTypeNode)
+                            CtaSections.atA(CtaSections.A_DISPATCH)
                         }
                         stmt.expression?.let { retExpr ->
                             if (retExpr is BinaryExpression && retExpr.operator == SyntaxKind.Equals) {
+                                CtaSections.atA(CtaSections.A_ASSIGN)
                                 checkAssignmentExpression(retExpr, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                CtaSections.atA(CtaSections.A_DISPATCH)
                             }
                         }
                     }
@@ -2710,6 +2779,7 @@ class Checker(
                 }
             }
         } finally {
+            CtaSections.atA(CtaSections.A_RESTORE)
             ctaM3RecordOnlySuppress = sRecSuppress
             if (recordMark >= 0) {
                 while (diagnostics.size > recordMark) diagnostics.removeAt(diagnostics.size - 1)
@@ -2724,6 +2794,7 @@ class Checker(
             inGeneratorFunctionBody = sGen
             currentTypeParamDecls = sTpDecls
             currentTypeParamScope = sTpScope
+            CtaSections.atA(CtaSections.A_GATE)
         }
     }
 
@@ -22497,7 +22568,27 @@ class Checker(
 
     /** (cta-m3d/m3e/m3h1): the statement-position cta anchors + the
      *  non-anchored VariableStatement's recording-only dispatch. */
+    /**
+     * (TYPE.2)(a): the [CtaSections] level-A wrapper. It sits on the HANDLER, not
+     * on `ctaM3StmtAnchor`, so the eligibility decision and its parent-chain
+     * climbs — paid at every reached node, anchoring or not — are a partition row
+     * ([CtaSections.A_GATE]) rather than an unmeasured remainder.
+     */
     private fun spineCtaM3StatementAnchor(node: Node) {
+        if (CtaSections.mode == CtaSections.OFF) {
+            spineCtaM3StatementAnchorCore(node)
+            return
+        }
+        CtaSections.beginA()
+        CtaSections.atA(CtaSections.A_GATE)
+        try {
+            spineCtaM3StatementAnchorCore(node)
+        } finally {
+            CtaSections.endA()
+        }
+    }
+
+    private fun spineCtaM3StatementAnchorCore(node: Node) {
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement || node is IfStatement) && !spineIsDts) {
             val p = (node as NodeBase).parent
             val anchored = when (p) {
@@ -94438,10 +94529,33 @@ interface DataView {
         }
     }
 
+    /**
+     * (TYPE.2)(a): the [CtaSections] level-B wrapper. Production branches once
+     * on a static read; the probe path opens the partition and closes it from a
+     * `finally`, so it survives the ~40 early `return`s inside the core and the
+     * row the invocation left in becomes the exit profile.
+     */
     private fun checkVarDeclAssignability(
         decl: VariableDeclaration, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
     ) {
+        if (CtaSections.mode == CtaSections.OFF) {
+            checkVarDeclAssignabilityCore(decl, source, fileName, varTypes, typeParams)
+            return
+        }
+        CtaSections.beginB()
+        try {
+            checkVarDeclAssignabilityCore(decl, source, fileName, varTypes, typeParams)
+        } finally {
+            CtaSections.endB()
+        }
+    }
+
+    private fun checkVarDeclAssignabilityCore(
+        decl: VariableDeclaration, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, typeParams: Set<String>
+    ) {
+        CtaSections.atB(CtaSections.B_BINDPAT)
         val name = decl.name
         if (name is ObjectBindingPattern) {
             checkDestructuringFromNullableUnion(name, decl.initializer, source, fileName)
@@ -94465,6 +94579,7 @@ interface DataView {
             recordDestructuredConstElementTypes(name, decl.initializer)
         }
         if (name !is Identifier) return
+        CtaSections.atB(CtaSections.B_PRO1)
 
         // varianceMeasurement: own `const v: G<tgt> = ident` for a directly-self-recursive
         // generic G (variance-aware assignability; suppresses the standard covariant-shortcut path).
@@ -94509,6 +94624,7 @@ interface DataView {
         if (tryEmitTypeofIndexSigNarrowing(decl, source, fileName)) return
 
         // B482: nested weak-type mismatch (`let weak: Weak & Spoiler = propertiesWrong`).
+        CtaSections.atB(CtaSections.B_WEAK)
         if (tryEmitNestedWeakVarDecl(decl, name, source, fileName)) return
         // B482: deep object-literal-leaf weak mismatch (`{ variables: { overrides: false } }`).
         if (tryEmitObjectLiteralWeakLeaves(decl, source, fileName)) return
@@ -94523,6 +94639,7 @@ interface DataView {
         // — tsc elaborates INTO the literal and reports the property-level leaf at the
         // property NAME with no outer chain and no TS6500 (`{valueOf: 1}` →
         // "Type 'number' is not assignable to type '() => Object'." at `valueOf`).
+        CtaSections.atB(CtaSections.B_PRO2)
         run {
             val init = decl.initializer
             val ann = decl.type
@@ -94607,6 +94724,7 @@ interface DataView {
         // return annotation and a return-free body resolves to `void`, which is never
         // assignable to a primitive var annotation. This is the one shape `thisWhenType-
         // CheckFails` needs; broad `this` typing FP'd the return-assignability path.
+        CtaSections.atB(CtaSections.B_PRO3)
         if (tryEmitVoidThisMethodToPrimitiveVar(decl, name, source, fileName)) return
 
         // B206: `let p: I = nsImport.m()` where the ambient module's `export =` const
@@ -94697,6 +94815,7 @@ interface DataView {
         // in currentLocalTypes so downstream references can resolve it.
         // Do NOT change getTypeOfVariableOrProperty (causes TS2403 FPs).
         val typeAnnotation = decl.type
+        CtaSections.atB(CtaSections.B_UNANNOT)
         if (typeAnnotation == null) {
             val init = decl.initializer ?: return
             val inferred = getTypeOfExpression(init)
@@ -94738,6 +94857,7 @@ interface DataView {
         // B250: intersections of bare names encode as "&A & B" — consumed ONLY by the
         // intersection-vs-bare-TP assignment pre-check; permissive-neutral elsewhere
         // (isAssignableTo's top gate treats any "&"-string as unknown → assignable).
+        CtaSections.atB(CtaSections.B_RECORD)
         val declaredTypeStr = resolveSimpleTypeName(typeAnnotation)
             ?: intersectionTypeNameForVarTypes(typeAnnotation)
         // Round 460: skip the block-UNAWARE string map too for ambiguous names (absent
@@ -94769,6 +94889,7 @@ interface DataView {
         }
 
         val init = decl.initializer ?: return
+        CtaSections.atB(CtaSections.B_NUIA)
 
         // B201: noUncheckedIndexedAccess — an INDEX-SIGNATURE element access used to
         // initialize a primitive-annotated const gets `| undefined` injected; a DECLARED
@@ -94811,6 +94932,7 @@ interface DataView {
         // commonly used as a "trust me" cast under strictNullChecks. The non-null
         // assertion makes the value satisfy any target type. Skip the assignability
         // check for this exact shape.
+        CtaSections.atB(CtaSections.B_PRE2)
         if (init is NonNullExpression) {
             val inner = init.expression
             val isNullishLit = (inner is Identifier && (inner.text == "null" || inner.text == "undefined"))
@@ -94891,7 +95013,11 @@ interface DataView {
         }
 
         // Use the Type-based engine (Phase 4) for clear-cut cases
+        CtaSections.atB(CtaSections.B_TARGET)
+        val ctaT0 = CtaSections.t()
         val targetType = getTypeFromTypeNode(typeAnnotation)
+        CtaSections.close(CtaSections.N_TYPE_NODE, ctaT0)
+        CtaSections.atB(CtaSections.B_NESTED)
         // B590 (assignmentToObjectAndFunction): a clodule (function + same-named
         // namespace merge) assigned to a `Function`-typed var, where the namespace
         // exports a NON-function value member named apply/call/bind, is not assignable
@@ -95013,6 +95139,7 @@ interface DataView {
             }
         }
         // Set contextual type for function expression parameter inference
+        CtaSections.atB(CtaSections.B_SRCTYPE)
         val savedContextual = contextualType
         if (targetType is Type.Object && (init is ArrowFunction || init is FunctionExpression)) {
             contextualType = targetType
@@ -95025,9 +95152,17 @@ interface DataView {
         // bidirectional contextual-typing rule and produces the correct source
         // display for TS2322 (`Type '"z"'` vs `Type 'string'`).
         val rawSourceTypeRaw = if (propTypeContainsLiteral(targetType)) {
-            literalTypeOfExpression(init, isArrayLikeReference(targetType)) ?: getTypeOfExpression(init)
+            literalTypeOfExpression(init, isArrayLikeReference(targetType)) ?: run {
+                val t0 = CtaSections.t()
+                val r = getTypeOfExpression(init)
+                CtaSections.close(CtaSections.N_GET_TYPE_OF_EXPR, t0)
+                r
+            }
         } else {
-            getTypeOfExpression(init)
+            val t0 = CtaSections.t()
+            val r = getTypeOfExpression(init)
+            CtaSections.close(CtaSections.N_GET_TYPE_OF_EXPR, t0)
+            r
         }
         contextualType = savedContextual
         // 17.43: contextual literal preservation — when init is a generic
@@ -95052,17 +95187,28 @@ interface DataView {
         // `let expression: PropertyAccessExpression | Identifier | ThisExpression
         // = initialExpression;` after an `if (isJsxNamespacedName(initialExpression))
         // return` guard removed the JsxNamespacedName member.
+        CtaSections.atB(CtaSections.B_NARROW)
         val sourceType = if (init is Identifier || init is PropertyAccessExpression) {
             if (isNarrowableTarget(targetType)) {
-                getNarrowedTypeForReference(rawSourceType, init)
+                val t0 = CtaSections.t()
+                val r = getNarrowedTypeForReference(rawSourceType, init)
+                CtaSections.closeNarrow(t0, r !== rawSourceType)
+                r
             } else if (targetType is Type.Interface || targetType is Type.Reference ||
                 targetType is Type.Union || targetType is Type.Intersection) {
+                val t0 = CtaSections.t()
                 val narrowed = getNarrowedTypeForReference(rawSourceType, init)
-                if (narrowed !== rawSourceType &&
-                    checkTypeRelatedTo(narrowed, targetType, assignableRelation)) narrowed
+                CtaSections.closeNarrow(t0, narrowed !== rawSourceType)
+                if (narrowed !== rawSourceType && run {
+                        val t1 = CtaSections.t()
+                        val ok = checkTypeRelatedTo(narrowed, targetType, assignableRelation)
+                        CtaSections.close(CtaSections.N_NARROW_REL, t1)
+                        ok
+                    }) narrowed
                 else rawSourceType
             } else rawSourceType
         } else rawSourceType
+        CtaSections.atB(CtaSections.B_MID)
         // round 431e: same foreign-TP rule as checkReturnAssignability's gate — an
         // un-inferred generic call initializer (`const p: () => Printer =
         // memoize(() => …)` typing as `() => T`) must not be relation-checked;
@@ -95144,6 +95290,7 @@ interface DataView {
             ))
             return
         }
+        CtaSections.atB(CtaSections.B_RELATION)
         lastMissingPropertyName = null // reset before comparison
         lastMissingIndexSigKind = null // reset before comparison (17.74)
         // 17.31f: bypass `canUseTypeEngine`'s nullish-Union gate when the init is a
@@ -95152,16 +95299,24 @@ interface DataView {
         // engine's strictNullChecks-aware nullish→primitive rejection is appropriate.
         // PropertyAccess/Identifier sources still take the gated path so missing
         // narrowing on `obj.prop` doesn't FP under the same shape.
+        val ctaC0 = CtaSections.t()
         val canUseRaw = canUseTypeEngine(sourceType, targetType)
+        CtaSections.close(CtaSections.N_CANUSE, ctaC0)
         val callBypass = !canUseRaw && init is CallExpression && sourceType is Type.Union &&
             strictNullChecks &&
             (targetType is Type.Intrinsic || targetType is Type.StringLiteral ||
                 targetType is Type.NumberLiteral || targetType is Type.BigIntLiteral)
         val canUse = canUseRaw || callBypass
         val isAssignable = canUse && (bareNewMatchesTarget(init, targetType) ||
-            withFreshObjLitSource(init) {
-                checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+            run {
+                val t0 = CtaSections.t()
+                val r = withFreshObjLitSource(init) {
+                    checkTypeRelatedTo(sourceType, targetType, assignableRelation)
+                }
+                CtaSections.close(CtaSections.N_REL_CALL, t0)
+                r
             })
+        CtaSections.atB(CtaSections.B_POST)
         // B103: the relation engine ignores optional-vs-required presence, so it can
         // wrongly report `{ x?: T }`-shaped source as assignable to `{ x: T }`. When the
         // comparison otherwise PASSES but a target REQUIRED property's source counterpart
@@ -95458,6 +95613,7 @@ interface DataView {
         // B395: a nested object-literal value missing required props already emitted the
         // precise per-key TS2741 (with TS6500) — suppress the coarse whole-init TS2322
         // chain that would otherwise double-report the same `something.a.b.thing` failure.
+        CtaSections.atB(CtaSections.B_ELAB)
         if (canUse && !isAssignable && !nestedMissingEmitted) {
             // Round 468b/513 (Blocker #3 residue): the annotation names an
             // AUGMENTATION-extended interface — check against the MERGED member table
@@ -95867,6 +96023,7 @@ interface DataView {
             } // end else (not missing property)
             return // Type engine handled it — skip old system
         }
+        CtaSections.atB(CtaSections.B_TAIL)
         // tryCatchFinallyControlFlow: skip the legacy varTypes widening fallback below
         // (inferSimpleExprType: `0`→"number") when the type engine already CONFIRMED a
         // literal initializer is assignable to a literal-union annotation

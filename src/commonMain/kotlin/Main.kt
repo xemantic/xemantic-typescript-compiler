@@ -111,6 +111,16 @@ fun main(args: Array<String>) {
             "--narrowSectionsCoarse", "--narrowsectionscoarse" -> {
                 NarrowSections.reset(); NarrowSections.mode = NarrowSections.COARSE
             }
+            // (TYPE.2)(a): the opt-in attribution INSIDE spineCtaM3StatementAnchor
+            // (level A, by callee) and checkVarDeclAssignability (level B, by
+            // section). `Coarse` keeps only the per-level anchors, so an
+            // ON-vs-COARSE pair prices the probe boundary differentially.
+            "--ctaSections", "--ctasections" -> {
+                CtaSections.reset(); CtaSections.mode = CtaSections.ON
+            }
+            "--ctaSectionsCoarse", "--ctasectionscoarse" -> {
+                CtaSections.reset(); CtaSections.mode = CtaSections.COARSE
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -187,6 +197,13 @@ fun main(args: Array<String>) {
         print(NarrowSections.csv())
         println("== (CALL.3) csv end ==")
         NarrowSections.mode = NarrowSections.OFF
+    }
+    if (CtaSections.mode != CtaSections.OFF) {
+        println(CtaSections.report())
+        println("== (TYPE.2) csv ==")
+        print(CtaSections.csv())
+        println("== (TYPE.2) csv end ==")
+        CtaSections.mode = CtaSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -323,6 +340,8 @@ private fun printUsage() {
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
           --narrowSections   (CALL.3) intra-walk attribution of narrowTypeFromFlow (arrivals vs distinct)
           --narrowSectionsCoarse  the same, whole-walk anchor only — the calibration counterpart
+          --ctaSections      (TYPE.2) attribution of spineCtaM3StatementAnchor + checkVarDeclAssignability
+          --ctaSectionsCoarse  the same, per-level anchors only — the differential calibration counterpart
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)

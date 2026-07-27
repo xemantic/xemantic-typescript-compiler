@@ -116,6 +116,28 @@
 > (431 ms of typing over 11,933 initializers inside a 2,900 ms handler that no
 > round has opened). Full derivation:
 > `docs/perf/type-of-expression-attribution.md`.
+> **ROUND-738 RESOLUTION — BOTH PRIORS FALSE, AND THE GATE COST IS NOW MEASURED
+> ON A REAL HANDLER.** Inside `checkVarDeclAssignability`, **flow narrowing is
+> 1 ms of 872 ms (0.11%)** and the **assignability relation 13 ms (1.5%)** —
+> round 735 found the same relation prior wrong by 48× one function over, and it
+> is now falsified in BOTH of the compiler's largest assignability sites. What is
+> there instead: **12,960 of 15,116 invocations (86%) never reach an
+> assignability check** — they are UNANNOTATED declarations whose whole job is
+> `getTypeOfExpression(init)` plus a map write, **405 ms = 46% of the function** —
+> so the function is two populations sharing a name, 12,960 at **34 µs** and
+> 1,881 at **227 µs** (round 737's 36 µs was their mean). **The handler is
+> 2,363 ms and 85% of it is four callees' own checking work**
+> (`checkVarDeclAssignability` 891, `checkReturnAssignability` 615,
+> `checkAssignmentExpression` 318, `walkFunctionBodiesInExpr` 181). Level A was
+> opened on the HANDLER, so the eligibility decision and its parent-chain climbs
+> are a ROW: **194 ms over all 856,976 nodes = 212 ns each**, plus 158 ms of
+> ambient scaffolding — **together 1.2% of the compile**, the per-handler shape
+> of round 732's own correction to (DISPATCH.1). Nothing landed: the one
+> candidate (hoist the unannotated branch above the ~18-walker prologue) is worth
+> **≈0** because every prologue walker already bails on `decl.type ?: return
+> false`. What the prologue DOES show is a price for the "endgame" paragraph
+> below: **265 ms of FP-firewall walkers against the 19 ms relation they exist to
+> correct, 14×.** Full derivation: `docs/perf/var-decl-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope

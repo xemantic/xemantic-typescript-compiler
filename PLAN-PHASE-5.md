@@ -20,6 +20,66 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 738 (2026-07-27) — (TYPE.2) DONE, PART 1. BOTH OF THE ITEM'S PRIORS ARE FALSE,
+THE SECOND BY 65x, AND `checkVarDeclAssignability` IS NOT WHAT ITS NAME SAYS.** The item
+asked whether the 36 us per initializer is mostly FLOW NARROWING (prior i) and whether the
+~2,470 ms outside the typing is the ASSIGNABILITY RELATION (prior ii). Measured inside the
+function with a new two-level partition (`CtaSections`, `--ctaSections{,Coarse}`):
+**narrowing is 1 ms of 872 ms (0.11%)** and **`checkTypeRelatedTo` is 13 ms (1.5%)**.
+Round 735 found the SAME relation prior wrong by 48x one function over; it is now falsified
+in BOTH of the compiler's largest assignability sites, so "an assignability check's cost is
+the relation" should not be proposed a third time without measuring.
+
+**WHAT IS ACTUALLY THERE — the exit profile decided it.** Of 15,116 invocations, **12,960
+(85.7%) leave in the UNANNOTATED-initializer branch**: no annotation, nothing to check, the
+work is `getTypeOfExpression(init)` plus a widening and a map write — **405 ms = 46% of the
+function**. Only **797 (5.3%)** reach the target-type computation at all. So there are two
+populations sharing a name: **12,960 unannotated declarations at 34 us each and 1,881
+annotated ones at 227 us each** — round 737's 36 us was their mean.
+
+**THE HANDLER, and the round's second-most-useful number.** Level A was deliberately opened
+on `spineCtaM3StatementAnchor` itself rather than on `ctaM3StmtAnchor`, so the ELIGIBILITY
+decision (kind test, parent test, the `ctaM3NestedChainOk`/`ctaM3FnBodyAnchorScope`/
+`ctaM3NearestList` parent-chain climbs) is a partition ROW instead of an unexplained
+remainder that would have invited "it must be the dispatch machinery". **The handler is
+2,363 ms; the gate over ALL 856,976 nodes is 194 ms (212 ns/node) and the whole ambient
+install/restore/dispatch scaffolding is 158 ms — together 1.2% of the compile.** The other
+85% is four callees' own checking: `checkVarDeclAssignability` 891, `checkReturnAssignability`
+615, `checkAssignmentExpression` 318, `walkFunctionBodiesInExpr` 181. Round 733's rule, third
+confirmation: a handler's nanos are its WORK, never its scaffolding.
+
+**NOTHING LANDED, correctly.** The one candidate the attribution surfaced — hoist the
+unannotated branch above the ~18-walker prologue (265 ms) — is worth **~0**: every prologue
+walker's first or second line is `decl.type ?: return false`, so the 12,960 unannotated decls
+already pay one field read. The 265 ms is spent on the 1,881 ANNOTATED decls at 141 us each,
+and it is **14x the 19 ms relation it exists to correct** — the first price tag on section
+0.1's "endgame" paragraph. An estimate of "265 ms x 86%" would have been wrong for exactly
+the reason section 0's law keeps producing: the population that looked skippable was already
+the cheap one.
+
+**PREDICTION SCORED (stated in full before the run): P1 HELD** (narrowing <=25%; really
+0.11%), **P2 HELD** (relation <=10%; really 1.5%), **P3 FALSIFIED** (A_VDECL largest but
+<50% AND walkFunctionBodiesInExpr >=15% — the first clause held at 37.7%, the second failed
+at 7.7%), **P4 HELD** (level-A partition 2,000-3,000 ms; really 2,363). Three of four, against
+two of four in each of rounds 732-737.
+
+**METHOD, and one honest admission.** Level B's ON-vs-COARSE differential works: +11 ms over
+84,737 extra boundaries = **130 ns each**, same order as rounds 734/735's independently-derived
+86-89 ns, bounding level-B inflation at 1.3%. **Level A's differential does NOT work** — its
+delta is -102 ms over +334,104 boundaries, i.e. NEGATIVE and entirely swamped by drift (the two
+runs' walls differ by 1,490 ms on a +-13% box). Level A's inflation is therefore COMPUTED from
+the established per-read cost (1,264,382 x 89 ns = ~113 ms of 2,363 ms = 4.8%), not measured,
+and every millisecond is relative attribution. The in-situ empty-span calibration was
+deliberately NOT taken: it over-read by 3.6x and 4.4x in consecutive rounds and re-deriving a
+known-wrong number is not evidence.
+
+Also recorded: the level-B cost distribution has round 735's shape again — **71 invocations
+(0.47%) carry 406 ms (47%) at 5.7 ms each**; which population they belong to was not recorded
+and is this round's one loose end (in-band either way at 1.4%). Suite 12,916 -> **12,923 / 0 / 3**
+(+7 `CtaSectionProbeTest` pins); `--listAll` byte-identical in production, ON and COARSE
+(46 errors); cost gate **all 20 counters +0.00%**. Full derivation:
+**`docs/perf/var-decl-attribution.md`**.
+
 **Round 737 (2026-07-27) — (TYPE.1) DONE. ARCHITECTURE-RETHINK section 0.1 STAGE 3 IS
 STRUCK: its MECHANISM is exactly right and its SIZE is wrong by 3.2x.** The 701,463
 `getTypeOfExpression` calls were attributed BY CALLER for the first time
@@ -1738,8 +1798,35 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   byte-identical, cost gate all 20 counters +0.00%. Full derivation:
   **`docs/perf/type-of-expression-attribution.md`**. Follow-on: **(TYPE.2)**.
 
-- [ ] **(TYPE.2) Attribute inside `checkVarDeclAssignability` /
-  `spineCtaM3StatementAnchor` — the third-largest spine handler, 2,900 ms, and
+- [x] **(TYPE.2) Attribute inside `checkVarDeclAssignability` /
+  `spineCtaM3StatementAnchor` — DONE round 738. BOTH PRIORS FALSE; the second
+  by 65x, and the function is not what its name says.** Measured inside:
+  **flow narrowing is 1 ms of 872 ms (0.11%)** and the **relation 13 ms
+  (1.5%)** — prior (i) wrong by ~200x, prior (ii) by ~65x (round 735 found the
+  SAME relation prior wrong by 48x one function over; it is now falsified in
+  BOTH of the compiler's largest assignability sites). What is actually there:
+  **12,960 of 15,116 invocations (86%) never reach an assignability check** —
+  they are UNANNOTATED declarations that only type an initializer and record it,
+  **405 ms = 46% of the function**. Two populations: 12,960 unannotated at
+  **34 us** each, 1,881 annotated at **227 us** each (round 737's 36 us was
+  their mean). **The handler is 2,363 ms and 85% of it is four callees' own
+  work** (`checkVarDeclAssignability` 891, `checkReturnAssignability` 615,
+  `checkAssignmentExpression` 318, `walkFunctionBodiesInExpr` 181); the
+  eligibility gate + parent climbs over ALL 856,976 nodes are **194 ms
+  (212 ns/node)** and the ambient scaffolding 158 ms — together 1.2% of the
+  compile. **NOTHING LANDED**: the only candidate lever (hoist the unannotated
+  branch above the ~18-walker prologue) is worth **~0**, because every prologue
+  walker already bails on `decl.type ?: return false`; the prologue's 265 ms is
+  spent on the 1,881 ANNOTATED decls and is **14x the relation it exists to
+  correct** — the first price tag on section 0.1's "endgame" paragraph. LANDED:
+  `CtaSections` + `--ctaSections{,Coarse}` (opt-in, behaviour-free when off;
+  level A opens on the HANDLER so the eligibility gate is a ROW, not an
+  unmeasured remainder) and `CtaSectionProbeTest`. Suite **12,923 / 0 / 3**,
+  `--listAll` byte-identical in all three modes, cost gate all 20 counters
+  +0.00%. Full derivation: **`docs/perf/var-decl-attribution.md`**. The original
+  item text follows.
+
+  ORIGINAL: **the third-largest spine handler, 2,900 ms, and
   no round has opened it (pointed at by round 737's by-caller table).**
   `checkVarDeclAssignability:29166` under `ctaM3StmtAnchor` is the **largest
   single expression-typing origin in the compiler**: 33,653 calls, 11,933
@@ -1758,7 +1845,7 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   RELATION — round 735 found that term to be 1.2% on the argument path, i.e.
   the same prior was wrong by 48× one function over. Gate: corpus suite +
   `--listAll` + `cost_gate.py` + `ab-interleaved.sh` medians AND win rate if
-  anything lands.
+  anything lands.**
 
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is
