@@ -30,7 +30,8 @@ import kotlin.test.Test
 
 /**
  * M2.1(a) (round 390): [RealLibFiles] ships the real TypeScript lib `.d.ts`
- * sources (the non-DOM ES set) as generated Kotlin. The generator chunks every
+ * sources as generated Kotlin — since (LIB.1)(b) (round 731) the WHOLE `src/lib`
+ * set, DOM / webworker / scripthost included. The generator chunks every
  * file into string literals of ≤ 60,000 modified-UTF-8 value bytes (a JVM
  * class-file string constant caps at 65,535) and reassembles them at runtime —
  * these tests pin the reassembly invariant beyond "it compiles": the multi-chunk
@@ -39,21 +40,48 @@ import kotlin.test.Test
 class RealLibFilesTest {
 
     @Test
-    fun `ships the full non-DOM lib set keyed by bare lib names`() {
+    fun `ships the full lib set including the host libs keyed by bare lib names`() {
         val files = RealLibFiles.files
-        // 100 files at the current pin; assert a floor so a pin bump doesn't
+        // 108 files at the current pin; assert a floor so a pin bump doesn't
         // spuriously fail, plus exact membership of the load-bearing entries.
-        assert(files.size >= 90)
+        assert(files.size >= 100)
         for (key in listOf(
             "es5", "es2015", "es2015.core", "es2015.iterable", "es2015.symbol.wellknown",
             "es2020.bigint", "es2024.collection", "esnext", "decorators", "decorators.legacy",
+            // (LIB.1)(b): the host set. `dom.generated` is the SOURCE name of what tsc
+            // distributes as `lib.dom.d.ts`.
+            "dom.generated", "dom.iterable.generated", "dom.asynciterable.generated",
+            "webworker.generated", "webworker.importscripts", "scripthost",
         )) {
             assert(key in files)
         }
-        // Keys are bare lib names — no extension, no DOM/host libs.
+        // Keys are bare lib names — no extension.
         assert(files.keys.none { it.endsWith(".d.ts") })
-        assert(files.keys.none { it.startsWith("dom") || it.startsWith("webworker") || it.startsWith("scripthost") })
         assert(files.values.none { it.isBlank() })
+    }
+
+    @Test
+    fun `the DOM lib reassembles across its forty chunks`() {
+        // dom.generated.d.ts is 2.35 MB — by far the largest lib file and 39 chunks
+        // past the single-constant cap, so a correct value here is the strongest
+        // reassembly evidence in the suite.
+        val dom = RealLibFiles.files.getValue("dom.generated")
+        assert(dom.length > 2_000_000)
+        // First chunk: the file opens with its lib-reference directives.
+        assert(dom.startsWith("/// <reference lib=\"es2015\" />\n"))
+        // Middle chunks: declarations far past the first 60 KB.
+        assert("interface Document extends Node" in dom)
+        assert("interface HTMLElement extends Element" in dom)
+        // Last chunk: the global value declarations live at the very end of the file.
+        assert("declare var document: Document;" in dom)
+        // Line endings are byte-faithful in BOTH directions, which is the sharper claim:
+        // es5.d.ts is CRLF (pinned above) while dom.generated.d.ts is LF-only, so a
+        // generator that normalised either way would fail one of the two cases.
+        // Counted in a loop, NOT via `windowed(2)` the way the es5 case does it — at
+        // 2.35 MB that allocates 2.35 million two-char strings.
+        var carriageReturns = 0
+        for (c in dom) if (c == '\r') carriageReturns++
+        assert(carriageReturns == 0)
     }
 
     @Test

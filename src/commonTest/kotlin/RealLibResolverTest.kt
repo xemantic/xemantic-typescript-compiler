@@ -62,18 +62,50 @@ class RealLibResolverTest {
     }
 
     @Test
-    fun `target default without lib option uses the full variant and skips unshipped DOM libs`() {
-        // lib.d.ts (= es5.full) has priority 0 -> first; its DOM/host references are
-        // not shipped -> recorded, not included.
+    fun `target default without lib option pulls the host libs in through the full variant`() {
+        // lib.d.ts (= es5.full) has priority 0 -> first, and its DOM / host references
+        // are SHIPPED since (LIB.1)(b), so they are included rather than recorded as
+        // unavailable. Note the second-order consequence, which is tsc's too: DOM
+        // references es2015, so an ES5 target-default program gets the whole ES2015
+        // layer even though nothing asked for it.
         RealLibResolver.resolve(
             null, ScriptTarget.ES5
         ) should {
-            have(orderedKeys == listOf("es5.full", "es5", "decorators", "decorators.legacy"))
-            have(unavailable == listOf(
-                "lib.dom.d.ts", "lib.webworker.importscripts.d.ts", "lib.scripthost.d.ts",
+            have(orderedKeys == listOf(
+                "es5.full", "es5", "es2015",
+                "dom.generated", "webworker.importscripts", "scripthost",
+                "es2015.core", "es2015.collection", "es2015.generator", "es2015.iterable",
+                "es2015.promise", "es2015.proxy", "es2015.reflect", "es2015.symbol",
+                "es2015.symbol.wellknown", "es2018.asynciterable",
+                "decorators", "decorators.legacy",
             ))
+            // The whole point of (LIB.1)(b): NOTHING is unavailable any more. This list
+            // was never consumed by anything, so every entry in it was a lib silently
+            // degrading to `any`.
+            have(unavailable.isEmpty())
             have(unknownNames.isEmpty())
         }
+    }
+
+    @Test
+    fun `an explicit dom lib request resolves to the shipped host file`() {
+        // `dom.generated` is the SOURCE name of what tsc distributes as `lib.dom.d.ts`;
+        // the resolution must carry it, and the round trip back to the distributed name
+        // must NOT print the source name (nothing distributes `lib.dom.generated.d.ts`).
+        RealLibResolver.resolve(
+            listOf("dom"), ScriptTarget.ES5
+        ) should {
+            have("dom.generated" in orderedKeys)
+            // dom.generated references es2015 + es2018.asynciterable, so those come too.
+            have("es2015" in orderedKeys)
+            have("es2018.asynciterable" in orderedKeys)
+            have(unavailable.isEmpty())
+            have(unknownNames.isEmpty())
+        }
+        assert(RealLibResolver.keyToDistFileName("dom.generated") == "lib.dom.d.ts")
+        assert(RealLibResolver.keyToDistFileName("webworker.generated") == "lib.webworker.d.ts")
+        assert(RealLibResolver.keyToDistFileName("dom.iterable.generated") == "lib.dom.iterable.d.ts")
+        assert(RealLibResolver.distFileNameToKey("lib.dom.d.ts") == "dom.generated")
     }
 
     @Test

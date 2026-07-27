@@ -46,9 +46,12 @@ package com.xemantic.typescript.compiler
  *   makes overload resolution across lib layers (an es5 interface extended by
  *   es2015.core) deterministic.
  *
- * DOM / webworker / scripthost libs are referenced by the `.full` variants but
- * deliberately not shipped (M2.4, post-v1) — they resolve to
- * [Resolution.unavailable] and are skipped.
+ * (LIB.1)(b), round 731: the DOM / webworker / scripthost host libs — referenced by
+ * every `.full` variant, so pulled in by any target-default lib set — ARE shipped now.
+ * Until then they landed in [Resolution.unavailable], which nothing outside this file
+ * ever consumed, so a browser project's `HTMLElement` degraded to `any` and its DOM
+ * code compiled clean while being entirely unchecked. [Resolution.unavailable] stays
+ * for the shape's sake but is expected to be EMPTY at this pin.
  */
 object RealLibResolver {
 
@@ -202,8 +205,9 @@ object RealLibResolver {
      *   lib file, deduped, in tsc's inclusion order.
      * @property unknownNames `lib` option entries / reference-directive names that are
      *   not in [libMap] (tsc reports a diagnostic per occurrence; the caller owns that).
-     * @property unavailable resolved-but-not-shipped file names (the DOM/webworker/
-     *   scripthost set — M2.4).
+     * @property unavailable resolved-but-not-shipped file names. EMPTY since (LIB.1)(b)
+     *   shipped the whole `src/lib` set; a non-empty value now means the pin moved and
+     *   introduced a lib file the generator did not pick up.
      */
     data class Resolution(
         val orderedKeys: List<String>,
@@ -283,10 +287,25 @@ object RealLibResolver {
     fun referencedLibNames(content: String): List<String> =
         libReferenceRegex.findAll(content).map { it.groupValues[1] }.toList()
 
-    /** Inverse of [distFileNameToKey]: [RealLibFiles.files] key -> distributed file name. */
+    /**
+     * Inverse of [distFileNameToKey]: [RealLibFiles.files] key -> distributed file name.
+     *
+     * The `*.generated` source names MUST be mapped back (round 731): tsc distributes
+     * `src/lib/dom.generated.d.ts` as `lib.dom.d.ts`, and this name is what a
+     * lib-declaration diagnostic renders (TS2728's "declared here") — leaving the else
+     * branch to build `lib.dom.generated.d.ts` would print a file name that does not
+     * exist in any TypeScript distribution. The `.full` variants (`es2016.full`, …) are
+     * NOT special-cased: their source and distributed names already agree.
+     */
     fun keyToDistFileName(key: String): String = when (key) {
         "es5.full" -> "lib.d.ts"
         "es2015.full" -> "lib.es6.d.ts"
+        "dom.generated" -> "lib.dom.d.ts"
+        "dom.iterable.generated" -> "lib.dom.iterable.d.ts"
+        "dom.asynciterable.generated" -> "lib.dom.asynciterable.d.ts"
+        "webworker.generated" -> "lib.webworker.d.ts"
+        "webworker.iterable.generated" -> "lib.webworker.iterable.d.ts"
+        "webworker.asynciterable.generated" -> "lib.webworker.asynciterable.d.ts"
         else -> "lib.$key.d.ts"
     }
 }
