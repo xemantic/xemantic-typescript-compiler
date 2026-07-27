@@ -66,6 +66,20 @@ two handlers, un-split, at 7,412 ms — so the splits inflate by ~10%, the same
 way round 732's per-handler nanos were inflated by its `when(h)` indirection.
 **Sound for relative attribution, not as absolute production costs.**
 
+The inflation is measured directly, apples-to-apples on the same binary and
+the same flags: `--passTiming --listAll` **without** `--spineSections` gives
+`checkSpine` 23,607 ms / checker-init 27,979 ms; **with** it, 24,478 ms /
+28,776 ms. **The probe costs ~800 ms**, which is what ~13 extra timestamp
+pairs per node at 42 ns plus the nested measures should cost — and it is the
+whole gap between this partition and round 732's un-split figure.
+
+**What the landed instrumentation costs when OFF** is not measurable and is
+not claimed to be: 13 additional static-field reads and not-taken branches per
+node in two handlers, ~11 ms on 856,962 nodes, two orders of magnitude below
+the ±2% (≈560 ms) drift band of a 30.7 s compile. The deterministic gate is
+`cost_gate.py` (+0.00% on all 20 counters); wall time cannot resolve this and
+no A/B is offered for it.
+
 ### `cpaSpineLeave` — 4,934 ms net
 
 | section | ms net | hits | consulted |
