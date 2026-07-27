@@ -249,6 +249,18 @@ VARIABLE_STATEMENT 2,835 ms over 14,712 (193 µs each), RETURN_STATEMENT
 `cpaSpineLeave` and `ccetSpineLeave` internally (they are 7.4 s together, 40% of
 the spine) and find out what 5.4 µs and 3.5 µs per node is being spent on.
 
+> **ROUND-733 ANSWER — and a correction to this section.** That attribution
+> was done (`docs/perf/spine-leave-attribution.md`), and the phrase
+> "cta/cpa/ccet legacy-parity frame bookkeeping" above is **wrong**: **88.4%
+> of those two handlers' time is the cpa and ccet passes' OWN checking work**
+> (`checkPropertyAccessInExpr`, `checkSingleCallExpressionTypes`) inside the
+> frame-ambient block. The ambient install+restore is 360 ms and the ancestor
+> climbs are 176 ms of 8,195. **A handler's per-handler nanos are its WORK,
+> not its scaffolding** — this table says where the time is, never why, and
+> inferring the why from it is the same mistake round 716 made one level up.
+> The real target it uncovers is `checkSingleCallExpressionTypes`: 53.6 µs per
+> CallExpression, 2.9 s over 52,413 of them, queued as **(CALL.1)**.
+
 ## 7. Reproducing
 
 ```bash
