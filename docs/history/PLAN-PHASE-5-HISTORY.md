@@ -1,3 +1,195 @@
+**Round 719 (2026-07-26) — second attempt to gate round 718's fix; the build again did
+not converge, so the loop is STOPPING on (BUILD.1) rather than burning a third round
+on it. Main is at the last gated commit and clean; the fix stays on
+`wip/round718-required-minus-optional`, pushed.**
+
+Method was deliberately minimal after round 718's thrash: quiet box confirmed (no JVMs,
+6.0 GB available), merge the branch locally, run ONE `jvmTest` with
+`-Dkotlin.daemon.jvmargs=-Xmx4g`, touch nothing until it returns. `compileKotlinJvm`
+was still running ~40 minutes later, having produced zero class files, and I stopped
+it — it did not fail on its own, and might eventually have finished; what it would not
+do is finish inside a round.
+
+**What the instrumentation says, and it is NOT "out of heap".** Sampling the Kotlin
+daemon twice, 2.5 minutes apart: same PID, `utime` 210.7 s → 277.2 s, RSS 2.38 GB
+against a 4 GB ceiling, `stime` ~1.5 s. That is the signature of real work — NOT the
+round-717 death spiral, which sat pinned exactly at the ceiling with nothing to show.
+At 4 g the compiler is computing; it is just slow.
+
+**A WRONG HYPOTHESIS, corrected here so nobody chases it.** I first blamed contention:
+round 717's compile of the same module took **2m 33s**, three `chore(bench): 3-way run`
+commits landed on origin during this session that I did not make, and a shared box
+would explain everything. Both halves are wrong. Those commits are authored by
+`github-actions[bot]` — they run in REMOTE CI and never touch this machine. And the
+2m 33s is not the same measurement: Gradle re-executing `compileKotlinJvm` does NOT
+imply a non-incremental Kotlin compile, so that run was almost certainly incremental
+against warm caches, while these were genuinely from scratch.
+
+**The actual constraint, stated carefully.** A FROM-SCRATCH compile of this module —
+~110k lines of Checker.kt plus a 566 KB generated lib file — takes tens of minutes on
+this box and needs ≥3–4 GB, while an incremental one takes ~2 minutes. What turns the
+cheap case into the expensive one is invalidating the incremental caches, and the
+documented memory ritual (`pkill -9 -f KotlinCompileDaemon`) does exactly that. So the
+operational rule is narrower and more useful than "get a bigger box": **do not hard-kill
+the Kotlin daemon**, and budget 4 g when a from-scratch compile is unavoidable.
+
+**What the owner still needs to decide** is only the heap default; the sharing question
+was my error and is withdrawn.
+
+**Judgement recorded, because a future round will face the same choice:** parking beat
+grinding. Two rounds produced a correct, well-understood, fully-diagnosed fix with a
+live repro; a third round of the same failing cycle would have produced nothing and
+risked landing something ungated. The branch plus the diagnosis is worth more than a
+red main.
+
+---
+
+**Round 718 (2026-07-26) — a complete fix for 11 of (LIB.1)'s 35 false positives,
+diagnosed, written, and NOT LANDED: four cold compiles in one session and none of
+them would gate it. The fix is on `wip/round718-required-minus-optional`; main is
+clean and unchanged. (BUILD.1) is escalated from nuisance to binding constraint.**
+
+**What the bug is.** `Required<T>` is `{ [P in keyof T]-?: T[P] }`, and `Parser.kt`'s
+mapped-type modifier scan records `-?` as a plain `?` — so `Required<T>` behaves
+exactly like `Partial<T>`, inverted. `-readonly` got its own flag back in M1.10; the
+`?` analogue was never written. It costs 11 of the 35: tsc declares
+`tracker: Required<Pick<SymbolTracker, "reportInferenceFallback">>`, and we called
+every `context.tracker.reportInferenceFallback(...)` possibly-undefined.
+
+**The mechanism is not the one it looks like, and that matters for the fix.** TS2722
+reads like a type-level question, so the obvious fix is "strip `undefined` from the
+member type". Wrong: the emitter gates on `isOptionalProperty(propSym)` — the
+SYMBOL's optionality — and a comment right there records that the codebase never adds
+`| undefined` for optional-member access at all. What actually happens is the M1.10
+trap repeating: a homomorphic mapped member CARRIES ITS SOURCE PROPERTY'S DECLARATION
+(for "declared here" related info), so `isOptionalProperty`'s declaration scan sees
+the source's `?`. The fix is therefore M1.10's mirror — a `mappedRequiredMemberIds`
+side-channel, probed only when the declaration says optional, which keeps the
+documented hot-path property (a declared-required property pays no set lookup).
+
+**Two dead ends, both caught by CONTROLS, which is the transferable part.** The first
+probe hand-rolled the mapped types (`type MyRequired<T> = { [P in keyof T]-?: T[P] }`)
+to stay off the lib: its two controls came back EMPTY — we emit nothing whatsoever for
+user-defined mapped types — so its three target assertions were passing vacuously and
+would have "confirmed" any fix at all, including no fix. The second cut asserted
+assignability through `Partial`, which measures an axis we do not model. Only
+`@useRealLibs` + TS2722 assertions reproduce it; verified against unmodified HEAD with
+the target FAILING and the control PASSING. **Rounds 700–704 lost four "fixes" to
+inertness; this round would have made it five without the controls, twice.**
+
+**Why it did not land.** No compile would finish. `-Xmx2g` hung (the round-717 trap),
+`-Xmx3g` ran 16 minutes before the daemon died and restarted from scratch, and only
+`-Xmx4g` got the main compile through — after which the test compile was still
+running when I stopped. Four cold compiles, ~an hour, no gate. Parking beat grinding:
+the branch carries the fix and the live repro, main stays clean and green, and the
+next round merges and gates it in one pass. (BUILD.1)'s proposal is revised 3g → 4g
+on this evidence, with a bigger box offered as the alternative the owner may prefer —
+(PERF.HW) already wants ≥8 real cores for a different reason.
+
+**Also recorded on (LIB.1):** the embedded lib declares NO utility types at all — no
+`Required`, `Pick`, `Partial`, `Omit`. That is why this whole family is invisible on
+the default path: the name is unresolved, degrades to `any`, and `any` is silent. It
+is the LIB.1 defect in miniature, on the dashboard profile, today.
+
+---
+
+**Round 717 (2026-07-26) — the two GATE items landed. Logical parity stopped being a
+rule and became a mechanism with two build-failing controls; cost stopped being an
+intention and became a counter diff. The determinism check on that gate found a racy
+counter on its first use — and it is exactly the counter (DISPATCH.1) was told to
+build its table from. Corpus 12,765 / 0 / 3, unchanged; the generated corpus is
+byte-identical.**
+
+**(PARITY.1) — a policy is only as good as its controls.** The owner's directive says
+a form-only divergence may be switched off. Written down as prose, that is an
+invitation to wave through a diff nobody read, so it landed as a mechanism instead.
+`docs/logical-parity.md` carries the decision procedure as two ALLOWLIST tables —
+seven meaning axes (a diagnostic present on one side only, a different span, a
+different code, a type denoting a different SET of values, different runtime
+semantics, a `.d.ts` a consumer would check differently, a different count of
+distinct diagnostics) and six form axes, each with the equivalence obligation it
+imposes — plus the rule that anything in neither table is MEANING by default. The
+mechanism is `logicalParityDivergences` in build.gradle.kts, keyed by baseline FILE
+name because that is exactly one generated subtest. Three properties are the point:
+the switched-off test is emitted `@Ignore`d rather than dropped, so it stays VISIBLE
+as skipped (a vanished test hides behind an unchanged total); the ledger is
+REGENERATED into the doc, so the table cannot drift from the build; and the build
+FAILS on either rot mode — a baseline matching no generated test, or a `pinnedBy`
+class that does not exist under src/commonTest. That last check is what makes
+"replace it with a test pinning the logic" mechanical rather than aspirational.
+Self-tested all three paths, then reverted to the empty list; **with no entries the
+generated tree is byte-identical** (`diff -r` before/after), so it costs nothing
+until used.
+
+**The judgement worth keeping from writing it:** a form-only diff is a *candidate*,
+not an entitlement. The directive's own cost clause — byte parity is secondary *if it
+can be achieved without extra cost* — means byte parity is still preferred where it
+is free, so a divergence needs a reason it is WORTH having (it unblocks a general
+rule, removes measurable work, deletes a special case). "Our output happens to differ
+and matching would be fiddly" is not one.
+
+**(COST.1) — `scripts/cost_gate.py`.** Twenty deterministic counters from a
+`--passTiming` run of the compiler profile, diffed against
+`docs/perf/cost-counters.txt`, failing above ±2%. Counters only, never wall time.
+Baseline at 41bedb73: 46 errors, 856,962 spine nodes, 696,933 getTypeOfExpression
+calls over 250,057 distinct nodes, 69,903 narrowing walks (40,546 memo-served),
+89,883 bypassed type-node resolutions, 1,377,511 globals lookups at 98.9% miss.
+Two design notes: the gate also pins **the compiler's ANSWER** (error count, program
+file count), because a cost drop that changes the output is not a win and the gate
+has to be able to see that; and four counters baseline at ZERO
+(`ctxFingerprint.builds`, `globals.conflated`, `narrow.walksOutsideInit`,
+`preparse.fresh`), which makes them tripwires rather than dead rows.
+
+**THE FINDING, which is why the second run was worth 90 seconds.** The premise of the
+gate is that these counters are reproducible, so I ran it twice on the same binary
+rather than asserting it. Nineteen of twenty came back bit-identical — and the AST
+census came back 857,350 vs 854,550, −0.33%. `indexSourceFile` runs on the crawl's
+CONCURRENT parse threads (`readAndScanBatch`, Dispatchers.Default,
+FRONTEND_CONCURRENCY in flight) while `PassTiming.nodeKindHistogram` is a plain
+HashMap, so increments are lost to a data race and the census always undercounts.
+Instrumentation-only, no production impact — but that census is documented as "the
+dispatch-order / kind-table design input", i.e. **precisely what (DISPATCH.1) is
+instructed to derive its per-kind handler table from**, and there a dropped rare kind
+is a WRONG TABLE, not a rounding error. Excluded from the gate, warned about at the
+source, and written onto the DISPATCH.1 item as its second trap.
+
+**The build trap, and the most reusable thing in this round.** CLAUDE.md's
+memory-freeing ritual before a self-compile is `./gradlew --stop && pkill -9 -f
+KotlinCompileDaemon`. Doing that leaves the next `compileKotlinJvm` a COLD,
+non-incremental compile, and the Kotlin daemon inherits `org.gradle.jvmargs`'
+`-Xmx2g`, which a cold build of this module does not fit in. It does not present as
+an out-of-memory error — it presents as a hang: 14 minutes, 350% CPU, RSS pinned
+exactly at the heap ceiling, `stime` ~5 s against 3,000 s of user time, and **zero
+class files written**, because Kotlin's backend only writes output at the end so
+there is no partial progress to read. The same build with
+`-Dkotlin.daemon.jvmargs=-Xmx3g` finished in **2m 33s**. Raising it permanently in
+gradle.properties is a build-system change and therefore owner-gated — queued below
+as (BUILD.1) rather than done.
+
+**(LIB.1)(a) measured, not started.** With the two gates in, I took the next queue
+item's decision step — "decide what a real project build uses for libs at all" — and
+found it answerable with zero code: every `compilerOptions` key flows through
+`applyDirective`, so `"useRealLibs": true` in the bench tsconfig flips the entire
+real-lib path on. Four arms (table on the item): the real-lib switch costs **exactly
+35 checker FPs and no measurable wall time**, and today's 46 "env-legit" FPs decompose
+as 33 node globals + 13 stub residue. The decision is therefore *yes, real builds
+should use real libs*, with the 35 burned down BEFORE the default flips so the
+dashboard never goes red — TS2722 ×11 is over a third of them and looks like one
+narrowing shape. **The reusable part:** the item read like a design fork needing an
+argument, and it was a measurement needing one tsconfig line. Its own text even said
+the decisive control is a MEMBER probe rather than name resolution — the same lesson
+one level up.
+
+**Also landed:** three compiler warnings had accumulated in Checker.kt's
+(M3.0-gap-4) helpers (two `else` arms in a `when` the smart cast already makes
+exhaustive, one redundant cast). They were invisible because Gradle does not re-emit
+warnings on an up-to-date compile — the same failure mode COST.1 exists for, in a
+different dimension: **a gate that is not mechanical does not happen.** Verified
+clean with a full `--rerun-tasks` recompile.
+
+---
+
+
 **Round 716 (2026-07-26) — the performance diagnosis was WRONG, and now it is
 measured. The type system is 28% of the compile; the dispatch machinery is 42%; the
 entire prize INV.5(c) exists for is 68 ms. Three cache hypotheses died in one

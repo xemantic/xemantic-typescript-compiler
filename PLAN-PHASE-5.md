@@ -20,6 +20,98 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 729 (2026-07-27) — (LIB.1) IS DONE: the real-lib false-positive count is ZERO.
+Arm C 16 → 13, and all 13 remaining are the env-legit TS2591 — the burn-down that started
+at 35 (round 717) is finished. Corpus 12,822 → 12,842 / 0 / 3 (+20 pins). Cost gate PASSES
+UNCHANGED TO THE DIGIT at all three gates (largest counter −0.68%, an improvement, nothing
+rebaselined). Embedded-lib compiler profile still 46, checked independently of the gate.**
+
+**CAUSE 1 — parser.ts:3558. Round 728's TYPE-PARAMETER NAME COLLISION reading is
+DISPROVEN.** The instrumentation was one dump at the inference-time constraint check, and
+it showed the two arms of round 728's own matrix behaving IDENTICALLY:
+
+    tp=T#30[c=NodeX]  first=Isect[TP(T)#38[c=NodeX], {m:1}]  ok=false     (colliding name)
+    tp=E#34[c=NodeX]  first=Isect[TP(T)#44[c=NodeX], {m:1}]  ok=false     (renamed)
+
+Same verdict, same shape, no name involved. The renamed variant was only ACCIDENTALLY
+clean — its equally-un-inferred return type is swallowed further downstream — so it is
+pinned here as a TARGET, not as a control. `withInternedTpScope`'s by-name overlay, which
+round 728 nominated as the lead, is not implicated at all.
+
+The real cause is round 725's rule at a THIRD site. `tryInferSingleTypeParamFromArgs`
+answers "does the inferred candidate satisfy the callee's constraint" with a bare
+`checkTypeRelatedTo`, which cannot look through an intersection to its TypeParam
+constituent — and the relation never will, because it has no
+TypeParam-source-via-constraint rule on purpose (round 456 measured adding one as
+net-zero and reverted). **The symptom is not a TS2344**: on failure the inference bails
+WHOLESALE, so the callee's declared return type is handed back un-instantiated and the
+mismatch surfaces as a TS2322 whose two sides print nearly the same text. That is why two
+rounds read this site wrong.
+
+**CAUSE 2 — and it is the session's real find: `Exclude<T, U>` was an IDENTITY FUNCTION.**
+The distribution loop evaluated each constituent's branch under the UNSHIFTED
+alias-argument map, so `T` in a branch still meant the WHOLE union; every non-matching
+constituent therefore contributed the entire union back and nothing was ever filtered.
+Only a NAKED type parameter distributes, which is what bounds the rebinding — `[T] extends
+[U] ? …` is pinned by a control whose diagnostic would DISAPPEAR if it leaked.
+
+It closed utilities.ts:4258 **and utilities.ts:12082** — the `assertType<never>` site round
+728 failed to reproduce in two attempts and rated least tractable. `HasInferredType` is
+built with `Exclude`, so it was never a narrowing question at all. Two sites, one cause,
+and the histogram again said otherwise.
+
+**TWO COMPANION DEFECTS, both surfaced by the FIRST arm-C measurement of that change and
+neither optional:**
+
+- **Enum-member types do not discriminate in our relation AT ALL.** `const k:
+  SK.Identifier = SK.PrivateIdentifier` is silent. Sibling AST interfaces differing only
+  in `kind` therefore read as mutually assignable, and a working `Exclude` promptly
+  DROPPED them: `Exclude<PropertyName, PrivateIdentifier>` lost `Identifier` too, which
+  showed up as TWO BRAND-NEW false positives at factory/utilities.ts:1056/1061 —
+  arm C 15, composition changed, count unmoved. Closed by applying round 472's `.kind`
+  DOMAIN veto (`kindDomainKeysExceed`, Type-vs-Type) inside the conditional evaluator,
+  consulted only on the already-related path. **The underlying relation gap is NOT fixed
+  and is queued below** — it is much larger than this unit and has corpus blast radius.
+- **A USER type alias shadowing a lib one loses.** The two declarations merge onto ONE
+  symbol and the generic substitution path took `firstOrNull`, i.e. in practice the LIB's,
+  so a local `type Omit<T,K> = {[P in keyof T]: T[P]}` resolved through `Pick<T,
+  Exclude<keyof T, K>>`. `RealLibsUtilityModifiersTest` pinned the opposite and had been
+  passing only because the lib body, with Exclude inert, behaved like the user's identity
+  mapped type — a green test measuring nothing.
+
+**CAUSE 3 (the bonus, not on the FP list).** Round 728 noticed in passing that an EXPLICIT
+call type argument of round 725's shape still emits TS2344. It is the same rule's last
+missing arm: `checkCallTypeArgConstraints` had only the BARE-TypeParam branch, and
+`NonNullable<X>` is `X & {}`, so that branch never sees it. Landed with three controls.
+The rule now has all three sites — type reference, inference, explicit call type argument
+— sharing one helper.
+
+**WHAT DID NOT WORK, and why it is worth recording.**
+
+- Round 728's four-case rename matrix is a genuine trap: it is REAL (the outcomes differ)
+  and it names the wrong variable. A matrix tells you which inputs move the output; it
+  cannot tell you which of them is the cause and which is a downstream accident. Only the
+  dump separated them, and it took one compile — exactly the estimate, spent one round
+  late.
+- Three of the six controls written for cause 1 turned out VACUOUS: an intersection with
+  no type parameter, and a TypeParam constrained to an unrelated type, are both silent on
+  BOTH sides of the fix, because our checker does not report that shape at all. The
+  `git stash` A/B against unmodified HEAD is what exposed them, and it is worth its two
+  compiles for that alone. The control that survived discriminates by MESSAGE —
+  `NodeArrayX<T>` → `NodeArrayX<T & { m: 1; }>` — which is the only available proof that
+  inference BOUND the intersection rather than being waved through.
+- A `Checker.kt` stack-trace line number is mod 65536: frame `Checker.kt:32118` is really
+  line 97654. Reading the wrong line first cost a few minutes and looked like the trace
+  pointing at unrelated code.
+
+**MEASUREMENT.** Arm C measured after every cause, both sides, by code: 16 → 15 (cause 1)
+→ 15 with changed composition (cause 2 first cut, +2 new / −2 old) → 13 (cause 2
+complete) → 13 (cause 3, unchanged as expected). tsconfig restored and verified by
+`grep -c useRealLibs` = 0 after each; the embedded profile re-checked at 46 independently
+of the cost gate's `output.errors`.
+
+---
+
 **Round 728 (2026-07-27) — THREE causes cracked in one session, and the three that remain
 are now isolated in lib-free repros instead of described. Real-lib false positives 7 → 3
 (arm C 20 → 16, MEASURED both sides, TS2349 ×2 → 0, TS2769 ×1 → 0, TS2322 ×3 → ×2, no
@@ -577,198 +669,6 @@ inferring it from symptoms.
 ---
 
 
-**Round 719 (2026-07-26) — second attempt to gate round 718's fix; the build again did
-not converge, so the loop is STOPPING on (BUILD.1) rather than burning a third round
-on it. Main is at the last gated commit and clean; the fix stays on
-`wip/round718-required-minus-optional`, pushed.**
-
-Method was deliberately minimal after round 718's thrash: quiet box confirmed (no JVMs,
-6.0 GB available), merge the branch locally, run ONE `jvmTest` with
-`-Dkotlin.daemon.jvmargs=-Xmx4g`, touch nothing until it returns. `compileKotlinJvm`
-was still running ~40 minutes later, having produced zero class files, and I stopped
-it — it did not fail on its own, and might eventually have finished; what it would not
-do is finish inside a round.
-
-**What the instrumentation says, and it is NOT "out of heap".** Sampling the Kotlin
-daemon twice, 2.5 minutes apart: same PID, `utime` 210.7 s → 277.2 s, RSS 2.38 GB
-against a 4 GB ceiling, `stime` ~1.5 s. That is the signature of real work — NOT the
-round-717 death spiral, which sat pinned exactly at the ceiling with nothing to show.
-At 4 g the compiler is computing; it is just slow.
-
-**A WRONG HYPOTHESIS, corrected here so nobody chases it.** I first blamed contention:
-round 717's compile of the same module took **2m 33s**, three `chore(bench): 3-way run`
-commits landed on origin during this session that I did not make, and a shared box
-would explain everything. Both halves are wrong. Those commits are authored by
-`github-actions[bot]` — they run in REMOTE CI and never touch this machine. And the
-2m 33s is not the same measurement: Gradle re-executing `compileKotlinJvm` does NOT
-imply a non-incremental Kotlin compile, so that run was almost certainly incremental
-against warm caches, while these were genuinely from scratch.
-
-**The actual constraint, stated carefully.** A FROM-SCRATCH compile of this module —
-~110k lines of Checker.kt plus a 566 KB generated lib file — takes tens of minutes on
-this box and needs ≥3–4 GB, while an incremental one takes ~2 minutes. What turns the
-cheap case into the expensive one is invalidating the incremental caches, and the
-documented memory ritual (`pkill -9 -f KotlinCompileDaemon`) does exactly that. So the
-operational rule is narrower and more useful than "get a bigger box": **do not hard-kill
-the Kotlin daemon**, and budget 4 g when a from-scratch compile is unavoidable.
-
-**What the owner still needs to decide** is only the heap default; the sharing question
-was my error and is withdrawn.
-
-**Judgement recorded, because a future round will face the same choice:** parking beat
-grinding. Two rounds produced a correct, well-understood, fully-diagnosed fix with a
-live repro; a third round of the same failing cycle would have produced nothing and
-risked landing something ungated. The branch plus the diagnosis is worth more than a
-red main.
-
----
-
-**Round 718 (2026-07-26) — a complete fix for 11 of (LIB.1)'s 35 false positives,
-diagnosed, written, and NOT LANDED: four cold compiles in one session and none of
-them would gate it. The fix is on `wip/round718-required-minus-optional`; main is
-clean and unchanged. (BUILD.1) is escalated from nuisance to binding constraint.**
-
-**What the bug is.** `Required<T>` is `{ [P in keyof T]-?: T[P] }`, and `Parser.kt`'s
-mapped-type modifier scan records `-?` as a plain `?` — so `Required<T>` behaves
-exactly like `Partial<T>`, inverted. `-readonly` got its own flag back in M1.10; the
-`?` analogue was never written. It costs 11 of the 35: tsc declares
-`tracker: Required<Pick<SymbolTracker, "reportInferenceFallback">>`, and we called
-every `context.tracker.reportInferenceFallback(...)` possibly-undefined.
-
-**The mechanism is not the one it looks like, and that matters for the fix.** TS2722
-reads like a type-level question, so the obvious fix is "strip `undefined` from the
-member type". Wrong: the emitter gates on `isOptionalProperty(propSym)` — the
-SYMBOL's optionality — and a comment right there records that the codebase never adds
-`| undefined` for optional-member access at all. What actually happens is the M1.10
-trap repeating: a homomorphic mapped member CARRIES ITS SOURCE PROPERTY'S DECLARATION
-(for "declared here" related info), so `isOptionalProperty`'s declaration scan sees
-the source's `?`. The fix is therefore M1.10's mirror — a `mappedRequiredMemberIds`
-side-channel, probed only when the declaration says optional, which keeps the
-documented hot-path property (a declared-required property pays no set lookup).
-
-**Two dead ends, both caught by CONTROLS, which is the transferable part.** The first
-probe hand-rolled the mapped types (`type MyRequired<T> = { [P in keyof T]-?: T[P] }`)
-to stay off the lib: its two controls came back EMPTY — we emit nothing whatsoever for
-user-defined mapped types — so its three target assertions were passing vacuously and
-would have "confirmed" any fix at all, including no fix. The second cut asserted
-assignability through `Partial`, which measures an axis we do not model. Only
-`@useRealLibs` + TS2722 assertions reproduce it; verified against unmodified HEAD with
-the target FAILING and the control PASSING. **Rounds 700–704 lost four "fixes" to
-inertness; this round would have made it five without the controls, twice.**
-
-**Why it did not land.** No compile would finish. `-Xmx2g` hung (the round-717 trap),
-`-Xmx3g` ran 16 minutes before the daemon died and restarted from scratch, and only
-`-Xmx4g` got the main compile through — after which the test compile was still
-running when I stopped. Four cold compiles, ~an hour, no gate. Parking beat grinding:
-the branch carries the fix and the live repro, main stays clean and green, and the
-next round merges and gates it in one pass. (BUILD.1)'s proposal is revised 3g → 4g
-on this evidence, with a bigger box offered as the alternative the owner may prefer —
-(PERF.HW) already wants ≥8 real cores for a different reason.
-
-**Also recorded on (LIB.1):** the embedded lib declares NO utility types at all — no
-`Required`, `Pick`, `Partial`, `Omit`. That is why this whole family is invisible on
-the default path: the name is unresolved, degrades to `any`, and `any` is silent. It
-is the LIB.1 defect in miniature, on the dashboard profile, today.
-
----
-
-**Round 717 (2026-07-26) — the two GATE items landed. Logical parity stopped being a
-rule and became a mechanism with two build-failing controls; cost stopped being an
-intention and became a counter diff. The determinism check on that gate found a racy
-counter on its first use — and it is exactly the counter (DISPATCH.1) was told to
-build its table from. Corpus 12,765 / 0 / 3, unchanged; the generated corpus is
-byte-identical.**
-
-**(PARITY.1) — a policy is only as good as its controls.** The owner's directive says
-a form-only divergence may be switched off. Written down as prose, that is an
-invitation to wave through a diff nobody read, so it landed as a mechanism instead.
-`docs/logical-parity.md` carries the decision procedure as two ALLOWLIST tables —
-seven meaning axes (a diagnostic present on one side only, a different span, a
-different code, a type denoting a different SET of values, different runtime
-semantics, a `.d.ts` a consumer would check differently, a different count of
-distinct diagnostics) and six form axes, each with the equivalence obligation it
-imposes — plus the rule that anything in neither table is MEANING by default. The
-mechanism is `logicalParityDivergences` in build.gradle.kts, keyed by baseline FILE
-name because that is exactly one generated subtest. Three properties are the point:
-the switched-off test is emitted `@Ignore`d rather than dropped, so it stays VISIBLE
-as skipped (a vanished test hides behind an unchanged total); the ledger is
-REGENERATED into the doc, so the table cannot drift from the build; and the build
-FAILS on either rot mode — a baseline matching no generated test, or a `pinnedBy`
-class that does not exist under src/commonTest. That last check is what makes
-"replace it with a test pinning the logic" mechanical rather than aspirational.
-Self-tested all three paths, then reverted to the empty list; **with no entries the
-generated tree is byte-identical** (`diff -r` before/after), so it costs nothing
-until used.
-
-**The judgement worth keeping from writing it:** a form-only diff is a *candidate*,
-not an entitlement. The directive's own cost clause — byte parity is secondary *if it
-can be achieved without extra cost* — means byte parity is still preferred where it
-is free, so a divergence needs a reason it is WORTH having (it unblocks a general
-rule, removes measurable work, deletes a special case). "Our output happens to differ
-and matching would be fiddly" is not one.
-
-**(COST.1) — `scripts/cost_gate.py`.** Twenty deterministic counters from a
-`--passTiming` run of the compiler profile, diffed against
-`docs/perf/cost-counters.txt`, failing above ±2%. Counters only, never wall time.
-Baseline at 41bedb73: 46 errors, 856,962 spine nodes, 696,933 getTypeOfExpression
-calls over 250,057 distinct nodes, 69,903 narrowing walks (40,546 memo-served),
-89,883 bypassed type-node resolutions, 1,377,511 globals lookups at 98.9% miss.
-Two design notes: the gate also pins **the compiler's ANSWER** (error count, program
-file count), because a cost drop that changes the output is not a win and the gate
-has to be able to see that; and four counters baseline at ZERO
-(`ctxFingerprint.builds`, `globals.conflated`, `narrow.walksOutsideInit`,
-`preparse.fresh`), which makes them tripwires rather than dead rows.
-
-**THE FINDING, which is why the second run was worth 90 seconds.** The premise of the
-gate is that these counters are reproducible, so I ran it twice on the same binary
-rather than asserting it. Nineteen of twenty came back bit-identical — and the AST
-census came back 857,350 vs 854,550, −0.33%. `indexSourceFile` runs on the crawl's
-CONCURRENT parse threads (`readAndScanBatch`, Dispatchers.Default,
-FRONTEND_CONCURRENCY in flight) while `PassTiming.nodeKindHistogram` is a plain
-HashMap, so increments are lost to a data race and the census always undercounts.
-Instrumentation-only, no production impact — but that census is documented as "the
-dispatch-order / kind-table design input", i.e. **precisely what (DISPATCH.1) is
-instructed to derive its per-kind handler table from**, and there a dropped rare kind
-is a WRONG TABLE, not a rounding error. Excluded from the gate, warned about at the
-source, and written onto the DISPATCH.1 item as its second trap.
-
-**The build trap, and the most reusable thing in this round.** CLAUDE.md's
-memory-freeing ritual before a self-compile is `./gradlew --stop && pkill -9 -f
-KotlinCompileDaemon`. Doing that leaves the next `compileKotlinJvm` a COLD,
-non-incremental compile, and the Kotlin daemon inherits `org.gradle.jvmargs`'
-`-Xmx2g`, which a cold build of this module does not fit in. It does not present as
-an out-of-memory error — it presents as a hang: 14 minutes, 350% CPU, RSS pinned
-exactly at the heap ceiling, `stime` ~5 s against 3,000 s of user time, and **zero
-class files written**, because Kotlin's backend only writes output at the end so
-there is no partial progress to read. The same build with
-`-Dkotlin.daemon.jvmargs=-Xmx3g` finished in **2m 33s**. Raising it permanently in
-gradle.properties is a build-system change and therefore owner-gated — queued below
-as (BUILD.1) rather than done.
-
-**(LIB.1)(a) measured, not started.** With the two gates in, I took the next queue
-item's decision step — "decide what a real project build uses for libs at all" — and
-found it answerable with zero code: every `compilerOptions` key flows through
-`applyDirective`, so `"useRealLibs": true` in the bench tsconfig flips the entire
-real-lib path on. Four arms (table on the item): the real-lib switch costs **exactly
-35 checker FPs and no measurable wall time**, and today's 46 "env-legit" FPs decompose
-as 33 node globals + 13 stub residue. The decision is therefore *yes, real builds
-should use real libs*, with the 35 burned down BEFORE the default flips so the
-dashboard never goes red — TS2722 ×11 is over a third of them and looks like one
-narrowing shape. **The reusable part:** the item read like a design fork needing an
-argument, and it was a measurement needing one tsconfig line. Its own text even said
-the decisive control is a MEMBER probe rather than name resolution — the same lesson
-one level up.
-
-**Also landed:** three compiler warnings had accumulated in Checker.kt's
-(M3.0-gap-4) helpers (two `else` arms in a `when` the smart cast already makes
-exhaustive, one redundant cast). They were invisible because Gradle does not re-emit
-warnings on an up-to-date compile — the same failure mode COST.1 exists for, in a
-different dimension: **a gate that is not mechanical does not happen.** Verified
-clean with a full `--rerun-tasks` recompile.
-
----
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **Reading convention (stated round 687, after it cost a scan):** a superseded
@@ -788,6 +688,30 @@ burn-down reached zero real FPs; reviving their full-completeness form is a
 backlog-horizon decision, not queue debt.)
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+- [ ] **(REL.1) Enum-member types do not discriminate in the relation AT ALL —
+  discovered round 729 while the `Exclude` distribution fix was being measured, NOT
+  fixed there.** The one-line repro is
+  `declare enum SK { A, B }; const k: SK.A = SK.B` — we emit NOTHING; tsc reports
+  TS2322. Consequence: two AST interfaces that differ only in
+  `readonly kind: SK.Identifier` vs `readonly kind: SK.PrivateIdentifier` read as
+  MUTUALLY ASSIGNABLE, so a sibling node type is a structural subtype of every other
+  sibling. That is invisible as long as nothing acts on it, which is exactly why it
+  surfaced only when `Exclude<T, U>` started filtering: the filter promptly dropped
+  `Identifier` out of `Exclude<PropertyName, PrivateIdentifier>` and invented two
+  false positives (factory/utilities.ts:1056/1061). Round 729 closed THOSE by
+  applying round 472's `.kind` DOMAIN veto (`kindDomainKeysExceed`) inside
+  `evaluateConditional` — a per-site patch over a general gap, and the third such
+  patch in this family (`kindDomainProvesNotSubtype` at the narrowing sites is the
+  first two). **The real fix is a `Type` for an enum MEMBER that is distinct from
+  the enum's own type, so the relation can reject a sibling by itself.** Blast
+  radius is the reason it is a separate item: every enum-typed comparison in the
+  corpus goes through this, TS2322/TS2367/TS2345 baselines included, and the
+  existing kind-domain readers (`enumMemberKeysOfTypeNode`,
+  `enumSwitchKeysFromTypeNode`, `discriminantPropAnnotation`) exist precisely
+  because the relation could not answer. Decompose before starting; expect the
+  per-site patches to become deletable once it lands, which is the measurable win.
+
 
 - [x] **(CATCH.1) Defensive-`catch` audit — DONE round 685, six batches: 193 of
   Checker.kt's 197 removed as dead residue, 3 kept with stated reasons, 1 real
@@ -1243,18 +1167,40 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   candidate against the RAW argument type while the single-signature path contextually
   types it — the `overloadingOnConstants2` rule now has a per-property analogue, evaluated
   only inside the already-failing branch.
-  **REMAINING 3, each now with a minimal repro (see the round-728 session note for the
-  code):** parser.ts:3558 is a TYPE-PARAMETER NAME COLLISION — a four-case matrix shows it
-  needs the argument's element type to be an intersection whose TypeParam constituent
-  SHARES ITS NAME with the callee's type parameter; rename either side and it is clean, and
-  `NonNullable` is incidental (it is just `T & {}`), so round 726's "the round-725 shape one
-  level in" reading is DISPROVEN. utilities.ts:4258 is `Exclude<…>` never being evaluated
-  outside `resolveAssertTargetTypeNode` — a repro exists but needs an INTERSECTION member,
-  and the gating question is that `isLibOnlyTypeName("Exclude")` is TRUE for an UNDECLARED
-  name, so a materializer gated that way would start firing on corpus tests that report
-  TS2304 today. utilities.ts:12082 did NOT reproduce in two shapes; the discriminator is
-  something about `HasInferredType` specifically, since the same file's other
-  `assertType<never>` (line 12050) does not false-positive.
+  **(a12)/(a13) LANDED round 729 — THE BURN-DOWN IS FINISHED: real-lib FPs 3 → 0 (arm C
+  16 → 13, both sides MEASURED; the 13 that remain are ALL env-legit TS2591). Corpus
+  12,822 → 12,842 / 0 / 3 (+20 pins), cost gate PASSES UNCHANGED TO THE DIGIT at every
+  step, embedded-lib profile still 46.**
+  (a12) parser.ts:3558 — **round 728's TYPE-PARAMETER NAME COLLISION reading is
+  DISPROVEN.** One dump at the inference-time constraint check shows both arms of that
+  four-case matrix failing IDENTICALLY (`Isect[TP(T)#38[c=NodeX], {m:1}]` vs `NodeX`,
+  under either name); the renamed variant was only ACCIDENTALLY clean, its equally
+  un-inferred return type swallowed downstream. The cause is round 725's rule at a THIRD
+  site: `tryInferSingleTypeParamFromArgs` asked "does the inferred candidate satisfy the
+  constraint" with a bare `checkTypeRelatedTo`, and on failure bails WHOLESALE — so the
+  callee's return type comes back UN-INSTANTIATED and the mismatch surfaces as a TS2322
+  whose two sides print nearly the same text. That display is what misled two rounds.
+  (a13) utilities.ts:4258 AND utilities.ts:12082, ONE cause — **`Exclude<T, U>` was an
+  IDENTITY FUNCTION.** The distribution loop evaluated each constituent's branch under the
+  UNSHIFTED alias-argument map, so `T` in a branch still meant the whole union and every
+  non-matching constituent handed it all back. The `assertType<never>` site round 728
+  rated least tractable and failed to reproduce twice was never a narrowing question:
+  `HasInferredType` is built with `Exclude`. Only a NAKED type parameter distributes,
+  which bounds the rebinding. **TWO COMPANION DEFECTS, both surfaced by the first arm-C
+  measurement of that change and neither optional:** enum-member types do not discriminate
+  in our relation at all, so a working `Exclude` DROPPED sibling AST interfaces
+  (`Exclude<PropertyName, PrivateIdentifier>` lost `Identifier` — two brand-new FPs at
+  factory/utilities.ts:1056/1061), closed by applying round 472's `.kind` DOMAIN veto
+  inside the conditional evaluator; and a USER alias shadowing a lib one lost to
+  `firstOrNull`, so a local `type Omit` resolved through the lib body (its own pin had
+  been passing only because Exclude was inert). **The enum-member relation gap itself is
+  NOT fixed — it is queued as (REL.1) at the top of the queue.**
+  **ALSO LANDED round 729, not on this list:** round 725's rule now has all THREE arms —
+  `checkCallTypeArgConstraints` (the EXPLICIT `f<NonNullable<U>>(…)` site round 728 found
+  in passing) shares the same helper as the type-reference and inference sites.
+  **NEXT for this item: (a) is now unblocked — re-measure services/server/harness under
+  real libs, then flip `useRealLibs` on by default.** The compiler profile is at zero; the
+  bigger profiles have their own deltas and were never measured.
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;
