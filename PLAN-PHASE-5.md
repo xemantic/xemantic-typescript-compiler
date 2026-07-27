@@ -20,6 +20,118 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 731 (2026-07-27) — (LIB.1)(b) LANDED: the DOM, webworker and scripthost lib sets
+are SHIPPED, so a browser or worker project is type-CHECKED instead of silently running
+unchecked. The cost was NOT where the item predicted — the payload is 3.14 MB, not ~1 MB,
+and it broke the KOTLIN COMPILE, not the compiler; splitting the emission over 16 part
+files fixed that and made a cold compile CHEAPER than before (2m25s). Corpus 12,857 →
+12,874 / 0 / 3 (+17 pins). Cost gate PASSES with every counter at +0.00%; dashboard
+unmoved (compiler 46, services 46, harness 94).**
+
+**THE DEFECT, restated because it is the whole point.** `generateRealLibSources` filtered
+out `dom.*`, `webworker.*` and `scripthost`, so `RealLibResolver` put those files in
+`Resolution.unavailable` — a list **nothing outside RealLibs.kt ever read**. No
+diagnostic, no failure, no signal of any kind: `"lib": ["dom"]` produced a program in
+which `HTMLElement` and `document` "resolved" (to nothing), every member access degraded
+to `any`, and a browser project got a green build over entirely unchecked code. Round
+730's flip made this reachable from a real build, which is why it was next.
+
+**WHAT SHIPPED.** All 108 `src/lib` `.d.ts` files (566 KB → 3.71 MB of lib source). Plus
+one correctness fix the shipping forced: `keyToDistFileName` special-cased only the two
+`.full` names, so a DOM file's `SourceFile.fileName` would have been
+`lib.dom.generated.d.ts` — a name that exists in no TypeScript distribution and would
+have been rendered by TS2728's "declared here". The six `*.generated` source names now
+map back to what tsc distributes (`dom.generated` → `lib.dom.d.ts`).
+
+**THE UNBUDGETED COST, and the number the owner asked for.** The item estimated ~1 MB.
+It is **3.14 MB**: `dom.generated.d.ts` alone is 2.35 MB, of which **66% is MDN doc
+comments** (webworker 786 KB, 60% comments; even es5 is 71% comments). Emitted the
+existing way — one `RealLibFiles.kt`, one `buildMap { }` lambda — that is a 3.82 MB
+generated source file, and `compileKotlinJvm` **fails with "Not enough memory to run
+compilation" after 7m34s** at the 5 GB `kotlin.daemon.jvmargs` pins for the Kotlin
+daemon. Raising the pin is not available: BUILD.1 already cut Gradle's own daemon to 1g
+to fit 5g on a 7.7 GB box with no swap, and 6g + 1g would invite the kernel OOM killer.
+
+**THE FIX WAS THE EMISSION SHAPE, NOT THE PAYLOAD — and it is a net WIN.** The chunk
+stream is now spread over `RealLibFilesPart0..15.kt` of ~250 KB each, every part a
+trivial `internal object` with one `append(sb: StringBuilder)`; `RealLibFiles`
+concatenates them once and cuts the result back into per-lib strings by recorded CHAR
+lengths (chars, not bytes: the chunker budgets mutf8 bytes but always splits at char
+boundaries, and `substring` is char-indexed). A COLD `compileKotlinJvm` then takes
+**2m25s** — against the ~6.5 min BUILD.1 records for the old single-file shape at a
+sixth of the payload. **So the single big generated file was itself the memory problem
+all along**, and 3.71 MB in 250 KB pieces is cheaper to compile than 566 KB in one.
+Two load-bearing details: the generator now WIPES its output dir first (the part count
+varies with the pin, and a stale `RealLibFilesPartN.kt` would still compile into the
+module), and `libNames`/`libLengths` are declared BEFORE `files` because an object's
+properties initialize in source order.
+
+**THE EVIDENCE IS A MEMBER PROBE.** The item's own recorded trap is real and was
+re-verified: "does `HTMLElement` resolve" passes just as happily when the whole DOM is
+missing, because an unknown name degrades to `any` and `any` is silent. `RealLibsDomTest`
+therefore probes three discriminating axes — an unknown member is REPORTED (TS2339), a
+real member's TYPE is honoured (TS2322), a method's ARITY is enforced (TS2554) — across
+DOM, webworker and scripthost. Run against unmodified HEAD first: **all 6 targets failed,
+all 7 controls passed.** After the change all 15 pass, including the negative control
+that an `es2015`-only lib set still knows nothing of the DOM (which is what proves the
+targets measure the shipped host set and not some unrelated widening of member checking).
+
+**ONE HONEST LIMITATION, pinned as a limitation rather than papered over.** The DOM
+TS2339 target uses `Screen`, not `HTMLElement`. The walker only reports a missing member
+once it can enumerate the receiver's COMPLETE member set, and it gives up on a lib
+interface with a heritage clause — `HTMLElement extends Element, ElementCSSInlineStyle,
+ElementContentEditable, GlobalEventHandlers, HTMLOrSVGElement`. That is the pre-existing
+B153 limit, FN-not-FP, and it is why the webworker probe (`FileReaderSync`, heritage-free)
+fires while the first HTMLElement draft did not. HTMLElement is pinned on the axis that
+DOES discriminate for it — the type of its own members — and the KDoc says why.
+
+**WHY THE DASHBOARD AND THE CORPUS DID NOT MOVE, stated so a future round does not
+re-derive it.** The bench profiles pin `"lib": ["es2020"]`, and the corpus keeps the
+embedded lib (the `useRealLibs` CONSTRUCTOR default is still false and the generator
+never sets it) — so neither requests a host lib and neither can see this change. What DID
+change is a project with no explicit `lib`: every `.full` variant references `dom`,
+`webworker.importscripts` and `scripthost`, so a target-default build now binds 2.35 MB
+more of lib per program, exactly as tsc does. A second-order consequence worth knowing:
+`lib.d.ts` → `dom` → `es2015`, so an **ES5** target-default program now gets the whole
+ES2015 layer, which is also what tsc does (pinned in `RealLibResolverTest`).
+
+**WHAT DID NOT WORK / cost time.**
+
+- The first attempt was the obvious one-line `filterNot` removal, and it burned a 7m34s
+  compile before failing on memory. Worth stating plainly: **the failure mode of "add a
+  megabyte of generated source" is a build OOM, not a slow build**, and the message is
+  the BUILD.1 one, so it reads as a regression in the pin rather than in the change.
+- A local `data class LibEntry` declared inside the task-configuration lambda made the
+  Gradle Kotlin-DSL script fail codegen ("Script compilation error", with an IR dump of
+  the enclosing lambda and no further detail). Two parallel lists instead. Do not declare
+  a local class inside a `tasks.registering { }` lambda.
+- The DOM reassembly pin was written asserting CRLF, mirroring the es5 pin, and failed:
+  **`dom.generated.d.ts` is LF-only while `es5.d.ts` is CRLF.** The pin now asserts LF for
+  DOM and keeps CRLF for es5, which is the sharper claim — a generator that normalised
+  either way would fail one of the two.
+- The HTMLElement TS2339 draft above.
+
+**NEXT — and (c) IS A DIFFERENT, SMALLER PROBLEM NOW than the item describes.** (LIB.1)(c)
+was scoped as "report a REQUESTED lib that is unavailable". After this round
+`Resolution.unavailable` is EMPTY for every resolution (pinned in
+`RealLibResolverTest`), so the condition (c) was written to report no longer arises for
+`dom`/`webworker`/`scripthost`: a non-empty `unavailable` can now only mean a pin bump
+introduced a lib file the generator did not pick up, which is a BUILD error, not a user
+diagnostic. What remains for the user is the OTHER field: `Resolution.unknownNames` — a
+`lib` entry that is not in `libMap` at all — has **zero consumers** anywhere in commonMain
+(verified by grep; the `unknownNames` hits in Checker.kt are an unrelated local
+parameter), so `"lib": ["dmo"]` is still silently ignored where tsc reports TS6046.
+**Its corpus risk is entirely a function of where it is emitted, and that is (c)'s real
+design decision:** the corpus runs the EMBEDDED lib and never reaches `RealLibResolver`
+at all, so a diagnostic raised from the real-lib resolution path moves ZERO baselines,
+while one raised from a raw `options.lib` × `libMap` check reaches all 259 `@lib:` cases
+and needs the full form-vs-meaning judgement under (PARITY.1). Round 730's warning still
+applies either way — key on a user-REQUESTED name, never the transitive closure, since a
+`.full` default lib pulls in host files nobody asked for. The round-688 reflog
+implementation is still the reference.
+
+---
+
 **Round 730 (2026-07-27) — (LIB.1) IS CLOSED. A real project build now uses the REAL
 TypeScript libs, and the flip is FREE: all 8 profiles report the SAME diagnostics CODE FOR
 CODE under both lib sets. The +5 the gating measurement first found were ONE lib-free
@@ -713,40 +825,6 @@ Both things were true at once: the heap was genuinely too small, AND my clock wa
 ---
 
 
-**Round 721 (2026-07-27) — a NEGATIVE result that removes the most attractive-looking
-hypothesis about (LIB.1)'s remaining 24 false positives, plus the first evidence that
-the build loop is now genuinely fast (a filtered test cycle: 1m 56s).**
-
-**The hypothesis, and why it looked strong.** Three of the eight remaining TS2322
-print a source and target that are the SAME TEXT:
-`Type 'NodeArray<T>' is not assignable to type 'NodeArray<T>'` (parser.ts:3583) and
-`WatchCompilerHostOfFilesAndCompilerOptions<T>` not assignable to a union whose FIRST
-MEMBER it is (watchPublic.ts:371/383). A generic reference failing to relate to itself
-would explain all three at once, and would be a perf item too — a self-relation that
-should short-circuit but instead runs a full structural comparison is wasted work.
-
-**It is wrong.** Five probes — self-return, constrained self-return, member-of-union,
-and return-through-a-local — all pass, and the control (an unrelated generic reference
-in the same position) still errors, so the probe can see TS2322 and is discriminating.
-Generic self-assignability is fine. Committed as `GenericSelfAssignabilityTest`, since
-the shapes are worth pinning even though they already work.
-
-**What that leaves, and it is a better lead than the one it replaces.** These FPs
-appear ONLY under real libs, so the failing comparison must involve something the
-CURATED lib does not have. The strongest candidate is symbol-keyed members: the same
-run reports `core.ts:1637` TS2739 as "missing `[Symbol.iterator]`, `[Symbol.toStringTag]`
-from `Set<TElement>`", and `NodeArray<T> extends ReadonlyArray<T>`, which in the real
-lib carries exactly those. So the next probe is not "does `X<T>` relate to `X<T>`" but
-"does a type whose members include well-known-symbol keys relate to itself" — build it
-under `@useRealLibs`, because that is the only place the shape exists.
-
-**Process note.** The round-720 rule held: the probe ran detached and returned in
-1m 56s with warm daemons, versus the multi-round thrash that preceded the heap fix.
-The remaining cost is that the FIRST build after a source change still recompiles the
-whole module; incremental cycles after that are cheap.
-
----
-
 
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
@@ -1065,9 +1143,32 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   43). The +5 that measurement first found on services/server/harness were ONE
   lib-free defect — a `this` pseudo-parameter counted into `minArgumentCount` while
   dropped from `parameters`, so a `this`-carrying function type was not assignable
-  to ITSELF — now fixed at all 19 signature builders. **REMAINING: (b) and (c)
-  below.**
-  THE DEFECT (measured rounds 687–688): `RealLibFiles` ships no
+  to ITSELF — now fixed at all 19 signature builders.
+  **(b) IS DONE (round 731): the DOM / webworker / scripthost sets are SHIPPED** —
+  all 108 `src/lib` files, 566 KB → 3.71 MB, plus the `*.generated` →
+  distributed-name mapping in `keyToDistFileName`. Proven by MEMBER probes
+  (`RealLibsDomTest`: unknown member reported, member type honoured, method arity
+  enforced, on all three host sets), every target verified failing on unmodified
+  HEAD. **The cost was in the BUILD, not the compiler:** the payload is 3.14 MB
+  (not the ~1 MB estimated; `dom.generated` alone is 2.35 MB, 66% MDN comments)
+  and emitting it as one generated file OOMs the Kotlin daemon at the BUILD.1 5 GB
+  pin after 7m34s — so the emission is split over 16 `RealLibFilesPart*.kt`, after
+  which a COLD compile takes 2m25s, i.e. CHEAPER than the old single-file shape at
+  a sixth of the payload. Dashboard unmoved (profiles pin `"lib": ["es2020"]`),
+  corpus unmoved (still the embedded lib), cost gate +0.00% on every counter.
+  **REMAINING: (c) only — and it SHRANK.** With everything shipped,
+  `Resolution.unavailable` is EMPTY for every resolution (pinned), so the
+  "requested but unshipped" case (c) was written for no longer exists — a
+  non-empty `unavailable` can now only mean a pin bump outran the generator, which
+  argues for a build error, not a user diagnostic. What is left for the user is
+  `Resolution.unknownNames` (a `lib` entry not in `libMap` at all — **zero
+  consumers today**; tsc reports TS6046). **Its corpus risk depends entirely on
+  where it is emitted, and that is (c)'s real design decision:** the corpus runs
+  the EMBEDDED lib and never consults `RealLibResolver`, so a diagnostic raised
+  from the real-lib resolution path moves ZERO baselines, while one raised from a
+  raw `options.lib` × `libMap` check reaches all 259 `@lib:` cases. See the
+  round-731 note.
+  THE DEFECT (measured rounds 687–688, FIXED in (b) above): `RealLibFiles` shipped no
   `dom.generated`/`dom.iterable.generated`/`webworker*`, so `"lib": ["dom"]` records
   the file in `Resolution.unavailable`, which **nothing outside RealLibs.kt ever
   consumes** — no diagnostic, no failure. Consequence on a 3-line program:
