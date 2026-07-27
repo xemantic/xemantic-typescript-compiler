@@ -20,6 +20,67 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 733 (2026-07-27) — (SPINE.1) step (a) DONE, and it FALSIFIES the item TWICE.** The
+two hottest spine leave handlers were attributed INTERNALLY (not guessed — round 732's
+whole lesson), and the item's premise does not survive: **`cpaSpineLeave` + `ccetSpineLeave`
+are not "legacy-parity frame bookkeeping". 88.4% of their measured time is the cpa and ccet
+passes' OWN checking work** (`checkPropertyAccessInExpr`, `checkSingleCallExpressionTypes`)
+running inside the frame-ambient block. And the item's named target — the ancestor climbs —
+is **176 ms, not the predicted 1-3 s**. Full derivation, per-section table and reproduction:
+`docs/perf/spine-leave-attribution.md`. Suite 12,882 -> **12,887 / 0 / 3** (+5 pins,
+`SpineSectionProbeTest`); cost gate all 20 counters +0.00%; profile `--listAll` identical
+probe-on vs probe-off (46 errors).
+
+**WHAT WAS BUILT.** `SpineSections` (in SpineDispatch.kt) + splits in the two handlers,
+opt-in via `--spineSections` and behaviour-free when off (`t`/`split`/`close`/`hit` are
+`inline`, so production pays a load-and-branch, never a call). The sections PARTITION each
+handler (7 cpa + 4 ccet) via a running-timestamp split inserted BETWEEN existing sections —
+no control flow was restructured. Nested sub-measures wrap the three ancestor climbs (each
+split into a timing wrapper + an untouched `…Core`) and both frame-ambient installs (a
+`sec`/`kind` param defaulting to `NONE`, so only the LEAVE call sites record), and the
+ambient is reported twice: whole-wrapper and install+restore ONLY — that second row is what
+separates scaffolding from work.
+
+**THE NUMBERS** (compiler profile, 856,962 nodes, net of a 42 ns probe pair; partition total
+8,195 ms net vs round 732's un-split 7,412 ms, so ~10% probe-inflated — relative attribution
+only). cpaSpineLeave 4,934 ms: anchor stmt **3,304** (45,626 hits), owner cond/subject
+**1,349** (19,551), VariableDeclaration recordings 180, frame pop 48, loop-var restores 25,
+heritage EWTA 17 (2 hits), PropertyDeclaration 11 (5 hits). ccetSpineLeave 3,254 ms:
+call/new/tagged anchor **3,136** (52,972), VariableDeclaration recordings 78, frame pop 33,
+override restores 7. **THE SPLIT THAT MATTERS: inside the frame-ambient block 7,601 ms
+(92.8%), of which the ambient install+restore is only 360 ms — so the passes' own work is
+7,241 ms = 88.4%. Outside the ambient: 587 ms (7.2%), of which the three climbs are 176 ms
+(2.1%).**
+
+**BOTH STEP-(b) HYPOTHESES PRICED AND DEAD.** (1) Memoizing `cpaM2ChainOk`/`cpaM2StmtPosition`:
+the entire cpa climb population is **85 ms** (77 + 8), 176 ms including `ccetM3ChainOk` —
+falsified by 6-17x, and § 0's law bites (a keyed probe cannot pay for a 932 ns walk over mean
+ancestor depth 6). (2) A parent-kindId dispatch axis: the three parent-keyed sections are
+`owner` 1,349 ms (of which ~1,340 is its 19,551 hits' WORK), EWTA 17 ms and PropertyDeclaration
+11 ms — **worth <=60 ms**. Five of cpaSpineLeave's seven sections cost 281 ms across 856,962
+consultations EACH; consultation is not the expense here either.
+
+**WHAT THE NUMBERS DO POINT AT — the next unit of work.** `checkSingleCallExpressionTypes` is
+**53.6 us per CallExpression** (2,931 ms over 52,413 anchors, minus the 2.3 us install). It is
+a **920-line straight-line function with 18 `diagnostics.add` sites and 7 `run{}` blocks, run
+in full for every call expression in the program** — 2.9 s, ~10% of a ~28 s compile, in ONE
+function, and the largest per-node cost measured anywhere in this compiler. Unlike the cpa
+anchors (which walk a statement subtree, so tens of us is expected) this is per-NODE. Round
+732's per-kind table agrees: it put CALL_EXPRESSION at 3,636 ms across all 59 handlers, and
+3,082 ms of that is ccetSpineLeave alone.
+
+**WHAT DID NOT WORK / WHAT WAS NOT DONE.** (a) NOTHING was optimised, deliberately: every
+candidate the item named measures below the 560 ms drift band of a 28 s compile, and the
+largest remaining scaffolding item (the 360 ms ambient install+restore) is ~1.2% — landing a
+speculative change to have something to show is exactly what round 732's falsification bought
+the right not to do. (b) The first probe calibrated at JVM STARTUP and read 40,573 ns per
+timestamp pair (the cold interpreter), making every net figure NEGATIVE; the calibration is
+now IN SITU — an empty span at the top of `cpaSpineLeave`, once per node, reading 42 ns. (c)
+A checked-and-discarded lead: the legacy `checkCallTypesInExpr` still calls
+`checkSingleCallExpressionTypes` and truncates the diagnostics via `ccetM3IsAnchored`, which
+looks like emit-twice — it is not, because the ccet/cpa/cta legacy PASSES were retired
+(rounds 585/592), so those truncation marks are inert residue. No duplicate work.
+
 **Round 732 (2026-07-27) — (DISPATCH.1) step (a) DONE, and it FALSIFIES the item.** The
 per-kind handler table was DERIVED (not guessed) and VERIFIED (whole corpus suite run
 with the table applied, byte-identical profile `--listAll`), and the measured prize is
@@ -1540,40 +1601,53 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **`docs/perf/dispatch-table.md`** — read that before proposing anything
   shaped like this again.
 
-- [ ] **(SPINE.1) Attribute and shrink `cpaSpineLeave` + `ccetSpineLeave` —
-  7.4 s, 40% of the spine, measured round 732. THIS is where the spine's time
-  is; (DISPATCH.1) proved it is not dispatch.** The round-732 per-handler
-  attribution (`--dispatchProbe`, compiler profile, 856,962 nodes) found six
-  handlers holding 71% of the 18.5 s spine: `cpaSpineLeave` 4,366 ms,
-  `ccetSpineLeave` 3,046 ms, `spineCtaM3StatementAnchor` 2,900 ms,
-  `spineIanyEnterNode` 1,025 ms, `ccetSpineEnter` 920 ms, `ctaSpineEnter`
-  586 ms — while the other 53 handlers TOGETHER are ~4.8 s. `cpaSpineLeave`
-  costs **5.4 us per node of the whole program** and `ccetSpineLeave` 3.5 us;
-  both are OPEN (parent-keyed `run{}` blocks, nodeId restore lists, frame pops),
-  so no kind table touches them. These are the cta/cpa/ccet legacy-parity frame
-  SKELETONS — per-node bookkeeping that exists to reproduce the deleted
-  walkers' ambient state, not type-system work and not dispatch.
-  **STEP (a): attribute INSIDE the two handlers** — the same technique that
-  worked in round 732: an opt-in by-id split of each handler's top-level
-  sections (for `cpaSpineLeave`: the anchor `if`, the `owner`-when `run{}`, the
-  `ExpressionWithTypeArguments` `run{}`, the PropertyDeclaration arm, the
-  loop-var restore loop, the VariableDeclaration arm, the frame pop) with
-  per-(section, kind) nanos. Do NOT guess which section is hot — round 732's
-  whole lesson is that the guess was wrong by 5x.
-  **STEP (b):** the likely shapes, to be confirmed by (a), are a per-node
-  `cpaM2StmtPosition`/`cpaM2ChainOk` ancestor climb that could be nodeId-memoized
-  (the `spineXxStatus` pattern every migrated pass already uses), and the
-  parent-keyed `run{}` blocks which are cheap to gate on the PARENT's kindId
-  (a second dispatch axis the round-732 table deliberately did not use).
-  **EXPECTED VALUE, stated so it can be falsified:** if the ancestor climbs
-  dominate, memoizing them should remove 1-3 s; if the cost is spread evenly
-  over genuinely necessary bookkeeping, it will not, and the honest answer is
-  that legacy-parity scaffolding is the price of the INV.4 migration and the
-  next lever is elsewhere. Gate: corpus suite + `--listAll` x8 + `cost_gate.py`.
-  Per-kind cross-check: CALL_EXPRESSION 3,636 ms over 52,509 nodes (69 us each),
-  VARIABLE_STATEMENT 2,835 ms over 14,712 (193 us each), RETURN_STATEMENT
-  1,839 ms over 15,662 (117 us each) — a fix that does not move those is not
-  the fix.
+- [x] **(SPINE.1) Attribute and shrink `cpaSpineLeave` + `ccetSpineLeave`** —
+  **step (a) DONE round 733, and it FALSIFIES the item; step (b) must NOT be
+  landed as specified.** The intra-handler attribution (`--spineSections`,
+  compiler profile, 856,962 nodes) shows the item's premise is wrong on both
+  counts. (1) These handlers are NOT "legacy-parity frame bookkeeping":
+  **88.4% of their time (7,241 of 8,195 ms) is the cpa and ccet passes' OWN
+  checking work** — `checkPropertyAccessInExpr` and
+  `checkSingleCallExpressionTypes` inside the frame-ambient block. The ambient
+  install+restore is 360 ms and the whole non-work scaffolding ~950 ms. (2)
+  The named target, the ancestor climbs, is **176 ms** (`cpaM2ChainOk` 77 +
+  `cpaM2StmtPosition` 8 + `ccetM3ChainOk` 91) — the 1-3 s prediction is wrong
+  by 6-17x, and § 0's law forbids the memo (932 ns per climb over mean
+  ancestor depth 6). The parent-kindId dispatch axis prices at <=60 ms. Full
+  per-section table, the work/scaffolding split and reproduction steps:
+  **`docs/perf/spine-leave-attribution.md`** — read it before proposing
+  anything shaped like this again. LANDED: `SpineSections` + `--spineSections`
+  (opt-in, behaviour-free when off) and `SpineSectionProbeTest`. NOT landed:
+  any optimisation — every candidate measures below the 560 ms drift band of a
+  28 s compile.
+
+- [ ] **(CALL.1) Attribute INSIDE `checkSingleCallExpressionTypes` — 2.9 s,
+  53.6 us per CallExpression, the largest per-node cost measured anywhere in
+  this compiler (round 733).** It is a **920-line straight-line function with
+  18 `diagnostics.add` sites and 7 `run{}` blocks, executed in full for every
+  one of the program's 52,413 call expressions** (2,931 ms over 52,413
+  anchors, minus a 2.3 us ambient install). Unlike the cpa anchors — which
+  walk a statement subtree, so tens of us is expected — this is per-NODE, and
+  ~10% of a ~28 s compile sits in one function. **STEP (a): attribute by
+  section, do not guess.** The `SpineSections` harness from round 733 is the
+  model: split the function's top-level regions with a running timestamp
+  (opt-in, behaviour-free when off, pinned by its own test) and separate the
+  type-system calls (`getCalleeType`, `getCallSignaturesOfType`,
+  `checkArgumentsAgainstSignature`, `checkTypeRelatedTo`) from the per-call
+  PRE-work each emission site does before it knows whether it will fire
+  (`getLineAndCharacterOfPosition` x22, `expressionTrueEnd` x16,
+  `typeToString` x12, the `cjsDefaultNsShapes`-style per-call map builds).
+  **EXPECTED VALUE, stated so a future round can falsify it:** if the
+  never-firing emission sites' pre-work dominates, hoisting it behind a cheap
+  pre-test removes **1-2 s**; if the cost is in signature resolution and
+  argument relations, it is genuine type-system work and the lever is the
+  relation engine (M3.1), not this function — say so and stop.
+  **A CAUTION carried forward from rounds 732 and 733:** both of those rounds
+  predicted a lever from a plausible reading of an aggregate and were wrong by
+  5x and 6-17x respectively. Price the population BEFORE building anything;
+  counters decide, `scripts/ab-interleaved.sh` medians AND win rate confirm.
+  Gate: corpus suite + `--listAll` + `cost_gate.py`.
+
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is
   parked with an explicit unpark condition — "a host with ≥8 real cores (re-run this

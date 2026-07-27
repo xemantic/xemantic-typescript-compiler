@@ -16,11 +16,21 @@
 > `cpaSpineLeave` 4,366 ms, `ccetSpineLeave` 3,046 ms,
 > `spineCtaM3StatementAnchor` 2,900 ms, `spineIanyEnterNode` 1,025 ms,
 > `ccetSpineEnter` 920 ms, `ctaSpineEnter` 586 ms; the other 53 together are
-> ~4.8 s. That is the cta/cpa/ccet legacy-parity frame bookkeeping, and shrinking
-> it is a PER-HANDLER problem. Full derivation: `docs/perf/dispatch-table.md`;
-> follow-on queue item: **(SPINE.1)**. Stage 1 of § 0.1's staged plan is
-> therefore NOT worth 11–19%, and stage 2's "DISPATCH.1 retroactively unlocks
-> M0.4" does not follow — a migrated pass costs its own work either way.
+> ~4.8 s. **ROUND-733 CORRECTION TO THAT LAST SENTENCE: it is NOT "frame
+> bookkeeping".** Attributing INSIDE the top two (`--spineSections`) shows
+> **88.4% of their 8.2 s is the cpa and ccet passes' OWN checking work**
+> (`checkPropertyAccessInExpr`, `checkSingleCallExpressionTypes`); the ambient
+> install+restore is 360 ms and the ancestor climbs — (SPINE.1)'s named target,
+> predicted at 1–3 s — are **176 ms**. A handler's per-handler nanos are its
+> WORK, not its scaffolding; "handler X is N ms" never licenses "X's
+> bookkeeping costs N ms". What it really points at is
+> `checkSingleCallExpressionTypes`: a 920-line function run in full for every
+> one of 52,413 call expressions at **53.6 µs each = 2.9 s**, the largest
+> per-node cost measured anywhere here. Full derivation:
+> `docs/perf/spine-leave-attribution.md`; follow-on queue item: **(CALL.1)**.
+> Stage 1 of § 0.1's staged plan is therefore NOT worth 11–19%, and stage 2's
+> "DISPATCH.1 retroactively unlocks M0.4" does not follow — a migrated pass
+> costs its own work either way.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope

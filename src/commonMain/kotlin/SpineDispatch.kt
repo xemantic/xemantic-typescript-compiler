@@ -480,3 +480,238 @@ object SpineDispatch {
         }
     }
 }
+
+/**
+ * (SPINE.1) step (a) — the opt-in INTRA-handler attribution for the two
+ * hottest spine leave handlers, `cpaSpineLeave` (4,366 ms) and
+ * `ccetSpineLeave` (3,046 ms), together 40% of the round-732 spine.
+ *
+ * ## Why a second probe object
+ *
+ * [SpineDispatch] answers *which handler*; it cannot answer *which part of a
+ * handler*, and round 732's lesson is that the guess about "which part" is the
+ * step that goes wrong. Both handlers are a SEQUENCE of independent top-level
+ * sections, so the cheapest sound attribution is a running timestamp split
+ * between them ([split]) plus dedicated timers around the two ancestor climbs
+ * (`cpaM2ChainOk`, `ccetM3ChainOk`) and the two frame-ambient installs, which
+ * are the parts a future optimisation would target.
+ *
+ * ## Behaviour-free when off (INV.0)
+ *
+ * [mode] is [OFF] in production; every entry point returns immediately on one
+ * static field read, and [t]/[split]/[hit] are `inline` so a production call
+ * is a load-and-branch, never a call. Pinned by `SpineSectionProbeTest`.
+ *
+ * ## Reading the report
+ *
+ * The section rows PARTITION the handler (they are disjoint spans of one
+ * call). The `of which` rows do NOT — they are nested inside the sections and
+ * are reported so the split between *deciding to work* (the climbs), *setting
+ * up to work* (the ambient install) and *the work itself* is explicit. Nanos
+ * are probe-inflated by one timestamp pair per split, exactly as round 732's
+ * per-handler nanos were; [overheadNanos] measures the pair so the report can
+ * state the inflation. They are sound for RELATIVE attribution only.
+ */
+object SpineSections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Opt-in; [OFF] in production. Set by `--spineSections`. */
+    var mode: Int = OFF
+
+    // Disjoint sections of cpaSpineLeave, in source order.
+    const val CPA_ANCHOR = 0
+    const val CPA_OWNER = 1
+    const val CPA_EWTA = 2
+    const val CPA_PROPDECL = 3
+    const val CPA_RESTORES = 4
+    const val CPA_VARDECL = 5
+    const val CPA_POP = 6
+    // Disjoint sections of ccetSpineLeave, in source order.
+    const val CCET_RESTORES = 7
+    const val CCET_CALL = 8
+    const val CCET_VARDECL = 9
+    const val CCET_POP = 10
+    // Nested sub-measures (inside the sections above; NOT part of the partition).
+    const val CPA_CHAINOK = 11
+    const val CPA_STMTPOS = 12
+    const val CCET_CHAINOK = 13
+    const val CPA_AMBIENT = 14
+    const val CCET_AMBIENT = 15
+    const val CPA_INSTALL = 16
+    const val CCET_INSTALL = 17
+
+    /**
+     * The in-situ calibration: an EMPTY span opened and closed back-to-back at
+     * the top of `cpaSpineLeave`, once per node. Its mean is the cost of one
+     * probe timestamp pair under the same JIT state and cache pressure as the
+     * real splits — unlike a startup loop, which measures a cold interpreter
+     * (the first draft read 40 µs/pair and made every net figure negative).
+     */
+    const val OVERHEAD = 18
+    const val NONE = -1
+
+    const val N = 19
+
+    val names: Array<String> = arrayOf(
+        "cpa: anchor stmt (m3a/m3b)", "cpa: owner cond/subject (m3b)",
+        "cpa: heritage EWTA (m3c)", "cpa: PropertyDeclaration init (m3c)",
+        "cpa: loop-var restores", "cpa: VariableDeclaration recordings",
+        "cpa: frame pop",
+        "ccet: override restores", "ccet: call/new/tagged anchor (m3)",
+        "ccet: VariableDeclaration recordings", "ccet: frame pop",
+        "  of which cpaM2ChainOk", "  of which cpaM2StmtPosition",
+        "  of which ccetM3ChainOk",
+        "  of which withCpaFrameAmbient (install+work)",
+        "  of which withCcetFrameAmbient (install+work)",
+        "  of which cpa ambient install+restore only",
+        "  of which ccet ambient install+restore only",
+        "  probe timestamp pair (in situ)",
+    )
+
+    /** The first index that is a nested sub-measure rather than a partition row. */
+    const val FIRST_NESTED = CPA_CHAINOK
+
+    var nanos: Array<LongArray> = Array(N) { LongArray(SpineDispatch.KINDS) }
+    var calls: Array<LongArray> = Array(N) { LongArray(SpineDispatch.KINDS) }
+
+    /** Times the section's gate PASSED, i.e. it actually did its work. */
+    var hits: LongArray = LongArray(N)
+
+    /** Ancestor-chain length above the climb's start node, summed per climb —
+     *  an UPPER bound on the steps the climb takes (it may return early).
+     *  Probe-only: computed in the timing wrapper, never in the climb. */
+    var climbDepth: LongArray = LongArray(N)
+
+    /** Cost of one probe timestamp pair, measured by an empty split. */
+    var overheadNanos: Long = 0
+    var overheadCalls: Long = 0
+
+    fun reset() {
+        nanos = Array(N) { LongArray(SpineDispatch.KINDS) }
+        calls = Array(N) { LongArray(SpineDispatch.KINDS) }
+        hits = LongArray(N)
+        climbDepth = LongArray(N)
+        overheadNanos = 0
+        overheadCalls = 0
+    }
+
+    // The four entry points below are DELIBERATELY inline despite carrying no
+    // function-typed parameter: they sit on the per-node spine path, so the
+    // production cost must be one static read plus a not-taken branch, never a
+    // call. (Round 732's `SpineDispatch.work()` is a call because it is only
+    // reached at a handler's rare work points.)
+
+    /** A timestamp, or 0 when off. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == OFF) 0L else PassTiming.nowNanos()
+
+    /**
+     * Close the span that started at [t0], attribute it to [sec] for [kind],
+     * and return a fresh timestamp for the next section. Returns 0 when off.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun split(sec: Int, kind: Int, t0: Long): Long {
+        if (mode == OFF) return 0L
+        val now = PassTiming.nowNanos()
+        nanos[sec][kind] += now - t0
+        calls[sec][kind]++
+        return now
+    }
+
+    /** Close a NESTED span without starting a new one. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun close(sec: Int, kind: Int, t0: Long) {
+        if (mode == OFF) return
+        nanos[sec][kind] += PassTiming.nowNanos() - t0
+        calls[sec][kind]++
+    }
+
+    /** Record that [sec]'s gate passed (it did its work, not just its test). */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun hit(sec: Int) {
+        if (mode == OFF) return
+        hits[sec]++
+    }
+
+    /** Probe-only: add the ancestor depth above [node] to [sec]'s climb budget. */
+    fun climb(sec: Int, node: Node) {
+        if (mode == OFF) return
+        var d = 0L
+        var c: Node? = (node as NodeBase).parent
+        while (c != null) { d++; c = (c as NodeBase).parent }
+        climbDepth[sec] += d
+    }
+
+    /** Calibrate [overheadNanos] with an empty timestamp pair. */
+    fun calibrate() {
+        if (mode == OFF) return
+        val a = PassTiming.nowNanos()
+        overheadNanos += PassTiming.nowNanos() - a
+        overheadCalls++
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (SPINE.1) intra-handler attribution: cpaSpineLeave + ccetSpineLeave ==")
+        val ovhCalls = calls[OVERHEAD].sum()
+        val ovh = if (ovhCalls > 0) nanos[OVERHEAD].sum() / ovhCalls else 0L
+        val startup = if (overheadCalls > 0) overheadNanos / overheadCalls else 0L
+        appendLine(
+            "probe timestamp-pair overhead: $ovh ns in situ (over $ovhCalls calls); " +
+                "$startup ns at startup (cold, over $overheadCalls calls — NOT used)"
+        )
+        var partition = 0L
+        var raw = 0L
+        for (s in 0 until FIRST_NESTED) { partition += net(s, ovh); raw += nanos[s].sum() }
+        appendLine(
+            "partition total (cpa+ccet leave): ${partition / 1_000_000} ms net, " +
+                "${raw / 1_000_000} ms raw"
+        )
+        appendLine("-- sections (disjoint; ms net of probe overhead) --")
+        for (s in 0 until N) {
+            val c = calls[s].sum()
+            if (c == 0L) continue
+            if (s == FIRST_NESTED) appendLine("-- nested sub-measures (INSIDE the sections above) --")
+            val ns = net(s, ovh)
+            val depth = climbDepth[s]
+            appendLine(
+                "  ${names[s].padEnd(44)} ${(ns / 1_000_000).toString().padStart(6)} ms net " +
+                    "(${(nanos[s].sum() / 1_000_000).toString().padStart(6)} raw) " +
+                    "over ${c.toString().padStart(9)} calls = ${
+                        if (c > 0) ns / c else 0
+                    } ns each, hits=${hits[s]}" +
+                    if (depth > 0) ", meanAncestorDepth=${depth / c}" else ""
+            )
+        }
+        appendLine("-- top kinds per section (ms net) --")
+        for (s in 0 until N) {
+            val c = calls[s].sum()
+            if (c == 0L) continue
+            val order = (0 until SpineDispatch.KINDS)
+                .filter { calls[s][it] > 0 }
+                .sortedByDescending { nanos[s][it] }
+                .take(5)
+            appendLine("  ${names[s].trim()}: " + order.joinToString(", ") {
+                "${SpineDispatch.kindNames[it]}=${
+                    (nanos[s][it] - ovh * calls[s][it]) / 1_000_000
+                }ms/${calls[s][it]}"
+            })
+        }
+    }
+
+    private fun net(sec: Int, ovh: Long): Long {
+        var total = 0L
+        for (k in 0 until SpineDispatch.KINDS) total += nanos[sec][k] - ovh * calls[sec][k]
+        return total
+    }
+
+    /** Machine-readable dump: one line per (section, kind) with data. */
+    fun csv(): String = buildString {
+        appendLine("section,kind,calls,nanos")
+        for (s in 0 until N) for (k in 0 until SpineDispatch.KINDS) {
+            if (calls[s][k] == 0L) continue
+            appendLine("\"${names[s].trim()}\",${SpineDispatch.kindNames[k]},${calls[s][k]},${nanos[s][k]}")
+        }
+    }
+}

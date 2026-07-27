@@ -73,6 +73,11 @@ fun main(args: Array<String>) {
             "--dispatchGated", "--dispatchgated" -> {
                 SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.GATED
             }
+            // (SPINE.1)(a): the opt-in intra-handler attribution.
+            "--spineSections", "--spinesections" -> {
+                SpineSections.reset(); SpineSections.mode = SpineSections.ON
+                repeat(200) { SpineSections.calibrate() }
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -121,6 +126,13 @@ fun main(args: Array<String>) {
         print(SpineDispatch.csv())
         println("== (DISPATCH.1) csv end ==")
         SpineDispatch.mode = SpineDispatch.OFF
+    }
+    if (SpineSections.mode == SpineSections.ON) {
+        println(SpineSections.report())
+        println("== (SPINE.1) csv ==")
+        print(SpineSections.csv())
+        println("== (SPINE.1) csv end ==")
+        SpineSections.mode = SpineSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -251,6 +263,7 @@ private fun printUsage() {
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
           --dispatchProbe    (DISPATCH.1) per-handler/per-kind spine attribution
           --dispatchGated    (DISPATCH.1) run only the derived per-kind handler table
+          --spineSections    (SPINE.1) intra-handler attribution of the two hot leaves
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)

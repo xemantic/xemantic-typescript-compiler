@@ -915,7 +915,15 @@ class Checker(
 
     /** Install [frame]'s state into the ambient fields the ccet helpers and
      *  emitters consult, run [block], restore. */
-    private inline fun withCcetFrameAmbient(frame: CcetFrame, block: () -> Unit) {
+    private inline fun withCcetFrameAmbient(
+        frame: CcetFrame,
+        sec: Int = SpineSections.NONE,
+        kind: Int = 0,
+        block: () -> Unit,
+    ) {
+        // (SPINE.1)(a): [sec] is NONE at every call site but ccetSpineLeave's,
+        // so the probe attributes only the LEAVE handler's installs.
+        val t0 = if (sec >= 0) SpineSections.t() else 0L
         val sLT = currentLocalTypes; val sPB = currentParamBindingNames
         val sTS = currentTypeParamScope; val sTA = currentTypeParamAstForOps
         val sBS = currentSuperBaseSig; val sBT = currentSuperBaseType
@@ -936,13 +944,19 @@ class Checker(
             f.nsSymbol?.let { inferenceNamespaceStack.addLast(it) }
             f.classSym?.let { callWalkerClassStack.addLast(it) }
         }
+        if (sec >= 0) SpineSections.close(SpineSections.CCET_INSTALL, kind, t0)
         try { block() } finally {
+            val t1 = if (sec >= 0) SpineSections.t() else 0L
             currentLocalTypes = sLT; currentParamBindingNames = sPB
             currentTypeParamScope = sTS; currentTypeParamAstForOps = sTA
             currentSuperBaseSig = sBS; currentSuperBaseType = sBT
             currentCheckFileName = sCFN; currentFlowGraph = sFG
             inferenceNamespaceStack.clear(); inferenceNamespaceStack.addAll(sNs)
             callWalkerClassStack.clear(); callWalkerClassStack.addAll(sCls)
+            if (sec >= 0) {
+                SpineSections.close(SpineSections.CCET_INSTALL, kind, t1)
+                SpineSections.close(sec, kind, t0)
+            }
         }
     }
 
@@ -998,6 +1012,16 @@ class Checker(
      *  member param defaults, class ACCESSOR param defaults. Declare-module
      *  subtrees are handled by the frame `dead` flag, not here. */
     private fun ccetM3ChainOk(start: Node): Boolean {
+        // (SPINE.1)(a): timed separately from the section; OFF in production.
+        if (SpineSections.mode == SpineSections.OFF) return ccetM3ChainOkCore(start)
+        val t0 = PassTiming.nowNanos()
+        val r = ccetM3ChainOkCore(start)
+        SpineSections.close(SpineSections.CCET_CHAINOK, (start as NodeBase).kindId, t0)
+        SpineSections.climb(SpineSections.CCET_CHAINOK, start)
+        return r
+    }
+
+    private fun ccetM3ChainOkCore(start: Node): Boolean {
         var cur: Node = start
         while (true) {
             val parent = (cur as NodeBase).parent ?: return false
@@ -1401,10 +1425,14 @@ class Checker(
 
     private fun ccetSpineLeave(node: Node) {
         if (spineIsDts || spineIsJsLike) return
+        // (SPINE.1)(a): opt-in intra-handler attribution; OFF in production.
+        val kid = (node as NodeBase).kindId
+        var tp = SpineSections.t()
         val id = (node as NodeBase).nodeId
         // Scoped override restores (If-narrowing, loop-var shadows).
         while (ccetRestores.isNotEmpty() && ccetRestores.last().nodeId == id && id >= 0) {
             SpineDispatch.work()
+            SpineSections.hit(SpineSections.CCET_RESTORES)
             val r = ccetRestores.removeLast()
             for ((i, nm) in r.names.withIndex()) {
                 if (r.hadPrev[i]) r.frame.localTypes[nm] = r.prevTypes[i]!!
@@ -1412,6 +1440,7 @@ class Checker(
             }
             for (nm in r.addedBindings) r.frame.paramBindings.remove(nm)
         }
+        tp = SpineSections.split(SpineSections.CCET_RESTORES, kid, tp)
         // (ccet-m3): the per-call-node anchors — Call/New/TaggedTemplate
         // emissions run from the spine at the node's OWN leave (probe-safe)
         // under the frame ambient; the legacy arms truncate via the recorded
@@ -1422,8 +1451,9 @@ class Checker(
         if (node is CallExpression || node is NewExpression || node is TaggedTemplateExpression) {
             val topF = ccetFrames.last()
             if (!topF.dead && ccetM3ChainOk(node)) {
+                SpineSections.hit(SpineSections.CCET_CALL)
                 ccetM3MarkAnchored(node)
-                withCcetFrameAmbient(topF) {
+                withCcetFrameAmbient(topF, SpineSections.CCET_AMBIENT, kid) {
                     when ((node as NodeBase).kindId) {
                         NodeKind.CALL_EXPRESSION -> { node as CallExpression; checkSingleCallExpressionTypes(node, spineSource, spineFileName) }
                         NodeKind.NEW_EXPRESSION -> { node as NewExpression; checkSingleNewExpressionTypes(node, spineSource, spineFileName) }
@@ -1432,6 +1462,7 @@ class Checker(
                 }
             }
         }
+        tp = SpineSections.split(SpineSections.CCET_CALL, kid, tp)
         // (ccet-m3): the Var-arm ORDERED recordings at each decl's leave —
         // the spine's per-node order reproduces the legacy interleave for
         // free (a call in decl k+1's initializer leaves BEFORE decl k+1's
@@ -1441,13 +1472,21 @@ class Checker(
             val vs = (vdl as? NodeBase)?.parent
             if (vdl is VariableDeclarationList && vs is VariableStatement) {
                 val frame = ccetFrames.last()
-                if (!frame.dead) withCcetFrameAmbient(frame) { ccetApplyDeclRecordings(node) }
+                if (!frame.dead) {
+                    SpineSections.hit(SpineSections.CCET_VARDECL)
+                    withCcetFrameAmbient(frame, SpineSections.CCET_AMBIENT, kid) {
+                        ccetApplyDeclRecordings(node)
+                    }
+                }
             }
         }
+        tp = SpineSections.split(SpineSections.CCET_VARDECL, kid, tp)
         // Frame pops.
         if (ccetFrames.size > 1 && ccetFrames.last().owner === node) {
+            SpineSections.hit(SpineSections.CCET_POP)
             ccetFrames.removeLast()
         }
+        SpineSections.close(SpineSections.CCET_POP, kid, tp)
     }
 
     /** The legacy VariableStatement arm's per-decl recordings: callable-
@@ -1509,6 +1548,17 @@ class Checker(
      *  ModuleDeclaration arm walks only ModuleBlock bodies). Fails CLOSED on
      *  unknown edges. */
     private fun cpaM2ChainOk(stmt: Node, forAnchor: Boolean = false): Boolean {
+        // (SPINE.1)(a): the climb is the memo candidate, so it is timed
+        // SEPARATELY from the sections that call it. OFF in production.
+        if (SpineSections.mode == SpineSections.OFF) return cpaM2ChainOkCore(stmt, forAnchor)
+        val t0 = PassTiming.nowNanos()
+        val r = cpaM2ChainOkCore(stmt, forAnchor)
+        SpineSections.close(SpineSections.CPA_CHAINOK, (stmt as NodeBase).kindId, t0)
+        SpineSections.climb(SpineSections.CPA_CHAINOK, stmt)
+        return r
+    }
+
+    private fun cpaM2ChainOkCore(stmt: Node, forAnchor: Boolean): Boolean {
         var cur: Node = stmt
         while (true) {
             val parent = (cur as NodeBase).parent ?: return false
@@ -1635,7 +1685,16 @@ class Checker(
 
     /** (cpa-m2a): is [node] at a position the legacy dispatcher visits AS a
      *  statement — a statement-LIST element or a single-statement position? */
-    private fun cpaM2StmtPosition(node: Node): Boolean = when ((node as NodeBase).parent) {
+    private fun cpaM2StmtPosition(node: Node): Boolean {
+        // (SPINE.1)(a): timed separately; OFF in production.
+        if (SpineSections.mode == SpineSections.OFF) return cpaM2StmtPositionCore(node)
+        val t0 = PassTiming.nowNanos()
+        val r = cpaM2StmtPositionCore(node)
+        SpineSections.close(SpineSections.CPA_STMTPOS, (node as NodeBase).kindId, t0)
+        return r
+    }
+
+    private fun cpaM2StmtPositionCore(node: Node): Boolean = when ((node as NodeBase).parent) {
         is SourceFile, is ModuleBlock, is Block, is CaseClause, is DefaultClause,
         is IfStatement, is ForStatement, is ForInStatement, is ForOfStatement,
         is WhileStatement, is DoStatement, is LabeledStatement, is WithStatement -> true
@@ -1646,7 +1705,14 @@ class Checker(
      *  stack into the ambient fields (the legacy helpers — populate/shadowing/
      *  getTypeOfExpression — consult them, incl. the two-stacks bridging in
      *  populateParameterLocalTypes), plus the per-dispatch file ambient. */
-    private inline fun withCpaFrameAmbient(frame: CpaFrame, block: () -> Unit) {
+    private inline fun withCpaFrameAmbient(
+        frame: CpaFrame,
+        sec: Int = SpineSections.NONE,
+        kind: Int = 0,
+        block: () -> Unit,
+    ) {
+        // (SPINE.1)(a): [sec] is NONE at every call site but cpaSpineLeave's.
+        val t0 = if (sec >= 0) SpineSections.t() else 0L
         val sLT = currentLocalTypes; val sPB = currentParamBindingNames
         val sEC = currentEnumConstrainedParams; val sSh = currentShadowedNames
         val sCFN = currentCheckFileName; val sFG = currentFlowGraph
@@ -1663,7 +1729,9 @@ class Checker(
         inStaticClassMethod = frame.inStatic
         propertyAccessEnclosingNamespaces.clear()
         for (f in cpaFrames) f.nsSymbol?.let { propertyAccessEnclosingNamespaces.addLast(it) }
+        if (sec >= 0) SpineSections.close(SpineSections.CPA_INSTALL, kind, t0)
         try { block() } finally {
+            val t1 = if (sec >= 0) SpineSections.t() else 0L
             currentLocalTypes = sLT; currentParamBindingNames = sPB
             currentEnumConstrainedParams = sEC; currentShadowedNames = sSh
             currentCheckFileName = sCFN; currentFlowGraph = sFG
@@ -1671,6 +1739,10 @@ class Checker(
             inStaticClassMethod = sStatic
             propertyAccessEnclosingNamespaces.clear()
             propertyAccessEnclosingNamespaces.addAll(sNs)
+            if (sec >= 0) {
+                SpineSections.close(SpineSections.CPA_INSTALL, kind, t1)
+                SpineSections.close(sec, kind, t0)
+            }
         }
     }
 
@@ -2076,6 +2148,13 @@ class Checker(
 
     private fun cpaSpineLeave(node: Node) {
         if (spineIsDts || spineIsJsLike) return
+        // (SPINE.1)(a): opt-in intra-handler attribution — OFF in production
+        // (one static read per split; see [SpineSections]).
+        val kid = (node as NodeBase).kindId
+        var tp = SpineSections.t()
+        // In-situ calibration: an EMPTY span, so its mean IS the probe's own
+        // timestamp-pair cost under the run's real JIT state.
+        tp = SpineSections.split(SpineSections.OVERHEAD, kid, tp)
         // (cpa-m3a): the first EMISSION moves — Var/Expr/Return statements'
         // DIRECT expression walks run from the spine under the frame ambient
         // (the walk is the LEGACY expr walker, so nested arrow/fn-expr/
@@ -2092,9 +2171,10 @@ class Checker(
                 node is EnumDeclaration) &&
             cpaM2StmtPosition(node) && cpaM2ChainOk(node, forAnchor = true)
         ) {
+            SpineSections.hit(SpineSections.CPA_ANCHOR)
             cpaM3MarkAnchored(node)
             val top = cpaFrames.last()
-            withCpaFrameAmbient(top) {
+            withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                 when ((node as NodeBase).kindId) {
                     NodeKind.VARIABLE_STATEMENT -> {
                         node as VariableStatement
@@ -2147,6 +2227,7 @@ class Checker(
                 }
             }
         }
+        tp = SpineSections.split(SpineSections.CPA_ANCHOR, kid, tp)
         // (cpa-m3b): condition/subject/incrementor/case-expr walks anchor at
         // the EXPRESSION node's OWN leave — after its subtree (probe-safe:
         // the diagnostics-list probes see the subtree's spine emissions) and
@@ -2168,13 +2249,15 @@ class Checker(
             }
             if (owner != null && node is Expression &&
                 cpaM2StmtPosition(owner) && cpaM2ChainOk(owner, forAnchor = true)) {
+                SpineSections.hit(SpineSections.CPA_OWNER)
                 cpaM3MarkAnchored(node)
                 val top = cpaFrames.last()
-                withCpaFrameAmbient(top) {
+                withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                     checkPropertyAccessInExpr(node, spineSource, spineFileName, top.classType)
                 }
             }
         }
+        tp = SpineSections.split(SpineSections.CPA_OWNER, kid, tp)
         // (cpa-m3c): a ClassDECLARATION's heritage expression walks anchor at
         // the heritage EXPRESSION node's leave (legacy walks them with the
         // OUTER ect, before the classType resolution; member walks don't
@@ -2188,14 +2271,16 @@ class Checker(
                 val cls = (hc as? NodeBase)?.parent
                 if (cls is ClassDeclaration &&
                     cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
+                    SpineSections.hit(SpineSections.CPA_EWTA)
                     cpaM3MarkAnchored(node)
                     val top = cpaFrames.last()
-                    withCpaFrameAmbient(top) {
+                    withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                         checkPropertyAccessInExpr(p.expression, spineSource, spineFileName, top.classType)
                     }
                 }
             }
         }
+        tp = SpineSections.split(SpineSections.CPA_EWTA, kid, tp)
         // (cpa-m3c): a ClassDECLARATION member PropertyDeclaration's
         // initializer walk anchors at the member's leave, with the member-
         // loop ambient (classType + per-member inStatic) installed locally
@@ -2205,11 +2290,12 @@ class Checker(
             val init = node.initializer
             if (init != null && cls is ClassDeclaration &&
                 cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
+                SpineSections.hit(SpineSections.CPA_PROPDECL)
                 cpaM3MarkAnchored(node)
                 val top = cpaFrames.last()
                 val clsType = cpaResolveClassType(cls)
                 val isStatic = ModifierFlag.Static in node.modifiers
-                withCpaFrameAmbient(top) {
+                withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                     val sStatic2 = inStaticClassMethod
                     inStaticClassMethod = isStatic
                     try {
@@ -2220,14 +2306,17 @@ class Checker(
                 }
             }
         }
+        tp = SpineSections.split(SpineSections.CPA_PROPDECL, kid, tp)
         val id = (node as NodeBase).nodeId
         // Loop-var override restores.
         while (cpaLoopVarRestores.isNotEmpty() && cpaLoopVarRestores.last().bodyId == id && id >= 0) {
             SpineDispatch.work()
+            SpineSections.hit(SpineSections.CPA_RESTORES)
             val r = cpaLoopVarRestores.removeLast()
             val top = cpaFrames.last()
             if (r.hadPrev) top.localTypes[r.name] = r.prev!! else top.localTypes.remove(r.name)
         }
+        tp = SpineSections.split(SpineSections.CPA_RESTORES, kid, tp)
         // (cpa-m2a): the VariableStatement arm's ORDERED recordings (B136 +
         // B186) apply at each VariableDeclaration's LEAVE — the legacy runs
         // them AFTER that decl's initializer walk, so a nested arrow body in
@@ -2241,16 +2330,20 @@ class Checker(
             // decl-leave path serves the remaining (non-anchored) chains.
             if (vdl is VariableDeclarationList && vs is VariableStatement && cpaM2ChainOk(vs) &&
                 !cpaM3IsAnchoredStmt(vs, spineFileName)) {
+                SpineSections.hit(SpineSections.CPA_VARDECL)
                 val frame = cpaFrames.last()
-                withCpaFrameAmbient(frame) {
+                withCpaFrameAmbient(frame, SpineSections.CPA_AMBIENT, kid) {
                     cpaApplyDeclRecordings(node)
                 }
             }
         }
+        tp = SpineSections.split(SpineSections.CPA_VARDECL, kid, tp)
         // Frame pops — mirror every push site.
         if (cpaFrames.size > 1 && cpaFrames.last().owner === node) {
+            SpineSections.hit(SpineSections.CPA_POP)
             cpaFrames.removeLast()
         }
+        SpineSections.close(SpineSections.CPA_POP, kid, tp)
     }
 
     private class CtaFrame(
