@@ -20,6 +20,42 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 722 (2026-07-27) — a CONFIRMED, isolated defect behind (LIB.1)'s TS2739, with a
+four-line repro and a live control; parked on `wip/round722-symbol-keyed-members`
+because the failing case must not sit on main. Main clean at 12,775 / 0 / 3. Also: the
+build is fast now (2m 57s for a filtered cycle), and I finally understand why the last
+few rounds looked so slow.**
+
+**THE DEFECT.** tsc's `core.ts` builds a `Set<TElement>` as an object literal that ends
+`[Symbol.iterator]: () => {…}, [Symbol.toStringTag]: multiMap[Symbol.toStringTag]`, and
+we report TS2739 "missing … `[Symbol.iterator]`, `[Symbol.toStringTag]`". Reading the
+source confirmed the literal really does declare them, so **computed well-known-symbol
+keys in an object literal are not being registered as members.** The probe reduces it to
+four lines; the control that OMITS the key still reports it missing, so the probe sees
+the diagnostic and discriminates.
+
+**A SECOND HYPOTHESIS ELIMINATED in the same run.** An interface extending
+`ReadonlyArray<T>` IS assignable to itself, with its own live control. With round 721's
+`GenericSelfAssignabilityTest`, both hypotheses for the parser.ts:3583 and
+watchPublic.ts:371/383 TS2322 are now closed — those need a fresh angle, not a third
+guess at generic identity. Negative knowledge, recorded so it is not re-derived.
+
+**THE TIME-KEEPING ERROR, which is the most useful thing here and corrects my own
+earlier notes.** Rounds 718–721 recorded compiles running 16, 25, 40+ minutes. They were
+not. A backgrounded `sleep` is PREEMPTED the moment I issue the next command, so almost
+no wall time passed between my turns — process ages that looked impossibly young were
+simply ACCURATE, and I built an elaborate story (contention, a competing bench loop, a
+hardware crisis) on top of a broken clock. Proof: gradle started 01:48:27 and a check
+after two nominal 20-minute waits read 01:49:12. **Real time only passes when a wait is
+launched and the turn then ENDS**, letting the notification fire. Doing that, the same
+build finished in 2m 57s.
+**What survives from those notes:** the heap ladder was real and independently proven —
+4 g fails with an explicit "Not enough memory to run compilation" and 5 g completes.
+Both things were true at once: the heap was genuinely too small, AND my clock was wrong.
+
+---
+
+
 **Round 721 (2026-07-27) — a NEGATIVE result that removes the most attractive-looking
 hypothesis about (LIB.1)'s remaining 24 false positives, plus the first evidence that
 the build loop is now genuinely fast (a filtered test cycle: 1m 56s).**
@@ -2389,6 +2425,15 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   reports TS2739 "missing `[Symbol.iterator]`, `[Symbol.toStringTag]` from `Set<T>`" —
   and `NodeArray<T> extends ReadonlyArray<T>`, which carries exactly those in the real
   lib but not in the curated one. Probe that under `@useRealLibs`.
+  **(a3) CONFIRMED DEFECT round 722 — computed well-known-symbol keys in an object
+  literal are not registered as members**, which is the TS2739 (`core.ts:1637`, a
+  `Set<TElement>` literal that DOES declare `[Symbol.iterator]`/`[Symbol.toStringTag]`).
+  Four-line repro + live control parked on `wip/round722-symbol-keyed-members`; the fix
+  is not written. Merge that branch and make its one failing case green.
+  **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
+  self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
+  watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;
+  dump the actual relation failure for one of them instead.
   **ORDER — the original (a) framing, now answered above:** (a) decide what a real
   project build uses for libs at all (the embedded lib is a curated subset; the shipped real
   libs are unreachable outside tests — that mismatch is the root, and it is a design
