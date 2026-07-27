@@ -20,6 +20,72 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 725 (2026-07-27) — round 724's confirmed defect FIXED, and the fix is free.
+Real-lib false positives 22 → 18 (arm C 35 → 31, MEASURED both sides, TS2344 ×4 → 0,
+no other code moved by even one). Corpus 12,781 → 12,788 / 0 / 3. Cost gate: all 20
+counters +0.00%. Embedded-lib compiler profile still 46.**
+
+**THE DEFECT, and why round 724 was right to disprove the obvious one first.** The real
+lib declares `type NonNullable<T> = T & {}`, so a `Visitor<NonNullable<TIn>, …>` type
+argument resolves to an INTERSECTION. Instrumenting the emission site printed it exactly:
+
+    arg=Intersection[TypeParam(TIn, constraint=Union[undefined | Node]) & Object(props=[])]  constraint=Interface(Node)
+    arg=Intersection[TypeParam(TIn, constraint=Interface(Node))         & Object(props=[])]  constraint=Interface(Node)
+
+The second line is the whole story. `TIn`'s constraint IS `Node`, there is nothing
+nullish to strip, and it still failed — because `checkConstraintsForTypeArgs` applies the
+constraint chain only to a BARE `Type.TypeParam` argument (and, since round 440-b, to a
+`Type.Union` argument). Wrapped in an intersection, the constituent's constraint is never
+consulted at all. The relation cannot save it either: our engine has no
+TypeParam-source-via-constraint rule, deliberately — round 456 measured adding one to the
+ENGINE as net-zero and reverted it, so the rule lives per emission site. This is the
+third arm of a rule that already had two.
+
+**THE FIX** is that third arm, in the shape of round 720's: a bail evaluated ONLY inside
+the already-failing branch, so it cannot cost anything on the happy path (and the cost
+gate agrees — every counter unchanged). `intersectionSatisfiesViaTypeParamConstraint`
+walks the intersection's TypeParam constituents, takes each one's constraint (sound:
+`T ⊆ constraint(T)`), and compares. The nullish strip is a SECOND, separately-gated step:
+an `{}` constituent is tsc's non-nullish marker (`X & {}` really is `X` minus
+null/undefined/void), so when one is present the constraint's nullish members are dropped
+first — which is what lets `TIn extends Node | undefined` satisfy `Node`. Non-TypeParam
+constituents are deliberately left alone: `checkTypeRelatedTo` has already run and
+implements "some constituent relates" together with its merged-contradiction guard, so
+this adds only the step that was missing.
+
+**WHAT DID NOT WORK, and what nearly did.** Round 724's hypothesis — "strip the nullish
+part of the constraint" — would have made the FIRST test pass and read as progress while
+leaving the second failing for an unrelated reason; that is exactly the trap its probe
+was built to spring, and it worked. The temptation on seeing "intersection source" is the
+blanket bail `argType is Type.Intersection -> continue`, which passes every target case
+and silently deletes a real diagnostic class; four negative controls now pin against it —
+an intersection with NO type parameter (`A & B`) that genuinely violates, `NonNullable`
+of an UNCONSTRAINED parameter (`unknown & {}` satisfies nothing), `NonNullable` of a
+parameter constrained to an unrelated type (proves the constraint is compared, not merely
+found), and a nullable-constrained parameter used WITHOUT `NonNullable` (proves the strip
+is tied to the `& {}` marker rather than applied to every constraint). All five controls
+fail correctly with the fix in.
+
+**MEASUREMENT DISCIPLINE.** The before-number was re-measured rather than taken from the
+round-723 note: revert Checker.kt, recompile, run arm C, restore. It came back 35 with
+TS2344 ×4 at parser.ts:3491/3492 and visitorPublic.ts:124/144 — the four sites round 724
+predicted — and 31 with TS2344 ×0 afterwards, every other code identical
+(TS2591 ×13 env, TS2322 ×7, TS2345 ×4, TS2339 ×4, TS2349 ×2, TS2769 ×1). Two compiles
+for that confirmation was the right trade: it is what turns "consistent with the
+documented baseline" into a measurement.
+
+**OPERATIONAL, and it cost two turns.** A subagent CANNOT wait on a detached build:
+`nohup … &` hides it from the harness, and ending a turn to await a notification
+terminates the agent rather than parking it. Run gradle in the FOREGROUND, one command
+per call, `timeout: 600000`. The first attempt combined `nohup … &` WITH the harness's
+background mode and produced two concurrent builds racing on the same output directory,
+which killed the Kotlin daemon on a 7.7 GB box. Related: `pgrep`/`ps` for a gradle client
+must match `gradle-wrapper.jar`, not `GradleWrapperMain` — the wrong pattern reported
+"nothing running" while a build was live, which is what let the race start.
+
+---
+
+
 **Round 724 (2026-07-27) — the TS2344 ×4 family is CONFIRMED and its obvious explanation
 is DISPROVEN, before any fix was written. Parked on
 `wip/round724-nonnullable-constraint`; main clean at 12,781 / 0 / 3.**
@@ -2497,6 +2563,35 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   `mapped.hits` +6.66% (+744 keyed lookups, +372 hits, ≈1.6 ms) — the direct price of
   typing members we previously discarded, and the hits rose faster than the keys, so the
   added lookups are mostly the cheap kind. Rebaselined in the landing commit.
+  **(a5) LANDED round 725 — the TS2344 family is gone; real-lib FPs 22 → 18 (arm C
+  35 → 31, both sides MEASURED), and the fix is FREE (all 20 cost counters +0.00%).
+  Corpus 12,781 → 12,788 / 0 / 3 (+7 pins), embedded-lib profile still 46.** THE DEFECT:
+  the real lib declares `NonNullable<T> = T & {}`, so a `Visitor<NonNullable<TIn>, …>`
+  type argument resolves to `Intersection[TypeParam(TIn), {}]` — and
+  `checkConstraintsForTypeArgs` applies the constraint chain only to a BARE
+  `Type.TypeParam` arg (and to a `Type.Union` arg since 440-b), never through an
+  intersection. Round 724's instrumentation-free hypothesis ("we compare against the RAW
+  constraint `Node | undefined` and just need to strip the nullish part") is DISPROVEN by
+  the case where TIn is already non-null: it failed identically, because the constituent's
+  constraint is not consulted AT ALL. The relation cannot cover it either — the engine has
+  no TypeParam-source-via-constraint rule on purpose (round 456 measured adding one as
+  net-zero and reverted), so this is the THIRD arm of a per-emission-site rule that
+  already had two. THE FIX: `intersectionSatisfiesViaTypeParamConstraint`, evaluated only
+  inside the already-failing branch (hence zero cost), takes each TypeParam constituent's
+  constraint (`T ⊆ constraint(T)`) and compares it; a SEPARATELY GATED second step drops
+  the constraint's nullish members when an `{}` constituent is present, since `X & {}` is
+  tsc's non-nullish marker. Non-TypeParam constituents are left to `checkTypeRelatedTo`,
+  which already does "some constituent relates" plus its merged-contradiction guard.
+  **THE TRAP, pinned by four negative controls:** the blanket
+  `argType is Type.Intersection -> continue` passes every target case and silently deletes
+  a real diagnostic class — controls cover an intersection with no type parameter
+  (`A & B`), `NonNullable` of an unconstrained parameter, `NonNullable` of a parameter
+  constrained to an unrelated type, and a nullable-constrained parameter used WITHOUT
+  `NonNullable` (which proves the strip is tied to the `& {}` marker, not applied to every
+  constraint). The four fixed sites are parser.ts:3491/3492 and visitorPublic.ts:124/144.
+  **REMAINING 18, by code:** TS2322 ×7, TS2345 ×4, TS2339 ×4, TS2349 ×2, TS2769 ×1 —
+  the TS2322 group is the one with two eliminated hypotheses already ((a2), (a4)); per
+  that note, dump the actual relation failure rather than guess a third time.
   **(a4) SECOND HYPOTHESIS ELIMINATED:** an interface extending `ReadonlyArray<T>` IS
   self-assignable (live control). With (a2), both explanations for the parser.ts:3583 /
   watchPublic.ts:371 TS2322 are closed — do NOT guess at generic identity a third time;

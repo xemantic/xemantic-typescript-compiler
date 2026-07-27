@@ -127287,6 +127287,57 @@ interface DataView {
         }
     }
 
+    /**
+     * Round 725: `{}` — the EMPTY type literal, which tsc uses as its non-nullish marker
+     * (`type NonNullable<T> = T & {}` in lib.es5.d.ts; nothing nullish is assignable to
+     * `{}`, so `X & {}` is exactly `X` minus `null`/`undefined`/`void`).
+     *
+     * Deliberately structural — an alias whose body is `{}` counts — and deliberately
+     * strict: ANY member, signature, index signature, tuple shape or backing symbol makes
+     * it a real constraint that must keep being checked.
+     */
+    private fun isEmptyObjectTypeLiteral(t: Type): Boolean =
+        t is Type.Object && t !is Type.Interface && t !is Type.Reference &&
+            t.symbol == null &&
+            t.properties.isNullOrEmpty() && t.members.isNullOrEmpty() &&
+            t.callSignatures.isNullOrEmpty() && t.constructSignatures.isNullOrEmpty() &&
+            t.stringIndexInfo == null && t.numberIndexInfo == null &&
+            t.tupleElementTypes == null
+
+    /**
+     * Round 725: does a TypeParam constituent of the INTERSECTION type argument [arg] carry
+     * a constraint that satisfies [target]? See the call site in [checkConstraintsForTypeArgs]
+     * for why this is a per-emission-site bail and not a relation-engine rule.
+     *
+     * Two steps, both sound in the SUPPRESSION direction only:
+     *  - a `T` constituent contributes its own constraint, because `T ⊆ constraint(T)`;
+     *  - an `{}` constituent removes the nullish members of that constraint first, because
+     *    `X & {}` genuinely excludes them ([isEmptyObjectTypeLiteral]).
+     *
+     * NON-TypeParam constituents are deliberately NOT re-examined here: `checkTypeRelatedTo`
+     * has already run and implements "some constituent relates" together with its
+     * merged-contradiction guard. This adds only the step the relation is missing, so an
+     * intersection that genuinely violates the constraint still errors.
+     */
+    private fun intersectionSatisfiesViaTypeParamConstraint(arg: Type.Intersection, target: Type): Boolean {
+        val stripsNullish = arg.types.any { isEmptyObjectTypeLiteral(it) }
+        for (m in arg.types) {
+            if (m !is Type.TypeParam) continue
+            var c = m.constraint ?: continue
+            if (c === errorType) continue
+            if (c === anyType) return true
+            if (stripsNullish && c is Type.Union) {
+                val kept = c.types.filter {
+                    !it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null or TypeFlags.Void)
+                }
+                if (kept.isEmpty()) continue
+                if (kept.size < c.types.size) c = if (kept.size == 1) kept[0] else getUnionType(kept)
+            }
+            if (checkTypeRelatedTo(c, target, assignableRelation)) return true
+        }
+        return false
+    }
+
     private fun checkConstraintsForTypeArgs(
         typeName: String, typeArgs: List<TypeNode>,
         source: String, fileName: String,
@@ -127402,6 +127453,21 @@ interface DataView {
                             checkTypeRelatedTo(cnst, instantiatedConstraint, assignableRelation))) {
                         continue
                     }
+                }
+                // Round 725: an INTERSECTION arg. The real lib declares `NonNullable<T> =
+                // T & {}`, so EVERY `NonNullable<TIn>` type argument arrives here as
+                // `Intersection[TypeParam(TIn), {}]` and the bare-TypeParam bail above —
+                // which is the only place we apply the constraint chain — never fires.
+                // That is four false TS2344 on tsc's own sources (parser.ts ×2,
+                // visitorPublic.ts ×2), from `visitNode<TIn extends Node | undefined, …>(
+                // node: TIn, visitor: Visitor<NonNullable<TIn>, TVisited>, …)` where
+                // `Visitor`'s first parameter requires `extends Node`. Measured: the case
+                // where TIn is ALREADY non-null fails identically, so this is NOT a
+                // missing nullish-strip — we simply never consult the constituent's
+                // constraint. Lifting the same step through the intersection fixes both.
+                if (argType is Type.Intersection &&
+                    intersectionSatisfiesViaTypeParamConstraint(argType, instantiatedConstraint)) {
+                    continue
                 }
                 // A UNION arg satisfies the constraint if EVERY member does — including
                 // a member that is a TypeParam whose own constraint satisfies (types.ts

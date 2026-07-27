@@ -101,4 +101,69 @@ class NonNullableConstraintTest {
         // A silent control means the probe cannot see TS2344 here at all.
         assert(diagnostics.any { it.code == 2344 })
     }
+
+    @Test
+    fun `control - NonNullable of an unconstrained parameter still fails the constraint`() {
+        // `NonNullable<TIn>` where TIn is unconstrained is `unknown & {}` — it satisfies
+        // nothing. The bail must consult the constituent's CONSTRAINT, so a constituent
+        // that has none must not be waved through.
+        val diagnostics = diagnose(
+            prelude + """
+                declare function visitNode<TIn>(
+                    node: TIn,
+                    visitor: Visitor<NonNullable<TIn>, Node>,
+                ): void
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.any { it.code == 2344 })
+    }
+
+    @Test
+    fun `control - NonNullable of a parameter constrained to an unrelated type still fails`() {
+        // The constraint chain must actually be COMPARED, not merely found: `string`
+        // stripped of nullish is still `string`, which does not satisfy `Node`.
+        val diagnostics = diagnose(
+            prelude + """
+                declare function visitNode<TIn extends string | undefined>(
+                    node: TIn,
+                    visitor: Visitor<NonNullable<TIn>, Node>,
+                ): void
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.any { it.code == 2344 })
+    }
+
+    @Test
+    fun `control - an intersection with no type parameter that violates the constraint still fails`() {
+        // The decisive negative control: the bail must not degrade into "an intersection
+        // never violates a constraint". `A & B` carries no type parameter at all, so
+        // nothing supplies a constraint and the genuine TS2344 must survive.
+        val diagnostics = diagnose(
+            prelude + """
+                interface A { a: number }
+                interface B { b: number }
+                declare function visitNode(visitor: Visitor<A & B, Node>): void
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.any { it.code == 2344 })
+    }
+
+    @Test
+    fun `control - a nullable-constrained parameter used WITHOUT NonNullable still fails`() {
+        // The nullish strip is tied to the `& {}` marker, not applied to every constraint:
+        // passing `TIn extends Node | undefined` directly is a real error and stays one.
+        val diagnostics = diagnose(
+            prelude + """
+                declare function visitNode<TIn extends Node | undefined>(
+                    node: TIn,
+                    visitor: Visitor<TIn, Node>,
+                ): void
+            """,
+            directives = realLibs,
+        )
+        assert(diagnostics.any { it.code == 2344 })
+    }
 }
