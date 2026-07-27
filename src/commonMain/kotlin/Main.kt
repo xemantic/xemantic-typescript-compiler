@@ -78,6 +78,11 @@ fun main(args: Array<String>) {
                 SpineSections.reset(); SpineSections.mode = SpineSections.ON
                 repeat(200) { SpineSections.calibrate() }
             }
+            // (CALL.1)(a): the opt-in intra-function attribution of
+            // checkSingleCallExpressionTypes.
+            "--callSections", "--callsections" -> {
+                CallSections.reset(); CallSections.mode = CallSections.ON
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -133,6 +138,13 @@ fun main(args: Array<String>) {
         print(SpineSections.csv())
         println("== (SPINE.1) csv end ==")
         SpineSections.mode = SpineSections.OFF
+    }
+    if (CallSections.mode == CallSections.ON) {
+        println(CallSections.report())
+        println("== (CALL.1) csv ==")
+        print(CallSections.csv())
+        println("== (CALL.1) csv end ==")
+        CallSections.mode = CallSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -264,6 +276,7 @@ private fun printUsage() {
           --dispatchProbe    (DISPATCH.1) per-handler/per-kind spine attribution
           --dispatchGated    (DISPATCH.1) run only the derived per-kind handler table
           --spineSections    (SPINE.1) intra-handler attribution of the two hot leaves
+          --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)

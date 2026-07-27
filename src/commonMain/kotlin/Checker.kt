@@ -135411,12 +135411,54 @@ interface DataView {
         return !typeIncludesUndefined(loopNarrowed)
     }
 
+    /**
+     * (CALL.1)(a): the opt-in intra-function attribution boundary. OFF in
+     * production — the core is then called directly, with no `try`/`finally`
+     * and no bookkeeping. When on, [CallSections.end] closes whatever section
+     * is still running, which is what makes the partition survive the ~20
+     * early `return`s inside the core.
+     */
     private fun checkSingleCallExpressionTypes(expr: CallExpression, source: String, fileName: String) {
+        if (CallSections.mode == CallSections.OFF) {
+            checkSingleCallExpressionTypesCore(expr, source, fileName)
+            return
+        }
+        CallSections.begin()
+        try {
+            checkSingleCallExpressionTypesCore(expr, source, fileName)
+        } finally {
+            CallSections.end()
+        }
+    }
+
+    private fun checkSingleCallExpressionTypesCore(expr: CallExpression, source: String, fileName: String) {
         // 16.4dx: TS2754 "'super' may not use type arguments." fires when a `super(...)`
         // call has explicit type arguments (e.g. `super<T>()`). Only for direct super
         // calls — `super.method<T>()` is a regular method call and valid. Squiggle
         // spans the whole `<...>` section; `node.end` in this AST already overshoots
         // to the token AFTER the last type arg's `>`, so subtract when computing end.
+        // (CALL.1)(a): nine boundaries back-to-back. The first closes the
+        // wrapper transition; the second closes the invocation's FIRST empty
+        // span; the remaining seven close steady-state empty spans, whose mean
+        // is the in-situ cost of one boundary. The `mode` test keeps the loop
+        // out of production entirely.
+        // UNROLLED deliberately: a `repeat(8)` puts a loop back-edge — and so a
+        // SAFEPOINT POLL — inside every empty span, which attributes stop-the-world
+        // pauses to the calibration and read 360 ns against a differential
+        // estimate of ~92 ns. The real boundaries are straight-line code.
+        if (CallSections.mode != CallSections.OFF) {
+            CallSections.at(CallSections.OVERHEAD_FIRST)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+            CallSections.at(CallSections.OVERHEAD)
+        }
+        CallSections.at(CallSections.B216)
+        val prologueT = CallSections.t()
         val calleeExpr = expr.expression
         // B216: dependent indexed-access constraint (`V extends O[K1][K2]`) — per-call
         // evaluation with the key TPs fixed to this call's string-literal args.
@@ -135424,15 +135466,18 @@ interface DataView {
             tryEmitDependentIndexedConstraintTs2345(expr, source, fileName)) return
         // recursiveTypeRelations: `<arr>.reduce<U>((acc, key: keyof X) => …, init)` where the
         // callback's currentValue param is annotated `keyof X` but the array elem is string/number.
+        CallSections.at(CallSections.REDUCE_KEYOF)
         if (calleeExpr is PropertyAccessExpression &&
             tryEmitReduceCallbackKeyofMismatch(expr, source, fileName)) return
         // unionOfArraysFilterCall: `(... as [Fizz] | readonly [Buzz?]).filter(item => item?.id < 5)`
         // — optional tuple element → callback param possibly-undefined → TS18048 (additive).
+        CallSections.at(CallSections.TUPLE_FILTER)
         if (calleeExpr is PropertyAccessExpression &&
             tryEmitTupleUnionFilterOptionalElementUndefined(expr, source, fileName)) return
         // inferFromGenericFunctionReturnTypes1: `<SetOf>.transform(compose(filter(λ), map(λ)…))`
         // — thread the element type; a last `map(x => x.method())` whose threaded type lacks the
         // method → TS2339 (corpus-unique mini-inference, additive).
+        CallSections.at(CallSections.COMPOSE_CHAIN)
         if (calleeExpr is PropertyAccessExpression &&
             tryEmitComposeChainMapMemberAccess(expr, source, fileName)) return
         // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
@@ -135442,6 +135487,7 @@ interface DataView {
         // full 'object | null' (and only under strictNullChecks — nullish args are
         // legal with SNC off). `Object.create(null/objExpr)` and shadowed `Object`
         // never enter.
+        CallSections.at(CallSections.OBJECT_CREATE)
         run {
             if (calleeExpr !is PropertyAccessExpression || calleeExpr.name.text != "create") return@run
             if ((calleeExpr.expression as? Identifier)?.text != "Object") return@run
@@ -135474,6 +135520,7 @@ interface DataView {
         // (no call signatures), not the inner value. Covers default/named-default imports
         // and namespace-member-of-re-export. Early (before the anyType bail). FP-safe:
         // tightly gated (nodenext + ESM importer + CJS target + `export default`).
+        CallSections.at(CallSections.CJS_DEFAULT_NS)
         run {
             val (direct, nsMembers) = cjsDefaultNsShapes(fileName)
             if (direct.isEmpty() && nsMembers.isEmpty()) return@run
@@ -135501,6 +135548,7 @@ interface DataView {
                 }
             }
         }
+        CallSections.at(CallSections.SUPER)
         if (calleeExpr is Identifier && calleeExpr.text == "super" && !expr.typeArguments.isNullOrEmpty()) {
             val typeArgs = expr.typeArguments
             val start = typeArgs.first().pos - 1
@@ -135541,6 +135589,8 @@ interface DataView {
             }
         }
         // Resolve callee to get its type
+        CallSections.close(CallSections.N_PROLOGUE, prologueT)
+        CallSections.at(CallSections.CALLEE_TYPE)
         val calleeType = getCalleeType(expr.expression)
         // TS2722: invoking a possibly-undefined OPTIONAL member. `bar.optionalMethod(1)`
         // where `optionalMethod?` is an optional callable member — `getCalleeType`
@@ -135551,6 +135601,7 @@ interface DataView {
         // resolves OPTIONAL + callable on the receiver type, and the access is NOT
         // flow-narrowed to exclude undefined (a `if (recv.m) recv.m()` guard). Span =
         // the whole `recv.m` property-access (matching tsc's squiggle).
+        CallSections.at(CallSections.OPT_MEMBER)
         if (strictNullChecks && !expr.questionDotToken && calleeExpr is PropertyAccessExpression &&
             !calleeExpr.questionDotToken) {
             val memberName = (calleeExpr.name).text
@@ -135586,6 +135637,7 @@ interface DataView {
         // initializer — definitively implicit-any. Broader "calleeType === anyType" is
         // unsafe: our checker resolves many callees to `any` due to incomplete inference,
         // so a universal emission would regress heavily.
+        CallSections.at(CallSections.EARLY_GATES)
         if (!expr.typeArguments.isNullOrEmpty() &&
             (isImplicitAnyVarChain(expr.expression) || isImplicitAnyThisMember(expr.expression))) {
             val start = expr.pos
@@ -135635,6 +135687,7 @@ interface DataView {
         //   (a) all constituents non-callable → "No constituent ... is callable."
         //   (b) some constituents non-callable → "Not all constituents ... are callable." + missing display
         //   (c) all constituents callable but sigs differ structurally → "Each member ... has signatures, but none ... compatible..."
+        CallSections.at(CallSections.UNION_CALLEE)
         if (calleeType is Type.Union) {
             // (M3.4 slice, round 408) Two FP suppressions before the "not callable"
             // verdict — BOTH only REMOVE constituents, so they can suppress a false
@@ -135862,7 +135915,9 @@ interface DataView {
             }
         }
         // Get call signatures
+        CallSections.at(CallSections.CALL_SIGS)
         val signatures = getCallSignaturesOfType(calleeType)
+        CallSections.at(CallSections.NO_SIGS)
         if (signatures.isEmpty()) {
             // 17.166: TS2348 — `var c = C();` where C is a class. The class
             // value's type is `typeof C` with construct signatures only; calling
@@ -135881,11 +135936,13 @@ interface DataView {
                 // `callOnInstance_ts` (which merge `function Foo(): Foo` /
                 // `declare function D()` with classes named the same) FP-fire TS2348.
                 val name = calleeExpr.text
+                val ts2348ScanT = CallSections.t()
                 val hasFunctionWithSameName = binderResults.any { br ->
                     br.sourceFile.statements.any { st ->
                         st is FunctionDeclaration && st.name?.text == name
                     }
                 }
+                CallSections.close(CallSections.N_TS2348_SCAN, ts2348ScanT)
                 if (sym != null && sym.flags.hasAny(SymbolFlags.Class) && !hasFunctionWithSameName) {
                     val start = expr.pos
                     val end = if (expr.arguments.isNotEmpty()) {
@@ -136104,6 +136161,7 @@ interface DataView {
             return
         }
         // 16.4: Instantiate signature when explicit type arguments are provided
+        CallSections.at(CallSections.TYPE_ARGS)
         val typeArgs = expr.typeArguments
         if (typeArgs != null && typeArgs.isNotEmpty()) {
             // B174: `f<typeof import("spec")>(null)` — getTypeFromTypeNode resolves an
@@ -136222,12 +136280,15 @@ interface DataView {
                         }
                     }
                     checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
+                    val taArgsT = CallSections.t()
                     checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true)
+                    CallSections.close(CallSections.N_TYPEARGS_ARGS, taArgsT)
                     return
                 }
             }
         }
         if (signatures.size == 1) {
+            CallSections.at(CallSections.SINGLE_SIG)
             // B98.r125: TS2345 for a call whose callee's last parameter is a rest
             // parameter typed exactly `never` (the bottom type — NOT `never[]`).
             // Such a signature is uncallable: the supplied argument tuple is never
@@ -136241,6 +136302,7 @@ interface DataView {
             // the generic-overload path (~48347) and the multi-overload path
             // (~48974) — see CLAUDE.md "TS2793 conditional on implementation match".
             var implRelated: Diagnostic? = null
+            val implT = CallSections.t()
             val implRelatedCandidate = getOverloadImplementationRelated(signatures[0], source, fileName)
             if (implRelatedCandidate != null) {
                 val implSig = getImplementationSignature(signatures[0], source, fileName)
@@ -136248,6 +136310,8 @@ interface DataView {
                     implRelated = implRelatedCandidate
                 }
             }
+            CallSections.close(CallSections.N_IMPL_RELATED, implT)
+            val walkersT = CallSections.t()
             checkTs2554ForPropertyAccessCall(expr, signatures[0], source, fileName)
             // B194: reverse-mapped callback arity — `createStructuredSelector({ p: (a, b) =>
             // … })` against `{[K in keyof T]: Alias<S, T[K]>}` where Alias is a FunctionType
@@ -136262,8 +136326,12 @@ interface DataView {
             // `e` param is `(arg: typeof c | typeof d)=>void` — suppress the FP arg-check, re-emit the
             // combined-rest-tuple cb-call TS2345 from the AST.
             if (checkTest2RestTupleTypeofUnionCall(expr, source, fileName)) return
+            CallSections.close(CallSections.N_SINGLE_WALKERS, walkersT)
+            val singleArgsT = CallSections.t()
             checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
+            CallSections.close(CallSections.N_SINGLE_ARGS, singleArgsT)
         } else {
+            CallSections.at(CallSections.OVERLOADS)
             // Skip overload resolution when any signature has type parameters —
             // without generic type argument inference, parameter types may resolve
             // incorrectly and produce false positive TS2769 errors.
@@ -136317,7 +136385,9 @@ interface DataView {
                 }
             }
             // Overload resolution: try each signature in order
+            val ovlT = CallSections.t()
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName, expr.expression)
+            CallSections.close(CallSections.N_OVERLOAD_ARGS, ovlT)
         }
     }
 

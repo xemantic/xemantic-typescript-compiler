@@ -715,3 +715,289 @@ object SpineSections {
         }
     }
 }
+
+/**
+ * (CALL.1) step (a) — the opt-in INTRA-FUNCTION attribution for
+ * `checkSingleCallExpressionTypes`.
+ *
+ * ## Why a third probe object
+ *
+ * [SpineDispatch] answers *which handler*, [SpineSections] *which part of a
+ * handler*; round 733 used them to land on one function. `ccetSpineLeave`'s
+ * call anchor costs **2,931 ms over 52,413 CallExpression nodes = 53.6 µs
+ * each** — a 920-line straight-line function with 18 `diagnostics.add` sites,
+ * run in full for every call in the program, and the largest per-node cost
+ * measured anywhere in this compiler. The open question is whether that is
+ * *type-system work* (signature resolution + argument relations) or *emission
+ * pre-work* the never-firing sites pay before they know they will not fire.
+ * Guessing has been falsified twice (rounds 732 and 733), so this measures.
+ *
+ * ## The mechanism, and why it differs from [SpineSections]
+ *
+ * The function is a SEQUENCE of independent top-level sections, so the
+ * attribution is again a running timestamp ([at]) split between them. But
+ * unlike a spine handler it has ~20 early `return`s, so a section can be left
+ * without reaching the next boundary. Hence the running section lives in the
+ * object ([cur]/[curT]) and is closed by [end] from the wrapper's `finally`.
+ * Two consequences worth stating:
+ *
+ * * `calls[s]` is the number of invocations that REACHED section `s`, so the
+ *   DROP between two consecutive sections is exactly the number of
+ *   invocations that returned inside the earlier one. The exit profile is
+ *   therefore free — no `hit` counters needed.
+ * * [depth] makes a re-entrant invocation record nothing rather than corrupt
+ *   the running section (the function's other caller,
+ *   `checkCallTypesInExpr`, is leaf machinery that could in principle nest).
+ *
+ * ## Behaviour-free when off (INV.0)
+ *
+ * [mode] is [OFF] in production: the wrapper branches once on it and
+ * otherwise calls the untouched core directly — no `try`/`finally`, no
+ * bookkeeping. Every entry point returns on one static field read and is
+ * `inline`. Pinned by `CallSectionProbeTest`.
+ *
+ * ## Reading the report
+ *
+ * Sections `0 until FIRST_NESTED` PARTITION one invocation. The rest are
+ * nested INSIDE those sections and are reported separately. Nanos are
+ * probe-inflated by one timestamp read per boundary — [OVERHEAD] measures an
+ * empty section on the real path, so the report can state the inflation.
+ * Sound for RELATIVE attribution only, exactly as in [SpineSections].
+ */
+object CallSections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Opt-in; [OFF] in production. Set by `--callSections`. */
+    var mode: Int = OFF
+
+    // ── the disjoint sections of checkSingleCallExpressionTypes, in source order
+    /** B216 dependent indexed-access constraint (property-access callees). */
+    const val B216 = 0
+    /** `reduce<U>` callback `keyof X` mismatch (property-access callees). */
+    const val REDUCE_KEYOF = 1
+    /** Tuple-union `.filter` optional-element TS18048 (property-access callees). */
+    const val TUPLE_FILTER = 2
+    /** `compose`-chain `.map` member access (property-access callees). */
+    const val COMPOSE_CHAIN = 3
+    /** `Object.create(<primitive>)` TS2345. */
+    const val OBJECT_CREATE = 4
+    /** CJS default-as-namespace TS2349 (`cjsDefaultNsShapes`). */
+    const val CJS_DEFAULT_NS = 5
+    /** `super<T>()` TS2754 + `super(...)` + `super.m(...)` argument checking. */
+    const val SUPER = 6
+    /** `getCalleeType(expr.expression)` — the callee resolution. */
+    const val CALLEE_TYPE = 7
+    /** TS2722 for invoking a possibly-undefined OPTIONAL member. */
+    const val OPT_MEMBER = 8
+    /** TS2347 + the bare `null`/`undefined` callee + the anyType bail. */
+    const val EARLY_GATES = 9
+    /** The union-callee branch (TS2349 (a)/(b)/(c) + the combined signature). */
+    const val UNION_CALLEE = 10
+    /** `getCallSignaturesOfType(calleeType)`. */
+    const val CALL_SIGS = 11
+    /** The whole `signatures.isEmpty()` branch (TS2348/TS6234/TS2349/TS272x). */
+    const val NO_SIGS = 12
+    /** The explicit-type-argument branch (TS2344/TS2559 + instantiation). */
+    const val TYPE_ARGS = 13
+    /** The single-signature branch. */
+    const val SINGLE_SIG = 14
+    /** The overload branch (TS2554 arity + `checkArgumentsAgainstOverloads`). */
+    const val OVERLOADS = 15
+
+    /** The first index that is a nested sub-measure rather than a partition row. */
+    const val FIRST_NESTED = 16
+
+    // ── nested sub-measures (INSIDE the sections above) ──────────────────────
+    /** The TS2348 gate's `binderResults × top-level statements` scan. */
+    const val N_TS2348_SCAN = 16
+    /** `checkArgumentsAgainstSignature` inside [SINGLE_SIG]. */
+    const val N_SINGLE_ARGS = 17
+    /** `checkArgumentsAgainstSignature` inside [TYPE_ARGS]. */
+    const val N_TYPEARGS_ARGS = 18
+    /** `checkArgumentsAgainstOverloads` inside [OVERLOADS]. */
+    const val N_OVERLOAD_ARGS = 19
+    /** The TS2793 "implementation would have succeeded" probe in [SINGLE_SIG]. */
+    const val N_IMPL_RELATED = 20
+    /** The five dedicated walkers inside [SINGLE_SIG], as one span. */
+    const val N_SINGLE_WALKERS = 21
+    /**
+     * [B216]..[SUPER] as ONE span — the whole never-firing pre-work gauntlet
+     * measured with a single boundary pair instead of seven, so its total is
+     * not swamped by seven boundary costs. Undercounts by whatever returns
+     * inside it (zero on the compiler profile: every one of those sections
+     * reports `returnedIn=0`).
+     */
+    const val N_PROLOGUE = 22
+
+    /**
+     * The wrapper's own transition — [begin] to the core's first boundary,
+     * i.e. one non-inlinable call into a 3,587-bytecode method plus the
+     * invocation's first timestamp read. Probe-only; not part of the partition
+     * and absent in production.
+     */
+    const val ENTRY = 23
+
+    /**
+     * The FIRST empty boundary span of an invocation, kept separate because it
+     * is the one that is not steady-state.
+     */
+    const val OVERHEAD_FIRST = 24
+
+    /**
+     * The in-situ calibration: seven further EMPTY spans back-to-back at the
+     * top of the core, so the mean is the STEADY-STATE cost of one [at] under
+     * the run's real JIT state — never a startup loop (round 733's first draft
+     * read 40 µs/pair cold and made every net figure negative) and never a
+     * single span, which this round's first draft used and which read ~1 µs
+     * against a probe whose whole measured cost is ~30 ms.
+     */
+    const val OVERHEAD = 25
+
+    const val N = 26
+
+    val names: Array<String> = arrayOf(
+        "B216 dependent indexed-access", "reduce<U> keyof callback",
+        "tuple-union .filter optional", "compose-chain .map member",
+        "Object.create primitive arg", "CJS default-as-namespace",
+        "super call / super.method", "getCalleeType",
+        "TS2722 optional member", "TS2347 + null/undefined callee + any bail",
+        "union callee (TS2349 a/b/c)", "getCallSignaturesOfType",
+        "no call signatures branch", "explicit type arguments branch",
+        "single signature branch", "overload branch",
+        "  of which TS2348 binderResults scan",
+        "  of which checkArgumentsAgainstSignature (single)",
+        "  of which checkArgumentsAgainstSignature (typeArgs)",
+        "  of which checkArgumentsAgainstOverloads",
+        "  of which TS2793 impl-would-have-succeeded probe",
+        "  of which the five single-sig dedicated walkers",
+        "  of which B216..super as ONE span (1 boundary, not 7)",
+        "  wrapper transition (probe-only, not production)",
+        "  probe boundary, first of the invocation",
+        "  probe boundary (in situ, steady state)",
+    )
+
+    var nanos: LongArray = LongArray(N)
+    var calls: LongArray = LongArray(N)
+
+    /** Invocations of the instrumented function (nested ones excluded). */
+    var invocations: Long = 0
+
+    /** The running section and its start timestamp; `-1` = none open. */
+    var cur: Int = -1
+    var curT: Long = 0
+    var depth: Int = 0
+
+    fun reset() {
+        nanos = LongArray(N)
+        calls = LongArray(N)
+        invocations = 0
+        cur = -1
+        curT = 0
+        depth = 0
+    }
+
+    // The entry points are `inline` so a production call is a static read plus
+    // a not-taken branch rather than a call, matching [SpineSections].
+
+    /** Open the partition for one invocation, starting at [ENTRY]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun begin() {
+        if (mode == OFF) return
+        depth++
+        if (depth != 1) return
+        invocations++
+        cur = ENTRY
+        curT = PassTiming.nowNanos()
+    }
+
+    /** Close the running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun at(sec: Int) {
+        if (mode == OFF || depth != 1) return
+        val now = PassTiming.nowNanos()
+        nanos[cur] += now - curT
+        calls[cur]++
+        cur = sec
+        curT = now
+    }
+
+    /** Close whatever section is still open (the invocation may have returned). */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun end() {
+        if (mode == OFF) return
+        if (depth == 1 && cur >= 0) {
+            nanos[cur] += PassTiming.nowNanos() - curT
+            calls[cur]++
+            cur = -1
+        }
+        depth--
+    }
+
+    /** Start a NESTED sub-measure, or 0 when off. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == OFF) 0L else PassTiming.nowNanos()
+
+    /** Close a NESTED sub-measure opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun close(sec: Int, t0: Long) {
+        if (mode == OFF) return
+        nanos[sec] += PassTiming.nowNanos() - t0
+        calls[sec]++
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (CALL.1) intra-function attribution: checkSingleCallExpressionTypes ==")
+        appendLine("invocations: $invocations")
+        val ovhCalls = calls[OVERHEAD]
+        val ovh = if (ovhCalls > 0) nanos[OVERHEAD] / ovhCalls else 0L
+        val firstOvh = if (calls[OVERHEAD_FIRST] > 0)
+            nanos[OVERHEAD_FIRST] / calls[OVERHEAD_FIRST] else 0L
+        appendLine(
+            "probe boundary overhead: $ovh ns in situ, steady state (over $ovhCalls empty " +
+                "sections); $firstOvh ns for the invocation's FIRST boundary"
+        )
+        var partition = 0L
+        var raw = 0L
+        for (s in 0 until FIRST_NESTED) { partition += nanos[s] - ovh * calls[s]; raw += nanos[s] }
+        appendLine(
+            "partition total: ${partition / 1_000_000} ms net, ${raw / 1_000_000} ms raw"
+        )
+        appendLine("-- sections (disjoint, source order; ms net of probe overhead) --")
+        for (s in 0 until N) {
+            val c = calls[s]
+            if (s == FIRST_NESTED) appendLine("-- nested sub-measures (INSIDE the sections above) --")
+            if (c == 0L) continue
+            val ns = nanos[s] - ovh * c
+            appendLine(
+                "  ${names[s].padEnd(46)} ${(ns / 1_000_000).toString().padStart(5)} ms net " +
+                    "(${(nanos[s] / 1_000_000).toString().padStart(5)} raw) reached ${
+                        c.toString().padStart(7)
+                    } = ${if (c > 0) ns / c else 0} ns each" +
+                    if (s < FIRST_NESTED) ", returnedIn=${returnedIn(s)}" else ""
+            )
+        }
+    }
+
+    /**
+     * Invocations that left the function inside section [sec]. Sections
+     * [B216]..[NO_SIGS] are strictly sequential, so the drop to the next one is
+     * the exit count; [TYPE_ARGS] forks into the two mutually exclusive tail
+     * branches; everything that reaches a tail branch leaves inside it.
+     */
+    fun returnedIn(sec: Int): Long = when (sec) {
+        in B216 until TYPE_ARGS -> calls[sec] - calls[sec + 1]
+        TYPE_ARGS -> calls[TYPE_ARGS] - calls[SINGLE_SIG] - calls[OVERLOADS]
+        else -> calls[sec]
+    }
+
+    /** Machine-readable dump: one line per section. */
+    fun csv(): String = buildString {
+        appendLine("section,reached,nanos")
+        for (s in 0 until N) {
+            if (calls[s] == 0L) continue
+            appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
+        }
+    }
+}
