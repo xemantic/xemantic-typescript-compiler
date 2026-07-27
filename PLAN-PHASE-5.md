@@ -20,6 +20,90 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 734 (2026-07-27) — (CALL.1) DONE. THE MEASUREMENT CHOSE BRANCH B, by 4x, and
+Branch A is disproved on TWO independent grounds.** The item asked which of two things
+`checkSingleCallExpressionTypes`'s 2.9 s is: (A) per-call PRE-work that never-firing
+emission sites pay before they know they will not fire — "hoisting removes 1-2 s" — or
+(B) signature resolution and argument relations, i.e. genuine type-system work whose
+lever is M3.1 and not this function. **It is B. 78% of the function (2,007 of 2,564 ms
+raw) is type-system work**: `checkArgumentsAgainstSignature` **1,357 ms (53%)**,
+`getCalleeType` **474 ms (18%)**, the TS2793 impl-would-have-succeeded probe 101,
+`checkArgumentsAgainstOverloads` 53, `getCallSignaturesOfType` 19. **No optimisation was
+landed** — per the item's own instruction for this outcome, and per round 733's
+precedent. Full derivation: `docs/perf/call-expression-attribution.md`. Suite 12,887 ->
+**12,892 / 0 / 3** (+5 pins, `CallSectionProbeTest`); cost gate all 20 counters +0.00%;
+profile `--listAll` identical probe-on vs probe-off (46 errors).
+
+**BRANCH A IS WRONG STATICALLY, BEFORE ANY TIMING.** The item's counts are right — 22
+`getLineAndCharacterOfPosition`, 17 `expressionTrueEnd`, 11 `typeToString`, 18
+`diagnostics.add` — but its claim that they are "all computed before the gate that
+decides whether to emit" is false for **every single site**: 16 of the 22 sit literally
+inside `if (length > 0) {`, and the rest inside `if (display != null)` /
+`if (pname != null)` / a `run{}` past all its `?: return@run` gates. **There is no
+pre-gate emission work to hoist. The gates already ARE the cheap pre-test the item
+proposed adding.** (Reproduce by listing the line preceding each call site over the
+function's line range — a 30-second check that would have retargeted the round.)
+
+**AND WRONG DYNAMICALLY.** Everything in the function that is not type-system work
+totals **557 ms**, ~70 ms of which is the probe itself → a theoretical maximum prize of
+**~490 ms = 1.6% of a 30.5 s compile**, i.e. INSIDE the +-2% drift band (~610 ms). The
+prize is smaller than the noise that would have to measure it, so no A/B is offered —
+the same restraint round 733 exercised. The largest hoistable block, the seven
+never-firing prologue walkers measured as ONE span, is **253 ms**.
+
+**THE EXIT PROFILE, which the partition gives away for free** (`calls[s]` = invocations
+that REACHED section s, so the drop between sections is the exit count): of 52,413
+invocations, **26,496 (50.6%) leave at the `calleeType === anyType || errorType` bail** —
+after `getCalleeType` has run in full; 22,145 (42.2%) reach the single-signature branch;
+3,640 the overload branch; 101 the explicit-type-argument branch; 31 the union branch;
+and **0 reach the ~240-line `signatures.isEmpty()` branch** with its seven emission
+sites, so its `binderResults x top-level-statements` scan — the one genuinely pre-gate
+computation in the function — never runs on this profile. **0 of the seven prologue
+walkers fire, and they still cost 253 ms**: that cost is gate evaluation, which is
+exactly why there is nothing to hoist.
+
+**WHAT WAS BUILT.** `CallSections` (in SpineDispatch.kt) + boundaries inside the
+function, opt-in via `--callSections`, behaviour-free when off. The function was split
+into a wrapper and `…Core`: the wrapper branches once on `mode` and otherwise calls the
+core directly — no `try`/`finally`, no bookkeeping. Unlike a spine handler this function
+has ~20 early `return`s, so the running section lives in the object and is closed by
+`end()` from the wrapper's `finally`; the pay-off is the free exit profile above. 16
+partition boundaries in source order, plus six nested sub-measures (the two
+`checkArgumentsAgainstSignature` call sites, `checkArgumentsAgainstOverloads`, the TS2793
+probe, the five dedicated single-sig walkers, and the whole prologue as ONE span).
+
+**WHAT DID NOT WORK — the calibration, twice, and the fix is a METHOD not a constant.**
+Round 733's lesson was "calibrate in situ, not at startup". In situ is necessary and NOT
+sufficient. Draft 1 measured the empty span from `begin()` to the core's first boundary
+and read **922 ns** — it spans the wrapper's non-inlinable call into a 3,587-bytecode
+method, a cold transition rather than a timestamp pair — which drove SIX sections
+negative. Draft 2 used `repeat(8) { at(...) }` and read **360 ns**: a `repeat` loop puts
+a **back-edge SAFEPOINT POLL inside every empty span**, so stop-the-world pauses are
+attributed to the calibration. Unrolling gave **306 ns** — still 3x too high. **The
+honest figure is DIFFERENTIAL: the prologue is measured twice in the same run, as seven
+sections (280 ms) and as one span (253 ms); six extra boundaries over 52,413 invocations
+= 86 ns each** (the prior run gave 92 ns on the same construction). That independently
+agrees with the round-733 technique — `--passTiming` with vs without `--callSections`
+moved `checkSpine` by **+29 ms**, +0.1%. Total probe inflation inside the partition is
+~70 ms of 2,564 ms = 2.7%, so the report's `raw` column is an upper bound and its `net`
+(which subtracts the pessimistic 306 ns) a lower one.
+
+**A NON-FINDING WORTH RECORDING.** The 922 ns first reading made "HotSpot refuses to JIT
+this method" look plausible (`DontCompileHugeMethods` skips >8,000 bytecodes, and the
+function is 920 lines). `javap` settles it in one command: the core is **3,587
+bytecodes**, well under the limit. Check the bytecode size before theorising about the
+JIT.
+
+**THE REAL LEVER, and it is queued as (CALL.2).** `checkArgumentsAgainstSignature` is
+now the largest single measured cost in the compiler: **1,357 ms over 22,145 calls =
+61 us each**, in a **1,534-line function** — larger than the one this round attributed.
+Whole-compile counters for the same run (`getTypeOfExpression` 3,911 ms / 701,736 calls,
+recompute x2.7; relations at depth 0 only 699 ms) make the falsifiable prior that most
+of the 61 us is argument TYPE computation rather than `checkTypeRelatedTo`. Secondary:
+`getCalleeType` costs 474 ms and half its results are thrown away three sections later —
+ask whether the bail's verdict is knowable more cheaply than by resolving (NOT a caching
+question; ARCHITECTURE-RETHINK § 0 closed those).
+
 **Round 733 (2026-07-27) — (SPINE.1) step (a) DONE, and it FALSIFIES the item TWICE.** The
 two hottest spine leave handlers were attributed INTERNALLY (not guessed — round 732's
 whole lesson), and the item's premise does not survive: **`cpaSpineLeave` + `ccetSpineLeave`
@@ -866,100 +950,6 @@ must match `gradle-wrapper.jar`, not `GradleWrapperMain` — the wrong pattern r
 ---
 
 
-**Round 724 (2026-07-27) — the TS2344 ×4 family is CONFIRMED and its obvious explanation
-is DISPROVEN, before any fix was written. Parked on
-`wip/round724-nonnullable-constraint`; main clean at 12,781 / 0 / 3.**
-
-Four of the remaining 22 read `Type 'NonNullable<T>' does not satisfy the constraint
-'Node'`, from tsc's `visitNode<TIn extends Node | undefined>(…, visitor:
-Visitor<NonNullable<TIn>, …>)` where `Visitor`'s first parameter requires `extends Node`.
-The natural reading is that we compare against `TIn`'s RAW constraint `Node | undefined`,
-which genuinely does not satisfy `Node`, and that stripping the nullish part fixes it.
-
-**The probe says otherwise, and this is the whole value of the round:** the case where
-the parameter is already non-null — `TIn extends Node`, nothing to strip — fails in
-exactly the same way. So we derive NO constraint for `NonNullable<T>` at all; nullish has
-nothing to do with it. Had I written the plausible fix first, it would have made one of
-the two cases pass and looked like progress while the family stayed broken.
-
-Control (an unconstrained type parameter) still reports TS2344, so the probe
-discriminates. Same family as round 720's `Required<T>` — a real-lib utility type whose
-effect we do not apply — and invisible on the curated-lib path for the same reason.
-
----
-
-
-**Round 723 (2026-07-27) — the round-722 defect is FIXED and it took two false positives
-with it, not one. Real-lib FPs 24 → 22; corpus 12,775 → 12,781 / 0 / 3; the cost gate
-tripped, was justified, and was rebaselined in the same commit.**
-
-**The fix, and how small it turned out to be.** `getTypeOfObjectLiteral` named a computed
-key with `computedLiteralKey(n) ?: continue`, and that helper accepts only string and
-numeric literals — so `[Symbol.iterator]: …` matched nothing and the member was silently
-DROPPED. Not mis-typed, not mis-named: absent. The target then correctly reported it
-missing. `computedSymbolKey` now names a DOTTED path as `[Symbol.iterator]`, matching how
-symbol members are named everywhere else (it is exactly what TS2739 prints back). Wired
-into both the PropertyAssignment and MethodDeclaration branches — the method form
-(`{ [Symbol.iterator]() {…} }`) did not handle computed names at all.
-
-**Where I deliberately stopped short.** A bare `[foo]` key is genuinely dynamic; naming
-it `[foo]` would let any literal satisfy an unrelated symbol-keyed member, so it still
-gets skipped. That is pinned by its own control, because the tempting over-broad version
-would have passed every other test in the file.
-
-**It fixed more than it was aimed at.** Predicted: TS2739 ×1. Actual: TS2739 ×1 → 0 AND
-TS2322 8 → 7 — a dropped member was also failing an assignability comparison elsewhere.
-Worth noting for the remaining 22: a single structural gap can surface under several
-different codes, so the by-code histogram overstates how many distinct causes are left.
-
-**The cost gate did its job.** It failed the round on `mapped.keyed` +3.12% and
-`mapped.hits` +6.66%. That is the honest price of typing members that were previously
-discarded — +744 keyed lookups, +372 of them hits, ≈1.6 ms at the round-716 per-call
-cost — and the alternative to that work was wrong output. Accepted and rebaselined in the
-landing commit, which is precisely the workflow (COST.1) was built for: not a veto, an
-accounting demand. Note the percentages look alarming only because `mapped.keyed` is a
-small counter; the absolute deltas are three digits.
-
----
-
-
-**Round 722 (2026-07-27) — a CONFIRMED, isolated defect behind (LIB.1)'s TS2739, with a
-four-line repro and a live control; parked on `wip/round722-symbol-keyed-members`
-because the failing case must not sit on main. Main clean at 12,775 / 0 / 3. Also: the
-build is fast now (2m 57s for a filtered cycle), and I finally understand why the last
-few rounds looked so slow.**
-
-**THE DEFECT.** tsc's `core.ts` builds a `Set<TElement>` as an object literal that ends
-`[Symbol.iterator]: () => {…}, [Symbol.toStringTag]: multiMap[Symbol.toStringTag]`, and
-we report TS2739 "missing … `[Symbol.iterator]`, `[Symbol.toStringTag]`". Reading the
-source confirmed the literal really does declare them, so **computed well-known-symbol
-keys in an object literal are not being registered as members.** The probe reduces it to
-four lines; the control that OMITS the key still reports it missing, so the probe sees
-the diagnostic and discriminates.
-
-**A SECOND HYPOTHESIS ELIMINATED in the same run.** An interface extending
-`ReadonlyArray<T>` IS assignable to itself, with its own live control. With round 721's
-`GenericSelfAssignabilityTest`, both hypotheses for the parser.ts:3583 and
-watchPublic.ts:371/383 TS2322 are now closed — those need a fresh angle, not a third
-guess at generic identity. Negative knowledge, recorded so it is not re-derived.
-
-**THE TIME-KEEPING ERROR, which is the most useful thing here and corrects my own
-earlier notes.** Rounds 718–721 recorded compiles running 16, 25, 40+ minutes. They were
-not. A backgrounded `sleep` is PREEMPTED the moment I issue the next command, so almost
-no wall time passed between my turns — process ages that looked impossibly young were
-simply ACCURATE, and I built an elaborate story (contention, a competing bench loop, a
-hardware crisis) on top of a broken clock. Proof: gradle started 01:48:27 and a check
-after two nominal 20-minute waits read 01:49:12. **Real time only passes when a wait is
-launched and the turn then ENDS**, letting the notification fire. Doing that, the same
-build finished in 2m 57s.
-**What survives from those notes:** the heap ladder was real and independently proven —
-4 g fails with an explicit "Not enough memory to run compilation" and 5 g completes.
-Both things were true at once: the heap was genuinely too small, AND my clock was wrong.
-
----
-
-
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **Reading convention (stated round 687, after it cost a scan):** a superseded
@@ -1621,7 +1611,7 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   any optimisation — every candidate measures below the 560 ms drift band of a
   28 s compile.
 
-- [ ] **(CALL.1) Attribute INSIDE `checkSingleCallExpressionTypes` — 2.9 s,
+- [x] **(CALL.1) Attribute INSIDE `checkSingleCallExpressionTypes` — 2.9 s,
   53.6 us per CallExpression, the largest per-node cost measured anywhere in
   this compiler (round 733).** It is a **920-line straight-line function with
   18 `diagnostics.add` sites and 7 `run{}` blocks, executed in full for every
@@ -1647,6 +1637,53 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   5x and 6-17x respectively. Price the population BEFORE building anything;
   counters decide, `scripts/ab-interleaved.sh` medians AND win rate confirm.
   Gate: corpus suite + `--listAll` + `cost_gate.py`.
+  **>>> DONE round 734. THE MEASUREMENT CHOSE BRANCH B, by 4x. <<<**
+  **78% of the function is type-system work** (2,007 of 2,564 ms raw):
+  `checkArgumentsAgainstSignature` **1,357 ms (53%)**, `getCalleeType`
+  **474 ms (18%)**, the TS2793 impl probe 101, `checkArgumentsAgainstOverloads`
+  53, `getCallSignaturesOfType` 19. **Branch A is disproved twice over.**
+  STATICALLY: all 22 `getLineAndCharacterOfPosition`, all 17
+  `expressionTrueEnd` and all 11 `typeToString` sites are DOWNSTREAM of the
+  emission decision (16 literally inside `if (length > 0) {`) — there is no
+  pre-gate work to hoist, the gates already ARE the cheap pre-test the item
+  proposed adding. DYNAMICALLY: everything non-type-system totals **557 ms**,
+  ~70 ms of it the probe, so the theoretical maximum prize is **~490 ms = 1.6%
+  of a 30.5 s compile — inside the +-2% drift band (~610 ms), i.e. smaller than
+  the noise that would have to measure it.** NOTHING was landed but the
+  harness. Full derivation, the exit profile (half of all 52,413 invocations
+  are discarded at the any/error bail AFTER `getCalleeType` has run; the
+  240-line `signatures.isEmpty()` branch is never entered on this profile) and
+  the two calibration artifacts: **`docs/perf/call-expression-attribution.md`**
+  — read it before proposing anything shaped like this again. LANDED:
+  `CallSections` + `--callSections` (opt-in, behaviour-free when off) and
+  `CallSectionProbeTest`. Follow-on: **(CALL.2)** below.
+
+- [ ] **(CALL.2) Attribute INSIDE `checkArgumentsAgainstSignature` — 1,357 ms
+  over 22,145 calls = 61 us each, now the largest single measured cost in this
+  compiler (round 734).** It is a **1,534-line function** — larger than the one
+  (CALL.1) attributed — and it is 53% of `checkSingleCallExpressionTypes`,
+  which is itself ~10% of the compile. **STEP (a): attribute by section, do not
+  guess** — the `CallSections` harness generalises (it needs only new section
+  constants), and its two calibration traps are recorded in
+  `docs/perf/call-expression-attribution.md` § 2: a boundary costs ~90 ns
+  measured DIFFERENTIALLY (N sections vs the same code as 1 span), while a
+  back-to-back empty span reads 3x that because a `repeat` loop's back-edge
+  safepoint poll — and, even unrolled, an invocation's first timestamp read —
+  attracts stop-the-world attribution. **The split to price: argument TYPE
+  computation vs RELATION work.** Whole-compile counters for the same run put
+  `getTypeOfExpression` at 3,911 ms / 701,736 calls (recompute x2.7) and
+  relations at depth 0 at only 699 ms, so the prior is that most of the 61 us
+  is arg-type computation rather than `checkTypeRelatedTo` — **state that as
+  the falsifiable expectation and let the measurement decide.** Secondary, from
+  the same round: `getCalleeType` is 474 ms and **half its results are
+  discarded** at the any/error bail three sections later (26,496 of 52,413) —
+  ask whether that verdict is knowable more cheaply than by resolving; this is
+  NOT a caching question (ARCHITECTURE-RETHINK § 0 closed those). **CAUTION
+  carried forward from rounds 732, 733 and 734:** all three predicted a lever
+  from a plausible reading of an aggregate and were wrong by 5x, 6-17x and
+  >=2x. Price the population BEFORE building anything; counters decide,
+  `scripts/ab-interleaved.sh` medians AND win rate confirm. Gate: corpus suite
+  + `--listAll` + `cost_gate.py`.
 
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is

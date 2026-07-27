@@ -31,6 +31,22 @@
 > Stage 1 of § 0.1's staged plan is therefore NOT worth 11–19%, and stage 2's
 > "DISPATCH.1 retroactively unlocks M0.4" does not follow — a migrated pass
 > costs its own work either way.
+> **ROUND-734 RESOLUTION OF THAT POINTER: `checkSingleCallExpressionTypes` is
+> TYPE-SYSTEM WORK, not machinery — 78% of it (2,007 of 2,564 ms) is
+> `checkArgumentsAgainstSignature` (1,357), `getCalleeType` (474), the TS2793
+> impl probe (101), `checkArgumentsAgainstOverloads` (53) and
+> `getCallSignaturesOfType` (19).** Everything else in the function — 18
+> emission sites, their gates, spans and displays — is 557 ms including ~70 ms
+> of probe, so the whole non-type-system prize is ≤490 ms, inside the ±2%
+> drift band. **This third attribution therefore CORRECTS the table below in
+> the other direction: the residual "dispatch + handler machinery ~7,600 ms
+> (42%)" is not machinery — it is the migrated passes' own checking, and the
+> type system is bigger than the 5,056 ms row says** (that row counts only the
+> instrumented primitives, not the argument-check and callee-resolution code
+> that calls them). The next lever is inside the relation/inference path
+> (M3.1), reached via **(CALL.2)**: `checkArgumentsAgainstSignature`, 61 µs per
+> call over 22,145 calls in a 1,534-line function. Full derivation:
+> `docs/perf/call-expression-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope

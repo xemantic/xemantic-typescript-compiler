@@ -1,3 +1,95 @@
+**Round 724 (2026-07-27) — the TS2344 ×4 family is CONFIRMED and its obvious explanation
+is DISPROVEN, before any fix was written. Parked on
+`wip/round724-nonnullable-constraint`; main clean at 12,781 / 0 / 3.**
+
+Four of the remaining 22 read `Type 'NonNullable<T>' does not satisfy the constraint
+'Node'`, from tsc's `visitNode<TIn extends Node | undefined>(…, visitor:
+Visitor<NonNullable<TIn>, …>)` where `Visitor`'s first parameter requires `extends Node`.
+The natural reading is that we compare against `TIn`'s RAW constraint `Node | undefined`,
+which genuinely does not satisfy `Node`, and that stripping the nullish part fixes it.
+
+**The probe says otherwise, and this is the whole value of the round:** the case where
+the parameter is already non-null — `TIn extends Node`, nothing to strip — fails in
+exactly the same way. So we derive NO constraint for `NonNullable<T>` at all; nullish has
+nothing to do with it. Had I written the plausible fix first, it would have made one of
+the two cases pass and looked like progress while the family stayed broken.
+
+Control (an unconstrained type parameter) still reports TS2344, so the probe
+discriminates. Same family as round 720's `Required<T>` — a real-lib utility type whose
+effect we do not apply — and invisible on the curated-lib path for the same reason.
+
+---
+
+
+**Round 723 (2026-07-27) — the round-722 defect is FIXED and it took two false positives
+with it, not one. Real-lib FPs 24 → 22; corpus 12,775 → 12,781 / 0 / 3; the cost gate
+tripped, was justified, and was rebaselined in the same commit.**
+
+**The fix, and how small it turned out to be.** `getTypeOfObjectLiteral` named a computed
+key with `computedLiteralKey(n) ?: continue`, and that helper accepts only string and
+numeric literals — so `[Symbol.iterator]: …` matched nothing and the member was silently
+DROPPED. Not mis-typed, not mis-named: absent. The target then correctly reported it
+missing. `computedSymbolKey` now names a DOTTED path as `[Symbol.iterator]`, matching how
+symbol members are named everywhere else (it is exactly what TS2739 prints back). Wired
+into both the PropertyAssignment and MethodDeclaration branches — the method form
+(`{ [Symbol.iterator]() {…} }`) did not handle computed names at all.
+
+**Where I deliberately stopped short.** A bare `[foo]` key is genuinely dynamic; naming
+it `[foo]` would let any literal satisfy an unrelated symbol-keyed member, so it still
+gets skipped. That is pinned by its own control, because the tempting over-broad version
+would have passed every other test in the file.
+
+**It fixed more than it was aimed at.** Predicted: TS2739 ×1. Actual: TS2739 ×1 → 0 AND
+TS2322 8 → 7 — a dropped member was also failing an assignability comparison elsewhere.
+Worth noting for the remaining 22: a single structural gap can surface under several
+different codes, so the by-code histogram overstates how many distinct causes are left.
+
+**The cost gate did its job.** It failed the round on `mapped.keyed` +3.12% and
+`mapped.hits` +6.66%. That is the honest price of typing members that were previously
+discarded — +744 keyed lookups, +372 of them hits, ≈1.6 ms at the round-716 per-call
+cost — and the alternative to that work was wrong output. Accepted and rebaselined in the
+landing commit, which is precisely the workflow (COST.1) was built for: not a veto, an
+accounting demand. Note the percentages look alarming only because `mapped.keyed` is a
+small counter; the absolute deltas are three digits.
+
+---
+
+
+**Round 722 (2026-07-27) — a CONFIRMED, isolated defect behind (LIB.1)'s TS2739, with a
+four-line repro and a live control; parked on `wip/round722-symbol-keyed-members`
+because the failing case must not sit on main. Main clean at 12,775 / 0 / 3. Also: the
+build is fast now (2m 57s for a filtered cycle), and I finally understand why the last
+few rounds looked so slow.**
+
+**THE DEFECT.** tsc's `core.ts` builds a `Set<TElement>` as an object literal that ends
+`[Symbol.iterator]: () => {…}, [Symbol.toStringTag]: multiMap[Symbol.toStringTag]`, and
+we report TS2739 "missing … `[Symbol.iterator]`, `[Symbol.toStringTag]`". Reading the
+source confirmed the literal really does declare them, so **computed well-known-symbol
+keys in an object literal are not being registered as members.** The probe reduces it to
+four lines; the control that OMITS the key still reports it missing, so the probe sees
+the diagnostic and discriminates.
+
+**A SECOND HYPOTHESIS ELIMINATED in the same run.** An interface extending
+`ReadonlyArray<T>` IS assignable to itself, with its own live control. With round 721's
+`GenericSelfAssignabilityTest`, both hypotheses for the parser.ts:3583 and
+watchPublic.ts:371/383 TS2322 are now closed — those need a fresh angle, not a third
+guess at generic identity. Negative knowledge, recorded so it is not re-derived.
+
+**THE TIME-KEEPING ERROR, which is the most useful thing here and corrects my own
+earlier notes.** Rounds 718–721 recorded compiles running 16, 25, 40+ minutes. They were
+not. A backgrounded `sleep` is PREEMPTED the moment I issue the next command, so almost
+no wall time passed between my turns — process ages that looked impossibly young were
+simply ACCURATE, and I built an elaborate story (contention, a competing bench loop, a
+hardware crisis) on top of a broken clock. Proof: gradle started 01:48:27 and a check
+after two nominal 20-minute waits read 01:49:12. **Real time only passes when a wait is
+launched and the turn then ENDS**, letting the notification fire. Doing that, the same
+build finished in 2m 57s.
+**What survives from those notes:** the heap ladder was real and independently proven —
+4 g fails with an explicit "Not enough memory to run compilation" and 5 g completes.
+Both things were true at once: the heap was genuinely too small, AND my clock was wrong.
+
+---
+
 **Round 721 (2026-07-27) — a NEGATIVE result that removes the most attractive-looking
 hypothesis about (LIB.1)'s remaining 24 false positives, plus the first evidence that
 the build loop is now genuinely fast (a filtered test cycle: 1m 56s).**
