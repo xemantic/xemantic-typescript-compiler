@@ -108440,11 +108440,35 @@ interface DataView {
         // type; the negative branch is unchanged (`t <: candidate` ⇒ guard always true ⇒
         // false branch is `never`).
         if (isMatch) {
-            return when {
-                checkTypeRelatedTo(targetType, t, assignableRelation) -> targetType
-                checkTypeRelatedTo(t, targetType, assignableRelation) -> t
-                else -> targetType
+            when {
+                checkTypeRelatedTo(targetType, t, assignableRelation) -> return targetType
+                checkTypeRelatedTo(t, targetType, assignableRelation) -> return t
             }
+            // Round 727: neither WHOLE-union relation holds — but tsc's `getNarrowedType`
+            // never compares against the whole candidate: it `mapType`s over the CANDIDATE
+            // and keeps, per constituent `c`, whichever of `t`/`c` is the subtype (dropping
+            // `c` when neither direction relates). Falling straight through to `targetType`
+            // therefore hands back the ENTIRE candidate union — including constituents the
+            // already-narrowed `t` provably is not — and every later member access resolves
+            // on that union's (tiny) common property set. tsc esDecorators.ts's
+            // `isAssignmentExpression(node) && isNamedEvaluation(node, …)` is the live shape:
+            // `NamedEvaluation` is a 9-member union of `X & {…}` intersections, only the two
+            // `AssignmentExpression & {…}` members survive, and without this every
+            // `node.left` / `node.right` / `node.operatorToken` after the guard FP'd TS2339.
+            // Reached ONLY on the previously-`else` path, so the two relating branches above
+            // stay byte-identical; an empty result keeps the old whole-union fallback.
+            if (targetType is Type.Union) {
+                val kept = mutableListOf<Type>()
+                for (c in targetType.types) {
+                    if (typeGuardMemberDisjoint(t, c)) continue
+                    when {
+                        checkTypeRelatedTo(c, t, assignableRelation) -> kept.add(c)
+                        checkTypeRelatedTo(t, c, assignableRelation) -> kept.add(t)
+                    }
+                }
+                if (kept.isNotEmpty()) return getUnionType(kept)
+            }
+            return targetType
         }
         // Round 472: the negative branch collapses to `never` only when t is GENUINELY
         // a subtype — our relation over-accepts a wide AST-node interface against a

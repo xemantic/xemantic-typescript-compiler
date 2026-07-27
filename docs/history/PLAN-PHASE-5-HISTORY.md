@@ -1,3 +1,1750 @@
+**Round 716 (2026-07-26) — the performance diagnosis was WRONG, and now it is
+measured. The type system is 28% of the compile; the dispatch machinery is 42%; the
+entire prize INV.5(c) exists for is 68 ms. Three cache hypotheses died in one
+session. One decisive probe found the real lever.**
+
+Owner directive: "do anything needed, all the necessary experiments, new
+architectural decisions, new tasks in the queue, to increase the performance. We are
+free to completely redesign this project." So this round measured instead of
+building, and the corrections are worth more than any patch would have been.
+Full write-up: `docs/ARCHITECTURE-RETHINK.md` § 0 (new, supersedes § 1's diagnosis).
+
+**What I set out to do was widen the INV.5(c) cache gate.** The reasoning looked
+strong: the round-548 gate refuses to cache any resolution whose node lives outside
+the file being checked, INV.3(c) had since made node-read names key by the node's
+OWN file, and the gate was written *after* that landed — so it looked stale.
+Instrumented: the gate rejects **65,000 of 88,829 bypassed resolutions (73.1%)**.
+The premise was right.
+
+**Then every version of the fix lost.** Widening it lifted hits 5,575 → 32,104
+(23% → 46%) and ran **28% slower** over 6 interleaved pairs. The composite-key hash
+probe costs more than the resolution it avoids. Memoizing the fingerprint against
+the installed context maps (builds 53,765 → 13,293, a 75% cut) still measured
+**+11.9%**. Pure identity keying — tsc's actual mapper-object shape — collapsed to
+**4.1%** hits, because our context maps are re-allocated per install rather than
+reused per region.
+
+**Then I measured the thing I should have measured first, and it ended the whole
+direction: the bypassed-resolution population is 68 ms.** 31,571 outermost calls at
+2.2 µs — 0.35% of the compile. Every version of that cache was competing for a third
+of one percent. This is the **third independent confirmation of one law**, after
+round 665's 30 ms expression memo and round 659's 75%-reappears migration: *the
+cacheable population is the cheap tail.* Recorded as a closed item so it is not
+re-opened a fourth time.
+
+**A real bug fell out of the failed experiment.** The widened key produced 3 profile
+FPs, and a verify mode (recompute every hit, compare) split them: **1,269
+shape-different serves**, every one a lib generic signature — `(value: T, …)` served
+where `(value: Declaration, …)` was correct, under an IDENTICAL fingerprint. So the
+context fingerprint is incomplete: the substitution input is ambient state captured
+by none of nsStack/tpScope/aliasArgs. Not fixed (its prize is 68 ms), but named, with
+the diagnostic that found it.
+
+**Where the time actually goes** — full attribution, new INV.4(g) counters:
+`checkSpine` is 83% of checker-init; inside it `spineEnterNode` 7,166 ms +
+`spineLeaveNode` 5,478 ms, while the WHOLE type system (narrowing 2,437 +
+getTypeOfExpression 1,804 + relations 468 + type-nodes 311 + members 36) is
+**5,056 ms**. That leaves **~7,600 ms of dispatch and handler machinery** — 857k
+nodes at 14.8 µs each for enter+leave, of which 8.9 µs is not type-system work.
+`spineEnterNode` reaches ~118 handler entry points and `spineLeaveNode` 14
+sub-dispatchers, and every handler is consulted about every node.
+
+**The lever, with a decisive probe rather than an argument.** Per-kind timing:
+`IDENTIFIER` is 44.5% of nodes at **2,746 ns each = 1,048 ms**. Skipping
+`spineEnterNode` entirely for bare Identifiers left the profile's 46 diagnostics
+**byte-identical**. That second is provably unnecessary. Queued as **(DISPATCH.1)**:
+a per-kind handler table, with the table DERIVED by instrumentation over the corpus
+(not read off the guards, and not derived from the profiles — they never exercise
+some kinds). Sized 1.0–2.5 s.
+
+**What landed:** the instrumentation only (opt-in, behaviour-free) — INV.5(c)
+cache attribution, the INV.5(c5) prize timer, INV.4(g) spine-phase and per-kind
+counters. Every experimental change was reverted: the widened gate, the memoized
+fingerprint, the identity key, the Identifier probe. Corpus green, profile back to
+46. **The box matters for anyone repeating this:** an M1 with Chrome running gives
+±13% wall variance, which swamps a 1 s effect — so the trustworthy numbers here are
+the in-process counters, and the wall claims are the 6-pair interleaved ones.
+
+---
+
+**Round 715 (2026-07-26) — measuring `expressions/asOperator` for adoption turned up a
+SILENT WRONG-OUTPUT bug, which landed; the category itself did not. Corpus 12,761 →
+12,765 / 0 / 3.**
+
+`(x + 1 as number) * 3` emitted `x + 1 * 3`. Erasing the cast dropped the parentheses
+with it and the `*` re-associated into the sum — the emitted program means something
+else. `typeAssertionResultNeedsParens` listed class/arrow/unary/typeof/void/delete/
+await/yield but not BinaryExpression or ConditionalExpression, which are precisely the
+kinds with a precedence to lose. The conformance case says it in a comment: "Must emit
+as (x + 1) * 3".
+
+**The category is not adopted, for the reason round 695's own table warned about.** Its
+remaining blocker (`asOperatorASI`) is a JS-EMIT test, and `conformanceDeferredError
+Baselines` only defers `.errors.txt` — so failure KIND, not count, decides adoptability,
+and this one needs the documented `hasPrecedingLineBreak` ASI divergence fixed in the
+parser first (`var x = 10 \n as \`Hello\`` is two statements in tsc, one cast to us).
+The three `.errors.txt` failures would have been deferrable; the emit one is not.
+
+**Worth noting about the measurement table generally:** it ranks categories by failure
+count, and this round shows count alone can mislead — a 5-failure category can be
+unadoptable while a 9-failure one whose failures are all error baselines is fine. When
+picking the next category, check the KINDS first.
+
+---
+
+**Round 714 (2026-07-26) — (M3.0-gap-2) PARKED with its reasoning, closing an
+ambiguity in the queue rather than leaving it open-ended. Corpus 12,761 / 0 / 3.**
+
+The item still read as work-in-progress while the decision had effectively been made
+last round, and an item that reads "in progress" is an instruction to the next session.
+Everything worth having from this case has shipped — the over-emitted TS7019/TS7006,
+the contextual typing of an IIFE's parameters from the call arguments, all three
+TS18048 including the pure-`undefined` reference and its literal-vs-reference boundary
+against TS18050, and (round 713) the argument-context TS7006 hole it exposed.
+
+What remains cannot be had cheaply: the case's TS7006 ×2 sit in PURE-DEFAULT mode,
+where the full implicit-any walker is deliberately off and the narrow one covers a
+single shape on purpose. Closing it means broadening that walker — the change on record
+as having regressed ~19 tests — for one conformance case. Both the queue item and the
+deferral comment in build.gradle.kts now say PARKED and why, so nobody re-derives the
+attempt.
+
+**The general point:** a deferral entry that explains a MISSING capability invites
+someone to go build it; one that records a DECISION and its cost does not. These two
+had drifted into the first kind while the answer was already the second.
+
+---
+
+**Round 713 (2026-07-26) — the TS7006 argument-context fix LANDED. Corpus 12,756 →
+12,761 / 0 / 3, all 8 profiles byte-identical.**
+
+Round 712 had the design right and the lookup wrong: a lib METHOD's signature
+declaration lives in `builtinLibMemberDecls`, not `builtinLibDecls`, and I had tested
+the parameter against the member set and the signature against the statement set —
+each the other's. Correcting that put the compiler profile back to 46 with all three
+target shapes still firing, and the full gates came back clean.
+
+What landed is the edge asking the question it actually needs — the callee's PARAMETER
+at the argument's index — with two measured narrowings that are now pinned as controls:
+the test is SYNTACTIC because our resolved `anyType` is not tsc's `any`, and the
+embedded lib is excluded because its simplified callback signatures are placeholders
+rather than statements about the type.
+
+**Worth keeping in mind for anything that reads a parameter's type to decide whether a
+callback is contextually typed:** both narrowings are about the same confusion — our
+`any` has three quite different origins (tsc really said `any`; we failed to resolve a
+generic; our lib simplified a signature) and only the first licenses a diagnostic.
+The corpus caught the second and the profiles caught the third, which is a neat
+demonstration of why both gates are kept.
+
+**gap-2 status:** the case's TS7006 ×2 are on argument arrows in a file with only
+`@strictNullChecks`, i.e. pure-default mode, where the full walker is deliberately off —
+so `contextuallyTypedIifeStrict` still cannot un-defer. Closing it would need the narrow
+default-mode walker to cover the argument-arrow shape, which is the broadening that
+regressed ~19 tests; not worth it for one case.
+
+---
+
+**Round 712 (2026-07-26) — implemented the TS7006 argument-edge fix, spent two
+narrowings on it, and reverted at the profile gate. No production change; corpus stays
+12,756 / 0 / 3.**
+
+The edge change works: with the argument index taken at the consumer, all three target
+shapes fire under noImplicitAny (including gap-2's `(f => f(12))(k => k)`) while the
+contextually-typed control stays silent. What it cost was two lessons about what "no
+contextual type" may be inferred FROM.
+
+**Our `anyType` is not tsc's `any`.** Deciding on the RESOLVED parameter type red-lined
+three corpus baselines: a parameter annotated with a generic or mapped type we cannot
+resolve lands on `anyType` too, and those genuinely have contextual types. The test has
+to be syntactic — the annotation is literally the `any` keyword, or absent. That turned
+the corpus green.
+
+**The embedded lib's `any`s are placeholders, not statements about the type.** With the
+syntactic rule the profiles gained FPs on `.replace(/\./g, s => …)` and
+`JSON.stringify(f, (_, v) => …)`, because our lib simplifies those callback signatures
+where tsc states them precisely. Excluding the builtin-lib decl sets is the right move
+and well-precedented, but my exclusion missed the `.replace` site, so the next attempt
+starts by finding which set actually holds a resolved lib METHOD's parameter for a
+PropertyAccess callee.
+
+Reverted rather than landed because profile FPs violate the v1 invariant — and the
+corpus was GREEN at that point, so the profiles are what caught it. Both narrowings are
+on the item so the next attempt begins two steps in.
+
+---
+
+**Round 711 (2026-07-26) — the TS7006 coverage hole located exactly; it is a contract
+mismatch, not a missing case. Probe-only, no production change; corpus 12,756 / 0 / 3.**
+
+The argument edge is built as `typed = isCalleeResolvable(callee)` — "can I resolve the
+callee name" standing in for "does this argument have a contextual type". The two
+missing shapes are exactly where those come apart: `anyCb(j => j)` resolves its callee
+(so it suppresses) while the parameter is `any` and supplies no contextual signature;
+`(f => f(12))(k => k)` has a parenthesized ARROW callee, which falls to the function's
+default `true` and suppresses too.
+
+So the fix is to ask the question the edge actually needs — the callee's PARAMETER type
+at that argument position, with no contextual signature when it is `any`, unresolved, or
+not function-shaped. Encouragingly, `isCalleeResolvable` already contains one instance of
+this reasoning: its B182 arm returns false when a LIB_MIN_TARGET-dropped method leaves the
+callback with no contextual signature. The change generalises that arm rather than
+inventing a rule.
+
+I stopped at the diagnosis on purpose. Broadening this particular walker is the change
+CLAUDE.md records as having regressed ~19 tests, so it needs a full corpus arbitration
+plus `--listAll` ×8 — callback parameters are everywhere in tsc's own source — and that
+is a poor fit for the tail of a long session.
+
+---
+
+**Round 710 (2026-07-26) — correcting round 709's own finding before anyone acts on
+it. Probe-only, no production change; corpus stays 12,756 / 0 / 3.**
+
+Round 709 concluded that our two TS7006 emitters have "inverted option gates" and told
+the next round to unify them. Reading the dispatch shows that is wrong, and acting on
+it would have undone deliberate work: `checkImplicitAnyDefaultVarFunctions` runs only
+in pure-default mode and deliberately covers ONE shape, because broadening the full
+`checkImplicitAnyParameters` walker was MEASURED to regress ~19 tests. The two are
+mutually exclusive so they cannot double-emit. The "swap" my matrix showed is exactly
+that design: different modes, different walkers, different coverage.
+
+**What survives is a smaller, genuine defect:** `anyCb(j => j)` is reported in
+pure-default mode but NOT under noImplicitAny. Turning the stricter option ON should
+never lose a diagnostic, whatever the walker split is. And gap-2's
+`(f => f(12))(k => k)` is uncovered in both modes. So the target is a coverage hole in
+the full walker — argument arrows whose callee parameter provides no contextual type —
+not the gates.
+
+**The lesson is the one I wrote down last round and then broke immediately.** I said a
+wrong characterisation in the queue is worse than none, because the next round starts by
+trusting it; then I wrote "inverted gates / plain bug" from a black-box matrix without
+reading the dispatch that explains it. Two greps would have prevented it. A behavioural
+matrix tells you WHAT differs; it does not license a claim about WHY, and "this looks
+like a bug" about deliberate, documented, measurement-backed code deserves more
+suspicion of my own reading than of the code.
+
+---
+
+**Round 709 (2026-07-26) — the TS7006 gate question is settled, and the answer is a
+defect in its own right: our two emitters have INVERTED option gates. Probe-only, no
+production change; corpus stays 12,756 / 0 / 3.**
+
+Running round 708's four shapes under two configurations gives a matrix no single
+option setting can satisfy: with `strictNullChecks` alone, `anyCb(j => j)` fires and
+`function plain(m) {}` does not; add `noImplicitAny` and they swap. Turning the option
+ON switches OFF the emitter that was firing. `anyCb(j => j)` going silent under
+noImplicitAny is simply wrong — tsc reports it.
+
+**Which convention is right is answerable from the corpus:** 12 of 22 sampled TS7006
+baselines have no `@noImplicitAny`/`@strict` directive, so TS7006 fires by DEFAULT in
+the reference, and the codebase's `!strictExplicitlyFalse` convention is the one that
+matches it. The `noImplicitAny || strict` gate on the other emitter is the outlier.
+
+So the next round's job is to unify the two gates on the default-on convention and
+re-gate — not to work on IIFEs. The gap-2 shape may fall out of that, since the
+conformance case sets only `@strictNullChecks: true`; if it does not, at least it will
+be failing for one reason instead of two.
+
+This is the second round running where the recorded framing of the "last small piece"
+turned out to be wrong, and both times a two-configuration probe was enough to replace
+a guess with a matrix. Worth preferring that over one-config probes when a diagnostic's
+presence could plausibly depend on options.
+
+---
+
+**Round 708 (2026-07-26) — probe-only on gap-2's last piece; it is not the gap the
+item described. No production change; corpus stays 12,756 / 0 / 3.**
+
+The item said an arrow passed AS an argument does not get its parameters checked for
+implicit any. Four contrasted shapes in one file say otherwise: `anyCb(j => j)` against
+an `any` parameter DOES fire TS7006, and `take(i => i)` against an annotated parameter
+is correctly silent — so the walker reaches argument arrows and distinguishes
+contextually-typed ones. `(f => f(12))(k => k)` is silent, which is the gap; but in the
+same file a plain `function plain(m) { return m; }` is silent too, and that has nothing
+to do with IIFEs or arguments.
+
+So the next step is not the callee-typing path the item pointed at: it is to settle
+which shapes emit TS7006 under which options, since a top-level function declaration's
+parameter and a callback's parameter evidently disagree here. Recorded on the item with
+the four probe results, so that round starts from evidence rather than from my earlier
+framing.
+
+I stopped at the probe deliberately: this is a different subsystem from the last three
+rounds' work, my context for the session is long, and a gate question deserves a clean
+start rather than the tail of a session.
+
+---
+
+**Round 707 (2026-07-26) — the last TS18048 gap closed; `contextuallyTypedIifeStrict`
+is now one diagnostic family from un-deferral. Corpus 12,756 / 0 / 3, all 8 profiles
+byte-identical.**
+
+Round 716 handled `T | undefined` operands; a reference typed exactly `undefined` was
+still silent. The cause was a strictNullChecks early return in the arithmetic walker
+that hands operands carrying the Null/Undefined flag to TS18050 — correct for the
+LITERAL `undefined`, wrong for a reference, which tsc reports as TS18048. Offering the
+operand to the possibly-undefined check before that return fixes it, and isolating it
+took one three-case probe (`a: number | undefined` fired, `c?: number` fired,
+`b: undefined` did not).
+
+**The corpus then caught the guard I had missed**, and it is a nice example of why the
+literal/reference distinction had to be explicit: `undefined` parses as an Identifier
+here, so it HAS a reference path, and the first cut emitted "'undefined' is possibly
+'undefined'" — three real baselines (operatorAddNullUndefined, binaryArithmatic2/3)
+rejected it immediately. Excluding the nullish keywords by name is exactly the TS18050
+boundary the original comment described.
+
+All three of the case's TS18048 ('j', 'k', 'o') now fire at the baseline's positions.
+The remainder is the two TS7006 for the INNER function's parameter in
+`(f => f(12))(i => i)` — an arrow passed AS an argument does not get its own parameters
+checked for implicit any.
+
+---
+
+**Round 716 (2026-07-26) — the possibly-undefined operand rule LANDED, after settling
+the pin question with evidence rather than authority. Corpus 12,756 / 0 / 3, all 8
+profiles byte-identical.**
+
+Round 705 left this deliberately unlanded: the rule was right by one baseline, but it
+flipped nine of our own pins, and rewriting other rounds' pins on a single data point
+is not a patch. The cheap way to settle it turned out to be the reference baselines
+themselves — `git grep` over `tests/baselines/reference` for TS18048 (418 occurrences)
+and for TS2362 co-occurring with "possibly undefined" (two files). The second baseline,
+`circularOptionalityRemoval`, reports TS18048 for `x > 0` with `x: number | undefined`
+— a different operator from the additive case, so the rule is about the OPERAND, not
+one syntax. And the two apparent counter-examples are not: their TS2362 operand is a
+`delete` expression, i.e. a boolean.
+
+With the direction established, the nine pins were updated — intent unchanged ("narrowing
+did not apply, so it still fires"), only the expected code — and one paired positive
+control strengthened to exclude TS18048 as well, so a future regression cannot make the
+NARROWED case start reporting it unnoticed.
+
+**The reusable point:** when a change turns your own pins red, the question is which of
+the two encodes the reference behaviour, and that is usually answerable from the
+baselines in a couple of greps. Deferring it one round cost nothing and produced a
+better-supported change than landing it under time pressure would have.
+
+---
+
+**Round 705 (2026-07-26) — the TS18048 rule for a possibly-undefined arithmetic
+operand: written, working, and REVERTED because it collides with nine of our own pins.
+No production change; corpus stays 12,756 / 0 / 3.**
+
+tsc checks possibly-undefined BEFORE it checks operand kinds, so `j + 1` with
+`j: number | undefined` is "'j' is possibly 'undefined'", not a complaint about the
+operator. Adding that check ahead of the three arithmetic emitters produces exactly the
+TS18048 the reference baseline wants.
+
+**Then nine LOCAL pins went red — and not one corpus test.** They live in four
+arithmetic narrowing test classes and assert that a maybe-undefined operand fires
+**TS2362**, with names like "negative control - genuinely maybe-undefined operand still
+fires TS2362". Their intent is "narrowing did not apply, so it still fires", which
+TS18048 satisfies; only the code differs.
+
+**Which is right matters more than which is convenient.** The evidence: the
+`contextuallyTypedIifeStrict` reference baseline — real tsc output — reports TS18048 for
+exactly this shape, and the corpus is green with or without the change, so it does not
+discriminate. That points at the pins encoding OUR old behaviour rather than tsc's. But
+rewriting nine pins written by earlier rounds, at the end of a long session, on the
+strength of one baseline, is a decision rather than a patch: I reverted, recorded the
+rule and the evidence on the item, and left it to a round that can confirm the direction
+against another baseline first and re-gate properly.
+
+---
+
+**Round 704 (2026-07-26) — an IIFE's parameters are now contextually typed from the
+call arguments. Corpus 12,750 → 12,756 / 0 / 3, all 8 profiles byte-identical.**
+
+Round 694 wrote this in the wrong place and measured it inert; the hook is
+`populateParameterLocalTypes`, because the body walkers read `currentLocalTypes` and
+nothing else. Written there, the decisive probe flips: `((a) => a.nope)("x")` reports
+TS2339 on `string` — widened, as tsc widens the argument's literal type.
+
+**Two pieces of the case remain, and the second is the more interesting.** Only ARROWS
+are typed — a function EXPRESSION IIFE is not, and the branch I expected to be
+responsible (the blanket `any` for a callback's own parameters) turned out not to be:
+deferring there changed nothing. That is now a LIMITATION PIN rather than folklore, so
+the next person knows both the gap and one place it is not. And the typed parameters
+now produce the right analysis under the wrong code: `((j?) => j + 1)(12)` reports
+TS2365 where tsc reports TS18048, which is the documented round-415 hazard — a union
+carrying `undefined` fails the arithmetic operand classifier. tsc checks
+possibly-undefined first, so a nullish-operand rule ahead of TS2362/2363/2365 is what
+closes the case.
+
+**Four times this session a first patch turned out to be inert** (rounds 700, 702, 704
+twice), and every one was caught immediately because the probe was built to fail if the
+change worked. That is the single most valuable habit this run reinforced.
+
+---
+
+**Round 703 (2026-07-26) — (M3.0-gap-4) CLOSED; `readonlyRestParameters` is
+un-deferred. Corpus 12,746 → 12,750 / 0 / 3, all 8 profiles byte-identical.**
+
+The half round 702 wrote and removed as inert needed one correction, and it was not in
+the logic: `emitTS2554TooMany` opens with `if (firstExcessIdx >= args.size) return`,
+and I had passed the EXPANDED COUNT where it wants an ARGUMENT INDEX — with two
+arguments and a count of two, it returned silently. The reference baseline states the
+same fact in a way I could have read earlier: the squiggle is on the SPREAD, because
+that is the argument the third one lives inside. Found by reading the emitter rather
+than by probing, which was quicker than the marker probe I had queued.
+
+**A process catch worth recording.** After un-deferring I expected the suite to gain
+four tests (three pins plus the recovered subtest) and it gained one. The pins were
+missing: my Python heredoc's `"""` string collided with the Kotlin raw strings inside
+it, and the script still printed its success message. The count discrepancy is what
+caught it — the same shape as round 690's stale-XML trap, and the reason to state an
+expected count before running rather than after. Rewritten with the editing tool.
+
+**Deferral ledger:** two conformance cases were deferred when the category landed;
+`arrowFunctionContexts` cleared in round 692 and `readonlyRestParameters` clears here.
+One remains — `contextuallyTypedIifeStrict` (M3.0-gap-2) — plus
+`commaOperatorOtherInvalidOperation`, whose (A) and (B1) shipped and whose (B2) is the
+relation-leniency work.
+
+---
+
+**Round 702 (2026-07-26) — (M3.0-gap-4)'s TS2556 half landed. Corpus 12,740 →
+12,746 / 0 / 3, all 8 profiles byte-identical.**
+
+An unbounded array spread into a fixed-arity call cannot be arity-checked, so tsc
+rejects it; we reported nothing, because the arg-count pass suppresses a too-FEW
+conclusion whenever a spread is present and nothing took over. The rule itself is one
+condition — but it took three suite runs to find its four narrowings, and each came
+from a test rather than from thinking about it: a TUPLE spread is legal, an ARRAY
+LITERAL spread is legal (tsc counts `...[6, 7]` as two arguments), spreading INTO a
+rest parameter is legal, and when the fixed arguments already exceed the maximum tsc
+reports the COUNT rather than TS2556. The last two came from a local pin and a corpus
+baseline going red, which is exactly what those gates are for.
+
+**Inert-change discipline paid again, twice.** The first cut did not fire at all: a
+rest PARAMETER's type does not resolve in the arg-count pass, so the operand is now
+classified from its ANNOTATION when the resolved type is unavailable — which also
+handles `readonly string[]` (a TypeOperator around an ArrayType) for free. And the
+TS2554 half of the item, which I also wrote, never fired either; rather than land dead
+code I removed it and recorded the design plus the specific next diagnostic step on
+the item.
+
+---
+
+**Round 701 (2026-07-26) — (M3.0-gap-3)(B1) LANDED, six rounds after it was first
+picked up. Corpus 12,737 → 12,740 / 0 / 3, all 8 profiles byte-identical.**
+
+The recorded recipe re-applied cleanly and the corpus went green immediately; the
+question was only the profiles. Round 700's guard-parameter INFERENCE fix removed two
+of the three FPs. The survivor was the third shape — `return nodeTest(node) ? node :
+undefined` in `getOriginalNode` — which is the same parameter-borne guard used for
+NARROWING rather than inference, and `narrowByCallPredicate` bails the moment
+`resolveFlowCalleeDecl` returns null. Giving it the same fallback
+(`parameterGuardFunctionType`: the parameter's FunctionType annotation supplies exactly
+the declaration triple it needs) cleared it, and all eight profiles returned to their
+baseline.
+
+**Observability was measured, not assumed.** B1's corpus effect is neutral by
+construction — it fixed exactly the regressions it caused — so before committing I
+A/B'd a candidate pin against the stashed tree: without the scope the snippet draws
+NOTHING (`y` is `any`, so `y.v` is too), with it the TS2322 appears. That is what makes
+it a landable fix rather than an unpinnable refactor, and it is the check I would have
+skipped three rounds ago.
+
+**One of my own pins failed and the compiler was right.** I asserted the
+arbitrary-type chain under `@strict: false`, where a `null` return is assignable to
+anything and there is no diagnostic at all. The power-assert diagram showed
+`diags == []` immediately. Worth noting because the reflex is to suspect the change.
+
+**What is still open on the item:** the deferred conformance case needs the second
+TS2322 (`var result: T1 = (x, y)`), which is TypeParam-vs-TypeParam and gated by the
+relation leniency measured back in round 695 at exactly 2 corpus tests. That is (B2)
+territory, and the case stays deferred. The engine work landed here — body-variable
+type resolution, chain parity, apparent constraints, and both halves of
+parameter-borne guard handling — is worth more than the case that surfaced it.
+
+---
+
+**Round 700 (2026-07-26) — the guard-inference gap round 699 named is CLOSED and
+landed. Corpus 12,731 → 12,737 / 0 / 3, all 8 profiles byte-identical.**
+
+Round 699 ended with (B1) blocked behind three profile FPs that turned out to be one
+family. This round attacked that family directly, which was the right call: it is a
+real gap in its own right, and closing it is what unblocks (B1).
+
+**Making it observable came first.** With (B1) reverted the target resolves to `any`,
+so the FPs cannot be reproduced — the gap is invisible from the diagnostic side. The
+probe that exposes it is to assign the call result to a deliberately wrong concrete
+type and read the inferred type out of the MESSAGE. Four contrasted cases in one file
+then localised it precisely: a guard with a CONCRETE target inferred correctly
+(`Special | undefined`) while the same call with the caller's `T` inferred the element
+type — so the machinery worked and only the type-parameter case did not.
+
+**Two independent halves were missing**, and the first fix alone was INERT — caught
+immediately, because the probe was built to fail if the change worked:
+(1) `predicateTargetTypeOfGuardExpr` resolved a guard only from a function
+DECLARATION, but here it arrives as a PARAMETER, whose annotation carries the
+predicate; it now walks out to the nearest enclosing signature declaring that name,
+innermost-first. (2) The target is then the caller's `T`, which does not resolve
+through the ambient scope there, so it is interned from the enclosing signature's own
+TypeParameter declaration. With both, `find(tags, predicate)` gives `T | undefined`
+and `tags.filter(predicate)` gives `T[]` — what tsc gives.
+
+The six pins keep the halves separable: the concrete-target controls distinguish "the
+guard was found" from "its target resolved", so a future regression localises to one
+of them rather than to the pair.
+
+---
+
+**Round 699 (2026-07-26) — (M3.0-gap-3)(B1) reached corpus ZERO with every residual
+fixed, and then the PROFILES killed it. The blocker is now known, specific, and not
+where four rounds of work had been pointing.**
+
+The recipe landed all four residuals: the errorType guard for (a); an
+apparent-constraint walk for (b), which also had to go into the ASSIGNMENT path
+(`V extends U extends A` is decided there, not in the return path — the failing case
+was an assignment all along, which I only noticed by reading the case source rather
+than trusting the item's classification); and an identity-keyed end-of-`init` dedup
+for (c)/(d), since dedicated pin walkers run AFTER the spine and own some of those
+positions with better displays. Corpus: **12,731 / 0 / 3**.
+
+**Then `--listAll` ×8 went 46 → 49 on every profile.** Three new false positives, the
+same three everywhere, all in `compiler/utilitiesPublic.ts` — and reading the source
+made them one family, not three: **type-guard-driven generic inference**.
+`getFirstJSDocTag<T extends JSDocTag>(…, predicate: (tag: JSDocTag) => tag is T)`
+returns `find(tags, predicate)`; `getAllJSDocTags` returns `…filter(predicate)`;
+the third is `nodeTest(node) ? node : undefined`. tsc binds the callee's parameter to
+the CALLER's `T` through the `tag is T` predicate, so those sources ARE `T | undefined`
+and `readonly T[]`. We bind the concrete `JSDocTag`. The mismatch was invisible while
+the return annotation resolved to `any`; resolving the target is what exposed it.
+
+**So the change cannot land, and that is the correct outcome, not a setback.** v1's
+dashboard sits at zero real FPs; trading three of them for an internally-more-correct
+type resolution would be a bad deal, and gating them away would need a heuristic that
+still lets `function f<T>(): T { return null; }` error — precisely where a heuristic
+would quietly lose real errors. The honest next step is the one that also has value on
+its own: make guard-driven inference bind the caller's type parameter. Round 430
+already built "TP-from-PREDICATE binding" for this exact family, so the question is
+why it yields `JSDocTag` here.
+
+**Worth saying plainly after five rounds on this item:** (A) shipped, (B1) is fully
+written and corpus-green but blocked behind a named M3.1 gap that is bigger than the
+conformance case it came from. The case stays deferred. If the next round does not
+close the guard-inference gap quickly, the right move is to re-scope — the conformance
+case is not worth a generic-inference project, though the generic-inference project may
+well be worth doing on its own merits.
+
+---
+
+**Round 698 (2026-07-26) — (M3.0-gap-3)(B): 4 residuals → 3, and the last two are
+now understood to be DOUBLE EMISSIONS rather than false positives. Reverted again
+(the corpus must stay green), but the remaining path is short and named.**
+
+Two findings, both of which change what the next round should do.
+
+**Residual (a) fell to a one-word widening.** `declFileGenericType`'s unconstrained
+`<T>` was reading as `constraint 'any'` — but that is not the `anyType` singleton, it
+is **errorType**, which DISPLAYS as `'any'` (B58.1). Guarding the chain block against
+`anyType || errorType` fixes it. Worth remembering generally: "the display says any"
+never distinguishes anyType from an unresolved type, so a guard written against the
+display's meaning has to test both.
+
+**(c) and (d) are not FPs — I had mis-classified them.** Reading the reference
+baselines shows both diagnostics ARE expected; what changes is our error COUNT (5 → 6,
+8 → 9). The `Diagnostic`-init probe named (c)'s other emitter: the dedicated pin walker
+`checkDeeplyNestedMappedTypes`, which exists *because* the engine could not produce
+that diagnostic — and its display is the CORRECT one, while the engine renders the
+source as `any[]` (the case's mapped aliases resolve to any). So the engine does not
+supersede that walker, and the walker must not be deleted. The ORDER decides the fix:
+the engine emits FIRST, the walker later, so an "already reported here?" probe in the
+engine cannot see it — the retraction belongs in the walker, for which the codebase
+has precedent.
+
+**Reverted rather than landed** because three corpus tests would be red, and the
+corpus is the gate every round leans on. The recipe on the item now carries the
+errorType guard, so the next round re-applies it and starts at THREE failures, each
+with a named fix: a syntactic constraint-text fallback for (b), and walker-side
+retraction for (c)/(d).
+
+---
+
+**Round 697 (2026-07-26) — (M3.0-gap-3)'s (A) half LANDED: a comma expression's
+return type is now its right operand's. Corpus 12,725 → 12,731 / 0 / 3, all 8
+profiles byte-identical.**
+
+After three consecutive rounds that ended in a revert, I deliberately picked the
+half of the item that is independent of the risky type-parameter machinery, and
+landed it. `combineBinaryTypes` already typed a comma as its right operand;
+`inferReturnTypeFromBody` had no Comma case, so `function foo(x: number, y: string)
+{ return x, y }` inferred `any` and every call site went unchecked.
+
+**The interesting constraint is WHERE the operand's type may come from.** This
+inference runs in the CALLER's scope — it is reached while checking a call site —
+so resolving the callee's parameter by name would hit the documented shadowing
+hazard. That is exactly why the function's existing plain-Identifier arm resolves
+nothing but `true`/`false`, and copying `getTypeOfExpression` in would have been the
+easy wrong answer. The operand is typed from the OWNING function's own parameter
+annotations instead, reached through the body's parent — scope-independent, and null
+whenever it cannot be read, so the change only ever adds precision. Two of the six
+pins are that boundary from both sides: an un-annotated operand must infer NOTHING
+rather than guess, and a same-named outer binding must not leak in.
+
+This clears the first of the deferred conformance case's two missing TS2322; the
+second is (B), which stays as recorded below, so the case remains deferred.
+
+---
+
+**Round 696 (2026-07-26) — (M3.0-gap-3)(B1) diagnosed to a one-line cause, its fix
+written and MEASURED, then reverted because it must land together with chain
+parity. No production change; sources verified byte-identical to the green tree.**
+
+**The cause is dead state.** The cta frame computes a type-parameter SCOPE at
+frame-build time and stores it as `CtaFrame.fnTpScope` — and `grep fnTpScope` returns
+exactly two hits: its declaration and its single write. Nothing reads it. The
+per-statement dispatch installs `currentTypeParamDecls = frame.fnTpDecls` but not the
+scope, so every annotation resolved during that dispatch sees no type parameters.
+That is why `var r: T1` resolved its target to `any` while the parameter `y: T2`
+resolved fine: parameters are resolved while building the signature, body variables
+during this dispatch. Installing the scope in the same save/restore sandwich is one
+line, and it works — probe: `T1` and `T1[]` instead of `any` and `any[]`.
+
+**The measurement is the deliverable.** 27 corpus tests fail with it — but of ~32
+changed baseline lines, **~29 are REMOVED chain lines** (`'T' could be instantiated
+with an arbitrary type which could be unrelated to 'null'/'undefined'`): the
+diagnostic still fires, only its second line is gone. With `T` resolving to a real
+`Type.TypeParam`, `return null`-in-a-generic stops falling through to the STRING
+fallback `emitTS2322(…, typeParams)`, which adds that chain, and is handled by a
+type-engine emitter that lacks it. The var-decl and assignment paths already carry a
+`tt is Type.TypeParam` chain block; the return path's engine emitter needs the same.
+Only 3 lines were additions: one chain-form flip and two genuinely new diagnostics.
+
+**Why I reverted rather than narrowed.** Scoping the install to the var-decl
+annotation alone would dodge all 27 — and be INERT, because the emission still needs
+(B2) (`canUseTypeEngine` refuses TypeParam-vs-concrete) and the relation leniency.
+Landing an inert change is the exact failure mode rounds 693/694 spent themselves on.
+The next round does it as one coherent change: chain parity first, then the scope
+install, then (B2), gated together.
+
+**Attempt 2, same round: 27 → 4, then reverted at the budget line.** The stack-trace
+probe in `Diagnostic`'s `init` (the documented technique) named the emitter in one
+run — `Checker.kt:31816`, i.e. real line **97352** after adding 65536, the wrap
+CLAUDE.md warns about. It is `checkReturnAssignability`'s engine emitter, which builds
+its chain for Object→Object and Union sources and simply has **no TypeParam-target
+branch**, unlike the var-decl and assignment paths. Adding that block cleared **23 of
+the 27**. The remaining four are each diagnosed on the item: two are chain-FORM
+mismatches in opposite directions (an unconstrained `T` arriving with
+`constraint == anyType` picks the constraint form where tsc uses the arbitrary one;
+an intersection source picks the arbitrary form where tsc uses the constraint one),
+and two are genuinely new emissions against targets that only became checkable once
+the scope resolved them — a mapped-type return and a DEFERRED conditional type, both
+M3-depth. I reverted rather than land four red tests or rush a gate for two FPs that
+are also the most likely to show up on the profiles.
+
+**Two rounds of suspects eliminated by measurement, in order:** `typeParams`
+threading (arrives correctly), the round-431e foreign-TP gate (never fires), the
+relation's unconstrained-TP leniency (changing it leaves the case silent; costs
+exactly 2 corpus tests), and now the scope install is *confirmed correct* with a
+fully-classified bill. What is left is not diagnosis but implementation.
+
+---
+
+**Round 695 (2026-07-26) — three more conformance categories adopted, chosen by
+MEASURING twelve of them in one run rather than guessing; one of their three
+failures fixed. Corpus 12,685 → 12,725 / 0 / 3.**
+
+**The method is the point.** Round 690 adopted a category and then discovered how
+red it was. Adopting is cheap to try and expensive to guess at, so this round put
+TWELVE candidate categories into the allowlist at once (+236 tests), ran the suite
+ONCE, and mapped the 91 failures back to their categories — then reverted all but
+the tractable ones. That is a ~7-minute run for a table that tells every future
+round what each category costs: `es6/defaultParameters` **0**, `es6/restParameters`
+**1**, `expressions/commaOperator` **2**, then `asOperator` 5, `types/any` 6,
+`conditional` 8, `nonPrimitive` 9, `labeledStatements` 9, `typeAliases` 9,
+`contextualTyping` 9, `typeSatisfaction` 12, `optionalChaining` 21. The three
+cheapest are adopted; the table lives on the M3.0 item.
+
+**One number in it is a trap worth naming:** `statements/labeledStatements` is 9
+failures from only 8 files, and several are **JS-emit** subtests. The deferral
+mechanism only covers `.errors.txt`, so that category cannot be adopted at all
+until the emit gap is fixed — a category's failure COUNT does not tell you whether
+it is adoptable; the failure KIND does.
+
+**The fix: a missing comma operand's TS2695 span.** `(, ANY)` has no left operand.
+Our recovery synthesizes an empty-text Identifier at the offending token, while
+tsc anchors its missing node at the FULL START — the end of the previous token,
+before trivia — with no width. Both halves are load-bearing and only one is
+visible in the obvious test shape: the POSITION differs only when trivia separates
+`(` from `,` (`( , )` → tsc reports at the `(`'s end, we reported at the `,`), and
+the zero LENGTH is what sorts TS2695 before the same-position TS1109, because the
+comparator is start → length → code and 2695 > 1109. I kept the fix in the comma
+emitter rather than the parser's shared missing-expression recovery, which anchors
+many other diagnostics; tsc reaches this position per-site too.
+
+**A gate that was decisive instead of merely reassuring.** The `--listAll` ×8 came
+back at the usual 46 ×7 / 94 harness, but the number that actually settles it is
+that those profiles emit **zero TS2695** — so the touched emitter contributes
+nothing to them and could not have changed their output. When a change is confined
+to one emitter, "does that emitter fire on the profiles at all" is a stronger and
+cheaper check than diffing two full runs.
+
+**A bounded experiment at the tail, reverted — and the revert is the finding.**
+(M3.0-gap-3)'s type-parameter half looked like the relation engine's leniency
+("two unconstrained type parameters always relate"), so I tried the correct rule
+(relate only when their names match — identity is unusable, interning is
+per-AST-position). Cost: exactly **2** corpus tests, both
+`Type 'SetOf<B>' is not assignable to type 'SetOf<B>'` — identical display, which
+means the leniency is masking an un-substituted class type parameter in a member,
+an M3.1 substitution gap. But the decisive probe was the other one: with the strict
+rule in place `var direct: T1 = y` was **still silent**, so the relation was never
+the blocker. Reverted; the measured cost is on the item so nobody re-runs it. Same
+discipline as rounds 693/694: the probe has to be one that FAILS if the change works.
+
+**Then a marker probe found what (B) actually is, and it is two things, neither of
+them the relation.** Printing both sides' `typeToString` plus
+`canUseTypeEngine`/`checkTypeRelatedTo` at `checkVarDeclAssignability`'s gate, over
+four deliberately-contrasted cases: **(B1)** `var r: T1` resolves its target to
+**`any`** — a type-parameter annotation on a function-BODY variable never reaches the
+type parameter, while the PARAMETER annotation `y: T2` resolves fine, because a
+parameter is resolved while building the signature with the TPs in
+`currentTypeParamScope` and a body variable is not. That is round 691's generic-arrow
+bug one scope level out, and it means no relation could ever have failed here.
+**(B2)** for `var s: string = x` the relation ALREADY returns the correct `false`, but
+`canUseTypeEngine` refuses a TypeParam-vs-concrete pair, so the correct verdict is
+never emitted. The threading the queue item warned about is fine — the probe shows
+`tp=[T]` / `tp=[T1, T2]` arriving and the foreign-TP gate not firing. Three plausible
+suspects (threading, foreign-TP gate, relation leniency) excluded by measurement, and
+the two real ones named, in one probe cycle.
+
+**Deferred with queue items** (the two remaining failures, both error baselines):
+(M3.0-gap-3) the comma operator's result type is not the right operand's type, so
+`return x, y` and `var r: T1 = (x, y)` miss TS2322 ×2; (M3.0-gap-4) a
+`readonly T[]` spread argument is neither rejected with TS2556 nor counted for
+TS2554 — the spread rule that is right for a tuple is wrong for an unbounded array
+into a fixed-arity signature.
+
+---
+
+**Round 694 (2026-07-26) — attempted the rest of (M3.0-gap-2), found the
+implementation UNOBSERVABLE, reverted it, and located the real hook.** No
+production code changed; corpus stays 12,685/0/3.
+
+**What I built.** `applyIifeParameterTypes` next to `applyContextualParameterTypes`
+in `getTypeOfArrowFunction`: for an immediately-invoked arrow, type each
+un-annotated parameter from the corresponding call ARGUMENT (rest parameter → array
+of the union of the remaining arguments; optional parameter → `T | undefined`;
+missing argument for an optional → `undefined`). It compiled, and the corpus stayed
+green.
+
+**Why it was reverted.** It does nothing. The decisive probe was not the
+conformance shapes — those merely stayed silent, which is ambiguous — but
+`((a) => a.nope)("x")`, which MUST report TS2339 if `a` is typed `string`. It
+reported nothing. The reason: the body walkers do not read `symbolTypes` for
+parameters. They read `currentLocalTypes`, filled by
+`populateParameterLocalTypes`, whose very first condition is
+`if (paramType != null && paramName is Identifier)` — it records a parameter ONLY
+when it has an ANNOTATION. An un-annotated parameter is invisible to them however
+the signature is typed.
+
+**Third time this session.** Rounds 687, 688 and 693 each turned on the same
+question, and this is the sharpest instance: a change can compile, keep the corpus
+green, and be entirely inert. The discipline that catches it is a probe that must
+FAIL if the change works — `a.nope` had to become an error — rather than a probe
+that merely observes the target case still being quiet.
+
+**Where the fix belongs**, recorded on the item: `populateParameterLocalTypes`,
+using the parent-walk from round 693's `isImmediatelyInvokedFunctionParam`. Expect
+a wide blast radius — it hands types to parameters that are currently `any` across
+~26 walker call sites — so it wants its own round with the corpus and `--listAll`
+×8 gates, not the tail of one.
+
+
+**Round 693 (2026-07-26) — (M3.0-gap-2)'s false-positive half fixed: an IIFE's
+parameters no longer draw implicit-any. Corpus 12,685/0/3.**
+
+tsc contextually types an immediately-invoked function's parameters from the
+call's ARGUMENTS, so it reports nothing for them — including when the call passes
+none. We emitted TS7019 ×3 + TS7006 ×2 on the conformance case.
+`isImmediatelyInvokedFunctionParam` walks the parameter's owner up through
+parentheses to a CallExpression whose unwrapped callee is that function; the
+unwrapping is not decoration, since the corpus shape is routinely written
+`(function (x) { } ("!"))` and `((((function (y) { }))))("-")`.
+
+**The instructive part: my first patch changed NOTHING.** I gated
+`checkParamsForImplicitAny`, rebuilt, re-probed — byte-identical output, all three
+diagnostics still there. There are TWO TS7019 emitters, and the live one for
+these shapes is the dedicated rest-parameter walker, which carries its own TS7019
+*and* its own TS7006. Both now carry the rule, and the pins deliberately cover
+the rest-parameter shapes because those are the ones a half-fix leaves behind.
+This is the same lesson as rounds 687–688 in a new place: when a change produces
+no observable effect, find out whether the code you changed is the code that runs.
+
+**A control that was wrong about current behaviour.** My first negative control
+asserted a non-invoked arrow `const f = (first, ...rest) => rest` still draws
+TS7019. It does not — and did not before this change either: a rest parameter in
+a var-initializer arrow never reaches the rest walker. That is an unrelated
+pre-existing gap, and the structural argument settles it without a bisect (my
+gate requires a CallExpression parent, which that shape has none of). The control
+now pins TS7006 there and a plain function declaration carries the TS7019 case.
+
+**Still open in gap-2**, and the reason the case stays deferred: the parameters
+are not actually TYPED from the arguments, so the reference's TS18048 ×3 (optional
+IIFE parameters under strictNullChecks) and TS7006 ×2 (the INNER function's
+parameter in `(f => f(12))(i => i)`) do not fire. That needs real contextual
+typing from a call's arguments — `applyContextualParameterTypes` is the machinery
+to extend — not another suppression.
+
+
+**Round 692 (2026-07-26) — (M3.0-gap-1) CLOSED: the conformance case's two
+missing diagnostics implemented, the case un-deferred, corpus 12,671/0/3.**
+
+**TS18033 for a function-valued computed enum member.** The emitter existed but
+was gated on the initializer being STRING-typed, so `enum E { x = () => 4 }` drew
+nothing. Extended to an initializer that is SYNTACTICALLY an arrow or function
+expression — FP-safe by construction, since a function can never satisfy a
+computed member's numeric domain, so tsc always reports it. The message renders
+the resolved signature, which is why it reads `Type '() => number' …` rather than
+the string branch's fixed word; that depends on round 691's generic-arrow fix
+having landed, and is a small example of one fix making the next one's output
+correct for free.
+
+**TS2332 for `this` inside an arrow in an enum initializer.** The walker's own
+doc said it "Skips function/class/arrow boundaries (those rebind `this`)" — but
+an ARROW DOES NOT REBIND `this`. That is the entire point of arrow functions, and
+it is why tsc reports `enum E { y = (() => this).length }`. The descent now
+covers arrow expression and block bodies while function expressions and class
+bodies stay skipped. One detail the baseline settled rather than intuition: the
+arrow-nested form gets TS2332 ONLY, with no companion TS2683, unlike the bare
+`this` — so the descent passes `emitTs2683 = false`. I checked the reference
+before wiring it rather than assuming symmetry.
+
+**Gates.** Corpus 12,671/0/3 (+6 pins, including a function-expression negative
+control that pins the rebinding boundary — the one thing a future refactor of
+that walker is most likely to get wrong), `--listAll` ×8 byte-identical.
+
+**An infrastructure blip worth not misreading.** One suite run reported BUILD
+FAILED after 10m45s with ZERO result XMLs, between two clean green runs of the
+same tree. No compile error, no test failure — nothing to attribute it to, and
+`compileTestKotlinJvm` was clean immediately after. Most likely the results
+directory being removed while Gradle held it. If a run fails with no XMLs at all,
+re-run before investigating: a real failure leaves evidence.
+
+**M3.0 scoreboard so far.** Seven conformance files, adopted in round 690, have
+now yielded one whole-program mistyping (every generic arrow) and two missing
+diagnostics. One deferral remains: (M3.0-gap-2), contextual typing of IIFE
+parameters.
+
+
+**Round 691 (2026-07-26) — the first bug the new conformance category caught:
+EVERY generic arrow was silently mistyped `<T>(n: T) => any`.**
+
+`getTypeOfArrowFunction` interned the arrow's OWN type parameters only when it
+constructed the `Signature` — at the bottom of the function, AFTER the return had
+been inferred. So while inferring `<T>(n: T) => n`, the parameter annotation `T`
+resolved to nothing, `n` never entered `currentLocalTypes` (that loop skips
+any/errorType), the body typed as `any`, and the arrow's type came out
+`<T>(n: T) => any`. The visible symptom was one TS2403 false positive; the actual
+scope was every generic arrow in every program.
+
+**Isolation did the work.** Three two-line cases, run together: a NON-generic
+arrow with the same array-literal body (`(n: number) => [n]`) was already
+correct, while a generic IDENTITY arrow (`<T>(n: T) => n`) was not. That single
+run ruled out return inference in general AND the TS2403 comparator — which the
+error message had been pointing at, since it renders a fn-type against a
+call-signature object — leaving type-parameter scope as the only candidate. The
+fix is the rule CLAUDE.md already states for interface call/construct signatures:
+push the owning declaration's type parameters before resolving anything that can
+reference them. Constraints and defaults now resolve under that scope too, so a
+constraint naming a sibling type parameter resolves.
+
+**Gates.** Corpus 12,663/0/3 (+7 pins, including non-generic controls that
+localise a future regression to the scope rather than to inference), `--listAll`
+×8 byte-identical on all eight profiles. The dashboard not moving is worth
+stating rather than assuming: tsc's own sources use generic arrows heavily, so
+byte-identity means the mistyping had been masked there — the `any` return was
+being absorbed by paths that accept it — not that the shape is rare.
+
+**What this says about M3.0.** The category cost one round to adopt and found a
+whole-program mistyping in the next. Seven files.
+
+
+**Round 690 (2026-07-26) — M3.0's infrastructure LANDED and the first
+conformance category adopted: `expressions/functions`, 12 test functions, corpus
+12,651 → 12,663 with zero regressions.**
+
+**Three edits as scoped, plus a fourth I did not foresee.** The scoped three
+(sparse paths, recursive collection, per-file case path) went in as planned. The
+fourth was found only by running the tests: a JS baseline's first line is a
+PROVENANCE HEADER echoing the case's real corpus path
+(`//// [tests/cases/conformance/expressions/functions/X.ts] ////`), and
+`BaselineFormatter` hardcoded `tests/cases/compiler`. That single mismatch
+accounted for **6 of the 9 initial failures** — every one of which looked like a
+compiler defect in the failure list and was nothing of the sort. `casesDir` is
+now threaded through the four formatter entry points with the compiler path as
+default, so existing callers are untouched.
+
+**Triage: 9 → 2.** After the header fix the only survivors are two genuine
+checker gaps, now queued as (M3.0-gap-1) and (M3.0-gap-2): an arrow used as a
+computed enum member value (missing TS18033/TS2332, over-emitted TS2403), and
+IIFE parameters not being contextually typed from the call arguments (missing
+TS18048/TS7006, over-emitted TS7019). Their JS-emit subtests pass in both cases,
+which localises both to the checker rather than the emitter.
+
+**Why the two are DEFERRED rather than left red.** The item's rule is "never
+leave a category half-red without notes", which permits red-with-notes — but the
+corpus is a hard zero-failure gate that every round's verification leans on, and
+two permanently-red tests would degrade that gate for every future round. So
+`conformanceDeferredErrorBaselines` skips just their `.errors.txt` subtests (the
+JS ones still run), and the mechanism's KDoc requires a queue item per entry:
+triage first, queue it, then defer. It is not a parking space for fresh failures.
+
+**A trap that cost a run.** `rm -rf build/test-results/jvmTest/binary` — the
+incantation in CLAUDE.md — clears the BINARY results but NOT the XMLs, so a
+tally script globbing `*.xml` happily sums the previous run's files. After
+removing two tests I read 12,665/2 twice from stale XMLs before noticing the
+generated sources no longer contained the failing tests at all. When the test
+COUNT should have changed and did not, suspect the results directory, not the
+change; `rm -rf build/test-results/jvmTest` (no `/binary`) is the honest reset.
+
+
+**Round 689 (2026-07-26) — M3.0's preconditions settled: the conformance corpus
+IS reachable offline, and what remains is exactly three edits.** No production
+code changed; the item now carries the findings so the next attempt starts at
+implementation.
+
+**The one that could have blocked the item outright.** `typescript-repo` is a
+**blobless partial clone** (`partialclonefilter = blob:none`, `promisor = true`)
+whose sparse checkout lists only `tests/cases/compiler` and
+`tests/baselines/reference` — the shape that normally means "the other paths need
+the network". It does not here: a `git cat-file -p HEAD:tests/cases/conformance/…`
+probe returns content, so the blobs are already local. Worth stating because the
+config alone reads as network-gated, and this box is offline.
+
+**Three more preconditions, all favourable.** Baselines need no work (the sparse
+checkout already takes the whole flat `tests/baselines/reference`). The
+conformance **variant-baseline convention is already implemented** — conformance
+writes `name(target=es5).errors.txt` and the generator's `computeVariations` /
+`paramBaselineName` produce exactly `name(key=value).ext`. And there are **ZERO
+basename collisions** between all of conformance and the 6,537 compiler cases, so
+the generated flat backtick function names need no disambiguation — I checked the
+whole set, not just the first category, because a collision anywhere would have
+forced a naming scheme change rather than a local fix.
+
+**Sizing, which picks the first category for us:** `expressions/functions` is
+**7 files**; `types/typeParameters` 46; `types/typeRelationships` 263. Seven is
+the right size to validate the generator change end-to-end before any category
+large enough to produce a triage wave.
+
+**The remaining work is three edits**, recorded on the item: `sparsePaths` gains
+the allowlisted dirs; the `testFiles` collection must walk them RECURSIVELY
+(categories have subdirs, unlike the flat compiler dir); and the generated bodies
+hardcode `typeScriptCasesDir` = `tests/cases/compiler`, so a conformance case
+needs its own path.
+
+**Why this stopped here.** The remaining edits are in `build.gradle.kts`, whose
+generator is a long `doLast` with documented editing hazards (the nested-comment
+trap that silently kills a region). That is work for a fresh context, not the
+ninth iteration of a long one — and the item is now specified precisely enough
+that the next round can go straight to it.
+
+
+**Round 688 (2026-07-26) — attempted M2.4's "small self-contained" follow-up,
+found it would be DEAD CODE, and reverted: `useRealLibs` defaults to false and
+nothing in the project path turns it on, so every real build — all eight
+dashboard profiles included — runs on the EMBEDDED lib and the whole real-lib
+subsystem is test-only.** No production code changed.
+
+**What I set out to do.** Round 687 recorded follow-up (i): surface
+`Resolution.unavailable` so `"lib": ["dom"]` stops being a silent no-op. It
+looked small — one field, one call site, no build change.
+
+**Two things the attempt established before it died.** First, **`unavailable` is
+the wrong key**: a `full` default lib (`lib.d.ts`, `lib.es2020.full.d.ts`)
+transitively references the DOM/host files, so an ordinary target-default
+resolution ALREADY has a non-empty `unavailable` (RealLibResolverTest pins
+exactly that), and keying on it would fire on every default build. Only a name
+the USER wrote is reportable, which needs a new `unavailableRequested` field —
+implemented, and it works. Second, **the corpus blocks the embedded-path
+variant**: 259 corpus cases carry `@lib:`, including **23 requesting `dom`**
+plus webworker×7, scripthost, esnext.temporal, esnext.intl — all unshipped, all
+currently green, because their baselines came from a real tsc that HAS those
+libs.
+
+**Then the diagnostic did not fire, and that was the real finding.** Wired into
+`bindRealLibs` and gated on an explicit request, it produced nothing on
+`"lib": ["es2020", "dom"]`. The reason is not a bug in the wiring:
+`CompilerOptions.useRealLibs` defaults to **false**, and its only writer is the
+`usereallibs` test directive — `ProjectCompiler` and `TsConfigLoader` never set
+it. So `bindRealLibs` never runs for a real build, and the entire real-lib
+machinery (RealLibResolver, RealLibSnapshots, `Resolution.unavailable`) is
+reachable only from tests that opt in. The change was reverted rather than
+landed: dead code that *looks* like the hole is closed is worse than the
+documented hole.
+
+**Which means M2.4's root is a design question, not a patch.** Real project
+builds type-check against a curated embedded lib while the shipped real libs sit
+unreachable; the DOM silence is one symptom of that mismatch. Recorded on the
+item, in order: decide what real builds should use for libs at all; then ship the
+DOM/webworker/scripthost sets (owner-gated build change); only then is the
+original cost question answerable and an unshipped-lib diagnostic both correct
+and reachable.
+
+**Method note.** Three rounds in a row here, the deciding evidence was a
+NEGATIVE: round 687's member probe (`e.notAMember` must error), and this round's
+"the diagnostic did not fire". Both times the tempting reading was that the
+measurement was fine and the subject was cheap/absent; both times the subject was
+simply not running. When a change to a subsystem produces no observable effect,
+establish that the subsystem EXECUTES before concluding anything about it.
+
+
+**Round 687 (2026-07-26) — queue hygiene, then M2.4 re-scoped by measurement:
+the DOM libs are not shipped, and `"lib": ["dom"]` is a SILENT no-op that turns
+every DOM-typed expression into an unchecked `any`.** No production code changed.
+
+**Queue hygiene first (the file's own documented failure mode).** Two parent
+items still read `- [ ]` while every live child was done or owner-gated: **EP.2**
+(2a/2b/2d-f/2g/2h all landed, 2c skipped-by-owner) and **INV.7** (7a/7c1/7d1/7d2/
+7d3 landed, only the parked 7b left). Both reconciled to `[x]`. Also stated the
+file's **reading convention** at the head of the QUEUE, because it cost me a scan:
+a superseded item is kept as `- [ ] ~~Name (original)~~` directly below the `[x]`
+that replaced it, so a top-down search for the next `- [ ]` must skip `~~…~~`
+titles AND parents whose live children are all done or parked. With those fixed
+the live queue is exactly ten items, M2.4 first.
+
+**M2.4 — the measurement falsified the premise.** The item asked for
+dom.generated.d.ts's parse/bind cost. It has none, because **`RealLibFiles` does
+not ship the DOM set at all** — its only "dom" occurrences are
+`/// <reference lib="dom" />` lines inside other libs' text.
+`RealLibResolver.resolve` puts the file in `Resolution.unavailable` and filters
+it out of `ordered`; **`unavailable` is never consumed outside RealLibs.kt**, so
+nothing is reported. Measured on three lines: `HTMLElement` resolves, `document`
+resolves, and `e.definitelyNotAMember` on an `HTMLElement` parameter compiles
+**clean**. A browser project therefore gets a green build with its DOM code
+entirely unchecked — which is a worse defect than any parse cost would have been.
+Follow-ups recorded on the item: (i) surface `unavailable` as a diagnostic
+(small, no build change); (ii) shipping the DOM set is an **owner-gated
+build-system change** (~1 MB of generated source), and only then is the original
+cost question answerable.
+
+**The near-miss, which is the transferable part.** My first control — "does
+`HTMLElement` resolve when `dom` is in `lib`?" — PASSED. A clean 5-pair
+interleaved A/B then put the cost inside the noise band (+38/−68/+34/−22/−23 ms),
+and I was one step from reporting "DOM is free". Both measurements were of
+nothing. **When an unknown name degrades to `any`, name resolution proves
+nothing; the control that decides is a MEMBER probe** — `e.notAMember` must
+error. The tell that sent me back was structural, not empirical: 1 MB of
+declarations cannot cost 0 ms, so I went looking for what the run was actually
+loading.
+
+
+**Round 686 (2026-07-26) — M4.9 DONE: one gate on `mergeModuleAugmentations`
+took the `"types": ["node"]` compiler profile from 30 diagnostics to 13, and
+every survivor is env-legit.** Also the queue-state finding that (CATCH.1) was
+the last live PERF/EP/INV item.
+
+**The bug.** `mergeModuleAugmentations` published every export of a FILELESS
+`declare module "spec"` into `globals`. For an AUGMENTATION that is right —
+globals is its only visibility channel (round 510's rationale, preserved). For
+the identical syntax in a SCRIPT `.d.ts` it is wrong: that DECLARES the ambient
+module, and its members are reachable only through an import of the specifier.
+So `@types/node`'s `declare module "fs" { export interface WatchOptions … }` put
+`WatchOptions` in globals, where it **outranked tsc's own import alias of the
+same name** — sys.ts's `WatchOptions` resolved to node's `fs.WatchOptions` and
+every downstream check disagreed with the source. The gate is the declaring file
+being an external module, which is exactly tsc's augmentation-vs-declaration
+distinction; `moduleFiles` is already populated before this pass runs.
+
+**One gate, eight codes.** TS2353×7, TS2339×3, TS2322×2, TS2345, TS7006, TS1345,
+TS2709, TS2558 — all downstream of the same pollution, all gone. What remains is
+13 TS2591 (`require`/`process` in files that never import node types), the same
+env class the eight dashboard profiles carry by design.
+
+**Found by discrimination, not search.** A four-file repro reproduced it in
+under a minute; then one probe settled the mechanism: an interface declared ONLY
+inside the ambient module drew TS2304 (so the name is NOT in the TS2304 walker's
+scope) while its MEMBERS resolved through the annotation (so the type IS in the
+type-position scope). Two scopes disagreeing is a much narrower target than
+"resolution is wrong somewhere", and it named the publishing site in one run.
+The earlier globals-leak hypothesis had been *falsified* by a no-import probe
+file getting a correct TS2304 — worth noting, because that near-miss would have
+sent a search-first approach into the per-file scoping machinery instead.
+
+**Queue state.** Working top-down, the PERF arc (M0.1–M0.4, M1, M2), the EP arc
+and INV.0–INV.7 are all closed or owner-parked: EP.2c was skipped by the owner,
+INV.7b is parked-by-owner, and (M0.3)'s remaining slices are priced below the
+±2% drift band. So the live queue is the **Post-v1 backlog** (unparked round
+679), and M4.9 was its first unchecked item. Next: M2.4 / M3.0 / M3.5 / M4.1–M4.7,
+plus the still-worthwhile ninth dashboard profile for `"types": ["node"]`.
+
+
+**Round 685 (2026-07-26) — (CATCH.1) batch 1: the 30 defensive catches around
+`getApparentType` / `getPropertyOfType` deleted as dead residue, and the audit's
+first real find fixed — an indirect circular type-parameter constraint blew the
+stack.** Two commits.
+
+**The batch.** 22 `try { getApparentType(x) } catch (_: Exception) { … }` sites,
+6 `getPropertyOfType` ones, 2 compound (`getPropertyOfType(getApparentType(…))`),
+plus the three `app != null &&` conjuncts the removals made vacuous. Checker.kt
+catch count **198 → 168** (commonMain 218 → 188). Both helpers are thin
+dispatchers — a `when` over type kinds; a `members[name]` lookup — so the whole
+throwing surface is member resolution, which is the same surface a hundred
+unguarded call sites already run on. **Ledger: 30 removed, 0 restored, 1 bug
+found.** Gate: corpus 12,617/0/3 and `--listAll` ×8 **byte-identical** against a
+pre-change baseline (46 errors on seven profiles, 94 on harness).
+
+**The find, and it came from the PINS, not the removal.** Writing the batch's
+corner-case tests surfaced that `<T extends U, U extends T>` — two lines of
+perfectly ordinary TypeScript — **overflows the stack**: `getApparentType`
+recursed type-param → constraint with no cycle guard. Confirmed by a temporary
+trace print at the `init` boundary guard: a stack of nothing but
+`getApparentType` frames. The general TS2313 walker only catches the DIRECT
+`<T extends T>` form (its own doc comment says the indirect case is "not yet
+handled"), so nothing stood between this shape and the overflow. The blast
+radius was not the crash — the boundary guard absorbs it — but that it ABORTS
+THE WHOLE FILE'S CHECKING and reports TS2589 at 0:0. Fixed by walking the
+constraint chain iteratively with a seen-set, allocated only when the chain hops
+type-param → type-param (so the common `T extends SomeInterface` allocates
+nothing); a cycle yields `anyType`, exactly like a missing constraint. Both
+commits' gates were byte-identical on all 8 profiles, i.e. no tsc-source shape
+reaches either path.
+
+**Both findings were PRE-EXISTING** — verified by running the new pins against a
+stashed HEAD, where they fail identically. That is the distinction the item's
+method turns on: the removal was byte-neutral (dead residue), while the pins
+written to justify it did the actual bug-finding. Worth carrying into batch 2:
+**write the corner-case pins first, run them against HEAD, and the deltas tell
+you which defaults were reachable.**
+
+**The other pin that failed, and why it stayed.** `switch (n.kind)` over
+`(A & { extra: true }) | (B & { extra: false })` does not narrow — the case
+bodies draw TS2339. That is the documented intersection-arm discriminant-fold
+residue (CLAUDE.md § "A UNION whose MEMBER is an INTERSECTION"), pre-existing and
+out of this item's scope; the pin now asserts only the sharp no-TS2589 signal,
+with the gap named in a comment.
+
+**Batch 2, same round: `getTypeOfSymbol` (16) + `resolveStructuredTypeMembers`
+(6), 22 sites, also byte-neutral — 0 bugs.** These two ARE deep resolvers, so the
+prior was different; what made them safe is that each already carries the guard
+its call-site catches stood in for — `getTypeOfSymbol`'s per-symbol in-progress
+sentinel (B202.1, degrades a re-entrant resolution to `anyType`) and
+`resolveStructuredTypeMembersCore`'s heritage cycle guard. The 8 pins drive
+exactly those shapes (mutually recursive interface AND class heritage, the
+`var x = cond ? y : 0; var y = x` initializer cycle, directly and generically
+recursive members, a circular type alias, a recursive-type relation) and all pass
+at unmodified HEAD. **Rule of thumb for batches 3+: grep the guarded helper for
+its own cycle guard first — where one exists the catch is redundant by
+construction.** Checker.kt **198 → 146** over the two batches (commonMain 218 →
+166).
+
+**Batches 3 and 4, same round: the two deep resolvers, 79 more sites, both
+byte-neutral — 0 bugs.** `getTypeFromTypeNode` (39) is the one that genuinely
+differed: its B202.2 in-progress sentinel covers only the CACHEABLE path — a
+resolution under `currentTypeParamScope`, a non-empty `inferenceNamespaceStack`,
+or `currentTypeAliasArgs` bypasses the cache and the sentinel with it, leaving
+the alias-substitution depth bail as the protection — so its pins drive the
+BYPASSING contexts specifically, and one pin is a control in the OTHER direction:
+an infinitely expanding alias is *supposed* to bail with TS2589, so "no TS2589"
+is not a universal sharp signal. `getTypeOfExpression` (40) holds no sentinel and
+needs none — it is a `when` over expression kinds on a finite acyclic tree,
+delegating to guarded resolvers and to the deliberately iterative walkers, so the
+only route to unbounded recursion is a DECLARATION cycle (initializer cycles,
+recursive inferred return types, an object literal spreading itself — all pinned,
+all passing at HEAD). Its two try/FINALLY blocks are untouched. Removals also
+retired one vestigial `tryGetTypeFromTypeNode` wrapper body and ~20 null checks
+the non-null returns made vacuous.
+
+**Batch 5 took the single-line tail (34 sites): the relation engine, the type
+printer, alias and heritage resolution, widening, `getTypeOfIdentifier` and the
+singletons — every one of which carries its own cycle guard
+(`relationComparisonStack` + the `isDeeplyNested` occurrence heuristic;
+`typeToStringInProgress`; a visited set; cache-before-recurse), which is the
+rule of thumb holding for the fifth time.** Its 7 pins drive those cycles
+directly (an infinitely expanding generic pair, mutually recursive interfaces
+relating, a recursive type printed into a diagnostic, a circular import-equals
+chain, circular class heritage, a recursive interface spread-widened).
+
+**ONE site kept by judgement, with a comment naming why:** the `Parser(...)` in
+`resolveRequireModuleShape` parses arbitrary external `.json` file content, not
+compiler-internal state. The whole method rests on "byte-identical over the
+corpus and eight profiles ⇒ the default was unreachable" — sound for internal
+paths, weak for an unbounded external input. Keeping it is the honest reading of
+the evidence rather than a completeness score.
+
+**Round total: 165 of Checker.kt's 197 catches deleted (198 → 33; commonMain 218
+→ 53), 0 restored, 1 kept by judgement, 1 bug found and fixed.** Every batch
+byte-identical on corpus + `--listAll` ×8.
+
+**Batch 6 spliced the last 28 by hand** — one exact whole-construct swap per
+site with an asserted occurrence count, because a scripted multi-line rewrite is
+the mangle hazard CLAUDE.md documents (an inserted arm-close emptying a gate so
+the body runs unconditionally). Ten collapsed to something simpler than the
+original: four `try { val t = f(x); if (t !== any && t !== error) t else null }`
+arms became `f(x).takeIf { … }`, and a `val resolved = …; when (resolved)` became
+`when (val resolved = …)`. Checker.kt 33 → **3**.
+
+**CLOSING VERDICT — 193 of Checker.kt's 197 removed, 0 restored, 3 kept, 1 bug
+found and fixed.** The three keeps each have a stated reason: the SOE boundary
+guard (load-bearing), the `FriBail` control-flow catch (never defensive), the
+`Parser(...)` on external `.json` content.
+
+**And the 20 sites outside Checker.kt are a DIFFERENT population — audited this
+round and deliberately left alone.** Vfs's 3 are filesystem I/O (a missing or
+unreadable file must yield null, not crash); Parser's 2 guard parsing of
+externally-sourced JSDoc type text; TsBuildInfo / TsConfigLoader / ModuleResolver
+NAME their exception (`SerializationException`, `IllegalArgumentException`) over
+external JSON; Transformer's one names `NumberFormatException`; Emitter's and
+Flow's grep hits are comments and emit-helper source strings. Every one either
+guards an external input or names what it absorbs — precisely what the Checker.kt
+residue did not do. So the item's opening premise ("~200 sites in commonMain, all
+the same shape") is true of Checker.kt and false of the rest, and finishing the
+count there would have been the wrong move.
+
+**Round 684 (2026-07-26) — the convention branch MERGED with rounds 674–681, and
+the ten test files those rounds added brought up to the one dialect. Round
+numbers had COLLIDED across the two lines of work and are renumbered here.**
+Owner-requested integration of branch `fix/build-problems` with `origin/main`,
+which had moved 31 commits (EP.2a–h, M4.8, M4.9) in the meantime.
+
+**Renumbering.** The branch and main both used **672** and **673** — main for the
+emit-diff gate going live and for EP.2's re-scoping, the branch for the build
+repair and the convention sweep. Main's numbers are the ones already published in
+`bench-history` and referenced from other notes, so the BRANCH's rounds moved:
+672 → **682**, 673 → **683**. Every self-reference moved with them, including the
+four CLAUDE.md entries that cite "round 672" for the assertion-idiom and
+Kotlin/Native rules; CLAUDE.md's *other* "round 672" (the emit-diff gate, § Known
+gotchas) is main's and stayed.
+
+**Conflicts (4).** `ModuleSpecifierExtractionTest` was the only code conflict and
+the only one with real content: M4.8 (round 680) had made reference directives
+STOP being module specifiers, so main rewrote the two assertions the branch had
+just converted. Resolved in main's favour semantically, in the branch's idiom
+syntactically — and the resolution needed one extra step, because
+`Parser(src).parse().referencedPaths` puts a **SourceFile in a power-assert
+subexpression**, the documented SOE/OOM hazard; both files grew `referencedPathsOf`
+/ `referencedTypesOf` helpers that return plain string lists. `STATUS.md`,
+`PLAN-PHASE-5.md` and `STATUS-HISTORY.md` were ordering-only.
+
+**The sweep (10 new files + 1 both sides touched).** Rounds 674–681 wrote their
+tests to the PRE-682 conventions, which is expected — those rounds predate the
+sweep on this branch — so: **144 `kotlin.test` call sites** (`assertEquals`,
+`assertTrue`, `assertFalse`, `assertNull`, `assertContains`) became power-assert
+`assert(...)`, messages dropped and the informative ones re-stated as comments;
+**7 test names** carrying `(`, `)`, `,` or an em-dash renamed (the Kotlin/Native
+character rule — the very drift round 682 cleared, re-accumulated in seven
+rounds, which is the mechanical-gate argument in miniature); **7 source-taking
+helpers** annotated `@Language("typescript")`; `SkipLibCheckTest` moved onto the
+shared `diagnose` helper and `should { have(…) }`; `ReferenceDirectiveProgramTest`
+rewritten so no SourceFile can reach an assert.
+
+**The trap, and it cost a full suite run.** The converter normalised whitespace on
+each argument it rewrote — fine for expressions, WRONG inside string literals: a
+needle `"// first comment line\n    // second comment line"` (the four spaces are
+the emitted indentation, i.e. the entire point of EP.2h's pin) collapsed to one
+space, and the test failed. One failure in 12,611, caught in one run, but the
+lesson generalises: **a scripted assertion conversion may re-flow argument
+EXPRESSIONS and must never re-flow their string literals** — audit by diffing the
+multiset of string literals before/after and accounting for every disappearance
+(here: 26 dropped message strings, plus the one genuine casualty).
+
+Gates: suite **12,611 / 0 / 3** — identical to round 681's count, because round
+683's TriageTest deletion (−1) and its two-control split (+1) cancel;
+`compileTestKotlinJvm` warning-clean. Trims per protocol: STATUS 679–677 and PLAN
+674–669 moved to `docs/history/`.
+
+**Also queued, at owner request: (CATCH.1) at the TOP of the queue** — the
+defensive-`catch` audit. The owner flagged one `catch (_: Exception) { null }` in
+`Checker.kt` and asked what else looks like it: **218 sites in `src/commonMain`,
+197 of them in Checker.kt**, all the same swallow-and-default shape. Blame shows
+the flagged one was born `catch (_: Throwable)` in the inline-SOE-guard era and
+was narrowed to `Exception` MECHANICALLY by the 2026-07-04 sweep, so it no longer
+catches what it was written for. The sweep's own CLAUDE.md entry reserved the
+per-site removal as separate work; CATCH.1 is that work, batched and gated
+(corpus + `--listAll` ×8), classifying each site as dead residue (delete) or real
+modelling bug (file it, restore that one catch with the exception named).
+
+**Round 683 (2026-07-25) — the test suite speaks ONE dialect.** Owner-requested
+follow-through on round 682's idiom unification, which had converted the
+`kotlin.test` calls but left three older conventions standing in files that sweep
+never had to touch: ~200 camelCase test names in 32 classes became backticked
+sentences; `should { have(…) }` replaced raw asserts on diagnostics and emitted
+JS (the local `assertNoNNNN` / `tsNNNN(result)` wrappers are DELETED — the
+receiver-plus-block form says what the wrapper name said, in the assertion
+itself); 41 classes' local helpers gained `@Language("typescript")`; 72
+`have(cond, "message")` calls lost the message, and 163 standalone `have(cond)`
+calls outside a `should` block became `assert(cond)`. `TriageTest.kt` was DELETED
+— not a test but a scratch harness that read `typescript-repo` fixtures, wrote
+`/tmp/triage_out.txt`, caught `Throwable` and asserted nothing. The six
+AST-centric files stay exempt (power-assert would toString a subtree). Finding
+the standalone `have` set needed a real scanner rather than a grep, and caught
+three Kotlin lexical traps in a row: a backtick test name pairs only WITHIN a
+line, block comments NEST, and `have(` inside a comment must not be rewritten.
+Suite 12,520 / 0 / 3. (Full narrative in STATUS.md.)
+
+**Round 682 (2026-07-25) — `./gradlew build` REPAIRED: `commonTest` had drifted
+native-incompatible since (INV.7a), and `jvmTest` could never have caught it.**
+Owner-requested build fix, branch `fix/build-problems`. (INV.7a) re-enabled
+linuxX64 at round 610 and the MAIN compile + link have stayed green since — but
+`compileTestKotlinLinuxX64` is also part of `build`, and ~60 rounds of new
+`commonTest` files broke it three separate ways. The tell is the asymmetry: the
+loop's gate is `./gradlew jvmTest`, which stays 100% green while `build` fails.
+
+**The three drifts** (all in `src/commonTest`, none reachable from the JVM gate):
+  - **102 backtick test names** carrying `(`, `)`, `,`, `&`, `@` across 68 files.
+    Kotlin/Native rejects these ("Name contains illegal characters"); the JVM
+    only rejects `.;[]/<>:\`, so every one of them compiles for `jvmTest`.
+    Renamed mechanically — parens dropped inline, a TRAILING parenthetical
+    rendered as ` - aside` (the readable form), `,` → ` -`, `&&` → `AND`.
+    Verified zero collisions and zero residual illegal chars.
+  - **65 `kotlin.assert` calls** (CcetAnchorTest / CpaAnchorTest /
+    CtaFnBodyAnchorTest — the three files that imported no `assert`, so they
+    bound the stdlib one). It is `@ExperimentalNativeApi`, and `@OptIn` for a
+    native-only annotation cannot be written in common code. Switched to the
+    project's own `com.xemantic.kotlin.test.assert` — multiplatform AND
+    power-assert-enabled (build.gradle.kts already lists it in
+    `powerAssert.functions`), so the calls take NO message argument: the failure
+    diagram renders every subexpression value, which is why the library's
+    `message` parameter is not meant to be used. All 65 message lambdas were
+    therefore DROPPED, not converted. This also closes a real hole —
+    `kotlin.assert` is a NO-OP when JVM assertions are off, so those 65 pins
+    were only ever load-bearing by Gradle's `enableAssertions` default.
+  - **`String.format`** (LineAndCharacterMemoTest) — JVM-only; replaced by a
+    local interpolating function.
+
+**Then, by owner decision, ALL NATIVE TARGETS WERE SWITCHED OFF** (linuxX64
+commented out alongside the Apple ones) to keep the Claude Code loop fast — the
+native test compile plus the optimizing link add ~7 min to `build`. The repair
+was still worth doing rather than reverting: it leaves the tree in a state where
+re-enabling a native target is a one-line uncomment instead of another 169-error
+cleanup.
+
+**Process point, now sharper.** The corpus suite is the loop's zero-regression
+gate, but it is a JVM-only gate, so it never saw this drift accumulating
+underneath it — and with native off, `build` will not see it either. Nothing
+mechanically enforces the three rules any more, which makes the documentation
+the only defense: the constraints and the way to check them are recorded BOTH in
+CLAUDE.md § "Known gotchas" and in a comment at the commented-out targets in
+build.gradle.kts (the place someone re-enabling them will actually read). To
+check, uncomment `linuxX64` and run `./gradlew compileTestKotlinLinuxX64`.
+
+**Also this round (owner-requested): the test suite moved to ONE assertion
+idiom — 1,009 `kotlin.test` call sites converted to power-assert `assert(...)`**
+(792 `assertEquals`, 115 `assertTrue`, 102 across
+`assertFalse`/`assertNull`/`assertNotNull`/`assertSame`/`assertContains`),
+matching the project's existing idiom (BaselineFormatterTest's
+`assert(result == expected)`).
+Messages dropped throughout — `assert`/`have` are the only power-assert-
+transformed functions (build.gradle.kts), and their diagram beats any
+hand-written message: a deliberately broken pin renders as
+`assert(ds.count { it.code == 1102 } == 99)` with the operand value `1`, the
+`false` verdict, AND the full diagnostics list underneath. That injected-failure
+check was the point — a green suite alone cannot distinguish a correct
+conversion from one that made assertions trivially true.
+
+**65 sites deliberately KEPT on `kotlin.test`** — every one in the six
+AST-centric files (Inv2LexicalScopeTest, Inv2NodeIndexTest, Inv3NodeKeyedLookupTest,
+Inv3PerFileLookupTest, RealLibSnapshotTest, ForEachChildOracleTest) whose compared
+value is an AST node, a `.copy()`, a `preorder(...)` element, a Symbol or a lexical
+scope (plus 3 there that need `assertNotNull`'s RETURN value mid-expression).
+Power-assert toStrings every subexpression, so those would trade a readable
+failure for a subtree dump (the documented SOE/OOM hazard). The empirical line:
+`List<Diagnostic>` and `CompilationResult` render usefully (strings +
+diagnostics, no AST); `SourceFile`/`NodeBase` do not.
+
+**Four mechanical-pass defects caught before shipping**, each of which a
+green-suite check would have missed or mis-attributed: Kotlin TRAILING COMMAS
+produced a phantom 4th argument (17 valid 3-arg calls silently skipped); the
+AST-hazard test was matching MESSAGE text rather than the compared values (false
+skip); collapsing a multi-line `listOf(...)` argument that carried `//` comments
+let the comment swallow the closing paren (1 site, hand-repaired with comments
+intact); and `assert(x == emptyList())` does not compile at all — `==` gives the
+compiler no inference source for the element type, so 28 sites became
+`assert(x.isEmpty())`. A fifth defect appeared in the `assertNotNull` pass: the
+value-position rewrite used the whole text before the call as the second line's
+indent, emitting `val js = assert(js != null)` — a duplicate declaration (13 sites,
+caught by the compiler, repaired). A sixth was mine to own too: the AST-hazard test
+matched hazard words INSIDE STRING LITERALS (`assertTrue("== node kinds" in text)`),
+so string masking was added and the completed `assertEquals` pass re-audited under it
+(no site had been wrongly skipped). Plus ~60 now-unused `kotlin.test` imports removed.
+Suite 12,520/0/3, unchanged at every step.
+
+**A counting correction worth keeping:** the first survey numbers came from `grep`,
+and BSD grep UNDERCOUNTED (`assertTrue` reported 102, actually 115). Every figure
+above is from the converter's own Kotlin-aware scanner; re-derive with a Python
+lookbehind regex, not grep, if these are ever re-checked.
+
+**Worth deciding later:** documentation alone did not hold last time — a
+`jvmTest`-side source scan over `src/commonTest` (assert the backtick names carry
+no native-illegal characters) would restore a mechanical gate for a few seconds
+of suite time, without any native toolchain. Not built; offered.
+**Round 681 (2026-07-25) — M4.9: two gaps that only existed because M4.8 let
+`@types` in. Compiler profile with `"types": ["node"]`: 60 → 30 errors. Also the
+round where I walked into a trap CLAUDE.md documents by name.**
+
+**`skipLibCheck` was parsed and never consulted.** Nothing noticed for as long as
+`.d.ts` files came only from the corpus and the bundled libs — but `@types/node`
+is ~70 declaration files, and checking them reported 15 TS7008 + 2 TS7010
+against DefinitelyTyped's own code in a project that had explicitly asked not
+to. Applied to the CHECKER's output only: tsc's `skipLibCheck` skips type
+checking of declaration files, it does not suppress their SYNTAX errors.
+
+**A PARAMETER did not shadow a same-named namespace reaching globals from an
+ambient module body.** `checkMemberAccessMissing` bails to the locally-known type
+only for names in `currentShadowedNames`, which `applyBodyLocalShadowing` fills
+for body-local VAR declarations and deliberately EXCLUDES parameter names (a var
+redeclaring a same-function param is a redeclaration, not a shadow). So a
+parameter fell through to the symbol-based branches, which resolve through
+globals. tsc's own `function formatJSDocLink(link: JSDocLink | …)` hit it
+because `fs.d.ts` declares `export namespace link` — 18 diagnostics reading
+*"Property 'kind' does not exist on type 'typeof link'"*.
+
+**What made this cheap to find was a discriminator, not a search.** I was
+grepping resolution paths and getting nowhere. Four one-line variants settled it
+in one run: a global `declare namespace link` is shadowed correctly, an
+ambient-module one is not; a LOCAL named `link` works, a PARAMETER does not; and
+it is not union-specific. That located the fault in the parameter path exactly,
+after which the fix was one gate.
+
+**The trap, worth stating plainly.** My first cut bailed whenever a concrete
+local type resolved the member. That is precisely the *"raw declared type
+exposes the property → suppress"* shape CLAUDE.md warns against, and it
+over-suppressed `instanceofWithStructurallyIdenticalTypes` — where `C1|C2|C3`
+narrows to `never` via `!isC1 && !isC2` on structurally-identical types and tsc
+DOES report TS2339-on-`never`. The corpus caught it in one run. Keying the bail
+on the name ALSO denoting a NAMESPACE in globals repairs only the
+mis-resolution and leaves that test untouched. The documented warning was
+specific enough to have saved the round had I re-read it before writing the
+gate rather than after the failure.
+
+**Gates.** Corpus **12,611 / 0 / 3** (+13 pins, including the sharp case: a
+member absent from BOTH the parameter type and the namespace must still
+report). `--listAll` ×8 unchanged (46 on seven, 94 on harness) — the dashboard
+profiles set `"types": []` and declare no colliding namespaces.
+
+**NEXT (M4.9 continues):** the remaining 30 on that profile are 13 TS2591
+(`require`/`process` in files that reference node types without importing
+them), 7 TS2353 (`fs.WatchOptions` vs the compiler's own `WatchOptions` in an
+object literal), 3 TS2339, and singletons. Worth a ninth dashboard profile so
+the number is tracked — but do NOT alter the existing eight.
+
+---
+
+**Round 680 (2026-07-25) — M4.8 DONE: `/// <reference path|types>` now pulls
+files into the program. `@types/node` goes from contributing 1 file to 67.**
+
+**The bug was a resolution-KIND confusion, not a missing feature.** The parser
+already recorded reference directives, and the crawl already tried to resolve
+them — into `SourceFile.moduleSpecifiers`, which the crawl feeds to
+`ModuleResolver`. But the three things are different: an import specifier
+resolves as a module, a `path=` target is a FILE PATH relative to the
+referencing file (tsc `resolveTripleslashReference`), and a `types=` target is a
+package name resolved through the type roots. So `path="globals.d.ts"` — no
+`./` — was treated as a BARE package, failed, and the file never entered the
+program. The `Ast.kt` doc comment asserting that reference directives live in
+`moduleSpecifiers` was accurate about the code and wrong about what that
+achieved.
+
+**Shape of the fix.** `SourceFile` gains `referencedPaths` / `referencedTypes`;
+the parser records the two kinds separately and stops merging them into
+`moduleSpecifiers` (whose only consumer was the crawl — checked before
+changing). The crawl resolves paths relative to the referencing file and types
+through the tsconfig's type roots, adding both to the frontier, so following is
+TRANSITIVE — which is the whole point for a package whose entry file is nothing
+but reference lines.
+
+**TS6053 needed no work, and that is worth noticing.** It is emitted by the
+CHECKER, which asks whether the referenced target is in the program — so it goes
+silent exactly when resolution starts succeeding and still fires for a genuinely
+missing file. Both directions are pinned. A design that had duplicated the
+resolution in the diagnostic would have needed a second fix here.
+
+**Measured.** With `@types/node` and `"types": ["node"]` on the compiler
+profile: program **79 → 146** files, TS2591 **43 → 13**. The rest of that
+profile's errors are now newly VISIBLE real gaps the unresolved names had been
+masking — TS2339×18, TS7008×15, TS2353×7 on `fs.WatchOptions`/`typeof link`
+shapes. Queued as M4.9; they do not touch the dashboard, whose tsconfig sets
+`"types": []` deliberately and correctly.
+
+**Gates.** Corpus **12,598 / 0 / 3** (+19 pins across two new classes).
+`--listAll` ×8 unchanged (46 on seven, 94 on harness) **and program sizes
+identical** (81/312/84/78/274/252/80/88) — a pure capability addition, no
+dashboard movement. `ModuleSpecifierExtractionTest` pinned the old contract and
+was updated: its intent (directives honoured after a leading block comment,
+ignored after the first code token) is preserved against the new fields, and
+that block-comment case is exactly `@types/node`'s own layout.
+
+**NEXT:** M4.9 — the gaps `@types/node` exposes once it actually loads.
+
+---
+
+**Round 679 (2026-07-25) — v1 RE-VERIFIED at HEAD and the post-v1 backlog
+UNPARKED; the verification itself turned up the highest-impact remaining gap.**
+
+**v1, checked rather than assumed.** It was declared at round 481; this round
+re-ran the three legs at HEAD, 200 rounds later. All 8 profiles: exit 0, **every
+input file emitted** (81/81, 312/312, 84/84, 78/78, 274/274, 252/252, 80/80,
+88/88), zero crash frames, `--listAll` steady at 46 on seven and 94 on harness.
+And the diagnostics are not merely "offline artifacts" in a vague sense — every
+single one is a missing Node ambient (`process`, `Buffer`, `require`, `NodeJS`,
+`console`, `BufferEncoding`) under a tsconfig that sets `"types": []`, which
+DISABLES type acquisition by design. Our handling of that is correct tsc
+semantics. So the FP leg is genuinely clean.
+
+**The backlog was parked on a condition that came true 200 rounds ago.** The
+Post-v1 section says the loop skips it "until v1 lands". v1 landed at round 481.
+Nothing ever re-read the condition, so ~200 rounds of work went to M5/INV while
+the section that now holds the live work sat marked parked. It is unparked. A
+queue-hygiene failure mode worth naming: **a parked item's unpark CONDITION
+needs an owner, or it never fires.**
+
+**M4.8 — found while proving the FP leg, and it is the big one.** Trying to make
+the FP claim decisive rather than caveated, I installed `@types/node` and turned
+on `"types": ["node"]`. The diagnostics did not move — 46 before, 46 after. The
+program went from 78 files to **79**. That one file is `@types/node/index.d.ts`,
+which is 64 `/// <reference path="…" />` lines and little else; `globals.d.ts`,
+one of those 64, is what declares `var process` and `namespace NodeJS`. Our
+reference-directive handling (`TypeScriptCompiler.kt` ~2168) only ORDERS files
+already in the program, and only under `outFile`; tsc's `processReferencedFiles`
+ADDS them. So we cannot consume `@types/node` — or any `@types` package built
+the same way, which is most of them. Queued as M4.8 at the head of the backlog.
+
+**Worth noting about the method:** the check that produced this was an attempt
+to strengthen a claim I already believed. "46 env-legit artifacts" was true, and
+re-verifying it was still the highest-value thing available, because the *way*
+it failed to reach zero is what exposed the gap.
+
+**Gates.** No production code changed this round. Emit verification, `--listAll`
+×8, and the `@types/node` probe are all measurements; the probe's temporary
+tsconfig is deleted and the fixture install is gitignored under `build/`.
+
+**NEXT:** M4.8 — make `/// <reference path|types>` pull files into the program.
+
+---
+
+**Round 678 (2026-07-25) — two fixes: the const-enum family is ACTUALLY closed
+(true gap 34 → 0) and a printer blank-line defect cleared 66 hunks. Byte-identical
+files 31 → 33/78. Round 677's "closed at parity" claim was WRONG — the gate's own
+summary metric lied, and I believed it.**
+
+**The correction first, because it is the point.** Round 677 declared the family
+closed on the strength of the emit-diff script's family-1 line reading
+`18,118 vs 18,118`. That counter is `grep -E '[0-9]+ /\* Name.Member \*/'` — it
+requires a **numeric** value before the comment. Every STRING-valued const enum
+is therefore invisible to it *on both sides*, so it reads perfect parity while
+string-valued reads are missing. Counting **all** `/* X.Y */` comments per file
+showed the truth: 34 still missing, every one of them `tracing.Phase.*`. The
+honest measure is the per-file comment count, and it is now 15,218 = 15,218.
+
+**What the residual actually was — and it was my ORIGINAL round-676 prediction,
+which round 677 then talked itself out of.** tsc's tracing.ts:
+
+    export namespace tracingEnabled { export const enum Phase { Bind = "bind" } }
+    export let tracing: typeof tracingEnabled | undefined;
+
+with every call site writing `tracing?.push(tracing.Phase.Bind, …)`. The
+receiver is a runtime VARIABLE whose declared TYPE is the namespace. Name
+resolution stops at the variable; tsc goes through the type.
+`namespaceBehindTypeofVariable` follows a `typeof <identifier>` annotation
+(through unions/parens, i.e. the `| undefined` form), resolving in the
+DECLARING file and falling back to the star-follower because the namespace name
+may itself come through a barrel. Wired into both the import path and the direct
+path, so `declare const t: typeof NS` behaves like an imported one. The variable
+keeps its runtime identity — only the MEMBER is substituted, the receiver's
+access and its import survive; both are negative controls.
+
+**Why round 677 got it wrong is worth naming precisely.** Round 676 predicted
+`tracing.Phase` (34 occurrences). Round 677 built a repro for a *namespace
+nested behind a barrel*, saw it fail, fixed it (EP.2e — a real bug), and when
+the count did not move went looking again and found EP.2f (also real). Two
+genuine fixes plus a metric that read parity produced a confident "closed". The
+missing step was never re-checking the ORIGINAL prediction against the ORIGINAL
+measurement: `tracing.Phase` was in the residual the whole time, and one
+per-file count would have shown it. **A metric agreeing with you is not
+verification when you have not checked what the metric can see.**
+
+**Gates.** Corpus 12,573 / 0 / 3 (+7 pins). `--listAll` ×8 unchanged (46 on
+seven, 94 on harness). True const-enum comment gap 0. Zero live `tracing.Phase`
+reads. byte-identical 31 → **32**/78 — the first file-level movement from this
+family, since the other 46 differ for family-2 reasons too.
+
+**Then EP.2h — and it was NOT part of EP.2c's subsystem at all.** Classifying
+the 368 residual hunks put 32 in a "we emit a line tsc lacks" bucket, which I
+took as the smallest separable slice of the formatting family. It turned out to
+be an ordinary printer defect, fixed in four lines: `emitInnerComments` writes a
+newline after a `//` comment (it terminates its own line) and then the NEXT
+comment wrote a second one for its `hasPrecedingNewLine`, so every pair of
+consecutive line comments gained a blank between them. tsc keeps a multi-line
+comment block before an `else if` adjacent. An `atLineStart` flag suppresses
+only the redundant newline; the indent is still written. Verified BYTE-IDENTICAL
+against tsc on an 11-line repro — including when the SOURCE has a blank line
+between the two comments, which tsc collapses too, so the behaviour is faithful
+and not merely convenient (that case is pinned separately, being the boundary
+the fix defines). Measured: hunks **368 → 302**, the add-a-line family **32 →
+0** (it also cleared 34 entangled CONTENT hunks), byte-identical **32 → 33**/78.
+Suite 12,579/0/3 with every JS baseline byte-exact despite touching the printer.
+
+**The reusable point:** a bucket in a classification is a hypothesis about
+cause, not a finding. Two of the three "formatting" shapes I sized as a
+subsystem in round 676 have now turned out to be plain defects (EP.2a's double
+comment, EP.2h's blank line). Before committing to the expensive reading of a
+classification, check whether the cheap one explains it.
+
+**EP.2c: asked, and the owner said SKIP.** With the cheap parts gone the fork
+was clean enough to put to the owner rather than guess: 302 residual hunks, 266
+of them the wrapped-expression structure, against the fact that byte-parity is
+not a v1 exit criterion. The answer was to move on. **The emit arc closes here
+at 33/78 byte-identical**, families 1 and 3 at full parity.
+
+**NEXT:** with EP closed, every remaining live queue item is either parked
+(INV.7b: needs a ≥16 GB builder) or explicitly zero-value on this box ((6e)
+parallel emit — the benches are `--noEmit`, and round 666 measured parallel
+scaling flat at w4 on 4 cores). That makes the next round's job an assessment,
+not a fix: **v1's three exit legs (zero FPs / all files emitted / zero crashes)
+all appear to be MET** — the FP leg since round 481, and the current TSVs show
+0 crashes with every profile emitting its full file set (78/80/81/84/88/252/
+274/312). If that holds under a deliberate check, v1 should be declared and the
+post-v1 backlog (M2.4/M3.0/M3.5/M4.x) unparked, which is where the real
+remaining work lives.
+
+---
+
+**Round 677 (2026-07-25) — three const-enum gaps fixed (18,048 → 18,118 on the
+script's counter). NOTE: the "family CLOSED" claim made here was WRONG — see
+round 678; 34 string-valued reads remained and the metric could not see them.**
+
+**EP.2d — parameter DEFAULT VALUES were never transformed at ES2018+.** The
+residual classifier pointed at two shapes; the larger was
+`function isNonLocalAlias(symbol, excludes = ts_js_1.SymbolFlags.Value | ...)`
+where tsc inlines. Root cause is not const-enum-specific at all:
+`flattenRestParameters` opened with `if (effectiveTarget >= ES2018) return
+Pair(params, body)` — returning the parameters **raw**. That helper owns the
+parameters of the plain (non-async) FunctionDeclaration branch, function and
+arrow expressions, and constructors, so at any modern target every default value
+in those positions skipped `transformExpression` entirely. The sub-ES2018 path
+had always applied the per-parameter treatment, which is exactly why a
+downlevel-heavy corpus of 12.5k tests never noticed: the bug is invisible below
+the very threshold most emit tests sit under. The fix restores the *whole*
+transform, so the pins cover an optional chain and a `this`-capturing arrow in
+default position, not just enums.
+
+**EP.2e — a const enum nested in a NAMESPACE did not inline through a barrel.**
+The barrel's star closure yields the NAMESPACE for the first path segment, and
+the binder sets `SymbolFlags.ConstEnum` on a namespace holding only const enums
+— so the flag test *passed* on the namespace while the `enumValues` lookup,
+keyed by the ENUM's symbol id, silently missed. `descendToConstEnum` walks the
+remaining segments through namespace exports, stopping at the first genuine
+`EnumDeclaration`.
+
+**EP.2f — computed initializers did not fold in the same-file collector.** This
+one only surfaced because EP.2e did *not* move the number. I had predicted the
+residual was tsc's `tracing.Phase`; the count stayed at 18,085 after the fix, so
+instead of theorising I re-ran the gate with `--keep` and counted per file:
+`debug.js` was short 25, and every missing member was a `Connection.*`. The
+source is `const enum Connection { Up = 1 << 0, ..., UpDown = Up | Down }` —
+computed. The Transformer's collector accepted only a literal (or a negated
+numeric) and returned null, "non-constant, don't inline", for everything else,
+while the Checker's cross-module evaluator had folded shifts and bitwise
+operators all along. Two evaluators, silently divergent, and the drift ends
+inlining for every member *after* the first computed one. The operator table now
+lives once in `tsFoldNumericBinary` and both call it.
+
+**The lesson repeats, and it is the same one as rounds 669 and 672.** My
+namespace-barrel prediction was well-reasoned, reproduced cleanly in a scratch
+project, and was *not what tsc's source does*. What corrected it was the gate
+plus a per-file count — 20 seconds of measurement against a confident wrong
+model. The standing rule holds: when a fix does not move the metric, do not
+explain why it should have; go read the residual.
+
+**Gates.** Corpus 12,566 / 0 / 3 (+32 hand-written tests across three new
+classes). `--listAll` ×8 unchanged: 46 on seven profiles, 94 on harness, zero
+crashes. byte-identical files stay 31/78.
+
+**SUPERSEDED:** this round claimed the const-enum family was closed because the
+script's family-1 counter read 18,118 = 18,118. That counter only sees
+NUMERIC-valued inlines; 34 string-valued reads (`tracing.Phase.*`) were still
+missing. Closed for real in round 678 — see above.
+
+---
+
+**Round 676 (2026-07-25) — EP.2c SIZED: it is a subsystem project, not a
+placement rule. 132 hunks in three shapes, and the recommendation is an explicit
+go/no-go rather than drifting into it.**
+
+**What the residual formatting actually is.** Classifying the 132
+formatting-only hunks: **78** have the SAME line count but a different
+continuation INDENT DEPTH — and it differs in BOTH directions (checker.js has us
+indenting 4 spaces too many in one wrapped `&&` chain and 4 too few in another),
+so no single constant fixes it; **47** are places where tsc has MORE lines
+because we COLLAPSE a wrap it keeps — binder.ts's
+`const name = isComputedName ? A` / `    : B ? C` / `    : D` is the archetype,
+and tsc reproduces the SOURCE's own line structure with `:` at line start;
+**7** are the reverse, a wrap we add and tsc does not.
+
+**Why that makes it a project.** All three need the emitter to model tsc's
+line-breaking AND indentation decisions for wrapped binary and ternary
+expressions — source-structure preservation for expressions, analogous to the
+existing `multiLine` flags on object and array literals but considerably
+broader. It is not a token-placement tweak one commit lands.
+
+**Honest sizing.** 132 of the 1,307 remaining hunks (~10%); few files would flip
+to byte-identical on its own because they carry other differences too; and it is
+the highest corpus-regression risk anywhere here, since the printer it touches
+is pinned by all 12,534 tests. Moderate payoff, high risk, subsystem scope is
+exactly the profile this arc has learned to price before committing, so the
+queue item asks for a decision rather than assuming one.
+
+**Where EP stands after five rounds with the gate.** EP.0 live (672), EP.1
+completed via the `.js`-aware barrel fix (672), EP.1a the TS2694 false positive
+(668), EP.2a the double-comment defect 128 → 1 (674), EP.2b hex const enums with
+the gap 675 → 70 (675). Cumulatively: **byte-identical files 9 → 31 of 78** and
+**const-enum inlined reads 1,618 → 18,048** against tsc's 18,118, with
+logical-assign already at parity. What remains is EP.2c plus a small tail: 70
+const-enum reads, `tracing.Phase.Bind` (a const enum behind a namespace), one
+import-elision difference, and a single double-comment of a different shape.
+
+No code changed this round (classification only); tree clean; suite untouched at
+12,534/0/3.
+
+**Round 675 (2026-07-25) — EP.2b: the `CharacterCodes` mystery
+was HEX LITERALS. Const-enum residual 675 → 70 reads.** Round 673 asked why one
+enum accounted for 638 of the un-inlined reads while its own file-mates inlined
+fine; the answer is that `SymbolFlags` and `Extension` are decimal- and
+string-valued and `CharacterCodes` is almost entirely hex.
+
+**The bug is small and completely silent.** All three const-enum evaluators
+parsed the member's literal with `text.toDoubleOrNull()`, which is decimal-only:
+Kotlin accepts a hex FLOAT (`0x1.8p3`) but not a hex INTEGER (`0x7F`). So the
+parse returned null, the member was recorded as non-constant, and the emit kept
+a qualified access — with no error, no diagnostic and nothing in any log. Only a
+byte-diff against real tsc could surface it, which is exactly what the round-672
+gate bought.
+
+**Three evaluators, found one at a time.** A shared
+`tsNumericLiteralToDouble` (Types.kt — hex/binary/octal, `_` separators, rejects
+BigInt) now serves the Transformer's same-file collector, the Checker's
+`literalConstantValue`, and the Checker's `evaluateEnumInitializer` (which
+builds the cross-module `enumValues` table). I wired the first two, and the
+same-file repro went green while the direct-import repro did not — that split is
+what revealed the third site. Worth noting as a pattern: the same value question
+is answered independently in three places, so a "fix" verified on one shape can
+easily be half-done.
+
+**Measured (the gate):** const-enum inlined reads **17,443 → 18,048** against
+tsc's 18,118 — the gap falls from 675 to **70**. Byte-identical files stay
+31/78 for the same reason as round 674: these hunks live in files that still
+differ for other reasons, and hunk-level progress is not file-level progress.
+
+**Gates:** 8 pins (`HexConstEnumInliningTest`) covering all three evaluator
+paths (same-file, cross-module, through a star barrel), binary and octal, a
+negative/zero regression guard, the shared parser across bases and separators,
+and two negative controls — a BigInt literal and garbage text must yield null
+rather than a wrong value, because a wrong value here would silently corrupt
+emitted constants rather than fail loudly. Suite 12,526 → **12,534/0** (3
+skipped) with every JS baseline byte-exact; `--listAll` ×8 byte-identical on all
+eight profiles, which carries more weight this round than usual since the change
+alters enum VALUES and a bad one would move diagnostics; warning-clean.
+
+**NEXT:** EP.2c (the original formatting family, ~131 whitespace/wrap hunks —
+tsc puts a wrapped ternary's `:` at line start), and the small tail: 70
+const-enum reads, `tracing.Phase.Bind` (a const enum behind a namespace), one
+import-elision difference, and the single remaining double-comment of a
+different shape.
+
 **Round 674 (2026-07-25) — EP.2a fixed: string-valued const enums in array
 literals stopped doubling their comment, 128 → 1.** The first emit fix made with
 the gate in place, and the gate is what makes the claim checkable.
