@@ -20,6 +20,41 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 721 (2026-07-27) — a NEGATIVE result that removes the most attractive-looking
+hypothesis about (LIB.1)'s remaining 24 false positives, plus the first evidence that
+the build loop is now genuinely fast (a filtered test cycle: 1m 56s).**
+
+**The hypothesis, and why it looked strong.** Three of the eight remaining TS2322
+print a source and target that are the SAME TEXT:
+`Type 'NodeArray<T>' is not assignable to type 'NodeArray<T>'` (parser.ts:3583) and
+`WatchCompilerHostOfFilesAndCompilerOptions<T>` not assignable to a union whose FIRST
+MEMBER it is (watchPublic.ts:371/383). A generic reference failing to relate to itself
+would explain all three at once, and would be a perf item too — a self-relation that
+should short-circuit but instead runs a full structural comparison is wasted work.
+
+**It is wrong.** Five probes — self-return, constrained self-return, member-of-union,
+and return-through-a-local — all pass, and the control (an unrelated generic reference
+in the same position) still errors, so the probe can see TS2322 and is discriminating.
+Generic self-assignability is fine. Committed as `GenericSelfAssignabilityTest`, since
+the shapes are worth pinning even though they already work.
+
+**What that leaves, and it is a better lead than the one it replaces.** These FPs
+appear ONLY under real libs, so the failing comparison must involve something the
+CURATED lib does not have. The strongest candidate is symbol-keyed members: the same
+run reports `core.ts:1637` TS2739 as "missing `[Symbol.iterator]`, `[Symbol.toStringTag]`
+from `Set<TElement>`", and `NodeArray<T> extends ReadonlyArray<T>`, which in the real
+lib carries exactly those. So the next probe is not "does `X<T>` relate to `X<T>`" but
+"does a type whose members include well-known-symbol keys relate to itself" — build it
+under `@useRealLibs`, because that is the only place the shape exists.
+
+**Process note.** The round-720 rule held: the probe ran detached and returned in
+1m 56s with warm daemons, versus the multi-round thrash that preceded the heap fix.
+The remaining cost is that the FIRST build after a source change still recompiles the
+whole module; incremental cycles after that are cheap.
+
+---
+
+
 **Round 720 (2026-07-26/27) — the owner approved the heap raise, and everything that
 had been stuck landed at once: `Required<T>` fixed, real-lib FPs 35 → 24, corpus
 12,765 → 12,770 / 0 / 3, and the cost gate reports ZERO movement on every counter.
@@ -2344,6 +2379,16 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **Also learned:** the embedded lib declares NO utility types at all, which is why
   the whole family is invisible on the default path — `Required<…>` is an unresolved
   name degrading to `any`, and `any` is silent. That is the LIB.1 defect in miniature.
+  **(a2) NEGATIVE RESULT round 721 — do NOT re-run this one.** The three TS2322 whose
+  source and target print identically (`NodeArray<T>` → `NodeArray<T>`;
+  `WatchCompilerHostOfFilesAndCompilerOptions<T>` → a union it is the first member of)
+  are NOT a generic-self-assignability bug: five probes covering self-return,
+  constrained self-return, member-of-union and return-through-a-local all pass, with a
+  live control. Pinned as `GenericSelfAssignabilityTest`. **The surviving lead is
+  symbol-keyed members**, because these FPs exist only under real libs and the same run
+  reports TS2739 "missing `[Symbol.iterator]`, `[Symbol.toStringTag]` from `Set<T>`" —
+  and `NodeArray<T> extends ReadonlyArray<T>`, which carries exactly those in the real
+  lib but not in the curated one. Probe that under `@useRealLibs`.
   **ORDER — the original (a) framing, now answered above:** (a) decide what a real
   project build uses for libs at all (the embedded lib is a curated subset; the shipped real
   libs are unreachable outside tests — that mismatch is the root, and it is a design
