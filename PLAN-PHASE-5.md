@@ -20,6 +20,104 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 746 (2026-07-28) — (REL.1)(c) STEP 2 LANDED: THE RELATION ANSWERS
+`isEnumTypeRelatedTo`, AND BOTH `checkEnumToEnumAssignments` (B425) AND
+`checkNamespaceEnumUnionAssignments` (B266) RETIRE WITH IT.** Compiler profile `--listAll`
+**at 46, diffed LINE-BY-LINE** against round 745's — composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). Cost gate **+0.00% on all 20 counters**,
+no rebaseline (`typeOfExpr.calls` -16, `globals.lookups` +1 — the deleted passes, nothing
+else). +18 local pins. **The full suite is the coordinator's run — see the report.**
+
+**THE ABLATION, PER PASS, IN THE ROUND-745 FORMAT.** Both tables were measured through the
+1.3-second scratch-project CLI loop on real builds, never argued:
+
+| build | B425 | `enumAssignmentCompat3` |
+|---|---|---|
+| pre-746 | enabled | 12, = the tsc baseline |
+| pre-746 | PassLab-disabled | **0** — the relation could not answer |
+| post-746 | enabled | **24 — every one of the 12 DUPLICATED** |
+| post-746 | deleted | **12, byte-identical to the baseline** — message, CHAIN, position, length |
+
+| build | B266 | `enumLiteralAssignableToEnumInsideUnion` |
+|---|---|---|
+| pre-746 | enabled | 5, = the tsc baseline |
+| pre-746 | PassLab-disabled | **3**, and all three with the WRONG display (`A \| B \| boolean`) |
+| post-746 (rule only) | disabled | 5 verdicts, still the wrong display (`Foo \| boolean`) |
+| post-746 (rule + display) | deleted | **5, byte-identical** — `boolean \| Foo` collapse included |
+
+That B266 row is the one worth reading twice: **the verdict and the display are separate
+deliverables**, and the middle row is a state where the pass is replaceable on VERDICT and
+not on OUTPUT. B425's chain is the same story — the relation reached all 12 verdicts at all
+12 positions while printing `Type 'E' is not assignable to type 'E'` twelve times.
+
+**THE RULE IS tsc's `isEnumTypeRelatedTo`, AND IT HAD TO GO IN `checkTypeRelatedToCore`,
+NOT `isSimpleTypeRelatedTo`.** Every enum-flavored type is a MEMBER-LESS `Type.Object`, so a
+`false` in the fast path merely falls through to the structural engine, which relates two
+empty objects VACUOUSLY — the enum-vs-enum rule was written in `isSimpleTypeRelatedTo` first
+and measured ZERO change on `enumLiteralAssignableToEnumInsideUnion`. `enumTypesRelation`
+returns a `EnumRelFailure?` rather than a Boolean because the elaboration needs the same walk:
+`Missing(member)`, `ValueDiffers(member, expected, given)`, `StringVsUnknown(member, value)`,
+or `Plain` for the two nominal rejections tsc reports without a chain (a different simple
+name, and a `const` enum, which tsc excludes by requiring `RegularEnum` on BOTH sides).
+
+**THE DOMAIN TRAP IS PER-MEMBER, NOT PER-ENUM (`enumMemberEntries`).** Round 745's
+`enumValueDomainIsComplete` answers for a whole enum; the relation needs each member's tsc
+value, and reading `enumValues` directly is WRONG for exactly the shape round 745 recorded:
+a member with no initializer in an AMBIENT non-const enum has NO value in tsc, while we
+auto-number it because the Transformer needs one. `declare enum D { Red, Green }` against a
+concrete `{ Red = 5 }` must RELATE (tsc: "at least one of the values is undefined ... just
+return"), and reading our auto-numbers would make it look value-shifted. Pinned by
+`negative control - an ambient enums opaque members are compatible with any numeric twin`,
+and it is 2 of the 8 baseline lines of `enumAssignmentCompat6`.
+
+**TWO DISPLAY RULES MOVED WITH THE PASSES, AND BOTH ARE SPLIT RATHER THAN WIDENED**
+(round 745's lesson, applied pre-emptively):
+- `enumCollisionQualifiedDisplays` is tsc's `getTypeNamesForErrorDisplay`: when the two sides
+  print the SAME string, BOTH re-render fully qualified. That is what turns
+  `Type 'E' is not assignable to type 'E'` into `Type 'Abcd.E' … 'First.E'` while leaving
+  `Type 'Nope' … 'E'` alone. tsc applies the retry to EVERY type; ours is gated to a pair
+  that is enum-flavored on both sides, because our display paths reach the same string for
+  unrelated reasons (annotation source text, an unfolded alias).
+- `enumUnionTargetDisplay` is B266's rule, and it is three rules: a member prints QUALIFIED
+  (the annotation path reduces a `QualifiedName` to its last name), a CONSECUTIVE run
+  covering every member of one enum collapses to the bare enum name (tsc's
+  `formatUnionTypes`), and non-enum constituents sort FIRST — tsc id-orders union
+  constituents and every intrinsic predates every enum type. Deliberately NOT a general id
+  sort: only the enum split is measured.
+
+**WHAT DID NOT WORK, AND IT IS THE ROUND'S REAL FINDING: A VALUE-AWARE RELATION MAKES EVERY
+DEDICATED ENUM WALKER CO-EMIT, NOT JUST THE TWO IN SCOPE.** The suite found two failures
+neither pass's ablation predicted, because both are OTHER walkers:
+- `enumAssignmentCompat6` — all six of B583's (`checkEnumAsgInFunctionScopes`) TS2322
+  duplicated, byte-identical.
+- `enumAssignmentCompat7` — the general class-member override check co-emitting TS2416 with
+  B463's (`encmCheckClassesAndOverloads`) at the same position.
+Both were resolved by the round-744 RETRACTION mechanism, not by more deletion, because in
+both cases the walker's DISPLAY is still the only correct one: B583 owns
+`import("f").DiagnosticCategory` for an enum shadowed by a module-scoped one, and B463 owns
+`(param: second.E) => void` — qualifying an enum nested inside a rendered FUNCTION type is a
+`typeToString` change this round did not measure. The TS2416 pair is guarded from BOTH sides
+(B463 retracts, the general site skips when a TS2416 already sits at the position), so B463
+wins whichever pass runs second. **B583 and B463 are therefore the NEXT retirements in this
+family, and each is now blocked on a display rule rather than on a verdict** — the same
+shape B266 was in at the start of this round.
+
+**NON-VACUITY IS MEASURED, NOT ARGUED.** All 14 rule/retirement pins were run through a build
+of unmodified `8a120fc6`: four are SILENT there and fire here; the fifth —
+`a member of a value-identical twin enum IS the same member` — fails on the pre-746 build in
+the OTHER direction, because round 744's name-plus-enum-name verdict rejected a
+value-identical twin's member as a FALSE POSITIVE. So **retiring B425/B266 also removes an
+FP**, exactly as retiring B203 did. The three retirement pins pass on BOTH builds byte-
+identically, chain included, which is what distinguishes "the general path reproduces the
+walker" from "the general path approximates it".
+
+**PROCESS NOTE, and it cost two watchdog kills.** A blocking foreground `jvmTest` is
+un-survivable for a subagent; the gates that fit are `compileKotlinJvm`, FILTERED
+`--tests` runs (766 tests / 0 failures here: the whole generated `TypeScriptCompilerTests_E`
+class plus the new pins), the scratch-project CLI loop, `--listAll` and the cost gate. Also:
+a from-scratch `compileKotlinJvm` OOMs when the previous daemons are still resident —
+`./gradlew --stop` FIRST turned a 20-minute OOM death into a 2.5-minute build, twice.
+
 **Round 745 (2026-07-28) — (REL.1)(c) STEP 1 LANDED: THE RELATION IS VALUE-AWARE, AND
 `checkEnumLiteralAssignments` (B203) IS RETIRED IN THE SAME COMMIT.** Corpus
 **12,971 -> 12,982 / 0 failures / 3 skipped** (+11 pins). Compiler profile `--listAll`
@@ -1260,12 +1358,30 @@ backlog-horizon decision, not queue debt.)
     `propTypeContainsLiteral` instead cost 4 profile FPs on `x = undefined!`), and the message
     keeps the literal via `ts2322KeepsSourceLiteral`. An enum-member TARGET also prints
     QUALIFIED now.
-    - **STEP 2 (next): `checkEnumToEnumAssignments` and `checkNamespaceEnumUnionAssignments`.**
-      Both survive round 745 untouched because they answer a DIFFERENT question — whether two
-      DISTINCT enums' same-named members are value-identical (tsc's `isEnumTypeRelatedTo`,
-      which `enumMemberTypesAreSameMember` deliberately does not check) — plus, for B266, the
-      display collapse of a fully-covered member set to the bare enum name. Re-ablate before
-      touching either.
+    - **STEP 2 DONE round 746: `checkEnumToEnumAssignments` (B425) and
+      `checkNamespaceEnumUnionAssignments` (B266) BOTH RETIRE, in one commit with the rule.**
+      Profile 46 diffed line-by-line, cost gate +0.00% on all 20 counters, +18 pins.
+      `enumTypesRelation` is tsc's `isEnumTypeRelatedTo` and it lives in
+      `checkTypeRelatedToCore`, NOT `isSimpleTypeRelatedTo` — every enum-flavored type is a
+      member-less `Type.Object`, so a `false` in the fast path only falls through to the
+      structural engine, which relates two empty objects vacuously (measured: the rule in the
+      fast path changed nothing). It returns a `EnumRelFailure?` because the ELABORATION needs
+      the same walk. Two display rules moved with the passes, each SPLIT rather than widened:
+      `enumCollisionQualifiedDisplays` (tsc's `getTypeNamesForErrorDisplay` — same string on
+      both sides ⇒ requalify both, gated to enum-flavored pairs) and `enumUnionTargetDisplay`
+      (B266's: members print qualified, a consecutive full-coverage run collapses to the bare
+      enum name, non-enum constituents sort first). The per-MEMBER domain trap is
+      `enumMemberEntries`: an ambient non-const member with no initializer has NO tsc value,
+      and reading our auto-numbers instead would reject a program tsc accepts.
+      - **THE FINDING: a value-aware relation makes EVERY dedicated enum walker co-emit.** The
+        suite caught two the ablations did not predict — B583
+        (`checkEnumAsgInFunctionScopes`, all six of `enumAssignmentCompat6` duplicated) and
+        B463's TS2416 (`enumAssignmentCompat7`) — resolved by the round-744 RETRACTION, not by
+        more deletion, because each still owns the only correct DISPLAY
+        (`import("f").DiagnosticCategory`; `(param: second.E) => void`). **B583 and B463 are
+        the next retirements in this family, and both are now blocked on a display rule rather
+        than on a verdict** — the state B266 was in when this round started. Qualifying an enum
+        nested inside a rendered FUNCTION type is the concrete blocker for B463.
     - **HISTORY — REDIRECTED round 744 BY ABLATION. The first deletion was NOT
     any of the three AST-only passes; it was the VALUE-AWARE disjointness rule.** Round 740's inventory called those three "100% artifacts,
     deletable"; a PassLab census (`build/pass-lab.txt`, `disable <pass>`, ZERO recompile — run it
@@ -1281,9 +1397,27 @@ backlog-horizon decision, not queue debt.)
     - **None of the twelve AST key-space helpers is orphaned yet** (checked by reference count
       after the round-459 retire — `enumMemberKeysOfTypeNode` / `enumMemberKeyOfExpr` keep other
       consumers), so there is no free deletion to take first.
-    - `discriminantPropAnnotation` (:110308) has FIVE call sites woven through switch-narrowing
-      and type-guard filtering. It is a multi-step replacement, not a one-commit deletion, and it
-      is the riskiest part of (c) — last, not first. Then `kindDomainProvesNotSubtype` /
+    - **STEP 3 (next), and round 746 re-ordered it: `checkEnumAsgInFunctionScopes` (B583) and
+      `encmCheckClassesAndOverloads`'s TS2416 (B463) come BEFORE
+      `discriminantPropAnnotation`.** Both now co-emit with the general relation and are held
+      off only by a retraction (round 746), so each is a one-commit retirement once its DISPLAY
+      moves: B583 needs `import("<base>").<Name>` for an enum shadowed by a module-scoped one
+      plus the `declare namespace` value-KIND split; B463 needs an enum QUALIFIED inside a
+      rendered function type (`(param: second.E) => void`), which is a `typeToString` change.
+    - `discriminantPropAnnotation` (:110431) has FIVE call sites woven through switch-narrowing
+      and type-guard filtering — `filterUnionByEnumDiscriminant`, `kindDomainKeysOfType`,
+      `discriminantKindKeys`, the exhaustive-switch `neverType` gate, and the objlit
+      discriminant-candidate filter — and ALL FIVE consume it the same way, through
+      `enumMemberKeysOfTypeNode`, whose key space is `"<enumSymbolId>#<member>"`. **Its
+      docstring's premise is now FALSE** ("the resolved property type is `anyType` for an
+      enum-member" — (a)/(b0) fixed that), so the replacement is mechanical in shape: read the
+      property's TYPE and key an `EnumLiteral` as
+      `"<canonicalEnumSymbol(parent).id>#<name>"`. **The risk is NOT the read, it is the KEY
+      SPACE**: `enumMemberKeysOfTypeNode` keys on `resolveEnumSymbolForDiscriminant`'s symbol
+      id while the type interning keys on `canonicalEnumSymbol`, and the same keys are minted
+      independently by `enumMemberKeyOfExpr` and `literalDiscriminantKeyOfType`. All producers
+      must flip together or narrowing silently stops matching — still a multi-step replacement,
+      still the riskiest part of (c). Then `kindDomainProvesNotSubtype` /
       `kindDomainKeysExceed` (including the round-729 `evaluateConditional` patch).
 
   **WHICH CONSUMERS BECOME DELETABLE** (census round 740, all line numbers in Checker.kt).

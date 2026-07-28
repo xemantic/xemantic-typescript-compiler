@@ -5585,6 +5585,15 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val enumDomainCompleteCache = HashMap<Int, Boolean>()
 
+    /** (REL.1)(c) round 746: memo for [enumMemberEntries], keyed by enum symbol id.
+     *  Declared before `init` per the init-order trap. */
+    private val enumMemberEntriesCache = HashMap<Int, List<Pair<String, ConstantValue?>>?>()
+
+    /** (REL.1)(c) round 746: memo for [enumTypesRelation], keyed by the canonical
+     *  (source, target) enum symbol id pair. Declared before `init` per the
+     *  init-order trap. */
+    private val enumTypesRelationCache = HashMap<Long, EnumRelFailure?>()
+
     /**
      * (REL.1)(a) round 741: interned enum-MEMBER types, keyed
      * `"<canonicalEnumSymbolId>#<memberName>"`.
@@ -7115,10 +7124,15 @@ class Checker(
         // The general relation is value-aware now (`numericLiteralFitsEnum`), reaches the
         // same three verdicts on `enumAssignmentCompat5` byte-for-byte, and additionally
         // covers the shapes B203's top-level-var/assignment scan never saw.
-        // (B266) Namespace-qualified enum members vs union annotations (TS2322)
-        pass("checkNamespaceEnumUnionAssignments") { checkNamespaceEnumUnionAssignments() }
-        // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
-        pass("checkEnumToEnumAssignments") { checkEnumToEnumAssignments() }
+        // B266 (`checkNamespaceEnumUnionAssignments`) is RETIRED — (REL.1)(c) round 746.
+        // The relation answers `isEnumTypeRelatedTo` now and `enumUnionTargetDisplay`
+        // carries the walker's DISPLAY rule — a fully-covered member set collapses to the
+        // bare enum name — so all five of `enumLiteralAssignableToEnumInsideUnion` come
+        // from the general path, byte-for-byte.
+        // B425 (`checkEnumToEnumAssignments`) is RETIRED — (REL.1)(c) round 746.
+        // The general relation answers `isEnumTypeRelatedTo` now (`enumTypesRelation`),
+        // reproducing all 12 of `enumAssignmentCompat3` byte-for-byte — message, chain,
+        // position and length — from the two enum types alone.
         pass("checkEnumAsgInFunctionScopes") { checkEnumAsgInFunctionScopes() }
         // B463: nominal enum mismatches in class-override / overload / member-access contexts
         pass("checkEnumNominalClassMismatches") { checkEnumNominalClassMismatches() }
@@ -93163,6 +93177,10 @@ interface DataView {
         // right for a namespaced interface (tsc prints the bare name there) and wrong
         // for an enum member, whose display name in tsc always carries its enum.
         if (targetType.flags.hasAny(TypeFlags.EnumLiteral)) return typeToString(targetType)
+        // (REL.1)(c) round 746: a UNION carrying enum-flavored constituents likewise —
+        // see [enumUnionTargetDisplay], which is B266's display rule moved into the
+        // general path so the walker can retire.
+        enumUnionTargetDisplay(targetType)?.let { return it }
         if (typeAnnotation is TypeReference && targetType is Type.Intrinsic &&
             targetType !== anyType && targetType !== unknownType && targetType !== errorType
         ) {
@@ -99179,7 +99197,7 @@ interface DataView {
                         // `false` or `true | false`), keep the literal display.
                         val displaySourceType = if (ts2322KeepsSourceLiteral(tt)) sourceType
                             else getWidenedLiteralType(sourceType)
-                        val displaySource = typeToString(displaySourceType)
+                        val displaySourceRaw = typeToString(displaySourceType)
                         // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
                         // the resolved type display (`'Infinity'` / `'-Infinity'` / `'NaN'`)
                         // over the type-annotation alias name. TypeScript expands type
@@ -99207,7 +99225,7 @@ interface DataView {
                         // `elaboratedErrorsOnNullableTargets01` baseline shape). The helper
                         // returns `tt` unchanged when not applicable.
                         val ttForDisplay = stripNullishFromDisplayTarget(tt, sourceType)
-                        val displayTarget = if (isIntrinsicNumericLiteral) resolvedDisplay
+                        val displayTargetRaw = if (isIntrinsicNumericLiteral) resolvedDisplay
                             else if (isPureFuncNoAlias) resolvedDisplay
                             // (REL.1)(c): an enum-MEMBER target prints QUALIFIED — see
                             // [displayTargetAnnotation], the var-decl path's twin.
@@ -99215,6 +99233,12 @@ interface DataView {
                             else if (ttForDisplay !== tt) typeToString(ttForDisplay)
                             else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: resolvedDisplay
                             else resolvedDisplay
+                        // (REL.1)(c) round 746: two DIFFERENT enums whose simple names collide
+                        // both print fully qualified — see [enumCollisionQualifiedDisplays].
+                        val enumQualified =
+                            enumCollisionQualifiedDisplays(displaySourceType, tt, displaySourceRaw, displayTargetRaw)
+                        val displaySource = enumQualified?.first ?: displaySourceRaw
+                        val displayTarget = enumQualified?.second ?: displayTargetRaw
                         val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
                         // 16.4bf: Compute missing-property set directly rather than relying on
                         // `lastMissingPropertyName` side-effect — a cached Ternary.False result
@@ -99410,6 +99434,13 @@ interface DataView {
                                 }
                             }
                             }
+                        }
+                        // (REL.1)(c) round 746: the `isEnumTypeRelatedTo` elaboration — the
+                        // missing member, or the first member whose value differs. Guarded on
+                        // an EMPTY chain because an enum type carries no properties, so
+                        // nothing above can have produced one for this pair.
+                        if (chain.isEmpty()) {
+                            enumRelationElaboration(displaySourceType, tt, displayTarget)?.let { chain.add(it) }
                         }
                         val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
                         diagnostics.add(Diagnostic(
@@ -102743,9 +102774,17 @@ interface DataView {
         if (sourceEnum === targetEnum) return true
         if (canonicalEnumSymbol(sourceEnum).id == canonicalEnumSymbol(targetEnum).id) return true
         if (sourceEnum.name != targetEnum.name) return false
-        return sourceEnum.declarations.any { d ->
-            d is EnumDeclaration && targetEnum.declarations.any { it === d }
-        }
+        if (sourceEnum.declarations.any { d ->
+                d is EnumDeclaration && targetEnum.declarations.any { it === d }
+            }
+        ) return true
+        // (REL.1)(c) round 746: two DISTINCT enums of the same name — tsc pairs the
+        // member comparison with `isEnumTypeRelatedTo` on the OWNING enums, so
+        // `Y.Foo.A` is `X.Foo.A` (both `A = 0`) while `Z.Foo.A` (`A = 1 << 1`) is not.
+        // Without this the name match alone made every same-named member of every
+        // same-named enum interchangeable, which is the half of
+        // `enumLiteralAssignableToEnumInsideUnion` B266 still owned.
+        return enumTypesRelation(sourceEnum, targetEnum) == null
     }
 
     /**
@@ -102874,6 +102913,273 @@ interface DataView {
         val domain = enumKnownDomainValues(target) ?: return true
         return domain.any { it is ConstantValue.NumberValue && it.value == lit.value }
     }
+
+    /**
+     * (REL.1)(c) round 746: why two DISTINCT enums do not relate — tsc's
+     * `isEnumTypeRelatedTo` error reporter, as a value rather than a callback.
+     *
+     * [Plain] is "not related, and tsc reports no elaboration"; the other two carry
+     * the elaboration's ingredients but NOT its text, because the target's display
+     * name depends on the source it is being compared against (see
+     * [enumRelationChainLine]).
+     */
+    private sealed class EnumRelFailure {
+        /** Different simple name, or a `const` enum — nominal mismatch, no chain. */
+        object Plain : EnumRelFailure()
+        class Missing(val member: String) : EnumRelFailure()
+        class ValueDiffers(val member: String, val expected: String, val given: String) : EnumRelFailure()
+        class StringVsUnknown(val member: String, val stringValue: String) : EnumRelFailure()
+    }
+
+    /**
+     * (REL.1)(c) round 746: an enum's members in DECLARATION order (merged across
+     * every declaration block), paired with the value **tsc** gives them.
+     *
+     * A `null` value is tsc's *opaque* member, and there are two ways to get one: an
+     * initializer the constant evaluator could not fold, and a member with no
+     * initializer in an AMBIENT non-const enum, which tsc declines to auto-number
+     * (`declare enum D { X, Y }`). We DO auto-number the latter — the Transformer
+     * needs a value to emit — so [enumValues] cannot be read directly here; this is
+     * the same difference [enumValueDomainIsComplete] guards, at member granularity.
+     *
+     * `null` for the whole enum means "not comparable at all" (no declaration, or a
+     * member name we cannot key), which every caller must read as "relate leniently".
+     */
+    private fun enumMemberEntries(enumSym: Symbol): List<Pair<String, ConstantValue?>>? =
+        enumMemberEntriesCache.getOrPut(enumSym.id) {
+            val canonical = canonicalEnumSymbol(enumSym)
+            val values = enumValues[canonical.id]
+            val decls = canonical.declarations.filterIsInstance<EnumDeclaration>()
+                .ifEmpty { enumSym.declarations.filterIsInstance<EnumDeclaration>() }
+            if (decls.isEmpty()) return@getOrPut null
+            val out = mutableListOf<Pair<String, ConstantValue?>>()
+            for (decl in decls) {
+                val ambient = enumDeclIsAmbient(decl)
+                val isConst = ModifierFlag.Const in decl.modifiers
+                for (member in decl.members) {
+                    val name = when (val n = member.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> return@getOrPut null
+                    }
+                    val opaque = member.initializer == null && ambient && !isConst
+                    out.add(name to if (opaque) null else values?.get(name))
+                }
+            }
+            out
+        }
+
+    /**
+     * (REL.1)(c) round 746: tsc's `isEnumTypeRelatedTo` — is every member of
+     * [sourceEnum] present in [targetEnum] with an EQUAL value? `null` means related.
+     *
+     * This is the question step (b)'s [enumMemberTypesAreSameMember] deliberately did
+     * not ask, and the reason `checkEnumToEnumAssignments` (B425) and
+     * `checkNamespaceEnumUnionAssignments` (B266) outlived round 745: the relation
+     * could tell one enum's member from another's, but not whether the two ENUMS are
+     * value-identical, which is what makes `Y.Foo.A` assignable to `X.Foo` and
+     * `Z.Foo.A` not.
+     *
+     * Three shapes answer "related" WITHOUT comparing values, and each is a
+     * multi-instance guard rather than a semantic rule: the same canonical symbol, a
+     * shared `EnumDeclaration` NODE (identity compare — never data-class equality,
+     * which deep-recurses the declaration), and an enum we cannot enumerate at all.
+     * Post-INV.3(d) a module-scoped enum has no global instance to canonicalize to,
+     * so a strict port of tsc's `sourceSymbol === targetSymbol` would declare
+     * `SyntaxKind` unrelated to itself — the same trap [enumMemberTypesAreSameMember]
+     * records.
+     *
+     * An OPAQUE member on either side is compatible with anything numeric (tsc:
+     * "at least one of the values is undefined ... just return"), which is why a
+     * `declare enum` relates to a concrete one until a member's value is known on
+     * BOTH sides and differs.
+     */
+    private fun enumTypesRelation(sourceEnum: Symbol, targetEnum: Symbol): EnumRelFailure? {
+        val src = canonicalEnumSymbol(sourceEnum)
+        val tgt = canonicalEnumSymbol(targetEnum)
+        if (src.id == tgt.id) return null
+        val key = (src.id.toLong() shl 32) or (tgt.id.toLong() and 0xffffffffL)
+        return enumTypesRelationCache.getOrPut(key) {
+            if (src.name != tgt.name) return@getOrPut EnumRelFailure.Plain
+            // tsc requires BOTH to be RegularEnum: a `const` enum relates only to itself.
+            if (!src.flags.hasAny(SymbolFlags.RegularEnum) || !tgt.flags.hasAny(SymbolFlags.RegularEnum)) {
+                return@getOrPut EnumRelFailure.Plain
+            }
+            if (src.declarations.any { d -> d is EnumDeclaration && tgt.declarations.any { it === d } }) {
+                return@getOrPut null
+            }
+            val sourceMembers = enumMemberEntries(src) ?: return@getOrPut null
+            val targetMembers = enumMemberEntries(tgt) ?: return@getOrPut null
+            val targetValues = HashMap<String, ConstantValue?>()
+            for ((n, v) in targetMembers) targetValues[n] = v
+            for ((name, sv) in sourceMembers) {
+                if (name !in targetValues) return@getOrPut EnumRelFailure.Missing(name)
+                val tv = targetValues[name]
+                if (sv == tv) continue
+                if (sv != null && tv != null) {
+                    return@getOrPut EnumRelFailure.ValueDiffers(name, enumConstantDisplay(tv), enumConstantDisplay(sv))
+                }
+                val str = (sv ?: tv) as? ConstantValue.StringValue ?: continue
+                return@getOrPut EnumRelFailure.StringVsUnknown(name, enumConstantDisplay(str))
+            }
+            null
+        }
+    }
+
+    /** (REL.1)(c) round 746: an enum member's value as tsc renders it in the
+     *  `Each declaration of …` elaboration — a plain number, a double-quoted string. */
+    private fun enumConstantDisplay(v: ConstantValue): String = when (v) {
+        is ConstantValue.NumberValue -> fmtEnumAsgVal(v.value)
+        is ConstantValue.StringValue -> "\"${v.value}\""
+    }
+
+    /**
+     * (REL.1)(c) round 746: the elaboration line tsc appends under the TS2322 when two
+     * enums fail to relate. [targetDisplay] must be the SAME string the top-level
+     * message used for the target, which is why this cannot be built inside
+     * [enumTypesRelation] — the pair decides whether either side prints qualified.
+     */
+    private fun enumRelationChainLine(
+        failure: EnumRelFailure, enumSimpleName: String, targetDisplay: String,
+    ): String? = when (failure) {
+        is EnumRelFailure.Plain -> null
+        is EnumRelFailure.Missing -> "  Property '${failure.member}' is missing in type '$targetDisplay'."
+        is EnumRelFailure.ValueDiffers ->
+            "  Each declaration of '$enumSimpleName.${failure.member}' differs in its value, " +
+                "where '${failure.expected}' was expected but '${failure.given}' was given."
+        is EnumRelFailure.StringVsUnknown ->
+            "  One value of '$enumSimpleName.${failure.member}' is the string '${failure.stringValue}', " +
+                "and the other is assumed to be an unknown numeric value."
+    }
+
+    /** (REL.1)(c) round 746: the enum SYMBOL behind an enum's OWN type (never a member
+     *  type — [TypeFlags.Enum] and [TypeFlags.EnumLiteral] are disjoint by construction
+     *  in [getDeclaredTypeOfEnumMember]). */
+    private fun enumOwnTypeSymbol(type: Type): Symbol? {
+        if (type.flags.hasNone(TypeFlags.Enum)) return null
+        return (type as? Type.Object)?.symbol?.takeIf { it.flags.hasAny(SymbolFlags.Enum) }
+    }
+
+    /** (REL.1)(c) round 746: the enum SYMBOL owning an enum-MEMBER type. */
+    private fun enumOfMemberTypeSymbol(type: Type): Symbol? {
+        if (type.flags.hasNone(TypeFlags.EnumLiteral)) return null
+        return (type as? Type.Object)?.symbol?.parent?.takeIf { it.flags.hasAny(SymbolFlags.Enum) }
+    }
+
+    /**
+     * (REL.1)(c) round 746: an enum-flavored type rendered with its NAMESPACE path —
+     * `First.E`, `Abcd.E`. `null` for anything that is not enum-flavored.
+     *
+     * This is tsc's `TypeFormatFlags.UseFullyQualifiedType`, which the relation's error
+     * reporter turns on only through [enumCollisionQualifiedDisplays].
+     */
+    private fun enumTypeQualifiedDisplay(type: Type): String? {
+        val sym = (type as? Type.Object)?.symbol ?: return null
+        val isMember = sym.flags.hasAny(SymbolFlags.EnumMember)
+        val enumSym = (if (isMember) sym.parent else sym)
+            ?.takeIf { it.flags.hasAny(SymbolFlags.Enum) } ?: return null
+        val segments = mutableListOf(enumSym.name)
+        var cur = enumSym.parent
+        var hops = 0
+        while (cur != null && hops++ < 64 &&
+            cur.flags.hasAny(SymbolFlags.Module or SymbolFlags.NamespaceModule or SymbolFlags.ValueModule)
+        ) {
+            segments.add(0, cur.name)
+            cur = cur.parent
+        }
+        if (isMember) segments.add(sym.name)
+        return segments.joinToString(".")
+    }
+
+    /**
+     * (REL.1)(c) round 746: tsc's `getTypeNamesForErrorDisplay` — when the two sides of a
+     * TS2322 print the SAME string, BOTH are re-rendered fully qualified, which is how
+     * `Type 'E' is not assignable to type 'E'` becomes
+     * `Type 'Abcd.E' is not assignable to type 'First.E'` while
+     * `Type 'Nope' is not assignable to type 'E'` keeps its bare names.
+     *
+     * Deliberately restricted to a pair that is enum-flavored on BOTH sides. tsc applies
+     * the retry to every type, but our display paths reach the same string for unrelated
+     * reasons (an annotation rendered from source text, an alias kept unfolded), so the
+     * general form is a separate, measured change — the round-745 rule that a shared
+     * display predicate gets SPLIT rather than widened.
+     */
+    private fun enumCollisionQualifiedDisplays(
+        sourceType: Type, targetType: Type, sourceDisplay: String, targetDisplay: String,
+    ): Pair<String, String>? {
+        if (sourceDisplay != targetDisplay) return null
+        val qualifiedSource = enumTypeQualifiedDisplay(sourceType) ?: return null
+        val qualifiedTarget = enumTypeQualifiedDisplay(targetType) ?: return null
+        if (qualifiedSource == qualifiedTarget) return null
+        return qualifiedSource to qualifiedTarget
+    }
+
+    /**
+     * (REL.1)(c) round 746: the TS2322 elaboration for two enums that do not relate —
+     * tsc's `isEnumTypeRelatedTo` error reporter, rendered against the target display
+     * the top-level message actually used. `null` when the pair is not enum-flavored,
+     * relates, or is a nominal mismatch tsc reports without elaboration.
+     */
+    private fun enumRelationElaboration(sourceType: Type, targetType: Type, targetDisplay: String): String? {
+        val targetEnum = enumOwnTypeSymbol(targetType) ?: return null
+        val sourceEnum = enumOwnTypeSymbol(sourceType) ?: enumOfMemberTypeSymbol(sourceType) ?: return null
+        val failure = enumTypesRelation(sourceEnum, targetEnum) ?: return null
+        return enumRelationChainLine(failure, canonicalEnumSymbol(sourceEnum).name, targetDisplay)
+    }
+
+    /**
+     * (REL.1)(c) round 746: tsc's union display for a target whose constituents include
+     * enum-flavored types — `boolean | Foo`, not the annotation's `X.Foo.A | X.Foo.B |
+     * boolean`. `null` when no constituent is enum-flavored, which leaves every other
+     * union on the annotation-text path untouched.
+     *
+     * This is the DISPLAY rule `checkNamespaceEnumUnionAssignments` (B266) owned, moved
+     * here so the pass can retire — round 744 already recorded that the pass's verdict
+     * was reproducible but its display was not. Three ingredients, all of them tsc's:
+     *
+     *  - a MEMBER prints qualified (`Foo.B`), which the annotation path cannot do
+     *    because it reduces a `QualifiedName` to its last name;
+     *  - a CONSECUTIVE run covering every member of one enum COLLAPSES to the bare enum
+     *    name (tsc's `formatUnionTypes`, which is why `X.Foo.A | X.Foo.B` prints `Foo`);
+     *  - constituents are ID-ORDERED in tsc, and every intrinsic predates every enum
+     *    type, so non-enum constituents come FIRST while each group keeps its own
+     *    relative order. Deliberately narrower than a full id sort: only the enum split
+     *    is measured, and a general re-sort would move union displays this round never
+     *    looked at.
+     */
+    private fun enumUnionTargetDisplay(targetType: Type): String? {
+        val union = targetType as? Type.Union ?: return null
+        val parts = union.types
+        if (parts.none { it.flags.hasAny(TypeFlags.EnumLike) }) return null
+        val out = mutableListOf<String>()
+        for (p in parts) if (p.flags.hasNone(TypeFlags.EnumLike)) out.add(typeToString(p))
+        val enumParts = parts.filter { it.flags.hasAny(TypeFlags.EnumLike) }
+        var i = 0
+        while (i < enumParts.size) {
+            val head = enumParts[i]
+            val owner = enumOfMemberTypeSymbol(head)
+            if (owner == null) { out.add(typeToString(head)); i++; continue }
+            var j = i
+            val seen = mutableSetOf<String>()
+            while (j < enumParts.size) {
+                val m = enumParts[j]
+                val o = enumOfMemberTypeSymbol(m) ?: break
+                if (canonicalEnumSymbol(o).id != canonicalEnumSymbol(owner).id) break
+                seen.add((m as? Type.Object)?.symbol?.name ?: break)
+                j++
+            }
+            val all = enumMemberEntries(owner)?.map { it.first }
+            if (all != null && all.isNotEmpty() && seen.containsAll(all)) {
+                out.add(canonicalEnumSymbol(owner).name)
+            } else {
+                for (k in i until j) out.add(typeToString(enumParts[k]))
+            }
+            i = if (j > i) j else i + 1
+        }
+        return out.joinToString(" | ")
+    }
+
 
     /**
      * (REL.1)(b0) round 742: the enum a MEMBER type belongs to, as a `Type`.
@@ -126349,18 +126655,33 @@ interface DataView {
                             }
                         }
 
-                        diagnostics.add(Diagnostic(
-                            message = message,
-                            category = DiagnosticCategory.Error,
-                            code = 2416,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = nameNode.pos,
-                            length = memberName.length,
-                            messageChain = chain,
-                            relatedInformation = relatedInfo,
-                        ))
+                        // (REL.1)(c) round 746: B463's enum-nominal walker
+                        // (`encmCheckClassesAndOverloads`) OWNS this position when it fired.
+                        // With the relation able to reject two DISTINCT enums, this general
+                        // check reaches the same verdict for an enum-typed override parameter
+                        // and the two co-emit (`enumAssignmentCompat7`). B463's display is
+                        // tsc's — it prints `(param: second.E) => void`, while the chain built
+                        // here renders both sides as the bare `E`, because qualifying an enum
+                        // nested inside a rendered FUNCTION type is a `typeToString` change
+                        // this round did not measure. Paired with B463's own retraction, so
+                        // B463 wins regardless of which pass runs second.
+                        if (diagnostics.none {
+                                it.code == 2416 && it.fileName == fileName && it.start == nameNode.pos
+                            }
+                        ) {
+                            diagnostics.add(Diagnostic(
+                                message = message,
+                                category = DiagnosticCategory.Error,
+                                code = 2416,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = nameNode.pos,
+                                length = memberName.length,
+                                messageChain = chain,
+                                relatedInformation = relatedInfo,
+                            ))
+                        }
                     }
                 }
 
@@ -143641,7 +143962,15 @@ interface DataView {
         if (sf.hasAny(TypeFlags.NumberLiteral) && tf.hasAny(TypeFlags.Number)) return true
         if (sf.hasAny(TypeFlags.BigIntLiteral) && tf.hasAny(TypeFlags.BigInt)) return true
         if (sf.hasAny(TypeFlags.BooleanLiteral) && tf.hasAny(TypeFlags.Boolean)) return true
-        if (sf.hasAny(TypeFlags.EnumLiteral) && tf.hasAny(TypeFlags.Enum)) return true
+        // (REL.1)(c) round 746: an enum MEMBER widens to an enum — but only to an enum
+        // its OWN enum relates to. Unconditional, this made `Z.Foo.A` assignable to
+        // `X.Foo`, which is the verdict B266 existed to supply.
+        if (sf.hasAny(TypeFlags.EnumLiteral) && tf.hasAny(TypeFlags.Enum)) {
+            val sourceEnum = enumOfMemberTypeSymbol(source)
+            val targetEnum = enumOwnTypeSymbol(target)
+            if (sourceEnum == null || targetEnum == null) return true
+            if (enumTypesRelation(sourceEnum, targetEnum) == null) return true
+        }
         if (sf.hasAny(TypeFlags.UniqueESSymbol) && tf.hasAny(TypeFlags.ESSymbol)) return true
         // String-like types to string
         if (sf.hasAny(TypeFlags.StringLike) && tf.hasAny(TypeFlags.String)) return true
@@ -143747,6 +144076,24 @@ interface DataView {
         // [enumMemberTypesAreSameMember].
         if (source.flags.hasAny(TypeFlags.EnumLiteral) && target.flags.hasAny(TypeFlags.EnumLiteral)) {
             return enumMemberTypesAreSameMember(source, target)
+        }
+        // (REL.1)(c) round 746: two ENUMS, and an enum MEMBER against an enum, relate by
+        // tsc's `isEnumTypeRelatedTo` — every source member present in the target with an
+        // equal value. BOTH verdicts have to be reached HERE and not in
+        // [isSimpleTypeRelatedTo]: every enum-flavored type is a member-less
+        // `Type.Object`, so a `false` there merely falls through to the structural engine,
+        // which relates two empty objects VACUOUSLY. That vacuous `true` is why
+        // `checkEnumToEnumAssignments` (B425) owned all 12 of `enumAssignmentCompat3` and
+        // `checkNamespaceEnumUnionAssignments` (B266) the two whole-enum targets of
+        // `enumLiteralAssignableToEnumInsideUnion`.
+        //
+        // The enum → MEMBER direction is deliberately NOT decided here: tsc rejects it (a
+        // union of members is not assignable to one member) but our leniency there is
+        // pre-existing and unmeasured, so it stays with the structural fallback.
+        run {
+            val targetEnum = enumOwnTypeSymbol(target) ?: return@run
+            val sourceEnum = enumOwnTypeSymbol(source) ?: enumOfMemberTypeSymbol(source) ?: return@run
+            return enumTypesRelation(sourceEnum, targetEnum) == null
         }
         // Check cache
         val cached = relation.get(source.id, target.id)
@@ -159006,191 +159353,6 @@ interface DataView {
      *  collected enums + boolean/string keywords — number/any/unknown ALWAYS accept → bail,
      *  anything else → bail), only `NS.Enum.Member` initializers; un-evaluable members
      *  exclude the whole enum (FN, never FP). */
-    private fun checkNamespaceEnumUnionAssignments() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            // Collect `namespace NS { export enum Foo }` — single decl per (NS, Foo) only.
-            val nsEnums = mutableMapOf<String, NsEnumInfo>()
-            val dupKeys = mutableSetOf<String>()
-            for (st in stmts) {
-                if (st !is ModuleDeclaration) continue
-                val nsName = (st.name as? Identifier)?.text ?: continue
-                val body = st.body as? ModuleBlock ?: continue
-                for (inner in body.statements) {
-                    if (inner !is EnumDeclaration) continue
-                    val key = "$nsName.${inner.name.text}"
-                    if (key in nsEnums || key in dupKeys) { nsEnums.remove(key); dupKeys.add(key); continue }
-                    val values = evalAllEnumMemberValues(inner)
-                    nsEnums[key] = NsEnumInfo(inner, inner.name.text, values, inner.members.mapNotNull { (it.name as? Identifier)?.text })
-                }
-            }
-            if (nsEnums.isEmpty()) continue
-            for (st in stmts) {
-                if (st !is VariableStatement) continue
-                for (d in st.declarationList.declarations) {
-                    val nameNode = d.name as? Identifier ?: continue
-                    val union = d.type as? UnionType ?: continue
-                    val init = d.initializer ?: continue
-                    checkNsEnumUnionOne(union, init, nameNode, nsEnums, source, fileName)
-                }
-            }
-        }
-    }
-
-    private class NsEnumInfo(
-        val decl: EnumDeclaration,
-        val enumName: String,
-        /** member -> computed value; null when ANY member is un-evaluable (whole enum excluded). */
-        val values: Map<String, Double>?,
-        val memberOrder: List<String>,
-    )
-
-    private fun evalAllEnumMemberValues(decl: EnumDeclaration): Map<String, Double>? {
-        val values = mutableMapOf<String, Double>()
-        var auto: Double? = 0.0
-        for (m in decl.members) {
-            val n = (m.name as? Identifier)?.text ?: return null
-            val v = if (m.initializer != null) evalEnumConstExpr(m.initializer) else auto
-            if (v == null) return null
-            values[n] = v
-            auto = v + 1
-        }
-        return values
-    }
-
-    private fun evalEnumConstExpr(e: Expression): Double? = when (e) {
-        is NumericLiteralNode -> e.text.toDoubleOrNull()
-        is ParenthesizedExpression -> evalEnumConstExpr(e.expression)
-        is PrefixUnaryExpression -> evalEnumConstExpr(e.operand)?.let { v ->
-            when (e.operator) {
-                SyntaxKind.Minus -> -v
-                SyntaxKind.Plus -> v
-                SyntaxKind.Tilde -> v.toInt().inv().toDouble()
-                else -> null
-            }
-        }
-        is BinaryExpression -> {
-            val l = evalEnumConstExpr(e.left)
-            val r = evalEnumConstExpr(e.right)
-            if (l == null || r == null) null else when (e.operator) {
-                SyntaxKind.LessThanLessThan -> (l.toInt() shl r.toInt()).toDouble()
-                SyntaxKind.GreaterThanGreaterThan -> (l.toInt() shr r.toInt()).toDouble()
-                SyntaxKind.GreaterThanGreaterThanGreaterThan -> (l.toInt() ushr r.toInt()).toDouble()
-                SyntaxKind.Bar -> (l.toInt() or r.toInt()).toDouble()
-                SyntaxKind.Ampersand -> (l.toInt() and r.toInt()).toDouble()
-                SyntaxKind.Caret -> (l.toInt() xor r.toInt()).toDouble()
-                SyntaxKind.Plus -> l + r
-                SyntaxKind.Minus -> l - r
-                SyntaxKind.Asterisk -> l * r
-                else -> null
-            }
-        }
-        else -> null
-    }
-
-    /** A union-annotation constituent the B266 walker understands. */
-    private sealed class NsEnumConstituent {
-        class Keyword(val text: String) : NsEnumConstituent()
-        class WholeEnum(val info: NsEnumInfo) : NsEnumConstituent()
-        class Member(val info: NsEnumInfo, val member: String) : NsEnumConstituent()
-    }
-
-    private fun checkNsEnumUnionOne(
-        union: UnionType, init: Expression, nameNode: Identifier,
-        nsEnums: Map<String, NsEnumInfo>, source: String, fileName: String,
-    ) {
-        // Initializer must be `NS.Enum.Member` resolving to a collected enum.
-        val pa = init as? PropertyAccessExpression ?: return
-        val recv = pa.expression as? PropertyAccessExpression ?: return
-        val nsIdent = recv.expression as? Identifier ?: return
-        val srcInfo = nsEnums["${nsIdent.text}.${recv.name.text}"] ?: return
-        val srcValues = srcInfo.values ?: return
-        val srcMember = pa.name.text
-        val srcValue = srcValues[srcMember] ?: return
-        // Parse every constituent; bail on anything not understood.
-        val parts = mutableListOf<NsEnumConstituent>()
-        for (t in union.types) {
-            when (t) {
-                is KeywordTypeNode -> when (t.kind) {
-                    SyntaxKind.BooleanKeyword -> parts.add(NsEnumConstituent.Keyword("boolean"))
-                    SyntaxKind.StringKeyword -> parts.add(NsEnumConstituent.Keyword("string"))
-                    else -> return // number/any/unknown accept the literal; others unmodeled
-                }
-                is TypeReference -> {
-                    if (!t.typeArguments.isNullOrEmpty()) return
-                    val qn = t.typeName as? QualifiedName ?: return
-                    val left = qn.left
-                    if (left is Identifier) {
-                        // NS.Enum — whole-enum target
-                        parts.add(NsEnumConstituent.WholeEnum(nsEnums["${left.text}.${qn.right.text}"] ?: return))
-                    } else if (left is QualifiedName && left.left is Identifier) {
-                        // NS.Enum.Member — member target
-                        val info = nsEnums["${(left.left).text}.${left.right.text}"] ?: return
-                        if (qn.right.text !in info.memberOrder) return
-                        parts.add(NsEnumConstituent.Member(info, qn.right.text))
-                    } else return
-                }
-                else -> return
-            }
-        }
-        // Does any constituent accept the source enum literal?
-        for (p in parts) when (p) {
-            is NsEnumConstituent.Keyword -> {} // boolean/string never accept a numeric enum literal
-            is NsEnumConstituent.WholeEnum -> {
-                if (p.info.decl === srcInfo.decl) return
-                if (nsEnumsRelated(srcInfo, p.info)) return
-            }
-            is NsEnumConstituent.Member -> {
-                val tgtValues = p.info.values ?: return
-                val tgtValue = tgtValues[p.member] ?: return
-                if (p.info.decl === srcInfo.decl && p.member == srcMember) return
-                if (srcValue == tgtValue && (p.info.decl === srcInfo.decl || nsEnumsRelated(srcInfo, p.info))) return
-            }
-        }
-        // Nothing accepts — TS2322 at the variable name. Display: keyword primitives first,
-        // then enum constituents (full-member-coverage collapses to the bare enum name).
-        val displayParts = mutableListOf<String>()
-        for (p in parts) if (p is NsEnumConstituent.Keyword && p.text !in displayParts) displayParts.add(p.text)
-        val memberCoverage = mutableMapOf<EnumDeclaration, MutableSet<String>>()
-        for (p in parts) if (p is NsEnumConstituent.Member) memberCoverage.getOrPut(p.info.decl) { mutableSetOf() }.add(p.member)
-        val enumDisplayed = mutableSetOf<EnumDeclaration>()
-        for (p in parts) when (p) {
-            is NsEnumConstituent.Keyword -> {}
-            is NsEnumConstituent.WholeEnum -> if (enumDisplayed.add(p.info.decl)) displayParts.add(p.info.enumName)
-            is NsEnumConstituent.Member -> {
-                val covered = memberCoverage[p.info.decl]!!
-                if (covered.size == p.info.memberOrder.size && covered.containsAll(p.info.memberOrder)) {
-                    if (enumDisplayed.add(p.info.decl)) displayParts.add(p.info.enumName)
-                } else {
-                    displayParts.add("${p.info.enumName}.${p.member}")
-                }
-            }
-        }
-        val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
-        // (REL.1)(b) round 744: the general relation now reaches the SAME verdict for a
-        // union annotation whose constituents are enum MEMBERS — `Z.Foo.A` is disjoint
-        // from `X.Foo.A` — so it emits its own TS2322 at this exact position, and the two
-        // co-emit (`enumLiteralAssignableToEnumInsideUnion`, three of its five lines).
-        // Retract it: the verdict is identical, and only this walker's DISPLAY is tsc's
-        // (a fully-covered member set collapses to the bare enum name, `boolean | Foo`,
-        // which the general union display cannot know to do). Removed here rather than
-        // gated at the general site because this walker owns the decision — its key space
-        // is namespace-qualified AND value-aware. When (REL.1)(c) retires B266, the
-        // collapse rule has to move into the union display with it.
-        diagnostics.removeAll {
-            it.code == 2322 && it.fileName == fileName && it.start == nameNode.pos
-        }
-        diagnostics.add(Diagnostic(
-            message = "Type '${srcInfo.enumName}.$srcMember' is not assignable to type '${displayParts.joinToString(" | ")}'.",
-            category = DiagnosticCategory.Error, code = 2322,
-            fileName = fileName, line = line, character = ch,
-            start = nameNode.pos, length = nameNode.text.length,
-        ))
-    }
-
     /**
      * B562: `return result` where the enclosing fn declares return type `Record<string, V>`
      * (V a `<Iface> | null`-style union) and `result` is a `const` whose initializer (directly
@@ -161042,16 +161204,37 @@ interface DataView {
         }
     }
 
-    /** TS isEnumTypeRelatedTo: same enum NAME + every source member present in target with an equal value. */
-    private fun nsEnumsRelated(src: NsEnumInfo, tgt: NsEnumInfo): Boolean {
-        if (src.enumName != tgt.enumName) return false
-        val sv = src.values ?: return true // un-evaluable: conservatively related (never emit)
-        val tv = tgt.values ?: return true
-        for ((m, v) in sv) {
-            val t = tv[m] ?: return false
-            if (t != v) return false
+    /** Fold a numeric enum-member initializer to its constant value; `null` when it is not
+     *  a foldable constant expression. Survives B266's round-746 retirement — the B425/B583
+     *  `EnumAsgInfo` collector and `checkEnumNominalClassMismatches` both consume it. */
+    private fun evalEnumConstExpr(e: Expression): Double? = when (e) {
+        is NumericLiteralNode -> e.text.toDoubleOrNull()
+        is ParenthesizedExpression -> evalEnumConstExpr(e.expression)
+        is PrefixUnaryExpression -> evalEnumConstExpr(e.operand)?.let { v ->
+            when (e.operator) {
+                SyntaxKind.Minus -> -v
+                SyntaxKind.Plus -> v
+                SyntaxKind.Tilde -> v.toInt().inv().toDouble()
+                else -> null
+            }
         }
-        return true
+        is BinaryExpression -> {
+            val l = evalEnumConstExpr(e.left)
+            val r = evalEnumConstExpr(e.right)
+            if (l == null || r == null) null else when (e.operator) {
+                SyntaxKind.LessThanLessThan -> (l.toInt() shl r.toInt()).toDouble()
+                SyntaxKind.GreaterThanGreaterThan -> (l.toInt() shr r.toInt()).toDouble()
+                SyntaxKind.GreaterThanGreaterThanGreaterThan -> (l.toInt() ushr r.toInt()).toDouble()
+                SyntaxKind.Bar -> (l.toInt() or r.toInt()).toDouble()
+                SyntaxKind.Ampersand -> (l.toInt() and r.toInt()).toDouble()
+                SyntaxKind.Caret -> (l.toInt() xor r.toInt()).toDouble()
+                SyntaxKind.Plus -> l + r
+                SyntaxKind.Minus -> l - r
+                SyntaxKind.Asterisk -> l * r
+                else -> null
+            }
+        }
+        else -> null
     }
 
     /** B425: collected info for an enum (possibly merged across blocks / namespace-nested). */
@@ -162655,49 +162838,6 @@ interface DataView {
         return true
     }
 
-    private fun checkEnumToEnumAssignments() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            val enums = LinkedHashMap<String, EnumAsgInfo>()
-            collectEnumsForAsg(stmts, null, enums)
-            if (enums.isEmpty()) continue
-            // var name -> enum key, from `[declare] var X: NS.E` annotations (top-level only).
-            val varEnum = HashMap<String, String>()
-            for (st in stmts) {
-                if (st !is VariableStatement) continue
-                for (d in st.declarationList.declarations) {
-                    val n = (d.name as? Identifier)?.text ?: continue
-                    val key = enumKeyOfTypeNode(d.type, enums) ?: continue
-                    varEnum[n] = key
-                }
-            }
-            if (varEnum.isEmpty()) continue
-            for (st in stmts) {
-                if (st !is ExpressionStatement) continue
-                val be = st.expression as? BinaryExpression ?: continue
-                if (be.operator != SyntaxKind.Equals) continue
-                val lhs = be.left as? Identifier ?: continue
-                val rhs = be.right as? Identifier ?: continue
-                val tgtKey = varEnum[lhs.text] ?: continue
-                val srcKey = varEnum[rhs.text] ?: continue
-                if (srcKey == tgtKey) continue
-                val src = enums[srcKey] ?: continue
-                val tgt = enums[tgtKey] ?: continue
-                val (top, chain) = enumAsgFailure(src, tgt) ?: continue
-                val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
-                diagnostics.add(Diagnostic(
-                    message = top, category = DiagnosticCategory.Error, code = 2322,
-                    fileName = fileName, line = line, character = ch,
-                    start = lhs.pos, length = lhs.text.length,
-                    messageChain = chain,
-                ))
-            }
-        }
-    }
-
     /**
      * B463: nominal enum mismatches in CLASS / OVERLOAD / member-access contexts
      * (enumAssignmentCompat7). Three FP-safe AST + B425-enum-info checks, all gated to
@@ -162870,6 +163010,16 @@ interface DataView {
                 val bRet = bm.type?.let { typeNodeDisplayOrNull(it) } ?: "void"
                 val nameNode = m.name
                 val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+                // (REL.1)(c) round 746: with the relation able to reject two DISTINCT enums,
+                // the general class-member override check reaches the same verdict and
+                // co-emits TS2416 here (`enumAssignmentCompat7`). Retract it — same mechanism
+                // as B266/B583. Only this walker's DISPLAY is tsc's: the general chain prints
+                // BOTH sides as the bare `E`, because qualifying an enum nested inside a
+                // rendered FUNCTION type (`(param: second.E) => void`) is a `typeToString`
+                // change this round did not measure.
+                diagnostics.removeAll {
+                    it.code == 2416 && it.fileName == fileName && it.start == nameNode.pos
+                }
                 diagnostics.add(Diagnostic(
                     message = "Property '$mName' in type '${cls.name?.text}' is not assignable to the same property in base type '$baseName'.",
                     category = DiagnosticCategory.Error, code = 2416,
@@ -163076,7 +163226,8 @@ interface DataView {
         if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
 
     // ===== enumAssignmentCompat6 (B583) =====
-    // The B425 `checkEnumToEnumAssignments` walker scans only TOP-LEVEL `var X: E` + top-level
+    // The B425 `checkEnumToEnumAssignments` walker — RETIRED (REL.1)(c) round 746, the general
+    // relation answers it — scanned only TOP-LEVEL `var X: E` + top-level
     // `X = Y`. enumAssignmentCompat6 puts every assignment inside FUNCTIONS with enum-typed
     // PARAMETERS (a.ts) and inside a block-scoped enum in an IIFE (f.ts). This walker descends
     // into function / IIFE bodies (disjoint from the top-level walker → no double-emit), builds
@@ -163155,6 +163306,17 @@ interface DataView {
                     val tgt = enums[tgtKey] ?: continue
                     val (top, chain) = enumAsgFailure(src, tgt) ?: continue
                     val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
+                    // (REL.1)(c) round 746: the general relation reaches the SAME verdict now
+                    // (`enumTypesRelation`) and emits its own TS2322 at this exact position,
+                    // so the two co-emit — six duplicated diagnostics on `enumAssignmentCompat6`.
+                    // Retract it, exactly as B266 does since round 744: the verdict is
+                    // identical, only this walker's DISPLAY is tsc's. B583 owns two things the
+                    // general path cannot say — `import("f").DiagnosticCategory` for an enum
+                    // shadowed by a module-scoped one, and the `declare namespace` value-KIND
+                    // split — so B583 is a LATER retirement than B425 was, not this one.
+                    diagnostics.removeAll {
+                        it.code == 2322 && it.fileName == fileName && it.start == lhs.pos
+                    }
                     diagnostics.add(Diagnostic(
                         message = top, category = DiagnosticCategory.Error, code = 2322,
                         fileName = fileName, line = line, character = ch,
