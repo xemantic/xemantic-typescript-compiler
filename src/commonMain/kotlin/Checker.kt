@@ -38908,8 +38908,29 @@ class Checker(
                 widened.numberIndexInfo = type.numberIndexInfo
                 widened
             }
-            else -> type
+            else -> widenEnumMemberTypes(type)
         }
+    }
+
+    /**
+     * (REL.1)(b0) round 742: [type] with every enum-MEMBER constituent replaced by its
+     * own enum. A UNION needs this as much as a bare member does — tsc's checker.ts
+     * writes `let variance = mods & Out ? (mods & In ? VarianceFlags.Invariant :
+     * VarianceFlags.Covariant) : …`, whose inferred type is a union of member types, and
+     * the later `variance = VarianceFlags.Independent` has to stay legal. Returns [type]
+     * unchanged when it carries no member type, so callers may apply it unconditionally.
+     */
+    private fun widenEnumMemberTypes(type: Type): Type {
+        enumTypeOfMemberType(type)?.let { return it }
+        if (type !is Type.Union) return type
+        var changed = false
+        val parts = ArrayList<Type>(type.types.size)
+        for (t in type.types) {
+            val widened = enumTypeOfMemberType(t)
+            if (widened != null) changed = true
+            parts.add(widened ?: t)
+        }
+        return if (changed) getUnionType(parts) else type
     }
 
     /**
@@ -94905,7 +94926,14 @@ interface DataView {
                     is Type.NumberLiteral -> numberType
                     is Type.BigIntLiteral -> bigintType
                     trueType, falseType -> booleanType
-                    else -> inferred
+                    // (REL.1)(b0) round 742: an enum MEMBER widens to its own enum, the
+                    // same rule this list applies to every other literal. This map is
+                    // what the TS2322 assignment check reads as the target's declared
+                    // type, so without it `let flags = TransformFlags.None; flags =
+                    // TransformFlags.ContainsESNext` becomes an error — which is exactly
+                    // how tsc's own sources initialize a flags accumulator. A UNION of
+                    // members widens per constituent, for the same reason.
+                    else -> widenEnumMemberTypes(inferred)
                 }
                 currentLocalTypes[name.text] = widened
             }
@@ -102673,13 +102701,6 @@ interface DataView {
         (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum or SymbolFlags.EnumMember) == true
 
     /**
-     * (REL.1)(b0) round 742: the enum a MEMBER type belongs to, as a `Type`.
-     *
-     * `null` for anything that is not an enum-member type. Used by [widenType] —
-     * an enum-member type widens to its own enum exactly as a string literal widens
-     * to `string`, which is what keeps `let x = E.A; x = E.B` legal.
-     */
-    /**
      * (REL.1)(b0) round 742: the CONSTANT VALUES an enum-flavored type can hold —
      * every member's value for an enum's own type, the single member's value for a
      * member type. `null` when [type] is not enum-flavored or its values were never
@@ -102699,6 +102720,13 @@ interface DataView {
         }
     }
 
+    /**
+     * (REL.1)(b0) round 742: the enum a MEMBER type belongs to, as a `Type`.
+     *
+     * `null` for anything that is not an enum-member type. An enum-member type widens
+     * to its own enum exactly as a string literal widens to `string`, which is what
+     * keeps `let x = E.A; x = E.B` legal — see [widenEnumMemberTypes].
+     */
     private fun enumTypeOfMemberType(type: Type): Type? {
         if (type.flags.hasNone(TypeFlags.EnumLiteral)) return null
         val owner = (type as? Type.Object)?.symbol?.parent ?: return null
@@ -143376,6 +143404,7 @@ interface DataView {
         // real error, but it is [checkEnumLiteralAssignments]' error today and the
         // relation must not start co-emitting it. Tightening this to tsc's
         // value-equality rule belongs with (REL.1)(b)/(c), which retire that walker.
+        //
         if (sf.hasAny(TypeFlags.EnumLiteral) || tf.hasAny(TypeFlags.EnumLiteral)) {
             enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
                 if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true

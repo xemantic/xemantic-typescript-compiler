@@ -276,6 +276,53 @@ class EnumMemberRelationTest {
         ) should { have(none { it.code == 2322 }) }
     }
 
+    /**
+     * The flags-accumulator shape, which is how tsc's own sources start almost every
+     * enum-valued local (`let transformFlags = TransformFlags.None`). It is a
+     * SEPARATE widening path from the one above: the TS2322 assignment check reads
+     * the target's declared type out of the pass's local-type map, whose recorder has
+     * its own inline literal-widener. Round 742 measured 23 profile FPs from that one
+     * omission.
+     */
+    @Test
+    fun `negative control - an accumulator initialized from a member accepts other members`() {
+        diagnose(
+            """
+            enum TF { None = 0, A = 1, B = 2 }
+            export function f(): TF {
+                let flags = TF.None
+                flags = TF.A
+                if (flags === TF.A) { flags = TF.B }
+                return flags
+            }
+            """,
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    /**
+     * The union sibling of the pin above — tsc's checker.ts writes
+     * `let variance = mods & Out ? (mods & In ? VarianceFlags.Invariant : …) : …`,
+     * whose inferred type is a UNION of member types, and widening has to distribute
+     * over it or the later `variance = VarianceFlags.Independent` is an error.
+     */
+    @Test
+    fun `negative control - a member union from a ternary widens per constituent`() {
+        diagnose(
+            """
+            enum VF { Invariant = 0, Covariant = 1, Contravariant = 2, Independent = 4 }
+            declare const outMod: boolean
+            declare const inMod: boolean
+            export function f(): VF {
+                let variance = outMod
+                    ? (inMod ? VF.Invariant : VF.Covariant)
+                    : VF.Contravariant
+                variance = VF.Independent
+                return variance
+            }
+            """,
+        ) should { have(none { it.code == 2322 }) }
+    }
+
     @Test
     fun `negative control - a member expression is assignable to its own enum`() {
         diagnose(
