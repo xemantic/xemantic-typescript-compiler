@@ -112453,7 +112453,26 @@ interface DataView {
             val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
             if (!isSimpleTypeRelatedTo(argType, paramType) &&
-                !checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
+                !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                // Round 743: SECOND CHANCE against the FLOW-narrowed type.
+                // [getTypeOfIdentifier] answers from `currentLocalTypes` and the
+                // declaration tables — so an `if (isFoo(x))` narrow is visible here
+                // (the condition pass records it), but an ASSERT-function narrow is
+                // NOT: `Debug.assert(isKeywordOrPunctuation(kind))` lives only in the
+                // flow graph, reached by [getNarrowedTypeForReference], which every
+                // emission site opts into individually and overload selection never
+                // did. tsc's parser.ts:2494 then picked `tokenToString(t: SyntaxKind):
+                // string | undefined` over the `PunctuationOrKeywordSyntaxKind` one.
+                //
+                // Deliberately a SECOND chance rather than the primary type: it can
+                // only turn a rejection into an acceptance, so no overload that
+                // already matched can start failing, and the flow walk is paid for
+                // only on the rejecting path.
+                val narrowed = getNarrowedTypeForReference(argType, arg)
+                if (narrowed === argType) return false
+                if (!isSimpleTypeRelatedTo(narrowed, paramType) &&
+                    !checkTypeRelatedTo(narrowed, paramType, assignableRelation)) return false
+            }
         }
         return true
     }
