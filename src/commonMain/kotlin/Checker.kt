@@ -102630,6 +102630,38 @@ interface DataView {
         (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum or SymbolFlags.EnumMember) == true
 
     /**
+     * (REL.1)(b): do two enum-MEMBER types denote the SAME member?
+     *
+     * **Deliberately NOT an identity test**, which is the trap this answers.
+     * [getDeclaredTypeOfEnumMember] interns on [canonicalEnumSymbol], but that helper
+     * can only canonicalize through `globals[name]` — and since INV.3(d) retired the
+     * merge for module-only names, a MODULE-scoped enum (every enum in tsc's own
+     * sources, `SyntaxKind` included) has no global instance to canonicalize to. Its
+     * per-file `Symbol` instances therefore key DIFFERENT member types for the same
+     * member, and an identity verdict declares `SyntaxKind.StringLiteral` disjoint
+     * from itself.
+     *
+     * So compare the way tsc's `isEnumTypeRelatedTo` does: same member NAME, and an
+     * owning enum that is the same symbol, canonicalizes to the same symbol, or shares
+     * an `EnumDeclaration` NODE (identity compare on the node — never data-class
+     * equality, which would deep-recurse the whole declaration).
+     */
+    private fun enumMemberTypesAreSameMember(source: Type, target: Type): Boolean {
+        val sourceMember = (source as? Type.Object)?.symbol ?: return false
+        val targetMember = (target as? Type.Object)?.symbol ?: return false
+        if (sourceMember === targetMember) return true
+        if (sourceMember.name != targetMember.name) return false
+        val sourceEnum = sourceMember.parent ?: return false
+        val targetEnum = targetMember.parent ?: return false
+        if (sourceEnum === targetEnum) return true
+        if (canonicalEnumSymbol(sourceEnum).id == canonicalEnumSymbol(targetEnum).id) return true
+        if (sourceEnum.name != targetEnum.name) return false
+        return sourceEnum.declarations.any { d ->
+            d is EnumDeclaration && targetEnum.declarations.any { it === d }
+        }
+    }
+
+    /**
      * Build an InterfaceType from class/interface declarations.
      * Collects type parameters and resolves base types (extends/implements).
      * Members are NOT resolved yet (lazy, done in resolveStructuredTypeMembers).
@@ -143298,6 +143330,15 @@ interface DataView {
         if (source === target) return true
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
+        // (REL.1)(b) round 741: two enum-member types relate ONLY when they are the
+        // same member. Both are member-less `Type.Object`s, so without this the
+        // structural engine below relates them VACUOUSLY in both directions — which is
+        // what made two AST node interfaces differing only in `readonly kind: SK.A` vs
+        // `SK.B` mutually assignable. The verdict is STRUCTURAL, not identity: see
+        // [enumMemberTypesAreSameMember].
+        if (source.flags.hasAny(TypeFlags.EnumLiteral) && target.flags.hasAny(TypeFlags.EnumLiteral)) {
+            return enumMemberTypesAreSameMember(source, target)
+        }
         // Check cache
         val cached = relation.get(source.id, target.id)
         if (cached == Ternary.True) return true

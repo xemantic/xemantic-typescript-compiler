@@ -57,7 +57,7 @@ import kotlin.test.Test
 class EnumMemberRelationTest {
 
     @Test
-    @Ignore // (REL.1) currently emits nothing — enum-member types resolve to anyType
+    // (REL.1)(b) round 741: ON — the relation now rejects a distinct sibling member.
     fun `a sibling enum member is not assignable to another member of the same enum`() {
         diagnose(
             """
@@ -69,7 +69,7 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1) currently emits nothing
+    // (REL.1)(b) round 741: ON.
     fun `sibling node types differing only in the kind discriminant are not assignable`() {
         diagnose(
             """
@@ -83,7 +83,8 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1) currently emits nothing — the reverse direction, proving MUTUAL assignability
+    // (REL.1)(b) round 741: ON — the reverse direction, which is what proved the
+    // old behaviour was MUTUAL assignability rather than a one-way leniency.
     fun `the reverse direction is rejected too - sibling node types are not mutually assignable`() {
         diagnose(
             """
@@ -97,7 +98,7 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1) currently emits nothing — a non-declared enum behaves identically
+    // (REL.1)(b) round 741: ON — a non-declared enum behaves identically.
     fun `a plain enum member is not assignable to a sibling member`() {
         diagnose(
             """
