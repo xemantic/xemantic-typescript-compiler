@@ -20,6 +20,85 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 741 (2026-07-28) — (REL.1) STEP (a) LANDED: THE ENUM-MEMBER TYPE NOW EXISTS, AND IT
+CHANGED NO ANSWER.** Corpus **12,940 / 0 failures / 8 skipped** (+5 pins, +1 `@Ignore`),
+compiler profile `--listAll` **byte-identical at 46 errors** — the whole output, not just the
+count — and the cost gate green at **max +0.40%** (rebaselined in this commit, see below).
+`TypeFlags.EnumLiteral` has a WRITER for the first time, so the widening rule
+`if (sf.hasAny(EnumLiteral) && tf.hasAny(Enum)) return true` (Checker.kt ~143100), written
+long ago and never once executed, now fires.
+
+**WHAT (a) IS.** `getDeclaredTypeOfSymbolWorker` gained an `EnumMember` branch
+([getDeclaredTypeOfEnumMember]) minting a distinct `Type.Object(Object or EnumLiteral)`,
+INTERNED on `"<canonicalEnumSymbol.id>#<memberName>"`; the enum's own type is now
+`Type.Object(Object or Enum)`. The interning key is why `canonicalEnumSymbol` survives
+(REL.1) — `declaredTypes[symbol.id]` memoizes per SYMBOL INSTANCE, and the same enum arrives
+as the merged global, a file-local and a barrel-resolved alias, so a per-symbol mint hands two
+non-equal types to one member. That is the catastrophe `canonicalEnumSymbol`'s own doc records
+for the discriminant key space, and it would have been re-created here.
+
+**BOTH PRIMITIVE LEGS WERE NEEDED, IN BOTH DIRECTIONS, AND THE MECHANISM IS ONE LINE.** The
+two pre-existing enum↔primitive rules (`isNumericEnumObjectType` / `isStringEnumObjectType`,
+Checker.kt ~143118/143124) classify by `type.symbol.flags.hasAny(SymbolFlags.Enum)` — and a
+member type's symbol carries `SymbolFlags.EnumMember`, so **neither can fire for a member type
+in either direction**. Measured, not assumed — an ABLATION build (mint in, leg block deleted,
+compiled and run) fails **all four** leg pins: numeric member → `number`, `number` → numeric
+member (both shapes), and string member → `string`. Only the string TARGET direction
+(`string` → a string member) is unverified, because tsc REJECTS it and its pin is therefore
+`@Ignore`d expecting the error; it is in only for behaviour-preservation symmetry with the
+former `anyType`, and **it is the first thing (b) should try deleting**. The same ablation
+exposed that one of round 740's own four controls — `take(Ext.Dts)` — is VACUOUS with respect
+to this change: an enum-member EXPRESSION types as the enum, so it rides the pre-existing
+`isStringEnumObjectType` rule and never touches a member type. That is why the four new pins
+annotate through `declare const d: Ext.Dts` instead. The legs are
+deliberately **VALUE-BLIND** at step (a): `let a: E.A = 2` where `A === 0` is a real error but
+it is `checkEnumLiteralAssignments`' error today, and the relation co-emitting it is exactly
+the 4 spurious TS2322 round 740's probe measured on `enumAssignmentCompat5`. Tightening to
+tsc's value-equality rule belongs with (b)/(c), which retire that walker.
+
+**THE ONE KNOCK-ON, AND IT IS A GENERAL LESSON, NOT A ONE-OFF.** Round 740 predicted "knock-ons
+where a union no longer collapses now that its members are distinct" and named
+`Partial<CreateSourceFileOptions> | ESNext | CommonJS`. It reproduced EXACTLY, as a single new
+TS2339 at program.ts:1341, and the cause is not union collapse at all: **`typeof x ===
+"object"` classified the member as an OBJECT.** Its verdict function asks
+`symbol.flags.hasAny(SymbolFlags.Enum)` — true for an enum, false for its member — so
+`ModuleKind.ESNext` survived a narrow it should never survive. Fixed with one shared predicate,
+`isEnumFlavoredObjectType`, applied at BOTH sites of that family (`typeofTagOfType` :89097 and
+the `typeof === "object"` union filter :110277). **Any classifier whose rule is "an enum value
+is a number/string at runtime, never an object" must accept `Enum or EnumMember`** — before
+this round it could not tell, because members were `anyType`. Recorded as a CLAUDE.md gotcha.
+
+**BOTH LATENT HAZARDS CLOSED.** Round 740 flagged that `getTypeFromTypeReference` looks `SK.A`
+up under the BARE last segment `"A"`. (1) `currentTypeParamScope` / `currentTypeAliasArgs` were
+consulted with that bare name, so an in-scope type parameter named `A` captured the enum
+member — both consults are now gated on `node.typeName is Identifier` (a qualified name never
+denotes a type parameter). (2) The round-444 `?: globals[name]` last-segment recovery bound
+`E.Member` to an unrelated global type named `Member` on a resolution failure — now skipped
+when the LEFT segment is an enum (`typeRefQualifiedLeftIsEnum`), taking errorType over a
+foreign type of the same simple name. Neither moved the corpus or the profile.
+
+**WHAT (a) DELIBERATELY DID NOT DO.** No disjointness rule: two members of the same enum still
+relate to each other structurally (both are member-less `Type.Object`s, so it is vacuous), and
+the four `@Ignore`d expectations in `EnumMemberRelationTest` are still `@Ignore`d — they are
+(b)'s acceptance criterion, not (a)'s. No scaffolding deleted: that is (c).
+
+**COST-GATE REBASELINE, justified.** Every counter moved by < 0.5% (largest `narrow.walks`
++0.40%, `typeOfExpr.calls` +0.18%, `typeNode.bypassed` +0.12%); `spine.nodes`,
+`globals.conflated` and the error/file counts are unchanged. The cause is exactly the mint:
+unions that used to collapse to one `anyType` member now carry their real constituents, so
+narrowing walks and expression typings see more of them. This is the accounting the gate asks
+for, not a regression — it buys a type where there was none.
+
+**NEW PINS (5, all in `EnumMemberRelationTest`).** Four state the legs directly — numeric
+member → `number`, `number` → numeric member, string member → `string`, and (`@Ignore`d,
+honest about the divergence) `string` → string member, which tsc REJECTS because string enums
+are nominal while step (a)'s both-ways leg accepts. The fifth pins the `typeof === "object"`
+knock-on in a dependency-free form. A pin that passes before AND after measures nothing, so
+each was checked against the ablation build: all four non-ignored leg pins fail there. The
+knock-on pin is a reduction of the profile diagnostic itself — program.ts:1341 was present on
+the build that had the mint but not `isEnumFlavoredObjectType`, and absent after — so it is
+evidenced by the profile rather than by a second ablation.
+
 **Round 740 (2026-07-28) — PART 1, (PERF.HW): THE CORES ARE REAL. THE QUESTION WAS WRONG.
 A "SINGLE-THREADED" xtsc RUN ALREADY CONSUMES 3.15 OF THE 4 CORES.** The item asked whether
 this VPS has real cores so that M2 is worth reviving, with unpark condition ">= 8 real cores".
@@ -1430,17 +1509,31 @@ backlog-horizon decision, not queue debt.)
   So the entire measured gap is **ONE rule family: enum member <-> its base primitive.**
 
   **DECOMPOSITION — three sub-steps, each landable alone and suite-gated.**
-  - **(a) Mint the type, change no answer.** Add the `EnumMember` branch returning a
-    distinct type interned on the **CANONICAL** member symbol (see the hazard below),
-    flagged `EnumLiteral`; flag the enum's own type `Enum`; and add the base-primitive
-    legs in `isSimpleTypeRelatedTo` — numeric member <-> `number`/`NumberLiteral` (the
-    literal relates iff its value equals the member's, never for a computed member),
-    string member <-> `string`/`StringLiteral`. **Do NOT add disjointness yet.** This is
-    behaviour-preserving by construction (nothing newly rejects) and its gate is a
-    byte-identical corpus + `--listAll`. It is what un-deadens `TypeFlags.EnumLiteral`.
+  - **(a) Mint the type, change no answer. DONE round 741** — corpus 12,940 / 0 / 8,
+    compiler profile `--listAll` byte-identical at 46 (whole output, not just the count),
+    cost gate max +0.40% and rebaselined in the same commit. `getDeclaredTypeOfSymbolWorker`
+    has an `EnumMember` branch ([getDeclaredTypeOfEnumMember]) minting
+    `Type.Object(Object or EnumLiteral)` interned on
+    `"<canonicalEnumSymbol.id>#<memberName>"`; the enum's own type is
+    `Type.Object(Object or Enum)`; `TypeFlags.EnumLiteral` finally has a writer and the
+    rule at :143100 finally fires. **The base-primitive legs are VALUE-BLIND on purpose**
+    — the value judgement (`let a: E.A = 2` where `A === 0`) is still
+    `checkEnumLiteralAssignments`', and the relation co-emitting it is precisely the 4
+    spurious TS2322 the round-740 probe measured. Both latent hazards closed. The one
+    knock-on was NOT union collapse but `typeof x === "object"` classifying a member as an
+    object — see `isEnumFlavoredObjectType`.
   - **(b) Let the relation reject.** Add the enum-literal disjointness rule. This is the
     step that turns the four `@Ignore`s in `EnumMemberRelationTest` ON — that is its
-    acceptance criterion. Expected movement is fully enumerated above.
+    acceptance criterion. Expected movement is fully enumerated above. **Round 741 hands
+    (b) three concrete starting points:** (i) the string TARGET leg (`string` → a string
+    enum member) is accepted only for behaviour-preservation symmetry with the old
+    `anyType`, tsc rejects it, and its `@Ignore`d pin is already written — try deleting
+    that half-leg first, it is the cheapest possible probe of (b)'s blast radius;
+    (ii) tighten the numeric leg to tsc's value-equality rule, which requires moving
+    `checkEnumLiteralAssignments`' judgement into the relation, so it must land WITH (c)'s
+    first deletion or the two co-emit; (iii) `enumMemberTypeIsStringValued` already
+    resolves a member's `ConstantValue` through the canonical enum, which is the whole
+    input a value-aware disjointness rule needs.
   - **(c) Delete the scaffolding**, one walker per commit, suite-gated. Order: the
     self-contained AST-only passes first (`checkEnumLiteralAssignments` :158391,
     `checkNamespaceEnumUnionAssignments` :158525, `checkEnumToEnumAssignments` :162161 —
@@ -1484,6 +1577,15 @@ backlog-horizon decision, not queue debt.)
   throughout: member widens to its enum, member assignable to itself, `number` -> numeric
   member, string member -> `string`. Those last two are precisely the shapes the probe
   over-rejected, i.e. they are the FP firewall for step (a).
+
+  **PINS EXTENDED (round 741), and one of round 740's was VACUOUS.** `take(Ext.Dts)` —
+  the "string member -> `string`" control — passes with or without the member type,
+  because an enum-member EXPRESSION types as the ENUM and rides the pre-existing
+  `isStringEnumObjectType` rule; it never reaches a member type. The four added leg pins
+  annotate through `declare const d: Ext.Dts` / `declare const a: E.A` instead and were
+  verified non-vacuous against an ablation build. A fifth pins the `typeof === "object"`
+  knock-on, and a sixth (`@Ignore`d) records the one place step (a) is knowingly more
+  lenient than tsc.
 
 
 - [x] **(CATCH.1) Defensive-`catch` audit — DONE round 685, six batches: 193 of

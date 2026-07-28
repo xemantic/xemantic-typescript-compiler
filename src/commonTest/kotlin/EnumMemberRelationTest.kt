@@ -154,4 +154,82 @@ class EnumMemberRelationTest {
             """,
         ) should { have(none { it.code == 2345 }) }
     }
+
+    // --- (REL.1)(a) round 741: the base-primitive legs, both legs both directions.
+    // Step (a) mints a distinct type per enum member; everything that used to be
+    // vacuously true because the member WAS `anyType` now has to be an explicit rule,
+    // and round 740 measured that the ENTIRE gap is this one family. The controls
+    // above are the shapes its probe over-rejected; these four are the legs stated
+    // directly, so a leg that is dropped or narrowed fails here rather than 700 lines
+    // into a corpus baseline.
+
+    @Test
+    fun `a declared numeric enum member type is assignable to number`() {
+        diagnose(
+            """
+            enum E { A, B }
+            declare const a: E.A
+            const n: number = a
+            """,
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    @Test
+    fun `number is assignable to a declared numeric enum member parameter`() {
+        diagnose(
+            """
+            enum E { A, B }
+            declare const n: number
+            declare function take(e: E.A): void
+            take(n)
+            """,
+        ) should { have(none { it.code == 2345 }) }
+    }
+
+    @Test
+    fun `a declared string enum member type is assignable to string`() {
+        diagnose(
+            """
+            enum Ext { Dts = ".d.ts", Dmts = ".d.mts" }
+            declare const d: Ext.Dts
+            const s: string = d
+            """,
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    /**
+     * The one knock-on round 740's probe measured and round 741 had to close:
+     * `typeof x === "object"` must classify an enum MEMBER as NOT-object, exactly as
+     * it already did for an enum. While every member was `anyType` the union collapsed
+     * and the question never arose; with distinct members it survives the narrow and
+     * the property access on it FPs TS2339 (tsc program.ts:1341,
+     * `ResolutionMode | Partial<CreateSourceFileOptions> | undefined`).
+     */
+    @Test
+    fun `a typeof object narrow drops enum member constituents`() {
+        diagnose(
+            """
+            enum ModuleKind { CommonJS = 1, ESNext = 99 }
+            interface Opts { impliedNodeFormat: ModuleKind.ESNext }
+            declare const result: ModuleKind.ESNext | ModuleKind.CommonJS | Opts | undefined
+            const x = typeof result === "object" ? result.impliedNodeFormat : result
+            """,
+        ) should { have(none { it.code == 2339 }) }
+    }
+
+    @Test
+    @Ignore // (REL.1)(b): step (a)'s string leg is deliberately BOTH-ways, so this
+    // stays silent for now. tsc rejects it — string enums are nominal, and unlike the
+    // numeric leg there is no bit-flag backwards-compatibility rule to justify it.
+    // Kept visible in the skipped count rather than pinned as correct.
+    fun `string is not assignable to a declared string enum member parameter`() {
+        diagnose(
+            """
+            enum Ext { Dts = ".d.ts", Dmts = ".d.mts" }
+            declare const s: string
+            declare function take(e: Ext.Dts): void
+            take(s)
+            """,
+        ) should { have(any { it.code == 2345 }) }
+    }
 }

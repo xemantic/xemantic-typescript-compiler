@@ -5581,6 +5581,21 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val canonicalEnumSymCache = HashMap<Int, Symbol>()
 
+    /**
+     * (REL.1)(a) round 741: interned enum-MEMBER types, keyed
+     * `"<canonicalEnumSymbolId>#<memberName>"`.
+     *
+     * The key is built on [canonicalEnumSymbol] for exactly the reason that helper
+     * exists: the SAME enum reaches type resolution as DIFFERENT `Symbol` instances
+     * (the merged global, the declaring file's local, a barrel-resolved alias), so a
+     * naive per-symbol mint would produce two non-EQUAL types for one member and the
+     * relation would answer `SK.A` vs `SK.A` by structure instead of identity.
+     * `declaredTypes[symbol.id]` still memoizes per instance — this map is what makes
+     * all those entries point at ONE `Type`. Declared before `init` per the init-order
+     * trap.
+     */
+    private val enumMemberTypes = HashMap<String, Type.Object>()
+
     /** P0 (services hang): LIVE recursion depth across BOTH flow walkers INCLUDING
      *  re-entrant walks — [narrowByAssertCall]/[narrowByCallPredicate] resolve the
      *  callee, which types a PropertyAccess receiver, which narrows it at its own
@@ -89079,7 +89094,9 @@ interface DataView {
         m.flags.hasAny(TypeFlags.Null) -> "object"          // typeof null === "object"
         // A numeric enum's values are numbers, a string enum's strings, a mixed enum's both —
         // bail rather than guess (the resolved Type.Object carries no per-member value kind here).
-        (m as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true -> null
+        // (REL.1)(a): an enum MEMBER type is enum-flavored too — without it the arm
+        // below would tag it "object".
+        isEnumFlavoredObjectType(m) -> null
         m is Type.Object ->
             if (getCallSignaturesOfType(m).isNotEmpty() || getConstructSignaturesOfType(m).isNotEmpty()) "function"
             else "object"
@@ -102090,6 +102107,18 @@ interface DataView {
         ))
     }
 
+    /**
+     * (REL.1)(a): does the LEFT segment of [qn] denote an enum? Consulted only on
+     * the round-444 last-segment `globals[name]` recovery path (a rare failure
+     * branch), to keep `E.Member` from binding to an unrelated global named
+     * `Member`.
+     */
+    private fun typeRefQualifiedLeftIsEnum(qn: QualifiedName): Boolean {
+        val left = qn.left as? Identifier ?: return false
+        val sym = lookupPerFileForNode(left, left.text) ?: return false
+        return resolveAlias(sym).flags.hasAny(SymbolFlags.Enum)
+    }
+
     private fun getTypeFromTypeReference(node: TypeReference): Type {
         val name = getTypeReferenceLastName(node.typeName) ?: return errorType
         // Check for built-in generic types
@@ -102109,13 +102138,21 @@ interface DataView {
                 }
             }
         }
-        // 16.0: Check enclosing class/interface type parameter scope before globals
-        currentTypeParamScope?.get(name)?.let { return it }
-        // B50.1: Check generic type alias arg-substitution map. Inside a type alias
-        // body resolution (when the outer `getTypeFromTypeReference` pushed the alias's
-        // type parameters → concrete arg types), a body-internal `TypeReference(T)`
-        // resolves directly to the concrete type bound for T.
-        currentTypeAliasArgs?.get(name)?.let { return it }
+        // (REL.1)(a) round 741, HAZARD 1: `name` is the LAST segment, so for the
+        // QUALIFIED `SK.A` both scope maps below were consulted under the bare `"A"`
+        // — an in-scope type parameter (or alias arg) named `A` CAPTURED the enum
+        // member. It was invisible while `SK.A` collapsed to `anyType`; the moment
+        // the member has a type of its own it is a silent wrong answer. A qualified
+        // name never denotes a type parameter, so gate both consults on Identifier.
+        if (node.typeName is Identifier) {
+            // 16.0: Check enclosing class/interface type parameter scope before globals
+            currentTypeParamScope?.get(name)?.let { return it }
+            // B50.1: Check generic type alias arg-substitution map. Inside a type alias
+            // body resolution (when the outer `getTypeFromTypeReference` pushed the alias's
+            // type parameters → concrete arg types), a body-internal `TypeReference(T)`
+            // resolves directly to the concrete type bound for T.
+            currentTypeAliasArgs?.get(name)?.let { return it }
+        }
         // Look up the symbol — try qualified name resolution, then file-locals
         // (namespace-aware), then globals. Namespace-aware lookup walks the
         // [inferenceNamespaceStack]'s top entry's parent chain to resolve type
@@ -102130,7 +102167,16 @@ interface DataView {
             // this consult was byte-redundant (same key as
             // resolveTypeNameToSymbol's own lookup) and would re-leak the
             // node-keyed null.
-            ?: (node.typeName as? QualifiedName)?.let { globals[name] }
+            //
+            // (REL.1)(a) round 741, HAZARD 2: this is also a bare-LAST-SEGMENT
+            // consult, so an `E.Member` whose member lookup failed bound itself to
+            // an unrelated global type named `Member`. Harmless while every enum
+            // member was `anyType`; a real type now. When the left segment IS an
+            // enum the reference is unambiguously an enum-member one — take
+            // errorType over a foreign type of the same simple name.
+            ?: (node.typeName as? QualifiedName)
+                ?.takeIf { !typeRefQualifiedLeftIsEnum(it) }
+                ?.let { globals[name] }
         if (symbol != null) {
             // INV.3(d)(v) (rounds 512/513): the round-473 Identifier and round-477
             // QualifiedName per-file-view DISPATCHES are retired with the merge —
@@ -102477,11 +102523,21 @@ interface DataView {
                 resolved
             }
             flags.hasAny(SymbolFlags.Enum) -> {
-                // Enums are both a type and a value — return an object type
-                val enumType = Type.Object()
+                // Enums are both a type and a value — return an object type.
+                // (REL.1)(a) round 741: flagged `Enum` so the enum-literal widening
+                // rule in [isSimpleTypeRelatedTo] (`EnumLiteral` source → `Enum`
+                // target, Checker.kt ~143100) finally has a target to fire against.
+                // It was written years before anything set either flag.
+                val enumType = Type.Object(TypeFlags.Object or TypeFlags.Enum)
                 enumType.symbol = symbol
                 enumType
             }
+            // (REL.1)(a) round 741: an enum-MEMBER annotation (`SK.A`) used to fall
+            // all the way to `else -> anyType` below — so `kind: SK.A` and
+            // `kind: SK.B` were literally the SAME `Type` instance and the relation
+            // was never asked a question it could get wrong. See
+            // [getDeclaredTypeOfEnumMember].
+            flags.hasAny(SymbolFlags.EnumMember) -> getDeclaredTypeOfEnumMember(symbol)
             flags.hasAny(SymbolFlags.Alias) -> {
                 // Import alias — resolve to target symbol's declared type
                 val target = resolveAliasTarget(symbol)
@@ -102509,6 +102565,69 @@ interface DataView {
             else -> anyType
         }
     }
+
+    /**
+     * (REL.1)(a) round 741: the declared type of an enum MEMBER symbol — a type
+     * distinct from both its sibling members and its own enum.
+     *
+     * INTERNING IS THE WHOLE POINT, and it is why [canonicalEnumSymbol] survives
+     * (REL.1): the enum owning [memberSym] arrives here as several `Symbol`
+     * instances depending on the resolution path, so the key is built on the
+     * CANONICAL enum symbol and the resulting `Type` is shared by every instance.
+     * A per-symbol mint would hand two non-equal types to the same member, which is
+     * the failure mode `canonicalEnumSymbol`'s own doc records for the discriminant
+     * key space.
+     *
+     * Flagged `EnumLiteral` — the first and only writer of that flag, which had ~11
+     * dead read sites before this. A member with no resolvable owning enum keeps the
+     * historical `anyType` (conservative: no answer changes for a shape we cannot
+     * key).
+     *
+     * The type carries NO members: at step (a) two members still relate to each
+     * other structurally (vacuously, both empty). Rejecting a sibling is (REL.1)(b).
+     */
+    private fun getDeclaredTypeOfEnumMember(memberSym: Symbol): Type {
+        val owner = memberSym.parent ?: return anyType
+        if (!owner.flags.hasAny(SymbolFlags.Enum)) return anyType
+        val enumSym = canonicalEnumSymbol(owner)
+        return enumMemberTypes.getOrPut("${enumSym.id}#${memberSym.name}") {
+            val memberType = Type.Object(TypeFlags.Object or TypeFlags.EnumLiteral)
+            // Prefer the canonical enum's own member symbol so the type's identity
+            // (and its display name) does not depend on which file touched it first.
+            memberType.symbol = enumSym.exports?.get(memberSym.name) ?: memberSym
+            memberType
+        }
+    }
+
+    /**
+     * (REL.1)(a): is [type] an enum-MEMBER type, and are its runtime values STRINGS?
+     *
+     * `null` means "not an enum-member type at all". `false` covers both a numeric
+     * member and a member whose value is not evaluable — the same auto-numeric
+     * default [isNumericEnumObjectType] applies, since an enum member without a
+     * computed value is an implicitly-numbered one.
+     */
+    private fun enumMemberTypeIsStringValued(type: Type): Boolean? {
+        if (type.flags.hasNone(TypeFlags.EnumLiteral)) return null
+        val memberSym = (type as? Type.Object)?.symbol ?: return null
+        val owner = memberSym.parent ?: return null
+        val value = enumValues[canonicalEnumSymbol(owner).id]?.get(memberSym.name)
+        return value is ConstantValue.StringValue
+    }
+
+    /**
+     * (REL.1)(a): is [type] an enum-flavored `Type.Object` — an enum's OWN type, or
+     * one of its MEMBER types?
+     *
+     * Every classifier whose rule is "an enum value is a number/string at runtime,
+     * never an object" must accept BOTH. Before round 741 an enum-member annotation
+     * was `anyType`, so those classifiers only ever saw the enum's own type and could
+     * test `SymbolFlags.Enum` alone; minting the member type turns that test into a
+     * silent misclassification (`ModuleKind.ESNext` surviving a
+     * `typeof result === "object"` narrow, which is how program.ts:1341 FP'd TS2339).
+     */
+    private fun isEnumFlavoredObjectType(type: Type): Boolean =
+        (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum or SymbolFlags.EnumMember) == true
 
     /**
      * Build an InterfaceType from class/interface declarations.
@@ -110171,7 +110290,10 @@ interface DataView {
                 // An ENUM resolves to a Type.Object with the enum symbol, but its VALUES
                 // are numbers/strings at runtime — never typeof "object" (tsc
                 // watchPublic's `ScriptTarget | CreateSourceFileOptions`).
-                (m as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true -> false
+                // (REL.1)(a): and so does an enum MEMBER since round 741 — program.ts's
+                // `ResolutionMode | Partial<CreateSourceFileOptions>` stopped collapsing
+                // to `any` the moment `ModuleKind.ESNext` became a type of its own.
+                isEnumFlavoredObjectType(m) -> false
                 m is Type.Object ->
                     if (getCallSignaturesOfType(m).isNotEmpty() || getConstructSignaturesOfType(m).isNotEmpty()) false
                     else true
@@ -143122,6 +143244,25 @@ interface DataView {
         // `string[]` via the same-target covariant element comparison). Mixed/numeric/
         // unknown-valued enums excluded (conservative: unevaluated → not provable).
         if (tf.hasAny(TypeFlags.String) && isStringEnumObjectType(source)) return true
+        // (REL.1)(a) round 741: an enum MEMBER type ↔ its BASE PRIMITIVE, in BOTH
+        // directions. This is the whole measured gap of step (a): `SK.A` used to be
+        // `anyType`, which related to everything, so every primitive answer around an
+        // enum-member annotation was vacuously true. A numeric member relates to and
+        // from NumberLike (tsc keeps that both-ways rule for bit-flag enums), a
+        // string-valued member to and from StringLike.
+        //
+        // Deliberately VALUE-BLIND at step (a): `let a: E.A = 2` where `A === 0` is a
+        // real error, but it is [checkEnumLiteralAssignments]' error today and the
+        // relation must not start co-emitting it. Tightening this to tsc's
+        // value-equality rule belongs with (REL.1)(b)/(c), which retire that walker.
+        if (sf.hasAny(TypeFlags.EnumLiteral) || tf.hasAny(TypeFlags.EnumLiteral)) {
+            enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
+                if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
+            }
+            enumMemberTypeIsStringValued(target)?.let { targetIsString ->
+                if (sf.hasAny(if (targetIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
+            }
+        }
         // object type (non-primitive) — primitives are NOT assignable to object
         if (tf.hasAny(TypeFlags.NonPrimitive)) {
             return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
