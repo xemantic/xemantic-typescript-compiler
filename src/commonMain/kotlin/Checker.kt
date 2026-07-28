@@ -7141,7 +7141,12 @@ class Checker(
         // The general relation answers `isEnumTypeRelatedTo` now (`enumTypesRelation`),
         // reproducing all 12 of `enumAssignmentCompat3` byte-for-byte — message, chain,
         // position and length — from the two enum types alone.
-        pass("checkEnumAsgInFunctionScopes") { checkEnumAsgInFunctionScopes() }
+        // B583 (`checkEnumAsgInFunctionScopes`) is RETIRED — (REL.1)(c) round 749. Round 748
+        // made a function-body-scoped enum resolvable in TYPE position, so the general relation
+        // reaches both of `enumAssignmentCompat6`'s `f.ts` verdicts; [enumModuleImportPrefix]
+        // supplies the `import("f").DiagnosticCategory` display that was the last thing the
+        // walker still owned. All eight of that test's diagnostics come from the general path
+        // now, byte-for-byte — message, chain, position and length.
         // B463: nominal enum mismatches in class-override / overload / member-access contexts
         pass("checkEnumNominalClassMismatches") { checkEnumNominalClassMismatches() }
         // B426: TS2783 — object-literal property overwritten by a later spread that guarantees it
@@ -103150,6 +103155,9 @@ interface DataView {
      *
      * This is tsc's `TypeFormatFlags.UseFullyQualifiedType`, which the relation's error
      * reporter turns on only through [enumCollisionQualifiedDisplays].
+     *
+     * (REL.1)(c) round 749: the path continues into the FILE when the enum has no
+     * namespace container — see [enumModuleImportPrefix].
      */
     private fun enumTypeQualifiedDisplay(type: Type): String? {
         val sym = (type as? Type.Object)?.symbol ?: return null
@@ -103165,8 +103173,40 @@ interface DataView {
             segments.add(0, cur.name)
             cur = cur.parent
         }
+        if (segments.size == 1) enumModuleImportPrefix(enumSym)?.let { segments.add(0, it) }
         if (isMember) segments.add(sym.name)
         return segments.joinToString(".")
+    }
+
+    /**
+     * (REL.1)(c) round 749: the `import("<base>")` head of a fully-qualified enum name —
+     * tsc's `getFullyQualifiedName` walking one more step, from the enum symbol into the
+     * SOURCE-FILE module symbol that owns it, which `symbolToString` renders as
+     * `import("f")`. That step is why `enumAssignmentCompat6`'s `f.ts` reads
+     * `Type 'DiagnosticCategory' is not assignable to type 'import("f").DiagnosticCategory'.`
+     * — at the error position the bare name belongs to the enum declared inside the IIFE, so
+     * the module-scoped one can only be named through its module.
+     *
+     * The condition IS tsc's, transcribed: in tsc a symbol carries a `parent` only when it
+     * sits in a container's `exports`/`members`, so a top-level EXPORTED declaration of an
+     * external module reaches the file's module symbol while a file-local one (and every
+     * function-body declaration, INV.2(c) scope-space symbols included) has no parent and
+     * stays bare. We have no module symbol to walk to, so the same question is asked of the
+     * declaration: top level, `export`ed, in a file with module syntax.
+     *
+     * DELIBERATELY not applied to a NAMESPACE-nested enum of a module file (the caller only
+     * consults it when the namespace walk produced nothing). tsc would print
+     * `import("f").ns.E` there; no corpus baseline asks for it, and widening the rule would
+     * move every namespace-qualified enum display in a module file for nothing.
+     */
+    private fun enumModuleImportPrefix(enumSym: Symbol): String? {
+        val decl = enumSym.declarations.firstOrNull { it is EnumDeclaration } as? EnumDeclaration
+            ?: return null
+        if (ModifierFlag.Export !in decl.modifiers) return null
+        val file = owningSourceFile(decl) ?: return null
+        if (decl.parent !== file) return null
+        if (file.fileName !in moduleFiles) return null
+        return "import(\"${moduleFileBaseNoExt(file.fileName)}\")"
     }
 
     /**
@@ -161345,8 +161385,8 @@ interface DataView {
     }
 
     /** Fold a numeric enum-member initializer to its constant value; `null` when it is not
-     *  a foldable constant expression. Survives B266's round-746 retirement — the B425/B583
-     *  `EnumAsgInfo` collector and `checkEnumNominalClassMismatches` both consume it. */
+     *  a foldable constant expression. Survives the B266/B425/B583 retirements — the
+     *  `EnumAsgInfo` collector and `checkEnumNominalClassMismatches` both still consume it. */
     private fun evalEnumConstExpr(e: Expression): Double? = when (e) {
         is NumericLiteralNode -> e.text.toDoubleOrNull()
         is ParenthesizedExpression -> evalEnumConstExpr(e.expression)
@@ -161391,11 +161431,12 @@ interface DataView {
         val stringValues: Map<String, String>? = null,
         /** A `declare namespace` enum — numeric but un-evaluable ("unknown numeric value"). */
         val isAmbient: Boolean = false,
-        /** Explicit display (e.g. `import("f").DiagnosticCategory` for a shadowed module export). */
-        val displayOverride: String? = null,
     ) {
+        /** (REL.1)(c) round 749: the `displayOverride` escape hatch is GONE with B583 — it had a
+         *  single writer (the shadowed module export's `import("f").<name>`), which the general
+         *  path now renders through [enumModuleImportPrefix]. */
         val qualifiedDisplay: String get() =
-            displayOverride ?: if (namespacePath != null) "$namespacePath.$simpleName" else simpleName
+            if (namespacePath != null) "$namespacePath.$simpleName" else simpleName
     }
 
     /**
@@ -163304,140 +163345,16 @@ interface DataView {
     private fun fmtEnumAsgVal(v: Double): String =
         if (v == v.toLong().toDouble()) v.toLong().toString() else v.toString()
 
-    // ===== enumAssignmentCompat6 (B583) =====
-    // The B425 `checkEnumToEnumAssignments` walker — RETIRED (REL.1)(c) round 746, the general
-    // relation answers it — scanned only TOP-LEVEL `var X: E` + top-level
-    // `X = Y`. enumAssignmentCompat6 puts every assignment inside FUNCTIONS with enum-typed
-    // PARAMETERS (a.ts) and inside a block-scoped enum in an IIFE (f.ts). This walker descends
-    // into function / IIFE bodies (disjoint from the top-level walker → no double-emit), builds
-    // per-scope param/var → enum maps, and emits the nominal enum mismatch via `enumAsgFailure`
-    // (now value-KIND-aware). For the f.ts IIFE, a block-scoped enum shadows a module-exported
-    // top-level enum of the same name → the outer one displays as `import("<base>").<name>`.
-    private fun checkEnumAsgInFunctionScopes() {
-        for (result in binderResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            val enums = LinkedHashMap<String, EnumAsgInfo>()
-            collectEnumsForAsg(stmts, null, enums)
-            if (enums.isEmpty()) continue
-            val fileVarEnum = HashMap<String, String>()
-            for (st in stmts) {
-                if (st !is VariableStatement) continue
-                for (d in st.declarationList.declarations) {
-                    val n = (d.name as? Identifier)?.text ?: continue
-                    enumKeyOfTypeNode(d.type, enums)?.let { fileVarEnum[n] = it }
-                }
-            }
-            for (st in stmts) {
-                when (st) {
-                    is FunctionDeclaration -> eafsEnterFunction(st, source, fileName, enums, fileVarEnum)
-                    is ExpressionStatement -> eafsIifeArrow(st.expression)?.let {
-                        eafsScanIife(it, source, fileName, enums, fileVarEnum)
-                    }
-                    else -> {}
-                }
-            }
-        }
-    }
-
-    private fun eafsIifeArrow(e: Expression): ArrowFunction? {
-        val call = e as? CallExpression ?: return null
-        if (call.arguments.isNotEmpty()) return null
-        val callee = call.expression
-        val inner = (callee as? ParenthesizedExpression)?.expression ?: callee
-        return inner as? ArrowFunction
-    }
-
-    private fun eafsEnterFunction(
-        fn: FunctionDeclaration, source: String, fileName: String,
-        enums: Map<String, EnumAsgInfo>, varEnum: Map<String, String>,
-    ) {
-        val body = fn.body ?: return
-        val child = HashMap(varEnum)
-        for (p in fn.parameters) {
-            val pn = (p.name as? Identifier)?.text ?: continue
-            enumKeyOfTypeNode(p.type, enums)?.let { child[pn] = it }
-        }
-        eafsScanBody(body.statements, source, fileName, enums, child)
-    }
-
-    private fun eafsScanBody(
-        stmts: List<Statement>, source: String, fileName: String,
-        enums: Map<String, EnumAsgInfo>, varEnum: Map<String, String>,
-    ) {
-        for (st in stmts) {
-            when (st) {
-                is FunctionDeclaration -> eafsEnterFunction(st, source, fileName, enums, varEnum)
-                is Block -> eafsScanBody(st.statements, source, fileName, enums, varEnum)
-                is ExpressionStatement -> {
-                    val arrow = eafsIifeArrow(st.expression)
-                    if (arrow != null) { eafsScanIife(arrow, source, fileName, enums, varEnum); continue }
-                    val be = st.expression as? BinaryExpression ?: continue
-                    if (be.operator != SyntaxKind.Equals) continue
-                    val lhs = be.left as? Identifier ?: continue
-                    val rhs = be.right as? Identifier ?: continue
-                    val tgtKey = varEnum[lhs.text] ?: continue
-                    val srcKey = varEnum[rhs.text] ?: continue
-                    if (srcKey == tgtKey) continue
-                    val src = enums[srcKey] ?: continue
-                    val tgt = enums[tgtKey] ?: continue
-                    val (top, chain) = enumAsgFailure(src, tgt) ?: continue
-                    val (line, ch) = getLineAndCharacterOfPosition(source, lhs.pos)
-                    // (REL.1)(c) round 746: the general relation reaches the SAME verdict now
-                    // (`enumTypesRelation`) and emits its own TS2322 at this exact position,
-                    // so the two co-emit — six duplicated diagnostics on `enumAssignmentCompat6`.
-                    // Retract it, exactly as B266 does since round 744: the verdict is
-                    // identical, only this walker's DISPLAY is tsc's. B583 owns two things the
-                    // general path cannot say — `import("f").DiagnosticCategory` for an enum
-                    // shadowed by a module-scoped one, and the `declare namespace` value-KIND
-                    // split — so B583 is a LATER retirement than B425 was, not this one.
-                    diagnostics.removeAll {
-                        it.code == 2322 && it.fileName == fileName && it.start == lhs.pos
-                    }
-                    diagnostics.add(Diagnostic(
-                        message = top, category = DiagnosticCategory.Error, code = 2322,
-                        fileName = fileName, line = line, character = ch,
-                        start = lhs.pos, length = lhs.text.length, messageChain = chain,
-                    ))
-                }
-                else -> {}
-            }
-        }
-    }
-
-    private fun eafsScanIife(
-        arrow: ArrowFunction, source: String, fileName: String,
-        enums: Map<String, EnumAsgInfo>, varEnum: Map<String, String>,
-    ) {
-        val body = arrow.body as? Block ?: return
-        val innerEnums = LinkedHashMap<String, EnumAsgInfo>()
-        collectEnumsForAsg(body.statements, null, innerEnums)
-        val childEnums = LinkedHashMap(enums)
-        val shadowed = HashMap<String, String>() // shadowed simpleName -> import-display key
-        val moduleBase = fileName.removePrefix("./").substringAfterLast('/')
-            .removeSuffix(".d.ts").removeSuffix(".ts").removeSuffix(".tsx")
-        for ((nm, inner) in innerEnums) {
-            val outer = enums[nm]
-            if (outer != null && outer.namespacePath == null && ModifierFlag.Export in outer.decl.modifiers) {
-                val importKey = "$nm@import"
-                childEnums[importKey] = EnumAsgInfo(
-                    outer.simpleName, outer.namespacePath, outer.memberOrder, outer.values,
-                    outer.isConst, outer.isString, outer.decl, outer.stringValues, outer.isAmbient,
-                    displayOverride = "import(\"$moduleBase\").$nm",
-                )
-                shadowed[nm] = importKey
-            }
-            childEnums[nm] = inner
-        }
-        val childVarEnum = HashMap<String, String>()
-        for ((vn, ek) in varEnum) {
-            val en = enums[ek]
-            childVarEnum[vn] = if (en != null && shadowed.containsKey(en.simpleName)) shadowed[en.simpleName]!! else ek
-        }
-        eafsScanBody(body.statements, source, fileName, childEnums, childVarEnum)
-    }
+    // B583 (`checkEnumAsgInFunctionScopes`) is RETIRED — (REL.1)(c) round 749.
+    // It owned `enumAssignmentCompat6`: enum assignments inside FUNCTION bodies (a.ts) and
+    // inside an IIFE whose block-scoped enum SHADOWS a module-exported one (f.ts). Round 748
+    // made that inner enum resolvable in TYPE position, which gave the general relation both
+    // verdicts at both positions; the last thing the walker still said that the general path
+    // could not was the shadowed enum's `import("f").DiagnosticCategory` display, and
+    // [enumModuleImportPrefix] supplies it. The walker's `declare namespace` value-KIND split
+    // turned out to be the relation's already ([enumMemberEntries], round 746). Ablation: with
+    // the walker's retraction removed, all EIGHT of `enumAssignmentCompat6` duplicated
+    // byte-identically; with the walker gone, all eight remain, byte-identical to tsc.
 
     // (M0.4) round 637: checkGenericIndexWrite (TS2862) ON THE SPINE.
     // The legacy per-file recursion (checkGenericIndexWrite / gIdxHandleBody

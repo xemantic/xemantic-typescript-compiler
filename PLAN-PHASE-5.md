@@ -20,6 +20,90 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 749 (2026-07-28) — (REL.1)(c) STEP 4b LANDED: `checkEnumAsgInFunctionScopes`
+(B583) RETIRES WITH THE `import("<base>")` DISPLAY RULE. FIFTH ENUM PASS REPLACED IN THIS
+ARC, AND THE LAST ONE BLOCKING (c)'s WALKER SWEEP.** Compiler profile `--listAll`
+**BYTE-IDENTICAL at 46** — diffed SORTED LINE-BY-LINE against round 748's, composition
+unchanged (TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). Filtered suite **8,978 tests,
+0 failures, 0 skipped** over the 19 generated classes carrying every TS2416-bearing or
+enum-named baseline plus every `*Enum*` local class. +6 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE ABLATION, ROUND-746/747 FORMAT, on `enumAssignmentCompat6` run WHOLE (both files, all
+eight diagnostics) through the 1.4-second scratch-project CLI loop:**
+
+| build | B583 | `enumAssignmentCompat6` |
+|---|---|---|
+| round 748 | enabled | 8, = the tsc baseline |
+| round 748 | PassLab-disabled | 8, but the two `f.ts` lines printing `DiagnosticCategory` on BOTH sides |
+| round 749 (rule only) | PassLab-disabled | **8, byte-identical to the baseline** — message, chain, position |
+| round 749 (rule, RETRACTION removed) | enabled | **16 — every one of the eight DUPLICATED, both copies byte-identical** |
+| round 749 | deleted | **8, byte-identical** — message, chain, position AND length |
+
+**ROW 4 NEEDED THE RETRACTION REMOVED TO EXIST AT ALL, and that is a difference from B425 and
+B463 worth recording.** B583 did `diagnostics.removeAll { code == 2322 && start == lhs.pos }`
+before adding its own, so with both live the output stayed at 8 and byte-identical — the
+co-emission was MASKED, not absent. A pass that RETRACTS before emitting cannot be ablated by
+counting; you have to delete the retraction to see whether the general path is already there.
+
+**THE DISPLAY DECOMPOSED INTO ONE PART, NOT TWO OR THREE.** B266's had three, B463's had two;
+this one is a single step. `enumTypeQualifiedDisplay`'s container walk simply continues past
+the namespaces into the FILE: `enumModuleImportPrefix` is tsc's `getFullyQualifiedName`
+reaching the SOURCE-FILE module symbol, which `symbolToString` renders as `import("f")`.
+**The gate is round 746's `enumCollisionQualifiedDisplays`, REUSED UNCHANGED** — the first
+round in this arc that needed no new gate, because "the same string on both sides" is exactly
+what a shadowed enum produces, and the site already consulted it.
+
+**THE CONDITION IS tsc's, TRANSCRIBED RATHER THAN INVENTED.** In tsc a symbol carries a
+`parent` only when it sits in a container's `exports`/`members`, so a top-level EXPORTED
+declaration of an external module reaches the file's module symbol, while a file-LOCAL one —
+and every function-body declaration, INV.2(c) scope-space symbols included — has no parent and
+stays bare. We have no module symbol to walk to, so the same question is asked of the
+DECLARATION: top level, `export`ed, in a file with module syntax. That transcription is what
+makes the two controls pass: a non-exported top-level enum prints bare on both sides, which is
+also what tsc prints once its own retry cannot separate them either.
+
+**THE `declare namespace` VALUE-KIND SPLIT B583 WAS ALSO CREDITED WITH TURNED OUT TO BE THE
+RELATION'S ALREADY** (`enumMemberEntries`, round 746). Rows 3 and 5 above are over the WHOLE
+test, so a.ts's `ambients` lines — the "One value ... is assumed to be an unknown numeric
+value" pair — are inside the byte-identical diff. B583's measured ownership at the moment of
+retirement was the `import("f")` display and nothing else.
+
+**PIN PLACEMENT, per round 745's rule, and it is what makes the round non-vacuous.** B583's
+shadow mapping lived only in `eafsScanIife`, and its body scan recursed into a bare `Block`
+and nothing else — so a plain FUNCTION body, an arrow held by a `const` (never invoked, so
+never an `ExpressionStatement` holding a call), and an assignment nested in an `if` are all
+shapes the walker could not structurally reach. Those three RULE pins each **FAIL on a build
+of unmodified `d92ebe6a`**, printing `Type 'DC' is not assignable to type 'DC'`. The three
+CONTROL pins (the `export` gate, the namespace-walk order, round 746's collision gate) and
+both `EnumShadowedInFunctionScopeTest` pins pass on BOTH builds — which is what distinguishes
+"the general path reproduces the walker" from "approximates it".
+
+**DELIBERATELY NARROWED, AND IT IS A KNOWN DIVERGENCE, STATED SO A FUTURE WIDENING IS
+DELIBERATE.** The file step is taken ONLY when the namespace walk produced nothing. An
+EXPORTED namespace of a module file is `import("f").ns.E` in tsc and stays `ns.E` here. No
+corpus baseline asks for it, and widening would move every namespace-qualified enum display in
+every module file. The `ctrl-ns` pin uses a NON-exported namespace, where `ns.E` is what tsc
+prints too, so the pin is correct rather than a divergence in disguise.
+
+**WHAT DID NOT WORK / findings not fixed.** (i) **The var-decl TS2322 site has neither the
+collision retry nor the enum elaboration**: `let z: DC = x` inside the shadowing body prints
+`Type 'DC' is not assignable to type 'DC'` with NO chain, where tsc says
+`... type 'import("t").DC'` plus the value-differs line. Measured, not guessed. It is a
+pre-existing gap that B583 never covered either (it only ever matched an `ExpressionStatement`
+holding `ident = ident`), and closing it means touching a site every var-decl assignability
+message flows through — a sized round of its own, not a rider on this one. (ii) `x = DC.Warning`
+with an enum-MEMBER source against the shadowed enum is SILENT — a member-vs-enum leg the
+relation does not have; also out of scope, also recorded rather than patched. (iii)
+`EnumAsgInfo.displayOverride` had exactly one writer (B583's `@import` key) and is deleted with
+it; `collectEnumsForAsg` / `enumKeyOfTypeNode` / `enumAsgFailure` and the value-kind helpers
+STAY — `checkEnumNominalClassMismatches` (B463 pieces A and C) still consumes them.
+(iv) The memory ritual held: every `compileKotlinJvm` was preceded by `./gradlew --stop` plus a
+graceful `kill` of the idle Kotlin daemon, and each took ~2m30s. The one command that DID time
+out was a plain 2-second CLI run launched right after a `--rerun-tasks` build, at 1.1 GB
+available — the daemons regrow between steps, so the check is per-invocation, not per-session.
+(v) `discriminantPropAnnotation` was assessed, not attempted — see the STEP 5 bullet.
+
 **Round 748 (2026-07-28) — (REL.1)(c) STEP 4 LANDED: A FUNCTION-BODY-SCOPED `enum` IS
 RESOLVABLE IN TYPE POSITION, AND B583's BLOCKER MOVES FROM RESOLUTION TO DISPLAY.** Compiler
 profile `--listAll` **BYTE-IDENTICAL at 46** — the whole output, diffed SORTED LINE-BY-LINE
@@ -1504,11 +1588,32 @@ backlog-horizon decision, not queue debt.)
       block-scoped `interface` unresolved on purpose. Pins in
       `FunctionScopedEnumTypePositionTest` (3 of 4 fail on unmodified `7ab9b215`, the third in
       the OTHER direction — the one that proves the ORDER changed).
-    - **STEP 4b (next) — B583's REMAINING blocker is now the DISPLAY**, exactly as B266's and
-      B463's were: `import("<base>").<Name>` for an enum shadowed by a module-scoped one, plus the
-      `declare namespace` value-KIND split. Target pinned byte-exactly by
-      `EnumShadowedInFunctionScopeTest`; measured ownership is ONE corpus test
-      (`enumAssignmentCompat6`, its two `f.ts` lines).
+    - **STEP 4b DONE round 749 — `checkEnumAsgInFunctionScopes` (B583) RETIRES with the
+      `import("<base>")` display rule, in one commit. FIFTH enum pass replaced in this arc.**
+      Profile `--listAll` BYTE-IDENTICAL at 46 (diffed sorted line-by-line), 8,978 filtered tests
+      over the 19 generated classes carrying every TS2416-bearing or enum-named baseline, 0
+      failures, +6 pins. **The display decomposed into ONE part** (B266's had three, B463's two):
+      `enumTypeQualifiedDisplay`'s container walk continues past the namespaces into the FILE —
+      `enumModuleImportPrefix` is tsc's `getFullyQualifiedName` reaching the source-file module
+      symbol, which `symbolToString` renders `import("f")`. **The gate is round 746's
+      `enumCollisionQualifiedDisplays`, REUSED UNCHANGED** — the first round in this arc needing no
+      new gate, because a shadowed enum produces exactly the same-string pair it tests for. The
+      condition is tsc's transcribed: a symbol has a `parent` only inside a container's `exports`,
+      so top-level + `export`ed + module-syntax file, and a function-body declaration (scope-space
+      symbols included) stays bare. **ABLATION: with the pass's RETRACTION removed, all EIGHT of
+      `enumAssignmentCompat6` DUPLICATED byte-identically** — B583 wiped the general TS2322 at its
+      own position before re-adding its own, so counting alone could never have shown the
+      co-emission. **The `declare namespace` value-KIND split it was also credited with turned out
+      to be the relation's already** (`enumMemberEntries`, round 746): the byte-identical diff is
+      over the WHOLE test, `ambients` lines included. **NARROWED ON PURPOSE, a known divergence:**
+      an EXPORTED namespace of a module file is `import("f").ns.E` in tsc and stays `ns.E` here —
+      the file step is taken only when the namespace walk found nothing; no baseline asks for it.
+      **NOT FIXED, measured:** the var-decl TS2322 site has neither the collision retry nor the
+      enum elaboration, so `let z: DC = x` in the shadowing body prints `Type 'DC' is not
+      assignable to type 'DC'` with no chain — a pre-existing gap B583 never covered either, and a
+      sized round of its own (every var-decl assignability message flows through that site).
+      Rule pins in `EnumModuleQualifiedDisplayTest` (3 fail on unmodified `d92ebe6a`, 3 controls
+      pass on both); retirement pins stay in `EnumShadowedInFunctionScopeTest`, passing on both.
     - **~~STEP 4 (was next)~~ — THE B583 UNBLOCKER: make a function-body-scoped `enum` RESOLVABLE
       IN TYPE POSITION.** DONE, see above. Round 747 measured that with B583 ablated the relation reproduces six of
       `enumAssignmentCompat6`'s eight diagnostics byte-for-byte and emits NOTHING for the other
@@ -1527,7 +1632,44 @@ backlog-horizon decision, not queue debt.)
       plus the `declare namespace` value-KIND split) become the remaining blocker. Target pinned
       byte-exactly by `EnumShadowedInFunctionScopeTest`; measured ownership is ONE corpus test
       (`enumAssignmentCompat6`, its two `f.ts` lines) over 3,904 filtered tests.
-    - **STEP 5 (last) — `discriminantPropAnnotation`.**
+    - **STEP 5 (last, and now the ONLY remaining (c) sub-step) — `discriminantPropAnnotation`.
+      ASSESSED round 749, not attempted. A SAFE DECOMPOSITION EXISTS and it is three steps,
+      the first of which is provably behavior-preserving.** The standing risk is unchanged —
+      `enumMemberKeysOfTypeNode`/`enumMemberKeyOfExpr` key on
+      `resolveEnumSymbolForDiscriminant(...).id` while the round-741 type interning
+      (`enumMemberTypes`) keys on `canonicalEnumSymbol(...).id`, the two spaces are COMPARED
+      against each other inside `filterUnionByEnumDiscriminant` (member keys vs case keys), and
+      a mismatch shows up as narrowing that silently stops matching. The decomposition removes
+      that risk by reconciling the spaces BEFORE flipping any reader:
+      - **(5a) Normalize the key space, change no reader.** Mint
+        `"${canonicalEnumSymbol(sym).id}#$member"` in `enumMemberKeyOfExpr` and
+        `enumMemberKeysOfTypeNode` (the `enumValues[sym.id]` probes stay on the RESOLVED id —
+        only the emitted key changes). **This is safe BY CONSTRUCTION and that is the round-749
+        finding**: `canonicalEnumSymbol` (:110683) only redirects to `globals[name]` when the two
+        symbols SHARE a declaration NODE (`d is EnumDeclaration && global.declarations.any { it === d }`),
+        so it is declaration-identity-based, never name-based — it can never merge two genuinely
+        distinct same-named enums, it can only unify instances of ONE enum. Equal-before therefore
+        implies equal-after, and the only new matches are the "same enum, different `Symbol`
+        instance" family the helper exists for. Gate: corpus + profile; a zero diff is the
+        expected result, and any delta IS the family 5b needs.
+      - **(5b) Flip the READ, one call site per commit, type-first with the AST reader as
+        fallback.** Read `getPropertyOfType(apparent, name)`'s TYPE and key an `EnumLiteral` as
+        `"${canonicalEnumSymbol(sym.parent).id}#${sym.name}"`, distributing over a union. **The
+        first flip must RESTRICT the type path to a property that HAS an annotation**, so it is a
+        pure re-derivation: `discriminantPropAnnotation` reads `PropertyDeclaration.type`, so a
+        property with an INFERRED enum-member type is invisible to it today, and a type reader
+        would start treating such a property as a discriminant — a widening, not a replacement.
+        Drop the restriction only as its own later step. The five sites are
+        `filterUnionByEnumDiscriminant`, `kindDomainKeysOfType`, `discriminantKindKeys`, the
+        exhaustive-switch `neverType` gate and the objlit discriminant-candidate filter.
+      - **(5c) Delete** `discriminantPropAnnotation` and the AST key helpers, then
+        `kindDomainProvesNotSubtype` / `kindDomainKeysExceed` (the round-729 `evaluateConditional`
+        patch included).
+      - **THE DETECTOR, so the failure is loud rather than silent**: a key-space mismatch presents
+        as narrowing that no longer fires, i.e. TS2339 FPs on the compiler profile — so the
+        profile's 46 is the gate. Sharper, and cheap: instrument both producers for ONE run to
+        assert the flipped key equals the legacy key at every mint (the `--verifyMappedCache`
+        probe is the precedent). Do that before 5b, not after.
     - `discriminantPropAnnotation` (:110431) has FIVE call sites woven through switch-narrowing
       and type-guard filtering — `filterUnionByEnumDiscriminant`, `kindDomainKeysOfType`,
       `discriminantKindKeys`, the exhaustive-switch `neverType` gate, and the objlit

@@ -29,36 +29,26 @@ import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
- * (REL.1)(c) round 747: what `checkEnumAsgInFunctionScopes` (B583) STILL owns, and why it
- * is not a display problem.
+ * (REL.1)(c): `checkEnumAsgInFunctionScopes` (B583) — RETIRED round 749. This class is now
+ * its ablation evidence, and it is worth keeping the two-round history the pins record.
  *
- * Round 746 recorded B583 as "blocked on a display rule" — it prints
- * `import("f").DiagnosticCategory` for a module-scoped enum shadowed by a local one, which
- * the general path cannot say. **The ablation says that reading is incomplete.** With B583
- * PassLab-disabled, the relation reproduces SIX of `enumAssignmentCompat6`'s eight
- * diagnostics byte-for-byte (the namespace-vs-namespace half, pinned below), and for the
- * remaining two it emits NOTHING AT ALL — so the display is the SECOND blocker, behind a
- * resolution one.
+ * Round 746 recorded B583 as "blocked on a display rule". Round 747's ablation corrected
+ * that: with B583 PassLab-disabled the relation reproduced SIX of `enumAssignmentCompat6`'s
+ * eight diagnostics byte-for-byte (the namespace-vs-namespace half, the first pin below) but
+ * emitted NOTHING AT ALL for the other two — so the display was the SECOND blocker, behind a
+ * RESOLUTION one. That first blocker was B83.5 in TYPE position: an `enum` declared inside a
+ * function or arrow body is never conventionally bound, and a name SHADOWING an outer one
+ * resolved to the OUTER symbol — a wrong answer rather than a missing one, which is why the
+ * fix could not be a fallback. Round 748 closed it (`lexicalTypeSymbolForNode`), which left
+ * only `import("f").DiagnosticCategory`, and round 749 closed that
+ * (`enumModuleImportPrefix`) and deleted the walker.
  *
- * The first blocker is B83.5, in TYPE position: an `enum` declared inside a function or
- * arrow body is never conventionally bound, so its name is invisible to
- * `getTypeFromTypeReference`. Measured, and the two failure modes differ:
- *  - a UNIQUE name resolves to nothing, so the annotation degrades to `any` and every
- *    check on it goes silent (no TS2304 either — the INV.4(c)(iii) family finds the name
- *    through the INV.2(c) lexical scopes, which the type resolver does not consult);
- *  - a name that SHADOWS an outer one resolves to the OUTER symbol, which is worse than
- *    nothing: `let b: DC = 0` inside the shadowing body is judged against the outer enum's
- *    value domain.
- * B583 sidesteps both by collecting the inner enums from the AST itself (`eafsScanIife`),
- * which is exactly why it is still the only pass that can answer here.
- *
- * Measured ownership, so the next agent does not re-derive it: over the six generated
- * classes that carry every TS2416/enum baseline (3,904 tests), B583 PassLab-disabled fails
- * exactly ONE test — `enumAssignmentCompat6` — and inside it only the two `f.ts` lines.
- *
- * Both pins pass today. The first is a REGRESSION GUARD for the half the relation already
- * owns; the second is the retirement target, landed early so that whoever closes the
- * resolution gap has the byte-exact goal in hand.
+ * Measured ownership at the moment of retirement: over the six generated classes carrying
+ * every TS2416/enum baseline (3,904 tests), B583 PassLab-disabled failed exactly ONE test —
+ * `enumAssignmentCompat6` — and inside it only the two `f.ts` lines, which the second pin
+ * holds byte-exactly. Both pins passed BEFORE the retirement and pass after it: that is the
+ * retirement evidence. The pins measuring the new display RULE (shapes the walker could not
+ * structurally reach) live in [EnumModuleQualifiedDisplayTest].
  */
 class EnumShadowedInFunctionScopeTest {
 
@@ -93,10 +83,11 @@ class EnumShadowedInFunctionScopeTest {
     }
 
     /**
-     * The retirement target. A module-scoped enum shadowed by one declared inside an IIFE:
-     * tsc names the outer one `import("f").DC`, because at the error position its bare name
-     * belongs to the inner enum. Owned by B583 today; the general path is silent here until
-     * a function-body enum declaration becomes resolvable in type position.
+     * The retirement target, now met. A module-scoped enum shadowed by one declared inside
+     * an IIFE: tsc names the outer one `import("f").DC`, because at the error position its
+     * bare name belongs to the inner enum. This was B583's exclusive shape; since round 749
+     * the identical bytes come from the relation plus [enumModuleImportPrefix], measured by
+     * deleting the walker and diffing the whole of `enumAssignmentCompat6`.
      */
     @Test
     fun `an enum shadowed inside an IIFE reports both directions with the import display`() {
