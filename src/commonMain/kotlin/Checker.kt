@@ -108284,8 +108284,16 @@ interface DataView {
                 val litKeys = litTypes.mapNotNull { literalDiscriminantKeyOfType(it) }
                 if (litKeys.size != litTypes.size) return null
                 val caseKeys = enumKeys + litKeys
-                val memberKeys = discriminantPropAnnotation(t, discriminant)
-                    ?.let { enumMemberKeysOfTypeNode(it) } ?: return null
+                // (REL.1)(c) step 5b, round 752: TYPE-FIRST via [discriminantKeysOfMember],
+                // which is round 751's shared reader — the resolved property type keyed
+                // through [enumDiscriminantKey], with THIS site's former composition
+                // (`discriminantPropAnnotation` + [enumMemberKeysOfTypeNode]) as its exact
+                // fallback, so the substitution can only ANSWER where this site was blind,
+                // never answer differently. Both paths start from the same property symbol.
+                // MEASURED on the compiler profile: 4 answering sightings, 4 AGREE, 0
+                // mismatched, and the type half alone reproduced all 4 (the annotation walk
+                // is already dead here).
+                val memberKeys = discriminantKeysOfMember(t, discriminant) ?: return null
                 return if (memberKeys.all { it in caseKeys }) neverType else null
             }
             if (matchesDirectly) {

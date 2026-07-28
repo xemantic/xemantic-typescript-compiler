@@ -158,4 +158,77 @@ class ExhaustiveSwitchNeverNarrowingTest {
             have(any { it.code == 2345 && it.message.contains("\"c\"") })
         }
     }
+
+    /**
+     * (REL.1)(c) step 5b, round 752: the NON-union subject leg of this gate (round 460's
+     * `isReferencedFile(reason)` shape — a single interface whose discriminant annotation is
+     * an enum-member union) reads that annotation TYPE-FIRST, through round 751's shared
+     * [Checker.discriminantKeysOfMember].
+     *
+     * The witness is a PARENTHESIZED annotation, as everywhere in this key-space family:
+     * [Checker.enumMemberKeysOfTypeNode] has no `ParenthesizedType` arm, so before the flip
+     * this site read NO keys, declined to narrow, and `assertNever(r)` failed with
+     * `Argument of type 'Reason' is not assignable to parameter of type 'never'`. Measured
+     * on a build of `e717aba2` with only this site left unflipped — so the pin is attributed
+     * to this reader alone, not to the exhaustive-switch reader flipped in the same round.
+     *
+     * Cross-FILE on purpose (per [EnumDiscriminantKeySpaceTest]): within one file every
+     * resolution path tends to reach the same enum `Symbol` instance, so a single-file pin
+     * cannot tell a canonical key space from an accidental one.
+     */
+    @Test
+    fun `a parenthesized enum-member-union discriminant on a NON-union subject narrows to never`() {
+        diagnose(
+            """
+            // @filename: /src/types.ts
+            export enum RK { First, Second }
+            export interface Reason { readonly kind: (RK.First | RK.Second); n: number }
+            // @filename: /src/user.ts
+            import { RK, Reason } from "./types";
+            export function assertNever(x: never): never { throw new Error("bad"); }
+            export function describe(r: Reason): string {
+                switch (r.kind) {
+                    case RK.First: return "first";
+                    case RK.Second: return "second";
+                    default: return assertNever(r);
+                }
+            }
+            """,
+        ) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    /**
+     * The no-false-suppression control for the pin above: leave one member uncovered and the
+     * subject must NOT narrow to `never`.
+     *
+     * It passes on an unflipped build too, and that is stated rather than hidden — TS2345
+     * fires on both sides for opposite reasons (unflipped: the gate cannot read the
+     * parenthesized keys at all; flipped: it reads them and finds `RK.Third` uncovered). So
+     * this pin cannot DISCRIMINATE the two builds; it guards the direction the discriminating
+     * pin above could otherwise be satisfied by.
+     */
+    @Test
+    fun `negative control - a parenthesized union with an uncovered member still fires TS2345`() {
+        diagnose(
+            """
+            // @filename: /src/types.ts
+            export enum RK { First, Second, Third }
+            export interface Reason { readonly kind: (RK.First | RK.Second | RK.Third); n: number }
+            // @filename: /src/user.ts
+            import { RK, Reason } from "./types";
+            export function assertNever(x: never): never { throw new Error("bad"); }
+            export function describe(r: Reason): string {
+                switch (r.kind) {
+                    case RK.First: return "first";
+                    case RK.Second: return "second";
+                    default: return assertNever(r);
+                }
+            }
+            """,
+        ) should {
+            have(any { it.code == 2345 })
+        }
+    }
 }
