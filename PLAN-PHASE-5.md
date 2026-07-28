@@ -92,6 +92,11 @@ neither pass's ablation predicted, because both are OTHER walkers:
   duplicated, byte-identical.
 - `enumAssignmentCompat7` — the general class-member override check co-emitting TS2416 with
   B463's (`encmCheckClassesAndOverloads`) at the same position.
+**And the TS2416 dedup keyed on POSITION alone was wrong**, caught by a broader filtered run
+rather than by the two failing tests: `interfaceExtendsClassWithPrivate2` legitimately gets
+TWO TS2416 at one position — a member violating BOTH a base class and a base interface —
+differing only in the base type they name, and a position-only key swallowed the second. The
+key is (code, fileName, start, MESSAGE) on both sides of the pair.
 Both were resolved by the round-744 RETRACTION mechanism, not by more deletion, because in
 both cases the walker's DISPLAY is still the only correct one: B583 owns
 `import("f").DiagnosticCategory` for an enum shadowed by a module-scoped one, and B463 owns

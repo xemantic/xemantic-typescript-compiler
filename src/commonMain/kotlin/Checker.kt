@@ -126665,8 +126665,14 @@ interface DataView {
                         // nested inside a rendered FUNCTION type is a `typeToString` change
                         // this round did not measure. Paired with B463's own retraction, so
                         // B463 wins regardless of which pass runs second.
+                        // Keyed on the MESSAGE, not just the position: a member that violates
+                        // BOTH a base class and a base interface legitimately gets TWO TS2416
+                        // at one position, differing only in the base type they name
+                        // (`interfaceExtendsClassWithPrivate2`), and a position-only key
+                        // swallowed the second.
                         if (diagnostics.none {
-                                it.code == 2416 && it.fileName == fileName && it.start == nameNode.pos
+                                it.code == 2416 && it.fileName == fileName &&
+                                    it.start == nameNode.pos && it.message == message
                             }
                         ) {
                             diagnostics.add(Diagnostic(
@@ -163017,11 +163023,16 @@ interface DataView {
                 // BOTH sides as the bare `E`, because qualifying an enum nested inside a
                 // rendered FUNCTION type (`(param: second.E) => void`) is a `typeToString`
                 // change this round did not measure.
+                val encmMessage =
+                    "Property '$mName' in type '${cls.name?.text}' is not assignable to the same property in base type '$baseName'."
+                // Keyed on the MESSAGE, not just the position — a member violating BOTH a base
+                // class and a base interface gets TWO legitimate TS2416 at one position.
                 diagnostics.removeAll {
-                    it.code == 2416 && it.fileName == fileName && it.start == nameNode.pos
+                    it.code == 2416 && it.fileName == fileName &&
+                        it.start == nameNode.pos && it.message == encmMessage
                 }
                 diagnostics.add(Diagnostic(
-                    message = "Property '$mName' in type '${cls.name?.text}' is not assignable to the same property in base type '$baseName'.",
+                    message = encmMessage,
                     category = DiagnosticCategory.Error, code = 2416,
                     fileName = fileName, line = line, character = ch,
                     start = nameNode.pos, length = mName.length,
