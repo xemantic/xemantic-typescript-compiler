@@ -38852,6 +38852,11 @@ class Checker(
             }
             is Type.Interface -> type
             is Type.Object -> {
+                // (REL.1)(b0) round 742: an enum-MEMBER type widens to its own enum,
+                // exactly as a string literal widens to `string`. Without this,
+                // `let x = E.A` would infer `E.A` and `x = E.B` would be an error —
+                // tsc widens the enum-literal type in every mutable inference position.
+                enumTypeOfMemberType(type)?.let { return it }
                 // B435: a frozen-object result (Readonly<T> shape) never widens — keep the
                 // marked, literal-preserving instance intact.
                 if (type.id in frozenObjectTypeIds) return type
@@ -53200,6 +53205,30 @@ interface DataView {
     }
 
     /**
+     * (REL.1)(b0) round 742: was [name]'s current recording INHERITED from an
+     * enclosing scope rather than made in this one?
+     *
+     * The pass copies its locals map at every scope frame ([spineArithFnFrame],
+     * kind 0) and restores the original at the frame's leave, so an enclosing
+     * body's recordings stay visible while a nested body is walked. The test is
+     * therefore instance IDENTITY against the innermost saved map: an entry made
+     * HERE either did not exist outside or is a different `Type` instance, while an
+     * untouched inherited entry is the very same instance the outer map holds.
+     *
+     * A declaration whose name is inherited is by construction a SHADOW, so the
+     * recorder's first-wins rule must not apply to it.
+     */
+    private fun spineArithInheritedName(name: String): Boolean {
+        val current = spineArithLocals[name] ?: return false
+        for (i in spineArithFrames.indices.reversed()) {
+            val f = spineArithFrames[i]
+            if (f.kind != 0) continue
+            return f.savedLocals?.get(name) === current
+        }
+        return false
+    }
+
+    /**
      * The legacy VariableStatement per-declarator recording, verbatim (see the
      * inline comments at the original site — now this function). Runs under
      * [spineArithInstalled], so currentLocalTypes IS [spineArithLocals].
@@ -53290,7 +53319,9 @@ interface DataView {
                     currentLocalTypes[declName] = srcT
                 }
             } else if (declName != null && decl.type == null &&
-                declName !in currentLocalTypes &&
+                // (REL.1)(b0) round 742: first-wins WITHIN a scope, but NOT over an
+                // entry INHERITED from an enclosing one — see [spineArithInheritedName].
+                (declName !in currentLocalTypes || spineArithInheritedName(declName)) &&
                 (decl.initializer is PropertyAccessExpression ||
                     decl.initializer is ElementAccessExpression ||
                     decl.initializer is CallExpression ||
@@ -53329,6 +53360,17 @@ interface DataView {
                         if (isConst && (initT === numberType || initT === stringType ||
                             initT === booleanType || initT === bigintType)) initT
                         else anyType
+                } else if (outerT is Type.Interface && spineArithInheritedName(declName)) {
+                    // (REL.1)(b0) round 742: the same shadow trap with a NON-CALLABLE
+                    // outer binding. tsc's generators.ts declares
+                    // `let state: Identifier` in `transformGenerators`, and the nested
+                    // `endExceptionBlock()`'s `const state = exception.state` shadows
+                    // it — so `state < ExceptionBlockState.Finally` typed its LEFT
+                    // operand as the AST interface and FP'd TS2365 the moment the RIGHT
+                    // operand stopped being `anyType`. Recording `anyType` = suppression,
+                    // the same remedy the callable case uses, and it cannot invent a
+                    // diagnostic (`any` only ever silences an operand check).
+                    currentLocalTypes[declName] = anyType
                 }
             }
         }
@@ -98617,8 +98659,9 @@ interface DataView {
                     // oldFileQuotePreference !== undefined) quotePreference =
                     // oldFileQuotePreference;`, tsc importFixes.ts writeFixes) is
                     // equally FP-safe under the same relation-passes gate.
-                    val ttIsEnumObject = tt is Type.Object &&
-                        tt.symbol?.flags?.hasAny(SymbolFlags.Enum) == true
+                    // (REL.1)(b0): a MEMBER type is equally enum-flavored — see
+                    // [isEnumFlavoredObjectType].
+                    val ttIsEnumObject = tt is Type.Object && isEnumFlavoredObjectType(tt)
                     val sourceType = if ((narrowRef is Identifier || narrowRef is PropertyAccessExpression) &&
                         (tt is Type.Interface || tt is Type.Reference || tt is Type.Union ||
                             tt is Type.Intersection || ttIsEnumObject)) {
@@ -101045,7 +101088,7 @@ interface DataView {
                         if (propSym.declarations.any { it is GetAccessor }) return false
                         if (recvType.tupleElementTypes != null) return false
                         if (recvType.stringIndexInfo != null || recvType.numberIndexInfo != null) return false
-                        if (recvType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return false
+                        if (isEnumFlavoredObjectType(recvType)) return false
                         if (isReadonlySymbol(propSym)) return false
                         if (isOptionalProperty(propSym)) return false
                         if (propSym.declarations.any { d ->
@@ -102628,6 +102671,68 @@ interface DataView {
      */
     private fun isEnumFlavoredObjectType(type: Type): Boolean =
         (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum or SymbolFlags.EnumMember) == true
+
+    /**
+     * (REL.1)(b0) round 742: the enum a MEMBER type belongs to, as a `Type`.
+     *
+     * `null` for anything that is not an enum-member type. Used by [widenType] —
+     * an enum-member type widens to its own enum exactly as a string literal widens
+     * to `string`, which is what keeps `let x = E.A; x = E.B` legal.
+     */
+    /**
+     * (REL.1)(b0) round 742: the CONSTANT VALUES an enum-flavored type can hold —
+     * every member's value for an enum's own type, the single member's value for a
+     * member type. `null` when [type] is not enum-flavored or its values were never
+     * evaluated (an unknown domain must stay unknown, never become empty: an empty
+     * set would read as "no value matches" and narrow a member away).
+     */
+    private fun enumDomainValues(type: Type): List<ConstantValue>? {
+        val sym = (type as? Type.Object)?.symbol ?: return null
+        return when {
+            sym.flags.hasAny(SymbolFlags.Enum) ->
+                enumValues[canonicalEnumSymbol(sym).id]?.values?.toList()
+            sym.flags.hasAny(SymbolFlags.EnumMember) -> {
+                val owner = sym.parent?.takeIf { it.flags.hasAny(SymbolFlags.Enum) } ?: return null
+                enumValues[canonicalEnumSymbol(owner).id]?.get(sym.name)?.let { listOf(it) }
+            }
+            else -> null
+        }
+    }
+
+    private fun enumTypeOfMemberType(type: Type): Type? {
+        if (type.flags.hasNone(TypeFlags.EnumLiteral)) return null
+        val owner = (type as? Type.Object)?.symbol?.parent ?: return null
+        if (!owner.flags.hasAny(SymbolFlags.Enum)) return null
+        return getDeclaredTypeOfSymbol(canonicalEnumSymbol(owner))
+    }
+
+    /**
+     * (REL.1)(b0) round 742: the type of an enum-member ACCESS EXPRESSION — `SK.A`
+     * in VALUE position, as opposed to the `SK.A` ANNOTATION step (a) already
+     * handled.
+     *
+     * Before this, such an access resolved to **`anyType`**: an enum's own
+     * `Type.Object` carries no member table, so [getPropertyOfType] missed and
+     * [computeRawTypeOfPropertyAccess] fell through to its `anyType` tail. That is
+     * why round 741 could flip three of `EnumMemberRelationTest`'s four
+     * expectations from the relation but not `const e: E.X = E.Y` — the relation
+     * was being handed `any`, not a member.
+     *
+     * Deliberately a targeted branch rather than planting members on the enum's
+     * type: giving the enum type a member table would also make it a structurally
+     * NON-empty relation target, so `x: E = <anything>` would start demanding
+     * those members. This changes the type of the ACCESS and nothing else.
+     */
+    private fun enumMemberAccessType(objectType: Type, propName: String): Type? {
+        val enumSym = (objectType as? Type.Object)?.symbol ?: return null
+        if (!enumSym.flags.hasAny(SymbolFlags.Enum)) return null
+        val memberSym = enumSym.exports?.get(propName)
+            ?: canonicalEnumSymbol(enumSym).exports?.get(propName)
+            ?: return null
+        if (!memberSym.flags.hasAny(SymbolFlags.EnumMember)) return null
+        val member = getDeclaredTypeOfEnumMember(memberSym)
+        return if (member === anyType) null else member
+    }
 
     /**
      * Build an InterfaceType from class/interface declarations.
@@ -109753,17 +109858,19 @@ interface DataView {
             // branches: equal keeps a member iff SOME enum value == the literal;
             // not-equal keeps iff SOME value != it. Unknown/empty value sets fall
             // through to the conservative rules below.
+            // (REL.1)(b0): a MEMBER-typed discriminant (`kind: SK.A`) has the same
+            // shape of answer with a domain of exactly ONE value — [enumDomainValues]
+            // returns that singleton, so the narrow is strictly sharper here.
             if (literalType is Type.NumberLiteral && propType is Type.Object &&
-                propType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true
+                isEnumFlavoredObjectType(propType)
             ) {
-                val enumSym = propType.symbol?.let { canonicalEnumSymbol(it) }
-                val values = enumSym?.id?.let { enumValues[it] }
+                val values = enumDomainValues(propType)
                 if (!values.isNullOrEmpty()) {
                     singleHadDiscriminant = true
                     val lit = literalType.value
                     fun matches(v: ConstantValue) = v is ConstantValue.NumberValue && v.value == lit
-                    return@filter if (equal) values.values.any { matches(it) }
-                    else values.values.any { !matches(it) }
+                    return@filter if (equal) values.any { matches(it) }
+                    else values.any { !matches(it) }
                 }
                 return@filter true // unknown enum domain — keep (conservative)
             }
@@ -109774,7 +109881,7 @@ interface DataView {
             // Enum-flavored objects are excluded (a string-enum VALUE can equal a string
             // at runtime); the negative branch keeps the member (nothing proven).
             if (literalIsDefiniteValue && propType is Type.Object &&
-                propType.symbol?.flags?.hasAny(SymbolFlags.Enum) != true
+                !isEnumFlavoredObjectType(propType)
             ) {
                 singleHadDiscriminant = true
                 return@filter !equal
@@ -114507,6 +114614,10 @@ interface DataView {
                 getNarrowedTypeForReference(rawObjectType, expr.expression)
             } else rawObjectType
         val propName = expr.name.text
+        // (REL.1)(b0) round 742: `SK.A` in VALUE position is the MEMBER's type. The
+        // lookup below cannot find it — an enum's `Type.Object` has no member table
+        // — so the access used to fall all the way through to the `anyType` tail.
+        enumMemberAccessType(objectType, propName)?.let { return it }
         // B83.4e: For Union receivers, map each constituent through
         // `getApparentType` (so primitives → wrapper interface) and look up the
         // property on each. If EVERY constituent has the property, return the
@@ -115461,7 +115572,15 @@ interface DataView {
                     }
                 } else {
                     val sym = type.symbol
-                    if (sym != null) sym.name
+                    // (REL.1)(b0) round 742: an enum-MEMBER type prints QUALIFIED, as
+                    // tsc does — `SyntaxKind.Identifier`, never the bare `Identifier`,
+                    // which is also the name of an unrelated interface. Step (a) minted
+                    // these types but they only reached a message through an annotation;
+                    // (b0) puts them in every enum-member expression, so the bare name
+                    // would start naming the wrong thing in real diagnostics.
+                    if (sym != null && sym.flags.hasAny(SymbolFlags.EnumMember)) {
+                        sym.parent?.let { "${it.name}.${sym.name}" } ?: sym.name
+                    } else if (sym != null) sym.name
                     else {
                         // Anonymous object type — format as { prop: type; ... }
                         val parts = mutableListOf<String>()
@@ -132934,7 +133053,9 @@ interface DataView {
         // Check Interface and Object types (anonymous object literals, type literals, etc.)
         if (objectType !is Type.Object) return
         // Skip enum types
-        if (objectType.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return
+        // (REL.1)(b0): an enum MEMBER type is equally member-less, so it would match
+        // the "empty receiver" TS2339 gate below (`Extension.Dts.length`).
+        if (isEnumFlavoredObjectType(objectType)) return
         // Resolve members
         resolveStructuredTypeMembers(objectType)
         if (objectType.properties.isNullOrEmpty()) {
@@ -133503,7 +133624,7 @@ interface DataView {
         // Enum receivers (the enum OBJECT `E["key"]` or enum-typed values) are owned
         // by the pre-existing enum element-access branches (TS7015 / TS2339-typeof) —
         // an enum's implicit reverse/forward index structure is not modeled here.
-        if ((rt as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true) return false
+        if (isEnumFlavoredObjectType(rt)) return false
         if ((recvExpr as? Identifier)?.let { globals[it.text] }?.flags?.hasAny(SymbolFlags.Enum) == true) return false
 
         // Resolve member names + the get/set member check per receiver kind.
@@ -133886,7 +134007,7 @@ interface DataView {
                 // noProps/noIndex/noCalls gate below. Mirrors the enum exclusion in
                 // tryEmitNoImplicitAnyIndexAccess (Checker.kt ~113333). tsc's own
                 // moduleNameResolver.ts does `ModuleResolutionKind[moduleResolution]`.
-                val recvIsEnum = (recvType as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum) == true ||
+                val recvIsEnum = isEnumFlavoredObjectType(recvType) ||
                     (expr.expression as? Identifier)?.let { currentFileLocals?.get(it.text) ?: globals[it.text] }
                         ?.flags?.hasAny(SymbolFlags.Enum) == true
                 if (!recvIsEnum && recvType is Type.Object && recvType !is Type.Reference && recvType !is Type.Interface) {
@@ -164023,6 +164144,13 @@ interface DataView {
      *  enum (any member with a string value) does NOT — it stays unclassified. */
     private fun isNumericEnumObjectType(type: Type): Boolean {
         val sym = (type as? Type.Object)?.symbol ?: return false
+        // (REL.1)(b0) round 742: a MEMBER type answers PER MEMBER — sharper than the
+        // whole-enum answer (a numeric member of a mixed enum is still numeric), and
+        // required, because `E.A + 1` types its operand as the member since (b0) and
+        // a member symbol carries EnumMember, not Enum.
+        if (sym.flags.hasAny(SymbolFlags.EnumMember)) {
+            return enumMemberTypeIsStringValued(type) == false
+        }
         if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
         val values = enumValues[sym.id] ?: return true // no computed values → all auto-numeric
         return values.values.none { it is ConstantValue.StringValue }
@@ -164036,6 +164164,10 @@ interface DataView {
      *  cascade gotcha) has no `enumValues` entry → false. */
     private fun isStringEnumObjectType(type: Type): Boolean {
         val sym = (type as? Type.Object)?.symbol ?: return false
+        // (REL.1)(b0): the per-MEMBER sibling of the rule in [isNumericEnumObjectType].
+        if (sym.flags.hasAny(SymbolFlags.EnumMember)) {
+            return enumMemberTypeIsStringValued(type) == true
+        }
         if (!sym.flags.hasAny(SymbolFlags.Enum)) return false
         val values = enumValues[sym.id] ?: return false
         return values.values.isNotEmpty() && values.values.all { it is ConstantValue.StringValue }
@@ -164414,6 +164546,16 @@ interface DataView {
         if (isStringLikeType(type)) return true
         if (type.flags.hasAny(TypeFlags.Boolean or TypeFlags.BooleanLiteral)) return true
         if (type is Type.Union) return type.types.all { isComparableType(it) }
+        // (REL.1)(b0) round 742: a TYPE PARAMETER is comparable iff its CONSTRAINT is —
+        // tsc compares the apparent type. The sibling rule has always been in
+        // [isValidArithmeticOperand]; only the relational path lacked it, and it was
+        // invisible while `SyntaxKind.FirstToken` on the other side was `anyType`
+        // (nodeFactory.ts createToken's `token >= SyntaxKind.FirstToken`, TKind extends
+        // SyntaxKind). An UNCONSTRAINED parameter stays non-comparable, as before.
+        if (type is Type.TypeParam) {
+            val c = type.constraint ?: return false
+            return isComparableType(c)
+        }
         return false
     }
 
@@ -164433,6 +164575,11 @@ interface DataView {
             val first = comparabilityCategory(type.types[0]) ?: return null
             return if (type.types.all { comparabilityCategory(it) == first }) first else null
         }
+        // (REL.1)(b0) round 742: an enum MEMBER's category follows its OWN value.
+        // The blanket `EnumLiteral → number` below was written while nothing set the
+        // flag; live, it would call `Ext.Dts` (a STRING member) a number and FP a
+        // cross-category TS2365 against a string operand.
+        enumMemberTypeIsStringValued(type)?.let { return if (it) "string" else "number" }
         if (type.flags.hasAny(TypeFlags.Number or TypeFlags.NumberLiteral or TypeFlags.EnumLiteral)) return "number"
         if (type is Type.Intrinsic && type.flags.hasAny(TypeFlags.Enum)) return "number"
         if (isNumericEnumObjectType(type)) return "number"

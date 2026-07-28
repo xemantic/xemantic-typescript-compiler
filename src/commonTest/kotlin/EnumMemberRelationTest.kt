@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler
 
+import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
 import kotlin.test.Ignore
@@ -215,6 +216,112 @@ class EnumMemberRelationTest {
             const x = typeof result === "object" ? result.impliedNodeFormat : result
             """,
         ) should { have(none { it.code == 2339 }) }
+    }
+
+    // --- (REL.1)(b0) round 742: an enum-member ACCESS EXPRESSION types as the MEMBER.
+    // Until this round it typed as `anyType` — an enum's own type carries no member
+    // table, so the property lookup missed and the access fell through to the anyType
+    // tail. That is what made round 740's `take(Ext.Dts)` control vacuous and what made
+    // the relation unable to reject `const e: E.X = E.Y` however sharp its rule was.
+    // Each pin below is stated so it FAILS on an `anyType` access — `any` relates to
+    // everything, so a pin that merely expects silence would measure nothing.
+
+    @Test
+    fun `a numeric enum member expression is not assignable to a string parameter`() {
+        diagnose(
+            """
+            enum E { A, B }
+            declare function take(s: string): void
+            take(E.A)
+            """,
+        ) should { have(any { it.code == 2345 }) }
+    }
+
+    @Test
+    fun `a string enum member expression is not assignable to a number parameter`() {
+        diagnose(
+            """
+            enum Ext { Dts = ".d.ts", Dmts = ".d.mts" }
+            declare function take(n: number): void
+            take(Ext.Dts)
+            """,
+        ) should { have(any { it.code == 2345 }) }
+    }
+
+    @Test
+    fun `an enum member type prints qualified by its enum`() {
+        val messages = diagnose(
+            """
+            enum E { A, B }
+            declare function take(s: string): void
+            take(E.A)
+            """,
+        ).filter { it.code == 2345 }.map { it.message }
+        assert(messages == listOf("Argument of type 'E.A' is not assignable to parameter of type 'string'."))
+    }
+
+    /**
+     * The other half of (b0): the member type must WIDEN. tsc gives `let x = E.A` the
+     * enum type, not the member, so a later `x = E.B` is legal — without the widening
+     * rule the mint alone would make ordinary enum code an error.
+     */
+    @Test
+    fun `negative control - a let initialized from a member widens to the enum`() {
+        diagnose(
+            """
+            enum E { A, B }
+            let x = E.A
+            x = E.B
+            """,
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    @Test
+    fun `negative control - a member expression is assignable to its own enum`() {
+        diagnose(
+            """
+            enum E { A = 1, B = 2 }
+            const c: E = E.A
+            """,
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    /**
+     * (b0) unmasked two pre-existing gaps that `anyType` had been hiding, both in the
+     * arithmetic/comparison pass, both fixed at the root rather than re-masked. These
+     * pin the roots directly, in shapes independent of enums where possible.
+     */
+    @Test
+    fun `negative control - a type parameter constrained to an enum is relationally comparable`() {
+        diagnose(
+            """
+            enum SK { First = 0, Last = 10 }
+            function f<T extends SK>(token: T): boolean {
+                return token >= SK.First && token <= SK.Last
+            }
+            f(SK.First)
+            """,
+        ) should { have(none { it.code == 2365 }) }
+    }
+
+    @Test
+    fun `negative control - an inner const shadows an enclosing annotated binding`() {
+        diagnose(
+            """
+            interface Ident { readonly xk: number }
+            enum State { Try, Catch, Finally }
+            interface Exc { state: State }
+            export function outer(): void {
+                let state: Ident
+                function inner(exception: Exc): boolean {
+                    const state = exception.state
+                    return state < State.Finally
+                }
+                state = { xk: 1 }
+                inner({ state: State.Try })
+            }
+            """,
+        ) should { have(none { it.code == 2365 }) }
     }
 
     @Test
