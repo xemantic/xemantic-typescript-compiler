@@ -20,6 +20,107 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 740 (2026-07-28) — PART 1, (PERF.HW): THE CORES ARE REAL. THE QUESTION WAS WRONG.
+A "SINGLE-THREADED" xtsc RUN ALREADY CONSUMES 3.15 OF THE 4 CORES.** The item asked whether
+this VPS has real cores so that M2 is worth reviving, with unpark condition ">= 8 real cores".
+Both halves of that framing are now measured, and the second one is answered by a number
+nobody in this arc had taken: **85.6 seconds of USER CPU for a 27.1 second wall.** 79% of the
+machine is spoken for before the first worker is created.
+
+**THE BOX, MEASURED NOT ASSUMED.** `nproc` 4; AMD EPYC-Rome @ 2445 MHz; **4 distinct `core
+id`s each with ONE thread sibling — no SMT**; **no cgroup `cpu.max`**; **steal 0.0 mean, 0 max
+across 72 `vmstat 5` samples** spanning the entire probe. Steal alone does NOT settle "are the
+cores real" — a hypervisor quota can be enforced without steal accounting — so they were tested
+directly with a tiny-working-set pure-CPU loop (no allocation, no JIT): **1.00x / 1.56x /
+3.45x / 3.61x at 1/2/4/8-way concurrency.** Four real, independent, unthrottled cores. (The
+2-way point is low only because a ~2 s job is dominated by process start.)
+
+**THE TABLE** (compiler profile, `--noEmit`, `-Xmx4g`, one cold JVM per run, 3 reps,
+**round-robin INTERLEAVED across levels** — round 666 ran the levels in blocks, which lets
+drift land on one level):
+
+| level | self ms (r1 / r2 / r3) | median | per-rep median delta | wins vs w1 | user CPU | **cores** | peak RSS |
+|---|---|---:|---:|:---:|---:|---:|---:|
+| **w1** | 27,126 / 26,356 / 27,904 | **27,126** | — | — | 85.6 s | **3.15** | 822 MB |
+| **w2** | 23,961 / 24,458 / 24,452 | **24,452** | **-11.67%** | **3/3** | 85.3 s | 3.49 | 1,555 MB |
+| **w4** | 25,976 / 26,452 / 25,838 | **25,976** | -4.24% | 2/3 | 92.6 s | 3.57 | 1,705 MB |
+| **w8** | 32,184 / 32,212 / 33,310 | **32,212** | **+19.37%** | **0/3** | 117.7 s | 3.65 | 2,240 MB |
+
+**Drift band re-derived rather than reused: +-2.87%** (w1's own three reps around their median).
+**Read the win rates, not the medians** — w2's per-rep deltas (-11.67 / -7.20 / -12.37%) never
+change sign; **w4's STRADDLE ZERO** (-4.24 / +0.36 / -7.40%) so w4 decides nothing except that
+it is not better than w2; w8 is decisive at 0/3 with a tight +18.7..+22.2% range. This
+reproduces round 666 (seq 27,873 / w2 24,669 = -11.5% / w4 27,905 = flat) on a now-check-only
+compile, and adds the w8 point the item asked for.
+
+**THE EXPLANATION.** The compile thread can be at most 1.00 of those 3.15 cores. Attributed by
+starving each subsystem in turn: `-XX:CICompilerCount=2` -> **2.34 cores / 62.8 s user (JIT
+~21.7 s of CPU)**; `-XX:ParallelGCThreads=1 -XX:ConcGCThreads=1` -> 3.06 cores (**GC only
+~2.7 s**). It is JIT, not GC: C2 compiling a ~110k-line `Checker.kt` never finishes inside a
+27 s run. **Self time is FLAT across all four configurations (26,641 / 26,824 / 26,703 /
+27,780 ms)** — so the JIT threads are NOT stealing from the compile thread (round 618's "JVM
+flag hunting is DEAD" stands); they are consuming the cores a WORKER would need. **Headroom for
+parallelism on this box is ~0.85 cores, not 3.**
+
+**THE WHOLE CURVE FOLLOWS FROM THAT.** Every level saturates at the same ~3.6-core ceiling
+(3.49 / 3.57 / 3.65). What changes with worker count is not parallelism obtained but TOTAL WORK
+done, because each worker re-binds every file and runs all ~318 program-wide collectors:
+**user CPU w1 85.6 -> w2 85.3 (+0%) -> w4 92.6 (+8%) -> w8 117.7 (+37%).** w2 divides work
+without adding any (the duplication is absorbed by the free ~0.85 cores) and banks -11.7%;
+w4 and w8 add 8% and 37% more CPU to a machine that has none left, and it converts directly
+into wall time.
+
+**AND IT IS NOT A JIT ARTIFACT — TESTED, NEGATIVE.** If w4's flatness were JIT threads crowding
+out workers, freeing them would fix it. w2: 24,305 -> 24,323 (unchanged). w4: 25,870 (3.62
+cores) -> 25,574 (**3.28 cores**). ~0.34 cores demonstrably released and the wall did not move.
+**The w4 ceiling is the parallel design's own duplicated work, not core starvation.**
+
+**THE FOUR-CONCURRENT-PROCESS TEST, CORRECTLY INTERPRETED.** Four INDEPENDENT solo compiles run
+at once took 103-105 s each (3.85x solo), aggregate throughput **1.03x** — which looks
+catastrophic until 3.15 is applied: 4 x 85.6 = 342 core-seconds on 4 cores has an **86 s
+floor**, and 105 s against that floor is **82% parallel efficiency**. **The box parallelises
+fine. Our compile does not, because one copy of it already occupies 79% of the machine.**
+
+**AMDAHL, AND WHERE THE MODEL BREAKS.** `seq = R + P`, `wN = R + P/N`: the w1/w2 fit gives
+**P = 5,348 ms divisible (19.7%)**, R = 21,778 ms — an infinite-worker floor of **-19.7%
+(1.25x), ever**. The w1/w4 fit gives P = 1,533 ms (5.7%). **The two disagree by 3.5x**, which
+per the rule fixed BEFORE the run means the model is contention-broken beyond w2 and only the
+w1/w2 fit is meaningful. Round 666 fitted 23%, this round 19.7%: **not resolvable at this
+precision** (P is twice a delta whose own per-rep spread is 1,554 ms, so P carries +-5.7
+points). Stated so nobody reads a trend into it — and the prior written down before the run,
+that removing emit from R should RAISE the divisible share, is therefore **untested, not
+falsified**.
+
+**ALSO FOUND, AND QUEUED AS (PERF.HW.a): `--workers N` IS NOT BEHAVIOUR-PRESERVING.** Sequential
+emits **46** diagnostics; **every** parallel level emits **62**. The 16 extras are one family in
+one file — `src/compiler/utilities.ts:11349..11410`, TS2322 *"Type `EvaluatorResult<number>` is
+not assignable to type `EvaluatorResult`"* and its `<string>` instantiations. **Identical at
+w2, w4 AND w8** (not count-dependent) and **deterministic across reps** (not a race): the
+round-609 signature, a program-wide COLLECTOR iterating the INV.6 partition view instead of
+`binderResults`. So the table above compares a correct sequential run against a diverging
+parallel one; the 16 extra emissions are negligible in cost so the timings stand, but **no
+`--workers` wall number can be a claim until this closes.**
+
+**VERDICT.** Cores real; only four; 3.15 already spoken for. **M2 stays parked and its unpark
+condition is REWRITTEN in place**: ">= 8 real cores" is necessary but INSUFFICIENT — the
+measured requirement is **>= 8 cores net of the ~3.2 the JVM's own JIT/GC consume, i.e.
+realistically >= 12** — and unlike the workers that tax is FIXED per JVM, so a bigger host
+simply out-sizes it. **Is shrinking the 77% duplicated term worth attempting? Not now**, for
+three reasons in increasing order of difficulty: the ceiling is 1.25x even if the duplication
+vanished entirely; there is no machine here to spend it on; and the mode is incorrect.
+
+**PREDICTIONS SCORED, 5 of 6** (all stated in full before any measurement): P1 drift <= +-3%
+**HELD** (+-2.87%); P2 w2 an 8-15% win at >= 2/3 **HELD** (-11.7%, 3/3); P3 w4 flat and not
+better than w2 **HELD** marginally; P4 w8 worse by >= 5% **HELD** (+19.4%, 0/3); **P5
+FALSIFIED** — w8 fits `-Xmx4g` comfortably (peak RSS 2,240 MB; GC 1.1 s of the 5.4 s
+regression, ~20% of it), so **no level was skipped for want of RAM**; P6 verdict **HELD** but
+for an unpredicted reason. The miss and the surprise point the same way: **memory was never the
+constraint, and CPU was constrained by something nobody had measured rather than by the core
+count everybody had been arguing about.**
+
+**NO `src/` CHANGE** — stated explicitly rather than skipped silently, so no suite run; 12,927
+stands. Full derivation: **`docs/perf/worker-scaling-round740.md`**.
+
 **Round 739 (2026-07-28) — PART 1, (BENCH.1): THE YARDSTICK WAS BROKEN IN A DIFFERENT PLACE
 THAN ROUND 738 THOUGHT, AND ROUND 738's CORRECTION IS RETRACTED.** The item was queued on
 round 738's inference that "every published xtsc-vs-tsc `--no-emit` ratio compared our
@@ -2120,23 +2221,69 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   deliberately did not start it thin. Scored predictions E1-E4 are written down in
   `docs/perf/engine-rule-price.md` § 4 — score them.
 
-- [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
-  my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is
-  parked with an explicit unpark condition — "a host with ≥8 real cores (re-run this
-  exact probe first)" — and the owner cannot say whether the Hetzner instance has
-  real cores. **Do not guess from the plan name** (Hetzner's shared-vCPU CX/CPX lines
-  behave very differently from the dedicated CCX line under sustained load, and this
-  workload runs saturated for ~30 s). **The probe is self-answering and costs one
-  session:** run the existing `--workers` mode at 1/2/4/8 on the compiler profile,
-  2 reps each, and read the shape — the round-666 baseline on 4 cores was seq 27.9 s
-  / w2 24.7 s (−11.5%) / w4 27.9 s (FLAT, contention-bound). If w4 and w8 keep
-  scaling, the cores are real and M2 Phase 1 (shared frozen collectors) is worth
-  reviving; if w4 goes flat again, the box is equivalent to the old one and M2 stays
-  parked with the measurement recorded. **Sequencing: this is NOT single-thread work
-  and must not preempt (DISPATCH.1)** — M2 measured 77% of the work as non-divisible
-  per-worker duplication, and that fraction is largely the dispatch machinery, so
-  shrinking it first is also what makes workers pay. Run this only when a session has
-  spare budget, and record the numbers either way.
+- [x] **(PERF.HW) DONE round 740 — the cores are REAL, and the question was the
+  wrong one: a SEQUENTIAL run already consumes 3.15 of the 4 cores.** Artifact:
+  `docs/perf/worker-scaling-round740.md`.
+  **The box:** `nproc` 4, AMD EPYC-Rome @ 2445 MHz, 4 distinct `core id`s with ONE
+  thread sibling each (**no SMT**), **no cgroup `cpu.max`**, steal **0.0 mean / 0
+  max over 72 vmstat samples**. Steal alone does not settle it (a hard quota need
+  not be accounted as steal), so the cores were tested directly with a
+  tiny-working-set pure-CPU loop: **1.00x / 1.56x / 3.45x / 3.61x at 1/2/4/8-way**
+  — four real, independent, unthrottled cores.
+  **The table** (compiler profile, `--noEmit`, -Xmx4g, 3 reps, **round-robin
+  interleaved across levels** rather than round 666's blocks; drift band re-derived
+  from w1's own reps at **+-2.87%**):
+
+  | level | median self | per-rep median delta | wins vs w1 | user CPU | cores |
+  |---|---:|---:|:---:|---:|---:|
+  | w1 | 27,126 ms | — | — | 85.6 s | **3.15** |
+  | w2 | 24,452 ms | **-11.67%** | **3/3** | 85.3 s | 3.49 |
+  | w4 | 25,976 ms | -4.24% (deltas STRADDLE ZERO = undecided) | 2/3 | 92.6 s | 3.57 |
+  | w8 | 32,212 ms | **+19.37%** | **0/3** | 117.7 s | 3.65 |
+
+  Reproduces round 666 (seq 27,873 / w2 24,669 / w4 flat) and adds the w8 point.
+  **THE EXPLANATION, never measured before: 85.6 s of USER CPU for a 27.1 s wall.**
+  Attributed by starvation — `-XX:CICompilerCount=2` -> 2.34 cores / 62.8 s user
+  (**JIT ~21.7 s of CPU**), `-XX:ParallelGCThreads=1 -XX:ConcGCThreads=1` -> 3.06
+  (**GC only ~2.7 s**): C2 compiling a ~110k-line `Checker.kt` never finishes inside
+  a 27 s run. **Self time is FLAT across all four configurations (26.6-27.8 s)** —
+  the JIT is not stealing from the compile thread (round 618 holds), it is consuming
+  the cores a WORKER would need, leaving **~0.85 free**. Every level saturates at the
+  same **~3.6-core ceiling**; what changes with worker count is TOTAL WORK (user CPU
+  +0% / +8% / +37%), because each worker re-binds every file and runs all ~318
+  collectors. **Not a JIT artifact — tested, negative:** freeing ~0.34 cores at w4
+  left the wall unmoved (25,870 -> 25,574). Four INDEPENDENT concurrent compiles ran
+  3.85x slower each (aggregate 1.03x) — which is **82% parallel efficiency** once
+  3.15 is applied (4 x 85.6 core-seconds on 4 cores floors at 86 s; measured 105 s).
+  **The box parallelises fine; our compile does not, because one copy already
+  occupies 79% of it.**
+  **Amdahl:** the w1/w2 fit gives P = 5,348 ms divisible (**19.7%**), R = 21,778 ms,
+  infinite-worker floor **-19.7% (1.25x) ever**; the w1/w4 fit gives 5.7%, a 3.5x
+  disagreement, so per the rule fixed before the run the model is contention-broken
+  beyond w2. 19.7% vs round 666's 23% is NOT resolvable (P is twice a delta whose
+  per-rep spread is 1,554 ms).
+  **Is shrinking the 77% duplicated term worth attempting? NOT NOW, three reasons:**
+  (1) the ceiling is 1.25x even if the duplication vanished; (2) there is no machine
+  here to spend it on; (3) the mode is INCORRECT — see the next item.
+  Predictions **5 of 6** (P5 falsified: w8 peak RSS 2,240 MB fits -Xmx4g easily, GC
+  1.1 s of the 5.4 s regression — **no level was skipped for want of RAM**).
+
+- [ ] **(PERF.HW.a) `--workers N` IS NOT BEHAVIOUR-PRESERVING — found by the round-740
+  probe, NOT fixed there.** Sequential emits **46** diagnostics on the compiler
+  profile; **every** parallel level emits **62**. The 16 extras are one family in one
+  file — `src/compiler/utilities.ts:11349..11410`, TS2322 *"Type
+  `EvaluatorResult<number>` is not assignable to type `EvaluatorResult`"* (and the
+  `<string>` instantiations). Classification: **identical at w2, w4 AND w8** (so not
+  a count-dependent partitioning effect) and **deterministic across reps** (so not a
+  race) — the round-609 signature, i.e. a program-wide COLLECTOR iterating the INV.6
+  partition view (`checkedResults`) instead of `binderResults`, so a partition worker
+  never sees the context that suppresses it. **`--partitionCheck N` is the existing
+  harness for exactly this and should reproduce it sequentially** (one run: if
+  `--partitionCheck 2` also diverges, the bug is the partition MODEL and is
+  debuggable single-threaded; if it does not, the bug is in the parallel path's fresh
+  per-worker bind). This is a prerequisite for ANY future `--workers` wall-time
+  claim, and it is cheap relative to M2 itself. No v1 impact — `--workers` is opt-in
+  and off by default.
 
 - [ ] ~~(cache/identity work of any shape)~~ — **CLOSED round 716 by measurement,
   do NOT re-open without new evidence.** (1) The context-bypassed resolution
@@ -2826,10 +2973,21 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   reclaimed but no wall win — w4 is already contention-bound, which is why it
   regresses against w2. VERDICT: the work is sound and would matter on a bigger
   machine, but on 4 cores / 7.7 GB it cannot be demonstrated, and this arc's rule
-  is not to land unmeasurable perf work. What would change the verdict: a host
-  with ≥8 real cores (re-run this exact probe first), or a redesign that shrinks
-  R rather than dividing P — the full per-worker re-bind is the single biggest
-  identified duplication and is the honest first target if M2 is revived.
+  is not to land unmeasurable perf work. ~~What would change the verdict: a host
+  with ≥8 real cores (re-run this exact probe first)~~ **UNPARK CONDITION REWRITTEN
+  ROUND 740 (PERF.HW) — "≥8 real cores" is NECESSARY BUT INSUFFICIENT.** The probe
+  was re-run and measured the thing this item never checked: **a SEQUENTIAL run
+  already consumes 3.15 of the 4 cores** (85.6 s user CPU / 27.1 s wall; ~2.2 cores
+  of it JIT, 0.11 GC), so only ~0.85 cores are free and every worker level saturates
+  at the same ~3.6-core ceiling. The measured requirement is therefore **≥8 cores
+  *net of* the ~3.2 the JVM's own JIT/GC consume during a ~27 s cold run, i.e.
+  realistically ≥12** — and that tax is **FIXED per JVM** (it does not grow with
+  worker count), so a larger host simply out-sizes it. Revival order, unchanged in
+  spirit but now with numbers behind it: **(a) close the `--workers` correctness
+  divergence (PERF.HW.a) — it emits 62 diagnostics against sequential's 46; (b)
+  shrink R — the full per-worker re-bind is still the single biggest identified
+  duplication; (c) only then re-probe, on a ≥12-core host.** The prize is capped at
+  **1.25x** by the w1/w2 Amdahl fit regardless.
 
 **EP — Emit parity (owner-authorized 2026-07-12: "output parity, including reported errors").**
 The offline v1 DoD checked emit COMPLETENESS (all files emitted, exit 0) but not
