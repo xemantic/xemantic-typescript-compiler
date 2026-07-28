@@ -20,6 +20,80 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 752 (2026-07-28) — (REL.1)(c) STEP 5b: FOUR MORE READERS FLIPPED IN THREE COMMITS,
+AND THE ROUND'S REAL DELIVERABLE IS A NEGATIVE RESULT ABOUT THE LAST TWO.** Compiler profile
+`--listAll` BYTE-IDENTICAL at 46 after every commit — whole output diffed SORTED
+LINE-BY-LINE, composition unchanged (TS2591×43 / TS2304×2 / TS2584×1, zero TS2322). 8,173
+generated corpus tests over every class carrying a TS2366/TS7030/TS2355 or enum baseline +
+630 local tests over the enum / narrowing / discriminant / switch / guard classes, 0 failures.
++9 local pins, and round 751's "not flipped yet" negative control inverted as it said it must
+be. **The full suite and the cost gate are the coordinator's run — see the report.**
+
+**CORRECTION TO `6c988338`'s COMMIT MESSAGE, recorded here because the commit is pushed: it
+claims "all five readers now flipped" and that is WRONG.** The OBJLIT
+discriminant-candidate filter (`selectUnionMemberByObjLitDiscriminant`, :147014) is still on
+the annotation walk — the miscount came from treating the exhaustive-switch gate's TWO
+readers as two of the five. **(5c) is therefore NOT unblocked; one reader remains.**
+
+**COMMIT 1 (`e717aba2`) — THE EXHAUSTIVE-SWITCH GATE, and the probe FORCED ITS SHAPE.** The
+reader is `unionDiscriminantKeysOfTypeCore`, behind `isExhaustiveEnumSwitch`. First probe, the
+obvious one — read enum-MEMBER types only, as round 751's site does — came back **204 AGREE
+but 9 TYPEBLIND**, the type path losing keys the AST path had: 7× a bare `kind: SyntaxKind`
+expanding to 396 members, 2× `newLine: NewLineKind`. Landing that would have started
+reporting switches tsc accepts. **The fix is a PAIR that mirrors the AST pair arm for arm** —
+`enumSwitchKeysFromType` twins `enumSwitchKeysFromTypeNode` (bare enum → whole member domain),
+`enumDiscriminantKeysOfType` twins `enumMemberKeysOfTypeNode` (a member) — and it re-measured
+**213 sightings, 213 AGREE, 0 mismatched, 0 blind, 0 gained**. The round-423 optional rule is
+untouched: `questionToken` still supplies `@undefined`, which the resolved type does not carry.
+**ABLATION: with the AST fallback CUT OUT the profile stayed byte-identical at 46**, so the
+annotation walk is already dead here too. **The negative control moved exactly as round 751
+predicted**: the parenthesized-discriminant switch went from TS2366 to silent.
+
+**COMMIT 2 (`3d8119dc`) — THE `neverType` DEFAULT-CLAUSE GATE**, `narrowByDefaultClause`'s
+non-union leg, substituted with round 751's shared `discriminantKeysOfMember` (whose fallback
+IS that site's former composition, so it can only ANSWER where the site was blind). 26
+sightings, 4 answering, **4 AGREE, and the type half ALONE reproduced all 4** — the ablation
+was measured PER SIGHTING rather than per build, which is sharper and free. **Pin
+non-vacuity was ATTRIBUTED, not assumed:** a build of `e717aba2` with only this site left
+unflipped emits `TS2345: Argument of type 'Reason' is not assignable to parameter of type
+'never'` on the pin's source, so the pin belongs to this reader and not to commit 1's.
+
+**COMMIT 3 (`6c988338`) — THE TWO `.kind` DOMAIN READERS, AND THE NEGATIVE RESULT.**
+`kindDomainKeysOfType` (207/207 AGREE over 234 sightings) and `discriminantKindKeys` (738/738
+AGREE over 986, type half alone reproducing all 738) both flip cleanly. **But both are
+UNOBSERVABLE.** Three shapes built to expose a before/after — a negative guard over a
+wide-domain subject, a positive guard over a three-member union, a conditional-type exclusion,
+each with the parenthesized `kind` that discriminated all three earlier flips — are SILENT on
+a build of pristine `3d8119dc` and on the flipped build alike. **The mechanism: both readers
+are VETOES layered over the structural relation, written when an enum member resolved to
+`anyType`; (REL.1)(a)/(b) gave the relation that ability, so a veto that declines to answer no
+longer changes an outcome.** Their pins ship declared as non-discriminating regression guards
+rather than passed off as proof.
+
+**AND THAT RE-SIZES (5c): `kindDomainKeysOfType`'s ONLY consumer is `kindDomainKeysExceed`,
+which (5c) intends to DELETE** — so that flip is scaffolding kept uniform until the deletion
+lands, not a fix. `discriminantKindKeys`' consumer (`typeGuardMemberDisjoint`) is NOT slated
+for deletion, which is what puts that one on (5c)'s critical path. A future agent choosing
+between "flip the reader" and "delete its consumer" should check the consumer's fate first.
+
+**METHOD NOTES.** (i) The self-test was carried over from round 751 and re-fired
+(`SELFTEST MISMATCH-REACHABLE` from the SAME categoriser on a perturbed key set), and the
+`canonicalEnumSymbol` memo-freeze was re-measured with the memo BYPASSED at every mint: **0
+divergences**. (ii) **The pristine-comparison build is the cheap instrument of this arc**: for
+each flip, `git stash push -- src/commonMain/kotlin/Checker.kt` (keeping the new tests),
+recompile, and run the ~1.4-second scratch-project CLI — that measured pin non-vacuity for
+commits 1 and 2 and produced commit 3's negative result, all without a `jvmTest` cycle. (iii)
+The memory ritual is per-INVOCATION and held all round: `./gradlew --stop` plus a graceful
+`pkill -f 'KotlinCompile[D]aemon'` before every compile (~2.5–3 min each); the daemons regrow
+to ~1 GB free during profile CLI runs, so the check was repeated before each.
+
+**WHAT DID NOT WORK.** (i) The enum-member-only reader at commit 1's site (9 TYPEBLIND, above)
+— the round-751 site needed no bare-enum arm and assuming this one was the same would have
+been a false negative generator. (ii) The three shapes hunting for an observable delta in
+commit 3. (iii) `Vfs.envVar` does not exist, so the probe's perturbation switch could not be
+an env var; re-running the extracted categoriser on a perturbed copy in the SAME process is
+strictly better anyway — same function, so it cannot drift from the one that printed AGREE.
+
 **Round 751 (2026-07-28) — (REL.1)(c) STEP 5b LANDED (FIRST OF FIVE CALL SITES): THE
 DISCRIMINANT READER IS TYPE-FIRST, AND THE PROBE THAT HAD TO COME FIRST SAYS THE SEVENTH
 PRODUCER LANDS IN THE SAME KEY SPACE.** Compiler profile `--listAll` **BYTE-IDENTICAL at 46**
@@ -1878,20 +1952,40 @@ backlog-horizon decision, not queue debt.)
         so dropping it is a NO-OP today and buys nothing until inference preserves the member
         type.** An assignability probe CANNOT establish this (`Kind` is leniently assignable to
         `Kind.Alpha` here) — read the PRINTED type name.
-      - **(5b) NEXT — the four remaining readers, one per commit, same shape.** Take the
-        **exhaustive-switch `neverType` gate** first: it is already pinned as a deliberate
-        negative control (a parenthesized discriminant narrows correctly but is not accepted as
-        exhaustive → TS2366 where the plain-annotation sibling is silent), so its flip has a
-        ready-made before/after signal, and it is the site the probe's evidence most directly
-        covers. Then `kindDomainKeysOfType`, `discriminantKindKeys`, and the objlit
-        discriminant-candidate filter (that last one is the one that consumes the round-475
-        `TypeQuery` arm, so expect the AST fallback to still be load-bearing there — ablate it
-        to find out rather than assuming). Re-run the mint-equality + memo-bypass probe for
-        each; `EnumDiscriminantKeySpaceTest` and `EnumDiscriminantTypeReadTest` are the
-        standing gates.
+      - **(5b) ROUND 752 FLIPPED FOUR MORE, IN THREE COMMITS. ONE READER REMAINS.** All
+        byte-identical at 46, 8,173 generated + 630 local tests / 0 failures, +9 pins.
+        (1) `e717aba2` the exhaustive-switch gate (`unionDiscriminantKeysOfTypeCore`) — 213/213
+        AGREE, fallback ABLATED byte-identical; **the probe forced the shape: an
+        enum-member-only reader went TYPEBLIND on 9 sightings (a bare `kind: SyntaxKind`
+        expanding to 396 members), so the type path must be the AST pair's arm-for-arm twin —
+        `enumSwitchKeysFromType` + `enumDiscriminantKeysOfType`.** Round 751's negative control
+        inverted as predicted. (2) `3d8119dc` the `neverType` default-clause gate — 4/4 AGREE,
+        per-sighting ablation showed the type half alone reproduces all 4; pin non-vacuity
+        ATTRIBUTED by building `e717aba2` with only that site unflipped. (3) `6c988338`
+        `kindDomainKeysOfType` (207/207) and `discriminantKindKeys` (738/738) — **clean but
+        UNOBSERVABLE: three shapes built to expose a before/after are silent on the pristine
+        build too, because both readers are VETOES over the structural relation and
+        (REL.1)(a)/(b) gave the relation that ability.** Their pins are declared
+        non-discriminating regression guards. Memo-bypass probe re-run each time: 0 divergences.
+      - **(5b) LAST READER — the objlit discriminant-candidate filter**
+        (`selectUnionMemberByObjLitDiscriminant`, :147014). **NOTE: `6c988338`'s commit message
+        wrongly says all five are flipped — it miscounted the exhaustive-switch gate's TWO
+        readers as two of the five. This one is still on the annotation walk, and (5c) is NOT
+        unblocked until it is done.** It is the site that consumes the round-475 `TypeQuery`
+        arm (`p: typeof X` for a top-level const string → the resolved type widens to `string`
+        while the annotation still yields a `lit:s:` key), so expect the AST fallback to stay
+        load-bearing there — ABLATE to find out rather than assuming. Its docstring still
+        carries the pre-(REL.1)(a) premise "the resolved property type cannot decide this",
+        which is now false and should be corrected with the flip. Re-run the mint-equality +
+        memo-bypass probe; `EnumDiscriminantKeySpaceTest`, `EnumDiscriminantTypeReadTest`,
+        `ExhaustiveSwitchTypeReadTest` and `KindDomainTypeReadTest` are the standing gates.
       - **(5c) Delete** `discriminantPropAnnotation` and the AST key helpers, then
         `kindDomainProvesNotSubtype` / `kindDomainKeysExceed` (the round-729 `evaluateConditional`
-        patch included).
+        patch included). **Round 752 re-sized the second half: `kindDomainKeysOfType` feeds ONLY
+        `kindDomainKeysExceed`, so it dies with it — and round 752 measured that veto
+        UNOBSERVABLE on every shape built to expose it, which is the deletion evidence.
+        `discriminantKindKeys`/`typeGuardMemberDisjoint` survive that cut and keep a consumer,
+        so they are the part of (5c) that actually needed the (5b) flip.**
       - **THE DETECTOR, so the failure is loud rather than silent**: a key-space mismatch presents
         as narrowing that no longer fires, i.e. TS2339 FPs on the compiler profile — so the
         profile's 46 is the gate. Sharper, and cheap: instrument both producers for ONE run to
