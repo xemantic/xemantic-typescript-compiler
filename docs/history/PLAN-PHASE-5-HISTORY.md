@@ -1,3 +1,741 @@
+**Round 743 (2026-07-28) — (REL.1) PART 1 LANDED: THE OVERLOAD PICKER WAS DOING TWO THINGS
+WRONG, AND NEITHER OF THEM IS ABOUT ENUMS.** Corpus **12,956 / 0 failures / 8 skipped** (+7 pins),
+compiler profile `--listAll` **BYTE-IDENTICAL at 46** after both commits. **(b) is parked again,
+strictly further along, on `wip/round743-rel1b` (94c8014b) — 4 profile FPs down to 2.**
+
+**BUG 1 — THE B136 CONCRETE-OVERLOAD SWAP RE-PICKED AN OVERLOAD THE SELECTION LOOP HAD ALREADY
+REJECTED** (commit `214e8cf1`). `getReturnTypeOfCallExpression`, when the chosen signature's return
+still carries an un-inferred type parameter, looks for a NON-GENERIC overload with a concrete return
+— and took the FIRST such overload **without ever asking whether it accepts the arguments**. So
+`factory.createToken(SyntaxKind.ReadonlyKeyword)` selected the correct generic
+`<TKind extends ModifierSyntaxKind>` overload and was then swapped back to
+`createToken(token: SyntaxKind.SuperKeyword): SuperExpression` purely because that one is
+non-generic with a concrete return. The omission was invisible for the Array predicate pair the rule
+was written for, where the non-generic overload accepts whatever the generic one does. The type-based
+verdict is now extracted as `signatureAcceptsArgs`, so any site adopting a signature asks the SAME
+question, and the swap candidate is gated on it; when NOTHING accepts the arguments — i.e.
+`resolveCallOverload` itself fell through to its first-arity-match tail — the test has no signal and
+the pre-743 behaviour stands, so the change is behaviour-preserving by construction outside the bug.
+
+**AND THE REDUCTION IS WHY TWO EARLIER ATTEMPTS FAILED: IT NEEDS THE GENERIC OVERLOAD.** Round 742
+wrote the repro as "two same-arity overloads whose parameters are DIFFERENT enum members pick the
+first". That shape **selects correctly** — the round-459 AST key gate handles it, verified here as
+its own probe. What reproduces is a non-generic enum-member overload FOLLOWED BY a generic one; the
+generic overload's un-inferred return is what arms the swap. Both earlier reductions blamed the
+barrel and the enum size and came back clean for want of that ingredient.
+
+**BUG 2 — OVERLOAD SELECTION COULD NOT SEE AN `asserts` NARROW** (commit `190d34b7`).
+`getTypeOfIdentifier` answers from `currentLocalTypes` and the declaration tables. An
+`if (isFoo(x))` narrow is RECORDED there by the condition pass, so selection saw it all along; an
+`asserts` narrow lives ONLY in the flow graph, reached by `getNarrowedTypeForReference`, which every
+emission site opts into individually and `resolveCallOverload` never did. So
+`Debug.assert(isKeywordOrPunctuation(kind)); … tokenToString(kind)` picked
+`tokenToString(t: SyntaxKind): string | undefined` over the `PunctuationOrKeywordSyntaxKind` overload
+returning `string` (parser.ts:2494). `signatureAcceptsArgs` now takes a SECOND CHANCE against the
+flow-narrowed type when the un-narrowed one is rejected — deliberately second rather than primary, so
+it can only turn a rejection into an acceptance and no overload that already matched can start
+failing, and the flow walk is paid for only on the rejecting path.
+
+**BOTH REDUCTIONS ARE ENUM-FREE, WHICH IS WHAT MAKES THE PINS BITE ON MAIN.** The profile diagnostics
+are visible only with (b) applied — without member disjointness the wrong overload's parameter
+accepted the argument anyway — but neither gap has anything to do with enums, and a pin written in
+the enum shape would have been vacuous on main. `AssertNarrowedOverloadSelectionTest` is
+`unknown` + `x is string` + a two-overload function; `EnumMemberLiteralOverloadSelectionTest`'s new
+trio keeps the enum only because that IS the round-459 gate's subject, and states the mirror
+direction (`takeSuper(createToken(SK.ReadonlyKeyword))` must ERROR) so a build that still picks the
+first overload fails it.
+
+**COST GATE.** Commit 1 +0.16% (rebaselined). Commit 2 **FAILED and was justified + rebaselined in
+the same commit**: `narrow.memoServed` +9.93% and `typeNode.bypassed` +23.26%, while `narrow.walks`
+moves only +0.83% — i.e. the second chance issues ~4,600 extra narrowing requests of which 87% the
+round-664 flow-walk memo serves for free, and the +584 real walks resolve the assert predicates and
+their targets (the 19,429 extra context-bypassed typeNode resolutions). It does NOT convert into wall
+time: interleaved against the same build without the fix, 26,098 / 26,593 ms vs 26,312 / 26,394 ms,
+inside the +-2.87% drift band.
+
+**PART 2 — (b) IS PARKED AGAIN, AT 2 FPs INSTEAD OF 4** (`wip/round743-rel1b`, all five `@Ignore`s
+ON). `checker.ts:7997` and `parser.ts:2494` are gone, fixed at the root on main. What remains, both
+meaning-level so no logical-parity divergence applies:
+
+- **`utilities.ts:4175`** — TS2322, intersection-over-union distribution:
+  `(Expression & StringLiteral) | NoSubstitutionTemplateLiteral | NumericLiteral` against
+  `MemberName | (Expression & (NumericLiteral | StringLiteralLike))`.
+- **`declarations.ts:846`** — TS2322 `'T | undefined'` vs `'T | StringLiteral'`: the
+  `if (!input) return undefined!` truthiness narrow does not strip `undefined` from a `T | undefined`
+  where `T extends Node`.
+
+**NEITHER REDUCED.** A hand-built model of each shape (the same interfaces, the same annotation, the
+same narrow) passes on the (b) build. Per round 742's rule that is a missing ingredient, not an
+absent bug — and it is exactly the state bug 1's reduction was in before the generic overload was
+added, so the next round should look for what the model omits rather than re-deriving the diagnosis.
+
+**THE ROUND-459 GATE'S PREMISE IS NOW FALSE, AND THE RELATION CAN ANSWER — BUT ONLY WITH (b).** The
+gate's own comment says enum members "are not modeled as literal types"; since (a)/(b0) they are, and
+for an ANNOTATED parameter the general type path in `signatureAcceptsArgs` reaches the same verdict
+**provided the relation rejects a sibling member**, which is precisely what (b) adds. On main today
+the gate is still load-bearing (sibling members relate vacuously) and it additionally answers for a
+parameter whose annotation the type path resolves to `anyType`. So it is (c) material, not (c) work:
+retire it in the same commit that lands (b), never before. Its doc now says so.
+
+**ALSO FOUND, NOT FIXED — a second, independent overload-selection hole with the same witness.** When
+BOTH candidate overloads are generic, round 481's lenience (`paramType is Type.TypeParam` matches any
+argument) never checks the type parameter's CONSTRAINT, so
+`createToken<TK extends SuperSK>(token: TK)` wins over
+`createToken<TKind extends ModifierSK>(token: TKind)` for a `ModifierSK` argument. The probe
+(`SuperExpr<SK.ReadonlyKeyword>` where `ModifierTok<SK.ReadonlyKeyword>` is correct) is recorded
+here rather than pinned, because a constraint check is only SHARP once (b) makes an enum-member union
+discriminate — before that it accepts everything and the change would be inert.
+
+**Round 742 (2026-07-28) — (REL.1) STEP (b0) LANDED: AN ENUM-MEMBER *EXPRESSION* IS A MEMBER
+TYPE, NOT `any` — AND THAT, NOT THE RELATION, WAS WHAT (b) WAS BLOCKED ON.** Corpus
+**12,949 / 0 failures / 8 skipped** (+9 pins), compiler profile `--listAll` back to **46**
+(byte-identical), cost gate **+0.35% max** on the first commit (rebaselined) and **+0.00%** on
+the second. Two commits on main; **(b) is parked again, on `wip/round742-rel1b`.**
+
+**WHAT (b0) IS, AND WHY IT EXISTED.** Step (a) minted the enum-member type, but an enum's own
+`Type.Object` carries no member table — so `getPropertyOfType(enumType, "A")` missed and
+`computeRawTypeOfPropertyAccess` fell ALL the way through to its `anyType` tail. Only
+ANNOTATIONS ever reached `getDeclaredTypeOfEnumMember`. `enumMemberAccessType` now types the
+ACCESS as the member, deliberately as a targeted branch rather than by planting members on the
+enum's type: a member table would also make the enum a structurally NON-EMPTY relation TARGET,
+so `x: E = <anything>` would start demanding those members. `widenType` widens a member back to
+its enum, exactly as a string literal widens to `string`.
+
+**THE PINS ARE STATED SO THEY FAIL ON `anyType`.** `take(E.A)` against a `string` parameter and
+`take(Ext.Dts)` against a `number` parameter must ERROR — `any` relates to everything, so a pin
+expecting silence measures nothing. Round 740's `take(Ext.Dts)` control was exactly that kind of
+vacuous pin, and this is what fixes it.
+
+**THE CLASSIFIER FAMILY AUDIT — the round-741 gotcha applied as an audit, not as firefighting.**
+Six more sites moved onto `isEnumFlavoredObjectType` (the TS2339 empty-receiver skip, both
+TS7053/TS7052 element-access skips, the B244 write path, the assignment-narrow gate), and
+`isNumericEnumObjectType`/`isStringEnumObjectType` now answer PER MEMBER from the member's own
+constant (sharper than the whole-enum answer, and required, because a member symbol carries
+`EnumMember`, not `Enum`). **Two sites were WRONG in a direction a mechanical widening would have
+missed:** `comparabilityCategory`'s blanket `EnumLiteral → number` would have called a STRING
+member a number and FP'd a cross-category TS2365 against a string operand; and the discriminant
+filter's "an OBJECT-typed discriminant can never strictly-equal a primitive literal" rule
+silently stopped excluding enum-flavored objects the moment a discriminant was a member type
+(the exclusion is load-bearing — a string-enum VALUE *can* equal a string at runtime).
+
+**THREE PRE-EXISTING BUGS THE `any` HAD BEEN MASKING. All three fixed at the root; the round did
+NOT re-mask any of them.** (b0) took the profile 46 → 53, and every one of the 7 was a gap that
+had always been there and had always been hidden by an `any` operand short-circuit:
+
+1. **`isComparableType` never resolved a TYPE PARAMETER's constraint** (6 FPs) — nodeFactory.ts
+   `createToken`'s `token >= SyntaxKind.FirstToken` with `TKind extends SyntaxKind`. The sibling
+   rule has been in `isValidArithmeticOperand` since it was written; only the relational path
+   lacked it. 53 → 47.
+2. **The arithmetic pass's first-wins local recording refused a genuine SHADOW** (1 FP) —
+   generators.ts declares `let state: Identifier` in `transformGenerators` and the nested
+   `endExceptionBlock()` declares its own `const state = exception.state`. The pass copies its
+   locals map per scope frame and restores at the frame's leave, so the enclosing recording is
+   still visible while the nested body is walked, and `declName !in currentLocalTypes` refused
+   the shadow. `spineArithInheritedName` decides inheritance by INSTANCE IDENTITY against the
+   innermost saved map — an entry made in this scope is either absent outside or a different
+   instance — so first-wins still holds WITHIN a scope. 47 → **46**.
+3. **`checkVarDeclAssignabilityCore` has its OWN inline literal-widener, separate from
+   `widenType`** (23 FPs, found by putting (b) on top of (b0) and reading the fallout) — and it
+   is what the TS2322 assignment check later reads as the target's declared type. So
+   `let flags = TransformFlags.None; flags = TransformFlags.ContainsESNext` — the way tsc's own
+   sources start every flags accumulator — inferred `flags` as the MEMBER type and made the
+   second line an error (74 → 51). The same widening must also DISTRIBUTE over a UNION, because
+   `let variance = mods & Out ? (mods & In ? VarianceFlags.Invariant : …) : …` infers a union of
+   members (51 → 50). `widenEnumMemberTypes` does both and is a no-op on anything carrying no
+   member type. **These landed on MAIN without the (b) rule**, because the INFERRED type was
+   wrong either way — merely invisible while two sibling members related vacuously.
+
+**DISPLAY.** Member types now print QUALIFIED (`SyntaxKind.Identifier`), as tsc does. The bare
+member name is also the name of an unrelated interface, and (b0) puts these types into every
+enum-member expression in the program, so the bare form would start naming the wrong thing.
+
+**(b) IS PARKED AGAIN — `wip/round742-rel1b` (4252f2d2) — BUT IT IS STRICTLY FURTHER ALONG.**
+On that branch **all FIVE `@Ignore`s flip ON**, including the fourth (`const e: E.X = E.Y`,
+which needed (b0)) and the fifth, unblocked by DELETING the string TARGET half of step (a)'s
+base-primitive leg — round 741 named that "the cheapest thing (b) can remove", and it is right:
+tsc rejects `string → Ext.Dts` because a string enum is nominal, and unlike the numeric direction
+there is no bit-flag compatibility rule to justify it.
+
+**WHAT BLOCKS IT IS EXACTLY ROUND 741's FOUR FPs**, unchanged in identity: `checker.ts:7997`
+(TS2769), `parser.ts:2494` (TS2345, assertion-narrow + `tokenToString` overload pick),
+`declarations.ts:846` (TS2322 `T | undefined` vs `T | StringLiteral`), `utilities.ts:4175`
+(TS2322, intersection-over-union). **That the count returns to FOUR after (b0) — a change that
+puts member types into every enum-member expression in the program — is itself evidence for round
+741's read that these are relation/narrowing gaps passing vacuously, not enum work.**
+
+**DIAGNOSED, NOT FIXED, AND IT IS THE NEXT ROUND'S STARTING POINT: `checker.ts:7997` IS AN
+OVERLOAD-PICK BUG, WITH THE ENUM ONLY AS WITNESS.** `factory.createToken(SyntaxKind.ReadonlyKeyword)`
+selects the FIRST overload — `createToken(token: SyntaxKind.SuperKeyword)` — and returns
+`SuperExpression`, which then fails `createIndexSignature`'s `ModifierLike[]` parameter. It has
+ALWAYS picked that overload; while `kind: SyntaxKind.SuperKeyword` and
+`kind: SyntaxKind.AbstractKeyword` were mutually assignable, the wrong return type related to the
+right one anyway. Reduced to a standalone repro (no barrels, no big enum): **two same-arity
+overloads whose parameters are DIFFERENT enum members pick the FIRST, while the same pair
+distinguished by ARITY picks correctly** — so `resolveCallOverload`'s type-based loop is not
+rejecting the mismatching member parameter, even though both its round-459 AST key-space gate and
+the (b) relation rule should. That loop is where to look, and note that the round-459 gate
+(`enumMemberKeysOfTypeNode`/`enumMemberKeyOfExpr`) exists verbatim because "enum members are not
+modeled as literal types" — which is no longer true, so it is also (c) deletion material.
+
+**METHOD NOTE.** The two widening bugs were found by LANDING (b) on top of (b0) and reading its
+fallout, then splitting the result: the fallout that was really (b0) incompleteness went to main,
+the rest stayed parked. A round that had only measured (b0) in isolation would have shipped both
+latent, because sibling members related vacuously and no diagnostic could see the wrong type.
+
+**Round 741 (2026-07-28) — (REL.1) STEP (a) LANDED: THE ENUM-MEMBER TYPE NOW EXISTS, AND IT
+CHANGED NO ANSWER.** Corpus **12,940 / 0 failures / 8 skipped** (+5 pins, +1 `@Ignore`),
+compiler profile `--listAll` **byte-identical at 46 errors** — the whole output, not just the
+count — and the cost gate green at **max +0.40%** (rebaselined in this commit, see below).
+`TypeFlags.EnumLiteral` has a WRITER for the first time, so the widening rule
+`if (sf.hasAny(EnumLiteral) && tf.hasAny(Enum)) return true` (Checker.kt ~143100), written
+long ago and never once executed, now fires.
+
+**WHAT (a) IS.** `getDeclaredTypeOfSymbolWorker` gained an `EnumMember` branch
+([getDeclaredTypeOfEnumMember]) minting a distinct `Type.Object(Object or EnumLiteral)`,
+INTERNED on `"<canonicalEnumSymbol.id>#<memberName>"`; the enum's own type is now
+`Type.Object(Object or Enum)`. The interning key is why `canonicalEnumSymbol` survives
+(REL.1) — `declaredTypes[symbol.id]` memoizes per SYMBOL INSTANCE, and the same enum arrives
+as the merged global, a file-local and a barrel-resolved alias, so a per-symbol mint hands two
+non-equal types to one member. That is the catastrophe `canonicalEnumSymbol`'s own doc records
+for the discriminant key space, and it would have been re-created here.
+
+**BOTH PRIMITIVE LEGS WERE NEEDED, IN BOTH DIRECTIONS, AND THE MECHANISM IS ONE LINE.** The
+two pre-existing enum↔primitive rules (`isNumericEnumObjectType` / `isStringEnumObjectType`,
+Checker.kt ~143118/143124) classify by `type.symbol.flags.hasAny(SymbolFlags.Enum)` — and a
+member type's symbol carries `SymbolFlags.EnumMember`, so **neither can fire for a member type
+in either direction**. Measured, not assumed — an ABLATION build (mint in, leg block deleted,
+compiled and run) fails **all four** leg pins: numeric member → `number`, `number` → numeric
+member (both shapes), and string member → `string`. Only the string TARGET direction
+(`string` → a string member) is unverified, because tsc REJECTS it and its pin is therefore
+`@Ignore`d expecting the error; it is in only for behaviour-preservation symmetry with the
+former `anyType`, and **it is the first thing (b) should try deleting**. The same ablation
+exposed that one of round 740's own four controls — `take(Ext.Dts)` — is VACUOUS with respect
+to this change: an enum-member EXPRESSION types as the enum, so it rides the pre-existing
+`isStringEnumObjectType` rule and never touches a member type. That is why the four new pins
+annotate through `declare const d: Ext.Dts` instead. The legs are
+deliberately **VALUE-BLIND** at step (a): `let a: E.A = 2` where `A === 0` is a real error but
+it is `checkEnumLiteralAssignments`' error today, and the relation co-emitting it is exactly
+the 4 spurious TS2322 round 740's probe measured on `enumAssignmentCompat5`. Tightening to
+tsc's value-equality rule belongs with (b)/(c), which retire that walker.
+
+**THE ONE KNOCK-ON, AND IT IS A GENERAL LESSON, NOT A ONE-OFF.** Round 740 predicted "knock-ons
+where a union no longer collapses now that its members are distinct" and named
+`Partial<CreateSourceFileOptions> | ESNext | CommonJS`. It reproduced EXACTLY, as a single new
+TS2339 at program.ts:1341, and the cause is not union collapse at all: **`typeof x ===
+"object"` classified the member as an OBJECT.** Its verdict function asks
+`symbol.flags.hasAny(SymbolFlags.Enum)` — true for an enum, false for its member — so
+`ModuleKind.ESNext` survived a narrow it should never survive. Fixed with one shared predicate,
+`isEnumFlavoredObjectType`, applied at BOTH sites of that family (`typeofTagOfType` :89097 and
+the `typeof === "object"` union filter :110277). **Any classifier whose rule is "an enum value
+is a number/string at runtime, never an object" must accept `Enum or EnumMember`** — before
+this round it could not tell, because members were `anyType`. Recorded as a CLAUDE.md gotcha.
+
+**BOTH LATENT HAZARDS CLOSED.** Round 740 flagged that `getTypeFromTypeReference` looks `SK.A`
+up under the BARE last segment `"A"`. (1) `currentTypeParamScope` / `currentTypeAliasArgs` were
+consulted with that bare name, so an in-scope type parameter named `A` captured the enum
+member — both consults are now gated on `node.typeName is Identifier` (a qualified name never
+denotes a type parameter). (2) The round-444 `?: globals[name]` last-segment recovery bound
+`E.Member` to an unrelated global type named `Member` on a resolution failure — now skipped
+when the LEFT segment is an enum (`typeRefQualifiedLeftIsEnum`), taking errorType over a
+foreign type of the same simple name. Neither moved the corpus or the profile.
+
+**WHAT (a) DELIBERATELY DID NOT DO.** No disjointness rule: two members of the same enum still
+relate to each other structurally (both are member-less `Type.Object`s, so it is vacuous), and
+the four `@Ignore`d expectations in `EnumMemberRelationTest` are still `@Ignore`d — they are
+(b)'s acceptance criterion, not (a)'s. No scaffolding deleted: that is (c).
+
+**(b) WAS ATTEMPTED IN THE SAME SESSION AND IS PARKED, NOT LANDED — branch
+`wip/round741-rel1b-disjointness` (045d0be5).** The rule is one line in
+`checkTypeRelatedToCore` ("two enum-member types relate only when they are the same member")
+and it WORKS: **three of the four `@Ignore`s flip ON** — sibling member, and BOTH directions of
+the sibling-node-interface case. Two things stop it landing, and both are useful to the next
+round:
+
+**(i) 4 new FPs on the compiler profile (46 → 50), one family.** `checker.ts:7997` TS2769 "No
+overload matches this call"; `parser.ts:2494` TS2345 `'string | undefined'` vs `'string |
+number'` (a `Debug.assert(isKeywordOrPunctuation(kind))` assertion-narrow feeding a
+`tokenToString` overload pick); `declarations.ts:846` TS2322 `'T | undefined'` vs `'T |
+StringLiteral'`; `utilities.ts:4175` TS2322 against `MemberName | (Expression & (NumericLiteral
+| StringLiteralLike))` — an intersection-over-union distribution. **The family is:** an
+enum-member union that used to COLLAPSE to a single `anyType` member now has real constituents,
+and a relation/narrowing path that was passing VACUOUSLY stops passing. These are meaning-level
+FPs, not form, so no `LogicalParityDivergence` applies — they are work.
+
+**(ii) The 4th pin does not flip at all, and it measures something else than the other three.**
+`enum E { X, Y }; const e: E.X = E.Y` stays silent because an enum-member ACCESS EXPRESSION
+types as the **enum**, not as the member — only ANNOTATIONS reach
+`getDeclaredTypeOfEnumMember`. Typing the expression as its member type is a separate change
+with its own blast radius (it is also what would make `take(Ext.Dts)` finally exercise the
+member path), and it should be its own sub-step.
+
+**AND A MEASURED NEGATIVE RESULT THAT IS WORTH MORE THAN THE RULE.** The obvious explanation
+for (i) — that ONE member splits into several `Type` instances, because `canonicalEnumSymbol`
+canonicalizes through `globals[name]` and INV.3(d) retired the merge for module-only names, so
+every enum in tsc's OWN sources (`SyntaxKind` included) has no global to canonicalize to — is
+**FALSE**. Replacing the identity verdict with tsc's structural one
+(`enumMemberTypesAreSameMember`: same member name + an owning enum that is the same symbol,
+canonicalizes to the same symbol, or shares an `EnumDeclaration` node) leaves the profile at the
+**same 4 FPs**. So the split is either not happening or not what these FPs are about; the next
+round should not spend a session on it. The structural comparison is kept on the branch anyway
+— it is strictly more correct and free.
+
+**COST-GATE REBASELINE, justified.** Every counter moved by < 0.5% (largest `narrow.walks`
++0.40%, `typeOfExpr.calls` +0.18%, `typeNode.bypassed` +0.12%); `spine.nodes`,
+`globals.conflated` and the error/file counts are unchanged. The cause is exactly the mint:
+unions that used to collapse to one `anyType` member now carry their real constituents, so
+narrowing walks and expression typings see more of them. This is the accounting the gate asks
+for, not a regression — it buys a type where there was none.
+
+**NEW PINS (5, all in `EnumMemberRelationTest`).** Four state the legs directly — numeric
+member → `number`, `number` → numeric member, string member → `string`, and (`@Ignore`d,
+honest about the divergence) `string` → string member, which tsc REJECTS because string enums
+are nominal while step (a)'s both-ways leg accepts. The fifth pins the `typeof === "object"`
+knock-on in a dependency-free form. A pin that passes before AND after measures nothing, so
+each was checked against the ablation build: all four non-ignored leg pins fail there. The
+knock-on pin is a reduction of the profile diagnostic itself — program.ts:1341 was present on
+the build that had the mint but not `isEnumFlavoredObjectType`, and absent after — so it is
+evidenced by the profile rather than by a second ablation.
+
+**Round 740 (2026-07-28) — PART 1, (PERF.HW): THE CORES ARE REAL. THE QUESTION WAS WRONG.
+A "SINGLE-THREADED" xtsc RUN ALREADY CONSUMES 3.15 OF THE 4 CORES.** The item asked whether
+this VPS has real cores so that M2 is worth reviving, with unpark condition ">= 8 real cores".
+Both halves of that framing are now measured, and the second one is answered by a number
+nobody in this arc had taken: **85.6 seconds of USER CPU for a 27.1 second wall.** 79% of the
+machine is spoken for before the first worker is created.
+
+**THE BOX, MEASURED NOT ASSUMED.** `nproc` 4; AMD EPYC-Rome @ 2445 MHz; **4 distinct `core
+id`s each with ONE thread sibling — no SMT**; **no cgroup `cpu.max`**; **steal 0.0 mean, 0 max
+across 72 `vmstat 5` samples** spanning the entire probe. Steal alone does NOT settle "are the
+cores real" — a hypervisor quota can be enforced without steal accounting — so they were tested
+directly with a tiny-working-set pure-CPU loop (no allocation, no JIT): **1.00x / 1.56x /
+3.45x / 3.61x at 1/2/4/8-way concurrency.** Four real, independent, unthrottled cores. (The
+2-way point is low only because a ~2 s job is dominated by process start.)
+
+**THE TABLE** (compiler profile, `--noEmit`, `-Xmx4g`, one cold JVM per run, 3 reps,
+**round-robin INTERLEAVED across levels** — round 666 ran the levels in blocks, which lets
+drift land on one level):
+
+| level | self ms (r1 / r2 / r3) | median | per-rep median delta | wins vs w1 | user CPU | **cores** | peak RSS |
+|---|---|---:|---:|:---:|---:|---:|---:|
+| **w1** | 27,126 / 26,356 / 27,904 | **27,126** | — | — | 85.6 s | **3.15** | 822 MB |
+| **w2** | 23,961 / 24,458 / 24,452 | **24,452** | **-11.67%** | **3/3** | 85.3 s | 3.49 | 1,555 MB |
+| **w4** | 25,976 / 26,452 / 25,838 | **25,976** | -4.24% | 2/3 | 92.6 s | 3.57 | 1,705 MB |
+| **w8** | 32,184 / 32,212 / 33,310 | **32,212** | **+19.37%** | **0/3** | 117.7 s | 3.65 | 2,240 MB |
+
+**Drift band re-derived rather than reused: +-2.87%** (w1's own three reps around their median).
+**Read the win rates, not the medians** — w2's per-rep deltas (-11.67 / -7.20 / -12.37%) never
+change sign; **w4's STRADDLE ZERO** (-4.24 / +0.36 / -7.40%) so w4 decides nothing except that
+it is not better than w2; w8 is decisive at 0/3 with a tight +18.7..+22.2% range. This
+reproduces round 666 (seq 27,873 / w2 24,669 = -11.5% / w4 27,905 = flat) on a now-check-only
+compile, and adds the w8 point the item asked for.
+
+**THE EXPLANATION.** The compile thread can be at most 1.00 of those 3.15 cores. Attributed by
+starving each subsystem in turn: `-XX:CICompilerCount=2` -> **2.34 cores / 62.8 s user (JIT
+~21.7 s of CPU)**; `-XX:ParallelGCThreads=1 -XX:ConcGCThreads=1` -> 3.06 cores (**GC only
+~2.7 s**). It is JIT, not GC: C2 compiling a ~110k-line `Checker.kt` never finishes inside a
+27 s run. **Self time is FLAT across all four configurations (26,641 / 26,824 / 26,703 /
+27,780 ms)** — so the JIT threads are NOT stealing from the compile thread (round 618's "JVM
+flag hunting is DEAD" stands); they are consuming the cores a WORKER would need. **Headroom for
+parallelism on this box is ~0.85 cores, not 3.**
+
+**THE WHOLE CURVE FOLLOWS FROM THAT.** Every level saturates at the same ~3.6-core ceiling
+(3.49 / 3.57 / 3.65). What changes with worker count is not parallelism obtained but TOTAL WORK
+done, because each worker re-binds every file and runs all ~318 program-wide collectors:
+**user CPU w1 85.6 -> w2 85.3 (+0%) -> w4 92.6 (+8%) -> w8 117.7 (+37%).** w2 divides work
+without adding any (the duplication is absorbed by the free ~0.85 cores) and banks -11.7%;
+w4 and w8 add 8% and 37% more CPU to a machine that has none left, and it converts directly
+into wall time.
+
+**AND IT IS NOT A JIT ARTIFACT — TESTED, NEGATIVE.** If w4's flatness were JIT threads crowding
+out workers, freeing them would fix it. w2: 24,305 -> 24,323 (unchanged). w4: 25,870 (3.62
+cores) -> 25,574 (**3.28 cores**). ~0.34 cores demonstrably released and the wall did not move.
+**The w4 ceiling is the parallel design's own duplicated work, not core starvation.**
+
+**THE FOUR-CONCURRENT-PROCESS TEST, CORRECTLY INTERPRETED.** Four INDEPENDENT solo compiles run
+at once took 103-105 s each (3.85x solo), aggregate throughput **1.03x** — which looks
+catastrophic until 3.15 is applied: 4 x 85.6 = 342 core-seconds on 4 cores has an **86 s
+floor**, and 105 s against that floor is **82% parallel efficiency**. **The box parallelises
+fine. Our compile does not, because one copy of it already occupies 79% of the machine.**
+
+**AMDAHL, AND WHERE THE MODEL BREAKS.** `seq = R + P`, `wN = R + P/N`: the w1/w2 fit gives
+**P = 5,348 ms divisible (19.7%)**, R = 21,778 ms — an infinite-worker floor of **-19.7%
+(1.25x), ever**. The w1/w4 fit gives P = 1,533 ms (5.7%). **The two disagree by 3.5x**, which
+per the rule fixed BEFORE the run means the model is contention-broken beyond w2 and only the
+w1/w2 fit is meaningful. Round 666 fitted 23%, this round 19.7%: **not resolvable at this
+precision** (P is twice a delta whose own per-rep spread is 1,554 ms, so P carries +-5.7
+points). Stated so nobody reads a trend into it — and the prior written down before the run,
+that removing emit from R should RAISE the divisible share, is therefore **untested, not
+falsified**.
+
+**ALSO FOUND, AND QUEUED AS (PERF.HW.a): `--workers N` IS NOT BEHAVIOUR-PRESERVING.** Sequential
+emits **46** diagnostics; **every** parallel level emits **62**. The 16 extras are one family in
+one file — `src/compiler/utilities.ts:11349..11410`, TS2322 *"Type `EvaluatorResult<number>` is
+not assignable to type `EvaluatorResult`"* and its `<string>` instantiations. **Identical at
+w2, w4 AND w8** (not count-dependent) and **deterministic across reps** (not a race): the
+round-609 signature, a program-wide COLLECTOR iterating the INV.6 partition view instead of
+`binderResults`. So the table above compares a correct sequential run against a diverging
+parallel one; the 16 extra emissions are negligible in cost so the timings stand, but **no
+`--workers` wall number can be a claim until this closes.**
+
+**VERDICT.** Cores real; only four; 3.15 already spoken for. **M2 stays parked and its unpark
+condition is REWRITTEN in place**: ">= 8 real cores" is necessary but INSUFFICIENT — the
+measured requirement is **>= 8 cores net of the ~3.2 the JVM's own JIT/GC consume, i.e.
+realistically >= 12** — and unlike the workers that tax is FIXED per JVM, so a bigger host
+simply out-sizes it. **Is shrinking the 77% duplicated term worth attempting? Not now**, for
+three reasons in increasing order of difficulty: the ceiling is 1.25x even if the duplication
+vanished entirely; there is no machine here to spend it on; and the mode is incorrect.
+
+**PREDICTIONS SCORED, 5 of 6** (all stated in full before any measurement): P1 drift <= +-3%
+**HELD** (+-2.87%); P2 w2 an 8-15% win at >= 2/3 **HELD** (-11.7%, 3/3); P3 w4 flat and not
+better than w2 **HELD** marginally; P4 w8 worse by >= 5% **HELD** (+19.4%, 0/3); **P5
+FALSIFIED** — w8 fits `-Xmx4g` comfortably (peak RSS 2,240 MB; GC 1.1 s of the 5.4 s
+regression, ~20% of it), so **no level was skipped for want of RAM**; P6 verdict **HELD** but
+for an unpredicted reason. The miss and the surprise point the same way: **memory was never the
+constraint, and CPU was constrained by something nobody had measured rather than by the core
+count everybody had been arguing about.**
+
+**NO `src/` CHANGE** — stated explicitly rather than skipped silently, so no suite run; 12,927
+stands. Full derivation: **`docs/perf/worker-scaling-round740.md`**.
+
+**Round 740 — PART 2, (REL.1) DECOMPOSED AND SIZED (fix deliberately NOT attempted): THE
+BLAST RADIUS EVERYONE FEARED IS **ONE** CORPUS BASELINE, AND THE ROOT CAUSE IS NOT "the
+relation is lenient" — IT IS `anyType`.** The item said "blast radius is the reason it is a
+separate item: every enum-typed comparison in the corpus goes through this, TS2322/TS2367/
+TS2345 baselines included". Measured: **12,927 tests, 1 failure.**
+
+**THE DEFECT REPRODUCES, and worse than written.** `declare enum SK { A, B }` with sibling
+interfaces differing ONLY in `readonly kind: SK.A` vs `SK.B` compiles to **zero errors in BOTH
+directions** — mutually assignable, exactly as the item claims. Same for a plain `enum`, a
+`const enum`, and the bare `const k: SK.A = SK.B`.
+
+**ROOT CAUSE, LOCATED.** `getTypeFromTypeReference` (Checker.kt:102093) reduces `SK.A` to the
+BARE member name `"A"`, resolves it via `resolveQualifiedName` to the enum's `exports["A"]`
+(a `SymbolFlags.EnumMember` symbol), and `getDeclaredTypeOfSymbolWorker` (:102387) **has no
+branch for that flag** — it falls to `else -> anyType` (:102509), cached in
+`declaredTypes[symbol.id]`. So `SK.A` and `SK.B` are *the same `Type` instance*, and the
+relation was never asked a question it could get wrong. **Corollary worth its own line:
+`TypeFlags.EnumLiteral` (Type.kt:55) is SET NOWHERE — all ~11 read sites are dead code,
+including the widening rule `if (sf.hasAny(EnumLiteral) && tf.hasAny(Enum)) return true` at
+:143100, which is already written and waiting for a flag that never arrives.**
+
+**THE MEASUREMENT — a throwaway 3-edit probe, built, measured on two axes, and REVERTED**
+(`git diff src/commonMain` empty; profile `--listAll` byte-identical to the pre-probe run at
+46 errors; cost gate all 20 counters +0.00% — that triple is the revert's proof, not a
+formality). The probe: an `EnumMember` branch minting a distinct `Type.Object(Object or
+EnumLiteral)` per member symbol (already interned by `declaredTypes[symbol.id]`, so no new
+cache); the enum's own type flagged `Object or Enum` so the dead rule at :143100 fires; and an
+enum-literal disjointness rule at the top of `checkTypeRelatedToCore`. It WORKS — the repro
+goes to 2 x TS2322 with a correct elaboration chain (`Types of property 'kind' are
+incompatible. Type 'A' is not assignable to type 'B'.`) while both negative controls stay
+silent.
+
+| axis | before | with probe | delta |
+|---|---:|---:|---|
+| corpus suite | 12,927 / 0 | 12,927 / **1** | `enumAssignmentCompat5` |
+| compiler profile `--listAll` | 46 | 52 | +6 |
+| profile self time | 26.5-27.1 s band | 26,192 ms | no measurable cost |
+
+**AND THE SINGLE FAILURE IS THE MISSING LEG, NOT THE ADDED ONE** — which is why this sizes as
+a session. It is 4 spurious `TS2322: Type 'number' is not assignable to type 'A'`: a numeric
+enum member type must stay assignable FROM `number`, and from a numeric literal equal to the
+member's value (`let a: E.A = 0` legal because `A === 0`; `a = 2` not; `Computed.A = 1` not,
+because a computed member has no literal — all three already pinned in that one baseline).
+The profile's +6 is the same family: `Extension.Dts` (a STRING enum member) not assignable to
+`string`, plus knock-ons where a union no longer collapses now that its members are distinct
+(`Partial<CreateSourceFileOptions> | ESNext | CommonJS`). **The entire measured gap is ONE
+rule family: enum member <-> its base primitive.**
+
+**DECOMPOSITION (three landable sub-steps), WHICH CONSUMERS DIE, AND WHICH ONE SURVIVES** —
+written into the queue item rather than repeated here. The headline: **`discriminantPropAnnotation`,
+`kindDomainProvesNotSubtype`, `kindDomainKeysExceed` and THREE whole AST-only passes
+(`checkEnumLiteralAssignments`, `checkNamespaceEnumUnionAssignments`, `checkEnumToEnumAssignments`)
+are 100% artifacts and go**; twelve more AST-side key-space helpers go with their consumers;
+but **`canonicalEnumSymbol` SURVIVES in modified form** — the duplicate-`Symbol`-instance
+problem it solves is independent of the relation, and a naive per-symbol mint would produce two
+non-equal types for the same member and reproduce the catastrophe its own doc records at
+:109775. Step (a) must intern on the canonical symbol, or compare structurally as tsc's
+`isEnumTypeRelatedTo` does. Also recorded: **two latent hazards that go LIVE the moment the
+member type is distinct** — `SK.A` is looked up in `currentTypeParamScope`/`currentTypeAliasArgs`
+under the BARE name `"A"` (:102125/:102129), and falls back to `globals["A"]` (:102132), so an
+unrelated type named `A` captures it. Invisible today because everything collapses to `any`.
+
+**LANDED: `src/commonTest/kotlin/EnumMemberRelationTest.kt`** — four `@Ignore`d currently-failing
+expectations naming the item (so the gap stays VISIBLE in the skipped count rather than
+vanishing) plus **four NOT-ignored positive controls** which are precisely the shapes the probe
+over-rejected, i.e. the FP firewall step (a) has to satisfy. Suite **12,927 -> 12,935 / 0
+failures / 7 skipped** (+8 tests, +4 ignored).
+
+**Round 739 (2026-07-28) — PART 1, (BENCH.1): THE YARDSTICK WAS BROKEN IN A DIFFERENT PLACE
+THAN ROUND 738 THOUGHT, AND ROUND 738's CORRECTION IS RETRACTED.** The item was queued on
+round 738's inference that "every published xtsc-vs-tsc `--no-emit` ratio compared our
+check+emit against tsc's check-only, so the honest gap is ~2.15x, not 2.4x". **I read the
+scripts instead of assuming, and the premise is false.**
+
+**WHAT EACH SIDE ACTUALLY RUNS** (verified in-file, not inferred):
+
+| script | xtsc | tsc / tsgo | decides |
+|---|---|---|---|
+| `bench-3way.sh` (CI -> `bench-history/`) | `MainKt <proj>` — **emits** | `-p tsconfig --outDir tmp` — **emits** | the published ratio |
+| `ab-interleaved.sh` | `MainKt --noEmit` | — | every perf A/B of this arc |
+| `cost_gate.py` | `MainKt --noEmit --passTiming` | — | the 20 cost counters |
+| `bench-compile-tsc.sh` | either (`--no-emit`) | — | `bench/*.tsv` |
+
+**The 2.4x is an EMIT-mode ratio with emit on BOTH sides.** `skipEmitOutputs` is set only from
+`ProjectCompiler`'s `noEmit` parameter (`ProjectCompiler.kt:144`), so the CI numerator is
+byte-for-byte the same work it was before round 738 and the ratio cannot have moved.
+**Round 738's ~2.15x is retracted in place in six files.** Its arithmetic multiplied the ratio
+by our own emit fraction `(1 - s_xtsc)` while implicitly taking tsc's `s_tsc` as ZERO — that
+is the ratio's FLOOR, not its value, and the error ran in the direction that flattered us.
+
+**AND IT IS NOW CONFIRMED EMPIRICALLY, NOT ONLY BY READING.** While this round ran, CI posted a
+3-way row for `3570483cf3da` — round 738's OWN HEAD, the commit that landed `skipEmitOutputs` —
+at **30.82s / 12.69s = 2.43x**, against **2.44x** for `728faeed137b` immediately before it. The
+gate does not move the published column, exactly as the code path predicts. A prediction stated
+before the data arrived and scored after it.
+
+**THE REAL MISMATCH, WHICH WAS STILL OPEN: two different compiles.** ARCHITECTURE-RETHINK
+§ 0.1's budget ("take the whole compile as 100 units") is a `--noEmit` compile; the 2.4x it is
+compared against is emit-on-both-sides. Before round 738 these were nearly the same number
+(our `--noEmit` emitted anyway, it just did not WRITE), which is exactly why nobody noticed;
+after 738 they differ. **Measured, same binary, 4 interleaved pairs, compiler profile:
+check-only 26,896 ms vs emit 29,194 ms self — the emit work is 2,298 ms = 8.5% of a check-only
+compile / 7.9% of an emit-inclusive one, B slower 4/4, per-pair +1,959..+2,422 ms.**
+
+**AND THE COLUMN THAT MATTERS WAS NEVER MEASURED AT ALL:** the bench has never run tsc or tsgo
+with `--noEmit`, so the mode this entire perf arc profiles has no reference number. It is
+bounded, not free: `R_ck = R_emit x (1 - 0.079) / (1 - s_tsc)`, so it EQUALS `R_emit` when
+tsc's emit share equals ours, bottoms at `0.921 x R_emit` only if tsc's emit were free, and
+**exceeds `R_emit` as soon as tsc's emit costs more than 7.9% of its run** — the likely case,
+since our checker is the slow part and our emitter is not. With `R_emit` = 2.40x (median of the
+last 30 CI runs) the check-only ratio is **>= 2.21x and probably >= 2.4x**.
+
+**THE HONEST PUBLISHED RATIO, with its basis: 2.28x median over ALL 341 CI runs, 2.40x over the
+last 30, EMIT mode, wall clock.** Per-row spread **1.87x-2.72x** on a compiler whose real change
+over that span was far smaller — because xtsc is ONE cold JVM run per row against tsc's median
+of three. **No single row is the ratio**; that alone is +-18%, wider than every landed win of
+this arc combined.
+
+**A SECOND, INDEPENDENT BUG IN THE SAME YARDSTICK.** `bench-3way.sh` parsed LOC with
+`grep -oE '[0-9]+ LOC' | tail -1`, which also matches the `throughput: N LOC/s` line and takes
+it — so **every one of the 340 archived run reports published THROUGHPUT as its LOC count**
+("78 files, 7,004 LOC" for a 194,702-LOC program) and then divided that by the wall time for
+its LOC/s column. Wall times, error counts and ratios are unaffected. Fixed.
+
+**LANDED (no `src/` change, so no suite run — stated rather than skipped silently).**
+(1) `bench-3way.sh` now measures **both modes on all three compilers** (`--modes`, default
+both; tsc/tsgo get `--noEmit` for check-only), fixes the LOC parse, and fixes the wall parse to
+read the summary median rather than run 1. (2) `bench-history/README.md` restructured: a
+marked (`<!-- BENCH-ROWS-START/END -->`) two-mode table above a labelled **archive** of the 341
+pre-739 emit-only rows, whose note records both caveats. Verified end-to-end twice with stub
+reference binaries, including marker preservation across runs. (3) All **8 profiles
+re-baselined check-only** (compiler 26,518 / tsc-cli 26,426 / jsTyping 28,434 / deprecatedCompat
+26,607 / typingsInstallerCore 26,400 / services 34,813 / server 36,395 / harness 37,129 ms
+self), each TSV carrying a **MODE DISCONTINUITY** block at the boundary — because `emitted=0`
+alone does NOT distinguish "did not emit" from "emitted and threw it away", only the date does.
+(4) `~2.15x` retracted in ARCHITECTURE-RETHINK (§ 0 header + § 0.1 + a new **§ 0.2** carrying
+the table, the 8.5% measurement and the bound), `front-end-attribution.md`, CLAUDE.md,
+STATUS.md and the round-738 note above.
+
+**WHAT DID NOT WORK / WAS NOT POSSIBLE.** The queue item said "re-run the 3-way on all 8
+profiles". **The 3-way cannot run here at all** — there is no `node`, no `tsc` and no `tsgo` on
+this box, and no network; the reference binaries are npm-installed inside the CI job. So the
+corrected check-only ratio is a BOUND, not a measurement, until the next CI run fills the new
+column. Mixing our local wall against a CI tsc number would have been exactly the class of
+error this round exists to fix, so it was not done.
+
+**ALSO FOUND: `bench/` is gitignored** (`.gitignore:62`), so the "dashboard" the mission
+statement points at is a LOCAL file — the re-baselined rows above do not travel to the next
+agent. The shared record is `bench-history/` (CI-written), STATUS.md and these notes. Recorded
+as a CLAUDE.md gotcha.
+
+**ROUND 738's OWN HEADLINE, HONESTLY.** Three estimates of the same quantity now exist: the
+phase measurement 2,623 ms (8.4% of the then-31,235 ms compile), this round's same-binary mode
+delta 2,298 ms (8.5% of a check-only compile), and 738's cross-binary A/B **-3,570 ms
+(-11.42%)** — which is ~1.3 s LARGER than a mode delta that additionally includes writing 78
+files. Two of three cluster at 8-9%. **State the landed value of (FRONT.1) as ~8-9%, with
+11.42% the high end**; the A/B is not wrong, it measured a different pair on a slower box.
+
+**Round 739 — PART 2, (ENGINE.1): THE 14x DOES NOT SURVIVE CONTACT WITH ITS OWN SITE, AND THAT
+NEEDED NO NEW MEASUREMENT.** The item said "measure two more sites before believing the 14x".
+Before spending a round on instrumentation I checked the ratio against the data it came from,
+and **the denominator is the wrong quantity**: 265/19 compares the FP-firewall walkers against
+**the final relation call alone**, and that call is **2.2% of the function it lives in**. A
+general rule engine does not consist of the relation call — it must still resolve the target
+type node, compute the source type, infer the type of an unannotated initializer, and narrow.
+All of that is in the same partition, in the same function, already measured by round 738.
+
+**Re-classifying round 738's own level-B rows by "would a general rule engine also do this"**
+(`checkVarDeclAssignability`, 15,116 invocations, 872 ms): **engine work 483 ms (55.4%)** —
+unannotated-init inference 405 + SOURCE type computation 57 + canUseTypeEngine/RELATION 19 +
+target getTypeFromTypeNode 1 + narrowing 1; **dedicated-walker layer 326 ms (37.4%)** — the
+four prologue groups 265 + clodule/B96/B231 6 + foreign-TP/B112/B207 4 + the ~30 post-relation
+walkers 51; bookkeeping 54 ms. **So the layer is 0.67x the engine work, not 14x it.**
+
+**THE NUMBER A SCOPE DECISION TURNS ON is not a ratio: it is 326 ms of a 26,896 ms check-only
+compile = 1.21%** — and **deletable is less than that**. The weak-type rule alone is 165 ms,
+HALF the layer, and it is real TypeScript semantics that tsc implements INSIDE
+`checkTypeRelatedTo`; we hold it in dedicated walkers only because a weak target passes our
+relation vacuously. It MOVES into a general engine, it does not vanish. Honest range for this
+site: **0.6-1.2% of the compile.**
+
+**METHOD CORRECTION THE NEXT ROUND MUST ADOPT, or its two sites will not be comparable:**
+report the layer in ms and as a share of the COMPILE, never as a ratio against the relation
+call; and split it into "re-implements a rule tsc also has" (moves) vs "corrects our own
+relation" (deletes). **And a grep census will not work**: `checkReturnAssignability` (802
+lines) has **ZERO `tryEmit*` calls** — its firewall is inline `if (...) return` guards
+(`aliasUnionContainsNullishKeyword`, `returnUnionSyntacticallyContainsLiteral`, the
+QualifiedName-suggestion guard, `arrayLiteralSatisfiesTupleTarget`) — while
+`checkAssignmentExpression` (1,427 lines) has 11 and `checkVarDeclAssignabilityCore` (1,504)
+has 15. A naming-convention census would have scored site 2 at zero. Static census for scale:
+805 `check*` + 181 `emit*` + 60 `tryEmit*` = 1,046 functions in 171,934 lines, which confirms
+section 0.1's "~1,005".
+
+**NOT STARTED, DELIBERATELY: the sites-2-and-3 instrumentation.** Each of rounds 733-738 spent
+a full session partitioning ONE function, and these two are 802 and 1,427 lines; starting one
+thin at the end of this round would have produced a number nobody could trust. Predictions
+E1-E4 for those sites are written down in `docs/perf/engine-rule-price.md` § 4 so the next
+round scores them instead of re-deriving them. **The scope question is NOT ready for the owner
+yet — but the number it would have been put with (14x) is now known to be the wrong statistic,
+and the one measured site says single-digit tenths of a percent.**
+
+**Round 738 (2026-07-28) — PART 2, (FRONT.1): THE FIRST FRONT-END ATTRIBUTION, AND THE
+ARC'S LARGEST LANDED WIN: `-11.42%` median, B wins 6/6.** Section 0.1's stage 5 said "the
+front end, ~20%, unprofiled". **The front end is 11.0%. The OTHER 9.2% of that never-measured
+region was `Transformer.transform` + `Emitter.emit` producing JavaScript that a `--noEmit`
+build immediately threw away** — `noEmit` was consulted ONLY where outputs are WRITTEN
+(`ProjectCompiler.build`), so the compile core transformed and emitted all 78 program files
+regardless: **2,623 ms of a 31,235 ms compile (8.4%)**, `Transformer` 2,211 + `Emitter` 412.
+
+**THE MAP (compiler profile, before the fix; 31,174 of 31,235 ms accounted for):** config
+102 ms (0.3%), **import-graph crawl WALL 1,683 ms (5.4%)**, **core parse loop 0 ms — 78 of 78
+pre-parses REUSED**, `extractRelativeImports` 17 ms (0.05%), **bind 1,622 ms (5.2%)**, checker
+24,872 ms (79.7%), post-checker 2,876 ms (9.2%). **Reading, decoding and PARSING 9,977,097
+characters costs 1,683 ms of wall in total** — the crawl already overlaps it 16-in-flight and
+the core re-parses nothing. **There is no 20% in the front end and no lever in it**: the
+largest row after the crawl is bind, at 5.2%, in-band.
+
+**THE FIX AND ITS GATE.** Verified first that the Phase-3 loop contributes NO diagnostics
+(no `diagnostics.add`/`remove` anywhere between the checker and the `CompilationResult`), so
+skipping it is diagnostic-neutral by construction. The gate is a NEW
+`CompilerOptions.skipEmitOutputs` set ONLY by `ProjectCompiler` from its own `noEmit`
+parameter — **deliberately NOT `options.noEmit`, which 440 corpus tests set as a DIRECTIVE**
+and whose baselines were produced by a core that still emits. `SkipEmitOutputsTest`'s fourth
+test is the negative control for exactly that.
+
+**A/B: median A=31,250 B=27,680, -3,570 ms = -11.42%, B wins 6/6**, per-pair median -3,221 ms,
+range [-4,099, -2,773] against a +-590 ms band. The A/B delta exceeds the phase measurement by
+~950 ms: the emit builds and discards ~10 MB of output strings (allocation/GC no span brackets)
+and the post-checker residue itself fell 2,876 -> 182 ms.
+
+**THIS IS A SCOPE CORRECTION, NOT AN ALGORITHMIC SPEED-UP, AND IT MUST BE REPORTED AS ONE.**
+Real `tsc --noEmit` does not run its emitter either. ~~So every published xtsc-vs-tsc
+`--no-emit` ratio before this compared our check+emit against tsc's check-only; the honest
+single-thread figure is ~2.15x.~~ **RETRACTED IN PLACE, ROUND 739 (BENCH.1): there was no
+published `--no-emit` ratio.** `bench-3way.sh` runs xtsc, tsc AND tsgo WITH EMIT, so the 2.4x
+was already like-for-like, and `skipEmitOutputs` — which fires only under `--noEmit` — does not
+move it by construction. The check-only ratio has never been measured on either side; see the
+round-739 note at the top of this file and `docs/ARCHITECTURE-RETHINK.md` § 0.2.
+
+**METHOD NOTE the next agent must not misread: the crawl's per-file read/pre-parse sums are
+ELAPSED-WITH-SUSPENSION, not CPU.** They bracket a `withContext(...)`, so a file's "parse"
+span includes waiting for a dispatcher slot — which is why the pre-parse sum (17,958 ms) is
+10.7x the crawl WALL (1,683 ms): that ratio is the effective in-flight concurrency, not a cost.
+**Only the crawl WALL is a wall-clock price**, and the report excludes the two sub-sums from
+its own total. Race-freedom was designed in rather than hoped for: each flow element carries
+its OWN nanos back on its `CrawledFile` and the SINGLE-THREADED collector sums them (a `+=`
+from the workers would race exactly as `PassTiming.nodeKindHistogram` does).
+
+**SECTION 0.1 AS A WHOLE — the honest status, since three of five stages now have numbers.**
+Stage 1 (DISPATCH.1, claimed 11-19%): measured **4.8% upper bound, ~100-300 ms realistic**;
+this round's per-handler gate row (194 ms over 857k nodes at 212 ns) is a third confirmation
+=> **~0.3-1%**. Stage 2 (M0.4 tail migration, claimed ~14% AFTER stage 1): **its stated basis
+is VOID** — it was priced as "stage 1 retroactively unlocks it" and stage 1 does not deliver.
+Stage 3 (getTypeOfExpression recompute, claimed ~9%): **STRUCK** (ceiling 2.9%, sound residue
+0.16%). Stage 4 (flow narrowing): **the only stage that paid** — -4.53% landed, ~2% residue
+mostly in-band. Stage 5 (front end, claimed 20%): 11.0% with no lever, plus the 9.2% scope
+error now landed. **So "~1.4-1.7x of today" is NOT SUPPORTED**: it assumed stages 1+2 were
+worth 25-33% and stage 3 another 9%; measured, stages 1+3 are ~1-4% combined, stage 2's premise
+is gone, and stage 5 has nothing. **The staged plan's remaining honest value is single digits.**
+**The realistic remaining route to parity**: 88% of the compile is now the checker, and SEVEN
+consecutive intra-function attributions have found the same shape — cost spread over hundreds
+of dedicated walkers at 0.1-1% each, with no single lever above the band left inside it, and
+every predicted lever coming in 3-65x too small. Three moves remain and only the first changes
+the constant: (1) the architecture change section 0.1's own "endgame" paragraph names —
+replacing ~1,005 `check*` walkers with general engine rules, for which this round produced the
+FIRST price on one instance (the var-decl FP-firewall prologue is **265 ms against the 19 ms
+relation it exists to correct, 14x**) — a SCOPE decision that trades the property which made
+the byte-identical corpus reachable; (2) parallelism, now cheaper than M2 measured because a
+worker's duplicated bind is only 5.2%, still needing >=8 real cores ((PERF.HW), unmeasured);
+(3) accept the gap — ~~~2.15x~~ **corrected round 739 to 2.28x (median of 340 CI runs) / 2.40x
+(last 30) in EMIT mode, with the check-only ratio unmeasured and bounded below by 2.21x.**
+
+Suite 12,923 -> **12,927 / 0 / 3** (+4 `SkipEmitOutputsTest` pins); profile `--listAll`
+byte-identical before and after the gate (46 errors); cost gate **18 of 20 counters +0.00%**,
+with `globals.lookups` -9.03% and `globals.misses` -9.11% FALLING (the Transformer's own
+checker queries, no longer made) and rebaselined in the same commit. Full derivation:
+**`docs/perf/front-end-attribution.md`**.
+
+**Round 738 (2026-07-27) — (TYPE.2) DONE, PART 1. BOTH OF THE ITEM'S PRIORS ARE FALSE,
+THE SECOND BY 65x, AND `checkVarDeclAssignability` IS NOT WHAT ITS NAME SAYS.** The item
+asked whether the 36 us per initializer is mostly FLOW NARROWING (prior i) and whether the
+~2,470 ms outside the typing is the ASSIGNABILITY RELATION (prior ii). Measured inside the
+function with a new two-level partition (`CtaSections`, `--ctaSections{,Coarse}`):
+**narrowing is 1 ms of 872 ms (0.11%)** and **`checkTypeRelatedTo` is 13 ms (1.5%)**.
+Round 735 found the SAME relation prior wrong by 48x one function over; it is now falsified
+in BOTH of the compiler's largest assignability sites, so "an assignability check's cost is
+the relation" should not be proposed a third time without measuring.
+
+**WHAT IS ACTUALLY THERE — the exit profile decided it.** Of 15,116 invocations, **12,960
+(85.7%) leave in the UNANNOTATED-initializer branch**: no annotation, nothing to check, the
+work is `getTypeOfExpression(init)` plus a widening and a map write — **405 ms = 46% of the
+function**. Only **797 (5.3%)** reach the target-type computation at all. So there are two
+populations sharing a name: **12,960 unannotated declarations at 34 us each and 1,881
+annotated ones at 227 us each** — round 737's 36 us was their mean.
+
+**THE HANDLER, and the round's second-most-useful number.** Level A was deliberately opened
+on `spineCtaM3StatementAnchor` itself rather than on `ctaM3StmtAnchor`, so the ELIGIBILITY
+decision (kind test, parent test, the `ctaM3NestedChainOk`/`ctaM3FnBodyAnchorScope`/
+`ctaM3NearestList` parent-chain climbs) is a partition ROW instead of an unexplained
+remainder that would have invited "it must be the dispatch machinery". **The handler is
+2,363 ms; the gate over ALL 856,976 nodes is 194 ms (212 ns/node) and the whole ambient
+install/restore/dispatch scaffolding is 158 ms — together 1.2% of the compile.** The other
+85% is four callees' own checking: `checkVarDeclAssignability` 891, `checkReturnAssignability`
+615, `checkAssignmentExpression` 318, `walkFunctionBodiesInExpr` 181. Round 733's rule, third
+confirmation: a handler's nanos are its WORK, never its scaffolding.
+
+**NOTHING LANDED, correctly.** The one candidate the attribution surfaced — hoist the
+unannotated branch above the ~18-walker prologue (265 ms) — is worth **~0**: every prologue
+walker's first or second line is `decl.type ?: return false`, so the 12,960 unannotated decls
+already pay one field read. The 265 ms is spent on the 1,881 ANNOTATED decls at 141 us each,
+and it is **14x the 19 ms relation it exists to correct** — the first price tag on section
+0.1's "endgame" paragraph. An estimate of "265 ms x 86%" would have been wrong for exactly
+the reason section 0's law keeps producing: the population that looked skippable was already
+the cheap one.
+
+**PREDICTION SCORED (stated in full before the run): P1 HELD** (narrowing <=25%; really
+0.11%), **P2 HELD** (relation <=10%; really 1.5%), **P3 FALSIFIED** (A_VDECL largest but
+<50% AND walkFunctionBodiesInExpr >=15% — the first clause held at 37.7%, the second failed
+at 7.7%), **P4 HELD** (level-A partition 2,000-3,000 ms; really 2,363). Three of four, against
+two of four in each of rounds 732-737.
+
+**METHOD, and one honest admission.** Level B's ON-vs-COARSE differential works: +11 ms over
+84,737 extra boundaries = **130 ns each**, same order as rounds 734/735's independently-derived
+86-89 ns, bounding level-B inflation at 1.3%. **Level A's differential does NOT work** — its
+delta is -102 ms over +334,104 boundaries, i.e. NEGATIVE and entirely swamped by drift (the two
+runs' walls differ by 1,490 ms on a +-13% box). Level A's inflation is therefore COMPUTED from
+the established per-read cost (1,264,382 x 89 ns = ~113 ms of 2,363 ms = 4.8%), not measured,
+and every millisecond is relative attribution. The in-situ empty-span calibration was
+deliberately NOT taken: it over-read by 3.6x and 4.4x in consecutive rounds and re-deriving a
+known-wrong number is not evidence.
+
+Also recorded: the level-B cost distribution has round 735's shape again — **71 invocations
+(0.47%) carry 406 ms (47%) at 5.7 ms each**; which population they belong to was not recorded
+and is this round's one loose end (in-band either way at 1.4%). Suite 12,916 -> **12,923 / 0 / 3**
+(+7 `CtaSectionProbeTest` pins); `--listAll` byte-identical in production, ON and COARSE
+(46 errors); cost gate **all 20 counters +0.00%**. Full derivation:
+**`docs/perf/var-decl-attribution.md`**.
+
+
 **Round 737 (2026-07-27) — (TYPE.1) DONE. ARCHITECTURE-RETHINK section 0.1 STAGE 3 IS
 STRUCK: its MECHANISM is exactly right and its SIZE is wrong by 3.2x.** The 701,463
 `getTypeOfExpression` calls were attributed BY CALLER for the first time
