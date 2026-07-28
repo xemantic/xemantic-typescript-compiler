@@ -159,4 +159,71 @@ class EnumMemberLiteralOverloadSelectionTest {
             have(none { it.code == 2345 })
         }
     }
+
+    // --- Round 744, (REL.1)(b): when BOTH candidates are GENERIC, round 481's
+    // lenience ("an un-inferred bare `Type.TypeParam` parameter matches any argument",
+    // which exists because tsc INFERS it) never looked at the type parameter's
+    // CONSTRAINT — so two overloads distinguished ONLY by their constraints always
+    // picked the first. tsc infers `TKind` and then checks it against `extends …`.
+    //
+    // The check is only SHARP once an enum-member union discriminates, which is why it
+    // lands with (b) and not with round 743, where it would have been inert: before the
+    // disjointness rule every member related to every other and `ModifierSK` accepted a
+    // `SK.SuperKeyword` argument anyway.
+
+    // The returns are deliberately NON-generic. With `SuperTok<T>` / `ModTok<T>` the
+    // selection is still corrected, but every direction goes silent — a parameterized
+    // interface compared against another parameterized interface relates leniently here
+    // — so a pin written that way would assert silence on a build that never picks
+    // right. All four directions below are checked, and two of them must ERROR.
+    private val bothGenericPrelude = """
+        enum SK { SuperKeyword = 1, AbstractKeyword = 2, ReadonlyKeyword = 3 }
+        type ModifierSK = SK.AbstractKeyword | SK.ReadonlyKeyword
+        type SuperSK = SK.SuperKeyword
+        interface SuperTok { sup: string }
+        interface ModTok { mod: string }
+        declare function wantMod(m: ModTok): void
+        declare function wantSuper(s: SuperTok): void
+        declare function make<T extends SuperSK>(token: T): SuperTok;
+        declare function make<T extends ModifierSK>(token: T): ModTok;
+
+    """.trimIndent()
+
+    @Test
+    fun `two generic overloads are distinguished by their type parameter constraints`() {
+        diagnose(bothGenericPrelude + """
+            wantMod(make(SK.ReadonlyKeyword));
+        """.trimIndent()) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `negative control - the first generic overload still wins for its own constraint`() {
+        diagnose(bothGenericPrelude + """
+            wantSuper(make(SK.SuperKeyword));
+        """.trimIndent()) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `negative control - the constraint-selected return is still checked`() {
+        // The mirror direction, so a build that still picks the FIRST overload for a
+        // ModifierSK argument fails here instead of passing a silence assertion.
+        diagnose(bothGenericPrelude + """
+            wantSuper(make(SK.ReadonlyKeyword));
+        """.trimIndent()) should {
+            have(any { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `negative control - the first overload's return is still checked too`() {
+        diagnose(bothGenericPrelude + """
+            wantMod(make(SK.SuperKeyword));
+        """.trimIndent()) should {
+            have(any { it.code == 2345 })
+        }
+    }
 }

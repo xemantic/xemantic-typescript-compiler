@@ -102701,6 +102701,38 @@ interface DataView {
         (type as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Enum or SymbolFlags.EnumMember) == true
 
     /**
+     * (REL.1)(b): do two enum-MEMBER types denote the SAME member?
+     *
+     * **Deliberately NOT an identity test**, which is the trap this answers.
+     * [getDeclaredTypeOfEnumMember] interns on [canonicalEnumSymbol], but that helper
+     * can only canonicalize through `globals[name]` — and since INV.3(d) retired the
+     * merge for module-only names, a MODULE-scoped enum (every enum in tsc's own
+     * sources, `SyntaxKind` included) has no global instance to canonicalize to. Its
+     * per-file `Symbol` instances therefore key DIFFERENT member types for the same
+     * member, and an identity verdict declares `SyntaxKind.StringLiteral` disjoint
+     * from itself.
+     *
+     * So compare the way tsc's `isEnumTypeRelatedTo` does: same member NAME, and an
+     * owning enum that is the same symbol, canonicalizes to the same symbol, or shares
+     * an `EnumDeclaration` NODE (identity compare on the node — never data-class
+     * equality, which would deep-recurse the whole declaration).
+     */
+    private fun enumMemberTypesAreSameMember(source: Type, target: Type): Boolean {
+        val sourceMember = (source as? Type.Object)?.symbol ?: return false
+        val targetMember = (target as? Type.Object)?.symbol ?: return false
+        if (sourceMember === targetMember) return true
+        if (sourceMember.name != targetMember.name) return false
+        val sourceEnum = sourceMember.parent ?: return false
+        val targetEnum = targetMember.parent ?: return false
+        if (sourceEnum === targetEnum) return true
+        if (canonicalEnumSymbol(sourceEnum).id == canonicalEnumSymbol(targetEnum).id) return true
+        if (sourceEnum.name != targetEnum.name) return false
+        return sourceEnum.declarations.any { d ->
+            d is EnumDeclaration && targetEnum.declarations.any { it === d }
+        }
+    }
+
+    /**
      * (REL.1)(b0) round 742: the CONSTANT VALUES an enum-flavored type can hold —
      * every member's value for an enum's own type, the single member's value for a
      * member type. `null` when [type] is not enum-flavored or its values were never
@@ -112447,28 +112479,15 @@ interface DataView {
     private fun signatureAcceptsArgs(sig: Signature, args: List<Expression>): Boolean {
         for ((i, arg) in args.withIndex()) {
             if (i >= sig.parameters.size) break
-            // Round 459: an ENUM-MEMBER literal param (`kind: SyntaxKind.NamedImports`)
-            // resolves to anyType (enum members are not modeled as literal types), so
-            // an enum-member ARG silently matched every overload and the FIRST won —
-            // tsc's `parseNamedImportsOrExports(SyntaxKind.NamedExports)` resolved to
-            // the NamedImports overload's return → FP TS2322 downstream. Compare the
-            // param ANNOTATION's canonical enum-member key set (round-411 key space,
-            // canonicalEnumSymbol-routed) against the arg's key AST-side; a resolvable
-            // non-member is a mismatch. Both-unresolvable keeps the prior behavior.
-            //
-            // (REL.1) round 743: the premise "enum members are not modeled as literal
-            // types" is FALSE since (a)/(b0) — the relation CAN answer this now, and
-            // the general path below reaches the same verdict for an annotated
-            // parameter. The AST gate stays because it also answers for a param whose
-            // annotation the type path resolves to `anyType`; retiring it is (REL.1)(c).
-            var mismatch = false
-            run {
-                val paramAnn = (sig.parameters[i].declarations.firstOrNull() as? Parameter)?.type ?: return@run
-                val paramKeys = enumMemberKeysOfTypeNode(paramAnn) ?: return@run
-                val argKey = enumMemberKeyOfExpr(arg) ?: return@run
-                if (argKey !in paramKeys) mismatch = true
-            }
-            if (mismatch) return false
+            // Round 459's AST-side enum-member key gate lived HERE — an enum-member
+            // literal param (`kind: SyntaxKind.NamedImports`) resolved to `anyType`, so
+            // an enum-member ARG silently matched every overload and the FIRST won. It
+            // is RETIRED by (REL.1)(b): its premise ("enum members are not modeled as
+            // literal types") stopped being true at (a)/(b0), and with the disjointness
+            // rule the general type path below reaches the same verdict — an
+            // enum-member ARG type now fails to relate to a SIBLING member's parameter
+            // type. Retired WITH (b) rather than before it, because until the relation
+            // rejects a sibling this gate was the only thing answering.
             val paramType = getTypeOfSymbol(sig.parameters[i])
             if (paramType === anyType || paramType === errorType) continue
             // Round 481: an UN-INFERRED bare TypeParam param (`initialValue: U` in
@@ -112476,15 +112495,26 @@ interface DataView {
             // it; the relation engine has no concrete-source-vs-TypeParam-target
             // rule, so without this the generic overload was always rejected and
             // the first arity match won (typing reduce's accumulator as T).
-            if (paramType is Type.TypeParam) continue
+            //
+            // (REL.1)(b) round 744: only WITHIN ITS CONSTRAINT, though. tsc infers `U`
+            // and then checks the inferred argument against `U extends …`, so two
+            // GENERIC overloads distinguished ONLY by their type parameters' constraints
+            // (`createToken<T extends SuperSK>` vs `createToken<T extends ModifierSK>`)
+            // must not both accept — before this the first one always won. The check is
+            // only SHARP once an enum-member union discriminates, which is why it lands
+            // with (b): before it, every member related to every other and the
+            // constraint accepted everything anyway.
+            val constrainedParamType = if (paramType is Type.TypeParam) {
+                paramType.constraint?.takeIf { it !== anyType && it !== errorType } ?: continue
+            } else paramType
             // Prefer the non-widened literal type so a string/number-literal arg can
             // select a specialized literal-param overload (e.g. createElement('canvas')
             // → the `(tagName: 'canvas'): Derived1` overload, not the `(tagName: string)`
             // fallback). Falls through to the widened type for non-literal args.
             val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
             if (argType === anyType || argType === errorType) continue
-            if (!isSimpleTypeRelatedTo(argType, paramType) &&
-                !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+            if (!isSimpleTypeRelatedTo(argType, constrainedParamType) &&
+                !checkTypeRelatedTo(argType, constrainedParamType, assignableRelation)) {
                 // Round 743: SECOND CHANCE against the FLOW-narrowed type.
                 // [getTypeOfIdentifier] answers from `currentLocalTypes` and the
                 // declaration tables — so an `if (isFoo(x))` narrow is visible here
@@ -112501,8 +112531,8 @@ interface DataView {
                 // only on the rejecting path.
                 val narrowed = getNarrowedTypeForReference(argType, arg)
                 if (narrowed === argType) return false
-                if (!isSimpleTypeRelatedTo(narrowed, paramType) &&
-                    !checkTypeRelatedTo(narrowed, paramType, assignableRelation)) return false
+                if (!isSimpleTypeRelatedTo(narrowed, constrainedParamType) &&
+                    !checkTypeRelatedTo(narrowed, constrainedParamType, assignableRelation)) return false
             }
         }
         return true
@@ -143483,14 +143513,19 @@ interface DataView {
         // Deliberately VALUE-BLIND at step (a): `let a: E.A = 2` where `A === 0` is a
         // real error, but it is [checkEnumLiteralAssignments]' error today and the
         // relation must not start co-emitting it. Tightening this to tsc's
-        // value-equality rule belongs with (REL.1)(b)/(c), which retire that walker.
+        // value-equality rule belongs with (REL.1)(c), which retires that walker.
         //
+        // (REL.1)(b) round 742 REMOVED the string TARGET half. Step (a) had it only for
+        // behaviour-preservation symmetry with the former `anyType`; tsc REJECTS
+        // `string → Ext.Dts`, because a string enum is NOMINAL and — unlike the numeric
+        // direction, which tsc keeps for bit-flag enums — there is no compatibility rule
+        // to justify it.
         if (sf.hasAny(TypeFlags.EnumLiteral) || tf.hasAny(TypeFlags.EnumLiteral)) {
             enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
                 if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
             }
             enumMemberTypeIsStringValued(target)?.let { targetIsString ->
-                if (sf.hasAny(if (targetIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
+                if (!targetIsString && sf.hasAny(TypeFlags.NumberLike)) return true
             }
         }
         // object type (non-primitive) — primitives are NOT assignable to object
@@ -143528,6 +143563,15 @@ interface DataView {
         if (source === target) return true
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
+        // (REL.1)(b): two enum-member types relate ONLY when they are the same
+        // member. Both are member-less `Type.Object`s, so without this the structural
+        // engine below relates them VACUOUSLY in both directions — which is what made
+        // two AST node interfaces differing only in `readonly kind: SK.A` vs `SK.B`
+        // mutually assignable. The verdict is STRUCTURAL, not identity: see
+        // [enumMemberTypesAreSameMember].
+        if (source.flags.hasAny(TypeFlags.EnumLiteral) && target.flags.hasAny(TypeFlags.EnumLiteral)) {
+            return enumMemberTypesAreSameMember(source, target)
+        }
         // Check cache
         val cached = relation.get(source.id, target.id)
         if (cached == Ternary.True) return true
@@ -159100,6 +159144,19 @@ interface DataView {
             }
         }
         val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
+        // (REL.1)(b) round 744: the general relation now reaches the SAME verdict for a
+        // union annotation whose constituents are enum MEMBERS — `Z.Foo.A` is disjoint
+        // from `X.Foo.A` — so it emits its own TS2322 at this exact position, and the two
+        // co-emit (`enumLiteralAssignableToEnumInsideUnion`, three of its five lines).
+        // Retract it: the verdict is identical, and only this walker's DISPLAY is tsc's
+        // (a fully-covered member set collapses to the bare enum name, `boolean | Foo`,
+        // which the general union display cannot know to do). Removed here rather than
+        // gated at the general site because this walker owns the decision — its key space
+        // is namespace-qualified AND value-aware. When (REL.1)(c) retires B266, the
+        // collapse rule has to move into the union display with it.
+        diagnostics.removeAll {
+            it.code == 2322 && it.fileName == fileName && it.start == nameNode.pos
+        }
         diagnostics.add(Diagnostic(
             message = "Type '${srcInfo.enumName}.$srcMember' is not assignable to type '${displayParts.joinToString(" | ")}'.",
             category = DiagnosticCategory.Error, code = 2322,
