@@ -5594,6 +5594,14 @@ class Checker(
      *  init-order trap. */
     private val enumTypesRelationCache = HashMap<Long, EnumRelFailure?>()
 
+    /** (REL.1)(c) round 747: tsc's `TypeFormatFlags.UseFullyQualifiedType`, restricted to
+     *  ENUM names — while set, [typeToString] renders an enum (or enum-member) type with its
+     *  namespace path, at ANY nesting depth, so a colliding pair inside a rendered function
+     *  type prints `(param: second.E) => void` rather than `(param: E) => void`. Set only by
+     *  [enumQualifiedRelationDisplays], the collision retry; declared before `init` per the
+     *  init-order trap. */
+    private var enumDisplayFullyQualified = false
+
     /**
      * (REL.1)(a) round 741: interned enum-MEMBER types, keyed
      * `"<canonicalEnumSymbolId>#<memberName>"`.
@@ -103116,6 +103124,43 @@ interface DataView {
     }
 
     /**
+     * (REL.1)(c) round 747: the same `getTypeNamesForErrorDisplay` retry as
+     * [enumCollisionQualifiedDisplays], for a relation-error pair whose types are NOT
+     * themselves enum-flavored but CONTAIN an enum — a method signature, above all.
+     * `(param: E) => void` prints identically on both sides of
+     * `enumAssignmentCompat7`'s TS2416, and re-rendering under
+     * [enumDisplayFullyQualified] separates them into `(param: second.E) => void` and
+     * `(param: first.E) => void`.
+     *
+     * SPLIT from [enumCollisionQualifiedDisplays] rather than folded into it (round 745's
+     * rule): that one is fed displays which may come from ANNOTATION TEXT rather than
+     * [typeToString], so re-rendering there would change strings for reasons that have
+     * nothing to do with the enum. This one re-renders both sides through [typeToString]
+     * and is self-gating — with no enum anywhere in the pair the flag changes nothing, the
+     * two renders stay equal, and the caller keeps its original displays.
+     *
+     * Both callers must pass displays that ARE [typeToString] output; a caller whose
+     * display came from a signature/annotation renderer must not use this.
+     */
+    private fun enumQualifiedRelationDisplays(
+        sourceType: Type, targetType: Type, sourceDisplay: String, targetDisplay: String,
+    ): Pair<String, String>? {
+        if (sourceDisplay != targetDisplay) return null
+        val saved = enumDisplayFullyQualified
+        enumDisplayFullyQualified = true
+        val qualifiedSource: String
+        val qualifiedTarget: String
+        try {
+            qualifiedSource = typeToString(sourceType)
+            qualifiedTarget = typeToString(targetType)
+        } finally {
+            enumDisplayFullyQualified = saved
+        }
+        if (qualifiedSource == qualifiedTarget) return null
+        return qualifiedSource to qualifiedTarget
+    }
+
+    /**
      * (REL.1)(c) round 746: the TS2322 elaboration for two enums that do not relate —
      * tsc's `isEnumTypeRelatedTo` error reporter, rendered against the target display
      * the top-level message actually used. `null` when the pair is not enum-flavored,
@@ -116185,7 +116230,12 @@ interface DataView {
                     // these types but they only reached a message through an annotation;
                     // (b0) puts them in every enum-member expression, so the bare name
                     // would start naming the wrong thing in real diagnostics.
-                    if (sym != null && sym.flags.hasAny(SymbolFlags.EnumMember)) {
+                    // (REL.1)(c) round 747: under the collision retry every enum name
+                    // renders with its full namespace path, at ANY nesting depth — see
+                    // [enumQualifiedRelationDisplays].
+                    val enumQualified = if (enumDisplayFullyQualified) enumTypeQualifiedDisplay(type) else null
+                    if (enumQualified != null) enumQualified
+                    else if (sym != null && sym.flags.hasAny(SymbolFlags.EnumMember)) {
                         sym.parent?.let { "${it.name}.${sym.name}" } ?: sym.name
                     } else if (sym != null) sym.name
                     else {
@@ -126620,7 +126670,21 @@ interface DataView {
                         if (missingForm != null) {
                             chain.addAll(missingForm)
                         } else {
-                            chain.add("  Type '$derivedDisplayForChain' is not assignable to type '$baseDisplayForChain'.")
+                            // (REL.1)(c) round 747: two overrides whose signatures print the
+                            // SAME string re-render with every enum name fully qualified —
+                            // `(param: second.E) => void` vs `(param: first.E) => void`.
+                            // Only on the plain branch: the other two build their displays
+                            // from a SIGNATURE renderer, not from `typeToString`.
+                            val qualifiedPair =
+                                if (isGenericConstraintMismatch || isPredicateMismatch) null
+                                else enumQualifiedRelationDisplays(
+                                    derivedType, basePropType,
+                                    derivedDisplayForChain, baseDisplayForChain,
+                                )
+                            chain.add(
+                                "  Type '${qualifiedPair?.first ?: derivedDisplayForChain}' is not assignable to " +
+                                    "type '${qualifiedPair?.second ?: baseDisplayForChain}'.",
+                            )
                             if (isGenericConstraintMismatch) {
                                 val (dConDisp, bTpName) = genericConstraintInfo
                                 chain.add("    Type '$dConDisp' is not assignable to type '$bTpName'.")
@@ -126655,39 +126719,24 @@ interface DataView {
                             }
                         }
 
-                        // (REL.1)(c) round 746: B463's enum-nominal walker
-                        // (`encmCheckClassesAndOverloads`) OWNS this position when it fired.
-                        // With the relation able to reject two DISTINCT enums, this general
-                        // check reaches the same verdict for an enum-typed override parameter
-                        // and the two co-emit (`enumAssignmentCompat7`). B463's display is
-                        // tsc's — it prints `(param: second.E) => void`, while the chain built
-                        // here renders both sides as the bare `E`, because qualifying an enum
-                        // nested inside a rendered FUNCTION type is a `typeToString` change
-                        // this round did not measure. Paired with B463's own retraction, so
-                        // B463 wins regardless of which pass runs second.
-                        // Keyed on the MESSAGE, not just the position: a member that violates
-                        // BOTH a base class and a base interface legitimately gets TWO TS2416
-                        // at one position, differing only in the base type they name
-                        // (`interfaceExtendsClassWithPrivate2`), and a position-only key
-                        // swallowed the second.
-                        if (diagnostics.none {
-                                it.code == 2416 && it.fileName == fileName &&
-                                    it.start == nameNode.pos && it.message == message
-                            }
-                        ) {
-                            diagnostics.add(Diagnostic(
-                                message = message,
-                                category = DiagnosticCategory.Error,
-                                code = 2416,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = nameNode.pos,
-                                length = memberName.length,
-                                messageChain = chain,
-                                relatedInformation = relatedInfo,
-                            ))
-                        }
+                        // (REL.1)(c) round 747: this site OWNS the enum-typed override
+                        // mismatch outright — B463's piece B (`encmCheckClassesAndOverloads`,
+                        // TS2416) is DELETED, together with round 746's guard pair that had
+                        // let the walker win. The verdict was already this site's since round
+                        // 746 made the relation reject two DISTINCT enums; what was missing
+                        // was the display, and [enumQualifiedRelationDisplays] supplies it.
+                        diagnostics.add(Diagnostic(
+                            message = message,
+                            category = DiagnosticCategory.Error,
+                            code = 2416,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = nameNode.pos,
+                            length = memberName.length,
+                            messageChain = chain,
+                            relatedInformation = relatedInfo,
+                        ))
                     }
                 }
 
@@ -127750,7 +127799,18 @@ interface DataView {
             if (derivedParamType === anyType || baseParamType === anyType) continue
             if (!checkTypeRelatedTo(baseParamType, derivedParamType, assignableRelation)) {
                 chain.add("    Types of parameters '${derivedParam.name}' and '${baseParam.name}' are incompatible.")
-                chain.add("      Type '${typeToString(baseParamType)}' is not assignable to type '${typeToString(derivedParamType)}'.")
+                // (REL.1)(c) round 747: tsc retries `getTypeNamesForErrorDisplay` at EVERY
+                // relation error, so a param pair that prints `E` on both sides requalifies
+                // independently of the signature line above it.
+                val baseParamDisplay = typeToString(baseParamType)
+                val derivedParamDisplay = typeToString(derivedParamType)
+                val qualifiedParams = enumQualifiedRelationDisplays(
+                    baseParamType, derivedParamType, baseParamDisplay, derivedParamDisplay,
+                )
+                chain.add(
+                    "      Type '${qualifiedParams?.first ?: baseParamDisplay}' is not assignable to " +
+                        "type '${qualifiedParams?.second ?: derivedParamDisplay}'.",
+                )
                 // When derived's param is a TypeParam (e.g. `f(a: T)` on a generic
                 // class) and base's param is a concrete type, the override is unsound
                 // because T can be instantiated to any subtype of its constraint —
@@ -162853,9 +162913,10 @@ interface DataView {
      *   - TS2339: `<ns>.E.X` value-position member access where `X` is not a member of enum
      *     `E` (and not a runtime/prototype property) → "Property 'X' does not exist on type
      *     'typeof E'.".
-     *   - TS2416: a class method override whose single param is enum `D` while the base
-     *     method's single param is a DIFFERENT, incompatible enum `B` → the contravariant
-     *     param mismatch chain.
+     *   - (piece B, TS2416 — RETIRED round 747) a class method override whose single param
+     *     was a different, incompatible enum. The general class-member override check now
+     *     reaches the same verdict AND, since [enumQualifiedRelationDisplays], the same
+     *     display: `(param: second.E) => void`.
      *   - TS2394: an overload signature whose return enum differs from the implementation
      *     signature's return enum → "This overload signature is not compatible with its
      *     implementation signature." + related TS2750 at the impl signature.
@@ -162877,8 +162938,8 @@ interface DataView {
             val enumsForA = if (nsKeys.isEmpty()) enums else enums.filterKeys { it !in nsKeys }
             // Piece A — value-position member access of a non-member.
             encmScanStmts(stmts, source, fileName, enumsForA)
-            // Pieces B/C — class-method overrides + overloaded functions.
-            encmCheckClassesAndOverloads(stmts, source, fileName, enums)
+            // Piece C — overloaded functions.
+            encmCheckOverloads(stmts, source, fileName, enums)
         }
     }
 
@@ -162987,63 +163048,7 @@ interface DataView {
     /** B463 helper: resolve a TypeReference param/return annotation to its dotted enum key. */
     private fun encmEnumKeyOfType(t: TypeNode?, enums: Map<String, EnumAsgInfo>): String? = enumKeyOfTypeNode(t, enums)
 
-    private fun encmCheckClassesAndOverloads(stmts: List<Statement>, source: String, fileName: String, enums: Map<String, EnumAsgInfo>) {
-        // Piece B — class-method overrides with incompatible-enum params.
-        val classByName = stmts.filterIsInstance<ClassDeclaration>().associateBy { it.name?.text }
-        for (cls in stmts.filterIsInstance<ClassDeclaration>()) {
-            val baseName = cls.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                ?.types?.firstOrNull()?.expression?.let { (it as? Identifier)?.text } ?: continue
-            val base = classByName[baseName] ?: continue
-            val baseMethods = base.members.filterIsInstance<MethodDeclaration>().associateBy { (it.name as? Identifier)?.text }
-            for (m in cls.members.filterIsInstance<MethodDeclaration>()) {
-                if (m.body == null) continue
-                val mName = (m.name as? Identifier)?.text ?: continue
-                val bm = baseMethods[mName] ?: continue
-                val dParam = m.parameters.singleOrNull() ?: continue
-                val bParam = bm.parameters.singleOrNull() ?: continue
-                val dKey = encmEnumKeyOfType(dParam.type, enums) ?: continue
-                val bKey = encmEnumKeyOfType(bParam.type, enums) ?: continue
-                if (dKey == bKey) continue
-                val dEnum = enums[dKey]!!; val bEnum = enums[bKey]!!
-                // contravariant param: base param must be assignable to derived param, AND
-                // (under @strictFunctionTypes:false, bivariant) derived to base — fire only
-                // when NEITHER relates, i.e. genuinely-incompatible enums.
-                if (enumAsgFailure(bEnum, dEnum) == null || enumAsgFailure(dEnum, bEnum) == null) continue
-                val dDisp = dEnum.qualifiedDisplay; val bDisp = bEnum.qualifiedDisplay
-                val pName = (dParam.name as? Identifier)?.text ?: "param"
-                val bpName = (bParam.name as? Identifier)?.text ?: "param"
-                val dRet = m.type?.let { typeNodeDisplayOrNull(it) } ?: "void"
-                val bRet = bm.type?.let { typeNodeDisplayOrNull(it) } ?: "void"
-                val nameNode = m.name
-                val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                // (REL.1)(c) round 746: with the relation able to reject two DISTINCT enums,
-                // the general class-member override check reaches the same verdict and
-                // co-emits TS2416 here (`enumAssignmentCompat7`). Retract it — same mechanism
-                // as B266/B583. Only this walker's DISPLAY is tsc's: the general chain prints
-                // BOTH sides as the bare `E`, because qualifying an enum nested inside a
-                // rendered FUNCTION type (`(param: second.E) => void`) is a `typeToString`
-                // change this round did not measure.
-                val encmMessage =
-                    "Property '$mName' in type '${cls.name?.text}' is not assignable to the same property in base type '$baseName'."
-                // Keyed on the MESSAGE, not just the position — a member violating BOTH a base
-                // class and a base interface gets TWO legitimate TS2416 at one position.
-                diagnostics.removeAll {
-                    it.code == 2416 && it.fileName == fileName &&
-                        it.start == nameNode.pos && it.message == encmMessage
-                }
-                diagnostics.add(Diagnostic(
-                    message = encmMessage,
-                    category = DiagnosticCategory.Error, code = 2416,
-                    fileName = fileName, line = line, character = ch,
-                    start = nameNode.pos, length = mName.length,
-                    messageChain = listOf(
-                        "  Type '($pName: $dDisp) => $dRet' is not assignable to type '($bpName: $bDisp) => $bRet'.",
-                        "    Types of parameters '$pName' and '$bpName' are incompatible.",
-                        "      Type '$bDisp' is not assignable to type '$dDisp'.",
-                    ),
-                ))
-            }
-        }
+    private fun encmCheckOverloads(stmts: List<Statement>, source: String, fileName: String, enums: Map<String, EnumAsgInfo>) {
         // Piece C — overloaded functions: overload-sig return enum vs impl return enum.
         val byName = LinkedHashMap<String, MutableList<FunctionDeclaration>>()
         for (st in stmts) if (st is FunctionDeclaration) {
@@ -163080,17 +163085,6 @@ interface DataView {
                 ))
             }
         }
-    }
-
-    /** B463: render a TypeNode for the TS2416 sig chain, qualified-name aware. */
-    private fun typeNodeDisplayOrNull(t: TypeNode): String? = when (t) {
-        is TypeReference -> when (val tn = t.typeName) {
-            is Identifier -> tn.text
-            is QualifiedName -> qualifiedNameToDottedString(tn)
-            else -> null
-        }
-        is KeywordTypeNode -> formatTypeForDisplay(t)
-        else -> null
     }
 
     /** B425: recursively collect enum declarations (merging blocks of the same name) keyed by
