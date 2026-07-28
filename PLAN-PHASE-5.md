@@ -20,6 +20,94 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 743 (2026-07-28) — (REL.1) PART 1 LANDED: THE OVERLOAD PICKER WAS DOING TWO THINGS
+WRONG, AND NEITHER OF THEM IS ABOUT ENUMS.** Corpus **12,956 / 0 failures / 8 skipped** (+7 pins),
+compiler profile `--listAll` **BYTE-IDENTICAL at 46** after both commits. **(b) is parked again,
+strictly further along, on `wip/round743-rel1b` (94c8014b) — 4 profile FPs down to 2.**
+
+**BUG 1 — THE B136 CONCRETE-OVERLOAD SWAP RE-PICKED AN OVERLOAD THE SELECTION LOOP HAD ALREADY
+REJECTED** (commit `214e8cf1`). `getReturnTypeOfCallExpression`, when the chosen signature's return
+still carries an un-inferred type parameter, looks for a NON-GENERIC overload with a concrete return
+— and took the FIRST such overload **without ever asking whether it accepts the arguments**. So
+`factory.createToken(SyntaxKind.ReadonlyKeyword)` selected the correct generic
+`<TKind extends ModifierSyntaxKind>` overload and was then swapped back to
+`createToken(token: SyntaxKind.SuperKeyword): SuperExpression` purely because that one is
+non-generic with a concrete return. The omission was invisible for the Array predicate pair the rule
+was written for, where the non-generic overload accepts whatever the generic one does. The type-based
+verdict is now extracted as `signatureAcceptsArgs`, so any site adopting a signature asks the SAME
+question, and the swap candidate is gated on it; when NOTHING accepts the arguments — i.e.
+`resolveCallOverload` itself fell through to its first-arity-match tail — the test has no signal and
+the pre-743 behaviour stands, so the change is behaviour-preserving by construction outside the bug.
+
+**AND THE REDUCTION IS WHY TWO EARLIER ATTEMPTS FAILED: IT NEEDS THE GENERIC OVERLOAD.** Round 742
+wrote the repro as "two same-arity overloads whose parameters are DIFFERENT enum members pick the
+first". That shape **selects correctly** — the round-459 AST key gate handles it, verified here as
+its own probe. What reproduces is a non-generic enum-member overload FOLLOWED BY a generic one; the
+generic overload's un-inferred return is what arms the swap. Both earlier reductions blamed the
+barrel and the enum size and came back clean for want of that ingredient.
+
+**BUG 2 — OVERLOAD SELECTION COULD NOT SEE AN `asserts` NARROW** (commit `190d34b7`).
+`getTypeOfIdentifier` answers from `currentLocalTypes` and the declaration tables. An
+`if (isFoo(x))` narrow is RECORDED there by the condition pass, so selection saw it all along; an
+`asserts` narrow lives ONLY in the flow graph, reached by `getNarrowedTypeForReference`, which every
+emission site opts into individually and `resolveCallOverload` never did. So
+`Debug.assert(isKeywordOrPunctuation(kind)); … tokenToString(kind)` picked
+`tokenToString(t: SyntaxKind): string | undefined` over the `PunctuationOrKeywordSyntaxKind` overload
+returning `string` (parser.ts:2494). `signatureAcceptsArgs` now takes a SECOND CHANCE against the
+flow-narrowed type when the un-narrowed one is rejected — deliberately second rather than primary, so
+it can only turn a rejection into an acceptance and no overload that already matched can start
+failing, and the flow walk is paid for only on the rejecting path.
+
+**BOTH REDUCTIONS ARE ENUM-FREE, WHICH IS WHAT MAKES THE PINS BITE ON MAIN.** The profile diagnostics
+are visible only with (b) applied — without member disjointness the wrong overload's parameter
+accepted the argument anyway — but neither gap has anything to do with enums, and a pin written in
+the enum shape would have been vacuous on main. `AssertNarrowedOverloadSelectionTest` is
+`unknown` + `x is string` + a two-overload function; `EnumMemberLiteralOverloadSelectionTest`'s new
+trio keeps the enum only because that IS the round-459 gate's subject, and states the mirror
+direction (`takeSuper(createToken(SK.ReadonlyKeyword))` must ERROR) so a build that still picks the
+first overload fails it.
+
+**COST GATE.** Commit 1 +0.16% (rebaselined). Commit 2 **FAILED and was justified + rebaselined in
+the same commit**: `narrow.memoServed` +9.93% and `typeNode.bypassed` +23.26%, while `narrow.walks`
+moves only +0.83% — i.e. the second chance issues ~4,600 extra narrowing requests of which 87% the
+round-664 flow-walk memo serves for free, and the +584 real walks resolve the assert predicates and
+their targets (the 19,429 extra context-bypassed typeNode resolutions). It does NOT convert into wall
+time: interleaved against the same build without the fix, 26,098 / 26,593 ms vs 26,312 / 26,394 ms,
+inside the +-2.87% drift band.
+
+**PART 2 — (b) IS PARKED AGAIN, AT 2 FPs INSTEAD OF 4** (`wip/round743-rel1b`, all five `@Ignore`s
+ON). `checker.ts:7997` and `parser.ts:2494` are gone, fixed at the root on main. What remains, both
+meaning-level so no logical-parity divergence applies:
+
+- **`utilities.ts:4175`** — TS2322, intersection-over-union distribution:
+  `(Expression & StringLiteral) | NoSubstitutionTemplateLiteral | NumericLiteral` against
+  `MemberName | (Expression & (NumericLiteral | StringLiteralLike))`.
+- **`declarations.ts:846`** — TS2322 `'T | undefined'` vs `'T | StringLiteral'`: the
+  `if (!input) return undefined!` truthiness narrow does not strip `undefined` from a `T | undefined`
+  where `T extends Node`.
+
+**NEITHER REDUCED.** A hand-built model of each shape (the same interfaces, the same annotation, the
+same narrow) passes on the (b) build. Per round 742's rule that is a missing ingredient, not an
+absent bug — and it is exactly the state bug 1's reduction was in before the generic overload was
+added, so the next round should look for what the model omits rather than re-deriving the diagnosis.
+
+**THE ROUND-459 GATE'S PREMISE IS NOW FALSE, AND THE RELATION CAN ANSWER — BUT ONLY WITH (b).** The
+gate's own comment says enum members "are not modeled as literal types"; since (a)/(b0) they are, and
+for an ANNOTATED parameter the general type path in `signatureAcceptsArgs` reaches the same verdict
+**provided the relation rejects a sibling member**, which is precisely what (b) adds. On main today
+the gate is still load-bearing (sibling members relate vacuously) and it additionally answers for a
+parameter whose annotation the type path resolves to `anyType`. So it is (c) material, not (c) work:
+retire it in the same commit that lands (b), never before. Its doc now says so.
+
+**ALSO FOUND, NOT FIXED — a second, independent overload-selection hole with the same witness.** When
+BOTH candidate overloads are generic, round 481's lenience (`paramType is Type.TypeParam` matches any
+argument) never checks the type parameter's CONSTRAINT, so
+`createToken<TK extends SuperSK>(token: TK)` wins over
+`createToken<TKind extends ModifierSK>(token: TKind)` for a `ModifierSK` argument. The probe
+(`SuperExpr<SK.ReadonlyKeyword>` where `ModifierTok<SK.ReadonlyKeyword>` is correct) is recorded
+here rather than pinned, because a constraint check is only SHARP once (b) makes an enum-member union
+discriminate — before that it accepts everything and the change would be inert.
+
 **Round 742 (2026-07-28) — (REL.1) STEP (b0) LANDED: AN ENUM-MEMBER *EXPRESSION* IS A MEMBER
 TYPE, NOT `any` — AND THAT, NOT THE RELATION, WAS WHAT (b) WAS BLOCKED ON.** Corpus
 **12,949 / 0 failures / 8 skipped** (+9 pins), compiler profile `--listAll` back to **46**
@@ -1129,32 +1217,42 @@ backlog-horizon decision, not queue debt.)
     constraint; the arithmetic pass's first-wins recording refusing a nested body's shadow
     of an ENCLOSING body's binding (`spineArithInheritedName`); and the two widening paths.
     Member types print QUALIFIED now.
-  - **(b) Let the relation reject. ATTEMPTED round 741, RE-ATTEMPTED round 742, PARKED on
-    `wip/round742-rel1b` (4252f2d2) — the rule works and ALL FIVE `@Ignore`s flip there.**
+  - **(b) Let the relation reject. ATTEMPTED rounds 741/742/743, PARKED on
+    `wip/round743-rel1b` (94c8014b) — the rule works and ALL FIVE `@Ignore`s flip there.**
     One line in `checkTypeRelatedToCore` ("two enum-member types relate only when they are
     the same member", verdict via the structural `enumMemberTypesAreSameMember`), plus the
-    deletion of step (a)'s string TARGET half (tsc rejects `string → Ext.Dts`). What blocks
-    it:
-    - **4 profile FPs (46 → 50) — EXACTLY the same four round 741 measured**, after a (b0)
-      that puts member types into every enum-member expression in the program: `checker.ts:7997`
-      TS2769, `parser.ts:2494` TS2345 (assertion-narrow + `tokenToString` overload pick),
-      `declarations.ts:846` TS2322 (`T | undefined` vs `T | StringLiteral`), `utilities.ts:4175`
-      TS2322 (intersection-over-union). **Meaning-level — no logical-parity divergence applies.**
-      The stability of that set across (b0) is the evidence that they are relation/narrowing
-      gaps passing vacuously, not enum work.
-    - **START HERE: `checker.ts:7997` is an OVERLOAD-PICK bug, enum only the witness.**
-      `factory.createToken(SyntaxKind.ReadonlyKeyword)` picks the FIRST overload
-      (`token: SyntaxKind.SuperKeyword`) and returns `SuperExpression`, which then fails
-      `createIndexSignature`'s `ModifierLike[]`. Standalone repro: two SAME-ARITY overloads
-      whose parameters are DIFFERENT enum members pick the first; the same pair distinguished
-      by ARITY picks correctly. So `resolveCallOverload`'s type-based loop is not rejecting
-      the mismatching member parameter — neither via its round-459 AST key gate nor via the
-      relation. Fixing it plausibly also reaches `parser.ts:2494` (the other overload pick).
+    deletion of step (a)'s string TARGET half (tsc rejects `string → Ext.Dts`). **Round 743
+    took the blocking FPs from 4 to 2** by fixing two overload-selection bugs at the root, on
+    main — see the round-743 session note. What blocks it now:
+    - **2 profile FPs (46 → 48), both meaning-level, so no logical-parity divergence applies:**
+      - **`utilities.ts:4175`** — TS2322, intersection-over-union distribution:
+        `(Expression & StringLiteral) | NoSubstitutionTemplateLiteral | NumericLiteral`
+        against `MemberName | (Expression & (NumericLiteral | StringLiteralLike))`.
+      - **`declarations.ts:846`** — TS2322 `'T | undefined'` vs `'T | StringLiteral'`: the
+        `if (!input) return undefined!` truthiness narrow does not strip `undefined` from a
+        `T | undefined` where `T extends Node`.
+    - **START HERE, AND REDUCE PROPERLY: neither has a reduction yet.** Round 743 built a
+      hand-made model of each shape (same interfaces, same annotation, same narrow) and BOTH
+      PASS on the (b) build. Per the standing rule that is a missing ingredient, not an absent
+      bug — bug 1 of round 743 was in exactly this state until the GENERIC overload was added
+      to its model. Look for what the model omits before re-deriving the diagnosis.
+    - **CLEARED round 743, at the root, on main — do not re-investigate:** `checker.ts:7997`
+      was the B136 concrete-overload swap re-picking an overload the type-based loop had
+      already rejected (`214e8cf1`); `parser.ts:2494` was overload selection being unable to
+      see an `asserts` narrow, which lives only in the flow graph (`190d34b7`).
     - **NEGATIVE RESULT, do not re-spend a session on it:** the "one member splits into several
       `Type` instances because `canonicalEnumSymbol` cannot canonicalize a module-scoped enum
       post-INV.3(d)" hypothesis is FALSE — `enumMemberTypesAreSameMember` (tsc's structural
-      `isEnumTypeRelatedTo` verdict) leaves the profile at the SAME 4 FPs. It is on the branch
+      `isEnumTypeRelatedTo` verdict) leaves the profile at the SAME FPs. It is on the branch
       anyway: strictly more correct and free.
+    - **LAND WITH (b), NOT BEFORE — two rules whose premise (b) is what makes true:** (i) the
+      round-459 AST key gate in `signatureAcceptsArgs` (its doc says enum members "are not
+      modeled as literal types", which is false since (a)/(b0)) — the general type path reaches
+      the same verdict *once the relation rejects a sibling member*, so retire it in (b)'s
+      commit; (ii) a CONSTRAINT check for round 481's bare-`Type.TypeParam` lenience in the
+      same function — round 743 measured that two GENERIC overloads distinguished only by
+      their type parameters' constraints still pick the first, and a constraint check is inert
+      until an enum-member union discriminates.
     - `enumMemberTypeIsStringValued` already resolves a member's `ConstantValue` through the
       canonical enum, which is the whole input a VALUE-aware disjointness rule needs (that one
       must land WITH (c)'s first deletion, or it co-emits with `checkEnumLiteralAssignments`).
