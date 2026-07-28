@@ -110,6 +110,49 @@ delta 2,298 ms (8.5% of a check-only compile), and 738's cross-binary A/B **-3,5
 files. Two of three cluster at 8-9%. **State the landed value of (FRONT.1) as ~8-9%, with
 11.42% the high end**; the A/B is not wrong, it measured a different pair on a slower box.
 
+**Round 739 — PART 2, (ENGINE.1): THE 14x DOES NOT SURVIVE CONTACT WITH ITS OWN SITE, AND THAT
+NEEDED NO NEW MEASUREMENT.** The item said "measure two more sites before believing the 14x".
+Before spending a round on instrumentation I checked the ratio against the data it came from,
+and **the denominator is the wrong quantity**: 265/19 compares the FP-firewall walkers against
+**the final relation call alone**, and that call is **2.2% of the function it lives in**. A
+general rule engine does not consist of the relation call — it must still resolve the target
+type node, compute the source type, infer the type of an unannotated initializer, and narrow.
+All of that is in the same partition, in the same function, already measured by round 738.
+
+**Re-classifying round 738's own level-B rows by "would a general rule engine also do this"**
+(`checkVarDeclAssignability`, 15,116 invocations, 872 ms): **engine work 483 ms (55.4%)** —
+unannotated-init inference 405 + SOURCE type computation 57 + canUseTypeEngine/RELATION 19 +
+target getTypeFromTypeNode 1 + narrowing 1; **dedicated-walker layer 326 ms (37.4%)** — the
+four prologue groups 265 + clodule/B96/B231 6 + foreign-TP/B112/B207 4 + the ~30 post-relation
+walkers 51; bookkeeping 54 ms. **So the layer is 0.67x the engine work, not 14x it.**
+
+**THE NUMBER A SCOPE DECISION TURNS ON is not a ratio: it is 326 ms of a 26,896 ms check-only
+compile = 1.21%** — and **deletable is less than that**. The weak-type rule alone is 165 ms,
+HALF the layer, and it is real TypeScript semantics that tsc implements INSIDE
+`checkTypeRelatedTo`; we hold it in dedicated walkers only because a weak target passes our
+relation vacuously. It MOVES into a general engine, it does not vanish. Honest range for this
+site: **0.6-1.2% of the compile.**
+
+**METHOD CORRECTION THE NEXT ROUND MUST ADOPT, or its two sites will not be comparable:**
+report the layer in ms and as a share of the COMPILE, never as a ratio against the relation
+call; and split it into "re-implements a rule tsc also has" (moves) vs "corrects our own
+relation" (deletes). **And a grep census will not work**: `checkReturnAssignability` (802
+lines) has **ZERO `tryEmit*` calls** — its firewall is inline `if (...) return` guards
+(`aliasUnionContainsNullishKeyword`, `returnUnionSyntacticallyContainsLiteral`, the
+QualifiedName-suggestion guard, `arrayLiteralSatisfiesTupleTarget`) — while
+`checkAssignmentExpression` (1,427 lines) has 11 and `checkVarDeclAssignabilityCore` (1,504)
+has 15. A naming-convention census would have scored site 2 at zero. Static census for scale:
+805 `check*` + 181 `emit*` + 60 `tryEmit*` = 1,046 functions in 171,934 lines, which confirms
+section 0.1's "~1,005".
+
+**NOT STARTED, DELIBERATELY: the sites-2-and-3 instrumentation.** Each of rounds 733-738 spent
+a full session partitioning ONE function, and these two are 802 and 1,427 lines; starting one
+thin at the end of this round would have produced a number nobody could trust. Predictions
+E1-E4 for those sites are written down in `docs/perf/engine-rule-price.md` § 4 so the next
+round scores them instead of re-deriving them. **The scope question is NOT ready for the owner
+yet — but the number it would have been put with (14x) is now known to be the wrong statistic,
+and the one measured site says single-digit tenths of a percent.**
+
 **Round 738 (2026-07-28) — PART 2, (FRONT.1): THE FIRST FRONT-END ATTRIBUTION, AND THE
 ARC'S LARGEST LANDED WIN: `-11.42%` median, B wins 6/6.** Section 0.1's stage 5 said "the
 front end, ~20%, unprofiled". **The front end is 11.0%. The OTHER 9.2% of that never-measured
@@ -2055,15 +2098,27 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   1.87x-2.72x because xtsc is one cold run against tsc's median of three. Full derivation:
   `docs/ARCHITECTURE-RETHINK.md` § 0.2.
 
-- [ ] **(ENGINE.1) Price the dedicated-walker prologue on two more sites before
-  believing the 14x (round 738).** The var-decl path's FP-firewall prologue is 265 ms
-  against the 19 ms assignability relation it exists to correct — the first price tag
-  on section 0.1's "endgame" paragraph, and the only structurally-large shape the
-  seven-round attribution arc has left. Extrapolating one ratio is exactly the error
-  rounds 732-737 kept making, so measure `checkReturnAssignability` (615 ms, never
-  opened) and `checkAssignmentExpression` (318 ms) the same way FIRST. Only then is
-  the scope question ("replace ~1,005 `check*` walkers with engine rules, trading the
-  property that made the byte-identical corpus reachable") worth putting to the owner.
+- [ ] **(ENGINE.1) Price the dedicated-walker layer on two more sites — IN PROGRESS,
+  round 739 did the part that needed no measurement and it already overturns the 14x.**
+  **The 14x does not survive contact with its OWN site.** 265/19 compares the firewall
+  walkers against the final relation call ALONE, and that call is 2.2% of the function
+  it lives in; a general rule engine must still resolve the target node, compute the
+  source type, infer unannotated initializers and narrow. Re-classifying round 738's
+  own level-B rows by "would a general engine also do this": **engine work 483 ms
+  (55.4%), dedicated-walker layer 326 ms (37.4%), bookkeeping 54 ms** — so the layer is
+  **0.67x the engine work, not 14x it**, and on this site it is **326 ms of a 26,896 ms
+  check-only compile = 1.21%**. Deletable is LESS: the weak-type rule is 165 ms = half
+  the layer and is real TypeScript semantics tsc implements inside `checkTypeRelatedTo`,
+  so it MOVES rather than vanishes => honest range **0.6-1.2%** for this site. **Method
+  correction the two remaining sites must adopt** (else their numbers are not
+  comparable): report the layer as ms and as a share of the COMPILE, never as a ratio
+  against the relation; and split it into "re-implements a rule tsc also has" (moves)
+  vs "corrects our own relation" (deletes). **A grep-based census will NOT work:
+  `checkReturnAssignability` (802 lines) has ZERO `tryEmit*` calls — its firewall is
+  inline `if (...) return` guards — while `checkAssignmentExpression` (1,427 lines) has
+  11.** Both need a real intra-function partition (rounds 735/738's method); round 739
+  deliberately did not start it thin. Scored predictions E1-E4 are written down in
+  `docs/perf/engine-rule-price.md` § 4 — score them.
 
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is

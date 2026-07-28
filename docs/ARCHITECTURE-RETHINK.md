@@ -333,10 +333,23 @@ machinery, so shrinking it is also what makes workers pay.
 
 **The endgame, stated honestly:** after stages 1–5 the residue is the shape of the
 checks themselves — 1,005 `check*` functions where a general engine would have
-rules. That redundancy is what the byte-identical corpus gate incentivised
+rules (census, round 739: 805 `check*` + 181 `emit*` + 60 `tryEmit*` = 1,046).
+That redundancy is what the byte-identical corpus gate incentivised
 (narrow verifiable walkers beat broad engine rules, and every broad attempt
 regressed). Removing it is a SCOPE decision, not a perf task, and it trades the
-property that made the corpus reachable.
+property that made the corpus reachable. **FIRST PRICE, round 739
+(`docs/perf/engine-rule-price.md`) — and the "14×" this paragraph was about to be
+sold with is the wrong statistic.** 265/19 compared the FP-firewall walkers against
+the final relation call alone, which is 2.2% of the function it lives in.
+Re-classified against the work a general rule engine would ALSO do (resolve the
+target node, compute the source type, infer unannotated initializers, narrow):
+**engine 483 ms (55.4%), dedicated-walker layer 326 ms (37.4%) — 0.67×, not 14×**,
+and the layer is **1.21% of a check-only compile** on the largest of the three
+assignability sites. Deletable is less still: **165 ms of the 326 is the weak-type
+rule**, real TypeScript semantics that tsc holds inside `checkTypeRelatedTo`, so it
+MOVES into any replacement engine rather than vanishing → **0.6–1.2% for this site.**
+Two sites remain unmeasured, with scored predictions written down; do not put the
+scope question to the owner until they are in.
 
 **PROCESS — the cost gate this arc lacked.** Round 713 added ~72k
 `getTypeOfExpression` calls (624,961 → 696,953, +11.5%) for one conformance
