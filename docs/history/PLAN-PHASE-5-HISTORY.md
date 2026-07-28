@@ -1,3 +1,148 @@
+**Round 737 (2026-07-27) — (TYPE.1) DONE. ARCHITECTURE-RETHINK section 0.1 STAGE 3 IS
+STRUCK: its MECHANISM is exactly right and its SIZE is wrong by 3.2x.** The 701,463
+`getTypeOfExpression` calls were attributed BY CALLER for the first time
+(`--typeOfExprCallers`, opt-in; only the OUTERMOST call walks the stack, so a whole
+expression subtree is attributed to the handler that ASKED for it and the recursion
+cannot inflate a caller's own factor). **The claim "several handlers independently type
+the same node" is CONFIRMED and pervasive: 177 sites initiate typing, 45.2% of the
+254,069 typed nodes (114,750) carry MORE THAN ONE origin — modal count three, maximum
+17 — and 75.8% of all calls land on those nodes. The x2.76 factor decomposes cleanly as
+2.05x CROSS-HANDLER times 1.34x recursion, and per-caller factors are 1.00-1.11
+everywhere: no handler re-types anything by itself.** **The money is not there.** A
+PERFECT per-node cache — the ceiling for this stage in ANY shape, ignoring soundness and
+every ambient install — saves **823 ms = 2.9% of a 28.7 s compile**; single-visit
+discipline (repeat OUTERMOST typings only) **670 ms = 2.3%**; the largest single
+handler-pair merge in the compiler **166 ms = 0.58%** against a re-derived +-2% band of
+~590 ms; and the SOUND memo re-measures at **46 ms**. **NOTHING WAS LANDED**, correctly.
+
+**TWO CORRECTIONS THE ROUND FORCES.** (1) **"getTypeOfExpression = 3,911 ms" is a DOUBLE
+COUNT** — `typeOfExprNanos` sums every call's span including nested ones, charging a
+subtree once per level. **The true total cost of all expression typing is 2,439 ms =
+8.5% of checker-init**, so 8.5% was always stage 3's ceiling even if typing were free.
+(2) **74.4% of the calls are OUTERMOST, not nested** — the intuitive "the factor is just
+recursion" reading (which was this round's stated prior P1) is false by 3x.
+
+**SECTION 0's LAW AGAIN, IN ITS SHARPEST INSTANCE AND WITH NO CACHE IN IT.** Sorted by
+COUNT the co-occurrence head is 141,388 repeat typings worth **71 ms (0.5 us each)** —
+the property-access receiver trio (`emitTs18048ForClosureCapturedUndefinedReceiver` +
+`checkMemberAccessMissing` x2, 90,948 repeats for 51 ms), `getTypeOfObjectLiteral`
+re-entering itself (30,040 for 6 ms), `calleeParamGivesNoContext` re-entering itself
+(27,133 for 23 ms). Sorted by TIME the head is **2,603 repeat typings worth 166 ms
+(64 us each)**, `collectUncalledTypedLocalsFromBody -> checkVarDeclAssignability`. The
+two orderings share nothing. Cross-origin repeats are 547 ms over 188,068 typings,
+same-origin only 68 ms over 61,215 — the redundancy is genuinely BETWEEN handlers, and
+it is genuinely cheap.
+
+**PREDICTION SCORED (stated in full before the run): P1 FALSIFIED** (>50% nested; really
+25.6%), **P2 HELD** (0.5-2.0 s prize; really 670 ms), **P3 HELD** (top-3 pairs <50% of
+the redundant time; really 41%), **P4 FALSIFIED** (top-5 origins >=60% of outermost;
+really 52.5%). The falsifier — any single pair >600 ms — was not met, by 3.6x. Two of
+four wrong, the same hit rate as 732-735; the one that mattered was P1, where the reason
+to distrust stage 3 turned out to be the OPPOSITE of the expected one and the mechanism
+section 0.1 named was right all along.
+
+**WHAT DID NOT WORK.** (a) A per-node type cache of any shape: ceiling 823 ms, and that
+ceiling assumes ignoring `currentFlowGraph`/`currentLocalTypes`/`currentTypeParamScope`
+and the object-literal freshness rule — the SOUND version measures 46 ms in the same run.
+(b) Merging the property-access receiver trio, the biggest co-occurrence GROUP in the
+compiler at 90,948 repeat typings: **51 ms**. (c) Merging the var-decl cluster, the most
+EXPENSIVE group (~12,100 repeats, ~326 ms): spread over five ordered pairs whose members
+type under different ambient installs — which is exactly why the same node costs 64 us
+when `checkVarDeclAssignability` re-types it and 21 us when `collectUncalledTypedLocals`
+first does, and exactly why round 596's memo across them was unsound.
+
+**METHOD.** The probe costs **16.7 us per attributed outermost call** (checker-init
+37,429 ms attributed vs 28,694 ms plain, over 522,102 `StackWalker` walks) — 190x round
+735's 89 ns timestamp read — so this round is deliberately COUNT-heavy: every
+deterministic counter is byte-identical between the two runs and to `cost-counters.txt`,
+which makes the calls / distinct / outermost / co-occurrence figures exact and
+load-independent, while every millisecond is RELATIVE (nested probe work inflates an
+outermost span by ~4%). Node keys mix pos+end+nodeId because `nodeId` is only PER-FILE
+preorder; the report prints a file-salted distinct count beside the unsalted one
+(254,069 vs 272,124, a 7.1% gap) so the residual is measured rather than assumed.
+
+Suite 12,910 -> **12,916 / 0 / 3** (+6 `TypeOfExprCallerAttributionTest` pins); profile
+`--listAll` **byte-identical** production vs attribution (46 errors); cost gate **all 20
+counters +0.00%** (the probe is additive-only inside the existing `PassTiming.enabled`
+guard). Full derivation: **`docs/perf/type-of-expression-attribution.md`**. Follow-on:
+**(TYPE.2)** — the by-caller table's own pointer, `checkVarDeclAssignability` under
+`spineCtaM3StatementAnchor`: the largest single typing origin (431 ms over 11,933
+top-level initializers = 36 us each) inside the third-largest spine handler (2,900 ms,
+round 732) that no round has opened, and its typing is only 15% of it.
+
+**Round 736 (2026-07-27) — (CALL.3) DONE, AND THE ARC HAS ITS FIRST LANDED WIN:
+`-4.53%` median, B wins 6/6, outside the +-2% band by 2.3x.** Round 735 handed forward
+394 walks costing 1,485 ms and forbade designing before two numbers existed. Both were
+measured with a new opt-in probe (`NarrowSections`/`NarrowProbe`, `--narrowSections{,Coarse}`),
+and they point at one line. **(i) ARRIVALS vs DISTINCT: a tail walk arrives at 1,900 flow
+nodes but only 214 DISTINCT ones — revisit factor 8.85 against 1.48 for a typical walk.
+The tail is not a bigger graph; it is the same small graph walked nine times.
+(ii) THE PER-ARRIVAL SPLIT: 51% of the whole narrowing population is
+`applyConditionNarrowing` (1,412 ms over 759,784 calls at 1,858 ns), and the tail's
+arrival MIX is what makes its arrivals 6.3x costlier — `FlowCondition` is 41% of tail
+arrivals against 18% overall, `FlowBranchLabel` 22% against 9%, while cheap `FlowCall`
+pass-throughs fall 57% -> 19%.**
+
+**THE FIX, and it is a soundness argument rather than a green suite.**
+`NarrowFlowMemo.served(id, depth)` required `depth <= storedDepth`, so a node reached
+again by a LONGER path recomputed its whole antecedent subtree — 631,585 arrivals
+compile-wide, **426,753 of them at `FlowCondition` nodes**, versus 290,011 serves. That
+condition guards exactly ONE thing: a deeper entry has less depth budget and might
+truncate at `NARROW_MAX_DEPTH`=2000 where the stored computation did not. That is
+**decidable**: `depth` influences the result through no other channel (grep the walker —
+it appears only in the cap test, the two memo calls, and `depth + 1`), and only
+NON-truncated results are ever stored. So an entry now carries `hi`, the max depth its
+own subtree reached, and serves a deeper probe iff `depth + (hi - storedDepth) < maxDepth`.
+**The one non-obvious part: a served hit must fold `depth + servedHeight` into the
+CALLER's height, or an ancestor records the shortcut's height instead of a fresh
+recomputation's and the disjunct goes unsound under nesting.** Mirrored into
+`narrowTypeFromFlowFollowLoopEntry` per the walker-mirror invariant.
+
+**EFFECT (counters, deterministic): `narrowTypeFromFlowCore` invocations 1,455,915 ->
+659,592 (-55%); arrivals 4,759,476 -> 3,500,214 (-26%) with DISTINCT nodes UNCHANGED at
+3,212,764; `applyConditionNarrowing` calls 759,784 -> 333,031 (-56%); `getUnionType` at
+branch labels -59%; the `>=1 ms` tail 429 walks -> 230 and its arrivals 815,259 -> 34,490
+(-96%), revisit factor 8.85 -> 1.34.** Distinct unchanged to the node is the signature of
+a correct memoisation change: the same work is discovered, it is simply not repeated.
+Measured context that made the argument checkable: maxDepth reached is **249 of 2000**,
+and depth/budget/cycle truncations are **0/0/0** (the cycle bail is structurally
+unreachable here — the only back-edges are loop back-edges and `narrowTypeFromFlow`
+returns the declared type at `FlowLoopLabel` without recursing, so it is a DAG walk).
+
+**WHAT DID NOT WORK — two candidates priced and rejected, record them.** (1) **A "does
+this condition mention the name" pre-test in front of `applyConditionNarrowing`**:
+95.6% of its calls return their INPUT unchanged, which reads like a huge prize and is a
+trap — the identity calls cost **949 ns each against 21,708 ns for the calls that
+narrow**, so the whole population is 689 ms raw before this round's fix and 468 ms after,
+~410 ms net = 1.3%, INSIDE the band before paying for the pre-test. Section 0's law in a
+shape that is not a cache: *what you can skip cheaply is what was already cheap*.
+(2) **Memoising the fast-forward chain's pass-through nodes**: `FlowCall` is 57% of all
+arrivals with 2,743,997 memo absences — the biggest miss population in the table and the
+cheapest, ~131 ns per arrival, so its entire revisit share is <=120 ms against a 74 ns
+extra `putIfDeeper` per invocation to capture it.
+
+**METHOD carried forward.** The per-arrival population (4.8 M) is large enough that one
+timestamp PAIR per arrival would have added ~850 ms to a 2.75 s population — the probe
+would have BEEN the measurement. So the two per-arrival structures are priced in **probe
+STEPS** (a deterministic counter inside their open-addressing loops), not nanos. And:
+one profile run in this round was taken at 239 MB available and reported the walk anchor
+at **83,074 ms against a true 2,751 ms** (30x) while its COUNTERS were byte-identical to
+the clean run — which is exactly why the decisive numbers here are counters.
+
+Suite 12,899 -> **12,910 / 0 / 3** (+4 `IntKeyMapTest` height pins, +7 `NarrowMemoDepthTest`);
+profile `--listAll` **byte-identical A vs B** (46 errors); cost gate: `output.errors`,
+`spine.nodes`, `narrow.walks`, `typeOfExpr.distinct`, `mapped.*` all +0.00%, and **four
+counters FELL and were rebaselined in this commit** — `typeNode.cacheable` -10.6%,
+`typeNode.cacheHits` -14.6%, `globals.lookups` -8.4%, `globals.misses` -8.5%, all
+downstream of the 56% cut in `applyConditionNarrowing` (which resolves names and type
+nodes). Full derivation: **`docs/perf/narrow-walk-attribution.md`**.
+**A TEST-DISCIPLINE NOTE worth keeping**: two of this round's negative controls failed on
+first run (TS2339 for `x.toFixed(2)` on a `string`-narrowed reference, and for a
+loop-widened receiver). Both fail IDENTICALLY on the baseline build — pre-existing
+emitter gaps, not regressions — and were rewritten onto TS2345 at a call argument, the
+path this round actually profiles. **Run a failing negative control against the baseline
+before believing OR dismissing it.**
+
 **Round 735 (2026-07-27) — (CALL.2) DONE. THE PRIOR HOLDS BY 48x, AND ITS SUPPORTING
 EVIDENCE POINTS AT THE WRONG TERM.** The item's falsifiable expectation was "most of the
 61 us is argument TYPE computation, not `checkTypeRelatedTo`". **It is: 924 ms of the

@@ -20,6 +20,106 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 747 (2026-07-28) — (REL.1)(c) STEP 3 LANDED: THE RELATION *PRINTS* THE ENUM, AND
+B463's TS2416 (`encmCheckClassesAndOverloads` piece B) RETIRES WITH THE DISPLAY RULE.
+`checkEnumAsgInFunctionScopes` (B583) DID **NOT** RETIRE, AND ROUND 746's READ OF IT IS
+CORRECTED — IT IS BLOCKED ON RESOLUTION, NOT ON A DISPLAY RULE.** Compiler profile `--listAll`
+**at 46, diffed LINE-BY-LINE** against round 746's — composition unchanged (TS2591x43 /
+TS2304x2 / TS2584x1, zero TS2322). Filtered suite over the SIX generated classes that carry
+every TS2416 baseline plus the new pins: **3,910 tests, 0 failures**. +8 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE ABLATION, ROUND-746 FORMAT, MEASURED THROUGH THE 1.3-SECOND SCRATCH-PROJECT CLI LOOP:**
+
+| build | B463 piece B | `enumAssignmentCompat7` |
+|---|---|---|
+| pre-747 | enabled | 3, = the tsc baseline |
+| pre-747 | PassLab-disabled | **1**, and that TS2416 printing `(param: E) => void` on BOTH sides |
+| post-747 (rule only) | PassLab-disabled | **1, byte-identical to the baseline** — message, chain, position |
+| post-747 (rule, guards removed) | enabled | **4 — the TS2416 DUPLICATED, both copies byte-identical** |
+| post-747 | deleted | **3, byte-identical** — message, chain, position AND length |
+
+Row 2 is the one that separates this round from 746: **the verdict was already the relation's**
+(round 746 made it reject two DISTINCT enums, which is why the guard pair existed), and only the
+DISPLAY was missing. Row 4 is the co-emission with both halves of the guard pair removed — the
+strongest form of the evidence, because the duplicate is byte-identical rather than merely
+same-positioned.
+
+**THE RULE IS ONE FLAG, AND IT HAD TO REACH INSIDE A RENDERED FUNCTION TYPE.**
+`enumDisplayFullyQualified` is tsc's `TypeFormatFlags.UseFullyQualifiedType` restricted to enum
+names, consulted by `typeToString` at ANY nesting depth — so `(param: E) => void` becomes
+`(param: second.E) => void` without the caller knowing where in the rendering the enum sits.
+`enumQualifiedRelationDisplays` is the `getTypeNamesForErrorDisplay` retry for a pair that is
+NOT itself enum-flavored: same string on both sides ⇒ re-render both under the flag. **SPLIT
+from round 746's `enumCollisionQualifiedDisplays` rather than folded into it** (round 745's
+rule, applied again): that one is fed displays which may come from ANNOTATION TEXT, so
+re-rendering there would change strings for reasons that have nothing to do with enums. The new
+one is **self-gating** — with no enum in the pair the re-render returns the same string and the
+caller keeps its originals, which is exactly why a colliding INTERFACE pair (`one.I` vs `two.I`)
+is deliberately left on `Type 'I' is not assignable to type 'I'` and is pinned that way. Applied
+at BOTH relation errors of the TS2416 chain, because tsc retries at each independently.
+
+**THE DISPLAY DECOMPOSED INTO TWO PARTS, NOT THREE** (B266's had three): the flag (qualify an
+enum at any depth) and the collision gate (retry only when the two sides print the same string).
+The gate is not decoration — `enumAssignmentCompat6`'s a.ts pins that tsc prints
+`DiagnosticCategory` / `DiagnosticCategory2` BARE although both are namespace-nested, so a
+rule that qualified unconditionally would be wrong on the corpus.
+
+**RETIRING PIECE B ALSO REMOVES A DIVERGENCE — the third retirement in this arc to do so.**
+B463 rendered every enum in its chain through `EnumAsgInfo.qualifiedDisplay`, which qualifies
+UNCONDITIONALLY, so for two DIFFERENTLY-named enums it printed `(param: third.Other) => void`
+where tsc prints `(param: Other) => void`. Measured, not argued: the pin
+`negative control - two differently named enums keep their bare names` FAILS on a build of
+unmodified `fa3308a4`, in the other direction. Of the six new pins, three fail there because
+both sides print the bare `E`, one fails for that divergence, and the two remaining — the
+retirement pin in B463's own shape and the interface self-gating control — pass on BOTH builds
+byte-identically, which is what distinguishes "the general path reproduces the walker" from
+"approximates it".
+
+**PIN PLACEMENT, per round 745's rule.** B463 piece B saw only TOP-LEVEL classes whose
+overriding and overridden methods each had EXACTLY ONE parameter — so a namespace-wrapped class
+or a two-parameter method measures the RULE (the walker could never answer it), and the
+top-level single-parameter shape measures the RETIREMENT.
+
+**B583: ROUND 746's "BLOCKED ON A DISPLAY RULE" IS INCOMPLETE, AND THIS IS THE ROUND'S REAL
+FINDING.** Ablated, the relation reproduces **six of `enumAssignmentCompat6`'s eight**
+diagnostics byte-for-byte — the whole namespace-vs-namespace half, including both elaboration
+shapes — and for the remaining two it emits **NOTHING AT ALL**. The `import("f").DiagnosticCategory`
+display is therefore the SECOND blocker, behind a RESOLUTION one:
+
+- an `enum` declared inside a function or arrow body is never conventionally bound (B83.5), and
+  `computeAllEnumValues` never reaches it either (it walks `result.locals` + namespace exports);
+- in TYPE position the two failure modes DIFFER, and the second is the dangerous one:
+  a UNIQUE name resolves to nothing, so the annotation degrades to `any` and every check on it
+  goes silent — with **no TS2304**, because the INV.4(c)(iii) family finds the name through the
+  INV.2(c) lexical scopes, which the type resolver does not consult; a name that **SHADOWS** an
+  outer one resolves to the **OUTER** symbol, so `let b: DC = 0` inside the shadowing body is
+  judged against the outer enum's value domain (measured: outer `DC { Warning = 7 }`, inner
+  string enum ⇒ `Type '0' is not assignable to type 'DC'`).
+- B583 sidesteps both by collecting the inner enums from the AST itself (`eafsScanIife`), which
+  is why it is still the only pass that can answer there.
+
+So B583's retirement is gated on making TYPE-position name resolution POSITION-aware for
+function-body-scoped declarations — the B83.5 family, not a `typeToString` change. Queued as
+(REL.1)(c) step 4's unblocker rather than attempted: the resolution order change is the opposite
+of surgical, and the shadowing mode means the fix cannot be a "when the lookup misses" fallback.
+
+**MEASURED OWNERSHIP, so the next agent does not re-derive it.** With B583 PassLab-disabled over
+the same six generated classes (3,904 tests), exactly ONE test fails — `enumAssignmentCompat6` —
+and inside it only the two `f.ts` lines. Both halves are pinned in
+`EnumShadowedInFunctionScopeTest`: the half the relation already owns (a regression guard) and
+the retirement target with its byte-exact `import("f").DC` message and chain, landed early.
+
+**WHAT DID NOT WORK / process notes.** (i) A `compileKotlinJvm` and a filtered `jvmTest` launched
+with ~650 MB available timed out at 10 minutes with no output; the same commands after
+`./gradlew --stop` took 2m28s and 38s. Free memory before every gradle invocation, not just
+before a from-scratch build. (ii) The raw `--listAll` print order changed for
+`enumAssignmentCompat7` when the emission moved from B463's slot to the general one — harmless,
+because the formatter's stable sort is what the baselines see, but it is a reminder to diff
+SORTED lines (CLAUDE.md's rule) rather than raw output. (iii) `discriminantPropAnnotation` was
+not attempted, per the standing assessment: the risk is the KEY SPACE, and all producers must
+flip together.
+
 **Round 746 (2026-07-28) — (REL.1)(c) STEP 2 LANDED: THE RELATION ANSWERS
 `isEnumTypeRelatedTo`, AND BOTH `checkEnumToEnumAssignments` (B425) AND
 `checkNamespaceEnumUnionAssignments` (B266) RETIRE WITH IT.** Compiler profile `--listAll`
@@ -1067,151 +1167,6 @@ and is this round's one loose end (in-band either way at 1.4%). Suite 12,916 -> 
 (46 errors); cost gate **all 20 counters +0.00%**. Full derivation:
 **`docs/perf/var-decl-attribution.md`**.
 
-**Round 737 (2026-07-27) — (TYPE.1) DONE. ARCHITECTURE-RETHINK section 0.1 STAGE 3 IS
-STRUCK: its MECHANISM is exactly right and its SIZE is wrong by 3.2x.** The 701,463
-`getTypeOfExpression` calls were attributed BY CALLER for the first time
-(`--typeOfExprCallers`, opt-in; only the OUTERMOST call walks the stack, so a whole
-expression subtree is attributed to the handler that ASKED for it and the recursion
-cannot inflate a caller's own factor). **The claim "several handlers independently type
-the same node" is CONFIRMED and pervasive: 177 sites initiate typing, 45.2% of the
-254,069 typed nodes (114,750) carry MORE THAN ONE origin — modal count three, maximum
-17 — and 75.8% of all calls land on those nodes. The x2.76 factor decomposes cleanly as
-2.05x CROSS-HANDLER times 1.34x recursion, and per-caller factors are 1.00-1.11
-everywhere: no handler re-types anything by itself.** **The money is not there.** A
-PERFECT per-node cache — the ceiling for this stage in ANY shape, ignoring soundness and
-every ambient install — saves **823 ms = 2.9% of a 28.7 s compile**; single-visit
-discipline (repeat OUTERMOST typings only) **670 ms = 2.3%**; the largest single
-handler-pair merge in the compiler **166 ms = 0.58%** against a re-derived +-2% band of
-~590 ms; and the SOUND memo re-measures at **46 ms**. **NOTHING WAS LANDED**, correctly.
-
-**TWO CORRECTIONS THE ROUND FORCES.** (1) **"getTypeOfExpression = 3,911 ms" is a DOUBLE
-COUNT** — `typeOfExprNanos` sums every call's span including nested ones, charging a
-subtree once per level. **The true total cost of all expression typing is 2,439 ms =
-8.5% of checker-init**, so 8.5% was always stage 3's ceiling even if typing were free.
-(2) **74.4% of the calls are OUTERMOST, not nested** — the intuitive "the factor is just
-recursion" reading (which was this round's stated prior P1) is false by 3x.
-
-**SECTION 0's LAW AGAIN, IN ITS SHARPEST INSTANCE AND WITH NO CACHE IN IT.** Sorted by
-COUNT the co-occurrence head is 141,388 repeat typings worth **71 ms (0.5 us each)** —
-the property-access receiver trio (`emitTs18048ForClosureCapturedUndefinedReceiver` +
-`checkMemberAccessMissing` x2, 90,948 repeats for 51 ms), `getTypeOfObjectLiteral`
-re-entering itself (30,040 for 6 ms), `calleeParamGivesNoContext` re-entering itself
-(27,133 for 23 ms). Sorted by TIME the head is **2,603 repeat typings worth 166 ms
-(64 us each)**, `collectUncalledTypedLocalsFromBody -> checkVarDeclAssignability`. The
-two orderings share nothing. Cross-origin repeats are 547 ms over 188,068 typings,
-same-origin only 68 ms over 61,215 — the redundancy is genuinely BETWEEN handlers, and
-it is genuinely cheap.
-
-**PREDICTION SCORED (stated in full before the run): P1 FALSIFIED** (>50% nested; really
-25.6%), **P2 HELD** (0.5-2.0 s prize; really 670 ms), **P3 HELD** (top-3 pairs <50% of
-the redundant time; really 41%), **P4 FALSIFIED** (top-5 origins >=60% of outermost;
-really 52.5%). The falsifier — any single pair >600 ms — was not met, by 3.6x. Two of
-four wrong, the same hit rate as 732-735; the one that mattered was P1, where the reason
-to distrust stage 3 turned out to be the OPPOSITE of the expected one and the mechanism
-section 0.1 named was right all along.
-
-**WHAT DID NOT WORK.** (a) A per-node type cache of any shape: ceiling 823 ms, and that
-ceiling assumes ignoring `currentFlowGraph`/`currentLocalTypes`/`currentTypeParamScope`
-and the object-literal freshness rule — the SOUND version measures 46 ms in the same run.
-(b) Merging the property-access receiver trio, the biggest co-occurrence GROUP in the
-compiler at 90,948 repeat typings: **51 ms**. (c) Merging the var-decl cluster, the most
-EXPENSIVE group (~12,100 repeats, ~326 ms): spread over five ordered pairs whose members
-type under different ambient installs — which is exactly why the same node costs 64 us
-when `checkVarDeclAssignability` re-types it and 21 us when `collectUncalledTypedLocals`
-first does, and exactly why round 596's memo across them was unsound.
-
-**METHOD.** The probe costs **16.7 us per attributed outermost call** (checker-init
-37,429 ms attributed vs 28,694 ms plain, over 522,102 `StackWalker` walks) — 190x round
-735's 89 ns timestamp read — so this round is deliberately COUNT-heavy: every
-deterministic counter is byte-identical between the two runs and to `cost-counters.txt`,
-which makes the calls / distinct / outermost / co-occurrence figures exact and
-load-independent, while every millisecond is RELATIVE (nested probe work inflates an
-outermost span by ~4%). Node keys mix pos+end+nodeId because `nodeId` is only PER-FILE
-preorder; the report prints a file-salted distinct count beside the unsalted one
-(254,069 vs 272,124, a 7.1% gap) so the residual is measured rather than assumed.
-
-Suite 12,910 -> **12,916 / 0 / 3** (+6 `TypeOfExprCallerAttributionTest` pins); profile
-`--listAll` **byte-identical** production vs attribution (46 errors); cost gate **all 20
-counters +0.00%** (the probe is additive-only inside the existing `PassTiming.enabled`
-guard). Full derivation: **`docs/perf/type-of-expression-attribution.md`**. Follow-on:
-**(TYPE.2)** — the by-caller table's own pointer, `checkVarDeclAssignability` under
-`spineCtaM3StatementAnchor`: the largest single typing origin (431 ms over 11,933
-top-level initializers = 36 us each) inside the third-largest spine handler (2,900 ms,
-round 732) that no round has opened, and its typing is only 15% of it.
-
-**Round 736 (2026-07-27) — (CALL.3) DONE, AND THE ARC HAS ITS FIRST LANDED WIN:
-`-4.53%` median, B wins 6/6, outside the +-2% band by 2.3x.** Round 735 handed forward
-394 walks costing 1,485 ms and forbade designing before two numbers existed. Both were
-measured with a new opt-in probe (`NarrowSections`/`NarrowProbe`, `--narrowSections{,Coarse}`),
-and they point at one line. **(i) ARRIVALS vs DISTINCT: a tail walk arrives at 1,900 flow
-nodes but only 214 DISTINCT ones — revisit factor 8.85 against 1.48 for a typical walk.
-The tail is not a bigger graph; it is the same small graph walked nine times.
-(ii) THE PER-ARRIVAL SPLIT: 51% of the whole narrowing population is
-`applyConditionNarrowing` (1,412 ms over 759,784 calls at 1,858 ns), and the tail's
-arrival MIX is what makes its arrivals 6.3x costlier — `FlowCondition` is 41% of tail
-arrivals against 18% overall, `FlowBranchLabel` 22% against 9%, while cheap `FlowCall`
-pass-throughs fall 57% -> 19%.**
-
-**THE FIX, and it is a soundness argument rather than a green suite.**
-`NarrowFlowMemo.served(id, depth)` required `depth <= storedDepth`, so a node reached
-again by a LONGER path recomputed its whole antecedent subtree — 631,585 arrivals
-compile-wide, **426,753 of them at `FlowCondition` nodes**, versus 290,011 serves. That
-condition guards exactly ONE thing: a deeper entry has less depth budget and might
-truncate at `NARROW_MAX_DEPTH`=2000 where the stored computation did not. That is
-**decidable**: `depth` influences the result through no other channel (grep the walker —
-it appears only in the cap test, the two memo calls, and `depth + 1`), and only
-NON-truncated results are ever stored. So an entry now carries `hi`, the max depth its
-own subtree reached, and serves a deeper probe iff `depth + (hi - storedDepth) < maxDepth`.
-**The one non-obvious part: a served hit must fold `depth + servedHeight` into the
-CALLER's height, or an ancestor records the shortcut's height instead of a fresh
-recomputation's and the disjunct goes unsound under nesting.** Mirrored into
-`narrowTypeFromFlowFollowLoopEntry` per the walker-mirror invariant.
-
-**EFFECT (counters, deterministic): `narrowTypeFromFlowCore` invocations 1,455,915 ->
-659,592 (-55%); arrivals 4,759,476 -> 3,500,214 (-26%) with DISTINCT nodes UNCHANGED at
-3,212,764; `applyConditionNarrowing` calls 759,784 -> 333,031 (-56%); `getUnionType` at
-branch labels -59%; the `>=1 ms` tail 429 walks -> 230 and its arrivals 815,259 -> 34,490
-(-96%), revisit factor 8.85 -> 1.34.** Distinct unchanged to the node is the signature of
-a correct memoisation change: the same work is discovered, it is simply not repeated.
-Measured context that made the argument checkable: maxDepth reached is **249 of 2000**,
-and depth/budget/cycle truncations are **0/0/0** (the cycle bail is structurally
-unreachable here — the only back-edges are loop back-edges and `narrowTypeFromFlow`
-returns the declared type at `FlowLoopLabel` without recursing, so it is a DAG walk).
-
-**WHAT DID NOT WORK — two candidates priced and rejected, record them.** (1) **A "does
-this condition mention the name" pre-test in front of `applyConditionNarrowing`**:
-95.6% of its calls return their INPUT unchanged, which reads like a huge prize and is a
-trap — the identity calls cost **949 ns each against 21,708 ns for the calls that
-narrow**, so the whole population is 689 ms raw before this round's fix and 468 ms after,
-~410 ms net = 1.3%, INSIDE the band before paying for the pre-test. Section 0's law in a
-shape that is not a cache: *what you can skip cheaply is what was already cheap*.
-(2) **Memoising the fast-forward chain's pass-through nodes**: `FlowCall` is 57% of all
-arrivals with 2,743,997 memo absences — the biggest miss population in the table and the
-cheapest, ~131 ns per arrival, so its entire revisit share is <=120 ms against a 74 ns
-extra `putIfDeeper` per invocation to capture it.
-
-**METHOD carried forward.** The per-arrival population (4.8 M) is large enough that one
-timestamp PAIR per arrival would have added ~850 ms to a 2.75 s population — the probe
-would have BEEN the measurement. So the two per-arrival structures are priced in **probe
-STEPS** (a deterministic counter inside their open-addressing loops), not nanos. And:
-one profile run in this round was taken at 239 MB available and reported the walk anchor
-at **83,074 ms against a true 2,751 ms** (30x) while its COUNTERS were byte-identical to
-the clean run — which is exactly why the decisive numbers here are counters.
-
-Suite 12,899 -> **12,910 / 0 / 3** (+4 `IntKeyMapTest` height pins, +7 `NarrowMemoDepthTest`);
-profile `--listAll` **byte-identical A vs B** (46 errors); cost gate: `output.errors`,
-`spine.nodes`, `narrow.walks`, `typeOfExpr.distinct`, `mapped.*` all +0.00%, and **four
-counters FELL and were rebaselined in this commit** — `typeNode.cacheable` -10.6%,
-`typeNode.cacheHits` -14.6%, `globals.lookups` -8.4%, `globals.misses` -8.5%, all
-downstream of the 56% cut in `applyConditionNarrowing` (which resolves names and type
-nodes). Full derivation: **`docs/perf/narrow-walk-attribution.md`**.
-**A TEST-DISCIPLINE NOTE worth keeping**: two of this round's negative controls failed on
-first run (TS2339 for `x.toFixed(2)` on a `string`-narrowed reference, and for a
-loop-widened receiver). Both fail IDENTICALLY on the baseline build — pre-existing
-emitter gaps, not regressions — and were rewritten onto TS2345 at a call argument, the
-path this round actually profiles. **Run a failing negative control against the baseline
-before believing OR dismissing it.**
-
 
 ---
 
@@ -1387,6 +1342,28 @@ backlog-horizon decision, not queue debt.)
         the next retirements in this family, and both are now blocked on a display rule rather
         than on a verdict** — the state B266 was in when this round started. Qualifying an enum
         nested inside a rendered FUNCTION type is the concrete blocker for B463.
+    - **STEP 3 DONE round 747: B463's TS2416 (`encmCheckClassesAndOverloads` piece B) RETIRES
+      with the display rule. B583 does NOT — and round 746's read of it is CORRECTED.** Profile
+      46 diffed line-by-line, 3,910 filtered tests over the six generated classes carrying every
+      TS2416 baseline, 0 failures, +8 pins. The rule is `enumDisplayFullyQualified` (tsc's
+      `TypeFormatFlags.UseFullyQualifiedType` restricted to enum names, consulted by
+      `typeToString` at ANY depth so an enum inside a rendered FUNCTION type qualifies) plus
+      `enumQualifiedRelationDisplays`, the `getTypeNamesForErrorDisplay` retry for a pair that is
+      not itself enum-flavored — SPLIT from round 746's `enumCollisionQualifiedDisplays` because
+      that one is fed annotation TEXT, and self-gating because a pair with no enum re-renders to
+      the same string. Applied at BOTH relation errors of the chain (tsc retries at each). Piece
+      B, `typeNodeDisplayOrNull` and BOTH halves of round 746's guard pair are deleted in the
+      same commit; pieces A (TS2339) and C (TS2394) stay — the general path still emits nothing
+      for them. Retiring it also removes a DIVERGENCE: B463 qualified UNCONDITIONALLY
+      (`EnumAsgInfo.qualifiedDisplay`), printing `(param: third.Other) => void` where tsc prints
+      `(param: Other) => void`.
+      - **B583 IS BLOCKED ON RESOLUTION, NOT ON A DISPLAY RULE — see (REL.1)(d).** Ablated, the
+        relation reproduces SIX of `enumAssignmentCompat6`'s eight byte-for-byte and emits
+        NOTHING for the other two, because an `enum` declared in a function/arrow body is never
+        bound (B83.5) and is invisible in TYPE position. `import("f").DiagnosticCategory` is the
+        SECOND blocker, behind that. Measured ownership: over the same 3,904 tests, B583
+        PassLab-disabled fails exactly ONE — `enumAssignmentCompat6`, its two `f.ts` lines.
+        Both halves pinned in `EnumShadowedInFunctionScopeTest`.
     - **HISTORY — REDIRECTED round 744 BY ABLATION. The first deletion was NOT
     any of the three AST-only passes; it was the VALUE-AWARE disjointness rule.** Round 740's inventory called those three "100% artifacts,
     deletable"; a PassLab census (`build/pass-lab.txt`, `disable <pass>`, ZERO recompile — run it
@@ -1402,13 +1379,28 @@ backlog-horizon decision, not queue debt.)
     - **None of the twelve AST key-space helpers is orphaned yet** (checked by reference count
       after the round-459 retire — `enumMemberKeysOfTypeNode` / `enumMemberKeyOfExpr` keep other
       consumers), so there is no free deletion to take first.
-    - **STEP 3 (next), and round 746 re-ordered it: `checkEnumAsgInFunctionScopes` (B583) and
-      `encmCheckClassesAndOverloads`'s TS2416 (B463) come BEFORE
-      `discriminantPropAnnotation`.** Both now co-emit with the general relation and are held
-      off only by a retraction (round 746), so each is a one-commit retirement once its DISPLAY
-      moves: B583 needs `import("<base>").<Name>` for an enum shadowed by a module-scoped one
-      plus the `declare namespace` value-KIND split; B463 needs an enum QUALIFIED inside a
-      rendered function type (`(param: second.E) => void`), which is a `typeToString` change.
+    - **~~STEP 3 (next), and round 746 re-ordered it~~ — DONE for B463 (round 747, see the STEP 3
+      bullet above). The B583 half of this bullet was WRONG: it is not a display problem.**
+      Kept for the history of the misread.
+    - **STEP 4 (next) — THE B583 UNBLOCKER: make a function-body-scoped `enum` RESOLVABLE IN TYPE
+      POSITION.** Round 747 measured that with B583 ablated the relation reproduces six of
+      `enumAssignmentCompat6`'s eight diagnostics byte-for-byte and emits NOTHING for the other
+      two, because an `enum` declared inside a function or arrow body is never conventionally
+      bound (B83.5) and `computeAllEnumValues` never reaches it either (it walks `result.locals`
+      + namespace exports). Two failure modes, and the second is why this cannot be a
+      "when the lookup misses" fallback: a UNIQUE name resolves to nothing (annotation → `any`,
+      every check silent, and NO TS2304 because the INV.4(c)(iii) family finds the name through
+      the INV.2(c) lexical scopes, which the type resolver does not consult), while a name that
+      SHADOWS an outer one resolves to the OUTER symbol — a wrong answer, not a missing one.
+      The INV.2(c) lexical binder DOES declare such an enum (`declareLexical` + a scope-space
+      symbol whose `exports` are filled by `bindLexicalEnumMembers`), so the ingredients exist;
+      what is missing is a POSITION-aware type-name resolution that prefers it, plus enum-value
+      computation for a scope-space enum symbol. Decompose before starting. Only AFTER that does
+      B583's display rule (`import("<base>").<Name>` for an enum shadowed by a module-scoped one,
+      plus the `declare namespace` value-KIND split) become the remaining blocker. Target pinned
+      byte-exactly by `EnumShadowedInFunctionScopeTest`; measured ownership is ONE corpus test
+      (`enumAssignmentCompat6`, its two `f.ts` lines) over 3,904 filtered tests.
+    - **STEP 5 (last) — `discriminantPropAnnotation`.**
     - `discriminantPropAnnotation` (:110431) has FIVE call sites woven through switch-narrowing
       and type-guard filtering — `filterUnionByEnumDiscriminant`, `kindDomainKeysOfType`,
       `discriminantKindKeys`, the exhaustive-switch `neverType` gate, and the objlit
