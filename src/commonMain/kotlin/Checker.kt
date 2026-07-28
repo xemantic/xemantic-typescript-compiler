@@ -9319,7 +9319,76 @@ class Checker(
     // Enum value computation
     // -----------------------------------------------------------------------
 
+    /**
+     * (REL.1)(c) step 4 — the program-wide set of simple names that the INV.2(c)
+     * lexical pass bound as an ENUM in SCOPE space (id <= -2), i.e. an `enum`
+     * declared inside a function/arrow/block body, which the main binder never
+     * bound (B83.5). Empty for almost every program, which is what keeps
+     * [lexicalTypeSymbolForNode]'s consult free on the hot type-reference path:
+     * one HashSet probe before any ancestor walk. Populated by
+     * [computeAllEnumValues], so it is complete before the first check runs.
+     */
+    private var lexicalBlockScopedEnumNames: Set<String> = emptySet()
+
+    /**
+     * (REL.1)(c) step 4: the position-aware TYPE-space consult for a
+     * function-body-scoped `enum`. Walks the node's ancestor chain outward over the
+     * INV.2(c) `lexicalScopes` table of the node's OWNING file and returns the first
+     * SCOPE-SPACE enum symbol of [name].
+     *
+     * **This is a resolution-ORDER change, not a fallback, and it cannot be written
+     * as one** — of the two B83.5 failure modes only the first is a miss: a UNIQUE
+     * name resolved to nothing (annotation → `any`, every check silent, and no TS2304
+     * because the INV.4(c)(iii) family finds the name through these same lexical
+     * scopes, which this resolver did not consult), while a name SHADOWING an outer
+     * one resolved to the OUTER symbol, which is a wrong answer with nothing to
+     * detect.
+     *
+     * SCOPE-SPACE ONLY (`scope.symbols`, never [LexicalScope.existing]) is what makes
+     * it containable: `declareLexical` skips any name the main binder already bound in
+     * that container, so a conventionally-bound name is absent from `symbols`
+     * everywhere and keeps resolving exactly as before. That also gives the shadowing
+     * rule for free — a scope-space binding exists only where the main binder had
+     * none, so the innermost-first walk reaches the inner `enum DC` before the file
+     * root's aliased locals ever offer the module-scoped one.
+     */
+    private fun lexicalTypeSymbolForNode(node: Node, name: String): Symbol? {
+        if (name !in lexicalBlockScopedEnumNames) return null
+        val owner = owningSourceFile(node) ?: return null
+        val scopes = fileResults[owner.fileName]?.lexicalScopes ?: return null
+        if (scopes.isEmpty()) return null
+        var cur: Node? = node
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            val id = (cur as NodeBase).nodeId
+            if (id >= 0) {
+                val sym = scopes[id]?.symbols?.get(name)
+                if (sym != null && sym.flags.hasAny(SymbolFlags.Enum)) return sym
+            }
+            if (cur is SourceFile) break
+            cur = cur.parent
+        }
+        return null
+    }
+
     private fun computeAllEnumValues() {
+        // (REL.1)(c) step 4: scope-space enums first — a function-body-scoped enum is
+        // invisible to the `result.locals` + namespace-exports walk below, so its
+        // values were never computed and [lexicalTypeSymbolForNode] would hand the
+        // relation a value-less enum. `computeEnumSymbolValues` is id-keyed and
+        // scope-symbol ids are a disjoint negative space, so this cannot perturb any
+        // conventionally-bound enum's values.
+        val blockScoped = HashSet<String>()
+        for (result in binderResults) {
+            for ((_, scope) in result.lexicalScopes) {
+                for ((symName, symbol) in scope.symbols) {
+                    if (!symbol.flags.hasAny(SymbolFlags.Enum)) continue
+                    blockScoped.add(symName)
+                    computeEnumSymbolValues(symbol)
+                }
+            }
+        }
+        lexicalBlockScopedEnumNames = blockScoped
         for (result in binderResults) {
             for ((_, symbol) in result.locals) {
                 computeEnumValuesRecursive(symbol)
@@ -151544,6 +151613,11 @@ interface DataView {
     private fun resolveTypeNameToSymbol(node: Node): Symbol? {
         return when (node) {
             is Identifier -> {
+                // (REL.1)(c) step 4: a function-body-scoped `enum` is invisible to the
+                // conventional consult (B83.5) and a name SHADOWING an outer one
+                // resolves there to the WRONG (outer) symbol — so the position-aware
+                // lexical consult must come FIRST, not as a miss-fallback.
+                lexicalTypeSymbolForNode(node, node.text)?.let { return it }
                 val sym = lookupPerFileForNode(node, node.text)
                 // INV.3(d): the import-shadowed-by-value-local TYPE/VALUE split —
                 // `import { SourceMapSource }` (a type) + a same-named local

@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 748 (2026-07-28) — (REL.1)(c) STEP 4 LANDED: A FUNCTION-BODY-SCOPED `enum` IS
+RESOLVABLE IN TYPE POSITION, AND B583's BLOCKER MOVES FROM RESOLUTION TO DISPLAY.** Compiler
+profile `--listAll` **BYTE-IDENTICAL at 46** — the whole output, diffed SORTED LINE-BY-LINE
+against a build of pristine `7ab9b215`, composition unchanged (TS2591x43 / TS2304x2 /
+TS2584x1, zero TS2322). Filtered suite **4,427 tests, 0 failures, 0 skipped**. +4 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE ROUND IS A SIZING FIRST (round 740's rule), AND THE FIX WAS ONLY WRITTEN BECAUSE THE
+SIZING CAME BACK CONTAINED.** Four predictions were stated before measuring and all four scored:
+
+| prediction | predicted | measured |
+|---|---|---|
+| corpus files with a block-scoped enum used in TYPE position | <= 15 | **2** |
+| corpus baselines that flip to failing under the fix | <= 5 | **0** |
+| block-scoped `class`/`interface`/`type` in type position vs enum | >= 10x | **62x** |
+| (implicit) profile stays at 46 | 46 | **46, byte-identical** |
+
+**THE CENSUS, AND HOW IT WAS OBTAINED.** A brace-stack scan over all 6,455 corpus sources and
+the 78 tsc-compiler sources classifies each `enum`/`class`/`interface`/`type`/`function`
+declaration by whether EVERY enclosing container is a namespace/module (conventionally bound)
+or at least one is a function/block (B83.5-unbound), then asks whether the name also appears in
+a type position. Corpus: **26 block-scoped enum declarations across 14 files, of which only 2
+files use one in type position** — `enumAssignmentCompat6` and `unusedLocalsInMethod4`. tsc
+compiler sources: **3 declarations, 2 in type position** — `debug.ts`'s `Connection` and
+`program.ts`'s `SeenPackageName`, both `const enum`s inside function bodies.
+
+**WHICH FAILURE MODE EACH SITE IS, because they need different fixes.** `enumAssignmentCompat6`
+is the SHADOWING mode (inner `DiagnosticCategory` over a module-scoped one). The other three —
+`unusedLocalsInMethod4`'s `ClassPropertySubstitutionFlags` and both profile sites — are the
+silent-`any` mode (unique names). **Both profile sites produce NO new diagnostic once resolved**,
+including `Connection`'s heavy bit-flag `|=` / `&` / `switch` arithmetic, which was the
+FP risk the sizing existed to price.
+
+**IT IS A RESOLUTION-ORDER CHANGE, NOT A FALLBACK, AND THE SHADOWING MODE IS WHY IT CANNOT BE
+ONE** — there is no miss to detect. `lexicalTypeSymbolForNode` is consulted FIRST in
+`resolveTypeNameToSymbol`'s Identifier branch: an innermost-first ancestor walk over the INV.2(c)
+`lexicalScopes` table of the node's OWNING file, returning the first SCOPE-SPACE enum symbol.
+
+**SCOPE-SPACE ONLY (`scope.symbols`, never `LexicalScope.existing`) IS THE WHOLE CONTAINMENT
+ARGUMENT, and it is worth stating as a rule for the next agent.** `declareLexical` skips any name
+the main binder already bound in that container, so a conventionally-bound name is ABSENT from
+`symbols` everywhere — the consult therefore cannot change how any such name resolves, which is
+what keeps the INV.3(c)/(d) per-file minefield entirely out of scope. The same property yields
+the shadowing rule for free: a scope-space binding exists only where the main binder had none, so
+the innermost-first walk reaches the inner `enum DC` before the file root's aliased locals ever
+offer the module-scoped one. Reading `existing` too would have been the obvious "complete" thing
+to do and would have put every INV.3 name back in play for nothing.
+
+**TWO SUPPORTING PIECES, both forced by measurement rather than design.** (i) `computeAllEnumValues`
+gained a scope-space leg — it walked `result.locals` + namespace exports only, so a resolvable
+function-body enum would otherwise have reached the now value-aware relation with NO values, which
+after round 745 means "domain not fully known" and silently accepts everything. It is id-keyed and
+scope-symbol ids are a disjoint negative space, so it cannot perturb a conventionally-bound enum.
+(ii) `lexicalBlockScopedEnumNames`, a program-wide name set built in the same pass, is the perf
+gate: one HashSet probe before any ancestor walk, and the set is EMPTY for almost every program.
+
+**THE PAYOFF, MEASURED BY ABLATION THROUGH THE 1.3-SECOND SCRATCH-PROJECT CLI LOOP:**
+
+| build | B583 | `enumAssignmentCompat6`'s `f.ts` |
+|---|---|---|
+| round 747 | PassLab-disabled | **NOTHING AT ALL** |
+| round 748 | PassLab-disabled | **both verdicts, both correct positions**, printing `Type 'DiagnosticCategory' is not assignable to type 'DiagnosticCategory'` |
+| round 748 | enabled | 2, byte-identical to the baseline (`import("f").DiagnosticCategory`) — no duplication |
+
+Row 2 is the round's deliverable: **B583 is now in exactly the state B266 was in before round 746
+and B463 before round 747** — replaceable on VERDICT, not on DISPLAY. The remaining blocker is the
+`import("<base>").<Name>` rule for an enum shadowed by a module-scoped one, plus the
+`declare namespace` value-KIND split.
+
+**IT DOES NOT GENERALISE, DELIBERATELY, AND THE OWNER SHOULD KNOW THE NUMBER.** B83.5 leaves
+`class` / `interface` / `type` / `function` unbound in exactly the same way, and the census says
+they are **62x more numerous in type position** than enums (interface 51 corpus files, type 41,
+class 33, function 5, against enum's 2). The mechanism here would extend to them by widening one
+flag test, but the blast radius is a different order of magnitude and would need its own sizing
+round. A negative-control pin holds a block-scoped `interface` UNRESOLVED on purpose, so a future
+widening has to change that pin deliberately rather than by accident.
+
+**NON-VACUITY, per the standing rule.** Three of the four pins FAIL on a build of unmodified
+`7ab9b215` (measured, by stashing only `Checker.kt` and rebuilding): two because the diagnostic
+does not fire there at all, and the third because it fires when it must NOT — an outer
+`Warning = 7` rejecting a `0` that the inner `Warning = 0` accepts. That third one is the pin that
+proves the ORDER changed rather than a gap being filled, and it is the direction a fallback-shaped
+fix could never produce. The negative control and both `EnumShadowedInFunctionScopeTest` pins pass
+on BOTH builds.
+
+**WHAT DID NOT WORK / process notes.** (i) The first census script was O(n) per character with a
+regex match attempt at every position and did not finish on a 3 MB `checker.ts`; rewritten with
+`finditer` + a merged event sort it runs in 0.5 s per file. The second version then blew up again
+because the type-position test re-scanned the whole source once per DECLARATION (2,880 of them in
+checker.ts) — inverted to collect all type-position names in ONE pass and test membership. (ii)
+**Round 747's memory lesson repeated verbatim and cost 10 minutes**: a `compileKotlinJvm` launched
+with 1,211 MB available timed out at 10 minutes with no output; after `./gradlew --stop` plus a
+graceful `kill` of the Kotlin daemon (4.4 GB idle) the identical command took 2m35s. Check
+`free -m` IMMEDIATELY before each gradle call, not once per session — the profile CLI runs and the
+daemons re-grow between them. (iii) `discriminantPropAnnotation` was not attempted, per the
+standing assessment: the risk is the KEY SPACE and all producers must flip together.
+
 **Round 747 (2026-07-28) — (REL.1)(c) STEP 3 LANDED: THE RELATION *PRINTS* THE ENUM, AND
 B463's TS2416 (`encmCheckClassesAndOverloads` piece B) RETIRES WITH THE DISPLAY RULE.
 `checkEnumAsgInFunctionScopes` (B583) DID **NOT** RETIRE, AND ROUND 746's READ OF IT IS
@@ -1382,8 +1479,38 @@ backlog-horizon decision, not queue debt.)
     - **~~STEP 3 (next), and round 746 re-ordered it~~ — DONE for B463 (round 747, see the STEP 3
       bullet above). The B583 half of this bullet was WRONG: it is not a display problem.**
       Kept for the history of the misread.
-    - **STEP 4 (next) — THE B583 UNBLOCKER: make a function-body-scoped `enum` RESOLVABLE IN TYPE
-      POSITION.** Round 747 measured that with B583 ablated the relation reproduces six of
+    - **STEP 4 DONE round 748 — a function-body-scoped `enum` IS resolvable in type position, and
+      B583's blocker MOVES FROM RESOLUTION TO DISPLAY.** Profile `--listAll` BYTE-IDENTICAL at 46
+      (diffed sorted line-by-line against pristine `7ab9b215`), 4,427 filtered tests / 0 failures,
+      +4 pins. **SIZED BEFORE IT WAS WRITTEN, and the sizing is the reusable artifact:** a static
+      census over all 6,455 corpus sources and the 78 tsc-compiler sources finds only **2 corpus
+      files and 2 profile sites** where a block-scoped enum is used in TYPE position — corpus
+      baselines changed: **ZERO**. `enumAssignmentCompat6` is the SHADOWING mode;
+      `unusedLocalsInMethod4` and both profile sites (`debug.ts`'s `Connection`, `program.ts`'s
+      `SeenPackageName`) are the silent-`any` mode, and neither profile site emits anything new
+      once resolved. `lexicalTypeSymbolForNode` is consulted FIRST in `resolveTypeNameToSymbol`'s
+      Identifier branch (innermost-first ancestor walk over the owning file's INV.2(c)
+      `lexicalScopes`); **SCOPE-SPACE ONLY (`scope.symbols`, never `existing`) is the containment
+      argument** — `declareLexical` skips any name the main binder bound, so a conventionally-bound
+      name cannot be reached, and the innermost-first order IS the shadowing rule for free.
+      `computeAllEnumValues` gained a scope-space leg (else the value-aware relation gets a
+      value-less enum, which since round 745 accepts everything); `lexicalBlockScopedEnumNames`
+      is the one-HashSet-probe perf gate. **ABLATION: with B583 disabled the general path went
+      from emitting NOTHING to emitting both verdicts at both correct positions**, printing
+      `Type 'DiagnosticCategory' is not assignable to type 'DiagnosticCategory'` — i.e. B583 is
+      now in the state B266 was in before round 746. **DELIBERATELY NOT GENERALISED**: the other
+      B83.5 kinds are **62x more numerous** in type position (interface 51 corpus files, type 41,
+      class 33, vs enum's 2), so widening is its own sizing round; a negative-control pin holds a
+      block-scoped `interface` unresolved on purpose. Pins in
+      `FunctionScopedEnumTypePositionTest` (3 of 4 fail on unmodified `7ab9b215`, the third in
+      the OTHER direction — the one that proves the ORDER changed).
+    - **STEP 4b (next) — B583's REMAINING blocker is now the DISPLAY**, exactly as B266's and
+      B463's were: `import("<base>").<Name>` for an enum shadowed by a module-scoped one, plus the
+      `declare namespace` value-KIND split. Target pinned byte-exactly by
+      `EnumShadowedInFunctionScopeTest`; measured ownership is ONE corpus test
+      (`enumAssignmentCompat6`, its two `f.ts` lines).
+    - **~~STEP 4 (was next)~~ — THE B583 UNBLOCKER: make a function-body-scoped `enum` RESOLVABLE
+      IN TYPE POSITION.** DONE, see above. Round 747 measured that with B583 ablated the relation reproduces six of
       `enumAssignmentCompat6`'s eight diagnostics byte-for-byte and emits NOTHING for the other
       two, because an `enum` declared inside a function or arrow body is never conventionally
       bound (B83.5) and `computeAllEnumValues` never reaches it either (it walks `result.locals`
