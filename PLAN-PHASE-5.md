@@ -42,6 +42,12 @@ byte-for-byte the same work it was before round 738 and the ratio cannot have mo
 by our own emit fraction `(1 - s_xtsc)` while implicitly taking tsc's `s_tsc` as ZERO — that
 is the ratio's FLOOR, not its value, and the error ran in the direction that flattered us.
 
+**AND IT IS NOW CONFIRMED EMPIRICALLY, NOT ONLY BY READING.** While this round ran, CI posted a
+3-way row for `3570483cf3da` — round 738's OWN HEAD, the commit that landed `skipEmitOutputs` —
+at **30.82s / 12.69s = 2.43x**, against **2.44x** for `728faeed137b` immediately before it. The
+gate does not move the published column, exactly as the code path predicts. A prediction stated
+before the data arrived and scored after it.
+
 **THE REAL MISMATCH, WHICH WAS STILL OPEN: two different compiles.** ARCHITECTURE-RETHINK
 § 0.1's budget ("take the whole compile as 100 units") is a `--noEmit` compile; the 2.4x it is
 compared against is emit-on-both-sides. Before round 738 these were nearly the same number
@@ -58,7 +64,7 @@ tsc's emit share equals ours, bottoms at `0.921 x R_emit` only if tsc's emit wer
 since our checker is the slow part and our emitter is not. With `R_emit` = 2.40x (median of the
 last 30 CI runs) the check-only ratio is **>= 2.21x and probably >= 2.4x**.
 
-**THE HONEST PUBLISHED RATIO, with its basis: 2.28x median over ALL 340 CI runs, 2.40x over the
+**THE HONEST PUBLISHED RATIO, with its basis: 2.28x median over ALL 341 CI runs, 2.40x over the
 last 30, EMIT mode, wall clock.** Per-row spread **1.87x-2.72x** on a compiler whose real change
 over that span was far smaller — because xtsc is ONE cold JVM run per row against tsc's median
 of three. **No single row is the ratio**; that alone is +-18%, wider than every landed win of
@@ -74,7 +80,7 @@ its LOC/s column. Wall times, error counts and ratios are unaffected. Fixed.
 (1) `bench-3way.sh` now measures **both modes on all three compilers** (`--modes`, default
 both; tsc/tsgo get `--noEmit` for check-only), fixes the LOC parse, and fixes the wall parse to
 read the summary median rather than run 1. (2) `bench-history/README.md` restructured: a
-marked (`<!-- BENCH-ROWS-START/END -->`) two-mode table above a labelled **archive** of the 340
+marked (`<!-- BENCH-ROWS-START/END -->`) two-mode table above a labelled **archive** of the 341
 pre-739 emit-only rows, whose note records both caveats. Verified end-to-end twice with stub
 reference binaries, including marker preservation across runs. (3) All **8 profiles
 re-baselined check-only** (compiler 26,518 / tsc-cli 26,426 / jsTyping 28,434 / deprecatedCompat

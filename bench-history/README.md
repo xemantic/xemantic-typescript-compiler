@@ -15,7 +15,7 @@ queue item `(BENCH.1)`):
 - **emit** — every compiler type-checks *and* writes JavaScript to an `outDir`.
 
 **Read the median across runs, not one row.** xtsc is a single cold JVM run per row against
-tsc/tsgo's median of three, so one row carries the full run-to-run spread: over the 340 archived
+tsc/tsgo's median of three, so one row carries the full run-to-run spread: over the 341 archived
 rows below the xtsc/tsc ratio ranges **1.87×–2.72×** with a median of **2.28×** on a compiler
 whose real change over that span was much smaller.
 
@@ -30,8 +30,12 @@ whose real change over that span was much smaller.
 
 Every row below is **emit mode on all three sides**: xtsc ran without `--noEmit` and tsc/tsgo
 ran with `--outDir`. That comparison is like-for-like, so these ratios stand as *emit* ratios —
-median **2.28×** over all 340 rows, **2.40×** over the last 30. Two caveats a reader needs:
+median **2.28×** over all 341 rows, **2.40×** over the last 30. Two caveats a reader needs:
 
+0. **Directly confirmed:** the newest archived row, `3570483cf3da`, is round 738's own HEAD —
+   the commit that landed `skipEmitOutputs` — and its emit ratio is **2.43×**, statistically
+   indistinguishable from the **2.44×** of `728faeed137b` immediately before it. The gate does
+   not move this column, exactly as reading the scripts predicts.
 1. **No check-only ratio exists before round 739.** The bench never ran tsc/tsgo with
    `--noEmit`, so the mode the perf arc actually profiles was never compared against a
    reference compiler. Round 738's inference that "the honest gap is ~2.15×, not 2.4×" assumed
