@@ -112151,13 +112151,27 @@ interface DataView {
         // receiver). This flows the concrete element type through chained
         // `.map`/`.filter` calls. FP-safe: only swaps an unresolved-TP return for a
         // concrete one, and only when the arg isn't a genuine type guard.
+        //
+        // Round 743: the candidate must ALSO ACCEPT THE ARGUMENTS. Without that the
+        // swap re-picks an overload [resolveCallOverload] had already rejected — tsc's
+        // `factory.createToken(SyntaxKind.ReadonlyKeyword)` selected the correct generic
+        // `<TKind extends ModifierSyntaxKind>` overload and was then swapped back to the
+        // FIRST one, `createToken(token: SyntaxKind.SuperKeyword): SuperExpression`,
+        // purely because that one is non-generic with a concrete return. The omission
+        // was invisible for the Array predicate pair this rule was written for, where
+        // the non-generic overload accepts whatever the generic one does.
         if (typeContainsUnresolvedTypeParam(chosenRt) && !callHasTypeGuardArg(expr)) {
             val argCount = expr.arguments.size
-            val concrete = sigs.firstOrNull { s ->
+            fun isConcreteCandidate(s: Signature) =
                 s.typeParameters.isNullOrEmpty() &&
                     argCount >= s.minArgumentCount && argCount <= s.parameters.size &&
                     s.resolvedReturnType != null && !typeContainsUnresolvedTypeParam(s.resolvedReturnType!!)
-            }
+            val concrete = sigs.firstOrNull { isConcreteCandidate(it) && signatureAcceptsArgs(it, expr.arguments) }
+            // When NOTHING accepts the arguments — including the sig that was chosen,
+            // i.e. [resolveCallOverload] fell through to its first-arity-match tail —
+            // the acceptance test has no signal to give and the pre-743 behavior stands.
+                ?: sigs.firstOrNull { isConcreteCandidate(it) }
+                    ?.takeIf { !signatureAcceptsArgs(chosen, expr.arguments) }
             if (concrete != null) return concrete.resolvedReturnType ?: anyType
             // M3.1 (round 428): overloaded GENERIC callee (tsc core.ts `append` —
             // every overload generic, single TP each) — no concrete overload exists
@@ -112384,48 +112398,64 @@ interface DataView {
         if (arityMatches.size == 1) return arityMatches[0]
         // Multiple arity matches — try type-based resolution
         for (sig in arityMatches) {
-            var allMatch = true
-            for ((i, arg) in args.withIndex()) {
-                if (i >= sig.parameters.size) break
-                // Round 459: an ENUM-MEMBER literal param (`kind: SyntaxKind.NamedImports`)
-                // resolves to anyType (enum members are not modeled as literal types), so
-                // an enum-member ARG silently matched every overload and the FIRST won —
-                // tsc's `parseNamedImportsOrExports(SyntaxKind.NamedExports)` resolved to
-                // the NamedImports overload's return → FP TS2322 downstream. Compare the
-                // param ANNOTATION's canonical enum-member key set (round-411 key space,
-                // canonicalEnumSymbol-routed) against the arg's key AST-side; a resolvable
-                // non-member is a mismatch. Both-unresolvable keeps the prior behavior.
-                run {
-                    val paramAnn = (sig.parameters[i].declarations.firstOrNull() as? Parameter)?.type ?: return@run
-                    val paramKeys = enumMemberKeysOfTypeNode(paramAnn) ?: return@run
-                    val argKey = enumMemberKeyOfExpr(arg) ?: return@run
-                    if (argKey !in paramKeys) allMatch = false
-                }
-                if (!allMatch) break
-                val paramType = getTypeOfSymbol(sig.parameters[i])
-                if (paramType === anyType || paramType === errorType) continue
-                // Round 481: an UN-INFERRED bare TypeParam param (`initialValue: U` in
-                // Array.reduce's generic overload) matches any arg — tsc INFERS U from
-                // it; the relation engine has no concrete-source-vs-TypeParam-target
-                // rule, so without this the generic overload was always rejected and
-                // the first arity match won (typing reduce's accumulator as T).
-                if (paramType is Type.TypeParam) continue
-                // Prefer the non-widened literal type so a string/number-literal arg can
-                // select a specialized literal-param overload (e.g. createElement('canvas')
-                // → the `(tagName: 'canvas'): Derived1` overload, not the `(tagName: string)`
-                // fallback). Falls through to the widened type for non-literal args.
-                val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
-                if (argType === anyType || argType === errorType) continue
-                if (!isSimpleTypeRelatedTo(argType, paramType) &&
-                    !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
-                    allMatch = false
-                    break
-                }
-            }
-            if (allMatch) return sig
+            if (signatureAcceptsArgs(sig, args)) return sig
         }
         // No type match — return first arity match
         return if (strictSelect) null else arityMatches[0]
+    }
+
+    /**
+     * Does [sig] accept [args] positionally? This is the type-based verdict
+     * [resolveCallOverload] selects an overload with, extracted so that any OTHER
+     * site adopting a signature asks the SAME question — round 743 found the B136
+     * concrete-overload swap in [getReturnTypeOfCallExpression] re-picking an
+     * overload this test had already rejected.
+     *
+     * Arity is the CALLER's business (this walks only the positions [sig] has).
+     */
+    private fun signatureAcceptsArgs(sig: Signature, args: List<Expression>): Boolean {
+        for ((i, arg) in args.withIndex()) {
+            if (i >= sig.parameters.size) break
+            // Round 459: an ENUM-MEMBER literal param (`kind: SyntaxKind.NamedImports`)
+            // resolves to anyType (enum members are not modeled as literal types), so
+            // an enum-member ARG silently matched every overload and the FIRST won —
+            // tsc's `parseNamedImportsOrExports(SyntaxKind.NamedExports)` resolved to
+            // the NamedImports overload's return → FP TS2322 downstream. Compare the
+            // param ANNOTATION's canonical enum-member key set (round-411 key space,
+            // canonicalEnumSymbol-routed) against the arg's key AST-side; a resolvable
+            // non-member is a mismatch. Both-unresolvable keeps the prior behavior.
+            //
+            // (REL.1) round 743: the premise "enum members are not modeled as literal
+            // types" is FALSE since (a)/(b0) — the relation CAN answer this now, and
+            // the general path below reaches the same verdict for an annotated
+            // parameter. The AST gate stays because it also answers for a param whose
+            // annotation the type path resolves to `anyType`; retiring it is (REL.1)(c).
+            var mismatch = false
+            run {
+                val paramAnn = (sig.parameters[i].declarations.firstOrNull() as? Parameter)?.type ?: return@run
+                val paramKeys = enumMemberKeysOfTypeNode(paramAnn) ?: return@run
+                val argKey = enumMemberKeyOfExpr(arg) ?: return@run
+                if (argKey !in paramKeys) mismatch = true
+            }
+            if (mismatch) return false
+            val paramType = getTypeOfSymbol(sig.parameters[i])
+            if (paramType === anyType || paramType === errorType) continue
+            // Round 481: an UN-INFERRED bare TypeParam param (`initialValue: U` in
+            // Array.reduce's generic overload) matches any arg — tsc INFERS U from
+            // it; the relation engine has no concrete-source-vs-TypeParam-target
+            // rule, so without this the generic overload was always rejected and
+            // the first arity match won (typing reduce's accumulator as T).
+            if (paramType is Type.TypeParam) continue
+            // Prefer the non-widened literal type so a string/number-literal arg can
+            // select a specialized literal-param overload (e.g. createElement('canvas')
+            // → the `(tagName: 'canvas'): Derived1` overload, not the `(tagName: string)`
+            // fallback). Falls through to the widened type for non-literal args.
+            val argType = literalTypeOfExpression(arg) ?: getTypeOfExpression(arg)
+            if (argType === anyType || argType === errorType) continue
+            if (!isSimpleTypeRelatedTo(argType, paramType) &&
+                !checkTypeRelatedTo(argType, paramType, assignableRelation)) return false
+        }
+        return true
     }
 
     /**

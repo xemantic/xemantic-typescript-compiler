@@ -96,4 +96,67 @@ class EnumMemberLiteralOverloadSelectionTest {
             have(none { it.code == 2322 })
         }
     }
+
+    // --- Round 743: the B136 concrete-overload SWAP re-picked an overload the
+    // selection above had already rejected. `resolveCallOverload` correctly chose the
+    // GENERIC `<TKind extends ModifierSK>` overload; its return carries an un-inferred
+    // TP, so `getReturnTypeOfCallExpression`'s swap looked for a non-generic overload
+    // with a concrete return — and took the FIRST one it found without ever asking
+    // whether that overload accepts the arguments. tsc's
+    // `factory.createToken(SyntaxKind.ReadonlyKeyword)` therefore typed as
+    // `SuperExpression`. The swap now requires the candidate to accept the args.
+    //
+    // The reduction needs the GENERIC overload — two same-arity NON-generic overloads
+    // distinguished only by an enum-member parameter already selected correctly (the
+    // round-459 gate above), which is why two earlier reductions of this bug came back
+    // clean.
+
+    private val genericPrelude = """
+        enum SK { SuperKeyword = 1, AbstractKeyword = 2, ReadonlyKeyword = 3 }
+        type ModifierSK = SK.AbstractKeyword | SK.ReadonlyKeyword
+        interface SuperExpr { kind: SK.SuperKeyword; sup: string }
+        interface ModifierTok<T extends ModifierSK> { kind: T; mod: string }
+        declare function takeMod(m: ModifierTok<SK.ReadonlyKeyword>): void
+        declare function takeSuper(s: SuperExpr): void
+
+    """.trimIndent()
+
+    @Test
+    fun `a generic overload selected over an enum-member one is not swapped back to it`() {
+        diagnose(genericPrelude + """
+            declare function createToken(token: SK.SuperKeyword): SuperExpr;
+            declare function createToken<TKind extends ModifierSK>(token: TKind): ModifierTok<TKind>;
+            takeMod(createToken(SK.ReadonlyKeyword));
+        """.trimIndent()) should {
+            have(none { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `negative control - the generic overload's instantiated return is still checked`() {
+        // The mirror of the pin above: before round 743 this was SILENT, because the
+        // call really did type as `SuperExpr`. A pin that only asserted silence on the
+        // correct target would keep passing on the broken build.
+        diagnose(genericPrelude + """
+            declare function createToken(token: SK.SuperKeyword): SuperExpr;
+            declare function createToken<TKind extends ModifierSK>(token: TKind): ModifierTok<TKind>;
+            takeSuper(createToken(SK.ReadonlyKeyword));
+        """.trimIndent()) should {
+            have(any { it.code == 2345 })
+        }
+    }
+
+    @Test
+    fun `negative control - the same pair distinguished by arity already selected correctly`() {
+        // Passes on both sides of the fix by construction — an arity-distinguished pair
+        // never reaches the type-based loop, so this measures nothing about the swap and
+        // is here only to pin that the fix did not disturb the path that already worked.
+        diagnose(genericPrelude + """
+            declare function createToken2(token: SK.SuperKeyword, extra: string): SuperExpr;
+            declare function createToken2<TKind extends ModifierSK>(token: TKind): ModifierTok<TKind>;
+            takeMod(createToken2(SK.ReadonlyKeyword));
+        """.trimIndent()) should {
+            have(none { it.code == 2345 })
+        }
+    }
 }
