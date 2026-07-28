@@ -143601,6 +143601,44 @@ interface DataView {
     }
 
     /**
+     * Round 744: `A & (B | C)` DENOTES `(A & B) | (A & C)`, so it relates to a target
+     * exactly when BOTH distributed members do. We store the intersection
+     * UN-distributed, and every rule below then asks the WHOLE intersection against one
+     * union member at a time — `A & (B | C)` against `B` fails, because neither `A → B`
+     * nor `B | C → B` holds — so an intersection-over-union source related to nothing.
+     *
+     * It stayed invisible because the two sides are usually the SAME interned instance
+     * (the `source === target` fast path). It shows the moment the union constituents
+     * are written in a DIFFERENT ORDER on the two sides — which is exactly how tsc's
+     * `getNameOrArgument` writes them (utilities.ts:4175: an
+     * `ElementAccessExpression & { argumentExpression: StringLiteralLike | NumericLiteral }`
+     * member returned into `MemberName | (Expression & (NumericLiteral | StringLiteralLike))`).
+     * Interning a union by SORTED constituent ids would also hide it, and must not be
+     * done: union display order is pinned to pristine tsc's source order.
+     *
+     * Strictly a FALLBACK — consulted only after the plain rule has already answered
+     * false, so it can only turn a rejection into an acceptance. Distributes the FIRST
+     * union constituent only, and bails on a wide one: the shapes this exists for carry
+     * a single small union, and a full cartesian product is not worth paying for on a
+     * path that has already failed.
+     */
+    private fun intersectionSourceDistributes(
+        source: Type.Intersection,
+        target: Type,
+        relation: Relation,
+    ): Boolean {
+        val unionIndex = source.types.indexOfFirst { it is Type.Union }
+        if (unionIndex < 0) return false
+        val union = source.types[unionIndex] as Type.Union
+        if (union.types.size > 8) return false
+        val rest = source.types.filterIndexed { index, _ -> index != unionIndex }
+        return union.types.all { member ->
+            val distributed = getIntersectionType(rest + member)
+            distributed !== source && checkTypeRelatedTo(distributed, target, relation)
+        }
+    }
+
+    /**
      * 4c. Core structural comparison — handles unions, intersections, and objects.
      */
     private fun structuredTypeRelatedTo(
@@ -143631,7 +143669,10 @@ interface DataView {
                     state.relationSourceTargets.add(source.target.id)
                 }
             }
-            return target.types.any { checkTypeRelatedTo(source, it, relation) }
+            if (target.types.any { checkTypeRelatedTo(source, it, relation) }) return true
+            // Round 744: `A & (B | C)` vs `B | C` — see [intersectionSourceDistributes].
+            return source is Type.Intersection &&
+                intersectionSourceDistributes(source, target, relation)
         }
         // Intersection target: source must be related to each constituent
         if (target is Type.Intersection) {
@@ -143651,7 +143692,9 @@ interface DataView {
                 intersectionMergedContradictsTarget(source, target, relation)) {
                 return false
             }
-            return source.types.any { checkTypeRelatedTo(it, target, relation) }
+            if (source.types.any { checkTypeRelatedTo(it, target, relation) }) return true
+            // Round 744: `A & (B | C)` vs anything — see [intersectionSourceDistributes].
+            return intersectionSourceDistributes(source, target, relation)
         }
         // Generic type references with matching target: compare type arguments directly.
         // For Ref<A> vs Ref<B> (same target), check A → B instead of full structural
