@@ -146987,13 +146987,33 @@ interface DataView {
         return matching.singleOrNull()
     }
 
-    /** Round 472: from a union's ≥2 object members, the SINGLE one whose declared
-     *  DISCRIMINANT property matches the object literal's enum-member / string-literal
-     *  value — `{ kind: InvocationKind.Call, node }` vs the CallInvocation |
-     *  TypeArgsInvocation | ContextualInvocation union selects CallInvocation via the
-     *  round-411 canonical `symId#member` key space (enum-member types resolve to
-     *  `any`, so the resolved property type cannot decide this; the DECLARED
-     *  annotation can). No usable discriminant / ambiguous → null (conservative). */
+    /**
+     * Round 472: from a union's ≥2 object members, the SINGLE one whose DISCRIMINANT
+     * property matches the object literal's enum-member / string-literal value —
+     * `{ kind: InvocationKind.Call, node }` vs the CallInvocation | TypeArgsInvocation |
+     * ContextualInvocation union selects CallInvocation via the round-411 canonical
+     * `symId#member` key space. No usable discriminant / ambiguous → null (conservative).
+     *
+     * (REL.1)(c) step 5b, round 753 — the LAST of the six readers to go type-first.
+     * **The original docstring's premise, "enum-member types resolve to `any`, so the
+     * resolved property type cannot decide this; the DECLARED annotation can", stopped
+     * being true at (REL.1)(a)** and is corrected here: [discriminantKeysOfMember] reads
+     * the resolved property TYPE first and falls back to the annotation walk.
+     *
+     * MEASURED over the whole compiler profile before the flip: **292 sightings, 292
+     * AGREE, 0 mismatched, 0 blind, 0 gained** (instrument falsified in the same run;
+     * [canonicalEnumSymbol] memo-bypass check 342 mints / 0 divergences).
+     *
+     * **UNLIKE the five earlier sites, the AST fallback is still LOAD-BEARING here, and
+     * that was measured rather than assumed.** This is the site that consumes the
+     * round-475 `TypeQuery` arm: for `k: typeof CloseTag` over a top-level
+     * `const CloseTag = "close"`, the resolved property type is the WIDENED `string`
+     * (no key) while [enumMemberKeysOfTypeNode] still yields `lit:s:close`. The probe
+     * reports that shape as TYPEBLIND with a real decision difference
+     * (`ast=true type=false`), so cutting the fallback would silently stop selecting the
+     * constituent. It is dead on the compiler profile only because that profile has no
+     * such shape — which is why the profile alone could not have settled it.
+     */
     private fun selectUnionMemberByObjLitDiscriminant(u: Type.Union, ol: ObjectLiteralExpression): Type.Object? {
         val objs = u.types.mapNotNull { it as? Type.Object }
             .filter { !(it is Type.Reference && it.target.symbol?.name == "Array") }
@@ -147011,7 +147031,7 @@ interface DataView {
                 ?: constStringCaseLiteralType(pa.initializer)?.let { literalDiscriminantKeyOfType(it) }
                 ?: continue
             val filtered = candidates.filter { m ->
-                val keys = enumMemberKeysOfTypeNode(discriminantPropAnnotation(m, name))
+                val keys = discriminantKeysOfMember(m, name)
                 keys != null && valueKey in keys
             }
             // A property whose key matches NO member's declared keys is not a usable
