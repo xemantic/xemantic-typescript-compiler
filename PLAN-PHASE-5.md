@@ -20,6 +20,90 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 739 (2026-07-28) — PART 1, (BENCH.1): THE YARDSTICK WAS BROKEN IN A DIFFERENT PLACE
+THAN ROUND 738 THOUGHT, AND ROUND 738's CORRECTION IS RETRACTED.** The item was queued on
+round 738's inference that "every published xtsc-vs-tsc `--no-emit` ratio compared our
+check+emit against tsc's check-only, so the honest gap is ~2.15x, not 2.4x". **I read the
+scripts instead of assuming, and the premise is false.**
+
+**WHAT EACH SIDE ACTUALLY RUNS** (verified in-file, not inferred):
+
+| script | xtsc | tsc / tsgo | decides |
+|---|---|---|---|
+| `bench-3way.sh` (CI -> `bench-history/`) | `MainKt <proj>` — **emits** | `-p tsconfig --outDir tmp` — **emits** | the published ratio |
+| `ab-interleaved.sh` | `MainKt --noEmit` | — | every perf A/B of this arc |
+| `cost_gate.py` | `MainKt --noEmit --passTiming` | — | the 20 cost counters |
+| `bench-compile-tsc.sh` | either (`--no-emit`) | — | `bench/*.tsv` |
+
+**The 2.4x is an EMIT-mode ratio with emit on BOTH sides.** `skipEmitOutputs` is set only from
+`ProjectCompiler`'s `noEmit` parameter (`ProjectCompiler.kt:144`), so the CI numerator is
+byte-for-byte the same work it was before round 738 and the ratio cannot have moved.
+**Round 738's ~2.15x is retracted in place in six files.** Its arithmetic multiplied the ratio
+by our own emit fraction `(1 - s_xtsc)` while implicitly taking tsc's `s_tsc` as ZERO — that
+is the ratio's FLOOR, not its value, and the error ran in the direction that flattered us.
+
+**THE REAL MISMATCH, WHICH WAS STILL OPEN: two different compiles.** ARCHITECTURE-RETHINK
+§ 0.1's budget ("take the whole compile as 100 units") is a `--noEmit` compile; the 2.4x it is
+compared against is emit-on-both-sides. Before round 738 these were nearly the same number
+(our `--noEmit` emitted anyway, it just did not WRITE), which is exactly why nobody noticed;
+after 738 they differ. **Measured, same binary, 4 interleaved pairs, compiler profile:
+check-only 26,896 ms vs emit 29,194 ms self — the emit work is 2,298 ms = 8.5% of a check-only
+compile / 7.9% of an emit-inclusive one, B slower 4/4, per-pair +1,959..+2,422 ms.**
+
+**AND THE COLUMN THAT MATTERS WAS NEVER MEASURED AT ALL:** the bench has never run tsc or tsgo
+with `--noEmit`, so the mode this entire perf arc profiles has no reference number. It is
+bounded, not free: `R_ck = R_emit x (1 - 0.079) / (1 - s_tsc)`, so it EQUALS `R_emit` when
+tsc's emit share equals ours, bottoms at `0.921 x R_emit` only if tsc's emit were free, and
+**exceeds `R_emit` as soon as tsc's emit costs more than 7.9% of its run** — the likely case,
+since our checker is the slow part and our emitter is not. With `R_emit` = 2.40x (median of the
+last 30 CI runs) the check-only ratio is **>= 2.21x and probably >= 2.4x**.
+
+**THE HONEST PUBLISHED RATIO, with its basis: 2.28x median over ALL 340 CI runs, 2.40x over the
+last 30, EMIT mode, wall clock.** Per-row spread **1.87x-2.72x** on a compiler whose real change
+over that span was far smaller — because xtsc is ONE cold JVM run per row against tsc's median
+of three. **No single row is the ratio**; that alone is +-18%, wider than every landed win of
+this arc combined.
+
+**A SECOND, INDEPENDENT BUG IN THE SAME YARDSTICK.** `bench-3way.sh` parsed LOC with
+`grep -oE '[0-9]+ LOC' | tail -1`, which also matches the `throughput: N LOC/s` line and takes
+it — so **every one of the 340 archived run reports published THROUGHPUT as its LOC count**
+("78 files, 7,004 LOC" for a 194,702-LOC program) and then divided that by the wall time for
+its LOC/s column. Wall times, error counts and ratios are unaffected. Fixed.
+
+**LANDED (no `src/` change, so no suite run — stated rather than skipped silently).**
+(1) `bench-3way.sh` now measures **both modes on all three compilers** (`--modes`, default
+both; tsc/tsgo get `--noEmit` for check-only), fixes the LOC parse, and fixes the wall parse to
+read the summary median rather than run 1. (2) `bench-history/README.md` restructured: a
+marked (`<!-- BENCH-ROWS-START/END -->`) two-mode table above a labelled **archive** of the 340
+pre-739 emit-only rows, whose note records both caveats. Verified end-to-end twice with stub
+reference binaries, including marker preservation across runs. (3) All **8 profiles
+re-baselined check-only** (compiler 26,518 / tsc-cli 26,426 / jsTyping 28,434 / deprecatedCompat
+26,607 / typingsInstallerCore 26,400 / services 34,813 / server 36,395 / harness 37,129 ms
+self), each TSV carrying a **MODE DISCONTINUITY** block at the boundary — because `emitted=0`
+alone does NOT distinguish "did not emit" from "emitted and threw it away", only the date does.
+(4) `~2.15x` retracted in ARCHITECTURE-RETHINK (§ 0 header + § 0.1 + a new **§ 0.2** carrying
+the table, the 8.5% measurement and the bound), `front-end-attribution.md`, CLAUDE.md,
+STATUS.md and the round-738 note above.
+
+**WHAT DID NOT WORK / WAS NOT POSSIBLE.** The queue item said "re-run the 3-way on all 8
+profiles". **The 3-way cannot run here at all** — there is no `node`, no `tsc` and no `tsgo` on
+this box, and no network; the reference binaries are npm-installed inside the CI job. So the
+corrected check-only ratio is a BOUND, not a measurement, until the next CI run fills the new
+column. Mixing our local wall against a CI tsc number would have been exactly the class of
+error this round exists to fix, so it was not done.
+
+**ALSO FOUND: `bench/` is gitignored** (`.gitignore:62`), so the "dashboard" the mission
+statement points at is a LOCAL file — the re-baselined rows above do not travel to the next
+agent. The shared record is `bench-history/` (CI-written), STATUS.md and these notes. Recorded
+as a CLAUDE.md gotcha.
+
+**ROUND 738's OWN HEADLINE, HONESTLY.** Three estimates of the same quantity now exist: the
+phase measurement 2,623 ms (8.4% of the then-31,235 ms compile), this round's same-binary mode
+delta 2,298 ms (8.5% of a check-only compile), and 738's cross-binary A/B **-3,570 ms
+(-11.42%)** — which is ~1.3 s LARGER than a mode delta that additionally includes writing 78
+files. Two of three cluster at 8-9%. **State the landed value of (FRONT.1) as ~8-9%, with
+11.42% the high end**; the A/B is not wrong, it measured a different pair on a slower box.
+
 **Round 738 (2026-07-28) — PART 2, (FRONT.1): THE FIRST FRONT-END ATTRIBUTION, AND THE
 ARC'S LARGEST LANDED WIN: `-11.42%` median, B wins 6/6.** Section 0.1's stage 5 said "the
 front end, ~20%, unprofiled". **The front end is 11.0%. The OTHER 9.2% of that never-measured
@@ -50,10 +134,13 @@ range [-4,099, -2,773] against a +-590 ms band. The A/B delta exceeds the phase 
 and the post-checker residue itself fell 2,876 -> 182 ms.
 
 **THIS IS A SCOPE CORRECTION, NOT AN ALGORITHMIC SPEED-UP, AND IT MUST BE REPORTED AS ONE.**
-Real `tsc --noEmit` does not run its emitter either, so **every published xtsc-vs-tsc
-`--no-emit` ratio before this compared our check+emit against tsc's check-only**. The 2.4x gap
-was measured against a compile doing ~9% of work the baseline was not doing; the honest
-single-thread figure is **~2.15x**.
+Real `tsc --noEmit` does not run its emitter either. ~~So every published xtsc-vs-tsc
+`--no-emit` ratio before this compared our check+emit against tsc's check-only; the honest
+single-thread figure is ~2.15x.~~ **RETRACTED IN PLACE, ROUND 739 (BENCH.1): there was no
+published `--no-emit` ratio.** `bench-3way.sh` runs xtsc, tsc AND tsgo WITH EMIT, so the 2.4x
+was already like-for-like, and `skipEmitOutputs` — which fires only under `--noEmit` — does not
+move it by construction. The check-only ratio has never been measured on either side; see the
+round-739 note at the top of this file and `docs/ARCHITECTURE-RETHINK.md` § 0.2.
 
 **METHOD NOTE the next agent must not misread: the crawl's per-file read/pre-parse sums are
 ELAPSED-WITH-SUSPENSION, not CPU.** They bracket a `withContext(...)`, so a file's "parse"
@@ -85,7 +172,8 @@ FIRST price on one instance (the var-decl FP-firewall prologue is **265 ms again
 relation it exists to correct, 14x**) — a SCOPE decision that trades the property which made
 the byte-identical corpus reachable; (2) parallelism, now cheaper than M2 measured because a
 worker's duplicated bind is only 5.2%, still needing >=8 real cores ((PERF.HW), unmeasured);
-(3) accept ~2.15x.
+(3) accept the gap — ~~~2.15x~~ **corrected round 739 to 2.28x (median of 340 CI runs) / 2.40x
+(last 30) in EMIT mode, with the check-only ratio unmeasured and bounded below by 2.21x.**
 
 Suite 12,923 -> **12,927 / 0 / 3** (+4 `SkipEmitOutputsTest` pins); profile `--listAll`
 byte-identical before and after the gate (46 errors); cost gate **18 of 20 counters +0.00%**,
@@ -1927,9 +2015,11 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   its output (2,623 ms of 31,235). Gated by a NEW `CompilerOptions.skipEmitOutputs`
   set only by `ProjectCompiler` — deliberately NOT `options.noEmit`, which 440 corpus
   tests set as a directive. **A SCOPE correction, not an algorithmic speed-up: real
-  `tsc --noEmit` does not emit either, so every published xtsc-vs-tsc `--no-emit`
+  `tsc --noEmit` does not emit either.** ~~so every published xtsc-vs-tsc `--no-emit`
   ratio compared our check+emit against tsc's check-only — the honest gap is ~2.15x,
-  not 2.4x.** The front end proper has NO lever: crawl WALL 1,683 ms (5.4%, and it
+  not 2.4x.~~ **RETRACTED round 739: the CI 3-way emits on ALL THREE sides, so the
+  2.4x was already like-for-like and this gate does not move it.**
+  The front end proper has NO lever: crawl WALL 1,683 ms (5.4%, and it
   already contains reading+decoding+PARSING all 9,977,097 chars, 16 in flight), core
   parse loop **0 ms** (78/78 pre-parses reused), bind 1,622 ms (5.2%), config 102 ms,
   `extractRelativeImports` 17 ms. LANDED: `FrontEnd` + `--frontEnd` (opt-in),
@@ -1938,13 +2028,26 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   +0.00% with two globals counters FALLING 9% (rebaselined same commit). Full
   derivation: **`docs/perf/front-end-attribution.md`**.
 
-- [ ] **(BENCH.1) Re-measure the whole dashboard against tsc now that `--noEmit` no
-  longer emits (round 738).** Every `bench/*.tsv` row and every "2.4x / 2.5x slower
-  than tsc" claim in STATUS.md, PLAN-PHASE-5.md and `docs/ARCHITECTURE-RETHINK.md`
-  was measured with our core transforming and emitting all 78 files while tsc's
-  `--noEmit` did not. Re-run `scripts/bench-compile-tsc.sh` 3-way on all 8 profiles
-  and correct the ratios in place; expect ~2.15x rather than 2.4x on the compiler
-  profile. **Do NOT quote a pre-738 ratio without this note.**
+- [x] **(BENCH.1) DONE round 739 — and the premise it was queued on was FALSE.** The item
+  assumed the published 2.4x compared our check+emit against tsc's check-only. It did not:
+  `bench-3way.sh` runs xtsc, tsc AND tsgo **with emit**, so the CI ratio was already
+  like-for-like and `skipEmitOutputs` (which fires only under `--noEmit`) cannot move it.
+  **Round 738's "~2.15x" is retracted everywhere it was written** — it applied our own emit
+  fraction while implicitly taking tsc's as zero, which is the ratio's floor, not its value.
+  **The real mismatch is the other one and it was still open: § 0.1's budget model is a
+  `--noEmit` compile compared against an EMIT-mode ratio.** Measured (same binary, 4
+  interleaved pairs, compiler profile): check-only 26,896 ms vs emit 29,194 ms, **emit work =
+  2,298 ms = 8.5% of a check-only compile**, B slower 4/4. **The check-only ratio has never
+  been measured on either side** (the bench never ran tsc with `--noEmit`); it is bounded by
+  `R_ck = R_emit x 0.921 / (1 - s_tsc)` => **>= 2.21x, and > 2.4x as soon as tsc's emit costs
+  more than 7.9% of its run**. LANDED: `bench-3way.sh` measures BOTH modes on all three
+  compilers (`--modes`), the LOC parse bug is fixed (every archived report published
+  THROUGHPUT as its LOC count), `bench-history/README.md` is restructured with a marked
+  two-mode table over a labelled pre-739 archive, and all 8 `bench/*.tsv` profiles are
+  re-baselined check-only with a MODE-DISCONTINUITY block at the boundary. Honest published
+  ratio: **2.28x (median of 340 CI runs) / 2.40x (last 30), EMIT mode**; per-row spread
+  1.87x-2.72x because xtsc is one cold run against tsc's median of three. Full derivation:
+  `docs/ARCHITECTURE-RETHINK.md` § 0.2.
 
 - [ ] **(ENGINE.1) Price the dedicated-walker prologue on two more sites before
   believing the 14x (round 738).** The var-decl path's FP-firewall prologue is 265 ms

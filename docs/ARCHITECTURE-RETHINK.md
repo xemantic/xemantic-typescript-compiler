@@ -149,9 +149,12 @@
 > **2,623 ms of 31,235**. Gating it (a new `skipEmitOutputs`, set only by
 > `ProjectCompiler` — never the `@noEmit` corpus directive that 440 tests use)
 > measured **−11.42%, B wins 6/6** — the arc's largest landed win, and a SCOPE
-> correction rather than a speed-up: real `tsc --noEmit` does not emit either,
-> so **every published xtsc-vs-tsc `--no-emit` ratio compared our check+emit
-> against tsc's check-only; the honest gap is ~2.15×, not 2.4×.** § 0.1's
+> correction rather than a speed-up: real `tsc --noEmit` does not emit either.
+> ~~so every published xtsc-vs-tsc `--no-emit` ratio compared our check+emit
+> against tsc's check-only; the honest gap is ~2.15×, not 2.4×.~~ **RETRACTED,
+> round 739 — see § 0.2. There was no published `--no-emit` ratio: the CI 3-way
+> ran EVERY compiler with emit, so the 2.4× was already like-for-like and this
+> change does not move it.** § 0.1's
 > staged plan as a whole is now: stage 1 ≈0.3–1% against 11–19%, stage 2's
 > premise VOID (it was priced as "stage 1 unlocks it"), stage 3 STRUCK, stage 4
 > the only one that paid (−4.53%, ~2% left), stage 5 measured and empty — so
@@ -257,7 +260,9 @@ checker-init                    80
 front-end                       20
 ```
 
-Matching JS tsc means 100 → 42 (the CI ratio is 2.4×). Working backwards:
+Matching JS tsc means 100 → 42 (the CI ratio is 2.4×; **that ratio is EMIT-mode
+and these 100 units are a `--noEmit` compile — see § 0.2, the two are not the same
+compile and the check-only ratio is still unmeasured**). Working backwards:
 
 | if we removed… | result | still |
 |---|---:|---:|
@@ -271,9 +276,11 @@ that plainly to anyone who proposes a single change that "gets us to tsc".
 today, i.e. roughly 1.5× slower than tsc rather than 2.4×.~~ **RETRACTED, round
 738.** Three of the five stages are now measured and a fourth's premise is void
 (§ 0.1 status in the round-738 header above): the plan's remaining honest value
-is **single digits**, not 40–70%. Also note the 2.4× itself was measured against
-our `--noEmit` doing ~9% of work tsc's does not — **the honest gap is ~2.15×**,
-and every pre-738 bench ratio needs restating (queue item (BENCH.1)).
+is **single digits**, not 40–70%. ~~Also note the 2.4× itself was measured against
+our `--noEmit` doing ~9% of work tsc's does not — the honest gap is ~2.15×.~~
+**RETRACTED, round 739 (§ 0.2): the 2.4× was measured with every compiler
+emitting, so it was already like-for-like; what is missing is a check-only ratio,
+which has never been measured on either side.**
 
 **The staged plan (each stage enables the next):**
 
@@ -338,6 +345,57 @@ diagnostic, ≈70–200 ms, and nothing noticed: the round gates are the corpus 
 handler entry points per node accumulate. Every round that touches the checker
 should now record `getTypeOfExpression` calls, `narrowWalks`, and the spine
 per-kind numbers, and justify an increase.
+
+### 0.2 What the tsc ratio actually measures — and what it never measured
+
+*Round 739, queue item (BENCH.1). This section exists because round 738 corrected
+a published ratio on a premise that was false, in the direction that flattered us.
+Read it before quoting any xtsc-vs-tsc number.*
+
+**What each side runs, verified in the scripts rather than assumed:**
+
+| script | xtsc | tsc / tsgo | what it decides |
+|---|---|---|---|
+| `bench-3way.sh` (CI, `bench-history/`) | `MainKt <proj>` — **emits** | `-p tsconfig --outDir tmp` — **emits** | the published ratio |
+| `ab-interleaved.sh` | `MainKt --noEmit` | — | every perf A/B in this arc |
+| `cost_gate.py` | `MainKt --noEmit --passTiming` | — | the 20 cost counters |
+| `bench-compile-tsc.sh` | either, per `--no-emit` | — | `bench/*.tsv` (**gitignored — local only**) |
+
+**So the 2.4× was never a `--no-emit` comparison.** Both sides emitted; it is a
+like-for-like EMIT ratio, and round 738's `skipEmitOutputs` gate — which fires only
+under `--noEmit` — does not move it by construction. Round 738's "the honest gap is
+~2.15×" is **retracted**: it multiplied the ratio by our own emit fraction while
+implicitly taking tsc's as zero, which is the ratio's *floor*, not its value.
+
+**The real mismatch is the other one, and it is still open.** § 0.1's budget model
+("take the whole compile as 100 units") is measured on a `--noEmit` compile, and it
+is compared against a ratio measured with emit on both sides. Those are two
+different compiles. Measured round 739 on the compiler profile, same binary, 4
+interleaved pairs: check-only **26,896 ms** vs emit **29,194 ms**, i.e. **the emit
+work is 2,298 ms = 8.5% of a check-only compile, 7.9% of an emit-inclusive one**
+(B slower in 4/4 pairs; per-pair +1,959…+2,422 ms).
+
+**The check-only ratio, which is the one this arc's numbers belong to, has never
+been measured** — the bench never ran tsc or tsgo with `--noEmit`. It is bounded,
+not free: with `s` the emit share of each side,
+
+```
+R_check-only = R_emit × (1 − 0.079) / (1 − s_tsc)
+```
+
+so it equals `R_emit` exactly when tsc's emit share equals ours, drops to
+`0.921 × R_emit` only in the impossible case that tsc's emit is free, and **exceeds
+`R_emit` as soon as tsc's emit costs more than 7.9% of its run** — which is the
+likely case, since our checker is the slow part and our emitter is not. Taking the
+median over the last 30 CI runs (`R_emit` = 2.40×), the check-only ratio is
+**≥ 2.21× and probably ≥ 2.4×**. `bench-3way.sh` now measures both modes on all
+three compilers, so the next CI run replaces this bound with a number.
+
+**Quoting rules, from here on.** (1) Name the mode with the ratio. (2) Never compare
+a ratio of one mode against a ratio of the other. (3) Never read a single CI row as
+the ratio: xtsc is one cold JVM run per row against tsc's median of three, and over
+340 archived rows the ratio ranges **1.87×–2.72×** (median 2.28× overall, 2.40× over
+the last 30) on a compiler whose real change over that span was far smaller.
 
 ---
 

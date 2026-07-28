@@ -20,11 +20,16 @@ gate, and an interleaved A/B.*
 > the Transformer's own `globals` queries).
 >
 > **This is a SCOPE correction, not an algorithmic speed-up, and it must be
-> reported as one.** Real `tsc --noEmit` does not run its emitter either — so
-> **every published xtsc-vs-tsc `--no-emit` ratio before this compared our
-> check+emit against tsc's check-only.** The 2.4× gap was measured against a
+> reported as one.** Real `tsc --noEmit` does not run its emitter either.
+> ~~So every published xtsc-vs-tsc `--no-emit` ratio before this compared our
+> check+emit against tsc's check-only. The 2.4× gap was measured against a
 > compile doing ~9% of work the baseline was not doing; the honest
-> single-thread figure is ~2.15×.
+> single-thread figure is ~2.15×.~~ **RETRACTED, round 739 — there was no
+> published `--no-emit` ratio.** `bench-3way.sh` ran xtsc, tsc AND tsgo with
+> emit, so the 2.4× was already like-for-like and this gate (which fires only
+> under `--noEmit`) does not move it. The check-only ratio has never been
+> measured on either side; see `docs/ARCHITECTURE-RETHINK.md` § 0.2 for what
+> each script runs, the measured 8.5% emit share, and the resulting bound.
 >
 > **And the front end proper has no lever in it.** 11.0% splits as crawl 5.4%
 > (which already contains ALL reading, decoding and parsing of 9,977,097
@@ -189,8 +194,12 @@ remain, and only the first can change the constant:
 2. **Parallelism**, which is now cheaper than M2 measured: a worker's duplicated
    term includes the bind, and the bind is 5.2%. Still needs ≥8 real cores —
    see (PERF.HW), still unmeasured on this box.
-3. **Accept ~2.15×.** Which, stated plainly, is 2.15× a mature compiler that has
-   had a decade of tuning, on a JVM, with a byte-identical corpus gate.
+3. **Accept the gap.** ~~~2.15×.~~ Corrected round 739: the published (emit-mode,
+   like-for-like) ratio is **2.28× over 340 CI runs, 2.40× over the last 30**, and
+   the check-only ratio this arc's numbers belong to is **unmeasured, bounded below
+   by 2.21×, and probably higher** (§ 0.2 of `docs/ARCHITECTURE-RETHINK.md`). Which,
+   stated plainly, is ~2.3× a mature compiler that has had a decade of tuning, on a
+   JVM, with a byte-identical corpus gate.
 
 ## 6. What did NOT work / was not attempted
 
