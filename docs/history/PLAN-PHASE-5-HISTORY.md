@@ -1,3 +1,122 @@
+**Round 744 (2026-07-28) — (REL.1)(b) LANDED. THE TWO BLOCKING FPs WERE BOTH ENUM-FREE, BOTH
+PRE-EXISTING, AND BOTH REDUCED ON THE FIRST ATTEMPT ONCE THE MODEL STOPPED COPYING THE
+DIAGNOSTIC MESSAGE.** Corpus **12,971 / 0 failures / 3 skipped** (+15 pins over three commits;
+skipped 8 → 3 because **all five `@Ignore`s in `EnumMemberRelationTest` are ON**, the item's stated
+acceptance criterion). Compiler profile `--listAll` **BYTE-IDENTICAL at 46** — diffed line-by-line
+against the pre-(b) 46, not just counted. Three commits on main, `9a8088a5` / `c1ed5cd5` /
+`e787480d`; **no branch is parked any more — (REL.1)(b) is on main.**
+
+**WHY ROUND 743's REDUCTIONS CAME BACK CLEAN, AND WHAT THE MISSING INGREDIENT ACTUALLY WAS.** Both
+FPs are describable in one sentence, and in both cases that sentence is WRONG because it is the
+message's sentence:
+
+- `declarations.ts:846` reads *"the `if (!input) return` truthiness narrow does not strip
+  `undefined` from a `T | undefined`"*. **It strips it correctly.** The reported type
+  `T | undefined` is the DECLARED type, printed by an elaboration that never sees the flow type;
+  the actual type at `return input` is `T | StringLiteral | NoSubstitutionTemplateLiteral`, and the
+  failing constituent is `NoSubstitutionTemplateLiteral`, which appears nowhere in the message. The
+  probe that settled it was four `const z: number = input` assignments at four flow points, whose
+  messages DO print the flow type.
+- `utilities.ts:4175` reads as *"intersection-over-union distribution"*, which is right, but the
+  reduction only bites when the two sides' union constituents are written in a **different ORDER** —
+  same-order sides are the same interned instance and pass on the `source === target` fast path
+  before any rule runs. A tidied-up model passes vacuously.
+
+**BUG 1 — A TYPE GUARD ON A TYPE PARAMETER REPLACED IT INSTEAD OF INTERSECTING** (commit
+`9a8088a5`). tsc's `getNarrowedType` can never take either subtype arm for a bare type parameter
+(nothing is a subtype of `T`; `T` is a subtype of nothing), so it falls to the *instantiable* tail
+and answers `T & candidate`, per candidate constituent. Ours asked the relation instead — and the
+relation answers "the candidate is assignable to `T`" **whenever the candidate is a UNION**, while
+correctly rejecting a single-type candidate. The second lenience (`T` relates to any object target)
+then returned bare `T` for the single case, so **the two lenience directions CANCEL for one
+candidate and COMPOUND for a union**: the guard handed back the whole candidate and dropped `T`.
+`if (guard(x)) {}` — an EMPTY body — is enough to reproduce, and no enum, no discriminant, no
+`undefined` and no truthiness narrow is load-bearing. Every one of those was tried as an
+explanation first.
+
+**BUG 2 — AN INTERSECTION SOURCE CARRYING A UNION DID NOT DISTRIBUTE** (commit `c1ed5cd5`).
+`A & (B | C)` denotes `(A & B) | (A & C)`; we store it un-distributed and every rule then asks the
+WHOLE intersection against one union member at a time, so `A & (B | C)` vs `B` fails (neither
+`A → B` nor `B | C → B`). `intersectionSourceDistributes` is a strict FALLBACK — consulted only
+after the plain rule already answered false, so it can only turn a rejection into an acceptance —
+distributing the FIRST union constituent only and bailing above 8 members. Applied at the union-target
+and intersection-source rules; the intersection-TARGET rule reaches them by recursion. **Interning a
+union by SORTED constituent ids would also have hidden this and must not be done**: union display
+order is pinned to pristine tsc's source order.
+
+**BOTH ARE PRE-EXISTING AND ENUM-FREE, PROVED BY ABLATION, WHICH IS WHY THEY LANDED ON MAIN FIRST.**
+A build of pristine main (`bfae3125`) fails both reductions and passes both controls. So they are
+their own commits with their own pins (`TypeParamTypeGuardNarrowingTest`,
+`IntersectionOverUnionRelationTest`), each gated by its own full suite, and each measuring
+**+0.00% on all 20 cost counters with the profile unchanged at 46** — i.e. neither shape occurs on
+the profile until (b) makes a sibling member reject.
+
+**WHAT (b) IS** (commit `e787480d`). One rule in `checkTypeRelatedToCore` — two enum-member types
+relate only when they denote the SAME member — with a STRUCTURAL verdict
+(`enumMemberTypesAreSameMember`, tsc's `isEnumTypeRelatedTo`) rather than identity, because
+`canonicalEnumSymbol` can only canonicalize through `globals[name]` and INV.3(d) retired that merge
+for module-only names, so an identity verdict declares `SyntaxKind.StringLiteral` disjoint from
+itself. Landing with it, because (b) is what makes their premise true:
+
+1. **The round-459 AST enum-member key gate in `signatureAcceptsArgs` is RETIRED.** Its three
+   original pins keep passing unchanged, which IS the ablation evidence that the general type path
+   now reaches the same verdict.
+2. **A CONSTRAINT check for round 481's bare-`Type.TypeParam` lenience.** Two GENERIC overloads
+   distinguished only by their type parameters' constraints always picked the first. **The pin had
+   to be rewritten once**: with GENERIC return types every direction goes silent (a parameterized
+   interface relates leniently to another), so the first version asserted silence on a build that
+   never picks right — non-generic returns make all four directions sharp, two of them errors.
+3. **(a)'s string TARGET leg is deleted** — tsc rejects `string → Ext.Dts`; a string enum is
+   nominal. That is the fifth `@Ignore`.
+4. **B266 (`checkNsEnumUnionOne`) RETRACTS the general TS2322 at its position.** With (b) the
+   relation reaches the same verdict for a union annotation of enum members, and the two co-emitted
+   on three of `enumLiteralAssignableToEnumInsideUnion`'s five lines. Only B266's DISPLAY is tsc's
+   (a fully-covered member set collapses to the bare enum name, `boolean | Foo`).
+
+**COST GATE.** Commits 1 and 2: every counter +0.00%. Commit 3 moved one past tolerance and
+rebaselined it in the same commit: `narrow.memoServed` **+3.16%** (44,354 → 45,757). That is the
+round-459 retire paying its trade — an enum-member argument now goes through the TYPE path
+(`typeOfExpr.calls` +0.72%, the relation, round 743's second-chance flow narrow) instead of an AST
+key-set comparison, so narrowing REQUESTS rise while real `narrow.walks` move only **+0.37%**: 84%
+of the extra requests are served free by the round-664 memo. **The retire also REMOVES work**:
+`globals.lookups` **−1.64%** and `globals.misses` **−1.67%** (−18.9k), which is
+`canonicalEnumSymbol`'s `globals[name]` consult inside `enumMemberKeysOfTypeNode` /
+`enumMemberKeyOfExpr` disappearing. Net trade: ~18.9k globals lookups for ~5k expression typings.
+
+**PART 3 — (c) IS BLOCKED, AND THE CENSUS SAYS SO IN NUMBERS.** Round 740's inventory lists the
+three AST-only enum passes as "100% artifacts, deletable". **They are not, and none of them is
+deletable today.** A PassLab ablation (`build/pass-lab.txt`, `disable <pass>`, zero recompile) run
+first as a whole-suite census and then per-walker through the CLI:
+
+| walker | test | with | without |
+|---|---|---:|---:|
+| `checkEnumToEnumAssignments` | `enumAssignmentCompat3` | 12 | **0** |
+| `checkEnumLiteralAssignments` | `enumAssignmentCompat5` | 3 | **0** |
+| `checkNamespaceEnumUnionAssignments` | `enumLiteralAssignableToEnumInsideUnion` | 5 | **3** |
+
+Each is uniquely load-bearing for exactly one corpus test, and all three are the same missing rule:
+**the relation is VALUE-BLIND**, which step (a) chose deliberately. `enumAssignmentCompat3`/`5` are
+about VALUE equality across enums (`E.A = 0` vs `F.A = 0`, `Computed.A = 1`), and B266's surviving
+two lines are its whole-enum targets. **So (c)'s first deletion is not any of the three passes — it
+is a VALUE-AWARE disjointness rule**, and only after that does a pass become deletable. None of the
+twelve AST key-space helpers is orphaned either (checked by reference count; retiring the round-459
+gate left `enumMemberKeysOfTypeNode` and `enumMemberKeyOfExpr` with other consumers).
+`discriminantPropAnnotation` has five call sites woven through switch-narrowing and type-guard
+filtering — it is a multi-step replacement, not a one-commit deletion, and it is the riskiest part
+of (c), not the first.
+
+**METHOD NOTE, and it is the round's transferable lesson.** Both reductions succeeded on the first
+try by building the shape from the REAL declarations in `build/bench/tsc-project-*/src/compiler/`
+(copy the interfaces verbatim, then delete ingredients one at a time) and running them through a
+**1.3-second scratch-project CLI loop** (`java -cp … MainKt --noEmit --listAll <dir>` on a
+throwaway tsconfig) instead of the test suite. That loop, not instrumentation, is what made twelve
+bisection variants affordable; no `Diagnostic`-constructor hook was needed this round. The
+diagnostic-message trap is the same one round 742/743 recorded: **the message names the declared
+type, and the elaboration names a constituent the relation never rejected** — probe the flow type
+with a deliberate mis-assignment rather than reading the message.
+
+---
+
 **Round 743 (2026-07-28) — (REL.1) PART 1 LANDED: THE OVERLOAD PICKER WAS DOING TWO THINGS
 WRONG, AND NEITHER OF THEM IS ABOUT ENUMS.** Corpus **12,956 / 0 failures / 8 skipped** (+7 pins),
 compiler profile `--listAll` **BYTE-IDENTICAL at 46** after both commits. **(b) is parked again,
