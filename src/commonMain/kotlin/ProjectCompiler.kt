@@ -99,6 +99,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         // parsing a `.ts` as JSON yields a garbage config, and downstream a corrupt lib
         // binderResult (its `sourceFile.text` no longer matching its statement positions)
         // that crashes the checker with a StringIndexOutOfBounds.
+        val feConfigT0 = FrontEnd.t()
         val isBareSourceFile = !vfs.isDirectory(absPath) &&
             !absPath.endsWith(".json") && vfs.exists(absPath)
         val configPath = if (isBareSourceFile) absPath else resolveConfigPath(absPath)
@@ -136,7 +137,12 @@ class ProjectCompiler(private val vfs: Vfs) {
         // Hoisted above the crawl (INV.1(e)): the crawl parses each file with the
         // parser flags computed from THESE options, so the core's pre-parse reuse
         // gate (content + flags equality) matches.
-        val emitOptions = config.options.copy(outDir = null, fullEmitPaths = true)
+        val emitOptions = config.options.copy(
+            outDir = null, fullEmitPaths = true,
+            // (FRONT.1): a type-check-only build must not transform and emit
+            // JavaScript it is about to discard — 8.4% of the compiler profile.
+            skipEmitOutputs = noEmit || config.options.noEmit,
+        )
 
         // Walk the import graph from the roots, reading and resolving as we go.
         // INV.1: the crawl is a cold Flow collected through the coroutine pipeline
@@ -150,6 +156,8 @@ class ProjectCompiler(private val vfs: Vfs) {
         val unresolved = mutableListOf<Pair<String, String>>()
         val importEdges = mutableListOf<Pair<String, String>>()
         val seeds = rootFiles + typeEntries.filter { it !in rootFiles }
+        FrontEnd.close(FrontEnd.CONFIG, feConfigT0)
+        val feCrawlT0 = FrontEnd.t()
         runCompilerPipeline {
             val typeRoots = effectiveTypeRoots(config)
             crawlImportGraph(
@@ -162,6 +170,7 @@ class ProjectCompiler(private val vfs: Vfs) {
                 f.preParsed?.let { preParsed[f.path] = it }
             }
         }
+        FrontEnd.close(FrontEnd.CRAWL, feCrawlT0)
 
         // Feed the gathered file set through the shared compilation core, handing it
         // the crawl's parses so program files are not parsed a second time.
@@ -241,7 +250,12 @@ class ProjectCompiler(private val vfs: Vfs) {
      * [specifiers] the graph walk follows and rides into the compilation core
      * via [ParsedSource.preParsed] (INV.1(e)).
      */
-    private class CrawledFile(val path: String, val content: String?, val preParsed: PreParsedFile?) {
+    private class CrawledFile(
+        val path: String, val content: String?, val preParsed: PreParsedFile?,
+        /** (FRONT.1): this file's OWN read and pre-parse nanos, carried back so the
+         *  SINGLE-THREADED collector can sum them without racing the workers. */
+        val readNanos: Long = 0, val parseNanos: Long = 0,
+    ) {
         val specifiers: Set<String> = preParsed?.sourceFile?.moduleSpecifiers?.toSet() ?: emptySet()
 
         /** M4.8: `/// <reference path>` targets — resolved relative to this file. */
@@ -348,16 +362,23 @@ class ProjectCompiler(private val vfs: Vfs) {
         val byPath = paths.asFlow()
             .flatMapMerge(concurrency = FRONTEND_CONCURRENCY) { path ->
                 flow {
+                    val t0 = FrontEnd.t()
                     val content = withContext(pipelineIoDispatcher) { vfs.readText(path) }
+                    val t1 = FrontEnd.t()
                     val preParsed =
                         if (content == null) null
                         else withContext(Dispatchers.Default) { parseForCrawl(path, content, options) }
-                    emit(CrawledFile(path, content, preParsed))
+                    val t2 = FrontEnd.t()
+                    emit(CrawledFile(path, content, preParsed, t1 - t0, t2 - t1))
                 }
             }
             .toList()
-            .associateBy { it.path }
-        return paths.map { byPath.getValue(it) }
+        if (FrontEnd.mode == FrontEnd.ON) {
+            // Single-threaded: the concurrent flow is fully drained by now.
+            for (f in byPath) FrontEnd.addCrawlFile(f.readNanos, f.parseNanos, f.content?.length ?: 0)
+        }
+        val indexed = byPath.associateBy { it.path }
+        return paths.map { indexed.getValue(it) }
     }
 
     private fun resolveConfigPath(projectPath: String): String {

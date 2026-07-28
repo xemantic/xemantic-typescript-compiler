@@ -138,6 +138,26 @@
 > false`. What the prologue DOES show is a price for the "endgame" paragraph
 > below: **265 ms of FP-firewall walkers against the 19 ms relation they exist to
 > correct, 14×.** Full derivation: `docs/perf/var-decl-attribution.md`.
+> **ROUND-738 PART 2 — § 0.1 STAGE 5 IS MEASURED, AND HALF OF ITS "20%" WAS NOT
+> FRONT END AT ALL.** The front end is **11.0%**: crawl WALL 1,683 ms (5.4%,
+> already containing the read, decode and PARSE of all 9,977,097 characters,
+> 16 in flight), bind 1,622 ms (5.2%), config 102 ms, `extractRelativeImports`
+> 17 ms, and the core's own parse loop **0 ms — 78 of 78 pre-parses reused**.
+> **There is no lever in it.** The other 9.2% of the never-measured region was
+> `Transformer.transform` + `Emitter.emit` producing JavaScript a `--noEmit`
+> build threw away (`noEmit` was consulted only where outputs are WRITTEN):
+> **2,623 ms of 31,235**. Gating it (a new `skipEmitOutputs`, set only by
+> `ProjectCompiler` — never the `@noEmit` corpus directive that 440 tests use)
+> measured **−11.42%, B wins 6/6** — the arc's largest landed win, and a SCOPE
+> correction rather than a speed-up: real `tsc --noEmit` does not emit either,
+> so **every published xtsc-vs-tsc `--no-emit` ratio compared our check+emit
+> against tsc's check-only; the honest gap is ~2.15×, not 2.4×.** § 0.1's
+> staged plan as a whole is now: stage 1 ≈0.3–1% against 11–19%, stage 2's
+> premise VOID (it was priced as "stage 1 unlocks it"), stage 3 STRUCK, stage 4
+> the only one that paid (−4.53%, ~2% left), stage 5 measured and empty — so
+> **"~1.4–1.7× of today" is not supported; the plan's remaining honest value is
+> single digits.** Full derivation and the three remaining routes:
+> `docs/perf/front-end-attribution.md` § 5.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
@@ -246,9 +266,14 @@ Matching JS tsc means 100 → 42 (the CI ratio is 2.4×). Working backwards:
 | \+ HALF the type system | 42 | **parity** |
 
 **So parity is not one lever — it needs all three, and the third is hard.** State
-that plainly to anyone who proposes a single change that "gets us to tsc". What is
-realistically reachable from the staged plan below is ~1.4–1.7× of today, i.e.
-roughly 1.5× slower than tsc rather than 2.4×.
+that plainly to anyone who proposes a single change that "gets us to tsc".
+~~What is realistically reachable from the staged plan below is ~1.4–1.7× of
+today, i.e. roughly 1.5× slower than tsc rather than 2.4×.~~ **RETRACTED, round
+738.** Three of the five stages are now measured and a fourth's premise is void
+(§ 0.1 status in the round-738 header above): the plan's remaining honest value
+is **single digits**, not 40–70%. Also note the 2.4× itself was measured against
+our `--noEmit` doing ~9% of work tsc's does not — **the honest gap is ~2.15×**,
+and every pre-738 bench ratio needs restating (queue item (BENCH.1)).
 
 **The staged plan (each stage enables the next):**
 
@@ -285,8 +310,14 @@ roughly 1.5× slower than tsc rather than 2.4×.
 4. **Flow narrowing** (69,917 walks, 18% of init) — round 664 banked 0.83 s; ~57%
    of misses are COLD, so the rest needs tsc's shape (a flow type computed once per
    reference and carried IN the type), not another memo.
-5. **Front-end (20%)** — unprofiled. Worth a look once it is a fifth of a smaller
-   number.
+5. ~~**Front-end (20%)** — unprofiled. Worth a look once it is a fifth of a smaller
+   number.~~ **MEASURED round 738 (`docs/perf/front-end-attribution.md`): the front
+   end is 11.0% and has NO lever in it** — the crawl (5.4%) already overlaps read,
+   decode and parse 16-in-flight and the core re-parses nothing (78/78 pre-parses
+   reused, core parse loop 0 ms); bind is 5.2% and in-band. **The other ~9% of this
+   "20%" was `Transformer` + `Emitter` running under `--noEmit` and discarding the
+   result**, now gated (`skipEmitOutputs`) for **−11.42%, B wins 6/6** — a scope
+   correction, not a speed-up.
 
 **Explicitly NOT on the list:** anything cache-shaped (three independent
 measurements), and parallelism until after stage 2 — M2 measured 77% of the work as

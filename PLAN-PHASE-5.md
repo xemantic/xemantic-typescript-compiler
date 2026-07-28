@@ -20,6 +20,79 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 738 (2026-07-28) — PART 2, (FRONT.1): THE FIRST FRONT-END ATTRIBUTION, AND THE
+ARC'S LARGEST LANDED WIN: `-11.42%` median, B wins 6/6.** Section 0.1's stage 5 said "the
+front end, ~20%, unprofiled". **The front end is 11.0%. The OTHER 9.2% of that never-measured
+region was `Transformer.transform` + `Emitter.emit` producing JavaScript that a `--noEmit`
+build immediately threw away** — `noEmit` was consulted ONLY where outputs are WRITTEN
+(`ProjectCompiler.build`), so the compile core transformed and emitted all 78 program files
+regardless: **2,623 ms of a 31,235 ms compile (8.4%)**, `Transformer` 2,211 + `Emitter` 412.
+
+**THE MAP (compiler profile, before the fix; 31,174 of 31,235 ms accounted for):** config
+102 ms (0.3%), **import-graph crawl WALL 1,683 ms (5.4%)**, **core parse loop 0 ms — 78 of 78
+pre-parses REUSED**, `extractRelativeImports` 17 ms (0.05%), **bind 1,622 ms (5.2%)**, checker
+24,872 ms (79.7%), post-checker 2,876 ms (9.2%). **Reading, decoding and PARSING 9,977,097
+characters costs 1,683 ms of wall in total** — the crawl already overlaps it 16-in-flight and
+the core re-parses nothing. **There is no 20% in the front end and no lever in it**: the
+largest row after the crawl is bind, at 5.2%, in-band.
+
+**THE FIX AND ITS GATE.** Verified first that the Phase-3 loop contributes NO diagnostics
+(no `diagnostics.add`/`remove` anywhere between the checker and the `CompilationResult`), so
+skipping it is diagnostic-neutral by construction. The gate is a NEW
+`CompilerOptions.skipEmitOutputs` set ONLY by `ProjectCompiler` from its own `noEmit`
+parameter — **deliberately NOT `options.noEmit`, which 440 corpus tests set as a DIRECTIVE**
+and whose baselines were produced by a core that still emits. `SkipEmitOutputsTest`'s fourth
+test is the negative control for exactly that.
+
+**A/B: median A=31,250 B=27,680, -3,570 ms = -11.42%, B wins 6/6**, per-pair median -3,221 ms,
+range [-4,099, -2,773] against a +-590 ms band. The A/B delta exceeds the phase measurement by
+~950 ms: the emit builds and discards ~10 MB of output strings (allocation/GC no span brackets)
+and the post-checker residue itself fell 2,876 -> 182 ms.
+
+**THIS IS A SCOPE CORRECTION, NOT AN ALGORITHMIC SPEED-UP, AND IT MUST BE REPORTED AS ONE.**
+Real `tsc --noEmit` does not run its emitter either, so **every published xtsc-vs-tsc
+`--no-emit` ratio before this compared our check+emit against tsc's check-only**. The 2.4x gap
+was measured against a compile doing ~9% of work the baseline was not doing; the honest
+single-thread figure is **~2.15x**.
+
+**METHOD NOTE the next agent must not misread: the crawl's per-file read/pre-parse sums are
+ELAPSED-WITH-SUSPENSION, not CPU.** They bracket a `withContext(...)`, so a file's "parse"
+span includes waiting for a dispatcher slot — which is why the pre-parse sum (17,958 ms) is
+10.7x the crawl WALL (1,683 ms): that ratio is the effective in-flight concurrency, not a cost.
+**Only the crawl WALL is a wall-clock price**, and the report excludes the two sub-sums from
+its own total. Race-freedom was designed in rather than hoped for: each flow element carries
+its OWN nanos back on its `CrawledFile` and the SINGLE-THREADED collector sums them (a `+=`
+from the workers would race exactly as `PassTiming.nodeKindHistogram` does).
+
+**SECTION 0.1 AS A WHOLE — the honest status, since three of five stages now have numbers.**
+Stage 1 (DISPATCH.1, claimed 11-19%): measured **4.8% upper bound, ~100-300 ms realistic**;
+this round's per-handler gate row (194 ms over 857k nodes at 212 ns) is a third confirmation
+=> **~0.3-1%**. Stage 2 (M0.4 tail migration, claimed ~14% AFTER stage 1): **its stated basis
+is VOID** — it was priced as "stage 1 retroactively unlocks it" and stage 1 does not deliver.
+Stage 3 (getTypeOfExpression recompute, claimed ~9%): **STRUCK** (ceiling 2.9%, sound residue
+0.16%). Stage 4 (flow narrowing): **the only stage that paid** — -4.53% landed, ~2% residue
+mostly in-band. Stage 5 (front end, claimed 20%): 11.0% with no lever, plus the 9.2% scope
+error now landed. **So "~1.4-1.7x of today" is NOT SUPPORTED**: it assumed stages 1+2 were
+worth 25-33% and stage 3 another 9%; measured, stages 1+3 are ~1-4% combined, stage 2's premise
+is gone, and stage 5 has nothing. **The staged plan's remaining honest value is single digits.**
+**The realistic remaining route to parity**: 88% of the compile is now the checker, and SEVEN
+consecutive intra-function attributions have found the same shape — cost spread over hundreds
+of dedicated walkers at 0.1-1% each, with no single lever above the band left inside it, and
+every predicted lever coming in 3-65x too small. Three moves remain and only the first changes
+the constant: (1) the architecture change section 0.1's own "endgame" paragraph names —
+replacing ~1,005 `check*` walkers with general engine rules, for which this round produced the
+FIRST price on one instance (the var-decl FP-firewall prologue is **265 ms against the 19 ms
+relation it exists to correct, 14x**) — a SCOPE decision that trades the property which made
+the byte-identical corpus reachable; (2) parallelism, now cheaper than M2 measured because a
+worker's duplicated bind is only 5.2%, still needing >=8 real cores ((PERF.HW), unmeasured);
+(3) accept ~2.15x.
+
+Suite 12,923 -> **12,927 / 0 / 3** (+4 `SkipEmitOutputsTest` pins); profile `--listAll`
+byte-identical before and after the gate (46 errors); cost gate **18 of 20 counters +0.00%**,
+with `globals.lookups` -9.03% and `globals.misses` -9.11% FALLING (the Transformer's own
+checker queries, no longer made) and rebaselined in the same commit. Full derivation:
+**`docs/perf/front-end-attribution.md`**.
+
 **Round 738 (2026-07-27) — (TYPE.2) DONE, PART 1. BOTH OF THE ITEM'S PRIORS ARE FALSE,
 THE SECOND BY 65x, AND `checkVarDeclAssignability` IS NOT WHAT ITS NAME SAYS.** The item
 asked whether the 36 us per initializer is mostly FLOW NARROWING (prior i) and whether the
@@ -1846,6 +1919,42 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   the same prior was wrong by 48× one function over. Gate: corpus suite +
   `--listAll` + `cost_gate.py` + `ab-interleaved.sh` medians AND win rate if
   anything lands.**
+
+- [x] **(FRONT.1) The first front-end attribution — DONE round 738, and it landed the
+  arc's largest win, `-11.42%` median with B winning 6/6.** Section 0.1 stage 5's
+  "front end, ~20%, unprofiled" is **11.0%**; the OTHER 9.2% of that region was
+  `Transformer.transform` + `Emitter.emit` running under `--noEmit` and discarding
+  its output (2,623 ms of 31,235). Gated by a NEW `CompilerOptions.skipEmitOutputs`
+  set only by `ProjectCompiler` — deliberately NOT `options.noEmit`, which 440 corpus
+  tests set as a directive. **A SCOPE correction, not an algorithmic speed-up: real
+  `tsc --noEmit` does not emit either, so every published xtsc-vs-tsc `--no-emit`
+  ratio compared our check+emit against tsc's check-only — the honest gap is ~2.15x,
+  not 2.4x.** The front end proper has NO lever: crawl WALL 1,683 ms (5.4%, and it
+  already contains reading+decoding+PARSING all 9,977,097 chars, 16 in flight), core
+  parse loop **0 ms** (78/78 pre-parses reused), bind 1,622 ms (5.2%), config 102 ms,
+  `extractRelativeImports` 17 ms. LANDED: `FrontEnd` + `--frontEnd` (opt-in),
+  `skipEmitOutputs`, `SkipEmitOutputsTest` (4 pins incl. the directive negative
+  control). Suite **12,927 / 0 / 3**, `--listAll` byte-identical, cost gate 18/20 at
+  +0.00% with two globals counters FALLING 9% (rebaselined same commit). Full
+  derivation: **`docs/perf/front-end-attribution.md`**.
+
+- [ ] **(BENCH.1) Re-measure the whole dashboard against tsc now that `--noEmit` no
+  longer emits (round 738).** Every `bench/*.tsv` row and every "2.4x / 2.5x slower
+  than tsc" claim in STATUS.md, PLAN-PHASE-5.md and `docs/ARCHITECTURE-RETHINK.md`
+  was measured with our core transforming and emitting all 78 files while tsc's
+  `--noEmit` did not. Re-run `scripts/bench-compile-tsc.sh` 3-way on all 8 profiles
+  and correct the ratios in place; expect ~2.15x rather than 2.4x on the compiler
+  profile. **Do NOT quote a pre-738 ratio without this note.**
+
+- [ ] **(ENGINE.1) Price the dedicated-walker prologue on two more sites before
+  believing the 14x (round 738).** The var-decl path's FP-firewall prologue is 265 ms
+  against the 19 ms assignability relation it exists to correct — the first price tag
+  on section 0.1's "endgame" paragraph, and the only structurally-large shape the
+  seven-round attribution arc has left. Extrapolating one ratio is exactly the error
+  rounds 732-737 kept making, so measure `checkReturnAssignability` (615 ms, never
+  opened) and `checkAssignmentExpression` (318 ms) the same way FIRST. Only then is
+  the scope question ("replace ~1,005 `check*` walkers with engine rules, trading the
+  property that made the byte-identical corpus reachable") worth putting to the owner.
 
 - [ ] **(PERF.HW) Settle the VPS core question by MEASUREMENT, not by spec sheet —
   my call per the owner leaving it to me (2026-07-26).** M2 (parallel scaling) is

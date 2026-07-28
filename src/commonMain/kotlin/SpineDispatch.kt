@@ -2279,3 +2279,150 @@ object CtaSections {
         }
     }
 }
+
+/**
+ * (FRONT.1) round 738: the FIRST attribution of the front end — `ARCHITECTURE
+ * -RETHINK` § 0.1's stage 5, "~20% of the compile, unprofiled", carried
+ * unmeasured since round 490 because the checker always dominated.
+ *
+ * The phases are per-FILE, not per-node, so a timestamp pair costs nothing
+ * relative to what it brackets (78 program files, ~89 ns per read) and the
+ * usual ON-vs-COARSE calibration is unnecessary. Two things DO need care and
+ * are handled explicitly:
+ *
+ * * **The crawl is concurrent** (`readAndScanBatch`: read on the IO
+ *   dispatcher, parse on `Dispatchers.Default`, `FRONTEND_CONCURRENCY` in
+ *   flight), so a `+=` from the worker lambdas would race exactly the way
+ *   `PassTiming.nodeKindHistogram` does. Instead each flow element carries its
+ *   OWN read and parse nanos back on its `CrawledFile`, and the SINGLE-THREADED
+ *   collector sums them after `toList()` — race-free and exact. [CRAWL] is the
+ *   crawl's WALL span; [READ] and [PREPARSE] are CPU sums across workers, so
+ *   `READ + PREPARSE > CRAWL` is expected and is itself the parallel speed-up.
+ * * **JFR self-% is not a wall-clock price** (round 623: `computeLineStarts`
+ *   showed 5.3% of samples and eliminating it measured −0.3%). Everything here
+ *   is a wall span around a named phase, which is the thing JFR could not give.
+ */
+object FrontEnd {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Opt-in; [OFF] in production. Set by `--frontEnd`. */
+    var mode: Int = OFF
+
+    /** tsconfig load, `@types` acquisition and the root-file glob walk. */
+    const val CONFIG = 0
+    /** The import-graph crawl, WALL — concurrent inside. */
+    const val CRAWL = 1
+    /** Read + UTF-8→UTF-16 decode, summed across crawl workers (CPU, not wall). */
+    const val READ = 2
+    /** The crawl's pre-parse, summed across crawl workers (CPU, not wall). */
+    const val PREPARSE = 3
+    /** The core's own parse loop — FRESH parses only (a reused pre-parse is free). */
+    const val PARSE = 4
+    /** `extractRelativeImports`, called TWICE per program file. */
+    const val IMPORTS = 5
+    /** `binder.bind` over every program file. */
+    const val BIND = 6
+    /** `Checker(...)` construction + `getDiagnostics()` — the 80% for reference. */
+    const val CHECK = 7
+    /** Everything in the compile core after the checker: transform, emit, tails. */
+    const val POST = 8
+    /** `Transformer.transform` per program file — INSIDE [POST]. */
+    const val TRANSFORM = 9
+    /** `Emitter.emit` per program file — INSIDE [POST]. */
+    const val EMIT = 10
+    /** Declaration (`.d.ts`) emit per program file — INSIDE [POST]. */
+    const val DECL_EMIT = 11
+
+    const val N = 12
+
+    val names: Array<String> = arrayOf(
+        "config load + @types + root glob",
+        "import-graph crawl (WALL)",
+        "  of which read+decode (CPU sum)",
+        "  of which pre-parse (CPU sum)",
+        "core parse loop (fresh only)",
+        "extractRelativeImports (x2/file)",
+        "bind (all program files)",
+        "checker construct + getDiagnostics",
+        "post-checker (transform/emit/tails)",
+        "  of which Transformer.transform",
+        "  of which Emitter.emit",
+        "  of which declaration emit",
+    )
+
+    var nanos: LongArray = LongArray(N)
+    var calls: LongArray = LongArray(N)
+
+    /** Files read by the crawl, and the total decoded UTF-16 length. */
+    var filesRead: Long = 0
+    var charsRead: Long = 0
+
+    /** Core parse loop: pre-parses REUSED versus parsed FRESH. */
+    var parsedReused: Long = 0
+    var parsedFresh: Long = 0
+
+    fun reset() {
+        nanos = LongArray(N)
+        calls = LongArray(N)
+        filesRead = 0; charsRead = 0
+        parsedReused = 0; parsedFresh = 0
+    }
+
+    /** Start a span, or 0 when off. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
+
+    /** Close a span opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun close(sec: Int, t0: Long) {
+        if (mode != ON) return
+        nanos[sec] += PassTiming.nowNanos() - t0
+        calls[sec]++
+    }
+
+    /**
+     * Add a crawl worker's own read/parse nanos. Called from the SINGLE-THREADED
+     * collector after the concurrent flow has been drained — never from a worker.
+     */
+    fun addCrawlFile(readNanos: Long, parseNanos: Long, chars: Int) {
+        if (mode != ON) return
+        nanos[READ] += readNanos; calls[READ]++
+        nanos[PREPARSE] += parseNanos; if (parseNanos > 0) calls[PREPARSE]++
+        filesRead++; charsRead += chars
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (FRONT.1) front-end attribution ==")
+        appendLine(
+            "files read: $filesRead ($charsRead chars)   core parse loop: " +
+                "$parsedReused reused / $parsedFresh fresh"
+        )
+        var total = 0L
+        for (s in 0..POST) if (s != READ && s != PREPARSE) total += nanos[s]
+        appendLine("phases (disjoint except the two crawl sub-sums): total ${total / 1_000_000} ms")
+        for (s in 0 until N) {
+            val c = calls[s]
+            if (c == 0L) continue
+            val pct = if (total > 0) nanos[s] * 1000 / total else 0
+            appendLine(
+                "  ${names[s].padEnd(38)} ${(nanos[s] / 1_000_000).toString().padStart(6)} ms " +
+                    "(${(pct / 10).toString().padStart(3)}.${pct % 10}%) over ${c.toString().padStart(6)} calls"
+            )
+        }
+        val frontEnd = nanos[CONFIG] + nanos[CRAWL] + nanos[PARSE] + nanos[IMPORTS] + nanos[BIND]
+        appendLine(
+            "FRONT END (config+crawl+parse+imports+bind): ${frontEnd / 1_000_000} ms = " +
+                "${if (total > 0) frontEnd * 100 / total else 0}% of the measured total"
+        )
+    }
+
+    fun csv(): String = buildString {
+        appendLine("phase,calls,nanos")
+        for (s in 0 until N) {
+            if (calls[s] == 0L) continue
+            appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
+        }
+    }
+}

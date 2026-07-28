@@ -102,6 +102,26 @@ data class CompilerOptions(
     /** True when `// @strict: false` was explicitly set (not just defaulting to false). */
     val strictExplicitlyFalse: Boolean = false,
     val noEmit: Boolean = false,
+    /**
+     * (FRONT.1) round 738: the CALLER does not want the JS outputs at all, so
+     * the compile core must not produce them.
+     *
+     * Distinct from [noEmit] on purpose. `noEmit` is a corpus DIRECTIVE (440
+     * tests set `@noEmit: true`) whose meaning to the harness is "do not WRITE",
+     * and those tests' baselines are produced by a core that still transforms
+     * and emits; gating the emit loop on it would change 440 behaviours at once.
+     * This flag is set only by [ProjectCompiler] from its own `noEmit`
+     * parameter — i.e. by `xtsc --noEmit`, the type-check-only CI mode — so no
+     * existing caller's behaviour moves.
+     *
+     * Measured: on the tsc compiler profile the transform+emit the core ran and
+     * then discarded under `--noEmit` was **2,623 ms of a 31,235 ms compile
+     * (8.4%)** — `Transformer.transform` 2,211 ms and `Emitter.emit` 412 ms
+     * across 78 files. Real `tsc --noEmit` does not run its emitter either, so
+     * every published xtsc-vs-tsc `--no-emit` ratio before this flag compared
+     * our check+emit against tsc's check-only.
+     */
+    val skipEmitOutputs: Boolean = false,
     /** Emit a UTF-8 byte order mark at the start of js/d.ts outputs. */
     val emitBOM: Boolean = false,
     val noEmitHelpers: Boolean = false,

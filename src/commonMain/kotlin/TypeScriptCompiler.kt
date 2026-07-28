@@ -1337,10 +1337,14 @@ class TypeScriptCompiler {
                 if (preParsed != null) {
                     sourceFile = preParsed.sourceFile
                     parserDiagnostics = preParsed.diagnostics
+                    if (FrontEnd.mode == FrontEnd.ON) FrontEnd.parsedReused++
                 } else {
+                    val feT0 = FrontEnd.t()
                     val parser = Parser(file.content, file.fileName, forceJsx = parserFlagsMulti.forceJsx, topLevelAwait = parserFlagsMulti.topLevelAwait, needsJsxFlag = parserFlagsMulti.needsJsxFlag, noImplicitAny = parserFlagsMulti.noImplicitAny)
                     sourceFile = parser.parse()
                     parserDiagnostics = parser.getDiagnostics()
+                    FrontEnd.close(FrontEnd.PARSE, feT0)
+                    if (FrontEnd.mode == FrontEnd.ON) FrontEnd.parsedFresh++
                 }
                 parsedSourceFiles[file.fileName] = sourceFile
                 if (parserDiagnostics.isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
@@ -1436,6 +1440,7 @@ class TypeScriptCompiler {
                 if (skipJsEmit) continue
 
                 // Extract relative imports for dependency ordering
+                val feImpT0 = FrontEnd.t()
                 importDeps[file.fileName] = extractRelativeImports(
                     sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
                     includeReferencePathDeps = true,
@@ -1457,6 +1462,7 @@ class TypeScriptCompiler {
                     rootDirs = options.rootDirs,
                     symlinkMap = parsed.symlinkMap,
                 )
+                FrontEnd.close(FrontEnd.IMPORTS, feImpT0)
                 // Detect whether this file uses `import X = require("...")` (CJS-style
                 // import-equals). When an entry-point file uses this form, TypeScript
                 // emits its dependencies in the order they appear in the file (single-root
@@ -1471,13 +1477,16 @@ class TypeScriptCompiler {
             }
 
             // Phase 2: Bind all files and create shared checker
+            val feBindT0 = FrontEnd.t()
             val binder = Binder(options)
             val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
+            FrontEnd.close(FrontEnd.BIND, feBindT0)
             val allInputFileNames = parsed.files.map { it.fileName }.toSet()
             val jsonModules = parsed.files
                 .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
                 .associate { it.fileName to it.content }
             val checker: Checker
+            val feCheckT0 = FrontEnd.t()
             if (ParallelCheckMode.workers > 1) {
                 // INV.6(6c1): share-nothing parallel check — N partition checkers on
                 // deep-stack worker threads replace the single full checker. Fresh
@@ -1517,6 +1526,8 @@ class TypeScriptCompiler {
                     options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
                 )
             }
+            FrontEnd.close(FrontEnd.CHECK, feCheckT0)
+            val fePostT0 = FrontEnd.t()
             // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
             // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
             // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
@@ -1626,8 +1637,13 @@ class TypeScriptCompiler {
                 parsedSourceFiles[name]?.let { name to it }
             } + parsedSourceFiles.filter { it.key !in transformOrder.toSet() }.map { it.toPair() }
 
-            // Phase 3: Transform and emit each file
-            for ((tsFileName, sourceFile) in orderedParsedSourceFiles) {
+            // Phase 3: Transform and emit each file.
+            // (FRONT.1): skipped entirely for a type-check-only build — the loop
+            // produces NO diagnostics (verified: no `diagnostics.add` between the
+            // checker and the result), only `jsOutputMap` entries the caller has
+            // said it does not want. Gated on `skipEmitOutputs`, which ONLY
+            // ProjectCompiler sets, never the `@noEmit` corpus directive.
+            for ((tsFileName, sourceFile) in if (options.skipEmitOutputs) emptyList() else orderedParsedSourceFiles) {
                 // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
                 // B11.2's `resolveJsxTsxCandidate` visibility. Without this, the Emitter
                 // would add a `"use strict";` prologue and produce a phantom
@@ -1654,11 +1670,15 @@ class TypeScriptCompiler {
                     if (hasModuleStatements) continue
                 }
 
+                val feTrT0 = FrontEnd.t()
                 val transformer = Transformer(options, checker, crossFileNamespaceExports)
                 val transformed = transformer.transform(sourceFile)
+                FrontEnd.close(FrontEnd.TRANSFORM, feTrT0)
 
+                val feEmT0 = FrontEnd.t()
                 val emitter = Emitter(options)
                 val javascript = emitter.emit(transformed, sourceFile)
+                FrontEnd.close(FrontEnd.EMIT, feEmT0)
 
                 // Skip files that produce no meaningful output (e.g. empty .tsx/.ts files)
                 // But keep blank files if the original had module statements (imports/exports)
@@ -1912,6 +1932,7 @@ class TypeScriptCompiler {
                 }
                 outside + nodeModulesFiles + inTreeProjectJson + inTreeProjectNonJson
             } else sourceEchoes
+            FrontEnd.close(FrontEnd.POST, fePostT0)
             return CompilationResult(
                 fileName = fileName,
                 sourceEchoes = orderedSourceEchoes,

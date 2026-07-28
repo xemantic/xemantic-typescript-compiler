@@ -121,6 +121,12 @@ fun main(args: Array<String>) {
             "--ctaSectionsCoarse", "--ctasectionscoarse" -> {
                 CtaSections.reset(); CtaSections.mode = CtaSections.COARSE
             }
+            // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
+            // ~20% of the compile and never profiled. Per-FILE spans, so no
+            // calibration counterpart is needed.
+            "--frontEnd", "--frontend" -> {
+                FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON
+            }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
             }
@@ -197,6 +203,13 @@ fun main(args: Array<String>) {
         print(NarrowSections.csv())
         println("== (CALL.3) csv end ==")
         NarrowSections.mode = NarrowSections.OFF
+    }
+    if (FrontEnd.mode != FrontEnd.OFF) {
+        println(FrontEnd.report())
+        println("== (FRONT.1) csv ==")
+        print(FrontEnd.csv())
+        println("== (FRONT.1) csv end ==")
+        FrontEnd.mode = FrontEnd.OFF
     }
     if (CtaSections.mode != CtaSections.OFF) {
         println(CtaSections.report())
@@ -342,6 +355,7 @@ private fun printUsage() {
           --narrowSectionsCoarse  the same, whole-walk anchor only — the calibration counterpart
           --ctaSections      (TYPE.2) attribution of spineCtaM3StatementAnchor + checkVarDeclAssignability
           --ctaSectionsCoarse  the same, per-level anchors only — the differential calibration counterpart
+          --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
