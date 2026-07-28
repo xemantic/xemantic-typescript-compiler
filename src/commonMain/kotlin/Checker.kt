@@ -109218,6 +109218,37 @@ interface DataView {
         // type; the negative branch is unchanged (`t <: candidate` ⇒ guard always true ⇒
         // false branch is `never`).
         if (isMatch) {
+            // Round 744: a bare TYPE PARAMETER is a supertype of nothing, so in tsc's
+            // `getNarrowedType` neither subtype arm can ever fire for one — it falls to
+            // the INSTANTIABLE tail (`maybeTypeOfKind(t, Instantiable) &&
+            // isTypeComparableTo(c, getBaseConstraintOfType(t))` → `getIntersectionType
+            // ([t, c])`) and yields `T & candidate`, per candidate constituent.
+            //
+            // Ours answered the FIRST arm `true` whenever the candidate is a UNION (a
+            // single-type candidate is correctly rejected — the two lenience directions
+            // happen to cancel there and compound here), so the guard handed back the
+            // whole candidate and DROPPED `T` from the flow. After
+            // `if (isStringLiteralLike(input)) {}` the branch join was then
+            // `T | StringLiteral | NoSubstitutionTemplateLiteral` rather than `T`, and
+            // the `return input` below it reported the *declared* `T | undefined`
+            // against `T | StringLiteral` (tsc transformers/declarations.ts:846,
+            // `rewriteModuleSpecifier`) — a message naming neither the real source
+            // constituent nor the real cause.
+            //
+            // Placed BEFORE the relation arms so neither lenience is consulted. A `T`
+            // whose CONSTRAINT already satisfies the candidate loses nothing: `T & c`
+            // relates wherever `T` does, and it additionally resolves the candidate's
+            // members, which returning bare `T` would not.
+            if (t is Type.TypeParam) {
+                val tpCandidates = if (targetType is Type.Union) targetType.types else listOf(targetType)
+                val parts = tpCandidates.filter {
+                    (it is Type.Object || it is Type.Intersection || it is Type.Reference) &&
+                        !typeGuardMemberDisjoint(t, it)
+                }
+                if (parts.isNotEmpty()) {
+                    return getUnionType(parts.map { getIntersectionType(listOf(t, it)) })
+                }
+            }
             when {
                 checkTypeRelatedTo(targetType, t, assignableRelation) -> return targetType
                 checkTypeRelatedTo(t, targetType, assignableRelation) -> return t
