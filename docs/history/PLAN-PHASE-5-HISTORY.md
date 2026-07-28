@@ -1,3 +1,540 @@
+**Round 732 (2026-07-27) — (DISPATCH.1) step (a) DONE, and it FALSIFIES the item.** The
+per-kind handler table was DERIVED (not guessed) and VERIFIED (whole corpus suite run
+with the table applied, byte-identical profile `--listAll`), and the measured prize is
+**883 ms of an 18.5 s spine — an upper bound inflated by the probe's own indirection;
+production-realistic is ~100-300 ms (0.3-1%), not the 1.0-2.5 s / 6-14% predicted.** The
+item's own falsification clause applies. Full derivation, per-handler table and
+reproduction steps: `docs/perf/dispatch-table.md`. Suite 12,876 -> **12,882 / 0 / 3**
+(+6 pins, `SpineDispatchProbeTest`); cost gate all 20 counters +0.00%.
+
+**WHAT WAS BUILT.** `SpineDispatch.kt` + three hooks in Checker.kt, opt-in and
+behaviour-free when off (`spineEnterNode`/`spineLeaveNode` branch once on
+`SpineDispatch.mode != OFF`): by-id twins of both prologues (`spineEnterHandlerById` /
+`spineLeaveHandlerById` — same 46 enter and 13 leave calls, same guards, same order),
+a PROBE mode recording per-(handler, kind) consults/nanos/observed-WORK, a GATED mode
+running only the table, and 23 `SpineDispatch.work()` call sites inside the OPEN
+handlers. Two extractions made every handler reachable by id: the three inline `cta-m3`
+blocks became named handlers, and the `when (kindId)` tail became
+`spineEnterKindDispatch`. Node populations come from the single-threaded spine, never
+from the racy parse-time `nodeKindHistogram` (round 717's trap, obeyed).
+
+**THE TABLE.** 46 enter handlers: 35 closed, 11 OPEN. 13 leave handlers: 3 closed, 10
+OPEN. A closure is accepted only on a SYNTACTIC justification (a top-level
+`when (kindId)` / `if (kindId != K) return`) or an `is Statement` gate
+(`STATEMENT_KINDS`, 32 kinds). Parent-keyed edges, nodeId registries
+(`ctaM3NarrowThen`, `ccetRestores`, `cpaLoopVarRestores`) and frame-owner identity stay
+OPEN; an OBSERVED work set is never promoted to a closure. Two handlers look closed and
+are not — `spineArithLeaveNode` has a frame pop AFTER its own-kind `when` (29 working
+kinds measured) and `spineNpLeaveNode`'s `else` arm reaches every Expression kind.
+
+**THE NUMBERS.** 856,962 nodes; consultations 59/node -> 21.65/node = 64% removed; the
+removed 32.0 M consultations are worth **883 ms**, the kept 18.6 M are worth 17,609 ms.
+**64% of the consultations are 4.8% of the time.** Two independent confirmations: (1)
+`--dispatchGated` measured SLOWER than production (spine enter 11,699 vs 11,157 ms,
+leave 8,683 vs 8,087) — skipping 37 of 59 handlers did not pay for the array-indexed
+`when(h)`; a production straight-line per-kind `when` would not lose that way, but it
+bounds the headroom. (2) IDENTIFIER — the item's own evidence — keeps **1,142 ms** and
+can skip **340 ms**: `spineIanyEnterNode` (376 ms), `ccetSpineEnter` (187 ms),
+`spineCeEnterNode` (178 ms) all do real per-identifier work, and only 10/46 enter +
+12/13 leave are skippable there.
+
+**WHY ROUND 716's ESTIMATE WAS WRONG.** It read "IDENTIFIER costs 2,746 ns/node and
+almost no handler wants an identifier" and inferred consultation overhead. 22 of the 59
+handlers genuinely ACT at an identifier, because the unclosable ones (parent edges,
+frame identity, nodeId registries) are exactly the expensive ones. The decisive probe
+("skip `spineEnterNode` for bare Identifiers -> byte-identical") skipped real work the
+compiler profile happens not to need; it never measured consultation.
+
+**WHERE THE TIME ACTUALLY IS — the finding to carry forward.** Six handlers are 71% of
+the measured spine: `cpaSpineLeave` 4,366 ms, `ccetSpineLeave` 3,046 ms,
+`spineCtaM3StatementAnchor` 2,900 ms, `spineIanyEnterNode` 1,025 ms, `ccetSpineEnter`
+920 ms, `ctaSpineEnter` 586 ms. The other 53 handlers together are ~4.8 s. These are the
+cta/cpa/ccet legacy-parity frame skeletons plus the implicit-any pass — per-node
+BOOKKEEPING, not dispatch and not the type system. `cpaSpineLeave` costs 5.4 us and
+`ccetSpineLeave` 3.5 us PER NODE OF THE PROGRAM. Per kind the same shape:
+CALL_EXPRESSION 3,636 ms over 52,509 nodes (69 us each), VARIABLE_STATEMENT 2,835 ms
+over 14,712 (193 us each).
+
+**WHAT DID NOT WORK / WHAT WAS NOT DONE.** (a) Step (c) — landing the dispatch — is
+deliberately NOT done, and should not be done as specified; see the new (SPINE.1) item.
+(b) `spineOsEnterNode`'s parent-keyed arms have no `work()` call, so its observed set
+reads 0 — not instrumented, not "does nothing". (c) The per-handler nanos are
+probe-inflated (a `when(h)` call plus a timestamp pair per handler per node, 38 ns
+subtracted); they are sound for RELATIVE attribution, not as absolute production costs.
+
+**Round 731 (2026-07-27) — (LIB.1)(b) LANDED: the DOM, webworker and scripthost lib sets
+are SHIPPED, so a browser or worker project is type-CHECKED instead of silently running
+unchecked. The cost was NOT where the item predicted — the payload is 3.14 MB, not ~1 MB,
+and it broke the KOTLIN COMPILE, not the compiler; splitting the emission over 16 part
+files fixed that and made a cold compile CHEAPER than before (2m25s). Corpus 12,857 →
+12,876 / 0 / 3 (+19 pins). Cost gate PASSES with every counter at +0.00%; dashboard
+unmoved (compiler 46, services 46, harness 94).**
+
+**THE DEFECT, restated because it is the whole point.** `generateRealLibSources` filtered
+out `dom.*`, `webworker.*` and `scripthost`, so `RealLibResolver` put those files in
+`Resolution.unavailable` — a list **nothing outside RealLibs.kt ever read**. No
+diagnostic, no failure, no signal of any kind: `"lib": ["dom"]` produced a program in
+which `HTMLElement` and `document` "resolved" (to nothing), every member access degraded
+to `any`, and a browser project got a green build over entirely unchecked code. Round
+730's flip made this reachable from a real build, which is why it was next.
+
+**WHAT SHIPPED.** All 108 `src/lib` `.d.ts` files (566 KB → 3.71 MB of lib source). Plus
+one correctness fix the shipping forced: `keyToDistFileName` special-cased only the two
+`.full` names, so a DOM file's `SourceFile.fileName` would have been
+`lib.dom.generated.d.ts` — a name that exists in no TypeScript distribution and would
+have been rendered by TS2728's "declared here". The six `*.generated` source names now
+map back to what tsc distributes (`dom.generated` → `lib.dom.d.ts`).
+
+**THE UNBUDGETED COST, and the number the owner asked for.** The item estimated ~1 MB.
+It is **3.14 MB**: `dom.generated.d.ts` alone is 2.35 MB, of which **66% is MDN doc
+comments** (webworker 786 KB, 60% comments; even es5 is 71% comments). Emitted the
+existing way — one `RealLibFiles.kt`, one `buildMap { }` lambda — that is a 3.82 MB
+generated source file, and `compileKotlinJvm` **fails with "Not enough memory to run
+compilation" after 7m34s** at the 5 GB `kotlin.daemon.jvmargs` pins for the Kotlin
+daemon. Raising the pin is not available: BUILD.1 already cut Gradle's own daemon to 1g
+to fit 5g on a 7.7 GB box with no swap, and 6g + 1g would invite the kernel OOM killer.
+
+**THE FIX WAS THE EMISSION SHAPE, NOT THE PAYLOAD — and it is a net WIN.** The chunk
+stream is now spread over `RealLibFilesPart0..15.kt` of ~250 KB each, every part a
+trivial `internal object` with one `append(sb: StringBuilder)`; `RealLibFiles`
+concatenates them once and cuts the result back into per-lib strings by recorded CHAR
+lengths (chars, not bytes: the chunker budgets mutf8 bytes but always splits at char
+boundaries, and `substring` is char-indexed). A COLD `compileKotlinJvm` then takes
+**2m25s** — against the ~6.5 min BUILD.1 records for the old single-file shape at a
+sixth of the payload. **So the single big generated file was itself the memory problem
+all along**, and 3.71 MB in 250 KB pieces is cheaper to compile than 566 KB in one.
+Two load-bearing details: the generator now WIPES its output dir first (the part count
+varies with the pin, and a stale `RealLibFilesPartN.kt` would still compile into the
+module), and `libNames`/`libLengths` are declared BEFORE `files` because an object's
+properties initialize in source order.
+
+**THE EVIDENCE IS A MEMBER PROBE.** The item's own recorded trap is real and was
+re-verified: "does `HTMLElement` resolve" passes just as happily when the whole DOM is
+missing, because an unknown name degrades to `any` and `any` is silent. `RealLibsDomTest`
+therefore probes three discriminating axes — an unknown member is REPORTED (TS2339), a
+real member's TYPE is honoured (TS2322), a method's ARITY is enforced (TS2554) — across
+DOM, webworker and scripthost. Run against unmodified HEAD first: **all 6 targets failed,
+all 7 controls passed.** After the change all 15 pass, including the negative control
+that an `es2015`-only lib set still knows nothing of the DOM (which is what proves the
+targets measure the shipped host set and not some unrelated widening of member checking).
+
+**ONE HONEST LIMITATION, pinned as a limitation rather than papered over.** The DOM
+TS2339 target uses `Screen`, not `HTMLElement`. The walker only reports a missing member
+once it can enumerate the receiver's COMPLETE member set, and it gives up on a lib
+interface with a heritage clause — `HTMLElement extends Element, ElementCSSInlineStyle,
+ElementContentEditable, GlobalEventHandlers, HTMLOrSVGElement`. That is the pre-existing
+B153 limit, FN-not-FP, and it is why the webworker probe (`FileReaderSync`, heritage-free)
+fires while the first HTMLElement draft did not. HTMLElement is pinned on the axis that
+DOES discriminate for it — the type of its own members — and the KDoc says why.
+
+**WHY THE DASHBOARD AND THE CORPUS DID NOT MOVE, stated so a future round does not
+re-derive it.** The bench profiles pin `"lib": ["es2020"]`, and the corpus keeps the
+embedded lib (the `useRealLibs` CONSTRUCTOR default is still false and the generator
+never sets it) — so neither requests a host lib and neither can see this change. What DID
+change is a project with no explicit `lib`: every `.full` variant references `dom`,
+`webworker.importscripts` and `scripthost`, so a target-default build now binds 2.35 MB
+more of lib per program, exactly as tsc does. A second-order consequence worth knowing:
+`lib.d.ts` → `dom` → `es2015`, so an **ES5** target-default program now gets the whole
+ES2015 layer, which is also what tsc does (pinned in `RealLibResolverTest`).
+
+**WHAT DID NOT WORK / cost time.**
+
+- The first attempt was the obvious one-line `filterNot` removal, and it burned a 7m34s
+  compile before failing on memory. Worth stating plainly: **the failure mode of "add a
+  megabyte of generated source" is a build OOM, not a slow build**, and the message is
+  the BUILD.1 one, so it reads as a regression in the pin rather than in the change.
+- A local `data class LibEntry` declared inside the task-configuration lambda made the
+  Gradle Kotlin-DSL script fail codegen ("Script compilation error", with an IR dump of
+  the enclosing lambda and no further detail). Two parallel lists instead. Do not declare
+  a local class inside a `tasks.registering { }` lambda.
+- The DOM reassembly pin was written asserting CRLF, mirroring the es5 pin, and failed:
+  **`dom.generated.d.ts` is LF-only while `es5.d.ts` is CRLF.** The pin now asserts LF for
+  DOM and keeps CRLF for es5, which is the sharper claim — a generator that normalised
+  either way would fail one of the two.
+- The HTMLElement TS2339 draft above.
+
+**(c)'s ZERO-RISK HALF LANDED WITH IT — the empty `unavailable` is now an INVARIANT, not
+an accident.** Two pins in `RealLibResolverTest`: every name in `libMap` and every
+`ScriptTarget` default resolves with both `unavailable` and `unknownNames` empty, and
+every distributed lib file name round-trips `distFileNameToKey` → `keyToDistFileName`
+unchanged. The second would have caught this round's own `lib.dom.generated.d.ts` bug;
+the first turns "a pin bump added a lib name we do not ship" from a silent `any` into a
+test failure. That is the half of (c) with no corpus exposure, so it did not need to wait
+for the design decision below.
+
+**NEXT — and (c) IS A DIFFERENT, SMALLER PROBLEM NOW than the item describes.** (LIB.1)(c)
+was scoped as "report a REQUESTED lib that is unavailable". After this round
+`Resolution.unavailable` is EMPTY for every resolution (pinned in
+`RealLibResolverTest`), so the condition (c) was written to report no longer arises for
+`dom`/`webworker`/`scripthost`: a non-empty `unavailable` can now only mean a pin bump
+introduced a lib file the generator did not pick up, which is a BUILD error, not a user
+diagnostic. What remains for the user is the OTHER field: `Resolution.unknownNames` — a
+`lib` entry that is not in `libMap` at all — has **zero consumers** anywhere in commonMain
+(verified by grep; the `unknownNames` hits in Checker.kt are an unrelated local
+parameter), so `"lib": ["dmo"]` is still silently ignored where tsc reports TS6046.
+**Its corpus risk is entirely a function of where it is emitted, and that is (c)'s real
+design decision:** the corpus runs the EMBEDDED lib and never reaches `RealLibResolver`
+at all, so a diagnostic raised from the real-lib resolution path moves ZERO baselines,
+while one raised from a raw `options.lib` × `libMap` check reaches all 259 `@lib:` cases
+and needs the full form-vs-meaning judgement under (PARITY.1). Round 730's warning still
+applies either way — key on a user-REQUESTED name, never the transitive closure, since a
+`.full` default lib pulls in host files nobody asked for. The round-688 reflog
+implementation is still the reference.
+
+---
+
+**Round 730 (2026-07-27) — (LIB.1) IS CLOSED. A real project build now uses the REAL
+TypeScript libs, and the flip is FREE: all 8 profiles report the SAME diagnostics CODE FOR
+CODE under both lib sets. The +5 the gating measurement first found were ONE lib-free
+defect — a `this` pseudo-parameter counted as a required argument, which made a
+`this`-carrying function type non-assignable to ITSELF. Corpus 12,842 → 12,857 / 0 / 3
+(+15 pins). Cost gate REBASELINED with a real, justified movement (`mapped.keyed` +3.81%).**
+
+**THE MEASUREMENT — four arms × 8 profiles, `--noEmit --listAll`, bucketed by code.** This
+is the table every future round compares against. Arms: **A** embedded libs + `types: []`
+(the dashboard), **B** real libs + `types: []` (what the dashboard BECOMES after the flip),
+**D** embedded + `types: ["node"]` (the env-legit floor), **C** real + `types: ["node"]`
+(a realistic project). Real-lib FP cost is `C − D`; dashboard cost is `B − A`.
+
+| profile | A before | B before | A/B after | D before | D after | C before | C after |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| compiler | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| tsc-cli | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| jsTyping | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| deprecatedCompat | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| typingsInstallerCore | 46 | 46 | 46 | 13 | 13 | 13 | 13 |
+| services | 46 | **47** | 46 | 13 | 13 | **14** | 13 |
+| server | 46 | **48** | 46 | 18 | 18 | **15** | 13 |
+| harness | 94 | **96** | 94 | 48 | 48 | **45** | 43 |
+
+Composition: the 46 is `TS2591 ×43 + TS2304 ×2 + TS2584 ×1` on the seven; the 13 is
+`TS2591 ×13`; harness carries `TS2591 ×66 + TS2304 ×10 + TS2503 ×6 + TS2584 ×6 + TS7006 ×3
++ TS2339 ×2 + TS2593 ×1`. **All env-legit** (offline: no real `@types/node` on the
+dashboard path, no `mocha`/`chai`). The only NON-env entries anywhere in the table were the
+bolded ones — every one a TS2322, and every one the single defect below. `harness` arm C
+retains one TS2322 (`vfsUtil.ts:1381`, `string | number | symbol` → `string | undefined`)
+which is present under arm **D** too — a node-types artifact, NOT a real-lib one, and off
+the dashboard path.
+
+**Two readings worth keeping.** (i) Arm D `server` 18 vs arm A 46 is not just the node
+globals: under the EMBEDDED lib, adding `@types/node` INTRODUCES five
+`Type 'Array<T>' is not assignable to type 'X[]'` FPs that the real lib does not have — the
+embedded `ArrayConstructor` is the cause, and real libs fix all five. (ii) The real-lib arm
+is the STABLE one: its TS2322 count is the same with and without node types, while the
+embedded arm swings 0 → 5. That is the mismatch this item existed to remove.
+
+**THE DEFECT — `this` IS NOT A CALL ARGUMENT, and it made a function type non-assignable to
+ITSELF.** `buildSignatureForFunctionLikeTypeNode` (Checker.kt, the FunctionType /
+ConstructorType ANNOTATION path) counted the `this` pseudo-parameter into
+`Signature.minArgumentCount`, while `getParameterSymbols` drops it from
+`Signature.parameters`. So `minArgumentCount` EXCEEDED `parameters.size`, and every arity
+gate — `signaturesRelatedTo`, the TS2554 emitters, the TS2322/TS2345 elaborations — read
+that as "target signature provides too few arguments". **The tell is the self-contradictory
+chain `Expected 3 or more, but got 3`**: whenever the two numbers are equal, suspect a
+`parameters`/`minArgumentCount` population mismatch, not an arity rule.
+
+The same builder ALSO zipped the surviving symbols POSITIONALLY against the DECLARATION's
+parameter list, so with a `this` param every parameter TYPE shifted by one — the real lib's
+`flatMap(cb: (this: This, value: T, index: number, array: T[]) => …)` printed as
+`(this: This, value: This, index: T, array: number)`. Round 460 fixed BOTH of these at the
+function-DECLARATION site and left the type-node site alone. The arity rule is now one
+`requiredParameterCount` helper used at **all 19** signature builders, of which **16** were
+counting `this`; the this-aware type resolution mirrors round 460's verbatim, and the
+legacy positional zip is preserved unchanged for `this`-free parameter lists (a
+binding-pattern param is dropped from `ps` too, and call-site arg alignment relies on it).
+
+**IT IS INVISIBLE UNDER THE EMBEDDED LIB**, which declares no `this` parameters at all.
+Under real libs it made every `Array`/`ReadonlyArray` member taking a `thisArg` mutually
+non-assignable — and through them `SortedArray<T>` vs `SortedReadonlyArray<T>`
+(server/utilitiesPublic.ts:22) and `T[][]` vs `any[][]` (services/organizeImports.ts:240).
+**One cause, both symptoms, all 5 sites** — and the second symptom was NOT predicted: the
+`organizeImports` chain blamed `concat(...)`, which is a red herring; the structural walk
+had already failed on the `thisArg` members and reported on the first member it could name.
+A message chain names where the walk STOPPED, not what broke.
+
+**THE FLIP.** `projectDefaults()` (CompilerOptions.kt) is the starting point for the two
+project entry points — `TsConfigLoader.load` and `ProjectCompiler.build`'s bare-source-file
+path. The CONSTRUCTOR default stays `false`, which is what keeps the corpus path (bare
+`CompilerOptions()` + `@directives`, ~13k baselines generated against the embedded lib)
+completely untouched; a tsconfig may still opt out with `"useRealLibs": false`, because
+`applyDirective` runs after. Verified end to end: with NO flag in the tsconfig,
+`Required<{a?: number}>` now correctly reports TS2741, and with `"useRealLibs": false` it
+goes silent again.
+
+**THE CONTROL DISCIPLINE THAT MATTERS HERE (the item's own recorded trap, and it is real).**
+"Does the name resolve?" proves NOTHING — an unknown name degrades to `any`, and `any` is
+silent, so `Required<…>` "resolved" under the embedded lib while meaning nothing. The
+decisive control is a MEMBER or REQUIREDNESS probe. Every pin added this round is of that
+kind, and the negative controls discriminate by MESSAGE, not by presence: the
+parameter-mismatch control errored BEFORE the fix too, just with the arity message instead
+of naming `b`.
+
+**COST GATE — rebaselined, and the movement is real, not noise.** `mapped.keyed` +3.81% is
+the direct price of resolving the real lib's mapped utility types
+(`Partial`/`Required`/`Pick`/`Readonly`/`Record`) — the embedded lib declares NONE of them,
+which is exactly why they used to degrade to `any`. `typeNode.bypassed` −7.74% is an
+improvement. `spine.nodes` (856,962), `globals.lookups` and `output.errors` are UNMOVED —
+lib files are not on the check spine, so the flip does not widen the checked program.
+Profile wall time stays inside the band (compiler 29.9–32.5 s across all arms).
+
+**WHAT DID NOT WORK / cost time.**
+
+- The first services/server/harness arm-D and arm-C runs were GARBAGE and looked like a
+  real regression (services D = 47 with a TS2688, TS2591 stuck at 43): those project dirs
+  had **no `node_modules/@types/node`**. Only `tsc-project-*` (the compiler profile) carried
+  the real @types/node v22.20.1 from an earlier online session — `bench-compile-tsc.sh`
+  `rm -rf`s it on any run without `--node-stub`. **An arm-D/C measurement on a fresh bench
+  project is meaningless until @types/node is copied in**; the tell is TS2591 not falling
+  from 43 to 13.
+- Guessing the cause from the printed types burned two probe rounds. The shifted display
+  (`value: This, index: T, array: number`) encodes the bug exactly, but I could not read it
+  backwards; the lib-free four-case probe (method / property / direct assignment / control)
+  answered it in one run. **Reach for a lib-free probe matrix before instrumenting** — it
+  was cheaper than the dump this time, precisely because the shape was small.
+- The first organizeImports repro attempt (`const group: T[][] = []` with a constrained `T`)
+  came back CLEAN and would have sent the round after a nonexistent second cause. It was the
+  same defect all along, reachable only through the real lib's `thisArg` members.
+
+**NEXT.** (LIB.1)'s remaining legs are (b) ship the DOM/webworker/scripthost sets and (c)
+report a user-REQUESTED lib that is unavailable — both still open, both now unblocked by the
+flip, and (c) needs a new `unavailableRequested` field (`Resolution.unavailable` is NOT the
+key: a `full` default lib transitively references DOM/host files, so an ordinary resolution
+has a non-empty `unavailable` and must stay silent). Corpus impact of (c) is ~30 baselines
+(259 cases carry `@lib:`, 23 request `dom`, 4 webworker) — judge each form-vs-meaning under
+(PARITY.1) and re-pin; the ONLY sanctioned disable is a `LogicalParityDivergence` entry.
+
+---
+
+**Round 729 (2026-07-27) — (LIB.1) IS DONE: the real-lib false-positive count is ZERO.
+Arm C 16 → 13, and all 13 remaining are the env-legit TS2591 — the burn-down that started
+at 35 (round 717) is finished. Corpus 12,822 → 12,842 / 0 / 3 (+20 pins). Cost gate PASSES
+UNCHANGED TO THE DIGIT at all three gates (largest counter −0.68%, an improvement, nothing
+rebaselined). Embedded-lib compiler profile still 46, checked independently of the gate.**
+
+**CAUSE 1 — parser.ts:3558. Round 728's TYPE-PARAMETER NAME COLLISION reading is
+DISPROVEN.** The instrumentation was one dump at the inference-time constraint check, and
+it showed the two arms of round 728's own matrix behaving IDENTICALLY:
+
+    tp=T#30[c=NodeX]  first=Isect[TP(T)#38[c=NodeX], {m:1}]  ok=false     (colliding name)
+    tp=E#34[c=NodeX]  first=Isect[TP(T)#44[c=NodeX], {m:1}]  ok=false     (renamed)
+
+Same verdict, same shape, no name involved. The renamed variant was only ACCIDENTALLY
+clean — its equally-un-inferred return type is swallowed further downstream — so it is
+pinned here as a TARGET, not as a control. `withInternedTpScope`'s by-name overlay, which
+round 728 nominated as the lead, is not implicated at all.
+
+The real cause is round 725's rule at a THIRD site. `tryInferSingleTypeParamFromArgs`
+answers "does the inferred candidate satisfy the callee's constraint" with a bare
+`checkTypeRelatedTo`, which cannot look through an intersection to its TypeParam
+constituent — and the relation never will, because it has no
+TypeParam-source-via-constraint rule on purpose (round 456 measured adding one as
+net-zero and reverted). **The symptom is not a TS2344**: on failure the inference bails
+WHOLESALE, so the callee's declared return type is handed back un-instantiated and the
+mismatch surfaces as a TS2322 whose two sides print nearly the same text. That is why two
+rounds read this site wrong.
+
+**CAUSE 2 — and it is the session's real find: `Exclude<T, U>` was an IDENTITY FUNCTION.**
+The distribution loop evaluated each constituent's branch under the UNSHIFTED
+alias-argument map, so `T` in a branch still meant the WHOLE union; every non-matching
+constituent therefore contributed the entire union back and nothing was ever filtered.
+Only a NAKED type parameter distributes, which is what bounds the rebinding — `[T] extends
+[U] ? …` is pinned by a control whose diagnostic would DISAPPEAR if it leaked.
+
+It closed utilities.ts:4258 **and utilities.ts:12082** — the `assertType<never>` site round
+728 failed to reproduce in two attempts and rated least tractable. `HasInferredType` is
+built with `Exclude`, so it was never a narrowing question at all. Two sites, one cause,
+and the histogram again said otherwise.
+
+**TWO COMPANION DEFECTS, both surfaced by the FIRST arm-C measurement of that change and
+neither optional:**
+
+- **Enum-member types do not discriminate in our relation AT ALL.** `const k:
+  SK.Identifier = SK.PrivateIdentifier` is silent. Sibling AST interfaces differing only
+  in `kind` therefore read as mutually assignable, and a working `Exclude` promptly
+  DROPPED them: `Exclude<PropertyName, PrivateIdentifier>` lost `Identifier` too, which
+  showed up as TWO BRAND-NEW false positives at factory/utilities.ts:1056/1061 —
+  arm C 15, composition changed, count unmoved. Closed by applying round 472's `.kind`
+  DOMAIN veto (`kindDomainKeysExceed`, Type-vs-Type) inside the conditional evaluator,
+  consulted only on the already-related path. **The underlying relation gap is NOT fixed
+  and is queued below** — it is much larger than this unit and has corpus blast radius.
+- **A USER type alias shadowing a lib one loses.** The two declarations merge onto ONE
+  symbol and the generic substitution path took `firstOrNull`, i.e. in practice the LIB's,
+  so a local `type Omit<T,K> = {[P in keyof T]: T[P]}` resolved through `Pick<T,
+  Exclude<keyof T, K>>`. `RealLibsUtilityModifiersTest` pinned the opposite and had been
+  passing only because the lib body, with Exclude inert, behaved like the user's identity
+  mapped type — a green test measuring nothing.
+
+**CAUSE 3 (the bonus, not on the FP list).** Round 728 noticed in passing that an EXPLICIT
+call type argument of round 725's shape still emits TS2344. It is the same rule's last
+missing arm: `checkCallTypeArgConstraints` had only the BARE-TypeParam branch, and
+`NonNullable<X>` is `X & {}`, so that branch never sees it. Landed with three controls.
+The rule now has all three sites — type reference, inference, explicit call type argument
+— sharing one helper.
+
+**WHAT DID NOT WORK, and why it is worth recording.**
+
+- Round 728's four-case rename matrix is a genuine trap: it is REAL (the outcomes differ)
+  and it names the wrong variable. A matrix tells you which inputs move the output; it
+  cannot tell you which of them is the cause and which is a downstream accident. Only the
+  dump separated them, and it took one compile — exactly the estimate, spent one round
+  late.
+- Three of the six controls written for cause 1 turned out VACUOUS: an intersection with
+  no type parameter, and a TypeParam constrained to an unrelated type, are both silent on
+  BOTH sides of the fix, because our checker does not report that shape at all. The
+  `git stash` A/B against unmodified HEAD is what exposed them, and it is worth its two
+  compiles for that alone. The control that survived discriminates by MESSAGE —
+  `NodeArrayX<T>` → `NodeArrayX<T & { m: 1; }>` — which is the only available proof that
+  inference BOUND the intersection rather than being waved through.
+- A `Checker.kt` stack-trace line number is mod 65536: frame `Checker.kt:32118` is really
+  line 97654. Reading the wrong line first cost a few minutes and looked like the trace
+  pointing at unrelated code.
+
+**MEASUREMENT.** Arm C measured after every cause, both sides, by code: 16 → 15 (cause 1)
+→ 15 with changed composition (cause 2 first cut, +2 new / −2 old) → 13 (cause 2
+complete) → 13 (cause 3, unchanged as expected). tsconfig restored and verified by
+`grep -c useRealLibs` = 0 after each; the embedded profile re-checked at 46 independently
+of the cost gate's `output.errors`.
+
+---
+
+**Round 728 (2026-07-27) — THREE causes cracked in one session, and the three that remain
+are now isolated in lib-free repros instead of described. Real-lib false positives 7 → 3
+(arm C 20 → 16, MEASURED both sides, TS2349 ×2 → 0, TS2769 ×1 → 0, TS2322 ×3 → ×2, no
+other code moved by even one). Corpus 12,804 → 12,822 / 0 / 3 (+18 pins). Cost gate
+PASSES — largest counter −0.68%, an improvement, nothing rebaselined. Embedded-lib
+compiler profile still 46.**
+
+**THE METHOD, unchanged and now five-for-five: triage by CAUSE first.** The seven sites
+did NOT split the way the histogram suggested. Three of them reproduced in a synthetic
+probe on the FIRST attempt — 8, 5 and 6 lines respectively, none needing the real libs —
+because the shapes were legible from the message plus the source line. The remaining
+four cost the rest of the session and produced three isolated repros and zero fixes.
+
+**CAUSE A — TS2349 ×2, one cause.** `resolutions.forEach(…)` on a
+`Set<Resolution> | Map<string, Resolution>` (resolutionCache.ts:1478) and
+`program.fileInfos.forEach(…)` on a union of two readonly arrays (builder.ts:2407). The
+B516 combining gate required every parameter to be REQUIRED
+(`minArgumentCount == parameters.size`), so every lib method with a trailing optional —
+`forEach(callbackfn, thisArg?)` above all — fell through to the "none of those signatures
+are compatible with each other" path. tsc's `combineSignaturesOfUnionMembers` demands
+nothing of the kind: longest parameter list, position-wise intersection (a position the
+shorter signature lacks contributes `unknown`), combined `minArgumentCount` = the MAX.
+Rest parameters stay excluded — the rest-tuple branch below owns them. **Only three
+corpus baselines pin that TS2349 message at all** (`betterErrorForUnionCall`,
+`unionTypeCallSignatures6`, `newOperator`), and all three survive on other gates: two
+differ in type parameters, one has arity 0 after the `this` drop.
+
+**CAUSE B — TS2322 ×1, and it is round 718's defect in the mirror.** A mapped type has
+FOUR modifiers and the materializer recorded three: `readonly` and `-readonly` since
+M1.10, `-?` since round 718, never the plain `?`. A homomorphic mapped member CARRIES ITS
+SOURCE DECLARATION and `isOptionalProperty` reads optionality off that declaration, so
+`Partial<T>`'s member of a REQUIRED source property stayed required — tsc's own
+`lookupFromPackageJson(): Partial<CreateSourceFileOptions>` (program.ts:1366) was rejected
+for omitting `languageVersion`. **The marker is a `SymbolFlags` BIT, not the id-keyed side
+channel its `-?` sibling uses**: the arm that must consult it is the hot one (every
+declared-REQUIRED property in the program reaches it), and a boxed-Int set lookup there
+would be paid on the whole program. The cost gate confirms the bit is free. Unlike `-?`,
+this one DOES reproduce on a hand-rolled mapped type.
+
+**CAUSE C — TS2769 ×1, found by a probe MATRIX rather than a single probe.** We have no
+fresh-literal machinery — `getTypeOfExpressionCore` types `"sort"` as `string`. Five
+variants of tsc's `new Intl.Collator(locale, { usage: "sort", … })` (core.ts:2100) said
+which ingredient mattered: single call signature CLEAN, two optional parameters CLEAN,
+single construct signature CLEAN — only the OVERLOADED call and construct forms reproduce,
+because overload resolution compares each candidate against the RAW argument type while
+the single-signature path contextually types the literal. The fix gives the existing
+`overloadingOnConstants2` rule (keep the literal against a LITERAL parameter) its
+per-property analogue, evaluated ONLY inside the already-failing branch — round 720/725's
+shape, and free for the same reason. Suppression-only and narrow: an excess property still
+rejects, a missing required target property still rejects, a property failing for any
+other reason still rejects, and at least one property must actually be rescued by its
+literal type.
+
+**THE THREE THAT REMAIN, each now with a minimal repro that did not exist before.**
+
+1. **parser.ts:3558, TS2322 — a TYPE-PARAMETER NAME COLLISION, not the `NonNullable`
+   shape round 726 predicted.** A four-case matrix isolates it exactly, with no lib types
+   and no `NonNullable` anywhere:
+
+       interface NodeX { kind: number }
+       interface NodeArrayX<T extends NodeX> extends ReadonlyArray<T> { pos: number }
+       declare function mkSame<T extends NodeX>(elements: readonly T[], pos: number): NodeArrayX<T>
+       function pG<T extends NodeX>(): NodeArrayX<T & { m: 1 }> {
+           const list: (T & { m: 1 })[] = []
+           return mkSame(list, 0)          // TS2322: NodeArrayX<T> vs NodeArrayX<T & { m: 1; }>
+       }
+
+   Rename the CALLEE's type parameter to `E`, or the CALLER's to `U`, and it is CLEAN.
+   Keep the collision but pass a CONCRETE element (`Conc[]`) — CLEAN. Keep the collision
+   and pass a concrete INTERSECTION (`(Conc & { m: 1 })[]`) — CLEAN. So the trigger is
+   precisely: **the argument's element type is an intersection whose TypeParam constituent
+   shares its NAME with the callee's type parameter.** `NonNullable<T>` is incidental (it
+   is just `T & {}`), and the constraint-checking family round 725 fixed is not involved.
+   Warming the callee's signature from a non-generic context first does NOT change the
+   outcome, so it is not a poisoned `symbolTypes` entry. `withInternedTpScope` and
+   `getTypeOfFunctionSymbol`'s `fnScope` both overlay by NAME
+   (`scope[tp.name.text] = typeParam`), which is where to start looking; `isArrayOfTypeParam`
+   compares the element by IDENTITY (`args0[0] === tp`), so a by-name capture anywhere in
+   that chain silently yields "no candidate" and the un-inferred return. Not instrumented —
+   that is the next round's first move, and it should take one compile.
+2. **utilities.ts:4258, TS2322 — `Exclude<…>` is never evaluated.** `getTypeFromTypeNode`
+   returns the raw union with `Identifier` still in it; the only place that DOES evaluate
+   `Exclude` is `resolveAssertTargetTypeNode`, which is assert-target-only. A repro exists
+   (below) but note it needed the INTERSECTION member to reproduce — the flat
+   `Ident | PropAcc` version is CLEAN:
+
+       interface Ident { kind: 1; escapedText: string }
+       interface PropAcc { kind: 2; expression: Ident | PropAcc }
+       interface ElemAcc { kind: 3; expression: Ident | PropAcc | ElemAcc }
+       interface Decl { d: 1 }
+       type LitElemAcc = ElemAcc & Decl & { readonly arg: string } & { readonly expression: any }
+       type Names = Ident | PropAcc | LitElemAcc
+       type Access = PropAcc | ElemAcc
+       declare const lhs: Access
+       function f() {
+           let nextToLast = lhs
+           while (nextToLast.expression.kind !== 1) {
+               nextToLast = nextToLast.expression as Exclude<Names, Ident>   // TS2322
+           }
+       }
+
+   **The gating question before writing this one:** `isLibOnlyTypeName("Exclude")` returns
+   TRUE when the name resolves to nothing at all, and the EMBEDDED lib declares no utility
+   types — so a materializer gated that way would start firing on corpus tests that
+   currently report TS2304 for an undeclared `Exclude`. Gate on the alias actually
+   resolving to a conditional-typed `TypeAliasDeclaration` instead, or evaluate the
+   conditional properly.
+3. **utilities.ts:12082, TS2345 `assertType<never>(node)` — NOT reproduced, twice.**
+   Neither a plain 2-member discriminated union with an exhaustive switch, nor the same
+   union arriving through an `asserts v is T` call (tsc's `Debug.type<HasInferredType>(node)`),
+   emits anything. Note that the FIRST `assertType<never>` in the same file (line 12050)
+   does NOT false-positive while this one does, so the discriminator is something about
+   `HasInferredType` specifically — 12 members, several sharing a `kind` domain — not about
+   exhaustive-switch narrowing in general. Least tractable of the three; leave it last.
+
+**A DEFECT FOUND IN PASSING, not on the list and not fixed.** An EXPLICIT call type
+argument of the round-725 shape still emits TS2344:
+`createNodeArrayX<NonNullable<U>>(list, 0)` where `U extends NodeX | undefined` reports
+"Type 'NonNullable<U>' does not satisfy the constraint 'NodeX'". Round 725's
+`intersectionSatisfiesViaTypeParamConstraint` evidently is not consulted at the
+CALL-type-argument site, only at the type-REFERENCE site. Worth a look when the parser.ts
+family is next touched — it may be why that family is fragile.
+
+**PROBE DISCIPLINE — what the controls bought this time.** Cause A's discriminating control
+runs in the direction round 727 recommended: with the members combined, `((x: number, …) |
+((x: boolean, …)` intersects to `never`, so `g("nope")` must report **TS2345, a diagnostic
+that did not exist on HEAD** (it reported TS2349 there). A fix that makes a new diagnostic
+APPEAR is far easier to prove than one that removes a class of them. Causes B and C are
+strictly suppression-only, so any control asserting a diagnostic that still fires WITH the
+fix necessarily fired without it. Every target was verified failing on unmodified HEAD via
+the CLI before the fix was written.
+
+**MEASUREMENT.** Arm C's 20-line HEAD listing was reused from round 727's own run rather
+than re-measured (same commit, same binary, nothing between them), and re-run after the
+three fixes: 16 = 13 env TS2591 + 3 real, with the diff a clean four-line removal and
+nothing added. tsconfig restored and verified by `grep -c useRealLibs` = 0; the embedded
+profile re-checked at 46 independently of the cost gate's `output.errors`.
+
 **Round 727 (2026-07-27) — TWO families cracked, both by triaging all eight remaining sites
 by CAUSE before touching anything. Real-lib false positives 14 → 7 (arm C 27 → 23 → 20,
 MEASURED at every step, TS2339 ×4 → 0 and TS2345 ×4 → ×1, no other code moved by even one).
