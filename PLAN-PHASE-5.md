@@ -1712,7 +1712,16 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Workaround until then, recorded in CLAUDE.md: pass
   `-Dkotlin.daemon.jvmargs=-Xmx4g` on the command line.
 
-- [ ] **(LIB.1) Ship the DOM/webworker libs and stop real builds silently running
+- [ ] **(LIB.1) — (a) DONE round 730, (b) DONE round 731. ONLY (c)'s user-facing half
+  is open, and it SHRANK to a design question (reconciled round 754: a top-down scan
+  must NOT re-do the flip or the lib shipping).** What genuinely remains: a
+  `Resolution.unknownNames` consumer (a `lib` entry not in `libMap` at all; tsc reports
+  TS6046) — **zero consumers today**, and round 731 measured its corpus impact as ZERO
+  *provided* it is raised from the real-lib resolution path (the corpus runs the
+  embedded lib and never consults `RealLibResolver`); raised instead from a raw
+  `options.lib` × `libMap` check it reaches all 259 `@lib:` cases. `Resolution.unavailable`
+  is now empty for every resolution (pinned), so the case (c) was written for is gone.
+  Original title: Ship the DOM/webworker libs and stop real builds silently running
   UNCHECKED — owner-approved 2026-07-26 ("yes, please fix it"), PROMOTED out of the
   post-v1 backlog because it is a silent wrong answer, not a missing feature.**
   **(a) IS DONE (round 730): the flip LANDED and it is FREE.** `projectDefaults()`
@@ -2117,7 +2126,10 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   `CallSections` + `--callSections` (opt-in, behaviour-free when off) and
   `CallSectionProbeTest`. Follow-on: **(CALL.2)** below.
 
-- [ ] **(CALL.2) Attribute INSIDE `checkArgumentsAgainstSignature` — 1,357 ms
+- [x] **(CALL.2) DONE round 735 — the attribution landed with
+  `docs/perf/argument-check-attribution.md` (checkbox reconciled round 754; the
+  ">>> DONE round 735 <<<" verdict below had been written without ticking the box).
+  Attribute INSIDE `checkArgumentsAgainstSignature` — 1,357 ms
   over 22,145 calls = 61 us each, now the largest single measured cost in this
   compiler (round 734).** It is a **1,534-line function** — larger than the one
   (CALL.1) attributed — and it is 53% of `checkSingleCallExpressionTypes`,
@@ -2190,7 +2202,9 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   soundness argument and the two priced-and-rejected candidates:
   **`docs/perf/narrow-walk-attribution.md`**. Follow-on: **(CALL.4)** below.
 
-- [ ] **(CALL.4) `applyConditionNarrowing`'s 33,307 genuinely-narrowing calls
+- [ ] **GENUINELY OPEN (reconciled round 754 — nothing has been attempted since it was
+  queued at round 736; what remains is the whole item: split the 21,708 ns).**
+  **(CALL.4) `applyConditionNarrowing`'s 33,307 genuinely-narrowing calls
   at 21,708 ns each — the largest unattributed per-call number this arc has
   produced (round 736).** After (CALL.3) the function is 333,031 calls / ~1,016
   ms, of which 93% return their input unchanged for **468 ms raw (~410 ms net,
@@ -2324,7 +2338,11 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   1.87x-2.72x because xtsc is one cold run against tsc's median of three. Full derivation:
   `docs/ARCHITECTURE-RETHINK.md` § 0.2.
 
-- [ ] **(ENGINE.1) Price the dedicated-walker layer on two more sites — IN PROGRESS,
+- [ ] **GENUINELY OPEN (reconciled round 754). What remains is exactly sites 2 and 3 —
+  `checkReturnAssignability` and `checkAssignmentExpression` — each needing a real
+  intra-function partition (rounds 735/738's method), plus scoring E1-E4 in
+  `docs/perf/engine-rule-price.md` § 4. Site 1 is measured and written up.**
+  **(ENGINE.1) Price the dedicated-walker layer on two more sites — IN PROGRESS,
   round 739 did the part that needed no measurement and it already overturns the 14x.**
   **The 14x does not survive contact with its OWN site.** 265/19 compares the firewall
   walkers against the final relation call ALONE, and that call is 2.2% of the function
