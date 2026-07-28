@@ -109984,6 +109984,27 @@ interface DataView {
         return tk.any { it !in targetKeys }
     }
 
+    /**
+     * (REL.1)(c) step 5b, round 752: TYPE-FIRST, annotation walk kept as the fallback — the
+     * same pair as [unionDiscriminantKeysOfType] ([enumSwitchKeysFromType] for a bare-enum
+     * domain, [enumDiscriminantKeysOfType] for a member), reached from the SAME property
+     * symbol as the annotation.
+     *
+     * MEASURED over the compiler profile: 234 sightings, 207 answering, **207 AGREE, 0
+     * mismatched, 0 where the type path lost a key the AST path had** — so the annotation
+     * walk is already dead here too (a `TYPEBLIND` sighting is what a still-load-bearing
+     * fallback would produce, and there were none).
+     *
+     * MEASURED AND NOT FIXED: the flip is currently UNOBSERVABLE. Three shapes built to
+     * expose it — a negative guard over a wide-domain subject, a positive guard over a
+     * three-member union, and a conditional-type exclusion, each with a parenthesized `kind`
+     * the AST reader cannot read — are silent on a build with the flip and on one without.
+     * The reason is (REL.1)(a)/(b): this reader is a VETO over the structural relation, and
+     * the relation now decides enum members by itself, so its answer no longer changes an
+     * outcome on the shapes it was written for. Its only consumer is [kindDomainKeysExceed],
+     * which (5c) intends to DELETE — so treat this flip as keeping the key space uniform
+     * until that deletion lands, not as a fix.
+     */
     private fun kindDomainKeysOfType(x: Type): Set<String>? {
         kindDomainKeysOfTypeCache[x.id]?.let { return it.ifEmpty { null } }
         val members = if (x is Type.Union) x.types else listOf(x)
@@ -109991,7 +110012,12 @@ interface DataView {
         var failed = false
         for (m in members) {
             val ann = discriminantPropAnnotation(m, "kind")
-            val k = ann?.let { enumMemberKeysOfTypeNode(it) ?: enumSwitchKeysFromTypeNode(it) }
+            val fromType = discriminantPropSymbol(m, "kind", annotatedOnly = true)?.let { sym ->
+                val pt = getTypeOfSymbol(sym)
+                enumSwitchKeysFromType(pt) ?: enumDiscriminantKeysOfType(pt)
+            }
+            val k = fromType
+                ?: ann?.let { enumMemberKeysOfTypeNode(it) ?: enumSwitchKeysFromTypeNode(it) }
             if (k == null) { failed = true; break }
             keys.addAll(k)
         }
@@ -110102,17 +110128,28 @@ interface DataView {
         return mk.none { it in tk }
     }
 
-    /** The `.kind` discriminant keys of [t] (union → all members', each required
-     *  readable), via the declared annotations. Null when any part is unreadable.
-     *  Memoized by Type.id — consulted per union member per predicate query. */
+    /**
+     * The `.kind` discriminant keys of [t] (union → all members', each required readable).
+     * Null when any part is unreadable. Memoized by Type.id — consulted per union member per
+     * predicate query.
+     *
+     * (REL.1)(c) step 5b, round 752: read TYPE-FIRST through [discriminantKeysOfMember],
+     * whose fallback IS this site's former composition, so the substitution can only ANSWER
+     * where this reader was blind. MEASURED over the compiler profile: 986 sightings, 738
+     * answering, **738 AGREE, 0 mismatched, and the type half ALONE reproduced every one of
+     * those 738** — a per-sighting ablation, so the annotation walk is dead here rather than
+     * merely quiet. Unlike [kindDomainKeysOfType] this reader's consumer
+     * ([typeGuardMemberDisjoint]) is NOT slated for deletion, which is what puts this flip on
+     * (5c)'s critical path. Also unobservable today for the same reason — see
+     * [kindDomainKeysOfType]'s note.
+     */
     private fun discriminantKindKeys(t: Type): Set<String>? {
         discriminantKindKeysCache[t.id]?.let { return it.ifEmpty { null } }
         val members = if (t is Type.Union) t.types else listOf(t)
         val keys = mutableSetOf<String>()
         var failed = false
         for (m in members) {
-            val ann = discriminantPropAnnotation(m, "kind")
-            val k = ann?.let { enumMemberKeysOfTypeNode(it) }
+            val k = discriminantKeysOfMember(m, "kind")
             if (k == null) { failed = true; break }
             keys.addAll(k)
         }
