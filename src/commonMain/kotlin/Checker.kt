@@ -144271,12 +144271,62 @@ interface DataView {
         return checkTypeRelatedToCore(source, target, relation)
     }
 
+    /**
+     * Round 754: the DEFAULTED INSTANTIATION of an open generic that reaches the
+     * relation raw, or null when [type] is not one.
+     *
+     * A reference that omits the type arguments of a generic whose every parameter
+     * carries a default — `EvaluatorResult` for `EvaluatorResult<T extends string |
+     * number | undefined = string | number | undefined>` — resolves to the RAW
+     * `Type.Interface`, whose members still carry the un-substituted `T`. Nothing
+     * relates a `Type.Reference` to that (the trap round 726 hit from the other
+     * side), so `EvaluatorResult<number>` was not assignable to a bare
+     * `EvaluatorResult` annotation and TS2322 fired on correct code — 16 of them in
+     * tsc's own `utilities.ts`.
+     *
+     * The normalisation is done HERE and not in `getTypeFromTypeReference` (where tsc
+     * does it, as `fillMissingTypeArguments`) for one measured reason: filling at
+     * resolution makes a bare `TableClass` and an explicit `TableClass<any>` the SAME
+     * interned instance, and `aliasDisplayMap` excludes `Type.Reference` on purpose —
+     * so `type Table = TableClass` stopped displaying as `Table`
+     * (`typeVariableConstraintedToAliasNotAssignableToUnion`, 8 baseline lines, error
+     * set otherwise unchanged). At the relation boundary the answer changes and no
+     * display does.
+     *
+     * A parameter WITHOUT a resolved default returns null, which keeps the old
+     * behaviour: omitting a REQUIRED type argument is TS2314, reported on its own.
+     */
+    private fun defaultedInstantiationOfOpenGeneric(type: Type): Type? {
+        if (type !is Type.Interface) return null // Type.Reference is NOT an Interface
+        val tps = type.typeParameters ?: return null
+        if (tps.isEmpty()) return null
+        val args = ArrayList<Type>(tps.size)
+        for (tp in tps) {
+            val d = tp.default ?: return null
+            if (d === errorType) return null
+            args.add(d)
+        }
+        return getOrInternReference(type, args)
+    }
+
     private fun checkTypeRelatedToCore(
         source: Type,
         target: Type,
         relation: Relation,
     ): Boolean {
         if (source === target) return true
+        // Round 754: normalise an open all-defaulted generic to its defaulted
+        // instantiation before anything else looks at it — see
+        // [defaultedInstantiationOfOpenGeneric]. The recursion terminates because a
+        // `Type.Reference` is not a `Type.Interface`, so the normalisation never
+        // fires twice on the same side.
+        run {
+            val ns = defaultedInstantiationOfOpenGeneric(source)
+            val nt = defaultedInstantiationOfOpenGeneric(target)
+            if (ns != null || nt != null) {
+                return checkTypeRelatedToCore(ns ?: source, nt ?: target, relation)
+            }
+        }
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
         // (REL.1)(b): two enum-member types relate ONLY when they are the same
