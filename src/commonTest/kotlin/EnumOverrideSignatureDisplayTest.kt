@@ -79,7 +79,7 @@ class EnumOverrideSignatureDisplayTest {
     private fun overrideChain(source: String): List<String> {
         val diagnostics = diagnose(enums + source).filter { it.code == 2416 }
         assert(diagnostics.size == 1)
-        return diagnostics[0].messageChain.orEmpty()
+        return diagnostics[0].messageChain
     }
 
     // --- the RULE: shapes B463's piece B could never see ---------------------
