@@ -89852,7 +89852,7 @@ interface DataView {
                 if (tn is Identifier) {
                     resolveEnumSymbolForDiscriminant(tn.text, node)?.let { esym ->
                         val vals = enumValues[esym.id] ?: return null
-                        return vals.keys.map { "${esym.id}#$it" }.toSet()
+                        return vals.keys.map { enumDiscriminantKey(esym, it) }.toSet()
                     }
                     // INV.3(c)(ii): the merged-globals fallback is keyed by the
                     // NODE'S OWNING FILE — a foreign annotation (types.ts's
@@ -89897,7 +89897,7 @@ interface DataView {
                     // builders resolved the global merged one (the key-space split).
                     val sym = canonicalEnumSymbol(raw)
                     val vals = enumValues[sym.id] ?: return null
-                    vals.keys.forEach { keys.add("${sym.id}#$it") }
+                    vals.keys.forEach { keys.add(enumDiscriminantKey(sym, it)) }
                 }
             }
         }
@@ -102790,7 +102790,7 @@ interface DataView {
         val owner = memberSym.parent ?: return anyType
         if (!owner.flags.hasAny(SymbolFlags.Enum)) return anyType
         val enumSym = canonicalEnumSymbol(owner)
-        return enumMemberTypes.getOrPut("${enumSym.id}#${memberSym.name}") {
+        return enumMemberTypes.getOrPut(enumDiscriminantKey(owner, memberSym.name)) {
             val memberType = Type.Object(TypeFlags.Object or TypeFlags.EnumLiteral)
             // Prefer the canonical enum's own member symbol so the type's identity
             // (and its display name) does not depend on which file touched it first.
@@ -108247,7 +108247,7 @@ interface DataView {
                     // member's value, and tsc's case narrowing removes every member
                     // with that value. A name is covered directly (its key is a case)
                     // or via a covered member with an EQUAL value.
-                    val coveredNames = values.keys.filter { "${enumSym.id}#$it" in enumKeys }.toSet()
+                    val coveredNames = values.keys.filter { enumDiscriminantKey(enumSym, it) in enumKeys }.toSet()
                     val coveredValues = coveredNames.mapNotNull { values[it] }.toSet()
                     if (values.isNotEmpty() && values.all { (nm, v) ->
                             nm in coveredNames || v in coveredValues
@@ -110690,6 +110690,38 @@ interface DataView {
         if (shared) global else sym
     }
 
+    /**
+     * (REL.1)(c) step 5a: THE single mint of the `"<enumSymbolId>#<member>"` key space.
+     *
+     * Six sites used to build this string by hand — [enumMemberKeyOfExpr],
+     * [enumMemberKeysOfTypeNode], [enumSwitchKeysFromTypeNode], [enumSwitchKeysFromType],
+     * [getDeclaredTypeOfEnumMember]'s `enumMemberTypes` interning, and the exhaustive-switch
+     * `neverType` gate's coverage probe. Each canonicalized on its own (three via
+     * [resolveEnumSymbolForDiscriminant], which already returns [canonicalEnumSymbol]'s
+     * answer, three by calling it directly), so the spaces AGREED — but only incidentally,
+     * and nothing made a seventh producer inherit that.
+     *
+     * Routing every mint through here makes the invariant STRUCTURAL: a key cannot be built
+     * from a non-canonical enum symbol, because there is nowhere else to build one. That is
+     * what step (5b) needs — it replaces the AST readers with a producer that keys a
+     * resolved `EnumLiteral` property TYPE, reaching the enum through the member symbol's
+     * `parent` rather than through a name lookup in the annotation's file. That is a
+     * different resolution path, so it can hand the same enum over as a different `Symbol`
+     * instance; the key it must agree with, [getDeclaredTypeOfEnumMember]'s interning key,
+     * is minted here too.
+     *
+     * MEASURED, round 750, by a temporary mint-equality probe over the whole compiler
+     * profile: **153 distinct incoming enum `Symbol` instances, 153 already canonical, 0
+     * needing redirection** — so the unification changed no key, which is why the profile
+     * stayed byte-identical. That zero is the reason (5b) may compare the two spaces.
+     *
+     * [canonicalEnumSymbol] is memoized per symbol id, so an already-canonical argument costs
+     * one cached probe. Pass the RAW symbol, never a pre-canonicalized one: one canonicalizing
+     * hop is guaranteed correct, whereas two rely on idempotence.
+     */
+    private fun enumDiscriminantKey(enumSym: Symbol, member: String): String =
+        "${canonicalEnumSymbol(enumSym).id}#$member"
+
     /** FLOW-ONLY resolution of a barrel-imported enum alias to its target enum Symbol,
      *  following ESM `.js` specifiers + `export *` barrels. The enum-flavored sibling of
      *  [resolveImportedNamespaceSymbol]; memoized in [importedEnumSymCache], never touches the
@@ -110759,7 +110791,7 @@ interface DataView {
         if (member.isEmpty()) return null
         val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
         if (enumValues[sym.id]?.containsKey(member) != true) return null
-        return "${sym.id}#$member"
+        return enumDiscriminantKey(sym, member)
     }
 
     /** An enum-member TYPE annotation `Enum.Member`, or a `UnionType` of such, → the set of
@@ -110781,7 +110813,7 @@ interface DataView {
                     val sym = resolveEnumSymbolForDiscriminant(enumIdent, node)
                     if (sym != null) {
                         if (enumValues[sym.id]?.containsKey(member) != true) return null
-                        return setOf("${sym.id}#$member")
+                        return setOf(enumDiscriminantKey(sym, member))
                     }
                     // Round 477: `ns.AliasName` — a namespace-import-qualified type alias
                     // (`eventName: protocol.CloseFileWatcherEventName` on tsc's server

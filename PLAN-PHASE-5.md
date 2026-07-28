@@ -20,6 +20,87 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 750 (2026-07-28) — (REL.1)(c) STEP 5a LANDED: THE `"<enumSymId>#<member>"` KEY SPACE
+HAS ONE MINT. THE RISK 5a EXISTED TO REMOVE WAS ALREADY ABSENT — MEASURED, NOT ARGUED, AND
+THAT ZERO IS THE ROUND'S DELIVERABLE.** Compiler profile `--listAll` **BYTE-IDENTICAL at 46**,
+diffed SORTED LINE-BY-LINE against a build of pristine `de24c764`, composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). 740 local tests over 123 classes + 4,669
+generated corpus tests over the `C/D/E/N/S/T/U` classes, **0 failures**. +6 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE MINT-EQUALITY PROBE, RUN FIRST AS INSTRUCTED, AND IT IS THE MEASUREMENT THE STEP WAS
+FOR.** A temporary probe inside the single mint printed one deduped line per incoming enum
+`Symbol` instance over the whole compiler profile: **153 distinct instances, 153 already
+canonical, 0 needing redirection.** So the flip changed no key, which is why the profile is
+byte-identical rather than merely the same count — and it is the evidence (5b) needs before it
+may compare the AST key space against the type key space.
+
+**ROUND 749'S STATED RISK PREMISE IS FALSE, AND A FUTURE AGENT SHOULD NOT RE-DERIVE IT.**
+The queue said the AST readers "key on `resolveEnumSymbolForDiscriminant(...).id` while the
+round-741 type interning keys on `canonicalEnumSymbol(...).id`, [and] the two spaces are
+COMPARED against each other". They are the SAME space: `resolveEnumSymbolForDiscriminant`
+(:110652) returns `canonicalEnumSymbol(target)` at BOTH of its return sites — the direct enum
+branch and the barrel-alias branch. Reconciliation was never owed; the flip as literally
+specified would have been a no-op wrapping an already-canonical symbol.
+
+**A PRODUCER CENSUS FOUND TWO SITES ROUND 749 DID NOT NAME, AND THEY ARE THE REASON THE ROUND
+IS NOT VACUOUS.** The key space had **six** producers, not two: `enumMemberKeyOfExpr` (:110762)
+and `enumMemberKeysOfTypeNode` (:110784), which round 749 named; plus
+**`enumSwitchKeysFromTypeNode` (:89855)** — the bare-enum-annotation branch, expanding an enum
+name to all its members — and **`enumSwitchKeysFromType` (:89900)**, the RESOLVED-TYPE producer;
+plus `getDeclaredTypeOfEnumMember`'s `enumMemberTypes` interning (:102793); plus the
+exhaustive-switch `neverType` gate's coverage probe (:108250). Each canonicalized on its own —
+three through `resolveEnumSymbolForDiscriminant`, three by calling `canonicalEnumSymbol`
+directly — so the spaces agreed, but **incidentally, at six sites, with nothing making a
+seventh producer inherit it.** That is exactly the shape of omission that makes 5b unsafe:
+5b adds the seventh.
+
+**SO THE LANDED CHANGE IS THE INVARIANT MADE STRUCTURAL, NOT A BEHAVIOUR FLIP.** One helper,
+`enumDiscriminantKey(enumSym, member)`, is now the only place the string is built; all six
+sites call it. A key can no longer be minted from a non-canonical enum symbol because there is
+nowhere else to mint one. The interning site passes the RAW `owner` rather than its
+pre-canonicalized local: one canonicalizing hop is correct by construction, two rely on
+`canonicalEnumSymbol` being idempotent, which nothing pins.
+
+**THE PINS PASS ON BOTH BUILDS, AND THAT IS THE CORRECT RESULT HERE — STATED SO IT IS NOT READ
+AS A WEAK ROUND.** 5a has no behaviour delta by construction, so a pin that FAILED on pristine
+`de24c764` would mean the step had changed an answer it must not change. All six were run
+against a build of unmodified `de24c764` (Checker.kt stashed, the new test class kept) and all
+six pass there. They are regression guards for 5b, and each covers a different PAIR of
+producers: the two AST producers against each other across a file boundary (both the "narrows"
+and the "removes the other constituent" legs — a broken key space is silent until a case body
+FPs TS2339); the resolved-TYPE producer against the case expression, via the exhaustive-switch
+`neverType` gate; and the type-INTERNING producer against the annotation, via enum-member type
+identity. **The cross-FILE shape is load-bearing in every one** — within a single file every
+path tends to find the same `Symbol` instance, so a single-file pin cannot tell a canonical key
+space from an accidental one.
+
+**THE SHARPEST PIN IS THE NEGATIVE CONTROL, and it guards the simplification a future agent is
+most likely to reach for.** Canonicalization is DECLARATION-IDENTITY based
+(`d is EnumDeclaration && global.declarations.any { it === d }`), never name-based. Two
+genuinely distinct same-named enums must therefore keep distinct keys — pinned by a
+value-SHIFTED twin (`Other.Kind.Alpha = 5` vs the imported `Kind.Alpha = 0`), which must stay
+TS2322. Were canonicalization ever "fixed" to merge by name, `getDeclaredTypeOfEnumMember`
+would intern both to one `Type` instance and that pin would go silent.
+
+**WHAT DID NOT WORK / findings not fixed.** (i) The probe's first run **crashed with an NPE on
+its own field**: a `private val` declared next to the mint helper is initialized AFTER the
+`init` block that runs the checker's passes, so it is null throughout them. Moving it up beside
+`canonicalEnumSymCache` fixed it — see the new CLAUDE.md entry; the same trap applies to any
+new Checker field a pass consults. (ii) `canonicalEnumSymbol` MEMOIZES per `sym.id` a decision
+that reads MUTABLE state (`globals[sym.name]`, and `enumValues[global.id] == null`), so a first
+touch before the enum's values are computed freezes the non-canonical answer for that instance.
+Nothing on the profile or in the pins hits it (0/153 redirections at all), so it is recorded,
+not patched — but it is a real ordering hazard and 5b's new producer touches enums from a
+different phase. (iii) The memory ritual is per-INVOCATION, not per-session, and it cost one
+build cycle again: a `compileKotlinJvm` launched at 1,020 MB available died with
+`OutOfMemoryError: GC overhead limit exceeded`; the same command after `./gradlew --stop` plus a
+graceful `kill` of the idle Kotlin daemon (5.2 GB available) took ~2m40s. The profile CLI runs
+are what let the daemons re-grow. (iv) The `xtscPrintJvmRuntimeClasspath` task does not exist in
+`build.gradle.kts` — it is registered by an init script the bench harness generates at
+`build/bench/print-classpath.init.gradle.kts`, so the classpath resolution needs
+`-I build/bench/print-classpath.init.gradle.kts`.
+
 **Round 749 (2026-07-28) — (REL.1)(c) STEP 4b LANDED: `checkEnumAsgInFunctionScopes`
 (B583) RETIRES WITH THE `import("<base>")` DISPLAY RULE. FIFTH ENUM PASS REPLACED IN THIS
 ARC, AND THE LAST ONE BLOCKING (c)'s WALKER SWEEP.** Compiler profile `--listAll`
@@ -1641,20 +1722,45 @@ backlog-horizon decision, not queue debt.)
       against each other inside `filterUnionByEnumDiscriminant` (member keys vs case keys), and
       a mismatch shows up as narrowing that silently stops matching. The decomposition removes
       that risk by reconciling the spaces BEFORE flipping any reader:
-      - **(5a) Normalize the key space, change no reader.** Mint
-        `"${canonicalEnumSymbol(sym).id}#$member"` in `enumMemberKeyOfExpr` and
-        `enumMemberKeysOfTypeNode` (the `enumValues[sym.id]` probes stay on the RESOLVED id —
-        only the emitted key changes). **This is safe BY CONSTRUCTION and that is the round-749
-        finding**: `canonicalEnumSymbol` (:110683) only redirects to `globals[name]` when the two
-        symbols SHARE a declaration NODE (`d is EnumDeclaration && global.declarations.any { it === d }`),
-        so it is declaration-identity-based, never name-based — it can never merge two genuinely
-        distinct same-named enums, it can only unify instances of ONE enum. Equal-before therefore
-        implies equal-after, and the only new matches are the "same enum, different `Symbol`
-        instance" family the helper exists for. Gate: corpus + profile; a zero diff is the
-        expected result, and any delta IS the family 5b needs.
-      - **(5b) Flip the READ, one call site per commit, type-first with the AST reader as
-        fallback.** Read `getPropertyOfType(apparent, name)`'s TYPE and key an `EnumLiteral` as
-        `"${canonicalEnumSymbol(sym.parent).id}#${sym.name}"`, distributing over a union. **The
+      - **(5a) Normalize the key space, change no reader. DONE round 750 — and the risk it
+        existed to remove was ALREADY ABSENT.** Profile `--listAll` byte-identical at 46 (diffed
+        sorted line-by-line against pristine `de24c764`), 740 local + 4,669 generated corpus
+        tests / 0 failures, +6 pins. **Round 749's premise was FALSE and must not be
+        re-derived:** `resolveEnumSymbolForDiscriminant` (:110652) already returns
+        `canonicalEnumSymbol(target)` at BOTH return sites, so the AST readers and the round-741
+        type interning were the SAME space; the flip as specified would have wrapped an
+        already-canonical symbol. **A census found the key space had SIX producers, two of them
+        unnamed by round 749** — `enumSwitchKeysFromTypeNode` (:89855, the bare-enum-name
+        expansion) and `enumSwitchKeysFromType` (:89900, the RESOLVED-TYPE producer) — alongside
+        `enumMemberKeyOfExpr`, `enumMemberKeysOfTypeNode`, `getDeclaredTypeOfEnumMember`'s
+        `enumMemberTypes` interning and the exhaustive-switch `neverType` coverage probe
+        (:108250). All six canonicalized independently, so they AGREED incidentally with nothing
+        making a seventh inherit it. What landed is therefore the invariant made STRUCTURAL:
+        `enumDiscriminantKey(enumSym, member)` is the only mint, all six sites call it, and the
+        interning site passes the RAW `owner` (one canonicalizing hop is correct; two rely on an
+        unpinned idempotence). **THE MINT-EQUALITY PROBE, run first: 153 distinct incoming enum
+        `Symbol` instances on the compiler profile, 153 already canonical, 0 redirected** — that
+        zero is the licence for 5b to compare the two spaces. Pins in
+        `EnumDiscriminantKeySpaceTest`; all six pass on unmodified `de24c764` too, which is the
+        CORRECT result for a step with no behaviour delta — a pin failing there would mean 5a had
+        changed an answer it must not. **Recorded, not patched:** `canonicalEnumSymbol` memoizes
+        per `sym.id` a decision that reads MUTABLE state (`globals[name]`, `enumValues[global.id]
+        == null`), so a first touch before an enum's values are computed freezes the
+        non-canonical answer for that instance — 0/153 on the profile, but 5b's producer touches
+        enums from a different phase, so check it there.
+      - **(5b) NEXT — flip the READ, one call site per commit, type-first with the AST reader as
+        fallback.** **START WITH THE PROBE, not with a flip** (round 750 makes it cheap and it is
+        now the decisive measurement): mint the type-derived key ALONGSIDE the AST key at
+        `filterUnionByEnumDiscriminant` and assert they are equal, over the compiler profile.
+        Round 750 proved the six EXISTING producers agree; what is still unmeasured is whether
+        the SEVENTH — which reaches the enum through a resolved property type's symbol `parent`,
+        from a different phase than the AST readers — lands in the same space. Mint it through
+        `enumDiscriminantKey` (it is the only mint) and the canonicalization is inherited; what
+        the probe must catch is the memoization hazard in the (5a) bullet, i.e. an enum whose
+        canonical decision was frozen before its values existed. `EnumDiscriminantKeySpaceTest`
+        is the standing gate — it is written so that a divergent seventh producer breaks it.
+        Read `getPropertyOfType(apparent, name)`'s TYPE and key an `EnumLiteral` as
+        `enumDiscriminantKey(sym.parent, sym.name)`, distributing over a union. **The
         first flip must RESTRICT the type path to a property that HAS an annotation**, so it is a
         pure re-derivation: `discriminantPropAnnotation` reads `PropertyDeclaration.type`, so a
         property with an INFERRED enum-member type is invisible to it today, and a type reader
@@ -1669,7 +1775,9 @@ backlog-horizon decision, not queue debt.)
         as narrowing that no longer fires, i.e. TS2339 FPs on the compiler profile — so the
         profile's 46 is the gate. Sharper, and cheap: instrument both producers for ONE run to
         assert the flipped key equals the legacy key at every mint (the `--verifyMappedCache`
-        probe is the precedent). Do that before 5b, not after.
+        probe is the precedent). **Round 750 ran it for the six existing producers — 153 incoming
+        enum symbols, 0 redirections — so it is a proven-cheap instrument; the mint is now a
+        single function, which is where the 5b version belongs.**
     - `discriminantPropAnnotation` (:110431) has FIVE call sites woven through switch-narrowing
       and type-guard filtering — `filterUnionByEnumDiscriminant`, `kindDomainKeysOfType`,
       `discriminantKindKeys`, the exhaustive-switch `neverType` gate, and the objlit
