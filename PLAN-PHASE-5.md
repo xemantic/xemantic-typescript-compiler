@@ -20,6 +20,99 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 751 (2026-07-28) — (REL.1)(c) STEP 5b LANDED (FIRST OF FIVE CALL SITES): THE
+DISCRIMINANT READER IS TYPE-FIRST, AND THE PROBE THAT HAD TO COME FIRST SAYS THE SEVENTH
+PRODUCER LANDS IN THE SAME KEY SPACE.** Compiler profile `--listAll` **BYTE-IDENTICAL at 46**
+— whole output diffed SORTED LINE-BY-LINE against a pre-flip build, composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). 5,901 generated corpus tests over the
+`C/D/E/I/N/P/S/T/U` classes plus 1,476 over every enum / narrowing / discriminant class,
+**0 failures**. +5 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE PROBE, RUN FIRST AS INSTRUCTED, IS THE ROUND'S DECISIVE MEASUREMENT.** A temporary
+probe minted the type-derived key ALONGSIDE the AST key at the same property symbol in
+`filterUnionByEnumDiscriminant` and categorised every sighting over the whole compiler
+profile: **198 distinct (property, key-set) lines, 198 AGREE, 0 MISMATCH, 0 TYPEBLIND (the
+type path losing a key the AST path had), 0 TYPEEXTRA/WIDEN (it gaining one).** The
+population is real rather than incidental: 5 discriminant properties (`kind` 173, `type` 19,
+`operator` 3, `token` 2, `keywordToken` 1) over 7 distinct enum symbols, all cross-file. The
+profile stayed at 46 with the probe live, so the probe itself changed no answer.
+
+**THE INSTRUMENT WAS FALSIFIED IN THE SAME RUN, AND THAT IS NOT CEREMONY.** A probe that
+reports AGREE because it is INERT is the exact failure this arc keeps warning about, so the
+categoriser was re-run against a deliberately PERTURBED copy of the type key set; it printed
+`SELFTEST MISMATCH-REACHABLE`. The AGREE verdict is therefore a measurement, not a silence.
+
+**THE MEMOIZATION HAZARD WAS MEASURED DIRECTLY — 0 DIVERGENCES — AND ROUND 750'S NUMBER
+COULD NOT HAVE SHOWN IT.** `canonicalEnumSymbol` memoizes per `sym.id` a decision that reads
+MUTABLE state (`globals[name]`, `enumValues[global.id] == null`), so a first touch before an
+enum's values exist FREEZES the non-canonical answer for that instance. The trap in
+validating it: **a frozen-wrong entry reports `canonical(sym) === sym` — indistinguishable
+from a genuinely already-canonical one — so round 750's "153 incoming symbols, 153 already
+canonical, 0 redirected" is exactly what a fully-frozen cache would ALSO print.** The only
+way to see it is to recompute the decision with the memo BYPASSED and diff against the
+memoized answer, which this round did at EVERY mint over the whole profile: zero
+divergences. So the hazard is measured absent on this profile, not merely un-triggered.
+
+**THE FLIP.** `discriminantKeysOfMember` reads `getTypeOfSymbol(propSym)` through the new
+`enumDiscriminantKeysOfType`, which keys an `EnumLiteral`-flagged type as
+`enumDiscriminantKey(memberSym.parent, memberSym.name)` (the single round-750 mint, so
+canonicalization is inherited), distributes over a union, reuses
+`literalDiscriminantKeyOfType` for a string-literal constituent, and is all-or-nothing per
+the AST reader's contract. `discriminantPropSymbol` was extracted from
+`discriminantPropAnnotation` behaviour-preservingly so **both paths start from the SAME
+property symbol** — that shared traversal is what makes this a re-derivation of one answer
+rather than a second lookup free to drift. **RESTRICTED to a property that HAS an
+annotation**, per the standing constraint.
+
+**THE ABLATION IS WHAT DISTINGUISHES A REAL REPLACEMENT FROM DEAD CODE BEHIND A WORKING
+FALLBACK, and it is the strongest evidence here: with the AST fallback CUT OUT ENTIRELY the
+profile stayed BYTE-IDENTICAL at 46.** So at this site the annotation walk is already dead
+on the compiler profile — which is the evidence (5c)'s deletion needs, and it is a stronger
+statement than the byte-identity of the flip itself (a re-derivation is byte-identical by
+construction and proves nothing on its own). The fallback is KEPT for corpus shapes type
+resolution cannot answer, chiefly `p: typeof X` for a top-level const string: that resolves
+to the widened `string`, while the annotation still yields a `lit:s:` key.
+
+**PIN NON-VACUITY: 4 of the 5 FAIL on a build of unmodified `db730b95`.** The witness is a
+PARENTHESIZED annotation — legal TypeScript, and `enumMemberKeysOfTypeNode` has no
+`ParenthesizedType` arm, so it yields no keys and the member is conservatively KEPT, i.e.
+narrowing silently stops matching. That is the precise failure mode this key-space family
+exists to prevent, and it is invisible until a case body FPs TS2339. The type reader has no
+arm list at all, which is the structural point of the flip.
+
+**TWO PINS WERE WRONG WHEN FIRST WRITTEN AND THE PRISTINE RUN CAUGHT THEM — the trap is
+general and worth stating.** A narrowing pin asserting that a TS2339 APPEARS
+(`case Kind.Alpha: return x.b`) passes on BOTH builds for OPPOSITE reasons: unflipped, the
+union was never narrowed so `b` is missing from `A | B`; flipped, `B` was correctly removed
+so `b` is missing from `A`. Same code, no discrimination. Rewritten to read the DEFAULT
+branch and assert `none` — only a build that actually SUBTRACTED the constituent lets `x.b`
+resolve — both now fail on pristine with `Property 'b' does not exist on type 'AB'`.
+
+**A THIRD INTENDED PIN WAS DROPPED AS MISLABELLED, and the finding is worth more than the
+pin.** The `annotatedOnly` restriction is currently UNOBSERVABLE: every unannotated
+enum-member property shape reaches the reader ALREADY WIDENED to the enum, so the type reader
+returns null on it regardless of the restriction. Verified by how it prints —
+`Type 'Kind' is not assignable to type 'string'` for `readonly kind = Kind.Alpha`, against
+`Type 'Kind.Alpha'` for the annotated sibling. The first two attempts to establish this were
+themselves wrong (`Kind` is leniently assignable to `Kind.Alpha` here, so an assignability
+probe cannot tell widened from member — the printed name can). Consequence for the plan:
+**dropping the restriction is currently a NO-OP, and buys nothing until inference preserves
+the member type on an unannotated property.** The pin ships saying exactly that, so the day
+inference changes, it flips and forces the widening to be decided deliberately.
+
+**WHAT DID NOT WORK / findings not fixed.** (i) The two non-discriminating pins above, and
+the two failed attempts at the restriction pin — all three cost only scratch-CLI seconds
+because the ~1-second scratch-project loop was used to design the pins BEFORE writing them
+as Kotlin, which is the reusable part. (ii) The exhaustive-switch `neverType` gate is
+UNFLIPPED and now visibly so: with a parenthesized discriminant, narrowing works but the
+switch is not accepted as exhaustive (TS2366 where the plain-annotation sibling is silent).
+Pinned as a deliberate negative control in the round-748 convention; it is the natural NEXT
+flip, since it is the site the probe's key-space evidence most directly covers. (iii) The
+memory ritual is per-INVOCATION and held all round: every `compileKotlinJvm` was preceded by
+`./gradlew --stop` plus a graceful `kill` of the idle Kotlin daemon and took ~2m30s; the
+daemons regrow to ~1 GB free during profile CLI runs, so the check was repeated before each.
+
 **Round 750 (2026-07-28) — (REL.1)(c) STEP 5a LANDED: THE `"<enumSymId>#<member>"` KEY SPACE
 HAS ONE MINT. THE RISK 5a EXISTED TO REMOVE WAS ALREADY ABSENT — MEASURED, NOT ARGUED, AND
 THAT ZERO IS THE ROUND'S DELIVERABLE.** Compiler profile `--listAll` **BYTE-IDENTICAL at 46**,
@@ -1748,26 +1841,54 @@ backlog-horizon decision, not queue debt.)
         == null`), so a first touch before an enum's values are computed freezes the
         non-canonical answer for that instance — 0/153 on the profile, but 5b's producer touches
         enums from a different phase, so check it there.
-      - **(5b) NEXT — flip the READ, one call site per commit, type-first with the AST reader as
-        fallback.** **START WITH THE PROBE, not with a flip** (round 750 makes it cheap and it is
-        now the decisive measurement): mint the type-derived key ALONGSIDE the AST key at
-        `filterUnionByEnumDiscriminant` and assert they are equal, over the compiler profile.
-        Round 750 proved the six EXISTING producers agree; what is still unmeasured is whether
-        the SEVENTH — which reaches the enum through a resolved property type's symbol `parent`,
-        from a different phase than the AST readers — lands in the same space. Mint it through
-        `enumDiscriminantKey` (it is the only mint) and the canonicalization is inherited; what
-        the probe must catch is the memoization hazard in the (5a) bullet, i.e. an enum whose
-        canonical decision was frozen before its values existed. `EnumDiscriminantKeySpaceTest`
-        is the standing gate — it is written so that a divergent seventh producer breaks it.
-        Read `getPropertyOfType(apparent, name)`'s TYPE and key an `EnumLiteral` as
-        `enumDiscriminantKey(sym.parent, sym.name)`, distributing over a union. **The
-        first flip must RESTRICT the type path to a property that HAS an annotation**, so it is a
-        pure re-derivation: `discriminantPropAnnotation` reads `PropertyDeclaration.type`, so a
-        property with an INFERRED enum-member type is invisible to it today, and a type reader
-        would start treating such a property as a discriminant — a widening, not a replacement.
-        Drop the restriction only as its own later step. The five sites are
-        `filterUnionByEnumDiscriminant`, `kindDomainKeysOfType`, `discriminantKindKeys`, the
-        exhaustive-switch `neverType` gate and the objlit discriminant-candidate filter.
+      - **(5b) IN PROGRESS — 1 of 5 call sites flipped. `filterUnionByEnumDiscriminant` DONE
+        round 751, and THE PROBE CAME BACK CLEAN.** Profile `--listAll` byte-identical at 46
+        (diffed sorted line-by-line), 5,901 generated corpus tests + 1,476 enum/narrowing/
+        discriminant tests / 0 failures, +5 pins. **THE PROBE, run first as instructed:
+        198 distinct (property, key-set) sightings over the whole compiler profile — 198
+        AGREE, 0 mismatched, 0 where the type path lost a key the AST path had, 0 where it
+        gained one**, over 5 discriminant properties (`kind` 173, `type` 19, `operator` 3,
+        `token` 2, `keywordToken` 1) and 7 enum symbols, all cross-file. The instrument was
+        FALSIFIED in the same run (a perturbed key set reported MISMATCH-REACHABLE), so the
+        AGREE verdict is a measurement rather than a silence. **THE MEMOIZATION HAZARD WAS
+        MEASURED DIRECTLY AND IS ABSENT (0 divergences at every mint) — and note that round
+        750's number could NOT have shown it: a `canonicalEnumSymbol` entry frozen to the
+        non-canonical answer reports `canonical(sym) === sym`, exactly like an
+        already-canonical one, so "153 canonical, 0 redirected" is also what a fully-frozen
+        cache prints. Recompute with the memo BYPASSED and diff — that is the only probe that
+        can see it, and it is the one to re-run for each remaining flip.** What landed:
+        `enumDiscriminantKeysOfType` (the seventh producer — keys an `EnumLiteral` type as
+        `enumDiscriminantKey(memberSym.parent, memberSym.name)` through the single round-750
+        mint, distributing over a union) consulted by `discriminantKeysOfMember` type-first
+        with the annotation walk as fallback, both starting from the SAME property symbol via
+        `discriminantPropSymbol` (extracted from `discriminantPropAnnotation`
+        behaviour-preservingly) — so the flip is a re-derivation of one answer, not a second
+        lookup free to drift. **RESTRICTED to an annotated property**, per the standing rule.
+        **THE ABLATION IS THE REAL EVIDENCE, since a re-derivation is byte-identical by
+        construction: with the AST fallback CUT OUT ENTIRELY the profile stayed byte-identical
+        at 46**, i.e. at this site the annotation walk is ALREADY DEAD on the compiler profile
+        — which is what (5c) needs. It is kept for corpus shapes type resolution cannot answer
+        (chiefly `p: typeof X` for a top-level const string → widened `string`, while the
+        annotation still yields a `lit:s:` key). Pins in `EnumDiscriminantTypeReadTest`, 4 of 5
+        failing on unmodified `db730b95`; the witness is a PARENTHESIZED annotation, which the
+        AST reader has no arm for (so it yields no keys and the member is silently KEPT).
+        **MEASURED, and it re-sizes the plan: the `annotatedOnly` restriction is currently
+        UNOBSERVABLE — every unannotated enum-member property reaches the reader ALREADY
+        WIDENED to the enum (`Type 'Kind'` vs `Type 'Kind.Alpha'` for the annotated sibling),
+        so dropping it is a NO-OP today and buys nothing until inference preserves the member
+        type.** An assignability probe CANNOT establish this (`Kind` is leniently assignable to
+        `Kind.Alpha` here) — read the PRINTED type name.
+      - **(5b) NEXT — the four remaining readers, one per commit, same shape.** Take the
+        **exhaustive-switch `neverType` gate** first: it is already pinned as a deliberate
+        negative control (a parenthesized discriminant narrows correctly but is not accepted as
+        exhaustive → TS2366 where the plain-annotation sibling is silent), so its flip has a
+        ready-made before/after signal, and it is the site the probe's evidence most directly
+        covers. Then `kindDomainKeysOfType`, `discriminantKindKeys`, and the objlit
+        discriminant-candidate filter (that last one is the one that consumes the round-475
+        `TypeQuery` arm, so expect the AST fallback to still be load-bearing there — ablate it
+        to find out rather than assuming). Re-run the mint-equality + memo-bypass probe for
+        each; `EnumDiscriminantKeySpaceTest` and `EnumDiscriminantTypeReadTest` are the
+        standing gates.
       - **(5c) Delete** `discriminantPropAnnotation` and the AST key helpers, then
         `kindDomainProvesNotSubtype` / `kindDomainKeysExceed` (the round-729 `evaluateConditional`
         patch included).

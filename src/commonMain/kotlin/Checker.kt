@@ -110882,6 +110882,36 @@ interface DataView {
     private fun literalDiscriminantKeyOfType(t: Type): String? =
         (t as? Type.StringLiteral)?.let { "lit:s:${it.value}" }
 
+    /**
+     * (REL.1)(c) step 5b: the discriminant keys of a RESOLVED property TYPE — the SEVENTH
+     * producer of the `"<enumSymbolId>#<member>"` key space, and the type-side replacement
+     * for [enumMemberKeysOfTypeNode]'s AST walk.
+     *
+     * It reaches the enum by a different route than every existing producer: through the
+     * member type's own symbol `parent`, minted by [getDeclaredTypeOfEnumMember] at type
+     * resolution time, rather than by resolving an annotation's enum NAME in the file the
+     * annotation lives in. The key is minted through [enumDiscriminantKey] so the round-750
+     * canonicalization is inherited by construction.
+     *
+     * Returns null unless EVERY constituent is keyable, matching the AST reader's
+     * all-or-nothing contract — a partially-keyed union must leave its member conservatively
+     * KEPT, since narrowing only ever removes constituents.
+     */
+    private fun enumDiscriminantKeysOfType(t: Type, depth: Int = 0): Set<String>? {
+        if (depth > 8) return null
+        if (t is Type.Union) {
+            val keys = mutableSetOf<String>()
+            for (m in t.types) keys.addAll(enumDiscriminantKeysOfType(m, depth + 1) ?: return null)
+            return keys.ifEmpty { null }
+        }
+        if (t is Type.StringLiteral) return literalDiscriminantKeyOfType(t)?.let { setOf(it) }
+        if (t.flags.hasNone(TypeFlags.EnumLiteral)) return null
+        val memberSym = (t as? Type.Object)?.symbol ?: return null
+        val owner = memberSym.parent ?: return null
+        if (!owner.flags.hasAny(SymbolFlags.Enum)) return null
+        return setOf(enumDiscriminantKey(owner, memberSym.name))
+    }
+
     /** Round 477: resolve `ns.TypeName` where `ns` is an `import * as ns from "spec"` in
      *  the CURRENT checking file, to the target module's top-level TypeAliasDeclaration
      *  named [member] — `protocol.CloseFileWatcherEventName` → `type
@@ -110918,9 +110948,19 @@ interface DataView {
         return result
     }
 
-    /** The declared TypeNode of union [member]'s discriminant property [propName] (from its
-     *  declaration), since the resolved property type is `anyType` for an enum-member. */
-    private fun discriminantPropAnnotation(member: Type, propName: String): TypeNode? {
+    /**
+     * Union [member]'s discriminant property [propName] as a SYMBOL.
+     *
+     * Extracted round 751 so the AST key reader ([discriminantPropAnnotation]) and the type
+     * key reader ([enumDiscriminantKeysOfType]) walk to the SAME property symbol — that
+     * shared traversal is what makes the (5b) flip a re-derivation rather than a second,
+     * independently-drifting lookup.
+     *
+     * [annotatedOnly] selects the population the AST reader can see: it reads
+     * `PropertyDeclaration.type`, so a property whose enum-member type is INFERRED is
+     * invisible to it. Passing `false` therefore WIDENS what counts as a discriminant.
+     */
+    private fun discriminantPropSymbol(member: Type, propName: String, annotatedOnly: Boolean): Symbol? {
         // round 419: an INTERSECTION member (`BindingPattern & { parent: … }`, tsc's declaration
         // unions) is `Type.Intersection`, not `Type.Object`, so the discriminant `.kind`
         // annotation lives on a CONSTITUENT — without folding it the member's `.kind` reads as
@@ -110936,12 +110976,54 @@ interface DataView {
         }
         for (obj in objects) {
             val propSym = getPropertyOfType(obj, propName) ?: continue
-            for (decl in propSym.declarations) {
-                val ann = (decl as? PropertyDeclaration)?.type
-                if (ann != null) return ann
-            }
+            if (!annotatedOnly) return propSym
+            if (propSym.declarations.any { (it as? PropertyDeclaration)?.type != null }) return propSym
         }
         return null
+    }
+
+    /** The declared TypeNode of union [member]'s discriminant property [propName] (from its
+     *  declaration). Its docstring's original premise — "the resolved property type is
+     *  `anyType` for an enum-member" — stopped being true at (REL.1)(a); see (5b). */
+    private fun discriminantPropAnnotation(member: Type, propName: String): TypeNode? =
+        discriminantPropSymbol(member, propName, annotatedOnly = true)
+            ?.declarations?.firstNotNullOfOrNull { (it as? PropertyDeclaration)?.type }
+
+    /**
+     * (REL.1)(c) step 5b, round 751: union [member]'s discriminant keys for [propName],
+     * read TYPE-FIRST with the AST reader as fallback.
+     *
+     * The type path ([enumDiscriminantKeysOfType]) is the SEVENTH producer of the key space
+     * and the one the (5c) deletion is waiting on; it reaches the enum through the resolved
+     * member type's symbol `parent` instead of re-resolving the annotation's enum NAME in
+     * the file the annotation lives in. Both paths start from the SAME property symbol, so
+     * this is a re-derivation of one answer, not a second lookup that can drift.
+     *
+     * **RESTRICTED to a property that HAS an annotation** (`annotatedOnly = true`), and that
+     * restriction is load-bearing rather than incidental: [discriminantPropAnnotation] reads
+     * `PropertyDeclaration.type`, so a property whose enum-member type is INFERRED is
+     * invisible to it today. An unrestricted type reader would start treating such a property
+     * as a discriminant — a WIDENING of what narrowing may remove, not a replacement of an
+     * existing reader. Dropping the restriction is its own later step.
+     *
+     * The AST fallback keeps the shapes type resolution cannot answer — chiefly
+     * `p: typeof X` for a top-level const string, which resolves to the widened `string`
+     * while the annotation still yields a `lit:s:` key.
+     *
+     * MEASURED before the flip, over the whole compiler profile: **198 distinct
+     * (property, key-set) sightings, 198 AGREE, 0 mismatched, 0 where the type path lost a
+     * key the AST path had, 0 where it gained one.** The instrument was falsified in the same
+     * run (a perturbed key set reported MISMATCH), and the [canonicalEnumSymbol] memoization
+     * hazard was checked directly by recomputing every decision UNCACHED at every mint: 0
+     * divergences. That last check is the one round 750 could not make — a symbol frozen to a
+     * non-canonical answer reports `canonical(sym) === sym`, exactly like an already-canonical
+     * one, so "0 redirections" never ruled the freeze out.
+     */
+    private fun discriminantKeysOfMember(member: Type, propName: String): Set<String>? {
+        val sym = discriminantPropSymbol(member, propName, annotatedOnly = true) ?: return null
+        enumDiscriminantKeysOfType(getTypeOfSymbol(sym))?.let { return it }
+        return sym.declarations.firstNotNullOfOrNull { (it as? PropertyDeclaration)?.type }
+            ?.let { enumMemberKeysOfTypeNode(it) }
     }
 
     /** Filter union [members] by an enum-member discriminant [propName] against [caseKeys]
@@ -110955,8 +111037,7 @@ interface DataView {
     ): List<Type>? {
         var anyMatched = false
         val filtered = members.filter { member ->
-            val keys = discriminantPropAnnotation(member, propName)?.let { enumMemberKeysOfTypeNode(it) }
-                ?: return@filter true
+            val keys = discriminantKeysOfMember(member, propName) ?: return@filter true
             anyMatched = true
             if (keep) keys.any { it in caseKeys } else keys.any { it !in caseKeys }
         }
