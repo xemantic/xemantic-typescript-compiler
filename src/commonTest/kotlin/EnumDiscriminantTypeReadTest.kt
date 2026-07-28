@@ -169,18 +169,19 @@ class EnumDiscriminantTypeReadTest {
     }
 
     /**
-     * Negative control marking the NEXT flip, in the round-748 convention of pinning a known
-     * divergence on purpose.
+     * ROUND 752 FLIPPED THIS. It shipped in round 751 as a negative control asserting the
+     * OPPOSITE — `any { it.code == 2366 }` — marking the exhaustive-switch gate as the next
+     * reader to convert, in the round-748 convention of pinning a known divergence on purpose.
+     * That gate is now type-first too, so the same source is silent on both counts: narrowing
+     * removes the other constituent AND the switch is accepted as exhaustive.
      *
-     * Four of the five readers still consume the annotation walk, and the exhaustive-switch
-     * `neverType` gate is one of them — so with a parenthesized discriminant it cannot see the
-     * subject's key space and does not accept the switch as exhaustive, emitting TS2366 where
-     * the plain-annotation sibling is silent. Narrowing in the SAME function already works
-     * (no TS2339 above), which is precisely the split between a flipped reader and an
-     * unflipped one. When that gate is flipped this pin must change.
+     * Kept here (rather than moved to [ExhaustiveSwitchTypeReadTest], which owns the gate's
+     * own pins) because what it records is that ONE parenthesized annotation now answers BOTH
+     * questions — a reader-by-reader flip is finished at a site only when every consumer of
+     * that site's key space agrees.
      */
     @Test
-    fun `negative control - the exhaustive switch gate is not flipped yet`() {
+    fun `the exhaustive switch gate reads the same parenthesized discriminant`() {
         val diagnostics = diagnose(
             """
             $parenthesized
@@ -194,7 +195,7 @@ class EnumDiscriminantTypeReadTest {
             }
             """,
         )
-        assert(diagnostics.any { it.code == 2366 })
+        assert(diagnostics.none { it.code == 2366 })
         assert(diagnostics.none { it.code == 2339 })
     }
 }

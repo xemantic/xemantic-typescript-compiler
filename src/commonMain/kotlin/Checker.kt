@@ -89682,7 +89682,14 @@ interface DataView {
      * The union-member walk of [requiredUnionDiscriminantKeys], shared with the
      * indexed-access branch of [enumSwitchKeysFromTypeNode] (`LiteralToken["kind"]`,
      * round 423). Null unless EVERY member of [apparent] (a union) contributes a
-     * complete key set from its [propName] declared annotation.
+     * complete key set for [propName].
+     *
+     * (REL.1)(c) step 5b, round 752: the per-member key derivation is TYPE-FIRST — see
+     * [unionDiscriminantKeysOfTypeCore]. This is the reader the exhaustive-switch gate
+     * ([isExhaustiveEnumSwitch]) consults, so a member whose discriminant it cannot read
+     * makes the whole switch non-exhaustive and the TS2366/TS7030/TS2355 stands. That
+     * direction is FP-safe (the gate only ever SUPPRESSES), which is why a blind spot here
+     * is silent: it shows up as a diagnostic tsc does not emit, never as a wrong answer.
      */
     private fun unionDiscriminantKeysOfType(apparent: Type, propName: String): Set<String>? {
         if (apparent !is Type.Union) return null
@@ -89709,19 +89716,21 @@ interface DataView {
             }
             var ann: TypeNode? = null
             var optional = false
+            var propSym: Symbol? = null
             for (obj in objects) {
                 // A generic-instantiation Reference's members can resolve lazily/not at
                 // all — fall back to its TARGET interface (the property lives on the
                 // declaration, e.g. `AssignmentExpression<T>` inheriting BinaryExpression's
                 // `kind`), round 423.
-                val propSym = getPropertyOfType(obj, propName)
+                val sym = getPropertyOfType(obj, propName)
                     ?: (obj as? Type.Reference)?.target?.let { getPropertyOfType(it, propName) }
                     ?: continue
-                for (decl in propSym.declarations) {
+                for (decl in sym.declarations) {
                     val pd = decl as? PropertyDeclaration ?: continue
                     if (pd.type != null) {
                         ann = pd.type
                         optional = pd.questionToken
+                        propSym = sym
                         break
                     }
                 }
@@ -89734,7 +89743,23 @@ interface DataView {
             // enumMemberKeysOfTypeNode covers `Enum.Member` refs and `lit:s:` string
             // literals — try both readers (disjoint gaps, identical shared results).
             val a = ann ?: return null
-            keys.addAll(enumSwitchKeysFromTypeNode(a) ?: enumMemberKeysOfTypeNode(a) ?: return null)
+            // (REL.1)(c) step 5b, round 752: TYPE-FIRST, with the annotation walk kept as
+            // the fallback. [enumSwitchKeysFromType] is the type-side twin of
+            // [enumSwitchKeysFromTypeNode] (a bare enum expands to its whole member
+            // domain, `| undefined/null` contribute their markers) and
+            // [enumDiscriminantKeysOfType] is the type-side twin of
+            // [enumMemberKeysOfTypeNode] (an `EnumLiteral` member type, a string literal,
+            // or a union of those) — so the pair mirrors the AST pair arm for arm, which
+            // is what makes this a re-derivation of one answer rather than a second lookup
+            // free to drift. Both start from the SAME property symbol.
+            val fromType = propSym?.let { sym ->
+                val t = getTypeOfSymbol(sym)
+                enumSwitchKeysFromType(t) ?: enumDiscriminantKeysOfType(t)
+            }
+            keys.addAll(
+                fromType
+                    ?: enumSwitchKeysFromTypeNode(a) ?: enumMemberKeysOfTypeNode(a) ?: return null
+            )
         }
         return keys.ifEmpty { null }
     }
