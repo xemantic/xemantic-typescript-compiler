@@ -28,7 +28,6 @@ package com.xemantic.typescript.compiler
 import com.xemantic.kotlin.test.assert
 import com.xemantic.kotlin.test.have
 import com.xemantic.kotlin.test.should
-import kotlin.test.Ignore
 import kotlin.test.Test
 
 /**
@@ -43,22 +42,22 @@ import kotlin.test.Test
  * `TypeFlags.EnumLiteral` exists but is **set nowhere**, so the widening rule already
  * written for it is dead code.
  *
- * The tests below are the currently-FAILING expectations. They are `@Ignore`d rather
- * than deleted so the gap stays visible in the skipped count, and so that the session
- * that lands (REL.1) turns them on as its acceptance criterion — the positive controls
- * at the bottom are NOT ignored, because they must keep passing throughout.
+ * CLOSED over rounds 741/742 — every expectation below was `@Ignore`d when written and
+ * every one is now ON, which was the acceptance criterion the item states: (a) minted
+ * the member type, (b0) made an enum-member ACCESS EXPRESSION resolve to it instead of
+ * `anyType`, and (b) let the relation reject a distinct sibling. The `@Ignore`s are
+ * GONE rather than the tests, so a regression here fails loudly instead of skipping.
  *
- * Blast radius, measured round 740 with a throwaway probe (distinct interned type per
- * enum member + `TypeFlags.Enum` on the enum's own type + an enum-literal disjointness
- * rule in `checkTypeRelatedToCore`): the full corpus went **12,927 / 1 failure**, and
- * the one failure (`enumAssignmentCompat5`) is the MISSING leg, not the added one —
- * a numeric enum member type must stay assignable FROM `number`. See
- * `docs/perf/../../PLAN-PHASE-5.md` (REL.1) for the decomposition.
+ * The order of the file is the order of the argument: the four original expectations,
+ * then the positive controls that are the FP firewall (round 740's throwaway probe
+ * over-rejected exactly these shapes), then the base-primitive legs (a) had to state
+ * explicitly once nothing was vacuously `any` any more, then (b0)'s value-position
+ * pins. See `PLAN-PHASE-5.md` (REL.1) for the decomposition.
  */
 class EnumMemberRelationTest {
 
     @Test
-    @Ignore // (REL.1) currently emits nothing — enum-member types resolve to anyType
+    // (REL.1)(b) round 742: ON — the relation now rejects a distinct sibling member.
     fun `a sibling enum member is not assignable to another member of the same enum`() {
         diagnose(
             """
@@ -70,7 +69,7 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1) currently emits nothing
+    // (REL.1)(b) round 742: ON.
     fun `sibling node types differing only in the kind discriminant are not assignable`() {
         diagnose(
             """
@@ -84,7 +83,8 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1) currently emits nothing — the reverse direction, proving MUTUAL assignability
+    // (REL.1)(b) round 742: ON — the reverse direction, which is what proved the old
+    // behaviour was MUTUAL assignability rather than a one-way leniency.
     fun `the reverse direction is rejected too - sibling node types are not mutually assignable`() {
         diagnose(
             """
@@ -98,7 +98,7 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1) currently emits nothing — a non-declared enum behaves identically
+    // (REL.1)(b) round 742: ON — needed (b0) too: the RHS is an ACCESS expression.
     fun `a plain enum member is not assignable to a sibling member`() {
         diagnose(
             """
@@ -325,10 +325,10 @@ class EnumMemberRelationTest {
     }
 
     @Test
-    @Ignore // (REL.1)(b): step (a)'s string leg is deliberately BOTH-ways, so this
-    // stays silent for now. tsc rejects it — string enums are nominal, and unlike the
-    // numeric leg there is no bit-flag backwards-compatibility rule to justify it.
-    // Kept visible in the skipped count rather than pinned as correct.
+    // (REL.1)(b) round 742: ON — the string TARGET half of step (a)'s leg is DELETED.
+    // It existed only for behaviour-preservation symmetry with the former `anyType`;
+    // tsc rejects it, because a string enum is nominal and, unlike the numeric
+    // direction, has no bit-flag backwards-compatibility rule to justify it.
     fun `string is not assignable to a declared string enum member parameter`() {
         diagnose(
             """

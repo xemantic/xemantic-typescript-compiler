@@ -38908,8 +38908,29 @@ class Checker(
                 widened.numberIndexInfo = type.numberIndexInfo
                 widened
             }
-            else -> type
+            else -> widenEnumMemberTypes(type)
         }
+    }
+
+    /**
+     * (REL.1)(b0) round 742: [type] with every enum-MEMBER constituent replaced by its
+     * own enum. A UNION needs this as much as a bare member does — tsc's checker.ts
+     * writes `let variance = mods & Out ? (mods & In ? VarianceFlags.Invariant :
+     * VarianceFlags.Covariant) : …`, whose inferred type is a union of member types, and
+     * the later `variance = VarianceFlags.Independent` has to stay legal. Returns [type]
+     * unchanged when it carries no member type, so callers may apply it unconditionally.
+     */
+    private fun widenEnumMemberTypes(type: Type): Type {
+        enumTypeOfMemberType(type)?.let { return it }
+        if (type !is Type.Union) return type
+        var changed = false
+        val parts = ArrayList<Type>(type.types.size)
+        for (t in type.types) {
+            val widened = enumTypeOfMemberType(t)
+            if (widened != null) changed = true
+            parts.add(widened ?: t)
+        }
+        return if (changed) getUnionType(parts) else type
     }
 
     /**
@@ -94905,7 +94926,14 @@ interface DataView {
                     is Type.NumberLiteral -> numberType
                     is Type.BigIntLiteral -> bigintType
                     trueType, falseType -> booleanType
-                    else -> inferred
+                    // (REL.1)(b0) round 742: an enum MEMBER widens to its own enum, the
+                    // same rule this list applies to every other literal. This map is
+                    // what the TS2322 assignment check reads as the target's declared
+                    // type, so without it `let flags = TransformFlags.None; flags =
+                    // TransformFlags.ContainsESNext` becomes an error — which is exactly
+                    // how tsc's own sources initialize a flags accumulator. A UNION of
+                    // members widens per constituent, for the same reason.
+                    else -> widenEnumMemberTypes(inferred)
                 }
                 currentLocalTypes[name.text] = widened
             }
@@ -102679,6 +102707,38 @@ interface DataView {
      * an enum-member type widens to its own enum exactly as a string literal widens
      * to `string`, which is what keeps `let x = E.A; x = E.B` legal.
      */
+    /**
+     * (REL.1)(b): do two enum-MEMBER types denote the SAME member?
+     *
+     * **Deliberately NOT an identity test**, which is the trap this answers.
+     * [getDeclaredTypeOfEnumMember] interns on [canonicalEnumSymbol], but that helper
+     * can only canonicalize through `globals[name]` — and since INV.3(d) retired the
+     * merge for module-only names, a MODULE-scoped enum (every enum in tsc's own
+     * sources, `SyntaxKind` included) has no global instance to canonicalize to. Its
+     * per-file `Symbol` instances therefore key DIFFERENT member types for the same
+     * member, and an identity verdict declares `SyntaxKind.StringLiteral` disjoint
+     * from itself.
+     *
+     * So compare the way tsc's `isEnumTypeRelatedTo` does: same member NAME, and an
+     * owning enum that is the same symbol, canonicalizes to the same symbol, or shares
+     * an `EnumDeclaration` NODE (identity compare on the node — never data-class
+     * equality, which would deep-recurse the whole declaration).
+     */
+    private fun enumMemberTypesAreSameMember(source: Type, target: Type): Boolean {
+        val sourceMember = (source as? Type.Object)?.symbol ?: return false
+        val targetMember = (target as? Type.Object)?.symbol ?: return false
+        if (sourceMember === targetMember) return true
+        if (sourceMember.name != targetMember.name) return false
+        val sourceEnum = sourceMember.parent ?: return false
+        val targetEnum = targetMember.parent ?: return false
+        if (sourceEnum === targetEnum) return true
+        if (canonicalEnumSymbol(sourceEnum).id == canonicalEnumSymbol(targetEnum).id) return true
+        if (sourceEnum.name != targetEnum.name) return false
+        return sourceEnum.declarations.any { d ->
+            d is EnumDeclaration && targetEnum.declarations.any { it === d }
+        }
+    }
+
     /**
      * (REL.1)(b0) round 742: the CONSTANT VALUES an enum-flavored type can hold —
      * every member's value for an enum's own type, the single member's value for a
@@ -143375,13 +143435,19 @@ interface DataView {
         // Deliberately VALUE-BLIND at step (a): `let a: E.A = 2` where `A === 0` is a
         // real error, but it is [checkEnumLiteralAssignments]' error today and the
         // relation must not start co-emitting it. Tightening this to tsc's
-        // value-equality rule belongs with (REL.1)(b)/(c), which retire that walker.
+        // value-equality rule belongs with (REL.1)(c), which retires that walker.
+        //
+        // (REL.1)(b) round 742 REMOVED the string TARGET half. Step (a) had it only for
+        // behaviour-preservation symmetry with the former `anyType`; tsc REJECTS
+        // `string → Ext.Dts`, because a string enum is NOMINAL and — unlike the numeric
+        // direction, which tsc keeps for bit-flag enums — there is no compatibility rule
+        // to justify it.
         if (sf.hasAny(TypeFlags.EnumLiteral) || tf.hasAny(TypeFlags.EnumLiteral)) {
             enumMemberTypeIsStringValued(source)?.let { sourceIsString ->
                 if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
             }
             enumMemberTypeIsStringValued(target)?.let { targetIsString ->
-                if (sf.hasAny(if (targetIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
+                if (!targetIsString && sf.hasAny(TypeFlags.NumberLike)) return true
             }
         }
         // object type (non-primitive) — primitives are NOT assignable to object
@@ -143419,6 +143485,15 @@ interface DataView {
         if (source === target) return true
         // Fast check
         if (isSimpleTypeRelatedTo(source, target)) return true
+        // (REL.1)(b): two enum-member types relate ONLY when they are the same
+        // member. Both are member-less `Type.Object`s, so without this the structural
+        // engine below relates them VACUOUSLY in both directions — which is what made
+        // two AST node interfaces differing only in `readonly kind: SK.A` vs `SK.B`
+        // mutually assignable. The verdict is STRUCTURAL, not identity: see
+        // [enumMemberTypesAreSameMember].
+        if (source.flags.hasAny(TypeFlags.EnumLiteral) && target.flags.hasAny(TypeFlags.EnumLiteral)) {
+            return enumMemberTypesAreSameMember(source, target)
+        }
         // Check cache
         val cached = relation.get(source.id, target.id)
         if (cached == Ternary.True) return true
