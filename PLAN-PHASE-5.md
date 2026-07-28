@@ -82,6 +82,41 @@ relate to each other structurally (both are member-less `Type.Object`s, so it is
 the four `@Ignore`d expectations in `EnumMemberRelationTest` are still `@Ignore`d — they are
 (b)'s acceptance criterion, not (a)'s. No scaffolding deleted: that is (c).
 
+**(b) WAS ATTEMPTED IN THE SAME SESSION AND IS PARKED, NOT LANDED — branch
+`wip/round741-rel1b-disjointness` (045d0be5).** The rule is one line in
+`checkTypeRelatedToCore` ("two enum-member types relate only when they are the same member")
+and it WORKS: **three of the four `@Ignore`s flip ON** — sibling member, and BOTH directions of
+the sibling-node-interface case. Two things stop it landing, and both are useful to the next
+round:
+
+**(i) 4 new FPs on the compiler profile (46 → 50), one family.** `checker.ts:7997` TS2769 "No
+overload matches this call"; `parser.ts:2494` TS2345 `'string | undefined'` vs `'string |
+number'` (a `Debug.assert(isKeywordOrPunctuation(kind))` assertion-narrow feeding a
+`tokenToString` overload pick); `declarations.ts:846` TS2322 `'T | undefined'` vs `'T |
+StringLiteral'`; `utilities.ts:4175` TS2322 against `MemberName | (Expression & (NumericLiteral
+| StringLiteralLike))` — an intersection-over-union distribution. **The family is:** an
+enum-member union that used to COLLAPSE to a single `anyType` member now has real constituents,
+and a relation/narrowing path that was passing VACUOUSLY stops passing. These are meaning-level
+FPs, not form, so no `LogicalParityDivergence` applies — they are work.
+
+**(ii) The 4th pin does not flip at all, and it measures something else than the other three.**
+`enum E { X, Y }; const e: E.X = E.Y` stays silent because an enum-member ACCESS EXPRESSION
+types as the **enum**, not as the member — only ANNOTATIONS reach
+`getDeclaredTypeOfEnumMember`. Typing the expression as its member type is a separate change
+with its own blast radius (it is also what would make `take(Ext.Dts)` finally exercise the
+member path), and it should be its own sub-step.
+
+**AND A MEASURED NEGATIVE RESULT THAT IS WORTH MORE THAN THE RULE.** The obvious explanation
+for (i) — that ONE member splits into several `Type` instances, because `canonicalEnumSymbol`
+canonicalizes through `globals[name]` and INV.3(d) retired the merge for module-only names, so
+every enum in tsc's OWN sources (`SyntaxKind` included) has no global to canonicalize to — is
+**FALSE**. Replacing the identity verdict with tsc's structural one
+(`enumMemberTypesAreSameMember`: same member name + an owning enum that is the same symbol,
+canonicalizes to the same symbol, or shares an `EnumDeclaration` node) leaves the profile at the
+**same 4 FPs**. So the split is either not happening or not what these FPs are about; the next
+round should not spend a session on it. The structural comparison is kept on the branch anyway
+— it is strictly more correct and free.
+
 **COST-GATE REBASELINE, justified.** Every counter moved by < 0.5% (largest `narrow.walks`
 +0.40%, `typeOfExpr.calls` +0.18%, `typeNode.bypassed` +0.12%); `spine.nodes`,
 `globals.conflated` and the error/file counts are unchanged. The cause is exactly the mint:
@@ -1522,18 +1557,31 @@ backlog-horizon decision, not queue debt.)
     spurious TS2322 the round-740 probe measured. Both latent hazards closed. The one
     knock-on was NOT union collapse but `typeof x === "object"` classifying a member as an
     object — see `isEnumFlavoredObjectType`.
-  - **(b) Let the relation reject.** Add the enum-literal disjointness rule. This is the
-    step that turns the four `@Ignore`s in `EnumMemberRelationTest` ON — that is its
-    acceptance criterion. Expected movement is fully enumerated above. **Round 741 hands
-    (b) three concrete starting points:** (i) the string TARGET leg (`string` → a string
-    enum member) is accepted only for behaviour-preservation symmetry with the old
-    `anyType`, tsc rejects it, and its `@Ignore`d pin is already written — try deleting
-    that half-leg first, it is the cheapest possible probe of (b)'s blast radius;
-    (ii) tighten the numeric leg to tsc's value-equality rule, which requires moving
-    `checkEnumLiteralAssignments`' judgement into the relation, so it must land WITH (c)'s
-    first deletion or the two co-emit; (iii) `enumMemberTypeIsStringValued` already
-    resolves a member's `ConstantValue` through the canonical enum, which is the whole
-    input a value-aware disjointness rule needs.
+  - **(b) Let the relation reject. ATTEMPTED round 741, PARKED on
+    `wip/round741-rel1b-disjointness` (045d0be5) — the rule works, its FALLOUT is the
+    work.** One line in `checkTypeRelatedToCore` ("two enum-member types relate only when
+    they are the same member") flips **3 of the 4** `@Ignore`s ON. What blocks it:
+    - **4 profile FPs (46 → 50), all one family** — `checker.ts:7997` TS2769,
+      `parser.ts:2494` TS2345 (assertion-narrow + `tokenToString` overload pick),
+      `declarations.ts:846` TS2322, `utilities.ts:4175` TS2322 (intersection-over-union).
+      An enum-member union that used to COLLAPSE to one `anyType` member now has real
+      constituents, so a relation/narrowing path that passed vacuously stops passing.
+      **These are meaning-level FPs — no logical-parity divergence applies.**
+    - **The 4th pin (`const e: E.X = E.Y`) does not flip and never will from the relation
+      alone:** an enum-member ACCESS EXPRESSION types as the ENUM, not the member. Only
+      ANNOTATIONS reach `getDeclaredTypeOfEnumMember`. **Make that a sub-step (b0)** —
+      it is also what would make `take(Ext.Dts)` exercise a member type at all.
+    - **NEGATIVE RESULT, do not re-spend a session on it:** the "one member splits into
+      several `Type` instances because `canonicalEnumSymbol` cannot canonicalize a
+      module-scoped enum post-INV.3(d)" hypothesis is FALSE — `enumMemberTypesAreSameMember`
+      (tsc's structural `isEnumTypeRelatedTo` verdict) leaves the profile at the SAME 4 FPs.
+    **Two more starting points round 741 leaves for (b):** the string TARGET leg (`string`
+    → a string enum member) is accepted only for behaviour-preservation symmetry with the
+    old `anyType`, tsc REJECTS it, and its `@Ignore`d pin is already written — deleting
+    that half-leg is the cheapest possible probe; and `enumMemberTypeIsStringValued`
+    already resolves a member's `ConstantValue` through the canonical enum, which is the
+    whole input a VALUE-aware disjointness rule needs (that one must land WITH (c)'s first
+    deletion, or it co-emits with `checkEnumLiteralAssignments`).
   - **(c) Delete the scaffolding**, one walker per commit, suite-gated. Order: the
     self-contained AST-only passes first (`checkEnumLiteralAssignments` :158391,
     `checkNamespaceEnumUnionAssignments` :158525, `checkEnumToEnumAssignments` :162161 —
