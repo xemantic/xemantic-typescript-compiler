@@ -36,11 +36,17 @@ import kotlin.test.Test
  * union (`Node <: Modifier` "held" because `Token<TKind>`'s enum-member `kind`
  * resolves to `any`), washing `node` to never and FP'ing every later use in the
  * false branch (tsc completions.ts isModifierLike → the identifierToKeywordKind
- * TS2345 at :2237). `kindDomainProvesNotSubtype` reads the declared `.kind`
- * DOMAINS — including a bare-enum annotation (`kind: SyntaxKind` = all members)
- * and a generic token reference whose `kind` is inherited via `extends` levels
- * with type-arg NODES threaded through TP positions — and keeps [t] when its
- * domain exceeds the target's.
+ * TS2345 at :2237). Round 472 fixed it with `kindDomainProvesNotSubtype`, a veto
+ * that read the declared `.kind` DOMAINS and kept the subject when its domain
+ * exceeded the target's.
+ *
+ * **(REL.1)(c) step 5c, round 753: that veto is DELETED and these pins now hold on
+ * the relation alone** — (REL.1)(a)/(b) gave the relation the enum-member
+ * discrimination whose absence was the whole reason the veto existed. Ablated
+ * before it was cut, the veto fired 11,667 times on the compiler profile and the
+ * output stayed byte-identical, so the deletion is measured rather than assumed.
+ * This file is now the sharpest guard on that: if the relation ever loses the
+ * ability, the `never` wash comes straight back here.
  */
 class NegativeGuardKindDomainTest {
 

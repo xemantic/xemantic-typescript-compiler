@@ -30,19 +30,22 @@ import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
- * Round 482 (M5.1 perf): [kindDomainKeysOfType] is memoized by Type.id (the top
- * set-churn source on the harness profile — a union like `Node` is guard-narrowed
- * at many read sites and each call re-scanned every member's `.kind` annotation and
- * built fresh mutable sets). The invariant a memo must not break: the cache is keyed
- * on the MEMBER type, while the negative-guard `.kind`-domain exceed check compares
- * that memoized domain against the PER-SITE target domain (hoisted out of the filter
- * loop) — so two negative guards on the SAME union with DIFFERENT targets in one
- * program must each narrow independently, with no stale cross-site contamination.
+ * Round 482 wrote this against a memo: `kindDomainKeysOfType` cached each member's
+ * `.kind` domain by Type.id, and the risk was cross-site contamination — the cache is
+ * keyed on the MEMBER type while the exceed check compares it against a PER-SITE target
+ * domain, so two negative guards on the SAME union with DIFFERENT targets had to narrow
+ * independently.
  *
- * The prelude mirrors the tsc token family: a brand-kinded `Modifier` union whose
- * members' `kind` domains exceed the property-poorer guard targets (enum-member
- * `kind` resolves to `any`, so the structural relation over-accepts and only the
- * declared-domain read keeps the members off the collapse-to-never path).
+ * **(REL.1)(c) step 5c, round 753: the memo and the whole veto family are DELETED, so
+ * there is no longer a cache here to contaminate — and the pin is kept anyway, because
+ * the OBSERVABLE invariant it states never depended on the implementation.** Two negative
+ * guards over the same union with different targets must still each narrow on their own,
+ * and that is now a statement about the structural relation, which (REL.1)(a)/(b) taught
+ * to discriminate enum members directly.
+ *
+ * The prelude mirrors the tsc token family: a brand-kinded `Modifier` union whose members'
+ * `kind` domains exceed the property-poorer guard targets — the shape that used to collapse
+ * to `never` when nothing could tell the siblings apart.
  */
 class KindDomainMemoConsistencyTest {
 

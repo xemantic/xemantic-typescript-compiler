@@ -29,32 +29,36 @@ import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
- * (REL.1)(c) step 5b, round 752: the two `.kind` DOMAIN readers —
- * [Checker.kindDomainKeysOfType] (the negative-guard `never` veto, via
- * `kindDomainKeysExceed`) and [Checker.discriminantKindKeys] (the type-guard member
- * disjointness test) — read their keys type-first, annotation walk kept as fallback.
+ * (REL.1)(c) steps 5b and 5c, rounds 752–753: the `.kind` DOMAIN shapes, and what happened
+ * to the two readers that used to decide them.
  *
- * **THESE PINS PASS ON A BUILD WITHOUT THE FLIP TOO, AND THAT IS THE POINT.** They are not
- * weak pins pretending to be strong ones; they record a MEASUREMENT. Each source below uses a
- * PARENTHESIZED `kind` annotation, which no AST key reader has an arm for — the witness that
- * flipped the other three call sites in this round — and each is silent on both builds.
+ * Round 752 flipped both to read their keys type-first — `kindDomainKeysOfType` (the
+ * negative-guard `never` veto, via `kindDomainKeysExceed`) and
+ * [Checker.discriminantKindKeys] (the type-guard member disjointness test) — and measured
+ * both flips UNOBSERVABLE. **Round 753 (5c) then DELETED the first one outright**, together
+ * with `kindDomainKeysExceed`, `kindDomainProvesNotSubtype`, their node-side readers, and
+ * round 729's `evaluateConditional` patch. [Checker.discriminantKindKeys] survives, because
+ * its consumer [Checker.typeGuardMemberDisjoint] still has live callers.
  *
- * The reason is structural: both of these readers are VETOES layered over the structural
+ * **SO THESE PINS NOW PIN THE RELATION ALONE, WHICH IS WHAT THEY WERE WRITTEN FOR.** Round
+ * 752 said in this same comment that they would become that "when (5c) deletes
+ * `kindDomainKeysExceed`/`kindDomainProvesNotSubtype`" — that is now the case, and every
+ * source below is still silent. Each uses a PARENTHESIZED `kind` annotation, which no AST key
+ * reader has an arm for, so on a pre-(REL.1)(a) engine there was nothing at all to decide
+ * these shapes with.
+ *
+ * **THE DELETION EVIDENCE, because "the pins still pass" is not on its own evidence of
+ * anything.** The veto was ablated before it was cut, and the ablation was instrumented to
+ * count the verdicts it suppressed: **it fired 11,667 times on the compiler profile** (of
+ * 40,648 consultations) and the output stayed BYTE-IDENTICAL at 46. An ablation that never
+ * fires cannot distinguish dead code from load-bearing code — the objlit annotation fallback
+ * in [Checker.selectUnionMemberByObjLitDiscriminant] is the counter-example from the same
+ * round: byte-identical on this profile when ablated, and load-bearing off it.
+ *
+ * The reason the veto could go is structural: it was a veto layered over the structural
  * relation, written when an enum member resolved to `anyType` and the relation could not tell
- * two siblings apart. (REL.1)(a)/(b) gave the relation that ability, so a veto that declines
- * to answer no longer changes the outcome — it only ever agreed with what the relation was
- * about to decide anyway. Three shapes were built to expose a difference and none did:
- * a negative guard over a wide-domain subject, a positive guard over a three-member union,
- * and a conditional-type exclusion.
- *
- * So what these pin is the SILENCE — that the flip did not start dropping a union member or
- * washing a subject to `never` somewhere the veto used to abstain. The measured agreement is
- * in the flipped readers' own docs: 207/207 and 738/738 sightings agreeing over the whole
- * compiler profile, with 0 where the annotation walk answered and the type path did not.
- *
- * When (5c) deletes `kindDomainKeysExceed`/`kindDomainProvesNotSubtype`, the first pin here
- * becomes a pin on the relation alone — which is the intended end state, and the reason it is
- * written against observable narrowing rather than against the veto.
+ * two siblings apart. (REL.1)(a)/(b) gave the relation that ability, so the veto only ever
+ * agreed with a verdict already reached.
  */
 class KindDomainTypeReadTest {
 
@@ -69,9 +73,10 @@ class KindDomainTypeReadTest {
     """.trimIndent()
 
     /**
-     * [Checker.kindDomainProvesNotSubtype]'s shape (round 472): the FALSE branch of a type
-     * guard must not wash the subject to `never` when its `.kind` domain provably exceeds the
-     * guard target's. Reading `n.w` after `!isB(n)` is what a `never` wash would break.
+     * The shape `kindDomainProvesNotSubtype` was written for (round 472) and which now has no
+     * veto behind it at all (round 753 deleted it): the FALSE branch of a type guard must not
+     * wash the subject to `never`. Reading `n.w` after `!isB(n)` is what a `never` wash would
+     * break — so this is the pin that would have caught the deletion going wrong.
      */
     @Test
     fun `a negative guard over a wide parenthesized kind domain keeps the subject usable`() {
@@ -112,8 +117,13 @@ class KindDomainTypeReadTest {
     }
 
     /**
-     * The round-729 `evaluateConditional` consumer: `T extends NB ? never : T` must exclude
-     * exactly `NB`, leaving a union whose members still share the readable `.kind`.
+     * Round 729's `evaluateConditional` shape: `T extends NB ? never : T` must exclude exactly
+     * `NB`, leaving a union whose members still share the readable `.kind`. Round 729 needed a
+     * `.kind` domain veto bolted onto the conjunction to get this right; round 753 deleted the
+     * veto and the shape still holds, because the relation itself discriminates enum members
+     * since (REL.1)(a)/(b). The sharper sibling pin is
+     * `DistributiveConditionalTypeTest.a sibling AST interface is not excluded just because it
+     * is structurally compatible`, which is the pin round 729 wrote for the patch.
      */
     @Test
     fun `a conditional exclusion over parenthesized kind members stays silent`() {

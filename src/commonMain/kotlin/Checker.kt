@@ -804,14 +804,6 @@ class Checker(
      *  "unreadable" (the function's public contract returns null for it). */
     private val discriminantKindKeysCache = HashMap<Int, Set<String>>()
 
-    /** Round 482 (M5.1 perf): memo for [kindDomainKeysOfType] by Type.id — same
-     *  empty-set-encodes-unreadable contract as [discriminantKindKeysCache], and same
-     *  cross-path determinism guarantee (its `kind`-annotation readers canonicalize
-     *  enum symbols via [canonicalEnumSymbol]). The top set-churn source on the harness
-     *  profile: a union like `Node` is guard-narrowed at many read sites, and each call
-     *  re-scanned every member's annotation + built fresh mutable sets. */
-    private val kindDomainKeysOfTypeCache = HashMap<Int, Set<String>>()
-
     /** Round 486 (M5.1 perf): per-source line-start offsets for
      *  [getLineAndCharacterOfPosition], which was an O(position) linear newline scan
      *  from index 0 on every call — on a ~1.5 MB source file (tsc's checker.ts) a
@@ -10430,9 +10422,9 @@ class Checker(
      * `copy()` / Transformer-synthesized / detached subtree) has no owner —
      * degrade to the legacy merged consult, mirroring [globalsForFile]'s
      * unknown-file degradation. `internal` for direct-construction tests.
-     * Consumers (INV.3(c)(ii)): the kind-domain/enum-discriminant readers —
-     * [resolveEnumSymbolForDiscriminant], [kindDomainTypeDeclSymbol], and the
-     * alias fallbacks in [enumSwitchKeysFromTypeNode]/[enumMemberKeysOfTypeNode].
+     * Consumers (INV.3(c)(ii)): the enum-discriminant readers —
+     * [resolveEnumSymbolForDiscriminant] and the alias fallbacks in
+     * [enumSwitchKeysFromTypeNode]/[enumMemberKeysOfTypeNode].
      */
     internal fun lookupPerFileForNode(node: Node, name: String): Symbol? {
         // Fast path (round 507b): a non-module-only name resolves identically
@@ -108287,7 +108279,7 @@ interface DataView {
                 // (REL.1)(c) step 5b, round 752: TYPE-FIRST via [discriminantKeysOfMember],
                 // which is round 751's shared reader — the resolved property type keyed
                 // through [enumDiscriminantKey], with THIS site's former composition
-                // (`discriminantPropAnnotation` + [enumMemberKeysOfTypeNode]) as its exact
+                // (the annotation walk + [enumMemberKeysOfTypeNode]) as its exact
                 // fallback, so the substitution can only ANSWER where this site was blind,
                 // never answer differently. Both paths start from the same property symbol.
                 // MEASURED on the compiler profile: 4 answering sightings, 4 AGREE, 0
@@ -109835,15 +109827,11 @@ interface DataView {
             // structural relation over-accepts it (enum-member kinds resolve to `any`,
             // so every AST-node member looked assignable to the property-poorest one —
             // `!isJsxOpeningFragment(node)` collapsed JsxCallLike to `never`).
-            // Round 482 (M5.1 perf): the target's `.kind` key domain is invariant across
-            // members — compute it ONCE instead of re-scanning `targetTypeNode` per member.
-            val targetKindDomain = kindDomainKeysFromTypeNode(targetTypeNode, 0)
+            // (REL.1)(c) step 5c, round 753: the round-472 `.kind` DOMAIN veto that used
+            // to sit here (`kindDomainKeysExceed`) is DELETED — see the single-type
+            // negative branch below for the measurement.
             return getUnionType(t.types.filter {
                 typeGuardMemberDisjoint(it, targetType) ||
-                    // Round 472: a member whose `.kind` DOMAIN exceeds the target's
-                    // provably has surviving values — keep it (see the single-type
-                    // negative branch below; same enum-any over-acceptance).
-                    kindDomainKeysExceed(it, targetKindDomain) ||
                     // Round 480: tsc's assumeFalse filter uses the SUBTYPE relation,
                     // in which a MISSING source property fails an OPTIONAL target
                     // property (assignability passes) — vfsUtil's FileInode is
@@ -109932,11 +109920,23 @@ interface DataView {
         // brand-kinded union (`Node <: Modifier` "holds" because KeywordToken<TKind>'s
         // enum-member `kind` resolves to `any`), so `!isModifier(node)` washed `node`
         // to never and every later use in the false branch FP'd (tsc completions.ts
-        // isModifierLike → the :2237 identifierToKeywordKind(node) TS2345). A t whose
-        // declared `.kind` DOMAIN has keys outside the target's domain provably has
-        // surviving values (tsc keeps it) → keep t.
+        // isModifierLike → the :2237 identifierToKeywordKind(node) TS2345).
+        //
+        // (REL.1)(c) step 5c, round 753: the `.kind` DOMAIN veto that guarded this
+        // (`kindDomainProvesNotSubtype`) is DELETED, together with its two sibling call
+        // sites (the union negative branch above, and round 729's `evaluateConditional`
+        // patch). **Its premise — "enum-member `kind` resolves to `any`" — is the exact
+        // thing (REL.1)(a)/(b) fixed**, so the relation now makes this distinction
+        // itself and the veto only ever agreed with a verdict already reached.
+        //
+        // MEASURED, and the measurement is the reason it went rather than being kept as
+        // insurance: with every verdict suppressed, the veto still FIRED **11,667 times
+        // on the compiler profile** (of 40,648 consultations) and the output stayed
+        // BYTE-IDENTICAL at 46. That firing count is what makes the byte-identity
+        // evidence — an ablation that never fires proves nothing about the code it
+        // disables, which is precisely the trap the objlit annotation fallback fell into
+        // in the same round (dead on this profile, load-bearing off it).
         return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
-            !kindDomainProvesNotSubtype(t, targetTypeNode) &&
             !missingVsOptionalProvesNotSubtype(t, targetType)) neverType else t
     }
 
@@ -109960,149 +109960,6 @@ interface DataView {
             tp.name !in OBJECT_PROTOTYPE_PROPERTIES && isOptionalProperty(tp) &&
                 getPropertyOfType(mApp, tp.name) == null
         }
-    }
-
-    /** Round 472: true when [t]'s declared `.kind` key DOMAIN provably exceeds the
-     *  guard target's — [t] then has values outside the target, so it is NOT a
-     *  subtype, whatever the (enum-any over-accepting) structural relation claims.
-     *  Unlike [discriminantKindKeys] the domain readers accept a BARE-enum
-     *  annotation (`kind: SyntaxKind` → the whole member set) and — node-side —
-     *  a generic token-like reference (`ModifierToken<SyntaxKind.AbstractKeyword>`)
-     *  whose `kind` member is inherited through generic `extends` levels with the
-     *  type-arg NODES threaded through TP positions (the resolved arg TYPE is `any`
-     *  for an enum member, so only the nodes can decide). Any unreadable side →
-     *  false (callers keep the structural verdict). */
-    private fun kindDomainProvesNotSubtype(t: Type, targetNode: TypeNode): Boolean =
-        kindDomainKeysExceed(t, kindDomainKeysFromTypeNode(targetNode, 0))
-
-    /** [kindDomainProvesNotSubtype]'s core with the target's key domain PRE-COMPUTED,
-     *  so a per-union-member filter can hoist the (node-scanning) target read out of
-     *  the loop instead of recomputing it once per member (round 482, M5.1 perf). */
-    private fun kindDomainKeysExceed(t: Type, targetKeys: Set<String>?): Boolean {
-        if (targetKeys == null) return false
-        val tk = kindDomainKeysOfType(t) ?: return false
-        return tk.any { it !in targetKeys }
-    }
-
-    /**
-     * (REL.1)(c) step 5b, round 752: TYPE-FIRST, annotation walk kept as the fallback — the
-     * same pair as [unionDiscriminantKeysOfType] ([enumSwitchKeysFromType] for a bare-enum
-     * domain, [enumDiscriminantKeysOfType] for a member), reached from the SAME property
-     * symbol as the annotation.
-     *
-     * MEASURED over the compiler profile: 234 sightings, 207 answering, **207 AGREE, 0
-     * mismatched, 0 where the type path lost a key the AST path had** — so the annotation
-     * walk is already dead here too (a `TYPEBLIND` sighting is what a still-load-bearing
-     * fallback would produce, and there were none).
-     *
-     * MEASURED AND NOT FIXED: the flip is currently UNOBSERVABLE. Three shapes built to
-     * expose it — a negative guard over a wide-domain subject, a positive guard over a
-     * three-member union, and a conditional-type exclusion, each with a parenthesized `kind`
-     * the AST reader cannot read — are silent on a build with the flip and on one without.
-     * The reason is (REL.1)(a)/(b): this reader is a VETO over the structural relation, and
-     * the relation now decides enum members by itself, so its answer no longer changes an
-     * outcome on the shapes it was written for. Its only consumer is [kindDomainKeysExceed],
-     * which (5c) intends to DELETE — so treat this flip as keeping the key space uniform
-     * until that deletion lands, not as a fix.
-     */
-    private fun kindDomainKeysOfType(x: Type): Set<String>? {
-        kindDomainKeysOfTypeCache[x.id]?.let { return it.ifEmpty { null } }
-        val members = if (x is Type.Union) x.types else listOf(x)
-        val keys = mutableSetOf<String>()
-        var failed = false
-        for (m in members) {
-            val ann = discriminantPropAnnotation(m, "kind")
-            val fromType = discriminantPropSymbol(m, "kind", annotatedOnly = true)?.let { sym ->
-                val pt = getTypeOfSymbol(sym)
-                enumSwitchKeysFromType(pt) ?: enumDiscriminantKeysOfType(pt)
-            }
-            val k = fromType
-                ?: ann?.let { enumMemberKeysOfTypeNode(it) ?: enumSwitchKeysFromTypeNode(it) }
-            if (k == null) { failed = true; break }
-            keys.addAll(k)
-        }
-        // Encode "unreadable" as an empty cached set (public contract returns null).
-        val result = if (failed) emptySet<String>() else keys
-        kindDomainKeysOfTypeCache[x.id] = result
-        return result.ifEmpty { null }
-    }
-
-    /** The `.kind` key domain of a type NODE: unions distribute (all members must
-     *  read), parameterless aliases unfold, and a generic interface reference reads
-     *  its `kind` member — own or inherited via `extends` — substituting bare-TP
-     *  annotations with the reference's type-arg NODES. */
-    private fun kindDomainKeysFromTypeNode(node: TypeNode?, depth: Int): Set<String>? {
-        if (node == null || depth > 12) return null
-        when (node) {
-            is ParenthesizedType -> return kindDomainKeysFromTypeNode(node.type, depth + 1)
-            is UnionType -> {
-                val keys = mutableSetOf<String>()
-                for (m in node.types) keys.addAll(kindDomainKeysFromTypeNode(m, depth + 1) ?: return null)
-                return keys.ifEmpty { null }
-            }
-            is TypeReference -> {
-                enumMemberKeysOfTypeNode(node)?.let { return it }
-                enumSwitchKeysFromTypeNode(node)?.let { return it }
-                val tn = node.typeName as? Identifier ?: return null
-                val sym = kindDomainTypeDeclSymbol(tn.text, node) ?: return null
-                (sym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration)?.let { alias ->
-                    // Parameterless alias only — a generic alias would need arg
-                    // threading through its body (not needed for the token family).
-                    if (!node.typeArguments.isNullOrEmpty() || !alias.typeParameters.isNullOrEmpty()) return null
-                    return kindDomainKeysFromTypeNode(alias.type, depth + 1)
-                }
-                val iface = sym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
-                    ?: return null
-                return ifaceKindDomainKeys(iface, node.typeArguments, depth + 1)
-            }
-            else -> return null
-        }
-    }
-
-    /** The symbol whose declarations carry the ACTUAL type declaration for [name] —
-     *  a file-local hit that is only an import ALIAS (ImportSpecifier declarations,
-     *  no TypeAlias/Interface) falls through to the merged globals entry, which
-     *  accumulated the declaring file's declarations. INV.3(c)(ii): that fallback
-     *  is keyed by [keyNode]'s OWNING file (the node the name was read from — a
-     *  types.ts annotation resolves under types.ts's visibility, whatever file is
-     *  being checked); a name with no meaning there returns the local (whose
-     *  missing TypeAlias/Interface decls make callers bail) instead of a leak. */
-    private fun kindDomainTypeDeclSymbol(name: String, keyNode: Node): Symbol? {
-        val local = currentFileLocals?.get(name)
-        if (local?.declarations?.any { it is TypeAliasDeclaration || it is InterfaceDeclaration } == true) return local
-        return lookupPerFileForNode(keyNode, name) ?: local
-    }
-
-    /** [kindDomainKeysFromTypeNode]'s interface walker: the `kind` member's keys,
-     *  own-first then the `extends` chain, threading [argNodes] through bare-TP
-     *  annotation/heritage-arg positions (`ModifierToken<SyntaxKind.X>` →
-     *  `KeywordToken<TKind=X>` → `Token<TKind=X> { kind: TKind }` → X's key). */
-    private fun ifaceKindDomainKeys(iface: InterfaceDeclaration, argNodes: List<TypeNode>?, depth: Int): Set<String>? {
-        if (depth > 12) return null
-        fun substitute(ann: TypeNode): TypeNode? {
-            val nm = ((ann as? TypeReference)?.typeName as? Identifier)?.text ?: return ann
-            val idx = iface.typeParameters?.indexOfFirst { it.name.text == nm } ?: -1
-            return if (idx >= 0) argNodes?.getOrNull(idx) else ann
-        }
-        val kindMember = iface.members.firstOrNull {
-            it is PropertyDeclaration && (it.name as? Identifier)?.text == "kind"
-        } as? PropertyDeclaration
-        if (kindMember?.type != null) {
-            val eff = substitute(kindMember.type) ?: return null
-            return kindDomainKeysFromTypeNode(eff, depth + 1)
-        }
-        for (clause in iface.heritageClauses.orEmpty()) {
-            if (clause.token != SyntaxKind.ExtendsKeyword) continue
-            for (base in clause.types) {
-                val baseName = (base.expression as? Identifier)?.text ?: continue
-                val baseSym = kindDomainTypeDeclSymbol(baseName, base) ?: continue
-                val baseIface = baseSym.declarations.firstOrNull { it is InterfaceDeclaration } as? InterfaceDeclaration
-                    ?: continue
-                val baseArgs = base.typeArguments?.map { substitute(it) ?: return null }
-                ifaceKindDomainKeys(baseIface, baseArgs, depth + 1)?.let { return it }
-            }
-        }
-        return null
     }
 
     /**
@@ -110138,10 +109995,11 @@ interface DataView {
      * where this reader was blind. MEASURED over the compiler profile: 986 sightings, 738
      * answering, **738 AGREE, 0 mismatched, and the type half ALONE reproduced every one of
      * those 738** — a per-sighting ablation, so the annotation walk is dead here rather than
-     * merely quiet. Unlike [kindDomainKeysOfType] this reader's consumer
-     * ([typeGuardMemberDisjoint]) is NOT slated for deletion, which is what puts this flip on
-     * (5c)'s critical path. Also unobservable today for the same reason — see
-     * [kindDomainKeysOfType]'s note.
+     * merely quiet. Its consumer [typeGuardMemberDisjoint] SURVIVED (5c) — the sibling
+     * `.kind` domain reader and its whole veto family did not — which is what put this flip
+     * on (5c)'s critical path. It is a veto over the structural relation like the deleted
+     * one, so it is equally unobservable on the shapes it was written for; it is kept because
+     * its consumer still has live callers, not because a difference was measured.
      */
     private fun discriminantKindKeys(t: Type): Set<String>? {
         discriminantKindKeysCache[t.id]?.let { return it.ifEmpty { null } }
@@ -111021,10 +110879,12 @@ interface DataView {
     /**
      * Union [member]'s discriminant property [propName] as a SYMBOL.
      *
-     * Extracted round 751 so the AST key reader ([discriminantPropAnnotation]) and the type
-     * key reader ([enumDiscriminantKeysOfType]) walk to the SAME property symbol — that
-     * shared traversal is what makes the (5b) flip a re-derivation rather than a second,
-     * independently-drifting lookup.
+     * Extracted round 751 so the AST key reader and the type key reader
+     * ([enumDiscriminantKeysOfType]) walk to the SAME property symbol — that shared
+     * traversal is what makes the (5b) flip a re-derivation rather than a second,
+     * independently-drifting lookup. `discriminantPropAnnotation`, the AST reader it was
+     * split out of, was deleted by (5c) in round 753; the annotation walk now lives only
+     * inside [discriminantKeysOfMember]'s fallback.
      *
      * [annotatedOnly] selects the population the AST reader can see: it reads
      * `PropertyDeclaration.type`, so a property whose enum-member type is INFERRED is
@@ -111052,13 +110912,6 @@ interface DataView {
         return null
     }
 
-    /** The declared TypeNode of union [member]'s discriminant property [propName] (from its
-     *  declaration). Its docstring's original premise — "the resolved property type is
-     *  `anyType` for an enum-member" — stopped being true at (REL.1)(a); see (5b). */
-    private fun discriminantPropAnnotation(member: Type, propName: String): TypeNode? =
-        discriminantPropSymbol(member, propName, annotatedOnly = true)
-            ?.declarations?.firstNotNullOfOrNull { (it as? PropertyDeclaration)?.type }
-
     /**
      * (REL.1)(c) step 5b, round 751: union [member]'s discriminant keys for [propName],
      * read TYPE-FIRST with the AST reader as fallback.
@@ -111070,7 +110923,7 @@ interface DataView {
      * this is a re-derivation of one answer, not a second lookup that can drift.
      *
      * **RESTRICTED to a property that HAS an annotation** (`annotatedOnly = true`), and that
-     * restriction is load-bearing rather than incidental: [discriminantPropAnnotation] reads
+     * restriction is load-bearing rather than incidental: the annotation fallback reads
      * `PropertyDeclaration.type`, so a property whose enum-member type is INFERRED is
      * invisible to it today. An unrestricted type reader would start treating such a property
      * as a discriminant — a WIDENING of what narrowing may remove, not a replacement of an
@@ -151335,18 +151188,22 @@ interface DataView {
 
     private fun evaluateConditional(checkType: Type, extendsType: Type, node: ConditionalType): Type {
         // Check if checkType extends extendsType
-        val related = (isSimpleTypeRelatedTo(checkType, extendsType) ||
-            checkTypeRelatedTo(checkType, extendsType, assignableRelation)) &&
-            // Round 729: the round-472 `.kind` DOMAIN veto. Enum-member types do not
-            // discriminate in our relation (`kind: SyntaxKind.Identifier` accepts
-            // `SyntaxKind.PrivateIdentifier`), so a structural verdict alone reports
-            // sibling AST interfaces as mutually assignable. Harmless while `Exclude` was
-            // an identity function; the moment distribution started working it silently
-            // DROPPED constituents — `Exclude<PropertyName, PrivateIdentifier>` lost
-            // `Identifier` too, because the two differ only in that discriminant.
-            // Consulted only on the already-related path, and only when BOTH domains read
-            // (an unreadable side leaves the structural verdict alone).
-            !kindDomainKeysExceed(checkType, kindDomainKeysOfType(extendsType))
+        // Round 729 bolted the round-472 `.kind` DOMAIN veto onto this conjunction,
+        // because enum-member types did not discriminate in our relation
+        // (`kind: SyntaxKind.Identifier` accepted `SyntaxKind.PrivateIdentifier`) and a
+        // structural verdict alone called sibling AST interfaces mutually assignable —
+        // so `Exclude<PropertyName, PrivateIdentifier>` silently dropped `Identifier`
+        // too, the moment distribution started working.
+        //
+        // (REL.1)(c) step 5c, round 753: DELETED, because (REL.1)(a)/(b) removed the
+        // premise — the relation discriminates enum members on its own now. Round 729's
+        // own pin (`a sibling AST interface is not excluded just because it is
+        // structurally compatible`, DistributiveConditionalTypeTest) passes without it,
+        // which is the specific evidence: the pin that motivated the patch no longer
+        // needs it. See `narrowTypeByTypeGuard`'s negative branch for the profile-wide
+        // ablation (11,667 suppressed verdicts, output byte-identical).
+        val related = isSimpleTypeRelatedTo(checkType, extendsType) ||
+            checkTypeRelatedTo(checkType, extendsType, assignableRelation)
         return if (related) {
             getTypeFromTypeNode(node.trueType)
         } else {
