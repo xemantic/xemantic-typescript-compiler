@@ -5581,6 +5581,10 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val canonicalEnumSymCache = HashMap<Int, Symbol>()
 
+    /** (REL.1)(c) round 745: memo for [enumValueDomainIsComplete], keyed by enum symbol id.
+     *  Declared before `init` per the init-order trap. */
+    private val enumDomainCompleteCache = HashMap<Int, Boolean>()
+
     /**
      * (REL.1)(a) round 741: interned enum-MEMBER types, keyed
      * `"<canonicalEnumSymbolId>#<memberName>"`.
@@ -7107,8 +7111,10 @@ class Checker(
         pass("checkIndexedAccessTpMismatchAssignment") { checkIndexedAccessTpMismatchAssignment() }
         // 72a6. B197: TS2322 for `let b: primitive = <T[keyof T] param>` under `T extends object`.
         pass("checkIndexedAccessKeyofPrimitiveAssignment") { checkIndexedAccessKeyofPrimitiveAssignment() }
-        // 72a7. B203: enum-literal assignability for numeric-literal RHS vs enum/enum-member annotations.
-        pass("checkEnumLiteralAssignments") { checkEnumLiteralAssignments() }
+        // 72a7. B203 (`checkEnumLiteralAssignments`) is RETIRED — (REL.1)(c) round 745.
+        // The general relation is value-aware now (`numericLiteralFitsEnum`), reaches the
+        // same three verdicts on `enumAssignmentCompat5` byte-for-byte, and additionally
+        // covers the shapes B203's top-level-var/assignment scan never saw.
         // (B266) Namespace-qualified enum members vs union annotations (TS2322)
         pass("checkNamespaceEnumUnionAssignments") { checkNamespaceEnumUnionAssignments() }
         // B425: enum-VAR to enum-VAR assignability (TS2322 + member-set/value-diff chain)
@@ -93152,6 +93158,11 @@ interface DataView {
      * (only `Type.Intrinsic`, excluding any/unknown/error, triggers the unfold).
      */
     private fun displayTargetAnnotation(typeAnnotation: TypeNode, targetType: Type): String {
+        // (REL.1)(c) round 745: an enum-MEMBER annotation prints QUALIFIED (`E.A`).
+        // [formatTypeForDisplay] reduces a `QualifiedName` to its LAST name, which is
+        // right for a namespaced interface (tsc prints the bare name there) and wrong
+        // for an enum member, whose display name in tsc always carries its enum.
+        if (targetType.flags.hasAny(TypeFlags.EnumLiteral)) return typeToString(targetType)
         if (typeAnnotation is TypeReference && targetType is Type.Intrinsic &&
             targetType !== anyType && targetType !== unknownType && targetType !== errorType
         ) {
@@ -95246,10 +95257,12 @@ interface DataView {
                 r
             }
         } else {
-            val t0 = CtaSections.t()
-            val r = getTypeOfExpression(init)
-            CtaSections.close(CtaSections.N_GET_TYPE_OF_EXPR, t0)
-            r
+            enumNumericLiteralSource(init, targetType) ?: run {
+                val t0 = CtaSections.t()
+                val r = getTypeOfExpression(init)
+                CtaSections.close(CtaSections.N_GET_TYPE_OF_EXPR, t0)
+                r
+            }
         }
         contextualType = savedContextual
         // 17.43: contextual literal preservation — when init is a generic
@@ -95712,7 +95725,7 @@ interface DataView {
             // contain literal members (mirrors B69.5 in checkAssignmentExpression).
             // `var b: Boolean = true` displays as `Type 'boolean' is not
             // assignable to type 'Boolean'`, not `'true'`.
-            val displaySourceType = if (propTypeContainsLiteral(targetType)) sourceType
+            val displaySourceType = if (ts2322KeepsSourceLiteral(targetType)) sourceType
                 else getWidenedLiteralType(sourceType)
             // B471: a bare class identifier in value position is its CONSTRUCTOR
             // (`typeof C`), but getTypeOfExpression resolves it to the instance type
@@ -98647,7 +98660,7 @@ interface DataView {
                     val sourceTypeRaw = if (propTypeContainsLiteral(tt)) {
                         literalTypeOfExpression(expr.right, isArrayLikeReference(tt)) ?: getTypeOfExpression(expr.right)
                     } else {
-                        getTypeOfExpression(expr.right)
+                        enumNumericLiteralSource(expr.right, tt) ?: getTypeOfExpression(expr.right)
                     }
                     // M3.4: narrow a reference RHS via the flow graph before the missing-property /
                     // relation checks below. A preceding user type-guard can narrow the RHS to a
@@ -99164,7 +99177,7 @@ interface DataView {
                         // (widened) not `false` when target is `{ [n: number]: any }`
                         // (no literal context). When target preserves literal (e.g.
                         // `false` or `true | false`), keep the literal display.
-                        val displaySourceType = if (propTypeContainsLiteral(tt)) sourceType
+                        val displaySourceType = if (ts2322KeepsSourceLiteral(tt)) sourceType
                             else getWidenedLiteralType(sourceType)
                         val displaySource = typeToString(displaySourceType)
                         // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
@@ -99196,6 +99209,9 @@ interface DataView {
                         val ttForDisplay = stripNullishFromDisplayTarget(tt, sourceType)
                         val displayTarget = if (isIntrinsicNumericLiteral) resolvedDisplay
                             else if (isPureFuncNoAlias) resolvedDisplay
+                            // (REL.1)(c): an enum-MEMBER target prints QUALIFIED — see
+                            // [displayTargetAnnotation], the var-decl path's twin.
+                            else if (tt.flags.hasAny(TypeFlags.EnumLiteral)) resolvedDisplay
                             else if (ttForDisplay !== tt) typeToString(ttForDisplay)
                             else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: resolvedDisplay
                             else resolvedDisplay
@@ -102750,6 +102766,113 @@ interface DataView {
             }
             else -> null
         }
+    }
+
+    /**
+     * (REL.1)(c) round 745: the value domain of an enum-flavored [type], but ONLY
+     * when it is COMPLETE — every member of the owning enum has a value we
+     * evaluated to a literal. `null` otherwise, and `null` must be read as "this
+     * enum can hold anything numeric", never as "the empty domain".
+     *
+     * This is the gate [enumDomainValues] deliberately does not apply: that helper
+     * answers "which values have we evaluated", which is the right question for
+     * NARROWING (dropping a constituent needs only the values we know) and the
+     * wrong one for REJECTION. An enum with one un-evaluable member is tsc's
+     * *computed* enum: its member types carry `TypeFlags.Enum` rather than a
+     * literal value, so every numeric literal stays assignable to it.
+     */
+    private fun enumKnownDomainValues(type: Type): List<ConstantValue>? {
+        val sym = (type as? Type.Object)?.symbol ?: return null
+        val owner = when {
+            sym.flags.hasAny(SymbolFlags.Enum) -> sym
+            sym.flags.hasAny(SymbolFlags.EnumMember) ->
+                sym.parent?.takeIf { it.flags.hasAny(SymbolFlags.Enum) }
+            else -> null
+        } ?: return null
+        if (!enumValueDomainIsComplete(owner)) return null
+        return enumDomainValues(type)
+    }
+
+    /**
+     * (REL.1)(c) round 745: is EVERY member of [enumSym] backed by an evaluated
+     * literal value?
+     *
+     * Three ways to answer no, each of them a shape tsc models as a *computed*
+     * enum (`createComputedEnumType`), i.e. one that keeps accepting any number:
+     * a member whose initializer the constant evaluator could not fold; a member
+     * with a name we cannot key ([enumValues] skips it); and — the non-obvious
+     * one — a member with NO initializer in an AMBIENT non-const enum, which tsc
+     * explicitly declines to auto-number (`declare enum D { X, Y }` has undefined
+     * member values, so `let d: D = 7` is legal). We DO auto-number those in
+     * [computeEnumSymbolValues], because the Transformer needs a value to emit;
+     * this predicate is where that difference must not leak into the relation.
+     *
+     * An enum with no members at all answers `false`: an empty domain would read
+     * as "nothing is assignable" and reject everything.
+     */
+    private fun enumValueDomainIsComplete(enumSym: Symbol): Boolean =
+        enumDomainCompleteCache.getOrPut(enumSym.id) {
+            val canonical = canonicalEnumSymbol(enumSym)
+            val values = enumValues[canonical.id] ?: return@getOrPut false
+            val decls = canonical.declarations.filterIsInstance<EnumDeclaration>()
+                .ifEmpty { enumSym.declarations.filterIsInstance<EnumDeclaration>() }
+            var memberCount = 0
+            for (decl in decls) {
+                val ambient = enumDeclIsAmbient(decl)
+                val isConst = ModifierFlag.Const in decl.modifiers
+                for (member in decl.members) {
+                    val name = when (val n = member.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        is NumericLiteralNode -> n.text
+                        else -> return@getOrPut false
+                    }
+                    memberCount++
+                    if (name !in values) return@getOrPut false
+                    if (member.initializer == null && ambient && !isConst) return@getOrPut false
+                }
+            }
+            memberCount > 0
+        }
+
+    /**
+     * (REL.1)(c) round 745: is [decl] in an ambient context — its own `declare`, an
+     * enclosing `declare namespace`, or a `.d.ts` file?
+     *
+     * An UNINDEXED declaration (no [NodeBase.parent] chain, so no owning
+     * `SourceFile`) answers `true`: the caller uses this to decide whether a value
+     * domain may be trusted, and "we could not tell" must degrade to "do not
+     * trust it".
+     */
+    private fun enumDeclIsAmbient(decl: EnumDeclaration): Boolean {
+        if (ModifierFlag.Declare in decl.modifiers) return true
+        var cur: Node? = decl.parent
+        var hops = 0
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return isDtsFile(cur.fileName)
+            if (cur is ModuleDeclaration && ModifierFlag.Declare in cur.modifiers) return true
+            cur = (cur as NodeBase).parent
+        }
+        return true
+    }
+
+    /**
+     * (REL.1)(c) round 745: may a NUMERIC-LITERAL [source] be assigned to the
+     * enum-flavored [target]?
+     *
+     * tsc's rule, verbatim from `isSimpleTypeRelatedTo`: the WIDE `number` is
+     * assignable to any numeric enum or enum member (the bit-flag compatibility
+     * rule — `flags & Mask` types as `number`), but a numeric LITERAL is
+     * assignable only to a member with the SAME value, or to any member of an
+     * enum whose domain is not fully known.
+     *
+     * Anything that is not a numeric literal answers `true`, so this only ever
+     * TIGHTENS the numeric-literal case and no other source can start failing.
+     */
+    private fun numericLiteralFitsEnum(source: Type, target: Type): Boolean {
+        val lit = source as? Type.NumberLiteral ?: return true
+        val domain = enumKnownDomainValues(target) ?: return true
+        return domain.any { it is ConstantValue.NumberValue && it.value == lit.value }
     }
 
     /**
@@ -114299,6 +114422,46 @@ interface DataView {
         }
         if (!changed) return sourceType
         return if (sourceType is Type.Intersection) getIntersectionType(newConstituents) else newConstituents[0]
+    }
+
+    /**
+     * (REL.1)(c) round 745: does a TS2322 against [targetType] keep the SOURCE's
+     * literal value in its message, rather than widening it?
+     *
+     * An enum-flavored target does — tsc models an enum as the union of its members'
+     * literal types and reports `Type '4' is not assignable to type 'E'`, never the
+     * widened `Type 'number'`, which the value-aware relation rule makes load-bearing:
+     * the message would otherwise throw away the very value it rejected.
+     *
+     * DELIBERATELY NOT folded into [propTypeContainsLiteral] — that predicate has ~25
+     * consumers and most of them are not about display at all: several choose
+     * `literalTypeOfExpression` over `getTypeOfExpression` for the SOURCE, and
+     * `literalTypeOfExpression` does not unwrap a `NonNullExpression`, so admitting
+     * enums there made `languageVersion = undefined!` (parser.ts:1790) reject with the
+     * pre-assertion `undefined` — 4 profile FPs. This split keeps the display fix at
+     * the two TS2322 sites that need it.
+     */
+    private fun ts2322KeepsSourceLiteral(targetType: Type): Boolean =
+        propTypeContainsLiteral(targetType) || targetType.flags.hasAny(TypeFlags.EnumLike)
+
+    /**
+     * (REL.1)(c) round 745: the NUMERIC-LITERAL type of [init] when [targetType] is
+     * enum-flavored, else `null`.
+     *
+     * The value-aware relation rule needs the VALUE: `getTypeOfExpression` hands an
+     * assignability site the widened `number` for a literal initializer, and `number`
+     * relates to every numeric enum by the bit-flag rule, so `let e: E = 4` would
+     * never be asked the question.
+     *
+     * Restricted to a `Type.NumberLiteral` result BY CONSTRUCTION, which is the
+     * firewall: the broad fix — admitting enums to [propTypeContainsLiteral] — also
+     * routed non-numeric initializers through [literalTypeOfExpression] and made
+     * `languageVersion = undefined!` (parser.ts:1790) reach the relation as plain
+     * `undefined`, for 4 profile FPs. Nothing but a numeric literal can pass here.
+     */
+    private fun enumNumericLiteralSource(init: Expression, targetType: Type): Type.NumberLiteral? {
+        if (targetType.flags.hasNone(TypeFlags.EnumLike)) return null
+        return literalTypeOfExpression(init) as? Type.NumberLiteral
     }
 
     /** 17.43 helper: true if [propType] is a literal type or contains literal members. */
@@ -143491,8 +143654,18 @@ interface DataView {
         // When strict null checks are off, null/undefined assignable to everything
         if (!strictNullChecks && sf.hasAny(TypeFlags.Null or TypeFlags.Undefined)) return true
         // number → enum type (TypeScript allows number → enum)
+        //
+        // (REL.1)(c) round 745: VALUE-AWARE for a numeric LITERAL source. tsc models
+        // an all-literal enum as the UNION of its members' literal types, so `4` is
+        // assignable to `E` only when some member IS 4; the wide `number` stays
+        // assignable either way (the bit-flag rule). [numericLiteralFitsEnum] answers
+        // `true` for every non-literal source and for every enum whose domain we
+        // cannot fully evaluate, so this can only reject a numeric literal we have
+        // proved out of range.
         if (sf.hasAny(TypeFlags.NumberLike) && target is Type.Object && target.symbol != null &&
-            target.symbol!!.flags.hasAny(SymbolFlags.Enum)) return true
+            target.symbol!!.flags.hasAny(SymbolFlags.Enum)) {
+            if (numericLiteralFitsEnum(source, target)) return true
+        }
         // M3.1 (round 428b): numeric-enum → number (a numeric enum's values ARE
         // numbers — tsc debug.ts `formatEnum(this.flags, …)` where flags: FlowFlags
         // vs a `number` param). String-valued enums excluded by the classifier.
@@ -143510,10 +143683,11 @@ interface DataView {
         // from NumberLike (tsc keeps that both-ways rule for bit-flag enums), a
         // string-valued member to and from StringLike.
         //
-        // Deliberately VALUE-BLIND at step (a): `let a: E.A = 2` where `A === 0` is a
-        // real error, but it is [checkEnumLiteralAssignments]' error today and the
-        // relation must not start co-emitting it. Tightening this to tsc's
-        // value-equality rule belongs with (REL.1)(c), which retires that walker.
+        // VALUE-AWARE since (REL.1)(c) round 745, which is what retired
+        // `checkEnumLiteralAssignments`: `let a: E.A = 2` where `A === 0` is the
+        // relation's error now. Only a numeric LITERAL is judged by value — the wide
+        // `number` stays assignable to any numeric member, which is why `a = n`
+        // (n: number) is legal in the same test.
         //
         // (REL.1)(b) round 742 REMOVED the string TARGET half. Step (a) had it only for
         // behaviour-preservation symmetry with the former `anyType`; tsc REJECTS
@@ -143525,7 +143699,9 @@ interface DataView {
                 if (tf.hasAny(if (sourceIsString) TypeFlags.StringLike else TypeFlags.NumberLike)) return true
             }
             enumMemberTypeIsStringValued(target)?.let { targetIsString ->
-                if (!targetIsString && sf.hasAny(TypeFlags.NumberLike)) return true
+                if (!targetIsString && sf.hasAny(TypeFlags.NumberLike) &&
+                    numericLiteralFitsEnum(source, target)
+                ) return true
             }
         }
         // object type (non-primitive) — primitives are NOT assignable to object
@@ -158814,156 +158990,6 @@ interface DataView {
                         // Body-local re-declaration shadows the param for later statements.
                         params.remove(n)
                     }
-                }
-            }
-        }
-    }
-
-    /** B203: literal-member info for a single-declaration top-level enum. */
-    private class EnumLitInfo(
-        val allLiteral: Boolean,
-        val memberNames: Set<String>,
-        val memberValues: Map<String, Double>,
-    )
-
-    /**
-     * B203: enum-literal assignability for a numeric-literal RHS against an enum /
-     * enum-member annotation (enumAssignmentCompat5).
-     *
-     * TypeScript's union-enum rule: an enum whose members are ALL "literal enum
-     * members" (no initializer, a numeric literal, or unary-minus numeric literal)
-     * is a UNION of its member literal types — a numeric literal outside the
-     * member-value set is not assignable to it (`e = 4` where E = {0,1,2}), and a
-     * literal is assignable to a MEMBER type `E.A` only when it equals that
-     * member's value. An enum with ANY computed member has no union form: the bare
-     * enum type accepts any number, but its MEMBER type `Computed.A` accepts NO
-     * numeric literal at all.
-     *
-     * FP firewall: fires only for a SINGLE-declaration top-level enum whose name is
-     * declared by nothing else in the file (merges/shadows bail), an annotation that
-     * is a bare `E` / `E.A` TypeReference, and a plain numeric-literal (or
-     * unary-minus) RHS in a TOP-LEVEL var-decl initializer or top-level
-     * `x = <lit>` assignment. String-literal or unparseable members skip the whole
-     * enum (FN-safe).
-     */
-    private fun checkEnumLiteralAssignments() {
-        for (result in checkedResults) {
-            val fileName = result.sourceFile.fileName
-            if (isDtsFile(fileName) || isJsLikeFileName(fileName)) continue
-            val source = result.sourceFile.text
-            val stmts = result.sourceFile.statements
-            val enumGroups = mutableMapOf<String, MutableList<EnumDeclaration>>()
-            for (s in stmts) if (s is EnumDeclaration) enumGroups.getOrPut(s.name.text) { mutableListOf() }.add(s)
-            if (enumGroups.isEmpty()) continue
-            // Bail per name when anything else top-level declares the same name
-            // (clodule/namespace merges, shadowing vars, imports).
-            fun nameDeclaredElsewhere(name: String): Boolean = stmts.any { st ->
-                when (st) {
-                    is ClassDeclaration -> st.name?.text == name
-                    is FunctionDeclaration -> st.name?.text == name
-                    is ModuleDeclaration -> (st.name as? Identifier)?.text == name
-                    is InterfaceDeclaration -> st.name.text == name
-                    is TypeAliasDeclaration -> st.name.text == name
-                    is ImportEqualsDeclaration -> st.name.text == name
-                    is VariableStatement -> st.declarationList.declarations.any { (it.name as? Identifier)?.text == name }
-                    else -> false
-                }
-            }
-            val enums = mutableMapOf<String, EnumLitInfo>()
-            outer@ for ((name, decls) in enumGroups) {
-                if (decls.size != 1 || nameDeclaredElsewhere(name)) continue
-                val memberNames = mutableSetOf<String>()
-                val values = mutableMapOf<String, Double>()
-                var auto = 0.0
-                var allLiteral = true
-                for (m in decls[0].members) {
-                    val mName = when (val n = m.name) {
-                        is Identifier -> n.text
-                        is StringLiteralNode -> n.text
-                        else -> continue@outer
-                    }
-                    memberNames.add(mName)
-                    val init = m.initializer
-                    when {
-                        init == null -> if (allLiteral) { values[mName] = auto; auto += 1 }
-                        init is NumericLiteralNode -> {
-                            val v = init.text.toDoubleOrNull() ?: continue@outer
-                            values[mName] = v; auto = v + 1
-                        }
-                        init is PrefixUnaryExpression && init.operator == SyntaxKind.Minus &&
-                            init.operand is NumericLiteralNode -> {
-                            val v = (init.operand).text.toDoubleOrNull() ?: continue@outer
-                            values[mName] = -v; auto = -v + 1
-                        }
-                        init is StringLiteralNode -> continue@outer
-                        else -> allLiteral = false
-                    }
-                }
-                enums[name] = EnumLitInfo(allLiteral, memberNames, values)
-            }
-            if (enums.isEmpty()) continue
-            fun litValueOf(e: Expression): Pair<Double, String>? = when {
-                e is NumericLiteralNode -> e.text.toDoubleOrNull()?.let { it to e.text }
-                e is PrefixUnaryExpression && e.operator == SyntaxKind.Minus && e.operand is NumericLiteralNode ->
-                    (e.operand).text.toDoubleOrNull()?.let { (-it) to "-${(e.operand).text}" }
-                else -> null
-            }
-            fun annoOf(t: TypeNode?): Pair<String, String?>? {
-                val tr = t as? TypeReference ?: return null
-                if (tr.typeArguments != null) return null
-                return when (val tn = tr.typeName) {
-                    is Identifier -> if (tn.text in enums) tn.text to null else null
-                    is QualifiedName -> {
-                        val left = (tn.left as? Identifier)?.text ?: return null
-                        if (left in enums && tn.right.text in enums[left]!!.memberNames) left to tn.right.text else null
-                    }
-                    else -> null
-                }
-            }
-            fun checkOne(anno: Pair<String, String?>, rhs: Expression, nameNode: Identifier) {
-                val (v, display) = litValueOf(rhs) ?: return
-                val info = enums[anno.first] ?: return
-                val member = anno.second
-                val bad = if (member == null) {
-                    info.allLiteral && info.memberValues.values.none { it == v }
-                } else if (info.allLiteral) {
-                    info.memberValues[member]?.let { it != v } ?: false
-                } else {
-                    true
-                }
-                if (bad) {
-                    val typeDisp = if (member == null) anno.first else "${anno.first}.$member"
-                    val (line, ch) = getLineAndCharacterOfPosition(source, nameNode.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Type '$display' is not assignable to type '$typeDisp'.",
-                        category = DiagnosticCategory.Error, code = 2322,
-                        fileName = fileName, line = line, character = ch,
-                        start = nameNode.pos, length = nameNode.text.length,
-                    ))
-                }
-            }
-            val varAnno = mutableMapOf<String, Pair<String, String?>>()
-            for (st in stmts) {
-                when (st) {
-                    is VariableStatement -> for (d in st.declarationList.declarations) {
-                        val n = (d.name as? Identifier) ?: continue
-                        val anno = annoOf(d.type)
-                        if (anno != null && n.text !in varAnno) {
-                            varAnno[n.text] = anno
-                            d.initializer?.let { checkOne(anno, it, n) }
-                        } else if (d.type != null && anno == null) {
-                            // re-declaration with a non-enum annotation shadows
-                            varAnno.remove(n.text)
-                        }
-                    }
-                    is ExpressionStatement -> {
-                        val be = st.expression as? BinaryExpression ?: continue
-                        if (be.operator != SyntaxKind.Equals) continue
-                        val target = be.left as? Identifier ?: continue
-                        val anno = varAnno[target.text] ?: continue
-                        checkOne(anno, be.right, target)
-                    }
-                    else -> {}
                 }
             }
         }

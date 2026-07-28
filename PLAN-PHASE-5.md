@@ -20,6 +20,96 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 745 (2026-07-28) — (REL.1)(c) STEP 1 LANDED: THE RELATION IS VALUE-AWARE, AND
+`checkEnumLiteralAssignments` (B203) IS RETIRED IN THE SAME COMMIT.** Corpus
+**12,971 -> 12,982 / 0 failures / 3 skipped** (+11 pins). Compiler profile `--listAll`
+**at 46, diffed line-by-line** — composition unchanged (TS2591x43 / TS2304x2 / TS2584x1,
+zero TS2322). Cost gate **+0.00% on all 20 counters**, no rebaseline (`typeOfExpr.calls`
+-16, `globals.lookups` +1 — the deleted pass, and nothing else).
+
+**THE ABLATION IS THE EVIDENCE, IN BOTH DIRECTIONS, AND IT IS WHY THIS IS ONE COMMIT.**
+Round 744's census measured B203 owning all 3 of `enumAssignmentCompat5`; this round
+re-ran it on the new build:
+
+| build | B203 | diagnostics on `enumAssignmentCompat5` |
+|---|---|---|
+| pre-745 | enabled | 3 (all B203's) |
+| pre-745 | PassLab-disabled | **0** — the relation could not answer |
+| post-745 | enabled | **6 — each of the three DUPLICATED** |
+| post-745 | disabled/deleted | **3, byte-identical to the baseline** (message, position, length) |
+
+That third row is round 740's predicted co-emission, reproduced. Landing the rule without
+the retirement is a 3-diagnostic regression; landing the retirement without the rule is a
+3-diagnostic regression the other way. They are one change.
+
+**THE RULE IS tsc's `isSimpleTypeRelatedTo` TAIL, VERBATIM** (checker.ts:22270 in the
+pinned tsc):
+
+```ts
+if (s & Number && (t & Enum || t & NumberLiteral && t & EnumLiteral)) return true;
+if (s & NumberLiteral && !(s & EnumLiteral) && (t & Enum ||
+      t & NumberLiteral && t & EnumLiteral && source.value === target.value)) return true;
+```
+
+i.e. the WIDE `number` stays assignable to any numeric enum or member (the bit-flag
+compatibility rule — which is why `a = n` is legal on the very next line of the same
+corpus test), while a numeric LITERAL must EQUAL the member's value. `numericLiteralFitsEnum`
+answers `true` for every non-`Type.NumberLiteral` source, so the change can only tighten the
+one case; it applies at both enum legs of `isSimpleTypeRelatedTo` (the enum's own type and
+the member type).
+
+**THE NON-OBVIOUS INPUT IS NOT THE VALUE, IT IS WHETHER THE DOMAIN IS KNOWN AT ALL.**
+tsc mints `createComputedEnumType` for a member whose value is `undefined`, and such a type
+carries `TypeFlags.Enum` rather than a literal — so it keeps accepting every number. Three
+shapes produce it, and `enumValueDomainIsComplete` has to answer no to each: an unfoldable
+initializer, an unkeyable member name, and — the one no reading of our own code would
+suggest — **a member with NO initializer in an AMBIENT non-const enum**, which tsc
+explicitly declines to auto-number. We DO auto-number those (the Transformer needs a value
+to emit), so `declare enum D { X, Y }; let d: D = 7` is legal in tsc and B203 reported it.
+**Retiring B203 therefore REMOVES an FP**, and adds four shapes its top-level-var/assignment
+scan never saw: function bodies, string enums (`let s: Str = 4`), negative literals, and
+`const enum`. Ambient-ness is decided per DECLARATION (`enumDeclIsAmbient`: own `declare`,
+an enclosing `declare namespace`, or a `.d.ts` file via the INV.2(a) parent chain), and an
+UNINDEXED declaration answers "ambient" — "we could not tell" must degrade to "do not
+trust the domain".
+
+**WHAT DID NOT WORK, and it cost a profile run: the message needs the source's literal
+value, and the obvious way to obtain it is wrong.** `Type '4' is not assignable to type 'E'`
+requires the source type to BE `Type.NumberLiteral(4)`; at an assignability site
+`getTypeOfExpression` hands over the widened `number`, which relates to every enum, so the
+rule would never even be consulted. The one-line fix — admit `TypeFlags.EnumLike` to
+`propTypeContainsLiteral` — makes the corpus test pass and **takes the profile 46 -> 50**:
+that predicate has ~25 consumers and most are not about display at all. Several choose
+`literalTypeOfExpression` over `getTypeOfExpression` for the SOURCE, and
+`literalTypeOfExpression` answers `undefinedType` for the identifier `undefined` while
+knowing nothing about the `!` that follows it, so tsc's own
+`languageVersion = undefined!` / `scriptKind = undefined!` / `languageVariant = undefined!`
+(parser.ts:1790/1792/1793, plus one more) started rejecting. Split in two it is 46 again:
+`ts2322KeepsSourceLiteral` for the two TS2322 DISPLAY sites, and `enumNumericLiteralSource`
+for the two SOURCE-selection sites, **restricted to a `Type.NumberLiteral` result by
+construction** so nothing else can ever travel that path. The 1.3-second scratch-project CLI
+loop reproduced the FP from a three-line file in one iteration; the profile only confirmed it.
+
+**ONE DISPLAY FIX RIDES ALONG, and it is pre-existing rather than new.** An enum-MEMBER
+annotation printed UNQUALIFIED (`Type 'string' is not assignable to type 'A'`) because
+`formatTypeForDisplay` reduces a `QualifiedName` to its last name — right for a namespaced
+interface, wrong for an enum member, whose tsc display name always carries its enum.
+`displayTargetAnnotation` and the assignment path's twin now defer to `typeToString` for an
+`EnumLiteral` target, which round 742 had already taught to qualify.
+
+**STILL LOAD-BEARING, RE-CONFIRMED, NOT TOUCHED.** `checkEnumToEnumAssignments` (all 12 of
+`enumAssignmentCompat3`) and `checkNamespaceEnumUnionAssignments` (2 of 5 of
+`enumLiteralAssignableToEnumInsideUnion`) both answer a DIFFERENT question — whether two
+distinct enums' members are value-identical, tsc's `isEnumTypeRelatedTo`, which
+`enumMemberTypesAreSameMember` deliberately does not check. They are step 2, not this step.
+
+**PIN DISCIPLINE.** All five positive pins live INSIDE A FUNCTION BODY on purpose: B203
+scanned only top-level statements, so a top-level pin would have passed on the pre-745 build
+and measured nothing. Non-vacuity is established by composition rather than by a rebuild —
+the pre-745 build with B203 ablated emits NOTHING for all three assignment shapes (measured),
+and B203 cannot see a function body (read from its `for (st in stmts)` walk). The ambient
+control is the sharpest of the six: it FAILS on pre-745, because B203 reported it.
+
 **Round 744 (2026-07-28) — (REL.1)(b) LANDED. THE TWO BLOCKING FPs WERE BOTH ENUM-FREE, BOTH
 PRE-EXISTING, AND BOTH REDUCED ON THE FIRST ATTEMPT ONCE THE MODEL STOPPED COPYING THE
 DIAGNOSTIC MESSAGE.** Corpus **12,971 / 0 failures / 3 skipped** (+15 pins over three commits;
@@ -1019,214 +1109,6 @@ emitter gaps, not regressions — and were rewritten onto TS2345 at a call argum
 path this round actually profiles. **Run a failing negative control against the baseline
 before believing OR dismissing it.**
 
-**Round 735 (2026-07-27) — (CALL.2) DONE. THE PRIOR HOLDS BY 48x, AND ITS SUPPORTING
-EVIDENCE POINTS AT THE WRONG TERM.** The item's falsifiable expectation was "most of the
-61 us is argument TYPE computation, not `checkTypeRelatedTo`". **It is: 924 ms of the
-function's 1,624 ms is the `argType` computation against 19 ms for the whole
-`checkTypeRelatedTo`+TS2345 section (10 ms for the relation call itself).** But the prior
-reasoned from `getTypeOfExpression` (3,911 ms, recompute x2.7) — and **inside this
-function `getTypeOfExpression` is 196 ms (12%) while FLOW NARROWING is 600 ms (37%)**.
-So (CALL.2) does NOT reach ARCHITECTURE-RETHINK section 0.1 **stage 3**; it reaches
-**stage 4**. Full derivation: `docs/perf/argument-check-attribution.md`. Suite 12,892 ->
-**12,899 / 0 / 3** (+7 pins, `ArgSectionProbeTest`); cost gate all 20 counters +0.00%;
-profile `--listAll` identical in production, `--argSections` and `--argSectionsCoarse`
-(46 errors). **No optimisation was landed** — every candidate inside this function prices
-below the +-2% band, and the one target that is ABOVE it was disproved three times over
-in the same run (below).
-
-**THE COMPILE-WIDE FINDING, and it is the round's real product.** The walk histogram was
-also added to `flowWalkWithTripCheck` under `--passTiming`, so it covers all 70,037 walks
-from all 11 call-site kinds: `<10us=40,046/159ms  <100us=25,695/811ms  <1ms=3,902/827ms`
-and **`>=1ms=394 walks/1,485 ms`**. **394 walks (0.56%) carry 47% of all flow narrowing
-and 4.9% of a 30.5 s compile** — the first single target measured ABOVE the +-2% drift
-band (~610 ms) since round 731, by 2.4x. By kind: WK_NARROW 336, WK_NARROW_LOOP 47,
-WK_BASE_EXPR 11, so it is one walk function, not one caller.
-
-**WHAT DID NOT WORK — three mechanisms for those 394, all DISPROVED by the same run.**
-(1) "They are TRIPPED walks, which are deliberately never memoized, so they re-run in
-full at every visit" — **FALSE, `narrowWalk tripped: 0 walks`; nothing trips on this
-profile.** (2) "They exhaust the 1,000,000-visit budget" — **FALSE: the 394 consume
-630,641 flow-node arrivals TOTAL, 1,601 each, max 19,515**, two orders of magnitude
-below it. (3) "The walk memo would serve them" — **FALSE: `walkMiss split: cold=69,968
-epochInvalidated=69`**, so essentially every launched walk is a first sighting and no
-cache reaches it (section 0's law from a fourth direction; the LIVE memo already serves
-40,709). What is left is arithmetic: all walks average **372 ns per node arrival**, the
-394 monsters **2,354 ns** — 13x more arrivals AND 6.3x more expensive arrivals, and
-neither factor alone explains it.
-
-**ALSO PRICED AND BELOW BAND, so recorded rather than attempted.** 86% of this function's
-9,615 narrowing walks (8,299) return the INPUT type unchanged, costing 237 ms — so a
-pre-test proving "this reference has no flow facts" is worth at most 0.8% of the compile.
-And the exit profile: **only 10,146 of 38,247 loop iterations (27%) ever reach the
-assignability check** (14,663 leave at the weak-target section, 12,280 in the
-`!isSimpleCheckableType` function-vs-function block) — yet all 37,379 pay the full
-`argType` computation, because every intervening block consumes `argType`. That is a real
-structural observation, not a lever: the work cannot be deferred past its consumers.
-
-**THE CALIBRATION, THIRD TIME, AND THE FIX IS NOW A MODE.** Round 734's lesson was
-"calibrate DIFFERENTIALLY, not with an empty span". This round generalises it:
-`--argSectionsCoarse` keeps only three anchors, so every other boundary costs a static
-read and a not-taken branch while the partition still spans the same wall time. ON is
-1,624 ms over 404,358 boundaries + ~293k nested reads; COARSE is **1,569 ms over 83,085**
--> **89 ns per timestamp read**, independently reproducing round 734's 86-92 ns by a
-different construction. The unrolled in-situ empty-span calibration in the SAME run
-reported **391 ns — 4.4x too high**, the identical error round 734 saw at 306 vs 86.
-**Total probe inflation 55 ms of 1,624 = 3.4%.**
-
-**THE NEXT UNIT is (CALL.3), and it needs two numbers before anything is designed.**
-(a) Node ARRIVALS versus DISTINCT flow nodes per monster walk: the intra-walk memo
-(`NarrowFlowMemo`, tsc's `sharedFlowNodes`) serves only entries stored at a
-same-or-deeper entry depth (`served(id, depth)` requires `depth <= stored`), so a revisit
-reached by a LONGER path misses — if arrivals >> distinct, that depth condition is the
-lever. (b) The per-arrival split of `narrowTypeFromFlow` (`applyConditionNarrowing`,
-`flowAssignmentMightNarrow`, `flowCallMightNarrow`, the `FlowBranchLabel` fan-out) —
-2,354 ns is not graph traversal. Anything proposed before those exist repeats the error
-of rounds 732/733/734, which predicted levers 5x, 6-17x and >=2x too large.
-
-**Round 734 (2026-07-27) — (CALL.1) DONE. THE MEASUREMENT CHOSE BRANCH B, by 4x, and
-Branch A is disproved on TWO independent grounds.** The item asked which of two things
-`checkSingleCallExpressionTypes`'s 2.9 s is: (A) per-call PRE-work that never-firing
-emission sites pay before they know they will not fire — "hoisting removes 1-2 s" — or
-(B) signature resolution and argument relations, i.e. genuine type-system work whose
-lever is M3.1 and not this function. **It is B. 78% of the function (2,007 of 2,564 ms
-raw) is type-system work**: `checkArgumentsAgainstSignature` **1,357 ms (53%)**,
-`getCalleeType` **474 ms (18%)**, the TS2793 impl-would-have-succeeded probe 101,
-`checkArgumentsAgainstOverloads` 53, `getCallSignaturesOfType` 19. **No optimisation was
-landed** — per the item's own instruction for this outcome, and per round 733's
-precedent. Full derivation: `docs/perf/call-expression-attribution.md`. Suite 12,887 ->
-**12,892 / 0 / 3** (+5 pins, `CallSectionProbeTest`); cost gate all 20 counters +0.00%;
-profile `--listAll` identical probe-on vs probe-off (46 errors).
-
-**BRANCH A IS WRONG STATICALLY, BEFORE ANY TIMING.** The item's counts are right — 22
-`getLineAndCharacterOfPosition`, 17 `expressionTrueEnd`, 11 `typeToString`, 18
-`diagnostics.add` — but its claim that they are "all computed before the gate that
-decides whether to emit" is false for **every single site**: 16 of the 22 sit literally
-inside `if (length > 0) {`, and the rest inside `if (display != null)` /
-`if (pname != null)` / a `run{}` past all its `?: return@run` gates. **There is no
-pre-gate emission work to hoist. The gates already ARE the cheap pre-test the item
-proposed adding.** (Reproduce by listing the line preceding each call site over the
-function's line range — a 30-second check that would have retargeted the round.)
-
-**AND WRONG DYNAMICALLY.** Everything in the function that is not type-system work
-totals **557 ms**, ~70 ms of which is the probe itself → a theoretical maximum prize of
-**~490 ms = 1.6% of a 30.5 s compile**, i.e. INSIDE the +-2% drift band (~610 ms). The
-prize is smaller than the noise that would have to measure it, so no A/B is offered —
-the same restraint round 733 exercised. The largest hoistable block, the seven
-never-firing prologue walkers measured as ONE span, is **253 ms**.
-
-**THE EXIT PROFILE, which the partition gives away for free** (`calls[s]` = invocations
-that REACHED section s, so the drop between sections is the exit count): of 52,413
-invocations, **26,496 (50.6%) leave at the `calleeType === anyType || errorType` bail** —
-after `getCalleeType` has run in full; 22,145 (42.2%) reach the single-signature branch;
-3,640 the overload branch; 101 the explicit-type-argument branch; 31 the union branch;
-and **0 reach the ~240-line `signatures.isEmpty()` branch** with its seven emission
-sites, so its `binderResults x top-level-statements` scan — the one genuinely pre-gate
-computation in the function — never runs on this profile. **0 of the seven prologue
-walkers fire, and they still cost 253 ms**: that cost is gate evaluation, which is
-exactly why there is nothing to hoist.
-
-**WHAT WAS BUILT.** `CallSections` (in SpineDispatch.kt) + boundaries inside the
-function, opt-in via `--callSections`, behaviour-free when off. The function was split
-into a wrapper and `…Core`: the wrapper branches once on `mode` and otherwise calls the
-core directly — no `try`/`finally`, no bookkeeping. Unlike a spine handler this function
-has ~20 early `return`s, so the running section lives in the object and is closed by
-`end()` from the wrapper's `finally`; the pay-off is the free exit profile above. 16
-partition boundaries in source order, plus six nested sub-measures (the two
-`checkArgumentsAgainstSignature` call sites, `checkArgumentsAgainstOverloads`, the TS2793
-probe, the five dedicated single-sig walkers, and the whole prologue as ONE span).
-
-**WHAT DID NOT WORK — the calibration, twice, and the fix is a METHOD not a constant.**
-Round 733's lesson was "calibrate in situ, not at startup". In situ is necessary and NOT
-sufficient. Draft 1 measured the empty span from `begin()` to the core's first boundary
-and read **922 ns** — it spans the wrapper's non-inlinable call into a 3,587-bytecode
-method, a cold transition rather than a timestamp pair — which drove SIX sections
-negative. Draft 2 used `repeat(8) { at(...) }` and read **360 ns**: a `repeat` loop puts
-a **back-edge SAFEPOINT POLL inside every empty span**, so stop-the-world pauses are
-attributed to the calibration. Unrolling gave **306 ns** — still 3x too high. **The
-honest figure is DIFFERENTIAL: the prologue is measured twice in the same run, as seven
-sections (280 ms) and as one span (253 ms); six extra boundaries over 52,413 invocations
-= 86 ns each** (the prior run gave 92 ns on the same construction). That independently
-agrees with the round-733 technique — `--passTiming` with vs without `--callSections`
-moved `checkSpine` by **+29 ms**, +0.1%. Total probe inflation inside the partition is
-~70 ms of 2,564 ms = 2.7%, so the report's `raw` column is an upper bound and its `net`
-(which subtracts the pessimistic 306 ns) a lower one.
-
-**A NON-FINDING WORTH RECORDING.** The 922 ns first reading made "HotSpot refuses to JIT
-this method" look plausible (`DontCompileHugeMethods` skips >8,000 bytecodes, and the
-function is 920 lines). `javap` settles it in one command: the core is **3,587
-bytecodes**, well under the limit. Check the bytecode size before theorising about the
-JIT.
-
-**THE REAL LEVER, and it is queued as (CALL.2).** `checkArgumentsAgainstSignature` is
-now the largest single measured cost in the compiler: **1,357 ms over 22,145 calls =
-61 us each**, in a **1,534-line function** — larger than the one this round attributed.
-Whole-compile counters for the same run (`getTypeOfExpression` 3,911 ms / 701,736 calls,
-recompute x2.7; relations at depth 0 only 699 ms) make the falsifiable prior that most
-of the 61 us is argument TYPE computation rather than `checkTypeRelatedTo`. Secondary:
-`getCalleeType` costs 474 ms and half its results are thrown away three sections later —
-ask whether the bail's verdict is knowable more cheaply than by resolving (NOT a caching
-question; ARCHITECTURE-RETHINK § 0 closed those).
-
-**Round 733 (2026-07-27) — (SPINE.1) step (a) DONE, and it FALSIFIES the item TWICE.** The
-two hottest spine leave handlers were attributed INTERNALLY (not guessed — round 732's
-whole lesson), and the item's premise does not survive: **`cpaSpineLeave` + `ccetSpineLeave`
-are not "legacy-parity frame bookkeeping". 88.4% of their measured time is the cpa and ccet
-passes' OWN checking work** (`checkPropertyAccessInExpr`, `checkSingleCallExpressionTypes`)
-running inside the frame-ambient block. And the item's named target — the ancestor climbs —
-is **176 ms, not the predicted 1-3 s**. Full derivation, per-section table and reproduction:
-`docs/perf/spine-leave-attribution.md`. Suite 12,882 -> **12,887 / 0 / 3** (+5 pins,
-`SpineSectionProbeTest`); cost gate all 20 counters +0.00%; profile `--listAll` identical
-probe-on vs probe-off (46 errors).
-
-**WHAT WAS BUILT.** `SpineSections` (in SpineDispatch.kt) + splits in the two handlers,
-opt-in via `--spineSections` and behaviour-free when off (`t`/`split`/`close`/`hit` are
-`inline`, so production pays a load-and-branch, never a call). The sections PARTITION each
-handler (7 cpa + 4 ccet) via a running-timestamp split inserted BETWEEN existing sections —
-no control flow was restructured. Nested sub-measures wrap the three ancestor climbs (each
-split into a timing wrapper + an untouched `…Core`) and both frame-ambient installs (a
-`sec`/`kind` param defaulting to `NONE`, so only the LEAVE call sites record), and the
-ambient is reported twice: whole-wrapper and install+restore ONLY — that second row is what
-separates scaffolding from work.
-
-**THE NUMBERS** (compiler profile, 856,962 nodes, net of a 42 ns probe pair; partition total
-8,195 ms net vs round 732's un-split 7,412 ms, so ~10% probe-inflated — relative attribution
-only). cpaSpineLeave 4,934 ms: anchor stmt **3,304** (45,626 hits), owner cond/subject
-**1,349** (19,551), VariableDeclaration recordings 180, frame pop 48, loop-var restores 25,
-heritage EWTA 17 (2 hits), PropertyDeclaration 11 (5 hits). ccetSpineLeave 3,254 ms:
-call/new/tagged anchor **3,136** (52,972), VariableDeclaration recordings 78, frame pop 33,
-override restores 7. **THE SPLIT THAT MATTERS: inside the frame-ambient block 7,601 ms
-(92.8%), of which the ambient install+restore is only 360 ms — so the passes' own work is
-7,241 ms = 88.4%. Outside the ambient: 587 ms (7.2%), of which the three climbs are 176 ms
-(2.1%).**
-
-**BOTH STEP-(b) HYPOTHESES PRICED AND DEAD.** (1) Memoizing `cpaM2ChainOk`/`cpaM2StmtPosition`:
-the entire cpa climb population is **85 ms** (77 + 8), 176 ms including `ccetM3ChainOk` —
-falsified by 6-17x, and § 0's law bites (a keyed probe cannot pay for a 932 ns walk over mean
-ancestor depth 6). (2) A parent-kindId dispatch axis: the three parent-keyed sections are
-`owner` 1,349 ms (of which ~1,340 is its 19,551 hits' WORK), EWTA 17 ms and PropertyDeclaration
-11 ms — **worth <=60 ms**. Five of cpaSpineLeave's seven sections cost 281 ms across 856,962
-consultations EACH; consultation is not the expense here either.
-
-**WHAT THE NUMBERS DO POINT AT — the next unit of work.** `checkSingleCallExpressionTypes` is
-**53.6 us per CallExpression** (2,931 ms over 52,413 anchors, minus the 2.3 us install). It is
-a **920-line straight-line function with 18 `diagnostics.add` sites and 7 `run{}` blocks, run
-in full for every call expression in the program** — 2.9 s, ~10% of a ~28 s compile, in ONE
-function, and the largest per-node cost measured anywhere in this compiler. Unlike the cpa
-anchors (which walk a statement subtree, so tens of us is expected) this is per-NODE. Round
-732's per-kind table agrees: it put CALL_EXPRESSION at 3,636 ms across all 59 handlers, and
-3,082 ms of that is ccetSpineLeave alone.
-
-**WHAT DID NOT WORK / WHAT WAS NOT DONE.** (a) NOTHING was optimised, deliberately: every
-candidate the item named measures below the 560 ms drift band of a 28 s compile, and the
-largest remaining scaffolding item (the 360 ms ambient install+restore) is ~1.2% — landing a
-speculative change to have something to show is exactly what round 732's falsification bought
-the right not to do. (b) The first probe calibrated at JVM STARTUP and read 40,573 ns per
-timestamp pair (the cold interpreter), making every net figure NEGATIVE; the calibration is
-now IN SITU — an empty span at the top of `cpaSpineLeave`, once per node, reading 42 ns. (c)
-A checked-and-discarded lead: the legacy `checkCallTypesInExpr` still calls
-`checkSingleCallExpressionTypes` and truncates the diagnostics via `ccetM3IsAnchored`, which
-looks like emit-twice — it is not, because the ccet/cpa/cta legacy PASSES were retired
-(rounds 585/592), so those truncation marks are inert residue. No duplicate work.
 
 ---
 
@@ -1363,9 +1245,29 @@ backlog-horizon decision, not queue debt.)
       `Type` instances because `canonicalEnumSymbol` cannot canonicalize a module-scoped enum
       post-INV.3(d)" hypothesis is FALSE — the structural verdict left the profile at the SAME
       FPs. It is kept anyway: strictly more correct and free.
-  - **(c) Delete the scaffolding — REDIRECTED round 744 BY ABLATION. The first deletion is NOT
-    any of the three AST-only passes; it is a VALUE-AWARE disjointness rule, and every pass
-    stays until that lands.** Round 740's inventory called those three "100% artifacts,
+  - **(c) Delete the scaffolding — STEP 1 DONE round 745: the value-aware rule landed and
+    `checkEnumLiteralAssignments` (B203) is RETIRED with it, in one commit.** Corpus
+    12,982 / 0 / 3 (+11 pins), profile at 46 diffed line-by-line, cost gate +0.00% on all 20
+    counters. `numericLiteralFitsEnum` applies tsc's rule at both enum legs of
+    `isSimpleTypeRelatedTo`: the wide `number` still relates to any numeric enum or member
+    (bit-flag compatibility), a numeric LITERAL must equal the member's value, and an enum
+    whose domain is not fully known keeps accepting everything — `enumValueDomainIsComplete`,
+    whose third clause is tsc's *computed* enum: **a member with no initializer in an AMBIENT
+    non-const enum has NO value in tsc**, so retiring B203 also removed an FP it had on
+    `declare enum D { X, Y }; let d: D = 7`. Two supporting splits were forced by measurement,
+    NOT by design: the source must reach the relation as a `Type.NumberLiteral`
+    (`enumNumericLiteralSource`, restricted to that type by construction — admitting enums to
+    `propTypeContainsLiteral` instead cost 4 profile FPs on `x = undefined!`), and the message
+    keeps the literal via `ts2322KeepsSourceLiteral`. An enum-member TARGET also prints
+    QUALIFIED now.
+    - **STEP 2 (next): `checkEnumToEnumAssignments` and `checkNamespaceEnumUnionAssignments`.**
+      Both survive round 745 untouched because they answer a DIFFERENT question — whether two
+      DISTINCT enums' same-named members are value-identical (tsc's `isEnumTypeRelatedTo`,
+      which `enumMemberTypesAreSameMember` deliberately does not check) — plus, for B266, the
+      display collapse of a fully-covered member set to the bare enum name. Re-ablate before
+      touching either.
+    - **HISTORY — REDIRECTED round 744 BY ABLATION. The first deletion was NOT
+    any of the three AST-only passes; it was the VALUE-AWARE disjointness rule.** Round 740's inventory called those three "100% artifacts,
     deletable"; a PassLab census (`build/pass-lab.txt`, `disable <pass>`, ZERO recompile — run it
     whole-suite for the failing set, then per-walker through the scratch-project CLI for
     attribution) measures every one of them uniquely load-bearing:
