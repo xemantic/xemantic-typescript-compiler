@@ -121,6 +121,74 @@ count everybody had been arguing about.**
 **NO `src/` CHANGE** — stated explicitly rather than skipped silently, so no suite run; 12,927
 stands. Full derivation: **`docs/perf/worker-scaling-round740.md`**.
 
+**Round 740 — PART 2, (REL.1) DECOMPOSED AND SIZED (fix deliberately NOT attempted): THE
+BLAST RADIUS EVERYONE FEARED IS **ONE** CORPUS BASELINE, AND THE ROOT CAUSE IS NOT "the
+relation is lenient" — IT IS `anyType`.** The item said "blast radius is the reason it is a
+separate item: every enum-typed comparison in the corpus goes through this, TS2322/TS2367/
+TS2345 baselines included". Measured: **12,927 tests, 1 failure.**
+
+**THE DEFECT REPRODUCES, and worse than written.** `declare enum SK { A, B }` with sibling
+interfaces differing ONLY in `readonly kind: SK.A` vs `SK.B` compiles to **zero errors in BOTH
+directions** — mutually assignable, exactly as the item claims. Same for a plain `enum`, a
+`const enum`, and the bare `const k: SK.A = SK.B`.
+
+**ROOT CAUSE, LOCATED.** `getTypeFromTypeReference` (Checker.kt:102093) reduces `SK.A` to the
+BARE member name `"A"`, resolves it via `resolveQualifiedName` to the enum's `exports["A"]`
+(a `SymbolFlags.EnumMember` symbol), and `getDeclaredTypeOfSymbolWorker` (:102387) **has no
+branch for that flag** — it falls to `else -> anyType` (:102509), cached in
+`declaredTypes[symbol.id]`. So `SK.A` and `SK.B` are *the same `Type` instance*, and the
+relation was never asked a question it could get wrong. **Corollary worth its own line:
+`TypeFlags.EnumLiteral` (Type.kt:55) is SET NOWHERE — all ~11 read sites are dead code,
+including the widening rule `if (sf.hasAny(EnumLiteral) && tf.hasAny(Enum)) return true` at
+:143100, which is already written and waiting for a flag that never arrives.**
+
+**THE MEASUREMENT — a throwaway 3-edit probe, built, measured on two axes, and REVERTED**
+(`git diff src/commonMain` empty; profile `--listAll` byte-identical to the pre-probe run at
+46 errors; cost gate all 20 counters +0.00% — that triple is the revert's proof, not a
+formality). The probe: an `EnumMember` branch minting a distinct `Type.Object(Object or
+EnumLiteral)` per member symbol (already interned by `declaredTypes[symbol.id]`, so no new
+cache); the enum's own type flagged `Object or Enum` so the dead rule at :143100 fires; and an
+enum-literal disjointness rule at the top of `checkTypeRelatedToCore`. It WORKS — the repro
+goes to 2 x TS2322 with a correct elaboration chain (`Types of property 'kind' are
+incompatible. Type 'A' is not assignable to type 'B'.`) while both negative controls stay
+silent.
+
+| axis | before | with probe | delta |
+|---|---:|---:|---|
+| corpus suite | 12,927 / 0 | 12,927 / **1** | `enumAssignmentCompat5` |
+| compiler profile `--listAll` | 46 | 52 | +6 |
+| profile self time | 26.5-27.1 s band | 26,192 ms | no measurable cost |
+
+**AND THE SINGLE FAILURE IS THE MISSING LEG, NOT THE ADDED ONE** — which is why this sizes as
+a session. It is 4 spurious `TS2322: Type 'number' is not assignable to type 'A'`: a numeric
+enum member type must stay assignable FROM `number`, and from a numeric literal equal to the
+member's value (`let a: E.A = 0` legal because `A === 0`; `a = 2` not; `Computed.A = 1` not,
+because a computed member has no literal — all three already pinned in that one baseline).
+The profile's +6 is the same family: `Extension.Dts` (a STRING enum member) not assignable to
+`string`, plus knock-ons where a union no longer collapses now that its members are distinct
+(`Partial<CreateSourceFileOptions> | ESNext | CommonJS`). **The entire measured gap is ONE
+rule family: enum member <-> its base primitive.**
+
+**DECOMPOSITION (three landable sub-steps), WHICH CONSUMERS DIE, AND WHICH ONE SURVIVES** —
+written into the queue item rather than repeated here. The headline: **`discriminantPropAnnotation`,
+`kindDomainProvesNotSubtype`, `kindDomainKeysExceed` and THREE whole AST-only passes
+(`checkEnumLiteralAssignments`, `checkNamespaceEnumUnionAssignments`, `checkEnumToEnumAssignments`)
+are 100% artifacts and go**; twelve more AST-side key-space helpers go with their consumers;
+but **`canonicalEnumSymbol` SURVIVES in modified form** — the duplicate-`Symbol`-instance
+problem it solves is independent of the relation, and a naive per-symbol mint would produce two
+non-equal types for the same member and reproduce the catastrophe its own doc records at
+:109775. Step (a) must intern on the canonical symbol, or compare structurally as tsc's
+`isEnumTypeRelatedTo` does. Also recorded: **two latent hazards that go LIVE the moment the
+member type is distinct** — `SK.A` is looked up in `currentTypeParamScope`/`currentTypeAliasArgs`
+under the BARE name `"A"` (:102125/:102129), and falls back to `globals["A"]` (:102132), so an
+unrelated type named `A` captures it. Invisible today because everything collapses to `any`.
+
+**LANDED: `src/commonTest/kotlin/EnumMemberRelationTest.kt`** — four `@Ignore`d currently-failing
+expectations naming the item (so the gap stays VISIBLE in the skipped count rather than
+vanishing) plus **four NOT-ignored positive controls** which are precisely the shapes the probe
+over-rejected, i.e. the FP firewall step (a) has to satisfy. Suite **12,927 -> 12,935 / 0
+failures / 7 skipped** (+8 tests, +4 ignored).
+
 **Round 739 (2026-07-28) — PART 1, (BENCH.1): THE YARDSTICK WAS BROKEN IN A DIFFERENT PLACE
 THAN ROUND 738 THOUGHT, AND ROUND 738's CORRECTION IS RETRACTED.** The item was queued on
 round 738's inference that "every published xtsc-vs-tsc `--no-emit` ratio compared our
@@ -1326,6 +1394,96 @@ backlog-horizon decision, not queue debt.)
   `enumSwitchKeysFromTypeNode`, `discriminantPropAnnotation`) exist precisely
   because the relation could not answer. Decompose before starting; expect the
   per-site patches to become deletable once it lands, which is the measurable win.
+
+  **DECOMPOSED AND SIZED, ROUND 740. IT IS A SESSION, NOT AN ARC — the measured blast
+  radius is ONE corpus baseline.** (Fix deliberately NOT attempted; the probe below was
+  reverted and the tree is clean.)
+
+  **ROOT CAUSE, LOCATED — it is not "the relation is lenient", it is `anyType`.**
+  `getTypeFromTypeReference` (Checker.kt:102093) reduces `SK.A` to the BARE member name
+  `"A"` via `getTypeReferenceLastName`, resolves it through `resolveQualifiedName` to the
+  enum's `exports["A"]` — a `SymbolFlags.EnumMember` symbol — and
+  `getDeclaredTypeOfSymbolWorker` (:102387) **has no branch for that flag**, so it falls
+  through to `else -> anyType` (:102509) and is cached in `declaredTypes[symbol.id]`.
+  `kind: SK.A` and `kind: SK.B` are therefore *the same `Type` instance*. Corollary:
+  **`TypeFlags.EnumLiteral` (Type.kt:55) is SET NOWHERE** — all ~11 read sites are dead,
+  **including the widening rule `if (sf.hasAny(EnumLiteral) && tf.hasAny(Enum)) return
+  true` at Checker.kt:143100, which is already written and waiting for a flag to exist.**
+
+  **BLAST RADIUS — MEASURED, not guessed.** A throwaway 3-edit probe (an `EnumMember`
+  branch minting a distinct `Type.Object(Object or EnumLiteral)` per member symbol —
+  already interned by `declaredTypes[symbol.id]`; the enum's own type flagged
+  `Object or Enum` so the dead rule fires; an enum-literal disjointness rule at the top
+  of `checkTypeRelatedToCore`) was built, measured and reverted:
+  - **Corpus: 12,927 tests, `1` failure** — `enumAssignmentCompat5`. Not "every enum-typed
+    comparison"; ONE.
+  - **The one failure is the MISSING leg, not the added one:** 4 spurious
+    `TS2322: Type 'number' is not assignable to type 'A'`. A numeric enum member type must
+    stay assignable FROM `number`, and from a numeric literal equal to the member's value
+    (`let a: E.A = 0` is legal because `A === 0`; `a = 2` is not; `Computed.A = 1` is not,
+    because a computed member has no literal — all three already in that baseline).
+  - **Compiler profile: 46 -> 52 (+6).** Same family: `Extension.Dts` (a STRING enum
+    member) not assignable to `string`; plus knock-ons where a union no longer collapses
+    now that its enum members are distinct (`Partial<CreateSourceFileOptions> | ESNext |
+    CommonJS`) and two generic/overload cascades.
+  - **No perf cost:** probe profile self 26,192 ms against a 26.5-27.1 s baseline band.
+  So the entire measured gap is **ONE rule family: enum member <-> its base primitive.**
+
+  **DECOMPOSITION — three sub-steps, each landable alone and suite-gated.**
+  - **(a) Mint the type, change no answer.** Add the `EnumMember` branch returning a
+    distinct type interned on the **CANONICAL** member symbol (see the hazard below),
+    flagged `EnumLiteral`; flag the enum's own type `Enum`; and add the base-primitive
+    legs in `isSimpleTypeRelatedTo` — numeric member <-> `number`/`NumberLiteral` (the
+    literal relates iff its value equals the member's, never for a computed member),
+    string member <-> `string`/`StringLiteral`. **Do NOT add disjointness yet.** This is
+    behaviour-preserving by construction (nothing newly rejects) and its gate is a
+    byte-identical corpus + `--listAll`. It is what un-deadens `TypeFlags.EnumLiteral`.
+  - **(b) Let the relation reject.** Add the enum-literal disjointness rule. This is the
+    step that turns the four `@Ignore`s in `EnumMemberRelationTest` ON — that is its
+    acceptance criterion. Expected movement is fully enumerated above.
+  - **(c) Delete the scaffolding**, one walker per commit, suite-gated. Order: the
+    self-contained AST-only passes first (`checkEnumLiteralAssignments` :158391,
+    `checkNamespaceEnumUnionAssignments` :158525, `checkEnumToEnumAssignments` :162161 —
+    each re-implements a relation rule outside the relation and each says so in its own
+    doc header), then `discriminantPropAnnotation` (:109991 — its doc states verbatim
+    that it exists *"since the resolved property type is `anyType` for an enum-member"*),
+    then `kindDomainProvesNotSubtype` (:109044) / `kindDomainKeysExceed` (:109050,
+    including the round-729 `evaluateConditional` patch at :149990).
+
+  **WHICH CONSUMERS BECOME DELETABLE** (census round 740, all line numbers in Checker.kt):
+  - **100% artifacts, deletable:** `discriminantPropAnnotation`, `kindDomainProvesNotSubtype`,
+    `kindDomainKeysExceed`, `checkEnumLiteralAssignments`, `checkNamespaceEnumUnionAssignments`,
+    `checkEnumToEnumAssignments`.
+  - **AST-side machinery that only computes what a `Type` would carry** — deletable with
+    their consumers: `enumMemberKeysOfTypeNode` :109867, `enumSwitchKeysFromTypeNode` :89651,
+    `kindDomainTypeDeclSymbol` :109113, `kindDomainKeysFromTypeNode` :109077,
+    `ifaceKindDomainKeys` :109123, `typeGuardMemberDisjoint` :109168, `discriminantKindKeys`
+    :109177, `kindDomainKeysOfType` :109056, `filterUnionByEnumDiscriminant` :110021,
+    `enumMemberKeyOfExpr` :109855, `enumSwitchKeysFromType` :89703,
+    `literalDiscriminantKeyOfType` :109950.
+  - **SURVIVES, in modified form — do NOT plan to delete it:** `canonicalEnumSymbol`
+    :109783. The duplicate-`Symbol`-instance problem it solves (the same enum arriving as
+    the merged global, a file-local, and a barrel-resolved alias) is INDEPENDENT of the
+    relation; a naive per-symbol mint produces two non-equal types for the same member and
+    reproduces the catastrophe its doc records at :109775. Step (a) must intern on the
+    canonical symbol, or compare structurally (enum name + member name + value) as tsc's
+    `isEnumTypeRelatedTo` does.
+  - **Orthogonal, not caused by this:** `resolveImportedEnumSymbol` :109798 (the barrel
+    `_namespaces/ts.js` module-resolution hop) stays either way.
+
+  **TWO LATENT HAZARDS that go LIVE the moment the member type is distinct** (both in
+  `getTypeFromTypeReference`, both invisible today because everything collapses to `any`):
+  :102125/:102129 look `SK.A` up in `currentTypeParamScope`/`currentTypeAliasArgs` under
+  the **bare name `"A"`**, so an in-scope type parameter named `A` captures it; and :102132
+  falls back to `globals["A"]` on qualified-resolution failure, binding `SK.A` to an
+  unrelated global type named `A`. Step (a) must key on the QUALIFIED name.
+
+  **PIN LANDED (round 740):** `src/commonTest/kotlin/EnumMemberRelationTest.kt` — four
+  `@Ignore`d currently-failing expectations naming this item (so the gap stays visible in
+  the skipped count) plus **four NOT-ignored positive controls** that must keep passing
+  throughout: member widens to its enum, member assignable to itself, `number` -> numeric
+  member, string member -> `string`. Those last two are precisely the shapes the probe
+  over-rejected, i.e. they are the FP firewall for step (a).
 
 
 - [x] **(CATCH.1) Defensive-`catch` audit — DONE round 685, six batches: 193 of
