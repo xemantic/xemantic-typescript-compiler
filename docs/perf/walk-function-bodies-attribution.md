@@ -250,8 +250,8 @@ as a measurement.
 
 ## 7. The predictions, scored
 
-Written down before the run, in
-`scratchpad/round756-predictions.md`.
+Written down in full before a single boundary was placed; this table is the
+record.
 
 | | prediction | measured | |
 |---|---|---|---|
