@@ -108764,9 +108764,22 @@ interface DataView {
                 return if (memberKeys.all { it in caseKeys }) neverType else null
             }
             if (matchesDirectly) {
+                // (REL.4) round 768: an enum-MEMBER case never reached this filter. Case
+                // expressions split into [litTypes] (literal NODES) and [enumKeys] /
+                // [caseMemberTypes] — an enum member is not a literal node — so a subject
+                // whose type is a UNION OF ENUM MEMBERS (`SyntaxKind.NewKeyword |
+                // SyntaxKind.ImportKeyword`, tsc's `MetaProperty["keywordToken"]`) had every
+                // constituent survive and `default:` answered the whole declared union. The
+                // bare-enum arm above has subtracted since round 765; this is the same
+                // subtraction for the already-decomposed shape. Requires EVERY enum-keyed
+                // case to have resolved to a member type, so a case that did not resolve
+                // keeps the conservative answer rather than proving a short exhaustion.
+                val enumCasesComplete = caseMemberTypes.size == enumKeys.size
                 val filtered = t.types.filter { m ->
                     !(isLiteralKindForDiscriminant(m) &&
-                        litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) })
+                        litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) }) &&
+                        !(enumCasesComplete && m.flags.hasAny(TypeFlags.EnumLiteral) &&
+                            caseMemberTypes.any { c -> enumMemberTypesAreSameMember(m, c) })
                 }
                 return when {
                     // Every literal-kind member matched a case → the switch is
@@ -111986,6 +111999,18 @@ interface DataView {
             // an enum's domain is finite, which is exactly the difference. Baseline-visible
             // by construction: the answer's DISPLAY changes from `K` to `K.B | K.C | K.D`.
             if (!keep) enumMinusMembers(t, listOf(literalType))?.let { return it }
+            // (REL.4) round 768: the LAST member. [enumMinusMembers] can only subtract from
+            // an enum's OWN type, so once a chain of `===` guards / ternary arms has peeled
+            // the union down to a SINGLE member type, the final subtraction had nothing to
+            // work on and the reference kept that member instead of reaching `never` — which
+            // is the whole point of the `Debug.assertNever(x)` idiom. Same round-746 owner
+            // rule as every other direction ([enumMemberTypesAreSameMember] refuses a foreign
+            // enum's like-named member), and it can only ever answer `never`, so it cannot
+            // widen anything.
+            if (!keep && t.flags.hasAny(TypeFlags.EnumLiteral) &&
+                literalType.flags.hasAny(TypeFlags.EnumLiteral) &&
+                enumMemberTypesAreSameMember(t, literalType)
+            ) return neverType
             return t
         }
         return if (keep) {
@@ -143203,9 +143228,19 @@ interface DataView {
                     // substitute-only-when-the-relation-passes monotone rule the
                     // assignment/return/var-decl gates use (pure suppression).
                     val agrT = ArgSections.t()
-                    val refined = n !== ctxApplied && n !== neverType &&
+                    // (REL.4) round 768: the `n !== neverType` exclusion is what round 765
+                    // recorded as "the narrowed `never` is discarded somewhere between the
+                    // flow walk and the argument check" — it is here. An exhaustive enum
+                    // switch's `default:` (round 460b) and a chain of `===` guards that peels
+                    // every member both PROVE the position unreachable, and tsc types the
+                    // reference `never` there. Accepted for an enum subject only: `never` is
+                    // assignable to everything, so it can only ever SUPPRESS, and keeping the
+                    // exclusion would make the round-746 subtraction chain answer the WHOLE
+                    // enum at its last step (measured — strictly worse than before the chain).
+                    val provenNever = n === neverType && isEnumFlavoredObjectType(ctxApplied)
+                    val refined = n !== ctxApplied && (provenNever || (n !== neverType &&
                         (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
-                            checkTypeRelatedTo(n, paramType, assignableRelation))
+                            checkTypeRelatedTo(n, paramType, assignableRelation))))
                     ArgSections.close(ArgSections.N_ARGTYPE_REL, agrT)
                     if (refined) n else ctxApplied
                 } else ctxApplied

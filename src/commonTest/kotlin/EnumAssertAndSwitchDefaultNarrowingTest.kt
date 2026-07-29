@@ -177,17 +177,10 @@ class EnumAssertAndSwitchDefaultNarrowingTest {
         narrowedTo("export function f(k: K) { if (isAB(k)) { probe(k); } }", "K.A | K.B")
     }
 
-    @Test
-    fun `an exhaustive enum switch default is not subtracted twice`() {
-        // Every member cased: round 460b's exhaustion arm answers first and this round's
-        // subtraction is never reached, so the argument keeps reporting the declared enum.
-        narrowedTo(
-            """
-            export function f(k: K) {
-              switch (k) { case K.A: case K.B: case K.C: case K.D: break; default: probe(k); }
-            }
-            """.trimIndent(),
-            "K",
-        )
-    }
+    // RETIRED round 768: `an exhaustive enum switch default is not subtracted twice` pinned
+    // that the argument keeps reporting the declared enum here — the round-462 `never`
+    // DISCARD, which round 765 itself recorded as an open gap and (REL.4) closed. Retired
+    // rather than edited, per this suite's own rule: the shape is owned in its correct form
+    // by `EnumExhaustionToNeverTest > an exhaustive bare enum switch default delivers never
+    // to a string parameter`, the same source with the inverted expectation.
 }
