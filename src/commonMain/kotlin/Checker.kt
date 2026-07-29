@@ -142981,6 +142981,30 @@ interface DataView {
                     ArgSections.closeNarrow(ArgSections.N_NARROW_NEVER, nwT, n !== ctxApplied)
                     if (n === neverType) n else ctxApplied
                 } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
+                    isEnumFlavoredObjectType(ctxApplied) && paramType !== neverType &&
+                    checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+                ) {
+                    // (REL.2)(C) round 764: the enum arm below is a SECOND CHANCE — it pays
+                    // for a flow walk only on the REJECTING path. Round 763 opened the gate
+                    // unconditionally and that cost 3,406 extra walks (`narrow.walks`
+                    // 71,323 -> 74,729, +4.78%), because in tsc's own sources an enum-typed
+                    // argument overwhelmingly goes to a parameter of that same enum, where
+                    // the raw type already relates and no narrowing can change any verdict.
+                    //
+                    // Soundness: this arm fires ONLY when the DECLARED type already
+                    // satisfies the parameter, so the narrowed type could only have made an
+                    // already-passing relation pass again. Skipping is therefore
+                    // acceptance-preserving in the round-743 sense — a second chance can
+                    // turn a rejection into an acceptance, never the reverse. It does give
+                    // up the narrower DISPLAY in the (unobserved) case where some OTHER
+                    // check downstream would have keyed on it; the 8-arm grid is the gate.
+                    //
+                    // Deliberately enum-ONLY: the Interface/`unknown`/`string`/`number`
+                    // arms below are corpus-pinned (round 428b/429c/438) and walk
+                    // unconditionally, and one of them — the `n <: ctxApplied` leg — exists
+                    // precisely to substitute a refinement that is NOT relation-driven.
+                    ctxApplied
+                } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
                         ctxApplied === stringType || ctxApplied === numberType ||
                         // (REL.2)(C) round 763: an ENUM's own type. tsc models a literal

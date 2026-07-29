@@ -20,6 +20,65 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 764 (2026-07-29) — (REL.2)(C) MADE A SECOND CHANCE: ROUND 763's +4.78% FLOW-WALK
+BILL IS RETURNED IN FULL. `narrow.walks` 74,729 -> 71,326 — THREE ABOVE THE PRE-763
+71,323 — WITH THE 8-ARM GRID BYTE-IDENTICAL AND NO ANSWER CHANGED.** Arm-A grid
+46/46/46/46/46/46/46/94, every profile's error lines byte-identical to round 763's
+`build/bench/r763/final`. Predictions: **3 of 3** (a small round; all three were stated
+before measuring).
+
+- **THE FIX IS ONE ARM PLACED BEFORE ROUND 763's.** An `else if` that matches the enum
+  sub-case *and* `checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)`, and
+  returns `ctxApplied` unchanged. Round 763's arm is byte-untouched below it, so the
+  corpus-pinned Interface / `unknown` / `string` / `number` legs keep walking
+  unconditionally — deliberately, because one of them (`n <: ctxApplied`, round 462)
+  exists precisely to substitute a refinement that is NOT relation-driven and would be
+  destroyed by this gate.
+- **99.9% OF ROUND 763's ADDED WALKS WERE ON THE ACCEPTING PATH, AND THAT IS THE
+  MEASUREMENT.** 3,403 of the 3,406 come back. In tsc's own sources an enum-typed
+  argument overwhelmingly goes to a parameter of that same enum (`kind: SyntaxKind` into
+  `(kind: SyntaxKind)`), where the DECLARED type already satisfies the parameter and no
+  narrowing can change any verdict. The three that remain are the genuinely-rejecting
+  sites the (C) clause was added for.
+- **SOUNDNESS IS THE ROUND-743 ONE-DIRECTION ARGUMENT.** The arm's result is the
+  `argType` for every downstream check, not just the pass/fail decision — which is why
+  round 763 queued this rather than taking it. The gate makes it safe by construction:
+  it fires only where the declared type ALREADY relates, so the narrowed type could only
+  have made an already-passing relation pass again. A second chance can turn a rejection
+  into an acceptance, never the reverse. What it gives up is the narrower DISPLAY in the
+  case where some other check downstream would have keyed on it; the grid is the gate for
+  that, and it did not move.
+- **THIS CHANGE HAS NO OBSERVABLE BEHAVIOUR BY CONSTRUCTION, SO IT HAS NO TARGET PIN —
+  STATED AS THE LIMIT ON THE EVIDENCE.** There is no shape that fails on unmodified
+  `16a00ff0` and passes here, because the skipped branch is the one where the raw type
+  was already accepted. The discriminating instruments are `narrow.walks` and the grid.
+  The +10 pins (`EnumArgumentSecondChanceTest`) are therefore all CONTROLS, against the
+  two ways the change could go wrong: the skip manufacturing a diagnostic where the raw
+  enum was fine (six shapes: ternary / `&&` / early-return / `switch` / `if` / unguarded),
+  and the skip swallowing the rejecting path the round-763 arm exists for — pinned in
+  BOTH argument shapes, `Identifier` and `PropertyAccessExpression`, the latter uncovered
+  by round 763 even though its arm always admitted it. A third control keeps a non-enum
+  interface argument narrowing on the rejecting path, so a later widening of the skip out
+  of the enum sub-case fails a test rather than a corpus baseline.
+- **AN ASIDE THAT WILL MATTER WHEN THE GLOBAL RULE LANDS.** The gate asks the CURRENT
+  relation, in which enum -> MEMBER is still vacuously true — so `takeA(k)` for
+  `takeA(k: K.A)` and `k: K` takes the SKIP path today. Under the (REL.2) global rule that
+  same call starts REJECTING, the walk fires, and narrowing is what saves it. The second
+  chance therefore tightens automatically as the relation does; it is not a rule that has
+  to be revisited when the leniency closes.
+- **COST (COST.1): `narrow.walks` 74,729 -> 71,326 (-4.55%), REBASELINED IN THE SAME
+  COMMIT** (round 763's protocol slip, flagged by round 763 itself, not repeated). Every
+  other counter moved within 0.3% and all in the same direction — `typeOfExpr.calls`
+  -0.03%, `globals.lookups` -0.27%, `typeNode.bypassed` -0.05% — i.e. the name resolution
+  and type reads those 3,403 walks were performing. `narrow.memoServed` -10.
+- **PREDICTIONS 3 of 3**, all written before the run: (1) `narrow.walks` lands at or below
+  72,000 — 71,326; (2) the 8-arm grid stays byte-identical, because the skip cannot change
+  the primary relation verdict and the downstream checks that key on a narrower type
+  (weak-type, excess-property, array-literal) all require an object/array-literal argument,
+  which an Identifier/PropertyAccess is not — IDENTICAL on all eight; (3) all 14 round-763
+  pins survive untouched, because every one targets `probe(x: string)`, which no
+  enum-shaped type relates to, so all of them are on the rejecting path — 954/0 filtered.
+
 **Round 763 (2026-07-29) — (REL.2)(B)+(C) LANDED. THE SCAFFOLDED GLOBAL-RULE PRICE
 FALLS compiler 46 -> 52 => 46 -> 47 AND services 46 -> 57 => 46 -> 52: FIVE OF THE ELEVEN
 UNMASKED WORKLIST LINES ARE CLOSED. BOTH OF ROUND 762's LABELS ARE AGAIN SHARPER THAN THEY
@@ -1399,6 +1458,11 @@ backlog-horizon decision, not queue debt.)
   - **STILL OPEN, and the remaining worklist is 6 lines:** 4 x cause (D)
     (`scanner.ts:905`, `importFixes.ts:1127`/`1162`, `formattingScanner.ts:113`) plus
     the two `completions.ts` property-read/inference lines above.
+  **Round 764 made the (C) arm a SECOND CHANCE** — it walks only when the declared enum
+  does NOT already satisfy the parameter, which returns 3,403 of round 763's 3,406 added
+  flow walks (`narrow.walks` 74,729 -> 71,326) with the grid byte-identical. It tightens
+  automatically when the global rule lands: enum -> MEMBER is vacuously true TODAY, so a
+  `K.A` parameter takes the skip path now and will take the walk path then.
   - **Deliberately not done, with its shape:** the NEGATIVE direction on a bare enum
     (`k !== K.A`, and a type guard's FALSE branch) still answers the whole enum. THAT
     one genuinely needs the member union, and it changes type DISPLAY
