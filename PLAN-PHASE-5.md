@@ -20,6 +20,83 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 760 (2026-07-29) — THE DASHBOARD RE-MEASURED END TO END FOR THE FIRST TIME
+SINCE ROUND 730, AND IT BARELY MOVED. Five profiles are unchanged CODE FOR CODE
+across ~50 commits; the only movement anywhere on the 8×2 grid is ONE line, and
+root-causing it found a substitution defect that has nothing to do with the arc
+that was blamed for it.** Arm A: compiler/tsc-cli/jsTyping/deprecatedCompat/
+typingsInstallerCore **46** (`TS2591×43 / TS2304×2 / TS2584×1`, identical to round
+730), services **47**, server **47**, harness **95**. Emit path confirmed working.
+Filtered batches **858 + 1052** hand-written and **5,405** corpus tests, 0 failures;
+build warning-clean. Artifact: `docs/perf/dashboard-round760.md`. **The full suite
+and the cost gate are the owner's to run.** Predictions: **3 of 6**.
+
+*Round 759 closed the attribution arc: eleven rounds produced two landed wins and
+neither came from finding a big number. This round is verification and hygiene —
+no timer was opened.*
+
+- **PART 1 — THE GRID (`467ea712`).** 8 profiles × 2 lib arms, `--noEmit --listAll`.
+  **Five profiles did not move at all** — same count AND same composition as round
+  730, across ~50 commits touching the relation, narrowing, overload selection, name
+  resolution, enum typing, the real-lib path and the emit gate. **services / server
+  / harness each +1, and it is ONE line, not three**: all three are exactly the
+  profiles containing `src/services`, each carrying the byte-identical
+  `completions.ts:2237` TS2345. **UP = a regression** (tsc reports zero on its own
+  source). Every other line on the grid, both arms, is env-legit — so the grid has
+  exactly ONE defect on it.
+- **ARM C IS RECORDED WITH ITS CAVEAT RATHER THAN COMPARED.** Round 730 measured it
+  against the real `@types/node` v22.20.1; `bench-compile-tsc.sh` `rm -rf`s that
+  directory on any run without `--node-stub`, and there is none on this box. This
+  round's arm C uses the all-`any` STUB, which can only suppress, so its absolutes
+  are a FLOOR and the 13 → 1 movement is NOT claimed as an improvement. Arm A needs
+  no `node_modules` and is the arm that compares.
+- **PART 2 — THE REDUCTION IS 12 LINES AND THE FIX IS NOT THE REDUCTION (`07e43815`).**
+  Four ingredients, each shown necessary by ablation: an ENUM discriminant, TWO
+  guards on one reference, an EARLY RETURN in the first, and the guards declared in
+  ANOTHER file. Mechanism measured with a `const s: string = node` probe — `never`
+  is assignable to `string`, so a washed reference makes the probe SILENT, which is
+  what makes it a discriminator: after `!isMod(node)` the type was `never` and is
+  now `Node`; inside the following guard it was `never` and is now `Ident`.
+- **ROUND 753's STATED PREMISE IS FALSIFIED, AND THE COMMENT THAT SAYS SO WAS
+  WRITTEN THE SAME ROUND.** `getDeclaredTypeOfEnumMember` mints member types with NO
+  members, so `Node <: Mod` relates VACUOUSLY; round 472 vetoed the resulting
+  `never`-collapse with `kindDomainProvesNotSubtype`, round 753 deleted it saying
+  (REL.1)(a)/(b) had taught the relation to decide for itself. It had — for
+  member-vs-member. `checkTypeRelatedToCore` already said the other direction was
+  left open ("*deliberately NOT decided here … pre-existing and unmeasured*").
+  `enumMemberDomainProvesNotSubtype` restores that one verdict at that one site.
+- **THE GLOBAL RULE WAS WRITTEN, COMPILED, MEASURED AND REVERTED — a sized refusal,
+  with the size.** Closing enum → MEMBER properly costs **compiler 46 → 52, services
+  47 → 57**: every new line is a `SyntaxKind` tsc narrows and we do not (a guard used
+  as a TERNARY CONDITION; `===` narrowing across `||`). **So the unit of work is the
+  narrowing features, not the relation rule.** Queued as **(REL.2)** with all six
+  sites, and the price is recorded IN PLACE beside the leniency.
+- **THE REAL ROOT CAUSE IS A SUBSTITUTION DEFECT, AND IT IS NOT ENUM-SPECIFIC —
+  queued as (REL.3).** `interface FwdA extends Fwd<K.A>` where `Fwd<T> extends Box<T>`
+  resolves `.v` to **`any`**; `BoxA extends Box<K.A>` resolves it to `K.A`. One
+  heritage hop substitutes, a second hop through an intermediate FORWARDING its own
+  type parameter does not. tsc's `AbstractKeyword extends KeywordToken<SK.AbstractKeyword>`
+  → `KeywordToken<TKind> extends Token<TKind>` is exactly that, so every keyword
+  node's `kind` is `any` — **which is why the landed veto leaves the profile line in
+  place, and the 8 profiles are byte-identical before and after.** That is stated as
+  a LIMIT ON THE EVIDENCE, not a credential (round 753's own rule).
+- **PART 3 — THE EMIT PATH, un-exercised for 22 rounds, IS FINE.** Round 738 gated
+  emit off for `--noEmit`; every gate since passed `--noEmit`. The gate is
+  `skipEmitOutputs = noEmit || config.options.noEmit`, read at ONE site, so an
+  emitting build is untouched by construction — and empirically the compiler profile
+  with emit ON writes **78 `.js` files**, exactly the `emitted=78` in every pre-738
+  TSV row, with the same 46 diagnostics. A sha256 of the emitted tree is recorded in
+  the artifact so a future round can diff without a rebuild.
+- **EVERY PIN RUN AGAINST UNMODIFIED `aef21e76`: the three TARGETS FAIL and the
+  three NEGATIVE CONTROLS PASS.** A control that is silent on both sides measures
+  nothing; these are not.
+- **PREDICTIONS 3 and 5 are the ones that moved the map.** (3) "≥1 other profile
+  also drifted" — WRONG, five are unmoved code for code, so the codebase is more
+  stable under 50 commits than assumed. (5) "the enum→member rule is the whole fix"
+  — WRONG in both directions: neither necessary nor sufficient, because (REL.3) sits
+  underneath it. The enum story rounds 741–753 spent themselves on is a LAYER ABOVE
+  a substitution defect nobody had measured.
+
 **Round 759 (2026-07-29) — (AUDIT.2)+(AUDIT.3): THE ARC'S LAST TWO UNVERIFIED ROWS,
 MEASURED. ONE OF THEM IS § 0's LAW'S FIRST COUNTER-EXAMPLE — the population that
 never reaches the relation is the EXPENSIVE one, 89% of the cost at 3.2x the
@@ -963,6 +1040,41 @@ burn-down reached zero real FPs; reviving their full-completeness form is a
 backlog-horizon decision, not queue debt.)
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+- [ ] **(REL.3) A TYPE ARGUMENT IS LOST AFTER TWO HERITAGE HOPS — the actual root
+  cause of `completions.ts:2237`, and the ONE remaining non-env-legit line on the
+  whole 8×2 dashboard (round 760).** Measured, NOT enum-specific, 8-line repro:
+
+      export interface Box<T> { v: T; }
+      export interface Fwd<T> extends Box<T> {}
+      export interface FwdA extends Fwd<K.A> {}     // FwdA.v resolves to `any`
+      export interface BoxA extends Box<K.A> {}     // BoxA.v resolves to `K.A`  ✓
+
+  One hop substitutes; a SECOND hop through an intermediate that **forwards its own
+  type parameter** to its base degrades to `any`. `getTypeFromBaseTypeExpression`
+  interns `Reference(Fwd, [K.A])`, but resolving *that* reference's own base
+  `Box<T>` needs the outer mapper applied to a type argument that is itself a type
+  parameter, and the substitution is not carried. tsc's shape is exactly this —
+  `AbstractKeyword extends KeywordToken<SK.AbstractKeyword>`,
+  `KeywordToken<TKind> extends Token<TKind>`, `Token<TKind> extends Node { kind: TKind }`
+  — so every keyword node's `kind` is `any`, which is why `Node <: Modifier` still
+  "holds" and why round 760's landed veto cannot fire on the real code. **M3.1
+  territory; decompose before starting.** Full measurement:
+  `docs/perf/dashboard-round760.md` § 4. Also unblocks (REL.2).
+
+- [ ] **(REL.2) Close the enum → MEMBER relation direction — BLOCKED ON NARROWING,
+  and the price is measured (round 760).** `checkTypeRelatedToCore` decides
+  enum-vs-member VACUOUSLY (both sides are member-less `Type.Object`s), so `K` is
+  assignable to `K.A`; round 746 left it deliberately and said so in a comment.
+  The rule was WRITTEN, COMPILED, MEASURED AND REVERTED this round: it is correct
+  and it costs **compiler 46 → 52, services 47 → 57**, because the vacuous `true`
+  is masking that many flow-narrowing gaps. **So the unit of work is the narrowing
+  features, not the relation rule** — land these first, then the rule is free:
+  (i) a type guard used as a TERNARY CONDITION (`parser.ts:2629`, `3762`×2);
+  (ii) `===` enum narrowing across an `||` (`parser.ts:8444`, `8728`);
+  (iii) `SyntaxKind` → `CommentKind` (`scanner.ts:905`).
+  Round 760's `enumMemberDomainProvesNotSubtype` is the site-local stand-in and
+  should be DELETED when this lands.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
