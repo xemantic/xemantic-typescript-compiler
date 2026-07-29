@@ -152,7 +152,7 @@ compiler profile — a lower bound, never a licence to close):
 | `ccetSpineEnter` (for-body + if-then) | 2 — BLOCK, RETURN_STATEMENT |
 | `spineArithEnterNode` (edge arms) | 28 |
 | `spineIanyEnterNode` (edge arms) | 27 |
-| `spineOsEnterNode` | 0 (not instrumented — parent arms have no `work()` call) |
+| `spineOsEnterNode` | **n/a — NOT INSTRUMENTED** (its parent arms have no `work()` call, so this 0 could never have been anything else; round-758 audit, round-750's rule) |
 | `ctaSpineLeave` | 6 |
 | `cpaSpineLeave` (restores) | 1 — BLOCK |
 | `ccetSpineLeave` (restores) | 2 |
@@ -205,6 +205,11 @@ Two independent confirmations that this is not an artefact of the estimate:
   that remain. A production DISPATCH.1 would emit a straight-line per-kind
   `when` instead of an indirection, so this is not proof that the idea *must*
   lose — but it bounds how much headroom there is to win it back.
+  **ROUND-758 CAVEAT: this is ONE run per mode, not interleaved, and no drift
+  band is quoted.** +4.9% / +7.4% on a box whose interleaved null band is ±2.0%
+  is directionally consistent with the row above but is not evidence at the
+  strength "independent confirmation" implies. The real confirmation is the
+  883 ms / 27 ns-per-consultation figure, which is a population.
 * **IDENTIFIER, the item's own evidence**: 381,670 nodes, kept **1,142 ms**,
   removable **340 ms**. The kept part is not overhead — it is
   `spineIanyEnterNode` (376 ms), `ccetSpineEnter` (187 ms), `spineCeEnterNode`
@@ -244,6 +249,17 @@ reproduce the legacy walkers' ambient state. Per-kind, the concentration is the
 same shape: CALL_EXPRESSION 3,636 ms over 52,509 nodes (69 µs each),
 VARIABLE_STATEMENT 2,835 ms over 14,712 (193 µs each), RETURN_STATEMENT
 1,839 ms over 15,662 (117 µs each).
+
+> **ROUND-758: those three per-kind figures are INDEPENDENTLY REPRODUCED —
+> 3,752 / 2,841 / 1,752 ms — by the `--passTiming` per-kind counter, which until
+> this round printed `enter+leave` while summing ENTER ONLY (it read
+> 929 / 1,624 / 950, i.e. 4.0x / 1.7x / 1.8x low). Two instruments of completely
+> different construction now agree to 0.2-5%, which is what makes both
+> believable.** The corrected table also settles § 5's premise: **IDENTIFIER is
+> 44.5% of the nodes and 8.4% of the spine's time (1,853 ms of 22,104), while
+> the five statement-anchor kinds (VARIABLE_STATEMENT, EXPRESSION_STATEMENT,
+> RETURN_STATEMENT, IF_STATEMENT, BLOCK) are 10% of the nodes and 40% of the
+> spine.** Full table: `docs/perf/claim-audit-round758.md` § 5.1.
 
 **The next unit of work is therefore per-handler, not per-kind**: attribute
 `cpaSpineLeave` and `ccetSpineLeave` internally (they are 7.4 s together, 40% of

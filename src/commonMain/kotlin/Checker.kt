@@ -22468,7 +22468,15 @@ class Checker(
                 if (!spineUResOnly) {
                     val t = PassTiming.nowNanos()
                     spineLeaveNode(node)
-                    PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
+                    val dl = PassTiming.nowNanos() - t
+                    PassTiming.spineLeaveNanos += dl
+                    // (AUDIT.1, round 758) The per-kind table said "enter+leave"
+                    // and accumulated ENTER only, so every per-kind figure ever
+                    // quoted from it — including ARCHITECTURE-RETHINK § 0's
+                    // "IDENTIFIER … 2,746 ns each" — was the enter chain alone.
+                    // The count stays one per node (bumped at enter).
+                    val kl = (node as NodeBase).kindId
+                    PassTiming.spineKindNanos[kl] = (PassTiming.spineKindNanos[kl] ?: 0L) + dl
                     spineScopeLeaveIfOwner(node)
                 }
                 if (spineUResActive) spineUResLeave(node)
@@ -22504,7 +22512,15 @@ class Checker(
                 if (!spineUResOnly) {
                     val t = PassTiming.nowNanos()
                     spineLeaveNode(node)
-                    PassTiming.spineLeaveNanos += PassTiming.nowNanos() - t
+                    val dl = PassTiming.nowNanos() - t
+                    PassTiming.spineLeaveNanos += dl
+                    // (AUDIT.1, round 758) The per-kind table said "enter+leave"
+                    // and accumulated ENTER only, so every per-kind figure ever
+                    // quoted from it — including ARCHITECTURE-RETHINK § 0's
+                    // "IDENTIFIER … 2,746 ns each" — was the enter chain alone.
+                    // The count stays one per node (bumped at enter).
+                    val kl = (node as NodeBase).kindId
+                    PassTiming.spineKindNanos[kl] = (PassTiming.spineKindNanos[kl] ?: 0L) + dl
                     spineScopeLeaveIfOwner(node)
                 }
                 if (spineUResActive) spineUResLeave(node)
@@ -137368,7 +137384,22 @@ interface DataView {
         // Resolve callee to get its type
         CallSections.close(CallSections.N_PROLOGUE, prologueT)
         CallSections.at(CallSections.CALLEE_TYPE)
+        val calleeT0 = CallSections.t()
         val calleeType = getCalleeType(expr.expression)
+        // (AUDIT.1, round 758) Split the resolution by whether its result survives
+        // the `anyType || errorType` bail below. Round 734 read "50.6% of the
+        // invocations bail" as "half of getCalleeType's 474 ms is wasted"; that
+        // is a frequency standing in for a population, and this is the population.
+        // The outcome test is INSIDE the mode gate, so production pays one static
+        // read and a not-taken branch — an inline `close(<expr>, t)` would have
+        // evaluated <expr> at every call expression before the gate could return.
+        if (CallSections.mode != CallSections.OFF) {
+            CallSections.close(
+                if (calleeType === anyType || calleeType === errorType) CallSections.N_CALLEE_BAIL
+                else CallSections.N_CALLEE_LIVE,
+                calleeT0,
+            )
+        }
         // TS2722: invoking a possibly-undefined OPTIONAL member. `bar.optionalMethod(1)`
         // where `optionalMethod?` is an optional callable member — `getCalleeType`
         // resolves to the bare callable (we don't add `| undefined` for optional-member

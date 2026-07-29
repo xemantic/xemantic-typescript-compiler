@@ -139,6 +139,15 @@ no A/B is offered for it.
    gate; EWTA and PropertyDeclaration are 28 ms TOTAL across 856,962
    consultations each. **A parent-kind axis is worth ≲60 ms** — the same
    conclusion round 732 reached for the node-kind axis, one level down.
+   **ROUND-758 FLAG (unverified, not falsified): the `owner` half of that
+   derivation IMPUTES a per-hit rate from a DIFFERENT section rather than
+   measuring `owner`'s own.** 19,551 is a FREQUENCY, and the per-hit rate it is
+   multiplied by is the ANCHOR section's population divided by the ANCHOR
+   section's hits. The conclusion is probably right — the two sibling
+   parent-keyed sections *are* 28 ms measured, and 60 ms is a tenth of a noise
+   band either way — but it is an imputation, and rounds 732/734/758 were each
+   burned by exactly this step. A nested span inside the `owner` block settles
+   it in one run. `docs/perf/claim-audit-round758.md` § 4 (S5).
 
 Both hypotheses are dead, and so is the framing that produced them. The
 cheap-per-node sections behave exactly as `docs/perf/dispatch-table.md` § 5

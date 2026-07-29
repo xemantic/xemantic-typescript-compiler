@@ -205,4 +205,21 @@ class CallSectionProbeTest {
         )
         CallSections.reset()
     }
+
+    /**
+     * (AUDIT.1) The outcome split must PARTITION the resolution — every
+     * `getCalleeType` call lands in exactly one of the two rows, so their sum
+     * is the section's own reach. Without this a future edit could charge a
+     * resolution to neither row and the "the bail half is the cheap half"
+     * measurement would silently become a sample.
+     */
+    @Test
+    fun `the getCalleeType outcome split partitions every resolution`() {
+        runProbe()
+        val bail = CallSections.calls[CallSections.N_CALLEE_BAIL]
+        val live = CallSections.calls[CallSections.N_CALLEE_LIVE]
+        assert(bail + live == CallSections.calls[CallSections.CALLEE_TYPE])
+        assert(live > 0L)
+        CallSections.reset()
+    }
 }

@@ -832,18 +832,33 @@ object CallSections {
     const val N_PROLOGUE = 22
 
     /**
+     * (AUDIT.1, round 758) `getCalleeType` split by OUTCOME — the half whose
+     * result is discarded three sections later at
+     * `calleeType === anyType || calleeType === errorType`.
+     *
+     * Round 734 recorded "50.6% of invocations bail" (a FREQUENCY) beside
+     * "`getCalleeType` costs 474 ms" (a TIME) and inferred that half of that
+     * time is wasted. That inference is only valid if resolution costs the same
+     * on both sides, which nothing measured. These two rows measure it.
+     */
+    const val N_CALLEE_BAIL = 23
+
+    /** [N_CALLEE_BAIL]'s complement — the resolutions the function goes on to use. */
+    const val N_CALLEE_LIVE = 24
+
+    /**
      * The wrapper's own transition — [begin] to the core's first boundary,
      * i.e. one non-inlinable call into a 3,587-bytecode method plus the
      * invocation's first timestamp read. Probe-only; not part of the partition
      * and absent in production.
      */
-    const val ENTRY = 23
+    const val ENTRY = 25
 
     /**
      * The FIRST empty boundary span of an invocation, kept separate because it
      * is the one that is not steady-state.
      */
-    const val OVERHEAD_FIRST = 24
+    const val OVERHEAD_FIRST = 26
 
     /**
      * The in-situ calibration: seven further EMPTY spans back-to-back at the
@@ -853,9 +868,9 @@ object CallSections {
      * single span, which this round's first draft used and which read ~1 µs
      * against a probe whose whole measured cost is ~30 ms.
      */
-    const val OVERHEAD = 25
+    const val OVERHEAD = 27
 
-    const val N = 26
+    const val N = 28
 
     val names: Array<String> = arrayOf(
         "B216 dependent indexed-access", "reduce<U> keyof callback",
@@ -873,6 +888,8 @@ object CallSections {
         "  of which TS2793 impl-would-have-succeeded probe",
         "  of which the five single-sig dedicated walkers",
         "  of which B216..super as ONE span (1 boundary, not 7)",
+        "  of which getCalleeType -> any/error (result DISCARDED)",
+        "  of which getCalleeType -> a usable type",
         "  wrapper transition (probe-only, not production)",
         "  probe boundary, first of the invocation",
         "  probe boundary (in situ, steady state)",

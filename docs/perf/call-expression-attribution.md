@@ -96,7 +96,8 @@ Compiler profile (`build/bench/tsc-project-*`), **52,413 invocations**.
 
 Two facts fall straight out. **Half of every call expression in the program is
 resolved, then discarded at the any/error bail** — after `getCalleeType` has run in
-full. And the ~240-line `signatures.isEmpty()` branch, with its seven emission
+full. **(Round-758 correction: half the CALLS, 8–10% of the TIME — the discarded
+resolutions cost 1,452 ns against 16,491 ns for the kept ones. See § 6.)** And the ~240-line `signatures.isEmpty()` branch, with its seven emission
 sites (TS2348 / TS6234 / TS2721 / TS2722 / TS2723 / TS2349 ×3), is never entered
 here at all, so its `binderResults × top-level-statements` scan — the one piece of
 genuinely pre-gate work in the function — never runs on this profile.
@@ -188,10 +189,25 @@ observations bound the follow-on:
   701,736 calls (recompute ×2.7), relations at depth 0 699 ms, narrowing walks
   3,260 ms. So the 1,357 ms is argument type computation plus relation work — the
   relation engine's own territory (M3.1), reached through this path.
-* `getCalleeType` costs 474 ms and **half its results are thrown away** at the
+* ~~`getCalleeType` costs 474 ms and **half its results are thrown away** at the
   any/error bail three sections later (26,496 of 52,413). That is not a caching
   question (§ 0 of `docs/ARCHITECTURE-RETHINK.md` closed those) — it is a question
-  of whether the bail's verdict is knowable more cheaply than by resolving.
+  of whether the bail's verdict is knowable more cheaply than by resolving.~~
+  **CLOSED, ROUND 758 — and this bullet is the arc's own textbook case of a
+  FREQUENCY spent as a POPULATION.** "Half its results" is 50.6% of the CALLS;
+  measured by outcome (`CallSections.N_CALLEE_BAIL` / `N_CALLEE_LIVE`, two runs):
+
+  | | calls | share of calls | ms raw | share of the section | ns each |
+  |---|---:|---:|---:|---:|---:|
+  | **result DISCARDED** | **26,496** | **50.6%** | **37 / 46** | **8.0% / 9.6%** | **1,452** |
+  | result USED | 25,917 | 49.4% | 426 / 435 | 92% / 90% | 16,491 |
+
+  **A discarded resolution costs 11× less than a kept one, so the implied
+  ~237 ms is 38 ms — out by 6.2×, and 0.14% of the compile against a ±2.0%
+  band.** The question answers itself in reverse: **the bail's verdict already
+  IS cheap**, because an `any`/`error` callee is exactly the one that fails
+  resolution fast. § 0's law again, with no cache in sight. Full derivation:
+  `docs/perf/claim-audit-round758.md` § 5.2.
 
 **(CALL.2)** — attribute inside `checkArgumentsAgainstSignature` the same way, and
 price the arg-type vs relation split before proposing anything. The harness

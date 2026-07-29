@@ -217,6 +217,36 @@
 > of its two spreads*, and the usable calibration came from comparing BOTH modes
 > against the probe-free binary. Full derivation:
 > `docs/perf/walk-function-bodies-attribution.md`.
+> **ROUND-757 CORRECTION TO THAT CENSUS, AND IT IS THE LENS FOR EVERYTHING
+> BELOW.** (FN.1) landed the descent into an expression-bodied arrow's body —
+> and the 874 arrows the census counted contain **SIX** block bodies between
+> them, a **146×** over-estimate. Its own diagnosis: *a census that counts
+> REACHED nodes answers "how often is this arm taken", not "how much is behind
+> it"* — and the round had priced the fix by the first number while claiming the
+> second. `--listAll` byte-identical, all 8,837 baselines unchanged.
+> **ROUND-758 RESOLUTION — THE ARC AUDITED ITS OWN NUMBERS, AND THIS SECTION IS
+> WHERE TWO OF THE FOUR FALSIFIED CLAIMS LIVE.** 57 load-bearing quantitative
+> claims across § 0/§ 0.1 and the ten `docs/perf/` artifacts were classified
+> POPULATION / FREQUENCY / TIME / RESIDUAL: **40 stand, 11 are stale or weak, 4
+> are falsified, 2 are unverified. Three of the four falsified are a FREQUENCY
+> spent as a POPULATION, and all three shrink — none grows.** **(1)
+> `IDENTIFIER` is 44.5% of the NODES and 8.4% of the spine's TIME** (1,853 ms of
+> 22,104), **ratio 5.3×** — so the "the measured lever is consultation" sentence
+> below loses its premise as well as its inference, and the per-kind counter it
+> came from **printed "enter+leave" while summing ENTER ONLY** (fixed; the
+> corrected counter reproduces round 732's independent `--dispatchProbe`
+> per-kind numbers to 0.2–5%). **(2) `getCalleeType`'s "half its results are
+> thrown away" is 50.6% of the CALLS and 8–10% of the TIME** — 1,452 ns per
+> discarded resolution against 16,491 ns per kept one, so the implied ~237 ms is
+> **38 ms**, out by **6.2×**; (CALL.1) § 6's last forward-pointer closes as a
+> measurement. **(3) The "dispatch + handler machinery (residual) ~7,600 ms
+> (42%)" row is a SUBTRACTION that was given a NAME, and rounds 732/733/734 each
+> measured a piece of it and found no dispatch — so § 0.1's parity row "remove
+> ALL dispatch overhead → 66 units, 1.5×" should read `100 → ~99, 2.4×`, out by
+> ~34×, and it is the FIRST step of the parity argument.** **"Single digits
+> remain" SURVIVES and is better supported; NO parked item is revived.** The map
+> was also re-measured for the first time since round 716 (§ 0's table, below).
+> Full derivation: `docs/perf/claim-audit-round758.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
@@ -240,21 +270,32 @@ this section, this section is the measurement.*
 **§1 says the cost is "uncached type recomputation". It is not.** Full attribution
 of a compiler-profile run (`--passTiming`, new INV.4(g)/INV.5(c5) counters):
 
-| | ms | share of checker-init |
-|---|---:|---:|
-| `checkSpine` | 14,292 | **83%** |
-| — `spineEnterNode` | 7,166 | |
-| — `spineLeaveNode` | 5,478 | |
-| — unresolved-names family | 840 | |
-| — `forEachChild` | 255 | |
-| — scope maintenance | 25 | |
-| **the whole type system, inside the above** | **5,056** | **28%** |
-| — flow-narrowing walks (69,917) | 2,437 | |
-| — `getTypeOfExpression` (624,810 calls) | 1,804 | |
-| — relations (depth-0) | 468 | |
-| — type-node resolution (depth-0) | 311 | |
-| — member resolution | 36 | |
-| **dispatch + handler machinery (residual)** | **~7,600** | **42%** |
+**RE-MEASURED ROUND 758** (HEAD `7d49c910`, ~40 rounds and two landed wins
+later). The 716 column is kept because several queue items still quote it; the
+758 column is the live one. **Read the two flagged rows with their caveats —
+they are the audit's ❌ rows** (`docs/perf/claim-audit-round758.md` § 4).
+
+| | 716 ms | **758 ms** | share of checker-init |
+|---|---:|---:|---:|
+| `checkSpine` | 14,292 | **22,104** | **84.4%** (74% of the compile) |
+| — `spineEnterNode` | 7,166 | **11,155** | |
+| — `spineLeaveNode` | 5,478 | **8,046** | |
+| — unresolved-names family | 840 | **1,223** | |
+| — `forEachChild` | 255 | **557** | |
+| — scope maintenance | 25 | **53** | |
+| **the INSTRUMENTED type-system rows** ⚠️ | **5,056** | **6,907** | **26.4%** |
+| — flow-narrowing walks | 2,437 (69,917) | **2,290** (71,414) | |
+| — `getTypeOfExpression` ⚠️ **double counts** (round 737: charges a subtree once per nesting level, ×~1.6) | 1,804 (624,810) | **3,254** (709,357) | |
+| — relations (depth-0) | 468 | **685** | |
+| — type-node resolution (depth-0) | 311 | **580** | |
+| — member resolution | 36 | **98** | |
+| **the ~400 tail passes** | *"14 units", § 0.1* | **3,130** | **11.9%** (10.4% of the compile) |
+| ~~**dispatch + handler machinery (residual)**~~ ❌ **A RESIDUAL THAT WAS GIVEN A NAME** — rounds 732/733/734 each measured a piece of it and found NO dispatch; real dispatch is 100–300 ms. It is the migrated passes' OWN CHECKING WORK | ~7,600 | **~12,300** | **47%** |
+
+⚠️ The type-system row set is **inflated and incomplete at once**: the
+`getTypeOfExpression` row double counts (737), while round 734 showed the row
+set MISSES the argument-check and callee-resolution code that calls those
+primitives. Do not quote "the type system is 26%" as either a floor or a ceiling.
 
 857k nodes → **14.8 µs per node** for enter+leave, of which **8.9 µs is not type-system
 work**. `spineEnterNode` is a linear chain reaching ~118 handler entry points and
@@ -281,25 +322,53 @@ the resolutions that are cacheable are the ones that were already fast.* **Stop
 proposing caches.** tsc is not fast because it caches; `NodeLinks.resolvedType` is a
 field read on the node, not a keyed probe — there is no key to build.
 
-**The measured lever is consultation, not computation.** Decisive probe: skipping
+~~**The measured lever is consultation, not computation.** Decisive probe: skipping
 `spineEnterNode`'s entire chain for bare `Identifier` nodes (44.5% of all nodes,
 2,746 ns each = **1,048 ms**) leaves the compiler-profile diagnostics **byte-identical**.
-That time is provably unnecessary work. See queue item **(DISPATCH.1)**.
+That time is provably unnecessary work. See queue item **(DISPATCH.1)**.~~
+
+**STRUCK — the INFERENCE round 732, the PREMISE round 758.** Round 732: 22 of
+the 59 handlers genuinely act at an identifier (the ones keyed on parent edges,
+frame identity and nodeId registries cannot be closed and are the expensive
+ones), the removable part at IDENTIFIER is 340 ms probe-inflated / ~100 ms real,
+and the byte-identical probe skipped real work the compiler profile happens not
+to need. **Round 758: the 44.5% was a FREQUENCY — a share of node VISITS — and
+identifiers are 8.4% of the spine's TIME (1,853 ms of 22,104), a ratio of
+5.3×.** The 2,746 ns also came from a counter that printed `enter+leave` and
+summed ENTER ONLY; corrected, the per-kind concentration is the *opposite* shape:
+
+| | share of nodes | share of the spine |
+|---|---:|---:|
+| IDENTIFIER | **44.5%** | **8.4%** |
+| the five statement-anchor kinds (VARIABLE_STATEMENT, EXPRESSION_STATEMENT, RETURN_STATEMENT, IF_STATEMENT, BLOCK) | **10.0%** | **40%** |
+| CALL_EXPRESSION | 6.1% | 17.0% |
+
+**Price a per-node idea against the POPULATION behind the kind, never against
+its share of the node count.** Full table: `docs/perf/claim-audit-round758.md`
+§ 5.1. And note that this table is a LOCATION, not a lever — the identical
+inference from the identical table is what produced (DISPATCH.1).
 
 **Corrected targets.** The 2.4× gap to JS tsc is not a type-system gap — our type
 system is 5 s of an 18 s compile and tsc does *more* semantic work than we do. It is
 the accumulated per-node checking machinery. Order of remaining levers, by measured
 size:
 
-| lever | measured size | risk |
-|---|---:|---|
-| (DISPATCH.1) per-kind handler table | 1.0–2.5 s | low, mechanical |
-| flow-narrowing walks (69,917 walks) | 2.4 s | medium (round 664 banked 0.83 s here) |
-| ~~`getTypeOfExpression` call COUNT (2.8× recompute)~~ | **0.67–0.82 s** | **do not pursue — round 737 measured it; the ceiling is an unsound cache, the sound residue is 46 ms** |
-| context-cache work of any shape | **0.07 s** | **do not pursue** |
+**This table was the round-716 estimate; every row has since been MEASURED and
+every one came in smaller. Kept with its verdicts because queue items still
+quote the left column.**
 
-Also measured and unchanged: 1,341,719 globals lookups at 98.9% miss (the (M0.3)(i)
-short-circuit, still priced ≲0.2%).
+| lever | 716 estimate | **measured** | verdict |
+|---|---:|---:|---|
+| (DISPATCH.1) per-kind handler table | 1.0–2.5 s | **0.1–0.3 s** (round 732) | **do not pursue** |
+| flow-narrowing walks | 2.4 s | **−4.53% landed** (736); residue 441 ms = 1.6% (755) | **spent** |
+| ~~`getTypeOfExpression` call COUNT (2.8× recompute)~~ | 0.67–0.82 s | ceiling **823 ms** unsound / **46 ms** sound (737) | **do not pursue** |
+| context-cache work of any shape | 0.07 s | 68 ms (716) | **do not pursue** |
+
+Also measured, and now stale in its own right: **961,213** globals lookups at
+**98.1%** miss (round 758; it was 1,341,719 / 98.9% in round 716). The
+"≲0.2%" price attached to it has never actually been measured — it is the last
+asserted-not-measured population in this section, and closing it is
+(AUDIT.3).
 
 ### 0.1 What single-thread parity with tsc actually costs
 
@@ -308,26 +377,40 @@ The budget, from the attribution above. Take the whole compile as 100 units
 20, never yet profiled because the checker always dominated):
 
 ```
-checker-init                    80
-  ├─ dispatch + handlers        34      (42% of init)
-  ├─ type system                22      (28%)
-  ├─ tail passes (~403)         14      (17%)
+checker-init                    80        →  ROUND 758: 87
+  ├─ dispatch + handlers        34   ❌ NOT DISPATCH — see below
+  ├─ type system                22   ⚠️ inflated AND incomplete (§ 0)
+  ├─ tail passes (~403)         14        →  ROUND 758: 10.4, and NOT removable
   └─ unresolved-names, misc     10
-front-end                       20
+front-end                       20        →  ROUND 738: 11 (+9 discarded emit, now gated)
 ```
+
+**The 34-unit row is a RESIDUAL that was given a NAME** (`spineEnterNode +
+spineLeaveNode − the instrumented type-system rows`), and a subtraction is not a
+measurement of whatever you call it. Rounds 732, 733 and 734 each opened a piece
+of it: the per-kind dispatch table removes 64% of the consultations for 4.8% of
+the time (~100–300 ms in production); 88.4% of the two largest handlers is
+`checkPropertyAccessInExpr` / `checkSingleCallExpressionTypes` doing their pass's
+own checking, against 360 ms of ambient scaffolding and 176 ms of ancestor
+climbs; and 78% of the largest of *those* is type-system work. **The 34 units
+are the checking work itself.**
 
 Matching JS tsc means 100 → 42 (the CI ratio is 2.4×; **that ratio is EMIT-mode
 and these 100 units are a `--noEmit` compile — see § 0.2, the two are not the same
 compile and the check-only ratio is still unmeasured**). Working backwards:
 
-| if we removed… | result | still |
-|---|---:|---:|
-| ALL dispatch overhead | 66 | 1.5× |
-| \+ ALL 403 tail passes | 53 | 1.9× |
-| \+ HALF the type system | 42 | **parity** |
+| if we removed… | claimed | **round-758 audit** |
+|---|---:|---|
+| ALL dispatch overhead | 66 → 1.5× | ❌ **100 → ~99, still 2.4×.** The 34 units are not dispatch; real dispatch is 100–300 ms = ~1 unit. **Out by ~34×, and it is the FIRST step of this argument** |
+| \+ ALL 403 tail passes | 53 → 1.9× | ⚠️ they are **10.4** units, and NOT removable — round 620 found only 3 of 23 census-silent passes deletable, and round 659's migration A/B measured **+0.24%**, i.e. nothing |
+| \+ HALF the type system | 42 → **parity** | ⚠️ rests on a type-system row that is both inflated (double count) and incomplete (§ 0) |
 
-**So parity is not one lever — it needs all three, and the third is hard.** State
-that plainly to anyone who proposes a single change that "gets us to tsc".
+~~**So parity is not one lever — it needs all three, and the third is hard.**~~
+**CORRECTED, round 758.** The first two rows do not deliver what they claim, so
+this is not three levers with a hard third — **it is ONE question: does the
+checking work itself get cheaper?** That is the "endgame" paragraph below, and
+rounds 739/755 priced it at ~2.3% on the three largest assignability sites.
+State *that* plainly to anyone who proposes a single change that "gets us to tsc".
 ~~What is realistically reachable from the staged plan below is ~1.4–1.7× of
 today, i.e. roughly 1.5× slower than tsc rather than 2.4×.~~ **RETRACTED, round
 738.** Three of the five stages are now measured and a fourth's premise is void
@@ -340,8 +423,11 @@ which has never been measured on either side.**
 
 **The staged plan (each stage enables the next):**
 
-1. **(DISPATCH.1) per-kind handler table** — 11–19%. *Prerequisite for everything
-   below.* Low risk, mechanical, decisive probe in hand.
+1. ~~**(DISPATCH.1) per-kind handler table** — 11–19%. *Prerequisite for everything
+   below.* Low risk, mechanical, decisive probe in hand.~~ **STRUCK, round 732
+   (measured ≈0.3–1%) and round 758 (its evidence — "IDENTIFIER is 44.5% of the
+   nodes" — was a FREQUENCY; identifiers are 8.4% of the spine's time, 5.3×).**
+   Nothing below was ever gated on it.
 2. **Resume the M0.4 tail migration** — worth ~14% AFTER stage 1, versus the 4%
    round 659 measured before it. Round 659's "75% reappears" was measured without
    a dispatch table, where one walk still consults every handler at every node.

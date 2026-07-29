@@ -101,6 +101,18 @@ yet all 37,379 that get past the first gate pay for the full `argType`
 computation at the top of the body, because every intervening block consumes
 `argType`.
 
+> **ROUND-758 FLAG (unverified, not falsified) — this is a FREQUENCY carrying a
+> POPULATION claim.** "27% reach the relation" is measured and "the `argType`
+> computation is 924 ms" is measured, but **the split of those 924 ms across the
+> two exit classes never was**, and the sentence reads as though the other 73%
+> are 73% of the cost. Rounds 736 (identity narrowing calls: 949 ns vs
+> 21,708 ns), 757 (874 arrows → six bodies) and 758 (discarded `getCalleeType`
+> resolutions: 1,452 ns vs 16,491 ns) all found the non-proceeding population to
+> be the CHEAP one. Queued as **(AUDIT.2)**: one `pendingArgTypeNanos` field
+> plus two nested rows charged at the relation section's open. **Prediction,
+> written down so it can be scored: the 73% that never reach the relation carry
+> < 40% of the 924 ms.** `docs/perf/claim-audit-round758.md` § 4 (G2), § 7.
+
 ## 4. The attribution
 
 Raw ms; percentages of the 1,624 ms raw partition.
