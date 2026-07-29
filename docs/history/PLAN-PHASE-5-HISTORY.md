@@ -1,3 +1,170 @@
+**Round 757 (2026-07-29) — (FN.1) FIXED: an expression-bodied arrow's body is walked
+now. THE FIX IS RIGHT AND THE CENSUS NUMBER THAT MOTIVATED IT WAS 146x TOO BIG.**
+Compiler profile `--listAll` **46, byte-identical to `2f728c1e` line for line**; the
+**entire generated corpus — all 25 letter classes, 8,837 tests — 0 failures**; filtered
+batch (`*Cta*` `*Arrow*` `*FunctionExpr*` `*Contextual*` `*Inv0*` `*Spine*` `*ObjLit*`
+`*Inv4*` `*DeepExpression*`) **2,335 / 0 / 0**; build warning-clean. The full suite and
+the cost gate are the owner's to run.
+
+**WHAT THE ARM WAS SKIPPING.** `walkFunctionBodiesInExpr`'s `ArrowFunction` arm was
+`(expr.body as? Block)?.let { … }` — for an EXPRESSION body it walked nothing and did
+not descend into the expression either, so a function body nested inside it was never
+handed to `checkFunctionBody`. The arm now descends, under the arrow's OWN
+parameter/type-parameter scope (`ctaTypeParamsIntoLocals` inside a saved/restored
+`EpochMap` install, exactly as the block arm's `checkFunctionBody` does its own); a
+zero-parameter arrow skips the install entirely. **The scope is not optional**: the
+nested `checkFunctionBody` INHERITS `currentLocalTypes`/`varTypes`, so without it an
+inner read of a parameter name resolves to a same-named outer/global binding — the
+`applyBodyLocalShadowing` FP class.
+
+**VERIFIED AGAINST UNMODIFIED `2f728c1e`, both directions.** Ten CLI fixtures run on a
+pristine build and on the fix. **Four targets are SILENT on pristine and fire after**:
+the paren-wrapped function expression, a block-bodied arrow passed as a CALL ARGUMENT
+inside the body, a CHAIN of expression-bodied arrows, and the parameter-shadowing shape.
+**Four controls are identical on both**: bare statement / function expression /
+block-bodied arrow all TS2322, and the out-of-scope read still TS2304-only (no leak).
+One NEGATIVE control — the same nested body written CORRECTLY — is silent on both, so
+the target pins are the descent DISCRIMINATING and not the descent emitting.
+
+**A PIN I WROTE WAS VACUOUS, AND MEASURING IT IS WHAT CAUGHT IT.** The scope pin first
+asserted "TS2322 present AND TS2339 absent", reasoning that the outer binding would have
+produced a missing-member error. It does not: `const v: {a:number}` then `v.b` emits
+NOTHING here, so the `none 2339` half passes whatever happens. Replaced with a TWO-SIDED
+discriminator whose two candidate bindings give OPPOSITE verdicts — outer `b: number` vs
+arrow `b: string` must be TS2322, and the SAME shape with the annotations swapped must be
+SILENT. Only the arrow's parameter winning produces both, and the pristine build produces
+neither.
+
+**THE FINDING: THE POPULATION IS SIX.** Arm census before → after: nodes visited 199,131
+→ 206,098 (+3.5%), max depth 18 → 35, expression-bodied arrows 874 → 911, **block-bodied
+arrows 374 → 380 (+6)**, **function expressions 262 → 262 (+0)**. **The 874
+expression-bodied arrows contain SIX block bodies between them**, and all six are clean —
+which is why 200 kLOC of TypeScript and 8,837 corpus baselines do not move by one byte.
+Round 756 quoted "874 of 1,510 (58%)" as the size of the false negative; that is the
+count of times the ARM IS TAKEN, not of what is behind it, and it overstates the
+reachable population by **146x**. *A census counts arm entries; only walking tells you
+what the arm was hiding.*
+
+**PREDICTIONS, SCORED** (written before the change compiled). P1 the profile moves off
+46, upward: **FALSIFIED** (byte-identical). P2 nodes visited rise 20-60%: **FALSIFIED**
+(+3.5%). P3 bodies checked rise >=30%: **FALSIFIED** (+1.4%). P4 at least one corpus
+baseline moves: **FALSIFIED** (zero, across all 25 classes). P5 added cost < 0.3%:
+**HELD** (0.04%). Four of five wrong, all in the same direction — I priced the fix by the
+census number instead of asking what the census counted.
+
+**THE COST.** New level-D row `D_ARROW_EXPR_SCOPE`: **8 ms over 707 installs**
+(`getTypeFromTypeNode` per annotated parameter dominates), plus 3.5% more nodes walked.
+Level D 262 → 276 ms probe-inflated; net of the 25,213 extra probe boundaries at ~168 ns,
+**≈10 ms ≈ 0.04% of a 26,800 ms compile**. The walker was 0.68% and is now ~0.72% — a
+5% rise in a row that is two thirds of one percent. No `LogicalParityDivergence` was
+needed or added; nothing was silenced.
+
+LANDED: the arm + the scope install, the `D_ARROW_EXPR_SCOPE` row, and +3 pins
+(`CtaSectionProbeTest` 20 → 23; two round-756 gap pins FLIPPED rather than deleted, as
+that item required). Addendum: `docs/perf/walk-function-bodies-attribution.md` § 11.
+
+**Round 756 (2026-07-29) — (TYPE.3) CLOSED AS A MEASUREMENT: `walkFunctionBodiesInExpr`
+spends 36% of itself on the work it is NAMED for, and the census found a FALSE NEGATIVE
+the milliseconds could not.** Compiler profile `--listAll` **46**, composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322), and `--listAll --ctaSections`
+**byte-identical** to it; `CtaSectionProbeTest` **20 / 0 / 0** (+9 pins); filtered batch
+(`*Cta*` `*ObjLit*` `*ObjectLiteral*` `*Arrow*` `*Inv0*` `*Spine*` `*FunctionExpr*`
+`*Contextual*`) **2,405 / 0 / 0**; build warning-clean. **NOTHING LANDED beyond the
+harness, correctly.** The full suite and the cost gate are the owner's to run.
+
+**FIRST, THE NUMBER REPRODUCES — EXACTLY.** Round 755's carry-forward says re-measure
+before spending a round inside. Round 738: 181 ms / 28,940 openings / 6,280 ns each.
+Today: **181 ms / 28,940 / 6,280 ns — all three digits identical.** Unlike round 755's
+target, this one's population is AST SHAPE (which expressions contain function bodies),
+so it does not move when the declared types move. *That is the useful half of the rule:
+re-measuring is cheap, and knowing WHY a number is stable is worth as much as catching
+one that is not.*
+
+**THE PARTITION** (level D, 10 rows + a 17-slot arm census, own index space). Net of a
+168 ns/boundary probe charge: **the walk itself 65 ms (36%)**, **`calleeDeclaredCtxParams`
+49 ms (27%)**, **`checkFunctionBody` for arrows 49 ms (27%)** and **for function
+expressions 16 ms (9%)** — sum 179 ms against the 181 ms measured independently, a 1%
+cross-check; a second cross-check from the opposite side has level D's outermost
+invocations at **28,940 = level A's `A_WALKFN` openings exactly**. So
+**`checkFunctionBody` — the work the function is named for — is 36% of it**; the rest is
+FINDING the bodies and one resolution that is there for them.
+
+**WHY IT IS SMALL, AND IT IS NOT WHAT ROUND 738 GUESSED.** The walk visits **199,131
+nodes to reach 1,510 function-like ones (0.76%)**, of which only **636 have a block body
+to check (0.32%)**. It is a property-access/call spine crawl: those two arms are 68% of
+the non-leaf visits, leaves are 56% of everything, max depth 18, 6.88 nodes per entry.
+Round 738's aside ("7.7% because the bodies it walks are mostly already walked") is wrong
+in mechanism: the bodies cost **61-131 us each** and there are **636** of them. **The walk
+spends more finding them than checking them.**
+
+**THE CENSUS FOUND A FALSE NEGATIVE.** **874 of the 1,510 function-like nodes (58%) are
+EXPRESSION-BODIED ARROWS**, whose arm is `(expr.body as? Block)?.let {}` — no block,
+nothing walked, no descent into the expression either. The obvious defence ("the spine
+anchors the inner statement anyway") was TESTED and is **FALSE**: `const f = () =>
+(function () { const s: string = 5; return s })` is **SILENT** where tsc reports TS2322,
+while all three controls (bare statement / function expression / BLOCK-bodied arrow) fire.
+Pinned as it stands with those controls, so it fails loudly the day the arm descends. **A
+correctness lead, not a perf one** — closing it ADDS work to a 0.68% walker. Queued below.
+
+**TWO MORE FROM THE CENSUS, ROUND 755's METHOD.** (i) **Four rows are ZERO in the whole
+compile** — `getTypeOfObjectLiteral` for objlit `this`, `walkObjectLiteralMemberBody`, and
+both B585 contextual-type-node computations — despite 755 object-literal arm entries: the
+entire B150/B585 object-literal-method machinery is JS-gated and tsc's source is `.ts`. A
+`.js` control lights both rows on the same shape, so the zeros measure the input, not a
+dead probe. (ii) **The walker has exactly ONE live entry point**: `invocationsDOutside ==
+0`, so the two legacy call sites in `checkTypeAssignabilityInStatements` are reachable
+only from inside its own body walks. (iii) Recorded without a theory: **950 nested walker
+entries per 374 arrow bodies (2.5 each) against 6 per 262 function-expression bodies
+(0.02 each)** — 100x, unexplained.
+
+**THE SIZE.** 181 ms = **0.68%** of a 26,800 ms compile; largest row **65 ms = 0.24%**;
+band **±2.0% ≈ 540 ms**. **Deleting the entire walker is a third of one noise band**, and
+it could not be deleted anyway without re-deriving the false-negative surface. The one
+named candidate — a "does any argument have a function shape" pre-test skipping the
+**29,787** unconditional `calleeDeclaredCtxParams` resolutions that exist to contextualize
+**636** bodies — is **49 ms = 0.18%** and unproved sound. Not attempted.
+
+**PREDICTIONS, SCORED** (written before the run). P0 the number reproduces: **HELD**, to
+the digit. P1 `checkFunctionBody` >= 60% and dispatch <= 15%: **FALSIFIED, both clauses**
+(36% / 36%) — I predicted the OPPOSITE of round 738's aside and was wrong in the same
+direction, for a third reason neither of us named. P2 `calleeDeclaredCtxParams` is the
+largest non-body row, >= 20 ms: **HELD** (49 ms). P3 nothing clears the band: **HELD**.
+Two of four wrong — the arc's steady rate.
+
+**WHAT DID NOT WORK.** The **ON-vs-COARSE differential is too noisy to price the
+boundary**: Δ29 ms against a 26 ms within-mode spread, bounding it only at 31-168 ns. The
+usable calibration came from comparing BOTH modes against the level-D-free binary
+(168 / 138 ns), and only the top of the range reconciles the partition with the 181 ms.
+*A differential is only as sharp as the smaller of its two spreads* — and the three rows
+that carry the findings move < 5 ms across the whole range, so the choice changes how big
+the walk is, not what the findings are.
+
+LANDED: `CtaSections` level D (`beginD`/`atD`/`endD`/`armD` + `enterWalkFn`/`exitWalkFn`,
+opt-in, behaviour-free when off) and 9 pins. Full derivation:
+**`docs/perf/walk-function-bodies-attribution.md`**.
+
+**PART 2 — (LIB.1) IS DONE: (c) LANDED, AND IT TOOK THE ZERO-CORPUS-IMPACT DESIGN.**
+`Resolution.unknownNames` had **zero consumers**, so `"lib": ["esnext.arary"]` resolved to
+NOTHING, the program was checked against no lib at all, and not one word was said — the
+(LIB.1) defect in its last shape. TS6046 is now raised from the resolution itself:
+`bindRealLibs` records the unknown names (it is the only place that KNOWS an entry
+resolved to no lib file) and a new `pass("checkLibOption")` emits **one diagnostic per bad
+entry**, message enumerating the valid names exactly as tsc does and deliberately NOT
+naming the offender (pinned — naming it is the obvious "improvement" and would diverge
+from every tsc baseline). Position follows tsc's two forms:
+`options.tsconfigOptionPositions["lib"]` for a tsconfig-driven build, file-less otherwise,
+as `tsc --lib bogus` is. **THE DESIGN CHOICE, and why**: raised from the real-lib
+resolution the corpus **cannot** move — it runs the embedded `BUILTIN_LIB_SOURCE` and
+never consults `RealLibResolver` — while a raw `options.lib` x `libMap` check reaches all
+259 `@lib:` cases and needs the full (PARITY.1) judgement. That property is a **PIN**, not
+a comment. **THE TRAP (b) PAID FOR APPLIES HERE**: a control asking only "does the good
+lib name produce no error?" passes just as happily when the good lib resolved to nothing,
+because silence IS the failure mode — so the control is a MEMBER probe
+(`Screen.definitelyNotAMember` must still be TS2339). **Verified against unmodified HEAD:
+the three targets FAIL, both controls PASS.** Gates: `--listAll` **byte-identical at 46**;
+`*LibOption*`/`*RealLib*`/`*Inv0*`/`*Cta*` **120 / 0**; corpus slice `_L`/`_M`/`_N`
+**1,075 / 0**; build warning-clean. Pins: `LibOptionUnknownNameTest` (5).
+
 **Round 755 (2026-07-29) — (CALL.4) CLOSED AS A MEASUREMENT: the 21,708 ns is 80% ONE
 CALLEE, and the item's own headline number had HALVED while it sat in the queue.**
 Compiler profile `--listAll` **46, byte-identical with the probe at its deepest**
