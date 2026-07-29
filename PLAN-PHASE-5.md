@@ -27,8 +27,8 @@ root-causing it found a substitution defect that has nothing to do with the arc
 that was blamed for it.** Arm A: compiler/tsc-cli/jsTyping/deprecatedCompat/
 typingsInstallerCore **46** (`TS2591×43 / TS2304×2 / TS2584×1`, identical to round
 730), services **47**, server **47**, harness **95**. Emit path confirmed working.
-Filtered batches **858 + 1052** hand-written and **5,405** corpus tests, 0 failures;
-build warning-clean. Artifact: `docs/perf/dashboard-round760.md`. **The full suite
+Filtered batches **858 + 1052** hand-written and **the ENTIRE generated corpus, all
+25 classes**, 0 failures; the two changed files compile warning-clean. Artifact: `docs/perf/dashboard-round760.md`. **The full suite
 and the cost gate are the owner's to run.** Predictions: **3 of 6**.
 
 *Round 759 closed the attribution arc: eleven rounds produced two landed wins and
@@ -89,7 +89,8 @@ no timer was opened.*
   the artifact so a future round can diff without a rebuild.
 - **EVERY PIN RUN AGAINST UNMODIFIED `aef21e76`: the three TARGETS FAIL and the
   three NEGATIVE CONTROLS PASS.** A control that is silent on both sides measures
-  nothing; these are not.
+  nothing; these are not. Corpus ran in five batches (1,989 + 3,416 + 1,038 +
+  1,533 + 862) — all 25 generated classes, 0 failures.
 - **PREDICTIONS 3 and 5 are the ones that moved the map.** (3) "≥1 other profile
   also drifted" — WRONG, five are unmoved code for code, so the codebase is more
   stable under 50 commits than assumed. (5) "the enum→member rule is the whole fix"

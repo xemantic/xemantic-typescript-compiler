@@ -90,8 +90,8 @@ for twenty-two rounds.
   row of `bench/self-compile-tsc.tsv`, and the same 46 diagnostics as the
   `--noEmit` run. Output is well-formed CommonJS.
 - Byte-level emit is gated continuously by the corpus's own `.js` baseline
-  subtests, which are generated pre-738 and unchanged since; 5,405 of them ran
-  green this round.
+  subtests, which are generated pre-738 and unchanged since; the ENTIRE generated
+  corpus — all 25 classes — ran green this round.
 
 Forward baseline, so a future round can diff without a rebuild — `sha256` of the
 concatenation of the 78 emitted `.js` files in sorted path order, compiler profile,
@@ -136,7 +136,8 @@ decided here … our leniency there is pre-existing and unmeasured."*
 `enumMemberDomainProvesNotSubtype`, consulted at the ONE call site that needs the
 answer — the type-guard negative branch — and only ever to DECLINE a collapse to
 `never`. Six pins; on unmodified `aef21e76` the **three targets FAIL and the three
-negative controls PASS**.
+negative controls PASS**. Corpus: all 25 generated classes, 0 failures
+(1,989 + 3,416 + 1,038 + 1,533 + 862 across five batches).
 
 ### What was sized and refused — two engine defects, both measured
 
