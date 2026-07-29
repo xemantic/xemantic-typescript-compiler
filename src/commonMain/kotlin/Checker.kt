@@ -111195,7 +111195,62 @@ interface DataView {
      *  read from (a types.ts `kind: Kind.A` annotation resolves under types.ts's visibility,
      *  a case/comparison expression under its own file's) — so a module-only name with no
      *  meaning where the node lives no longer leaks a foreign file's local. */
-    private fun resolveEnumSymbolForDiscriminant(enumIdent: String, keyNode: Node): Symbol? {
+    private fun resolveEnumSymbolForDiscriminant(enumIdent: String, keyNode: Node): Symbol? =
+        resolveEnumSymbolFileLevel(enumIdent, keyNode)
+            ?: enumSymbolFromEnclosingNamespace(enumIdent, keyNode)
+
+    /**
+     * (REL.4)(a) round 769: the enum name looked up in [keyNode]'s ENCLOSING NAMESPACE
+     * chain, innermost first — the scope a file-level lookup structurally cannot see.
+     *
+     * A `namespace`'s members live in the module symbol's [Symbol.exports] (the binder
+     * puts ALL of them there, `export`-prefixed or not), never in the file's `locals`
+     * nor in `globals`, so before this every name-based enum reader answered null for
+     * `const enum ParsingContext` inside tsc's own `namespace Parser` — and with it EVERY
+     * narrowing direction at once, because they all funnel through
+     * [resolveEnumSymbolForDiscriminant]. It is the enum's DECLARATION site that decides,
+     * not the code's: a top-level enum switched on inside a namespace always worked.
+     *
+     * STRICTLY ADDITIVE by construction — [resolveEnumSymbolForDiscriminant] consults it
+     * only after the file-level lookup returned null, so it can mint a key only where
+     * there was none. That matters more here than anywhere else in the checker: this is
+     * the `"symId#member"` space whose SPLIT (round 425) made `typeGuardMemberDisjoint`
+     * catastrophically wrong. Measured over the 8 tsc-source profiles before landing —
+     * of ~15k (compiler) / ~23k (services) resolver calls, **0** names resolve both ways,
+     * and for every enum reached here the members' `parent` canonicalizes to the same id
+     * this returns, which is the key [getDeclaredTypeOfEnumMember] interns under.
+     *
+     * A namespace member that is NOT an enum answers null and STOPS the climb: the
+     * innermost binding of a name is the one that counts, and an outer enum must not be
+     * keyed through an inner shadow.
+     */
+    private fun enumSymbolFromEnclosingNamespace(enumIdent: String, keyNode: Node): Symbol? {
+        var cur: Node? = keyNode
+        var hops = 0
+        var res: BinderResult? = null
+        var resolved = false
+        while (cur != null && hops++ < 4096) {
+            if (cur is SourceFile) return null
+            if (cur is ModuleDeclaration) {
+                if (!resolved) {
+                    resolved = true
+                    res = owningSourceFile(keyNode)?.fileName?.let { fileResults[it] }
+                }
+                val nsSym = res?.nodeToSymbol?.get(nodeKey(cur))
+                val cand = nsSym?.exports?.get(enumIdent)
+                if (cand != null) {
+                    val t = resolveAlias(cand)
+                    return if (t.flags.hasAny(SymbolFlags.Enum)) canonicalEnumSymbol(t) else null
+                }
+            }
+            cur = (cur as NodeBase).parent
+        }
+        return null
+    }
+
+    /** The pre-round-769 resolution: [currentFileLocals] then the INV.3(c)(ii)
+     *  node-keyed merged-globals consult, then the barrel-imported-enum fallback. */
+    private fun resolveEnumSymbolFileLevel(enumIdent: String, keyNode: Node): Symbol? {
         val sym = currentFileLocals?.get(enumIdent) ?: lookupPerFileForNode(keyNode, enumIdent) ?: return null
         val target = resolveAlias(sym)
         if (target.flags.hasAny(SymbolFlags.Enum)) return canonicalEnumSymbol(target)
