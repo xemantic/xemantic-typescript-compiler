@@ -110349,10 +110349,10 @@ interface DataView {
         val tProps = tObj.properties ?: return false
         val sProps = sObj.properties ?: return false
         return tProps.any { tp ->
-            val tt = getTypeOfSymbol(tp)
+            val tt = propertyTypeOnCarrier(tObj, tp)
             if (tt.flags.hasNone(TypeFlags.EnumLiteral)) return@any false
             val sp = sProps.firstOrNull { it.name == tp.name } ?: return@any false
-            val st = getTypeOfSymbol(sp)
+            val st = propertyTypeOnCarrier(sObj, sp)
             // The source must carry the OWNING enum's own type — a sibling MEMBER is
             // (REL.1)(b)'s question and is already answered by the relation.
             st.flags.hasAny(TypeFlags.Enum) &&
@@ -110360,6 +110360,30 @@ interface DataView {
                 enumOwnTypeSymbol(st) === enumOfMemberTypeSymbol(tt)
         }
     }
+
+    /**
+     * Round 762: the type of [prop] AS CARRIED BY [carrier] — substituted through the
+     * carrier's type arguments when it is a generic instantiation.
+     *
+     * `getTypeOfSymbol` reads the type off the DECLARING interface's member symbol. Where
+     * that declaration is a generic base — tsc's `Token<TKind> { kind: TKind }`, inherited
+     * by every `ModifierToken<SyntaxKind.X>` constituent of `Modifier` — the answer is the
+     * bare type PARAMETER rather than `SyntaxKind.AbstractKeyword`, so a caller testing
+     * `flags` for EnumLiteral / Enum reads the parameter and answers "no".
+     *
+     * MEASURED, not reasoned: swapping this one read flips three pins in
+     * [GenericGuardTargetEnumMemberTest] that fail on `254b4151`. The shape that needs it
+     * is a UNION of generic instantiations (`Modifier`); a guard onto a SINGLE
+     * instantiation already answered correctly, which is why round 760's plain-interface
+     * reductions all stayed clean while tsc's REAL source kept washing `node` to `never`
+     * (services/server/harness `completions.ts:2237`).
+     *
+     * Same idiom as [resolvePrefixTailSegment]; the null fallback keeps a non-generic or
+     * unresolvable carrier on its existing answer, so this only ever ADDS substitution.
+     */
+    private fun propertyTypeOnCarrier(carrier: Type.Object, prop: Symbol): Type =
+        if (carrier is Type.Reference) resolveGenericPropertyType(carrier, prop) ?: getTypeOfSymbol(prop)
+        else getTypeOfSymbol(prop)
 
     /**
      * Round 480 (tsc subtype vs assignability): the negative type-guard filter uses
