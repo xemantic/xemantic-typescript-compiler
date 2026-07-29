@@ -107,6 +107,23 @@ build, then removed. It is not landed, and `enumMemberDomainProvesNotSubtype` st
   which still answers `K` where tsc answers `K.B | K.C | K.D`), which nothing on the worklist
   consumes; (6) "(B) needs (C)" — WRONG, they are independent, and the member-union-declared
   case proves it.
+- **COST (COST.1): `narrow.walks` 71,323 -> 74,729 (+4.78%), REBASELINED, and the increase IS
+  the fix.** The (C) gate now runs `getNarrowedTypeForReference` for enum-typed call arguments,
+  which previously fell through it entirely — 3,406 flow walks that did not happen before and
+  are exactly the work the five closed lines needed. It is new walks, not cache churn:
+  `narrow.memoServed` moved +7. Every other counter is inside tolerance (`typeOfExpr.calls`
+  +0.03%, `globals.lookups` +0.46% — the name resolution those walks perform). **Priced:**
+  `--passTiming` puts `narrowWalks` at **2,621 ms of a 30,408 ms checker-init**, so +4.78% of
+  it is ~125 ms = **0.4% of checker-init**, under the box's own drift band. *Protocol note: the
+  rebaseline is a FOLLOW-UP commit, not the same one — CLAUDE.md asks for the same commit and
+  this round measured the gate after committing.*
+- **FOLLOW-UP QUEUED, not taken: make the enum arm a SECOND CHANCE.** The other arms of that
+  gate walk unconditionally, but an enum argument can only change a verdict when the raw enum
+  does not already relate to the parameter — the idiom `overloadNarrowedArgType`'s round-743
+  sibling already uses ("the flow walk is paid for only on the rejecting path"). Expected to
+  return most of the 3,406 walks. NOT taken here because the arm's result is the `argType` for
+  every downstream check, not just the pass/fail decision, so it needs its own grid + corpus
+  gate rather than riding this one.
 - **KNOWN AND DELIBERATELY NOT DONE, with their shapes:** the NEGATIVE direction on a bare enum
   (`k !== K.A`, and a type guard's false branch) still answers the whole enum — that one really
   does need the member union, and it changes DISPLAY (`K.B | K.C | K.D` instead of `K`), so it
