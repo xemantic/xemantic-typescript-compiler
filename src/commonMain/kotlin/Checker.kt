@@ -5072,8 +5072,49 @@ class Checker(
      * overlap); lib diagnostics render `:--:--` so only the display name is
      * affected.
      */
+    /**
+     * (LIB.1)(c): TS6046 for a `lib` option entry that names no lib file.
+     *
+     * Until this landed [RealLibResolver.Resolution.unknownNames] had **zero
+     * consumers**: a typo in `"lib"` was dropped without a word and the program was
+     * checked against whatever DID resolve — for a single-entry `"lib": ["dom"]`
+     * typo, against nothing at all. That is the (LIB.1) defect in its last shape.
+     *
+     * tsc's message enumerates the valid names and does NOT name the offending one
+     * (`Argument for '--lib' option must be: 'es5', 'es6', …`), one diagnostic per
+     * bad entry. The position follows tsc's two forms: a tsconfig-driven build
+     * points at the `lib` value, anything else (CLI, test directives) is file-less
+     * exactly as `tsc --lib bogus` is.
+     */
+    private fun checkLibOption() {
+        if (realLibUnknownNames.isEmpty()) return
+        val valid = RealLibResolver.libs.joinToString(", ") { "'$it'" }
+        val pos = options.tsconfigOptionPositions["lib"]
+        for (unused in realLibUnknownNames) {
+            diagnostics.add(
+                Diagnostic(
+                    message = "Argument for '--lib' option must be: $valid.",
+                    category = DiagnosticCategory.Error,
+                    code = 6046,
+                    fileName = pos?.fileName,
+                    line = pos?.valueLine,
+                    character = pos?.valueCharacter,
+                    start = pos?.valueStart,
+                    length = pos?.valueLength,
+                )
+            )
+        }
+    }
+
     private fun bindRealLibs(): SymbolTable {
         val libNames = options.lib.ifEmpty { null }
+        // (LIB.1)(c): the resolution is the only place that KNOWS a `lib` entry is not
+        // a lib name — it silently dropped them before, so `"lib": ["esnext.arary"]`
+        // ran on es5 alone and said nothing. Recorded here and reported by
+        // [checkLibOption]; raising it from the resolution rather than from a raw
+        // `options.lib` x `libMap` check is what keeps it off the embedded-lib path
+        // (the corpus never resolves real libs, so no baseline can move).
+        realLibUnknownNames = RealLibResolver.resolve(libNames, options.target).unknownNames
         val results = RealLibSnapshots.bindLibFiles(libNames, options.target, options)
         val merged: SymbolTable = symbolTable()
         for (result in results) {
@@ -5112,6 +5153,16 @@ class Checker(
      * would just duplicate ~400 strings without any visibility refinement.
      */
     private val perFileScope: MutableMap<String, SymbolTable> = mutableMapOf()
+
+    /**
+     * (LIB.1)(c): `lib` option entries that are not lib names at all, recorded by
+     * [bindRealLibs] and reported by [checkLibOption] as TS6046.
+     *
+     * DECLARED BEFORE [libGlobals] on purpose — the Kotlin field-init order gotcha:
+     * [libGlobals]'s initializer is what fills this, so a later declaration would be
+     * overwritten with `emptyList()` after the fact.
+     */
+    private var realLibUnknownNames: List<String> = emptyList()
 
     /** Retained lib-globals snapshot for [perFileScope] construction. */
     private val libGlobals: SymbolTable = parseBuiltinLib()
@@ -5682,6 +5733,9 @@ class Checker(
         if (PassTiming.enabled || PassTiming.censusMode) {
             PassTiming.diagnosticsSize = { diagnostics.size }
         }
+        // (LIB.1)(c): report a `lib` entry that named no lib file. First, because it
+        // explains every downstream "unknown name" the missing lib would produce.
+        pass("checkLibOption") { checkLibOption() }
         // 0. Merge built-in type declarations into globals (before user files)
         mergeSymbolTable(globals, libGlobals)
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)

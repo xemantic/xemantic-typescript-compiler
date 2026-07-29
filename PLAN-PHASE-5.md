@@ -100,6 +100,28 @@ LANDED: `CtaSections` level D (`beginD`/`atD`/`endD`/`armD` + `enterWalkFn`/`exi
 opt-in, behaviour-free when off) and 9 pins. Full derivation:
 **`docs/perf/walk-function-bodies-attribution.md`**.
 
+**PART 2 — (LIB.1) IS DONE: (c) LANDED, AND IT TOOK THE ZERO-CORPUS-IMPACT DESIGN.**
+`Resolution.unknownNames` had **zero consumers**, so `"lib": ["esnext.arary"]` resolved to
+NOTHING, the program was checked against no lib at all, and not one word was said — the
+(LIB.1) defect in its last shape. TS6046 is now raised from the resolution itself:
+`bindRealLibs` records the unknown names (it is the only place that KNOWS an entry
+resolved to no lib file) and a new `pass("checkLibOption")` emits **one diagnostic per bad
+entry**, message enumerating the valid names exactly as tsc does and deliberately NOT
+naming the offender (pinned — naming it is the obvious "improvement" and would diverge
+from every tsc baseline). Position follows tsc's two forms:
+`options.tsconfigOptionPositions["lib"]` for a tsconfig-driven build, file-less otherwise,
+as `tsc --lib bogus` is. **THE DESIGN CHOICE, and why**: raised from the real-lib
+resolution the corpus **cannot** move — it runs the embedded `BUILTIN_LIB_SOURCE` and
+never consults `RealLibResolver` — while a raw `options.lib` x `libMap` check reaches all
+259 `@lib:` cases and needs the full (PARITY.1) judgement. That property is a **PIN**, not
+a comment. **THE TRAP (b) PAID FOR APPLIES HERE**: a control asking only "does the good
+lib name produce no error?" passes just as happily when the good lib resolved to nothing,
+because silence IS the failure mode — so the control is a MEMBER probe
+(`Screen.definitelyNotAMember` must still be TS2339). **Verified against unmodified HEAD:
+the three targets FAIL, both controls PASS.** Gates: `--listAll` **byte-identical at 46**;
+`*LibOption*`/`*RealLib*`/`*Inv0*`/`*Cta*` **120 / 0**; corpus slice `_L`/`_M`/`_N`
+**1,075 / 0**; build warning-clean. Pins: `LibOptionUnknownNameTest` (5).
+
 **Round 755 (2026-07-29) — (CALL.4) CLOSED AS A MEASUREMENT: the 21,708 ns is 80% ONE
 CALLEE, and the item's own headline number had HALVED while it sat in the queue.**
 Compiler profile `--listAll` **46, byte-identical with the probe at its deepest**
@@ -1845,15 +1867,31 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Workaround until then, recorded in CLAUDE.md: pass
   `-Dkotlin.daemon.jvmargs=-Xmx4g` on the command line.
 
-- [ ] **(LIB.1) — (a) DONE round 730, (b) DONE round 731. ONLY (c)'s user-facing half
-  is open, and it SHRANK to a design question (reconciled round 754: a top-down scan
-  must NOT re-do the flip or the lib shipping).** What genuinely remains: a
-  `Resolution.unknownNames` consumer (a `lib` entry not in `libMap` at all; tsc reports
-  TS6046) — **zero consumers today**, and round 731 measured its corpus impact as ZERO
-  *provided* it is raised from the real-lib resolution path (the corpus runs the
-  embedded lib and never consults `RealLibResolver`); raised instead from a raw
-  `options.lib` × `libMap` check it reaches all 259 `@lib:` cases. `Resolution.unavailable`
-  is now empty for every resolution (pinned), so the case (c) was written for is gone.
+- [x] **(LIB.1) — DONE. (a) round 730, (b) round 731, (c) round 756.**
+  **(c) LANDED round 756, and it took the ZERO-CORPUS-IMPACT design.** TS6046 is now
+  raised from `Resolution.unknownNames` — recorded by `bindRealLibs` (the only place
+  that KNOWS an entry resolved to no lib file) and emitted by a new
+  `pass("checkLibOption")`, one diagnostic per bad entry, message enumerating the valid
+  names exactly as tsc does and NOT naming the offender. Position follows tsc's two
+  forms: `options.tsconfigOptionPositions["lib"]` for a tsconfig-driven build, file-less
+  otherwise (as `tsc --lib bogus` is). **The corpus cannot move by construction** — it
+  runs the embedded `BUILTIN_LIB_SOURCE` and never resolves real libs — and that is a
+  PIN, not a comment (`control - the embedded lib path stays silent so no corpus
+  baseline can move`). *Do not widen it to a raw `options.lib` × `libMap` check: that
+  reaches all 259 `@lib:` cases and needs the full (PARITY.1) judgement.* The defect it
+  closes: `"lib": ["esnext.arary"]` resolved to NOTHING, the program was checked
+  against no lib at all, and not one word was said. **The trap (b) paid for applies
+  here too and the control obeys it**: "the good lib name produces no error" passes
+  just as happily when the good lib resolved to nothing, so the control is a MEMBER
+  probe (`Screen.definitelyNotAMember` must still be TS2339). Verified against
+  unmodified HEAD: the three targets FAIL, both controls PASS.
+  Pins: `LibOptionUnknownNameTest` (5). Gates: compiler profile `--listAll`
+  **byte-identical at 46**; filtered `*LibOption*`/`*RealLib*`/`*Inv0*`/`*Cta*`
+  **120 / 0**; corpus slice `_L`/`_M`/`_N` **1,075 / 0**.
+  Round-731 background: `Resolution.unavailable` is empty for every resolution
+  (pinned), so the "requested but unshipped" case (c) was originally written for is
+  gone; an unavailable lib can now only mean a pin bump outran the generator, which
+  argues for a build error rather than a user diagnostic.
   Original title: Ship the DOM/webworker libs and stop real builds silently running
   UNCHECKED — owner-approved 2026-07-26 ("yes, please fix it"), PROMOTED out of the
   post-v1 backlog because it is a silent wrong answer, not a missing feature.**
