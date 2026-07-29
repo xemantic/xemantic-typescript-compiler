@@ -20,6 +20,86 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 756 (2026-07-29) — (TYPE.3) CLOSED AS A MEASUREMENT: `walkFunctionBodiesInExpr`
+spends 36% of itself on the work it is NAMED for, and the census found a FALSE NEGATIVE
+the milliseconds could not.** Compiler profile `--listAll` **46**, composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322), and `--listAll --ctaSections`
+**byte-identical** to it; `CtaSectionProbeTest` **20 / 0 / 0** (+9 pins); filtered batch
+(`*Cta*` `*ObjLit*` `*ObjectLiteral*` `*Arrow*` `*Inv0*` `*Spine*` `*FunctionExpr*`
+`*Contextual*`) **2,405 / 0 / 0**; build warning-clean. **NOTHING LANDED beyond the
+harness, correctly.** The full suite and the cost gate are the owner's to run.
+
+**FIRST, THE NUMBER REPRODUCES — EXACTLY.** Round 755's carry-forward says re-measure
+before spending a round inside. Round 738: 181 ms / 28,940 openings / 6,280 ns each.
+Today: **181 ms / 28,940 / 6,280 ns — all three digits identical.** Unlike round 755's
+target, this one's population is AST SHAPE (which expressions contain function bodies),
+so it does not move when the declared types move. *That is the useful half of the rule:
+re-measuring is cheap, and knowing WHY a number is stable is worth as much as catching
+one that is not.*
+
+**THE PARTITION** (level D, 10 rows + a 17-slot arm census, own index space). Net of a
+168 ns/boundary probe charge: **the walk itself 65 ms (36%)**, **`calleeDeclaredCtxParams`
+49 ms (27%)**, **`checkFunctionBody` for arrows 49 ms (27%)** and **for function
+expressions 16 ms (9%)** — sum 179 ms against the 181 ms measured independently, a 1%
+cross-check; a second cross-check from the opposite side has level D's outermost
+invocations at **28,940 = level A's `A_WALKFN` openings exactly**. So
+**`checkFunctionBody` — the work the function is named for — is 36% of it**; the rest is
+FINDING the bodies and one resolution that is there for them.
+
+**WHY IT IS SMALL, AND IT IS NOT WHAT ROUND 738 GUESSED.** The walk visits **199,131
+nodes to reach 1,510 function-like ones (0.76%)**, of which only **636 have a block body
+to check (0.32%)**. It is a property-access/call spine crawl: those two arms are 68% of
+the non-leaf visits, leaves are 56% of everything, max depth 18, 6.88 nodes per entry.
+Round 738's aside ("7.7% because the bodies it walks are mostly already walked") is wrong
+in mechanism: the bodies cost **61-131 us each** and there are **636** of them. **The walk
+spends more finding them than checking them.**
+
+**THE CENSUS FOUND A FALSE NEGATIVE.** **874 of the 1,510 function-like nodes (58%) are
+EXPRESSION-BODIED ARROWS**, whose arm is `(expr.body as? Block)?.let {}` — no block,
+nothing walked, no descent into the expression either. The obvious defence ("the spine
+anchors the inner statement anyway") was TESTED and is **FALSE**: `const f = () =>
+(function () { const s: string = 5; return s })` is **SILENT** where tsc reports TS2322,
+while all three controls (bare statement / function expression / BLOCK-bodied arrow) fire.
+Pinned as it stands with those controls, so it fails loudly the day the arm descends. **A
+correctness lead, not a perf one** — closing it ADDS work to a 0.68% walker. Queued below.
+
+**TWO MORE FROM THE CENSUS, ROUND 755's METHOD.** (i) **Four rows are ZERO in the whole
+compile** — `getTypeOfObjectLiteral` for objlit `this`, `walkObjectLiteralMemberBody`, and
+both B585 contextual-type-node computations — despite 755 object-literal arm entries: the
+entire B150/B585 object-literal-method machinery is JS-gated and tsc's source is `.ts`. A
+`.js` control lights both rows on the same shape, so the zeros measure the input, not a
+dead probe. (ii) **The walker has exactly ONE live entry point**: `invocationsDOutside ==
+0`, so the two legacy call sites in `checkTypeAssignabilityInStatements` are reachable
+only from inside its own body walks. (iii) Recorded without a theory: **950 nested walker
+entries per 374 arrow bodies (2.5 each) against 6 per 262 function-expression bodies
+(0.02 each)** — 100x, unexplained.
+
+**THE SIZE.** 181 ms = **0.68%** of a 26,800 ms compile; largest row **65 ms = 0.24%**;
+band **±2.0% ≈ 540 ms**. **Deleting the entire walker is a third of one noise band**, and
+it could not be deleted anyway without re-deriving the false-negative surface. The one
+named candidate — a "does any argument have a function shape" pre-test skipping the
+**29,787** unconditional `calleeDeclaredCtxParams` resolutions that exist to contextualize
+**636** bodies — is **49 ms = 0.18%** and unproved sound. Not attempted.
+
+**PREDICTIONS, SCORED** (written before the run). P0 the number reproduces: **HELD**, to
+the digit. P1 `checkFunctionBody` >= 60% and dispatch <= 15%: **FALSIFIED, both clauses**
+(36% / 36%) — I predicted the OPPOSITE of round 738's aside and was wrong in the same
+direction, for a third reason neither of us named. P2 `calleeDeclaredCtxParams` is the
+largest non-body row, >= 20 ms: **HELD** (49 ms). P3 nothing clears the band: **HELD**.
+Two of four wrong — the arc's steady rate.
+
+**WHAT DID NOT WORK.** The **ON-vs-COARSE differential is too noisy to price the
+boundary**: Δ29 ms against a 26 ms within-mode spread, bounding it only at 31-168 ns. The
+usable calibration came from comparing BOTH modes against the level-D-free binary
+(168 / 138 ns), and only the top of the range reconciles the partition with the 181 ms.
+*A differential is only as sharp as the smaller of its two spreads* — and the three rows
+that carry the findings move < 5 ms across the whole range, so the choice changes how big
+the walk is, not what the findings are.
+
+LANDED: `CtaSections` level D (`beginD`/`atD`/`endD`/`armD` + `enterWalkFn`/`exitWalkFn`,
+opt-in, behaviour-free when off) and 9 pins. Full derivation:
+**`docs/perf/walk-function-bodies-attribution.md`**.
+
 **Round 755 (2026-07-29) — (CALL.4) CLOSED AS A MEASUREMENT: the 21,708 ns is 80% ONE
 CALLEE, and the item's own headline number had HALVED while it sat in the queue.**
 Compiler profile `--listAll` **46, byte-identical with the probe at its deepest**
@@ -2323,6 +2403,50 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   `TypeOfExprCallerAttributionTest`. Suite **12,916 / 0 / 3**, `--listAll`
   byte-identical, cost gate all 20 counters +0.00%. Full derivation:
   **`docs/perf/type-of-expression-attribution.md`**. Follow-on: **(TYPE.2)**.
+
+- [x] **(TYPE.3) Open `walkFunctionBodiesInExpr` — DONE round 756, CLOSED AS A
+  MEASUREMENT. The last unopened region the attribution arc pointed at.** Round 738's
+  181 ms reproduces **exactly** (28,940 openings, 6,280 ns each — all three digits),
+  because its population is AST shape and not declared types. Partitioned by a new
+  **level D** in `CtaSections` — the first RECURSIVE partition in the arc, so it could
+  not use levels A-C's `depth != 1` shape (that charges the whole descent to the
+  dispatch row); `beginD` hands the caller's running row back and `endD` reopens it, so
+  every row is SELF time and the rows sum to the total. **Net of a 168 ns/boundary
+  charge: the walk itself 65 ms (36%), `calleeDeclaredCtxParams` 49 ms (27%),
+  `checkFunctionBody` for arrows 49 ms (27%) and for function expressions 16 ms (9%)** —
+  sum 179 vs 181 measured independently, and level D's outermost invocations are
+  **28,940 = level A's `A_WALKFN` openings exactly**, a cross-check from the other side.
+  **So `checkFunctionBody` — the work the function is NAMED for — is 36% of it.** The
+  walk visits **199,131 nodes to reach 1,510 function-like ones (0.76%)**, only **636**
+  of which have a body to check; the bodies cost **61-131 us each**, so round 738's
+  aside ("the bodies it walks are mostly already walked") is wrong in mechanism — **the
+  walk spends more finding them than checking them.** **THE CENSUS FOUND A FALSE
+  NEGATIVE** (see (FN.1) below) and two zero-population findings: the whole B150/B585
+  object-literal-method machinery is JS-gated and **never runs** on tsc's `.ts` source
+  despite 755 objlit arm entries (a `.js` control lights it, so the zeros measure the
+  input), and **`invocationsDOutside == 0`** — the walker has exactly one live entry
+  point, the spine anchor. **NOTHING LANDED: 181 ms = 0.68% of the compile, largest row
+  0.24%, against a ±2.0% band — deleting the whole walker is a third of one noise band.**
+  Priced and rejected: a "does any argument have a function shape" pre-test skipping the
+  29,787 unconditional callee resolutions that exist for 636 bodies = **49 ms = 0.18%**,
+  and unproved sound. Full derivation:
+  **`docs/perf/walk-function-bodies-attribution.md`**.
+
+- [ ] **(FN.1) FALSE NEGATIVE found by round 756's arm census: an expression-bodied
+  arrow's body is never walked.** `walkFunctionBodiesInExpr`'s `ArrowFunction` arm is
+  `(expr.body as? Block)?.let { … }` — for an EXPRESSION body it walks nothing, and it
+  does not descend into the expression to look for functions inside it either. On the
+  compiler profile that is **874 of the 1,510 function-like nodes the walker reaches
+  (58%)**. The obvious defence — "the check spine anchors the inner statement anyway" —
+  was tested and is FALSE:
+  `const f = () => (function () { const s: string = 5; return s })` is **SILENT** where
+  tsc reports TS2322, while all three controls (bare statement / function expression /
+  BLOCK-bodied arrow) fire. Pinned AS IT STANDS by `an expression-bodied arrow hides a
+  nested body mismatch - a known gap` in `CtaSectionProbeTest`, with those three
+  controls, so the pin fails loudly the day the arm descends — **flip that pin when
+  fixing this, do not delete it.** Scope note: this ADDS work to a walker round 756
+  priced at 0.68%, and it will surface diagnostics on shapes the corpus has never
+  checked, so expect baseline movement and judge it per `docs/logical-parity.md` § 2.
 
 - [x] **(TYPE.2) Attribute inside `checkVarDeclAssignability` /
   `spineCtaM3StatementAnchor` — DONE round 738. BOTH PRIORS FALSE; the second

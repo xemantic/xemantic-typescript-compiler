@@ -185,6 +185,38 @@
 > cheap tail" hid that **73% of the identity time is inside three leaves that
 > RESOLVE something**. Full derivation:
 > `docs/perf/condition-narrowing-attribution.md`.
+> **ROUND-756 RESOLUTION — THE LAST UNOPENED REGION OF THE ARC, AND A CENSUS
+> FINDING THE MILLISECONDS COULD NOT GIVE.** `walkFunctionBodiesInExpr` (round
+> 738's 181 ms row, never opened) reproduces **exactly** — 28,940 openings,
+> 6,280 ns each, all three digits — because its population is AST SHAPE, not
+> declared types. Partitioned by a new **level D** in `CtaSections`, the arc's
+> first RECURSIVE partition (levels A–C's `depth != 1` shape would charge the
+> whole descent to the dispatch row; `beginD` hands the caller's running row
+> back and `endD` reopens it, so every row is SELF time). **Net of a
+> 168 ns/boundary charge: the walk itself 65 ms (36%), `calleeDeclaredCtxParams`
+> 49 ms (27%), `checkFunctionBody` for arrows 49 ms (27%) and for function
+> expressions 16 ms (9%)** — sum 179 against the 181 measured independently, and
+> level D's outermost invocations are 28,940 = level A's row openings exactly.
+> **So the work the function is NAMED for is 36% of it.** The walk visits
+> **199,131 nodes to reach 1,510 function-like ones (0.76%)**, only **636** with
+> a block body, and those bodies cost **61–131 µs each** — so round 738's aside
+> ("the bodies it walks are mostly already walked") is wrong in mechanism: **the
+> walk spends more finding them than checking them.** **THE ARM CENSUS FOUND A
+> FALSE NEGATIVE**: 874 of the 1,510 (58%) are EXPRESSION-BODIED ARROWS whose
+> arm walks nothing, and "the spine anchors the inner statement anyway" was
+> tested and is FALSE — `() => (function () { const s: string = 5; … })` is
+> silent where tsc reports TS2322 (three controls fire). Queued as **(FN.1)**.
+> Two zero-population findings in the same census: the whole B150/B585
+> object-literal-method machinery is JS-gated and **never runs** on tsc's `.ts`
+> source despite 755 objlit arm entries, and `invocationsDOutside == 0` — the
+> walker has exactly ONE live entry point. **NOTHING LANDED: 181 ms = 0.68%,
+> largest row 0.24%, band ±2.0% — deleting the whole walker is a third of one
+> noise band.** Method note for the next round: **the ON-vs-COARSE differential
+> failed here** (Δ29 ms against a 26 ms within-mode spread, bounding the
+> boundary only at 31–168 ns) — *a differential is only as sharp as the smaller
+> of its two spreads*, and the usable calibration came from comparing BOTH modes
+> against the probe-free binary. Full derivation:
+> `docs/perf/walk-function-bodies-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope

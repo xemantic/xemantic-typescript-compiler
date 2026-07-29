@@ -2735,7 +2735,9 @@ class Checker(
                             decl.initializer?.let {
                                 CtaSections.atA(CtaSections.A_WALKFN)
                                 val ctxFn = contextualizeFnExprFromAnnotation(decl.type, it)
+                                CtaSections.enterWalkFn()
                                 walkFunctionBodiesInExpr(ctxFn ?: it, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                                CtaSections.exitWalkFn()
                                 CtaSections.atA(CtaSections.A_DISPATCH)
                             }
                             val init = decl.initializer
@@ -2750,7 +2752,9 @@ class Checker(
                         CtaSections.atA(CtaSections.A_ASSIGN)
                         checkAssignmentExpression(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
                         CtaSections.atA(CtaSections.A_WALKFN)
+                        CtaSections.enterWalkFn()
                         walkFunctionBodiesInExpr(stmt.expression, spineSource, spineFileName, frame.varTypes, frame.typeParams)
+                        CtaSections.exitWalkFn()
                         CtaSections.atA(CtaSections.A_DISPATCH)
                     }
                     is ReturnStatement -> {
@@ -92712,30 +92716,48 @@ interface DataView {
         expr: Expression, source: String, fileName: String,
         varTypes: MutableMap<String, String>, typeParams: Set<String>
     ) {
+        // (TYPE.3) round 756: level D partitions this walker. It RECURSES, so the
+        // probe hands the caller's running row back and reopens it on the way out
+        // — every row is SELF time, exclusive of nested invocations.
+        val ctaD = CtaSections.beginD()
+        try {
+        CtaSections.atD(CtaSections.D_DISPATCH)
         when (expr) {
             is FunctionExpression -> {
+                CtaSections.armD(CtaSections.DA_FNEXPR)
                 // B101: a function expression rebinds `this`; clear the enclosing class
                 // (an arrow, below, preserves `this`).
                 val savedThis = currentClassForThis
                 currentClassForThis = null
                 try {
+                    CtaSections.atD(CtaSections.D_FNEXPR)
                     checkFunctionBody(expr.body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
                         isAsync = ModifierFlag.Async in expr.modifiers,
                         isGenerator = expr.asteriskToken)
+                    CtaSections.atD(CtaSections.D_DISPATCH)
                 } finally {
                     currentClassForThis = savedThis
                 }
             }
             is ArrowFunction -> {
-                (expr.body as? Block)?.let { body ->
-                    checkFunctionBody(body, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
+                val arrowBlock = expr.body as? Block
+                if (arrowBlock == null) CtaSections.armD(CtaSections.DA_ARROW_EXPR)
+                else {
+                    CtaSections.armD(CtaSections.DA_ARROW_BLOCK)
+                    CtaSections.atD(CtaSections.D_ARROW)
+                    checkFunctionBody(arrowBlock, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
                         isAsync = ModifierFlag.Async in expr.modifiers)
+                    CtaSections.atD(CtaSections.D_DISPATCH)
                 }
             }
-            is ArrayLiteralExpression -> expr.elements.forEach {
-                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            is ArrayLiteralExpression -> {
+                CtaSections.armD(CtaSections.DA_ARRAY)
+                expr.elements.forEach {
+                    walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+                }
             }
             is ObjectLiteralExpression -> {
+                CtaSections.armD(CtaSections.DA_OBJLIT)
                 // B150: in JS files, descend into object-literal METHOD/ACCESSOR bodies
                 // (shorthand `{ a() {...} }`) and type `this` as the object-literal type
                 // so `this.X = v` (X a member of the same literal) is type-checked
@@ -92746,21 +92768,34 @@ interface DataView {
                 var objLitThisType: Type? = null
                 val jsLike = isJsLikeFileName(fileName)
                 fun objLitThis(): Type {
-                    if (objLitThisType == null) objLitThisType =
-                        getTypeOfObjectLiteral(expr)
-                    return objLitThisType
+                    var t = objLitThisType
+                    if (t == null) {
+                        CtaSections.atD(CtaSections.D_OBJLIT_THIS)
+                        t = getTypeOfObjectLiteral(expr)
+                        CtaSections.atD(CtaSections.D_DISPATCH)
+                        objLitThisType = t
+                    }
+                    return t
                 }
                 // B585: the contextual type node threaded from the enclosing call; if this
                 // object literal is contextually `Record<string, Alias>` / `{ [k:string]: Alias }`,
                 // its methods' `this.X = v` mismatch DISPLAYS the alias (e.g. `WatchHandler<any>`).
                 val ctxNode = objLitArgCtxTypeNode
-                val ctxAliasDisplay = if (jsLike) objLitCtxIndexSigAliasDisplay(ctxNode) else null
+                val ctxAliasDisplay = if (jsLike) {
+                    CtaSections.atD(CtaSections.D_OBJLIT_CTX)
+                    val a = objLitCtxIndexSigAliasDisplay(ctxNode)
+                    CtaSections.atD(CtaSections.D_DISPATCH)
+                    a
+                } else null
                 fun walkMember(body: Block?, ret: TypeNode?, params: List<Parameter>, tps: List<TypeParameter>?, async: Boolean, generator: Boolean = false) {
                     val savedAlias = objLitMethodThisIndexAliasDisplay
                     objLitMethodThisIndexAliasDisplay = ctxAliasDisplay
                     try {
-                        walkObjectLiteralMemberBody(body, ret, params, tps, objLitThis(),
+                        val thisType = objLitThis()
+                        CtaSections.atD(CtaSections.D_OBJLIT_MEM)
+                        walkObjectLiteralMemberBody(body, ret, params, tps, thisType,
                             source, fileName, varTypes, typeParams, async, generator)
+                        CtaSections.atD(CtaSections.D_DISPATCH)
                     } finally {
                         objLitMethodThisIndexAliasDisplay = savedAlias
                     }
@@ -92770,8 +92805,12 @@ interface DataView {
                         is PropertyAssignment -> {
                             // B585: thread the property's contextual member type node into the
                             // value walk when the value is itself an object literal.
-                            val memberCtx = if (prop.initializer is ObjectLiteralExpression && ctxNode != null)
-                                objLitCtxMemberTypeNode(ctxNode, (prop.name as? Identifier)?.text ?: "") else null
+                            val memberCtx = if (prop.initializer is ObjectLiteralExpression && ctxNode != null) {
+                                CtaSections.atD(CtaSections.D_OBJLIT_CTX)
+                                val m = objLitCtxMemberTypeNode(ctxNode, (prop.name as? Identifier)?.text ?: "")
+                                CtaSections.atD(CtaSections.D_DISPATCH)
+                                m
+                            } else null
                             val saved = objLitArgCtxTypeNode
                             objLitArgCtxTypeNode = memberCtx
                             try { walkFunctionBodiesInExpr(prop.initializer, source, fileName, varTypes, typeParams) }
@@ -92787,12 +92826,13 @@ interface DataView {
                     }
                 }
             }
-            is ParenthesizedExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is AsExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is TypeAssertionExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is SatisfiesExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is NonNullExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is ParenthesizedExpression -> { CtaSections.armD(CtaSections.DA_UNWRAP); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is AsExpression -> { CtaSections.armD(CtaSections.DA_UNWRAP); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is TypeAssertionExpression -> { CtaSections.armD(CtaSections.DA_UNWRAP); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is SatisfiesExpression -> { CtaSections.armD(CtaSections.DA_UNWRAP); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is NonNullExpression -> { CtaSections.armD(CtaSections.DA_UNWRAP); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
             is BinaryExpression -> {
+                CtaSections.armD(CtaSections.DA_BINARY)
                 val rightStack = ArrayDeque<Expression>()
                 var cur: Expression = expr
                 while (cur is BinaryExpression) { rightStack.addLast(cur.right); cur = cur.left }
@@ -92800,18 +92840,30 @@ interface DataView {
                 while (rightStack.isNotEmpty()) walkFunctionBodiesInExpr(rightStack.removeLast(), source, fileName, varTypes, typeParams)
             }
             is CallExpression -> {
+                CtaSections.armD(CtaSections.DA_CALL)
                 walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
                 // B210: contextual param typing from the callee's unique non-generic
                 // declared signature (fn decl / class ctor / super → base ctor), so
                 // body assignment checks see `s: string` in `foo(function(s){ s = 5 })`.
+                CtaSections.atD(CtaSections.D_CTXPARAMS)
                 val ctxParams = calleeDeclaredCtxParams(expr)
+                CtaSections.atD(CtaSections.D_DISPATCH)
                 expr.arguments.forEachIndexed { i, arg ->
-                    val ctxFn = ctxParams?.getOrNull(i)?.type?.let { contextualizeFnExprFromAnnotation(it, arg) }
+                    val ctxFn = ctxParams?.getOrNull(i)?.type?.let {
+                        CtaSections.atD(CtaSections.D_CTXFN)
+                        val c = contextualizeFnExprFromAnnotation(it, arg)
+                        CtaSections.atD(CtaSections.D_DISPATCH)
+                        c
+                    }
                     // B585: thread the callee's resolved param type node as an object-literal
                     // arg's contextual type, so a nested object-literal method's `this.X = v`
                     // mismatch DISPLAYS the contextual string-index alias.
-                    val argCtx = if (arg is ObjectLiteralExpression && isJsLikeFileName(fileName))
-                        objLitArgCalleeParamTypeNode(expr, i) else null
+                    val argCtx = if (arg is ObjectLiteralExpression && isJsLikeFileName(fileName)) {
+                        CtaSections.atD(CtaSections.D_ARGCTX)
+                        val a = objLitArgCalleeParamTypeNode(expr, i)
+                        CtaSections.atD(CtaSections.D_DISPATCH)
+                        a
+                    } else null
                     val savedArgCtx = objLitArgCtxTypeNode
                     objLitArgCtxTypeNode = argCtx
                     try {
@@ -92822,44 +92874,64 @@ interface DataView {
                 }
             }
             is NewExpression -> {
+                CtaSections.armD(CtaSections.DA_NEW)
                 walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+                CtaSections.atD(CtaSections.D_CTXPARAMS)
                 val ctxParams = calleeDeclaredCtxParams(expr)
+                CtaSections.atD(CtaSections.D_DISPATCH)
                 expr.arguments?.forEachIndexed { i, arg ->
-                    val ctxFn = ctxParams?.getOrNull(i)?.type?.let { contextualizeFnExprFromAnnotation(it, arg) }
+                    val ctxFn = ctxParams?.getOrNull(i)?.type?.let {
+                        CtaSections.atD(CtaSections.D_CTXFN)
+                        val c = contextualizeFnExprFromAnnotation(it, arg)
+                        CtaSections.atD(CtaSections.D_DISPATCH)
+                        c
+                    }
                     walkFunctionBodiesInExpr(ctxFn ?: arg, source, fileName, varTypes, typeParams)
                 }
             }
             is ConditionalExpression -> {
+                CtaSections.armD(CtaSections.DA_COND)
                 walkFunctionBodiesInExpr(expr.condition, source, fileName, varTypes, typeParams)
                 walkFunctionBodiesInExpr(expr.whenTrue, source, fileName, varTypes, typeParams)
                 walkFunctionBodiesInExpr(expr.whenFalse, source, fileName, varTypes, typeParams)
             }
-            is SpreadElement -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is AwaitExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is YieldExpression -> expr.expression?.let { walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams) }
-            is VoidExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is DeleteExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is TypeOfExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
-            is PropertyAccessExpression -> walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
+            is SpreadElement -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is AwaitExpression -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is YieldExpression -> { CtaSections.armD(CtaSections.DA_UNARY); expr.expression?.let { walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams) } }
+            is VoidExpression -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is DeleteExpression -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is TypeOfExpression -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
+            is PropertyAccessExpression -> { CtaSections.armD(CtaSections.DA_PROPACCESS); walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams) }
             is ElementAccessExpression -> {
+                CtaSections.armD(CtaSections.DA_ELEMACCESS)
                 walkFunctionBodiesInExpr(expr.expression, source, fileName, varTypes, typeParams)
                 walkFunctionBodiesInExpr(expr.argumentExpression, source, fileName, varTypes, typeParams)
             }
-            is PrefixUnaryExpression -> walkFunctionBodiesInExpr(expr.operand, source, fileName, varTypes, typeParams)
-            is PostfixUnaryExpression -> walkFunctionBodiesInExpr(expr.operand, source, fileName, varTypes, typeParams)
-            is TemplateExpression -> expr.templateSpans.forEach {
-                walkFunctionBodiesInExpr(it.expression, source, fileName, varTypes, typeParams)
+            is PrefixUnaryExpression -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.operand, source, fileName, varTypes, typeParams) }
+            is PostfixUnaryExpression -> { CtaSections.armD(CtaSections.DA_UNARY); walkFunctionBodiesInExpr(expr.operand, source, fileName, varTypes, typeParams) }
+            is TemplateExpression -> {
+                CtaSections.armD(CtaSections.DA_TEMPLATE)
+                expr.templateSpans.forEach {
+                    walkFunctionBodiesInExpr(it.expression, source, fileName, varTypes, typeParams)
+                }
             }
             is TaggedTemplateExpression -> {
+                CtaSections.armD(CtaSections.DA_TAGGED)
                 walkFunctionBodiesInExpr(expr.tag, source, fileName, varTypes, typeParams)
                 (expr.template as? TemplateExpression)?.templateSpans?.forEach {
                     walkFunctionBodiesInExpr(it.expression, source, fileName, varTypes, typeParams)
                 }
             }
-            is CommaListExpression -> expr.elements.forEach {
-                walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+            is CommaListExpression -> {
+                CtaSections.armD(CtaSections.DA_COMMA)
+                expr.elements.forEach {
+                    walkFunctionBodiesInExpr(it, source, fileName, varTypes, typeParams)
+                }
             }
-            else -> {}
+            else -> CtaSections.armD(CtaSections.DA_LEAF)
+        }
+        } finally {
+            CtaSections.endD(ctaD)
         }
     }
 

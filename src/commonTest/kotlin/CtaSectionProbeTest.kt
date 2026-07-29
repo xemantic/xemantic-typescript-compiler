@@ -26,6 +26,8 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.kotlin.test.have
+import com.xemantic.kotlin.test.should
 import kotlin.test.Test
 
 /**
@@ -298,6 +300,220 @@ class CtaSectionProbeTest {
         assert(CtaSections.invocationsC == 0L)
         assert(CtaSections.cCalls.sum() == 0L)
         assert(CtaSections.cExitIn.sum() == 0L)
+        CtaSections.reset()
+    }
+
+    // ── (TYPE.3) round 756: level D, walkFunctionBodiesInExpr ─────────────────
+    //
+    // Level D is the first RECURSIVE partition in this object, so its pins carry
+    // two obligations the level-A/B/C pins did not. (1) The recursion identity:
+    // a nested invocation must close its caller's row and reopen it, which makes
+    // `2 * visited - outermost` the exact boundary count under COARSE. (2) The
+    // arm census is pinned SHAPE BY SHAPE with the confusable arm asserted ZERO
+    // (round 755) — a fixture lighting every arm at once cannot detect a swap,
+    // and the two arrow arms are the pair most easily confused.
+
+    /** Run one isolated fixture with the probe at [mode] and leave the counters. */
+    private fun probeFixture(
+        fixture: String,
+        mode: Int = CtaSections.ON,
+        directives: String = "// @strict: true",
+        fileName: String = "t.ts",
+    ) {
+        val saved = CtaSections.mode
+        CtaSections.reset()
+        CtaSections.mode = mode
+        try {
+            diagnose(fixture, directives = directives, fileName = fileName)
+        } finally {
+            CtaSections.mode = saved
+        }
+    }
+
+    @Test
+    fun `the level-D name tables are index-aligned and complete`() {
+        assert(CtaSections.dNames.size == CtaSections.ND)
+        assert(CtaSections.dArmNames.size == CtaSections.NDA)
+        assert(CtaSections.D_ENTRY == 0)
+        assert(CtaSections.D_DISPATCH == 1)
+        assert(CtaSections.D_ARGCTX == CtaSections.ND - 1)
+        assert(CtaSections.DA_LEAF == CtaSections.NDA - 1)
+        // The sentinel must not collide with "the caller had no open row".
+        assert(CtaSections.D_INACTIVE == -2)
+    }
+
+    @Test
+    fun `level D visits every node of the walked expression and recurses`() {
+        runProbe()
+        val outermost = CtaSections.outermostD
+        val visited = CtaSections.invocationsD
+        assert(outermost > 0L)
+        // The cross-check that makes the partition believable: level D's
+        // outermost invocations are exactly level A's A_WALKFN row openings,
+        // measured from opposite sides of the same call.
+        assert(outermost == CtaSections.calls[CtaSections.A_WALKFN])
+        // The walk descends, so it visits strictly more nodes than it is entered.
+        assert(visited > outermost)
+        assert(CtaSections.maxDepthD >= 2)
+        // Every visited node took exactly one `when` arm.
+        assert(CtaSections.dArm.sum() == visited)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `level D is a single row under COARSE - its calibration counterpart`() {
+        runProbe(CtaSections.COARSE)
+        val visited = CtaSections.invocationsD
+        val outermost = CtaSections.outermostD
+        assert(visited > 0L)
+        // beginD charges the caller's row for every NESTED invocation and endD
+        // charges this invocation's row always, so the boundary count is exact.
+        assert(CtaSections.dCalls[CtaSections.D_ENTRY] == 2 * visited - outermost)
+        assert(CtaSections.dCalls.sum() == CtaSections.dCalls[CtaSections.D_ENTRY])
+        assert(CtaSections.dCalls[CtaSections.D_ARROW] == 0L)
+        assert(CtaSections.dCalls[CtaSections.D_CTXPARAMS] == 0L)
+        // The census still works under COARSE — it costs no timestamp.
+        assert(CtaSections.dArm.sum() == visited)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `nothing is recorded for level D while the probe is off`() {
+        val saved = CtaSections.mode
+        CtaSections.reset()
+        CtaSections.mode = CtaSections.OFF
+        try {
+            diagnose(source)
+        } finally {
+            CtaSections.mode = saved
+        }
+        assert(CtaSections.invocationsD == 0L)
+        assert(CtaSections.invocationsDOutside == 0L)
+        assert(CtaSections.dCalls.sum() == 0L)
+        assert(CtaSections.dArm.sum() == 0L)
+        assert(!CtaSections.inWalkFn)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `an arrow with a BLOCK body is descended into`() {
+        probeFixture(
+            """
+            function host(): void {
+                const g = () => { const inner = function () { const deep = 1; return deep } ; return inner }
+            }
+            """.trimIndent()
+        )
+        assert(CtaSections.dArm[CtaSections.DA_ARROW_BLOCK] > 0L)
+        assert(CtaSections.dCalls[CtaSections.D_ARROW] > 0L)
+        // The confusable arm must stay silent: this arrow has no expression body.
+        assert(CtaSections.dArm[CtaSections.DA_ARROW_EXPR] == 0L)
+        // And the walk reached the nested function expression THROUGH the block.
+        assert(CtaSections.dArm[CtaSections.DA_FNEXPR] > 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `an arrow with an EXPRESSION body is reached and never descended into`() {
+        probeFixture(
+            """
+            function host(): void {
+                const g = () => (function () { const deep = 1; return deep })
+            }
+            """.trimIndent()
+        )
+        assert(CtaSections.dArm[CtaSections.DA_ARROW_EXPR] > 0L)
+        // The measured finding: the arm walks NOTHING, so the function
+        // expression inside the arrow's body is never reached by this walker
+        // and its body is never handed to checkFunctionBody.
+        assert(CtaSections.dArm[CtaSections.DA_FNEXPR] == 0L)
+        assert(CtaSections.dArm[CtaSections.DA_ARROW_BLOCK] == 0L)
+        assert(CtaSections.dCalls[CtaSections.D_ARROW] == 0L)
+        assert(CtaSections.dCalls[CtaSections.D_FNEXPR] == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `an expression-bodied arrow hides a nested body mismatch - a known gap`() {
+        // The census says 874 of the 1,510 function-like nodes this walker
+        // reaches on the compiler profile are expression-bodied arrows, whose
+        // arm walks NOTHING. The obvious defence — "the spine anchors the inner
+        // statement anyway" — is TESTED here rather than assumed, and it is
+        // FALSE. Three controls first, so the gap is attributed to the arrow's
+        // body shape and to nothing else.
+        diagnose("const s: string = 5") should { have(any { it.code == 2322 }) }
+        diagnose(
+            """
+            const f = function () { const s: string = 5; return s }
+            """.trimIndent()
+        ) should { have(any { it.code == 2322 }) }
+        diagnose(
+            """
+            const f = () => { const s: string = 5; return s }
+            """.trimIndent()
+        ) should { have(any { it.code == 2322 }) }
+        // THE GAP, pinned as it is today: swap the block body for an expression
+        // body and the same mismatch goes silent. tsc reports it. This pin fails
+        // — correctly and loudly — the day the arm learns to descend.
+        diagnose(
+            """
+            const f = () => (function () { const s: string = 5; return s })
+            """.trimIndent()
+        ) should { have(none { it.code == 2322 }) }
+    }
+
+    @Test
+    fun `the callee parameter resolution runs at every call the walk reaches`() {
+        probeFixture(
+            """
+            function h(a: number): number { return a }
+            function host(): void {
+                const r = h(h(h(1)))
+            }
+            """.trimIndent()
+        )
+        val calls = CtaSections.dArm[CtaSections.DA_CALL]
+        assert(calls == 3L)
+        // The measured shape: calleeDeclaredCtxParams is UNCONDITIONAL — it
+        // resolves the callee's declared signature once per call/new the walk
+        // reaches, whether or not any argument is a function expression.
+        assert(CtaSections.dCalls[CtaSections.D_CTXPARAMS] == calls + CtaSections.dArm[CtaSections.DA_NEW])
+        // Not one of these three calls has a function argument to contextualize.
+        assert(CtaSections.dArm[CtaSections.DA_FNEXPR] == 0L)
+        assert(CtaSections.dArm[CtaSections.DA_ARROW_BLOCK] == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `the object-literal member rows are silent on a TypeScript file`() {
+        probeFixture(
+            """
+            function host(): void {
+                const o = { m() { const v = 1; return v } }
+            }
+            """.trimIndent()
+        )
+        assert(CtaSections.dArm[CtaSections.DA_OBJLIT] > 0L)
+        // B150/B585 are gated to JS-like files, so on .ts the object-literal
+        // `this` type is never minted and no member body is walked.
+        assert(CtaSections.dCalls[CtaSections.D_OBJLIT_THIS] == 0L)
+        assert(CtaSections.dCalls[CtaSections.D_OBJLIT_MEM] == 0L)
+        assert(CtaSections.dCalls[CtaSections.D_OBJLIT_CTX] == 0L)
+        CtaSections.reset()
+        // The control that makes the zeros a measurement rather than a dead
+        // probe: the SAME shape in a .js file lights both rows.
+        probeFixture(
+            """
+            function host() {
+                const o = { m() { const v = 1; return v } }
+            }
+            """.trimIndent(),
+            directives = "// @allowJs: true\n// @checkJs: true",
+            fileName = "t.js",
+        )
+        assert(CtaSections.dArm[CtaSections.DA_OBJLIT] > 0L)
+        assert(CtaSections.dCalls[CtaSections.D_OBJLIT_THIS] > 0L)
+        assert(CtaSections.dCalls[CtaSections.D_OBJLIT_MEM] > 0L)
         CtaSections.reset()
     }
 }

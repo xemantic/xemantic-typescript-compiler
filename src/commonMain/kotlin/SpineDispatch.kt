@@ -2363,6 +2363,132 @@ object CtaSections {
     var curTC: Long = 0
     var depthC: Int = 0
 
+    // ── level D: walkFunctionBodiesInExpr, round 756 ──────────────────────────
+    // The last unopened region the (TYPE.2) attribution arc pointed at: level A's
+    // [A_WALKFN] row, 181 ms over 28,940 openings. Its OWN index space, so the
+    // level-A/B/C layouts — and the pins that assert them — are untouched.
+    //
+    // **This level is RECURSIVE, which levels A-C were not**, so it cannot use
+    // their "depth != 1 ⇒ return" shape (that would charge the whole recursive
+    // descent to whichever row happened to be open at depth 1, i.e. to the
+    // dispatch row, and answer nothing). Instead [beginD] hands the caller's
+    // running row back to [endD], which reopens it: every row is therefore SELF
+    // time, exclusive of nested `walkFunctionBodiesInExpr` invocations, and the
+    // rows sum to the walk's true total. The consequence to keep in mind when
+    // reading [D_FNEXPR]/[D_ARROW]: `checkFunctionBody` walks statements and
+    // those statements re-enter this walker, so a body row is the body's own
+    // checking MINUS the nested walks it spawns — which are themselves in the
+    // table, one row down.
+    //
+    // Level D is active only inside the window the two [A_WALKFN] call sites open
+    // ([inWalkFn]), so its total is directly comparable to that row and the
+    // partition is a cross-check rather than a claim; invocations reached from
+    // anywhere else (`checkFunctionBody` under any other handler) are COUNTED in
+    // [invocationsDOutside] and not timed. The window is an explicit flag rather
+    // than `curA == A_WALKFN` precisely so that it survives [COARSE], where level
+    // A's interior anchors do not fire — that is what makes level D's own
+    // ON-vs-COARSE differential possible.
+
+    /** The wrapper transition. Probe-only; absent in production. */
+    const val D_ENTRY = 0
+    /** The `when` selection and every pure pass-through arm — the walk itself. */
+    const val D_DISPATCH = 1
+    /** `checkFunctionBody` from the `FunctionExpression` arm. */
+    const val D_FNEXPR = 2
+    /** `checkFunctionBody` from the `ArrowFunction` arm (block bodies only). */
+    const val D_ARROW = 3
+    /** `getTypeOfObjectLiteral` — the lazy `this` type of an object literal. */
+    const val D_OBJLIT_THIS = 4
+    /** `walkObjectLiteralMemberBody` — JS-like object-literal methods/accessors. */
+    const val D_OBJLIT_MEM = 5
+    /** B585 object-literal contextual type nodes (index-sig alias + member). */
+    const val D_OBJLIT_CTX = 6
+    /** B210 `calleeDeclaredCtxParams` — the callee's declared parameter list. */
+    const val D_CTXPARAMS = 7
+    /** B210 `contextualizeFnExprFromAnnotation` — the synthesized annotated fn. */
+    const val D_CTXFN = 8
+    /** B585 `objLitArgCalleeParamTypeNode` — a call argument's contextual node. */
+    const val D_ARGCTX = 9
+
+    const val ND = 10
+
+    val dNames: Array<String> = arrayOf(
+        "D: wrapper transition",
+        "D: dispatch + pass-through arms (the walk)",
+        "D: checkFunctionBody — FunctionExpression",
+        "D: checkFunctionBody — ArrowFunction",
+        "D: getTypeOfObjectLiteral (objlit `this`)",
+        "D: walkObjectLiteralMemberBody (JS)",
+        "D: B585 objlit contextual type nodes",
+        "D: B210 calleeDeclaredCtxParams",
+        "D: B210 contextualizeFnExprFromAnnotation",
+        "D: B585 objLitArgCalleeParamTypeNode",
+    )
+
+    // The arm census. Round 755's finding came from one of these, not from a
+    // millisecond: an arm with a conspicuous semantics and no invocations.
+    const val DA_FNEXPR = 0
+    const val DA_ARROW_BLOCK = 1
+    /** An arrow whose body is an EXPRESSION — the arm walks nothing at all. */
+    const val DA_ARROW_EXPR = 2
+    const val DA_ARRAY = 3
+    const val DA_OBJLIT = 4
+    const val DA_UNWRAP = 5
+    const val DA_BINARY = 6
+    const val DA_CALL = 7
+    const val DA_NEW = 8
+    const val DA_COND = 9
+    const val DA_UNARY = 10
+    const val DA_PROPACCESS = 11
+    const val DA_ELEMACCESS = 12
+    const val DA_TEMPLATE = 13
+    const val DA_TAGGED = 14
+    const val DA_COMMA = 15
+    /** No arm matched — an identifier, a literal, a class expression, … */
+    const val DA_LEAF = 16
+
+    const val NDA = 17
+
+    val dArmNames: Array<String> = arrayOf(
+        "FunctionExpression (body walked)",
+        "ArrowFunction, block body (walked)",
+        "ArrowFunction, expression body (NOT walked)",
+        "ArrayLiteralExpression",
+        "ObjectLiteralExpression",
+        "Paren/As/TypeAssertion/Satisfies/NonNull",
+        "BinaryExpression",
+        "CallExpression",
+        "NewExpression",
+        "ConditionalExpression",
+        "Spread/Await/Yield/Void/Delete/TypeOf/Prefix/Postfix",
+        "PropertyAccessExpression",
+        "ElementAccessExpression",
+        "TemplateExpression",
+        "TaggedTemplateExpression",
+        "CommaListExpression",
+        "leaf (no arm — identifier/literal/class expr/…)",
+    )
+
+    var dNanos: LongArray = LongArray(ND)
+    var dCalls: LongArray = LongArray(ND)
+    var dArm: LongArray = LongArray(NDA)
+    /** Nodes visited by the walk inside [A_WALKFN], at every depth. */
+    var invocationsD: Long = 0
+    /** Of those, the OUTERMOST ones — must equal `calls[A_WALKFN]`. */
+    var outermostD: Long = 0
+    /** Deepest recursion reached inside [A_WALKFN]. */
+    var maxDepthD: Int = 0
+    /** Invocations reached from anywhere else; counted, never timed. */
+    var invocationsDOutside: Long = 0
+    /** Level D's window: open only across the two [A_WALKFN] call sites. */
+    var inWalkFn: Boolean = false
+    var curD: Int = -1
+    var curTD: Long = 0
+    var depthD: Int = 0
+
+    /** [beginD]'s "not measuring" sentinel — distinct from "no caller row" (-1). */
+    const val D_INACTIVE = -2
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -2376,6 +2502,9 @@ object CtaSections {
         curB = -1; curTB = 0; depthB = 0; startB = 0
         cNanos = LongArray(NC); cCalls = LongArray(NC); cExitIn = LongArray(NC)
         invocationsC = 0; curC = -1; curTC = 0; depthC = 0
+        dNanos = LongArray(ND); dCalls = LongArray(ND); dArm = LongArray(NDA)
+        invocationsD = 0; outermostD = 0; maxDepthD = 0; invocationsDOutside = 0
+        curD = -1; curTD = 0; depthD = 0; inWalkFn = false
     }
 
     // The entry points are `inline` so a production call is a static read plus a
@@ -2388,6 +2517,9 @@ object CtaSections {
         depthA++
         if (depthA != 1) return
         invocationsA++
+        // Self-healing: an anchor that threw would otherwise leave level D's
+        // window open for every later invocation.
+        inWalkFn = false
         curA = A_ENTRY
         curTA = PassTiming.nowNanos()
     }
@@ -2500,6 +2632,69 @@ object CtaSections {
         }
         depthC--
     }
+
+    /**
+     * Open level D's partition for one `walkFunctionBodiesInExpr` invocation,
+     * CLOSING the caller's running row and returning it so [endD] can reopen it.
+     * Returns [D_INACTIVE] when this invocation is not inside the [A_WALKFN] row
+     * (or the probe is off), in which case [endD] must do nothing.
+     *
+     * Under [COARSE] the whole invocation stays in [D_ENTRY] (because [atD] is
+     * [ON]-only), so a COARSE run is level D's calibration counterpart with
+     * exactly one boundary pair per invocation.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginD(): Int {
+        if (mode == OFF) return D_INACTIVE
+        if (!inWalkFn) { invocationsDOutside++; return D_INACTIVE }
+        invocationsD++
+        if (depthD == 0) outermostD++
+        depthD++
+        if (depthD > maxDepthD) maxDepthD = depthD
+        val prev = curD
+        val now = PassTiming.nowNanos()
+        if (prev >= 0) { dNanos[prev] += now - curTD; dCalls[prev]++ }
+        curD = D_ENTRY
+        curTD = now
+        return prev
+    }
+
+    /** Close level D's running row and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atD(sec: Int) {
+        if (mode != ON || curD < 0) return
+        val now = PassTiming.nowNanos()
+        dNanos[curD] += now - curTD
+        dCalls[curD]++
+        curD = sec
+        curTD = now
+    }
+
+    /** Close this invocation's running row and reopen the caller's, [prev]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endD(prev: Int) {
+        if (mode == OFF || prev == D_INACTIVE) return
+        val now = PassTiming.nowNanos()
+        if (curD >= 0) { dNanos[curD] += now - curTD; dCalls[curD]++ }
+        depthD--
+        curD = prev
+        curTD = now
+    }
+
+    /** Count one `when` arm of `walkFunctionBodiesInExpr`. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun armD(arm: Int) {
+        if (mode == OFF || curD < 0) return
+        dArm[arm]++
+    }
+
+    /** Open level D's window — one of the two [A_WALKFN] call sites. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun enterWalkFn() { if (mode != OFF) inWalkFn = true }
+
+    /** Close level D's window. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun exitWalkFn() { if (mode != OFF) inWalkFn = false }
 
     /** Start a NESTED sub-measure, or 0 when off. Never active under [COARSE]. */
     @Suppress("NOTHING_TO_INLINE")
@@ -2616,6 +2811,40 @@ object CtaSections {
                     } = ${ns / c} ns each, exitedIn=${cExitIn[s]}"
             )
         }
+        appendLine(
+            "-- (TYPE.3) level D: walkFunctionBodiesInExpr, inside the A_WALKFN row only --"
+        )
+        appendLine(
+            "nodes visited $invocationsD (outermost $outermostD, max depth $maxDepthD); " +
+                "invocations elsewhere, counted not timed: $invocationsDOutside"
+        )
+        var partD = 0L
+        var bD = 0L
+        for (s in 0 until ND) { partD += dNanos[s] - ovh * dCalls[s]; bD += dCalls[s] }
+        appendLine(
+            "level D partition: ${partD / 1_000_000} ms net, ${
+                dNanos.sum() / 1_000_000
+            } ms raw over $bD boundaries"
+        )
+        // NB the count is boundary CLOSES, not invocations: a nested walker entry
+        // closes whichever row is open, so a body row is closed once per
+        // transition PLUS once per nested walk it spawns. Per-invocation costs
+        // come from the arm census below, not from this column.
+        for (s in 0 until ND) {
+            val c = dCalls[s]
+            if (c == 0L) continue
+            val ns = dNanos[s] - ovh * c
+            appendLine(
+                "  ${dNames[s].padEnd(46)} ${(ns / 1_000_000).toString().padStart(5)} ms net " +
+                    "(${(dNanos[s] / 1_000_000).toString().padStart(5)} raw) closed ${
+                        c.toString().padStart(8)
+                    } times"
+            )
+        }
+        appendLine("-- level D arm census: which `when` arm each visited node took --")
+        for (a in 0 until NDA) {
+            appendLine("  ${dArmNames[a].padEnd(52)} ${dArm[a].toString().padStart(8)}")
+        }
     }
 
     /** Machine-readable dump: one line per section. */
@@ -2628,6 +2857,13 @@ object CtaSections {
         for (s in 0 until NC) {
             if (cCalls[s] == 0L) continue
             appendLine("\"${cNames[s].trim()}\",${cCalls[s]},${cNanos[s]},${cExitIn[s]}")
+        }
+        for (s in 0 until ND) {
+            if (dCalls[s] == 0L) continue
+            appendLine("\"${dNames[s].trim()}\",${dCalls[s]},${dNanos[s]},0")
+        }
+        for (a in 0 until NDA) {
+            appendLine("\"D arm: ${dArmNames[a]}\",${dArm[a]},0,0")
         }
     }
 }
