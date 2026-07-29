@@ -5636,6 +5636,10 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val enumMemberEntriesCache = HashMap<Int, List<Pair<String, ConstantValue?>>?>()
 
+    /** (REL.2) round 764: memo for [enumMemberTypesOf], keyed by enum symbol id.
+     *  Declared before `init` per the init-order trap. */
+    private val enumMemberTypesCache = HashMap<Int, List<Type>?>()
+
     /** (REL.1)(c) round 746: memo for [enumTypesRelation], keyed by the canonical
      *  (source, target) enum symbol id pair. Declared before `init` per the
      *  init-order trap. */
@@ -103048,6 +103052,74 @@ interface DataView {
     }
 
     /**
+     * (REL.2) round 764: the MEMBER TYPES of an enum's own type, in declaration order,
+     * or `null` when [type] is not a decomposable enum.
+     *
+     * This is the thing tsc has for free and we do not. tsc models a literal enum AS
+     * the union of its members, so every SUBTRACTIVE narrowing (`k !== K.A`, a type
+     * guard's false branch, an exhaustive `default:`) is ordinary union filtering
+     * there. We mint one member-LESS `Type.Object` for the whole enum, so those
+     * narrows had nothing to subtract FROM and answered the whole enum — round 763
+     * closed the POSITIVE direction (which needs no decomposition: the narrowed type
+     * is the tested member) and left this one, because it is the half that changes
+     * type DISPLAY.
+     *
+     * DELIBERATELY NOT a `Type` — the caller decides whether to build the union, so
+     * the "nothing was removed" path can hand back the original enum type and keep
+     * displaying as `K`. Member ORDER is [enumMemberEntries]'s declaration order,
+     * which is what makes the display `K.B | K.C | K.D` rather than id-ordered.
+     *
+     * `null` for a member name absent from the canonical enum's exports or for a
+     * member whose type does not mint as an `EnumLiteral`: an incomplete
+     * decomposition would SUBTRACT from a domain that is not the real one, and a
+     * partial answer here is a wrong narrow, not a conservative one.
+     */
+    private fun enumMemberTypesOf(type: Type): List<Type>? {
+        val sym = (type as? Type.Object)?.symbol ?: return null
+        if (sym.flags.hasNone(SymbolFlags.Enum)) return null
+        return enumMemberTypesCache.getOrPut(sym.id) {
+            val canonical = canonicalEnumSymbol(sym)
+            val names = enumMemberEntries(canonical) ?: return@getOrPut null
+            if (names.isEmpty()) return@getOrPut null
+            val exports = canonical.exports ?: return@getOrPut null
+            val out = mutableListOf<Type>()
+            for ((name, _) in names) {
+                val memberSym = exports[name] ?: return@getOrPut null
+                if (memberSym.flags.hasNone(SymbolFlags.EnumMember)) return@getOrPut null
+                val memberType = getDeclaredTypeOfEnumMember(memberSym)
+                if (memberType.flags.hasNone(TypeFlags.EnumLiteral)) return@getOrPut null
+                if (out.none { it === memberType }) out.add(memberType)
+            }
+            out
+        }
+    }
+
+    /**
+     * (REL.2) round 764: subtract [remove] from the enum type [t], as tsc's union
+     * filtering would — or `null` when that cannot be answered.
+     *
+     * The gate is deliberately narrow: every constituent of [remove] must be a MEMBER
+     * of [t]'s own enum ([isLiteralAssignableToMember] carries the round-746 owner
+     * rule, so `Z.Foo.A` never subtracts from an `X.Foo`), and the enum must decompose
+     * completely. A subtraction that removes NOTHING returns [t] itself rather than an
+     * equivalent union, which keeps every unaffected message displaying `K`.
+     */
+    private fun enumMinusMembers(t: Type, remove: List<Type>): Type? {
+        if (remove.isEmpty()) return null
+        if (remove.any { it.flags.hasNone(TypeFlags.EnumLiteral) || !isLiteralAssignableToMember(it, t) }) {
+            return null
+        }
+        val members = enumMemberTypesOf(t) ?: return null
+        val kept = members.filter { m -> remove.none { enumMemberTypesAreSameMember(m, it) } }
+        return when {
+            kept.size == members.size -> t
+            kept.isEmpty() -> neverType
+            kept.size == 1 -> kept[0]
+            else -> getUnionType(kept)
+        }
+    }
+
+    /**
      * (REL.1)(a): is [type] an enum-MEMBER type, and are its runtime values STRINGS?
      *
      * `null` means "not an enum-member type at all". `false` covers both a numeric
@@ -110343,6 +110415,19 @@ interface DataView {
         // The general fix belongs in [checkTypeRelatedToCore] and is SIZED there, not
         // taken: it is right, and it costs +6/+11 profile FPs by unmasking flow-narrowing
         // gaps. This veto is the one consumer that needs the answer today.
+        // (REL.2) round 764: a type GUARD's false branch on a bare ENUM subject. Same
+        // finite-domain subtraction as the `!==` case: `!isAB(k)` on `k: K` where the
+        // guard targets `K.A | K.B` leaves `K.C | K.D`, not `K`. Reached BEFORE the
+        // subtype test below, whose two possible answers are both wrong here — `never`
+        // (the relation calls the enum a subtype of one of its own members, vacuously)
+        // and the whole enum (what the round-760 veto currently produces). Gated inside
+        // [enumMinusMembers] to a target that is entirely members of THIS enum, so every
+        // interface-target guard — including the `!isModifier(node)` shape the veto below
+        // exists for — is untouched.
+        run {
+            val targets = if (targetType is Type.Union) targetType.types else listOf(targetType)
+            enumMinusMembers(t, targets)?.let { if (it !== t) return it }
+        }
         return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
             !missingVsOptionalProvesNotSubtype(t, targetType) &&
             !enumMemberDomainProvesNotSubtype(t, targetType)) neverType else t
@@ -111849,6 +111934,14 @@ interface DataView {
             // getBaseConfigFileName ternary). The keep=false case stays unchanged
             // (removing one literal from an infinite primitive domain is a no-op).
             if (keep && isLiteralAssignableToMember(literalType, t)) return literalType
+            // (REL.2) round 764: the NEGATIVE direction on a BARE ENUM. `k !== K.A` (and
+            // the else-branch of `k === K.A`) removes one member from the enum's domain,
+            // which tsc can do because it models the enum AS its member union; ours is one
+            // member-LESS object, so this returned the whole enum. The comment above is
+            // right that removing a literal from an INFINITE primitive domain is a no-op —
+            // an enum's domain is finite, which is exactly the difference. Baseline-visible
+            // by construction: the answer's DISPLAY changes from `K` to `K.B | K.C | K.D`.
+            if (!keep) enumMinusMembers(t, listOf(literalType))?.let { return it }
             return t
         }
         return if (keep) {

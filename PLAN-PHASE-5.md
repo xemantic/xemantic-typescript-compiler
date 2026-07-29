@@ -52,7 +52,7 @@ before measuring).
   STATED AS THE LIMIT ON THE EVIDENCE.** There is no shape that fails on unmodified
   `16a00ff0` and passes here, because the skipped branch is the one where the raw type
   was already accepted. The discriminating instruments are `narrow.walks` and the grid.
-  The +10 pins (`EnumArgumentSecondChanceTest`) are therefore all CONTROLS, against the
+  The +9 pins (`EnumArgumentSecondChanceTest`) are therefore all CONTROLS, against the
   two ways the change could go wrong: the skip manufacturing a diagnostic where the raw
   enum was fine (six shapes: ternary / `&&` / early-return / `switch` / `if` / unguarded),
   and the skip swallowing the rejecting path the round-763 arm exists for — pinned in
@@ -78,6 +78,78 @@ before measuring).
   which an Identifier/PropertyAccess is not — IDENTICAL on all eight; (3) all 14 round-763
   pins survive untouched, because every one targets `probe(x: string)`, which no
   enum-shaped type relates to, so all of them are on the rejecting path — 954/0 filtered.
+
+**PART 2 — THE NEGATIVE DIRECTION LANDED, AND ITS RESULT IS THE INTERESTING ONE: THE RULE
+FIRES 45 TIMES ACROSS THE PROFILES AND CHANGES NOTHING — GRID BYTE-IDENTICAL, ALL 20 COST
+COUNTERS BIT-IDENTICAL.** `k !== K.A`, the else-branch of `k === K.A` and a type guard's
+FALSE branch on a bare enum now SUBTRACT from the enum's member domain instead of answering
+the whole enum. Predictions: **2 of 3**.
+
+- **THE MECHANISM IS ONE MISSING DOMAIN, NOT A NARROWING BUG.** tsc models a literal enum AS
+  the union of its members, so every subtractive narrow is ordinary union filtering there; we
+  mint one member-LESS `Type.Object` for the whole enum, so the subtractive paths had nothing
+  to subtract FROM. `enumMemberTypesOf` supplies the domain in `enumMemberEntries`'
+  DECLARATION order (which is what makes the display `K.B | K.C | K.D` and not an id-ordered
+  permutation) and `enumMinusMembers` does the subtraction, gated to a `remove` list that is
+  ENTIRELY members of that same enum — the round-746 owner rule via
+  `isLiteralAssignableToMember`, so `J.X` subtracts nothing from `K`. Two call sites: the
+  `keep = false` non-union arm of `narrowUnionByLiteral`, and the single-type NEGATIVE branch
+  of `narrowByCallPredicate`, placed BEFORE the subtype test whose two possible answers are
+  both wrong here (`never`, because the relation calls an enum a subtype of its own member
+  vacuously, and the whole enum, which is what the round-760 veto currently produces).
+- **THE 45 FIRINGS ARE THE EVIDENCE, AND THEY WERE MEASURED, NOT ASSUMED.** A temporary
+  `println` in `enumMinusMembers` (added, measured, removed — the diff carries no residue)
+  counted **14 firings on the compiler profile and 31 on services/harness**, with a control
+  run on the probe project to prove the instrument fires at all. The compiler's include
+  **5 x `SyntaxKind -> kept=395/396`**, i.e. a 395-member union really is built on tsc's own
+  source. This is the round-753 discipline applied in advance: without it, "the grid did not
+  move" would have been the same non-evidence the objlit annotation ablation produced.
+- **WHAT THE BYTE-IDENTITY DOES AND DOES NOT ESTABLISH — the honest split.** It establishes
+  that all 45 firings are VERDICT-NEUTRAL on these profiles: nothing that was accepted starts
+  failing, nothing that failed starts passing, and no message's displayed type changes. It
+  does NOT establish which of two mechanisms produces that, and the counters cannot tell
+  them apart: the caller may consume the narrower type and reach the same answer (a 395/396
+  subset of `SyntaxKind` satisfies the same `SyntaxKind` parameter), or the caller may
+  discard it (round 764 Part 1's own arm discards a narrow that is not `refined`). Settling
+  it needs a counter at the CONSUMER — "narrowed type differed AND the consumer's verdict
+  differed" — which nothing on the worklist needs. Recorded as a limit on the evidence.
+- **AND IT COSTS NOTHING MEASURABLE.** All 20 deterministic counters are bit-identical, and
+  the eight profile wall times moved -3% to -15% against Part 1's run, i.e. inside the box's
+  drift band in the favourable direction — the feared `SyntaxKind` blow-up is 5 unions on the
+  compiler profile, not a per-narrow tax. Part 1 is probably why: the call-argument site now
+  SKIPS the walk exactly where an enum argument goes to its own enum's parameter, which is
+  the population that would have paid for the big unions.
+- **NO CORPUS BASELINE MOVED, so no `LogicalParityDivergence` was needed and none was added.**
+  The E/C/N/S/T generated classes — `enum*`, `controlFlow*`, `narrowing*`, `switch*`, `type*`,
+  the letters that carry this family — ran **3,363 / 0**. Nothing to classify: the change is
+  display-visible in principle and reached no baseline in practice. The full suite is the
+  owner's gate on the other 20 letters.
+- **EVERY PIN RUN AGAINST UNMODIFIED `4c0f1150`, as one CLI probe carrying all ten shapes
+  with the pins' exact prelude: the 5 TARGETS ALL CHANGE and the 5 CONTROLS ARE ALL
+  IDENTICAL.** Targets: `K -> K.B | K.C | K.D` (`!==`), `K -> K.B | K.C | K.D` (else-branch),
+  `K -> K.C | K.D` (guard false branch, and the same in a ternary), `K -> K.A | K.C | K.D`
+  (middle-member removal). Controls that stay put: an UNRELATED enum's member subtracts
+  nothing; an interface-target guard's false branch is untouched (the `!isModifier(node)`
+  shape the round-760 veto owns); a reference already declared as a member union is
+  unchanged; the positive direction still answers the tested member; and a switch `default:`
+  still answers the whole enum.
+- **THE `default:` CLAUSE IS THE ONE SHAPE OF THE NEGATIVE DIRECTION NOT CLOSED, and it is
+  pinned as a control so it is recorded as measured rather than overlooked.**
+  `narrowBySwitchClause` returns null the moment a `DefaultClause` falls in the range, before
+  any narrowing is attempted — that is not enum-specific and would be a change to the switch
+  machinery, not to the enum domain.
+- **A DISPLAY TRAP WORTH THE LINE: an interned union carries a type ALIAS's display name.**
+  The order pin was first written as `k !== K.D`, whose survivors are exactly the prelude's
+  `type U = K.A | K.B | K.C` — so the message read `U` and the pin measured the alias table
+  instead of the member order. Removing a MIDDLE member (`k !== K.B`) avoids every alias and
+  is the sharper order test anyway.
+- **PREDICTIONS 2 of 3.** Hit: (4) the exact narrowed type for all five target shapes, and
+  that the switch `default:` would NOT move; (6) no corpus baseline in the E/C/N/S/T letters
+  would move. **Missed: (5) "the compiler profile's wall time rises >5% because `SyntaxKind`
+  gets decomposed at every `kind !== SyntaxKind.X`"** — it fires 5 times, not hundreds, and
+  the wall fell. The miss is the same POPULATION-vs-FREQUENCY error the arc keeps paying for,
+  in its cheapest form: *how often the source writes a shape* is not *how often a narrow for
+  it is requested*, because a narrowed type is computed only where an emission site asks.
 
 **Round 763 (2026-07-29) — (REL.2)(B)+(C) LANDED. THE SCAFFOLDED GLOBAL-RULE PRICE
 FALLS compiler 46 -> 52 => 46 -> 47 AND services 46 -> 57 => 46 -> 52: FIVE OF THE ELEVEN
@@ -1463,12 +1535,16 @@ backlog-horizon decision, not queue debt.)
   flow walks (`narrow.walks` 74,729 -> 71,326) with the grid byte-identical. It tightens
   automatically when the global rule lands: enum -> MEMBER is vacuously true TODAY, so a
   `K.A` parameter takes the skip path now and will take the walk path then.
-  - **Deliberately not done, with its shape:** the NEGATIVE direction on a bare enum
-    (`k !== K.A`, and a type guard's FALSE branch) still answers the whole enum. THAT
-    one genuinely needs the member union, and it changes type DISPLAY
-    (`K.B | K.C | K.D` instead of `K`) — a baseline-visible change, so it is its own
-    step. Same for an `asserts k is K.A | K.B` call on a bare enum
-    (`narrowByAssertCall` has its own gate).
+  - **The NEGATIVE direction LANDED round 764** (`k !== K.A`, the else-branch of
+    `k === K.A`, and a type guard's FALSE branch): `enumMemberTypesOf` +
+    `enumMinusMembers` decompose the enum and subtract, so a bare enum now answers
+    `K.B | K.C | K.D` where it answered `K`. It really does change DISPLAY, and it
+    reached no baseline: the rule FIRES 14 times on the compiler profile and 31 on
+    services (measured with a temporary counter, since removed — 5 of the compiler's
+    are `SyntaxKind` at 395/396) with the grid and all 20 cost counters bit-identical.
+    Still open in that direction: a switch `default:` clause (`narrowBySwitchClause`
+    bails on a `DefaultClause` before narrowing — not enum-specific), and an
+    `asserts k is K.A | K.B` call on a bare enum (`narrowByAssertCall`, own gate).
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
