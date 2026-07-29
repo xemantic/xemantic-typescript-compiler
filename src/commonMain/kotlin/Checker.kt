@@ -110307,8 +110307,58 @@ interface DataView {
         // evidence — an ablation that never fires proves nothing about the code it
         // disables, which is precisely the trap the objlit annotation fallback fell into
         // in the same round (dead on this profile, load-bearing off it).
+        //
+        // Round 760 RESTORES the veto in its narrowest possible form, because round 753's
+        // stated premise is falsified by measurement: (REL.1)(a)/(b) taught the relation
+        // member-vs-member, but the enum → MEMBER direction is still decided VACUOUSLY by
+        // the structural engine (both sides are member-less `Type.Object`s), so
+        // `Node <: Modifier` still "holds" and `!isModifier(node)` still washed `node` to
+        // `never` — completions.ts:2237's TS2345 is exactly that, back after four years.
+        // The general fix belongs in [checkTypeRelatedToCore] and is SIZED there, not
+        // taken: it is right, and it costs +6/+11 profile FPs by unmasking flow-narrowing
+        // gaps. This veto is the one consumer that needs the answer today.
         return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
-            !missingVsOptionalProvesNotSubtype(t, targetType)) neverType else t
+            !missingVsOptionalProvesNotSubtype(t, targetType) &&
+            !enumMemberDomainProvesNotSubtype(t, targetType)) neverType else t
+    }
+
+    /**
+     * Round 760: is [source] provably NOT a subtype of [target] because [target] pins a
+     * property to a single enum MEMBER where [source] types the same property as that
+     * member's whole ENUM?
+     *
+     * `SyntaxKind` is not `SyntaxKind.AbstractKeyword` — an enum is the union of its
+     * members' literal types, and a union is not a subtype of one member. The structural
+     * engine cannot see this: [getDeclaredTypeOfEnumMember] mints member types with NO
+     * members, so the two `Type.Object`s relate vacuously. Only the type-guard NEGATIVE
+     * branch consults this, and only to DECLINE a collapse to `never`; a `false` verdict
+     * leaves every existing answer untouched.
+     *
+     * A UNION [target] needs EVERY constituent proved out — the source fails to be a
+     * subtype of the union only if it is a subtype of none of them.
+     */
+    private fun enumMemberDomainProvesNotSubtype(source: Type, target: Type): Boolean {
+        if (target is Type.Union) {
+            return target.types.isNotEmpty() &&
+                target.types.all { enumMemberDomainProvesNotSubtype(source, it) }
+        }
+        val tObj = getApparentType(target) as? Type.Object ?: return false
+        val sObj = getApparentType(source) as? Type.Object ?: return false
+        resolveStructuredTypeMembers(tObj)
+        resolveStructuredTypeMembers(sObj)
+        val tProps = tObj.properties ?: return false
+        val sProps = sObj.properties ?: return false
+        return tProps.any { tp ->
+            val tt = getTypeOfSymbol(tp)
+            if (tt.flags.hasNone(TypeFlags.EnumLiteral)) return@any false
+            val sp = sProps.firstOrNull { it.name == tp.name } ?: return@any false
+            val st = getTypeOfSymbol(sp)
+            // The source must carry the OWNING enum's own type — a sibling MEMBER is
+            // (REL.1)(b)'s question and is already answered by the relation.
+            st.flags.hasAny(TypeFlags.Enum) &&
+                enumOwnTypeSymbol(st) != null &&
+                enumOwnTypeSymbol(st) === enumOfMemberTypeSymbol(tt)
+        }
     }
 
     /**
@@ -144736,7 +144786,12 @@ interface DataView {
         //
         // The enum → MEMBER direction is deliberately NOT decided here: tsc rejects it (a
         // union of members is not assignable to one member) but our leniency there is
-        // pre-existing and unmeasured, so it stays with the structural fallback.
+        // pre-existing and MEASURED as load-bearing (round 760): closing it globally is
+        // correct and costs +6 compiler / +11 services FPs, because the vacuous `true` is
+        // currently masking that many flow-narrowing gaps (a type guard used as a ternary
+        // CONDITION, `===` enum narrowing across `||`). The ONE consumer that needs the
+        // right answer today — the type-guard negative branch — asks for it directly via
+        // [enumMemberDomainProvesNotSubtype]. See PLAN-PHASE-5.md (REL.2).
         run {
             val targetEnum = enumOwnTypeSymbol(target) ?: return@run
             val sourceEnum = enumOwnTypeSymbol(source) ?: enumOfMemberTypeSymbol(source) ?: return@run
