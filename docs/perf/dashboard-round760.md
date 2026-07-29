@@ -27,6 +27,14 @@ below rests on.
 
 ## 1. The table
 
+> **SUPERSEDED FOR services / server / harness, round 762.** The `completions.ts:2237`
+> line below is FIXED (`88386a1d`) and arm A now reads
+> **46 / 46 / 46 / 46 / 46 / 46 / 46 / 94**, with all eight profiles carrying an
+> IDENTICAL composition and **no non-env-legit line anywhere on the grid**. Its cause was
+> neither (REL.2) nor (REL.3): it is a guard target's enum member lost through GENERIC
+> INSTANTIATION, and § 4's four-ingredient reduction is wrong on three of its four
+> ingredients — see PLAN-PHASE-5.md round 762.
+
 | profile | A @730 | **A @760** | Δ | C @730 † | **C @760** † |
 |---|---:|---:|:--:|---:|---:|
 | compiler | 46 | **46** | — | 13 | 1 |
@@ -100,6 +108,19 @@ arm A:
     e31fafba50001da1043553c6311332d90174f04aafea50f35d566f3c8f20ccfc
 
 ## 4. Root cause of `completions.ts:2237`, and what was and was not fixed
+
+> **CORRECTED IN PLACE, round 762 — THREE OF THESE FOUR INGREDIENTS ARE NOT INGREDIENTS.**
+> Measured on the REAL source (a probe file compiled into the services profile, against
+> the genuine `Node`/`Identifier`/`isIdentifier`): the early return is irrelevant (an
+> `if/else` and a bare `!guard` both reproduce), the enum discriminant is irrelevant, and
+> the second guard is irrelevant. What matters is that the **PRECEDING guard's target is
+> a union of GENERIC INSTANTIATIONS** — tsc's `Modifier` is a union of
+> `ModifierToken<SyntaxKind.X>` with `kind` declared once on the generic base
+> `Token<TKind>`. `enumMemberDomainProvesNotSubtype` read that property with
+> `getTypeOfSymbol`, which answers with the bare parameter `TKind`, so the veto declined
+> and the wash to `never` survived. A guard onto a SINGLE instantiation already answered
+> correctly, which is why every plain-interface reduction below — and eight more tried in
+> round 762 — stayed clean. Fixed by `propertyTypeOnCarrier` (`88386a1d`).
 
 Reduced from 300k LOC to **12 lines**, cross-file. Four ingredients, each shown
 necessary by ablation (a variant missing any one of them is clean):

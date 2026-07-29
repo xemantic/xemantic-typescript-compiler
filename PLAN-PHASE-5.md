@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 762 (2026-07-29) — THE SIX (REL.2) GAPS ENUMERATED AND CHARACTERISED: THEY ARE
+FOUR CAUSES, AND BOTH OF ROUND 760'S LABELS FOR THEM ARE WRONG. ONE CAUSE LANDED, AND IT
+IS THE ONE THAT OWNED `completions.ts:2237` — THE LAST NON-ENV-LEGIT LINE ON THE ENTIRE
+8x2 GRID. ARM A IS NOW 46/46/46/46/46/46/46/94 WITH ALL EIGHT PROFILES CARRYING AN
+IDENTICAL COMPOSITION.** services 47 -> 46, server 47 -> 46, harness 95 -> 94; the other
+five unchanged at 46. Corpus: all 25 generated classes, 0 failures. Predictions: **3 of 6**.
+
+*The brief said to enumerate before fixing any, and the enumeration is the deliverable:
+it collapsed six symptoms to four causes, moved three of the six sites to a different
+cause than the one they were filed under, and sized the largest one out of "round" range.*
+
+- **THE ENUMERATION — 6 sites, 4 causes, and the `||` and the ternary are both incidental.**
+
+  | site | round-760 label | ACTUAL cause |
+  |---|---|---|
+  | `completions.ts:2237` | "a type-predicate guard that does not narrow" | **A** — a guard target's enum member lost through GENERIC INSTANTIATION |
+  | `parser.ts:2629`, `3762`x2 | "a guard used as a TERNARY CONDITION" | **C** — the enum type is not decomposed into its member union |
+  | `parser.ts:8444`, `8728` | "`===` narrowing across an `\|\|`" | **B**(+C) — `===` does not narrow against an enum member AT ALL |
+  | `scanner.ts:905` | "`SyntaxKind` -> `CommentKind`" | **D** — `const` initialisers do not preserve LITERAL types |
+
+- **THE INSTRUMENT CAME FIRST, AND THE FIRST ONE WAS WRONG.** A branded-object probe
+  target reported *silence* for six of eight sites — because a member-less enum
+  `Type.Object` relates to it VACUOUSLY, so silence conflated "narrowed" with "not
+  narrowed". Re-probing against a PRIMITIVE (`declare function probe(x: string)`), which
+  nothing enum-shaped can satisfy, separates them in one run and names the narrowed type
+  in the message. Same class of error as round 760's read-into-`string`, caught before it
+  was spent.
+- **THE `||` IS INCIDENTAL (the control failed too).** A plain single
+  `if (kk === K.A) { … }` does not narrow either, while the same shape on a numeric
+  literal union (`1|2|3`, `=== 1`) narrows correctly. Round 760 filed 8444/8728 under the
+  `||`; the `||` does nothing. Sized: `narrowByEquality`'s
+  `literalTypeOfExpression(other)` does not resolve an enum-member reference, so it
+  returns `t` unnarrowed — contained. It needs **C** as well, because
+  `narrowUnionByLiteral` then has no union to filter.
+- **THE TERNARY IS INCIDENTAL TOO.** The same guard narrows correctly in an `if` and
+  fails in a ternary ONLY when the reference is declared as the ENUM; declared as an
+  explicit member union (`K.A | K.B | K.C`) the ternary narrows fine, and a string-literal
+  predicate narrows fine in both positions. So the cause is that `K` is never decomposed
+  into `K.A | K.B | …` for any constituent-filtering narrowing (**C**).
+- **CAUSE D IS NOT ABOUT ENUMS AND IS NOT A ROUND — IT IS THE ABSENCE OF FRESH LITERAL
+  TYPES.** `scanner.ts:905` was filed as `SyntaxKind -> CommentKind`. Measured: `const x1
+  = "a"; const y1: "a" = x1;` reports *Type 'string' is not assignable to type '"a"'* —
+  we do not preserve literal types for `const` **at all**, conditional or not. That is
+  tsc's fresh/widening literal-type machinery, whose blast radius is every `const` in the
+  corpus. **An arc, not a queue item for this round.** (The enum half of this needed the
+  primitive probe: `const y4: K.A|K.B = x4` is SILENT even when `x4` is the whole enum,
+  because `K` relates to `K.A|K.B` vacuously — the very leniency (REL.2) is about, so
+  that probe could never have shown the positive.)
+- **CAUSE A LANDED (`88386a1d`), AND ROUND 760's FOUR-INGREDIENT REDUCTION WAS WRONG ON
+  THREE OF THE FOUR.** Round 760 required an ENUM discriminant, TWO guards, an EARLY
+  RETURN, and the guards in ANOTHER file. Measured on the REAL source with a probe file
+  compiled into the services profile: the early return is irrelevant (an `if/else` and a
+  bare `!guard` both reproduce), the reference must be the same one, and what actually
+  matters is that **the PRECEDING guard's target is a union of GENERIC INSTANTIATIONS**.
+  `isSourceFile` / `isStringLiteral` (plain interfaces) do not reproduce; a LOCAL guard
+  onto a hand-written union of plain interfaces does not reproduce; a LOCAL guard onto the
+  REAL `Modifier` does. tsc's `Modifier` is a union of `ModifierToken<SyntaxKind.X>`, and
+  `kind` is declared once, on the generic base `Token<TKind> { kind: TKind }`.
+- **ROOT CAUSE, one read:** `enumMemberDomainProvesNotSubtype` asked for the property with
+  `getTypeOfSymbol`, which answers with the DECLARING interface's member type — the bare
+  type parameter `TKind`, carrying no `EnumLiteral` flag — so the veto declined, the
+  collapse to `never` survived, and the next guard had nothing left to narrow.
+  `propertyTypeOnCarrier` substitutes through the carrier's type arguments (the idiom
+  `resolvePrefixTailSegment` already uses). **This is why eight successive reductions
+  stayed clean: a guard onto a SINGLE generic instantiation already answered correctly,
+  so only a UNION of them reproduces.**
+- **EIGHT REDUCTIONS FAILED BEFORE THE REAL SOURCE WAS PROBED, WHICH IS THE LESSON.**
+  Extensionless-vs-`.js` specifiers, barrel depth 1/2/3, named-vs-namespace imports,
+  module augmentation of the base AND the derived interface — every one clean. The
+  answer came from compiling a probe file INTO the materialised services profile against
+  the genuine `Node`/`Identifier`/`isIdentifier`, where `if (isIdentifier(node))` reports
+  `Node` with a preceding `isModifier` guard and `Identifier` without one.
+  A real find along the way, unrelated and unqueued: an imported guard behind an
+  EXTENSIONLESS specifier (`from "./lib"`) never narrows, while `"./lib.js"` does —
+  `resolveImportedFunctionLikeDecl` was built for tsc's ESM `.js` shape. tsc's own source
+  always writes `.js`, so it costs the dashboard nothing.
+- **THE GLOBAL RULE STILL COSTS EXACTLY WHAT IT DID — RE-MEASURED, NOT ASSUMED, AND NOT
+  LANDED.** With the scaffold in: compiler 46 -> **52**, services 46 -> **57**, the same
+  endpoints round 760 recorded. So cause A removed a CONSUMER of the leniency, not any of
+  the gaps. The full unmasked worklist is now enumerated for the first time — the 6
+  compiler lines plus **5 services-only lines round 760 never listed**:
+  `importFixes.ts:1127`/`1162` and `formattingScanner.ts:113` (all three cause **D**, an
+  object literal's `kind` property widening to the enum), and `completions.ts:2234`/`2239`
+  (cause **B**). **Cause D therefore owns 4 of the 11 — the largest single share.**
+  `completions.ts:2237` does NOT return under the rule, so the landed fix holds.
+- **EVERY PIN RUN AGAINST UNMODIFIED `254b4151`: the 3 TARGETS FAIL and the 3 NEGATIVE
+  CONTROLS PASS.** The controls are load-bearing: *a NON-generic member target was
+  already handled* fails any fix that breaks the plain carrier path, and *a guard onto the
+  SAME enum member still collapses* fails any fix that vetoes member-vs-member, which the
+  relation already decides.
+- **PREDICTIONS 3 of 6.** Hit: the six sites are fewer than six causes; `completions.ts:2237`
+  goes away; the corpus does not move. **Missed, and the misses moved the map:** (4) "the
+  gaps are enum-specific" — WRONG, cause D is not about enums at all and owns the largest
+  share; (5) "closing the gaps makes the global rule free" — WRONG, the price is unchanged
+  because cause A was not one of the gaps; (6) "the reduction will reproduce it" — WRONG
+  eight times, and the real source answered in one run.
+
 **Round 761 (2026-07-29) — (REL.3) SIZED, AND ITS HEADLINE CLAIM IS FALSIFIED. THE
 SUBSTITUTION DEFECT IS REAL, MEASURED AND NOW FIXED — BUT IT DOES NOT EXIST ANYWHERE
 IN tsc's SOURCE, AND IT NEVER DID.** Round 760 wrote: *"every keyword node's `kind` in
@@ -1145,11 +1242,35 @@ backlog-horizon decision, not queue debt.)
   (iii) `SyntaxKind` → `CommentKind` (`scanner.ts:905`).
   Round 760's `enumMemberDomainProvesNotSubtype` is the site-local stand-in and
   should be DELETED when this lands.
-  **Round 761: this is now the TOP item and it also owns `completions.ts:2237`.**
-  (REL.3) was measured NOT to be that line's cause; the visible cause in the source
-  is that inside `if (isIdentifier(node))` the reference stays `Node` — a
-  type-predicate guard that does not narrow. That is the same family as (i)/(ii),
-  so start with the narrowing features and re-measure the line afterwards.
+  **Round 762 ENUMERATED the six and they are FOUR causes; the labels (i)/(ii)/(iii)
+  above are all WRONG and are superseded by the table below.** `completions.ts:2237`
+  was a FOURTH cause (a guard target's enum member lost through generic
+  instantiation), is FIXED (`88386a1d`), and was never one of the six — so the grid
+  is now clean of non-env-legit lines and this item no longer owns a live defect.
+  Re-measured with the global rule scaffolded in: the price is UNCHANGED at
+  compiler 46 -> 52 / services 46 -> 57, and the full unmasked worklist is:
+  - **(B) `===` / `switch` does not narrow against an enum MEMBER at all** —
+    `parser.ts:8444`, `8728`, `completions.ts:2234`, `2239`. The `||` in round 760's
+    label is incidental: a plain single `if (kk === K.A)` fails too, while `1|2|3`
+    on `=== 1` narrows. Site: `narrowByEquality`'s `literalTypeOfExpression(other)`
+    does not resolve an enum-member reference. Contained; needs (C) to have a union
+    to filter.
+  - **(C) an enum type is never decomposed into its member union** —
+    `parser.ts:2629`, `3762`x2. The ternary in round 760's label is incidental: the
+    same guard narrows in an `if`, and narrows in a ternary when the reference is
+    declared `K.A | K.B | K.C` rather than `K`. Any constituent-filtering narrowing
+    on an enum-declared reference has nothing to filter.
+  - **(D) `const` initialisers do not preserve LITERAL types** — `scanner.ts:905`,
+    `importFixes.ts:1127`, `1162`, `formattingScanner.ts:113`. **The largest share,
+    4 of 11, and NOT enum-specific**: `const x = "a"; const y: "a" = x;` already
+    reports *Type 'string' is not assignable to type '"a"'*. This is tsc's
+    fresh/widening literal-type machinery — **an ARC (blast radius: every `const` in
+    the corpus), not a queue item**; promote it as its own M3 item before (REL.2).
+  Order: (B)+(C) together (they share the `narrowUnionByLiteral` consumer), then (D)
+  as an arc, then the global rule, then delete the stand-in veto.
+  **None of (B)/(C)/(D) is observable on the dashboard until the global rule lands** —
+  they are masked by the vacuous `true`, so each must be gated on LOCAL pins plus a
+  scaffolded re-measurement, not on a grid delta.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
