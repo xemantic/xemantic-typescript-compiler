@@ -20,6 +20,85 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 769 (2026-07-29) — (REL.4)(a) THE NAMESPACE-SCOPED ENUM. ONE RESOLVER, ONE
+STRICTLY-ADDITIVE FALLBACK, **3 MORE `assertNever` LINES CLOSED — compiler 58 -> 56,
+services 63 -> 60** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS **+10 / +14** INSTEAD OF
+ROUND 767's +20/+25. AND THE KEY-SPACE WIDENING WAS PROBED BEFORE IT WAS FLIPPED, THEN
+RE-PROBED AFTER, ON THE POPULATION THE FLIP ITSELF ENLARGES.** Unscaffolded grid
+46/46/46/46/46/46/46/94, all eight byte-identical to `build/bench/r767final`.
+Predictions: **3 of 4**, and the miss is the finding.
+
+- **THE INSTRUMENT WAS VERIFIED BEFORE IT WAS BELIEVED.** Round 767's namespace pair was
+  reconstructed (an `R769` object + one `--xnsargs` flag, added, measured, REMOVED) and
+  re-measured at HEAD before anything was changed: **compiler 58 / services 63**, exactly
+  round 768's post-fix numbers. Only then was it asked anything new.
+- **THE DEFECT IS ONE FUNCTION.** `resolveEnumSymbolForDiscriminant` — the single
+  name-based entry into the `"symId#member"` key space — resolved the enum name through
+  `currentFileLocals` / `lookupPerFileForNode`, i.e. FILE-level lookup only. A `namespace`
+  member lives in the module symbol's `exports` and is in neither table, so every
+  name-based enum reader answered null and every narrowing direction went blind at once.
+  Round 768 isolated it over 11 variants: it is the enum's DECLARATION site that decides,
+  not the code's.
+- **THE PROBE, THE ROUND-750/751 SHAPE: MINT BOTH KEYS, COMPARE WHERE BOTH RESOLVE,
+  ENUMERATE WHERE ONLY THE WIDENED ONE DOES.** Of **14,507** (compiler) / **23,066**
+  (services) resolver calls, **`bothResolved` = 0** — the widened space is DISJOINT from
+  the current one, so no existing key can move, which is what makes a strictly-additive
+  fallback provably safe rather than hopefully safe. And for every enum the fallback newly
+  reaches, **every member's `parent` canonicalizes to the id the fallback returns** (1
+  distinct symbol on compiler, 2 on services, **0 disagreements**) — that parent is the
+  path `getDeclaredTypeOfEnumMember` mints its interning key from, so the two producers
+  agree and the space stays unsplit. Round 425's catastrophe is a SPLIT space, so that is
+  the invariant that had to hold.
+- **RE-PROBED AFTER THE FLIP, WHICH IS THE HALF THE MINT CANNOT ENFORCE FOR YOU.** The
+  fix enlarges its own population, so the pre-flip agreement proves nothing about the
+  post-flip one. Re-run with the fallback live: `bothResolved` still **0**,
+  member-parent disagreements still **0**, on `onlyWide` **130** (compiler) / **154**
+  (services).
+- **AND THAT NUMBER IS THE ROUND's FINDING: THE BLINDNESS WAS SELF-CONCEALING.** I
+  predicted the widened population would be >= 50 (27 cases x 2 switches). It was **2**.
+  `narrowBySwitchClause`'s default arm bails on the FIRST case it cannot key
+  (`enumKeys.add(enumMemberKeyOfExpr(...) ?: return null)`), so the resolver was asked
+  once per switch and the other 26 cases were never reached — the early bail was hiding
+  the size of its own cause. After the flip the same profile asks it **130** times.
+- **THE FIX.** `enumSymbolFromEnclosingNamespace`: climb `keyNode`'s parent chain,
+  innermost first, and look the name up in each enclosing `ModuleDeclaration`'s symbol
+  `exports` (`nodeToSymbol[nodeKey(moduleDecl)]`, the binder's own table — it holds ALL
+  members, `export`-prefixed or not). Consulted ONLY where the file-level lookup already
+  returned null. A namespace member that is not an enum answers null and STOPS the climb:
+  the innermost binding wins, so an outer enum cannot be keyed through an inner shadow.
+- **THE PRICE, SCAFFOLDED: compiler 58 -> 56, services 63 -> 60**, and `diff` says exactly
+  the three targeted lines with **no new line**: `parser.ts:2941`/`3485` (`ParsingContext`,
+  a `const enum` in `namespace Parser` — a bare-identifier switch subject) and
+  `findAllReferences.ts:1973` (`SpecialSearchKind` in `export namespace Core` — a
+  PROPERTY-ACCESS subject, `state.specialSearchKind`, which is round 768's cause 2 running
+  for the first time on this enum). **alpha goes 7 -> 5 on compiler and 9 -> 7 on
+  services.**
+- **NOT TAKEN, DELIBERATELY: THE QUALIFIED `N.A.X` DIRECTION FROM OUTSIDE THE NAMESPACE.**
+  Round 768 recorded it as the second half of this cause (`enumMemberTypeOfExpr` requires
+  `pa.expression is Identifier`). The probe measured **0** sites for it on all 8 profiles,
+  so landing it would be an unmeasured widening of the very key space this round spent its
+  evidence budget bounding. Recorded, not pinned (round 765's rule).
+- **NOT TAKEN: THE TERNARY TWIN (cause 6).** `nodeFactory.ts:7112` /
+  `declarations.ts:1739` are a type-guard chain over a node UNION/INTERSECTION, not an
+  enum — the subtraction machinery is `narrowByCallPredicate`'s, not `enumMinusMembers`',
+  and an intersection subject has no member list to peel. Its own round.
+- **GATES.** Filtered batch of the 66 enum / switch / `never` / exhaustion / discriminant
+  classes **454 / 0** (rounds 763-768's own classes included); corpus letters C/D/E/N
+  **3,197 / 0** and M/P/S/T **1,933 / 0**; build warning-clean; unscaffolded 8-arm grid
+  byte-identical on all eight; cost gate 18 of 20 counters bit-identical,
+  `globals.lookups` 963,032 -> 963,052 and `globals.misses` 948,318 -> 948,338
+  (**+20, +0.002%**, the 130 newly successful resolutions doing downstream work that used
+  to bail) — **rebaselined in the same commit**. No corpus baseline moved, so no
+  `LogicalParityDivergence`. Suite count 13,192 -> **13,207** (+15 pins).
+- **PREDICTIONS 3 of 4.** HIT: the scaffolded price falls by exactly the namespace-enum
+  sites (58 -> 56 / 63 -> 60, predicted to the line once `SpecialSearchKind` was found to
+  be one); the unscaffolded grid does not move; the post-flip key-space probe still shows
+  0 collisions and 0 member-parent disagreements. **MISSED:** the size of the newly-reached
+  population before the flip (predicted >= 50, measured **2**) — see the self-concealing
+  bail above.
+- **THE SCAFFOLD LEFT NO RESIDUE** (`grep -rn 'R769\|xnsargs' src/` is empty); arm outputs
+  are under `build/bench/r769{scaf,wideScaf,wide,final,land}` (gitignored).
+
 **Round 768 (2026-07-29) — (REL.4)(a) THE `assertNever` FAMILY IS 15 SYMPTOMS AND **THREE**
 CAUSES, ALL THREE THE SAME SHAPE: THE SUBTRACTION STOPS ONE MEMBER SHORT OF `never`.
 CLOSED 8 OF 20 SCAFFOLDED LINES — **compiler 66 -> 58, services 71 -> 63, server 72 -> 64,
@@ -1008,165 +1087,6 @@ no timer was opened.*
   underneath it. The enum story rounds 741–753 spent themselves on is a LAYER ABOVE
   a substitution defect nobody had measured.
 
-**Round 759 (2026-07-29) — (AUDIT.2)+(AUDIT.3): THE ARC'S LAST TWO UNVERIFIED ROWS,
-MEASURED. ONE OF THEM IS § 0's LAW'S FIRST COUNTER-EXAMPLE — the population that
-never reaches the relation is the EXPENSIVE one, 89% of the cost at 3.2x the
-per-argument price.** No behaviour change; additive opt-in instrumentation only.
-Compiler profile `--listAll` **46**, composition unchanged (TS2591x43 / TS2304x2 /
-TS2584x1), production vs `--argSections` sorted-line diff IDENTICAL on the final
-binary; filtered probe batch **70 / 0**; build warning-clean. The full suite and the
-cost gate are the owner's to run. Artifact: `docs/perf/claim-audit-round758.md`
-§§ 10-14 (extended); `argument-check-attribution.md` and § 0/§ 0.1 corrected IN PLACE.
-
-*Round 758 flagged two claims as ❓ and scoped them out by choice, naming both
-precisely. This round measured both. It scored **2 of 6** predictions, which is the
-rate round 758 said its own 5-of-5 lacked.*
-
-- **(AUDIT.2) — THE ONE ROW OF THE AUDIT THAT RESOLVES IN THE CITATION'S FAVOUR.**
-  `argument-check-attribution.md` § 3 said "only 27% reach the relation, yet all
-  37,379 pay for the full `argType` computation". **It is true and understated: the
-  72% that exit early carry 89% of the argType time — 613 ms of 689 — at
-  22,604 ns each against 7,134 ns for the 28% that do.** Round 758 predicted
-  "< 40%"; I predicted 35%; the answer is **89%**. Both wrong by ~2.5x, in the same
-  direction, from the same prior.
-- **THE MECHANISM IS MEASURED, NOT A RESIDUAL** (the round-758 rule about naming
-  subtractions): `getTypeOfExpression` costs **8,252 ns** for a non-relating
-  argument against **1,344 ns** for a relating one (**6.1x**), and **7,917 of the
-  9,674 narrowing walks (82%)** are non-relating. Those two rows are 80% of the
-  argType total; the remaining 140 ms is labelled RESIDUAL and not spent.
-  **Why the correlation runs backwards:** the exit predicate is a property of the
-  PARAMETER (`isSimpleCheckableType`, foreign TPs) while the cost is a property of
-  the ARGUMENT — and complex parameters attract complex arguments, so the 15,140
-  that exit at the function-vs-function block are arrows and callbacks typed under
-  an installed contextual type.
-- **STILL NO LEVER, FOR A REASON THAT HAS NOTHING TO DO WITH THE SIZE.** *Paying for
-  `argType` is not wasting it*: eleven blocks below consume the value
-  (`tryEmitWeakTypeAssignment`, the 353-line objlit block, the fn-vs-fn block, the
-  nullish gates), and the assignability relation is the CHEAPEST consumer in the
-  function at 19 ms — the third independent finding (735: 48x, 738: 65x) that the
-  relation engine is not where the call path's time is. The non-relating argType is
-  613 ms = 2.3% (above the band) but not removable; the only arguably-skippable
-  subset is 275 ms of narrowing = **1.0%, half a band**. **No parked item revived.**
-- **THE ROW'S DEFINING NUMBER HAD FALLEN 25% WHILE THE ITEM SAT IN THE QUEUE**
-  (924 -> 689 ms raw), and the exit profile shifted underneath it: foreign-TP exit
-  14,663 -> 11,689, fn-vs-fn exit 12,280 -> 15,140, relation 10,146 -> 10,560. The
-  COUNTS are deterministic to the unit and the 89%/10% share reproduced across all
-  three runs; only the ms drift (748 / 656 / 689, a ±13% box). Round 755's rule, for
-  the third time.
-- **(AUDIT.3) — 36-71 ms = 0.13-0.26%, so § 0's asserted "≲0.2%" is the right
-  order.** The arc's usual instrument could not do this one: an ~89 ns timestamp
-  pair around a ~37 ns probe would BE the measurement. So the probe **amplifies the
-  signal instead of shrinking the instrument** — `--globalsAmp r` brackets `r` reads
-  of the same key under ONE pair, and two values of `r` cancel the pair's cost
-  algebraically. Measured **cold ~37 ns / warm 9.1 ns** over 961,420 bracketed
-  lookups; `961,213` classified lookups reproduce round 758 exactly.
-- **THE INSTRUMENT WAS FALSIFIED, NOT TRUSTED** (round 758 found the previous one
-  broken). Dead-code elimination is ruled out **arithmetically** — the sink is an
-  exact multiple of the hit count at every amplification (16x17,928 = 286,848;
-  64x17,928 = 1,147,392, to the unit). Three independent slopes agree to 7%, which
-  is the perturbation test. The sink's hit count independently reproduces the
-  classifier's 98.1% miss rate. **And one negative check is reported as WEAK rather
-  than cited**: the wall-time cross-check agrees (+549 ms probe vs +1,644 ms wall)
-  but the ±13% box drift is ±3.9 s, so the wall could not have falsified anything —
-  the sink could, which is why it is the one quoted (round 750's rule).
-- **WHAT WAS BUILT** (additive, opt-in, behaviour-free when off): three pairs of
-  `ArgSections` rows charged from a parked span (`pendingArgType`/`pendingGtoe`/
-  `pendingNarrow`) once the exit class is known eleven sections later — an EXACT
-  partition, printed as a check and pinned by an extended
-  `ArgSectionProbeTest`; and `GlobalsAmp` + `--globalsAmp N` (`N < 0` = in-situ
-  empty bracket) with a new `GlobalsAmpProbeTest`. Production cost is **zero
-  instructions**: `ArgSections`' additions sit inside the existing `mode == ON`
-  gate, and `InstrumentedSymbolTable` is only ever constructed under `--passTiming`.
-- **WHAT THIS CHANGES FOR THE MAP.** § 0's law keeps its CACHE form intact but loses
-  its generalised form: **it holds only when the exit predicate and the cost share a
-  CAUSE.** Corrected in place in § 0, in `argument-check-attribution.md` § 3, and in
-  CLAUDE.md — whose POPULATION-vs-FREQUENCY entry had hardened the direction into
-  "every instance SHRANK … the direction never varies", which is now false.
-  **S5 remains unmeasured by choice** (the `owner` section's imputed per-hit rate).
-
-**Round 758 (2026-07-29) — (AUDIT.1): THE ATTRIBUTION ARC AUDITED ITS OWN NUMBERS.
-57 load-bearing claims classified POPULATION / FREQUENCY / TIME / RESIDUAL —
-40 stand, 11 stale-or-weak, 4 falsified, 2 unverified. THREE OF THE FOUR FALSIFIED
-ARE A FREQUENCY SPENT AS A POPULATION, AND ALL THREE SHRINK.** No behaviour change;
-new artifact `docs/perf/claim-audit-round758.md`; § 0/§ 0.1 and four `docs/perf/`
-artifacts corrected IN PLACE. Compiler profile `--listAll` **46**, composition
-unchanged (TS2591×43 / TS2304×2 / TS2584×1), production vs `--callSections`
-sorted-line diff IDENTICAL; filtered probe batch **66 / 0**; build warning-clean.
-The full suite and the cost gate are the owner's to run.
-
-*Round 757's carry-forward was that its predecessor priced a fix by a census of
-REACHED nodes — "874 expression-bodied arrows" — and the population behind it was
-SIX, a 146x error. It flagged that three of the arc's rounds priced work by a
-similar reached-count. This round checked all of them.*
-
-- **The three falsified frequencies, each with its multiple.**
-  **(1) `IDENTIFIER` is 44.5% of the NODES and 8.4% of the spine's TIME** —
-  1,853 ms of 22,104 — **5.3x**. This is what § 0 built "the measured lever is
-  consultation, not computation" on, and round 732 had already falsified the
-  INFERENCE; this removes the PREMISE. **(2) `getCalleeType`'s "half its results
-  are thrown away" is 50.6% of the CALLS and 8–10% of the TIME** — 1,452 ns per
-  discarded resolution against 16,491 ns per kept one, **11x** — so the implied
-  ~237 ms is **38 ms = 0.14%**, out by **6.2x**; (CALL.1) § 6's last open
-  forward-pointer closes as a measurement. **(3) The 874 arrows → six bodies,
-  146x** (already landed round 757, counted here for the tally).
-- **A MEASUREMENT BUG IN THE INSTRUMENT ITSELF: `--passTiming`'s per-kind table
-  printed `enter+leave` and summed ENTER ONLY.** Every per-kind figure ever quoted
-  from it — including § 0's "IDENTIFIER … 2,746 ns each" — was the enter chain
-  alone. Fixed (both leave sites in `spineWalkFileProfiled`; the count still
-  increments once per node, at enter). **The fix is confirmed by an INDEPENDENT
-  instrument**: round 732's `--dispatchProbe` derived per-kind totals by a totally
-  different construction, and the corrected counter lands on its three published
-  numbers — CALL_EXPRESSION 3,752 vs 3,636, VARIABLE_STATEMENT 2,841 vs 2,835,
-  RETURN_STATEMENT 1,752 vs 1,839 (0.2–5%) — where the broken version read
-  929 / 1,624 / 950, i.e. 4.0x / 1.7x / 1.8x low. Production is untouched:
-  `spineWalkFileProfiled` is entered only under `PassTiming.enabled`.
-- **The corrected concentration is the OPPOSITE shape to the one § 0 asserted.**
-  IDENTIFIER: 44.5% of nodes, 8.4% of the spine. The five statement-anchor kinds
-  (VARIABLE_STATEMENT / EXPRESSION_STATEMENT / RETURN_STATEMENT / IF_STATEMENT /
-  BLOCK): **10% of the nodes, 40% of the spine**. CALL_EXPRESSION: 6.1% / 17.0%.
-  Stated in the artifact as a LOCATION, not a lever — the identical inference from
-  the identical table is what produced (DISPATCH.1) and cost rounds 716–732.
-- **A FOURTH falsified claim that is not a frequency: § 0's "dispatch + handler
-  machinery (residual) ~7,600 ms (42%)" is a SUBTRACTION THAT WAS GIVEN A NAME.**
-  Rounds 732/733/734 each measured a piece of it and found no dispatch. So
-  § 0.1's parity table row "remove ALL dispatch overhead → 66 units, 1.5x" should
-  read **`100 → ~99, 2.4x`** — **out by ~34x, and it is the FIRST step of the
-  parity argument**. Corrected in place: parity is not three levers with a hard
-  third, it is ONE question (does the checking work get cheaper), which is the
-  endgame paragraph rounds 739/755 priced at ~2.3%.
-- **The map was re-measured for the first time since round 716** (round 755's own
-  rule, never applied to the arc's top-level table): `checkSpine` **22,104 ms =
-  84.4% of checker-init, 74% of the compile**; the ~400 tail passes **3,130 ms =
-  10.4%** (§ 0.1 said 14 units, and 619/620/659 all say they are not removable);
-  globals lookups **961,213 at 98.1% miss** (was 1,341,719 / 98.9%). Shape
-  unchanged, three absolutes stale.
-- **What was BUILT** (additive-only, behaviour-free when off): the per-kind leave
-  accumulation above, plus `CallSections.N_CALLEE_BAIL` / `N_CALLEE_LIVE` splitting
-  `getCalleeType` by outcome. The outcome test sits INSIDE the `mode != OFF` gate —
-  an inline `close(<expr>, t)` would evaluate `<expr>` at all 52,413 call
-  expressions before the gate could return. One new pin,
-  `the getCalleeType outcome split partitions every resolution`.
-- **PREDICTIONS: 5 of 5 held** (IDENTIFIER 6–9% → 8.4%; CALL_EXPRESSION overtakes it
-  at ≥2,500 ms → 3,752; the bail half ≤40% of the time → 8–10%; top-3 kinds <40% of
-  the spine → 38.3%; ≥3 frequency-as-population claims → 3+2). **That is the round's
-  warning sign, not its credential** — rounds 732–757 scored 2-of-4 to 4-of-5 WRONG
-  and those are the rounds that changed the map. An audit whose every prediction
-  holds has tested claims it already half-knew were wrong.
-- **WHAT STANDS.** "Single digits remain" **SURVIVES and is better supported** —
-  every re-derived population came in BELOW its citation, none above. § 0's law
-  gains its sixth and seventh instances (both without a cache in sight). Round 732's
-  per-kind numbers, the six-hot-handler map, round 737's count-vs-time pair table
-  (the arc's first explicit statement of this very trap), the front end's emptiness
-  and the engine-rule price all stand. **NO PARKED ITEM IS REVIVED.**
-- **What did NOT get measured, and is flagged rather than fixed** — two ❓ rows:
-  **(G2)** "all 37,379 arguments pay for the full `argType` computation" while only
-  27% reach the relation — the 924 ms total is measured, its split by exit class is
-  not. Queued as **(AUDIT.2)**, half a round, ceiling 3.5%, *prediction recorded so
-  it can be scored: the non-relating 73% carry < 40% of the 924 ms*. **(S5)** the
-  `owner` section's ≈1,340 ms imputes a per-hit rate from a DIFFERENT section.
-  Also **(AUDIT.3)**: § 0's "961,213 globals lookups … priced ≲0.2%" is the last
-  asserted-not-measured population in the section.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **Reading convention (stated round 687, after it cost a scan):** a superseded
@@ -1196,27 +1116,38 @@ backlog-horizon decision, not queue debt.)
   ESM `.js` + `export *` — that is the TS2315 flood). Each step alone is measurably
   INERT; only the pair moves anything. It unblocks 1,127 previously-unchecked
   `PropertyAccess` callees on compiler and 1,551 on services.
-  **The price of switching it on TODAY is compiler 46 -> 66, services 46 -> 71,
-  server 46 -> 72, harness 94 -> 121 — all FPs, in three causes:**
+  **The price of switching it on TODAY is compiler 46 -> 56, services 46 -> 60
+  (round 769; round 767 sized it at 46 -> 66 / 46 -> 71) — all FPs, in three causes:**
   - **(a) `Debug.assertNever(x)` whose argument does not narrow to `never` — 8 of the 15
-    CLOSED round 768; 7 remain, and the price is re-measured: compiler 66 -> 58, services
-    71 -> 63, server 72 -> 64, harness 121 -> 113.** The closed 8 were THREE causes, all
+    CLOSED round 768 and 2 more round 769; 5 remain on compiler / 7 on services, and the
+    price is re-measured: compiler 58 -> 56, services 63 -> 60.** The closed 8 were THREE causes, all
     "the subtraction stops one member short of `never`": the LAST member (a single member
     type has nothing to subtract from — so a PARTIAL chain narrowed and a COMPLETE one did
     not, i.e. round 767's "only the FIRST/innermost subtracts" was backwards), an
     enum-member case in a UNION subject (the `Type.Union` `default:` arm filtered only
     literal NODES — and a PROPERTY-ACCESS subject is this same cause), and the round-462
     `n !== neverType` discard round 765 recorded and left unchased.
-    **The 7 still open are 4 further causes** — see round 768's session note for the
-    isolation of each: (4) an enum DECLARED inside a `namespace` is invisible to
-    `resolveEnumSymbolForDiscriminant` (file-level name lookup), which blinds EVERY
-    narrowing direction — `parser.ts:2941`/`3485`, isolated to one resolver but it widens
-    the `"symId#member"` key space, so it wants its own suite-gated round; (5) a POST-SWITCH
+    **Cause (4) CLOSED round 769** — an enum DECLARED inside a `namespace` was invisible to
+    `resolveEnumSymbolForDiscriminant` (file-level name lookup only), which blinded EVERY
+    narrowing direction; a strictly-ADDITIVE enclosing-namespace fallback closes
+    `parser.ts:2941`/`3485` (`ParsingContext`) and `findAllReferences.ts:1973`
+    (`SpecialSearchKind`). The `"symId#member"` key-space widening was probed FIRST, round
+    750/751's shape: of ~15k (compiler) / ~23k (services) resolver calls, **0** names
+    resolve BOTH ways (the widened space is DISJOINT, so no existing key can move) and
+    **0** member-parent disagreements — before AND after the flip, the latter on the
+    population the flip itself enlarges (2 -> 130). Still open on that cause and NOT taken:
+    the qualified `N.A.X` direction from OUTSIDE the namespace (`enumMemberTypeOfExpr`
+    requires `pa.expression is Identifier`) — **0 measured sites** on all 8 profiles, so it
+    would be an unmeasured widening of the same key space.
+    **The 5 still open are 3 further causes** — see round 768's session note for the
+    isolation of each: (5) a POST-SWITCH
     fall-through does not narrow at all (`checker.ts:11536`, `37648`) — NOT enum-specific,
     flow-graph work; (6) a type-guard ternary chain over a node union/intersection
     (`nodeFactory.ts:7112`, `declarations.ts:1739`) — the non-enum twin of cause 1;
     (7) `moduleSpecifiers.ts:1411`, whose argument is an ELEMENT ACCESS that is not the
-    switch subject at all. **(4) is the next unit of work: 2 of the 7 for one resolver.**
+    switch subject at all. **(6) is the next unit of work** — round 769 sized it as its own
+    round: the subtraction machinery there is `narrowByCallPredicate`'s, not
+    `enumMinusMembers`', and an INTERSECTION subject has no member list to peel.
   - **(b) `Debug.assertIsDefined` / `Debug.checkDefined` GENERIC INFERENCE** (4 compiler /
     7 services): the `T` of `checkDefined<T>(value: T | null | undefined): T` instantiates
     to the non-nullable side. M3.1, not (REL.2).
@@ -1343,7 +1274,9 @@ backlog-horizon decision, not queue debt.)
     price of both is **compiler 46 -> 66, services 46 -> 71, server 46 -> 72, harness
     94 -> 121**; ~75% of the new lines are one narrowing family. NOT taken.
     **Round 768 closed 8 of that family, re-pricing the flip at compiler 46 -> 58,
-    services 46 -> 63, server 46 -> 64, harness 94 -> 113** — see (REL.4)(a).
+    services 46 -> 63, server 46 -> 64, harness 94 -> 113; round 769 closed 3 more (the
+    namespace-scoped enum), re-pricing it again at compiler 46 -> 56, services 46 -> 60**
+    — see (REL.4)(a).
   - **Round 765 RE-PRICED the global rule (scaffolded, measured, reverted — NOT landed):
     compiler 46 -> 47 UNCHANGED, services 46 -> 52 becomes 46 -> 51, and the worklist is
     5 lines, not 6 — `importFixes.ts:1162` has CLOSED** without being on anyone's list.
