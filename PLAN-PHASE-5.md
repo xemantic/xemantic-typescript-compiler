@@ -140,6 +140,23 @@ round 764's `build/bench/r764final`. Predictions: **1 of 2**.
   `default:` narrowing on the UNMODIFIED build) took one probe run to write, and it is now
   a pin so the claim cannot be re-made from the code's shape.
 
+**PART 3 — THE GLOBAL RULE RE-PRICED, NOT LANDED, AND THE PRICE HAS FALLEN AGAIN:
+compiler 46 -> 47 (UNCHANGED) and services 46 -> 52 becomes 46 -> 51. THE WORKLIST IS 5
+LINES, NOT 6 — `importFixes.ts:1162` HAS CLOSED.** Measured the same way round 763 did:
+a temporary `--xglobalrule` flag in `checkTypeRelatedToCore` rejecting an enum's own type
+against an enum MEMBER, one compile, two profile runs, then reverted. **Prediction: 0 of
+1 — "the price is unchanged, because rounds 764/765 closed no worklist line" is WRONG.**
+Whatever closed `importFixes.ts:1162` is one of round 764's subtractive narrows or this
+round's two arms, and it closed WITHOUT being on anyone's list, which is the second time
+this arc has found the masked population larger than the enumeration of it.
+
+- **THE REMAINING FIVE, re-listed so the next round works from a measurement and not from
+  round 762's table:** `scanner.ts:905` (cause D, and the ONLY line on the compiler
+  profile — that profile is still one line from the rule being free), plus, on services,
+  `importFixes.ts:1127` and `formattingScanner.ts:113` (cause D) and
+  `completions.ts:2234`/`2239` (the property-read / generic-inference family round 763
+  showed are NOT (B)). So (D) is now **3 of 5**, still the largest share, and still an arc.
+
 **Round 764 (2026-07-29) — (REL.2)(C) MADE A SECOND CHANCE: ROUND 763's +4.78% FLOW-WALK
 BILL IS RETURNED IN FULL. `narrow.walks` 74,729 -> 71,326 — THREE ABOVE THE PRE-763
 71,323 — WITH THE 8-ARM GRID BYTE-IDENTICAL AND NO ANSWER CHANGED.** Arm-A grid
@@ -1067,6 +1084,13 @@ backlog-horizon decision, not queue debt.)
     Still open in that direction: a switch `default:` clause (`narrowBySwitchClause`
     bails on a `DefaultClause` before narrowing — not enum-specific), and an
     `asserts k is K.A | K.B` call on a bare enum (`narrowByAssertCall`, own gate).
+  - **Round 765 RE-PRICED the global rule (scaffolded, measured, reverted — NOT landed):
+    compiler 46 -> 47 UNCHANGED, services 46 -> 52 becomes 46 -> 51, and the worklist is
+    5 lines, not 6 — `importFixes.ts:1162` has CLOSED** without being on anyone's list.
+    The remaining five: `scanner.ts:905` (cause D; the ONLY compiler-profile line, so that
+    profile is one line from the rule being free), `importFixes.ts:1127` and
+    `formattingScanner.ts:113` (cause D), `completions.ts:2234`/`2239` (the property-read /
+    generic-inference family, not narrowing). **(D) is now 3 of 5 and is still an arc.**
   - **Round 765 CLOSED both of those, and the "not enum-specific" label above is
     WITHDRAWN — the switch one is enum-specific and is one arm.** Round 425's
     `DefaultClause` arm has narrowed a literal-union subject all along (measured on the
