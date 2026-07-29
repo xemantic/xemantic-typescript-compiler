@@ -81,7 +81,7 @@ that wrong reason is the finding.
   `importFixes.ts:1127` and `formattingScanner.ts:113` (cause D), `completions.ts:2234` and
   `2239` (the property-read / generic-inference family). Expected, since none of the five
   is a `never`-parameter site.
-- **EVERY PIN RUN AGAINST UNMODIFIED `6fa1d630`: the 7 TARGETS ALL FAIL and the 6 CONTROLS
+- **EVERY PIN RUN AGAINST UNMODIFIED `6fa1d630`: the 7 TARGETS ALL FAIL and the 7 CONTROLS
   ALL PASS.** Targets, all of which answered the bare enum `K` before: a 3-of-4 partial
   switch `default: assertNever(k)` -> `K.D`; a 1-of-4 one -> `K.B | K.C | K.D`; a
   MIDDLE-member one -> `K.A | K.C | K.D` (declaration order); `===` guards with no switch
@@ -1245,7 +1245,7 @@ backlog-horizon decision, not queue debt.)
     a diagnostic (nothing non-`never` is assignable to `never`, so only the DISPLAY moves).
     Gate population measured before widening: of 26,432 reference arguments on the compiler
     profile the arm is reached **5** times, of which **0** are enum-flavored — so the fix is
-    narrow by construction AND fires **0 times on all 8 profiles**; 13 pins are its evidence.
+    narrow by construction AND fires **0 times on all 8 profiles**; 14 pins are its evidence.
   - **AND THE REASON FOR THAT ZERO IS THE ROUND-766 FINDING, WHICH IS THE NEXT UNIT OF WORK:
     `checkArgumentsAgainstSignature` DOES NOT RUN FOR A CALL WHOSE CALLEE IS A MEMBER OF AN
     IMPORTED NAMESPACE.** Isolated with three probes: a same-file `namespace Debug` reaches
