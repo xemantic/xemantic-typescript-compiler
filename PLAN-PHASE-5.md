@@ -20,6 +20,99 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 763 (2026-07-29) — (REL.2)(B)+(C) LANDED. THE SCAFFOLDED GLOBAL-RULE PRICE
+FALLS compiler 46 -> 52 => 46 -> 47 AND services 46 -> 57 => 46 -> 52: FIVE OF THE ELEVEN
+UNMASKED WORKLIST LINES ARE CLOSED. BOTH OF ROUND 762's LABELS ARE AGAIN SHARPER THAN THEY
+READ — (C) IS NOT A DECOMPOSITION, AND THE TWO `completions.ts` LINES FILED UNDER (B) ARE NOT
+(B).** Arm-A grid 46/46/46/46/46/46/46/94, every profile's error lines BYTE-IDENTICAL to round
+762. Corpus all 25 generated classes 8,837 / 0. Predictions: **4 of 6**.
+
+*The global rule was scaffolded behind a temporary flag purely to re-price it in the SAME
+build, then removed. It is not landed, and `enumMemberDomainProvesNotSubtype` still stands.*
+
+- **(C) IS NOT ABOUT DECOMPOSING THE ENUM — IT IS A NARROWABILITY GATE, AND THE FIX IS ONE
+  CLAUSE.** An enum's own type is a member-LESS `Type.Object`, so it is neither a `Type.Union`
+  nor a `Type.Interface`, and the call-argument site's gate
+  (`checkArgumentsAgainstSignature`, the B469/round-428b pair) admits exactly those two
+  shapes plus `unknown`/`string`/`number`. The flow read was therefore **never attempted**
+  for an enum-declared reference — `narrowByCallPredicate` was never even called with it.
+  Its single-type arm answers `K.A | K.B` correctly the moment it is reached
+  (`checkTypeRelatedTo(target, t)` holds via the round-746 enum-literal widening), so nothing
+  needed decomposing. Round 762's label would have sent the next round to
+  `getDeclaredTypeOfSymbol`.
+- **THAT ALSO EXPLAINS THE `if`-vs-TERNARY SPLIT ROUND 762 CALLED INCIDENTAL, AND IT IS NOT
+  INCIDENTAL — IT IS THE DIAGNOSTIC.** An `if` BLOCK types its body from `currentLocalTypes`
+  (the condition pass records the guard), so an enum narrowed there all along. A ternary, an
+  `&&` right operand, a position after an early-return guard, an `asserts` call and a `switch`
+  are exactly the positions with no `currentLocalTypes` recording — they need the flow read
+  the gate refused. Measured as a 5x2 table (enum vs `K.A|K.B|K.C`, five positions): the union
+  narrows in all five, the enum in only the `if`.
+- **(B) IS INDEPENDENT OF (C) — round 762 said "needs (C) to have a union to filter", and the
+  probe falsifies it.** `k === K.A` fails to narrow even when `k` is ALREADY declared
+  `K.A | K.B | K.C`. `literalTypeOfExpression` has no answer for an enum-member reference (it
+  is not a literal NODE), so `narrowByEquality` bailed before reaching any union; and
+  `narrowUnionByLiteral`'s two comparators (`isLiteralAssignableToMember`,
+  `areLiteralTypesEquivalent`) had no enum arm either. Three small additions:
+  `enumMemberTypeOfExpr` (the value-position twin of `enumMemberKeyOfExpr`, resolving through
+  the same canonical key space), an EnumLiteral->Enum widening arm delegating to
+  `isSimpleTypeRelatedTo` (so the round-746 owner rule decides, not the flag), and an
+  `enumMemberTypesAreSameMember` arm (NOT identity — a module-scoped enum keys different
+  interned member types per file).
+- **THE SWITCH HALF OF (B) IS A SEPARATE ARM AND THE FOLD WAS THE TRAP.** `switch (kind) { case
+  K.A: }` on a bare enum subject fell out of `narrowBySwitchClause` at `if (t !is Type.Union)
+  return null`. The member types are collected BESIDE `literalTypes`, never folded into it:
+  the discriminant paths key their cases through `literalDiscriminantKeyOfType`, which has no
+  answer for an enum-member type, so a fold would make every MIXED enum/literal discriminant
+  switch bail. Pinned by a negative control.
+- **THE INSTRUMENT WAS THE ROUND, AND THE LESSON IS THE ARC'S RECURRING ONE.** Five probe
+  generations (probe1 the shape census, probe2 the `return`/`const`/statement ablation, probe3
+  the two relation directions, probe4 the 5x2 enum-vs-union table, probe5 the non-enum
+  control) narrowed it to "flow fails for a non-union enum and succeeds for a union" — and
+  every structural reading of `narrowByCallPredicate` said that was impossible, because its
+  arms DO answer correctly. **A one-line `println` then showed it was never called.** When the
+  code says the answer should be right and the output says it is wrong, the missing step is
+  UPSTREAM of the code being read; a trace settles in 90 seconds what reading cannot. Round
+  762 burned eight reductions before compiling a probe; this round burned five.
+- **THE PROBE TARGET MUST BE A PRIMITIVE, AND `number` IS NOT ONE FOR AN ENUM.** Round 762's
+  branded-object target reported silence because a member-less enum type relates vacuously;
+  this round nearly lost probe5 to a `number` target, which every numeric enum satisfies. Only
+  `string` separates them AND names the narrowed type in the TS2345 message. All 14 pins use it.
+- **THE PRICE, RE-MEASURED IN THE SAME BUILD (temporary `--xglobalrule` flag, since removed).**
+  compiler **46 -> 47** (was 46 -> 52), services **46 -> 52** (was 46 -> 57). Closed:
+  `parser.ts:2629`, `3762`x2 (cause C), `8444`, `8728` (cause B+C). The compiler profile is now
+  ONE line from the rule being free, and that line is `scanner.ts:905` — cause (D).
+- **`completions.ts:2234`/`2239` DID NOT CLOSE AND ARE NOT (B).** 2234 is a PROPERTY READ on a
+  union of generic instantiations: `node.kind` after `isModifier(node)` answers `SyntaxKind`,
+  i.e. the CONSTRAINT of `Token<TKind>`'s parameter, not `ModifierSyntaxKind` — round 762's
+  `propertyTypeOnCarrier` fixed that read only inside the veto, not in the general path. 2239
+  is generic inference: `identifierToKeywordKind` returns `tryCast(token, isKeyword)` and the
+  `KeywordSyntaxKind` type argument is lost, so the declared `KeywordSyntaxKind | undefined`
+  reads as `SyntaxKind | undefined`. Neither is narrowing. **Remaining worklist: 4 x cause (D)
+  + these 2.**
+- **(D) SIZED, NOT STARTED, and the size is unchanged from round 762's read.** `const x = "a";
+  const y: "a" = x;` still reports *Type 'string' is not assignable to type '"a"'* — we do not
+  preserve literal types for `const` at all. The four (D) lines are its enum/object-literal
+  face (`kind: SyntaxKind` widening in an object literal). Blast radius is every `const` in the
+  corpus; it is tsc's fresh/widening literal-type machinery and belongs as its own M3 item
+  before (REL.2)'s rule.
+- **EVERY PIN RUN AGAINST UNMODIFIED `d47ffdc0`: the 9 TARGETS FAIL and the 5 NEGATIVE CONTROLS
+  PASS.** The controls are load-bearing: *an `if` BLOCK still narrows* fails any fix that
+  reroutes the `currentLocalTypes` path; *a member of an UNRELATED enum does not narrow* fails
+  any fix that matches the EnumLiteral flag without the owner check; *a mixed enum-and-string
+  discriminant switch still filters* fails the `literalTypes` fold described above.
+- **PREDICTIONS 4 of 6.** Hit: (B) and (C) both land in one round; the corpus does not move; the
+  price drops; `completions.ts:2234`/`2239` are mis-filed. **Missed, and both misses moved the
+  map:** (5) "(C) needs the enum decomposed into its member union" — WRONG, it is a gate, and
+  the decomposition is only needed for the NEGATIVE direction (`k !== K.A` on a bare enum,
+  which still answers `K` where tsc answers `K.B | K.C | K.D`), which nothing on the worklist
+  consumes; (6) "(B) needs (C)" — WRONG, they are independent, and the member-union-declared
+  case proves it.
+- **KNOWN AND DELIBERATELY NOT DONE, with their shapes:** the NEGATIVE direction on a bare enum
+  (`k !== K.A`, and a type guard's false branch) still answers the whole enum — that one really
+  does need the member union, and it changes DISPLAY (`K.B | K.C | K.D` instead of `K`), so it
+  is a separate, baseline-visible change; and an `asserts k is K.A | K.B` call on a bare enum
+  still does not narrow (a different entry, `narrowByAssertCall`, with its own gate).
+
 **Round 762 (2026-07-29) — THE SIX (REL.2) GAPS ENUMERATED AND CHARACTERISED: THEY ARE
 FOUR CAUSES, AND BOTH OF ROUND 760'S LABELS FOR THEM ARE WRONG. ONE CAUSE LANDED, AND IT
 IS THE ONE THAT OWNED `completions.ts:2237` — THE LAST NON-ENV-LEGIT LINE ON THE ENTIRE
@@ -1271,6 +1364,30 @@ backlog-horizon decision, not queue debt.)
   **None of (B)/(C)/(D) is observable on the dashboard until the global rule lands** —
   they are masked by the vacuous `true`, so each must be gated on LOCAL pins plus a
   scaffolded re-measurement, not on a grid delta.
+  **Round 763 LANDED (B)+(C) and corrected both labels again. The scaffolded price is
+  now compiler 46 -> 47 and services 46 -> 52** (was 46 -> 52 / 46 -> 57); the five
+  `parser.ts` lines are CLOSED. Corrections that matter to whoever takes the rest:
+  - **(C) was never a decomposition.** An enum's own type is a member-LESS
+    `Type.Object` — neither a `Type.Union` nor a `Type.Interface` — so it fell through
+    the call-argument NARROWABILITY GATE and the flow read was never attempted.
+    `narrowByCallPredicate`'s single-type arm was always right. One clause fixed it.
+  - **(B) does not need (C).** `k === K.A` failed even on a reference declared
+    `K.A | K.B | K.C`. Fixed via `enumMemberTypeOfExpr` plus enum arms in
+    `isLiteralAssignableToMember` / `areLiteralTypesEquivalent`, and a separate
+    `narrowBySwitchClause` arm for a bare-enum switch subject.
+  - **`completions.ts:2234`/`2239` are NOT (B)** and did not close: 2234 is a property
+    read on a union of generic instantiations (`Modifier.kind` answers `SyntaxKind`,
+    the constraint of `Token<TKind>`), 2239 is generic inference through `tryCast`
+    losing `KeywordSyntaxKind`. Both are the (REL.3)/round-762 family, not narrowing.
+  - **STILL OPEN, and the remaining worklist is 6 lines:** 4 x cause (D)
+    (`scanner.ts:905`, `importFixes.ts:1127`/`1162`, `formattingScanner.ts:113`) plus
+    the two `completions.ts` property-read/inference lines above.
+  - **Deliberately not done, with its shape:** the NEGATIVE direction on a bare enum
+    (`k !== K.A`, and a type guard's FALSE branch) still answers the whole enum. THAT
+    one genuinely needs the member union, and it changes type DISPLAY
+    (`K.B | K.C | K.D` instead of `K`) — a baseline-visible change, so it is its own
+    step. Same for an `asserts k is K.A | K.B` call on a bare enum
+    (`narrowByAssertCall` has its own gate).
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,

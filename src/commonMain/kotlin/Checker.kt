@@ -108696,6 +108696,14 @@ interface DataView {
         // [clauseStart, clauseEnd) range.
         val literalTypes = mutableListOf<Type>()
         val caseEnumKeys = mutableSetOf<String>()
+        // (REL.2)(B) round 763: the member TYPES of the range's enum-member cases, kept
+        // BESIDE [literalTypes] rather than folded into it — the discriminant paths below
+        // key their members through [literalDiscriminantKeyOfType], which has no answer
+        // for an enum-member type, so a fold would make every mixed enum/literal
+        // discriminant switch bail. [rangeCaseCount] is what makes the direct-subject arm
+        // safe: it fires only when EVERY case in the range resolved to a member type.
+        val caseEnumTypes = mutableListOf<Type>()
+        var rangeCaseCount = 0
         val clauses = flowNode.switchStatement.caseBlock
         var idx = 0
         for (clause in clauses) {
@@ -108703,10 +108711,14 @@ interface DataView {
             if (idx >= flowNode.clauseStart) {
                 when (clause) {
                     is CaseClause -> {
+                        rangeCaseCount++
                         val lit = literalTypeOfExpression(clause.expression)
                             ?: constStringCaseLiteralType(clause.expression)
                         if (lit != null) literalTypes.add(lit)
-                        else enumMemberKeyOfExpr(clause.expression)?.let { caseEnumKeys.add(it) }
+                        else enumMemberKeyOfExpr(clause.expression)?.let {
+                            caseEnumKeys.add(it)
+                            enumMemberTypeOfExpr(clause.expression)?.let { mt -> caseEnumTypes.add(mt) }
+                        }
                     }
                     is DefaultClause -> {
                         // Default clause — no narrowing possible from this clause alone.
@@ -108731,6 +108743,20 @@ interface DataView {
             val matching = literalTypes.filter { getWidenedLiteralType(it) === t }
             if (matching.size != literalTypes.size || matching.isEmpty()) return null
             return if (matching.size == 1) matching[0] else getUnionType(matching)
+        }
+        // (REL.2)(B) round 763: the enum sibling of the bare-subject rule above —
+        // `switch (kind) { case SyntaxKind.A: … }` narrows `kind` to the matched range's
+        // member types. Same shape, same FP discipline: EVERY case in the range must have
+        // resolved to a member of THIS enum ([isLiteralAssignableToMember] answers via the
+        // round-746 owner rule), and any literal case in the range keeps the conservative
+        // null. Positive direction only — reaching a case proves the subject IS one of its
+        // members; the negative/default direction would need the enum decomposed into its
+        // member union, which nothing consumes yet.
+        if (matchesDirectly && t !is Type.Union && literalTypes.isEmpty() &&
+            caseEnumTypes.isNotEmpty() && caseEnumTypes.size == rangeCaseCount &&
+            caseEnumTypes.all { isLiteralAssignableToMember(it, t) }
+        ) {
+            return if (caseEnumTypes.size == 1) caseEnumTypes[0] else getUnionType(caseEnumTypes)
         }
         if (t !is Type.Union) return null
         // Enum-member discriminant switch (e.g. `switch (s.type) { case Kind.B: }` where the
@@ -110723,8 +110749,13 @@ interface DataView {
         // (or `undefined`) narrows like `x === null`. tsc treats a reference to a
         // value whose declared type is the `null`/`undefined` literal type the same
         // as the keyword itself for equality narrowing (controlFlowNullTypeAndLiteral).
+        // (REL.2)(B) round 763: `kk === K.A` — an enum-MEMBER reference is not a literal
+        // NODE, so without [enumMemberTypeOfExpr] this bailed and `===` never narrowed
+        // against an enum member at all.
         val literalType = literalTypeOfExpression(other)
-            ?: constNullishAnnotationType(other) ?: return t
+            ?: constNullishAnnotationType(other)
+            ?: enumMemberTypeOfExpr(other)
+        if (literalType == null) return t
         return narrowUnionByLiteral(t, literalType, keep = equal)
     }
 
@@ -111165,6 +111196,37 @@ interface DataView {
         val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
         if (enumValues[sym.id]?.containsKey(member) != true) return null
         return enumDiscriminantKey(sym, member)
+    }
+
+    /**
+     * (REL.2)(B) round 763: the enum-MEMBER TYPE denoted by an `Enum.Member` reference
+     * expression — the value-position twin of [enumMemberKeyOfExpr].
+     *
+     * [literalTypeOfExpression] answers `null` here (an enum member is not a literal
+     * NODE), so before this `kk === K.A` reached [narrowUnionByLiteral] with nothing to
+     * compare and returned the type unnarrowed — measured on every shape: a plain
+     * `if`, an `||` join, a `switch`, and even a reference already declared as the
+     * explicit member union `K.A | K.B | K.C`. Round 760 filed that under "narrowing
+     * across an `||`"; the `||` is incidental.
+     *
+     * Resolution goes through [resolveEnumSymbolForDiscriminant] (the same
+     * canonicalization the discriminant key space uses) so an enum reached through an
+     * import alias or a namespace qualifier answers with the SAME interned member type
+     * [getDeclaredTypeOfEnumMember] hands every other consumer. A member the constant
+     * evaluator never keyed answers `null` — an unknown member must stay unknown rather
+     * than narrow to a type nothing else agrees with.
+     */
+    private fun enumMemberTypeOfExpr(expr: Expression): Type? {
+        val pa = unwrapParensExpr(expr) as? PropertyAccessExpression ?: return null
+        val enumIdent = (pa.expression as? Identifier)?.text ?: return null
+        val member = pa.name.text
+        if (member.isEmpty()) return null
+        val sym = resolveEnumSymbolForDiscriminant(enumIdent, pa) ?: return null
+        if (enumValues[sym.id]?.containsKey(member) != true) return null
+        val memberSym = sym.exports?.get(member) ?: return null
+        if (memberSym.flags.hasNone(SymbolFlags.EnumMember)) return null
+        val t = getDeclaredTypeOfEnumMember(memberSym)
+        return if (t.flags.hasAny(TypeFlags.EnumLiteral)) t else null
     }
 
     /** An enum-member TYPE annotation `Enum.Member`, or a `UnionType` of such, → the set of
@@ -111825,6 +111887,15 @@ interface DataView {
             literal is Type.BigIntLiteral && member === bigintType -> true
             (literal === trueType || literal === falseType) && member === booleanType -> true
             member === anyType || member === unknownType -> true
+            // (REL.2)(B) round 763: an enum MEMBER widens to its OWN enum exactly as a
+            // string literal widens to `string`. This is the arm that makes
+            // `kk === K.A` narrow a reference DECLARED as the bare enum `K`: the
+            // non-union branch above substitutes the literal when it is assignable to
+            // the supertype, which is tsc's `narrowTypeByEquality` on a literal enum.
+            // Owner-checked, not flag-checked alone — `X.Foo.A` must not narrow a
+            // `Z.Foo`-typed reference (the (REL.1)(c) same-name-different-enum rule).
+            literal.flags.hasAny(TypeFlags.EnumLiteral) && member.flags.hasAny(TypeFlags.Enum) ->
+                isSimpleTypeRelatedTo(literal, member)
             else -> false
         }
     }
@@ -111834,6 +111905,14 @@ interface DataView {
      * for non-literal types — narrowing only removes/keeps exact literal matches.
      */
     private fun areLiteralTypesEquivalent(a: Type, b: Type): Boolean = when {
+        // (REL.2)(B) round 763: two enum MEMBERS are "the same literal" when they denote
+        // the same member. Deliberately [enumMemberTypesAreSameMember] and NOT identity:
+        // a module-scoped enum (every enum in tsc's own sources) has no global instance
+        // to canonicalize to, so the same member keys DIFFERENT interned types per file
+        // — see that helper's own doc. Without this arm the union branches below never
+        // matched an enum member, so `k !== K.A` removed nothing.
+        a.flags.hasAny(TypeFlags.EnumLiteral) && b.flags.hasAny(TypeFlags.EnumLiteral) ->
+            enumMemberTypesAreSameMember(a, b)
         a is Type.StringLiteral && b is Type.StringLiteral -> a.value == b.value
         a is Type.NumberLiteral && b is Type.NumberLiteral -> a.value == b.value
         a is Type.BigIntLiteral && b is Type.BigIntLiteral -> a.value == b.value
@@ -142903,7 +142982,21 @@ interface DataView {
                     if (n === neverType) n else ctxApplied
                 } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
-                        ctxApplied === stringType || ctxApplied === numberType) &&
+                        ctxApplied === stringType || ctxApplied === numberType ||
+                        // (REL.2)(C) round 763: an ENUM's own type. tsc models a literal
+                        // enum as the UNION of its members, so every narrowability gate
+                        // in this file admits it via `is Type.Union`; ours mints a
+                        // member-LESS `Type.Object`, which is neither a Union nor a
+                        // Type.Interface — so it fell through EVERY gate and a reference
+                        // declared as the bare enum was never narrowed at an argument
+                        // position, whatever narrowed it. Measured: `isTemplateLiteralKind(kind)`
+                        // narrowed `kind` correctly in an `if` BLOCK (which types the body
+                        // from `currentLocalTypes`) and not in a ternary, an `&&`, or after
+                        // an early-return guard (all of which need this flow read) —
+                        // tsc parser.ts:2629/3762. NOT a decomposition into `K.A | K.B | …`:
+                        // [narrowByCallPredicate]'s single-type arm already answers
+                        // correctly once it is reached.
+                        isEnumFlavoredObjectType(ctxApplied)) &&
                     paramType !== neverType) {
                     // M3.4 (round 428b, generalized round 429c/438): an Identifier or
                     // PROPERTY-ACCESS arg whose NON-union interface type is narrowed DOWN by
