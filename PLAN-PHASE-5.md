@@ -20,6 +20,65 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 765 (2026-07-29) — PART 1: THE CONSUMER QUESTION ROUND 764 COULD NOT SETTLE IS
+SETTLED, AND THE ANSWER IS (b) — THE NARROWED TYPE IS CONSUMED, BY A REAL RELATION
+QUESTION, AND EVERY CONSUMER AGREES. THE AGREEMENT IS NOT LUCK: EVERY CONSULTATION'S
+TARGET IS THE ENUM ITSELF.** Predictions: **4 of 4** (all written before the run).
+
+- **THE INSTRUMENT IS THE ONE ROUND 764 PRESCRIBED, BUILT AT THE CONSUMER.** Scaffolding
+  (a `NegDirProbe` object + `--xnegdir` flag, added, measured, REMOVED — the diff carries
+  no residue): `enumMinusMembers` TAGS every type it produces with the enum it came from,
+  and the three consumers of a type — the relation entry `checkTypeRelatedTo`, the
+  property lookup `getPropertyOfType`, and `typeToString` — ask their question TWICE when
+  the input is tagged, once with the narrowed type and once with the raw enum, and count
+  "consulted" and "differed" separately. A fourth counter records DELIVERIES out of
+  `getNarrowedTypeForReference` with the consuming call site captured by stack trace.
+- **THE NUMBERS. compiler: 14 firings -> 12 distinct products -> 4 consumed -> 4 relation
+  consults, 0 DIFFER, 0 property lookups, 0 displays. services / server / harness
+  (identical, all three carry `src/services`): 31 firings -> 22 distinct -> 7 consumed ->
+  10 relation consults, 0 DIFFER, 0 / 0.** The firing counts reproduce round 764's 14 and
+  31 exactly, which is the instrument agreeing with the prior measurement before it is
+  asked anything new.
+- **THE CONSULT TRACE IS WHY IT IS (b) AND NOT A COINCIDENCE: the target of every single
+  consultation is the ENUM ITSELF** — `SyntaxKind` -> `SyntaxKind`, `StructureIsReused`,
+  `UsingKind`, `NameValidationResult`, `ScriptElementKind`, all `verdictNarrowed=true
+  verdictRaw=true`. A sub-union of an enum's members relates to that enum by ordinary
+  union membership, so the two answers CANNOT differ. On these profiles there is no target
+  that could separate them — which is the same masking the whole (REL.2) item is about.
+- **THE CONSUMING SITES ARE SECOND-CHANCE GATES, WHICH IS WHY AN ABLATION IS ALSO SILENT.**
+  `checkReturnAssignabilityCore` (3 on compiler, 4 on services), `checkAssignmentExpression`
+  (1 / 1) and, on services only, `getTypeOfObjectLiteral` (2) all have the shape
+  `if (narrowed !== raw && checkTypeRelatedTo(narrowed, target)) narrowed else raw` — so
+  when the narrow does not relate they fall back to the raw enum. Replacing every product
+  with `string` (a NON-subset) therefore leaves the compiler AND services error lines
+  BYTE-IDENTICAL. That ablation is reported as what it is: a bound on the OUTPUT effect,
+  not a claim that the type is unread.
+- **THE OTHER SHARE IS (a), AND IT IS STATED SEPARATELY: 8 of the 12 distinct products on
+  compiler and 15 of 22 on services are never delivered and never read by any of the three
+  consumers.** Those firings are inert today.
+- **THE INSTRUMENT WAS FALSIFIED BEFORE ITS ZERO WAS BANKED.** A second probe mode records
+  a deliberately BOGUS baseline (`string`) instead of the raw enum: `rel.differs` goes
+  0 -> **4 of 4 consults** on the compiler profile. The counter can report a difference; the
+  0 in the real run is a measurement, not a blind spot. *(The first perturbation attempt
+  could NOT have shown the opposite — it replaced the product, so nothing was tagged and
+  every consumer counter trivially read 0. The tell was `consults` collapsing to 0 with it.)*
+- **WHAT THE INSTRUMENT DOES NOT SEE, recorded as the limit:** a tagged type NESTED inside
+  another type (the `getTypeOfObjectLiteral` deliveries make it an object property's type,
+  and a later relation on the OBJECT does not have it as `source`), and purely STRUCTURAL
+  inspection (`t is Type.Union`, flag tests). The end-to-end `string` ablation is what
+  covers those routes, at the coarser output granularity.
+- **THE CONSEQUENCE FOR THE ITEM: the rule is NOT dead weight and must NOT be deleted.**
+  It is verdict-neutral for one reason only — enum -> MEMBER is still decided VACUOUSLY, so
+  every target it meets today is a target the raw enum already satisfied. The moment
+  (REL.2)'s global rule lands, a member-union target starts REJECTING the whole enum and
+  the subtracted type is what saves those sites. It tightens automatically as the relation
+  does, exactly as round 764 recorded for the second chance — the same mechanism, seen from
+  the other end.
+- **PREDICTIONS 4 of 4**, all written before measuring: (1) `rel.consults > 0`; (2)
+  `rel.differs == 0`; (3) `display.consults == 0` (a tagged type reaching `typeToString`
+  would have changed a message and moved the grid); (4) the falsification reports
+  `rel.differs > 0`.
+
 **Round 764 (2026-07-29) — (REL.2)(C) MADE A SECOND CHANCE: ROUND 763's +4.78% FLOW-WALK
 BILL IS RETURNED IN FULL. `narrow.walks` 74,729 -> 71,326 — THREE ABOVE THE PRE-763
 71,323 — WITH THE 8-ARM GRID BYTE-IDENTICAL AND NO ANSWER CHANGED.** Arm-A grid
@@ -1545,6 +1604,20 @@ backlog-horizon decision, not queue debt.)
     Still open in that direction: a switch `default:` clause (`narrowBySwitchClause`
     bails on a `DefaultClause` before narrowing — not enum-specific), and an
     `asserts k is K.A | K.B` call on a bare enum (`narrowByAssertCall`, own gate).
+  - **Round 765 SETTLED the consumer question round 764 left open, and the answer is
+    (b): the narrowed type IS consumed — by a real relation question — and every
+    consumer agrees.** Measured with a consumer-side differential (scaffolding, since
+    removed): compiler **4 relation consults, 0 differ**; services/server/harness **10,
+    0 differ**; zero property lookups and zero displays on all four. The trace names the
+    reason and it is not luck — **the target of every consultation is the ENUM ITSELF**
+    (`SyntaxKind`, `StructureIsReused`, `UsingKind`, `NameValidationResult`,
+    `ScriptElementKind`), and a sub-union of an enum's members relates to that enum by
+    union membership, so the two answers cannot differ. The remaining 8-of-12 (compiler)
+    and 15-of-22 (services) distinct products are never delivered and never read — that
+    share is inert. **So the rule must NOT be deleted**: it is verdict-neutral only
+    because enum -> MEMBER is still vacuous, i.e. because of the very leniency this item
+    exists to close; when the global rule lands, a member-union target starts rejecting
+    the whole enum and the subtracted type is what saves those sites.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
