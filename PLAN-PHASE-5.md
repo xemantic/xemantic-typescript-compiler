@@ -20,6 +20,71 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 757 (2026-07-29) — (FN.1) FIXED: an expression-bodied arrow's body is walked
+now. THE FIX IS RIGHT AND THE CENSUS NUMBER THAT MOTIVATED IT WAS 146x TOO BIG.**
+Compiler profile `--listAll` **46, byte-identical to `2f728c1e` line for line**; the
+**entire generated corpus — all 25 letter classes, 8,837 tests — 0 failures**; filtered
+batch (`*Cta*` `*Arrow*` `*FunctionExpr*` `*Contextual*` `*Inv0*` `*Spine*` `*ObjLit*`
+`*Inv4*` `*DeepExpression*`) **2,335 / 0 / 0**; build warning-clean. The full suite and
+the cost gate are the owner's to run.
+
+**WHAT THE ARM WAS SKIPPING.** `walkFunctionBodiesInExpr`'s `ArrowFunction` arm was
+`(expr.body as? Block)?.let { … }` — for an EXPRESSION body it walked nothing and did
+not descend into the expression either, so a function body nested inside it was never
+handed to `checkFunctionBody`. The arm now descends, under the arrow's OWN
+parameter/type-parameter scope (`ctaTypeParamsIntoLocals` inside a saved/restored
+`EpochMap` install, exactly as the block arm's `checkFunctionBody` does its own); a
+zero-parameter arrow skips the install entirely. **The scope is not optional**: the
+nested `checkFunctionBody` INHERITS `currentLocalTypes`/`varTypes`, so without it an
+inner read of a parameter name resolves to a same-named outer/global binding — the
+`applyBodyLocalShadowing` FP class.
+
+**VERIFIED AGAINST UNMODIFIED `2f728c1e`, both directions.** Ten CLI fixtures run on a
+pristine build and on the fix. **Four targets are SILENT on pristine and fire after**:
+the paren-wrapped function expression, a block-bodied arrow passed as a CALL ARGUMENT
+inside the body, a CHAIN of expression-bodied arrows, and the parameter-shadowing shape.
+**Four controls are identical on both**: bare statement / function expression /
+block-bodied arrow all TS2322, and the out-of-scope read still TS2304-only (no leak).
+One NEGATIVE control — the same nested body written CORRECTLY — is silent on both, so
+the target pins are the descent DISCRIMINATING and not the descent emitting.
+
+**A PIN I WROTE WAS VACUOUS, AND MEASURING IT IS WHAT CAUGHT IT.** The scope pin first
+asserted "TS2322 present AND TS2339 absent", reasoning that the outer binding would have
+produced a missing-member error. It does not: `const v: {a:number}` then `v.b` emits
+NOTHING here, so the `none 2339` half passes whatever happens. Replaced with a TWO-SIDED
+discriminator whose two candidate bindings give OPPOSITE verdicts — outer `b: number` vs
+arrow `b: string` must be TS2322, and the SAME shape with the annotations swapped must be
+SILENT. Only the arrow's parameter winning produces both, and the pristine build produces
+neither.
+
+**THE FINDING: THE POPULATION IS SIX.** Arm census before → after: nodes visited 199,131
+→ 206,098 (+3.5%), max depth 18 → 35, expression-bodied arrows 874 → 911, **block-bodied
+arrows 374 → 380 (+6)**, **function expressions 262 → 262 (+0)**. **The 874
+expression-bodied arrows contain SIX block bodies between them**, and all six are clean —
+which is why 200 kLOC of TypeScript and 8,837 corpus baselines do not move by one byte.
+Round 756 quoted "874 of 1,510 (58%)" as the size of the false negative; that is the
+count of times the ARM IS TAKEN, not of what is behind it, and it overstates the
+reachable population by **146x**. *A census counts arm entries; only walking tells you
+what the arm was hiding.*
+
+**PREDICTIONS, SCORED** (written before the change compiled). P1 the profile moves off
+46, upward: **FALSIFIED** (byte-identical). P2 nodes visited rise 20-60%: **FALSIFIED**
+(+3.5%). P3 bodies checked rise >=30%: **FALSIFIED** (+1.4%). P4 at least one corpus
+baseline moves: **FALSIFIED** (zero, across all 25 classes). P5 added cost < 0.3%:
+**HELD** (0.04%). Four of five wrong, all in the same direction — I priced the fix by the
+census number instead of asking what the census counted.
+
+**THE COST.** New level-D row `D_ARROW_EXPR_SCOPE`: **8 ms over 707 installs**
+(`getTypeFromTypeNode` per annotated parameter dominates), plus 3.5% more nodes walked.
+Level D 262 → 276 ms probe-inflated; net of the 25,213 extra probe boundaries at ~168 ns,
+**≈10 ms ≈ 0.04% of a 26,800 ms compile**. The walker was 0.68% and is now ~0.72% — a
+5% rise in a row that is two thirds of one percent. No `LogicalParityDivergence` was
+needed or added; nothing was silenced.
+
+LANDED: the arm + the scope install, the `D_ARROW_EXPR_SCOPE` row, and +3 pins
+(`CtaSectionProbeTest` 20 → 23; two round-756 gap pins FLIPPED rather than deleted, as
+that item required). Addendum: `docs/perf/walk-function-bodies-attribution.md` § 11.
+
 **Round 756 (2026-07-29) — (TYPE.3) CLOSED AS A MEASUREMENT: `walkFunctionBodiesInExpr`
 spends 36% of itself on the work it is NAMED for, and the census found a FALSE NEGATIVE
 the milliseconds could not.** Compiler profile `--listAll` **46**, composition unchanged
@@ -2470,21 +2535,24 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   and unproved sound. Full derivation:
   **`docs/perf/walk-function-bodies-attribution.md`**.
 
-- [ ] **(FN.1) FALSE NEGATIVE found by round 756's arm census: an expression-bodied
-  arrow's body is never walked.** `walkFunctionBodiesInExpr`'s `ArrowFunction` arm is
-  `(expr.body as? Block)?.let { … }` — for an EXPRESSION body it walks nothing, and it
-  does not descend into the expression to look for functions inside it either. On the
-  compiler profile that is **874 of the 1,510 function-like nodes the walker reaches
-  (58%)**. The obvious defence — "the check spine anchors the inner statement anyway" —
-  was tested and is FALSE:
-  `const f = () => (function () { const s: string = 5; return s })` is **SILENT** where
-  tsc reports TS2322, while all three controls (bare statement / function expression /
-  BLOCK-bodied arrow) fire. Pinned AS IT STANDS by `an expression-bodied arrow hides a
-  nested body mismatch - a known gap` in `CtaSectionProbeTest`, with those three
-  controls, so the pin fails loudly the day the arm descends — **flip that pin when
-  fixing this, do not delete it.** Scope note: this ADDS work to a walker round 756
-  priced at 0.68%, and it will surface diagnostics on shapes the corpus has never
-  checked, so expect baseline movement and judge it per `docs/logical-parity.md` § 2.
+- [x] **(FN.1) FALSE NEGATIVE found by round 756's arm census — FIXED round 757, and
+  its motivating number was 146x too big.** `walkFunctionBodiesInExpr`'s `ArrowFunction`
+  arm was `(expr.body as? Block)?.let { … }`: for an EXPRESSION body it walked nothing
+  and did not descend either, so a nested function body never reached
+  `checkFunctionBody`. It now descends under the arrow's OWN parameter/type-parameter
+  scope (zero-parameter arrows skip the install) — the scope is the FP firewall, since
+  the nested `checkFunctionBody` inherits `currentLocalTypes`/`varTypes`. Round 756's two
+  gap pins were FLIPPED, not deleted, and joined by a two-sided scope discriminator;
+  **four fixtures fail on unmodified `2f728c1e` and pass after, four controls are
+  identical on both**. **THE FINDING: the profile is byte-identical at 46 and all 8,837
+  corpus baselines are unchanged, because the 874 expression-bodied arrows contain
+  exactly SIX block bodies between them** (arm census 374 → 380 block arrows, 262 → 262
+  function expressions) and all six are clean. The "874 of 1,510 (58%)" this item quoted
+  is *how often the arm is taken*, not *what is behind it*. **No baseline moved, so no
+  `LogicalParityDivergence` was needed.** Cost: new `D_ARROW_EXPR_SCOPE` row = 8 ms over
+  707 installs, +3.5% nodes walked, **≈10 ms ≈ 0.04% of the compile** (the walker goes
+  0.68% → ~0.72%). Addendum:
+  **`docs/perf/walk-function-bodies-attribution.md` § 11**.
 
 - [x] **(TYPE.2) Attribute inside `checkVarDeclAssignability` /
   `spineCtaM3StatementAnchor` — DONE round 738. BOTH PRIORS FALSE; the second

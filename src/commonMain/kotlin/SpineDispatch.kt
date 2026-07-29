@@ -2397,26 +2397,34 @@ object CtaSections {
     const val D_FNEXPR = 2
     /** `checkFunctionBody` from the `ArrowFunction` arm (block bodies only). */
     const val D_ARROW = 3
+    /**
+     * (FN.1) round 757: the parameter/type-parameter scope an EXPRESSION-bodied
+     * arrow installs before its body is descended into. The descent itself is a
+     * nested invocation and is therefore NOT in this row — this is the setup
+     * only, which is the whole of the work the fix ADDS at this level.
+     */
+    const val D_ARROW_EXPR_SCOPE = 4
     /** `getTypeOfObjectLiteral` — the lazy `this` type of an object literal. */
-    const val D_OBJLIT_THIS = 4
+    const val D_OBJLIT_THIS = 5
     /** `walkObjectLiteralMemberBody` — JS-like object-literal methods/accessors. */
-    const val D_OBJLIT_MEM = 5
+    const val D_OBJLIT_MEM = 6
     /** B585 object-literal contextual type nodes (index-sig alias + member). */
-    const val D_OBJLIT_CTX = 6
+    const val D_OBJLIT_CTX = 7
     /** B210 `calleeDeclaredCtxParams` — the callee's declared parameter list. */
-    const val D_CTXPARAMS = 7
+    const val D_CTXPARAMS = 8
     /** B210 `contextualizeFnExprFromAnnotation` — the synthesized annotated fn. */
-    const val D_CTXFN = 8
+    const val D_CTXFN = 9
     /** B585 `objLitArgCalleeParamTypeNode` — a call argument's contextual node. */
-    const val D_ARGCTX = 9
+    const val D_ARGCTX = 10
 
-    const val ND = 10
+    const val ND = 11
 
     val dNames: Array<String> = arrayOf(
         "D: wrapper transition",
         "D: dispatch + pass-through arms (the walk)",
         "D: checkFunctionBody — FunctionExpression",
         "D: checkFunctionBody — ArrowFunction",
+        "D: (FN.1) expression-bodied arrow param scope",
         "D: getTypeOfObjectLiteral (objlit `this`)",
         "D: walkObjectLiteralMemberBody (JS)",
         "D: B585 objlit contextual type nodes",
@@ -2429,7 +2437,10 @@ object CtaSections {
     // millisecond: an arm with a conspicuous semantics and no invocations.
     const val DA_FNEXPR = 0
     const val DA_ARROW_BLOCK = 1
-    /** An arrow whose body is an EXPRESSION — the arm walks nothing at all. */
+    /**
+     * An arrow whose body is an EXPRESSION. Until round 757 this arm walked
+     * NOTHING — see [D_ARROW_EXPR_SCOPE]; it now descends into the body.
+     */
     const val DA_ARROW_EXPR = 2
     const val DA_ARRAY = 3
     const val DA_OBJLIT = 4
@@ -2452,7 +2463,7 @@ object CtaSections {
     val dArmNames: Array<String> = arrayOf(
         "FunctionExpression (body walked)",
         "ArrowFunction, block body (walked)",
-        "ArrowFunction, expression body (NOT walked)",
+        "ArrowFunction, expression body (walked since 757)",
         "ArrayLiteralExpression",
         "ObjectLiteralExpression",
         "Paren/As/TypeAssertion/Satisfies/NonNull",

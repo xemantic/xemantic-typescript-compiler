@@ -197,6 +197,8 @@ loudly — the day the arm learns to descend. **This is a correctness lead, not 
 performance one**, and it is filed as such: closing it ADDS work to a walker
 this round priced at 0.68%.
 
+> **CLOSED IN ROUND 757 — and the population is SIX, not 874.** See § 11.
+
 ### 5.2 Four rows that are zero, and one arm that is
 
 `getTypeOfObjectLiteral` for the object-literal `this` type,
@@ -305,3 +307,36 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --ctaSectionsCoarse build/bench/tsc-project-*
 ```
+
+## 11. Round-757 addendum — (FN.1) closed, and the finding is the population
+
+The `ArrowFunction` arm now descends into an EXPRESSION body, under the arrow's
+own parameter/type-parameter scope (a new row, `D_ARROW_EXPR_SCOPE`; a
+zero-parameter arrow skips the install). § 5.1's four-line table now reads
+`TS2322 ✓` on all four lines.
+
+**What the fix found on the compiler profile: nothing.** `--listAll` is
+byte-identical at 46, and all 8,837 corpus baselines are unchanged. The reason
+is in the arm census, measured before and after:
+
+| | before | after | Δ |
+|---|---:|---:|---:|
+| nodes visited | 199,131 | 206,098 | **+3.5%** |
+| max depth | 18 | 35 | +17 |
+| ArrowFunction, expression body | 874 | 911 | +37 |
+| **ArrowFunction, block body (a body to check)** | **374** | **380** | **+6** |
+| **FunctionExpression (a body to check)** | **262** | **262** | **+0** |
+| `checkFunctionBody` closings | 1,592 | 1,615 | +1.4% |
+
+**The 874 expression-bodied arrows contain exactly SIX block bodies between
+them.** The false negative is real — four fixtures fail on unmodified
+`2f728c1e` and pass after — but on 200 kLOC of TypeScript its incidence is six
+bodies, all of which happened to be clean. *A census that counts REACHED nodes
+answers "how often is this arm taken", not "how much is behind it"*; § 5.1
+quoted the first number as though it bounded the second, and it is 146× out.
+
+**Cost**: the added work is the `D_ARROW_EXPR_SCOPE` row (8 ms over 707 installs
+— `getTypeFromTypeNode` per annotated parameter dominates it) plus the +3.5%
+more nodes. Level D goes 262 → 276 ms probe-inflated; net of the 25,213 extra
+probe boundaries at ~168 ns, **≈10 ms ≈ 0.04% of the compile**. The walker was
+0.68% and is now ~0.72%.

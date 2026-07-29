@@ -414,7 +414,7 @@ class CtaSectionProbeTest {
     }
 
     @Test
-    fun `an arrow with an EXPRESSION body is reached and never descended into`() {
+    fun `an arrow with an EXPRESSION body is descended into`() {
         probeFixture(
             """
             function host(): void {
@@ -423,24 +423,44 @@ class CtaSectionProbeTest {
             """.trimIndent()
         )
         assert(CtaSections.dArm[CtaSections.DA_ARROW_EXPR] > 0L)
-        // The measured finding: the arm walks NOTHING, so the function
-        // expression inside the arrow's body is never reached by this walker
-        // and its body is never handed to checkFunctionBody.
-        assert(CtaSections.dArm[CtaSections.DA_FNEXPR] == 0L)
+        // (FN.1) round 757: the arm now walks the body expression, so the
+        // function expression inside it is REACHED and its body is handed to
+        // checkFunctionBody. Round 756 pinned all four of these at zero.
+        assert(CtaSections.dArm[CtaSections.DA_FNEXPR] > 0L)
+        assert(CtaSections.dCalls[CtaSections.D_FNEXPR] > 0L)
+        // The confusable arm must stay silent: this arrow has no block body.
         assert(CtaSections.dArm[CtaSections.DA_ARROW_BLOCK] == 0L)
         assert(CtaSections.dCalls[CtaSections.D_ARROW] == 0L)
-        assert(CtaSections.dCalls[CtaSections.D_FNEXPR] == 0L)
+        // `() =>` takes no parameters, so the descent skips the scope install.
+        assert(CtaSections.dCalls[CtaSections.D_ARROW_EXPR_SCOPE] == 0L)
         CtaSections.reset()
     }
 
     @Test
-    fun `an expression-bodied arrow hides a nested body mismatch - a known gap`() {
-        // The census says 874 of the 1,510 function-like nodes this walker
+    fun `an expression-bodied arrow with parameters installs a scope`() {
+        probeFixture(
+            """
+            function host(): void {
+                const g = (p: string) => (function () { const deep = 1; return deep })
+            }
+            """.trimIndent()
+        )
+        assert(CtaSections.dArm[CtaSections.DA_ARROW_EXPR] > 0L)
+        assert(CtaSections.dArm[CtaSections.DA_FNEXPR] > 0L)
+        // The parameter makes the install necessary; the zero-parameter fixture
+        // above proves the fast path is a real branch and not dead code.
+        assert(CtaSections.dCalls[CtaSections.D_ARROW_EXPR_SCOPE] > 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `an expression-bodied arrow no longer hides a nested body mismatch`() {
+        // The census said 874 of the 1,510 function-like nodes this walker
         // reaches on the compiler profile are expression-bodied arrows, whose
-        // arm walks NOTHING. The obvious defence — "the spine anchors the inner
-        // statement anyway" — is TESTED here rather than assumed, and it is
-        // FALSE. Three controls first, so the gap is attributed to the arrow's
-        // body shape and to nothing else.
+        // arm walked NOTHING. The obvious defence — "the spine anchors the
+        // inner statement anyway" — was TESTED rather than assumed, and it is
+        // FALSE. Three controls first, so the behaviour is attributed to the
+        // arrow's body shape and to nothing else.
         diagnose("const s: string = 5") should { have(any { it.code == 2322 }) }
         diagnose(
             """
@@ -452,14 +472,84 @@ class CtaSectionProbeTest {
             const f = () => { const s: string = 5; return s }
             """.trimIndent()
         ) should { have(any { it.code == 2322 }) }
-        // THE GAP, pinned as it is today: swap the block body for an expression
-        // body and the same mismatch goes silent. tsc reports it. This pin fails
-        // — correctly and loudly — the day the arm learns to descend.
+        // (FN.1) round 757: the same mismatch behind an EXPRESSION body. Round
+        // 756 pinned this silent; tsc reports it, and so do we now.
         diagnose(
             """
             const f = () => (function () { const s: string = 5; return s })
             """.trimIndent()
+        ) should { have(any { it.code == 2322 }) }
+        // The negative half of the same shape: a body that is CORRECT stays
+        // silent, so the pin above is the descent discriminating and not the
+        // descent emitting.
+        diagnose(
+            """
+            const f = () => (function () { const s: string = "ok"; return s })
+            """.trimIndent()
         ) should { have(none { it.code == 2322 }) }
+    }
+
+    @Test
+    fun `a block body nested deeper inside an expression body is reached`() {
+        // Not the paren-wrapped shape: an arrow body that is a CALL whose
+        // argument is a block-bodied arrow — the commonest form of the 874.
+        diagnose(
+            """
+            declare function each(f: (x: number) => void): void
+            const f = () => each(x => { const s: string = 5; return })
+            """.trimIndent()
+        ) should { have(any { it.code == 2322 }) }
+        // And through a chain of expression-bodied arrows, so the descent is
+        // recursive rather than one level deep.
+        diagnose(
+            """
+            const f = () => () => (function () { const s: string = 5; return s })
+            """.trimIndent()
+        ) should { have(any { it.code == 2322 }) }
+    }
+
+    @Test
+    fun `the arrow parameter scope reaches the nested body and does not leak`() {
+        // The scope install is the FP firewall: without it a nested body's read
+        // of an arrow parameter resolves to the same-named OUTER binding. The
+        // discriminator is TWO-SIDED, because a one-sided one is vacuous here —
+        // the two candidate bindings are chosen so that each direction of the
+        // question has the OPPOSITE verdict, and only the arrow's parameter
+        // winning produces both.
+        //
+        // Outer `b` is a number, the arrow's is a string: TS2322 iff the
+        // arrow's parameter won.
+        diagnose(
+            """
+            function host(): void {
+                const v: { b: number } = { b: 1 }
+                const f = (v: { b: string }) => (function () { const n: number = v.b; return n })
+            }
+            """.trimIndent()
+        ) should { have(any { it.code == 2322 }) }
+        // The same shape with the two annotations swapped: SILENT iff the
+        // arrow's parameter won. The outer binding would have fired here.
+        diagnose(
+            """
+            function host(): void {
+                const v: { b: string } = { b: "x" }
+                const f = (v: { b: number }) => (function () { const n: number = v.b; return n })
+            }
+            """.trimIndent()
+        ) should { have(none { it.code == 2322 }) }
+        // And the install must be undone: after the arrow, `p` is out of scope,
+        // so it is TS2304 and never a typed binding leaked out of the descent.
+        diagnose(
+            """
+            function host(): void {
+                const f = (p: string) => (function () { return p })
+                const q: number = p
+            }
+            """.trimIndent()
+        ) should {
+            have(any { it.code == 2304 })
+            have(none { it.code == 2322 })
+        }
     }
 
     @Test

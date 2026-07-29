@@ -92795,8 +92795,52 @@ interface DataView {
             }
             is ArrowFunction -> {
                 val arrowBlock = expr.body as? Block
-                if (arrowBlock == null) CtaSections.armD(CtaSections.DA_ARROW_EXPR)
-                else {
+                if (arrowBlock == null) {
+                    CtaSections.armD(CtaSections.DA_ARROW_EXPR)
+                    // (FN.1) round 757: an EXPRESSION-bodied arrow used to walk
+                    // NOTHING — 874 of the 1,510 function-like nodes this walker
+                    // reaches on the compiler profile (58%). A function body nested
+                    // in the body expression (`() => (function () { … })`,
+                    // `() => xs.map(x => { … })`) was therefore never handed to
+                    // checkFunctionBody and every diagnostic inside it was lost;
+                    // the check spine does NOT cover it (measured, round 756).
+                    // The descent is scoped exactly as the block body above is: the
+                    // nested checkFunctionBody INHERITS currentLocalTypes/varTypes,
+                    // so without the arrow's own parameters an inner read of a
+                    // parameter name would resolve to a same-named outer/global
+                    // binding — the applyBodyLocalShadowing FP class.
+                    val bodyExpr = expr.body as? Expression
+                    if (bodyExpr != null) {
+                        val fnTps = expr.typeParameters
+                        if (expr.parameters.isEmpty() && fnTps.isNullOrEmpty()) {
+                            // `() => e`: nothing to scope, so skip the install
+                            // entirely rather than copy two maps per arrow.
+                            walkFunctionBodiesInExpr(bodyExpr, source, fileName, varTypes, typeParams)
+                        } else {
+                            CtaSections.atD(CtaSections.D_ARROW_EXPR_SCOPE)
+                            val innerTypes = varTypes.toMutableMap()
+                            val savedLocalTypes = currentLocalTypes
+                            val savedTypeParamDecls = currentTypeParamDecls
+                            currentLocalTypes = EpochMap(currentLocalTypes)
+                            try {
+                                if (!fnTps.isNullOrEmpty()) {
+                                    val merged = savedTypeParamDecls.toMutableMap()
+                                    for (tp in fnTps) merged[tp.name.text] = tp
+                                    currentTypeParamDecls = merged
+                                }
+                                withInternedTpScope(fnTps, withAst = false, withDefaults = true) {
+                                    ctaTypeParamsIntoLocals(expr.parameters, innerTypes)
+                                }
+                                CtaSections.atD(CtaSections.D_DISPATCH)
+                                walkFunctionBodiesInExpr(bodyExpr, source, fileName, innerTypes,
+                                    typeParams + collectTypeParamNames(fnTps))
+                            } finally {
+                                currentLocalTypes = savedLocalTypes
+                                currentTypeParamDecls = savedTypeParamDecls
+                            }
+                        }
+                    }
+                } else {
                     CtaSections.armD(CtaSections.DA_ARROW_BLOCK)
                     CtaSections.atD(CtaSections.D_ARROW)
                     checkFunctionBody(arrowBlock, expr.type, expr.parameters, expr.typeParameters, source, fileName, varTypes, typeParams,
