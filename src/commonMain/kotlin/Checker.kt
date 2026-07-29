@@ -143116,7 +143116,23 @@ interface DataView {
                     val nwT = ArgSections.t()
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
                     ArgSections.closeNarrow(ArgSections.N_NARROW_NEVER, nwT, n !== ctxApplied)
-                    if (n === neverType) n else ctxApplied
+                    // (REL.2) round 766: a bare ENUM subject is the one shape whose PARTIAL
+                    // refinement is safe to keep, so it gets an exception to the discard
+                    // above. `default: Debug.assertNever(k)` in a partially-covered switch
+                    // (and the same shape after `if (k === K.A) return;` guards) narrows to
+                    // the UNCOVERED members — tsc's answer — where we displayed the whole
+                    // enum. It cannot manufacture the FP the comment above warns about: the
+                    // substituted type is a NON-EMPTY union of enum members, and nothing
+                    // non-`never` is assignable to `never`, so the TS2345 that already fired
+                    // still fires and only its DISPLAY changes. Gated by the round-746 owner
+                    // rule ([enumTargetsAreOwnMembers], shared with the subtractive and
+                    // assert directions), so a narrow to anything that is not a member of
+                    // THIS enum keeps the conservative declared type.
+                    val enumSubset = n !== ctxApplied && n !== neverType &&
+                        isEnumFlavoredObjectType(ctxApplied) &&
+                        enumTargetsAreOwnMembers(
+                            ctxApplied, if (n is Type.Union) n.types else listOf(n))
+                    if (n === neverType || enumSubset) n else ctxApplied
                 } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
                     isEnumFlavoredObjectType(ctxApplied) && paramType !== neverType &&
                     checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
