@@ -136,7 +136,7 @@ which rounds 619/620 (only 3 of 23 census-silent passes were deletable) and 659
 | **A7** | **"IDENTIFIER 44.5% of all nodes, 2,746 ns each = 1,048 ms" ⇒ "the measured lever is consultation"** | **F used as P** | ❌ **the population is 8.4% of the spine — 1,853 ms of 22,104. Ratio 5.3×.** § 5.1 |
 | A8 | Corrected-targets row "(DISPATCH.1) 1.0–2.5 s" | P estimate | ❌ round 732 measured ≈0.3–1%; the table was never updated |
 | A9 | Corrected-targets row "flow narrowing 2.4 s" | T | ⚠️ superseded — 736 landed −4.53%, 755 closed the residue at 1.6% |
-| A10 | "1,341,719 globals lookups at 98.9% miss, priced ≲0.2%" | F + **asserted** P | ⚠️ count is stale (961,213 / 98.1%); the ≲0.2% price has never been measured, only asserted |
+| A10 | "1,341,719 globals lookups at 98.9% miss, priced ≲0.2%" | F + **asserted** P | ✅ **MEASURED ROUND 759 — 36–71 ms = 0.13–0.26%. The right order; the last asserted-never-measured population in § 0 closes.** § 11 |
 | A11 | budget: checker-init 80 / front end 20 | T | ⚠️ corrected round 738 (front end 11.0%, the other 9.2% was discarded emit); today checker-init is **87%** of the compile |
 | A12 | budget row "dispatch + handlers 34" | **R** | ❌ same mislabel as A4 |
 | **A13** | **"if we removed ALL dispatch overhead → 66 units, 1.5×"** | derived from A12 | ❌ **the honest row is 100 → 99. Out by ~34×, and it is the FIRST step of the parity argument.** § 5.3 |
@@ -188,7 +188,7 @@ which rounds 619/620 (only 3 of 23 census-silent passes were deletable) and 659
 | # | claim | class | verdict |
 |---|---|:--:|---|
 | G1 | 22,419 invocations / 38,247 iterations; 10,146 (27%) reach the relation | F | ✅ |
-| **G2** | "**yet all 37,379 that get past the first gate pay for the full `argType` computation**" | **F used as P** | ❓ **UNVERIFIED — the 924 ms `argType` total is measured, its split across the 27%/73% exit classes is not.** Sized and predicted in § 7; NOT measured this round |
+| **G2** | "**yet all 37,379 that get past the first gate pay for the full `argType` computation**" | **F used as P** | ✅ **MEASURED ROUND 759 — and it is the arc's first frequency-as-population claim that resolves in the citation's favour. The non-relating 72% carry 89% of the argType time, at 3.2× the per-argument price.** § 10 |
 | G3 | argType 924 ms vs relation 19 ms = 48× | P vs P | ✅ |
 | G4 | 86% of walks return the input unchanged, worth ≤237 ms | P (both sides measured) | ✅ the model of doing it right |
 | G5 | 394 of 70,037 walks (0.56%) = 1,485 ms | P | ✅ consumed by 736 |
@@ -425,4 +425,281 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 # the getCalleeType outcome split (grep 'getCalleeType ->')
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --listAll --callSections build/bench/tsc-project-*
+```
+
+---
+
+# ROUND 759 — the two ❓ rows, resolved
+
+*(AUDIT.2) and (AUDIT.3). Round 758 flagged G2 and A10 rather than measuring
+them, and named both precisely enough to be picked up cold. Both are now
+measured. **G2 is the first frequency-as-population flag in this audit that
+resolves in the CITATION's favour — and it does so by 2.2× against the
+prediction round 758 wrote down for it.** A10 confirms. No behaviour change,
+no optimisation, no parked item revived.*
+
+> **HEADLINE — § 0'S LAW HAS A COUNTER-EXAMPLE, AND THIS IS IT.** Six times the
+> arc has found that "the population you could skip is the population that was
+> already cheap" (rounds 665, 659, 716, 736, 737, 758×2). Inside
+> `checkArgumentsAgainstSignature` it is **false**: the 72% of arguments that
+> never reach the assignability check carry **89%** of the argument-typing time,
+> at **22,604 ns each against 7,134 ns** for the 28% that do — **3.2× the wrong
+> way**. Round 758 predicted "< 40%", this round predicted 35%; the answer is
+> **89%**. **The mechanism is measured, not residual:**
+> `getTypeOfExpression` costs **8,252 ns** for a non-relating argument against
+> **1,344 ns** for a relating one (**6.1×**), and 7,917 of the 9,674 narrowing
+> walks (82%) are in the non-relating class. **But the implied prize still does
+> not exist**, for a reason that has nothing to do with the size: *paying for
+> `argType` is not wasting it* — eleven downstream blocks consume the value, and
+> the assignability relation is the cheapest consumer in the function at 19 ms.
+> **(AUDIT.3): the globals-lookup population is 36–71 ms = 0.13–0.26%,
+> confirming § 0's asserted ≲0.2% as the right order.**
+
+## 10. (AUDIT.2) — `argType` by exit class
+
+### 10.1 What was built
+
+Two `ArgSections` fields and three pairs of rows, all inside the existing
+`mode == ON` gate. The exit class is not knowable where `argType` is computed —
+it is settled up to eleven sections later — so the span is **parked**
+(`pendingArgType`) and charged when the iteration either opens `L_RELATION` or
+starts the next iteration / ends the invocation without having done so.
+
+`pendingGtoe` and `pendingNarrow`/`pendingNarrowCalls` ride along, so the two
+terms that make the classes differ are **measured** rather than obtained by
+subtraction. That was deliberate: § 0's "42% dispatch" was a residual with a
+name on it and it was ~34× wrong.
+
+**The rows PARTITION their sources exactly** — `nanos[REL] + nanos[NONREL] ==
+nanos[L_ARGTYPE]` and the same for `calls`, and likewise for the
+`getTypeOfExpression` and narrowing pairs. The report prints the check
+(`EXACT`) and `ArgSectionProbeTest` pins it, so a later edit cannot silently
+turn the measurement into a sample — a sample would read as "the non-relating
+class is cheap" no matter what the truth was.
+
+### 10.2 The defining number had fallen 25% while the item sat in the queue
+
+Round 755's rule, applying for the third time:
+
+| | round 735 | **round 759** |
+|---|---:|---:|
+| invocations / iterations | 22,419 / 38,247 | **22,419 / 38,247** — identical |
+| the `argType` row | 924 ms raw | **689 ms raw** (**−25%**) |
+| iterations reaching the relation | 10,146 (27%) | **10,560 (28%)** |
+
+The **counts** are deterministic to the unit; only the milliseconds drift
+(three runs this session: 748 / 656 / 689 ms raw, a ±13% box). **The exit-class
+SHARE is stable to the point across all three: 89% / 10%.**
+
+The exit profile itself has shifted, downstream of (REL.1) and rounds 736/738:
+
+| iterations leave the loop body in… | 735 | **759** |
+|---|---:|---:|
+| the arity `break` / spread / any-param gates | 868 | 556 |
+| the foreign-TP + weak-target section | 14,663 | **11,689** |
+| the `!isSimpleCheckableType` function-vs-function block | 12,280 | **15,140** |
+| `paramType is TypeParam` | 211 | 214 |
+| the optional-parameter / undefined gates | 79 | 88 |
+| **the `checkTypeRelatedTo` + TS2345 section** | 10,146 | **10,560** |
+
+### 10.3 The split
+
+Compiler profile, raw ms (relative attribution only — probe inflation ~3.4%,
+§ 2 of `argument-check-attribution.md`).
+
+| | args | share of args | ms | **share of argType** | ns each |
+|---|---:|---:|---:|---:|---:|
+| **reaches the relation** | 10,560 | 28% | **75** | **10%** | **7,134** |
+| **exits before it** | 27,131 | 72% | **613** | **89%** | **22,604** |
+
+**The claim G2 flagged is true, and understated.** "All of them pay for the full
+`argType` computation" reads as though the 72% were 72% of the cost. They are
+89% of it.
+
+### 10.4 The mechanism — measured, and one row labelled RESIDUAL
+
+| term | reaching | exiting | ratio |
+|---|---:|---:|---:|
+| `getTypeOfExpression(arg)` | 14 ms / 10,560 = **1,344 ns** | 223 ms / 27,131 = **8,252 ns** | **6.1×** |
+| `getNarrowedTypeForReference` | 37 ms / **1,757 walks** = 21,205 ns | 275 ms / **7,917 walks** = 34,854 ns | 1.6× |
+| **RESIDUAL** (literal preservation, `stripNullishForNonNullArg`, the M3.4 refinement relation, contextual save/restore, probe boundaries) | — | — | 140 ms of 689 = 20% |
+
+The two measured terms are **549 of 689 ms = 80%**. The remaining 140 ms is a
+subtraction and is labelled as one; it is not spent below.
+
+**Why the correlation runs the wrong way.** § 0's law describes populations
+selected by a predicate that shares a CAUSE with the cost: a `getCalleeType`
+resolution that is discarded is cheap *because* failing to resolve is fast
+(C5); an `applyConditionNarrowing` call that returns its input is cheap
+*because* it bailed early (N4). Here the exit predicate is a property of the
+**parameter** — is it `isSimpleCheckableType`? does the argument's type carry a
+foreign type parameter? — while the cost is a property of the **argument**, and
+the two are correlated in the opposite direction. **Complex parameters attract
+complex arguments**: the 15,140 arguments that exit at the function-vs-function
+block are matched against function-typed parameters, so they are the arrows,
+callbacks and object literals that get a contextual type installed before
+`getTypeOfExpression` runs; the foreign-TP exits are generic call expressions
+whose typing means resolving a callee and its signature. The 10,560 that reach
+the relation are the cheap ones — identifiers and literals against simple
+parameters, at 1,344 ns.
+
+### 10.5 What the 27% claim actually means
+
+1. **It is not a frequency masquerading as a population.** It is literally true,
+   and the ratio is 2.2× further in its own direction than round 758's
+   prediction allowed. This is the audit's one row that resolves for the
+   citation rather than against it.
+2. **The implied prize nevertheless does not exist, for a different reason.**
+   *Paying for `argType` is not wasting it.* Every intervening block consumes
+   the value — `tryEmitWeakTypeAssignment(argType, …)`, the 353-line
+   object-literal block, the function-vs-function block, the nullish gates. The
+   72% are not arguments whose type was computed for nothing; they are
+   arguments whose type was computed for a **different consumer than the
+   relation**. The relation is the cheapest consumer in the function: 19 ms.
+3. **It re-points the lever one more time.** If 89% of argument typing serves
+   non-relation consumers, then making the relation cheaper (M3.1) touches ~3%
+   of this function — the third independent finding this arc that the relation
+   engine is not where the call path's time is (735: 48×; 738: 65×; here).
+
+### 10.6 Sized, and NOT started
+
+* **The non-relating `argType` is 613 ms = 2.3% of a 27.0 s compile** — above
+  the ±2.0% band (~540 ms) — **and not removable**, per 10.5(2).
+* **The only subset whose necessity is even arguable is the 275 ms of narrowing
+  performed for arguments that then exit** (a narrowed interface subtype rarely
+  changes a function-vs-function verdict). That is **1.0% — half a noise band**,
+  before anyone measures whether it is sound to skip. Parked.
+* **`getTypeOfExpression` at 8,252 ns for a non-relating argument** is the
+  largest single row here: 223 ms = 0.82%, in band. It is contextual typing of
+  callback arguments, which is `checkFunctionBody` work reached from a
+  different direction than (FN.1) reached it.
+
+**No parked item is revived.**
+
+## 11. (AUDIT.3) — the globals-lookup population
+
+### 11.1 The instrument, and why the arc's usual one does not work here
+
+A `nowNanos()` pair is 86–92 ns (rounds 734/735) and the thing being priced was
+expected to cost ~57 ns, so a nested span would have reported roughly 2.5× the
+truth. Round 736 escaped the same wall with counters; counters cannot price a
+`HashMap` probe, so this escapes the other way — **amplify the signal instead of
+shrinking the instrument.** `--globalsAmp r` brackets **r** reads of the same
+key under ONE pair, so
+
+```
+p(r) = cold + (r-1) * warm + boundary
+```
+
+and **two runs at different `r` eliminate the unknown boundary entirely.**
+
+### 11.2 The measurements
+
+Compiler profile, `--noEmit --passTiming --globalsAmp r`. 961,213 classified
+lookups (**exactly** reproducing round 758) plus 207 that precede the
+classifier's installation = **961,420 bracketed**.
+
+| r | p(r) ns | sink | wall ms |
+|---:|---:|---:|---:|
+| **−1** (empty bracket, in situ) | **40** | 0 | 30,591 |
+| 1 | 74 / **81** (two runs) | 17,928 | 29,901 / 31,655 |
+| 16 | **217** | 286,848 | 30,212 |
+| 64 | **645** | 1,147,392 | 31,545 |
+
+**`warm`, from three independent pairs:** (16,64) → 8.92 ns; (1,16) → 9.53 ns;
+(1,64) → 9.06 ns. **≈ 9.1 ns, agreeing to 7%.**
+
+**`cold` = p(1) − p(−1) = 34–41 ns, so ≈ 37 ns** — four times a warm re-read,
+which is what one expects of a first touch against a repeat.
+
+### 11.3 The instrument, falsified rather than trusted
+
+* **Dead-code elimination is ruled out ARITHMETICALLY, not by timing.** The sink
+  is an exact multiple of the hit count at every amplification:
+  16 × 17,928 = 286,848 and 64 × 17,928 = 1,147,392, **to the unit**. Every read
+  executed.
+* **The probe reports proportionally more when its input is perturbed** — three
+  independent slopes within 7% of each other. A broken instrument would not be
+  linear in `r`.
+* **It sees the same population the counter does**: the sink's 17,928 non-null
+  results independently reproduce the classifier's 17,906 `trueGlobal` hits
+  (+22 pre-classifier lookups) — a 98.1% miss rate derived twice, by two
+  mechanisms.
+* **The wall-time check is CONSISTENT but not sharp, and is reported as such.**
+  The 63 extra reads per lookup should cost 961,420 × 63 × 9.1 ns = 551 ms; the
+  probe's own total grew by 549 ms (71 → 620), which agrees, but the wall grew
+  1,644 ms against a ±13% drift band of ±3.9 s. The wall could not have
+  falsified anything here; the sink could.
+
+### 11.4 The answer
+
+| basis | per lookup | population | share of a 27.0 s compile |
+|---|---:|---:|---:|
+| **calibration-free ceiling** (`p(1)`, since the pair costs ≥ 0) | 74–81 ns | **71–78 ms** | **0.26–0.29%** |
+| **best estimate** (`cold` = p(1) − the in-situ empty bracket) | ~37 ns | **36 ms** | **0.13%** |
+| if the empty bracket over-reads 3.6–4.4× as in rounds 734/735 | 63–72 ns | 61–69 ms | 0.23–0.26% |
+| absolute floor (`warm`, a re-read) | 9.1 ns | 8.7 ms | 0.03% |
+
+**The globals-lookup population is 36–71 ms = 0.13–0.26%.** § 0's asserted
+"≲0.2%" is the right order, and every reading is **7.6–15× below** the ±2.0%
+band (~540 ms). **A10 closes as a measurement; § 0 has no
+asserted-never-measured population left.**
+
+## 12. The predictions, scored — 2 of 6
+
+Written down before any measurement
+(`scratchpad/predictions-round759.md`), and this is the healthy result round 758
+said it lacked.
+
+| | prediction | measured | |
+|---|---|---|---|
+| R1 | non-relating share **30–40%**, point 35% | **89%** | **WRONG, 2.5×** |
+| R2 | mechanism = the `anyType` exit is the cheap one | the `anyType`/foreign-TP exit **shrank** to 11,689 and the fn-vs-fn exit **grew** to 15,140; both are dear | **WRONG** |
+| R3 | relating 55–65 µs, non-relating 11–14 µs, ratio 4–6× | **7.1 µs / 22.6 µs, ratio 0.32×** | **WRONG, and inverted** |
+| R4 | the named way I could be wrong (~30%): contextually-typed arrow arguments at the fn-vs-fn exit | **that is the mechanism** — `getTypeOfExpression` 6.1× dearer there | **the escape hatch was the answer** |
+| R5 | globals probe 30–80 ns ⇒ 29–77 ms = 0.11–0.29%; ≲0.2% stands | **37 ns ⇒ 36 ms = 0.13%** | **HELD** |
+| R6 | warm ≪ cold, gap ≥ 1.5× | **4×** (9.1 vs 37 ns) | **HELD** |
+| round 758's own | the non-relating 73% carry **< 40%** | **89%** | **FALSIFIED** |
+| falsifier | any re-derived population above ±2.0% (~540 ms) ⇒ revived lever | largest is 613 ms and it is **consumed, not wasted**; largest arguably-skippable is 275 ms | **not met** |
+
+**The tally moves.** Round 758's ledger was 40 ✅ / 11 ⚠️ / 4 ❌ / 2 ❓. G2 and
+A10 leave ❓; **G2 becomes ✅ in the citation's favour** and A10 becomes ✅.
+**S5 remains unmeasured by choice** — the `owner` section's per-hit rate is
+still borrowed from a different section.
+
+**And the lesson the arc should keep.** Six confirmations of one law produced a
+prior strong enough that two independent rounds predicted the same wrong answer
+in the same direction. The law is real but it is CONDITIONAL: it holds when the
+exit predicate and the cost share a cause. **Before invoking it again, ask what
+selects the population and what drives its cost — and whether they are the same
+thing.**
+
+## 13. Verification
+
+* Compiler profile `--listAll`: **46 errors**, composition unchanged
+  (TS2591×43 / TS2304×2 / TS2584×1); production vs `--argSections` sorted-line
+  diff **IDENTICAL** on the final binary.
+* Filtered batch (`*ArgSectionProbe*` `*GlobalsAmpProbe*` `*CallSectionProbe*`
+  `*Inv0PassTiming*` `*SpineSectionProbe*` `*CtaSectionProbe*`
+  `*SpineDispatchProbe*` `*NarrowMemoDepth*`): **70 tests, 0 failures**
+  (66 + 1 extended pin + 3 new `GlobalsAmpProbeTest`).
+* Build warning-clean (`compileKotlinJvm compileTestKotlinJvm`, no `w:`).
+* Production cost: **zero instructions.** `ArgSections`' additions are inside
+  the existing `mode == ON` gate; `InstrumentedSymbolTable` is only ever
+  constructed under `--passTiming`, and with `GlobalsAmp.reads == 0` its read
+  path is `backing[key]` and nothing else.
+
+## 14. Reproducing
+
+```bash
+scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log   # once
+CP=$(cat build/bench/cp-cache.txt)
+# (AUDIT.2) — grep 'AUDIT.2'
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --argSections build/bench/tsc-project-*
+# (AUDIT.3) — grep 'AUDIT.3'; -1 is the in-situ empty bracket
+for r in -1 1 16 64; do
+  java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+       --noEmit --passTiming --globalsAmp $r build/bench/tsc-project-*
+done
 ```

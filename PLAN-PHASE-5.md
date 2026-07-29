@@ -20,6 +20,82 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 759 (2026-07-29) — (AUDIT.2)+(AUDIT.3): THE ARC'S LAST TWO UNVERIFIED ROWS,
+MEASURED. ONE OF THEM IS § 0's LAW'S FIRST COUNTER-EXAMPLE — the population that
+never reaches the relation is the EXPENSIVE one, 89% of the cost at 3.2x the
+per-argument price.** No behaviour change; additive opt-in instrumentation only.
+Compiler profile `--listAll` **46**, composition unchanged (TS2591x43 / TS2304x2 /
+TS2584x1), production vs `--argSections` sorted-line diff IDENTICAL on the final
+binary; filtered probe batch **70 / 0**; build warning-clean. The full suite and the
+cost gate are the owner's to run. Artifact: `docs/perf/claim-audit-round758.md`
+§§ 10-14 (extended); `argument-check-attribution.md` and § 0/§ 0.1 corrected IN PLACE.
+
+*Round 758 flagged two claims as ❓ and scoped them out by choice, naming both
+precisely. This round measured both. It scored **2 of 6** predictions, which is the
+rate round 758 said its own 5-of-5 lacked.*
+
+- **(AUDIT.2) — THE ONE ROW OF THE AUDIT THAT RESOLVES IN THE CITATION'S FAVOUR.**
+  `argument-check-attribution.md` § 3 said "only 27% reach the relation, yet all
+  37,379 pay for the full `argType` computation". **It is true and understated: the
+  72% that exit early carry 89% of the argType time — 613 ms of 689 — at
+  22,604 ns each against 7,134 ns for the 28% that do.** Round 758 predicted
+  "< 40%"; I predicted 35%; the answer is **89%**. Both wrong by ~2.5x, in the same
+  direction, from the same prior.
+- **THE MECHANISM IS MEASURED, NOT A RESIDUAL** (the round-758 rule about naming
+  subtractions): `getTypeOfExpression` costs **8,252 ns** for a non-relating
+  argument against **1,344 ns** for a relating one (**6.1x**), and **7,917 of the
+  9,674 narrowing walks (82%)** are non-relating. Those two rows are 80% of the
+  argType total; the remaining 140 ms is labelled RESIDUAL and not spent.
+  **Why the correlation runs backwards:** the exit predicate is a property of the
+  PARAMETER (`isSimpleCheckableType`, foreign TPs) while the cost is a property of
+  the ARGUMENT — and complex parameters attract complex arguments, so the 15,140
+  that exit at the function-vs-function block are arrows and callbacks typed under
+  an installed contextual type.
+- **STILL NO LEVER, FOR A REASON THAT HAS NOTHING TO DO WITH THE SIZE.** *Paying for
+  `argType` is not wasting it*: eleven blocks below consume the value
+  (`tryEmitWeakTypeAssignment`, the 353-line objlit block, the fn-vs-fn block, the
+  nullish gates), and the assignability relation is the CHEAPEST consumer in the
+  function at 19 ms — the third independent finding (735: 48x, 738: 65x) that the
+  relation engine is not where the call path's time is. The non-relating argType is
+  613 ms = 2.3% (above the band) but not removable; the only arguably-skippable
+  subset is 275 ms of narrowing = **1.0%, half a band**. **No parked item revived.**
+- **THE ROW'S DEFINING NUMBER HAD FALLEN 25% WHILE THE ITEM SAT IN THE QUEUE**
+  (924 -> 689 ms raw), and the exit profile shifted underneath it: foreign-TP exit
+  14,663 -> 11,689, fn-vs-fn exit 12,280 -> 15,140, relation 10,146 -> 10,560. The
+  COUNTS are deterministic to the unit and the 89%/10% share reproduced across all
+  three runs; only the ms drift (748 / 656 / 689, a ±13% box). Round 755's rule, for
+  the third time.
+- **(AUDIT.3) — 36-71 ms = 0.13-0.26%, so § 0's asserted "≲0.2%" is the right
+  order.** The arc's usual instrument could not do this one: an ~89 ns timestamp
+  pair around a ~37 ns probe would BE the measurement. So the probe **amplifies the
+  signal instead of shrinking the instrument** — `--globalsAmp r` brackets `r` reads
+  of the same key under ONE pair, and two values of `r` cancel the pair's cost
+  algebraically. Measured **cold ~37 ns / warm 9.1 ns** over 961,420 bracketed
+  lookups; `961,213` classified lookups reproduce round 758 exactly.
+- **THE INSTRUMENT WAS FALSIFIED, NOT TRUSTED** (round 758 found the previous one
+  broken). Dead-code elimination is ruled out **arithmetically** — the sink is an
+  exact multiple of the hit count at every amplification (16x17,928 = 286,848;
+  64x17,928 = 1,147,392, to the unit). Three independent slopes agree to 7%, which
+  is the perturbation test. The sink's hit count independently reproduces the
+  classifier's 98.1% miss rate. **And one negative check is reported as WEAK rather
+  than cited**: the wall-time cross-check agrees (+549 ms probe vs +1,644 ms wall)
+  but the ±13% box drift is ±3.9 s, so the wall could not have falsified anything —
+  the sink could, which is why it is the one quoted (round 750's rule).
+- **WHAT WAS BUILT** (additive, opt-in, behaviour-free when off): three pairs of
+  `ArgSections` rows charged from a parked span (`pendingArgType`/`pendingGtoe`/
+  `pendingNarrow`) once the exit class is known eleven sections later — an EXACT
+  partition, printed as a check and pinned by an extended
+  `ArgSectionProbeTest`; and `GlobalsAmp` + `--globalsAmp N` (`N < 0` = in-situ
+  empty bracket) with a new `GlobalsAmpProbeTest`. Production cost is **zero
+  instructions**: `ArgSections`' additions sit inside the existing `mode == ON`
+  gate, and `InstrumentedSymbolTable` is only ever constructed under `--passTiming`.
+- **WHAT THIS CHANGES FOR THE MAP.** § 0's law keeps its CACHE form intact but loses
+  its generalised form: **it holds only when the exit predicate and the cost share a
+  CAUSE.** Corrected in place in § 0, in `argument-check-attribution.md` § 3, and in
+  CLAUDE.md — whose POPULATION-vs-FREQUENCY entry had hardened the direction into
+  "every instance SHRANK … the direction never varies", which is now false.
+  **S5 remains unmeasured by choice** (the `owner` section's imputed per-hit rate).
+
 **Round 758 (2026-07-29) — (AUDIT.1): THE ATTRIBUTION ARC AUDITED ITS OWN NUMBERS.
 57 load-bearing claims classified POPULATION / FREQUENCY / TIME / RESIDUAL —
 40 stand, 11 stale-or-weak, 4 falsified, 2 unverified. THREE OF THE FOUR FALSIFIED
@@ -2264,23 +2340,32 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   **`docs/perf/claim-audit-round758.md`**; § 0/§ 0.1 + four artifacts corrected
   in place.
 
-- [ ] **(AUDIT.2) Split `argType` by exit class in `ArgSections`** — the last
-  "yet all of them pay" claim in the arc
-  (`docs/perf/argument-check-attribution.md` § 3: only 27% of 38,247 arguments
-  reach the relation, "yet all 37,379 pay for the full `argType` computation").
-  The 924 ms total is measured; its split across the two exit classes is not.
-  Build: one `pendingArgTypeNanos` field plus two nested rows, charged at the
-  relation section's open and flushed at the next iteration / `end()`.
-  **Ceiling 924 ms = 3.5%; half a round. Prediction, recorded so it can be
-  scored: the 73% that never reach the relation carry < 40% of the 924 ms** —
-  i.e. this closes as a measurement like 755/756/758 rather than as a lever.
+- [x] **(AUDIT.2) Split `argType` by exit class — DONE round 759. THE CLAIM IS
+  TRUE AND UNDERSTATED, AND IT IS § 0's LAW'S FIRST COUNTER-EXAMPLE.** The 72%
+  that never reach the relation carry **89%** of the argument-typing time, at
+  **22,604 ns each against 7,134 ns** for the 28% that do — **3.2× the wrong
+  way**. Round 758's recorded prediction ("< 40%") and round 759's own (35%) are
+  both **FALSIFIED by ~2.5×, in the same direction**, because both applied "what
+  you could skip cheaply was already cheap" where the exit predicate (a property
+  of the PARAMETER) and the cost (a property of the ARGUMENT) do not share a
+  cause. Mechanism measured, not residual: `getTypeOfExpression` **8,252 ns**
+  non-relating vs **1,344 ns** relating (6.1×), and **82% of the narrowing
+  walks** are non-relating. **No lever anyway** — *paying for `argType` is not
+  wasting it*: eleven blocks below consume the value and the relation is the
+  cheapest consumer at 19 ms. The one arguably-skippable subset is 275 ms of
+  narrowing = **1.0%, half a band**. Also: the row's defining number had fallen
+  **924 → 689 ms (−25%)** while the item sat in the queue.
 
-- [ ] **(AUDIT.3) Price the globals-lookup population** — § 0's "961,213
-  globals lookups at 98.1% miss … still priced ≲0.2%" is the last
-  asserted-never-measured population in that section. One nested span at
-  `globalsForFile` settles it; the implied cost is ~57 ns per lookup, which is
-  plausible for a `HashMap` miss, so the expected outcome is confirmation. A
-  quarter of a round; its value is closing the file, not finding time.
+- [x] **(AUDIT.3) Price the globals-lookup population — DONE round 759.
+  36–71 ms = 0.13–0.26%; § 0's asserted ≲0.2% is the right order and the last
+  asserted-never-measured population in that section closes.** A nested span
+  could not do it (an ~89 ns timestamp pair around a ~37 ns probe), so the
+  instrument AMPLIFIES instead: `--globalsAmp r` brackets `r` reads under one
+  pair, and two values of `r` cancel the pair's cost. Measured: **cold ~37 ns,
+  warm 9.1 ns** (three independent slopes within 7%), 961,420 bracketed lookups.
+  DCE ruled out **arithmetically** — the sink is an exact multiple of the hit
+  count at every `r` — and the sink's 17,928 hits independently reproduce the
+  classifier's 98.1% miss rate.
 
 - [x] **(TYPE.2) Attribute inside `checkVarDeclAssignability` /
   `spineCtaM3StatementAnchor` — DONE round 738. BOTH PRIORS FALSE; the second

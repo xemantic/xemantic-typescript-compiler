@@ -9,7 +9,12 @@ profile `--listAll` in all three modes, and a cost gate at +0.00% on all 20
 counters. The instrumentation is behaviour-free when off.*
 
 > **HEADLINE — THE PRIOR HOLDS, BY ~48×, AND THE MECHANISM IS NOT THE ONE THE
-> PRIOR NAMED.** The item's falsifiable expectation was *"most of the 61 µs is
+> PRIOR NAMED.** *(ROUND-759 CORRECTION: the `argType` row is **689 ms** on
+> `5f787d79`, not 924 — the counts are unchanged to the unit but the
+> milliseconds fell 25% while (AUDIT.2) sat in the queue. The 48× verdict is
+> unaffected, since the relation section is 19 ms either way. And the § 3 box
+> below now carries the exit-class split, which INVERTS what that section
+> implied about the 73%.)* The item's falsifiable expectation was *"most of the 61 µs is
 > argument TYPE computation, not `checkTypeRelatedTo`"*. It is: **924 ms of the
 > function's 1,624 ms is the `argType` computation, against 19 ms for the
 > `checkTypeRelatedTo` + TS2345 section (10 ms for the relation call itself).**
@@ -101,21 +106,43 @@ yet all 37,379 that get past the first gate pay for the full `argType`
 computation at the top of the body, because every intervening block consumes
 `argType`.
 
-> **ROUND-758 FLAG (unverified, not falsified) — this is a FREQUENCY carrying a
-> POPULATION claim.** "27% reach the relation" is measured and "the `argType`
-> computation is 924 ms" is measured, but **the split of those 924 ms across the
-> two exit classes never was**, and the sentence reads as though the other 73%
-> are 73% of the cost. Rounds 736 (identity narrowing calls: 949 ns vs
-> 21,708 ns), 757 (874 arrows → six bodies) and 758 (discarded `getCalleeType`
-> resolutions: 1,452 ns vs 16,491 ns) all found the non-proceeding population to
-> be the CHEAP one. Queued as **(AUDIT.2)**: one `pendingArgTypeNanos` field
-> plus two nested rows charged at the relation section's open. **Prediction,
-> written down so it can be scored: the 73% that never reach the relation carry
-> < 40% of the 924 ms.** `docs/perf/claim-audit-round758.md` § 4 (G2), § 7.
+> **ROUND-759 MEASUREMENT OF THAT SENTENCE — IT IS TRUE, AND UNDERSTATED. THIS
+> IS THE ARC'S ONE COUNTER-EXAMPLE TO § 0's LAW.** (AUDIT.2) split the `argType`
+> row by exit class (`ArgSections.N_ARGTYPE_RELATING` / `_NONRELATING`, an exact
+> partition, pinned). **The 72% that never reach the relation carry 89% of the
+> argument-typing time, at 22,604 ns each against 7,134 ns for the 28% that
+> do — 3.2× the wrong way.** Round 758 predicted "< 40%" and round 759 predicted
+> 35%; both were wrong by ~2.5×, in the same direction, because both applied a
+> law that does not hold here. **Mechanism, measured not residual:**
+> `getTypeOfExpression` costs **8,252 ns** for a non-relating argument against
+> **1,344 ns** for a relating one (**6.1×**), and **7,917 of the 9,674 narrowing
+> walks (82%)** are non-relating. The reason is that the exit predicate is a
+> property of the **parameter** (`isSimpleCheckableType`, foreign type
+> parameters) while the cost is a property of the **argument** — and complex
+> parameters attract complex arguments: the 15,140 that exit at the
+> function-vs-function block are arrows and callbacks typed under an installed
+> contextual type. **The prize still does not exist**, for an unrelated reason:
+> *paying for `argType` is not wasting it* — eleven blocks below consume the
+> value, and the assignability relation is the cheapest consumer in the function
+> at 19 ms. Full derivation: `docs/perf/claim-audit-round758.md` § 10.
+>
+> **AND THE NUMBERS IN THIS SECTION ARE STALE BY 25%.** Round 759 re-measured on
+> `5f787d79`: the counts are identical to the unit (22,419 / 38,247), but the
+> `argType` row is **689 ms raw, not 924** (three runs: 748 / 656 / 689, a ±13%
+> box), and the exit profile has shifted downstream of (REL.1) and rounds
+> 736/738 — the foreign-TP exit **14,663 → 11,689**, the function-vs-function
+> exit **12,280 → 15,140**, the relation **10,146 → 10,560**. Round 755's rule
+> again: *an item defined by a measured number must re-measure it before a round
+> is spent inside it.*
 
 ## 4. The attribution
 
 Raw ms; percentages of the 1,624 ms raw partition.
+
+*(Round-759 note: the `argType` row below is **689 ms** on `5f787d79`, and it
+splits **75 ms / 613 ms** between arguments that reach the relation and those
+that do not — see the § 3 box. The rest of this table has not been
+re-measured.)*
 
 | region | ms raw | share |
 |---|---:|---:|

@@ -979,6 +979,7 @@ object PassTiming {
             top(globalsUnscopedByName, 30, "unscoped by name")
             top(globalsUnscopedByPass, 20, "unscoped by pass")
         }
+        if (GlobalsAmp.calls > 0) appendLine(GlobalsAmp.report())
     }
 
     private fun ms(nanos: Long): String {
@@ -1073,6 +1074,84 @@ internal enum class GlobalsLookupClass { MISS, TRUE_GLOBAL, SHARED, OWN_LOCAL, C
  * — this table has identity semantics. `globals` is never compared or
  * rendered, only consulted; do not reuse this wrapper for a map that is.
  */
+/**
+ * (AUDIT.3) round 759 — the opt-in AMPLIFIED price of one `globals[name]`
+ * probe, closing the last asserted-never-measured population in
+ * `docs/ARCHITECTURE-RETHINK.md` § 0 ("961,213 globals lookups at 98.1% miss …
+ * priced ≲0.2%"). The COUNT has always been measured and is a cost-gate
+ * counter; the TIME behind it never was.
+ *
+ * ## Why amplification rather than a nested span
+ *
+ * The arc's own instrument does not work here. A `nowNanos()` pair costs
+ * 86–92 ns (measured independently by rounds 734 and 735) and the thing being
+ * measured is expected to cost ~57 ns, so a per-lookup span would report
+ * roughly 2.5× the truth and its error bar would exceed the answer. Round 736
+ * hit the same wall inside the narrowing walk and escaped it with counters;
+ * counters cannot price a `HashMap` probe, so this escapes the other way —
+ * **amplify the signal instead of shrinking the instrument.**
+ *
+ * With [reads] `= r`, one pair brackets `r` reads of the same key. The reported
+ * per-lookup figure is then `p(r) = cold + (r-1)*warm + b`, where `b` is the
+ * unknown pair cost. **Two runs at different `r` eliminate `b` entirely**:
+ *
+ * ```
+ * warm = (p(r2) - p(r1)) / (r2 - r1)          // b cancels
+ * cold = p(r1) - (r1 - 1) * warm - b          // needs b, but weakly
+ * ```
+ *
+ * `cold` is the number the population wants — the first read of a key at that
+ * moment in the compile, which is exactly what production performs. `warm` is
+ * the same read with the entry already in L1; the gap between them is a
+ * measurement in its own right, and it is also this instrument's
+ * **falsification**: if the loop were elided the reported `p(r)` would not grow
+ * with `r` at all, and the extra reads must additionally show up in WALL time.
+ *
+ * Off in production by construction: [InstrumentedSymbolTable] is only ever
+ * constructed under `--passTiming` (`Checker.globals`), and with [reads] `== 0`
+ * its read path is unchanged.
+ */
+object GlobalsAmp {
+
+    /**
+     * Reads performed per lookup under ONE timestamp pair; `0` = OFF.
+     *
+     * A NEGATIVE value is the in-situ EMPTY bracket — the pair with no read
+     * between it, which prices the instrument itself at the same site and
+     * frequency. Read its answer with the codebase's own warning in hand: an
+     * in-situ empty span has over-read the differential by 3.6x and 4.4x in
+     * rounds 734 and 735, so it bounds the pair rather than measuring it.
+     */
+    var reads: Int = 0
+
+    var nanos: Long = 0
+    var calls: Long = 0
+
+    /** Consumes the amplified results so the JIT cannot elide the reads. */
+    var sink: Long = 0
+
+    fun reset() {
+        nanos = 0
+        calls = 0
+        sink = 0
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (AUDIT.3) amplified globals-probe price ==")
+        appendLine(
+            "reads per lookup: $reads   bracketed lookups: $calls   " +
+                "total ${nanos / 1_000_000} ms   sink $sink"
+        )
+        val per = if (calls > 0) nanos / calls else 0L
+        appendLine(
+            "p($reads) = $per ns per bracketed lookup = cold + ${reads - 1} * warm + boundary"
+        )
+        appendLine(
+            "  solve `warm` from TWO runs at different `reads`: (p(r2) - p(r1)) / (r2 - r1)"
+        )
+    }
+}
+
 internal class InstrumentedSymbolTable(
     private val backing: SymbolTable = symbolTable(),
 ) : SymbolTable by backing {
@@ -1080,14 +1159,51 @@ internal class InstrumentedSymbolTable(
     /** Classifier installed by the checker; null = inert. */
     var onLookup: ((name: String, result: Symbol?) -> Unit)? = null
 
+    /**
+     * (AUDIT.3): the read the population is made of, optionally AMPLIFIED. A
+     * single `nowNanos()` pair costs 86–92 ns (rounds 734/735) against a probe
+     * that is expected to cost ~57 ns, so timing one read would be measuring the
+     * instrument; [GlobalsAmp] performs `reads` of them under ONE pair instead.
+     * Off ([GlobalsAmp.reads] `== 0`) this is `backing[key]` and nothing else.
+     */
+    private fun timedGet(key: String): Symbol? {
+        val r = GlobalsAmp.reads
+        if (r == 0) return backing[key]
+        if (r < 0) {
+            // In-situ EMPTY bracket: price the timestamp pair itself at the same
+            // site and frequency, so `cold` can be separated from it. The read
+            // still happens, outside the pair, so the compile is unchanged.
+            val e0 = PassTiming.nowNanos()
+            GlobalsAmp.nanos += PassTiming.nowNanos() - e0
+            GlobalsAmp.calls++
+            return backing[key]
+        }
+        val t0 = PassTiming.nowNanos()
+        var result: Symbol? = null
+        var seen = 0L
+        var i = 0
+        while (i < r) {
+            val v = backing[key]
+            // Consume the result: without this the JIT may hoist the loop-invariant
+            // read and the probe would report a cost that production never pays.
+            if (v != null) seen++
+            result = v
+            i++
+        }
+        GlobalsAmp.nanos += PassTiming.nowNanos() - t0
+        GlobalsAmp.calls++
+        GlobalsAmp.sink += seen
+        return result
+    }
+
     override fun get(key: String): Symbol? {
-        val result = backing[key]
+        val result = timedGet(key)
         onLookup?.invoke(key, result)
         return result
     }
 
     override fun containsKey(key: String): Boolean {
-        val result = backing[key]
+        val result = timedGet(key)
         onLookup?.invoke(key, result)
         return result != null
     }

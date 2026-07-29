@@ -247,6 +247,35 @@
 > remain" SURVIVES and is better supported; NO parked item is revived.** The map
 > was also re-measured for the first time since round 716 (§ 0's table, below).
 > Full derivation: `docs/perf/claim-audit-round758.md`.
+> **ROUND-759 RESOLUTION OF THE TWO ❓ ROWS — AND § 0's LAW GETS ITS FIRST
+> COUNTER-EXAMPLE.** (AUDIT.2): `argument-check-attribution.md` § 3's "only 27%
+> reach the relation, yet all 37,379 pay for the full `argType` computation" is
+> **TRUE AND UNDERSTATED — the 72% that never reach the relation carry 89% of
+> the argument-typing time, at 22,604 ns each against 7,134 ns for the 28% that
+> do, 3.2× the WRONG way.** Round 758 predicted "< 40%" and round 759 predicted
+> 35%; both were out by ~2.5× in the same direction — and the row's own total
+> had meanwhile fallen **924 → 689 ms (−25%)** with the counts unchanged to the
+> unit, so round 755's re-measure-first rule applies for the third time. Both
+> predictions failed because both applied "the
+> population you could skip cheaply is the population that was already cheap"
+> where it does not hold. **The law is CONDITIONAL: it holds when the exit
+> predicate and the cost share a CAUSE** (a resolution that fails fast, a
+> narrowing that bails early). Here the predicate is a property of the PARAMETER
+> (`isSimpleCheckableType`, foreign TPs) and the cost a property of the
+> ARGUMENT, and complex parameters attract complex arguments —
+> `getTypeOfExpression` is **6.1× dearer** for a non-relating argument (8,252 vs
+> 1,344 ns) and **82% of the narrowing walks** are non-relating, both measured
+> rather than subtracted. **Before invoking the law again, ask what SELECTS the
+> population and what DRIVES its cost, and whether they are the same thing.**
+> **No lever, for a reason unrelated to the size:** *paying for `argType` is not
+> wasting it* — eleven blocks below consume the value, and the assignability
+> relation is the CHEAPEST consumer in the function at 19 ms, which is the third
+> independent finding (after 735's 48× and 738's 65×) that the relation engine
+> is not where the call path's time is. The only arguably-skippable subset is
+> 275 ms of narrowing = 1.0%, half a band. **(AUDIT.3): the globals-lookup
+> population is measured — 36–71 ms = 0.13–0.26%, see the § 0 table note.**
+> Predictions scored **2 of 6**, which is the healthy rate round 758 said its own
+> 5-of-5 lacked. Full derivation: `docs/perf/claim-audit-round758.md` §§ 10–12.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
@@ -319,7 +348,20 @@ This is the **third independent confirmation of one law** (after round 665's 30 
 expression memo and round 659's 75%-reappears migration): *in xtsc the cacheable
 population is the cheap tail. Caching in front of a resolution does not pay, because
 the resolutions that are cacheable are the ones that were already fast.* **Stop
-proposing caches.** tsc is not fast because it caches; `NodeLinks.resolvedType` is a
+proposing caches.**
+
+> **ROUND-759 QUALIFICATION — the CACHE form of this law stands; its GENERALISED
+> form does not.** The generalisation the arc came to use ("the population you
+> could skip cheaply is the population that was already cheap") held six times
+> and then failed: inside `checkArgumentsAgainstSignature` the arguments that
+> never reach the assignability check are the **expensive** ones, 3.2× over.
+> **The law holds when the exit predicate and the cost share a CAUSE** — a
+> resolution discarded because it failed fast, a narrowing call that returned
+> early. It fails when the predicate reads one operand and the cost belongs to
+> the other and the two correlate the wrong way. Two rounds predicted the same
+> wrong answer in the same direction from this prior; **ask what SELECTS a
+> population and what DRIVES its cost before invoking it.**
+> (AUDIT.2), `docs/perf/claim-audit-round758.md` § 10.4. tsc is not fast because it caches; `NodeLinks.resolvedType` is a
 field read on the node, not a keyed probe — there is no key to build.
 
 ~~**The measured lever is consultation, not computation.** Decisive probe: skipping
@@ -364,11 +406,16 @@ quote the left column.**
 | ~~`getTypeOfExpression` call COUNT (2.8× recompute)~~ | 0.67–0.82 s | ceiling **823 ms** unsound / **46 ms** sound (737) | **do not pursue** |
 | context-cache work of any shape | 0.07 s | 68 ms (716) | **do not pursue** |
 
-Also measured, and now stale in its own right: **961,213** globals lookups at
-**98.1%** miss (round 758; it was 1,341,719 / 98.9% in round 716). The
-"≲0.2%" price attached to it has never actually been measured — it is the last
-asserted-not-measured population in this section, and closing it is
-(AUDIT.3).
+Also measured: **961,213** globals lookups at **98.1%** miss (round 758; it was
+1,341,719 / 98.9% in round 716). **The "≲0.2%" price attached to it is MEASURED
+as of round 759 (AUDIT.3): the population is 36–71 ms = 0.13–0.26% of the
+compile** — a first-touch probe costs ~37 ns and a warm re-read 9.1 ns,
+measured by amplification (`--globalsAmp r` brackets `r` reads under one
+timestamp pair, so two values of `r` cancel the pair's own cost; the sink is an
+exact multiple of the hit count at every `r`, which rules out elision
+arithmetically). The assertion was the right order, every reading is 7.6–15×
+below the ±2.0% band, and **§ 0 now has no asserted-never-measured population
+left.** Derivation: `docs/perf/claim-audit-round758.md` § 11.
 
 ### 0.1 What single-thread parity with tsc actually costs
 

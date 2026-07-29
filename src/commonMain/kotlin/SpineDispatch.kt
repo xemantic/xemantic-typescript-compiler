@@ -1146,16 +1146,47 @@ object ArgSections {
      */
     const val N_NARROW_IDENTITY = 27
 
+    // -- (AUDIT.2) round 759: [L_ARGTYPE] split by the iteration's EXIT CLASS ---
+    /**
+     * [L_ARGTYPE] charged to the iterations that went on to REACH
+     * [L_RELATION] — the 27% whose argument type is actually consumed by an
+     * assignability check.
+     */
+    const val N_ARGTYPE_RELATING = 28
+
+    /**
+     * [L_ARGTYPE] charged to the iterations that left the loop body BEFORE
+     * [L_RELATION]. This is the population `docs/perf/argument-check-attribution.md`
+     * § 3 described as "yet all 37,379 pay for the full `argType` computation" —
+     * a FREQUENCY (73% of iterations) that had never been priced.
+     *
+     * The two rows PARTITION [L_ARGTYPE] exactly, in both nanos and calls
+     * (`ArgSectionProbeTest` pins it), so this is a measurement and not a
+     * sample.
+     */
+    const val N_ARGTYPE_NONRELATING = 29
+
+    /**
+     * [N_GET_TYPE_OF_EXPR] and [N_NARROW], split by the same exit class — the
+     * two terms that make up ~80% of the argType row. Without them the
+     * difference between the classes is a RESIDUAL, and § 0's own history is
+     * what a named residual costs.
+     */
+    const val N_GTOE_RELATING = 30
+    const val N_GTOE_NONRELATING = 31
+    const val N_NARROW_RELATING = 32
+    const val N_NARROW_NONRELATING = 33
+
     /** The wrapper's own transition. Probe-only; absent in production. */
-    const val ENTRY = 28
+    const val ENTRY = 34
 
     /** The FIRST empty boundary span of an invocation — not steady state. */
-    const val OVERHEAD_FIRST = 29
+    const val OVERHEAD_FIRST = 35
 
     /** In-situ steady-state empty boundaries; a pessimistic upper bound (round 734). */
-    const val OVERHEAD = 30
+    const val OVERHEAD = 36
 
-    const val N = 31
+    const val N = 37
 
     val names: Array<String> = arrayOf(
         "prologue walkers (10, generic-gated)",
@@ -1186,6 +1217,12 @@ object ArgSections {
         "    narrow site round-441 (never param)",
         "    narrow site M3.4 (iface/str/num arg)",
         "    narrow calls returning the INPUT type",
+        "    argType of args REACHING the relation",
+        "    argType of args exiting BEFORE it",
+        "      - its getTypeOfExpression, REACHING",
+        "      - its getTypeOfExpression, exiting",
+        "      - its narrowing walks, REACHING",
+        "      - its narrowing walks, exiting",
         "  wrapper transition (probe-only)",
         "  probe boundary, first of the invocation",
         "  probe boundary (in situ, steady state)",
@@ -1225,6 +1262,26 @@ object ArgSections {
     var curT: Long = 0
     var depth: Int = 0
 
+    /**
+     * (AUDIT.2): the [L_ARGTYPE] span of the CURRENT loop iteration, held until
+     * the iteration's exit class is known; `-1` = nothing pending.
+     *
+     * The exit class cannot be decided where `argType` is computed — it is
+     * settled up to eleven sections later — so the span is parked here and
+     * charged when the iteration either opens [L_RELATION] (RELATING) or starts
+     * the next iteration / ends the invocation without having done so
+     * (NON-RELATING). Every iteration that opens [L_ARGTYPE] flushes exactly
+     * once, which is what makes the two rows a partition rather than a sample.
+     */
+    var pendingArgType: Long = -1L
+
+    /** The same iteration's [N_GET_TYPE_OF_EXPR] span, parked with it. */
+    var pendingGtoe: Long = 0L
+
+    /** The same iteration's narrowing time and walk count, parked with it. */
+    var pendingNarrow: Long = 0L
+    var pendingNarrowCalls: Long = 0L
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -1235,6 +1292,30 @@ object ArgSections {
         cur = -1
         curT = 0
         depth = 0
+        clearPending()
+    }
+
+    /** Drop whatever the current iteration has parked. */
+    fun clearPending() {
+        pendingArgType = -1L
+        pendingGtoe = 0L
+        pendingNarrow = 0L
+        pendingNarrowCalls = 0L
+    }
+
+    /**
+     * Charge the parked iteration to its now-known exit class. [off] is `0` for
+     * an iteration that reached [L_RELATION] and `1` for one that did not, so
+     * the three pairs of rows stay index-adjacent and the flush is branch-free.
+     */
+    fun flushPending(off: Int) {
+        nanos[N_ARGTYPE_RELATING + off] += pendingArgType
+        calls[N_ARGTYPE_RELATING + off]++
+        nanos[N_GTOE_RELATING + off] += pendingGtoe
+        calls[N_GTOE_RELATING + off]++
+        nanos[N_NARROW_RELATING + off] += pendingNarrow
+        calls[N_NARROW_RELATING + off] += pendingNarrowCalls
+        clearPending()
     }
 
     // The entry points are `inline` so a production call is a static read plus
@@ -1247,6 +1328,7 @@ object ArgSections {
         depth++
         if (depth != 1) return
         invocations++
+        pendingArgType = -1L
         cur = ENTRY
         curT = PassTiming.nowNanos()
     }
@@ -1257,8 +1339,19 @@ object ArgSections {
         if (mode == OFF || depth != 1) return
         if (mode == COARSE && !coarseAnchor[sec]) return
         val now = PassTiming.nowNanos()
-        nanos[cur] += now - curT
+        val d = now - curT
+        nanos[cur] += d
         calls[cur]++
+        // (AUDIT.2): park the argType span, or charge a parked one to its now-known
+        // exit class. `at(L_PARAM)` opens the NEXT iteration, so a span still parked
+        // there belongs to an iteration that left before the relation.
+        if (mode == ON) {
+            if (cur == L_ARGTYPE) {
+                pendingArgType = d
+            } else if (pendingArgType >= 0L && (sec == L_RELATION || sec == L_PARAM)) {
+                flushPending(if (sec == L_RELATION) 0 else 1)
+            }
+        }
         cur = sec
         curT = now
     }
@@ -1274,10 +1367,20 @@ object ArgSections {
     @Suppress("NOTHING_TO_INLINE")
     inline fun end() {
         if (mode == OFF) return
-        if (depth == 1 && cur >= 0) {
-            nanos[cur] += PassTiming.nowNanos() - curT
-            calls[cur]++
-            cur = -1
+        if (depth == 1) {
+            if (cur >= 0) {
+                val d = PassTiming.nowNanos() - curT
+                nanos[cur] += d
+                calls[cur]++
+                // Only reachable if the invocation left INSIDE the argType block
+                // (it cannot today — the block is an expression with a `finally`);
+                // charging it keeps the partition exact if that ever changes.
+                if (mode == ON && cur == L_ARGTYPE) pendingArgType = d
+                cur = -1
+            }
+            // The last iteration never sees another `at(L_PARAM)`, and the two
+            // `return`s inside L_OBJLIT skip the loop's remaining boundaries.
+            if (mode == ON && pendingArgType >= 0L) flushPending(1)
         }
         depth--
     }
@@ -1290,8 +1393,12 @@ object ArgSections {
     @Suppress("NOTHING_TO_INLINE")
     inline fun close(sec: Int, t0: Long) {
         if (mode != ON) return
-        nanos[sec] += PassTiming.nowNanos() - t0
+        val d = PassTiming.nowNanos() - t0
+        nanos[sec] += d
         calls[sec]++
+        // (AUDIT.2): park it with the iteration's argType span — the exit class
+        // is not known for another eleven sections.
+        if (sec == N_GET_TYPE_OF_EXPR) pendingGtoe += d
     }
 
     /**
@@ -1305,6 +1412,7 @@ object ArgSections {
         val d = PassTiming.nowNanos() - t0
         nanos[site] += d; calls[site]++
         nanos[N_NARROW] += d; calls[N_NARROW]++
+        pendingNarrow += d; pendingNarrowCalls++
         if (!changed) { nanos[N_NARROW_IDENTITY] += d; calls[N_NARROW_IDENTITY]++ }
         val b = if (d < 10_000L) 0 else if (d < 100_000L) 1 else if (d < 1_000_000L) 2 else 3
         narrowBucketCalls[b]++; narrowBucketNanos[b] += d
@@ -1345,6 +1453,45 @@ object ArgSections {
                     } = ${if (c > 0) ns / c else 0} ns each" +
                     if (s in L_PARAM until POST) ", leftIn=${leftIn(s)}" else ""
             )
+        }
+        val relN = nanos[N_ARGTYPE_RELATING]
+        val nonN = nanos[N_ARGTYPE_NONRELATING]
+        val relC = calls[N_ARGTYPE_RELATING]
+        val nonC = calls[N_ARGTYPE_NONRELATING]
+        if (relC + nonC > 0) {
+            appendLine("-- (AUDIT.2) argType by EXIT CLASS (raw; partitions the argType row) --")
+            val tot = relN + nonN
+            appendLine(
+                "  reaches the relation  ${(relN / 1_000_000).toString().padStart(5)} ms " +
+                    "(${if (tot > 0) relN * 100 / tot else 0}% of argType) over " +
+                    "${relC.toString().padStart(7)} args = ${if (relC > 0) relN / relC else 0} ns each"
+            )
+            appendLine(
+                "  exits before it       ${(nonN / 1_000_000).toString().padStart(5)} ms " +
+                    "(${if (tot > 0) nonN * 100 / tot else 0}% of argType) over " +
+                    "${nonC.toString().padStart(7)} args = ${if (nonC > 0) nonN / nonC else 0} ns each"
+            )
+            appendLine(
+                "  partition check: rel+non = ${relN + nonN} ns / ${relC + nonC} calls" +
+                    " vs argType row ${nanos[L_ARGTYPE]} ns / ${calls[L_ARGTYPE]} calls" +
+                    if (relN + nonN == nanos[L_ARGTYPE] && relC + nonC == calls[L_ARGTYPE])
+                        "  EXACT" else "  *** MISMATCH ***"
+            )
+            // The two terms that make the classes differ — measured, so the gap
+            // between them is not a residual with a name on it.
+            for ((label, base) in listOf(
+                "getTypeOfExpression" to N_GTOE_RELATING,
+                "narrowing walks    " to N_NARROW_RELATING,
+            )) {
+                appendLine(
+                    "    $label  reaching ${(nanos[base] / 1_000_000).toString().padStart(4)} ms" +
+                        " /${calls[base].toString().padStart(7)} = " +
+                        "${if (calls[base] > 0) nanos[base] / calls[base] else 0} ns" +
+                        "   exiting ${(nanos[base + 1] / 1_000_000).toString().padStart(4)} ms" +
+                        " /${calls[base + 1].toString().padStart(7)} = " +
+                        "${if (calls[base + 1] > 0) nanos[base + 1] / calls[base + 1] else 0} ns"
+                )
+            }
         }
         appendLine("-- narrowing-walk cost distribution (all three sites) --")
         val labels = arrayOf("< 10 us", "10-100 us", "0.1-1 ms", ">= 1 ms")

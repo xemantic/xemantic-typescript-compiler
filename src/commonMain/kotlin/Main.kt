@@ -139,6 +139,19 @@ fun main(args: Array<String>) {
             "--workers" -> {
                 i++; if (i < args.size) ParallelCheckMode.workers = args[i].toIntOrNull() ?: 0
             }
+            // (AUDIT.3): price the globals-lookup population by AMPLIFICATION —
+            // N reads of the same key under ONE timestamp pair, so the ~89 ns
+            // pair cannot dominate the ~57 ns it is measuring. Needs the
+            // instrumented table, hence --passTiming. Two runs at different N
+            // solve for the per-read cost with the pair cost cancelling.
+            "--globalsAmp", "--globalsamp" -> {
+                passTiming = true
+                i++
+                if (i < args.size) {
+                    GlobalsAmp.reset()
+                    GlobalsAmp.reads = args[i].toIntOrNull() ?: 0
+                }
+            }
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
             "--help", "-h" -> { printUsage(); return }
             else -> if (!a.startsWith("-")) project = a
@@ -369,6 +382,7 @@ private fun printUsage() {
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
           --workers N        parallel share-nothing partition check on N threads (INV.6(6c); line order may differ)
+          --globalsAmp N     (AUDIT.3) price one globals[name] probe: N reads under one timestamp pair (implies --passTiming)
                              + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help
         """.trimIndent()

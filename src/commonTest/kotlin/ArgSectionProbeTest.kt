@@ -240,7 +240,68 @@ class ArgSectionProbeTest {
         // Nested sub-measures never record under COARSE either.
         assert(ArgSections.calls[ArgSections.N_GET_TYPE_OF_EXPR] == 0L)
         assert(ArgSections.calls[ArgSections.N_NARROW] == 0L)
+        assert(ArgSections.calls[ArgSections.N_ARGTYPE_RELATING] == 0L)
+        assert(ArgSections.calls[ArgSections.N_ARGTYPE_NONRELATING] == 0L)
+        assert(ArgSections.calls[ArgSections.N_GTOE_NONRELATING] == 0L)
+        assert(ArgSections.calls[ArgSections.N_NARROW_NONRELATING] == 0L)
         assert(ArgSections.narrowBucketCalls.sum() == 0L)
+        ArgSections.reset()
+    }
+
+    /**
+     * (AUDIT.2): the exit-class split must PARTITION the argType row — every
+     * argument whose type was computed lands in exactly one class, and the two
+     * classes' nanos sum to the row they came from.
+     *
+     * This is the pin round 758 added for the `getCalleeType` outcome split,
+     * for the same reason: without it a later edit could silently turn the
+     * measurement into a sample, and a sample would read as "the non-relating
+     * class is cheap" no matter what the truth was.
+     */
+    @Test
+    fun `the argType exit-class split partitions every argument`() {
+        runProbe()
+        val rel = ArgSections.calls[ArgSections.N_ARGTYPE_RELATING]
+        val non = ArgSections.calls[ArgSections.N_ARGTYPE_NONRELATING]
+        // Not vacuous: the fixture exercises BOTH classes — `takesNumber(s.length)`
+        // and `takesNumber("nope")` reach the relation, while the `.map((x) => x + 1)`
+        // callback argument exits at the function-vs-function block.
+        assert(rel > 0L)
+        assert(non > 0L)
+        assert(rel + non == ArgSections.calls[ArgSections.L_ARGTYPE])
+        assert(
+            ArgSections.nanos[ArgSections.N_ARGTYPE_RELATING] +
+                ArgSections.nanos[ArgSections.N_ARGTYPE_NONRELATING] ==
+                ArgSections.nanos[ArgSections.L_ARGTYPE]
+        )
+        // The relating class is exactly the population that opened L_RELATION.
+        assert(rel == ArgSections.calls[ArgSections.L_RELATION])
+        // The two MECHANISM rows partition their own sub-measures the same way,
+        // which is what lets the difference between the classes be attributed
+        // rather than named.
+        assert(
+            ArgSections.calls[ArgSections.N_GTOE_RELATING] +
+                ArgSections.calls[ArgSections.N_GTOE_NONRELATING] ==
+                ArgSections.calls[ArgSections.N_GET_TYPE_OF_EXPR]
+        )
+        assert(
+            ArgSections.nanos[ArgSections.N_GTOE_RELATING] +
+                ArgSections.nanos[ArgSections.N_GTOE_NONRELATING] ==
+                ArgSections.nanos[ArgSections.N_GET_TYPE_OF_EXPR]
+        )
+        assert(
+            ArgSections.calls[ArgSections.N_NARROW_RELATING] +
+                ArgSections.calls[ArgSections.N_NARROW_NONRELATING] ==
+                ArgSections.calls[ArgSections.N_NARROW]
+        )
+        assert(
+            ArgSections.nanos[ArgSections.N_NARROW_RELATING] +
+                ArgSections.nanos[ArgSections.N_NARROW_NONRELATING] ==
+                ArgSections.nanos[ArgSections.N_NARROW]
+        )
+        // Nothing is left parked once the last invocation has ended.
+        assert(ArgSections.pendingArgType == -1L)
+        assert(ArgSections.pendingNarrowCalls == 0L)
         ArgSections.reset()
     }
 }
