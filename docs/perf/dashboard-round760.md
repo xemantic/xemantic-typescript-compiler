@@ -157,6 +157,23 @@ So the relation rule is not the unit of work; **the narrowing features are**, an
 they must land first. Recorded in place in `checkTypeRelatedToCore` so the next
 agent finds the price beside the leniency.
 
+> **CORRECTED IN PLACE, round 761 — this subsection's two headline claims are
+> FALSIFIED.** (1) The member does not resolve to `any`; it resolves to the
+> **unsubstituted type PARAMETER**. The probe used below is a READ into `string`,
+> and an unconstrained type parameter relates leniently in that direction, so it
+> cannot tell `any` from `T` — a WRITE probe (`s2.v = "x"`) reports
+> `not assignable to type 'TFWD'`. (2) **tsc's real shape is NOT
+> `interface AbstractKeyword extends KeywordToken<…>`** — `src/compiler/types.ts`
+> line 1632 writes `export type AbstractKeyword =
+> ModifierToken<SyntaxKind.AbstractKeyword>`, a type ALIAS, which takes the working
+> `resolveGenericPropertyType` path. Probed against the real source: `.kind` is
+> `SyntaxKind.AbstractKeyword`, correct, and always was. **So this is not the root
+> cause of `completions.ts:2237`, and "it is why the landed veto cannot fire" does
+> not follow** — the round-761 fix for the defect below fires **zero** times on all
+> eight profiles (shadow A/B counter). The line's visible cause is that inside
+> `if (isIdentifier(node))` the reference stays `Node`: the (REL.2) narrowing
+> family. Details: PLAN-PHASE-5.md round 761.
+
 **(REL.3) — a type argument is LOST after two heritage hops.** This, not the enum
 rule, is the actual root cause at `completions.ts:2237`, which is why the landed
 veto does not move that line. tsc's real shape is

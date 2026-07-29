@@ -116344,7 +116344,13 @@ interface DataView {
         val visited = mutableSetOf<Int>()
         val queue = ArrayDeque<Type>()
         type.baseTypes?.forEach { queue.addLast(it) }
+        // (REL.3) round 761: the descent below now INSTANTIATES each base through its
+        // reference's mapper, which mints fresh type ids — so `visited` alone no longer
+        // bounds a self-expanding circular base (`interface A<T> extends A<A<T>>`, a
+        // TS2310 shape we still type). Cap the walk; real chains are a handful deep.
+        var steps = 0
         while (queue.isNotEmpty()) {
+            if (steps++ > 1000) return null
             val cur = queue.removeFirst()
             if (!visited.add(cur.id)) continue
             if (cur is Type.Reference && cur.target.symbol === declaringSymbol) {
@@ -116354,7 +116360,25 @@ interface DataView {
             // `class E extends D` where D extends C<string>: E's baseTypes contain
             // D (Type.Interface, no generic), and D's baseTypes contain C<string>.
             when (cur) {
-                is Type.Reference -> cur.target.baseTypes?.forEach { queue.addLast(it) }
+                // (REL.3) round 761: a Reference's OWN type arguments must be pushed
+                // THROUGH to its target's base types, exactly as
+                // resolveGenericPropertyTypeWorker does for the same descent. The
+                // target's `baseTypes` are written in the TARGET's type-parameter
+                // scope: for `interface Fwd<TFWD> extends Box<TFWD>`, Fwd's baseTypes
+                // hold `Box<TFWD>` — the raw TFWD, not this reference's argument. So
+                // enqueueing them unmapped answers `Box<TFWD>` for `S2 extends
+                // Fwd<number>` and the property resolves to the bare type PARAMETER
+                // instead of `number`. One hop substituted, the second did not.
+                is Type.Reference -> {
+                    val tps = cur.target.typeParameters
+                    val args = cur.resolvedTypeArguments
+                    val mapper = if (!tps.isNullOrEmpty() && args != null && tps.size == args.size) {
+                        createTypeMapper(tps, args)
+                    } else null
+                    cur.target.baseTypes?.forEach { base ->
+                        queue.addLast(if (mapper != null) instantiateType(base, mapper) else base)
+                    }
+                }
                 is Type.Interface -> cur.baseTypes?.forEach { queue.addLast(it) }
                 else -> {}
             }

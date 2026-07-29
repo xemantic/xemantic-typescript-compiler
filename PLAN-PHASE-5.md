@@ -20,6 +20,78 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 761 (2026-07-29) — (REL.3) SIZED, AND ITS HEADLINE CLAIM IS FALSIFIED. THE
+SUBSTITUTION DEFECT IS REAL, MEASURED AND NOW FIXED — BUT IT DOES NOT EXIST ANYWHERE
+IN tsc's SOURCE, AND IT NEVER DID.** Round 760 wrote: *"every keyword node's `kind` in
+tsc's own source is `any`"*, from an 8-line synthetic reduction. Measured against the
+REAL `src/compiler/types.ts` this round: **`AbstractKeyword.kind` is
+`SyntaxKind.AbstractKeyword`, correctly** — because tsc declares
+`export type AbstractKeyword = ModifierToken<SyntaxKind.AbstractKeyword>`, a type
+ALIAS, and an alias to a generic reference takes the WORKING resolution path. The
+`interface X extends Intermediate<Arg>` form the reduction used does not occur.
+Landed anyway (it is a genuine defect, 9 shapes, zero cost); **8×2 grid unchanged code
+for code, corpus 8,837 / 0.** Predictions: **2 of 6**.
+
+*The caller's brief said to size before fixing, and the sizing is the deliverable.
+Two of the round's three headline numbers came from refusing to trust a reduction.*
+
+- **THE DEFECT IS NOT `any` — IT IS THE UNSUBSTITUTED TYPE PARAMETER.** Round 760's
+  probe was a READ into `string`; an unconstrained TP relates leniently in that
+  direction, so `any` and `T` are indistinguishable to it. A WRITE probe separates
+  them in one run: `s2.v = "x"` reports *"Type 'string' is not assignable to type
+  **'TFWD'**"*. Renaming every parameter (`TBOX`/`TFWD`/`TWR`) then names the survivor
+  — always the INTERMEDIATE's own parameter, i.e. hop 1 substituted and hop 2 did not.
+- **ROOT CAUSE, one function: `findInheritedBaseRef` (Checker.kt).** Stepping from a
+  `Type.Reference` up to its target's own bases, it enqueued them RAW. A target's
+  `baseTypes` are written in the TARGET's type-parameter scope — for
+  `interface Fwd<TFWD> extends Box<TFWD>`, Fwd's baseTypes hold `Box<TFWD>` — so the
+  walk answered `Box<TFWD>` and the property resolved to the bare parameter. The fix
+  applies that reference's mapper to each base before enqueueing, which is EXACTLY what
+  `resolveGenericPropertyTypeWorker` already does for the same descent (lines
+  100670-100673); it is a missing-composition bug, not a new mechanism.
+- **SHAPE CENSUS — 13 shapes, 10 broken, 9 fixed.** Broken and fixed: forwarded TP (2
+  and 3 hops), an intermediate that WRAPS its TP (`Box<T[]>`), an intermediate with
+  EXTRA type params, REORDERED type params, a CLASS chain, a METHOD signature, a nested
+  type argument. Already correct and still correct: a single hop; a NON-forwarding
+  intermediate; an intermediate's OWN member; a generic derived interface instantiated
+  at the use site (`Gen<T> extends Fwd<T>` used as `Gen<number>`) — that one is a
+  `Type.Reference`, so it never enters the broken walk. **Still broken, NOT fixed: a
+  type-ALIAS intermediate** (`type ABox<T> = Box<T>; interface S10 extends ABox<number>`)
+  — a different site (`getTypeFromBaseTypeExpression` only interns a Reference when the
+  declared type is a `Type.Interface`), and that one really does degrade to `any`.
+- **BLAST RADIUS: ZERO, ON EVERY AXIS.** Corpus: all 25 generated classes, **8,837
+  tests, 0 failures** (batches 3,514 + 1,647 + 1,338 + 1,797 + 541). The 8×2 arm-A grid:
+  46 / 46 / 46 / 46 / 46 / 47 / 47 / 95, **identical count AND composition to round
+  760**, including the one `completions.ts:2237` line. Build warning-clean.
+- **AND THAT ZERO IS EXACTLY THE ROUND-753 TRAP, SO IT WAS INSTRUMENTED.** A shadow A/B
+  counter ran the OLD walk beside the new one and counted disagreements: **0 firings on
+  the compiler profile and 0 on services** — the changed code never executes on tsc's
+  source. A green corpus and an unmoved profile therefore prove NOTHING about them, and
+  this note says so rather than banking them as evidence. What DOES fire: the synthetic
+  tsc-shape repro (1 firing, answer `Token<TKind>` → `Token<SyntaxKind.AbstractKeyword>`).
+- **THE FALSIFICATION, measured on the real source rather than argued.** A probe file
+  added to the materialised services profile importing the real `types.ts`:
+  `wantStr(ak.kind)` on a real `AbstractKeyword` reports
+  `Argument of type 'SyntaxKind.AbstractKeyword'` — correct, with the fix contributing
+  nothing (0 firings). So **(REL.3) is not the root cause of `completions.ts:2237`, and
+  the claim that it blocks the round-760 veto is withdrawn.** The remaining cause at
+  that line is visible in the source: inside `if (isIdentifier(node))`, `node` is still
+  `Node` — a type-predicate guard that does not narrow, i.e. the **(REL.2) narrowing
+  family**, which is where the next round belongs.
+- **EVERY PIN RUN AGAINST UNMODIFIED `bf9abfb3`: the 5 TARGETS FAIL and the 3 NEGATIVE
+  CONTROLS PASS.** The controls are load-bearing, not decoration: *a SPECIALIZED
+  intermediate is not re-substituted* (`Spec<T> extends Box<string>` must keep `string`)
+  fails any fix that pushes the outer argument down blindly, and *REORDERS its type
+  parameters* fails any fix that passes arguments positionally.
+- **PREDICTIONS 1 and 3 moved the map.** (1) "the lost type is `any`" — **WRONG**, it is
+  the type parameter, and the instrument that said otherwise was the read probe. (3) "the
+  defect has siblings" — right, and there are more than expected (7 distinct broken
+  shapes plus one that a different site owns). (2) "≤20 baselines" — 0. (4) non-forwarding
+  intermediate fine — right. (5) "the fold at resolveInterfaceMembersCore is the site" —
+  **WRONG**, the member table is not consulted at all here; the interface member SYMBOL is
+  shared by every derived type and its cached type is `any`. (6) "counts move UP" —
+  **WRONG**, nothing moved, because nothing fired.
+
 **Round 760 (2026-07-29) — THE DASHBOARD RE-MEASURED END TO END FOR THE FIRST TIME
 SINCE ROUND 730, AND IT BARELY MOVED. Five profiles are unchanged CODE FOR CODE
 across ~50 commits; the only movement anywhere on the 8×2 grid is ONE line, and
@@ -1042,26 +1114,23 @@ backlog-horizon decision, not queue debt.)
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
-- [ ] **(REL.3) A TYPE ARGUMENT IS LOST AFTER TWO HERITAGE HOPS — the actual root
-  cause of `completions.ts:2237`, and the ONE remaining non-env-legit line on the
-  whole 8×2 dashboard (round 760).** Measured, NOT enum-specific, 8-line repro:
-
-      export interface Box<T> { v: T; }
-      export interface Fwd<T> extends Box<T> {}
-      export interface FwdA extends Fwd<K.A> {}     // FwdA.v resolves to `any`
-      export interface BoxA extends Box<K.A> {}     // BoxA.v resolves to `K.A`  ✓
-
-  One hop substitutes; a SECOND hop through an intermediate that **forwards its own
-  type parameter** to its base degrades to `any`. `getTypeFromBaseTypeExpression`
-  interns `Reference(Fwd, [K.A])`, but resolving *that* reference's own base
-  `Box<T>` needs the outer mapper applied to a type argument that is itself a type
-  parameter, and the substitution is not carried. tsc's shape is exactly this —
-  `AbstractKeyword extends KeywordToken<SK.AbstractKeyword>`,
-  `KeywordToken<TKind> extends Token<TKind>`, `Token<TKind> extends Node { kind: TKind }`
-  — so every keyword node's `kind` is `any`, which is why `Node <: Modifier` still
-  "holds" and why round 760's landed veto cannot fire on the real code. **M3.1
-  territory; decompose before starting.** Full measurement:
-  `docs/perf/dashboard-round760.md` § 4. Also unblocks (REL.2).
+- [x] **(REL.3) FIXED round 761 — and its headline claim was FALSIFIED in the same
+  round.** The defect was real: `findInheritedBaseRef` enqueued a `Type.Reference`'s
+  target's `baseTypes` RAW, and those are written in the TARGET's type-parameter
+  scope, so `interface S extends Fwd<number>` (where `Fwd<T> extends Box<T>`)
+  resolved `.v` to the bare parameter `T` — **not to `any`**, as round 760 reported;
+  its read-into-`string` probe cannot tell an unconstrained TP from `any`. 9 of 10
+  broken shapes fixed (forwarded / wrapping / extra / reordered TPs, class chains,
+  method signatures, nested args, 3 hops); 8 pins in
+  `HeritageTypeArgumentSecondHopTest`. **But it fires ZERO times on all 8 profiles**
+  (shadow A/B counter), because tsc writes
+  `export type AbstractKeyword = ModifierToken<SyntaxKind.AbstractKeyword>` — a type
+  ALIAS, which takes the working `resolveGenericPropertyType` path. Probed on the
+  real `types.ts`: `AbstractKeyword.kind` is `SyntaxKind.AbstractKeyword`, correct,
+  and always was. **So (REL.3) is NOT the root cause of `completions.ts:2237` and
+  does not block (REL.2)** — that claim is withdrawn. Leftover: a type-ALIAS
+  intermediate (`type ABox<T> = Box<T>; interface S extends ABox<number>`) still
+  degrades to `any`, in `getTypeFromBaseTypeExpression`; unqueued, no known consumer.
 
 - [ ] **(REL.2) Close the enum → MEMBER relation direction — BLOCKED ON NARROWING,
   and the price is measured (round 760).** `checkTypeRelatedToCore` decides
@@ -1076,6 +1145,11 @@ backlog-horizon decision, not queue debt.)
   (iii) `SyntaxKind` → `CommentKind` (`scanner.ts:905`).
   Round 760's `enumMemberDomainProvesNotSubtype` is the site-local stand-in and
   should be DELETED when this lands.
+  **Round 761: this is now the TOP item and it also owns `completions.ts:2237`.**
+  (REL.3) was measured NOT to be that line's cause; the visible cause in the source
+  is that inside `if (isIdentifier(node))` the reference stays `Node` — a
+  type-predicate guard that does not narrow. That is the same family as (i)/(ii),
+  so start with the narrowing features and re-measure the line afterwards.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
