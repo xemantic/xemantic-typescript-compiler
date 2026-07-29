@@ -1,3 +1,601 @@
+**Round 755 (2026-07-29) — (CALL.4) CLOSED AS A MEASUREMENT: the 21,708 ns is 80% ONE
+CALLEE, and the item's own headline number had HALVED while it sat in the queue.**
+Compiler profile `--listAll` **46, byte-identical with the probe at its deepest**
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322); filtered suite (`*Narrow*` `*Flow*`
+`*Guard*` `*Inv0*`) **504 / 0 / 0**; +18 pins; build warning-clean. **NOTHING LANDED
+beyond the harness, correctly.** The full suite and the cost gate are the owner's to run.
+
+**FIRST, THE ITEM'S DEFINING NUMBER DOES NOT REPRODUCE.** Round 736 measured 33,307
+genuinely-narrowing calls at 21,708 ns = 723 ms. Today: **21,970 calls at 20,085 ns =
+441 ms** — the per-call cost is stable (-7.5%) but the COUNT fell **34%** while the total
+call count ROSE 2.5% (333,031 -> 341,240). No narrowing change landed in between; the
+shift is downstream of (REL.1) and round 754, which changed what the declared types ARE
+and so how often a condition has anything to remove. **Carry-forward: an item defined by a
+measured number must re-measure it before a round is spent inside it.**
+
+**THE SPLIT.** Eleven `C_*` sub-measures, one per leaf, folded per outermost call into
+NARROWING and IDENTITY columns (the two populations differ 14x per call, so a single mean
+answers nothing). Of the 441 ms narrowing: **`narrowByCallPredicate` 351 ms over 23,138
+calls at 15,181 ns = 80%**, `narrowByEquality` 50, `narrowByTruthiness` 16, everything else
+<= 6, and **the dispatcher's own residue is 9 ms (2%)**. Replicated across two independent
+timing runs at different boundary counts: the 80% moves 1.2 points while individual small
+rows move +/-25%. **`applyConditionNarrowing` is not a function with an expensive body — it
+is a `when` that reaches one expensive callee**, and that callee does type-predicate
+RESOLUTION, i.e. type-system work belonging to M3.1, not dispatch machinery.
+
+**THE SIZE, AGAINST A BAND RE-DERIVED TODAY.** Five interleaved NULL pairs (same class dir
+both sides): median **-0.05%**, spread **1,095 ms**, range **[-526, +569]** on a 26,778 ms
+compile => the band is **+/-2.0%**. The whole genuinely-narrowing population is **441 ms =
+1.6%** — *smaller than one pair's noise*. A perfect memo over the whole `narrowByCallPredicate`
+leaf is capped at 472 ms = 1.75%, in-band before it costs anything, so round 736's own rule
+("measure the PRIZE first") says do not bother measuring its repeat factor. **No lever.**
+
+**TWO CORRECTIONS TO ROUND 736.** (i) The rejected "does this condition mention the name"
+pre-test is not merely in-band — it is **UNSOUND**: 99,002 identity calls (31%) reach
+`aliasedConditionInitializer`, the aliased-condition feature whose whole point is a
+condition that does NOT mention the walked reference, and **1,873 of those alias
+resolutions genuinely narrow**. (ii) The identity majority is not free dispatch: 73% of its
+454 ms is inside three leaves that RESOLVE something (call-predicate 121, equality 91,
+alias 77). An identity call resolved a callee and then found nothing to remove.
+
+**THE CENSUS ALSO SAYS.** `instanceof` and `in` are **38 and 42 invocations in the entire
+compile** — the two arms with the most conspicuous narrowing semantics are statistically
+absent from tsc's own source. The `=` (truthy-assignment) arm's 5,968 invocations are
+**entirely OTHER references walking past**: a walk for the assignment's own target breaks
+out of the fast-forward loop at the `FlowAssignment` the same expression produced and never
+sees the condition — which is why only 26 of the 5,968 narrow. Both facts came out of test
+fixtures that FAILED first with zero invocations.
+
+**PROBE COST, MEASURED NOT ASSERTED.** ON carries ~2.34 M boundary pairs; ON->DEEP adds
+exactly 172,957 and moves the anchor +47 ms => **<=271 ns per pair, an upper bound only**
+(rows move +/-25% between those runs). The DEEP row's own attributed span is 81 ns, so a
+pair ATTRIBUTES a third of what it COSTS — round 733's lesson from the other side. At
+rounds 734/735's 86-89 ns per read the ON run is **~21% inflated**; every per-section
+nanosecond above is RELATIVE attribution.
+
+LANDED: `NarrowSections` `C_*` rows + arm census + `--narrowSectionsDeep` (opt-in,
+behaviour-free when off) and `NarrowSectionProbeTest` (18 pins; the arm mirror is pinned
+SHAPE BY SHAPE with confusable arms asserted zero — a fixture lighting every arm at once
+cannot detect a swap). Full derivation:
+**`docs/perf/condition-narrowing-attribution.md`**.
+
+**PART 2 — (ENGINE.1) SITE 2 MEASURED, E1-E4 SCORED, AND THE 14x IS GONE FOR GOOD.**
+`checkReturnAssignability` partitioned into 15 rows (a new level C in `CtaSections` with
+its own index space, so the level-A/B pins are untouched; wrapper + `...Core` so every
+early return closes its row). **The cross-check is what makes it believable: level C
+totals 741 ms over 10,119 invocations against level A's INDEPENDENT
+`A: checkReturnAssignability` row at 740 ms** — two partitions taken from opposite sides
+of the same call, agreeing to 0.1%. Calibrated differentially: ON carries 144,179
+boundaries for 741 ms, COARSE 10,119 for 642 ms => **739 ns per boundary**, consistent
+with round 733's in-situ ~900 ns and NOT with the 86-89 ns per read (which is a READ, not
+a bracket in a hot function). **Net of probe: engine 446 ms (71.6%), dedicated-walker
+layer 177 ms (28.4%), bookkeeping 0** — the layer is **0.66% of the compile** and
+**0.40x the engine work**. **E1 HOLDS** (28.4%, inside 25-50%); **E2 FAILS** (4.5x, not
+>=10x — the 14x was an artifact of site 1's relation being 2.2% of its function); **E3
+HOLDS BY A BOUND** (sites 1+2 = 503 ms; site 3's WHOLE function is 373 ms, so the
+three-site layer is capped at 876 ms = 3.3% whatever its split; honest estimate
+~605-630 ms = **2.3%**); **E4 HOLDS AT BOTH SITES** — site 1's weak-type rule and site 2's
+excess-property checking are both implemented by tsc *inside* `checkTypeRelatedTo`, so
+both MOVE rather than vanish. **THE OWNER-FACING NUMBER: the scope change is worth ~2.3%
+of a check-only compile against a +/-2.0% band — between one and two noise bands — and
+less than that after the rules that move.** Two findings site 1 could not give: the
+**218-line TS2322 elaboration runs ONCE in the whole compile**, and the **legacy string
+checker is not a rare fallback — 8,587 of 10,119 invocations (85%) exit inside it**,
+running the full engine block and then re-checking through the string path, for 15 ms.
+**LEFT OPEN: site 3 (`checkAssignmentExpression`, 1,427 lines, 373 ms) needs the same
+level-D partition; it can sharpen the number but cannot change the conclusion.** LANDED:
+`CtaSections` level C (`beginC`/`atC`/`endC`, own arrays, COARSE = one row) + 4 pins in
+`CtaSectionProbeTest`. Filtered gates: 866 local + 1,290 corpus (`_R`/`_A`/`_G`) tests,
+0 failures; `--listAll --ctaSections` byte-identical at 46. Derivation:
+**`docs/perf/engine-rule-price.md`** §§ 5-8.
+
+**Round 754 (2026-07-28) — (PERF.HW.a) CLOSED: `--workers N` now reaches 46. THE ROUND'S
+DELIVERABLE IS THAT ROUND 740's CLASSIFICATION WAS WRONG — it is NOT the round-609
+partition-collector class, and the sequential run was the one getting the right answer for
+the wrong reason.** Compiler profile `--listAll` **46, sorted-identical to a pre-change
+build**, composition unchanged (TS2591x43 / TS2304x2 / TS2584x1, zero TS2322);
+`--partitionCheck 2` **EQUIVALENT on ALL EIGHT profiles**; `--workers 2` and `--workers 4`
+both **46 and byte-identical to sequential** — the item's acceptance criterion, met.
+services 47 / server 47 / harness 95, each diffed byte-identical against a build of
+unmodified HEAD. `cost_gate.py` **+0.00% on 19 of 20 counters**, `typeNode.bypassed`
+-0.01%; no rebaseline needed. +9 pins, build warning-clean. **The full suite and the cost
+gate are the owner's to run.**
+
+**PART 1 — QUEUE RECONCILE (`8c10a780`).** The checkboxes had drifted, which CLAUDE.md
+names as a real failure mode. **(CALL.2) ticked** — its body already carried a
+">>> DONE round 735 <<<" verdict and `docs/perf/argument-check-attribution.md` is
+committed; only the box was unticked. **(LIB.1) stays open but its TITLE now says what is
+closed**: (a) round 730 (the `projectDefaults` real-lib flip), (b) round 731
+(DOM/webworker/scripthost, 108 files) — what remains is only (c)'s user-facing half, whose
+corpus impact round 731 measured as ZERO on the design where the diagnostic is raised from
+the real-lib resolution path. **(CALL.4) and (ENGINE.1) stay open**, each with a one-line
+statement of what genuinely remains (the whole 21,708 ns split; sites 2 and 3 plus the
+E1-E4 scoring).
+
+**PART 2 — THE MEASUREMENT THAT OVERTURNS ROUND 740.** `--partitionCheck 2` reproduces the
+divergence SEQUENTIALLY (`full=46 merged=62 extra=16`), so the bug was debuggable
+single-threaded, as the item hoped. All 16 extras are `return evaluatorResult(...)` sites
+in `utilities.ts` — and a byte-offset alignment shows they are 16 of the 21 such returns,
+the 5 quiet ones being exactly the ones whose argument does NOT narrow to `number`/`string`.
+**A probe printing source type, target type and the relation verdict at the emission site
+in BOTH views is what settled it:**
+
+    FULL  target=EvaluatorResult<string|number|undefined> Interface  src=EvaluatorResult<number>  rel=true   tgtProps=[value:any, ...]
+    PART  target=EvaluatorResult<string|number|undefined> Interface  src=EvaluatorResult<number>  rel=false  tgtProps=[value:T,   ...]
+
+Same two types, opposite verdicts. **No collector is starved — there is no context to
+starve.** The target `EvaluatorResult` written bare resolves to the RAW `Type.Interface`,
+whose `value` member still carries the un-substituted `T`, and nothing relates a
+`Type.Reference` to that (round 726's trap from the other side). **The sequential run was
+right BY ACCIDENT: a resolution-ORDER accident had cached that same `value` member as
+`any`, making the relation vacuously true.** Reorder the files — which is precisely what
+`--partitionCheck N` and `--workers N` do — and the accident stops. **A two-file scratch
+project reproduces the false positive with NO partitioning at all**, which is the
+independent confirmation the collector story never had.
+
+**THE FIX (`cac22abd`) AND WHY IT IS AT THE RELATION AND NOT AT RESOLUTION.** The first
+attempt was the principled one — fill the missing arguments from the defaults in
+`getTypeFromTypeReference`, as tsc's `fillMissingTypeArguments` does. It passed every
+profile gate (46, partitionCheck EQUIVALENT, workers 46) **and the corpus caught it**:
+filling at resolution makes a bare `TableClass` and an explicit `TableClass<any>` the SAME
+interned instance, and `aliasDisplayMap` excludes `Type.Reference` deliberately, so
+`type Table = TableClass` stopped displaying as `Table` —
+`typeVariableConstraintedToAliasNotAssignableToUnion`, 8 baseline lines, error set
+otherwise unchanged. Registering the alias on the filled reference is not available either:
+the same interned instance is what the T-constraint elaboration prints as `TableClass<any>`
+in that very baseline, so it would break more lines than it fixed. **So the normalisation
+moved to `checkTypeRelatedToCore`**: `defaultedInstantiationOfOpenGeneric` maps an open
+generic whose every parameter has a resolved default to `getOrInternReference(target,
+defaults)` before anything else looks at either side. The answer changes and no display
+does. Recursion terminates because `Type.Reference` is not a `Type.Interface`.
+
+**THE FIX ALSO CLOSES A SILENT LENIENCY, and that is what makes the pins non-vacuous.** On
+unmodified HEAD a bare `Box` target ACCEPTED `Box<string>` where `Box<T = number>`, because
+the raw target's `value: T` is a bare type parameter and the relation is lenient there.
+**4 of the 9 pins fail on pristine HEAD and TWO OF THOSE FOUR ARE THE NEGATIVE CONTROLS** —
+so the change is not only an FP removal, it starts rejecting code HEAD wrongly accepted.
+The other 5 pass on both builds and ship saying so; one of them (`Cell<T = number, U = T>`)
+is documented as riding the relation's TypeParam lenience, because a default that NAMES an
+earlier parameter is filled with the parameter itself rather than through a mapper of the
+args before it — a known divergence from tsc's `fillMissingTypeArguments`, recorded rather
+than papered over.
+
+**NEGATIVE RESULT worth keeping: services' TS2345 is NOT this round's.** The services
+profile measures 47 (TS2591x43 / TS2304x2 / TS2584x1 / TS2345x1) against a round-739 TSV
+row of 46 — a real drift from rounds 741-753, not from this change: a build of unmodified
+HEAD emits the identical 47 lines. The site is `completions.ts:2237`, an
+`isIdentifier(node)` guard failing to narrow. It is unrelated to enums or defaults and is
+left for a future round; recorded here so the next agent does not attribute it to (REL.1)
+or to this fix without measuring.
+
+**Round 753 (2026-07-28) — (REL.1)(c) STEPS 5b AND 5c COMPLETE. THE ARC IS DONE, AND THE
+ROUND'S DELIVERABLE IS THAT TWO ABLATIONS OF THE SAME SHAPE GAVE OPPOSITE ANSWERS — one
+"keep", one "cut" — and only an instrumented ablation could tell them apart.** Compiler
+profile `--listAll` BYTE-IDENTICAL at 46 after both commits, whole output diffed SORTED
+LINE-BY-LINE, composition unchanged (TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). 8,203
+tests (7,068 generated corpus over A/C/D/E/G/I/N/O/P/S/T/U + 1,135 local over the
+enum/narrowing/discriminant/switch/objlit/guard/conditional/relation classes), 0 failures.
++6 pins, -194 lines, build warning-clean. **The full suite and the cost gate are the
+coordinator's run — see the report.**
+
+**COMMIT 1 (`1310bfef`) — THE LAST READER, AND ITS FALLBACK IS LOAD-BEARING.**
+`selectUnionMemberByObjLitDiscriminant` reads through `discriminantKeysOfMember`
+(type-first, annotation walk as fallback) instead of
+`enumMemberKeysOfTypeNode(discriminantPropAnnotation(...))`. That composition IS the
+fallback, so the type half can only ANSWER where the site was blind. Probe first, as
+instructed: **292 sightings, 292 AGREE, 0 mismatched, 0 TYPEBLIND, 0 TYPEEXTRA**;
+instrument falsified in the same run (`SELFTEST MISMATCH-REACHABLE`); `canonicalEnumSymbol`
+memo-bypass re-run at every mint, 342 checks / 0 divergences.
+
+**ROUND 752 PREDICTED THE FALLBACK WOULD SURVIVE HERE. THE PREDICTION WAS TESTED IN BOTH
+DIRECTIONS, AND THE PROFILE ALONE WOULD HAVE SAID THE OPPOSITE.** With the AST fallback cut
+out the compiler profile stays byte-identical at 46 — the same signal that retired the
+fallback-reliance question at the five earlier sites. It is worthless here: the round-475
+`TypeQuery` shape (`kind: typeof CloseTag` over a top-level `const CloseTag = "close"`,
+tsc's editorServices `eventName` pattern) resolves to the WIDENED `string` and carries no
+key, while `enumMemberKeysOfTypeNode` still yields `lit:s:close`. The probe reports that
+shape TYPEBLIND with a real decision difference (`ast=true type=false`), and an ablated
+build emits a wrong-constituent TS2353 on it. **So the ablation's byte-identity was a
+statement about the profile's contents, not about the code.** The docstring's
+pre-(REL.1)(a) premise ("enum-member types resolve to `any`, so the resolved property type
+cannot decide this") is corrected with the flip.
+
+**THE PIN SHAPE HAD TO BE INVERTED, AND THE FIRST ATTEMPT PASSED ON BOTH BUILDS.** A failed
+selection at this site is NOT silence: both consumers fall back to the whole union, and the
+nested-excess consumer then reads the property off the FIRST constituent. Written the
+natural way — matching constituent first — every pin passes on both builds. **REVERSED, a
+failed selection becomes a false positive naming the wrong member's shape**
+(`'id' does not exist in type '{ url: string; }'`), so the pins assert ABSENCE in a branch
+that must be reachable, each with a plain-annotation reachability control. 1 of 6 FAILS on
+unmodified `bdc6abb1` — the parenthesized-annotation witness, which the AST reader has no
+arm for. The other five ship declared as what they are.
+
+**COMMIT 2 (`4300de65`) — (5c) DELETES THE `.kind` DOMAIN VETO FAMILY.**
+`kindDomainProvesNotSubtype`, `kindDomainKeysExceed`, `kindDomainKeysOfType` (+ its Type.id
+memo), `kindDomainKeysFromTypeNode`, `kindDomainTypeDeclSymbol`, `ifaceKindDomainKeys` and
+`discriminantPropAnnotation`, with all three call sites: the union negative-guard branch,
+the single-type negative-guard `never` gate, and round 729's `evaluateConditional` patch.
+
+**THE ABLATION WAS INSTRUMENTED TO COUNT THE VERDICTS IT SUPPRESSED, AND THAT COUNT IS THE
+EVIDENCE.** `kindDomainKeysExceed` is the single funnel for all three sites, so forcing it
+to `false` reproduces the deletion exactly. Done that way the profile is byte-identical at
+46 — but **the veto FIRED 11,667 times on the compiler profile (of 40,648 consultations)**
+and changed no output. That number is what makes the byte-identity mean something: an
+ablation that never fires cannot distinguish dead code from load-bearing code, and this
+round carries its own counter-example in commit 1. **Ask of every green ablation how many
+times the disabled code actually ran.**
+
+**ROUND 729'S OWN PIN IS THE SHARPEST EVIDENCE for the conditional call site.**
+`DistributiveConditionalTypeTest.a sibling AST interface is not excluded just because it is
+structurally compatible` is the test that patch was written for; it passes without it, as
+do all 8 in that class. Mechanism, and it is the same one round 752 identified: every
+member of this family was a veto layered over the structural relation, written when an enum
+member resolved to `anyType` and sibling AST interfaces read as mutually assignable.
+(REL.1)(a)/(b) removed the premise, so the veto only ever agreed with a verdict already
+reached.
+
+**SCOPE CORRECTION TO (5c) AS WRITTEN — the queue also called for deleting "the AST key
+helpers", and THEY STAY.** `enumMemberKeysOfTypeNode` and `enumSwitchKeysFromTypeNode`
+still have live consumers: the exhaustive-switch coverage readers (:89576/:89761/:89876,
+:89513) and `discriminantKeysOfMember`'s fallback, measured load-bearing above. Only
+`discriminantPropAnnotation` became unreachable, its last caller having gone with
+`kindDomainKeysOfType`. **The cascade lands as ONE commit rather than the planned three
+because each deletion orphans the next and the build is warning-clean** — splitting it
+would need throwaway `@Suppress("unused")` annotations.
+
+**THREE PIN CLASSES WERE UPDATED RATHER THAN DELETED**, which is the right outcome and was
+predicted in their own docs: `KindDomainTypeReadTest`, `NegativeGuardKindDomainTest` and
+`KindDomainMemoConsistencyTest` all stated invariants about NARROWING, not about the veto,
+so they now pin the relation alone. `KindDomainMemoConsistencyTest` pinned a memo that no
+longer exists and is kept anyway — its observable statement (two negative guards over one
+union with different targets narrow independently) never depended on the implementation.
+
+**WHAT DID NOT WORK.** (i) The first pin set for commit 1 — matching constituent first —
+was non-discriminating in every one of three shapes, including a contextual-typing shape
+(`f: (n) => n + 1` under a failed selection produces no TS7006 at all, so implicit-any is
+not an observable of this selector). (ii) Reading the compiler profile as the ablation
+oracle for commit 1; it says "dead" for a fallback that is not. (iii) Deleting (5c) in
+three commits as the queue specifies — the warning-clean invariant forbids it.
+
+**(REL.1) IS COMPLETE**: (a) round 741, (b0) round 742, (b) round 744, (c) steps 1-5
+rounds 745-753. Five enum walkers retired across the arc, six readers flipped to the type
+path, one veto family deleted.
+
+**Round 752 (2026-07-28) — (REL.1)(c) STEP 5b: FOUR MORE READERS FLIPPED IN THREE COMMITS,
+AND THE ROUND'S REAL DELIVERABLE IS A NEGATIVE RESULT ABOUT THE LAST TWO.** Compiler profile
+`--listAll` BYTE-IDENTICAL at 46 after every commit — whole output diffed SORTED
+LINE-BY-LINE, composition unchanged (TS2591×43 / TS2304×2 / TS2584×1, zero TS2322). 8,173
+generated corpus tests over every class carrying a TS2366/TS7030/TS2355 or enum baseline +
+630 local tests over the enum / narrowing / discriminant / switch / guard classes, 0 failures.
++9 local pins, and round 751's "not flipped yet" negative control inverted as it said it must
+be. **The full suite and the cost gate are the coordinator's run — see the report.**
+
+**CORRECTION TO `6c988338`'s COMMIT MESSAGE, recorded here because the commit is pushed: it
+claims "all five readers now flipped" and that is WRONG.** The OBJLIT
+discriminant-candidate filter (`selectUnionMemberByObjLitDiscriminant`, :147014) is still on
+the annotation walk — the miscount came from treating the exhaustive-switch gate's TWO
+readers as two of the five. **(5c) is therefore NOT unblocked; one reader remains.**
+
+**COMMIT 1 (`e717aba2`) — THE EXHAUSTIVE-SWITCH GATE, and the probe FORCED ITS SHAPE.** The
+reader is `unionDiscriminantKeysOfTypeCore`, behind `isExhaustiveEnumSwitch`. First probe, the
+obvious one — read enum-MEMBER types only, as round 751's site does — came back **204 AGREE
+but 9 TYPEBLIND**, the type path losing keys the AST path had: 7× a bare `kind: SyntaxKind`
+expanding to 396 members, 2× `newLine: NewLineKind`. Landing that would have started
+reporting switches tsc accepts. **The fix is a PAIR that mirrors the AST pair arm for arm** —
+`enumSwitchKeysFromType` twins `enumSwitchKeysFromTypeNode` (bare enum → whole member domain),
+`enumDiscriminantKeysOfType` twins `enumMemberKeysOfTypeNode` (a member) — and it re-measured
+**213 sightings, 213 AGREE, 0 mismatched, 0 blind, 0 gained**. The round-423 optional rule is
+untouched: `questionToken` still supplies `@undefined`, which the resolved type does not carry.
+**ABLATION: with the AST fallback CUT OUT the profile stayed byte-identical at 46**, so the
+annotation walk is already dead here too. **The negative control moved exactly as round 751
+predicted**: the parenthesized-discriminant switch went from TS2366 to silent.
+
+**COMMIT 2 (`3d8119dc`) — THE `neverType` DEFAULT-CLAUSE GATE**, `narrowByDefaultClause`'s
+non-union leg, substituted with round 751's shared `discriminantKeysOfMember` (whose fallback
+IS that site's former composition, so it can only ANSWER where the site was blind). 26
+sightings, 4 answering, **4 AGREE, and the type half ALONE reproduced all 4** — the ablation
+was measured PER SIGHTING rather than per build, which is sharper and free. **Pin
+non-vacuity was ATTRIBUTED, not assumed:** a build of `e717aba2` with only this site left
+unflipped emits `TS2345: Argument of type 'Reason' is not assignable to parameter of type
+'never'` on the pin's source, so the pin belongs to this reader and not to commit 1's.
+
+**COMMIT 3 (`6c988338`) — THE TWO `.kind` DOMAIN READERS, AND THE NEGATIVE RESULT.**
+`kindDomainKeysOfType` (207/207 AGREE over 234 sightings) and `discriminantKindKeys` (738/738
+AGREE over 986, type half alone reproducing all 738) both flip cleanly. **But both are
+UNOBSERVABLE.** Three shapes built to expose a before/after — a negative guard over a
+wide-domain subject, a positive guard over a three-member union, a conditional-type exclusion,
+each with the parenthesized `kind` that discriminated all three earlier flips — are SILENT on
+a build of pristine `3d8119dc` and on the flipped build alike. **The mechanism: both readers
+are VETOES layered over the structural relation, written when an enum member resolved to
+`anyType`; (REL.1)(a)/(b) gave the relation that ability, so a veto that declines to answer no
+longer changes an outcome.** Their pins ship declared as non-discriminating regression guards
+rather than passed off as proof.
+
+**AND THAT RE-SIZES (5c): `kindDomainKeysOfType`'s ONLY consumer is `kindDomainKeysExceed`,
+which (5c) intends to DELETE** — so that flip is scaffolding kept uniform until the deletion
+lands, not a fix. `discriminantKindKeys`' consumer (`typeGuardMemberDisjoint`) is NOT slated
+for deletion, which is what puts that one on (5c)'s critical path. A future agent choosing
+between "flip the reader" and "delete its consumer" should check the consumer's fate first.
+
+**METHOD NOTES.** (i) The self-test was carried over from round 751 and re-fired
+(`SELFTEST MISMATCH-REACHABLE` from the SAME categoriser on a perturbed key set), and the
+`canonicalEnumSymbol` memo-freeze was re-measured with the memo BYPASSED at every mint: **0
+divergences**. (ii) **The pristine-comparison build is the cheap instrument of this arc**: for
+each flip, `git stash push -- src/commonMain/kotlin/Checker.kt` (keeping the new tests),
+recompile, and run the ~1.4-second scratch-project CLI — that measured pin non-vacuity for
+commits 1 and 2 and produced commit 3's negative result, all without a `jvmTest` cycle. (iii)
+The memory ritual is per-INVOCATION and held all round: `./gradlew --stop` plus a graceful
+`pkill -f 'KotlinCompile[D]aemon'` before every compile (~2.5–3 min each); the daemons regrow
+to ~1 GB free during profile CLI runs, so the check was repeated before each.
+
+**WHAT DID NOT WORK.** (i) The enum-member-only reader at commit 1's site (9 TYPEBLIND, above)
+— the round-751 site needed no bare-enum arm and assuming this one was the same would have
+been a false negative generator. (ii) The three shapes hunting for an observable delta in
+commit 3. (iii) `Vfs.envVar` does not exist, so the probe's perturbation switch could not be
+an env var; re-running the extracted categoriser on a perturbed copy in the SAME process is
+strictly better anyway — same function, so it cannot drift from the one that printed AGREE.
+
+**Round 751 (2026-07-28) — (REL.1)(c) STEP 5b LANDED (FIRST OF FIVE CALL SITES): THE
+DISCRIMINANT READER IS TYPE-FIRST, AND THE PROBE THAT HAD TO COME FIRST SAYS THE SEVENTH
+PRODUCER LANDS IN THE SAME KEY SPACE.** Compiler profile `--listAll` **BYTE-IDENTICAL at 46**
+— whole output diffed SORTED LINE-BY-LINE against a pre-flip build, composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). 5,901 generated corpus tests over the
+`C/D/E/I/N/P/S/T/U` classes plus 1,476 over every enum / narrowing / discriminant class,
+**0 failures**. +5 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE PROBE, RUN FIRST AS INSTRUCTED, IS THE ROUND'S DECISIVE MEASUREMENT.** A temporary
+probe minted the type-derived key ALONGSIDE the AST key at the same property symbol in
+`filterUnionByEnumDiscriminant` and categorised every sighting over the whole compiler
+profile: **198 distinct (property, key-set) lines, 198 AGREE, 0 MISMATCH, 0 TYPEBLIND (the
+type path losing a key the AST path had), 0 TYPEEXTRA/WIDEN (it gaining one).** The
+population is real rather than incidental: 5 discriminant properties (`kind` 173, `type` 19,
+`operator` 3, `token` 2, `keywordToken` 1) over 7 distinct enum symbols, all cross-file. The
+profile stayed at 46 with the probe live, so the probe itself changed no answer.
+
+**THE INSTRUMENT WAS FALSIFIED IN THE SAME RUN, AND THAT IS NOT CEREMONY.** A probe that
+reports AGREE because it is INERT is the exact failure this arc keeps warning about, so the
+categoriser was re-run against a deliberately PERTURBED copy of the type key set; it printed
+`SELFTEST MISMATCH-REACHABLE`. The AGREE verdict is therefore a measurement, not a silence.
+
+**THE MEMOIZATION HAZARD WAS MEASURED DIRECTLY — 0 DIVERGENCES — AND ROUND 750'S NUMBER
+COULD NOT HAVE SHOWN IT.** `canonicalEnumSymbol` memoizes per `sym.id` a decision that reads
+MUTABLE state (`globals[name]`, `enumValues[global.id] == null`), so a first touch before an
+enum's values exist FREEZES the non-canonical answer for that instance. The trap in
+validating it: **a frozen-wrong entry reports `canonical(sym) === sym` — indistinguishable
+from a genuinely already-canonical one — so round 750's "153 incoming symbols, 153 already
+canonical, 0 redirected" is exactly what a fully-frozen cache would ALSO print.** The only
+way to see it is to recompute the decision with the memo BYPASSED and diff against the
+memoized answer, which this round did at EVERY mint over the whole profile: zero
+divergences. So the hazard is measured absent on this profile, not merely un-triggered.
+
+**THE FLIP.** `discriminantKeysOfMember` reads `getTypeOfSymbol(propSym)` through the new
+`enumDiscriminantKeysOfType`, which keys an `EnumLiteral`-flagged type as
+`enumDiscriminantKey(memberSym.parent, memberSym.name)` (the single round-750 mint, so
+canonicalization is inherited), distributes over a union, reuses
+`literalDiscriminantKeyOfType` for a string-literal constituent, and is all-or-nothing per
+the AST reader's contract. `discriminantPropSymbol` was extracted from
+`discriminantPropAnnotation` behaviour-preservingly so **both paths start from the SAME
+property symbol** — that shared traversal is what makes this a re-derivation of one answer
+rather than a second lookup free to drift. **RESTRICTED to a property that HAS an
+annotation**, per the standing constraint.
+
+**THE ABLATION IS WHAT DISTINGUISHES A REAL REPLACEMENT FROM DEAD CODE BEHIND A WORKING
+FALLBACK, and it is the strongest evidence here: with the AST fallback CUT OUT ENTIRELY the
+profile stayed BYTE-IDENTICAL at 46.** So at this site the annotation walk is already dead
+on the compiler profile — which is the evidence (5c)'s deletion needs, and it is a stronger
+statement than the byte-identity of the flip itself (a re-derivation is byte-identical by
+construction and proves nothing on its own). The fallback is KEPT for corpus shapes type
+resolution cannot answer, chiefly `p: typeof X` for a top-level const string: that resolves
+to the widened `string`, while the annotation still yields a `lit:s:` key.
+
+**PIN NON-VACUITY: 4 of the 5 FAIL on a build of unmodified `db730b95`.** The witness is a
+PARENTHESIZED annotation — legal TypeScript, and `enumMemberKeysOfTypeNode` has no
+`ParenthesizedType` arm, so it yields no keys and the member is conservatively KEPT, i.e.
+narrowing silently stops matching. That is the precise failure mode this key-space family
+exists to prevent, and it is invisible until a case body FPs TS2339. The type reader has no
+arm list at all, which is the structural point of the flip.
+
+**TWO PINS WERE WRONG WHEN FIRST WRITTEN AND THE PRISTINE RUN CAUGHT THEM — the trap is
+general and worth stating.** A narrowing pin asserting that a TS2339 APPEARS
+(`case Kind.Alpha: return x.b`) passes on BOTH builds for OPPOSITE reasons: unflipped, the
+union was never narrowed so `b` is missing from `A | B`; flipped, `B` was correctly removed
+so `b` is missing from `A`. Same code, no discrimination. Rewritten to read the DEFAULT
+branch and assert `none` — only a build that actually SUBTRACTED the constituent lets `x.b`
+resolve — both now fail on pristine with `Property 'b' does not exist on type 'AB'`.
+
+**A THIRD INTENDED PIN WAS DROPPED AS MISLABELLED, and the finding is worth more than the
+pin.** The `annotatedOnly` restriction is currently UNOBSERVABLE: every unannotated
+enum-member property shape reaches the reader ALREADY WIDENED to the enum, so the type reader
+returns null on it regardless of the restriction. Verified by how it prints —
+`Type 'Kind' is not assignable to type 'string'` for `readonly kind = Kind.Alpha`, against
+`Type 'Kind.Alpha'` for the annotated sibling. The first two attempts to establish this were
+themselves wrong (`Kind` is leniently assignable to `Kind.Alpha` here, so an assignability
+probe cannot tell widened from member — the printed name can). Consequence for the plan:
+**dropping the restriction is currently a NO-OP, and buys nothing until inference preserves
+the member type on an unannotated property.** The pin ships saying exactly that, so the day
+inference changes, it flips and forces the widening to be decided deliberately.
+
+**WHAT DID NOT WORK / findings not fixed.** (i) The two non-discriminating pins above, and
+the two failed attempts at the restriction pin — all three cost only scratch-CLI seconds
+because the ~1-second scratch-project loop was used to design the pins BEFORE writing them
+as Kotlin, which is the reusable part. (ii) The exhaustive-switch `neverType` gate is
+UNFLIPPED and now visibly so: with a parenthesized discriminant, narrowing works but the
+switch is not accepted as exhaustive (TS2366 where the plain-annotation sibling is silent).
+Pinned as a deliberate negative control in the round-748 convention; it is the natural NEXT
+flip, since it is the site the probe's key-space evidence most directly covers. (iii) The
+memory ritual is per-INVOCATION and held all round: every `compileKotlinJvm` was preceded by
+`./gradlew --stop` plus a graceful `kill` of the idle Kotlin daemon and took ~2m30s; the
+daemons regrow to ~1 GB free during profile CLI runs, so the check was repeated before each.
+
+**Round 750 (2026-07-28) — (REL.1)(c) STEP 5a LANDED: THE `"<enumSymId>#<member>"` KEY SPACE
+HAS ONE MINT. THE RISK 5a EXISTED TO REMOVE WAS ALREADY ABSENT — MEASURED, NOT ARGUED, AND
+THAT ZERO IS THE ROUND'S DELIVERABLE.** Compiler profile `--listAll` **BYTE-IDENTICAL at 46**,
+diffed SORTED LINE-BY-LINE against a build of pristine `de24c764`, composition unchanged
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). 740 local tests over 123 classes + 4,669
+generated corpus tests over the `C/D/E/N/S/T/U` classes, **0 failures**. +6 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE MINT-EQUALITY PROBE, RUN FIRST AS INSTRUCTED, AND IT IS THE MEASUREMENT THE STEP WAS
+FOR.** A temporary probe inside the single mint printed one deduped line per incoming enum
+`Symbol` instance over the whole compiler profile: **153 distinct instances, 153 already
+canonical, 0 needing redirection.** So the flip changed no key, which is why the profile is
+byte-identical rather than merely the same count — and it is the evidence (5b) needs before it
+may compare the AST key space against the type key space.
+
+**ROUND 749'S STATED RISK PREMISE IS FALSE, AND A FUTURE AGENT SHOULD NOT RE-DERIVE IT.**
+The queue said the AST readers "key on `resolveEnumSymbolForDiscriminant(...).id` while the
+round-741 type interning keys on `canonicalEnumSymbol(...).id`, [and] the two spaces are
+COMPARED against each other". They are the SAME space: `resolveEnumSymbolForDiscriminant`
+(:110652) returns `canonicalEnumSymbol(target)` at BOTH of its return sites — the direct enum
+branch and the barrel-alias branch. Reconciliation was never owed; the flip as literally
+specified would have been a no-op wrapping an already-canonical symbol.
+
+**A PRODUCER CENSUS FOUND TWO SITES ROUND 749 DID NOT NAME, AND THEY ARE THE REASON THE ROUND
+IS NOT VACUOUS.** The key space had **six** producers, not two: `enumMemberKeyOfExpr` (:110762)
+and `enumMemberKeysOfTypeNode` (:110784), which round 749 named; plus
+**`enumSwitchKeysFromTypeNode` (:89855)** — the bare-enum-annotation branch, expanding an enum
+name to all its members — and **`enumSwitchKeysFromType` (:89900)**, the RESOLVED-TYPE producer;
+plus `getDeclaredTypeOfEnumMember`'s `enumMemberTypes` interning (:102793); plus the
+exhaustive-switch `neverType` gate's coverage probe (:108250). Each canonicalized on its own —
+three through `resolveEnumSymbolForDiscriminant`, three by calling `canonicalEnumSymbol`
+directly — so the spaces agreed, but **incidentally, at six sites, with nothing making a
+seventh producer inherit it.** That is exactly the shape of omission that makes 5b unsafe:
+5b adds the seventh.
+
+**SO THE LANDED CHANGE IS THE INVARIANT MADE STRUCTURAL, NOT A BEHAVIOUR FLIP.** One helper,
+`enumDiscriminantKey(enumSym, member)`, is now the only place the string is built; all six
+sites call it. A key can no longer be minted from a non-canonical enum symbol because there is
+nowhere else to mint one. The interning site passes the RAW `owner` rather than its
+pre-canonicalized local: one canonicalizing hop is correct by construction, two rely on
+`canonicalEnumSymbol` being idempotent, which nothing pins.
+
+**THE PINS PASS ON BOTH BUILDS, AND THAT IS THE CORRECT RESULT HERE — STATED SO IT IS NOT READ
+AS A WEAK ROUND.** 5a has no behaviour delta by construction, so a pin that FAILED on pristine
+`de24c764` would mean the step had changed an answer it must not change. All six were run
+against a build of unmodified `de24c764` (Checker.kt stashed, the new test class kept) and all
+six pass there. They are regression guards for 5b, and each covers a different PAIR of
+producers: the two AST producers against each other across a file boundary (both the "narrows"
+and the "removes the other constituent" legs — a broken key space is silent until a case body
+FPs TS2339); the resolved-TYPE producer against the case expression, via the exhaustive-switch
+`neverType` gate; and the type-INTERNING producer against the annotation, via enum-member type
+identity. **The cross-FILE shape is load-bearing in every one** — within a single file every
+path tends to find the same `Symbol` instance, so a single-file pin cannot tell a canonical key
+space from an accidental one.
+
+**THE SHARPEST PIN IS THE NEGATIVE CONTROL, and it guards the simplification a future agent is
+most likely to reach for.** Canonicalization is DECLARATION-IDENTITY based
+(`d is EnumDeclaration && global.declarations.any { it === d }`), never name-based. Two
+genuinely distinct same-named enums must therefore keep distinct keys — pinned by a
+value-SHIFTED twin (`Other.Kind.Alpha = 5` vs the imported `Kind.Alpha = 0`), which must stay
+TS2322. Were canonicalization ever "fixed" to merge by name, `getDeclaredTypeOfEnumMember`
+would intern both to one `Type` instance and that pin would go silent.
+
+**WHAT DID NOT WORK / findings not fixed.** (i) The probe's first run **crashed with an NPE on
+its own field**: a `private val` declared next to the mint helper is initialized AFTER the
+`init` block that runs the checker's passes, so it is null throughout them. Moving it up beside
+`canonicalEnumSymCache` fixed it — see the new CLAUDE.md entry; the same trap applies to any
+new Checker field a pass consults. (ii) `canonicalEnumSymbol` MEMOIZES per `sym.id` a decision
+that reads MUTABLE state (`globals[sym.name]`, and `enumValues[global.id] == null`), so a first
+touch before the enum's values are computed freezes the non-canonical answer for that instance.
+Nothing on the profile or in the pins hits it (0/153 redirections at all), so it is recorded,
+not patched — but it is a real ordering hazard and 5b's new producer touches enums from a
+different phase. (iii) The memory ritual is per-INVOCATION, not per-session, and it cost one
+build cycle again: a `compileKotlinJvm` launched at 1,020 MB available died with
+`OutOfMemoryError: GC overhead limit exceeded`; the same command after `./gradlew --stop` plus a
+graceful `kill` of the idle Kotlin daemon (5.2 GB available) took ~2m40s. The profile CLI runs
+are what let the daemons re-grow. (iv) The `xtscPrintJvmRuntimeClasspath` task does not exist in
+`build.gradle.kts` — it is registered by an init script the bench harness generates at
+`build/bench/print-classpath.init.gradle.kts`, so the classpath resolution needs
+`-I build/bench/print-classpath.init.gradle.kts`.
+
+**Round 749 (2026-07-28) — (REL.1)(c) STEP 4b LANDED: `checkEnumAsgInFunctionScopes`
+(B583) RETIRES WITH THE `import("<base>")` DISPLAY RULE. FIFTH ENUM PASS REPLACED IN THIS
+ARC, AND THE LAST ONE BLOCKING (c)'s WALKER SWEEP.** Compiler profile `--listAll`
+**BYTE-IDENTICAL at 46** — diffed SORTED LINE-BY-LINE against round 748's, composition
+unchanged (TS2591x43 / TS2304x2 / TS2584x1, zero TS2322). Filtered suite **8,978 tests,
+0 failures, 0 skipped** over the 19 generated classes carrying every TS2416-bearing or
+enum-named baseline plus every `*Enum*` local class. +6 local pins.
+**The full suite and the cost gate are the coordinator's run — see the report.**
+
+**THE ABLATION, ROUND-746/747 FORMAT, on `enumAssignmentCompat6` run WHOLE (both files, all
+eight diagnostics) through the 1.4-second scratch-project CLI loop:**
+
+| build | B583 | `enumAssignmentCompat6` |
+|---|---|---|
+| round 748 | enabled | 8, = the tsc baseline |
+| round 748 | PassLab-disabled | 8, but the two `f.ts` lines printing `DiagnosticCategory` on BOTH sides |
+| round 749 (rule only) | PassLab-disabled | **8, byte-identical to the baseline** — message, chain, position |
+| round 749 (rule, RETRACTION removed) | enabled | **16 — every one of the eight DUPLICATED, both copies byte-identical** |
+| round 749 | deleted | **8, byte-identical** — message, chain, position AND length |
+
+**ROW 4 NEEDED THE RETRACTION REMOVED TO EXIST AT ALL, and that is a difference from B425 and
+B463 worth recording.** B583 did `diagnostics.removeAll { code == 2322 && start == lhs.pos }`
+before adding its own, so with both live the output stayed at 8 and byte-identical — the
+co-emission was MASKED, not absent. A pass that RETRACTS before emitting cannot be ablated by
+counting; you have to delete the retraction to see whether the general path is already there.
+
+**THE DISPLAY DECOMPOSED INTO ONE PART, NOT TWO OR THREE.** B266's had three, B463's had two;
+this one is a single step. `enumTypeQualifiedDisplay`'s container walk simply continues past
+the namespaces into the FILE: `enumModuleImportPrefix` is tsc's `getFullyQualifiedName`
+reaching the SOURCE-FILE module symbol, which `symbolToString` renders as `import("f")`.
+**The gate is round 746's `enumCollisionQualifiedDisplays`, REUSED UNCHANGED** — the first
+round in this arc that needed no new gate, because "the same string on both sides" is exactly
+what a shadowed enum produces, and the site already consulted it.
+
+**THE CONDITION IS tsc's, TRANSCRIBED RATHER THAN INVENTED.** In tsc a symbol carries a
+`parent` only when it sits in a container's `exports`/`members`, so a top-level EXPORTED
+declaration of an external module reaches the file's module symbol, while a file-LOCAL one —
+and every function-body declaration, INV.2(c) scope-space symbols included — has no parent and
+stays bare. We have no module symbol to walk to, so the same question is asked of the
+DECLARATION: top level, `export`ed, in a file with module syntax. That transcription is what
+makes the two controls pass: a non-exported top-level enum prints bare on both sides, which is
+also what tsc prints once its own retry cannot separate them either.
+
+**THE `declare namespace` VALUE-KIND SPLIT B583 WAS ALSO CREDITED WITH TURNED OUT TO BE THE
+RELATION'S ALREADY** (`enumMemberEntries`, round 746). Rows 3 and 5 above are over the WHOLE
+test, so a.ts's `ambients` lines — the "One value ... is assumed to be an unknown numeric
+value" pair — are inside the byte-identical diff. B583's measured ownership at the moment of
+retirement was the `import("f")` display and nothing else.
+
+**PIN PLACEMENT, per round 745's rule, and it is what makes the round non-vacuous.** B583's
+shadow mapping lived only in `eafsScanIife`, and its body scan recursed into a bare `Block`
+and nothing else — so a plain FUNCTION body, an arrow held by a `const` (never invoked, so
+never an `ExpressionStatement` holding a call), and an assignment nested in an `if` are all
+shapes the walker could not structurally reach. Those three RULE pins each **FAIL on a build
+of unmodified `d92ebe6a`**, printing `Type 'DC' is not assignable to type 'DC'`. The three
+CONTROL pins (the `export` gate, the namespace-walk order, round 746's collision gate) and
+both `EnumShadowedInFunctionScopeTest` pins pass on BOTH builds — which is what distinguishes
+"the general path reproduces the walker" from "approximates it".
+
+**DELIBERATELY NARROWED, AND IT IS A KNOWN DIVERGENCE, STATED SO A FUTURE WIDENING IS
+DELIBERATE.** The file step is taken ONLY when the namespace walk produced nothing. An
+EXPORTED namespace of a module file is `import("f").ns.E` in tsc and stays `ns.E` here. No
+corpus baseline asks for it, and widening would move every namespace-qualified enum display in
+every module file. The `ctrl-ns` pin uses a NON-exported namespace, where `ns.E` is what tsc
+prints too, so the pin is correct rather than a divergence in disguise.
+
+**WHAT DID NOT WORK / findings not fixed.** (i) **The var-decl TS2322 site has neither the
+collision retry nor the enum elaboration**: `let z: DC = x` inside the shadowing body prints
+`Type 'DC' is not assignable to type 'DC'` with NO chain, where tsc says
+`... type 'import("t").DC'` plus the value-differs line. Measured, not guessed. It is a
+pre-existing gap that B583 never covered either (it only ever matched an `ExpressionStatement`
+holding `ident = ident`), and closing it means touching a site every var-decl assignability
+message flows through — a sized round of its own, not a rider on this one. (ii) `x = DC.Warning`
+with an enum-MEMBER source against the shadowed enum is SILENT — a member-vs-enum leg the
+relation does not have; also out of scope, also recorded rather than patched. (iii)
+`EnumAsgInfo.displayOverride` had exactly one writer (B583's `@import` key) and is deleted with
+it; `collectEnumsForAsg` / `enumKeyOfTypeNode` / `enumAsgFailure` and the value-kind helpers
+STAY — `checkEnumNominalClassMismatches` (B463 pieces A and C) still consumes them.
+(iv) The memory ritual held: every `compileKotlinJvm` was preceded by `./gradlew --stop` plus a
+graceful `kill` of the idle Kotlin daemon, and each took ~2m30s. The one command that DID time
+out was a plain 2-second CLI run launched right after a `--rerun-tasks` build, at 1.1 GB
+available — the daemons regrow between steps, so the check is per-invocation, not per-session.
+(v) `discriminantPropAnnotation` was assessed, not attempted — see the STEP 5 bullet.
+
+
+---
+
 **Round 748 (2026-07-28) — (REL.1)(c) STEP 4 LANDED: A FUNCTION-BODY-SCOPED `enum` IS
 RESOLVABLE IN TYPE POSITION, AND B583's BLOCKER MOVES FROM RESOLUTION TO DISPLAY.** Compiler
 profile `--listAll` **BYTE-IDENTICAL at 46** — the whole output, diffed SORTED LINE-BY-LINE

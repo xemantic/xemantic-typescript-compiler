@@ -103095,6 +103095,19 @@ interface DataView {
     }
 
     /**
+     * (REL.2) round 765: is every constituent of [targets] a MEMBER of [t]'s own enum?
+     *
+     * The round-746 owner rule, factored out of [enumMinusMembers] so the POSITIVE
+     * direction can share it: `Z.Foo.A` is not a member of an `X.Foo`, and a plain
+     * literal (`case "z":`, `case 0:`) is not a member of anything — either bails, which
+     * is what keeps a mixed enum/literal case list and a foreign enum's member out of
+     * both the subtraction and the substitution.
+     */
+    private fun enumTargetsAreOwnMembers(t: Type, targets: List<Type>): Boolean =
+        targets.isNotEmpty() &&
+            targets.all { it.flags.hasAny(TypeFlags.EnumLiteral) && isLiteralAssignableToMember(it, t) }
+
+    /**
      * (REL.2) round 764: subtract [remove] from the enum type [t], as tsc's union
      * filtering would — or `null` when that cannot be answered.
      *
@@ -103105,10 +103118,7 @@ interface DataView {
      * equivalent union, which keeps every unaffected message displaying `K`.
      */
     private fun enumMinusMembers(t: Type, remove: List<Type>): Type? {
-        if (remove.isEmpty()) return null
-        if (remove.any { it.flags.hasNone(TypeFlags.EnumLiteral) || !isLiteralAssignableToMember(it, t) }) {
-            return null
-        }
+        if (!enumTargetsAreOwnMembers(t, remove)) return null
         val members = enumMemberTypesOf(t) ?: return null
         val kept = members.filter { m -> remove.none { enumMemberTypesAreSameMember(m, it) } }
         return when {
@@ -108673,12 +108683,22 @@ interface DataView {
             if (range.size != 1 || range[0] !is DefaultClause) return@run
             val litTypes = mutableListOf<Type>()
             val enumKeys = mutableSetOf<String>()
+            // (REL.2) round 765: the case clauses' member TYPES, collected beside the keys
+            // for the bare-enum arm below. [caseMemberTypes] is complete iff it has one
+            // entry per enum-keyed case — a case whose member type does not resolve leaves
+            // the subtraction short, which would answer a WIDER type than tsc, so the arm
+            // requires completeness rather than subtracting what it happens to have.
+            val caseMemberTypes = mutableListOf<Type>()
             for (clause in all) {
                 if (clause !is CaseClause) continue
                 val lit = literalTypeOfExpression(clause.expression)
                     ?: constStringCaseLiteralType(clause.expression)
-                if (lit != null) litTypes.add(lit)
-                else enumKeys.add(enumMemberKeyOfExpr(clause.expression) ?: return null)
+                if (lit != null) {
+                    litTypes.add(lit)
+                } else {
+                    enumKeys.add(enumMemberKeyOfExpr(clause.expression) ?: return null)
+                    enumMemberTypeOfExpr(clause.expression)?.let(caseMemberTypes::add)
+                }
             }
             if (litTypes.isEmpty() && enumKeys.isEmpty()) return null
             // Round 460: a NON-union subject — a SINGLE interface (often after a type guard
@@ -108713,6 +108733,18 @@ interface DataView {
                             nm in coveredNames || v in coveredValues
                         }
                     ) return neverType
+                    // (REL.2) round 765: a PARTIALLY covered bare enum. Reaching `default:`
+                    // means no case matched, so tsc — which models the enum AS its member
+                    // union — answers the enum MINUS the cased members; we answered the
+                    // whole enum. Same finite-domain subtraction as `k !== K.A` (round
+                    // 764), and the gap is enum-specific, not switch machinery: the
+                    // `Type.Union` arm below has narrowed a literal-union subject on
+                    // `default:` since round 425. Requires EVERY case to have resolved to a
+                    // member type and NO literal case in the list, so a mixed
+                    // `case K.A: case "z":` switch keeps the conservative answer.
+                    if (litTypes.isEmpty() && caseMemberTypes.size == enumKeys.size) {
+                        enumMinusMembers(t, caseMemberTypes)?.let { if (it !== t) return it }
+                    }
                     return null
                 }
                 val discriminant = discriminantName ?: return null
@@ -109140,6 +109172,18 @@ interface DataView {
         // the relation check below would trivially pass (`any` relates to
         // everything) and keep the useless `any`.
         if (t === anyType || t === unknownType) return targetType
+        // (REL.2) round 765: `asserts k is K.A | K.B` on a BARE ENUM subject. The
+        // relation below answers `t` (the whole enum), because enum -> MEMBER is still
+        // decided vacuously — the very leniency (REL.2) exists to close — so `matches`
+        // is true and the assertion narrows nothing. [narrowByCallPredicate]'s positive
+        // arm avoids this by asking `targetType <: t` FIRST; reordering the general test
+        // here would change every non-enum assertion, so the enum case gets its own arm,
+        // gated by the round-746 owner rule ([enumTargetsAreOwnMembers]) exactly as the
+        // subtractive direction is.
+        run {
+            val targets = if (targetType is Type.Union) targetType.types else listOf(targetType)
+            if (enumTargetsAreOwnMembers(t, targets) && enumMemberTypesOf(t) != null) return targetType
+        }
         val matches = checkTypeRelatedTo(t, targetType, assignableRelation)
         return if (matches) t else targetType
     }
