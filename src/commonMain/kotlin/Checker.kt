@@ -108621,6 +108621,13 @@ interface DataView {
                 }
             }
             var result = t
+            // (REL.4) round 770: an EMPTY clause range is the implicit no-case-matched edge
+            // out of a `default`-less switch — reaching it excludes EVERY case tag, exactly
+            // as a `default:` clause does.
+            if (flowNode.clauseStart >= flowNode.clauseEnd) {
+                for (tag in tags) tag?.let { result = narrowByTypeOfGuard(result, it, isMatch = false) }
+                return result
+            }
             for (i in 0 until minOf(flowNode.clauseStart, tags.size)) {
                 tags[i]?.let { result = narrowByTypeOfGuard(result, it, isMatch = false) }
             }
@@ -108680,7 +108687,14 @@ interface DataView {
         run {
             val all = flowNode.switchStatement.caseBlock
             val range = all.filterIndexed { i, _ -> i >= flowNode.clauseStart && i < flowNode.clauseEnd }
-            if (range.size != 1 || range[0] !is DefaultClause) return@run
+            // (REL.4) round 770: an EMPTY clause range is the implicit no-case-matched edge
+            // out of a `default`-less switch (Flow.kt `bindSwitchStatement`; tsc encodes it
+            // the same way and reads it as `clauseStart === clauseEnd` ⇒ default). It is the
+            // SAME position as a `default:` clause, so it gets the same subtraction — that
+            // is the whole of `Debug.assertNever(x)` after an exhaustive `default`-less
+            // switch, which the FlowCondition chain alone could never narrow.
+            val noClauseMatched = flowNode.clauseStart >= flowNode.clauseEnd
+            if (!noClauseMatched && (range.size != 1 || range[0] !is DefaultClause)) return@run
             val litTypes = mutableListOf<Type>()
             val enumKeys = mutableSetOf<String>()
             // (REL.2) round 765: the case clauses' member TYPES, collected beside the keys
@@ -108945,6 +108959,14 @@ interface DataView {
      */
     private fun narrowBySwitchOnTrue(t: Type, flowNode: FlowSwitchClause, name: String): Type? {
         val clauses = flowNode.switchStatement.caseBlock
+        // (REL.4) round 770: an EMPTY clause range is the implicit no-case-matched edge out
+        // of a `default`-less switch, NOT a match of the clause at [clauseStart] — this
+        // function keys purely on [clauseStart], so without the guard `switch (true) { case
+        // c1: … }` narrows POSITIVELY by `c1` on the way out of the switch and collapses to
+        // `never` (narrowByClauseExpressionInSwitchTrue3). The edge's own claim — every case
+        // condition is false — is already carried by the FlowCondition chain this node sits
+        // on top of, so there is nothing left to add here.
+        if (flowNode.clauseStart >= flowNode.clauseEnd) return null
         val matched = clauses.getOrNull(flowNode.clauseStart) ?: return null
         var narrowed = t
         // Every CASE clause appearing before the matched clause must be false.

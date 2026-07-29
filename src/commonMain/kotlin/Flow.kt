@@ -687,12 +687,22 @@ class FlowGraphBuilder {
         // `switch (true) { case shape.kind === "circle": return … }` this leaves shape as
         // the non-circle members past the switch (tsc's post-switch exhaustiveness). For
         // a non-discriminant scrutinee each FlowCondition narrows nothing (harmless).
+        // (REL.4) round 770: the FlowCondition chain above says "every case EXPRESSION is
+        // falsy", which is the truth only for the `switch (true) { case <cond>: }` idiom —
+        // for a discriminant switch the case expression is a VALUE (`SyntaxKind.A`), so the
+        // chain narrows nothing and `Debug.assertNever(x)` after a `default`-less exhaustive
+        // switch saw the whole declared type. tsc encodes the same edge as a switch-clause
+        // flow with an EMPTY clause range (binder `createFlowSwitchClause(preSwitchCaseFlow,
+        // node, 0, 0)`, read by `narrowTypeBySwitchOnDiscriminant`'s `clauseStart ===
+        // clauseEnd` ⇒ treat as default). Layered ON TOP of the chain rather than replacing
+        // it, so every existing `switch (true)` answer is untouched: [narrowBySwitchClause]
+        // returns null for a range it cannot key and the caller keeps the antecedent.
         if (!hasDefault) {
             var noMatch = preSwitch
             for (clause in clauses) {
                 if (clause is CaseClause) noMatch = newCondition(false, clause.expression, noMatch)
             }
-            joinAntecedent(postSwitch, noMatch)
+            joinAntecedent(postSwitch, newSwitchClause(stmt, 0, 0, noMatch))
         }
 
         breakTargetStack.removeLast()
