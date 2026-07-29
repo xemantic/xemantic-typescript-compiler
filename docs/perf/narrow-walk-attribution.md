@@ -251,6 +251,12 @@ Stage 4 (flow narrowing) has now paid once. What is left of it:
   scaffolding. That per-call figure is the largest unattributed number this arc
   has produced and is the natural next probe — but note it is a 723 ms
   population, i.e. 2.4% of the compile, only just outside the band.
+  **SUPERSEDED, round 755 (`docs/perf/condition-narrowing-attribution.md`): the
+  population is now 21,970 calls at 20,085 ns = 441 ms (1.6%) — the count fell
+  34% while total calls rose 2.5% — and 80% of it is one callee,
+  `narrowByCallPredicate`, with the dispatcher's own residue at 2%. Nothing
+  landed; the whole population is smaller than one A/B pair's noise. § 6's
+  rejected pre-test is also UNSOUND, not merely in-band.**
 * The `>= 1 ms` tail is **gone as a distinct phenomenon** (230 walks, 34,490
   arrivals, revisit factor 1.34). There is no longer a monster population to
   attack.

@@ -20,6 +20,67 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 755 (2026-07-29) — (CALL.4) CLOSED AS A MEASUREMENT: the 21,708 ns is 80% ONE
+CALLEE, and the item's own headline number had HALVED while it sat in the queue.**
+Compiler profile `--listAll` **46, byte-identical with the probe at its deepest**
+(TS2591x43 / TS2304x2 / TS2584x1, zero TS2322); filtered suite (`*Narrow*` `*Flow*`
+`*Guard*` `*Inv0*`) **504 / 0 / 0**; +18 pins; build warning-clean. **NOTHING LANDED
+beyond the harness, correctly.** The full suite and the cost gate are the owner's to run.
+
+**FIRST, THE ITEM'S DEFINING NUMBER DOES NOT REPRODUCE.** Round 736 measured 33,307
+genuinely-narrowing calls at 21,708 ns = 723 ms. Today: **21,970 calls at 20,085 ns =
+441 ms** — the per-call cost is stable (-7.5%) but the COUNT fell **34%** while the total
+call count ROSE 2.5% (333,031 -> 341,240). No narrowing change landed in between; the
+shift is downstream of (REL.1) and round 754, which changed what the declared types ARE
+and so how often a condition has anything to remove. **Carry-forward: an item defined by a
+measured number must re-measure it before a round is spent inside it.**
+
+**THE SPLIT.** Eleven `C_*` sub-measures, one per leaf, folded per outermost call into
+NARROWING and IDENTITY columns (the two populations differ 14x per call, so a single mean
+answers nothing). Of the 441 ms narrowing: **`narrowByCallPredicate` 351 ms over 23,138
+calls at 15,181 ns = 80%**, `narrowByEquality` 50, `narrowByTruthiness` 16, everything else
+<= 6, and **the dispatcher's own residue is 9 ms (2%)**. Replicated across two independent
+timing runs at different boundary counts: the 80% moves 1.2 points while individual small
+rows move +/-25%. **`applyConditionNarrowing` is not a function with an expensive body — it
+is a `when` that reaches one expensive callee**, and that callee does type-predicate
+RESOLUTION, i.e. type-system work belonging to M3.1, not dispatch machinery.
+
+**THE SIZE, AGAINST A BAND RE-DERIVED TODAY.** Five interleaved NULL pairs (same class dir
+both sides): median **-0.05%**, spread **1,095 ms**, range **[-526, +569]** on a 26,778 ms
+compile => the band is **+/-2.0%**. The whole genuinely-narrowing population is **441 ms =
+1.6%** — *smaller than one pair's noise*. A perfect memo over the whole `narrowByCallPredicate`
+leaf is capped at 472 ms = 1.75%, in-band before it costs anything, so round 736's own rule
+("measure the PRIZE first") says do not bother measuring its repeat factor. **No lever.**
+
+**TWO CORRECTIONS TO ROUND 736.** (i) The rejected "does this condition mention the name"
+pre-test is not merely in-band — it is **UNSOUND**: 99,002 identity calls (31%) reach
+`aliasedConditionInitializer`, the aliased-condition feature whose whole point is a
+condition that does NOT mention the walked reference, and **1,873 of those alias
+resolutions genuinely narrow**. (ii) The identity majority is not free dispatch: 73% of its
+454 ms is inside three leaves that RESOLVE something (call-predicate 121, equality 91,
+alias 77). An identity call resolved a callee and then found nothing to remove.
+
+**THE CENSUS ALSO SAYS.** `instanceof` and `in` are **38 and 42 invocations in the entire
+compile** — the two arms with the most conspicuous narrowing semantics are statistically
+absent from tsc's own source. The `=` (truthy-assignment) arm's 5,968 invocations are
+**entirely OTHER references walking past**: a walk for the assignment's own target breaks
+out of the fast-forward loop at the `FlowAssignment` the same expression produced and never
+sees the condition — which is why only 26 of the 5,968 narrow. Both facts came out of test
+fixtures that FAILED first with zero invocations.
+
+**PROBE COST, MEASURED NOT ASSERTED.** ON carries ~2.34 M boundary pairs; ON->DEEP adds
+exactly 172,957 and moves the anchor +47 ms => **<=271 ns per pair, an upper bound only**
+(rows move +/-25% between those runs). The DEEP row's own attributed span is 81 ns, so a
+pair ATTRIBUTES a third of what it COSTS — round 733's lesson from the other side. At
+rounds 734/735's 86-89 ns per read the ON run is **~21% inflated**; every per-section
+nanosecond above is RELATIVE attribution.
+
+LANDED: `NarrowSections` `C_*` rows + arm census + `--narrowSectionsDeep` (opt-in,
+behaviour-free when off) and `NarrowSectionProbeTest` (18 pins; the arm mirror is pinned
+SHAPE BY SHAPE with confusable arms asserted zero — a fixture lighting every arm at once
+cannot detect a swap). Full derivation:
+**`docs/perf/condition-narrowing-attribution.md`**.
+
 **Round 754 (2026-07-28) — (PERF.HW.a) CLOSED: `--workers N` now reaches 46. THE ROUND'S
 DELIVERABLE IS THAT ROUND 740's CLASSIFICATION WAS WRONG — it is NOT the round-609
 partition-collector class, and the sequential run was the one getting the right answer for
@@ -2164,9 +2225,32 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   soundness argument and the two priced-and-rejected candidates:
   **`docs/perf/narrow-walk-attribution.md`**. Follow-on: **(CALL.4)** below.
 
-- [ ] **GENUINELY OPEN (reconciled round 754 — nothing has been attempted since it was
-  queued at round 736; what remains is the whole item: split the 21,708 ns).**
-  **(CALL.4) `applyConditionNarrowing`'s 33,307 genuinely-narrowing calls
+- [x] **(CALL.4) DONE round 755 — CLOSED AS A MEASUREMENT, and the item's OWN defining
+  number had halved while it sat in the queue.** Round 736's "33,307 genuinely-narrowing
+  calls at 21,708 ns = 723 ms" is now **21,970 at 20,085 ns = 441 ms**: the per-call cost
+  is stable (-7.5%), the COUNT fell **34%** while total calls ROSE 2.5% — downstream of
+  (REL.1)/round 754 changing what the declared types are. **The split: 80% of a narrowing
+  call is `narrowByCallPredicate`** (351 ms over 23,138 calls at 15,181 ns), then
+  `narrowByEquality` 50, `narrowByTruthiness` 16, everything else <= 6; **the dispatcher's
+  own residue is 9 ms = 2%**. Replicated across two independent timing runs (the 80% moves
+  1.2 points while small rows move +/-25%). **NOTHING LANDED, correctly**: the whole
+  population is **441 ms = 1.6%** against a band **re-derived this session at +/-2.0%**
+  (5 null pairs: median -0.05%, range [-526, +569] on 26,778 ms) — *smaller than one A/B
+  pair's noise* — and a perfect memo over the whole leaf is capped at 1.75%, in-band before
+  it costs anything. The 80% is type-predicate RESOLUTION, i.e. M3.1 work, not machinery.
+  **Two corrections to round 736**: the rejected "does this condition mention the name"
+  pre-test is also **UNSOUND** (99,002 identity calls are the aliased-condition path, whose
+  point is a condition that does not mention the reference; 1,873 of them narrow), and the
+  identity majority is not free dispatch (73% of its 454 ms is inside three leaves that
+  resolve something). Census oddities worth knowing: `instanceof` and `in` are **38 and 42
+  invocations in the entire compile**, and the `=` arm is reached only by OTHER references
+  walking past. LANDED: `NarrowSections` `C_*` rows + arm census + `--narrowSectionsDeep`
+  (opt-in, behaviour-free when off) and `NarrowSectionProbeTest` (18 pins, arm mirror pinned
+  shape by shape). `--listAll` byte-identical with the probe at its deepest; filtered suite
+  504 / 0 / 0. Full derivation: **`docs/perf/condition-narrowing-attribution.md`**.
+  The original item text follows.
+
+  ORIGINAL: **(CALL.4) `applyConditionNarrowing`'s 33,307 genuinely-narrowing calls
   at 21,708 ns each — the largest unattributed per-call number this arc has
   produced (round 736).** After (CALL.3) the function is 333,031 calls / ~1,016
   ms, of which 93% return their input unchanged for **468 ms raw (~410 ms net,

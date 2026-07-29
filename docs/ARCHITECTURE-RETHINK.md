@@ -161,6 +161,30 @@
 > **"~1.4–1.7× of today" is not supported; the plan's remaining honest value is
 > single digits.** Full derivation and the three remaining routes:
 > `docs/perf/front-end-attribution.md` § 5.
+> **ROUND-755 RESOLUTION — STAGE 4 IS NOW EMPTY TOO, AND THE ITEM'S OWN DEFINING
+> NUMBER HAD HALVED WHILE IT SAT IN THE QUEUE.** Round 736 left
+> `applyConditionNarrowing`'s "33,307 genuinely-narrowing calls at 21,708 ns =
+> 723 ms" as the largest unattributed number in the arc. Re-measured: **21,970
+> calls at 20,085 ns = 441 ms** — the per-call cost is stable (−7.5%), the COUNT
+> fell **34%** while the total call count ROSE 2.5%, downstream of (REL.1) and
+> round 754 changing what the declared types are. *An item defined by a measured
+> number must re-measure it before a round is spent inside it.* **The split:
+> `narrowByCallPredicate` is 351 ms over 23,138 calls at 15,181 ns = 80% of a
+> narrowing call, and the dispatcher's own residue is 9 ms = 2%** — so
+> `applyConditionNarrowing` is not a function with an expensive body, it is a
+> `when` that reaches one expensive callee, and that callee does type-predicate
+> RESOLUTION (M3.1 work, not machinery). **Nothing landed, correctly**: 441 ms is
+> **1.6%** against a band re-derived this session at **±2.0%** (5 null pairs:
+> median −0.05%, range [−526, +569] on a 26,778 ms compile) — the whole
+> population is smaller than one A/B pair's noise, and a perfect memo over the
+> entire leaf is capped at 1.75%, in-band before it costs anything. Two
+> corrections to round 736: its rejected "does this condition mention the name"
+> pre-test is not merely in-band but **UNSOUND** (99,002 identity calls are the
+> aliased-condition path, whose whole point is a condition that does *not*
+> mention the reference; 1,873 of them narrow), and its "identity calls are the
+> cheap tail" hid that **73% of the identity time is inside three leaves that
+> RESOLVE something**. Full derivation:
+> `docs/perf/condition-narrowing-attribution.md`.
 
 
 *Written 2026-07-13 (round 490). Owner directive: "follow your intuition and rescope
