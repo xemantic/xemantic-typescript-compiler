@@ -1410,8 +1410,19 @@ object NarrowSections {
     /** Anchor only ([S_WALK]) — the calibration counterpart of [ON]. */
     const val COARSE = 2
 
-    /** Opt-in; [OFF] in production. Set by `--narrowSections{,Coarse}`. */
+    /**
+     * (CALL.4): [ON] plus the [C_REFPATH] rows — the `getReferencePath` calls
+     * inside `applyConditionNarrowing`. Separated because that call is an order
+     * of magnitude more frequent than the `narrowBy*` leaves, so its boundary
+     * pairs would inflate every other row; ON→DEEP is its own differential.
+     */
+    const val DEEP = 3
+
+    /** Opt-in; [OFF] in production. Set by `--narrowSections{,Coarse,Deep}`. */
     var mode: Int = OFF
+
+    /** True in the two timing modes — [COARSE] takes the anchor only. */
+    val timing: Boolean get() = mode == ON || mode == DEEP
 
     // -- sections: nested sub-measures, NOT a partition (the function recurses)
     /** The outermost `narrowTypeFromFlow` call — the anchor, and the total. */
@@ -1449,6 +1460,89 @@ object NarrowSections {
 
     var nanos: LongArray = LongArray(N)
     var calls: LongArray = LongArray(N)
+
+    // -- (CALL.4): the split INSIDE applyConditionNarrowing --------------------
+    // Nested sub-measures again, never a partition: the dispatcher recurses, and
+    // every row below brackets a call that provably does NOT re-enter it (the
+    // recursive arms — wrappers, `!`, `||`/`&&`/`??`, the alias inline — call it
+    // as a separate statement, so no row contains a recursion).
+    const val C_EQ = 0
+    const val C_INSTOF = 1
+    const val C_IN = 2
+    const val C_CALLPRED = 3
+    const val C_TRUTHY = 4
+    const val C_DISCRIM = 5
+    const val C_EXNULL = 6
+    const val C_ISARRAY = 7
+    const val C_ALIAS = 8
+    const val C_UNION = 9
+    const val C_REFPATH = 10
+    const val NC = 11
+
+    val cNames: Array<String> = arrayOf(
+        "narrowByEquality",
+        "narrowByInstanceOf",
+        "narrowByInOperator",
+        "narrowByCallPredicate",
+        "narrowByTruthiness",
+        "narrowByBooleanDiscriminantTruthiness",
+        "narrowByExcludingNullUndefined",
+        "narrowByArrayIsArray",
+        "aliasedConditionInitializer",
+        "getUnionType at ||/&&/??",
+        "getReferencePath (DEEP only)",
+    )
+
+    /** Scratch for the outermost `applyConditionNarrowing` call in progress. */
+    var cScratchNanos: LongArray = LongArray(NC)
+    var cScratchCalls: LongArray = LongArray(NC)
+
+    /**
+     * The rows, split by whether the OUTERMOST call narrowed. This is the whole
+     * point of (CALL.4): round 736 measured 33,307 narrowing calls at 21,708 ns
+     * against 726,477 identity calls at 949 ns, and the question is what the
+     * 21,708 ns is made of.
+     */
+    var cNanosNarrow: LongArray = LongArray(NC)
+    var cCallsNarrow: LongArray = LongArray(NC)
+    var cNanosIdent: LongArray = LongArray(NC)
+    var cCallsIdent: LongArray = LongArray(NC)
+
+    // -- which `when` arm each invocation took ---------------------------------
+    const val A_WRAPPER = 0
+    const val A_PREFIX = 1
+    const val A_LOGICAL = 2
+    const val A_EQUALITY = 3
+    const val A_ASSIGN = 4
+    const val A_INSTOF = 5
+    const val A_IN = 6
+    const val A_BIN_OTHER = 7
+    const val A_CALL = 8
+    const val A_IDENT = 9
+    const val A_PROPACCESS = 10
+    const val A_OTHER = 11
+    const val NA = 12
+
+    val armNames: Array<String> = arrayOf(
+        "wrapper (paren/as/satisfies/nonnull)", "prefix !", "|| && ??",
+        "=== !== == !=", "= (truthy assignment)", "instanceof", "in",
+        "binary, other operator", "call", "identifier", "property access",
+        "other expression kind",
+    )
+
+    /** Arm dispatches over ALL invocations, recursive ones included. */
+    var armAll: LongArray = LongArray(NA)
+    /** The same, folded only for outermost calls that NARROWED. */
+    var armNarrow: LongArray = LongArray(NA)
+    /** Scratch for the outermost call in progress. */
+    var armScratch: LongArray = LongArray(NA)
+
+    /** Invocations (recursive included) and the per-outermost-call fan-out. */
+    var acnInvocations: Long = 0
+    var acnInvNarrow: Long = 0
+    var acnInvIdent: Long = 0
+    var acnScratchInv: Long = 0
+    var acnFanOutMax: Long = 0
 
     // -- flow-node kinds, for the arrival census -------------------------------
     const val K_START = 0
@@ -1568,6 +1662,12 @@ object NarrowSections {
         walkMemoOutcomeByKind = Array(3) { LongArray(NKINDS) }
         maxDepth = 0; truncDepth = 0; truncBudget = 0
         condCalls = 0; condIdentity = 0; condIdentityNanos = 0
+        cScratchNanos = LongArray(NC); cScratchCalls = LongArray(NC)
+        cNanosNarrow = LongArray(NC); cCallsNarrow = LongArray(NC)
+        cNanosIdent = LongArray(NC); cCallsIdent = LongArray(NC)
+        armAll = LongArray(NA); armNarrow = LongArray(NA); armScratch = LongArray(NA)
+        acnInvocations = 0; acnInvNarrow = 0; acnInvIdent = 0
+        acnScratchInv = 0; acnFanOutMax = 0
         clearWalk()
     }
 
@@ -1602,7 +1702,7 @@ object NarrowSections {
         val took = PassTiming.nowNanos() - t0
         NarrowProbe.on = false
         val steps = NarrowProbe.steps
-        if (mode == ON) { nanos[S_WALK] += took; calls[S_WALK]++ }
+        if (timing) { nanos[S_WALK] += took; calls[S_WALK]++ }
         walks++
         arrivals += wArrivals; distinct += wDistinct; invocations += wInvocations
         memoServe += wMemoServe
@@ -1642,26 +1742,73 @@ object NarrowSections {
         if (NarrowProbe.noteDistinct(id)) wDistinct++
     }
 
+    /**
+     * (CALL.4) Open the OUTERMOST `applyConditionNarrowing`. Clears the per-call
+     * scratch, so anything an unbracketed entry point (the `FollowLoopEntry`
+     * mirror, `narrowByAssertCall`) left behind is discarded rather than
+     * mis-attributed to the next condition.
+     */
+    fun beginCond(): Long {
+        for (c in 0 until NC) { cScratchNanos[c] = 0; cScratchCalls[c] = 0 }
+        for (a in 0 until NA) armScratch[a] = 0
+        acnScratchInv = 0
+        return t()
+    }
+
     /** Close one `applyConditionNarrowing`, flagging an identity result. */
     fun closeCond(t0: Long, identity: Boolean) {
         condCalls++
-        if (mode == ON) {
+        if (timing) {
             val d = PassTiming.nowNanos() - t0
             nanos[S_COND] += d; calls[S_COND]++
             if (identity) { condIdentity++; condIdentityNanos += d }
         } else if (identity) condIdentity++
+        val n = if (identity) cNanosIdent else cNanosNarrow
+        val c = if (identity) cCallsIdent else cCallsNarrow
+        for (i in 0 until NC) { n[i] += cScratchNanos[i]; c[i] += cScratchCalls[i] }
+        if (identity) acnInvIdent += acnScratchInv else {
+            acnInvNarrow += acnScratchInv
+            for (a in 0 until NA) armNarrow[a] += armScratch[a]
+        }
+        if (acnScratchInv > acnFanOutMax) acnFanOutMax = acnScratchInv
     }
 
-    /** Start a nested sub-measure, or 0 when not in [ON]. */
+    /** One `applyConditionNarrowing` invocation, recursive ones included. */
+    fun arm(a: Int) {
+        acnInvocations++; acnScratchInv++
+        armAll[a]++; armScratch[a]++
+    }
+
+    /** Start a nested sub-measure, or 0 when [COARSE]/[OFF]. */
     @Suppress("NOTHING_TO_INLINE")
-    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
+    inline fun t(): Long = if (mode == ON || mode == DEEP) PassTiming.nowNanos() else 0L
 
     /** Close a nested sub-measure opened at [t0]. */
     @Suppress("NOTHING_TO_INLINE")
     inline fun close(sec: Int, t0: Long) {
-        if (mode != ON) return
+        if (mode != ON && mode != DEEP) return
         nanos[sec] += PassTiming.nowNanos() - t0
         calls[sec]++
+    }
+
+    /** Close an intra-`applyConditionNarrowing` row opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun closec(sec: Int, t0: Long) {
+        if (mode != ON && mode != DEEP) return
+        cScratchNanos[sec] += PassTiming.nowNanos() - t0
+        cScratchCalls[sec]++
+    }
+
+    /** Start a [DEEP]-only row (`getReferencePath`), or 0 otherwise. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun tDeep(): Long = if (mode == DEEP) PassTiming.nowNanos() else 0L
+
+    /** Close a [DEEP]-only row opened at [t0]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun closeDeep(sec: Int, t0: Long) {
+        if (mode != DEEP) return
+        cScratchNanos[sec] += PassTiming.nowNanos() - t0
+        cScratchCalls[sec]++
     }
 
     private fun ms(n: Long) = (n / 1_000_000).toString().padStart(5)
@@ -1752,7 +1899,21 @@ object NarrowSections {
                     }%)"
             )
         }
-        if (mode == ON) {
+        appendLine("-- applyConditionNarrowing: arm dispatch (all invocations / narrowing calls) --")
+        appendLine(
+            "  invocations: $acnInvocations   fan-out per outermost call: " +
+                "narrowing ${ratio(acnInvNarrow, condCalls - condIdentity)} " +
+                "identity ${ratio(acnInvIdent, condIdentity)} (max $acnFanOutMax)"
+        )
+        for (a in 0 until NA) {
+            if (armAll[a] == 0L && armNarrow[a] == 0L) continue
+            appendLine(
+                "  ${armNames[a].padEnd(38)} ${armAll[a].toString().padStart(9)} all  ${
+                    armNarrow[a].toString().padStart(9)
+                } narrowing"
+            )
+        }
+        if (timing) {
             appendLine("-- (ii) the per-arrival split (nested sub-measures, self time) --")
             for (s in 0 until N) {
                 val c = calls[s]
@@ -1766,6 +1927,54 @@ object NarrowSections {
             var leaves = 0L
             for (s in 1 until N) leaves += nanos[s]
             appendLine("  sum of the rows below the anchor: ${ms(leaves)} ms")
+            appendLine(
+                "-- (CALL.4) inside applyConditionNarrowing, split by whether the " +
+                    "OUTERMOST call narrowed --"
+            )
+            appendLine(
+                "  ${"row".padEnd(38)}${"NARROWING ms".padStart(13)}${"calls".padStart(10)}${
+                    "ns each".padStart(10)
+                }${"IDENTITY ms".padStart(13)}${"calls".padStart(10)}${"ns each".padStart(10)}"
+            )
+            var sumN = 0L
+            var sumI = 0L
+            for (c in 0 until NC) {
+                if (cCallsNarrow[c] == 0L && cCallsIdent[c] == 0L) continue
+                sumN += cNanosNarrow[c]; sumI += cNanosIdent[c]
+                appendLine(
+                    "  ${cNames[c].padEnd(38)}${ms(cNanosNarrow[c])} ms${
+                        cCallsNarrow[c].toString().padStart(10)
+                    }${
+                        (if (cCallsNarrow[c] > 0) cNanosNarrow[c] / cCallsNarrow[c] else 0)
+                            .toString().padStart(10)
+                    }${ms(cNanosIdent[c])} ms${cCallsIdent[c].toString().padStart(10)}${
+                        (if (cCallsIdent[c] > 0) cNanosIdent[c] / cCallsIdent[c] else 0)
+                            .toString().padStart(10)
+                    }"
+                )
+            }
+            val narrowingCalls = condCalls - condIdentity
+            val narrowingNanos = nanos[S_COND] - condIdentityNanos
+            appendLine(
+                "  ${"SUM of the rows".padEnd(38)}${ms(sumN)} ms${" ".repeat(20)}${
+                    ms(sumI)
+                } ms"
+            )
+            appendLine(
+                "  ${"the applyConditionNarrowing anchor".padEnd(38)}${ms(narrowingNanos)} ms${
+                    narrowingCalls.toString().padStart(10)
+                }${
+                    (if (narrowingCalls > 0) narrowingNanos / narrowingCalls else 0)
+                        .toString().padStart(10)
+                }${ms(condIdentityNanos)} ms${condIdentity.toString().padStart(10)}${
+                    (if (condIdentity > 0) condIdentityNanos / condIdentity else 0)
+                        .toString().padStart(10)
+                }"
+            )
+            appendLine(
+                "  residue (dispatch + recursion + unbracketed): ${ms(narrowingNanos - sumN)} ms " +
+                    "narrowing, ${ms(condIdentityNanos - sumI)} ms identity"
+            )
         }
     }
 
@@ -1774,6 +1983,18 @@ object NarrowSections {
         for (s in 0 until N) {
             if (calls[s] == 0L) continue
             appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
+        }
+        for (c in 0 until NC) {
+            if (cCallsNarrow[c] != 0L) {
+                appendLine("\"acn/narrowing/${cNames[c]}\",${cCallsNarrow[c]},${cNanosNarrow[c]}")
+            }
+            if (cCallsIdent[c] != 0L) {
+                appendLine("\"acn/identity/${cNames[c]}\",${cCallsIdent[c]},${cNanosIdent[c]}")
+            }
+        }
+        for (a in 0 until NA) {
+            if (armAll[a] == 0L) continue
+            appendLine("\"acn/arm/${armNames[a]}\",${armAll[a]},${armNarrow[a]}")
         }
     }
 }

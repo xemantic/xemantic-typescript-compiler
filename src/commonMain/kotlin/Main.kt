@@ -111,6 +111,12 @@ fun main(args: Array<String>) {
             "--narrowSectionsCoarse", "--narrowsectionscoarse" -> {
                 NarrowSections.reset(); NarrowSections.mode = NarrowSections.COARSE
             }
+            // (CALL.4): ON plus the `getReferencePath` rows, which are an order
+            // of magnitude more frequent than the `narrowBy*` leaves — an
+            // ON-vs-DEEP pair is their own differential.
+            "--narrowSectionsDeep", "--narrowsectionsdeep" -> {
+                NarrowSections.reset(); NarrowSections.mode = NarrowSections.DEEP
+            }
             // (TYPE.2)(a): the opt-in attribution INSIDE spineCtaM3StatementAnchor
             // (level A, by callee) and checkVarDeclAssignability (level B, by
             // section). `Coarse` keeps only the per-level anchors, so an
@@ -353,6 +359,7 @@ private fun printUsage() {
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
           --narrowSections   (CALL.3) intra-walk attribution of narrowTypeFromFlow (arrivals vs distinct)
           --narrowSectionsCoarse  the same, whole-walk anchor only — the calibration counterpart
+          --narrowSectionsDeep  (CALL.4) the same plus the getReferencePath rows
           --ctaSections      (TYPE.2) attribution of spineCtaM3StatementAnchor + checkVarDeclAssignability
           --ctaSectionsCoarse  the same, per-level anchors only — the differential calibration counterpart
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind

@@ -106559,7 +106559,10 @@ interface DataView {
             is FlowUnreachable -> neverType
             is FlowCondition -> {
                 val antecedent = narrowTypeFromFlowCore(declaredType, node.antecedent, name, seen, depth + 1, memo)
-                val tC = NarrowSections.t()
+                // (CALL.4): beginCond clears the per-call scratch, so leaf work an
+                // UNBRACKETED entry point left behind (the FollowLoopEntry mirror,
+                // narrowByAssertCall) is discarded rather than attributed here.
+                val tC = if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.beginCond() else 0L
                 val r = applyConditionNarrowing(antecedent, node.expression, node.isTrue, name)
                 if (NarrowSections.mode != NarrowSections.OFF) {
                     NarrowSections.closeCond(tC, r === antecedent)
@@ -107667,9 +107670,146 @@ interface DataView {
      * Handles `&&`/`||` recursively (De Morgan) and `===`/`!==`/`==`/`!=`
      * against literal values.
      */
+    /**
+     * (CALL.4) Which `when` arm [applyConditionNarrowing] will take for [expr] —
+     * a structural mirror of that function's own dispatch, in the same order, so
+     * the arm census costs nothing when the probe is off. Only ever called under
+     * `--narrowSections{,Coarse,Deep}`; `NarrowSectionProbeTest` pins the mirror
+     * arm by arm against a fixture that exercises each shape.
+     */
+    private fun narrowArmOf(expr: Expression): Int = when (expr) {
+        is ParenthesizedExpression, is AsExpression, is TypeAssertionExpression,
+        is SatisfiesExpression, is NonNullExpression -> NarrowSections.A_WRAPPER
+        is PrefixUnaryExpression -> NarrowSections.A_PREFIX
+        is BinaryExpression -> when (expr.operator) {
+            SyntaxKind.BarBar, SyntaxKind.AmpersandAmpersand,
+            SyntaxKind.QuestionQuestion -> NarrowSections.A_LOGICAL
+            SyntaxKind.EqualsEqualsEquals, SyntaxKind.EqualsEquals,
+            SyntaxKind.ExclamationEqualsEquals,
+            SyntaxKind.ExclamationEquals -> NarrowSections.A_EQUALITY
+            SyntaxKind.Equals -> NarrowSections.A_ASSIGN
+            SyntaxKind.InstanceOfKeyword -> NarrowSections.A_INSTOF
+            SyntaxKind.InKeyword -> NarrowSections.A_IN
+            else -> NarrowSections.A_BIN_OTHER
+        }
+        is CallExpression -> NarrowSections.A_CALL
+        is Identifier -> NarrowSections.A_IDENT
+        is PropertyAccessExpression -> NarrowSections.A_PROPACCESS
+        else -> NarrowSections.A_OTHER
+    }
+
+    // (CALL.4) probe wrappers. Each brackets ONE leaf of applyConditionNarrowing —
+    // a call that provably does not re-enter the dispatcher, so the rows are self
+    // time. Behaviour-free: with the probe off each is a static read, a not-taken
+    // branch and the original call.
+
+    private fun pTruthy(t: Type, truthy: Boolean): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByTruthiness(t, truthy)
+        val t0 = NarrowSections.t()
+        val r = narrowByTruthiness(t, truthy)
+        NarrowSections.closec(NarrowSections.C_TRUTHY, t0)
+        return r
+    }
+
+    private fun pEquality(t: Type, expr: BinaryExpression, equal: Boolean, name: String): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByEquality(t, expr, equal, name)
+        val t0 = NarrowSections.t()
+        val r = narrowByEquality(t, expr, equal, name)
+        NarrowSections.closec(NarrowSections.C_EQ, t0)
+        return r
+    }
+
+    private fun pInstanceOf(t: Type, expr: BinaryExpression, isMatch: Boolean, name: String): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByInstanceOf(t, expr, isMatch, name)
+        val t0 = NarrowSections.t()
+        val r = narrowByInstanceOf(t, expr, isMatch, name)
+        NarrowSections.closec(NarrowSections.C_INSTOF, t0)
+        return r
+    }
+
+    private fun pInOperator(t: Type, expr: BinaryExpression, hasProp: Boolean, name: String): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByInOperator(t, expr, hasProp, name)
+        val t0 = NarrowSections.t()
+        val r = narrowByInOperator(t, expr, hasProp, name)
+        NarrowSections.closec(NarrowSections.C_IN, t0)
+        return r
+    }
+
+    private fun pCallPredicate(t: Type, expr: CallExpression, isMatch: Boolean, name: String): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByCallPredicate(t, expr, isMatch, name)
+        val t0 = NarrowSections.t()
+        val r = narrowByCallPredicate(t, expr, isMatch, name)
+        NarrowSections.closec(NarrowSections.C_CALLPRED, t0)
+        return r
+    }
+
+    private fun pDiscriminant(t: Type, prop: String, truthy: Boolean): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) {
+            return narrowByBooleanDiscriminantTruthiness(t, prop, truthy)
+        }
+        val t0 = NarrowSections.t()
+        val r = narrowByBooleanDiscriminantTruthiness(t, prop, truthy)
+        NarrowSections.closec(NarrowSections.C_DISCRIM, t0)
+        return r
+    }
+
+    private fun pExcludeNullish(t: Type): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByExcludingNullUndefined(t)
+        val t0 = NarrowSections.t()
+        val r = narrowByExcludingNullUndefined(t)
+        NarrowSections.closec(NarrowSections.C_EXNULL, t0)
+        return r
+    }
+
+    private fun pIsArray(t: Type, isMatch: Boolean): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return narrowByArrayIsArray(t, isMatch)
+        val t0 = NarrowSections.t()
+        val r = narrowByArrayIsArray(t, isMatch)
+        NarrowSections.closec(NarrowSections.C_ISARRAY, t0)
+        return r
+    }
+
+    private fun pAliasInit(expr: Identifier, name: String): Expression? {
+        if (NarrowSections.mode == NarrowSections.OFF) return aliasedConditionInitializer(expr, name)
+        val t0 = NarrowSections.t()
+        val r = aliasedConditionInitializer(expr, name)
+        NarrowSections.closec(NarrowSections.C_ALIAS, t0)
+        return r
+    }
+
+    private fun pCondUnion(a: Type, b: Type): Type {
+        if (NarrowSections.mode == NarrowSections.OFF) return getUnionType(listOf(a, b))
+        val t0 = NarrowSections.t()
+        val r = getUnionType(listOf(a, b))
+        NarrowSections.closec(NarrowSections.C_UNION, t0)
+        return r
+    }
+
+    /**
+     * (CALL.4) `getReferencePath` inside the dispatcher. COUNTED in every probe
+     * mode but TIMED only in `DEEP`: it is an order of magnitude more frequent
+     * than the `narrowBy*` leaves, so its boundary pairs would inflate every
+     * other row (rounds 734/735 price one timestamp read at 86–89 ns).
+     */
+    private fun pRefPath(expr: Expression): String? {
+        val m = NarrowSections.mode
+        if (m == NarrowSections.OFF) return getReferencePath(expr)
+        if (m != NarrowSections.DEEP) {
+            val r = getReferencePath(expr)
+            NarrowSections.cScratchCalls[NarrowSections.C_REFPATH]++
+            return r
+        }
+        val t0 = PassTiming.nowNanos()
+        val r = getReferencePath(expr)
+        NarrowSections.cScratchNanos[NarrowSections.C_REFPATH] += PassTiming.nowNanos() - t0
+        NarrowSections.cScratchCalls[NarrowSections.C_REFPATH]++
+        return r
+    }
+
     private fun applyConditionNarrowing(
         t: Type, expr: Expression, isTrue: Boolean, name: String,
     ): Type {
+        if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.arm(narrowArmOf(expr))
         return when (expr) {
             is ParenthesizedExpression -> applyConditionNarrowing(t, expr.expression, isTrue, name)
             // Value-preserving wrappers (`x as T`, `<T>x`, `x satisfies T`, `x!`) do not
@@ -107686,7 +107826,7 @@ interface DataView {
                     // `a || b` is true if a or b is true: result is union
                     val tA = applyConditionNarrowing(t, expr.left, true, name)
                     val tB = applyConditionNarrowing(t, expr.right, true, name)
-                    getUnionType(listOf(tA, tB))
+                    pCondUnion(tA, tB)
                 } else {
                     // !(a || b) ⇔ !a && !b
                     val tA = applyConditionNarrowing(t, expr.left, false, name)
@@ -107700,7 +107840,7 @@ interface DataView {
                     // !(a && b) ⇔ !a || !b
                     val tA = applyConditionNarrowing(t, expr.left, false, name)
                     val tB = applyConditionNarrowing(t, expr.right, false, name)
-                    getUnionType(listOf(tA, tB))
+                    pCondUnion(tA, tB)
                 }
                 // round 44 iter9: nullish coalescing `a ?? b`. When truthy, EITHER
                 // a is non-null/undefined (and truthy), OR a is null/undefined and b is truthy.
@@ -107710,7 +107850,7 @@ interface DataView {
                 SyntaxKind.QuestionQuestion -> if (isTrue) {
                     val tA = applyConditionNarrowing(t, expr.left, true, name)
                     val tB = applyConditionNarrowing(t, expr.right, true, name)
-                    getUnionType(listOf(tA, tB))
+                    pCondUnion(tA, tB)
                 } else {
                     // `a ?? b` falsy iff a is null/undefined AND b is falsy.
                     // Narrow `name` to falsy on both sides.
@@ -107718,9 +107858,9 @@ interface DataView {
                     applyConditionNarrowing(tA, expr.right, false, name)
                 }
                 SyntaxKind.EqualsEqualsEquals,
-                SyntaxKind.EqualsEquals -> narrowByEquality(t, expr, equal = isTrue, name)
+                SyntaxKind.EqualsEquals -> pEquality(t, expr, equal = isTrue, name)
                 SyntaxKind.ExclamationEqualsEquals,
-                SyntaxKind.ExclamationEquals -> narrowByEquality(t, expr, equal = !isTrue, name)
+                SyntaxKind.ExclamationEquals -> pEquality(t, expr, equal = !isTrue, name)
                 // Round 459: a truthy ASSIGNMENT condition narrows its target — the
                 // assignment evaluates to the assigned value, so `while (child =
                 // tryParse(() => …))` sees `child` truthy in the body (tsc's parser
@@ -107729,9 +107869,9 @@ interface DataView {
                 // downstream discriminant filter). The false branch falsy-narrows
                 // symmetrically.
                 SyntaxKind.Equals ->
-                    if (getReferencePath(expr.left) == name) narrowByTruthiness(t, truthy = isTrue) else t
-                SyntaxKind.InstanceOfKeyword -> narrowByInstanceOf(t, expr, isMatch = isTrue, name)
-                SyntaxKind.InKeyword -> narrowByInOperator(t, expr, hasProp = isTrue, name)
+                    if (pRefPath(expr.left) == name) pTruthy(t, truthy = isTrue) else t
+                SyntaxKind.InstanceOfKeyword -> pInstanceOf(t, expr, isMatch = isTrue, name)
+                SyntaxKind.InKeyword -> pInOperator(t, expr, hasProp = isTrue, name)
                 else -> t
             }
             is CallExpression -> {
@@ -107742,7 +107882,7 @@ interface DataView {
                 val callee = unwrapParensExpr(expr.expression)
                 if (callee is Identifier && callee.text == "Boolean" && expr.arguments.size == 1) {
                     val arg = expr.arguments[0]
-                    if (getReferencePath(arg) == name) return narrowByTruthiness(t, truthy = isTrue)
+                    if (pRefPath(arg) == name) return pTruthy(t, truthy = isTrue)
                 }
                 // Round 459: `Array.isArray(x)` — the lib guard `isArray(arg: any): arg is
                 // any[]`. The embedded lib deliberately has NO ArrayConstructor, so the
@@ -107753,7 +107893,7 @@ interface DataView {
                 // Conservative: unchanged when the filter keeps nothing or removes nothing.
                 if (callee is PropertyAccessExpression && callee.name.text == "isArray" &&
                     (callee.expression as? Identifier)?.text == "Array" &&
-                    expr.arguments.size == 1 && getReferencePath(expr.arguments[0]) == name) {
+                    expr.arguments.size == 1 && pRefPath(expr.arguments[0]) == name) {
                     // isArray.ts corpus pin: a USE-BEFORE-ASSIGNED var keeps its DECLARED
                     // type in tsc (the TS2454 rule — its baseline expects the ELSE branch
                     // of Array.isArray un-narrowed for `var maybeArray: number | number[];`
@@ -107765,7 +107905,7 @@ interface DataView {
                         val decl = (currentFileLocals?.get(name) ?: globals[name])?.valueDeclaration
                         decl is VariableDeclaration && decl.initializer == null
                     }
-                    if (!unassignedFileVar) return narrowByArrayIsArray(t, isMatch = isTrue)
+                    if (!unassignedFileVar) return pIsArray(t, isMatch = isTrue)
                 }
                 // Round 423: a TRUTHY optional-chain CALL proves its optional receiver
                 // didn't short-circuit — `if (x.y?.size()) { x.y.keys() }` (builder.ts's
@@ -107777,16 +107917,16 @@ interface DataView {
                 if (isTrue) {
                     var cur: Expression = callee
                     while (cur is PropertyAccessExpression) {
-                        if (cur.questionDotToken && getReferencePath(cur.expression) == name) {
-                            return narrowByExcludingNullUndefined(t)
+                        if (cur.questionDotToken && pRefPath(cur.expression) == name) {
+                            return pExcludeNullish(t)
                         }
                         cur = cur.expression
                     }
                 }
-                narrowByCallPredicate(t, expr, isMatch = isTrue, name)
+                pCallPredicate(t, expr, isMatch = isTrue, name)
             }
             is Identifier -> if (expr.text == name) {
-                narrowByTruthiness(t, truthy = isTrue)
+                pTruthy(t, truthy = isTrue)
             } else {
                 // Round 423 (tsc `narrowType`, aliased conditions): a bare-Identifier
                 // condition may be a local ALIAS of a narrowing expression —
@@ -107794,7 +107934,7 @@ interface DataView {
                 // narrows `node` exactly as if the guard call were inline (tsc gates on
                 // isConstantVariable + inlineLevel < 5; our flow back-walk in
                 // [aliasedConditionInitializer] is the equivalent const-ness proof).
-                val init = if (aliasedConditionInlineLevel < 5) aliasedConditionInitializer(expr, name) else null
+                val init = if (aliasedConditionInlineLevel < 5) pAliasInit(expr, name) else null
                 if (init != null) {
                     aliasedConditionInlineLevel++
                     try {
@@ -107808,7 +107948,7 @@ interface DataView {
             // narrows `A._a` from `T | undefined | null` to `T` on the truthy side.
             // Path comparison gates by structural identity of the dotted reference path.
             is PropertyAccessExpression -> {
-                if (getReferencePath(expr) == name) narrowByTruthiness(t, truthy = isTrue)
+                if (pRefPath(expr) == name) pTruthy(t, truthy = isTrue)
                 // round 43 iter11 + round 425: single-level property access on the walked
                 // reference. A `?.` access proves the receiver non-nullish on the truthy
                 // side (the chain short-circuits to undefined — falsy — when nullish),
@@ -107818,11 +107958,11 @@ interface DataView {
                 // classFields' PrivateIdentifier field infos). Sound with `?.` too: a
                 // nullish receiver takes the falsy branch, where only literal-TRUE
                 // members are dropped (the nullish members themselves are kept).
-                else if (getReferencePath(expr.expression) == name) {
+                else if (pRefPath(expr.expression) == name) {
                     var narrowed = if (expr.name.text.isNotEmpty())
-                        narrowByBooleanDiscriminantTruthiness(t, expr.name.text, truthy = isTrue)
+                        pDiscriminant(t, expr.name.text, truthy = isTrue)
                     else t
-                    if (expr.questionDotToken && isTrue) narrowed = narrowByExcludingNullUndefined(narrowed)
+                    if (expr.questionDotToken && isTrue) narrowed = pExcludeNullish(narrowed)
                     narrowed
                 }
                 // round 44 iter5: multi-level optional-chain — `if (obj?.x?.y)` truthy
@@ -107832,12 +107972,12 @@ interface DataView {
                 else if (isTrue) {
                     var cur: Expression = expr.expression
                     while (cur is PropertyAccessExpression) {
-                        if (cur.questionDotToken && getReferencePath(cur.expression) == name) {
-                            return narrowByExcludingNullUndefined(t)
+                        if (cur.questionDotToken && pRefPath(cur.expression) == name) {
+                            return pExcludeNullish(t)
                         }
-                        if (getReferencePath(cur) == name && expr.questionDotToken) {
+                        if (pRefPath(cur) == name && expr.questionDotToken) {
                             // Direct ancestor matches name AND the outer expr is optional-chain
-                            return narrowByExcludingNullUndefined(t)
+                            return pExcludeNullish(t)
                         }
                         cur = cur.expression
                     }
