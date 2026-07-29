@@ -49,6 +49,15 @@ import kotlin.test.Test
  * Note that the corresponding EXHAUSTIVE shape (a guard covering every member, whose
  * false branch is `never`) is deliberately unpinned — `never` is assignable to
  * `string`, so it is silent, and silence cannot tell it from a narrow that never ran.
+ *
+ * Round 765 RETIRED this class's switch-`default:` control (see the note at the foot of
+ * the class). It had pinned the one shape round 764 left open, and round 765 closed it;
+ * the shape now lives in [EnumAssertAndSwitchDefaultNarrowingTest] with the correct
+ * expectation. **The lesson, which cost a suite failure to learn: pinning a KNOWN-OPEN
+ * gap as a control plants a landmine for whichever round closes it** — such a control
+ * asserts behaviour we intend to change, so it is a countdown, not a guard. Prefer
+ * recording an open gap in the session note; if it really must be pinned, the closing
+ * round has to be told where to look, which is what this paragraph now does.
  */
 class EnumNegativeNarrowingTest {
 
@@ -147,16 +156,12 @@ class EnumNegativeNarrowingTest {
         narrowedTo("export function f(k: K) { if (k === K.A) { probe(k); } }", "K.A")
     }
 
-    @Test
-    fun `negative control - a switch default clause still answers the whole enum`() {
-        // NOT a target: the default clause returns before any narrowing is attempted
-        // (`narrowBySwitchClause` bails on a `DefaultClause` in the range), and that
-        // path is not enum-specific. Pinned so the gap is recorded as measured rather
-        // than overlooked — this is the one shape of the negative direction round 764
-        // did not close.
-        narrowedTo(
-            "export function f(k: K) { switch (k) { case K.A: break; default: probe(k); } }",
-            "K",
-        )
-    }
+    // RETIRED round 765: `negative control - a switch default clause still answers the
+    // whole enum`. It pinned the shape round 764 had NOT closed, and round 765 closed it
+    // — the same source now answers `K.B | K.C | K.D`, so the control was asserting
+    // pre-fix behaviour. The shape is now owned, in its correct form, by
+    // [EnumAssertAndSwitchDefaultNarrowingTest]: `a switch default on a bare enum
+    // subtracts the cased member` is this exact source with the inverted expectation,
+    // beside a middle-member order pin and a fallthrough-group pin. Nothing is lost by
+    // the retirement, and keeping both would have left two pins on one shape disagreeing.
 }

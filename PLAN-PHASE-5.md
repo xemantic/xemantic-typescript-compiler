@@ -140,6 +140,54 @@ round 764's `build/bench/r764final`. Predictions: **1 of 2**.
   `default:` narrowing on the UNMODIFIED build) took one probe run to write, and it is now
   a pin so the claim cannot be re-made from the code's shape.
 
+**PART 2b (follow-up, after the owner's full suite) — PART 2 BROKE ONE TEST, AND IT IS A
+STALE CONTROL OF ROUND 764's, NOT A REGRESSION IN MEANING. THE AUDIT IT FORCED FOUND NO
+SECOND ONE — AND IT DID FIND THE REASON THE NEW ARM FIRES ZERO TIMES ON tsc's SOURCES.**
+Full suite on `bee3b0a9`: 13,161 / **1 failure** / 3 skipped, cost gate clean.
+
+- **THE FAILURE.** `EnumNegativeNarrowingTest > negative control - a switch default clause
+  still answers the whole enum` asserted that a bare-enum `default:` answers `K`. Part 2
+  closed exactly that gap, so the control was asserting pre-fix behaviour. **RETIRED, not
+  edited**, because the shape is now owned in its correct form by
+  `EnumAssertAndSwitchDefaultNarrowingTest > a switch default on a bare enum subtracts the
+  cased member` — the SAME source with the inverted expectation, beside a middle-member
+  order pin and a fallthrough-group pin. Updating it in place would have left two pins on
+  one shape. Suite count 13,161 -> **13,160**.
+- **WHY THE GATES MISSED IT, and the rule that follows.** The filtered batch was corpus
+  letters E/C/N/S/T plus the round's OWN new class; round 764's class was in neither.
+  **When a round closes a gap a previous round pinned as a control, that previous class
+  must be in the filtered batch** — and it is findable: the shape being fixed was named in
+  the previous round's session note, which is the pointer to its test class.
+- **THE `asserts` HALF HAS NO STALE CONTROL, and that is grepped rather than assumed.** No
+  test anywhere pins `asserts x is <enum member>` on a bare enum except this round's own
+  class — round 764 recorded that shape in its session note only, never as a pin. So the
+  worse failure mode the audit was looking for (a stale control still PASSING, for the
+  wrong reason) does not exist on that half.
+- **THE INSENSITIVE-ASSERTION AUDIT ON THE SWITCH HALF, measured not read.** Seven
+  enum/switch classes carry absence-style (`none {}`) assertions beside `default:` clauses.
+  All but three switch on a PROPERTY subject (`x.kind`, `node.kind`, `reason.kind`), which
+  cannot reach the new arm at all — it lives in the `matchesDirectly` branch, and a
+  property subject takes the `discriminantName` branch. Of the three DIRECT-subject
+  switches, two are exhaustive (round-460b answers `never` first) and the third —
+  `EnumValueAliasExhaustiveSwitchTest > negative control - an uncovered distinct-valued
+  member still fires`, a genuinely PARTIAL bare-enum switch with a lone `default:` — was
+  checked by running its exact source through the CLI: the message still reads *Argument of
+  type 'E'*, so the arm does not fire and the control passes for its original reason.
+- **AND THAT IS THE INTERESTING PART: the discriminator is the `never` PARAMETER TYPE.**
+  Isolated over four variants — plain enum, `const` enum, `return` bodies, `break` bodies
+  all narrow correctly to `P.C` / `C2.C` against a `string` target; only the `never` target
+  answers the whole `P`. **An enum argument going to a `never` parameter does not get the
+  flow read at all**, so `default: Debug.assertNever(x)` in a partially-covered switch
+  still reports the whole enum where tsc reports the uncovered member. **This is a large
+  part of why Part 2's arm fires ZERO times on tsc's own sources: `default:
+  Debug.assertNever(…)` IS tsc's idiom for that position**, and it is precisely the
+  parameter type the call-argument narrowability gate declines. Sized and NOT taken — it
+  widens a corpus-pinned gate — and queued under (REL.2).
+- **RE-RUN of the ten affected classes: 73 / 0** (`EnumNegativeNarrowingTest` 10 -> 9,
+  `EnumAssertAndSwitchDefaultNarrowingTest` 11, `EnumValueAliasExhaustiveSwitchTest` 2,
+  `EnumArgumentSecondChanceTest` 9, `EnumFlowNarrowingRel2Test` 14, plus the five audited
+  switch classes).
+
 **PART 3 — THE GLOBAL RULE RE-PRICED, NOT LANDED, AND THE PRICE HAS FALLEN AGAIN:
 compiler 46 -> 47 (UNCHANGED) and services 46 -> 52 becomes 46 -> 51. THE WORKLIST IS 5
 LINES, NOT 6 — `importFixes.ts:1162` HAS CLOSED.** Measured the same way round 763 did:
@@ -1084,6 +1132,16 @@ backlog-horizon decision, not queue debt.)
     Still open in that direction: a switch `default:` clause (`narrowBySwitchClause`
     bails on a `DefaultClause` before narrowing — not enum-specific), and an
     `asserts k is K.A | K.B` call on a bare enum (`narrowByAssertCall`, own gate).
+  - **NEW, found by round 765's stale-control audit and NOT taken: an enum argument going
+    to a `never` PARAMETER never gets the flow read**, so `default: Debug.assertNever(k)`
+    in a partially-covered bare-enum switch reports the whole enum where tsc reports the
+    uncovered member. Isolated over four variants (plain enum / `const` enum / `return`
+    bodies / `break` bodies all narrow correctly against a `string` target; only the
+    `never` target does not), so the discriminator is the parameter type, not the enum or
+    the switch. **This is a large part of why round 765's switch arm fires ZERO times on
+    tsc's own sources — `Debug.assertNever` IS tsc's idiom for that position.** The fix
+    widens the corpus-pinned call-argument narrowability gate (`checkArgumentsAgainstSignature`,
+    the B469/round-428b pair), so it needs its own grid + corpus gate.
   - **Round 765 RE-PRICED the global rule (scaffolded, measured, reverted — NOT landed):
     compiler 46 -> 47 UNCHANGED, services 46 -> 52 becomes 46 -> 51, and the worklist is
     5 lines, not 6 — `importFixes.ts:1162` has CLOSED** without being on anyone's list.
