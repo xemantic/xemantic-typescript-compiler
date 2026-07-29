@@ -243,4 +243,61 @@ class CtaSectionProbeTest {
         assert(onTotal > coarseTotal)
         CtaSections.reset()
     }
+
+    // ── (ENGINE.1) level C: checkReturnAssignability ─────────────────────────
+
+    @Test
+    fun `the level-C name table is index-aligned and complete`() {
+        assert(CtaSections.cNames.size == CtaSections.NC)
+        assert(CtaSections.C_ENTRY == 0)
+        assert(CtaSections.C_STRTAIL == CtaSections.NC - 1)
+        // Source order: every row the partition walks through is between the
+        // wrapper transition and the string fallback.
+        assert(CtaSections.C_TARGET < CtaSections.C_SRCTYPE)
+        assert(CtaSections.C_SRCTYPE < CtaSections.C_RELATION)
+        assert(CtaSections.C_RELATION < CtaSections.C_ELAB)
+    }
+
+    @Test
+    fun `level C partitions every invocation and the exits sum to it`() {
+        runProbe()
+        val invocations = CtaSections.invocationsC
+        assert(invocations > 0L)
+        // The partition opens on the wrapper, so every invocation is counted
+        // there exactly once whatever early return it takes.
+        assert(CtaSections.cCalls[CtaSections.C_ENTRY] == invocations)
+        assert(CtaSections.cExitIn.sum() == invocations)
+        // The fixture's annotated `return total` reaches the relation.
+        assert(CtaSections.cCalls[CtaSections.C_RELATION] > 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `level C is a single row under COARSE - its calibration counterpart`() {
+        runProbe(CtaSections.COARSE)
+        val invocations = CtaSections.invocationsC
+        assert(invocations > 0L)
+        // Exactly one boundary pair per invocation, all of it in the anchor.
+        assert(CtaSections.cCalls[CtaSections.C_ENTRY] == invocations)
+        assert(CtaSections.cCalls.sum() == invocations)
+        assert(CtaSections.cCalls[CtaSections.C_SRCTYPE] == 0L)
+        assert(CtaSections.cCalls[CtaSections.C_RELATION] == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `nothing is recorded for level C while the probe is off`() {
+        val saved = CtaSections.mode
+        CtaSections.reset()
+        CtaSections.mode = CtaSections.OFF
+        try {
+            diagnose(source)
+        } finally {
+            CtaSections.mode = saved
+        }
+        assert(CtaSections.invocationsC == 0L)
+        assert(CtaSections.cCalls.sum() == 0L)
+        assert(CtaSections.cExitIn.sum() == 0L)
+        CtaSections.reset()
+    }
 }

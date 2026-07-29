@@ -2299,6 +2299,70 @@ object CtaSections {
     var depthB: Int = 0
     var startB: Long = 0
 
+    // ── level C: checkReturnAssignability, (ENGINE.1) site 2 ──────────────────
+    // Its OWN index space and arrays, so the level-A/B layout — and the pins that
+    // assert it — are untouched. Rows are in source order; the classification into
+    // engine / dedicated-walker / bookkeeping lives in
+    // `docs/perf/engine-rule-price.md`, not here.
+    /** The wrapper transition. Probe-only; absent in production. */
+    const val C_ENTRY = 0
+    /** The generator `TReturn` unwrap and its re-entry. */
+    const val C_GEN = 1
+    /** The nullish-alias, literal-union and QualifiedName-suggestion guards. */
+    const val C_FIRE1 = 2
+    /** `arrayLiteralSatisfiesTupleTarget`. */
+    const val C_TUPLE = 3
+    /** `getTypeFromTypeNode(returnTypeNode)` — the TARGET type. */
+    const val C_TARGET = 4
+    /** `checkConditionalReturnBranches` — the per-branch positional check. */
+    const val C_CONDBR = 5
+    /** Contextual-type selection for an objlit / array-literal return. */
+    const val C_CTX = 6
+    /** The SOURCE type. */
+    const val C_SRCTYPE = 7
+    /** The flow-narrowing block and its confirming relation. */
+    const val C_NARROW = 8
+    /** The foreign-TP gate and the narrow-verified exit. */
+    const val C_FTP = 9
+    /** The objlit / array / arrow / construct-signature guard cluster. */
+    const val C_WALKERS = 10
+    /** `canUseTypeEngine` + `checkTypeRelatedTo` — the ASSIGNABILITY RELATION. */
+    const val C_RELATION = 11
+    /** The two guards between `canUseForReturn` and the relation's use. */
+    const val C_MIDGUARD = 12
+    /** The TS2322 elaboration and emission. */
+    const val C_ELAB = 13
+    /** The legacy string-based fallback tail. */
+    const val C_STRTAIL = 14
+
+    const val NC = 15
+
+    val cNames: Array<String> = arrayOf(
+        "C: wrapper transition",
+        "C: generator TReturn unwrap",
+        "C: nullish-alias / literal-union / qualified-name guards",
+        "C: arrayLiteralSatisfiesTupleTarget",
+        "C: getTypeFromTypeNode — the TARGET",
+        "C: checkConditionalReturnBranches",
+        "C: contextual-type selection",
+        "C: the SOURCE type",
+        "C: flow narrowing",
+        "C: foreign-TP gate",
+        "C: objlit / array / arrow guard cluster",
+        "C: canUseTypeEngine + checkTypeRelatedTo",
+        "C: post-canUse guards",
+        "C: TS2322 elaboration + emission",
+        "C: string-based fallback",
+    )
+
+    var cNanos: LongArray = LongArray(NC)
+    var cCalls: LongArray = LongArray(NC)
+    var cExitIn: LongArray = LongArray(NC)
+    var invocationsC: Long = 0
+    var curC: Int = -1
+    var curTC: Long = 0
+    var depthC: Int = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -2310,6 +2374,8 @@ object CtaSections {
         vdBucketNanos = LongArray(4)
         curA = -1; curTA = 0; depthA = 0
         curB = -1; curTB = 0; depthB = 0; startB = 0
+        cNanos = LongArray(NC); cCalls = LongArray(NC); cExitIn = LongArray(NC)
+        invocationsC = 0; curC = -1; curTC = 0; depthC = 0
     }
 
     // The entry points are `inline` so a production call is a static read plus a
@@ -2394,6 +2460,45 @@ object CtaSections {
             curB = -1
         }
         depthB--
+    }
+
+    /** Open level C's partition for one invocation, starting at [C_ENTRY]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginC() {
+        if (mode == OFF) return
+        depthC++
+        if (depthC != 1) return
+        invocationsC++
+        curC = C_ENTRY
+        curTC = PassTiming.nowNanos()
+    }
+
+    /**
+     * Close level C's running section and start [sec]. Under [COARSE] the whole
+     * function stays in [C_ENTRY], so a COARSE run is level C's calibration
+     * counterpart with exactly one boundary pair per invocation.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atC(sec: Int) {
+        if (mode != ON || depthC != 1) return
+        val now = PassTiming.nowNanos()
+        cNanos[curC] += now - curTC
+        cCalls[curC]++
+        curC = sec
+        curTC = now
+    }
+
+    /** Close whatever level-C section is open, recording the exit row. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endC() {
+        if (mode == OFF) return
+        if (depthC == 1 && curC >= 0) {
+            cNanos[curC] += PassTiming.nowNanos() - curTC
+            cCalls[curC]++
+            cExitIn[curC]++
+            curC = -1
+        }
+        depthC--
     }
 
     /** Start a NESTED sub-measure, or 0 when off. Never active under [COARSE]. */
@@ -2489,6 +2594,28 @@ object CtaSections {
                     "${(vdBucketNanos[b] / 1_000_000).toString().padStart(5)} ms"
             )
         }
+        appendLine(
+            "-- (ENGINE.1) level C: checkReturnAssignability, $invocationsC invocations --"
+        )
+        var partC = 0L
+        var bC = 0L
+        for (s in 0 until NC) { partC += cNanos[s] - ovh * cCalls[s]; bC += cCalls[s] }
+        appendLine(
+            "level C partition: ${partC / 1_000_000} ms net, ${
+                cNanos.sum() / 1_000_000
+            } ms raw over $bC boundaries"
+        )
+        for (s in 0 until NC) {
+            val c = cCalls[s]
+            if (c == 0L) continue
+            val ns = cNanos[s] - ovh * c
+            appendLine(
+                "  ${cNames[s].padEnd(56)} ${(ns / 1_000_000).toString().padStart(5)} ms net " +
+                    "(${(cNanos[s] / 1_000_000).toString().padStart(5)} raw) reached ${
+                        c.toString().padStart(7)
+                    } = ${ns / c} ns each, exitedIn=${cExitIn[s]}"
+            )
+        }
     }
 
     /** Machine-readable dump: one line per section. */
@@ -2497,6 +2624,10 @@ object CtaSections {
         for (s in 0 until N) {
             if (calls[s] == 0L) continue
             appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]},${exitIn[s]}")
+        }
+        for (s in 0 until NC) {
+            if (cCalls[s] == 0L) continue
+            appendLine("\"${cNames[s].trim()}\",${cCalls[s]},${cNanos[s]},${cExitIn[s]}")
         }
     }
 }

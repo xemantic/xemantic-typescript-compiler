@@ -81,6 +81,36 @@ SHAPE BY SHAPE with confusable arms asserted zero — a fixture lighting every a
 cannot detect a swap). Full derivation:
 **`docs/perf/condition-narrowing-attribution.md`**.
 
+**PART 2 — (ENGINE.1) SITE 2 MEASURED, E1-E4 SCORED, AND THE 14x IS GONE FOR GOOD.**
+`checkReturnAssignability` partitioned into 15 rows (a new level C in `CtaSections` with
+its own index space, so the level-A/B pins are untouched; wrapper + `...Core` so every
+early return closes its row). **The cross-check is what makes it believable: level C
+totals 741 ms over 10,119 invocations against level A's INDEPENDENT
+`A: checkReturnAssignability` row at 740 ms** — two partitions taken from opposite sides
+of the same call, agreeing to 0.1%. Calibrated differentially: ON carries 144,179
+boundaries for 741 ms, COARSE 10,119 for 642 ms => **739 ns per boundary**, consistent
+with round 733's in-situ ~900 ns and NOT with the 86-89 ns per read (which is a READ, not
+a bracket in a hot function). **Net of probe: engine 446 ms (71.6%), dedicated-walker
+layer 177 ms (28.4%), bookkeeping 0** — the layer is **0.66% of the compile** and
+**0.40x the engine work**. **E1 HOLDS** (28.4%, inside 25-50%); **E2 FAILS** (4.5x, not
+>=10x — the 14x was an artifact of site 1's relation being 2.2% of its function); **E3
+HOLDS BY A BOUND** (sites 1+2 = 503 ms; site 3's WHOLE function is 373 ms, so the
+three-site layer is capped at 876 ms = 3.3% whatever its split; honest estimate
+~605-630 ms = **2.3%**); **E4 HOLDS AT BOTH SITES** — site 1's weak-type rule and site 2's
+excess-property checking are both implemented by tsc *inside* `checkTypeRelatedTo`, so
+both MOVE rather than vanish. **THE OWNER-FACING NUMBER: the scope change is worth ~2.3%
+of a check-only compile against a +/-2.0% band — between one and two noise bands — and
+less than that after the rules that move.** Two findings site 1 could not give: the
+**218-line TS2322 elaboration runs ONCE in the whole compile**, and the **legacy string
+checker is not a rare fallback — 8,587 of 10,119 invocations (85%) exit inside it**,
+running the full engine block and then re-checking through the string path, for 15 ms.
+**LEFT OPEN: site 3 (`checkAssignmentExpression`, 1,427 lines, 373 ms) needs the same
+level-D partition; it can sharpen the number but cannot change the conclusion.** LANDED:
+`CtaSections` level C (`beginC`/`atC`/`endC`, own arrays, COARSE = one row) + 4 pins in
+`CtaSectionProbeTest`. Filtered gates: 866 local + 1,290 corpus (`_R`/`_A`/`_G`) tests,
+0 failures; `--listAll --ctaSections` byte-identical at 46. Derivation:
+**`docs/perf/engine-rule-price.md`** §§ 5-8.
+
 **Round 754 (2026-07-28) — (PERF.HW.a) CLOSED: `--workers N` now reaches 46. THE ROUND'S
 DELIVERABLE IS THAT ROUND 740's CLASSIFICATION WAS WRONG — it is NOT the round-609
 partition-collector class, and the sequential run was the one getting the right answer for
@@ -2384,11 +2414,38 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   1.87x-2.72x because xtsc is one cold run against tsc's median of three. Full derivation:
   `docs/ARCHITECTURE-RETHINK.md` § 0.2.
 
-- [ ] **GENUINELY OPEN (reconciled round 754). What remains is exactly sites 2 and 3 —
-  `checkReturnAssignability` and `checkAssignmentExpression` — each needing a real
-  intra-function partition (rounds 735/738's method), plus scoring E1-E4 in
-  `docs/perf/engine-rule-price.md` § 4. Site 1 is measured and written up.**
-  **(ENGINE.1) Price the dedicated-walker layer on two more sites — IN PROGRESS,
+- [ ] **ANSWERED FOR THE DECISION, round 755 — site 2 measured, E1-E4 scored, ONLY SITE 3's
+  PARTITION LEFT (and E3 is already closed by a bound it cannot break).**
+  `checkReturnAssignability` was partitioned into 15 rows (a new level C in
+  `CtaSections`, its own index space so the level-A/B pins are untouched; wrapper +
+  `...Core` so every early return closes its row). **Cross-check: level C totals 741 ms
+  over 10,119 invocations against level A's independent `A: checkReturnAssignability`
+  row at 740 ms** — two partitions from opposite sides of the same call agreeing to 0.1%.
+  Calibrated differentially (ON 144,179 boundaries / 741 ms vs COARSE 10,119 / 642 ms =
+  **739 ns per boundary**, consistent with round 733's in-situ ~900 ns and NOT with the
+  86-89 ns per read). **Net of probe: engine 446 ms (71.6%), dedicated-walker layer
+  177 ms (28.4%), bookkeeping 0** => the layer is **0.66% of a 26,778 ms compile** and
+  **0.40x the engine work** (site 1: 1.21%, 0.67x). **SCORES: E1 HOLDS** (28.4%, inside
+  the predicted 25-50%); **E2 FAILS** (177/39 = **4.5x**, not the predicted >=10x — the
+  14x was an artifact of site 1's relation being 2.2% of its function; here it is 6.3%);
+  **E3 HOLDS BY A BOUND** (sites 1+2 = 503 ms, site 3's ENTIRE function is 373 ms, so the
+  three-site layer cannot exceed **876 ms = 3.3%**; at the 28-37% both measured sites show
+  the honest figure is **~605-630 ms = 2.3%**); **E4 HOLDS AT BOTH** (site 1 the weak-type
+  rule, site 2 excess-property checking — tsc implements both inside `checkTypeRelatedTo`,
+  so both MOVE rather than delete). **THE OWNER-FACING NUMBER: deleting the layer on the
+  three largest assignability sites is worth ~2.3% of a check-only compile, bounded at
+  3.3%, against a band re-derived the same session at +/-2.0% — between one and two noise
+  bands, and it trades the property that made a byte-identical corpus reachable.** Two
+  findings site 1 could not give: the **218-line TS2322 elaboration runs ONCE in the whole
+  compile** (a property of a clean profile, not of the code), and **the legacy string
+  checker is not a rare fallback — 8,587 of 10,119 invocations (85%) exit inside it**,
+  running the entire engine block and then re-checking through the string path, for
+  **15 ms**. **WHAT IS LEFT: site 3 (`checkAssignmentExpression`, 1,427 lines, 373 ms)
+  needs the same level-D partition** — it cannot change the conclusion, only sharpen it.
+  Full derivation: **`docs/perf/engine-rule-price.md`** §§ 5-8. The original item text
+  follows.
+
+  ORIGINAL: **(ENGINE.1) Price the dedicated-walker layer on two more sites — IN PROGRESS,
   round 739 did the part that needed no measurement and it already overturns the 14x.**
   **The 14x does not survive contact with its OWN site.** 265/19 compares the firewall
   walkers against the final relation call ALONE, and that call is 2.2% of the function

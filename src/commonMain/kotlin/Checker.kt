@@ -97435,13 +97435,44 @@ interface DataView {
         return true
     }
 
+    /**
+     * (ENGINE.1) site 2. The wrapper exists only for the level-C partition; with
+     * the probe off it is a static read and a tail call. The recursive generator
+     * re-entry goes through it too — `depthC` ignores the nested partition, so
+     * the re-entry's time is charged to the row the outer invocation is in.
+     */
     private fun checkReturnAssignability(
         stmt: ReturnStatement, returnType: String, source: String, fileName: String,
         varTypes: Map<String, String>, typeParams: Set<String>,
         returnTypeNode: TypeNode? = null,
         generatorReturnUnwrapped: Boolean = false,
     ) {
+        if (CtaSections.mode == CtaSections.OFF) {
+            checkReturnAssignabilityCore(
+                stmt, returnType, source, fileName, varTypes, typeParams,
+                returnTypeNode, generatorReturnUnwrapped,
+            )
+            return
+        }
+        CtaSections.beginC()
+        try {
+            checkReturnAssignabilityCore(
+                stmt, returnType, source, fileName, varTypes, typeParams,
+                returnTypeNode, generatorReturnUnwrapped,
+            )
+        } finally {
+            CtaSections.endC()
+        }
+    }
+
+    private fun checkReturnAssignabilityCore(
+        stmt: ReturnStatement, returnType: String, source: String, fileName: String,
+        varTypes: Map<String, String>, typeParams: Set<String>,
+        returnTypeNode: TypeNode? = null,
+        generatorReturnUnwrapped: Boolean = false,
+    ) {
         val expr = stmt.expression
+        CtaSections.atC(CtaSections.C_GEN)
 
         // Round 435: a GENERATOR's `return expr` checks against the annotation's
         // TReturn (tsc getIterationTypeOfGeneratorFunctionReturnType), never the
@@ -97474,6 +97505,7 @@ interface DataView {
         // RESOLVED union can collapse when enum-member constituents resolve through
         // cross-file merging, so trust the syntactic proof (the M1.8 TS2366 rule,
         // extended to the return-VALUE path; tsc's own parseResolutionMode).
+        CtaSections.atC(CtaSections.C_FIRE1)
         (expr as? Identifier)?.text?.takeIf { it == "undefined" || it == "null" }?.let { nm ->
             if (aliasUnionContainsNullishKeyword(returnTypeNode, nm)) return
         }
@@ -97515,6 +97547,7 @@ interface DataView {
         }
         // Try new Type-based engine when returnTypeNode is available
         if (returnTypeNode != null) {
+            CtaSections.atC(CtaSections.C_TUPLE)
             // Round 446: `return [Diagnostics.X, arg, …]` where the target is a variadic
             // tuple, or a union/alias containing one (`DiagnosticOrDiagnosticAndArguments =
             // DiagnosticMessage | [message: DiagnosticMessage, ...args: (string|number)[]]`).
@@ -97524,16 +97557,19 @@ interface DataView {
             (expr?.let { unwrapParens(it) } as? ArrayLiteralExpression)?.let { arr ->
                 if (arrayLiteralSatisfiesTupleTarget(arr, returnTypeNode, currentFileLocals)) return
             }
+            CtaSections.atC(CtaSections.C_TARGET)
             val targetType = getTypeFromTypeNode(returnTypeNode)
             // B69.1: Per-branch conditional return-expression checking. Must run
             // BEFORE the standard aggregated check so per-branch positions land
             // instead of one outer error.
+            CtaSections.atC(CtaSections.C_CONDBR)
             if (targetType !== anyType && targetType !== errorType &&
                 checkConditionalReturnBranches(expr, targetType, returnTypeNode, source, fileName, typeParams) != 0) {
                 return
             }
             // 16.0: contextual typing — set return type as context for arrow/function
             // return expressions so their params get typed from the expected signature.
+            CtaSections.atC(CtaSections.C_CTX)
             val savedContextual = contextualType
             // Round 462: ObjectLiteralExpression included (mirrors the call-arg path's
             // B83.4g) — getTypeOfObjectLiteral's per-property contextual machinery needs
@@ -97587,6 +97623,7 @@ interface DataView {
             // mirrors 17.66 (var-decl init) / 17.67 (call arg). When return type
             // contains literal types and the return expression is a literal,
             // preserve the literal instead of widening to the primitive.
+            CtaSections.atC(CtaSections.C_SRCTYPE)
             val sourceTypeRaw = try {
                 if (expr != null) {
                     val widened = getTypeOfExpression(expr)
@@ -97613,6 +97650,7 @@ interface DataView {
             // early-returns instead of falling to the string fallback (which cannot
             // resolve e.g. an `unknown` param narrowed by `typeof target === "string"`
             // and re-FP'd — tsc stringCompletions.ts getPatternFromFirstMatchingCondition).
+            CtaSections.atC(CtaSections.C_NARROW)
             var sourceNarrowVerified = false
             val sourceType = if ((expr is Identifier || expr is PropertyAccessExpression) &&
                 (targetType is Type.Interface || targetType is Type.Reference ||
@@ -97677,6 +97715,7 @@ interface DataView {
             // return (the self-compile `T[]`/`U | undefined` return family). Bail —
             // an OWN-TP source (fn<T>(x: T): number { return x }) keeps checking
             // (corpus-pinned), as does everything TP-free.
+            CtaSections.atC(CtaSections.C_FTP)
             if (typeContainsForeignTypeParam(sourceType, typeParams)) return
             // Round 470: precise-verdict early return for a flow-narrowing-VERIFIED
             // source (see the flag above) — the engine already confirmed the NARROWED
@@ -97694,6 +97733,7 @@ interface DataView {
             // `Awaited<name>` (the await unwrap of `T | Yadda` leaves `Awaited<T> |
             // Yadda`). Narrowly gated to avoid touching the global relation/scope:
             // unconstrained TP, Promise<bareTP> return annotation, union source.
+            CtaSections.atC(CtaSections.C_WALKERS)
             run {
                 if (!inAsyncFunctionBody) return@run
                 val rtn = returnTypeNode as? TypeReference ?: return@run
@@ -97965,7 +98005,9 @@ interface DataView {
                     return
                 }
             }
+            CtaSections.atC(CtaSections.C_RELATION)
             val canUseForReturn = canUseTypeEngine(sourceType, targetType)
+            CtaSections.atC(CtaSections.C_MIDGUARD)
             // M1.9: the engine CONFIRMED the return assignable and the source is a
             // fully-resolved nullish type — the string fallback below cannot resolve a
             // union-ALIAS annotation (`type Mode = 1 | 2 | undefined` renders as "Mode")
@@ -97990,7 +98032,9 @@ interface DataView {
                 checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
                 return
             }
+            CtaSections.atC(CtaSections.C_RELATION)
             if (canUseForReturn && !checkTypeRelatedTo(sourceType, targetType, assignableRelation)) {
+                CtaSections.atC(CtaSections.C_ELAB)
                 // Async-function returns: declared `Promise<T>` accepts `T` directly.
                 // The returned value is implicitly wrapped in a Promise at runtime,
                 // so the assignability check must compare against `T` (the awaited
@@ -98211,6 +98255,7 @@ interface DataView {
             }
         }
 
+        CtaSections.atC(CtaSections.C_STRTAIL)
         // Fallback to old string-based system (skip when returnType is empty — means only returnTypeNode was available)
         if (returnType.isEmpty()) return
         val exprType = if (expr != null) {
