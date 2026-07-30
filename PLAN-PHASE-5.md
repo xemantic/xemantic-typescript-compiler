@@ -20,6 +20,59 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 771 (2026-07-30) — OWNER-DIRECTED, NOT A QUEUE ITEM: THE JVM's OWN COST WAS NEVER
+MEASURED, AND IT IS 56% OF A COLD COMPILE. AOT RECOVERS ALMOST ALL OF IT — 1.97×, OUTPUT
+BYTE-IDENTICAL ON ALL 8 PROFILES, ZERO COMPILER CHANGES.** Full derivation:
+`docs/perf/aot-native-image.md`. Nothing was integrated; three items queued as (AOT.1–3).
+
+- **THE GAP IN THE MAP.** `bench-compile-tsc.sh` forks a fresh JVM per run, so its
+  `--warmup N` warms the page cache and never the JIT: **all 341 archived CI rows are cold
+  single-shots and xtsc's steady state was unmeasured.** `BenchMain` — the one harness that
+  could answer it — existed and had never been pointed at the question. Twelve iterations in
+  one JVM: **iter 0 26,272 ms, iter 1 13,953, iters 2+ 11,112–11,716 (median 11,580)**. So
+  **~14.7 s of a 26.3 s compile is warmup.** Iter 0 reproduces round 739's independently
+  measured 26,896 ms cold check-only, which is what validates the harness.
+- **THIS IS ROUND 740 FROM THE OTHER SIDE.** That round measured 85.6 s of user CPU for a
+  27.1 s wall, ~2.2 cores of JIT, and C2 never finishing `Checker.kt` inside one run — and
+  concluded "not a single-thread lever" because starving the JIT did not move self time.
+  Correct, and it missed this: the JIT is not stealing from the compile thread, it is that
+  **the compile thread never reaches compiled code**. The evidence was in the repo for 31
+  rounds.
+- **AOT, GraalVM CE, standalone (no build-system change): 13,350 ms, 1.97× the cold JVM**,
+  and only 15% off JVM peak — on a COLD run, which is how a CLI compiler is used. RSS
+  392 MB against a 4 GB heap allowance; binary 55 MB; image build 2m 1s.
+- **THE GATE IS BYTE-IDENTITY ON ALL EIGHT PROFILES, NOT A COUNT** (two runs can agree on
+  46 and disagree on which 46). Sorted `--listAll` diff empty on every one; speedups
+  1.71–1.98×. **Two things make it more than eight green rows:** the error grid comes out
+  **46/46/46/46/46/46/46/94**, reproducing the dashboard's known composition, so the seven
+  freshly materialized profiles are right rather than merely self-consistent; and **the
+  saving is CONSTANT in absolute terms (12.4–16.0 s) across a 4× range of project size**,
+  so the ratio falls (1.98 → 1.71) only because the denominator grows. That is the
+  signature of a fixed warmup cost; per-node work would not behave that way.
+- **`-O3 -march=native` MEASURED AND WORTH NOTHING: 13,325 vs 13,335 ms.** So the residual
+  15% is not instruction selection — it is the absence of PGO, which CE cannot do. A
+  negative result that closes a direction rather than opening one.
+- **THE WARM BAND IS CALIBRATED, AND IT IS THE ROUND'S MOST REUSABLE OUTPUT.** Six A/A
+  processes: pair deltas **+0.93% / −0.98% / +0.41%**, i.e. **±1.0% = ±114 ms** against the
+  cold ±2.0% = ±536 ms — **4.7× more sensitive in absolute terms**, at lower cost per
+  sample. **Every A/B in the arc was run cold**, so items rejected as in-band deserve
+  re-examination: (CALL.4)'s 441 ms is 3.9× the warm band, the `getTypeOfExpression`
+  ceiling 7.1%, single-visit discipline 5.8%. **Stated in the doc and repeated here because
+  it is the easy mistake: MEASURABLE IS NOT WORTH LANDING** — nothing got bigger, only
+  visible, round 755's "(CALL.4) is M3.1 resolution work, not machinery" is untouched, and
+  round 736's identity pre-test was rejected as UNSOUND, not small. (AUDIT.3)'s globals
+  population stays dead at 0.3–0.6%.
+- **FOR THE PORT QUESTION THIS ROUND WAS RUN TO INFORM:** our steady-state COMPUTE is
+  11.6 s, not 26.3 s, so the architectural gap to tsgo is roughly **5×, not 13×** — and a
+  Kotlin port of tsgo would **inherit the warmup tax AOT removes for free**, being the same
+  JVM one-shot process. The port thesis is weaker than it looked, and its prize is smaller.
+- **EVIDENCE LIMITS, STATED RATHER THAN GLOSSED.** The corpus suite is a JVM harness and
+  has never run against a native binary, so the 8-profile grid is the ONLY behavioural
+  evidence and it is weaker than the suite. One box; single run per profile in the grid;
+  emit mode not measured natively. Also found: this box has **no C toolchain at all** and
+  `sudo` needs a password — the unprivileged assembly and its three traps are in doc § 8,
+  and a CI runner would need the same solved.
+
 **Round 770 (2026-07-29; note written 2026-07-30 — see PROCESS below) — (REL.4)(a) CAUSE 5,
 THE POST-SWITCH FALL-THROUGH: A `default`-LESS SWITCH'S NO-MATCH EDGE NOW SUBTRACTS EVERY
 CASE TAG. THE DEFECT WAS IN THE BINDER, NOT THE CHECKER, AND THE ROUND WAS SENT AT CAUSE 6
@@ -1012,95 +1065,40 @@ cause than the one they were filed under, and sized the largest one out of "roun
   because cause A was not one of the gaps; (6) "the reduction will reproduce it" — WRONG
   eight times, and the real source answered in one run.
 
-**Round 761 (2026-07-29) — (REL.3) SIZED, AND ITS HEADLINE CLAIM IS FALSIFIED. THE
-SUBSTITUTION DEFECT IS REAL, MEASURED AND NOW FIXED — BUT IT DOES NOT EXIST ANYWHERE
-IN tsc's SOURCE, AND IT NEVER DID.** Round 760 wrote: *"every keyword node's `kind` in
-tsc's own source is `any`"*, from an 8-line synthetic reduction. Measured against the
-REAL `src/compiler/types.ts` this round: **`AbstractKeyword.kind` is
-`SyntaxKind.AbstractKeyword`, correctly** — because tsc declares
-`export type AbstractKeyword = ModifierToken<SyntaxKind.AbstractKeyword>`, a type
-ALIAS, and an alias to a generic reference takes the WORKING resolution path. The
-`interface X extends Intermediate<Arg>` form the reduction used does not occur.
-Landed anyway (it is a genuine defect, 9 shapes, zero cost); **8×2 grid unchanged code
-for code, corpus 8,837 / 0.** Predictions: **2 of 6**.
+**AOT — owner-directed, round 771. Measured, documented in `docs/perf/aot-native-image.md`,
+NOT integrated. The three items below are what that investigation leaves open.**
 
-*The caller's brief said to size before fixing, and the sizing is the deliverable.
-Two of the round's three headline numbers came from refusing to trust a reduction.*
-
-- **THE DEFECT IS NOT `any` — IT IS THE UNSUBSTITUTED TYPE PARAMETER.** Round 760's
-  probe was a READ into `string`; an unconstrained TP relates leniently in that
-  direction, so `any` and `T` are indistinguishable to it. A WRITE probe separates
-  them in one run: `s2.v = "x"` reports *"Type 'string' is not assignable to type
-  **'TFWD'**"*. Renaming every parameter (`TBOX`/`TFWD`/`TWR`) then names the survivor
-  — always the INTERMEDIATE's own parameter, i.e. hop 1 substituted and hop 2 did not.
-- **ROOT CAUSE, one function: `findInheritedBaseRef` (Checker.kt).** Stepping from a
-  `Type.Reference` up to its target's own bases, it enqueued them RAW. A target's
-  `baseTypes` are written in the TARGET's type-parameter scope — for
-  `interface Fwd<TFWD> extends Box<TFWD>`, Fwd's baseTypes hold `Box<TFWD>` — so the
-  walk answered `Box<TFWD>` and the property resolved to the bare parameter. The fix
-  applies that reference's mapper to each base before enqueueing, which is EXACTLY what
-  `resolveGenericPropertyTypeWorker` already does for the same descent (lines
-  100670-100673); it is a missing-composition bug, not a new mechanism.
-- **SHAPE CENSUS — 13 shapes, 10 broken, 9 fixed.** Broken and fixed: forwarded TP (2
-  and 3 hops), an intermediate that WRAPS its TP (`Box<T[]>`), an intermediate with
-  EXTRA type params, REORDERED type params, a CLASS chain, a METHOD signature, a nested
-  type argument. Already correct and still correct: a single hop; a NON-forwarding
-  intermediate; an intermediate's OWN member; a generic derived interface instantiated
-  at the use site (`Gen<T> extends Fwd<T>` used as `Gen<number>`) — that one is a
-  `Type.Reference`, so it never enters the broken walk. **Still broken, NOT fixed: a
-  type-ALIAS intermediate** (`type ABox<T> = Box<T>; interface S10 extends ABox<number>`)
-  — a different site (`getTypeFromBaseTypeExpression` only interns a Reference when the
-  declared type is a `Type.Interface`), and that one really does degrade to `any`.
-- **BLAST RADIUS: ZERO, ON EVERY AXIS.** Corpus: all 25 generated classes, **8,837
-  tests, 0 failures** (batches 3,514 + 1,647 + 1,338 + 1,797 + 541). The 8×2 arm-A grid:
-  46 / 46 / 46 / 46 / 46 / 47 / 47 / 95, **identical count AND composition to round
-  760**, including the one `completions.ts:2237` line. Build warning-clean.
-- **AND THAT ZERO IS EXACTLY THE ROUND-753 TRAP, SO IT WAS INSTRUMENTED.** A shadow A/B
-  counter ran the OLD walk beside the new one and counted disagreements: **0 firings on
-  the compiler profile and 0 on services** — the changed code never executes on tsc's
-  source. A green corpus and an unmoved profile therefore prove NOTHING about them, and
-  this note says so rather than banking them as evidence. What DOES fire: the synthetic
-  tsc-shape repro (1 firing, answer `Token<TKind>` → `Token<SyntaxKind.AbstractKeyword>`).
-- **THE FALSIFICATION, measured on the real source rather than argued.** A probe file
-  added to the materialised services profile importing the real `types.ts`:
-  `wantStr(ak.kind)` on a real `AbstractKeyword` reports
-  `Argument of type 'SyntaxKind.AbstractKeyword'` — correct, with the fix contributing
-  nothing (0 firings). So **(REL.3) is not the root cause of `completions.ts:2237`, and
-  the claim that it blocks the round-760 veto is withdrawn.** The remaining cause at
-  that line is visible in the source: inside `if (isIdentifier(node))`, `node` is still
-  `Node` — a type-predicate guard that does not narrow, i.e. the **(REL.2) narrowing
-  family**, which is where the next round belongs.
-- **EVERY PIN RUN AGAINST UNMODIFIED `bf9abfb3`: the 5 TARGETS FAIL and the 3 NEGATIVE
-  CONTROLS PASS.** The controls are load-bearing, not decoration: *a SPECIALIZED
-  intermediate is not re-substituted* (`Spec<T> extends Box<string>` must keep `string`)
-  fails any fix that pushes the outer argument down blindly, and *REORDERS its type
-  parameters* fails any fix that passes arguments positionally.
-- **PREDICTIONS 1 and 3 moved the map.** (1) "the lost type is `any`" — **WRONG**, it is
-  the type parameter, and the instrument that said otherwise was the read probe. (3) "the
-  defect has siblings" — right, and there are more than expected (7 distinct broken
-  shapes plus one that a different site owns). (2) "≤20 baselines" — 0. (4) non-forwarding
-  intermediate fine — right. (5) "the fold at resolveInterfaceMembersCore is the site" —
-  **WRONG**, the member table is not consulted at all here; the interface member SYMBOL is
-  shared by every derived type and its cached type is `any`. (6) "counts move UP" —
-  **WRONG**, nothing moved, because nothing fired.
-
-### QUEUE — work top-to-bottom; promote unblockers per protocol
-
-**Reading convention (stated round 687, after it cost a scan):** a superseded
-item is kept for its history as `- [ ] ~~Name (original)~~ — …` directly BELOW
-the `- [x]` entry that replaced it. Those struck-through lines are INERT — a
-top-down scan for the next `- [ ]` must skip anything whose title is `~~…~~`,
-and must also skip a parent whose every live child is `[x]` or owner-parked.
-
-(Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
-swept into PLAN-PHASE-5-HISTORY.md by an over-eager session-note trim; they are
-LIVE structure, not history. v1's offline-verifiable legs LANDED at round 481, so
-M5 is now the active arc per the owner directive; the Post-v1 backlog below is the
-"any TypeScript project" horizon and stays parked until the owner re-scopes. The
-M1–M3 campaign items still unchecked in the history file (M2.2/M2.3/M3.1–M3.4/M1.12)
-hit their re-scoped v1 acceptance bar — "the shapes tsc's source uses" — when the
-burn-down reached zero real FPs; reviving their full-completeness form is a
-backlog-horizon decision, not queue debt.)
+- [ ] **(AOT.1) Decide the shipped artifact — OWNER DECISION, everything else waits on it.**
+  A GraalVM CE native image of the current compiler runs the compiler profile in
+  **13,350 ms against the JVM's 26,272 ms (1.97×)**, with `--listAll` output
+  **byte-identical to the JVM's on all 8 profiles** (grid in the doc § 2), 392 MB RSS
+  against a 4 GB heap allowance, and a 2-minute image build. That is **−49% of a cold
+  compile for zero compiler changes** — larger than everything the rounds-482–759 arc
+  landed, combined, and orthogonal to it. **Integration is a Guardrails build-system
+  change and was deliberately not taken.** The decision is not just "add native-image":
+  it is whether the shipped artifact is a native binary, a JVM jar, or both, and it
+  interacts with the multiplatform story (a native image is per-OS/arch, so CI would
+  need a build matrix). Blockers to be aware of, both recorded: the corpus suite is a
+  JVM harness and has never run against a native binary, so the 8-profile grid is the
+  only behavioural evidence; and a CI runner needs a C toolchain, which this box did
+  not have (doc § 8 records the unprivileged workaround and its three traps).
+- [ ] **(AOT.2) Adopt the WARM protocol for compiler-level A/B — cheap, and it changes
+  what is measurable.** Calibrated round 771 (doc § 4): six A/A processes give a warm
+  band of **±1.0% = ±114 ms** against the cold protocol's ±2.0% = ±536 ms, i.e. **4.7×
+  more sensitive in absolute terms**, and ten warm iterations cost less than four cold
+  runs. The harness already exists (`BenchMain`) and is self-falsifying (every iteration
+  prints its own files/errors). **This re-opens items the arc rejected as in-band, and
+  the list is in doc § 4** — (CALL.4)'s 441 ms residue is 3.9× the warm band, the
+  `getTypeOfExpression` ceiling 7.1%, single-visit discipline 5.8%. **Read the two
+  cautions there before re-opening any of them: nothing got bigger, only visible, and
+  round 736's identity pre-test was rejected as UNSOUND rather than small.** `AUDIT.3`'s
+  globals population stays dead at 0.3–0.6%.
+- [ ] **(AOT.3) Emit-mode native measurement + PGO.** (a) All round-771 figures are
+  `--noEmit`; the published CI ratio is emit-mode, so the two cannot be compared until
+  the native binary is measured with emit (§ 0.2's standing rule). (b) `-O3
+  -march=native` measured **13,325 vs 13,335 ms — nothing**, so the residual 15% against
+  JVM peak is not codegen but the absence of **PGO**, which GraalVM CE cannot do. Only
+  Oracle GraalVM closes it. **Do not spend further rounds on codegen flags.**
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 

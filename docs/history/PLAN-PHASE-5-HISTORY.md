@@ -1,3 +1,93 @@
+**Round 761 (2026-07-29) — (REL.3) SIZED, AND ITS HEADLINE CLAIM IS FALSIFIED. THE
+SUBSTITUTION DEFECT IS REAL, MEASURED AND NOW FIXED — BUT IT DOES NOT EXIST ANYWHERE
+IN tsc's SOURCE, AND IT NEVER DID.** Round 760 wrote: *"every keyword node's `kind` in
+tsc's own source is `any`"*, from an 8-line synthetic reduction. Measured against the
+REAL `src/compiler/types.ts` this round: **`AbstractKeyword.kind` is
+`SyntaxKind.AbstractKeyword`, correctly** — because tsc declares
+`export type AbstractKeyword = ModifierToken<SyntaxKind.AbstractKeyword>`, a type
+ALIAS, and an alias to a generic reference takes the WORKING resolution path. The
+`interface X extends Intermediate<Arg>` form the reduction used does not occur.
+Landed anyway (it is a genuine defect, 9 shapes, zero cost); **8×2 grid unchanged code
+for code, corpus 8,837 / 0.** Predictions: **2 of 6**.
+
+*The caller's brief said to size before fixing, and the sizing is the deliverable.
+Two of the round's three headline numbers came from refusing to trust a reduction.*
+
+- **THE DEFECT IS NOT `any` — IT IS THE UNSUBSTITUTED TYPE PARAMETER.** Round 760's
+  probe was a READ into `string`; an unconstrained TP relates leniently in that
+  direction, so `any` and `T` are indistinguishable to it. A WRITE probe separates
+  them in one run: `s2.v = "x"` reports *"Type 'string' is not assignable to type
+  **'TFWD'**"*. Renaming every parameter (`TBOX`/`TFWD`/`TWR`) then names the survivor
+  — always the INTERMEDIATE's own parameter, i.e. hop 1 substituted and hop 2 did not.
+- **ROOT CAUSE, one function: `findInheritedBaseRef` (Checker.kt).** Stepping from a
+  `Type.Reference` up to its target's own bases, it enqueued them RAW. A target's
+  `baseTypes` are written in the TARGET's type-parameter scope — for
+  `interface Fwd<TFWD> extends Box<TFWD>`, Fwd's baseTypes hold `Box<TFWD>` — so the
+  walk answered `Box<TFWD>` and the property resolved to the bare parameter. The fix
+  applies that reference's mapper to each base before enqueueing, which is EXACTLY what
+  `resolveGenericPropertyTypeWorker` already does for the same descent (lines
+  100670-100673); it is a missing-composition bug, not a new mechanism.
+- **SHAPE CENSUS — 13 shapes, 10 broken, 9 fixed.** Broken and fixed: forwarded TP (2
+  and 3 hops), an intermediate that WRAPS its TP (`Box<T[]>`), an intermediate with
+  EXTRA type params, REORDERED type params, a CLASS chain, a METHOD signature, a nested
+  type argument. Already correct and still correct: a single hop; a NON-forwarding
+  intermediate; an intermediate's OWN member; a generic derived interface instantiated
+  at the use site (`Gen<T> extends Fwd<T>` used as `Gen<number>`) — that one is a
+  `Type.Reference`, so it never enters the broken walk. **Still broken, NOT fixed: a
+  type-ALIAS intermediate** (`type ABox<T> = Box<T>; interface S10 extends ABox<number>`)
+  — a different site (`getTypeFromBaseTypeExpression` only interns a Reference when the
+  declared type is a `Type.Interface`), and that one really does degrade to `any`.
+- **BLAST RADIUS: ZERO, ON EVERY AXIS.** Corpus: all 25 generated classes, **8,837
+  tests, 0 failures** (batches 3,514 + 1,647 + 1,338 + 1,797 + 541). The 8×2 arm-A grid:
+  46 / 46 / 46 / 46 / 46 / 47 / 47 / 95, **identical count AND composition to round
+  760**, including the one `completions.ts:2237` line. Build warning-clean.
+- **AND THAT ZERO IS EXACTLY THE ROUND-753 TRAP, SO IT WAS INSTRUMENTED.** A shadow A/B
+  counter ran the OLD walk beside the new one and counted disagreements: **0 firings on
+  the compiler profile and 0 on services** — the changed code never executes on tsc's
+  source. A green corpus and an unmoved profile therefore prove NOTHING about them, and
+  this note says so rather than banking them as evidence. What DOES fire: the synthetic
+  tsc-shape repro (1 firing, answer `Token<TKind>` → `Token<SyntaxKind.AbstractKeyword>`).
+- **THE FALSIFICATION, measured on the real source rather than argued.** A probe file
+  added to the materialised services profile importing the real `types.ts`:
+  `wantStr(ak.kind)` on a real `AbstractKeyword` reports
+  `Argument of type 'SyntaxKind.AbstractKeyword'` — correct, with the fix contributing
+  nothing (0 firings). So **(REL.3) is not the root cause of `completions.ts:2237`, and
+  the claim that it blocks the round-760 veto is withdrawn.** The remaining cause at
+  that line is visible in the source: inside `if (isIdentifier(node))`, `node` is still
+  `Node` — a type-predicate guard that does not narrow, i.e. the **(REL.2) narrowing
+  family**, which is where the next round belongs.
+- **EVERY PIN RUN AGAINST UNMODIFIED `bf9abfb3`: the 5 TARGETS FAIL and the 3 NEGATIVE
+  CONTROLS PASS.** The controls are load-bearing, not decoration: *a SPECIALIZED
+  intermediate is not re-substituted* (`Spec<T> extends Box<string>` must keep `string`)
+  fails any fix that pushes the outer argument down blindly, and *REORDERS its type
+  parameters* fails any fix that passes arguments positionally.
+- **PREDICTIONS 1 and 3 moved the map.** (1) "the lost type is `any`" — **WRONG**, it is
+  the type parameter, and the instrument that said otherwise was the read probe. (3) "the
+  defect has siblings" — right, and there are more than expected (7 distinct broken
+  shapes plus one that a different site owns). (2) "≤20 baselines" — 0. (4) non-forwarding
+  intermediate fine — right. (5) "the fold at resolveInterfaceMembersCore is the site" —
+  **WRONG**, the member table is not consulted at all here; the interface member SYMBOL is
+  shared by every derived type and its cached type is `any`. (6) "counts move UP" —
+  **WRONG**, nothing moved, because nothing fired.
+
+### QUEUE — work top-to-bottom; promote unblockers per protocol
+
+**Reading convention (stated round 687, after it cost a scan):** a superseded
+item is kept for its history as `- [ ] ~~Name (original)~~ — …` directly BELOW
+the `- [x]` entry that replaced it. Those struck-through lines are INERT — a
+top-down scan for the next `- [ ]` must skip anything whose title is `~~…~~`,
+and must also skip a parent whose every live child is `[x]` or owner-parked.
+
+(Restored 2026-07-12, round 481 — the queue/backlog/inventory sections had been
+swept into PLAN-PHASE-5-HISTORY.md by an over-eager session-note trim; they are
+LIVE structure, not history. v1's offline-verifiable legs LANDED at round 481, so
+M5 is now the active arc per the owner directive; the Post-v1 backlog below is the
+"any TypeScript project" horizon and stays parked until the owner re-scopes. The
+M1–M3 campaign items still unchecked in the history file (M2.2/M2.3/M3.1–M3.4/M1.12)
+hit their re-scoped v1 acceptance bar — "the shapes tsc's source uses" — when the
+burn-down reached zero real FPs; reviving their full-completeness form is a
+backlog-horizon decision, not queue debt.)
+
 **Round 760 (2026-07-29) — THE DASHBOARD RE-MEASURED END TO END FOR THE FIRST TIME
 SINCE ROUND 730, AND IT BARELY MOVED. Five profiles are unchanged CODE FOR CODE
 across ~50 commits; the only movement anywhere on the 8×2 grid is ONE line, and
