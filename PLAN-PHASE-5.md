@@ -1068,15 +1068,33 @@ cause than the one they were filed under, and sized the largest one out of "roun
 **AOT — owner-directed, round 771. Measured, documented in `docs/perf/aot-native-image.md`,
 NOT integrated. The three items below are what that investigation leaves open.**
 
-- [ ] **(AOT.1) Decide the shipped artifact — OWNER DECISION, everything else waits on it.**
-  A GraalVM CE native image of the current compiler runs the compiler profile in
+- [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
+  nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
+  existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
+  plugin, which expects the `application`/`java` conventions this KMP build does not use.
+  **Verified end to end**: the gradle-built binary is **byte-identical to the JVM on all 8
+  profiles** (12.8–22.1 s), full suite **13,216 / 0 / 3** unchanged, and the
+  no-GraalVM path was TESTED and then FIXED — it reported a bare
+  `IOException: Cannot run program "native-image"`, so the task now probes PATH itself and
+  says what to install and which flag to pass. Reflection metadata lives in
+  `src/jvmMain/resources/META-INF/native-image/…` (18 entries, all kotlinx-coroutines
+  atomic field updaters) and is auto-discovered from the classpath. **Deliberately NOT
+  wired into `build`/`check`** — it needs GraalVM plus a C toolchain and adds ~2 min, and
+  it produces a distribution artifact rather than a verification.
+  `.github/workflows/native.yml` is **`workflow_dispatch` only** (no cost per push) and
+  carries the byte-identity check; it is UNTESTED on CI, being unrunnable from here.
+- [ ] **(AOT.1) Decide the shipped artifact — the REMAINING owner decision.** (AOT.1a)
+  above makes the binary buildable and verified; what is still open is whether it SHIPS,
+  and as what: release-attached native binaries need a per-OS/arch matrix (this box can
+  only produce linux-x64, and the Apple targets have no builder), which is a different
+  question from "can we build one".
+  The measurement behind it: a GraalVM CE native image runs the compiler profile in
   **13,350 ms against the JVM's 26,272 ms (1.97×)**, with `--listAll` output
   **byte-identical to the JVM's on all 8 profiles** (grid in the doc § 2), 392 MB RSS
   against a 4 GB heap allowance, and a 2-minute image build. That is **−49% of a cold
   compile for zero compiler changes** — larger than everything the rounds-482–759 arc
-  landed, combined, and orthogonal to it. **Integration is a Guardrails build-system
-  change and was deliberately not taken.** The decision is not just "add native-image":
-  it is whether the shipped artifact is a native binary, a JVM jar, or both, and it
+  landed, combined, and orthogonal to it. The remaining decision is
+  whether the shipped artifact is a native binary, a JVM jar, or both, and it
   interacts with the multiplatform story (a native image is per-OS/arch, so CI would
   need a build matrix). Blockers to be aware of, both recorded: the corpus suite is a
   JVM harness and has never run against a native binary, so the 8-profile grid is the

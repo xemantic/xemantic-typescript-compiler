@@ -214,6 +214,106 @@ tasks.register<JavaExec>("compileTsProject") {
 }
 
 // ---------------------------------------------------------------------------
+// AOT — GraalVM native-image
+// ---------------------------------------------------------------------------
+//
+// Ahead-of-time compiles the JVM target into a standalone native executable.
+// Measured round 771 on the compiler profile: 13,350 ms against the JVM's
+// 26,272 ms (1.97x), with `--listAll` output BYTE-IDENTICAL to the JVM's on all
+// eight bench profiles, 392 MB RSS against a 4 GB heap allowance. The win is
+// not faster code — it is the ~14.7 s of JVM warm-up a one-shot CLI run never
+// amortizes. Full derivation and caveats: docs/perf/aot-native-image.md.
+//
+//   ./gradlew nativeImage                         # uses GRAALVM_HOME
+//   ./gradlew nativeImage -PgraalvmHome=/opt/graalvm
+//   ./gradlew nativeImage -PnativeImageHeap=6g    # builder heap, default 5g
+//
+// DELIBERATELY NOT wired into `build`/`check`: it needs a GraalVM JDK *and* a
+// working C toolchain (gcc + binutils + libc headers + zlib), which a plain
+// JVM CI runner does not have, and it adds ~2 min. Nothing about the normal
+// build changes if GraalVM is absent — the task simply fails with the message
+// below when explicitly asked for.
+//
+// Reflection metadata lives in src/jvmMain/resources/META-INF/native-image/...
+// and is picked up from the classpath automatically; it is 18 entries, all
+// kotlinx-coroutines atomic field updaters. There is ZERO application
+// reflection (the TypeScript libs are embedded as Kotlin string constants
+// rather than resources), which is why `--no-fallback` succeeds unassisted.
+// Regenerate it with the tracing agent only if a dependency starts reflecting:
+//   java -agentlib:native-image-agent=config-output-dir=<dir> -cp ... MainKt ...
+//
+// `-O3 -march=native` was measured and is worth NOTHING here (13,325 vs
+// 13,335 ms) — the residual 15% against JVM peak is the absence of PGO, which
+// GraalVM CE cannot do. Do not add codegen flags expecting a win.
+
+val nativeImageMainClass = "com.xemantic.typescript.compiler.MainKt"
+
+val nativeImage by tasks.registering {
+    group = "build"
+    description = "Ahead-of-time compiles the JVM target into a native executable (needs GraalVM + a C toolchain)."
+
+    val jvmMain = kotlin.targets.getByName("jvm").compilations.getByName("main")
+    dependsOn(jvmMain.compileTaskProvider)
+
+    val classpathFiles = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    inputs.files(classpathFiles)
+    inputs.property("mainClass", nativeImageMainClass)
+
+    val outputDir = layout.buildDirectory.dir("native")
+    val binaryFile = outputDir.map { it.file("xtsc") }
+    outputs.file(binaryFile)
+
+    // Resolved at CONFIGURATION time so the task's inputs are honest.
+    val graalHome = (project.findProperty("graalvmHome") as String?)
+        ?: System.getenv("GRAALVM_HOME")
+    val builderHeap = (project.findProperty("nativeImageHeap") as String?) ?: "5g"
+
+    doLast {
+        // Prefer an explicit GraalVM home; fall back to whatever is on PATH so a
+        // GraalVM-provisioned CI runner works with no extra configuration.
+        val fromHome = graalHome?.let { File(it).resolve("bin/native-image") }
+        val onPath = System.getenv("PATH")
+            ?.split(File.pathSeparator)
+            ?.map { File(it).resolve("native-image") }
+            ?.firstOrNull { it.canExecute() }
+        val tool = when {
+            fromHome != null && fromHome.canExecute() -> fromHome.absolutePath
+            fromHome != null -> error(
+                "native-image not found at $fromHome — is '$graalHome' a GraalVM JDK?"
+            )
+            onPath != null -> onPath.absolutePath
+            // Checked explicitly rather than left to ProcessBuilder, which reports
+            // this as a bare `IOException: Cannot run program "native-image"` that
+            // says nothing about what to install or which flag to pass.
+            else -> error(
+                "native-image not found. Install a GraalVM JDK and either put its " +
+                    "bin/ on PATH, set GRAALVM_HOME, or pass -PgraalvmHome=/path/to/graalvm. " +
+                    "A C toolchain (gcc, binutils, libc headers, zlib) is also required."
+            )
+        }
+
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        val binary = out.resolve("xtsc")
+
+        // A missing C toolchain is the most likely failure and its message is
+        // opaque (it aborts inside CCompilerInvoker), so say so up front.
+        logger.lifecycle(
+            "Building native image via $tool (needs gcc + binutils + libc headers + zlib on PATH) ..."
+        )
+        runCommand(
+            tool,
+            "-cp", classpathFiles.joinToString(File.pathSeparator) { it.absolutePath },
+            "-o", binary.absolutePath,
+            "--no-fallback",
+            "-J-Xmx$builderHeap",
+            nativeImageMainClass
+        )
+        logger.lifecycle("Native executable: $binary")
+    }
+}
+
+// ---------------------------------------------------------------------------
 // TypeScript compiler test harness
 // ---------------------------------------------------------------------------
 

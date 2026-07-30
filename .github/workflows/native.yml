@@ -1,0 +1,66 @@
+# Builds the ahead-of-time compiled native executable via GraalVM native-image.
+#
+# MANUAL TRIGGER ONLY, deliberately. The image build adds ~2 min and the normal
+# `build-main` / `build-pr` workflows do not need it — the JVM suite is the
+# correctness gate, and this produces a distribution artifact rather than a
+# verification. Attaching the binary to releases is a separate decision (see
+# (AOT.1) in PLAN-PHASE-5.md) and is intentionally NOT wired here.
+#
+# Why this is a separate workflow at all: build-main/build-pr both delegate to
+# the shared xemantic/.github reusable workflow, which knows nothing about
+# GraalVM.
+#
+# NOTE: unlike the machine this was developed on, ubuntu-latest ships a working
+# C toolchain (gcc, binutils, libc headers, zlib), so none of the unprivileged
+# toolchain assembly described in docs/perf/aot-native-image.md § 8 applies here.
+name: Native image
+
+on:
+  workflow_dispatch:
+    inputs:
+      verify:
+        description: "Run the native binary against the compiler bench profile and diff it against the JVM"
+        type: boolean
+        default: true
+
+jobs:
+  native:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up GraalVM
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          cache: 'gradle'
+
+      - name: Build native image
+        run: ./gradlew nativeImage --no-configuration-cache
+
+      - name: Report binary
+        run: |
+          ls -la build/native/xtsc
+          ./build/native/xtsc --help | head -5 || true
+
+      # The gate is byte-identity against the JVM, never a diagnostic COUNT: two
+      # runs can agree on 46 and disagree on which 46.
+      - name: Verify against the JVM (byte-identity)
+        if: ${{ inputs.verify }}
+        run: |
+          set -euo pipefail
+          scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
+          PROFILE=$(ls -d build/bench/tsc-project-* | head -1)
+          CP="build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)"
+          java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+            --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > jvm.txt
+          ./build/native/xtsc --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > native.txt
+          diff jvm.txt native.txt && echo "native output is byte-identical to the JVM"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: xtsc-linux-x64
+          path: build/native/xtsc
+          if-no-files-found: error
