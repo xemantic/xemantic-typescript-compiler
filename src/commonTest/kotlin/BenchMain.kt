@@ -31,8 +31,18 @@ import kotlin.time.measureTimedValue
  * Warm in-process whole-project benchmark entry point (NOT a test — carries no
  * `@Test` methods, so `jvmTest` runs are unaffected). Each iteration performs a
  * complete rebuild: tsconfig load, glob discovery, module resolution, parse,
- * bind, check, transform, and emit-to-memory (`noEmit = true` skips only the
- * final disk writes; the JS text is still produced by the shared pipeline).
+ * bind and check.
+ *
+ * This runs **check-only**: `noEmit = true` reaches `ProjectCompiler`'s
+ * `skipEmitOutputs`, so since round 738 nothing is transformed or emitted at all
+ * (the earlier "emit-to-memory, only the disk writes are skipped" note here
+ * predates that gate and was stale). The number is therefore directly comparable
+ * to the arc's `--noEmit` figures — `ab-interleaved.sh` and `cost_gate.py` — and
+ * NOT to the emit-mode CI ratio in `bench-history/`.
+ *
+ * **This is the only harness that measures a WARM compile.** `bench-compile-tsc.sh`
+ * forks a fresh JVM per run, so its `--warmup N` warms the page cache and never
+ * the JIT; every archived CI row is a cold single-shot.
  *
  * Usage:
  * ```
@@ -61,7 +71,12 @@ fun main(args: Array<String>) {
         times.add(ms)
         files = result.programFiles.size
         errors = result.errorCount
-        println("""{"iter":$i,"ms":$ms}""")
+        // The probe's own falsification: an in-process rebuild shares whatever state
+        // the pipeline does not reset (id counters, interning caches, the Vfs object),
+        // so a WARM number is only a measurement while every iteration still answers
+        // the SAME program. A drifting errors/files column means state is leaking and
+        // the timings below it measure a different compile, not a faster one.
+        println("""{"iter":$i,"ms":$ms,"files":${result.programFiles.size},"errors":${result.errorCount}}""")
     }
 
     val sorted = times.sorted()
