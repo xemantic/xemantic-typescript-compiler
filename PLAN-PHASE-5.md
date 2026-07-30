@@ -1083,6 +1083,36 @@ NOT integrated. The three items below are what that investigation leaves open.**
   it produces a distribution artifact rather than a verification.
   `.github/workflows/native.yml` is **`workflow_dispatch` only** (no cost per push) and
   carries the byte-identity check; it is UNTESTED on CI, being unrunnable from here.
+- [ ] **(SERVER.1) Pre-warmed compile server + thin client — the prize is MEASURED and it is
+  Stage 1 ONLY (owner-proposed round 772, sized the same session).** A long-lived warm JVM
+  answering compile requests from a minimal CLI. **The warm JVM is the FASTEST artifact we
+  have** — 11,580 ms against the GraalVM binary's 13,350 ms and a 26,272 ms cold CLI — so
+  this is worth ~2.3x over today and ~13% over shipping AOT alone.
+  **Design: native thin CLIENT + JVM SERVER**, which composes with (AOT.1) rather than
+  competing — the Graal binary is an ideal client (instant start, no JVM) while the server
+  stays on the JVM precisely because C2 peak beats Graal's AOT code.
+  - **STAGE 1 — reuse the JVM, NOT the program. This is the whole prize, and it is
+    already proven safe**: `BenchMain` ran 12 in-process rebuilds reporting identical
+    `files=78 errors=46`, so a fresh program per request in one warm JVM carries
+    essentially no new correctness surface. Missing piece is only the TRANSPORT (a socket
+    protocol + client), not the compiler.
+  - **STAGE 2 — reuse program state: MEASURED AND DEAD for self-compile.** Round 772 drove
+    the existing `--watch` on the compiler profile: a LEAF edit (`semver.ts`, 3 dependents)
+    yields `incremental recheck of 77/78 file(s)` at 13,529 ms, and `checker.ts` / `types.ts`
+    do not qualify at all (`rebuilding…`, 12,002 / 11,208 ms). All three ARE the warm
+    full-rebuild time. Cause: tsc's sources are `export *` barrels, so reverse-dependency
+    closure ≈ the whole program. **The INV.7(d1) machinery existing does NOT make this
+    cheap** — do not price a design off it. May still pay on a well-layered user project;
+    re-measure there before reviving.
+  - **Costs to weigh, and one of them already bit**: a resident daemon inherits staleness,
+    version skew and memory residency — an idle 3.76 GB Kotlin daemon is what froze this box
+    during round 772. And state reuse is where this codebase has already been wrong:
+    `--workers` produced 62 diagnostics against sequential's 46. Stage 1 avoids both by
+    keeping per-request state fresh.
+  - Precedent, including next door: `tsserver` is exactly this for TypeScript, tsgo ships an
+    LSP server, plus Nailgun / Bazel persistent workers / Roslyn VBCSCompiler / the Gradle
+    and Kotlin daemons.
+
 - [ ] **(AOT.1) Decide the shipped artifact — the REMAINING owner decision.** (AOT.1a)
   above makes the binary buildable and verified; what is still open is whether it SHIPS,
   and as what: release-attached native binaries need a per-OS/arch matrix (this box can
