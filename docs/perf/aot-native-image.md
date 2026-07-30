@@ -44,6 +44,36 @@ project size**, which is the signature of a fixed warmup cost: the speedup RATIO
 (1.98× → 1.71×) precisely because the denominator grows while the saving does not.
 A per-node or per-file cost would not behave that way.
 
+## 2b. Kotlin/Native measured against it — GraalVM wins by 1.63×
+
+*Round 772. Both are AOT; they are different backends (SubstrateVM vs LLVM), and the
+question "should we also ship a Kotlin/Native binary" needed a number rather than a
+preference.* Compiler profile, `--noEmit`, same box, `linkReleaseExecutableLinuxX64`.
+
+| runtime | wall | vs JVM cold | vs Graal | RSS | binary |
+|---|---:|---:|---:|---:|---:|
+| JVM, cold single-shot | 26,272 ms | 1.00× | 0.51× | — | — |
+| JVM, warm steady state | 11,580 ms | 2.27× | 1.15× | — | — |
+| **GraalVM native-image** | **13,350 ms** | **1.97×** | 1.00× | **392 MB** | 55 MB |
+| **Kotlin/Native release** | **21,787 ms** | 1.21× | **0.61×** | 1,190 MB | **27 MB** |
+
+**Kotlin/Native is byte-identical to the JVM** (sorted `--listAll` diff empty, 46 errors)
+and is **1.63× SLOWER than GraalVM**, at **3× the resident memory**, in **half the binary
+size**. Its timings are extremely stable — 21.83 / 21.88 / 21.83 s, a 0.2% spread, against
+the JVM's JIT-driven variance — which is what an AOT binary with no warm-up should look
+like.
+
+**The prior stated in the queue before measuring was correct and is now confirmed**: a type
+checker is allocation-heavy (AST nodes, interned types), and K/N's optimizer and GC trail
+Graal's on exactly that profile — the 3× RSS is the same finding seen from the memory side.
+Note also that K/N barely beats the JVM *cold* (1.21×) and is well behind the JVM *warm*
+(11.6 s): it removes warm-up, then gives most of the gain back in weaker codegen.
+
+**So GraalVM is the shipping path for speed.** Kotlin/Native's remaining argument is
+reach — a 27 MB binary with no JVM anywhere, on platforms Graal would need its own
+toolchain for — and `linuxX64Test`, which would run the corpus natively. Neither is a
+performance argument.
+
 ## 3. `-O3 -march=native` buys nothing — and that is informative
 
 | build | median of 3 |

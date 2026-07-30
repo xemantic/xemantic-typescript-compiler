@@ -1124,9 +1124,18 @@ NOT integrated. The three items below are what that investigation leaves open.**
   **The accumulated `commonTest` drift is MEASURED and FIXED: 7 errors, all one class**
   (commas in backtick test names — CLAUDE.md rule 1), against round 672's 169. Fixed in
   place; the names now satisfy the native rule, which the JVM never checks.
-  **What remains is the LINK**: `linuxX64Test` dies after ~22 min with `Gradle build daemon
-  disappeared unexpectedly` — the OS OOM-killer, not a Java OOM, so there is nothing in the
-  log to grep. Linking the test executable does not fit beside a 6 GB daemon on 7.7 GB.
+  **THE MAIN EXECUTABLE LINKS AND IS MEASURED (round 772, later the same session):**
+  `linkReleaseExecutableLinuxX64` succeeds in **8m05s at -Xmx4g** — a SMALLER heap than the
+  6g that froze the box, which is the counter-intuitive lesson (a 6g daemon starves the OS
+  and the OOM-killer takes something; 4g fails gracefully or, here, succeeds). The binary is
+  **byte-identical to the JVM** and **1.63× SLOWER than GraalVM** — 21,787 ms vs 13,350 ms,
+  at 3× the RSS in half the binary size; full table in the doc § 2b. **The queue's own prior
+  was correct**, so GraalVM is the shipping path for speed and K/N's remaining argument is
+  reach, not performance.
+  **What remains is the TEST link**: `linuxX64Test` died after ~22 min with `Gradle build
+  daemon disappeared unexpectedly` — the OS OOM-killer, not a Java OOM, so there is nothing
+  in the log to grep. **That attempt was at 6g and is worth ONE retry at 4g**, since the main
+  link then succeeded at 4g where the test link failed at 6g; untried.
   **Untried levers, cheapest first** (from Kotlin's tips page): `org.gradle.workers.max=1`;
   a smaller daemon (4–5g) since the killer is the OS and not the heap; `linkDebugTest*`
   rather than anything release/`-opt`; `kotlin.incremental.native=true`; and the page's
