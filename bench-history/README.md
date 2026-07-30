@@ -14,6 +14,16 @@ queue item `(BENCH.1)`):
   and `scripts/cost_gate.py` both pass `--noEmit`, so **a perf claim must quote this ratio**.
 - **emit** — every compiler type-checks *and* writes JavaScript to an `outDir`.
 
+**The `xtsc-nat` / `nat/tsc` / `nat/tsgo` columns (round 772)** are the same compiler
+ahead-of-time compiled with GraalVM `native-image` (`./gradlew nativeImage`). Its output is
+byte-identical to the JVM arm's on all 8 profiles — what it removes is JVM warm-up, which a
+one-shot CLI run never amortizes (~1.97× on the compiler profile; `docs/perf/aot-native-image.md`).
+Those columns are **appended at the end of the row deliberately**: every row written before
+round 772 has 10 cells and Markdown renders the missing trailing ones as empty, so the
+archive stays aligned under the headers it was written for. A `—` means the AOT arm was not
+measured for that run. **The JVM arm still runs on temurin JDK 26, unchanged** — GraalVM
+builds the image and is never the JVM the `xtsc` column is measured on.
+
 **Read the median across runs, not one row.** xtsc is a single cold JVM run per row against
 tsc/tsgo's median of three, so one row carries the full run-to-run spread: over the 341 archived
 rows below the xtsc/tsc ratio ranges **1.87×–2.72×** with a median of **2.28×** on a compiler

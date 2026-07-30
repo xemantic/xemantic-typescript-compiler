@@ -29,6 +29,11 @@
 # Usage: scripts/bench-3way.sh --tsc PATH --tsgo PATH [options]
 #   --tsc PATH        reference JS `tsc` binary (required)
 #   --tsgo PATH       native `tsgo` binary (required)
+#   --xtsc-native P   OPTIONAL ahead-of-time xtsc binary (./gradlew nativeImage ->
+#                     build/native/xtsc). When given, it is measured as a FOURTH
+#                     compiler in every mode. Omit it and the run is unchanged.
+#                     Round 771: ~1.97x the JVM cold, output byte-identical on all
+#                     8 profiles — see docs/perf/aot-native-image.md.
 #   --project NAME    tsc subproject profile (default compiler)
 #   --xtsc-iters N    measured xtsc runs, median (default 1; ~30s each in CI)
 #   --ref-iters N     measured tsc/tsgo runs, median (default 3; cheap)
@@ -41,7 +46,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-TSC_BIN=""; TSGO_BIN=""; PROJECT=compiler
+TSC_BIN=""; TSGO_BIN=""; XTSC_NATIVE=""; PROJECT=compiler
 XTSC_ITERS=1; REF_ITERS=3
 MODES="check-only,emit"
 OUT_DIR="$REPO_ROOT/bench-history"; LABEL=""
@@ -49,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --tsc)        TSC_BIN="$2"; shift 2 ;;
         --tsgo)       TSGO_BIN="$2"; shift 2 ;;
+        --xtsc-native) XTSC_NATIVE="$2"; shift 2 ;;
         --project)    PROJECT="$2"; shift 2 ;;
         --xtsc-iters) XTSC_ITERS="$2"; shift 2 ;;
         --ref-iters)  REF_ITERS="$2"; shift 2 ;;
@@ -116,6 +122,39 @@ run_xtsc() { # $1=mode ; sets xtsc_wall xtsc_self xtsc_err xtsc_files LOC
 }
 
 # --------------------------------------------------------------------------
+# 1b. The ahead-of-time xtsc binary (optional), on the SAME project and mode.
+#
+# Uses xtsc's OWN CLI rather than bench-compile-tsc.sh, which drives `java`.
+# Emit mode needs no --outDir: xtsc writes to the outDir the materialized
+# tsconfig already sets, exactly as the JVM arm does.
+# --------------------------------------------------------------------------
+run_native() { # $1=mode ; sets nat_wall nat_self nat_err
+    local mode="$1" walls=() selfs=() out start end i
+    nat_wall=0; nat_self=0; nat_err=0
+    [[ -n "$XTSC_NATIVE" ]] || return 0
+    echo "== xtsc-native ($mode) =="
+    for ((i=1;i<=XTSC_ITERS;i++)); do
+        out="$(mktemp)"
+        start=$(date +%s%N)
+        if [[ "$mode" == check-only ]]; then
+            "$XTSC_NATIVE" --noEmit "$PROJ_DIR" >"$out" 2>&1 || true
+        else
+            "$XTSC_NATIVE" "$PROJ_DIR" >"$out" 2>&1 || true
+        fi
+        end=$(date +%s%N)
+        walls+=($(( (end-start)/1000000 )))
+        # Self time and errors come from the compiler's own output, so they are
+        # correct on any OS (the round-730 macOS BSD-grep trap hits parsed stats,
+        # not these).
+        selfs+=($(grep -oE '^time:[[:space:]]+[0-9]+' "$out" | grep -oE '[0-9]+' | head -1 || echo 0))
+        nat_err=$(grep -oE '[0-9]+ error\(s\)' "$out" | grep -oE '[0-9]+' | head -1 || echo 0)
+        rm -f "$out"
+    done
+    nat_wall=$(median "${walls[@]}")
+    nat_self=$(median "${selfs[@]}")
+}
+
+# --------------------------------------------------------------------------
 # 2. tsc / tsgo on the SAME materialized project, in the SAME mode.
 # --------------------------------------------------------------------------
 run_ref() { # $1=bin  $2=mode ; echoes "wall_ms err"
@@ -142,7 +181,8 @@ for MODE in "${MODE_LIST[@]}"; do
     run_xtsc "$MODE"
     echo "== tsc ($TSC_VER, $MODE) ==";   read -r tsc_wall  tsc_err  < <(run_ref "$TSC_BIN"  "$MODE")
     echo "== tsgo ($TSGO_VER, $MODE) =="; read -r tsgo_wall tsgo_err < <(run_ref "$TSGO_BIN" "$MODE")
-    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err")
+    run_native "$MODE"
+    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err $nat_wall $nat_self $nat_err")
 done
 
 # --------------------------------------------------------------------------
@@ -180,10 +220,11 @@ tsc_ver, tsgo_ver = g("B_TSC_VER"), g("B_TSGO_VER")
 xiters, refiters = i("B_XITERS"), i("B_REFITERS")
 
 # mode xtsc_wall xtsc_self xtsc_err tsc_wall tsc_err tsgo_wall tsgo_err
+#      nat_wall nat_self nat_err   (nat_* are 0 when --xtsc-native was not passed)
 modes = []
 for line in g("B_MODE_DATA").splitlines():
     p = line.split()
-    if len(p) == 8:
+    if len(p) == 11:
         modes.append((p[0],) + tuple(int(x) for x in p[1:]))
 
 def sec(ms): return f"{ms/1000:.2f}s" if ms else "n/a"
@@ -213,7 +254,7 @@ lines = [
 if label:
     lines.append(f"- **Label**: {label}")
 
-for mode, xw, xself, xerr, tw, terr, gw, gerr in modes:
+for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr in modes:
     lines += [
         "",
         f"## {mode}",
@@ -225,11 +266,23 @@ for mode, xw, xself, xerr, tw, terr, gw, gerr in modes:
         f"| xtsc | {rev} | {sec(xw)} | {tput(xw)} LOC/s | {xerr} |",
         f"| tsc | {tsc_ver} | {sec(tw)} | {tput(tw)} LOC/s | {terr} |",
         f"| tsgo | {tsgo_ver} | {sec(gw)} | {tput(gw)} LOC/s | {gerr} |",
+    ]
+    if nw:
+        lines.append(f"| xtsc-native | {rev} (AOT) | {sec(nw)} | {tput(nw)} LOC/s | {nerr} |")
+    lines += [
         "",
         f"Relative (wall): xtsc is **{ratio(xw,tw)}** tsc and **{ratio(xw,gw)}** tsgo; "
         f"tsc is **{ratio(tw,gw)}** tsgo. "
         f"xtsc self-reported time (excl. JVM startup/JIT): **{sec(xself)}**.",
     ]
+    if nw:
+        lines += [
+            "",
+            f"Ahead-of-time (GraalVM native-image): **{sec(nw)}**, "
+            f"**{ratio(xw,nw)}** the JVM arm, **{ratio(nw,tw)}** tsc, **{ratio(nw,gw)}** tsgo. "
+            f"Same compiler, same output — the JVM arm's extra time is warm-up a "
+            f"one-shot CLI run never amortizes (docs/perf/aot-native-image.md).",
+        ]
 lines += [
     "",
     "> Compare a ratio only against a ratio of the SAME mode. A single xtsc run "
@@ -250,12 +303,18 @@ with open(os.path.join(runs_dir, run_name), "w", encoding="utf-8", newline="\n")
 # them is never rewritten (its columns differ — see the README's archive note).
 index = os.path.join(out_dir, "README.md")
 START, END = "<!-- BENCH-ROWS-START -->", "<!-- BENCH-ROWS-END -->"
-col = ("| Date | xtsc rev | Mode | xtsc | tsc | tsgo | xtsc/tsc | xtsc/tsgo | xtsc err | Run |\n"
-       "|---|---|---|---:|---:|---:|---:|---:|---:|---|\n")
+# The AOT columns are APPENDED rather than inserted: rows written before round
+# 772 have 10 cells, and Markdown renders the missing trailing cells as empty,
+# so every historical row stays under the headers it was written for. Inserting
+# mid-table would silently shift ~341 archived rows by one column.
+col = ("| Date | xtsc rev | Mode | xtsc | tsc | tsgo | xtsc/tsc | xtsc/tsgo | xtsc err | Run "
+       "| xtsc-nat | nat/tsc | nat/tsgo |\n"
+       "|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|\n")
 new_rows = "".join(
     f"| {date_h} | [`{rev}`]({commit_url}) | {mode} | {sec(xw)} | {sec(tw)} | {sec(gw)} "
-    f"| {ratio(xw,tw)} | {ratio(xw,gw)} | {xerr} | [report](runs/{run_name}) |\n"
-    for mode, xw, xself, xerr, tw, terr, gw, gerr in modes)
+    f"| {ratio(xw,tw)} | {ratio(xw,gw)} | {xerr} | [report](runs/{run_name}) "
+    f"| {sec(nw) if nw else '—'} | {ratio(nw,tw) if nw else '—'} | {ratio(nw,gw) if nw else '—'} |\n"
+    for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr in modes)
 
 txt = open(index, encoding="utf-8").read() if os.path.exists(index) else ""
 if START in txt and END in txt:
@@ -276,9 +335,12 @@ PYEOF
 echo
 echo "=== 3-way bench ($PROJECT @ $TS_COMMIT8) ==="
 for row in "${MODE_DATA[@]}"; do
-    read -r m xw xs xe tw te gw ge <<<"$row"
+    read -r m xw xs xe tw te gw ge nw ns ne <<<"$row"
     echo "  -- $m --"
     printf '    %-6s %8s ms wall  %6s errors\n' xtsc "$xw" "$xe"
     printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsc  "$tw" "$te" "$TSC_VER"
     printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsgo "$gw" "$ge" "$TSGO_VER"
+    if [[ "$nw" != 0 ]]; then
+        printf '    %-6s %8s ms wall  %6s errors  (AOT)\n' xtsc-n "$nw" "$ne"
+    fi
 done

@@ -40,6 +40,19 @@ jobs:
         with:
           fetch-depth: 0
 
+      # ORDER IS LOAD-BEARING. setup-graalvm sets BOTH GRAALVM_HOME and JAVA_HOME;
+      # setup-java then puts JAVA_HOME back to temurin 26 while GRAALVM_HOME
+      # survives. So Gradle and the JVM bench arm keep running on the exact JDK
+      # every archived row was measured with, and GraalVM is used ONLY to build
+      # the native image. Swapping these two steps would silently re-baseline the
+      # whole xtsc series onto GraalVM's JIT.
+      - name: Set up GraalVM (for the AOT arm only)
+        uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up JDK 26
         uses: actions/setup-java@v5
         with:
@@ -69,16 +82,34 @@ jobs:
           "$PWD/node_modules/.bin/tsc"  --version
           "$PWD/node_modules/.bin/tsgo" --version
 
-      - name: Run 3-way bench
+      # ~2 min. Non-fatal on purpose: if the image fails to build, the bench still
+      # publishes its 3-way row rather than losing the data point entirely — the
+      # AOT columns simply read "—" for that run.
+      - name: Build the AOT binary
+        id: aot
+        continue-on-error: true
+        run: |
+          ./gradlew nativeImage --no-configuration-cache -PgraalvmHome="$GRAALVM_HOME"
+          echo "bin=$PWD/build/native/xtsc" >> "$GITHUB_OUTPUT"
+
+      - name: Run 3-way bench (+ AOT arm)
         env:
           BENCH_RUNNER: 'ubuntu-latest, JDK 26 (GitHub-hosted, shared)'
           TSC_BIN: ${{ steps.refs.outputs.tsc }}
           TSGO_BIN: ${{ steps.refs.outputs.tsgo }}
+          NATIVE_BIN: ${{ steps.aot.outputs.bin }}
           BENCH_LABEL: ${{ github.event.inputs.label || format('push {0}', github.sha) }}
         run: |
+          native_args=()
+          if [[ -n "${NATIVE_BIN:-}" && -x "${NATIVE_BIN:-}" ]]; then
+            native_args=(--xtsc-native "$NATIVE_BIN")
+          else
+            echo "::warning::AOT binary unavailable — publishing the 3-way row without it"
+          fi
           scripts/bench-3way.sh \
             --tsc  "$TSC_BIN" \
             --tsgo "$TSGO_BIN" \
+            "${native_args[@]}" \
             --project compiler \
             --xtsc-iters 1 --ref-iters 3 \
             --label "$BENCH_LABEL"
