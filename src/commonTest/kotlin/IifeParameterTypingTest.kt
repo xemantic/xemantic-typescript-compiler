@@ -42,7 +42,7 @@ import kotlin.test.Test
 class IifeParameterTypingTest {
 
     @Test
-    fun `an IIFE parameter takes the argument's type, widened`() {
+    fun `an IIFE parameter takes the argument's type - widened`() {
         val diags = diagnose(
             """
             ((a) => a.nope)("x");

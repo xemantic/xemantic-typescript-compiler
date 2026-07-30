@@ -157,7 +157,7 @@ class EnumDiscriminantKeySpaceTest {
     }
 
     @Test
-    fun `negative control - a same-named enum is a different enum, never merged by name`() {
+    fun `negative control - a same-named enum is a different enum and never merged by name`() {
         val diagnostics = diagnose(
             """
             $types

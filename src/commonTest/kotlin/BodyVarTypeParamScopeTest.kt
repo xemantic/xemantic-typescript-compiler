@@ -85,7 +85,7 @@ class BodyVarTypeParamScopeTest {
     }
 
     @Test
-    fun `a chained constraint reports the APPARENT constraint, not the immediate one`() {
+    fun `a chained constraint reports the APPARENT constraint - not the immediate one`() {
         // `V extends U extends A` — tsc names 'A'. Reporting 'U' (or dropping to the
         // arbitrary form because `A & B` does not relate to a bare `U`) is the failure
         // this pins.

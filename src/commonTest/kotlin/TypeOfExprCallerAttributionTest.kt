@@ -129,7 +129,7 @@ class TypeOfExprCallerAttributionTest {
     }
 
     @Test
-    fun `the attributed run records callers, outermost calls and node origins`() {
+    fun `the attributed run records callers and outermost calls and node origins`() {
         runAttributed()
         val calls = PassTiming.callerSiteCalls.sum()
         val outermost = PassTiming.callerSiteOutermost.sum()

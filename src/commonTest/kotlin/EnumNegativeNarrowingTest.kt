@@ -108,7 +108,7 @@ class EnumNegativeNarrowingTest {
     }
 
     @Test
-    fun `the subtraction keeps DECLARATION order, not the order of the removed member`() {
+    fun `the subtraction keeps DECLARATION order - not the order of the removed member`() {
         // Removing a MIDDLE member: the survivors must still print in declaration
         // order, which an id-ordered or a remove-then-append result would not.
         // Deliberately NOT `k !== K.D`, whose survivors are exactly `U` — the interned

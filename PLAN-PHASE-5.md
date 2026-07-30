@@ -1111,26 +1111,36 @@ NOT integrated. The three items below are what that investigation leaves open.**
   cautions there before re-opening any of them: nothing got bigger, only visible, and
   round 736's identity pre-test was rejected as UNSOUND rather than small.** `AUDIT.3`'s
   globals population stays dead at 0.3–0.6%.
-- [ ] **(AOT.4) Kotlin/Native — BLOCKED ON HARDWARE, not on the code (round 771, owner asked
-  "should we strive to also compile native binary").** There are TWO different "native"
-  paths and they must not be conflated: **(A)** GraalVM native-image, which is (AOT.1) and
-  is measured and works; **(B)** Kotlin/Native, an LLVM backend with no JVM at all, whose
-  targets have been commented out since 2026-07-25. B was attempted this round and
-  **`compileKotlinLinuxX64` cannot complete on this box** — `-Xmx2g` kills the daemon,
-  `-Xmx5g` and `-Xmx6g` both OOM after 4m47s / 6m03s (details and the `--no-daemon` trap
-  in CLAUDE.md). **That is a hardware limit and NOT evidence about Kotlin/Native's
-  suitability** — round 610 had linuxX64 compiling and linking, and the frontend simply
-  needs more than the JVM's BUILD.1 5 GB against 7.7 GB total. Retry on a 16–32 GB
-  machine. **Two things make B worth retrying there even though A already works:** it is
-  the only path to binaries with no JVM anywhere (macOS/Windows/Linux), which is plausibly
-  this project's real differentiator against tsgo; and **`linuxX64Test` would run the
-  13,216-test corpus NATIVELY**, closing the evidence gap that (AOT.1) currently carries
-  (the suite has never run against any native build). **Expect a cleanup first**: the
-  accumulated `src/commonTest` native-only violations are STILL UNMEASURED, because
-  commonMain fails before the test compile is reached — round 672 cleared 169 such errors
-  and nothing has checked since 2026-07-25. My prior, stated so it can be falsified: K/N
-  will be SLOWER than GraalVM here, because a type checker is allocation-heavy and K/N's
-  optimizer and GC are behind Graal's on that profile — measure, do not assume.
+- [ ] **(AOT.4) Kotlin/Native — COMPILING IS SOLVED, LINKING A TEST BINARY HERE IS NOT
+  (round 772; round 771's "hardware limit" verdict is RETRACTED).** There are TWO
+  different "native" paths: **(A)** GraalVM native-image, integrated as `./gradlew
+  nativeImage` and measured; **(B)** Kotlin/Native, an LLVM backend with no JVM at all.
+  **Round 771 concluded B could not compile on this box and that was WRONG** — it tuned
+  `-Pkotlin.native.jvmArgs`, which nothing reads. **Kotlin/Native compiles inside the
+  GRADLE daemon**, so its heap is `org.gradle.jvmargs`, which BUILD.1 pinned to 1g to make
+  room for the 5 GB Kotlin daemon; the JVM-compile memory fix is precisely what starved it.
+  With `-Dorg.gradle.jvmargs=-Xmx6g`: **`compileKotlinLinuxX64` succeeds in 2m04s** and
+  **`compileTestKotlinLinuxX64` in a further 23s, 0 errors**.
+  **The accumulated `commonTest` drift is MEASURED and FIXED: 7 errors, all one class**
+  (commas in backtick test names — CLAUDE.md rule 1), against round 672's 169. Fixed in
+  place; the names now satisfy the native rule, which the JVM never checks.
+  **What remains is the LINK**: `linuxX64Test` dies after ~22 min with `Gradle build daemon
+  disappeared unexpectedly` — the OS OOM-killer, not a Java OOM, so there is nothing in the
+  log to grep. Linking the test executable does not fit beside a 6 GB daemon on 7.7 GB.
+  **Untried levers, cheapest first** (from Kotlin's tips page): `org.gradle.workers.max=1`;
+  a smaller daemon (4–5g) since the killer is the OS and not the heap; `linkDebugTest*`
+  rather than anything release/`-opt`; `kotlin.incremental.native=true`; and the page's
+  own first rule, **"avoid huge classes"**, which a 110k-line `Checker.kt` maximally
+  violates. Or simply a 16–32 GB machine.
+  **Why it is still worth finishing even though (A) works:** it is the only path to
+  binaries with no JVM anywhere (macOS/Windows/Linux), plausibly this project's real
+  differentiator against tsgo; and `linuxX64Test` would run the 13,216-test corpus
+  NATIVELY, closing the evidence gap (AOT.1) carries (the suite has never run against any
+  native build). **linuxX64 is left COMMENTED OUT** in build.gradle.kts — with the link
+  failing, enabling it would break `./gradlew build`. My prior, stated so it can be
+  falsified: K/N will be SLOWER than GraalVM here, because a type checker is
+  allocation-heavy and K/N's optimizer and GC trail Graal's on that profile.
+
 - [ ] **(AOT.3) Emit-mode native measurement + PGO.** (a) All round-771 figures are
   `--noEmit`; the published CI ratio is emit-mode, so the two cannot be compared until
   the native binary is measured with emit (§ 0.2's standing rule). (b) `-O3

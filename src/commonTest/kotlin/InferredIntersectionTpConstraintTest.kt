@@ -115,7 +115,7 @@ class InferredIntersectionTpConstraintTest {
     }
 
     @Test
-    fun `control - the inferred argument is the intersection itself, not something permissive`() {
+    fun `control - the inferred argument is the intersection itself and not something permissive`() {
         // THE DISCRIMINATING CONTROL. It errors on both sides of the fix, but the MESSAGE
         // differs, and the message is the whole point: before, the un-inferred
         // `NodeArrayX<T>` was reported; after, `NodeArrayX<T & { m: 1; }>` is — which is

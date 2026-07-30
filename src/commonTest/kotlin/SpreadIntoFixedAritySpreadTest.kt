@@ -145,7 +145,7 @@ class SpreadIntoFixedAritySpreadTest {
     }
 
     @Test
-    fun `negative control - an already-too-many call reports the COUNT, not TS2556`() {
+    fun `negative control - an already-too-many call reports the COUNT and not TS2556`() {
         val diags = diagnose(
             """
             function f(a: number) { }
