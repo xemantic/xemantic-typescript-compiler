@@ -20,6 +20,81 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 770 (2026-07-29; note written 2026-07-30 — see PROCESS below) — (REL.4)(a) CAUSE 5,
+THE POST-SWITCH FALL-THROUGH: A `default`-LESS SWITCH'S NO-MATCH EDGE NOW SUBTRACTS EVERY
+CASE TAG. THE DEFECT WAS IN THE BINDER, NOT THE CHECKER, AND THE ROUND WAS SENT AT CAUSE 6
+AND PIVOTED.** Suite **13,207 -> 13,216** (+9 pins, `PostSwitchFallThroughNarrowingTest`);
+unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
+
+- **THE PIVOT, RECORDED BECAUSE IT IS A FINDING.** The round was queued at cause 6 (the
+  type-guard ternary chain over a node union/intersection, `nodeFactory.ts:7112` /
+  `declarations.ts:1739`). It is NOT this: cause 6's subtraction machinery is
+  `narrowByCallPredicate`'s, not `enumMinusMembers`', and an INTERSECTION subject has no
+  member list to peel — round 769 had already sized it as its own round. The shape that
+  actually blocked `Debug.assertNever` on the dashboard was cause 5, so the round took
+  cause 5. Cause 6 remains open and unchanged.
+- **THE DEFECT IS IN THE BINDER.** Leaving a `default`-less switch, `bindSwitchStatement`
+  joined the post-switch flow to a bare **FlowCondition chain asserting that every case
+  EXPRESSION is falsy**. That is the truth for the `switch (true) { case <cond>: }` idiom
+  **only** — in a discriminant switch the case expression is a VALUE (`SyntaxKind.A`), so
+  every link of the chain narrows nothing, and `Debug.assertNever(x)` after an exhaustive
+  `default`-less switch saw the WHOLE declared type. Round 768's label for this cause
+  ("does not narrow at all … NOT enum-specific, flow-graph work") is confirmed exactly:
+  the fix is in the flow graph and the pins show it works for enums, discriminated unions
+  and `typeof` tags alike.
+- **THE FIX MIRRORS tsc, AND IT IS LAYERED RATHER THAN SUBSTITUTED.** tsc encodes the same
+  edge as a switch-clause flow with an **EMPTY clause range** — binder
+  `createFlowSwitchClause(preSwitchCaseFlow, node, 0, 0)`, read by
+  `narrowTypeBySwitchOnDiscriminant` as `clauseStart === clauseEnd` ⇒ treat as `default:`.
+  We now emit `newSwitchClause(stmt, 0, 0, noMatch)` **on top of** the existing condition
+  chain instead of replacing it, so every existing `switch (true)` answer is untouched
+  (`narrowBySwitchClause` returns null for a range it cannot key and the caller keeps the
+  antecedent). Three checker readers learned that an empty range means "no case matched",
+  i.e. the SAME position as a `default:` clause and therefore the same subtraction.
+- **AND IT UNCOVERED A SECOND DEFECT, FIXED HERE TOO — found by a pin breaking, not by
+  inspection.** `narrowBySwitchOnTrue` keys purely on `clauseStart` and never consults
+  `clauseEnd`, so the new empty range read as "**clause 0 matched**" and narrowed
+  POSITIVELY on the way OUT of the switch, collapsing `switch (true) { case c1: … }` to
+  `never`. Caught by `narrowByClauseExpressionInSwitchTrue3` failing. Guarded with an
+  early `return null`: the edge's own claim — every case condition is false — is already
+  carried by the FlowCondition chain the node now sits on top of, so that function has
+  nothing left to add. **The general invariant is in CLAUDE.md**: a reader of
+  `FlowSwitchClause` that keys on `clauseStart` alone is wrong the moment an empty range
+  reaches it, and there are now four such readers.
+- **GATES.** Suite **13,216 / 0 failures / 3 skipped** (13,207 + 9); compiler profile
+  `--listAll` **46** and programFiles **78**, unchanged; cost gate exit 0 with **16 of the
+  20 counters bit-identical** and four moved — `narrow.walks` 71,326 -> **71,323**,
+  `narrow.memoServed` 45,489 -> **45,488** (the three walks that no longer run, and the one
+  memo serve they consumed), `globals.lookups` 963,052 -> **964,621** and `globals.misses`
+  948,338 -> **949,907** (**+0.16% / +0.17%**, the new switch-clause readers resolving case
+  tags that used to bail), inside the ±2% tolerance and **rebaselined** — in a follow-up
+  commit rather than the same one, which is a protocol deviation forced by the interruption
+  below, not a choice. No corpus baseline moved, so no `LogicalParityDivergence`.
+- **NOT MEASURED, AND IT IS THIS ROUND'S OPEN END.** The **scaffolded (REL.4) flip price
+  was not re-measured.** Cause 5's two lines are `checker.ts:11536` and `37648`, both in
+  `src/compiler`, so the expectation is **compiler 56 -> 54 and services 60 -> 58** — a
+  PREDICTION, not a measurement, and whoever takes (REL.4) next must re-measure behind the
+  scaffold before quoting it. The unscaffolded grid at 46 cannot see this: cause 5's lines
+  only exist while the imported-namespace pair is scaffolded on.
+- **PROCESS — why this note is a day late.** Three consecutive server-side API failures
+  (500, 529, 529) killed the authoring agent after the work was complete and before it
+  could gate. The orchestrator inspected the diff for completeness and probe residue (no
+  scaffold or instrumentation remains) and landed the code commit `619641b2` with the gate
+  results in its message; the host was then restarted before protocol step 5 ran, leaving
+  the session note, the STATUS bump, the queue update and the cost rebaseline undone. All
+  four are this commit. **The gates were re-run from scratch on the restarted host rather
+  than taken from the commit message** — suite 13,216 / 0 / 3 tallied from the 574 result
+  XMLs, cost gate re-run and rebaselined, and every number above reproduced.
+- **AND THE EVIDENCE THE ROUND NEVER RECORDED: the pins were run against the PRE-FIX
+  source.** Narrowing pins are exactly the class CLAUDE.md warns can pass on a working AND
+  a broken build, so a green run proves nothing on its own. Reverting only
+  `Checker.kt` + `Flow.kt` to `619641b2^`: **the 5 TARGETS FAIL and the 3 NEGATIVE CONTROLS
+  PASS.** The ninth pin — `a switch on true with no default still narrows through the
+  condition chain` — **passes on BOTH sides, which is correct and is the point of it**: it
+  guards the second defect, the one the fix itself introduced and then fixed, so it must
+  hold before and after. That is a regression guard, not a target, and it is labelled as
+  such here so a future round does not read it as a vacuous pin.
+
 **Round 769 (2026-07-29) — (REL.4)(a) THE NAMESPACE-SCOPED ENUM. ONE RESOLVER, ONE
 STRICTLY-ADDITIVE FALLBACK, **3 MORE `assertNever` LINES CLOSED — compiler 58 -> 56,
 services 63 -> 60** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS **+10 / +14** INSTEAD OF
@@ -1009,84 +1084,6 @@ Two of the round's three headline numbers came from refusing to trust a reductio
   shared by every derived type and its cached type is `any`. (6) "counts move UP" —
   **WRONG**, nothing moved, because nothing fired.
 
-**Round 760 (2026-07-29) — THE DASHBOARD RE-MEASURED END TO END FOR THE FIRST TIME
-SINCE ROUND 730, AND IT BARELY MOVED. Five profiles are unchanged CODE FOR CODE
-across ~50 commits; the only movement anywhere on the 8×2 grid is ONE line, and
-root-causing it found a substitution defect that has nothing to do with the arc
-that was blamed for it.** Arm A: compiler/tsc-cli/jsTyping/deprecatedCompat/
-typingsInstallerCore **46** (`TS2591×43 / TS2304×2 / TS2584×1`, identical to round
-730), services **47**, server **47**, harness **95**. Emit path confirmed working.
-Filtered batches **858 + 1052** hand-written and **the ENTIRE generated corpus, all
-25 classes**, 0 failures; the two changed files compile warning-clean. Artifact: `docs/perf/dashboard-round760.md`. **The full suite
-and the cost gate are the owner's to run.** Predictions: **3 of 6**.
-
-*Round 759 closed the attribution arc: eleven rounds produced two landed wins and
-neither came from finding a big number. This round is verification and hygiene —
-no timer was opened.*
-
-- **PART 1 — THE GRID (`467ea712`).** 8 profiles × 2 lib arms, `--noEmit --listAll`.
-  **Five profiles did not move at all** — same count AND same composition as round
-  730, across ~50 commits touching the relation, narrowing, overload selection, name
-  resolution, enum typing, the real-lib path and the emit gate. **services / server
-  / harness each +1, and it is ONE line, not three**: all three are exactly the
-  profiles containing `src/services`, each carrying the byte-identical
-  `completions.ts:2237` TS2345. **UP = a regression** (tsc reports zero on its own
-  source). Every other line on the grid, both arms, is env-legit — so the grid has
-  exactly ONE defect on it.
-- **ARM C IS RECORDED WITH ITS CAVEAT RATHER THAN COMPARED.** Round 730 measured it
-  against the real `@types/node` v22.20.1; `bench-compile-tsc.sh` `rm -rf`s that
-  directory on any run without `--node-stub`, and there is none on this box. This
-  round's arm C uses the all-`any` STUB, which can only suppress, so its absolutes
-  are a FLOOR and the 13 → 1 movement is NOT claimed as an improvement. Arm A needs
-  no `node_modules` and is the arm that compares.
-- **PART 2 — THE REDUCTION IS 12 LINES AND THE FIX IS NOT THE REDUCTION (`07e43815`).**
-  Four ingredients, each shown necessary by ablation: an ENUM discriminant, TWO
-  guards on one reference, an EARLY RETURN in the first, and the guards declared in
-  ANOTHER file. Mechanism measured with a `const s: string = node` probe — `never`
-  is assignable to `string`, so a washed reference makes the probe SILENT, which is
-  what makes it a discriminator: after `!isMod(node)` the type was `never` and is
-  now `Node`; inside the following guard it was `never` and is now `Ident`.
-- **ROUND 753's STATED PREMISE IS FALSIFIED, AND THE COMMENT THAT SAYS SO WAS
-  WRITTEN THE SAME ROUND.** `getDeclaredTypeOfEnumMember` mints member types with NO
-  members, so `Node <: Mod` relates VACUOUSLY; round 472 vetoed the resulting
-  `never`-collapse with `kindDomainProvesNotSubtype`, round 753 deleted it saying
-  (REL.1)(a)/(b) had taught the relation to decide for itself. It had — for
-  member-vs-member. `checkTypeRelatedToCore` already said the other direction was
-  left open ("*deliberately NOT decided here … pre-existing and unmeasured*").
-  `enumMemberDomainProvesNotSubtype` restores that one verdict at that one site.
-- **THE GLOBAL RULE WAS WRITTEN, COMPILED, MEASURED AND REVERTED — a sized refusal,
-  with the size.** Closing enum → MEMBER properly costs **compiler 46 → 52, services
-  47 → 57**: every new line is a `SyntaxKind` tsc narrows and we do not (a guard used
-  as a TERNARY CONDITION; `===` narrowing across `||`). **So the unit of work is the
-  narrowing features, not the relation rule.** Queued as **(REL.2)** with all six
-  sites, and the price is recorded IN PLACE beside the leniency.
-- **THE REAL ROOT CAUSE IS A SUBSTITUTION DEFECT, AND IT IS NOT ENUM-SPECIFIC —
-  queued as (REL.3).** `interface FwdA extends Fwd<K.A>` where `Fwd<T> extends Box<T>`
-  resolves `.v` to **`any`**; `BoxA extends Box<K.A>` resolves it to `K.A`. One
-  heritage hop substitutes, a second hop through an intermediate FORWARDING its own
-  type parameter does not. tsc's `AbstractKeyword extends KeywordToken<SK.AbstractKeyword>`
-  → `KeywordToken<TKind> extends Token<TKind>` is exactly that, so every keyword
-  node's `kind` is `any` — **which is why the landed veto leaves the profile line in
-  place, and the 8 profiles are byte-identical before and after.** That is stated as
-  a LIMIT ON THE EVIDENCE, not a credential (round 753's own rule).
-- **PART 3 — THE EMIT PATH, un-exercised for 22 rounds, IS FINE.** Round 738 gated
-  emit off for `--noEmit`; every gate since passed `--noEmit`. The gate is
-  `skipEmitOutputs = noEmit || config.options.noEmit`, read at ONE site, so an
-  emitting build is untouched by construction — and empirically the compiler profile
-  with emit ON writes **78 `.js` files**, exactly the `emitted=78` in every pre-738
-  TSV row, with the same 46 diagnostics. A sha256 of the emitted tree is recorded in
-  the artifact so a future round can diff without a rebuild.
-- **EVERY PIN RUN AGAINST UNMODIFIED `aef21e76`: the three TARGETS FAIL and the
-  three NEGATIVE CONTROLS PASS.** A control that is silent on both sides measures
-  nothing; these are not. Corpus ran in five batches (1,989 + 3,416 + 1,038 +
-  1,533 + 862) — all 25 generated classes, 0 failures.
-- **PREDICTIONS 3 and 5 are the ones that moved the map.** (3) "≥1 other profile
-  also drifted" — WRONG, five are unmoved code for code, so the codebase is more
-  stable under 50 commits than assumed. (5) "the enum→member rule is the whole fix"
-  — WRONG in both directions: neither necessary nor sufficient, because (REL.3) sits
-  underneath it. The enum story rounds 741–753 spent themselves on is a LAYER ABOVE
-  a substitution defect nobody had measured.
-
 ### QUEUE — work top-to-bottom; promote unblockers per protocol
 
 **Reading convention (stated round 687, after it cost a scan):** a superseded
@@ -1116,11 +1113,15 @@ backlog-horizon decision, not queue debt.)
   ESM `.js` + `export *` — that is the TS2315 flood). Each step alone is measurably
   INERT; only the pair moves anything. It unblocks 1,127 previously-unchecked
   `PropertyAccess` callees on compiler and 1,551 on services.
-  **The price of switching it on TODAY is compiler 46 -> 56, services 46 -> 60
-  (round 769; round 767 sized it at 46 -> 66 / 46 -> 71) — all FPs, in three causes:**
+  **The last MEASURED price of switching it on is compiler 46 -> 56, services 46 -> 60
+  (round 769; round 767 sized it at 46 -> 66 / 46 -> 71) — all FPs, in three causes.
+  Round 770 closed cause (5) WITHOUT re-measuring behind the scaffold, so the live price is
+  a PREDICTION of compiler 46 -> 54 / services 46 -> 58: re-measure before quoting it, and
+  before flipping anything.**
   - **(a) `Debug.assertNever(x)` whose argument does not narrow to `never` — 8 of the 15
-    CLOSED round 768 and 2 more round 769; 5 remain on compiler / 7 on services, and the
-    price is re-measured: compiler 58 -> 56, services 63 -> 60.** The closed 8 were THREE causes, all
+    CLOSED round 768, 2 more round 769 and 2 more predicted by round 770; 3 remain on
+    compiler / 5 on services on that prediction. Last measured: compiler 58 -> 56,
+    services 63 -> 60 (round 769).** The closed 8 were THREE causes, all
     "the subtraction stops one member short of `never`": the LAST member (a single member
     type has nothing to subtract from — so a PARTIAL chain narrowed and a COMPLETE one did
     not, i.e. round 767's "only the FIRST/innermost subtracts" was backwards), an
@@ -1139,15 +1140,27 @@ backlog-horizon decision, not queue debt.)
     the qualified `N.A.X` direction from OUTSIDE the namespace (`enumMemberTypeOfExpr`
     requires `pa.expression is Identifier`) — **0 measured sites** on all 8 profiles, so it
     would be an unmeasured widening of the same key space.
-    **The 5 still open are 3 further causes** — see round 768's session note for the
-    isolation of each: (5) a POST-SWITCH
-    fall-through does not narrow at all (`checker.ts:11536`, `37648`) — NOT enum-specific,
-    flow-graph work; (6) a type-guard ternary chain over a node union/intersection
+    **Cause (5) CLOSED round 770** — a POST-SWITCH fall-through did not narrow at all
+    (`checker.ts:11536`, `37648`). The defect was in the BINDER: leaving a `default`-less
+    switch, the post-switch flow carried only a FlowCondition chain asserting "every case
+    EXPRESSION is falsy", which is the truth for the `switch (true) { case <cond>: }` idiom
+    ONLY — a discriminant switch's case expression is a VALUE, so the chain narrowed
+    nothing. Fixed as tsc encodes it: a switch-clause flow with an EMPTY clause range
+    (`createFlowSwitchClause(…, 0, 0)`, read as `clauseStart === clauseEnd` ⇒ default),
+    layered ON TOP of the chain so every `switch (true)` answer is untouched; three checker
+    readers treat an empty range as "no case matched". Round 768's "NOT enum-specific,
+    flow-graph work" label was exactly right — it fixes enums, discriminated unions and
+    `typeof` tags alike. **The scaffolded price was NOT re-measured; the PREDICTION is
+    compiler 56 -> 54 / services 60 -> 58** (both lines are in `src/compiler`), and it must
+    be re-measured behind the scaffold before being quoted.
+    **The 3 still open are 2 further causes** — see round 768's session note for the
+    isolation of each: (6) a type-guard ternary chain over a node union/intersection
     (`nodeFactory.ts:7112`, `declarations.ts:1739`) — the non-enum twin of cause 1;
     (7) `moduleSpecifiers.ts:1411`, whose argument is an ELEMENT ACCESS that is not the
     switch subject at all. **(6) is the next unit of work** — round 769 sized it as its own
-    round: the subtraction machinery there is `narrowByCallPredicate`'s, not
-    `enumMinusMembers`', and an INTERSECTION subject has no member list to peel.
+    round and round 770 confirmed the sizing by pivoting AWAY from it: the subtraction
+    machinery there is `narrowByCallPredicate`'s, not `enumMinusMembers`', and an
+    INTERSECTION subject has no member list to peel.
   - **(b) `Debug.assertIsDefined` / `Debug.checkDefined` GENERIC INFERENCE** (4 compiler /
     7 services): the `T` of `checkDefined<T>(value: T | null | undefined): T` instantiates
     to the non-nullable side. M3.1, not (REL.2).
