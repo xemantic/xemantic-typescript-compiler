@@ -1206,7 +1206,24 @@ NOT integrated. The three items below are what that investigation leaves open.**
     LSP server, plus Nailgun / Bazel persistent workers / Roslyn VBCSCompiler / the Gradle
     and Kotlin daemons.
 
-- [ ] **(AOT.1) Decide the shipped artifact — the REMAINING owner decision.** (AOT.1a)
+- [ ] **BLOCKED-PENDING-USER (marked round 775): (AOT.1) Decide the shipped artifact — the
+  REMAINING owner decision.** Guardrails: this is a release/build-matrix decision, not an
+  engineering one, so the loop marks it and works past it rather than choosing.
+  **The proposal to react to, stated so a yes/no is enough.** Ship **both**, with the JVM
+  jar as the canonical artifact and a linux-x64 native binary attached to releases as an
+  opt-in fast path — because the two pieces of evidence point opposite ways and only that
+  split respects both. For it: −49% of a cold compile for zero compiler changes, and the
+  8-profile grid is byte-identical. Against it: **the corpus suite has never run against
+  any native build**, so a shipped binary would carry 8 profiles of evidence where the jar
+  carries 13,223 tests — and per-OS/arch CI (the Apple targets have no builder here) is a
+  standing cost paid every release. Publishing linux-x64 only, clearly labelled as such,
+  buys the speed for the CI-and-container case that most wants it while keeping the
+  evidence gap off the default path. **(AOT.4) is what would close that gap** — a native
+  `linuxX64Test` run of the full corpus — so a decision is cheaper AFTER it, and the loop
+  is working it next. Answer needed on: (1) both / jar-only / native-only, (2) whether
+  linux-x64-only is acceptable for a first release, (3) whether the release CI budget for
+  a ~2-minute image build per platform is approved.
+  (AOT.1a)
   above makes the binary buildable and verified; what is still open is whether it SHIPS,
   and as what: release-attached native binaries need a per-OS/arch matrix (this box can
   only produce linux-x64, and the Apple targets have no builder), which is a different
