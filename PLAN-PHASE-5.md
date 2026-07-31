@@ -20,6 +20,92 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 777 (2026-07-31) — (REL.4)(a) CAUSE 6: AN INTERSECTION OF UNIONS HAS NO MEMBER
+LIST TO PEEL, BECAUSE tsc BUILDS ONE AT TYPE CONSTRUCTION AND WE DO NOT. `nodeFactory.ts:7112`
+CLOSED — scaffolded compiler **53 -> 52**, services **58 -> 57**, `diff` says exactly that
+line and no other. THE SECOND SITE WAS ALREADY CLOSED BY ROUND 770, AND FIVE OF MY OWN
+PINS WERE MEASURED INERT BEFORE THEY LANDED.** Suite 13,226 -> **13,234**; all 20 cost
+counters bit-identical.
+
+- **THE MECHANISM, AND IT IS A MISSING NORMALIZATION, NOT A MISSING NARROWING ARM.** tsc's
+  `getIntersectionType` rewrites `X & (A | B)` into `X & A | X & B` at CONSTRUCTION
+  ("union types are always at the top level in type representations") and `getReducedType`
+  then drops every combination whose discriminant properties are disjoint unit types — so
+  `HasModifiers & HasDecorators` **IS** the 7-member union `HasDecorators` before any
+  narrowing runs, and the 7-arm `isParameter(node) ? … : Debug.assertNever(node)` chain
+  peels it like any other union. We store intersections un-distributed, which costs the
+  RELATION nothing (`intersectionSourceDistributes` does it on demand there) but leaves
+  flow narrowing with nothing to subtract from: the subject fell into
+  `narrowByCallPredicate`'s single-type path, where one guard can only answer "the whole
+  intersection" or `never`.
+- **THE FIX IS AN ON-DEMAND VIEW, ADOPTED ONLY WHERE IT SUBTRACTS.**
+  `distributedNarrowingType` builds the reduced union on demand (memoized by Type.id);
+  `narrowByCallPredicate` runs the existing union machinery over it and **returns the
+  ORIGINAL intersection whenever the answer is the view unchanged**, so a guard that does
+  not apply cannot alter identity or display anywhere in the program. Deliberately NOT in
+  `getIntersectionType`: distributing at construction would change every intersection's
+  identity, display and relation behaviour. Gated to >= 1 union operand (so
+  `CompilerOptions & { types: … }` and every brand/refinement intersection is untouched),
+  all operands object-capable, product < 4096 — tsc caps the same product at 100,000 and
+  errors; we decline. Live maximum on tsc's sources: 24 x 7 = **168**.
+- **THE PRICE, RE-MEASURED BEHIND THE SCAFFOLD AS THE QUEUE DEMANDED — AND THE PRIOR
+  PREDICTION WAS OFF BY ONE IN THE ROUND'S OWN FAVOUR.** Round 770 predicted compiler
+  56 -> 54; the live pre-round figure is **53**, because round 770 closed THREE lines, not
+  the two it counted — its third KDoc shape, `transformers/declarations.ts:1739`, is the
+  other of cause 6's two named sites, and it is **absent from the scaffolded output
+  entirely** (`grep -c declarations.ts:1739` = 0 in both arms). So cause 6 was one site,
+  not two, and the second closed a round before anyone looked. After this round:
+  **compiler 53 -> 52, services 58 -> 57**, one line, no new line.
+- **FIVE OF MY EIGHT PINS WERE MEASURED INERT AND REWRITTEN BEFORE LANDING. THE CAUSE IS
+  THE PROBE POSITION.** A call ARGUMENT to a plain parameter does **not** flow-narrow: the
+  argument gate performs the flow read only on its special arms — a `never` parameter
+  (rounds 441/462/766) and a bare-enum argument (round 764) — so `declare function take(s:
+  string)` reports the DECLARED type whatever narrowing did, and five pins written that
+  way produced byte-identical output on a fixed and an ablated build. Rewritten as
+  `const probe: string = node` (TS2322), every one discriminates. The single surviving
+  argument-position assertion is the `assertNever` one, i.e. exactly the arm that does read
+  flow. **A second pin defect in the same batch:** two type aliases with identical bodies
+  intern to ONE type, so `type Left = A | B; type Right = A | B` displays as `Left & Left`
+  and the pin was asserting the alias table rather than the narrowing.
+- **THE PINS WERE THEN VERIFIED AGAINST THE ABLATED BUILD, NOT ASSUMED.** All 8 shapes run
+  through one binary with the fix on and with it flag-ablated: **5 targets fail ablated and
+  pass fixed; 3 regression guards are identical on both sides** (an untouched intersection
+  still displays as itself, a no-union-operand intersection is not distributed, a guard for
+  an absent member subtracts nothing).
+- **A PRE-EXISTING DASHBOARD DELTA FOUND BY THIS ROUND'S GATE, ATTRIBUTED, AND NOT MINE:
+  services / server / harness are 47 / 47 / 95, not 46 / 46 / 94.** The new line is
+  `services/formatting/formattingScanner.ts:311 — TS2322: Type 'SyntaxKind' is not
+  assignable to type 'T'` (`tokenInfo.token.kind = container.kind` after
+  `isToken(container)`; the round-762 `Token<TKind>` carrier family). Ablating THIS round's
+  fix leaves it in place, and **reverting round 776's sorted crawl removes it** — measured
+  by rebuilding with only that hunk reverted: services returns to **46** with the line gone.
+  So round 776's program-order fix, which was gated on the compiler profile alone, moved a
+  first-touch-order-dependent generic instantiation on three other profiles. Queued below;
+  round 776's crawl sort is right and should NOT be reverted for it.
+- **GATES.** Suite **13,234 / 0 failures / 3 skipped** (13,226 + 8 pins); **all 20 cost
+  counters BIT-IDENTICAL, no rebaseline**; unscaffolded 8-profile grid
+  46/46/46/46/46/47/47/95 with 5 profiles byte-identical to `r770grid` and the 3 deltas
+  attributed above — the ablated arm reproduces them exactly, so this change moves NO
+  profile line unscaffolded (as expected: the family is invisible until the flip lands). No
+  corpus baseline moved, so no `LogicalParityDivergence`. Build warning-clean. The scaffold
+  left no residue (`grep -rn 'R777Probe\|x777' src/` is empty); arm outputs are under
+  `build/bench/r777` (gitignored).
+- **NOT TAKEN, AND RECORDED RATHER THAN PINNED** (round 765's rule). (i) A NUMERIC-literal
+  discriminant does not narrow through a `default`-less switch's no-match edge or through a
+  `default:` clause, where a string-literal and an enum-member discriminant both do — that
+  is `literalDiscriminantKeyOfType` returning null for a numeric literal *by design*
+  (round 422: numeric enums are number-comparable, so a numeric-literal annotation stays
+  unrepresented and its member is conservatively kept). Widening it widens the
+  `"symId#member"` key space, which is round 425's catastrophe; it wants its own round.
+  A plain `if (x.kind === 1)` chain narrows correctly, so this is confined to the switch
+  readers. (ii) `narrowByAssertCall` was NOT given the distributed view — no site measured.
+- **PREDICTIONS 2 of 4.** HIT: the scaffolded price falls by exactly the targeted site with
+  no new line; the cost counters do not move. **MISSED, and both misses are the output:**
+  (a) I predicted cause 6 was two sites and the price would fall by 2 — it is ONE site,
+  because round 770 silently closed the other; (b) I predicted the unscaffolded grid would
+  be byte-identical to `r770grid` on all eight — three profiles had already moved, six
+  rounds before I got here.
+
 **Round 776 (2026-07-31) — (COST.2) THE COST BASELINE DID NOT DRIFT: ITS ANCHOR WAS NEVER
 REPRODUCIBLE. ROUND 760's OWN COMMIT, REBUILT AND RE-RUN TODAY, MEASURES THE *PRE*-FIX
 NUMBERS — SO THE REDUCTION IT RECORDED (−8,253 bypassed) DOES NOT EXIST ON ITS OWN
@@ -961,6 +1047,22 @@ NOT integrated. The three items below are what that investigation leaves open.**
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
+- [ ] **(ORDER.1) `formattingScanner.ts:311` is a PROGRAM-ORDER-dependent FP that round
+  776 introduced and round 777 attributed — services / server / harness are 46 -> 47 /
+  46 -> 47 / 94 -> 95 and have been since 2026-07-31.** The line is `TS2322: Type
+  'SyntaxKind' is not assignable to type 'T'` at `tokenInfo.token.kind = container.kind`
+  after `isToken(container)` — the round-762 `Token<TKind>` carrier family, where the
+  property's type comes from the DECLARING generic interface. **Attribution is measured,
+  not inferred**: rebuilding with only round 776's `ProjectCompiler.walk` sort reverted
+  returns services to 46 with the line gone, and ablating round 777's own change leaves it
+  in place. **Do NOT revert the crawl sort** — it is right, and it is what makes the COST.1
+  counters a property of the project rather than of the filesystem; the defect is that a
+  generic instantiation's verdict depends on which file touches a shared type node FIRST.
+  The lesson for the gate: round 776 checked the compiler profile only, and this is on the
+  other seven. **Diagnose with the round-762 method** — `propertyTypeOnCarrier` / a UNION of
+  instantiations, and remember a single instantiation still answers correctly, so only the
+  union reproduces it.
+
 - [ ] **(REL.4) Turn argument checking ON for a call whose callee is a member of an
   IMPORTED namespace — SIZED round 767, price measured, DO (a) FIRST.** The change
   itself is two call sites: `computeRawTypeOfPropertyAccess`'s namespace fallback must
@@ -970,15 +1072,21 @@ NOT integrated. The three items below are what that investigation leaves open.**
   ESM `.js` + `export *` — that is the TS2315 flood). Each step alone is measurably
   INERT; only the pair moves anything. It unblocks 1,127 previously-unchecked
   `PropertyAccess` callees on compiler and 1,551 on services.
-  **The last MEASURED price of switching it on is compiler 46 -> 56, services 46 -> 60
-  (round 769; round 767 sized it at 46 -> 66 / 46 -> 71) — all FPs, in three causes.
-  Round 770 closed cause (5) WITHOUT re-measuring behind the scaffold, so the live price is
-  a PREDICTION of compiler 46 -> 54 / services 46 -> 58: re-measure before quoting it, and
-  before flipping anything.**
-  - **(a) `Debug.assertNever(x)` whose argument does not narrow to `never` — 8 of the 15
-    CLOSED round 768, 2 more round 769 and 2 more predicted by round 770; 3 remain on
-    compiler / 5 on services on that prediction. Last measured: compiler 58 -> 56,
-    services 63 -> 60 (round 769).** The closed 8 were THREE causes, all
+  **The last MEASURED price of switching it on is compiler 46 -> 52, services 46 -> 57
+  (round 777; 46 -> 66 / 46 -> 71 round 767, 46 -> 56 / 46 -> 60 round 769) — all FPs.
+  Round 777 re-measured behind the scaffold and found round 770's prediction of 54 was
+  one too high: round 770 closed THREE lines, not the two it counted. Re-measure before
+  quoting, and before flipping anything.**
+  - **(a) `Debug.assertNever(x)` whose argument does not narrow to `never` — 14 of the 15
+    CLOSED (8 round 768, 3 round 769, 3 round 770, 1 round 777). Last MEASURED: compiler
+    53 -> 52, services 58 -> 57 (round 777). **ONE line remains on compiler and TWO on
+    services**, and they are cause (7) plus one services-only twin:
+    `moduleSpecifiers.ts:1411` (`allowedEndings[0]`, an ELEMENT ACCESS that is not the
+    switch subject at all) and `stringCompletions.ts:386` (`Extension | undefined`, whose
+    elaboration says `Type 'Extension' is not assignable to type 'never'` — a
+    nullish-carrying subject, not obviously the same cause). Neither is narrowing of a
+    reference, so (a) is effectively closed and the flip's residual price is (b)+(c) plus
+    these two.** The closed 8 were THREE causes, all
     "the subtraction stops one member short of `never`": the LAST member (a single member
     type has nothing to subtract from — so a PARTIAL chain narrowed and a COMPLETE one did
     not, i.e. round 767's "only the FIRST/innermost subtracts" was backwards), an
@@ -1010,14 +1118,16 @@ NOT integrated. The three items below are what that investigation leaves open.**
     `typeof` tags alike. **The scaffolded price was NOT re-measured; the PREDICTION is
     compiler 56 -> 54 / services 60 -> 58** (both lines are in `src/compiler`), and it must
     be re-measured behind the scaffold before being quoted.
-    **The 3 still open are 2 further causes** — see round 768's session note for the
-    isolation of each: (6) a type-guard ternary chain over a node union/intersection
-    (`nodeFactory.ts:7112`, `declarations.ts:1739`) — the non-enum twin of cause 1;
-    (7) `moduleSpecifiers.ts:1411`, whose argument is an ELEMENT ACCESS that is not the
-    switch subject at all. **(6) is the next unit of work** — round 769 sized it as its own
-    round and round 770 confirmed the sizing by pivoting AWAY from it: the subtraction
-    machinery there is `narrowByCallPredicate`'s, not `enumMinusMembers`', and an
-    INTERSECTION subject has no member list to peel.
+    **Cause (6) CLOSED round 777, and it was ONE site, not two.** `declarations.ts:1739`
+    had already been closed by round 770 (it is that round's third KDoc shape; it is absent
+    from the scaffolded output entirely), so only `nodeFactory.ts:7112` remained — subject
+    `HasModifiers & HasDecorators`, an INTERSECTION with no member list to peel. tsc has
+    one for free: `getIntersectionType` distributes `X & (A | B)` at CONSTRUCTION and
+    `getReducedType` drops the discriminant-disjoint combinations, so the subject IS the
+    7-member union `HasDecorators` before narrowing runs. Fixed as an ON-DEMAND VIEW
+    (`distributedNarrowingType`) consulted by `narrowByCallPredicate` and ADOPTED ONLY
+    WHERE IT SUBTRACTS, so identity and display are untouched wherever a guard does not
+    apply. **Cause (7) is what remains** — see (a) above.
   - **(b) `Debug.assertIsDefined` / `Debug.checkDefined` GENERIC INFERENCE** (4 compiler /
     7 services): the `T` of `checkDefined<T>(value: T | null | undefined): T` instantiates
     to the non-nullable side. M3.1, not (REL.2).
