@@ -50,7 +50,7 @@ rebaselined with the mechanism named; one real defect found on the way and fixed
   `--listAll` on the profile is **byte-identical** to the run recorded on 2026-07-29 under
   the old regime (`build/bench/r770grid/compiler.txt`). The two regimes agree on every
   answer and differ only in cache accounting.
-- **THE DEFECT FOUND ON THE WAY (landed, 8e98733e): program order was the FILESYSTEM's
+- **THE DEFECT FOUND ON THE WAY (landed, 192922e5): program order was the FILESYSTEM's
   readdir order.** `ProjectCompiler.walk` listed every directory through `vfs.list` — raw
   `readdir` — and that becomes the program's root-file order, which decides which file
   first touches a shared type node and therefore whether INV.5(c) calls the resolution
@@ -935,7 +935,7 @@ NOT integrated. The three items below are what that investigation leaves open.**
   the PRE-fix `104,162 / 25,583`, so the `-7.92%` its rebaseline recorded does not exist on
   its own source; ablating the veto it was credited to moves the counter by ONE resolution
   (104,162 → 104,163). Rebaselined at `103,802 / 25,521` WITH the mechanism and the full
-  falsification set (`4189518e`). Found and fixed on the way (`8e98733e`): program order was
+  falsification set (`af7c7d08`). Found and fixed on the way (`192922e5`): program order was
   the filesystem's `readdir` order, and these two counters move ~1% with it — a partial
   cause at most, and the gate header now carries the caveat. What is still open: the
   07-29→07-30 regime itself is unexplained, and its build directory no longer exists.
