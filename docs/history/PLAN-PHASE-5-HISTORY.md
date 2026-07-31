@@ -1,3 +1,188 @@
+**Round 765 (2026-07-29) — PART 1: THE CONSUMER QUESTION ROUND 764 COULD NOT SETTLE IS
+SETTLED, AND THE ANSWER IS (b) — THE NARROWED TYPE IS CONSUMED, BY A REAL RELATION
+QUESTION, AND EVERY CONSUMER AGREES. THE AGREEMENT IS NOT LUCK: EVERY CONSULTATION'S
+TARGET IS THE ENUM ITSELF.** Predictions: **4 of 4** (all written before the run).
+
+- **THE INSTRUMENT IS THE ONE ROUND 764 PRESCRIBED, BUILT AT THE CONSUMER.** Scaffolding
+  (a `NegDirProbe` object + `--xnegdir` flag, added, measured, REMOVED — the diff carries
+  no residue): `enumMinusMembers` TAGS every type it produces with the enum it came from,
+  and the three consumers of a type — the relation entry `checkTypeRelatedTo`, the
+  property lookup `getPropertyOfType`, and `typeToString` — ask their question TWICE when
+  the input is tagged, once with the narrowed type and once with the raw enum, and count
+  "consulted" and "differed" separately. A fourth counter records DELIVERIES out of
+  `getNarrowedTypeForReference` with the consuming call site captured by stack trace.
+- **THE NUMBERS. compiler: 14 firings -> 12 distinct products -> 4 consumed -> 4 relation
+  consults, 0 DIFFER, 0 property lookups, 0 displays. services / server / harness
+  (identical, all three carry `src/services`): 31 firings -> 22 distinct -> 7 consumed ->
+  10 relation consults, 0 DIFFER, 0 / 0.** The firing counts reproduce round 764's 14 and
+  31 exactly, which is the instrument agreeing with the prior measurement before it is
+  asked anything new.
+- **THE CONSULT TRACE IS WHY IT IS (b) AND NOT A COINCIDENCE: the target of every single
+  consultation is the ENUM ITSELF** — `SyntaxKind` -> `SyntaxKind`, `StructureIsReused`,
+  `UsingKind`, `NameValidationResult`, `ScriptElementKind`, all `verdictNarrowed=true
+  verdictRaw=true`. A sub-union of an enum's members relates to that enum by ordinary
+  union membership, so the two answers CANNOT differ. On these profiles there is no target
+  that could separate them — which is the same masking the whole (REL.2) item is about.
+- **THE CONSUMING SITES ARE SECOND-CHANCE GATES, WHICH IS WHY AN ABLATION IS ALSO SILENT.**
+  `checkReturnAssignabilityCore` (3 on compiler, 4 on services), `checkAssignmentExpression`
+  (1 / 1) and, on services only, `getTypeOfObjectLiteral` (2) all have the shape
+  `if (narrowed !== raw && checkTypeRelatedTo(narrowed, target)) narrowed else raw` — so
+  when the narrow does not relate they fall back to the raw enum. Replacing every product
+  with `string` (a NON-subset) therefore leaves the compiler AND services error lines
+  BYTE-IDENTICAL. That ablation is reported as what it is: a bound on the OUTPUT effect,
+  not a claim that the type is unread.
+- **THE OTHER SHARE IS (a), AND IT IS STATED SEPARATELY: 8 of the 12 distinct products on
+  compiler and 15 of 22 on services are never delivered and never read by any of the three
+  consumers.** Those firings are inert today.
+- **THE INSTRUMENT WAS FALSIFIED BEFORE ITS ZERO WAS BANKED.** A second probe mode records
+  a deliberately BOGUS baseline (`string`) instead of the raw enum: `rel.differs` goes
+  0 -> **4 of 4 consults** on the compiler profile. The counter can report a difference; the
+  0 in the real run is a measurement, not a blind spot. *(The first perturbation attempt
+  could NOT have shown the opposite — it replaced the product, so nothing was tagged and
+  every consumer counter trivially read 0. The tell was `consults` collapsing to 0 with it.)*
+- **WHAT THE INSTRUMENT DOES NOT SEE, recorded as the limit:** a tagged type NESTED inside
+  another type (the `getTypeOfObjectLiteral` deliveries make it an object property's type,
+  and a later relation on the OBJECT does not have it as `source`), and purely STRUCTURAL
+  inspection (`t is Type.Union`, flag tests). The end-to-end `string` ablation is what
+  covers those routes, at the coarser output granularity.
+- **THE CONSEQUENCE FOR THE ITEM: the rule is NOT dead weight and must NOT be deleted.**
+  It is verdict-neutral for one reason only — enum -> MEMBER is still decided VACUOUSLY, so
+  every target it meets today is a target the raw enum already satisfied. The moment
+  (REL.2)'s global rule lands, a member-union target starts REJECTING the whole enum and
+  the subtracted type is what saves those sites. It tightens automatically as the relation
+  does, exactly as round 764 recorded for the second chance — the same mechanism, seen from
+  the other end.
+- **PREDICTIONS 4 of 4**, all written before measuring: (1) `rel.consults > 0`; (2)
+  `rel.differs == 0`; (3) `display.consults == 0` (a tagged type reaching `typeToString`
+  would have changed a message and moved the grid); (4) the falsification reports
+  `rel.differs > 0`.
+
+**PART 2 — BOTH REMAINING NEGATIVE-DIRECTION SHAPES LANDED, AND ROUND 764's
+CHARACTERISATION OF THE SWITCH ONE IS WRONG IN THE USEFUL DIRECTION: IT IS ENUM-SPECIFIC,
+NOT SWITCH MACHINERY, SO IT DOES NOT GENERALISE PAST ENUMS AND IT IS ONE ARM, NOT AN
+ARC.** Arm-A grid 46/46/46/46/46/46/46/94, every profile's error lines byte-identical to
+round 764's `build/bench/r764final`. Predictions: **1 of 2**.
+
+- **THE SWITCH `default:` MACHINERY WAS NEVER MISSING — round 425's `DefaultClause` arm has
+  narrowed a literal-union subject all along.** Measured on unmodified `6b956c12` before a
+  line was written: `switch (s) { case "a": break; default: … }` on `s: "a"|"b"|"c"` already
+  answers `"b" | "c"`. The gap is the branch one level in: that arm splits on
+  `t !is Type.Union`, and a bare enum is a member-LESS `Type.Object`, so the non-union side
+  had only round-460b's exhaustion test (all members cased -> `never`) and `return null` for
+  everything else. The fix is the round-764 subtraction placed after that test — the same
+  `enumMinusMembers`, on the cases collected from the WHOLE switch (reaching `default:`
+  means no case matched). Round 764's "not enum-specific... a change to the switch
+  machinery" is withdrawn; **this is why the shape was verified before it was scoped.**
+- **THE ASSERT SHAPE IS AN ORDER QUESTION, NOT A MISSING FEATURE.** `narrowByAssertCall`'s
+  non-union tail asks `t <: targetType` and returns `t` when it holds — and `K <: K.A | K.B`
+  is VACUOUSLY true, so `asserts k is K.A | K.B` on a bare enum narrowed nothing.
+  `narrowByCallPredicate`'s positive arm avoids this by asking the OTHER direction first
+  (round 763), but reordering the general test would change every non-enum assertion, so
+  the enum case gets its own arm behind the round-746 owner rule. The shared gate is
+  factored out as `enumTargetsAreOwnMembers` — the same predicate the subtraction uses, so
+  the positive and negative directions cannot drift apart.
+- **THE ARMS FIRE ZERO TIMES ON THE PROFILES, AND THAT IS SAID PLAINLY RATHER THAN HIDDEN
+  BEHIND A GREEN GRID.** A temporary counter on each arm (added, measured, removed) reads
+  **0 on compiler, 0 on services, 0 on tsc-cli**, and `enumMinusMembers`' own firing count
+  stays at 14 / 31 — i.e. unchanged from round 764. So "the grid did not move" is the
+  round-753 NON-EVIDENCE for these two arms; what protects them is the 11 local pins plus
+  the corpus. What the cost gate DOES show is that the switch block is reached: collecting
+  the cases' member types costs `globals.lookups` **+0.06%** (+617), so
+  `enumMemberTypeOfExpr` runs on tsc's own `default:` switches — the subtraction simply
+  never changes an answer that anything asks for there.
+- **EVERY PIN RUN AGAINST UNMODIFIED `6b956c12` (stash, compile, run): the 5 TARGETS ALL
+  FAIL and the 6 CONTROLS ALL PASS.** Targets: `asserts k is K.A | K.B` -> `K.A | K.B`;
+  `asserts k is K.B` -> `K.B`; `default:` after `case K.A` -> `K.B | K.C | K.D`; after
+  `case K.B` (the MIDDLE-member order pin, round 764's display trap) -> `K.A | K.C | K.D`;
+  after a `case K.A: case K.B:` fallthrough group -> `K.C | K.D`. Controls that must not
+  move, each failing a specific mis-widening: a literal-union `default:` still narrows (the
+  claim above, pinned rather than asserted); a mixed `case K.A: case "z":` list keeps the
+  whole enum; an UNRELATED enum's member asserts nothing; an INTERFACE-target assertion
+  still narrows to the interface (fails any widening of the new arm out of the enum
+  sub-case); a positive type guard still narrows; an exhaustive switch's `default:` is
+  unchanged.
+- **AN OBSERVATION LEFT UNCHASED, recorded so it is not rediscovered as a regression:** an
+  exhaustive enum switch's `default:` answers round-460b's `never`, and the argument site
+  still displays the declared enum — before AND after this round, so it is neither caused
+  nor fixed here. The narrowed `never` is discarded somewhere between the flow walk and the
+  argument check; unqueued, no known consumer.
+- **COST (COST.1): 18 of 20 counters BIT-identical; `globals.lookups` +0.06% and
+  `globals.misses` +0.07%, REBASELINED IN THE SAME COMMIT.** Both are the new
+  `enumMemberTypeOfExpr` call per enum-keyed case in a `default:` switch, which resolves
+  the member through name resolution. `narrow.walks` is unchanged at 71,326.
+- **NO CORPUS BASELINE MOVED, so no `LogicalParityDivergence` was needed and none was
+  added.** The E/C/N/S/T generated classes plus the new pins ran **3,374 / 0**.
+- **PREDICTIONS 1 of 2.** Hit: the assert shape is contained to one arm. **MISSED, and the
+  miss is the round's most useful output: "the switch fix is not enum-specific, so it helps
+  every discriminant"** — it does not. The control that falsified it (a literal-union
+  `default:` narrowing on the UNMODIFIED build) took one probe run to write, and it is now
+  a pin so the claim cannot be re-made from the code's shape.
+
+**PART 2b (follow-up, after the owner's full suite) — PART 2 BROKE ONE TEST, AND IT IS A
+STALE CONTROL OF ROUND 764's, NOT A REGRESSION IN MEANING. THE AUDIT IT FORCED FOUND NO
+SECOND ONE — AND IT DID FIND THE REASON THE NEW ARM FIRES ZERO TIMES ON tsc's SOURCES.**
+Full suite on `bee3b0a9`: 13,161 / **1 failure** / 3 skipped, cost gate clean.
+
+- **THE FAILURE.** `EnumNegativeNarrowingTest > negative control - a switch default clause
+  still answers the whole enum` asserted that a bare-enum `default:` answers `K`. Part 2
+  closed exactly that gap, so the control was asserting pre-fix behaviour. **RETIRED, not
+  edited**, because the shape is now owned in its correct form by
+  `EnumAssertAndSwitchDefaultNarrowingTest > a switch default on a bare enum subtracts the
+  cased member` — the SAME source with the inverted expectation, beside a middle-member
+  order pin and a fallthrough-group pin. Updating it in place would have left two pins on
+  one shape. Suite count 13,161 -> **13,160**.
+- **WHY THE GATES MISSED IT, and the rule that follows.** The filtered batch was corpus
+  letters E/C/N/S/T plus the round's OWN new class; round 764's class was in neither.
+  **When a round closes a gap a previous round pinned as a control, that previous class
+  must be in the filtered batch** — and it is findable: the shape being fixed was named in
+  the previous round's session note, which is the pointer to its test class.
+- **THE `asserts` HALF HAS NO STALE CONTROL, and that is grepped rather than assumed.** No
+  test anywhere pins `asserts x is <enum member>` on a bare enum except this round's own
+  class — round 764 recorded that shape in its session note only, never as a pin. So the
+  worse failure mode the audit was looking for (a stale control still PASSING, for the
+  wrong reason) does not exist on that half.
+- **THE INSENSITIVE-ASSERTION AUDIT ON THE SWITCH HALF, measured not read.** Seven
+  enum/switch classes carry absence-style (`none {}`) assertions beside `default:` clauses.
+  All but three switch on a PROPERTY subject (`x.kind`, `node.kind`, `reason.kind`), which
+  cannot reach the new arm at all — it lives in the `matchesDirectly` branch, and a
+  property subject takes the `discriminantName` branch. Of the three DIRECT-subject
+  switches, two are exhaustive (round-460b answers `never` first) and the third —
+  `EnumValueAliasExhaustiveSwitchTest > negative control - an uncovered distinct-valued
+  member still fires`, a genuinely PARTIAL bare-enum switch with a lone `default:` — was
+  checked by running its exact source through the CLI: the message still reads *Argument of
+  type 'E'*, so the arm does not fire and the control passes for its original reason.
+- **AND THAT IS THE INTERESTING PART: the discriminator is the `never` PARAMETER TYPE.**
+  Isolated over four variants — plain enum, `const` enum, `return` bodies, `break` bodies
+  all narrow correctly to `P.C` / `C2.C` against a `string` target; only the `never` target
+  answers the whole `P`. **An enum argument going to a `never` parameter does not get the
+  flow read at all**, so `default: Debug.assertNever(x)` in a partially-covered switch
+  still reports the whole enum where tsc reports the uncovered member. **This is a large
+  part of why Part 2's arm fires ZERO times on tsc's own sources: `default:
+  Debug.assertNever(…)` IS tsc's idiom for that position**, and it is precisely the
+  parameter type the call-argument narrowability gate declines. Sized and NOT taken — it
+  widens a corpus-pinned gate — and queued under (REL.2).
+- **RE-RUN of the ten affected classes: 73 / 0** (`EnumNegativeNarrowingTest` 10 -> 9,
+  `EnumAssertAndSwitchDefaultNarrowingTest` 11, `EnumValueAliasExhaustiveSwitchTest` 2,
+  `EnumArgumentSecondChanceTest` 9, `EnumFlowNarrowingRel2Test` 14, plus the five audited
+  switch classes).
+
+**PART 3 — THE GLOBAL RULE RE-PRICED, NOT LANDED, AND THE PRICE HAS FALLEN AGAIN:
+compiler 46 -> 47 (UNCHANGED) and services 46 -> 52 becomes 46 -> 51. THE WORKLIST IS 5
+LINES, NOT 6 — `importFixes.ts:1162` HAS CLOSED.** Measured the same way round 763 did:
+a temporary `--xglobalrule` flag in `checkTypeRelatedToCore` rejecting an enum's own type
+against an enum MEMBER, one compile, two profile runs, then reverted. **Prediction: 0 of
+1 — "the price is unchanged, because rounds 764/765 closed no worklist line" is WRONG.**
+Whatever closed `importFixes.ts:1162` is one of round 764's subtractive narrows or this
+round's two arms, and it closed WITHOUT being on anyone's list, which is the second time
+this arc has found the masked population larger than the enumeration of it.
+
+- **THE REMAINING FIVE, re-listed so the next round works from a measurement and not from
+  round 762's table:** `scanner.ts:905` (cause D, and the ONLY line on the compiler
+  profile — that profile is still one line from the rule being free), plus, on services,
+  `importFixes.ts:1127` and `formattingScanner.ts:113` (cause D) and
+  `completions.ts:2234`/`2239` (the property-read / generic-inference family round 763
+  showed are NOT (B)). So (D) is now **3 of 5**, still the largest share, and still an arc.
+
 **Round 764 (2026-07-29) — (REL.2)(C) MADE A SECOND CHANCE: ROUND 763's +4.78% FLOW-WALK
 BILL IS RETURNED IN FULL. `narrow.walks` 74,729 -> 71,326 — THREE ABOVE THE PRE-763
 71,323 — WITH THE 8-ARM GRID BYTE-IDENTICAL AND NO ANSWER CHANGED.** Arm-A grid
