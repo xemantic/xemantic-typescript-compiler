@@ -804,6 +804,11 @@ class Checker(
      *  "unreadable" (the function's public contract returns null for it). */
     private val discriminantKindKeysCache = HashMap<Int, Set<String>>()
 
+    /** (REL.4)(a) round 777: memo for [distributedNarrowingType] by Type.id.
+     *  `neverType` encodes "does not distribute" (the function returns null for it —
+     *  a genuinely empty distribution would already have been rejected upstream). */
+    private val distributedNarrowingCache = HashMap<Int, Type>()
+
     /** Round 486 (M5.1 perf): per-source line-start offsets for
      *  [getLineAndCharacterOfPosition], which was an O(position) linear newline scan
      *  from index 0 on every call — on a ~1.5 MB source file (tsc's checker.ts) a
@@ -49091,6 +49096,12 @@ class Checker(
         internal var unresolvedAuditEnabled = false
         internal val unresolvedAuditOld = HashMap<String, String>()
         internal val unresolvedAuditSpine = HashMap<String, String>()
+
+        /** (REL.4)(a) round 777: cartesian-product cap for [distributedNarrowingType].
+         *  tsc caps the same product at 100,000 and reports an error above it; we simply
+         *  decline to build the view (narrowing then behaves exactly as before). The live
+         *  maximum on tsc's own sources is `HasModifiers & HasDecorators` at 24 x 7 = 168. */
+        private const val DISTRIBUTE_MAX_COMBINATIONS = 4096
 
         // INV.4(c)(iii) batch 4: edge verdicts for the spine expression-
         // territory classification (see [spineUResExprEdge]).
@@ -110119,7 +110130,102 @@ interface DataView {
         else -> t.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
     }
 
+    /**
+     * (REL.4)(a) cause 6, round 777: the DISTRIBUTED form of an intersection whose
+     * operands include unions — `(A | B) & (B | C)` as `A & B | A & C | B & B | B & C`,
+     * minus every combination whose `.kind` discriminants are provably disjoint.
+     *
+     * tsc has this for free: `getIntersectionType` normalizes `X & (A | B)` into
+     * `X & A | X & B` at CONSTRUCTION ("union types are always at the top level in type
+     * representations"), and `getReducedType` then drops the combinations whose
+     * discriminant properties are disjoint unit types. We store intersections
+     * UN-distributed (see the `intersectionSourceDistributes` gotcha in CLAUDE.md), which
+     * costs nothing for the relation — it distributes on demand there — but leaves flow
+     * NARROWING with no member list to peel: `HasModifiers & HasDecorators`
+     * (nodeFactory.ts's `replaceDecoratorsAndModifiers`) fell into the single-type path,
+     * where one type-guard subtraction can only answer "the whole intersection" or
+     * `never`, so a 7-arm `isParameter(node) ? … : Debug.assertNever(node)` chain
+     * subtracted NOTHING and the `never` parameter saw the declared type.
+     *
+     * Deliberately NOT done in [getIntersectionType]: distributing at construction would
+     * change every intersection's identity, display and relation behaviour. Here it is
+     * an on-demand VIEW consulted by one caller, and only where the view actually
+     * subtracts something is it adopted — see [narrowByCallPredicate].
+     *
+     * Null unless at least one operand is a union (so `CompilerOptions & { types: … }`
+     * and every other brand/refinement intersection is untouched), every operand is
+     * object-capable, and the cartesian product stays under [DISTRIBUTE_MAX_COMBINATIONS]
+     * (tsc caps the same product at 100,000 and errors above it; we simply decline).
+     */
+    private fun distributedNarrowingType(t: Type.Intersection): Type? {
+        distributedNarrowingCache[t.id]?.let { return if (it === neverType) null else it }
+        val computed = computeDistributedNarrowingType(t)
+        distributedNarrowingCache[t.id] = computed ?: neverType
+        return computed
+    }
+
+    private fun computeDistributedNarrowingType(t: Type.Intersection): Type? {
+        if (t.types.none { it is Type.Union }) return null
+        var product = 1
+        for (p in t.types) {
+            // Only object-capable operands can be distributed soundly — a primitive or a
+            // type parameter operand has no member list and no discriminant to reduce by.
+            val alts = if (p is Type.Union) p.types else listOf(p)
+            // `Type.Interface` and `Type.Reference` both ARE `Type.Object`s.
+            if (alts.any { it !is Type.Object }) return null
+            product *= alts.size
+            if (product > DISTRIBUTE_MAX_COMBINATIONS) return null
+        }
+        var combos: List<List<Type>> = listOf(emptyList())
+        for (p in t.types) {
+            val alts = if (p is Type.Union) p.types else listOf(p)
+            combos = combos.flatMap { prefix -> alts.map { prefix + it } }
+        }
+        val members = mutableListOf<Type>()
+        val seenIds = HashSet<Int>()
+        for (combo in combos) {
+            // The reduction tsc's `getReducedType` performs: a combination whose parts
+            // carry disjoint `.kind` discriminants is an EMPTY intersection and is dropped.
+            // `typeGuardMemberDisjoint` is false on any unreadable side, so an unkeyable
+            // combination is conservatively KEPT (the view then simply subtracts less).
+            var empty = false
+            outer@ for (i in combo.indices) {
+                for (j in i + 1 until combo.size) {
+                    if (combo[i] !== combo[j] && typeGuardMemberDisjoint(combo[i], combo[j])) {
+                        empty = true
+                        break@outer
+                    }
+                }
+            }
+            if (empty) continue
+            val member = getIntersectionType(combo.distinct())
+            if (member.flags.hasAny(TypeFlags.Never)) continue
+            if (seenIds.add(member.id)) members.add(member)
+        }
+        if (members.isEmpty()) return null
+        val result = getUnionType(members)
+        // A view identical to the input buys nothing and would only churn identity.
+        return if (result === t) null else result
+    }
+
     private fun narrowByCallPredicate(
+        t: Type, expr: CallExpression, isMatch: Boolean, name: String,
+    ): Type {
+        // (REL.4)(a) round 777: an INTERSECTION-of-unions subject is narrowed through its
+        // distributed view, so successive guards peel it exactly as they peel a union.
+        // ADOPTED ONLY WHEN THE VIEW SUBTRACTS: an unchanged answer returns the ORIGINAL
+        // intersection, so a guard that does not apply cannot silently replace the type's
+        // identity or display anywhere in the program.
+        if (t is Type.Intersection) {
+            distributedNarrowingType(t)?.let { view ->
+                val narrowed = narrowByCallPredicateWorker(view, expr, isMatch, name)
+                return if (narrowed === view) t else narrowed
+            }
+        }
+        return narrowByCallPredicateWorker(t, expr, isMatch, name)
+    }
+
+    private fun narrowByCallPredicateWorker(
         t: Type, expr: CallExpression, isMatch: Boolean, name: String,
     ): Type {
         // Unwrap value-preserving wrappers around the callee so `(isFoo)(x)`,
