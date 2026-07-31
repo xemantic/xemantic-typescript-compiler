@@ -1,3 +1,117 @@
+**Round 767 (2026-07-29) — (REL.2) THE IMPORTED-NAMESPACE CALL-ARGUMENT BLIND SPOT SIZED
+BEHIND A SCAFFOLD, MEASURED, AND REVERTED. THE PRICE IS **compiler 46 -> 66, services
+46 -> 71, server 46 -> 72, harness 94 -> 121** AND EVERY ONE OF THE 20/25 NEW LINES IS AN
+FP. THE MECHANISM IS **TWO** MISSING STEPS, NOT ONE, AND THE SECOND IS A DELIBERATE DESIGN
+DECISION THIS CODEBASE ALREADY WROTE DOWN.** Arm-A grid 46/46/46/46/46/46/46/94, every
+profile byte-identical to round 766's `build/bench/r766final`; the FINAL grid at clean HEAD
+is byte-identical to it too, so **nothing landed and the grid is untouched**. Predictions:
+**3 of 5 on values, and the one that missed on MECHANISM is again the finding.**
+
+*Everything below was measured behind a temporary `NsArgProbe` object + five `--xns*` /
+`--xglobalrule` flags, added, measured and REMOVED. The diff carries no residue; the only
+committed change is documentation.*
+
+- **THE MECHANISM, MEASURED, IS TWO INDEPENDENT MISSING STEPS — AND MY ONE-STEP READ OF IT
+  WAS WRONG IN THE SAME WAY ROUND 766's WAS.** (1) `computeRawTypeOfPropertyAccess`'s
+  namespace fallback fires only when the receiver symbol carries `SymbolFlags.Module`; an
+  import alias carries `SymbolFlags.Alias`, so `Debug.take` falls through to `anyType`,
+  `getCalleeType` returns `anyType`, and `checkCallTypesInExpr` bails one line before the
+  signature machinery. (2) **teaching that fallback to call `resolveAlias` FIXES NOTHING**:
+  on the compiler profile the alias receivers number **4,383** and the ones `resolveAlias`
+  resolves to a Module number **0**. The general resolver cannot follow an ESM `.js`
+  specifier into an `export *` barrel — which is every import in tsc's own sources — and
+  the round-409 gotcha in `resolveImportedSymbolGeneral` says it **must never be taught
+  to** (the TS2315 flood). The barrel-aware resolver already exists and is deliberately
+  FLOW-ONLY: `resolveImportedNamespaceSymbol`. **That is exactly why round 766 saw the
+  asymmetry it recorded** — `Dbg.assertIsA(p)` narrows because the flow walker consults
+  the flow-only resolver, and `Dbg.take(arg)` is unchecked because the call path consults
+  the general one.
+- **THE THREE-WAY ABLATION, ON A 5-VARIANT SCRATCH PROJECT AND THEN ON THE PROFILES: EACH
+  STEP ALONE IS INERT AND ONLY THE PAIR MOVES ANYTHING.** Step 2 alone (alias-following via
+  `resolveAlias`) fixes ONLY an extensionless specifier — 0 sites on tsc's sources. Step 1
+  alone (barrel-aware receiver resolution, result not applied) lifts alias-resolves-to-Module
+  from 0 to 3,659 on compiler and leaves the grid at **46 / 46** — measurably inert. Only
+  both together move it. Scratch matrix: single-specifier `.js`, two-specifier `.js`,
+  two-member namespace, extensionless, and `export *` barrel — all five silent at HEAD, all
+  five reported under the pair.
+- **THE POPULATION, BEFORE AND AFTER (behaviour-free counters; arm A is byte-identical to
+  `r766final` on all 8, which is what licences them).** compiler: 5,048 property accesses
+  reach the namespace fallback, 141 receivers already Module (the same-file namespaces that
+  work today), 4,383 alias receivers -> **3,659 newly typed**; `PropertyAccess` callees that
+  survive the `anyType` bail go **3,652 -> 4,779 (+1,127)**. services: 9,823 / 255 / 8,964 ->
+  **5,079 newly typed**, callees **6,615 -> 8,166 (+1,551)**. Those +1,127 / +1,551 are round
+  766's 1,108 / 1,518 `Debug.*` calls plus a small tail of other imported namespaces.
+- **THE PRICE, PER PROFILE, WITH THE PAIR SCAFFOLDED ON: compiler 46 -> 66 (+20), tsc /
+  jsTyping / deprecatedCompat / typingsInstallerCore 46 -> 66 (+20), services 46 -> 71
+  (+25), server 46 -> 72 (+26), harness 94 -> 121 (+27).** Every new line is an FP by
+  construction — the 8 profiles are tsc's own sources and tsc compiles them with zero
+  errors. **THREE causes, read line by line:**
+  - **(alpha) 15 of 20 on compiler, 17 of 25 on services — `Debug.assertNever(x)` whose
+    argument does not narrow to `never`.** Every one is a `default:` / final-`return`
+    exhaustiveness assertion. Subjects split: 4 BARE ENUMS (`TypeSystemPropertyName`,
+    `LazyNodeCheckFlags`, `ParsingContext` x2), 6 enum-member unions or property-access
+    reads (`node.keywordToken`, `node.operator`, `JsxTokenSyntaxKind`,
+    `SyntaxKind.Extends|Implements`), 1 ELEMENT ACCESS (`allowedEndings[0]`, not a
+    narrowable reference at all), 4 node unions/intersections (`CallLikeExpression`,
+    `HasModifiers & HasDecorators`, the declarations.ts top-level union).
+  - **(beta) 4 on compiler, 7 on services — `Debug.assertIsDefined` / `Debug.checkDefined`
+    GENERIC INFERENCE.** `assertIsDefined<T>(value: T)` and `checkDefined<T>(value: T | null
+    | undefined): T` get their parameter instantiated to the NON-nullable side, so a
+    `Declaration | undefined` argument is rejected (checker.ts:12576, esDecorators.ts:1093,
+    esnext.ts:605) and the return-position twin fails TS2322 (utilities.ts:2386,
+    importFixes.ts:2093/2113, fixClassIncorrectlyImplementsInterface.ts:71). **Not
+    narrowing — M3.1 inference.**
+  - **(gamma) 1 line — esDecorators.ts:1314**, an object literal whose `kind: string` member
+    fails a literal-union target: cause **(D)**, surfacing downstream of a newly-typed
+    `Debug.*` value.
+- **DOES THE 763-766 ARC GO LIVE UNDER THE SCAFFOLD? NO — AND THAT IS REPORTED AS THE
+  ABLATION IT IS.** `enumMinusMembers` stays at **14 / 31** and round 766's never-arm enum
+  subset stays at **0 / 0**, before AND after. The counters reproduce rounds 764/765 exactly
+  before being asked anything new, which is the instrument agreeing with the prior
+  measurement. The arms need a BARE ENUM at a `never` parameter; not one of the 15 alpha
+  sites is that shape.
+- **BUT THE ARC's SUBJECT MATTER BECOMES OBSERVABLE FOR THE FIRST TIME, AND TWO SITES NAME
+  THEIR OWN GAP.** `checker.ts:38292` sits after two sequential `if (node.keywordToken ===
+  X) { ... return ... }` guards and reports `SyntaxKind.ImportKeyword` — the FIRST guard
+  subtracted, the SECOND did not. `checker.ts:8056` sits at the tail of a ~13-arm `kind ===
+  SyntaxKind.X ? ... : Debug.assertNever(kind)` TERNARY CHAIN and reports
+  `SyntaxKind.ArrowFunction` — only the innermost condition subtracted. Both are partial
+  narrows of a member union, i.e. the machinery runs and stops early; both are findable.
+- **THE GLOBAL enum -> MEMBER RULE IS EXACTLY ADDITIVE WITH THIS — NO INTERACTION.**
+  Scaffold fidelity checked first: the rule ALONE re-measures **compiler 46 -> 47 / services
+  46 -> 51**, reproducing rounds 765/766 to the line, so the re-implementation is faithful.
+  With the namespace pair on it is **66 -> 67 / 71 -> 76** — the same **+1 / +5**, and
+  `diff` says the SAME FIVE LINES (`scanner.ts:905`, `importFixes.ts:1127`,
+  `formattingScanner.ts:113`, `completions.ts:2234`, `2239`). The two changes do not
+  interact in either direction.
+- **NOTHING LANDED, DELIBERATELY.** A contained fix was in scope; this is not one — +20 to
+  +27 grid lines across the 8 profiles, of which ~75% are one narrowing family and ~20% are
+  a generic-inference family that is not even (REL.2)'s. The final grid at clean HEAD is
+  byte-identical to `r766final` on all 8 profiles and the tree is clean, so **the corpus
+  suite and the cost gate cannot have moved**; the owner's runs are the confirmation.
+- **RECOMMENDATION: DO NOT SWITCH IT ON YET; DO IT SECOND, AFTER (alpha).** The two steps
+  are one call site each and the resolver already exists, so the change itself is small —
+  but it converts a silent blind spot into 20-27 visible FPs, ~75% of them one shape. The
+  cheap order is to close the `assertNever` narrowing family FIRST (it is invisible today,
+  so it needs local pins and this exact scaffold to re-measure against), then flip the
+  namespace pair, which at that point should cost roughly the beta+gamma remainder (~5
+  compiler / ~8 services) instead of 20/25. **Queued as (REL.4) below.**
+- **THE SCRATCH PROJECT IS GONE** (round 766's rule) and the arm outputs are under
+  `build/bench/r767{A,B,C,D,E,final}` (gitignored).
+- **PREDICTIONS 3 of 5 on values; the useful one is the mechanism miss.** HIT: (2) compiler
+  goes above 60 — 66, inside the stated 60..400 band. (3a) round 766's arm stays 0 under the
+  scaffold, because `Debug.assertNever` is used exactly where the switch IS exhaustive — 0
+  on all arms. (5) `paCallsArgChecked` rises by >= 1,000 — +1,127. **MISSED:** (1) the value
+  half held (`aliasReceiver` 4,383 > 0) but the MECHANISM half was wrong — I predicted
+  `aliasMemberFound >= 1108` from alias-following alone and it is **0**; the binding step is
+  the `.js`+barrel resolution the general resolver deliberately refuses. (3b) `enumMinusFired`
+  rises above 14 — it stayed at exactly 14. (4) the global rule's price CHANGES under the
+  scaffold — it does not, in either direction, to the line.
+
+**AOT — owner-directed, round 771. Measured, documented in `docs/perf/aot-native-image.md`,
+NOT integrated. The three items below are what that investigation leaves open.**
+
+
 **Round 766 (2026-07-29) — (REL.2) THE `never`-PARAMETER GAP IS CLOSED, AND THE ROUND'S
 REAL OUTPUT IS THAT ROUND 765's DIAGNOSIS OF IT WAS WRONG IN A WAY THAT MATTERS: THE FLOW
 READ WAS NEVER DECLINED, AND THE REASON THE ARM IS SILENT ON tsc's SOURCES IS TWO LEVELS

@@ -114460,7 +114460,18 @@ interface DataView {
                         val nonNullish = rawArgType0.types.filter {
                             !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
                         }
-                        if (nonNullish.size == 1) nonNullish[0] else rawArgType0
+                        // (REL.4)(b) round 779: a `tp | null | undefined` parameter REMOVES
+                        // the source's nullish constituents before inferring tp — that is
+                        // what makes `Debug.checkDefined<T>(value: T | null | undefined): T`
+                        // return the non-nullable side. The round-428 rule only did so when
+                        // exactly ONE non-nullish member remained, so a MULTI-member source
+                        // (`__String | undefined`, whose `__String` is itself a 3-member
+                        // union) bound tp to the whole nullish-carrying union and the call's
+                        // return type kept `undefined`.
+                        if (nonNullish.size == 1) nonNullish[0]
+                        else if (REL4B_GATE && nonNullish.size > 1 && nonNullish.size < rawArgType0.types.size)
+                            getUnionType(nonNullish)
+                        else rawArgType0
                     } else rawArgType0
                     if (rawArgType === anyType || rawArgType === errorType) {
                         // M3.1 (round 428): at the RETURN-TYPE call site an untypeable
@@ -142664,6 +142675,33 @@ interface DataView {
         return true
     }
 
+    /**
+     * (REL.4)(b) round 779: true when [paramSym]'s DECLARED type node is a bare
+     * reference to one of [sigIn]'s OWN type parameters — i.e. whatever concrete
+     * named type `paramType` now holds was INFERRED BY US from the very argument
+     * about to be judged against it. `Debug.assertIsDefined<T>(value: T)` called
+     * with `symbol.valueDeclaration` (an optional `Declaration` member) is the
+     * measured shape: our inference binds T := Declaration, and every rule whose
+     * premise is "the parameter independently REQUIRES this named type" then reads
+     * a requirement it manufactured itself. A bare type parameter requires nothing.
+     *
+     * Reads the AST, not the Type: an instantiated Signature carries no
+     * `typeParameters` and its parameter symbols hold the SUBSTITUTED type, so the
+     * Type side cannot see that the annotation ever was a `T` — but
+     * `instantiateSignature` copies `valueDeclaration` through, so the annotation
+     * node survives. Deliberately BARE-only (not "mentions a TP anywhere"): a
+     * nested mention (`Array<T>`) is the same class of error but has zero measured
+     * sites, and widening it is an unmeasured widening of a suppression.
+     */
+    private fun paramDeclaredTypeIsOwnTypeParam(paramSym: Symbol, sigIn: Signature): Boolean {
+        val tps = sigIn.typeParameters
+        if (tps.isNullOrEmpty()) return false
+        val ann = (paramSym.valueDeclaration as? Parameter)?.type as? TypeReference ?: return false
+        if (!ann.typeArguments.isNullOrEmpty()) return false
+        val name = (ann.typeName as? Identifier)?.text ?: return false
+        return tps.any { it.symbol?.name == name }
+    }
+
     // visibilityOfCrossModuleTypeUsage: an OPTIONAL-member PropertyAccess argument
     // (`configuration.server`, where `server?: IServer`) passed to a required NAMED
     // parameter (`server: IServer`). `computeRawTypeOfPropertyAccess` does NOT model the
@@ -144526,6 +144564,7 @@ interface DataView {
                 // visibilityOfCrossModuleTypeUsage: optional-member PropertyAccess arg vs
                 // required named param — undefined is the sole failure (see helper).
                 if (arg is PropertyAccessExpression &&
+                    !(REL4B_GATE && paramDeclaredTypeIsOwnTypeParam(params[i], sigIn)) &&
                     tryEmitOptionalMemberArgVsRequiredNamedTs2345(arg, paramType, params[i], source, fileName)) continue
                 // Round 512 (post-retire FN unmasked): a PRIMITIVE arg vs an anonymous
                 // plain property-bag param (`type SFL = { x: number }` — pre-retire the
@@ -173722,6 +173761,16 @@ interface DataView {
  * `init` block runs (the init-order gotcha). Never flip this in a commit.
  */
 private val SYMBOL_TYPE_ORDER_GATE = true
+
+/**
+ * (REL.4)(b) round 779 ABLATION SWITCH — flip to `false` to restore the pre-779
+ * behaviour of BOTH halves of that round's fix (the optional-member TS2345 walker
+ * fires against an inferred bare-type-parameter parameter; a `tp | null | undefined`
+ * parameter only strips the source's nullish constituents when exactly one member
+ * survives) so `Rel4bGenericInferenceTest`'s pins can be shown to discriminate.
+ * Same top-level init-order rationale as the switch above. Never flip in a commit.
+ */
+private val REL4B_GATE = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---

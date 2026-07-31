@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 779 (2026-07-31) — (REL.4)(b) CLOSED, AND ITS OWN LABEL IS FALSIFIED: THE FAMILY IS
+**TWO** DEFECTS AND ONLY **ONE** OF THEM IS GENERIC INFERENCE. THREE OF THE FOUR COMPILER
+LINES COME FROM A DEDICATED WALKER READING *OUR OWN* INFERENCE AS IF IT WERE THE
+PROGRAMMER'S REQUIREMENT.** Scaffolded price **compiler 52 -> 48, services 56 -> 49** —
+eleven lines, `diff` says exactly those and no new one. Unscaffolded 8-profile grid
+**46/46/46/46/46/46/46/94**, byte-identical set-for-set to round 778's on all eight. Suite
+13,242 -> **13,252 / 0 failures / 3 skipped**; cost gate exit 0, **no rebaseline**.
+
+- **DEFECT 1 (3 of 4 compiler lines, 3 of 7 services lines) IS NOT INFERENCE AT ALL.**
+  `Debug.assertIsDefined<T>(value: T, …): asserts value is NonNullable<T>` has no nullable
+  parameter to get wrong — its parameter is a bare `T`, and our inference binds
+  T := `Declaration` from `symbol.valueDeclaration` correctly. The FP is
+  `tryEmitOptionalMemberArgVsRequiredNamedTs2345`, a walker whose whole premise is *"the
+  parameter independently REQUIRES this named type, so the member's unmodelled `| undefined`
+  is the sole failure"*. Against an inferred bare type parameter that premise is
+  self-referential: the requirement is one we manufactured from the very argument being
+  judged, and a bare type parameter requires nothing. The fix is one AST predicate
+  (`paramDeclaredTypeIsOwnTypeParam`) on that walker's gate. **It must read the AST**: an
+  instantiated `Signature` carries `typeParameters = null` and its parameter symbols hold
+  the SUBSTITUTED type, so nothing on the Type side can see that the annotation ever was a
+  `T` — but `instantiateSignature` copies `valueDeclaration` through, so the annotation node
+  survives. Sites: `checker.ts:12576`, `esDecorators.ts:1093`, `esnext.ts:605`.
+- **DEFECT 2 (1 compiler / 4 services) IS the item's stated one, and it is a THREE-LINE
+  relaxation, not engine work.** `checkDefined<T>(value: T | null | undefined): T` reaches
+  round 428's nullable-union anchor, which strips the source's nullish constituents **only
+  when exactly ONE non-nullish member survives**. tsc's `__String` is itself a 3-member
+  union, so `__String | undefined` kept all four members, bound T to the whole
+  nullish-carrying union, and the call's return type carried `undefined` into
+  `checkReturnAssignability`. Now any proper non-empty non-nullish subset is used. Sites:
+  `utilities.ts:2386`, `fixClassIncorrectlyImplementsInterface.ts:71`,
+  `importFixes.ts:2093`/`2113`.
+- **SO THE QUEUE'S "M3.1, the generic-inference engine" LABEL OVER-PRICED THIS BY A LOT.**
+  Neither half needed inference infrastructure; the whole change is ~15 lines. Blocker #2's
+  arc is untouched and still open — this round is evidence about ONE family, not about it.
+- **DIAGNOSED IN ONE RUN BY HOOKING `Diagnostic`'s CONSTRUCTOR, AFTER THREE REDUCTIONS
+  FAILED FOR A REASON WORTH RECORDING.** A hand-written `plain(x: Decl)` called with
+  `Decl | undefined` is SILENT — the argument loop's `paramNotSimple` gate `continue`s
+  unless the argument is primitive — so "my reduction does not reproduce" read as "the shape
+  is wrong" when it really meant "the general relation path is not the emitter". The
+  message's `Type 'undefined' is not assignable to type 'X'.` chain is NOT a discriminator
+  either: the general TS2345 path builds the same chain for a union source. A filtered
+  `Throwable().stackTraceToString()` in `Diagnostic`'s `init`, keyed on file+line, named the
+  emitter immediately — for all four lines, in four 30-second runs.
+- **THE PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (`REL4B_GATE = false`,
+  recompiled, `Rel4bGenericInferenceTest` re-run): **5 of 10 fail ablated and pass fixed**,
+  **5 hold on both sides** — two of those are negative controls that FIRE on both (a
+  genuinely required named parameter still rejects; the same generic callee's CONCRETE
+  parameter still rejects, so the suppression is per-PARAMETER, not per-call) and three are
+  silent on both (round 428's single-survivor path, a source with no nullish member, a bare
+  `tp` parameter still inferring the whole union). The sharpest pin discriminates **by
+  MESSAGE** rather than by silence — `function f(): A | B { return checkDefinedLocal(abc) }`
+  names `'A | B | C'` fixed and `'A | B | C | null | undefined'` ablated — which is what
+  proves the strip removed the nullish members and nothing else.
+- **A PROBE-POSITION TRAP, round 777's lesson arriving from the other side: for defect 2
+  ONLY the RETURN position is observable.** A var-decl annotation (`const v: A = checkDefined(ab)`)
+  and a call-argument position (`wantsA(checkDefined(ab))`) are silent on the FIXED **and**
+  the ABLATED binary — the first because the var-decl gate does not reach it, the second
+  because of round 468's foreign-TP CallExpression bail. Four pins written that way would
+  have measured nothing. Related: a union source into a strictly SMALLER union target fires
+  while the same source into a single-member target does not, so `f(): A` cannot pin what
+  `f(): A | B` can.
+- **THE FIX IS REACHED UNSCAFFOLDED AND CHANGES NO VERDICT** — the cost gate reports
+  `typeOfExpr.calls` **-6** and `narrow.memoServed` **-2** on the compiler profile with all
+  18 other counters bit-identical and all 8 profile outputs byte-identical, so this is not a
+  zero-count green (round 753's rule). No rebaseline: every delta is 0.00%.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). (i) The defect-1 gate is
+  BARE-type-parameter only. A nested mention (`f<T>(x: Array<T>)`) is the same class of
+  error and has **0 measured sites** on all 8 profiles, so widening it would be an unmeasured
+  widening of a suppression. (ii) `(c)` (`esDecorators.ts:1314`) was NOT folded in: it is
+  cause (D), literal widening, whose blast radius is every `const` in the corpus — the queue
+  is right that it is an arc.
+- **THE FLIP'S RESIDUAL IS NOW THREE LINES, AND IT IS THE SAME THREE ON BOTH PROFILES PLUS
+  ONE.** Scaffolded compiler 48 = 46 env-legit + `moduleSpecifiers.ts:1411` + `esDecorators.ts:1314`;
+  services 49 adds `stringCompletions.ts:386`. That is exactly (a)'s two named stragglers
+  plus (c) — no unclassified line remains.
+- **PREDICTIONS 2 of 4.** HIT: (b) is exactly 4 compiler / 7 services as the item said, and
+  the fix removes precisely those with no new line; the corpus does not move (no
+  `LogicalParityDivergence`). **MISSED, and both misses are the output:** (a) I took the
+  item's word that this was one generic-inference defect — it is two, and the majority is a
+  dedicated walker; (b) I expected a var-decl probe to read the inferred return type, and it
+  reads nothing on either side.
+
 **Round 778 (2026-07-31) — (ORDER.1) CLOSED. `getTypeOfSymbol` PERSISTED EVERY RESOLUTION
 INTO A GLOBAL CACHE, INCLUDING THE ONES MADE UNDER A CALLER'S INSTANTIATION CONTEXT — THE
 EXACT CONTEXT `getTypeFromTypeNode` HAS ALWAYS REFUSED TO CACHE UNDER. SO A MEMBER TYPED BY
@@ -722,119 +804,6 @@ cost counters bit-identical. Predictions: **3 of 5**, and both misses are the fi
   src/` is empty); arm outputs are in the scratchpad only, deliberately not under
   `build/bench/`.
 
-**Round 767 (2026-07-29) — (REL.2) THE IMPORTED-NAMESPACE CALL-ARGUMENT BLIND SPOT SIZED
-BEHIND A SCAFFOLD, MEASURED, AND REVERTED. THE PRICE IS **compiler 46 -> 66, services
-46 -> 71, server 46 -> 72, harness 94 -> 121** AND EVERY ONE OF THE 20/25 NEW LINES IS AN
-FP. THE MECHANISM IS **TWO** MISSING STEPS, NOT ONE, AND THE SECOND IS A DELIBERATE DESIGN
-DECISION THIS CODEBASE ALREADY WROTE DOWN.** Arm-A grid 46/46/46/46/46/46/46/94, every
-profile byte-identical to round 766's `build/bench/r766final`; the FINAL grid at clean HEAD
-is byte-identical to it too, so **nothing landed and the grid is untouched**. Predictions:
-**3 of 5 on values, and the one that missed on MECHANISM is again the finding.**
-
-*Everything below was measured behind a temporary `NsArgProbe` object + five `--xns*` /
-`--xglobalrule` flags, added, measured and REMOVED. The diff carries no residue; the only
-committed change is documentation.*
-
-- **THE MECHANISM, MEASURED, IS TWO INDEPENDENT MISSING STEPS — AND MY ONE-STEP READ OF IT
-  WAS WRONG IN THE SAME WAY ROUND 766's WAS.** (1) `computeRawTypeOfPropertyAccess`'s
-  namespace fallback fires only when the receiver symbol carries `SymbolFlags.Module`; an
-  import alias carries `SymbolFlags.Alias`, so `Debug.take` falls through to `anyType`,
-  `getCalleeType` returns `anyType`, and `checkCallTypesInExpr` bails one line before the
-  signature machinery. (2) **teaching that fallback to call `resolveAlias` FIXES NOTHING**:
-  on the compiler profile the alias receivers number **4,383** and the ones `resolveAlias`
-  resolves to a Module number **0**. The general resolver cannot follow an ESM `.js`
-  specifier into an `export *` barrel — which is every import in tsc's own sources — and
-  the round-409 gotcha in `resolveImportedSymbolGeneral` says it **must never be taught
-  to** (the TS2315 flood). The barrel-aware resolver already exists and is deliberately
-  FLOW-ONLY: `resolveImportedNamespaceSymbol`. **That is exactly why round 766 saw the
-  asymmetry it recorded** — `Dbg.assertIsA(p)` narrows because the flow walker consults
-  the flow-only resolver, and `Dbg.take(arg)` is unchecked because the call path consults
-  the general one.
-- **THE THREE-WAY ABLATION, ON A 5-VARIANT SCRATCH PROJECT AND THEN ON THE PROFILES: EACH
-  STEP ALONE IS INERT AND ONLY THE PAIR MOVES ANYTHING.** Step 2 alone (alias-following via
-  `resolveAlias`) fixes ONLY an extensionless specifier — 0 sites on tsc's sources. Step 1
-  alone (barrel-aware receiver resolution, result not applied) lifts alias-resolves-to-Module
-  from 0 to 3,659 on compiler and leaves the grid at **46 / 46** — measurably inert. Only
-  both together move it. Scratch matrix: single-specifier `.js`, two-specifier `.js`,
-  two-member namespace, extensionless, and `export *` barrel — all five silent at HEAD, all
-  five reported under the pair.
-- **THE POPULATION, BEFORE AND AFTER (behaviour-free counters; arm A is byte-identical to
-  `r766final` on all 8, which is what licences them).** compiler: 5,048 property accesses
-  reach the namespace fallback, 141 receivers already Module (the same-file namespaces that
-  work today), 4,383 alias receivers -> **3,659 newly typed**; `PropertyAccess` callees that
-  survive the `anyType` bail go **3,652 -> 4,779 (+1,127)**. services: 9,823 / 255 / 8,964 ->
-  **5,079 newly typed**, callees **6,615 -> 8,166 (+1,551)**. Those +1,127 / +1,551 are round
-  766's 1,108 / 1,518 `Debug.*` calls plus a small tail of other imported namespaces.
-- **THE PRICE, PER PROFILE, WITH THE PAIR SCAFFOLDED ON: compiler 46 -> 66 (+20), tsc /
-  jsTyping / deprecatedCompat / typingsInstallerCore 46 -> 66 (+20), services 46 -> 71
-  (+25), server 46 -> 72 (+26), harness 94 -> 121 (+27).** Every new line is an FP by
-  construction — the 8 profiles are tsc's own sources and tsc compiles them with zero
-  errors. **THREE causes, read line by line:**
-  - **(alpha) 15 of 20 on compiler, 17 of 25 on services — `Debug.assertNever(x)` whose
-    argument does not narrow to `never`.** Every one is a `default:` / final-`return`
-    exhaustiveness assertion. Subjects split: 4 BARE ENUMS (`TypeSystemPropertyName`,
-    `LazyNodeCheckFlags`, `ParsingContext` x2), 6 enum-member unions or property-access
-    reads (`node.keywordToken`, `node.operator`, `JsxTokenSyntaxKind`,
-    `SyntaxKind.Extends|Implements`), 1 ELEMENT ACCESS (`allowedEndings[0]`, not a
-    narrowable reference at all), 4 node unions/intersections (`CallLikeExpression`,
-    `HasModifiers & HasDecorators`, the declarations.ts top-level union).
-  - **(beta) 4 on compiler, 7 on services — `Debug.assertIsDefined` / `Debug.checkDefined`
-    GENERIC INFERENCE.** `assertIsDefined<T>(value: T)` and `checkDefined<T>(value: T | null
-    | undefined): T` get their parameter instantiated to the NON-nullable side, so a
-    `Declaration | undefined` argument is rejected (checker.ts:12576, esDecorators.ts:1093,
-    esnext.ts:605) and the return-position twin fails TS2322 (utilities.ts:2386,
-    importFixes.ts:2093/2113, fixClassIncorrectlyImplementsInterface.ts:71). **Not
-    narrowing — M3.1 inference.**
-  - **(gamma) 1 line — esDecorators.ts:1314**, an object literal whose `kind: string` member
-    fails a literal-union target: cause **(D)**, surfacing downstream of a newly-typed
-    `Debug.*` value.
-- **DOES THE 763-766 ARC GO LIVE UNDER THE SCAFFOLD? NO — AND THAT IS REPORTED AS THE
-  ABLATION IT IS.** `enumMinusMembers` stays at **14 / 31** and round 766's never-arm enum
-  subset stays at **0 / 0**, before AND after. The counters reproduce rounds 764/765 exactly
-  before being asked anything new, which is the instrument agreeing with the prior
-  measurement. The arms need a BARE ENUM at a `never` parameter; not one of the 15 alpha
-  sites is that shape.
-- **BUT THE ARC's SUBJECT MATTER BECOMES OBSERVABLE FOR THE FIRST TIME, AND TWO SITES NAME
-  THEIR OWN GAP.** `checker.ts:38292` sits after two sequential `if (node.keywordToken ===
-  X) { ... return ... }` guards and reports `SyntaxKind.ImportKeyword` — the FIRST guard
-  subtracted, the SECOND did not. `checker.ts:8056` sits at the tail of a ~13-arm `kind ===
-  SyntaxKind.X ? ... : Debug.assertNever(kind)` TERNARY CHAIN and reports
-  `SyntaxKind.ArrowFunction` — only the innermost condition subtracted. Both are partial
-  narrows of a member union, i.e. the machinery runs and stops early; both are findable.
-- **THE GLOBAL enum -> MEMBER RULE IS EXACTLY ADDITIVE WITH THIS — NO INTERACTION.**
-  Scaffold fidelity checked first: the rule ALONE re-measures **compiler 46 -> 47 / services
-  46 -> 51**, reproducing rounds 765/766 to the line, so the re-implementation is faithful.
-  With the namespace pair on it is **66 -> 67 / 71 -> 76** — the same **+1 / +5**, and
-  `diff` says the SAME FIVE LINES (`scanner.ts:905`, `importFixes.ts:1127`,
-  `formattingScanner.ts:113`, `completions.ts:2234`, `2239`). The two changes do not
-  interact in either direction.
-- **NOTHING LANDED, DELIBERATELY.** A contained fix was in scope; this is not one — +20 to
-  +27 grid lines across the 8 profiles, of which ~75% are one narrowing family and ~20% are
-  a generic-inference family that is not even (REL.2)'s. The final grid at clean HEAD is
-  byte-identical to `r766final` on all 8 profiles and the tree is clean, so **the corpus
-  suite and the cost gate cannot have moved**; the owner's runs are the confirmation.
-- **RECOMMENDATION: DO NOT SWITCH IT ON YET; DO IT SECOND, AFTER (alpha).** The two steps
-  are one call site each and the resolver already exists, so the change itself is small —
-  but it converts a silent blind spot into 20-27 visible FPs, ~75% of them one shape. The
-  cheap order is to close the `assertNever` narrowing family FIRST (it is invisible today,
-  so it needs local pins and this exact scaffold to re-measure against), then flip the
-  namespace pair, which at that point should cost roughly the beta+gamma remainder (~5
-  compiler / ~8 services) instead of 20/25. **Queued as (REL.4) below.**
-- **THE SCRATCH PROJECT IS GONE** (round 766's rule) and the arm outputs are under
-  `build/bench/r767{A,B,C,D,E,final}` (gitignored).
-- **PREDICTIONS 3 of 5 on values; the useful one is the mechanism miss.** HIT: (2) compiler
-  goes above 60 — 66, inside the stated 60..400 band. (3a) round 766's arm stays 0 under the
-  scaffold, because `Debug.assertNever` is used exactly where the switch IS exhaustive — 0
-  on all arms. (5) `paCallsArgChecked` rises by >= 1,000 — +1,127. **MISSED:** (1) the value
-  half held (`aliasReceiver` 4,383 > 0) but the MECHANISM half was wrong — I predicted
-  `aliasMemberFound >= 1108` from alias-following alone and it is **0**; the binding step is
-  the `.js`+barrel resolution the general resolver deliberately refuses. (3b) `enumMinusFired`
-  rises above 14 — it stayed at exactly 14. (4) the global rule's price CHANGES under the
-  scaffold — it does not, in either direction, to the line.
-
-**AOT — owner-directed, round 771. Measured, documented in `docs/perf/aot-native-image.md`,
-NOT integrated. The three items below are what that investigation leaves open.**
-
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
   existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
@@ -1076,11 +1045,16 @@ NOT integrated. The three items below are what that investigation leaves open.**
   ESM `.js` + `export *` — that is the TS2315 flood). Each step alone is measurably
   INERT; only the pair moves anything. It unblocks 1,127 previously-unchecked
   `PropertyAccess` callees on compiler and 1,551 on services.
-  **The last MEASURED price of switching it on is compiler 46 -> 52, services 46 -> 57
-  (round 777; 46 -> 66 / 46 -> 71 round 767, 46 -> 56 / 46 -> 60 round 769) — all FPs.
-  Round 777 re-measured behind the scaffold and found round 770's prediction of 54 was
-  one too high: round 770 closed THREE lines, not the two it counted. Re-measure before
-  quoting, and before flipping anything.**
+  **The last MEASURED price of switching it on is compiler 46 -> 48, services 46 -> 49
+  (round 779; 46 -> 52 / 46 -> 56 round 778's state, 46 -> 66 / 46 -> 71 round 767) — all
+  FPs. Both numbers were re-measured behind the scaffold in round 779 and BOTH prior
+  quotes were stale by one (round 778's (ORDER.1) fix had removed a services line nobody
+  attributed to this item). Re-measure before quoting, and before flipping anything —
+  three separate rounds have mis-stated this price.**
+  **THE RESIDUAL IS NOW THREE LINES AND ALL THREE ARE NAMED:** `moduleSpecifiers.ts:1411`
+  and `stringCompletions.ts:386` — (a)'s two stragglers, neither a narrowing of a
+  reference — plus `esDecorators.ts:1314`, which is (c). Nothing unclassified remains, so
+  the flip is gated on (c)'s arc and on those two, not on further recon.
   - **(a) `Debug.assertNever(x)` whose argument does not narrow to `never` — 14 of the 15
     CLOSED (8 round 768, 3 round 769, 3 round 770, 1 round 777). Last MEASURED: compiler
     53 -> 52, services 58 -> 57 (round 777). **ONE line remains on compiler and TWO on
@@ -1132,11 +1106,27 @@ NOT integrated. The three items below are what that investigation leaves open.**
     (`distributedNarrowingType`) consulted by `narrowByCallPredicate` and ADOPTED ONLY
     WHERE IT SUBTRACTS, so identity and display are untouched wherever a guard does not
     apply. **Cause (7) is what remains** — see (a) above.
-  - **(b) `Debug.assertIsDefined` / `Debug.checkDefined` GENERIC INFERENCE** (4 compiler /
-    7 services): the `T` of `checkDefined<T>(value: T | null | undefined): T` instantiates
-    to the non-nullable side. M3.1, not (REL.2).
-  - **(c) one line, esDecorators.ts:1314 — cause (D) literal widening downstream.**
-  Then flip the pair, which should then cost roughly the (b)+(c) remainder. The (REL.2)
+  - **(b) CLOSED round 779 — compiler 52 -> 48, services 56 -> 49, all 11 lines, no new
+    line. AND THE LABEL BELOW WAS WRONG: the family is TWO defects and only one is
+    inference, so "M3.1" over-priced it — the whole fix is ~15 lines and Blocker #2's arc
+    was not touched.** (b1), **3 of 4 compiler lines** (`checker.ts:12576`,
+    `esDecorators.ts:1093`, `esnext.ts:605`): `assertIsDefined<T>(value: T)` has a BARE
+    type-parameter parameter and T was inferred CORRECTLY; the FP came from
+    `tryEmitOptionalMemberArgVsRequiredNamedTs2345`, whose premise ("the parameter
+    independently REQUIRES this named type") is self-referential when the named type is one
+    we inferred from the very argument being judged. Gated by an AST predicate
+    (`paramDeclaredTypeIsOwnTypeParam`) — it MUST read the AST, since an instantiated
+    Signature carries no `typeParameters` and its parameter symbols hold the substituted
+    type. (b2), **1 compiler / 4 services** (`utilities.ts:2386`,
+    `fixClassIncorrectlyImplementsInterface.ts:71`, `importFixes.ts:2093`/`2113`): the
+    stated defect, and a three-line relaxation of round 428's nullable-union anchor, which
+    stripped the source's nullish constituents only when exactly ONE non-nullish member
+    survived. Still open, recorded not pinned: the (b1) gate is BARE-TP only — a nested
+    mention (`f<T>(x: Array<T>)`) is the same class of error with **0 measured sites**.
+  - **(c) one line, esDecorators.ts:1314 — cause (D) literal widening downstream.** NOT
+    folded into round 779 (deliberately): its blast radius is every `const` in the corpus,
+    so it stays the arc the (REL.2) worklist already calls it.
+  Then flip the pair, which should then cost roughly the (c) remainder plus (a)'s two. The (REL.2)
   global enum -> MEMBER rule is EXACTLY ADDITIVE with this (+1 compiler / +5 services,
   the same five lines, measured both ways), so the two orders are independent.
 
