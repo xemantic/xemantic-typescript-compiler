@@ -163,6 +163,14 @@ def write_baseline(path, values, rev, profile):
         f.write("# the compiler does. Rebaselining is allowed and expected; doing it WITHOUT\n")
         f.write("# a justification in the session note is the failure mode this file exists\n")
         f.write("# to prevent.\n")
+        f.write("#\n")
+        f.write("# ONE CAVEAT, measured round 776: typeNode.bypassed and mapped.keyed are also\n")
+        f.write("# a function of PROGRAM ORDER — which file first touches a shared type node\n")
+        f.write("# decides whether the INV.5(c) cache calls the resolution own-file or foreign.\n")
+        f.write("# Three orders of the same 78 files move them ~1% with the AST and all 46\n")
+        f.write("# diagnostics bit-identical. Program order is the crawl's, and the crawl sorts\n")
+        f.write("# only since round 776 (before that it was the filesystem's readdir order), so\n")
+        f.write("# a pre-776 value of these two is not comparable across boxes.\n")
         for key, *_ in COUNTERS:
             if key in values:
                 f.write("%s%d\n" % (key.ljust(width), values[key]))

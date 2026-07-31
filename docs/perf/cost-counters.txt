@@ -1,7 +1,7 @@
 # COST.1 baseline — deterministic checker cost counters.
 #
 # Produced by: scripts/cost_gate.py --update  (profile: compiler)
-# Recorded:    2026-07-30 at 619641b22c70+dirty
+# Recorded:    2026-07-31 at 8e98733e0b7c  (the last commit that moved src/)
 #
 # These are COUNTS, not times: they are identical across runs and boxes,
 # which is the whole point — a laptop's wall clock swings +/-13% and cannot
@@ -9,23 +9,31 @@
 # the compiler does. Rebaselining is allowed and expected; doing it WITHOUT
 # a justification in the session note is the failure mode this file exists
 # to prevent.
+#
+# ONE CAVEAT, measured round 776: typeNode.bypassed and mapped.keyed are also
+# a function of PROGRAM ORDER — which file first touches a shared type node
+# decides whether the INV.5(c) cache calls the resolution own-file or foreign.
+# Three orders of the same 78 files move them ~1% with the AST and all 46
+# diagnostics bit-identical. Program order is the crawl's, and the crawl sorts
+# only since round 776 (before that it was the filesystem's readdir order), so
+# a pre-776 value of these two is not comparable across boxes.
 output.errors            46
 output.programFiles      78
 preparse.reused          78
 preparse.fresh           0
 spine.nodes              856962
-typeOfExpr.calls         705201
-typeOfExpr.distinct      251527
+typeOfExpr.calls         709538
+typeOfExpr.distinct      253049
 typeOfExpr.outsideInit   80
-narrow.walks             71323
+narrow.walks             71418
 narrow.walksOutsideInit  0
-narrow.memoServed        45488
-typeNode.cacheable       188372
-typeNode.cacheHits       131411
-typeNode.bypassed        95909
-mapped.keyed             24693
-mapped.hits              5972
+narrow.memoServed        45757
+typeNode.cacheable       189272
+typeNode.cacheHits       131578
+typeNode.bypassed        103802
+mapped.keyed             25521
+mapped.hits              6045
 ctxFingerprint.builds    0
-globals.lookups          964621
+globals.lookups          965386
 globals.conflated        0
-globals.misses           949907
+globals.misses           947477
