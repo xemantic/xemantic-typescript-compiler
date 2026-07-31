@@ -42107,7 +42107,18 @@ class Checker(
                     // Identifier (e.g. `a = foo` where foo is imported). Excludes string-literal
                     // initializers (caught by `prevInitializer is StringLiteralNode` not matching)
                     // and explicit `as any` casts (which are AsExpression, not Identifier).
-                    val isTs18056 = options.isolatedModules && prevInitializer is Identifier
+                    // NOTE (round 775): the discriminator is `kind`, not `prevInitializer is
+                    // Identifier`. Established: the first native corpus run reported TS18056
+                    // here where tsc and the JVM report TS1061 (enumNoInitializerFollows-
+                    // NonLiteralInitializer, `d = <expr> as any`); the two forms are JVM-
+                    // equivalent, since Identifier is the only class declaring
+                    // `kind = SyntaxKind.Identifier` and `prevInitializer` is `Expression?`;
+                    // and `kind` is this codebase's own dispatch idiom (M0.2). SUSPECTED but
+                    // NOT confirmed: a Kotlin/Native `is`-check miscompile — no minimal repro
+                    // was ever obtained, and local native builds are now forbidden (CLAUDE.md),
+                    // so treat the cause as open and re-diagnose in CI if it resurfaces.
+                    val isTs18056 = options.isolatedModules &&
+                        prevInitializer?.kind == SyntaxKind.Identifier
                     if (isTs18056) {
                         diagnostics.add(Diagnostic(
                             message = "Enum member following a non-literal numeric member must have an initializer when 'isolatedModules' is enabled.",

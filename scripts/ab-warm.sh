@@ -135,7 +135,7 @@ for d in "$DIR_A" "$DIR_B"; do
     [[ -f "$d/com/xemantic/typescript/compiler/MainKt.class" ]] || {
         echo "error: '$d' is not a jvm MAIN class dir (no MainKt.class)" >&2; exit 1; }
 done
-[[ -f "$TEST_CLASSES/com/xemantic/typescript/compiler/BenchMainKt.class" ]] || {
+[[ -f "$TEST_CLASSES/com/xemantic/typescript/compiler/bench/BenchMainKt.class" ]] || {
     echo "error: $TEST_CLASSES/.../BenchMainKt.class missing — run ./gradlew compileTestKotlinJvm" >&2
     exit 1
 }
@@ -170,7 +170,7 @@ run_one() {
     local dir="$1"
     local out; out="$(mktemp)"
     java "-Xmx$HEAP" -cp "$dir:$TEST_CLASSES:$CP_TAIL" \
-        com.xemantic.typescript.compiler.BenchMainKt "$PROJ_DIR" "$WARMUP" "$ITERS" \
+        com.xemantic.typescript.compiler.bench.BenchMainKt "$PROJ_DIR" "$WARMUP" "$ITERS" \
         >"$out" 2>&1 || true
     python3 - "$out" <<'PY'
 import json, statistics, sys

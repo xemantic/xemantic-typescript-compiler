@@ -1,30 +1,47 @@
-# Builds the ahead-of-time compiled native executable via GraalVM native-image.
+# The two NATIVE toolchains, both manual-trigger only:
+#   * `native-image` — the GraalVM AOT executable (round 771).
+#   * `kotlin-native` — the Kotlin/Native linuxX64 target and the corpus suite
+#     run against it (round 775).
 #
-# MANUAL TRIGGER ONLY, deliberately. The image build adds ~2 min and the normal
-# `build-main` / `build-pr` workflows do not need it — the JVM suite is the
-# correctness gate, and this produces a distribution artifact rather than a
-# verification. Attaching the binary to releases is a separate decision (see
-# (AOT.1) in PLAN-PHASE-5.md) and is intentionally NOT wired here.
+# MANUAL TRIGGER ONLY, deliberately. Neither is a correctness gate for a normal
+# push — the JVM suite is — and both are slow. Attaching the AOT binary to
+# releases is a separate decision (see (AOT.1) in PLAN-PHASE-5.md) and is
+# intentionally NOT wired here.
+#
+# THIS WORKFLOW IS WHERE KOTLIN/NATIVE LIVES NOW, and that is an owner directive,
+# not a preference: a local K/N test link froze the 7.7 GB / zero-swap dev box for
+# ~2 hours (round 775; see the CLAUDE.md rule). A GitHub standard runner has 16 GB,
+# so the work belongs here. `./gradlew build` on a normal checkout is untouched —
+# the linuxX64 target registers only under `-PenableNativeTargets=true`.
 #
 # Why this is a separate workflow at all: build-main/build-pr both delegate to
-# the shared xemantic/.github reusable workflow, which knows nothing about
-# GraalVM.
+# the shared xemantic/.github reusable workflow, which knows nothing about either
+# toolchain.
 #
 # NOTE: unlike the machine this was developed on, ubuntu-latest ships a working
 # C toolchain (gcc, binutils, libc headers, zlib), so none of the unprivileged
 # toolchain assembly described in docs/perf/aot-native-image.md § 8 applies here.
-name: Native image
+name: Native
 
 on:
   workflow_dispatch:
     inputs:
+      graalvm:
+        description: "Build the GraalVM native image"
+        type: boolean
+        default: true
       verify:
         description: "Run the native binary against the compiler bench profile and diff it against the JVM"
+        type: boolean
+        default: true
+      kotlin_native:
+        description: "Compile the Kotlin/Native linuxX64 target and run the corpus suite on it"
         type: boolean
         default: true
 
 jobs:
   native:
+    if: ${{ inputs.graalvm }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -64,3 +81,55 @@ jobs:
           name: xtsc-linux-x64
           path: build/native/xtsc
           if-no-files-found: error
+
+  # Kotlin/Native (linuxX64) — compile, link, and run the WHOLE corpus suite
+  # against the native binary. This is the only gate that can see a native-only
+  # divergence at all: `jvmTest` compiles commonTest with the JVM compiler, which
+  # is looser than Kotlin/Native on backtick test names, `kotlin.assert` and
+  # JVM-only stdlib (CLAUDE.md § "must compile for Kotlin/Native").
+  #
+  # Round 775 measured, locally, before local native work was forbidden:
+  # compile (main + test) 2m10s, `linkDebugTestLinuxX64` 1m03s, the suite
+  # 14m28s — 9,161 tests, 2 failures. DEBUG, not release, is the lever: round
+  # 772's RELEASE test link died to the OS OOM-killer after ~22 min on the dev
+  # box. If a release-mode native artifact is ever wanted, treat it as a
+  # separate, separately-measured job.
+  #
+  # MEMORY: Kotlin/Native compiles INSIDE THE GRADLE DAEMON, so its heap is
+  # `org.gradle.jvmargs` — which gradle.properties pins at 1g to leave room for
+  # the 5g Kotlin JVM daemon on the dev box, and 1g does not link this module.
+  # `-Dorg.gradle.jvmargs` on the command line is the override; 6g measured
+  # sufficient (round 772) and fits a 16 GB runner.
+  kotlin-native:
+    if: ${{ inputs.kotlin_native }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up JDK 26
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '26'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # The property gate is the whole point: without it the linuxX64 target does
+      # not register, so nothing about a normal build changes.
+      - name: Run the corpus suite on Kotlin/Native (linuxX64)
+        run: |
+          ./gradlew -PenableNativeTargets=true \
+            -Dorg.gradle.jvmargs=-Xmx6g \
+            linuxX64Test
+
+      - name: Upload native test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxX64-test-results
+          path: |
+            build/test-results/linuxX64Test
+            build/reports/tests/linuxX64Test
+          if-no-files-found: warn

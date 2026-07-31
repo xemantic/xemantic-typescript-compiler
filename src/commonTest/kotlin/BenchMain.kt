@@ -23,8 +23,19 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-package com.xemantic.typescript.compiler
+// NOT `com.xemantic.typescript.compiler` — this file declares a top-level
+// `main(Array<String>)`, and so does `src/commonMain/kotlin/Main.kt`. On the JVM those
+// are two distinct classes (`MainKt` / `BenchMainKt`) and coexist happily; Kotlin/Native
+// mangles a top-level function to `kfun:<package>#main(kotlin.Array<kotlin.String>){}`
+// with NO file component, so in one package they are ONE symbol — and the test binary
+// links the main klib together with the test klib, which makes it a hard `ld.lld:
+// duplicate symbol` at link time (round 775). Only the native TEST link can see this:
+// the main executable link never pulls in commonTest. Keep any future commonTest
+// entry point out of the compiler's own package.
+package com.xemantic.typescript.compiler.bench
 
+import com.xemantic.typescript.compiler.ProjectCompiler
+import com.xemantic.typescript.compiler.SystemVfs
 import kotlin.time.measureTimedValue
 
 /**
@@ -46,7 +57,7 @@ import kotlin.time.measureTimedValue
  *
  * Usage:
  * ```
- * java -cp <test-classpath> com.xemantic.typescript.compiler.BenchMainKt \
+ * java -cp <test-classpath> com.xemantic.typescript.compiler.bench.BenchMainKt \
  *     <projectDir> <warmupIters> <measuredIters>
  * ```
  * Prints one JSON object per measured iteration, then a `summary` line.

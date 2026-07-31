@@ -130,8 +130,9 @@ kotlin {
     //      `(`, `)`, `,`, `&`, `@` (the JVM accepts all of these; native does not)
     //   2. no `kotlin.assert` — use `com.xemantic.kotlin.test.assert(cond)`
     //   3. no JVM-only stdlib (e.g. `String.format`)
-    // To verify before re-enabling: uncomment linuxX64 below, then run
-    // `./gradlew compileTestKotlinLinuxX64` (NOT `jvmTest` — it cannot see this).
+    // To verify: run the `kotlin-native` job of .github/workflows/native.yml (it
+    // passes `-PenableNativeTargets=true`; `jvmTest` cannot see any of this).
+    // NOT locally — a local K/N build froze the dev box for ~2 h (round 775).
     //
     // native, see https://kotlinlang.org/docs/native-target-support.html
     // tier 1
@@ -149,11 +150,21 @@ kotlin {
     // tier 2
     // INV.7 native re-enable (pre-approved M5 exception; round 610): host-buildable
     // target only — Apple targets stay commented until a macOS builder exists.
-//    linuxX64 {
-//        binaries.executable {
-//            entryPoint = "com.xemantic.typescript.compiler.main"
-//        }
-//    }
+    //
+    // OPT-IN ONLY (round 775, owner directive). The target registers ONLY under
+    // `-PenableNativeTargets=true`, so a plain `./gradlew build` never sees it and
+    // is unchanged. Native builds belong in CI (.github/workflows/native.yml,
+    // 16 GB runners): a local Kotlin/Native test link froze the 7.7 GB dev box for
+    // ~2 hours — see the CLAUDE.md rule, and note that `-Xmx` cannot bound it
+    // because the konan/LLVM backend and the linked test executable are separate
+    // processes outside any JVM heap.
+    if (project.findProperty("enableNativeTargets") == "true") {
+        linuxX64 {
+            binaries.executable {
+                entryPoint = "com.xemantic.typescript.compiler.main"
+            }
+        }
+    }
 //    linuxArm64 {
 //        binaries.executable {
 //            entryPoint = "com.xemantic.typescript.compiler.main"
