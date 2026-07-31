@@ -20,6 +20,58 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 774 (2026-07-31) — (AOT.2) THE WARM A/B DRIVER LANDS, AND ITS OWN VALIDATION
+FOUND THAT THE ±1.0% BAND IS A PROPERTY OF A BOX NOBODY IS TOUCHING: THE SAME BINARY
+AGAINST ITSELF READ −6.70% WHILE I POLLED THE RUN'S LOG, AND −0.36% / −0.54% / +1.02%
+WHEN I LEFT IT ALONE.** Script + docs only; no `src/` change, so no suite gate (stated
+rather than skipped quietly).
+
+- **WHAT LANDED.** `scripts/ab-warm.sh`, the warm counterpart of `ab-interleaved.sh`:
+  one fresh JVM per SAMPLE, each running `BenchMain <proj> <warmup> <iters>` and
+  contributing the MEDIAN of its measured iterations, A,B,A,B,… so both arms meet the
+  same drift. Per-process medians are the samples, never per-iteration values — iterations
+  inside one JVM share JIT state and heap, so pooling them would fake the sample count.
+  The statistical stance is COPIED from the cold driver verbatim; only the band changes
+  (1.0% vs 2.0%), which is why an A/A correctly reports NOISE-DOMINATED in both runs.
+- **SELF-FALSIFICATION IS WIRED AND WAS TESTED BY FAKING IT, not by trusting it.** The
+  driver parses every iteration's `files`/`errors` and aborts (exit 3) if any iteration
+  in any process disagrees, or if a process yields no iterations. Both paths were
+  exercised with a stub `java` on PATH emitting a deliberate `78/46 → 78/47` drift and
+  emitting nothing; both abort loudly. All 96 real iterations across the two validation
+  runs reported `78/46`.
+- **THE MEASUREMENT, AND THE PREDICTION I GOT WRONG.** I expected the first A/A to
+  reproduce round 771 and it did not: deltas **−0.19% / −6.70% / +2.47%**, process-median
+  sd **278 ms**. My first instinct was "this box is worse than round 771's" — a claim I
+  was one commit away from writing into the docs. The actual cause was **me**: I had
+  polled the log with ~100 short shell commands while it measured. Re-running the
+  IDENTICAL shape while doing nothing gave **−0.36% / −0.54% / +1.02%**, sd **48 ms
+  (0.41%)** — tighter than round 771's own 187 ms. This is round 740's "~3.15 of 4 cores"
+  finding arriving from the other side: the spare capacity a `tail` eats is exactly the
+  capacity the measurement needs. Cost: 2 × ~13.5 min, chosen as 3 pairs × (warmup 2 +
+  8 iters) to match round 771's shape exactly so the two are comparable.
+- **THE DISCRIMINATOR IS THE ARM sd, NOT THE VERDICT.** Both runs say NOISE-DOMINATED,
+  which is correct for an A/A and therefore useless for telling a good run from a
+  poisoned one. So the driver prints each arm's own run-to-run sd (round 756's rule) and
+  the docs now say: discard a warm run whose arm sd exceeds ~1%, however clean its
+  median looks.
+- **CLASSPATH CONTRACT.** `BenchMain` is in `commonTest`, so the run needs the test
+  classes while the A/B must swap only MAIN classes: the classpath is
+  `<A-or-B main dir> : build/classes/kotlin/jvm/test : <deps>`. Consequences stated in
+  the header: the test dir is SHARED and comes from the current build, so a change that
+  alters the API BenchMain calls cannot be A/B'd warm at all; and there is no B-side
+  extra-args slot, because BenchMain takes no compiler flags — a flag comparison stays a
+  cold job. The dep tail is resolved through the existing init script and cached in
+  `build/bench/cp-warm.txt`, **used only while newer than build.gradle.kts** — the
+  committed `build/bench/cp.txt` is stale (names kotlinx-io 0.9.0 / kotlin-stdlib 2.4.0
+  where the build now resolves 0.9.1 / 2.4.10), which is precisely the trap that guard
+  exists for. The driver also stops the gradle daemons before sampling (`KEEP_DAEMONS=1`
+  opts out), since an idle daemon squats GB on a zero-swap 7.7 GB box.
+- **NOT DONE, deliberately.** No arc item was re-opened — (AOT.2) is the instrument, and
+  doc § 4's caution stands: **measurable is not worth landing**, nothing got bigger, and
+  round 736's identity pre-test was rejected as UNSOUND rather than small. No
+  `build.gradle.kts` change (Guardrails). No bench TSV row — `bench/` is gitignored, so
+  the numbers live here.
+
 **Round 773 (2026-07-30/31) — (SERVER.1) STAGE 1 LANDED: A PRE-WARMED COMPILE SERVER MAKES
 THE WARM JVM THE FASTEST ARTIFACT WE SHIP — 11.9 s THROUGH A REAL SOCKET AGAINST THE AOT
 BINARY'S 13,350 ms AND THE COLD CLI'S 26,272 ms.** Code landed as `ff81d0cc`; this note,
@@ -1171,8 +1223,10 @@ NOT integrated. The three items below are what that investigation leaves open.**
   JVM harness and has never run against a native binary, so the 8-profile grid is the
   only behavioural evidence; and a CI runner needs a C toolchain, which this box did
   not have (doc § 8 records the unprivileged workaround and its three traps).
-- [ ] **(AOT.2) Adopt the WARM protocol for compiler-level A/B — cheap, and it changes
-  what is measurable.** Calibrated round 771 (doc § 4): six A/A processes give a warm
+- [x] **(AOT.2) DONE round 774 — Adopt the WARM protocol for compiler-level A/B — cheap,
+  and it changes what is measurable.** Driver landed as `scripts/ab-warm.sh`; the band
+  reproduces at ±1.0% **on an idle box only** (round-774 note below; doc § 4a).
+  Calibrated round 771 (doc § 4): six A/A processes give a warm
   band of **±1.0% = ±114 ms** against the cold protocol's ±2.0% = ±536 ms, i.e. **4.7×
   more sensitive in absolute terms**, and ten warm iterations cost less than four cold
   runs. The harness already exists (`BenchMain`) and is self-falsifying (every iteration

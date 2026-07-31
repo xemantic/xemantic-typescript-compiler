@@ -859,10 +859,32 @@ every gate listed here; the 8-profile FP floors
 unchanged (env-legit only); a bench TSV row per landed item;
 diagnostics/emit byte-diffs (`--listAll`, `emit-diff-tsc.sh`) empty vs the
 pre-change binary for behavior-preserving steps; wall-clock claims decided by
-interleaved A/B medians ONLY — anything priced below the ±2% drift band folds
+interleaved A/B medians ONLY — anything priced below the drift band folds
 into a structural item instead of landing alone (the round-618 discipline).
 A fresh JFR (or the INV.0 pass table) before and after each structural phase —
 the profile shifts after every fix.
+
+**Two A/B protocols, two bands — name the one you used (round 774).** The band is
+a property of the PROTOCOL, not of the box, so a number is uninterpretable without it:
+
+| protocol | driver | band | use it for |
+|---|---|---|---|
+| **COLD** — one fresh JVM per sample | `scripts/ab-interleaved.sh` | **±2.0% ≈ ±536 ms** | warm-up-shaped costs, claims about the shipped one-shot CLI, and anything compared against `bench-history/` (every archived row is cold) |
+| **WARM** — one JVM per sample, N in-process rebuilds, sample = its median | `scripts/ab-warm.sh` | **±1.0% ≈ ±114 ms** | steady-state COMPUTE claims about compiler machinery ("does this make the checker do less work"), i.e. effects of 100–500 ms the cold band cannot see |
+
+**The warm band holds only on a box nobody is touching**: round 774's A/A measured
+±1.0% with the box idle and **−6.70%** on the same binary while an agent polled the run's
+log, so start a warm run and then leave the machine alone, and discard any run whose
+printed per-arm sd exceeds ~1%. The warm band was calibrated in round 771 and re-measured in round 774 —
+**calibration table in `docs/perf/aot-native-image.md` § 4, not duplicated here**,
+along with the list of arc items it re-opens and the two cautions attached to them
+(nothing got bigger, only visible; round 736's identity pre-test was rejected as
+UNSOUND, not as small). Both protocols are `--noEmit` check-only, so they compare to
+each other and to `cost_gate.py`, and NOT to the emit-mode CI ratio (§ 0.2). The warm
+protocol is only admissible because `BenchMain` prints `files`/`errors` per iteration
+and the driver aborts on any drift — an in-process rebuild that answers a different
+program is not a faster compile. Neither protocol beats an IN-PROCESS COUNTER
+(`--passTiming`, `cost_gate.py`) where one exists: counters are deterministic.
 
 ## 7. Anti-goals
 

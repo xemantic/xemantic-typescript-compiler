@@ -100,6 +100,26 @@ A/A pair deltas: +0.93%   -0.98%   +0.41%
 protocol is **4.7× more sensitive in absolute terms**, and ten warm iterations fit in
 the time of four cold runs.
 
+### 4a. Reproduced round 774 — and the band is a property of a QUIET box
+
+`scripts/ab-warm.sh` (round 774, (AOT.2)) is the driver for this protocol. Its A/A
+validation ran the identical shape twice — 3 pairs, warmup 2, 8 iterations, same class
+dir on both arms, all 48 iterations reporting `files=78 errors=46`:
+
+| run | conditions | A/A pair deltas | process-median sd |
+|---|---|---|---|
+| 1 | agent polling the log ~100× while it measured | −0.19% / **−6.70%** / +2.47% | 278 ms (2.4%) |
+| 2 | box left completely alone | −0.36% / −0.54% / +1.02% | **48 ms (0.41%)** |
+| round 771 | (six A/A processes) | +0.93% / −0.98% / +0.41% | 187 ms |
+
+**Run 2 reproduces the ±1.0% band and beats it; run 1 does not come close, on the same
+binary.** So the band is not a property of this box — it is a property of a box nobody
+is touching, which follows directly from round 740's "a single xtsc run already consumes
+~3.15 of 4 cores": the spare capacity a `tail` of the log eats is the same capacity the
+measurement needs. **Both runs correctly report NOISE-DOMINATED**, which is what an A/A
+should say; the discriminator between them is the per-arm sd the driver prints, not the
+verdict. Quote a warm number only from a run whose arm sd is ≲1%.
+
 **Consequence for the arc's rejected items.** Several were rejected as "inside the
 band" when measured cold. Against a ±114 ms warm band:
 
