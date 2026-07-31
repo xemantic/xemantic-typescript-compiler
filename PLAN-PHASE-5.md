@@ -20,6 +20,44 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 773 (2026-07-30/31) — (SERVER.1) STAGE 1 LANDED: A PRE-WARMED COMPILE SERVER MAKES
+THE WARM JVM THE FASTEST ARTIFACT WE SHIP — 11.9 s THROUGH A REAL SOCKET AGAINST THE AOT
+BINARY'S 13,350 ms AND THE COLD CLI'S 26,272 ms.** Code landed as `ff81d0cc`; this note,
+the checkbox and the STATUS bump are the follow-up commit (the authoring session ended at
+protocol step 5 — the same failure mode round 770 recorded, and the second time in four
+rounds, so the loop now closes bookkeeping for the PREVIOUS round before picking new work).
+
+- **WHAT IT IS.** `xtsc --serve` holds one warm JVM; `xtsc --daemon <args>` sends a request
+  over a Unix domain socket. Four requests through the client on the compiler profile:
+  **26,415 / 14,311 / 11,933 / 11,907 ms**, i.e. it converges on round 771's independently
+  measured **11,580 ms** warm steady state, and the output is IDENTICAL to the direct CLI's,
+  all 46 diagnostics. **This composes with (AOT.1) rather than competing**: the GraalVM image
+  is the ideal thin CLIENT (starts in milliseconds) while the JVM SERVER keeps C2 peak.
+- **TWO INVARIANTS, both documented in the source rather than left to a reader.** Requests
+  are served **SEQUENTIALLY on one thread** — Symbol/Type ids are thread-local (INV.6(6c0))
+  and `--workers` is already measured producing 62 diagnostics where sequential produces 46,
+  so a thread-per-connection server would reopen that bug class **to save nothing**, the
+  compile being the cost and not the accept. And a request runs the **ORDINARY `main()`**
+  with stdout captured, so server output is CLI output by construction rather than by
+  testing. Reusing one JVM across compiles was already proven safe: `BenchMain` runs 12
+  in-process rebuilds all reporting 78 files / 46 errors.
+- **STAGE 2 IS DELIBERATELY ABSENT** — round 772 measured retained program state as
+  worthless on this corpus (tsc's `export *` barrels make the reverse-dependency closure the
+  whole program), so Stage 1 IS the prize.
+- **TWO BUGS FOUND BY TESTING, NOT BY INSPECTION**, which is the reusable part: a Unix socket
+  path over ~108 bytes fails as a bare `SocketException: Unix domain path too long` naming
+  neither the path nor the limit; and the check for it first landed as a `require`, which
+  **CRASHED the client instead of letting it fall back** — the very contract `--daemon`
+  documents. Non-fatal for the client, fatal only for `serve()`, pinned by a regression test.
+- **WHAT IS NOT PINNED, stated rather than implied.** 7 pins cover `CompileServer.respondTo`
+  — the whole behaviour minus the socket — and are NOT bound in-suite on purpose (a thread
+  parked in `accept()` inside a 13k-test suite is a flakiness source). The strongest
+  property, byte-identical CLI parity, is also unpinned: it needs two full compiles in one
+  method and the suite runs at Gradle's default 512 MB test heap, where that OOMs; raising
+  the suite-wide heap for one test is the wrong trade on this box. Both exclusions are
+  written into the test class. Suite **13,216 -> 13,223 / 0 failures / 3 skipped**;
+  warning-clean.
+
 **Round 771 (2026-07-30) — OWNER-DIRECTED, NOT A QUEUE ITEM: THE JVM's OWN COST WAS NEVER
 MEASURED, AND IT IS 56% OF A COLD COMPILE. AOT RECOVERS ALMOST ALL OF IT — 1.97×, OUTPUT
 BYTE-IDENTICAL ON ALL 8 PROFILES, ZERO COMPILER CHANGES.** Full derivation:
@@ -1083,7 +1121,10 @@ NOT integrated. The three items below are what that investigation leaves open.**
   it produces a distribution artifact rather than a verification.
   `.github/workflows/native.yml` is **`workflow_dispatch` only** (no cost per push) and
   carries the byte-identity check; it is UNTESTED on CI, being unrunnable from here.
-- [ ] **(SERVER.1) Pre-warmed compile server + thin client — the prize is MEASURED and it is
+- [x] **(SERVER.1) DONE round 773 — Stage 1 shipped (`xtsc --serve` / `xtsc --daemon`),
+  measured at 11,907 ms through a real Unix socket against the cold CLI's 26,415 ms; output
+  identical to the direct CLI's. Stage 2 stays dead. Body kept for the design record.**
+  Pre-warmed compile server + thin client — the prize is MEASURED and it is
   Stage 1 ONLY (owner-proposed round 772, sized the same session).** A long-lived warm JVM
   answering compile requests from a minimal CLI. **The warm JVM is the FASTEST artifact we
   have** — 11,580 ms against the GraalVM binary's 13,350 ms and a 26,272 ms cold CLI — so
