@@ -118,6 +118,17 @@ object PassTiming {
      *  conflated-interface node) was active. */
     var typeNodeBypassed: Long = 0
 
+    /** `getTypeOfSymbol` resolutions whose answer was PERSISTED into the
+     *  global `symbolTypes` cache (the caller-supplied instantiation context
+     *  was empty, so the answer is a function of the symbol alone). */
+    var symbolTypeCached: Long = 0
+
+    /** `getTypeOfSymbol` resolutions NOT persisted, because a caller-supplied
+     *  instantiation context (type-param scope / alias args / inference
+     *  namespace) was active and the answer therefore depends on WHO asked —
+     *  i.e. on program order. See (ORDER.1). */
+    var symbolTypeContextBypassed: Long = 0
+
     // --- INV.5(c) context-keyed cache (`mappedNodeTypes`) attribution --------
     // The bypassed population above is the port's whole prize: each of those
     // resolutions is one tsc would have served from NodeLinks. These split it by
@@ -285,6 +296,8 @@ object PassTiming {
         typeNodeCacheable = 0
         typeNodeCacheHits = 0
         typeNodeBypassed = 0
+        symbolTypeCached = 0
+        symbolTypeContextBypassed = 0
         mappedHits = 0
         mappedServeWrong = 0
         mappedServeIdOnly = 0
@@ -908,6 +921,15 @@ object PassTiming {
                 "misses ${typeNodeCacheable - typeNodeCacheHits}) vs bypassed $typeNodeBypassed " +
                 "(${bypassPct / 10}.${bypassPct % 10}% of resolutions bypass the cache)"
         )
+        run {
+            val symTotal = symbolTypeCached + symbolTypeContextBypassed
+            val pct = if (symTotal > 0) symbolTypeContextBypassed * 1000 / symTotal else 0L
+            appendLine(
+                "getTypeOfSymbol cache writes: persisted $symbolTypeCached vs " +
+                    "context-bypassed $symbolTypeContextBypassed " +
+                    "(${pct / 10}.${pct % 10}% of first touches are order-dependent)"
+            )
+        }
         run {
             val rejects = mappedRejectUnindexed + mappedRejectNoOwner + mappedRejectForeignFile
             val keyed = mappedHits + mappedMisses

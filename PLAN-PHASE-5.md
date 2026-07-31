@@ -20,6 +20,104 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 778 (2026-07-31) — (ORDER.1) CLOSED. `getTypeOfSymbol` PERSISTED EVERY RESOLUTION
+INTO A GLOBAL CACHE, INCLUDING THE ONES MADE UNDER A CALLER'S INSTANTIATION CONTEXT — THE
+EXACT CONTEXT `getTypeFromTypeNode` HAS ALWAYS REFUSED TO CACHE UNDER. SO A MEMBER TYPED BY
+A TYPE PARAMETER WAS FROZEN AS WHATEVER THE FIRST TOUCHER SAW, AND THE CRAWL SORT CHANGED
+WHO THAT WAS.** 8-profile grid **46/46/46/46/46/47/47/95 -> 46/46/46/46/46/46/46/94**,
+and the sorted diagnostic SETS are otherwise IDENTICAL to round 777's on all eight — the
+change removes exactly one line on three profiles and touches nothing else. Suite
+13,234 -> **13,242 / 0 failures / 3 skipped**. Cost gate rebaselined, +2.0% on one
+population, accounted below.
+
+- **THE MECHANISM, ONE LEVEL BELOW WHERE THE QUEUE ITEM POINTED.** `getTypeFromTypeNodeCore`
+  computes `cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty()
+  && currentTypeAliasArgs == null && !isPerFileDependentRefNode(node)` and skips `nodeTypes`
+  when it is false, because "the same node may resolve differently depending on the
+  enclosing class/interface's type parameters". `getTypeOfSymbol` wrote `symbolTypes[id]`
+  **unconditionally**. For `interface TextRangeWithKind<T extends SyntaxKind = SyntaxKind>
+  { kind: T }` that means the ONE `kind` symbol every instantiation shares (round 761) is
+  frozen at its first touch: `T` if some file materialized `TextRangeWithKind<T>`'s members
+  inside a generic scope first, `any` otherwise. The bare read at
+  `formattingScanner.ts:311` then compares `SyntaxKind` against a bare `Type.TypeParam`
+  target — which our relation correctly rejects for a single-type source — and emits
+  `TS2322: Type 'SyntaxKind' is not assignable to type 'T'`. **The fix is the missing half
+  of a gate that already exists**: persist only when the AMBIENT (caller-supplied) context
+  is empty. A context the worker installs FOR ITSELF (`pushInferenceNamespaceFor`, a
+  function's own type params) is a function of the symbol and stays cacheable, which is why
+  the gate is read at ENTRY.
+- **REPRODUCED IN 1.2 SECONDS AND MINIMIZED BY SINGLE-INGREDIENT ABLATION** (scratch project
+  + `MainKt --noEmit --listAll`, per the round-744 loop). Four ingredients tested one at a
+  time against the UNFIXED binary: the `TokenInfo` indirection is **not** needed (a direct
+  `TextRangeWithKind` parameter reproduces); a `declare`d generic function is **not** enough
+  (only a BODY that materializes `TextRangeWithKind<T>`'s members poisons it — so this is
+  member RESOLUTION, not the signature); any local annotation `TextRangeWithKind<T>` in a
+  generic scope works, `createTextRangeWithKind` is incidental; and **moving that generic
+  scope BELOW the bare read silences it entirely** — which is the order dependence in three
+  lines of TypeScript.
+- **THE QUEUE ITEM'S OWN "STRONGEST LEAD" IS FALSIFIED, AND BY READING SOURCE RATHER THAN
+  GUESSING.** The lead was `propertyTypeOnCarrier` / the round-762 carrier idiom. It cannot
+  answer this one: `propertyTypeOnCarrier` is `if (carrier is Type.Reference)
+  resolveGenericPropertyType(...) ?: getTypeOfSymbol(prop) else getTypeOfSymbol(prop)`, and
+  a bare reference to a generic whose every parameter has a DEFAULT resolves to the RAW
+  `Type.Interface`, not a `Type.Reference` (`defaultedInstantiationOfOpenGeneric` says so in
+  its first line: *"Type.Reference is NOT an Interface"*). So on this carrier
+  `propertyTypeOnCarrier` **is** `getTypeOfSymbol(prop)`, character for character — there
+  are no type arguments to substitute. The other half of the lead, the globally-`any`
+  member cache, was right, and it was right about the direction too: the cached value
+  differed between the two orders.
+- **WHAT WAS *NOT* DONE, AND WHY — the bare read still degrades to `any`.** The
+  principled answer for `TextRangeWithKind.kind` read through the DEFAULTED bare reference
+  is `SyntaxKind`, not `any`, and `defaultedInstantiationOfOpenGeneric` already computes
+  it. Applying it at resolution is documented-closed (round 754: it makes a bare
+  `TableClass` and an explicit `TableClass<any>` the same interned instance and
+  `type Table = TableClass` stops displaying as `Table`, 8 baseline lines measured);
+  applying it at the property-READ site is untried and is a strictly larger change than
+  this defect needs, since it would not by itself make the cache order-independent.
+  Recorded here rather than pinned (round 765's rule): today `token.kind = "not a kind"`
+  is silent on the bare carrier, in BOTH orders, and that is a real open gap.
+- **A SECOND DIMENSION IS LEFT OPEN ON PURPOSE.** `getTypeFromTypeNodeCore`'s gate has a
+  FOURTH conjunct, `!isPerFileDependentRefNode(node)`; `symbolTypeContextIsEmpty()` mirrors
+  only the three instantiation dimensions. A per-FILE order dependence in `symbolTypes` is
+  therefore still possible in principle; nothing on the eight profiles exhibits one, so it
+  is stated, not fixed.
+- **THE PINS DISCRIMINATE, VERIFIED AGAINST AN ABLATED BINARY, NOT ASSUMED** (round 777's
+  lesson, applied). `SymbolTypeOrderTest` is 8 tests run through one binary with
+  `SYMBOL_TYPE_ORDER_GATE` on and flipped off: **4 fail ablated and pass fixed** (the
+  generic-scope-first source order, the source-order differential, the generic-scope-first
+  PROGRAM order, the program-order differential) and **4 are identical on both sides** (the
+  benign order, a non-generic member of the same interface still rejecting a bad write, the
+  member still resolving, an instantiation missing the member still rejected). The
+  cross-FILE differential could NOT reuse `ProjectCrawlOrderTest`'s reversing `Vfs` —
+  round 776's sort makes that view answer the same program order by construction, which is
+  the whole point of it — so the two orders are produced by RENAMING the two modules.
+- **THE ABLATION IS COUNTED, NOT ASSUMED GREEN** (round 753's rule). A new `--passTiming`
+  line reports `getTypeOfSymbol cache writes: persisted 20507 vs context-bypassed 2576
+  (11.1% of first touches are order-dependent)` on the compiler profile — so the ablated
+  arm ran the suppressed write 2,576 times, and a zero-count false green is excluded.
+- **THE COST, AND IT IS THE MECHANISM'S OWN ARITHMETIC.** Suppressing 2,576 cache writes
+  means those symbols re-resolve on a later touch: `typeNode.cacheable` +0.92%,
+  `typeNode.bypassed` 103,802 -> **105,855 (+1.98%)** and, downstream of that,
+  `mapped.keyed` 25,521 -> **26,151 (+2.47%)** and `mapped.hits` 6,045 -> **6,462 (+6.90%)**
+  — the last two over the ±2% tolerance. Everything else is flat (`typeOfExpr.calls`
+  +0.01%, `narrow.walks` +0.01%, `globals.lookups` +0.04%, `spine.nodes` and
+  `output.errors` bit-identical). Priced against round 716's measurement that the WHOLE
+  bypassed population is **68 ms**, +1.98% of it is ~1.3 ms — about 0.005% of a 27 s
+  compile — bought in exchange for the compiler's verdicts no longer depending on directory
+  order. Rebaselined in this commit. Both gate runs were **bit-identical** to each other,
+  which is the round-776 reproducibility check applied to my own number.
+- **PREDICTIONS 3 of 4.** HIT: the cause is a first-touch-wins global cache; the fix removes
+  exactly the one line on exactly the three profiles; the corpus does not move (no
+  `LogicalParityDivergence` needed). **MISSED, and it is the useful one:** I expected the
+  fix to be at the READ site via `propertyTypeOnCarrier`, as the item's lead said — the
+  carrier route is structurally incapable of answering a DEFAULTED bare generic, and the
+  three minutes spent reading `defaultedInstantiationOfOpenGeneric` would have been three
+  hours spent instrumenting `resolveGenericPropertyType` had I trusted the lead.
+- **PROCESS.** The Kotlin daemon OOM'd mid-round on a rebuild (`GC overhead limit
+  exceeded`) with 1.7 GB free while the jvmTest daemon still held its heap; `./gradlew
+  --stop` + a graceful `pkill -f 'KotlinCompile[D]aemon'` then compiled in 2m23s. That is
+  BUILD.1's idle-daemon-squats trap arriving from the test side rather than the build side.
+
 **Round 777 (2026-07-31) — (REL.4)(a) CAUSE 6: AN INTERSECTION OF UNIONS HAS NO MEMBER
 LIST TO PEEL, BECAUSE tsc BUILDS ONE AT TYPE CONSTRUCTION AND WE DO NOT. `nodeFactory.ts:7112`
 CLOSED — scaffolded compiler **53 -> 52**, services **58 -> 57**, `diff` says exactly that
@@ -734,112 +832,6 @@ committed change is documentation.*
   rises above 14 — it stayed at exactly 14. (4) the global rule's price CHANGES under the
   scaffold — it does not, in either direction, to the line.
 
-**Round 766 (2026-07-29) — (REL.2) THE `never`-PARAMETER GAP IS CLOSED, AND THE ROUND'S
-REAL OUTPUT IS THAT ROUND 765's DIAGNOSIS OF IT WAS WRONG IN A WAY THAT MATTERS: THE FLOW
-READ WAS NEVER DECLINED, AND THE REASON THE ARM IS SILENT ON tsc's SOURCES IS TWO LEVELS
-FURTHER UP — `checkArgumentsAgainstSignature` DOES NOT RUN AT ALL FOR A CALL WHOSE CALLEE
-IS A MEMBER OF AN IMPORTED NAMESPACE, WHICH IS EVERY ONE OF THE 1,108 `Debug.*(…)` CALLS
-ON THE COMPILER PROFILE.** Arm-A grid 46/46/46/46/46/46/46/94, every profile's error lines
-byte-identical to round 764's `build/bench/r764final`. All 20 cost counters BIT-identical.
-Predictions: **6 of 6 on the stated values, 1 of them right for the wrong reason** — and
-that wrong reason is the finding.
-
-- **THE FIX IS ONE EXCEPTION TO ONE DISCARD.** Round 441's `never`-parameter arm
-  (`checkArgumentsAgainstSignature`, the B469/round-428b gate chain) has ALWAYS performed
-  the flow read; what it does is `if (n === neverType) n else ctxApplied` — it throws away
-  any result that is not exactly `never`. Post-764/765 a bare enum's narrow at that
-  position is a proper member subset, which is tsc's answer, so the enum case now keeps it:
-  `n !== ctxApplied && n !== neverType && isEnumFlavoredObjectType(ctxApplied) &&
-  enumTargetsAreOwnMembers(ctxApplied, constituents(n))`. **Round 765's "an enum argument
-  going to a `never` parameter never gets the flow read at all" is WITHDRAWN** — the read
-  happens; the result is discarded.
-- **WHY THE DISCARD IS SAFE TO EXCEPT HERE, and why the exception is narrow by
-  construction.** The substituted type is a NON-EMPTY union of enum members and nothing
-  non-`never` is assignable to `never`, so the TS2345 that already fired still fires and
-  only its DISPLAY changes — the FP the round-441 comment warns about (a partial refinement
-  taking the union-arg emission path) cannot be manufactured. The gate is the round-746
-  owner rule shared with the subtractive (764) and assert (765) directions, so the three
-  cannot drift apart, and everything that is not an enum keeps round 441's discard
-  verbatim.
-- **THE GATE'S POPULATION, MEASURED BEFORE THE WIDENING (temporary counters, since
-  removed).** Of **26,432** Identifier/PropertyAccess call arguments on the compiler
-  profile (43,563 on services), the round-441 arm is reached **5** times (6 on services) —
-  it is already narrow by construction — and of those, the enum-flavored share is **0** and
-  the widening's population (`neverArm.enumSubset`) is **0 on every one of the 8 profiles**.
-  All 5 reached sites prove `never` and take the pre-existing accepted path. So the
-  widening is narrow by construction AND measured-inert on the dashboard; the pins are the
-  evidence, the grid is a no-regression gate.
-- **THE ABLATION IS REPORTED AS WHAT IT IS: THE FIX FIRES ZERO TIMES ON ALL EIGHT
-  PROFILES.** Round 765's two arms also stay at **0 before and 0 after**, so closing this
-  did NOT turn the negative-direction arm live, which was the stated hope when the item was
-  queued. `enumMinusMembers` still fires 14 / 31, reproducing round 764 exactly.
-- **AND THAT ZERO IS WHERE THE ROUND EARNED ITS KEEP, because it was chased upstream
-  instead of banked.** `emitter.ts:1527` is the exact shape (`phase: PipelinePhase`, a
-  5-member enum, `default: return Debug.assertNever(phase)`), so a zero was not credible.
-  Three probes, no compile between them: a SAME-FILE `namespace Debug` reaches the arm and
-  the fix applies; a plain exported `assertNever2` IMPORTED from another file reaches it;
-  **an exported `namespace Debug` imported from another file does not reach it at all —
-  `refArgs` does not even count the argument, i.e. `checkArgumentsAgainstSignature` never
-  runs for that call.** Both the direct-import and the barrel (`export * from`) forms fail,
-  so it is the namespace-member callee, not the barrel. **Blast radius: 1,108
-  `Debug.<member>(…)` calls on the compiler profile and 1,518 on services — 441
-  `Debug.assert`, 313 `Debug.checkDefined`, 110 `Debug.fail`, 62 `Debug.assertNever` —
-  none of whose arguments are checked.** Recorded, not taken: turning argument checking on
-  for 1,108 previously-unchecked calls is an FP-risk item to SIZE, not a widening to slip
-  in. **NOTE the asymmetry that keeps it from being a general resolution failure:** the
-  flow-walk assert path DOES resolve a namespace member (`Dbg.assertIsA(p)` narrows
-  correctly), so the gap is specific to the call-ARGUMENT path.
-- **THE GLOBAL RULE RE-PRICED WITH THE FIX ON (scaffolded, measured, REVERTED — not
-  landed): compiler 46 -> 47 and services 46 -> 51, UNCHANGED from round 765, and the same
-  five lines** — `scanner.ts:905` (cause D, still the only compiler-profile line),
-  `importFixes.ts:1127` and `formattingScanner.ts:113` (cause D), `completions.ts:2234` and
-  `2239` (the property-read / generic-inference family). Expected, since none of the five
-  is a `never`-parameter site.
-- **EVERY PIN RUN AGAINST UNMODIFIED `6fa1d630`: the 7 TARGETS ALL FAIL and the 7 CONTROLS
-  ALL PASS.** Targets, all of which answered the bare enum `K` before: a 3-of-4 partial
-  switch `default: assertNever(k)` -> `K.D`; a 1-of-4 one -> `K.B | K.C | K.D`; a
-  MIDDLE-member one -> `K.A | K.C | K.D` (declaration order); `===` guards with no switch
-  at all -> `K.D`; a `Debug.assertNever(k)` callee (same-file namespace) -> `K.D`; a
-  `const enum` -> `CE.Z`; an `asserts k is K.A | K.B` reaching a `never` parameter ->
-  `K.A | K.B`. Controls: a `string`-target twin of the first target still says `K.D` (the
-  harness must keep discriminating on the PARAMETER type — that is the whole subject here);
-  an exhaustive switch stays SILENT; **an interface narrowed through a TERNARY and through
-  an EARLY RETURN keeps `Animal`** — these two are the real guard on round 441's discard,
-  and they were rewritten after a first attempt used an `if` BLOCK, which types its body
-  from `currentLocalTypes` and so never reaches the arm at all; a mixed `case K.A: case
-  "z":` list and an unrelated enum's member keep the whole enum; a literal-union subject
-  still narrows to `"c"`.
-- **THE STALE-CONTROL AUDIT ROUND 765's RULE DEMANDS WAS RUN, and it found the shape twice
-  but never pinned at the message level.** Nine classes carry a `never` parameter; the two
-  that pin this exact source — `EnumValueAliasExhaustiveSwitchTest > negative control - an
-  uncovered distinct-valued member still fires` (which round 765 measured by hand and found
-  reading *Argument of type 'E'*) and `DestructuringAssignmentNarrowingTest > negative
-  control - a NON-exhaustive direct enum switch keeps the assertNever error` — both assert
-  `it.code == 2345` only, so a display-only change cannot break them. They now read
-  `'E.C'` / `'Kind.B'`; that is an improvement their assertions are blind to, which is
-  worth knowing about the shape of this suite's enum controls.
-- **COST (COST.1): all 20 counters BIT-identical, `narrow.walks` unchanged at 71,326.** The
-  walk already happened; only the use of its result changed. No rebaseline.
-- **NO CORPUS BASELINE MOVED**, so no `LogicalParityDivergence` was needed and none was
-  added. Filtered batch of the 13 classes that own this shape (round 765's corollary —
-  including round 764's and 765's own classes, plus the seven `never`-parameter classes
-  found by grep) **120 / 0**; corpus letters E/C/N/S/T **3,363 / 0**; build warning-clean.
-- **PREDICTIONS 6 of 6 on values, and the useful part is that prediction 2 was RIGHT FOR
-  THE WRONG REASON.** (1) the arm's population is under 200 on compiler — 5. (2) the
-  widening's population is 0 on compiler — 0, on all eight. **But the stated reason —
-  "tsc's `Debug.assertNever` sites are in EXHAUSTIVE switches, which round 460b already
-  answers `never`" — is FALSE**: those sites never reach the arm at all, because the call
-  is not argument-checked. Had the prediction been scored on its number alone the upstream
-  gap would have gone unfound; it was scored on its mechanism, which is why it was chased.
-  (3) round 765's arm stays 0 — 0. (4) grid byte-identical — all eight. (5) global-rule
-  price unchanged — 47 / 51, same five lines. (6) cost counters bit-identical — all 20.
-- **NEXT UNIT OF WORK, in priority order:** (1) **size** the imported-namespace call-argument
-  gap above — it is the single largest measured blind spot on the dashboard (1,108 + 1,518
-  unchecked calls) and it gates the visibility of rounds 763-766's entire narrowing arc, but
-  turning it on could add many grid lines, so it wants a scaffolded measurement first,
-  exactly as the global rule gets; (2) cause **(D)**, `const` literal-type preservation,
-  still 3 of the 5 remaining worklist lines and still an arc.
-
 **AOT — owner-directed, round 771. Measured, documented in `docs/perf/aot-native-image.md`,
 NOT integrated. The three items below are what that investigation leaves open.**
 
@@ -1047,7 +1039,7 @@ NOT integrated. The three items below are what that investigation leaves open.**
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
-- [ ] **(ORDER.1) `formattingScanner.ts:311` is a PROGRAM-ORDER-dependent FP that round
+- [x] **(ORDER.1) `formattingScanner.ts:311` is a PROGRAM-ORDER-dependent FP that round
   776 introduced and round 777 attributed — services / server / harness are 46 -> 47 /
   46 -> 47 / 94 -> 95 and have been since 2026-07-31.** The line is `TS2322: Type
   'SyntaxKind' is not assignable to type 'T'` at `tokenInfo.token.kind = container.kind`
@@ -1062,6 +1054,18 @@ NOT integrated. The three items below are what that investigation leaves open.**
   other seven. **Diagnose with the round-762 method** — `propertyTypeOnCarrier` / a UNION of
   instantiations, and remember a single instantiation still answers correctly, so only the
   union reproduces it.
+  **CLOSED round 778 — and the `propertyTypeOnCarrier` lead above is FALSIFIED.** The
+  carrier is a bare DEFAULTED generic, which resolves to the RAW `Type.Interface`, not a
+  `Type.Reference`, so `propertyTypeOnCarrier` degenerates to `getTypeOfSymbol(prop)`
+  verbatim. The defect was one level down: `getTypeOfSymbol` persisted into `symbolTypes`
+  even when a CALLER's instantiation context was installed — the context
+  `getTypeFromTypeNodeCore` has always refused to cache a type NODE under — so the one
+  member symbol every instantiation shares froze as `T` or as `any` depending on who
+  touched it first. Gated the WRITE on the ambient context being empty
+  (`symbolTypeContextIsEmpty`, mirroring three of `cacheable`'s four conjuncts); grid
+  back to 46/46/46/46/46/46/46/94 with the sorted sets otherwise identical on all eight.
+  Still open and stated in the note, not pinned: the bare read degrades to `any` rather
+  than to the DEFAULT (`SyntaxKind`), in both orders.
 
 - [ ] **(REL.4) Turn argument checking ON for a call whose callee is a member of an
   IMPORTED namespace — SIZED round 767, price measured, DO (a) FIRST.** The change

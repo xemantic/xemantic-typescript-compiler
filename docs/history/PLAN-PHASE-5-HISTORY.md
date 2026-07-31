@@ -1,3 +1,109 @@
+**Round 766 (2026-07-29) — (REL.2) THE `never`-PARAMETER GAP IS CLOSED, AND THE ROUND'S
+REAL OUTPUT IS THAT ROUND 765's DIAGNOSIS OF IT WAS WRONG IN A WAY THAT MATTERS: THE FLOW
+READ WAS NEVER DECLINED, AND THE REASON THE ARM IS SILENT ON tsc's SOURCES IS TWO LEVELS
+FURTHER UP — `checkArgumentsAgainstSignature` DOES NOT RUN AT ALL FOR A CALL WHOSE CALLEE
+IS A MEMBER OF AN IMPORTED NAMESPACE, WHICH IS EVERY ONE OF THE 1,108 `Debug.*(…)` CALLS
+ON THE COMPILER PROFILE.** Arm-A grid 46/46/46/46/46/46/46/94, every profile's error lines
+byte-identical to round 764's `build/bench/r764final`. All 20 cost counters BIT-identical.
+Predictions: **6 of 6 on the stated values, 1 of them right for the wrong reason** — and
+that wrong reason is the finding.
+
+- **THE FIX IS ONE EXCEPTION TO ONE DISCARD.** Round 441's `never`-parameter arm
+  (`checkArgumentsAgainstSignature`, the B469/round-428b gate chain) has ALWAYS performed
+  the flow read; what it does is `if (n === neverType) n else ctxApplied` — it throws away
+  any result that is not exactly `never`. Post-764/765 a bare enum's narrow at that
+  position is a proper member subset, which is tsc's answer, so the enum case now keeps it:
+  `n !== ctxApplied && n !== neverType && isEnumFlavoredObjectType(ctxApplied) &&
+  enumTargetsAreOwnMembers(ctxApplied, constituents(n))`. **Round 765's "an enum argument
+  going to a `never` parameter never gets the flow read at all" is WITHDRAWN** — the read
+  happens; the result is discarded.
+- **WHY THE DISCARD IS SAFE TO EXCEPT HERE, and why the exception is narrow by
+  construction.** The substituted type is a NON-EMPTY union of enum members and nothing
+  non-`never` is assignable to `never`, so the TS2345 that already fired still fires and
+  only its DISPLAY changes — the FP the round-441 comment warns about (a partial refinement
+  taking the union-arg emission path) cannot be manufactured. The gate is the round-746
+  owner rule shared with the subtractive (764) and assert (765) directions, so the three
+  cannot drift apart, and everything that is not an enum keeps round 441's discard
+  verbatim.
+- **THE GATE'S POPULATION, MEASURED BEFORE THE WIDENING (temporary counters, since
+  removed).** Of **26,432** Identifier/PropertyAccess call arguments on the compiler
+  profile (43,563 on services), the round-441 arm is reached **5** times (6 on services) —
+  it is already narrow by construction — and of those, the enum-flavored share is **0** and
+  the widening's population (`neverArm.enumSubset`) is **0 on every one of the 8 profiles**.
+  All 5 reached sites prove `never` and take the pre-existing accepted path. So the
+  widening is narrow by construction AND measured-inert on the dashboard; the pins are the
+  evidence, the grid is a no-regression gate.
+- **THE ABLATION IS REPORTED AS WHAT IT IS: THE FIX FIRES ZERO TIMES ON ALL EIGHT
+  PROFILES.** Round 765's two arms also stay at **0 before and 0 after**, so closing this
+  did NOT turn the negative-direction arm live, which was the stated hope when the item was
+  queued. `enumMinusMembers` still fires 14 / 31, reproducing round 764 exactly.
+- **AND THAT ZERO IS WHERE THE ROUND EARNED ITS KEEP, because it was chased upstream
+  instead of banked.** `emitter.ts:1527` is the exact shape (`phase: PipelinePhase`, a
+  5-member enum, `default: return Debug.assertNever(phase)`), so a zero was not credible.
+  Three probes, no compile between them: a SAME-FILE `namespace Debug` reaches the arm and
+  the fix applies; a plain exported `assertNever2` IMPORTED from another file reaches it;
+  **an exported `namespace Debug` imported from another file does not reach it at all —
+  `refArgs` does not even count the argument, i.e. `checkArgumentsAgainstSignature` never
+  runs for that call.** Both the direct-import and the barrel (`export * from`) forms fail,
+  so it is the namespace-member callee, not the barrel. **Blast radius: 1,108
+  `Debug.<member>(…)` calls on the compiler profile and 1,518 on services — 441
+  `Debug.assert`, 313 `Debug.checkDefined`, 110 `Debug.fail`, 62 `Debug.assertNever` —
+  none of whose arguments are checked.** Recorded, not taken: turning argument checking on
+  for 1,108 previously-unchecked calls is an FP-risk item to SIZE, not a widening to slip
+  in. **NOTE the asymmetry that keeps it from being a general resolution failure:** the
+  flow-walk assert path DOES resolve a namespace member (`Dbg.assertIsA(p)` narrows
+  correctly), so the gap is specific to the call-ARGUMENT path.
+- **THE GLOBAL RULE RE-PRICED WITH THE FIX ON (scaffolded, measured, REVERTED — not
+  landed): compiler 46 -> 47 and services 46 -> 51, UNCHANGED from round 765, and the same
+  five lines** — `scanner.ts:905` (cause D, still the only compiler-profile line),
+  `importFixes.ts:1127` and `formattingScanner.ts:113` (cause D), `completions.ts:2234` and
+  `2239` (the property-read / generic-inference family). Expected, since none of the five
+  is a `never`-parameter site.
+- **EVERY PIN RUN AGAINST UNMODIFIED `6fa1d630`: the 7 TARGETS ALL FAIL and the 7 CONTROLS
+  ALL PASS.** Targets, all of which answered the bare enum `K` before: a 3-of-4 partial
+  switch `default: assertNever(k)` -> `K.D`; a 1-of-4 one -> `K.B | K.C | K.D`; a
+  MIDDLE-member one -> `K.A | K.C | K.D` (declaration order); `===` guards with no switch
+  at all -> `K.D`; a `Debug.assertNever(k)` callee (same-file namespace) -> `K.D`; a
+  `const enum` -> `CE.Z`; an `asserts k is K.A | K.B` reaching a `never` parameter ->
+  `K.A | K.B`. Controls: a `string`-target twin of the first target still says `K.D` (the
+  harness must keep discriminating on the PARAMETER type — that is the whole subject here);
+  an exhaustive switch stays SILENT; **an interface narrowed through a TERNARY and through
+  an EARLY RETURN keeps `Animal`** — these two are the real guard on round 441's discard,
+  and they were rewritten after a first attempt used an `if` BLOCK, which types its body
+  from `currentLocalTypes` and so never reaches the arm at all; a mixed `case K.A: case
+  "z":` list and an unrelated enum's member keep the whole enum; a literal-union subject
+  still narrows to `"c"`.
+- **THE STALE-CONTROL AUDIT ROUND 765's RULE DEMANDS WAS RUN, and it found the shape twice
+  but never pinned at the message level.** Nine classes carry a `never` parameter; the two
+  that pin this exact source — `EnumValueAliasExhaustiveSwitchTest > negative control - an
+  uncovered distinct-valued member still fires` (which round 765 measured by hand and found
+  reading *Argument of type 'E'*) and `DestructuringAssignmentNarrowingTest > negative
+  control - a NON-exhaustive direct enum switch keeps the assertNever error` — both assert
+  `it.code == 2345` only, so a display-only change cannot break them. They now read
+  `'E.C'` / `'Kind.B'`; that is an improvement their assertions are blind to, which is
+  worth knowing about the shape of this suite's enum controls.
+- **COST (COST.1): all 20 counters BIT-identical, `narrow.walks` unchanged at 71,326.** The
+  walk already happened; only the use of its result changed. No rebaseline.
+- **NO CORPUS BASELINE MOVED**, so no `LogicalParityDivergence` was needed and none was
+  added. Filtered batch of the 13 classes that own this shape (round 765's corollary —
+  including round 764's and 765's own classes, plus the seven `never`-parameter classes
+  found by grep) **120 / 0**; corpus letters E/C/N/S/T **3,363 / 0**; build warning-clean.
+- **PREDICTIONS 6 of 6 on values, and the useful part is that prediction 2 was RIGHT FOR
+  THE WRONG REASON.** (1) the arm's population is under 200 on compiler — 5. (2) the
+  widening's population is 0 on compiler — 0, on all eight. **But the stated reason —
+  "tsc's `Debug.assertNever` sites are in EXHAUSTIVE switches, which round 460b already
+  answers `never`" — is FALSE**: those sites never reach the arm at all, because the call
+  is not argument-checked. Had the prediction been scored on its number alone the upstream
+  gap would have gone unfound; it was scored on its mechanism, which is why it was chased.
+  (3) round 765's arm stays 0 — 0. (4) grid byte-identical — all eight. (5) global-rule
+  price unchanged — 47 / 51, same five lines. (6) cost counters bit-identical — all 20.
+- **NEXT UNIT OF WORK, in priority order:** (1) **size** the imported-namespace call-argument
+  gap above — it is the single largest measured blind spot on the dashboard (1,108 + 1,518
+  unchecked calls) and it gates the visibility of rounds 763-766's entire narrowing arc, but
+  turning it on could add many grid lines, so it wants a scaffolded measurement first,
+  exactly as the global rule gets; (2) cause **(D)**, `const` literal-type preservation,
+  still 3 of the 5 remaining worklist lines and still an arc.
+
 **Round 765 (2026-07-29) — PART 1: THE CONSUMER QUESTION ROUND 764 COULD NOT SETTLE IS
 SETTLED, AND THE ANSWER IS (b) — THE NARROWED TYPE IS CONSUMED, BY A REAL RELATION
 QUESTION, AND EVERY CONSUMER AGREES. THE AGREEMENT IS NOT LUCK: EVERY CONSULTATION'S

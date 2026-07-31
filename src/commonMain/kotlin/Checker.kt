@@ -103955,14 +103955,40 @@ interface DataView {
         // fnType SHELL before resolving signatures (B198), so function
         // self-references hit the cache fast-path above and never reach this check.
         if (!symbolTypeResolutionInProgress.add(symbol.id)) return anyType
+        // (ORDER.1) round 778: the WRITE is gated on the caller-supplied
+        // instantiation context being empty — the exact mirror of
+        // `getTypeFromTypeNodeCore`'s `cacheable` gate, which has always refused
+        // to cache a type NODE resolved under a type-param scope / alias args /
+        // inference namespace because "the same node may resolve differently".
+        // `symbolTypes` had no such gate, so a member whose annotation IS a type
+        // parameter (`interface R<T> { kind: T }`) was frozen globally as whatever
+        // the FIRST toucher saw: `T` when some file happened to instantiate
+        // `R<T>` inside a generic scope first, `any` otherwise — a verdict that
+        // depended on program order and moved with the crawl. The context a
+        // worker installs FOR ITSELF (namespace push, own type params) is a
+        // function of the symbol and stays cacheable; only the ambient context
+        // that was already installed when the caller arrived disqualifies it.
+        val cacheable = symbolTypeContextIsEmpty()
+        if (PassTiming.enabled) {
+            if (cacheable) PassTiming.symbolTypeCached++ else PassTiming.symbolTypeContextBypassed++
+        }
         try {
             val type = getTypeOfSymbolWorker(symbol)
-            symbolTypes[symbol.id] = type
+            if (cacheable || !SYMBOL_TYPE_ORDER_GATE) symbolTypes[symbol.id] = type
             return type
         } finally {
             symbolTypeResolutionInProgress.remove(symbol.id)
         }
     }
+
+    /**
+     * (ORDER.1): is the AMBIENT instantiation context empty — i.e. would this
+     * resolution answer the same way no matter which caller reached it first?
+     * The three dimensions are exactly `getTypeFromTypeNodeCore`'s.
+     */
+    private fun symbolTypeContextIsEmpty(): Boolean =
+        currentTypeParamScope == null && currentTypeAliasArgs == null &&
+            inferenceNamespaceStack.isEmpty()
 
     private fun getTypeOfSymbolWorker(symbol: Symbol): Type {
         val flags = symbol.flags
@@ -173687,6 +173713,15 @@ interface DataView {
         ))
     }
 }
+
+/**
+ * (ORDER.1) round 778 ABLATION SWITCH — flip to `false` to restore the
+ * pre-778 behaviour (`getTypeOfSymbol` persists every resolution, whatever
+ * instantiation context the caller had installed) so the round's pins can be
+ * shown to discriminate. Top-level so it is initialized before the Checker's
+ * `init` block runs (the init-order gotcha). Never flip this in a commit.
+ */
+private val SYMBOL_TYPE_ORDER_GATE = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---
