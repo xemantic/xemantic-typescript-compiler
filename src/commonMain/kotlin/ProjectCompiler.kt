@@ -518,19 +518,34 @@ class ProjectCompiler(private val vfs: Vfs) {
         return null
     }
 
-    /** Recursively walks [dir], invoking [onFile] for each file; prunes obvious heavy dirs. */
+    /**
+     * Recursively walks [dir], invoking [onFile] for each file; prunes obvious heavy dirs.
+     *
+     * SORTED, and that is load-bearing (round 776): this walk fixes the ROOT-FILE order of
+     * the whole program, and `vfs.list` hands back raw `readdir` order — a hash order that
+     * is a property of the FILESYSTEM, not of the project. Program order decides which file
+     * first touches a shared type node, hence the INV.5(c) cacheable-vs-bypassed split:
+     * measured on the compiler profile, three orders of the SAME 78 files give
+     * `typeNode.bypassed` 104,162 / 103,644 / 103,272 and `mapped.keyed` 25,583 / 25,378 /
+     * 25,688 while the AST (856,962 nodes) and all 46 diagnostics stay bit-identical. So an
+     * unsorted crawl makes the COST.1 counters a property of the box, which is exactly what
+     * that gate assumes they are not. Directories are pushed in REVERSE so the LIFO stack
+     * pops them alphabetically — a plain depth-first alphabetical walk.
+     */
     private fun walk(dir: String, onFile: (String) -> Unit) {
         val pruned = setOf("node_modules", ".git", "bower_components", "jspm_packages")
         val stack = ArrayDeque(listOf(dir))
         while (stack.isNotEmpty()) {
             val d = stack.removeLast()
-            for (entry in vfs.list(d)) {
+            val dirs = mutableListOf<String>()
+            for (entry in vfs.list(d).sorted()) {
                 if (vfs.isDirectory(entry)) {
-                    if (PathUtil.basename(entry) !in pruned) stack.addLast(entry)
+                    if (PathUtil.basename(entry) !in pruned) dirs.add(entry)
                 } else {
                     onFile(entry)
                 }
             }
+            for (i in dirs.indices.reversed()) stack.addLast(dirs[i])
         }
     }
 
