@@ -1,3 +1,181 @@
+**Round 769 (2026-07-29) — (REL.4)(a) THE NAMESPACE-SCOPED ENUM. ONE RESOLVER, ONE
+STRICTLY-ADDITIVE FALLBACK, **3 MORE `assertNever` LINES CLOSED — compiler 58 -> 56,
+services 63 -> 60** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS **+10 / +14** INSTEAD OF
+ROUND 767's +20/+25. AND THE KEY-SPACE WIDENING WAS PROBED BEFORE IT WAS FLIPPED, THEN
+RE-PROBED AFTER, ON THE POPULATION THE FLIP ITSELF ENLARGES.** Unscaffolded grid
+46/46/46/46/46/46/46/94, all eight byte-identical to `build/bench/r767final`.
+Predictions: **3 of 4**, and the miss is the finding.
+
+- **THE INSTRUMENT WAS VERIFIED BEFORE IT WAS BELIEVED.** Round 767's namespace pair was
+  reconstructed (an `R769` object + one `--xnsargs` flag, added, measured, REMOVED) and
+  re-measured at HEAD before anything was changed: **compiler 58 / services 63**, exactly
+  round 768's post-fix numbers. Only then was it asked anything new.
+- **THE DEFECT IS ONE FUNCTION.** `resolveEnumSymbolForDiscriminant` — the single
+  name-based entry into the `"symId#member"` key space — resolved the enum name through
+  `currentFileLocals` / `lookupPerFileForNode`, i.e. FILE-level lookup only. A `namespace`
+  member lives in the module symbol's `exports` and is in neither table, so every
+  name-based enum reader answered null and every narrowing direction went blind at once.
+  Round 768 isolated it over 11 variants: it is the enum's DECLARATION site that decides,
+  not the code's.
+- **THE PROBE, THE ROUND-750/751 SHAPE: MINT BOTH KEYS, COMPARE WHERE BOTH RESOLVE,
+  ENUMERATE WHERE ONLY THE WIDENED ONE DOES.** Of **14,507** (compiler) / **23,066**
+  (services) resolver calls, **`bothResolved` = 0** — the widened space is DISJOINT from
+  the current one, so no existing key can move, which is what makes a strictly-additive
+  fallback provably safe rather than hopefully safe. And for every enum the fallback newly
+  reaches, **every member's `parent` canonicalizes to the id the fallback returns** (1
+  distinct symbol on compiler, 2 on services, **0 disagreements**) — that parent is the
+  path `getDeclaredTypeOfEnumMember` mints its interning key from, so the two producers
+  agree and the space stays unsplit. Round 425's catastrophe is a SPLIT space, so that is
+  the invariant that had to hold.
+- **RE-PROBED AFTER THE FLIP, WHICH IS THE HALF THE MINT CANNOT ENFORCE FOR YOU.** The
+  fix enlarges its own population, so the pre-flip agreement proves nothing about the
+  post-flip one. Re-run with the fallback live: `bothResolved` still **0**,
+  member-parent disagreements still **0**, on `onlyWide` **130** (compiler) / **154**
+  (services).
+- **AND THAT NUMBER IS THE ROUND's FINDING: THE BLINDNESS WAS SELF-CONCEALING.** I
+  predicted the widened population would be >= 50 (27 cases x 2 switches). It was **2**.
+  `narrowBySwitchClause`'s default arm bails on the FIRST case it cannot key
+  (`enumKeys.add(enumMemberKeyOfExpr(...) ?: return null)`), so the resolver was asked
+  once per switch and the other 26 cases were never reached — the early bail was hiding
+  the size of its own cause. After the flip the same profile asks it **130** times.
+- **THE FIX.** `enumSymbolFromEnclosingNamespace`: climb `keyNode`'s parent chain,
+  innermost first, and look the name up in each enclosing `ModuleDeclaration`'s symbol
+  `exports` (`nodeToSymbol[nodeKey(moduleDecl)]`, the binder's own table — it holds ALL
+  members, `export`-prefixed or not). Consulted ONLY where the file-level lookup already
+  returned null. A namespace member that is not an enum answers null and STOPS the climb:
+  the innermost binding wins, so an outer enum cannot be keyed through an inner shadow.
+- **THE PRICE, SCAFFOLDED: compiler 58 -> 56, services 63 -> 60**, and `diff` says exactly
+  the three targeted lines with **no new line**: `parser.ts:2941`/`3485` (`ParsingContext`,
+  a `const enum` in `namespace Parser` — a bare-identifier switch subject) and
+  `findAllReferences.ts:1973` (`SpecialSearchKind` in `export namespace Core` — a
+  PROPERTY-ACCESS subject, `state.specialSearchKind`, which is round 768's cause 2 running
+  for the first time on this enum). **alpha goes 7 -> 5 on compiler and 9 -> 7 on
+  services.**
+- **NOT TAKEN, DELIBERATELY: THE QUALIFIED `N.A.X` DIRECTION FROM OUTSIDE THE NAMESPACE.**
+  Round 768 recorded it as the second half of this cause (`enumMemberTypeOfExpr` requires
+  `pa.expression is Identifier`). The probe measured **0** sites for it on all 8 profiles,
+  so landing it would be an unmeasured widening of the very key space this round spent its
+  evidence budget bounding. Recorded, not pinned (round 765's rule).
+- **NOT TAKEN: THE TERNARY TWIN (cause 6).** `nodeFactory.ts:7112` /
+  `declarations.ts:1739` are a type-guard chain over a node UNION/INTERSECTION, not an
+  enum — the subtraction machinery is `narrowByCallPredicate`'s, not `enumMinusMembers`',
+  and an intersection subject has no member list to peel. Its own round.
+- **GATES.** Filtered batch of the 66 enum / switch / `never` / exhaustion / discriminant
+  classes **454 / 0** (rounds 763-768's own classes included); corpus letters C/D/E/N
+  **3,197 / 0** and M/P/S/T **1,933 / 0**; build warning-clean; unscaffolded 8-arm grid
+  byte-identical on all eight; cost gate 18 of 20 counters bit-identical,
+  `globals.lookups` 963,032 -> 963,052 and `globals.misses` 948,318 -> 948,338
+  (**+20, +0.002%**, the 130 newly successful resolutions doing downstream work that used
+  to bail) — **rebaselined in the same commit**. No corpus baseline moved, so no
+  `LogicalParityDivergence`. Suite count 13,192 -> **13,207** (+15 pins).
+- **PREDICTIONS 3 of 4.** HIT: the scaffolded price falls by exactly the namespace-enum
+  sites (58 -> 56 / 63 -> 60, predicted to the line once `SpecialSearchKind` was found to
+  be one); the unscaffolded grid does not move; the post-flip key-space probe still shows
+  0 collisions and 0 member-parent disagreements. **MISSED:** the size of the newly-reached
+  population before the flip (predicted >= 50, measured **2**) — see the self-concealing
+  bail above.
+- **THE SCAFFOLD LEFT NO RESIDUE** (`grep -rn 'R769\|xnsargs' src/` is empty); arm outputs
+  are under `build/bench/r769{scaf,wideScaf,wide,final,land}` (gitignored).
+
+**Round 768 (2026-07-29) — (REL.4)(a) THE `assertNever` FAMILY IS 15 SYMPTOMS AND **THREE**
+CAUSES, ALL THREE THE SAME SHAPE: THE SUBTRACTION STOPS ONE MEMBER SHORT OF `never`.
+CLOSED 8 OF 20 SCAFFOLDED LINES — **compiler 66 -> 58, services 71 -> 63, server 72 -> 64,
+harness 121 -> 113** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS +12/+17 INSTEAD OF
++20/+25. AND ROUND 767's READING OF ITS OWN TWO NAMED SITES WAS BACKWARDS.** Unscaffolded
+grid 46/46/46/46/46/46/46/94, all eight byte-identical to `build/bench/r767final`. All 20
+cost counters bit-identical. Predictions: **3 of 5**, and both misses are the finding.
+
+- **ROUND 767 SAID "ONLY THE FIRST GUARD SUBTRACTS" AND "ONLY THE INNERMOST TERNARY ARM
+  SUBTRACTS". IT IS THE REVERSE: EVERY STEP BUT THE LAST SUBTRACTS.** The arithmetic
+  settles it — `checker.ts:8056`'s 13-arm chain reports `SyntaxKind.ArrowFunction`, the
+  LAST arm's member, which is the declared union minus the first twelve; "only the
+  innermost subtracted" would have reported the other twelve. Reduced in one probe file
+  (13 shapes, no compile between them) and confirmed against unmodified `c853573e`.
+- **CAUSE 1 — THE LAST MEMBER.** `narrowUnionByLiteral`'s non-union `!keep` branch
+  subtracts through `enumMinusMembers`, which only accepts an enum's OWN type
+  (`enumMemberTypesOf` gates on `SymbolFlags.Enum`). Once a chain of `===` guards or
+  ternary arms peels the union down to a SINGLE member type there is nothing left to
+  subtract FROM. **That is why a PARTIAL chain narrows correctly and a COMPLETE one does
+  not**, and it is the whole reason `Debug.assertNever` never reaches `never`.
+- **CAUSE 2 — AN ENUM-MEMBER CASE IN A UNION SUBJECT.** Case expressions split into
+  literal NODES and enum keys (an enum member is not a literal node — the round-763
+  gotcha), and the `Type.Union` `default:` arm filtered only the former. A subject typed
+  `SyntaxKind.NewKeyword | SyntaxKind.ImportKeyword` therefore kept every constituent.
+  Gated on `caseMemberTypes.size == enumKeys.size` so a case that did not resolve cannot
+  prove a short exhaustion. **A PROPERTY-ACCESS subject is the SAME cause, not a second
+  one** — `n.keywordToken`'s type IS the member union, and it reaches the `matchesDirectly`
+  branch because the reference path equals the subject path.
+- **CAUSE 3 — THE DISCARDED `never`, WHICH ROUND 765 RECORDED AND LEFT UNCHASED.** The
+  round-462 argument gate read `n !== ctxApplied && n !== neverType && (...)`; that middle
+  clause is round 765's "the narrowed `never` is discarded somewhere between the flow walk
+  and the argument check". Accepted for an enum subject only — `never` is assignable to
+  everything, so it can only SUPPRESS. **Not optional: with cause 1 fixed and this one not,
+  a 4-guard chain over a 4-member enum answers the WHOLE enum where it used to answer the
+  last member** (measured — strictly worse than before the fix).
+- **THE ABLATION, SCAFFOLDED, WITH THE INSTRUMENT VERIFIED FIRST.** Round 767's namespace
+  pair was reconstructed (a `NsArgProbe` object + one `--xnsargs` flag, added, measured,
+  REMOVED) and re-measured at HEAD before anything was changed: **66 lines, byte-identical
+  to `build/bench/r767B/compiler.txt`** — the instrument agreeing with the prior
+  measurement before being asked anything new. After the three fixes: **58**, exactly 8
+  fewer and no new line. Closed: `checker.ts:8056`, `19023`, `38292`, `38303`, `50971`,
+  `nodeFactory.ts:3807`, `5883`, `parser.ts:6160`. **alpha goes 15 -> 7 on compiler and
+  17 -> 9 on services; beta (4/7) and gamma (1) are untouched, as scoped.**
+- **THE 7 STILL OPEN, AND THEY ARE 4 MORE CAUSES — ONE OF WHICH IS ISOLATED TO A LINE.**
+  - **(4) AN ENUM DECLARED INSIDE A `namespace` IS INVISIBLE TO THE ENTIRE ENUM-NARROWING
+    ECOLOGY** — `parser.ts:2941`, `3485` (`ParsingContext`, whose switches are exhaustive:
+    27 cases, 27 members, no duplicates — verified). Isolated to
+    `resolveEnumSymbolForDiscriminant`, which resolves the enum NAME through
+    `currentFileLocals` / `lookupPerFileForNode`, i.e. FILE-level lookup, and a namespace
+    member is in neither. Measured over 11 variants: it is the enum's DECLARATION site that
+    decides, not the code's — a top-level enum switched on inside a namespace works, and a
+    namespace enum fails from inside AND outside, bare `A.X` AND qualified `N.A.X`, `const`
+    AND plain, exported AND not, in the switch-default, exhaustion, POSITIVE-guard and
+    subtractive directions alike. `getTypeOfExpression` resolves `N.A.X` fine (it mints an
+    `EnumLiteral` and displays `A.X`), so the split is exactly the two reader flavours.
+    **NOT taken: it widens the `"symId#member"` discriminant key space, which the round-425
+    gotcha records as catastrophic when it goes wrong, so it wants its own round with a full
+    suite behind it.** Also note `enumMemberTypeOfExpr` requires `pa.expression is Identifier`,
+    so `N.A.X` is rejected before resolution even starts — two edits, not one.
+  - **(5) A POST-SWITCH FALL-THROUGH DOES NOT NARROW AT ALL** — `checker.ts:11536`
+    (an exhaustive 9-case switch with NO `default:` and `return Debug.assertNever(x)` after
+    it), `checker.ts:37648`. **NOT enum-specific**: a literal-union subject fails the same
+    way, so it is flow-graph work (the implicit no-case-matched edge out of the switch),
+    not a narrowing arm.
+  - **(6) A TYPE-GUARD TERNARY CHAIN OVER A NODE UNION / INTERSECTION** —
+    `nodeFactory.ts:7112` (`HasModifiers & HasDecorators`, `isParameter(node) ? … :
+    Debug.assertNever(node)`), `declarations.ts:1739`. The non-enum twin of cause 1.
+  - **(7) `moduleSpecifiers.ts:1411`** — the argument is `allowedEndings[0]`, an ELEMENT
+    ACCESS that is not the switch subject at all. One line, probably not narrowable by any
+    of the above.
+- **TWO GAPS RECORDED, NOT PINNED** (round 765's rule — a pin on an open gap is a
+  countdown, not a guard): the LITERAL twin of cause 1 (`s: "a"|"b"|"c"` guarded on all
+  three still answers `"c"`, not `never` — deliberately left, since generalising the
+  non-union subtraction past the round-746 owner rule touches every `const` in the corpus),
+  and cause (5) above.
+- **THE STALE-CONTROL RULE FIRED AGAIN, AND THE FILTERED BATCH CAUGHT IT.**
+  `EnumAssertAndSwitchDefaultNarrowingTest > an exhaustive enum switch default is not
+  subtracted twice` pinned cause 3's discard as settled behaviour — round 765 recorded that
+  same discard as an OPEN gap in its own session note and pinned the symptom anyway.
+  **RETIRED, not edited**: the shape is owned in its correct form by
+  `EnumExhaustionToNeverTest > an exhaustive bare enum switch default delivers never to a
+  string parameter`, the same source with the inverted expectation. It was caught because
+  round 765's corollary was followed — round 765's own class was in the batch.
+- **GATES.** Filtered batch of the 24 classes owning enum/switch/`never`-parameter shapes
+  (rounds 763-766's own classes included) **186 / 0**; corpus letters C/D/E/N/P/S/T
+  **4,600 / 0**; build warning-clean; 8-arm grid byte-identical on all eight; cost gate all
+  20 counters bit-identical, **no rebaseline**. No corpus baseline moved, so no
+  `LogicalParityDivergence` was needed and none was added. Suite count 13,174 -> **13,192**
+  (+19 new pins, −1 retired control).
+- **PREDICTIONS 3 of 5.** HIT: the 15 sites are fewer causes than symptoms (3 closed 8);
+  the unscaffolded grid does not move; the cost counters do not move. **MISSED, and both
+  misses are the round's output:** (a) I predicted the two named sites were two causes —
+  they are ONE (cause 1), and round 767's "only the first / only the innermost subtracts"
+  is backwards; (b) I predicted the property-access switch subject was its own cause — it
+  is cause 2, because the property's TYPE is the union the arm was already meant to filter.
+- **THE SCRATCH PROJECT IS GONE** and the scaffold left no residue (`grep NsArgProbe|xnsargs
+  src/` is empty); arm outputs are in the scratchpad only, deliberately not under
+  `build/bench/`.
+
 **Round 767 (2026-07-29) — (REL.2) THE IMPORTED-NAMESPACE CALL-ARGUMENT BLIND SPOT SIZED
 BEHIND A SCAFFOLD, MEASURED, AND REVERTED. THE PRICE IS **compiler 46 -> 66, services
 46 -> 71, server 46 -> 72, harness 94 -> 121** AND EVERY ONE OF THE 20/25 NEW LINES IS AN

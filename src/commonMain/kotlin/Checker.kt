@@ -628,6 +628,16 @@ class Checker(
      *  interned literal types are never marked. Declared before [init] (init-order). */
     private val nonWideningLiteralTypeIds = mutableSetOf<Int>()
 
+    /** (WIDEN.1) Type ids of the literal types a `const` binding KEPT (tsc's
+     *  `getWidenedLiteralTypeForInitializer`) — see the recording site in
+     *  [checkVarDeclAssignabilityCore]. Consulted where a site must behave as it did
+     *  before (WIDEN.1): an ASSIGNMENT TARGET, because assigning to a `const` is already
+     *  TS2588 and tsc adds no assignability error there (`checkReferenceExpression`
+     *  returns false, so `checkTypeAssignableToAndOptionallyElaborate` never runs).
+     *  Distinct from [nonWideningLiteralTypeIds], whose entries must NOT widen anywhere.
+     *  Identity-keyed by [Type.id]; declared before [init] (init-order). */
+    private val widen1ConstLiteralTypeIds = mutableSetOf<Int>()
+
     /** B185: the statement list of the scope currently being walked by
      *  [checkTypeAssignabilityInStatements] — lets per-decl checks resolve FUNCTION-LOCAL
      *  type-alias names (not bound by the Binder per the block-scoped-decl gotcha) by
@@ -39008,6 +39018,24 @@ class Checker(
         return widenType(getTypeOfExpression(init))
     }
 
+    /**
+     * (WIDEN.1) True when [decl] is a `const` binding — tsc's `NodeFlags.Constant` half of
+     * `getWidenedLiteralTypeForInitializer` (checker.ts:41455):
+     *
+     * ```ts
+     * return getCombinedNodeFlagsCached(declaration) & NodeFlags.Constant ||
+     *     isDeclarationReadonly(declaration) ? type : getWidenedLiteralType(type);
+     * ```
+     *
+     * i.e. an IMMUTABLE binding keeps the literal type its initializer produced; only a
+     * mutable one widens it. The gate is a DECLARATION FLAG, not type freshness — tsc's
+     * freshness (`isFreshLiteralType`) decides widening at *mutable locations*
+     * (`checkExpressionForMutableLocation`), which is a separate question for us because
+     * our widening is applied per consumer rather than carried on the type.
+     */
+    private fun varDeclIsImmutableBinding(decl: VariableDeclaration): Boolean =
+        (decl.parent as? VariableDeclarationList)?.flags == SyntaxKind.ConstKeyword
+
     /** Widen a literal type to its base type (e.g., true → boolean, "hello" → string). */
     private fun widenType(type: Type): Type {
         return when (type) {
@@ -53473,7 +53501,11 @@ interface DataView {
                 decl.initializer?.let { literalTypeOfExpression(it) }
             } else null
             if (lit != null && lit !== nullType && lit !== undefinedType) {
-                currentLocalTypes[declName!!] = getWidenedLiteralType(lit)
+                // (WIDEN.1) round 781: this recording runs AFTER the TS2322 walk's and
+                // overwrites it, so the const-ness gate has to be repeated here or the
+                // literal the other site preserved is widened away again.
+                currentLocalTypes[declName!!] =
+                    if (WIDEN1_CONST_KEEPS_LITERAL && isConst) lit else getWidenedLiteralType(lit)
             } else if (declName != null && decl.type == null && decl.initializer is BinaryExpression) {
                 // A BINARY initializer whose operator pins a concrete primitive
                 // result also records: comparisons → boolean, arithmetic/compound
@@ -95238,7 +95270,14 @@ interface DataView {
         CtaSections.atB(CtaSections.B_UNANNOT)
         if (typeAnnotation == null) {
             val init = decl.initializer ?: return
-            val inferred = getTypeOfExpression(init)
+            // (WIDEN.1) round 781: a `const` binding keeps its initializer's LITERAL type
+            // (tsc `getWidenedLiteralTypeForInitializer` — see [varDeclIsImmutableBinding]).
+            // The literal has to be read off the AST: `getTypeOfExpression` answers the
+            // BASE primitive for a literal node (there is no fresh-literal expression type
+            // in this checker), so `literalTypeOfExpression` is the only source of one.
+            val keepsLiteral = WIDEN1_CONST_KEEPS_LITERAL && varDeclIsImmutableBinding(decl)
+            val inferred = (if (keepsLiteral) literalTypeOfExpression(init) else null)
+                ?: getTypeOfExpression(init)
             // 16.0: Allow void from explicit super()/CallExpression — for super(...)
             // returning void, we want `x = 5` later to fire TS2322. Filter void
             // only when source is null/undefined identifier (already handled).
@@ -95261,7 +95300,21 @@ interface DataView {
                 // Widen literal types: 42 → number, "hello" → string.
                 // B185: a NON-WIDENING literal (const-narrowed through a literal-union
                 // annotation) propagates AS-IS — `let x2 = x` keeps `"x"`.
-                val widened = if (inferred.id in nonWideningLiteralTypeIds) inferred else when (inferred) {
+                // (WIDEN.1): this map is what every downstream read of the name resolves
+                // through, so it, not `widenType`, is where the const-ness gate belongs.
+                // An ENUM MEMBER is deliberately NOT kept for a `const`: tsc keeps
+                // `const e = E.A` as `E.A`, we still widen it to `E`, which is WIDER than
+                // tsc and so cannot manufacture a diagnostic. Skipping the enum arm too
+                // costs `completions.ts:2239` — `const k = identifierToKeywordKind(node)`
+                // would keep all 85 KeywordSyntaxKind MEMBERS, which the `isModifierKind`
+                // guard then fails to narrow, so the return check rejects the whole union.
+                // `widenEnumMemberTypes` is a no-op on a string/number/bigint/boolean
+                // literal, so applying it here keeps exactly the intended half.
+                val widened = if (inferred.id in nonWideningLiteralTypeIds) inferred
+                    else if (keepsLiteral) widenEnumMemberTypes(inferred).also {
+                        if (it === inferred) widen1ConstLiteralTypeIds.add(it.id)
+                    }
+                    else when (inferred) {
                     is Type.StringLiteral -> stringType
                     is Type.NumberLiteral -> numberType
                     is Type.BigIntLiteral -> bigintType
@@ -98921,7 +98974,14 @@ interface DataView {
                 if (targetType == null || targetType === anyType || targetType === errorType) {
                     (narrowedDeclaredTypes[target.text] ?: currentLocalTypes[target.text])?.let { localType ->
                         if (localType !== anyType && localType !== errorType) {
-                            targetType = localType
+                            // (WIDEN.1): a `const` binding KEEPS its initializer's literal
+                            // type for READS, but assigning to it is already TS2588 and tsc
+                            // adds no assignability error at such a target. Widen back so
+                            // this site behaves exactly as it did before (WIDEN.1) —
+                            // otherwise `const x = 0; x = 1` co-emits a spurious TS2322
+                            // (constDeclarations-access2 pins that it must not).
+                            targetType = if (localType.id in widen1ConstLiteralTypeIds)
+                                widenType(localType) else localType
                         }
                     }
                 }
@@ -173830,6 +173890,14 @@ private val REL4B_GATE = true
  * switches above. Never flip this in a commit.
  */
 private val REL4_ELEM_UNION_GATE = true
+
+/**
+ * (WIDEN.1) ABLATION SWITCH — flip to `false` to restore the pre-(WIDEN.1) behaviour in
+ * which a `const` binding's inferred type widened its literal to the base primitive, so
+ * `ConstLiteralTypeTest`'s pins can be shown to discriminate. Same top-level init-order
+ * rationale as the switches above. Never flip this in a commit.
+ */
+private val WIDEN1_CONST_KEEPS_LITERAL = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---

@@ -20,6 +20,106 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 781 (2026-07-31) — (WIDEN.1) PROMOTED, SIZED AND LANDED. THE QUEUE'S "BLAST RADIUS
+IS EVERY `const` IN THE CORPUS" IS FALSIFIED: THE MEASURED RADIUS IS **ONE** BASELINE OF
+13,262, AND IT WAS A REAL tsc RULE WE WERE MISSING, NOT A FORM DIVERGENCE — SO NO
+`LogicalParityDivergence` WAS NEEDED.** (REL.4)(c) is CLOSED. Unscaffolded 8-profile grid
+**46/46/46/46/46/46/46/94**, set-for-set IDENTICAL to round 780's on all eight. Suite
+13,262 -> **13,275 / 0 failures / 3 skipped**; cost gate exit 0, **no rebaseline**.
+
+- **THE DEFECT IS NOT IN A WIDENER — THERE IS NO FRESH-LITERAL EXPRESSION TYPE AT ALL.**
+  `getTypeOfExpressionCore` answers `stringType` for a `StringLiteralNode`, `numberType`
+  for a `NumericLiteralNode`, and so on: a `Type.StringLiteral` is minted ONLY by
+  `literalTypeOfExpression`, a separate AST-based helper ~25 sites opt into. So `const x =
+  "a"` never had a literal type to preserve, and the fix cannot be "skip the widening" —
+  it has to READ THE LITERAL OFF THE AST. tsc's rule itself is a one-liner and a
+  DECLARATION-FLAG gate, not a freshness one (`getWidenedLiteralTypeForInitializer`,
+  checker.ts:41455: `NodeFlags.Constant || isDeclarationReadonly ? type :
+  getWidenedLiteralType(type)`).
+- **TWO GUESSES WERE MEASURED INERT BEFORE THE THIRD LANDED, AND THAT IS THE ROUND'S
+  METHOD LESSON.** The obvious sites — `getVarDeclType` and `getTypeOfVariableOrProperty`
+  (via `inferTypeFromInitializer`), both of which literally call `widenType` on a var
+  decl's initializer — were gated on const-ness, compiled, and changed **nothing**: all
+  three scratch repros were byte-identical. The actual read path is
+  `getTypeOfIdentifier` -> `currentLocalTypes`, written by
+  `checkVarDeclAssignabilityCore`'s un-annotated branch (the round-742 "own inline
+  literal-widener") and OVERWRITTEN by `spineArithRecordVarDecl`. Round 779's
+  `Diagnostic`-constructor hook named the emitter in one 30-second run after two builds of
+  reasoning had failed; a `println` at the recording site then showed
+  `inferred=string` — i.e. the value arrived at the widener ALREADY widened, which is what
+  pointed one level down to `getTypeOfExpression`.
+- **WHAT LANDED: three lines of gate plus one exclusion each side.** (i) the un-annotated
+  `currentLocalTypes` recording prefers `literalTypeOfExpression(init)` for a `const`;
+  (ii) it skips the literal->base step for it; (iii) `spineArithRecordVarDecl` repeats the
+  gate, because it runs later and would otherwise widen the preserved literal away again.
+  `varDeclIsImmutableBinding` is the one predicate (`decl.parent`'s
+  `VariableDeclarationList.flags == ConstKeyword`).
+- **BOTH EXCLUSIONS WERE FOUND BY MEASUREMENT, NOT FORESIGHT — EACH COST EXACTLY ONE
+  LINE.** (a) Skipping the whole widening for a `const` also skipped
+  `widenEnumMemberTypes`, so `const k = identifierToKeywordKind(node)` kept all 85
+  `KeywordSyntaxKind` MEMBERS, the `isModifierKind` guard failed to narrow that, and the
+  return check rejected the union: **services/server 46 -> 47, harness 94 -> 95**, the new
+  line being `completions.ts:2239`. Fixed by applying `widenEnumMemberTypes` on the
+  const path too (it is a no-op on a string/number/bigint/boolean literal, so it keeps
+  exactly the intended half). An enum member therefore still widens to its enum — WIDER
+  than tsc, so it cannot manufacture a diagnostic. (b) An ASSIGNMENT TARGET must still see
+  the widened type: `const x = 0; x = 1` began co-emitting TS2322 beside TS2588, which
+  `constDeclarations-access2` pins as wrong — and it IS wrong, tsc's
+  `checkReferenceExpression` returns false for a const target so
+  `checkTypeAssignableToAndOptionallyElaborate` never runs. `widen1ConstLiteralTypeIds`
+  (an id set mirroring the existing `nonWideningLiteralTypeIds` mechanism) marks the kept
+  literals and the assignment-target read widens them back, which makes that site provably
+  identical to its pre-(WIDEN.1) behaviour.
+- **6 OF 13 PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (`WIDEN1_CONST_KEEPS_
+  LITERAL = false`, recompiled, class re-run). The other 7 hold on both sides ON PURPOSE:
+  three pin that `let`/`var`/`let`-from-`const` still widen (they FIRE on both, by
+  MESSAGE), and four pin the exclusions and the structural cases the gate must not reach.
+  One of the discriminating six discriminates **by MESSAGE** rather than by silence —
+  `const j: "b" = k` names `'"a"'` fixed and `'string'` ablated, which is what proves the
+  const kept its literal rather than some rule going quiet.
+- **THE FIX IS REACHED UNSCAFFOLDED AND CHANGES NO VERDICT** — cost gate `typeOfExpr.calls`
+  -1,057 (-0.15%), `typeOfExpr.distinct` -147, `narrow.walks` +14, `typeNode.cacheHits`
+  -23, everything else flat, all deltas inside +/-0.15%. So this is not a zero-count green
+  (round 753's rule): the new path ran on tsc's own sources and agreed with the old answers
+  everywhere.
+- **(REL.4)(c) IS CLOSED — VERIFIED ON THE EXACT SHAPE, NOT BY ANALOGY.** A scratch project
+  carrying the real `ESDecorateClassElementContext` member list and the real 5-arm
+  `const kind = isGetAccessorDeclaration(member) ? "getter" : … : Debug.fail()` reports
+  1 error before and **0** after. So (REL.4)'s residual is now empty and the flip is a
+  decision with NO measured FP cost — but re-measure behind a scaffold before quoting that,
+  per the item's own standing warning.
+- **BUT THE (REL.2) WORKLIST'S "cause (D)" LABEL IS NOW IN DOUBT, AND THIS IS THE FINDING I
+  DID NOT EXPECT.** Reading the three remaining sites in the real sources:
+  `formattingScanner.ts:113` is `const item: TextRangeWithTriviaKind = { pos, end, kind: t }`
+  where `const t = scanner.getToken()` — a CALL initializer, so no literal exists to
+  preserve and this is the round-778 `TextRangeWithKind<T>` / enum-member family;
+  `importFixes.ts:1127` assigns ENUM MEMBERS (`ImportFixKind.AddToExisting`,
+  `AddAsTypeOnly.NotAllowed`) inline, not consts. **Neither is string-literal widening.**
+  They are invisible unscaffolded, so this round cannot prove them either way — but
+  whoever takes (REL.2) should RE-CLASSIFY them behind the scaffold before assuming
+  (WIDEN.1) closed them. Only `scanner.ts:905` remains a plausible cause-(D) site.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). (i) A CALL-ARGUMENT
+  position still reads the widened type — `wantsKind(k)` for `const k = "method"` still
+  reports `Argument of type 'string'`, on both binaries, because the argument gate resolves
+  its type by a different path. No profile line needs it; it is sub-step 2 below.
+  (ii) `const o = { kind: k }` now infers `{ kind: "a" }` where tsc infers `{ kind: string }`
+  (object-literal members are MUTABLE locations in tsc — the classic `as const` gotcha).
+  Ours is NARROWER than tsc there, which in principle could manufacture an FP (`o.kind =
+  "b"` is legal in tsc); zero measured sites on all 8 profiles and the corpus is green,
+  so it is recorded, not chased. (iii) `readonly` class properties are not covered — tsc's
+  gate is `Constant || isDeclarationReadonly` and only the `Constant` half landed.
+- **PREDICTIONS 2 of 4.** HIT: the blast radius is far smaller than "every `const`"; the
+  corpus baselines AGREE with tsc rather than pinning our divergence, exactly as the
+  task's framing argued. **MISSED, and both misses are the output:** I expected the fix to
+  live in a widener and it lives in a RECORDING SITE, because there is no literal
+  expression type at all; and I expected the three (REL.2) lines to be the same defect —
+  at least two of them are not.
+- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) three times, always
+  on the build after a long `jvmTest`; `./gradlew --stop` + a graceful
+  `pkill -f 'KotlinCompile[D]aemon'` fixed it each time in ~2m30s. Also burned one 16-minute
+  build discovering that `System.getenv` does not resolve in `commonMain` — and lost the
+  error message by piping gradle through `tail`. Log to a FILE.
+
 **Round 780 (2026-07-31) — (REL.4)(a) IS CLOSED, AND BOTH "PROBABLY NOT NARROWABLE"
 STRAGGLERS WERE ORDINARY NARROWING GAPS. THE FLIP'S RESIDUAL IS NOW EXACTLY ONE LINE —
 `esDecorators.ts:1314`, i.e. (c) ALONE.** Scaffolded price, re-measured behind THIS round's
@@ -710,184 +810,6 @@ unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
   hold before and after. That is a regression guard, not a target, and it is labelled as
   such here so a future round does not read it as a vacuous pin.
 
-**Round 769 (2026-07-29) — (REL.4)(a) THE NAMESPACE-SCOPED ENUM. ONE RESOLVER, ONE
-STRICTLY-ADDITIVE FALLBACK, **3 MORE `assertNever` LINES CLOSED — compiler 58 -> 56,
-services 63 -> 60** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS **+10 / +14** INSTEAD OF
-ROUND 767's +20/+25. AND THE KEY-SPACE WIDENING WAS PROBED BEFORE IT WAS FLIPPED, THEN
-RE-PROBED AFTER, ON THE POPULATION THE FLIP ITSELF ENLARGES.** Unscaffolded grid
-46/46/46/46/46/46/46/94, all eight byte-identical to `build/bench/r767final`.
-Predictions: **3 of 4**, and the miss is the finding.
-
-- **THE INSTRUMENT WAS VERIFIED BEFORE IT WAS BELIEVED.** Round 767's namespace pair was
-  reconstructed (an `R769` object + one `--xnsargs` flag, added, measured, REMOVED) and
-  re-measured at HEAD before anything was changed: **compiler 58 / services 63**, exactly
-  round 768's post-fix numbers. Only then was it asked anything new.
-- **THE DEFECT IS ONE FUNCTION.** `resolveEnumSymbolForDiscriminant` — the single
-  name-based entry into the `"symId#member"` key space — resolved the enum name through
-  `currentFileLocals` / `lookupPerFileForNode`, i.e. FILE-level lookup only. A `namespace`
-  member lives in the module symbol's `exports` and is in neither table, so every
-  name-based enum reader answered null and every narrowing direction went blind at once.
-  Round 768 isolated it over 11 variants: it is the enum's DECLARATION site that decides,
-  not the code's.
-- **THE PROBE, THE ROUND-750/751 SHAPE: MINT BOTH KEYS, COMPARE WHERE BOTH RESOLVE,
-  ENUMERATE WHERE ONLY THE WIDENED ONE DOES.** Of **14,507** (compiler) / **23,066**
-  (services) resolver calls, **`bothResolved` = 0** — the widened space is DISJOINT from
-  the current one, so no existing key can move, which is what makes a strictly-additive
-  fallback provably safe rather than hopefully safe. And for every enum the fallback newly
-  reaches, **every member's `parent` canonicalizes to the id the fallback returns** (1
-  distinct symbol on compiler, 2 on services, **0 disagreements**) — that parent is the
-  path `getDeclaredTypeOfEnumMember` mints its interning key from, so the two producers
-  agree and the space stays unsplit. Round 425's catastrophe is a SPLIT space, so that is
-  the invariant that had to hold.
-- **RE-PROBED AFTER THE FLIP, WHICH IS THE HALF THE MINT CANNOT ENFORCE FOR YOU.** The
-  fix enlarges its own population, so the pre-flip agreement proves nothing about the
-  post-flip one. Re-run with the fallback live: `bothResolved` still **0**,
-  member-parent disagreements still **0**, on `onlyWide` **130** (compiler) / **154**
-  (services).
-- **AND THAT NUMBER IS THE ROUND's FINDING: THE BLINDNESS WAS SELF-CONCEALING.** I
-  predicted the widened population would be >= 50 (27 cases x 2 switches). It was **2**.
-  `narrowBySwitchClause`'s default arm bails on the FIRST case it cannot key
-  (`enumKeys.add(enumMemberKeyOfExpr(...) ?: return null)`), so the resolver was asked
-  once per switch and the other 26 cases were never reached — the early bail was hiding
-  the size of its own cause. After the flip the same profile asks it **130** times.
-- **THE FIX.** `enumSymbolFromEnclosingNamespace`: climb `keyNode`'s parent chain,
-  innermost first, and look the name up in each enclosing `ModuleDeclaration`'s symbol
-  `exports` (`nodeToSymbol[nodeKey(moduleDecl)]`, the binder's own table — it holds ALL
-  members, `export`-prefixed or not). Consulted ONLY where the file-level lookup already
-  returned null. A namespace member that is not an enum answers null and STOPS the climb:
-  the innermost binding wins, so an outer enum cannot be keyed through an inner shadow.
-- **THE PRICE, SCAFFOLDED: compiler 58 -> 56, services 63 -> 60**, and `diff` says exactly
-  the three targeted lines with **no new line**: `parser.ts:2941`/`3485` (`ParsingContext`,
-  a `const enum` in `namespace Parser` — a bare-identifier switch subject) and
-  `findAllReferences.ts:1973` (`SpecialSearchKind` in `export namespace Core` — a
-  PROPERTY-ACCESS subject, `state.specialSearchKind`, which is round 768's cause 2 running
-  for the first time on this enum). **alpha goes 7 -> 5 on compiler and 9 -> 7 on
-  services.**
-- **NOT TAKEN, DELIBERATELY: THE QUALIFIED `N.A.X` DIRECTION FROM OUTSIDE THE NAMESPACE.**
-  Round 768 recorded it as the second half of this cause (`enumMemberTypeOfExpr` requires
-  `pa.expression is Identifier`). The probe measured **0** sites for it on all 8 profiles,
-  so landing it would be an unmeasured widening of the very key space this round spent its
-  evidence budget bounding. Recorded, not pinned (round 765's rule).
-- **NOT TAKEN: THE TERNARY TWIN (cause 6).** `nodeFactory.ts:7112` /
-  `declarations.ts:1739` are a type-guard chain over a node UNION/INTERSECTION, not an
-  enum — the subtraction machinery is `narrowByCallPredicate`'s, not `enumMinusMembers`',
-  and an intersection subject has no member list to peel. Its own round.
-- **GATES.** Filtered batch of the 66 enum / switch / `never` / exhaustion / discriminant
-  classes **454 / 0** (rounds 763-768's own classes included); corpus letters C/D/E/N
-  **3,197 / 0** and M/P/S/T **1,933 / 0**; build warning-clean; unscaffolded 8-arm grid
-  byte-identical on all eight; cost gate 18 of 20 counters bit-identical,
-  `globals.lookups` 963,032 -> 963,052 and `globals.misses` 948,318 -> 948,338
-  (**+20, +0.002%**, the 130 newly successful resolutions doing downstream work that used
-  to bail) — **rebaselined in the same commit**. No corpus baseline moved, so no
-  `LogicalParityDivergence`. Suite count 13,192 -> **13,207** (+15 pins).
-- **PREDICTIONS 3 of 4.** HIT: the scaffolded price falls by exactly the namespace-enum
-  sites (58 -> 56 / 63 -> 60, predicted to the line once `SpecialSearchKind` was found to
-  be one); the unscaffolded grid does not move; the post-flip key-space probe still shows
-  0 collisions and 0 member-parent disagreements. **MISSED:** the size of the newly-reached
-  population before the flip (predicted >= 50, measured **2**) — see the self-concealing
-  bail above.
-- **THE SCAFFOLD LEFT NO RESIDUE** (`grep -rn 'R769\|xnsargs' src/` is empty); arm outputs
-  are under `build/bench/r769{scaf,wideScaf,wide,final,land}` (gitignored).
-
-**Round 768 (2026-07-29) — (REL.4)(a) THE `assertNever` FAMILY IS 15 SYMPTOMS AND **THREE**
-CAUSES, ALL THREE THE SAME SHAPE: THE SUBTRACTION STOPS ONE MEMBER SHORT OF `never`.
-CLOSED 8 OF 20 SCAFFOLDED LINES — **compiler 66 -> 58, services 71 -> 63, server 72 -> 64,
-harness 121 -> 113** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS +12/+17 INSTEAD OF
-+20/+25. AND ROUND 767's READING OF ITS OWN TWO NAMED SITES WAS BACKWARDS.** Unscaffolded
-grid 46/46/46/46/46/46/46/94, all eight byte-identical to `build/bench/r767final`. All 20
-cost counters bit-identical. Predictions: **3 of 5**, and both misses are the finding.
-
-- **ROUND 767 SAID "ONLY THE FIRST GUARD SUBTRACTS" AND "ONLY THE INNERMOST TERNARY ARM
-  SUBTRACTS". IT IS THE REVERSE: EVERY STEP BUT THE LAST SUBTRACTS.** The arithmetic
-  settles it — `checker.ts:8056`'s 13-arm chain reports `SyntaxKind.ArrowFunction`, the
-  LAST arm's member, which is the declared union minus the first twelve; "only the
-  innermost subtracted" would have reported the other twelve. Reduced in one probe file
-  (13 shapes, no compile between them) and confirmed against unmodified `c853573e`.
-- **CAUSE 1 — THE LAST MEMBER.** `narrowUnionByLiteral`'s non-union `!keep` branch
-  subtracts through `enumMinusMembers`, which only accepts an enum's OWN type
-  (`enumMemberTypesOf` gates on `SymbolFlags.Enum`). Once a chain of `===` guards or
-  ternary arms peels the union down to a SINGLE member type there is nothing left to
-  subtract FROM. **That is why a PARTIAL chain narrows correctly and a COMPLETE one does
-  not**, and it is the whole reason `Debug.assertNever` never reaches `never`.
-- **CAUSE 2 — AN ENUM-MEMBER CASE IN A UNION SUBJECT.** Case expressions split into
-  literal NODES and enum keys (an enum member is not a literal node — the round-763
-  gotcha), and the `Type.Union` `default:` arm filtered only the former. A subject typed
-  `SyntaxKind.NewKeyword | SyntaxKind.ImportKeyword` therefore kept every constituent.
-  Gated on `caseMemberTypes.size == enumKeys.size` so a case that did not resolve cannot
-  prove a short exhaustion. **A PROPERTY-ACCESS subject is the SAME cause, not a second
-  one** — `n.keywordToken`'s type IS the member union, and it reaches the `matchesDirectly`
-  branch because the reference path equals the subject path.
-- **CAUSE 3 — THE DISCARDED `never`, WHICH ROUND 765 RECORDED AND LEFT UNCHASED.** The
-  round-462 argument gate read `n !== ctxApplied && n !== neverType && (...)`; that middle
-  clause is round 765's "the narrowed `never` is discarded somewhere between the flow walk
-  and the argument check". Accepted for an enum subject only — `never` is assignable to
-  everything, so it can only SUPPRESS. **Not optional: with cause 1 fixed and this one not,
-  a 4-guard chain over a 4-member enum answers the WHOLE enum where it used to answer the
-  last member** (measured — strictly worse than before the fix).
-- **THE ABLATION, SCAFFOLDED, WITH THE INSTRUMENT VERIFIED FIRST.** Round 767's namespace
-  pair was reconstructed (a `NsArgProbe` object + one `--xnsargs` flag, added, measured,
-  REMOVED) and re-measured at HEAD before anything was changed: **66 lines, byte-identical
-  to `build/bench/r767B/compiler.txt`** — the instrument agreeing with the prior
-  measurement before being asked anything new. After the three fixes: **58**, exactly 8
-  fewer and no new line. Closed: `checker.ts:8056`, `19023`, `38292`, `38303`, `50971`,
-  `nodeFactory.ts:3807`, `5883`, `parser.ts:6160`. **alpha goes 15 -> 7 on compiler and
-  17 -> 9 on services; beta (4/7) and gamma (1) are untouched, as scoped.**
-- **THE 7 STILL OPEN, AND THEY ARE 4 MORE CAUSES — ONE OF WHICH IS ISOLATED TO A LINE.**
-  - **(4) AN ENUM DECLARED INSIDE A `namespace` IS INVISIBLE TO THE ENTIRE ENUM-NARROWING
-    ECOLOGY** — `parser.ts:2941`, `3485` (`ParsingContext`, whose switches are exhaustive:
-    27 cases, 27 members, no duplicates — verified). Isolated to
-    `resolveEnumSymbolForDiscriminant`, which resolves the enum NAME through
-    `currentFileLocals` / `lookupPerFileForNode`, i.e. FILE-level lookup, and a namespace
-    member is in neither. Measured over 11 variants: it is the enum's DECLARATION site that
-    decides, not the code's — a top-level enum switched on inside a namespace works, and a
-    namespace enum fails from inside AND outside, bare `A.X` AND qualified `N.A.X`, `const`
-    AND plain, exported AND not, in the switch-default, exhaustion, POSITIVE-guard and
-    subtractive directions alike. `getTypeOfExpression` resolves `N.A.X` fine (it mints an
-    `EnumLiteral` and displays `A.X`), so the split is exactly the two reader flavours.
-    **NOT taken: it widens the `"symId#member"` discriminant key space, which the round-425
-    gotcha records as catastrophic when it goes wrong, so it wants its own round with a full
-    suite behind it.** Also note `enumMemberTypeOfExpr` requires `pa.expression is Identifier`,
-    so `N.A.X` is rejected before resolution even starts — two edits, not one.
-  - **(5) A POST-SWITCH FALL-THROUGH DOES NOT NARROW AT ALL** — `checker.ts:11536`
-    (an exhaustive 9-case switch with NO `default:` and `return Debug.assertNever(x)` after
-    it), `checker.ts:37648`. **NOT enum-specific**: a literal-union subject fails the same
-    way, so it is flow-graph work (the implicit no-case-matched edge out of the switch),
-    not a narrowing arm.
-  - **(6) A TYPE-GUARD TERNARY CHAIN OVER A NODE UNION / INTERSECTION** —
-    `nodeFactory.ts:7112` (`HasModifiers & HasDecorators`, `isParameter(node) ? … :
-    Debug.assertNever(node)`), `declarations.ts:1739`. The non-enum twin of cause 1.
-  - **(7) `moduleSpecifiers.ts:1411`** — the argument is `allowedEndings[0]`, an ELEMENT
-    ACCESS that is not the switch subject at all. One line, probably not narrowable by any
-    of the above.
-- **TWO GAPS RECORDED, NOT PINNED** (round 765's rule — a pin on an open gap is a
-  countdown, not a guard): the LITERAL twin of cause 1 (`s: "a"|"b"|"c"` guarded on all
-  three still answers `"c"`, not `never` — deliberately left, since generalising the
-  non-union subtraction past the round-746 owner rule touches every `const` in the corpus),
-  and cause (5) above.
-- **THE STALE-CONTROL RULE FIRED AGAIN, AND THE FILTERED BATCH CAUGHT IT.**
-  `EnumAssertAndSwitchDefaultNarrowingTest > an exhaustive enum switch default is not
-  subtracted twice` pinned cause 3's discard as settled behaviour — round 765 recorded that
-  same discard as an OPEN gap in its own session note and pinned the symptom anyway.
-  **RETIRED, not edited**: the shape is owned in its correct form by
-  `EnumExhaustionToNeverTest > an exhaustive bare enum switch default delivers never to a
-  string parameter`, the same source with the inverted expectation. It was caught because
-  round 765's corollary was followed — round 765's own class was in the batch.
-- **GATES.** Filtered batch of the 24 classes owning enum/switch/`never`-parameter shapes
-  (rounds 763-766's own classes included) **186 / 0**; corpus letters C/D/E/N/P/S/T
-  **4,600 / 0**; build warning-clean; 8-arm grid byte-identical on all eight; cost gate all
-  20 counters bit-identical, **no rebaseline**. No corpus baseline moved, so no
-  `LogicalParityDivergence` was needed and none was added. Suite count 13,174 -> **13,192**
-  (+19 new pins, −1 retired control).
-- **PREDICTIONS 3 of 5.** HIT: the 15 sites are fewer causes than symptoms (3 closed 8);
-  the unscaffolded grid does not move; the cost counters do not move. **MISSED, and both
-  misses are the round's output:** (a) I predicted the two named sites were two causes —
-  they are ONE (cause 1), and round 767's "only the first / only the innermost subtracts"
-  is backwards; (b) I predicted the property-access switch subject was its own cause — it
-  is cause 2, because the property's TYPE is the union the arm was already meant to filter.
-- **THE SCRATCH PROJECT IS GONE** and the scaffold left no residue (`grep NsArgProbe|xnsargs
-  src/` is empty); arm outputs are in the scratchpad only, deliberately not under
-  `build/bench/`.
-
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
   existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
@@ -1120,6 +1042,47 @@ cost counters bit-identical. Predictions: **3 of 5**, and both misses are the fi
   Still open and stated in the note, not pinned: the bare read degrades to `any` rather
   than to the DEFAULT (`SyntaxKind`), in both orders.
 
+- [ ] **(WIDEN.1) A `const` binding keeps its initializer's LITERAL type — PROMOTED round
+  781 from (REL.2) cause (D) / (REL.4)(c), SIZED BY EXPERIMENT, and sub-step (a) LANDED.**
+  tsc's rule is `getWidenedLiteralTypeForInitializer` (checker.ts:41455), a
+  DECLARATION-FLAG gate: `NodeFlags.Constant || isDeclarationReadonly ? type :
+  getWidenedLiteralType(type)`.
+  **MEASURED SIZE, which retires the "blast radius is every `const` in the corpus" label
+  the queue carried from round 762: ONE corpus baseline of 13,262 moved, and it moved
+  because we were MISSING a real tsc rule (a const-assignment target is never
+  assignability-checked), not because our output diverged in form.** No
+  `LogicalParityDivergence` was needed. The reason the radius is so small is structural,
+  and is the thing to know before touching this again: **`getTypeOfExpression` answers the
+  BASE primitive for a literal NODE — this checker mints no fresh-literal expression type
+  at all** — so the literal must be read off the AST (`literalTypeOfExpression`), and the
+  gate belongs where `currentLocalTypes` is RECORDED, not in `widenType`.
+  - **(a) DONE round 781 — the un-annotated `const` var-decl recording.** Gate in
+    `checkVarDeclAssignabilityCore`'s un-annotated branch + `spineArithRecordVarDecl`
+    (which runs later and would re-widen). Two exclusions, each found by measurement:
+    an ENUM MEMBER still widens to its enum (skipping it cost `completions.ts:2239` —
+    services/server 46 -> 47, harness 94 -> 95), and an ASSIGNMENT TARGET still reads the
+    widened type via `widen1ConstLiteralTypeIds` (skipping it cost
+    `constDeclarations-access2`). **Closes (REL.4)(c)**, verified on the real
+    `ESDecorateClassElementContext` shape (1 error -> 0). 13 pins in
+    `ConstLiteralTypeTest`, 6 discriminating against an ablated binary.
+  - **(b) OPEN — the CALL-ARGUMENT position.** `const k = "method"; wantsKind(k)` still
+    reports `Argument of type 'string'` on the fixed AND the ablated binary: the argument
+    gate resolves its type by a path that does not read the recorded literal. **0 measured
+    sites on all 8 profiles**, so do not widen this speculatively — take it only when a
+    profile line or a (REL.2) re-measurement needs it.
+  - **(c) OPEN — `readonly` class properties.** tsc's gate is `Constant ||
+    isDeclarationReadonly`; only the `Constant` half landed. No measured site.
+  - **(d) OPEN, and it is a DIVERGENCE we now own:** `const o = { kind: k }` infers
+    `{ kind: "a" }` where tsc infers `{ kind: string }` (object-literal members are
+    MUTABLE locations in tsc — the `as const` gotcha). Ours is NARROWER, so unlike the
+    enum exclusion it CAN in principle manufacture an FP (`o.kind = "b"` is legal in tsc).
+    Zero measured sites; recorded, not pinned (round 765's rule).
+  Back-pointers: **(REL.4)(c)** — CLOSED by (a). **(REL.2)** — its remaining worklist is
+  labelled 3x cause (D), but round 781 read the real sources and **at least two of the
+  three are not literal widening at all** (`formattingScanner.ts:113` initialises from a
+  CALL, `importFixes.ts:1127` assigns enum members inline); re-classify behind the (REL.2)
+  scaffold before crediting (WIDEN.1) with them.
+
 - [ ] **(REL.4) Turn argument checking ON for a call whose callee is a member of an
   IMPORTED namespace — SIZED round 767, price measured, DO (a) FIRST.** The change
   itself is two call sites: `computeRawTypeOfPropertyAccess`'s namespace fallback must
@@ -1218,13 +1181,17 @@ cost counters bit-identical. Predictions: **3 of 5**, and both misses are the fi
     stripped the source's nullish constituents only when exactly ONE non-nullish member
     survived. Still open, recorded not pinned: the (b1) gate is BARE-TP only — a nested
     mention (`f<T>(x: Array<T>)`) is the same class of error with **0 measured sites**.
-  - **(c) one line, esDecorators.ts:1314 — cause (D) literal widening downstream, and since
-    round 780 it is THE WHOLE RESIDUAL.** NOT folded into round 779 or 780 (deliberately):
-    its blast radius is every `const` in the corpus, so it stays the arc the (REL.2) worklist
-    already calls it. The message is `Type '{ kind: string; … }' is not assignable to type
-    'ESDecorateClassElementContext'` — the object literal's `kind` came from a `const kind =`
-    holding a string literal and widened to `string`, where the target wants a literal union.
-  Then flip the pair, whose MEASURED cost is now (c) alone (+1, round 780). The (REL.2)
+  - **(c) CLOSED round 781 by (WIDEN.1)(a) — and the feared arc was one baseline wide.**
+    The message was `Type '{ kind: string; … }' is not assignable to type
+    'ESDecorateClassElementContext'`: the object literal's `kind` came from a 5-arm
+    `const kind = … ? "getter" : … : Debug.fail()` whose literal union had widened to
+    `string`. Verified on a scratch project carrying the REAL member list and the REAL
+    conditional chain — 1 error before, **0** after. The "blast radius is every `const` in
+    the corpus" label is retired: the measured radius was ONE corpus baseline, which was a
+    genuine missing tsc rule rather than a form divergence. See (WIDEN.1) above.
+  **SO THE RESIDUAL IS NOW EMPTY: (a), (b) AND (c) ARE ALL CLOSED, and the flip's measured
+  cost should now be ZERO new lines — RE-MEASURE BEHIND A SCAFFOLD BEFORE QUOTING THAT**
+  (every earlier quote in this item was stale by at least one). The (REL.2)
   global enum -> MEMBER rule is EXACTLY ADDITIVE with this (+1 compiler / +5 services,
   the same five lines, measured both ways), so the two orders are independent.
 
@@ -1283,6 +1250,12 @@ cost counters bit-identical. Predictions: **3 of 5**, and both misses are the fi
     reports *Type 'string' is not assignable to type '"a"'*. This is tsc's
     fresh/widening literal-type machinery — **an ARC (blast radius: every `const` in
     the corpus), not a queue item**; promote it as its own M3 item before (REL.2).
+    **PROMOTED AND LANDED round 781 as (WIDEN.1) — and the "blast radius" premise was
+    FALSE: one corpus baseline, not every `const`. BUT the four sites listed on this line
+    were RE-READ in the real sources and at least two are not literal widening at all
+    (`formattingScanner.ts:113` initialises from a CALL; `importFixes.ts:1127` assigns
+    enum members inline) — re-classify them behind the scaffold before assuming they
+    closed.**
   Order: (B)+(C) together (they share the `narrowUnionByLiteral` consumer), then (D)
   as an arc, then the global rule, then delete the stand-in veto.
   **None of (B)/(C)/(D) is observable on the dashboard until the global rule lands** —
