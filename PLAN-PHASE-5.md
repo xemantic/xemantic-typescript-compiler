@@ -20,6 +20,90 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 780 (2026-07-31) — (REL.4)(a) IS CLOSED, AND BOTH "PROBABLY NOT NARROWABLE"
+STRAGGLERS WERE ORDINARY NARROWING GAPS. THE FLIP'S RESIDUAL IS NOW EXACTLY ONE LINE —
+`esDecorators.ts:1314`, i.e. (c) ALONE.** Scaffolded price, re-measured behind THIS round's
+own scaffold in both arms: **compiler 48 -> 47, services 49 -> 47**; `diff` says exactly the
+two targeted lines and no new one, and the fix-off arm reproduced round 779's 48/49 exactly
+(the price was NOT stale this time — the first round in this arc where it wasn't).
+Unscaffolded 8-profile grid **46/46/46/46/46/46/46/94**, set-for-set IDENTICAL to round
+779's on all eight. Suite 13,252 -> **13,262 / 0 failures / 3 skipped**; cost gate exit 0,
+**no rebaseline**.
+
+- **DEFECT 1 — AN ELEMENT ACCESS WAS NOT A REFERENCE *AT THE ARGUMENT GATE*, AND NOWHERE
+  ELSE.** Everything else was already in place: `getReferencePath` has encoded `a[0]` since
+  round 461, `Flow.kt`'s `ElementAccessExpression` arm records a flow node at it, and the
+  walk compares path STRINGS. But all four flow-reading arms of
+  `checkArgumentsAgainstSignature`'s argument-type computation tested
+  `arg is Identifier || arg is PropertyAccessExpression`, so an element-access argument fell
+  to the `else -> ctxApplied` tail and read the DECLARED type — which is the whole of
+  `Debug.assertNever(allowedEndings[0])` after an exhaustive `switch (allowedEndings[0])`.
+  One predicate (`argIsNarrowableRef`, path-gated so a computed index and a call chain stay
+  out) closes it. **Round 768's "an ELEMENT ACCESS that is not the switch subject at all" was
+  wrong on the mechanism**: it IS the subject by path (`allowedEndings[0]` both places) — the
+  two occurrences are different NODES, and the narrowing machinery has never cared.
+- **DEFECT 2 — A SWITCH `default:` SUBTRACTED NEITHER A NULLISH NOR A WHOLE-ENUM CONSTITUENT
+  OF A UNION SUBJECT**, and `Extension | undefined` (`stringCompletions.ts:386`) needs both.
+  (i) `case undefined:` / `case null:` DO resolve — `literalTypeOfExpression` answers
+  `undefinedType`/`nullType` for the bare identifiers — but the member test is
+  `isLiteralKindForDiscriminant`, a string/number/bigint/boolean-literal predicate, so
+  nothing ever matched them. (ii) An enum constituent is ONE member-LESS `Type.Object`
+  (round 763), so no per-member test could touch it either, where tsc — which models a
+  literal enum AS its member union — peels all 14 constituents. Fixed by teaching the
+  `matchesDirectly` union filter to also drop an identity-matched nullish member and to
+  REPLACE an enum constituent with `enumMinusMembers(m, caseMemberTypes)` (the same
+  subtraction the BARE-enum arm has used since round 765, carrying the round-746 owner rule,
+  and answering null for anything it cannot decompose). The filter became a loop with an
+  explicit `subtracted` flag because it can now SHRINK a constituent rather than only drop
+  it — `filtered.size == t.types.size` is no longer a "nothing happened" test.
+- **DIAGNOSED WITHOUT THE SCAFFOLD, WHICH IS THE REUSABLE PART.** The FPs are invisible
+  unscaffolded only because their CONSUMER (`Debug.assertNever`) is a namespace member; the
+  DEFECT is a plain narrowing gap and reproduces in a 1.2 s scratch project with a local
+  `declare function assertNever(x: never): never`. Three probes discriminated the three
+  subject shapes in one run — identifier and property-access narrow, element access does not
+  — which named the gate before any instrumentation. Also measured on the way and recorded:
+  **`getTypeOfElementAccess` applies NO flow narrowing at all** (its `getTypeOfPropertyAccess`
+  twin has since 17.34d), so `const s: boolean = a[0]` after `if (typeof a[0] === "string")`
+  still reads `string | number`. That is a SECOND gap, deliberately not taken — it is a read
+  site every element access in the program passes through, and no profile line needs it.
+- **THE PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (`REL4_ELEM_UNION_GATE =
+  false`, recompiled, class re-run): **8 of 10 fail ablated and pass fixed; 2 hold on both
+  sides** — a COMPUTED-index element access still reports the declared type (so the PATH
+  gate, not the node kind, is what admits an element access) and a partial identifier switch
+  is unchanged. Six of the eight discriminate **by MESSAGE**: `'ME.B | ME.C'` vs `'ME'`,
+  `'2'` vs `'2 | undefined'`, `'undefined'` vs `'ME | undefined'` — each names WHAT the
+  narrowing left behind, so a pin cannot be satisfied by some unrelated rule going silent.
+  One of them pins the negative direction of the same mechanism: `case null:` must NOT
+  subtract `undefined` while the enum still subtracts.
+- **THE FIX IS REACHED UNSCAFFOLDED AND CHANGES NO VERDICT** — the cost gate reports
+  `narrow.walks` +15 (+0.02%), `typeOfExpr.calls` -6 and `globals.lookups` +36 with the other
+  17 counters bit-identical, and all 8 profile outputs byte-identical. So this is not a
+  zero-count green (round 753's rule): the new arms ran and agreed with the old answers
+  everywhere on tsc's own sources except the two targeted lines.
+- **SO THE FLIP IS NOW GATED ON (c) AND NOTHING ELSE.** Scaffolded compiler 47 = 46
+  env-legit + `esDecorators.ts:1314`; services 47 = the same. The residual message —
+  `Type '{ kind: string; … }' is not assignable to type 'ESDecorateClassElementContext'` —
+  is cause (D) literal widening (`const kind = …` widens to `string` where the target wants
+  a literal union), whose blast radius is every `const` in the corpus. **NOT LANDED, and the
+  decision is left to the owner**: flipping today would add exactly 1 FP to a
+  currently-clean dashboard on the two measured profiles.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). (i) The
+  `getTypeOfElementAccess` read-site gap above. (ii) After `a[0] = ME.A` inside an exhausted
+  `default:`, we answer `ME` where tsc answers `ME.A` — the FlowAssignment correctly
+  invalidates (no stale `never`), the assignment-RHS refinement just does not run for an
+  element-access path. Both are wider-than-tsc, so neither can manufacture an FP.
+- **PREDICTIONS 3 of 4.** HIT: both stragglers were closable; the scaffolded price falls by
+  exactly the two targeted lines with no new one; the unscaffolded grid does not move.
+  **MISSED, and it is the useful one:** I expected `moduleSpecifiers.ts:1411` to need a
+  narrowing RULE (round 768 had recorded it as probably not narrowable by any); it needed a
+  GATE widened to a node kind the rest of the machinery had supported for 300 rounds — the
+  "not narrowable" verdict came from reading the SHAPE instead of asking whether the read
+  ever happened.
+- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) on the fourth
+  recompile of the round, exactly BUILD.1's idle-daemon-squats trap; `./gradlew --stop` +
+  a graceful `pkill -f 'KotlinCompile[D]aemon'` freed 4.1 GB and the next build took 2m29s.
+  Budget one daemon restart per ~4 gate flips.
+
 **Round 779 (2026-07-31) — (REL.4)(b) CLOSED, AND ITS OWN LABEL IS FALSIFIED: THE FAMILY IS
 **TWO** DEFECTS AND ONLY **ONE** OF THEM IS GENERIC INFERENCE. THREE OF THE FOUR COMPILER
 LINES COME FROM A DEDICATED WALKER READING *OUR OWN* INFERENCE AS IF IT WERE THE
@@ -1045,26 +1129,37 @@ cost counters bit-identical. Predictions: **3 of 5**, and both misses are the fi
   ESM `.js` + `export *` — that is the TS2315 flood). Each step alone is measurably
   INERT; only the pair moves anything. It unblocks 1,127 previously-unchecked
   `PropertyAccess` callees on compiler and 1,551 on services.
-  **The last MEASURED price of switching it on is compiler 46 -> 48, services 46 -> 49
-  (round 779; 46 -> 52 / 46 -> 56 round 778's state, 46 -> 66 / 46 -> 71 round 767) — all
-  FPs. Both numbers were re-measured behind the scaffold in round 779 and BOTH prior
-  quotes were stale by one (round 778's (ORDER.1) fix had removed a services line nobody
-  attributed to this item). Re-measure before quoting, and before flipping anything —
-  three separate rounds have mis-stated this price.**
-  **THE RESIDUAL IS NOW THREE LINES AND ALL THREE ARE NAMED:** `moduleSpecifiers.ts:1411`
-  and `stringCompletions.ts:386` — (a)'s two stragglers, neither a narrowing of a
-  reference — plus `esDecorators.ts:1314`, which is (c). Nothing unclassified remains, so
-  the flip is gated on (c)'s arc and on those two, not on further recon.
-  - **(a) `Debug.assertNever(x)` whose argument does not narrow to `never` — 14 of the 15
-    CLOSED (8 round 768, 3 round 769, 3 round 770, 1 round 777). Last MEASURED: compiler
-    53 -> 52, services 58 -> 57 (round 777). **ONE line remains on compiler and TWO on
-    services**, and they are cause (7) plus one services-only twin:
-    `moduleSpecifiers.ts:1411` (`allowedEndings[0]`, an ELEMENT ACCESS that is not the
-    switch subject at all) and `stringCompletions.ts:386` (`Extension | undefined`, whose
-    elaboration says `Type 'Extension' is not assignable to type 'never'` — a
-    nullish-carrying subject, not obviously the same cause). Neither is narrowing of a
-    reference, so (a) is effectively closed and the flip's residual price is (b)+(c) plus
-    these two.** The closed 8 were THREE causes, all
+  **The last MEASURED price of switching it on is compiler 46 -> 47, services 46 -> 47
+  (round 780; 46 -> 48 / 46 -> 49 round 779, 46 -> 52 / 46 -> 56 round 778's state,
+  46 -> 66 / 46 -> 71 round 767) — one FP, the SAME one on both profiles. Round 780
+  measured both arms behind its own scaffold and its fix-off arm reproduced round 779's
+  48/49 exactly, so that quote was accurate; every earlier one was stale by at least one.
+  Re-measure before quoting, and before flipping anything.**
+  **THE RESIDUAL IS NOW ONE LINE: `esDecorators.ts:1314`, i.e. (c) ALONE.** (a) and (b) are
+  closed. **DECISION PENDING (round 780, not taken unilaterally): flipping today adds
+  exactly +1 FP to a currently-clean dashboard** (measured on compiler and services; the
+  file is `src/compiler/transformers/esDecorators.ts`, so any profile including it pays the
+  same one). Either close (c)'s literal-widening arc first, or accept +1 knowingly and land
+  the 1,127 / 1,551 newly-checked callees the flip buys.
+  - **(a) CLOSED round 780 — all 15. `Debug.assertNever(x)` whose argument does not narrow
+    to `never`** (8 round 768, 3 round 769, 3 round 770, 1 round 777, the last 2 round 780:
+    compiler 48 -> 47, services 49 -> 47). **The two "probably not narrowable" stragglers
+    were ordinary narrowing gaps, and the recon that called them unnarrowable read the SHAPE
+    instead of asking whether the flow read ever happened.** `moduleSpecifiers.ts:1411`
+    (`allowedEndings[0]`): an element access IS a reference everywhere else in the checker —
+    `getReferencePath` since round 461, a flow node from `Flow.kt`'s own arm, a path-STRING
+    walk — but the four flow-reading arms of the argument gate tested
+    `arg is Identifier || arg is PropertyAccessExpression`, so it fell to the raw-type tail.
+    `stringCompletions.ts:386` (`Extension | undefined`): the switch `default:` union filter
+    subtracted neither a nullish constituent covered by `case undefined:` (the member test is
+    a string/number/bigint/boolean-literal predicate, so `undefinedType` never matched) nor a
+    whole-ENUM constituent (one member-LESS `Type.Object`, where tsc has a member union to
+    peel) — fixed by identity-matching the nullish case and by REPLACING the enum constituent
+    with `enumMinusMembers`. **Still open, recorded not pinned: `getTypeOfElementAccess`
+    applies no flow narrowing at all** (its property-access twin has since 17.34d), so a
+    plain read `a[0]` after `if (typeof a[0] === "string")` still answers the declared type —
+    a read site every element access passes through, and no profile line needs it.
+    The closed 8 were THREE causes, all
     "the subtraction stops one member short of `never`": the LAST member (a single member
     type has nothing to subtract from — so a PARTIAL chain narrowed and a COMPLETE one did
     not, i.e. round 767's "only the FIRST/innermost subtracts" was backwards), an
@@ -1123,10 +1218,13 @@ cost counters bit-identical. Predictions: **3 of 5**, and both misses are the fi
     stripped the source's nullish constituents only when exactly ONE non-nullish member
     survived. Still open, recorded not pinned: the (b1) gate is BARE-TP only — a nested
     mention (`f<T>(x: Array<T>)`) is the same class of error with **0 measured sites**.
-  - **(c) one line, esDecorators.ts:1314 — cause (D) literal widening downstream.** NOT
-    folded into round 779 (deliberately): its blast radius is every `const` in the corpus,
-    so it stays the arc the (REL.2) worklist already calls it.
-  Then flip the pair, which should then cost roughly the (c) remainder plus (a)'s two. The (REL.2)
+  - **(c) one line, esDecorators.ts:1314 — cause (D) literal widening downstream, and since
+    round 780 it is THE WHOLE RESIDUAL.** NOT folded into round 779 or 780 (deliberately):
+    its blast radius is every `const` in the corpus, so it stays the arc the (REL.2) worklist
+    already calls it. The message is `Type '{ kind: string; … }' is not assignable to type
+    'ESDecorateClassElementContext'` — the object literal's `kind` came from a `const kind =`
+    holding a string literal and widened to `string`, where the target wants a literal union.
+  Then flip the pair, whose MEASURED cost is now (c) alone (+1, round 780). The (REL.2)
   global enum -> MEMBER rule is EXACTLY ADDITIVE with this (+1 compiler / +5 services,
   the same five lines, measured both ways), so the two orders are independent.
 

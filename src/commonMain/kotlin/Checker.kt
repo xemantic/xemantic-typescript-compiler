@@ -108837,11 +108837,47 @@ interface DataView {
                 // case to have resolved to a member type, so a case that did not resolve
                 // keeps the conservative answer rather than proving a short exhaustion.
                 val enumCasesComplete = caseMemberTypes.size == enumKeys.size
-                val filtered = t.types.filter { m ->
-                    !(isLiteralKindForDiscriminant(m) &&
-                        litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) }) &&
-                        !(enumCasesComplete && m.flags.hasAny(TypeFlags.EnumLiteral) &&
-                            caseMemberTypes.any { c -> enumMemberTypesAreSameMember(m, c) })
+                val filtered = ArrayList<Type>(t.types.size)
+                var subtracted = false
+                for (m in t.types) {
+                    if (isLiteralKindForDiscriminant(m) &&
+                        litTypes.any { lit -> literalsEqualForDiscriminant(m, lit) }
+                    ) { subtracted = true; continue }
+                    // (REL.4) round 780: a NULLISH constituent covered by `case undefined:` /
+                    // `case null:`. Those cases DO resolve — [literalTypeOfExpression] answers
+                    // `undefinedType`/`nullType` for the bare identifiers — but
+                    // [isLiteralKindForDiscriminant] is a string/number/bigint/boolean-literal
+                    // test, so no member ever matched them and an otherwise-exhaustive
+                    // `T | undefined` switch still carried `undefined` into `default:`.
+                    // Identity comparison: both are interned intrinsics.
+                    if (REL4_ELEM_UNION_GATE &&
+                        (m === undefinedType || m === nullType) && litTypes.any { it === m }
+                    ) {
+                        subtracted = true; continue
+                    }
+                    if (enumCasesComplete && m.flags.hasAny(TypeFlags.EnumLiteral) &&
+                        caseMemberTypes.any { c -> enumMemberTypesAreSameMember(m, c) }
+                    ) { subtracted = true; continue }
+                    // (REL.4) round 780: a WHOLE-ENUM constituent (`Extension | undefined`,
+                    // tsc stringCompletions.ts:386). tsc models a literal enum AS the union of
+                    // its members, so there the subject is a 14-member union and `default:`
+                    // peels all of it; ours is ONE member-LESS `Type.Object` (round 763), which
+                    // no per-member test above can touch. [enumMinusMembers] is the same
+                    // subtraction the BARE-enum arm has used since round 765 — it carries the
+                    // round-746 owner rule and answers null for anything it cannot decompose,
+                    // so a foreign or value-less enum keeps the conservative constituent.
+                    if (REL4_ELEM_UNION_GATE && enumCasesComplete &&
+                        m.flags.hasNone(TypeFlags.EnumLiteral) && isEnumFlavoredObjectType(m)
+                    ) {
+                        val sub = enumMinusMembers(m, caseMemberTypes)
+                        if (sub != null && sub !== m) {
+                            subtracted = true
+                            if (sub === neverType) continue
+                            if (sub is Type.Union) filtered.addAll(sub.types) else filtered.add(sub)
+                            continue
+                        }
+                    }
+                    filtered.add(m)
                 }
                 return when {
                     // Every literal-kind member matched a case → the switch is
@@ -108850,7 +108886,7 @@ interface DataView {
                     // Only literal-kind members are dropped (a wide member is kept), so an
                     // empty result is a genuine exhaustiveness proof, not an "unknown".
                     filtered.isEmpty() -> neverType
-                    filtered.size == t.types.size -> null
+                    !subtracted -> null
                     filtered.size == 1 -> filtered[0]
                     else -> getUnionType(filtered)
                 }
@@ -143357,6 +143393,18 @@ interface DataView {
             // literal types and the arg is a literal expression, preserve the literal
             // type instead of widening to the primitive — matches TypeScript's
             // bidirectional contextual-typing rule for TS2345 source display.
+            // (REL.4) round 780: an ELEMENT ACCESS with a literal index is a narrowable
+            // REFERENCE — tsc's `isMatchingReference` accepts it and round 461 already
+            // encodes it in [getReferencePath] (`a[0]`), the binder already records a flow
+            // node at it (Flow.kt's ElementAccessExpression arm), and the flow walk is
+            // path-string-based so it needs nothing else. Only THIS gate excluded it: every
+            // flow-reading arm below tested `arg is Identifier || arg is
+            // PropertyAccessExpression`, so `Debug.assertNever(allowedEndings[0])` after an
+            // exhaustive `switch (allowedEndings[0])` read the DECLARED type (tsc:
+            // moduleSpecifiers.ts:1411). The path gate is what keeps a non-pure chain
+            // (a call, a computed index) out — those answer null and stay on the raw type.
+            val argIsNarrowableRef = arg is Identifier || arg is PropertyAccessExpression ||
+                (REL4_ELEM_UNION_GATE && arg is ElementAccessExpression && getReferencePath(arg) != null)
             val argType = try {
                 val gtoeT = ArgSections.t()
                 val raw = getTypeOfExpression(arg)
@@ -143380,12 +143428,12 @@ interface DataView {
                 // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
                 // args do not (getTypeOfIdentifier never consults narrowing), so narrow
                 // them explicitly here. Only Union types can be refined.
-                if ((arg is Identifier || arg is PropertyAccessExpression) && ctxApplied is Type.Union) {
+                if (argIsNarrowableRef && ctxApplied is Type.Union) {
                     val nwT = ArgSections.t()
                     val nw = getNarrowedTypeForReference(ctxApplied, arg)
                     ArgSections.closeNarrow(ArgSections.N_NARROW_UNION, nwT, nw !== ctxApplied)
                     nw
-                } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
+                } else if (argIsNarrowableRef &&
                     paramType === neverType && ctxApplied !is Type.Union) {
                     // Round 441: `assertNever(x)` / `assertType<never>(x)` whose arg has a
                     // NON-union declared type (a `Debug.type<SomeUnion>(node)` assert casts
@@ -143416,7 +143464,7 @@ interface DataView {
                         enumTargetsAreOwnMembers(
                             ctxApplied, if (n is Type.Union) n.types else listOf(n))
                     if (n === neverType || enumSubset) n else ctxApplied
-                } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
+                } else if (argIsNarrowableRef &&
                     isEnumFlavoredObjectType(ctxApplied) && paramType !== neverType &&
                     checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
                 ) {
@@ -143440,7 +143488,7 @@ interface DataView {
                     // unconditionally, and one of them — the `n <: ctxApplied` leg — exists
                     // precisely to substitute a refinement that is NOT relation-driven.
                     ctxApplied
-                } else if ((arg is Identifier || arg is PropertyAccessExpression) &&
+                } else if (argIsNarrowableRef &&
                     (ctxApplied is Type.Interface || ctxApplied === unknownType ||
                         ctxApplied === stringType || ctxApplied === numberType ||
                         // (REL.2)(C) round 763: an ENUM's own type. tsc models a literal
@@ -173771,6 +173819,17 @@ private val SYMBOL_TYPE_ORDER_GATE = true
  * Same top-level init-order rationale as the switch above. Never flip in a commit.
  */
 private val REL4B_GATE = true
+
+/**
+ * (REL.4) round 780 ABLATION SWITCH — flip to `false` to restore the pre-780
+ * behaviour of both halves of that round's fix (an ELEMENT-ACCESS argument is not a
+ * narrowable reference at the argument gate; a switch `default:` subtracts neither a
+ * nullish constituent covered by `case undefined:`/`case null:` nor a whole-ENUM
+ * constituent covered by its members' cases) so `Rel4ElementAccessAndUnionSwitchTest`'s
+ * pins can be shown to discriminate. Same top-level init-order rationale as the
+ * switches above. Never flip this in a commit.
+ */
+private val REL4_ELEM_UNION_GATE = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---
