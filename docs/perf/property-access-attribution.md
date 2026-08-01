@@ -505,3 +505,180 @@ P=build/bench/tsc-project-*
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll --cpaSections       $P
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll --cpaSectionsCoarse $P
 ```
+
+---
+
+# Round 790 — (ENGINE.2d)(a): the round-425 loop-entry retry is a pure repeat, 88.7% of the time
+
+## 17. The headline
+
+`checkMemberAccessMissing`'s block 1 walks the flow graph, and then — whenever
+that walk did not suppress — walks it AGAIN through the loop-entry-following
+mirror. Re-measured at HEAD before anything was written:
+
+| | calls | gross ms |
+|---|---:|---:|
+| the PLAIN narrowing flow walk | 22,270 | 758 |
+| **the round-425 loop-entry RETRY walk** | **21,384** | **528** |
+
+Every count of round 789's reproduced exactly (67,258 / 22,270 / 21,384 / 914 /
+40,308 / 63,797), so the target was stable while it sat in the queue — which is
+not something to assume (round 786's had grown, round 755's had halved).
+
+**The retry is now skipped when the plain walk provably made it redundant, and
+that is 88.7% of the time.** Measured after:
+
+| | calls | gross ms |
+|---|---:|---:|
+| the PLAIN narrowing flow walk | 22,270 | 756 |
+| the round-425 loop-entry RETRY walk | **2,408** | **90** |
+
+and, one level up, the row that contains them: **R_FLOW 1,548 → 1,111 ms**,
+level R total **3,094 → 2,618**, level Q total **3,488 → 3,026**. The saving is
+visible at every level of the partition; it does not get absorbed one level up.
+
+## 18. The equivalence, and why it is provable rather than probable
+
+`narrowTypeFromFlow` and `narrowTypeFromFlowFollowLoopEntry` are line-by-line
+mirrors (CLAUDE.md's walker-mirror invariant). Arm by arm — `FlowStart`,
+`FlowUnreachable`, `FlowCondition`, `FlowBranchLabel`, `FlowAssignment`,
+`FlowCall`, `FlowSwitchClause`, `FlowArrayMutation` — plus the fast-forward
+pass-through loop, the depth/visit budgets, the `seen` set and both memos, they
+are identical. **The one difference is `FlowLoopLabel`**: the plain walker
+returns the declared type there, the mirror recurses into `antecedents[0]`.
+
+So if the plain walk ARRIVED at no `FlowLoopLabel`, the mirror makes exactly the
+same traversal decision at every node the plain walk visited, reaches the same
+nodes, and returns the same type. Stronger than "same result": since every
+resolution the mirror would drive was already driven (and cached) by the plain
+walk moments earlier, the second walk is a pure REPEAT — which also disposes of
+the cache-mutation-order hazard (round 754) that kept round 789 from landing it,
+because a repeat mutates nothing new.
+
+**Three ways the claim can fail, all handled by treating unknown as "run it".**
+
+1. **The walk never ran.** `isFlowAnalysisDisabledAt`, a missing reference path,
+   a missing flow node, or a serve from the round-664 inter-walk memo all return
+   without traversing anything, so no observation was made and none may be used.
+2. **The walk TRUNCATED** — the depth trip, the re-entry/visit budget, or the
+   `seen` cycle break. Such a walk saw only a prefix of its own traversal.
+3. **A serve from the round-736 intra-walk `NarrowFlowMemo` hid a subtree.** This
+   one is not a hazard: that memo is constructed fresh at each outermost entry
+   (`memo: NarrowFlowMemo = NarrowFlowMemo()`), so anything it serves was walked
+   EARLIER IN THE SAME WALK and its loop labels were already observed.
+
+Two monotone counters on the checker implement it. `narrowWalkLaunches` is bumped
+INSIDE `getNarrowedTypeForReference`'s walk lambda, so case 1 leaves it unchanged.
+`narrowRetryRelevantObs` is bumped at both walkers' `FlowLoopLabel` arms and at
+every truncation exit, covering case 2. **Monotone and never reset is what makes
+them re-entrancy-safe**: a nested walk launched from inside `applyConditionNarrowing`
+can only push the bracketed reading in the conservative direction. The bracket is
+taken IMMEDIATELY around the walk call — the `suppresses` fold that follows
+re-enters the checker and would poison it.
+
+## 19. The hazard was falsified by measurement, not by the argument above
+
+Round 788's protocol. `--verifyLoopRetry` keeps the PRE-gate behaviour — the retry
+runs at every call and is honoured — and counts, for every call the gate would
+have skipped, whether the retry returned a different `Type` INSTANCE and whether
+it suppressed where the plain walk had not:
+
+| profile | skippable | verified | type-diff | **verdict-diff** |
+|---|---:|---:|---:|---:|
+| compiler | 18,976 | 18,976 | 0 | **0** |
+| services | 24,290 | 24,290 | 0 | **0** |
+| harness | 24,681 | 24,681 | 0 | **0** |
+
+**67,947 comparisons, zero divergences, at the strongest available granularity:
+not "the same verdict" but the same `Type` instance.**
+
+**And the zero is not the reading of a dead instrument.** `--verifyLoopRetryAll`
+runs the same comparison over the population the gate never skips — the calls
+whose plain walk DID cross a loop label. On the round's fixture it reports
+`VERIFIED 4, type-diff 2, VERDICT-DIFF 2`: the loop-crossing calls really do
+disagree, and disagree in the direction that matters (the retry suppresses where
+the plain walk did not). That is CLAUDE.md's "record a deliberately bogus
+baseline" discipline, obtained here without a bogus baseline, because the
+complement population supplies the positive control for free.
+
+## 20. Law 2 does not apply here, and the counters say so to the unit
+
+Round 788's finding — an aggregate that is *skippable* is not thereby
+*recoverable*, because the skipped resolution was cached and the bill passed to
+the next asker — is the thing this round had to check before claiming anything.
+The queue item wrote the prediction down first: a narrowing walk's result is
+memoed, but round 735 measured essentially every launched walk COLD, so the bill
+should NOT move. It did not:
+
+```
+narrow.walks     71,377 -> 52,401   -26.59%      = -18,976, EXACTLY the skipped count
+globals.lookups 942,637 -> 902,299   -4.28%
+globals.misses  924,862 -> 884,538   -4.36%
+typeOfExpr.calls 689,726 -> 688,878  -0.12%
+typeNode.cacheHits 132,660 -> 131,983 -0.51%
+output.errors / spine.nodes / typeOfExpr.distinct / mapped.*   +0.00%
+```
+
+**No counter rose.** The `narrow.walks` drop matching the skipped-retry count to
+the unit is the cleanest evidence in this arc that a removal removed work rather
+than relocating it: 18,976 walks were launched, and 18,976 fewer are launched.
+One block of one function was **26.6% of every flow-narrowing walk xtsc performs**;
+it is now 4.6% of it.
+
+## 20b. The warm A/B: direction yes, magnitude no
+
+3 pairs, `scripts/ab-warm.sh`, box left alone for the whole run:
+
+| pair | delta |
+|---|---:|
+| 1 | -216 ms (-1.83%) |
+| 2 | -635 ms (-5.13%) |
+| 3 | -751 ms (-6.11%) |
+
+median of the medians **-696 ms (-5.66%), B wins 3/3**, and the smallest delta is
+already outside the +-1.0% warm band. **But the magnitude is not measured**: arm
+A's sd is **2.47%** (arm B's 0.88%), above the ~1% quietness criterion the driver
+itself sets for discarding a warm verdict, and the per-pair spread is 535 ms
+against a 635 ms delta — law 7's ratio is 1.19, not the several-fold margin a
+magnitude claim needs. Arm A drifted upward across the run (11,819 -> 12,381 ->
+12,299 ms) while arm B did not, and the quoted -696 ms EXCEEDS the 438 ms the
+partition measured directly, which is the tell of an inflated arm rather than a
+larger win.
+
+So: **the sign is confirmed 3/3 and the size is the partition's 438 ms, not the
+wall's 696.** The deterministic counters remain the primary evidence — as round
+788 also had to conclude, from the opposite position (its verdict was
+NOISE-DOMINATED and could not even confirm the sign).
+
+## 21. Verification
+
+* Corpus suite **13,380 -> 13,389 / 0 failures / 3 skipped** (+9 pins,
+  `LoopEntryRetryGateTest`).
+* 8-profile `--listAll` grid captured at HEAD FIRST and again after, diffed
+  set-for-set in BOTH directions: **46/46/46/46/46/46/46/94, 0 added and 0
+  removed on all eight.** Both directions matters here and nowhere more: a
+  suppression that starts firing DELETES a true positive and makes the grid look
+  better.
+* `--partitionCheck 2` **EQUIVALENT — 46**.
+* Cost gate rebaselined in the same commit, with the mechanism and population
+  named above.
+* **Pin discrimination: 7 of 9.** Against a binary whose `loopFree` is forced true,
+  seven of the nine `LoopEntryRetryGateTest` pins fail; the two that hold are the
+  two deliberate controls (the unguarded negative control, and the
+  production-inertness pin). No two faults cancelled — round 789 reported a
+  cancellation, so this round checked for one instead of assuming.
+
+## 22. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt); P=build/bench/tsc-project-*
+# the yield and the equivalence, in one run
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSectionsCensus --verifyLoopRetry $P
+# the control: the same comparison over the population the gate never skips
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSectionsCensus --verifyLoopRetryAll $P
+# the price
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSections $P
+```
