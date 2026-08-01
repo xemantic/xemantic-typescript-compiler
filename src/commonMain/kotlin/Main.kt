@@ -207,6 +207,28 @@ fun main(args: Array<String>) {
             // prologue's measured time by the verdict, and counts how many of the
             // calls it would skip actually emitted or returned. That last column
             // is the falsifier.
+            // (ENGINE.2h) round 795: the deferred TS2793 `implRelated` probe.
+            // Evaluates it EAGERLY (at the position it used to occupy) and again
+            // DEFERRED (at its single reader), honours the EAGER verdict — so the
+            // run reproduces the pre-change binary and IS the grid's baseline —
+            // and compares the two at `Diagnostic` granularity.
+            "--verifyImplRelated", "--verifyimplrelated" -> {
+                CallSections.verifyImplRelated = true
+            }
+            // ... and the FREE complement control (round 790): the same
+            // comparison over every single-signature call, not only the ones
+            // that reach an emission.
+            "--verifyImplRelatedAll", "--verifyimplrelatedall" -> {
+                CallSections.verifyImplRelated = true
+                CallSections.verifyImplRelatedAll = true
+            }
+            // ... and the POSITIVE control: the deferred evaluation drops the
+            // `allArgumentsMatch` gate, so the diff column must move.
+            "--verifyImplRelatedBogus", "--verifyimplrelatedbogus" -> {
+                CallSections.verifyImplRelated = true
+                CallSections.verifyImplRelatedAll = true
+                CallSections.verifyImplRelatedBogus = true
+            }
             "--ccetPreGate", "--ccetpregate" -> {
                 CallSections.reset(); CallSections.mode = CallSections.ON
                 CallSections.preGateProbe = true
@@ -299,6 +321,8 @@ fun main(args: Array<String>) {
         print(CallSections.csv())
         println("== (CALL.1) csv end ==")
         CallSections.mode = CallSections.OFF
+    } else if (CallSections.verifyImplRelated) {
+        println(CallSections.implRelatedReport())
     }
     if (ArgSections.mode != ArgSections.OFF) {
         println(ArgSections.report())
@@ -483,6 +507,11 @@ private fun printUsage() {
           --verifyUnionRetry  (ENGINE.2f) keep the round-424 UNION loop-entry retry walking
                              and honour it, while comparing the substituted candidate against
                              the re-walked one (--verifyUnionRetryAll = the complement control)
+          --verifyImplRelated  (ENGINE.2h) evaluate the TS2793 "implementation would have
+                             succeeded" probe BOTH eagerly and deferred, honour the eager
+                             verdict, and compare at Diagnostic granularity
+                             (--verifyImplRelatedAll = the free complement population,
+                              --verifyImplRelatedBogus = the positive control)
           --verifyDeferSuppression  (ENGINE.2d)(b) evaluate checkMemberAccessMissing's flow
                              suppression BOTH eagerly and deferred, honour the eager verdict,
                              and count every disagreement (--verifyDeferSuppressionBogus = control)

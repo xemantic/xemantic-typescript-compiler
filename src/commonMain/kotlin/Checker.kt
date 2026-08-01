@@ -139649,16 +139649,15 @@ interface DataView {
             // an impl that rejects "HI" too. Mirrors the gate already in place for
             // the generic-overload path (~48347) and the multi-overload path
             // (~48974) — see CLAUDE.md "TS2793 conditional on implementation match".
-            var implRelated: Diagnostic? = null
-            val implT = CallSections.t()
-            val implRelatedCandidate = getOverloadImplementationRelated(signatures[0], source, fileName)
-            if (implRelatedCandidate != null) {
-                val implSig = getImplementationSignature(signatures[0], source, fileName)
-                if (implSig != null && allArgumentsMatch(expr.arguments, implSig, bivariantFnParams = true)) {
-                    implRelated = implRelatedCandidate
-                }
-            }
-            CallSections.close(CallSections.N_IMPL_RELATED, implT)
+            // (ENGINE.2h) round 795: DEFERRED. The answer is related INFO on an
+            // argument diagnostic and has exactly ONE reader — so it is computed
+            // there, for the ~57 calls per compiler-profile compile that reach
+            // it, instead of here for all 23,214. Under `--verifyImplRelated` it
+            // is ALSO computed here and that verdict is the one honoured, so the
+            // verify run reproduces this line's pre-deferral behaviour exactly.
+            val implRelated: Diagnostic? = if (CallSections.verifyImplRelated)
+                overloadImplementationRelated(expr.arguments, signatures[0], source, fileName)
+            else null
             val walkersT = CallSections.t()
             checkTs2554ForPropertyAccessCall(expr, signatures[0], source, fileName)
             // B194: reverse-mapped callback arity — `createStructuredSelector({ p: (a, b) =>
@@ -139676,7 +139675,10 @@ interface DataView {
             if (checkTest2RestTupleTypeofUnionCall(expr, source, fileName)) return
             CallSections.close(CallSections.N_SINGLE_WALKERS, walkersT)
             val singleArgsT = CallSections.t()
-            checkArgumentsAgainstSignature(expr.arguments, signatures[0], source, fileName, implRelated)
+            checkArgumentsAgainstSignature(
+                expr.arguments, signatures[0], source, fileName, implRelated,
+                deferImplementationRelated = true,
+            )
             CallSections.close(CallSections.N_SINGLE_ARGS, singleArgsT)
         } else {
             CallSections.at(CallSections.OVERLOADS)
@@ -139927,6 +139929,46 @@ interface DataView {
             }
         }
         return null
+    }
+
+    /**
+     * (ENGINE.2h) round 795 — the whole TS2793 "the implementation would have
+     * succeeded" probe as ONE function, so it can be DEFERRED to the single site
+     * that reads its answer.
+     *
+     * It is [getOverloadImplementationRelated] (find the implementation to point
+     * at) + [getImplementationSignature] (rebuild its signature) +
+     * [allArgumentsMatch] (would it have accepted these arguments?), and its
+     * result is a piece of RELATED INFO attached to an argument diagnostic —
+     * i.e. it is read only where an argument diagnostic actually fires. Run
+     * eagerly at every single-signature call it cost 72–79 ms per compiler-profile
+     * compile over 23,214 invocations, of which 57 reach a reader.
+     *
+     * [bogus] is the positive control (`--verifyImplRelatedBogus`): it drops the
+     * `allArgumentsMatch` gate, which is the only part of the answer a
+     * mutation-order difference could plausibly move, so the verifier's diff
+     * column has something it MUST see.
+     */
+    private fun overloadImplementationRelated(
+        args: List<Expression>,
+        sig: Signature,
+        source: String,
+        fileName: String,
+        bogus: Boolean = false,
+    ): Diagnostic? {
+        val candidate = getOverloadImplementationRelated(sig, source, fileName)
+        if (candidate == null) {
+            CallSections.noteImplRelated(candidate = false, implSig = false, applied = false)
+            return null
+        }
+        val implSig = getImplementationSignature(sig, source, fileName)
+        if (implSig == null) {
+            CallSections.noteImplRelated(candidate = true, implSig = false, applied = false)
+            return null
+        }
+        val matched = bogus || allArgumentsMatch(args, implSig, bivariantFnParams = true)
+        CallSections.noteImplRelated(candidate = true, implSig = true, applied = matched)
+        return if (matched) candidate else null
     }
 
     private fun findCtorImplementationInStatements(stmts: List<Statement>, overloadDecl: Constructor): Constructor? {
@@ -144182,20 +144224,37 @@ interface DataView {
         fileName: String,
         implementationRelated: Diagnostic? = null,
         calleeGenericInstantiation: Boolean = false,
+        // (ENGINE.2h) round 795: the caller left the TS2793 related-info probe
+        // UNEVALUATED; compute it at the one site that reads it.
+        deferImplementationRelated: Boolean = false,
     ) {
         if (ArgSections.mode == ArgSections.OFF) {
             checkArgumentsAgainstSignatureCore(
-                args, sigIn, source, fileName, implementationRelated, calleeGenericInstantiation
+                args, sigIn, source, fileName, implementationRelated,
+                calleeGenericInstantiation, deferImplementationRelated,
             )
-            return
+        } else {
+            ArgSections.begin()
+            try {
+                checkArgumentsAgainstSignatureCore(
+                    args, sigIn, source, fileName, implementationRelated,
+                    calleeGenericInstantiation, deferImplementationRelated,
+                )
+            } finally {
+                ArgSections.end()
+            }
         }
-        ArgSections.begin()
-        try {
-            checkArgumentsAgainstSignatureCore(
-                args, sigIn, source, fileName, implementationRelated, calleeGenericInstantiation
+        // (ENGINE.2h) the FREE complement control (round 790): the emission-site
+        // comparison sees only the ~57 calls that reach a reader, which bounds
+        // nothing about the other 23,157. Under `--verifyImplRelatedAll` the
+        // deferred evaluation is made — and compared — for every one of them, at
+        // a position strictly later than the eager one, which is where a
+        // cache-mutation-ORDER difference (round 754) would have to show up.
+        if (deferImplementationRelated && CallSections.verifyImplRelatedAll) {
+            val deferred = overloadImplementationRelated(
+                args, sigIn, source, fileName, bogus = CallSections.verifyImplRelatedBogus,
             )
-        } finally {
-            ArgSections.end()
+            CallSections.noteImplRelatedVerifiedAll(deferred != implementationRelated)
         }
     }
 
@@ -144210,6 +144269,10 @@ interface DataView {
         // fine-grained TS2322-at-arrow-return conversion — for a generic-instantiated
         // callback param TypeScript keeps the coarse whole-argument TS2345.
         calleeGenericInstantiation: Boolean = false,
+        // (ENGINE.2h) round 795: [implementationRelated] was NOT computed by the
+        // caller — compute it here, at its only reader, and only if that reader
+        // is reached. See [overloadImplementationRelated].
+        deferImplementationRelated: Boolean = false,
     ) {
         // (CALL.2)(a): nine boundaries back-to-back. The first closes the wrapper
         // transition; the second closes the invocation's FIRST empty span; the
@@ -145784,9 +145847,33 @@ interface DataView {
                         }
                     }
                 }
-                // TS2793: overload implementation would have matched
-                if (implementationRelated != null) {
-                    relatedInfo.add(implementationRelated)
+                // TS2793: overload implementation would have matched.
+                // (ENGINE.2h) round 795: THIS is the probe's only reader, so this
+                // is where it is computed. The forcing is inside the very
+                // invocation the caller deferred it from — nothing was stored, so
+                // round 788's lazy-thunk failure mode (a value forced in a
+                // different dynamic scope, needing every save/restore site to
+                // cooperate) has nothing to bite on; and the argument loop's own
+                // `contextualType` install is already restored by here.
+                // The loop `break`s right after emitting, so this runs at most
+                // once per invocation and needs no memo.
+                val implRelated: Diagnostic? = if (!deferImplementationRelated)
+                    implementationRelated
+                else {
+                    val implT = CallSections.t()
+                    val deferred = overloadImplementationRelated(
+                        args, sigIn, source, fileName,
+                        bogus = CallSections.verifyImplRelatedBogus,
+                    )
+                    CallSections.close(CallSections.N_IMPL_RELATED, implT)
+                    if (CallSections.verifyImplRelated) {
+                        // Honour the EAGER verdict; only COUNT the disagreement.
+                        CallSections.noteImplRelatedVerified(deferred != implementationRelated)
+                        implementationRelated
+                    } else deferred
+                }
+                if (implRelated != null) {
+                    relatedInfo.add(implRelated)
                 }
                 // Union elaboration: find the failing constituent and add as message chain
                 val chain = mutableListOf<String>()

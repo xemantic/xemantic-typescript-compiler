@@ -927,6 +927,89 @@ object CallSections {
     /** Invocations of the instrumented function (nested ones excluded). */
     var invocations: Long = 0
 
+    // ── (ENGINE.2h) round 795: the deferred TS2793 `implRelated` probe ───────
+    /**
+     * `--verifyImplRelated`. The TS2793 "the implementation would have
+     * succeeded" related-info probe used to run at EVERY single-signature call
+     * — `getOverloadImplementationRelated` + `getImplementationSignature` +
+     * `allArgumentsMatch`, 23,214 times on the compiler profile — to build a
+     * `Diagnostic` that only an argument-error emission ever attaches (57 of
+     * those calls reach an emission at all). Round 791's shape: DEFER it to the
+     * one site that reads it.
+     *
+     * The deferral cannot be argued from the emission sites (there is exactly
+     * ONE reader, so there is nothing to enumerate); what it CAN change is
+     * round 754's cache-mutation ORDER — the deferred evaluation runs after the
+     * argument loop has typed the earlier arguments. So under this flag the
+     * probe is evaluated at BOTH positions and the **eager** verdict is the one
+     * honoured, which makes the verify run reproduce the pre-change binary by
+     * construction and its diff column a falsifier rather than a tautology.
+     */
+    var verifyImplRelated: Boolean = false
+
+    /**
+     * The FREE complement control (round 790) for [verifyImplRelated]
+     * (`--verifyImplRelatedAll`): the deferred evaluation is ALSO performed —
+     * and compared — at the end of every single-signature argument check, not
+     * only at the 57 that reach an emission. Same comparison, ~23k-call
+     * population instead of 57, so a zero there is a bound worth having; it is
+     * not a positive control, which is what [verifyImplRelatedBogus] is for.
+     */
+    var verifyImplRelatedAll: Boolean = false
+
+    /**
+     * The POSITIVE control (`--verifyImplRelatedBogus`): the deferred evaluation
+     * drops the `allArgumentsMatch` gate, so it answers "the implementation
+     * would have succeeded" wherever a candidate exists at all. Every call whose
+     * eager verdict was `null` *because of that gate* must then show up in
+     * [implRelatedVerifyDiff]. A zero under this flag means the comparator
+     * cannot see a difference and the real run's zero says nothing.
+     */
+    var verifyImplRelatedBogus: Boolean = false
+
+    /** Calls that evaluated the probe (deferred in production, both under the
+     *  verifier). Census, so the row's population is never inferred. */
+    var implRelatedCalls: Long = 0
+    /** Of those, the ones with an overload IMPLEMENTATION to point at. */
+    var implRelatedCandidates: Long = 0
+    /** Of those, the ones whose implementation signature was reconstructed. */
+    var implRelatedImplSigs: Long = 0
+    /** Of those, the ones where `allArgumentsMatch` accepted — i.e. TS2793 is
+     *  attachable. The population the eager computation existed to serve. */
+    var implRelatedApplied: Long = 0
+    /** `--verifyImplRelated` comparisons at the EMISSION site. */
+    var implRelatedVerified: Long = 0
+    /** Of those, eager and deferred differed at `Diagnostic` granularity. */
+    var implRelatedVerifyDiff: Long = 0
+    /** `--verifyImplRelatedAll` comparisons over the complement population. */
+    var implRelatedVerifiedAll: Long = 0
+    /** Of those, eager and deferred differed. */
+    var implRelatedVerifyAllDiff: Long = 0
+
+    /** Record one probe evaluation's census. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteImplRelated(candidate: Boolean, implSig: Boolean, applied: Boolean) {
+        if (mode == OFF && !verifyImplRelated) return
+        implRelatedCalls++
+        if (candidate) implRelatedCandidates++
+        if (implSig) implRelatedImplSigs++
+        if (applied) implRelatedApplied++
+    }
+
+    /** Record one eager-vs-deferred comparison at the emission site. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteImplRelatedVerified(differs: Boolean) {
+        implRelatedVerified++
+        if (differs) implRelatedVerifyDiff++
+    }
+
+    /** Record one eager-vs-deferred comparison over the complement population. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteImplRelatedVerifiedAll(differs: Boolean) {
+        implRelatedVerifiedAll++
+        if (differs) implRelatedVerifyAllDiff++
+    }
+
     // ── (ENGINE.2g) round 793: the prologue pre-gate probe ───────────────────
     /**
      * Compute the candidate prologue pre-gate and HONOUR NOTHING — the prologue
@@ -981,6 +1064,10 @@ object CallSections {
         pgSkipFired = 0; pgKeepFired = 0
         pgB216Deep = 0
         pgOpen = false; pgSkip = false; pgT0 = 0; pgD0 = 0
+        implRelatedCalls = 0; implRelatedCandidates = 0
+        implRelatedImplSigs = 0; implRelatedApplied = 0
+        implRelatedVerified = 0; implRelatedVerifyDiff = 0
+        implRelatedVerifiedAll = 0; implRelatedVerifyAllDiff = 0
     }
 
     /** (ENGINE.2g) open the prologue span for one depth-1 invocation. */
@@ -1103,7 +1190,16 @@ object CallSections {
                     "skip-set B216 reads past the receiver type: $pgB216Deep"
             )
         }
+        appendLine(implRelatedReport())
     }
+
+    /** (ENGINE.2h) the deferred TS2793 probe's census + verifier columns. */
+    fun implRelatedReport(): String =
+        "(ENGINE.2h) TS2793 implRelated probe${if (verifyImplRelatedBogus) " [BOGUS CONTROL]" else ""}: " +
+            "evaluated $implRelatedCalls (candidate $implRelatedCandidates, " +
+            "implSig $implRelatedImplSigs, APPLIED $implRelatedApplied); " +
+            "verified at the emission site $implRelatedVerified, DIFF $implRelatedVerifyDiff; " +
+            "complement $implRelatedVerifiedAll, DIFF $implRelatedVerifyAllDiff"
 
     /**
      * Invocations that left the function inside section [sec]. Sections

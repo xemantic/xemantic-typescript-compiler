@@ -218,9 +218,13 @@ class CallSectionProbeTest {
             CallSections.calls[CallSections.N_SINGLE_ARGS] <=
                 CallSections.calls[CallSections.SINGLE_SIG]
         )
-        // The TS2793 impl probe runs once per reach of the single-sig branch.
+        // (ENGINE.2h) round 795 RESTATED this. The TS2793 impl probe used to run
+        // once per reach of the single-sig branch; it is now DEFERRED to its only
+        // reader, so the row is driven by argument EMISSIONS and is strictly
+        // rarer than the branch. The old equality is exactly what a
+        // never-deferring build would restore.
         assert(
-            CallSections.calls[CallSections.N_IMPL_RELATED] ==
+            CallSections.calls[CallSections.N_IMPL_RELATED] <
                 CallSections.calls[CallSections.SINGLE_SIG]
         )
         // The overload fixture reaches checkArgumentsAgainstOverloads.
