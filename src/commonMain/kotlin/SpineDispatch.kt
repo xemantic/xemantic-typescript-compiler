@@ -2664,6 +2664,121 @@ object CtaSections {
     /** [beginD]'s "not measuring" sentinel — distinct from "no caller row" (-1). */
     const val D_INACTIVE = -2
 
+    // ── level E: checkAssignmentExpression, (ENGINE.1) site 3 ─────────────────
+    // The last of the three largest assignability sites, and the only one whose
+    // partition (ENGINE.1) still owed. Its OWN index space and arrays, so the
+    // level-A/B/C/D layouts — and the pins asserting them — are untouched.
+    //
+    // The function IS recursive, but at exactly one place: `a = b = c` descends
+    // into the chained right-hand assignment at the very top. That single site
+    // gets its own row, [E_RECURSE], and [atE] keeps the round-756 "depth != 1 ⇒
+    // return" shape — so the whole nested descent is charged to [E_RECURSE] of
+    // the OUTERMOST invocation, every other row stays exclusive of recursion,
+    // and the rows still sum to the site's true total. (Level D needed the
+    // hand-back shape because its recursion is spread across sixteen arms; here
+    // a dedicated row is both simpler and exactly attributed.)
+    //
+    // Under [COARSE] the whole invocation stays in [E_ENTRY] (because [atE] is
+    // [ON]-only), which is level E's own calibration counterpart.
+
+    /** The wrapper transition. Probe-only; absent in production. */
+    const val E_ENTRY = 0
+    /** `a = b = c` — the nested invocation, charged whole to the outer one. */
+    const val E_RECURSE = 1
+    /** 16.4dp: `arguments = <primitive>` in a non-arrow body. */
+    const val E_ARGS = 2
+    /** The sort-comparator / deeply-nested-objlit / mutually-recursive guards. */
+    const val E_FIRE1 = 3
+    /** 16.4dr + typeOfPrototype: `X.prototype.m = …`. */
+    const val E_PROTO = 4
+    /** Identifier target: the array-literal and identifier-RHS guard clusters. */
+    const val E_IDLIT = 5
+    /** B73.1/B155 module-alias `typeof import("X")` shapes. */
+    const val E_MODULE = 6
+    /** B236 optional-vs-required presence rule for an embedded-lib pair. */
+    const val E_B236 = 7
+    /** The TARGET type: annotation, local scope, and the tuple-node check. */
+    const val E_TTRESOLVE = 8
+    /** The foreign-TP TARGET gate and the B8.1 `never`-target block. */
+    const val E_FTP = 9
+    /** A class-value RHS against the target's construct signature. */
+    const val E_CTORID = 10
+    /** The SOURCE type (contextual install + `literalTypeOfExpression`/`getTypeOfExpression`). */
+    const val E_SRCTYPE = 11
+    /** The flow-narrowing block and its confirming relation. */
+    const val E_NARROW = 12
+    /** The foreign-TP SOURCE gate and the index-signature literal-value check. */
+    const val E_MID = 13
+    /** The construct-signature / call-signature guard blocks. */
+    const val E_SIGS = 14
+    /** The object-literal guard block. */
+    const val E_OBJLIT = 15
+    /** The strictNullChecks union block and the array-literal guards. */
+    const val E_UNION = 16
+    /** B175: a class-value RHS identifier. */
+    const val E_B175 = 17
+    /** B127: interface-vs-interface guards. */
+    const val E_B127 = 18
+    /** `canUseTypeEngine` + `checkTypeRelatedTo` — the ASSIGNABILITY RELATION. */
+    const val E_RELATION = 19
+    /** Post-relation walkers: index-sig, excess properties, array elements. */
+    const val E_POST = 20
+    /** The `canUse && !isAssignable` TS2322 elaboration and emission. */
+    const val E_ELAB = 21
+    /** The engine-confirmed literal-RHS exit that skips the legacy path. */
+    const val E_LITTAIL = 22
+    /** The legacy `varTypes` string-based fallback. */
+    const val E_DECLSTR = 23
+    /** `this.prop = value` — the varTypes class-property write path. */
+    const val E_THIS = 24
+    /** `x.prop = value` — `checkPropertyAccessAssignment`. */
+    const val E_PA = 25
+    /** `x[k] = value` — the element-access write paths. */
+    const val E_ELEM = 26
+
+    const val NE = 27
+
+    val eNames: Array<String> = arrayOf(
+        "E: wrapper transition",
+        "E: chained-assignment recursion (nested invocations)",
+        "E: `arguments = <primitive>` (16.4dp)",
+        "E: sort-comparator / deeply-nested / mutually-recursive",
+        "E: X.prototype.m = fn (16.4dr + typeOfPrototype)",
+        "E: identifier target — array/identifier RHS guards",
+        "E: module-alias typeof-import shapes (B73.1/B155)",
+        "E: B236 optional-vs-required lib pair",
+        "E: the TARGET type (annotation + local + tuple)",
+        "E: foreign-TP target gate + never target (B8.1)",
+        "E: class-value RHS vs construct signature",
+        "E: the SOURCE type",
+        "E: flow narrowing",
+        "E: foreign-TP source gate + index-sig literal values",
+        "E: construct/call-signature guard blocks",
+        "E: object-literal guard block",
+        "E: strictNullChecks union + array-literal guards",
+        "E: B175 class-value RHS identifier",
+        "E: B127 interface-vs-interface guards",
+        "E: canUseTypeEngine + checkTypeRelatedTo",
+        "E: post-relation walkers (index-sig/excess/array)",
+        "E: TS2322 elaboration + emission",
+        "E: engine-confirmed literal-RHS exit",
+        "E: legacy varTypes string fallback",
+        "E: this.prop = value",
+        "E: x.prop = value",
+        "E: x[k] = value",
+    )
+
+    var eNanos: LongArray = LongArray(NE)
+    var eCalls: LongArray = LongArray(NE)
+    var eExitIn: LongArray = LongArray(NE)
+    /** Outermost `checkAssignmentExpression` invocations. */
+    var invocationsE: Long = 0
+    /** Nested (chained-assignment) invocations; counted, never partitioned. */
+    var invocationsENested: Long = 0
+    var curE: Int = -1
+    var curTE: Long = 0
+    var depthE: Int = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -2680,6 +2795,9 @@ object CtaSections {
         dNanos = LongArray(ND); dCalls = LongArray(ND); dArm = LongArray(NDA)
         invocationsD = 0; outermostD = 0; maxDepthD = 0; invocationsDOutside = 0
         curD = -1; curTD = 0; depthD = 0; inWalkFn = false
+        eNanos = LongArray(NE); eCalls = LongArray(NE); eExitIn = LongArray(NE)
+        invocationsE = 0; invocationsENested = 0
+        curE = -1; curTE = 0; depthE = 0
     }
 
     // The entry points are `inline` so a production call is a static read plus a
@@ -2856,6 +2974,45 @@ object CtaSections {
         curTD = now
     }
 
+    /**
+     * Open level E's partition for one OUTERMOST `checkAssignmentExpression`,
+     * starting at [E_ENTRY]. A nested (chained-assignment) invocation is counted
+     * in [invocationsENested] and left to the outer partition's [E_RECURSE] row.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginE() {
+        if (mode == OFF) return
+        depthE++
+        if (depthE != 1) { invocationsENested++; return }
+        invocationsE++
+        curE = E_ENTRY
+        curTE = PassTiming.nowNanos()
+    }
+
+    /** Close level E's running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atE(sec: Int) {
+        if (mode != ON || depthE != 1) return
+        val now = PassTiming.nowNanos()
+        eNanos[curE] += now - curTE
+        eCalls[curE]++
+        curE = sec
+        curTE = now
+    }
+
+    /** Close whatever level-E section is open, recording the exit row. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endE() {
+        if (mode == OFF) return
+        if (depthE == 1 && curE >= 0) {
+            eNanos[curE] += PassTiming.nowNanos() - curTE
+            eCalls[curE]++
+            eExitIn[curE]++
+            curE = -1
+        }
+        depthE--
+    }
+
     /** Count one `when` arm of `walkFunctionBodiesInExpr`. */
     @Suppress("NOTHING_TO_INLINE")
     inline fun armD(arm: Int) {
@@ -3020,6 +3177,29 @@ object CtaSections {
         for (a in 0 until NDA) {
             appendLine("  ${dArmNames[a].padEnd(52)} ${dArm[a].toString().padStart(8)}")
         }
+        appendLine(
+            "-- (ENGINE.1) level E: checkAssignmentExpression, $invocationsE outermost " +
+                "invocations ($invocationsENested nested, charged to E_RECURSE) --"
+        )
+        var partE = 0L
+        var bE = 0L
+        for (s in 0 until NE) { partE += eNanos[s] - ovh * eCalls[s]; bE += eCalls[s] }
+        appendLine(
+            "level E partition: ${partE / 1_000_000} ms net, ${
+                eNanos.sum() / 1_000_000
+            } ms raw over $bE boundaries"
+        )
+        for (s in 0 until NE) {
+            val c = eCalls[s]
+            if (c == 0L) continue
+            val ns = eNanos[s] - ovh * c
+            appendLine(
+                "  ${eNames[s].padEnd(56)} ${(ns / 1_000_000).toString().padStart(5)} ms net " +
+                    "(${(eNanos[s] / 1_000_000).toString().padStart(5)} raw) reached ${
+                        c.toString().padStart(7)
+                    } = ${ns / c} ns each, exitedIn=${eExitIn[s]}"
+            )
+        }
     }
 
     /** Machine-readable dump: one line per section. */
@@ -3039,6 +3219,10 @@ object CtaSections {
         }
         for (a in 0 until NDA) {
             appendLine("\"D arm: ${dArmNames[a]}\",${dArm[a]},0,0")
+        }
+        for (s in 0 until NE) {
+            if (eCalls[s] == 0L) continue
+            appendLine("\"${eNames[s].trim()}\",${eCalls[s]},${eNanos[s]},${eExitIn[s]}")
         }
     }
 }

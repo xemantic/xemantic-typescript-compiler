@@ -98669,15 +98669,37 @@ interface DataView {
         return body.types.any { it is KeywordTypeNode && it.kind == kind }
     }
 
+    /**
+     * (ENGINE.1) site 3. The wrapper exists only for the level-E partition; with
+     * the probe off it is a static read and a tail call. The chained-assignment
+     * re-entry goes through it too — `depthE` ignores the nested partition, so
+     * the whole nested descent is charged to the outer invocation's
+     * [CtaSections.E_RECURSE] row, which is the only place recursion happens.
+     */
     private fun checkAssignmentExpression(expr: Expression, source: String, fileName: String, varTypes: MutableMap<String, String>, typeParams: Set<String>) {
+        if (CtaSections.mode == CtaSections.OFF) {
+            checkAssignmentExpressionCore(expr, source, fileName, varTypes, typeParams)
+            return
+        }
+        CtaSections.beginE()
+        try {
+            checkAssignmentExpressionCore(expr, source, fileName, varTypes, typeParams)
+        } finally {
+            CtaSections.endE()
+        }
+    }
+
+    private fun checkAssignmentExpressionCore(expr: Expression, source: String, fileName: String, varTypes: MutableMap<String, String>, typeParams: Set<String>) {
         // B572: this assignment is owned by checkTemplateUnionIntersectionComplexity (TS2859) — skip.
         if (expr is BinaryExpression && expr.pos in relationComplexityHandled) return
         if (expr is BinaryExpression && expr.operator == SyntaxKind.Equals) {
+            CtaSections.atE(CtaSections.E_RECURSE)
             // Recurse into chained assignments first: a = b = c = null
             // Each assignment in the chain gets checked independently
             if (expr.right is BinaryExpression) {
                 checkAssignmentExpression(expr.right, source, fileName, varTypes, typeParams)
             }
+            CtaSections.atE(CtaSections.E_ARGS)
             // 16.4dp: `arguments = <primitive>` inside a non-arrow function body fires
             // TS2322 because `arguments` is the implicit `IArguments` parameter. Only
             // emit when the RHS is clearly a primitive (number/string/boolean literal
@@ -98705,6 +98727,7 @@ interface DataView {
                     return // one error per assignment
                 }
             }
+            CtaSections.atE(CtaSections.E_FIRE1)
             val target = expr.left
             // interfaceAssignmentCompat piece 1: `<lhs> = <arr>.sort(<comparatorIdent>)` where the
             // comparator's parameter type is contravariantly incompatible with the array's element
@@ -98724,6 +98747,7 @@ interface DataView {
             // interface declaration. Resolve the method type on X's instance
             // interface and compare with RHS function type. Emits TS2322 with
             // function-mismatch elaboration chain.
+            CtaSections.atE(CtaSections.E_PROTO)
             if (target is PropertyAccessExpression) {
                 val inner = target.expression
                 if (inner is PropertyAccessExpression &&
@@ -98834,6 +98858,7 @@ interface DataView {
                 }
             }
             if (target is Identifier) {
+                CtaSections.atE(CtaSections.E_IDLIT)
                 // B185b: `arr = [...['y']]` where arr's annotation is `<LitUnionAlias>[]` —
                 // a SPREAD of a string-literal array literal loses freshness (the inner
                 // array is NOT contextually typed through `...`), so its elements widen to
@@ -98882,6 +98907,7 @@ interface DataView {
                 //       and RHS is a primitive → emit TS2322 with module target display
                 //   (2) target has primitive type (`var y = 1`) and RHS is a module
                 //       alias (`y = moduleA`) → emit TS2322 with module source display
+                CtaSections.atE(CtaSections.E_MODULE)
                 val rhsModuleName = tryGetModuleImportNameForExpr(expr.right)
                 val targetSym = currentFileLocals?.get(target.text) ?: globals[target.text]
                 val targetInitModuleName = run {
@@ -98953,6 +98979,7 @@ interface DataView {
                 // varTypes-name-driven (params aren't in globals/currentLocalTypes).
                 // SNC-on keeps the pre-existing coarse-TS2322 path (gate below). Lib-only
                 // pair keeps the member-resolution FP surface at zero (mirror of B103).
+                CtaSections.atE(CtaSections.E_B236)
                 run {
                     if (strictNullChecks) return@run
                     val rhsId = expr.right as? Identifier ?: return@run
@@ -98987,6 +99014,7 @@ interface DataView {
                     return
                 }
                 // Try new Type-based engine for file-level and local variables
+                CtaSections.atE(CtaSections.E_TTRESOLVE)
                 var targetType: Type? = null
                 var typeAnnotation: TypeNode? = null
                 // Scope shadowing: a function-body-local var (tracked in
@@ -99042,6 +99070,7 @@ interface DataView {
                         arrayLiteralSatisfiesTupleTarget(expr.right, declNode, currentFileLocals)) return
                 }
                 if (targetType != null && targetType !== anyType && targetType !== errorType) {
+                    CtaSections.atE(CtaSections.E_FTP)
                     val tt = targetType
                     // Round 435f: an assignment TARGET carrying a FOREIGN type param is a
                     // local typed from an UN-INFERRED generic call return (`let expression =
@@ -99082,6 +99111,7 @@ interface DataView {
                     // so without a special-case the assignment falls through and emits
                     // no diagnostic. Display the source as `typeof X` and emit the
                     // construct-signature mismatch elaboration chain.
+                    CtaSections.atE(CtaSections.E_CTORID)
                     val rhs = expr.right
                     if (rhs is Identifier &&
                         tt is Type.Object &&
@@ -99121,6 +99151,7 @@ interface DataView {
                     // B52.4 extends to ObjectLiteralExpression so per-property contextual
                     // typing flows into nested arrow function parameters via
                     // getTypeOfObjectLiteral's per-property contextualType push.
+                    CtaSections.atE(CtaSections.E_SRCTYPE)
                     val savedContextual = contextualType
                     if (tt is Type.Object && (expr.right is ArrowFunction || expr.right is FunctionExpression ||
                             expr.right is ObjectLiteralExpression)) {
@@ -99164,6 +99195,7 @@ interface DataView {
                     // destructuring.ts flattenDestructuring's `location = node = value`
                     // where `value` is guard-narrowed to DestructuringAssignment; the
                     // outer RHS is a BinaryExpression the plain gate skipped).
+                    CtaSections.atE(CtaSections.E_NARROW)
                     var narrowRef: Expression = expr.right
                     while (narrowRef is BinaryExpression && narrowRef.operator == SyntaxKind.Equals) {
                         narrowRef = narrowRef.right
@@ -99187,6 +99219,7 @@ interface DataView {
                     // round 431e: same foreign-TP rule as checkReturnAssignability's
                     // gate — an un-inferred generic call RHS (`fileIncludeReasons =
                     // append(…)` typing as `T[]`) must not be relation-checked.
+                    CtaSections.atE(CtaSections.E_MID)
                     if (typeContainsForeignTypeParam(sourceType, typeParams)) return
                     lastMissingPropertyName = null
                     lastMissingIndexSigKind = null
@@ -99217,6 +99250,7 @@ interface DataView {
                     // when target is a class/iface instance (its construct sigs
                     // are static-side; instance structural compares should
                     // follow the regular path).
+                    CtaSections.atE(CtaSections.E_SIGS)
                     if (tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
                         !isClassOrInterfaceInstanceType(tt) &&
                         sourceType is Type.Object &&
@@ -99303,6 +99337,7 @@ interface DataView {
                     // (a) RHS is an empty ObjectLiteralExpression `{}`; (b) target is
                     // a named wrapper interface. Other shapes still go through the
                     // standard path.
+                    CtaSections.atE(CtaSections.E_OBJLIT)
                     if (expr.right is ObjectLiteralExpression &&
                         (expr.right).properties.isEmpty() &&
                         tt is Type.Interface
@@ -99356,6 +99391,7 @@ interface DataView {
                     // that would fire for narrowed-union / contextual-typing cases that are
                     // legitimately assignable; we ONLY fire when the unambiguous cause is a
                     // nullish member missing from the (non-nullable) target.
+                    CtaSections.atE(CtaSections.E_UNION)
                     if (strictNullChecks && sourceType is Type.Union &&
                         (tt is Type.Object || tt is Type.Interface) &&
                         !typeIncludesUndefined(tt) && !typeIncludesNull(tt)
@@ -99424,6 +99460,7 @@ interface DataView {
                     // Single-missing only (multi → bail, FN-safe). The class-identifier RHS
                     // also SKIPS the instance-source branch below (it would mis-classify the
                     // static side as the instance shape).
+                    CtaSections.atE(CtaSections.E_B175)
                     val b175RhsClassSym = (expr.right as? Identifier)?.let { r ->
                         (currentFileLocals?.get(r.text) ?: globals[r.text])?.takeIf { s ->
                             s.flags.hasAny(SymbolFlags.Class) &&
@@ -99490,6 +99527,7 @@ interface DataView {
                     // so name-presence IS the assignability criterion, and `Object`-source
                     // is excluded (the TS2696 special-case owns that). Reaches the nested
                     // `a = b` of `const x = a = b` via the var-decl-initializer walk.
+                    CtaSections.atE(CtaSections.E_B127)
                     val b127SrcIsClassInstance =
                         sourceType is Type.Interface && sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true
                     val b127BothPlainInterfaces = sourceType is Type.Interface && tt is Type.Interface &&
@@ -99552,6 +99590,7 @@ interface DataView {
                             return
                         }
                     }
+                    CtaSections.atE(CtaSections.E_RELATION)
                     val canUse = canUseTypeEngine(sourceType, tt)
                     val isAssignable = canUse && (bareNewMatchesTarget(expr.right, tt) ||
                         withFreshObjLitSource(expr.right) {
@@ -99560,6 +99599,7 @@ interface DataView {
                     // B138 (assignment path): NON-LITERAL object source vs an index-sig-only
                     // target — `x = a` where `x: {[k:string]:T}`. Gated to `isAssignable`
                     // (the relation wrongly passes) so it never double-emits.
+                    CtaSections.atE(CtaSections.E_POST)
                     if (isAssignable && expr.right !is ObjectLiteralExpression &&
                         expr.right !is ArrayLiteralExpression &&
                         tt is Type.Object && tt.members.isNullOrEmpty() &&
@@ -99599,6 +99639,7 @@ interface DataView {
                     ) {
                         return
                     }
+                    CtaSections.atE(CtaSections.E_ELAB)
                     if (canUse && !isAssignable) {
                         // M3.1 (round 461): a bare TypeParam SOURCE whose declared
                         // constraint chain reaches a type assignable to the target is
@@ -99924,6 +99965,7 @@ interface DataView {
                     // (completions.ts) FP'd because the legacy path widens `true`→"boolean"
                     // and `isAssignableTo("boolean", "true | undefined")` fails. The engine
                     // already validated it (sourceType kept as `true` via propTypeContainsLiteral).
+                    CtaSections.atE(CtaSections.E_LITTAIL)
                     val rhsIsBooleanLiteral = (expr.right as? Identifier)?.text.let { it == "true" || it == "false" }
                     if (canUse && isAssignable && (expr.right is NumericLiteralNode ||
                             expr.right is StringLiteralNode || expr.right is BigIntLiteralNode ||
@@ -99934,6 +99976,7 @@ interface DataView {
                 }
 
                 // Fallback to old string-based system
+                CtaSections.atE(CtaSections.E_DECLSTR)
                 val declaredType = varTypes[target.text]
                 if (declaredType != null) {
                     // B54.7 (probe re-enable for regression-identification): fallback to varTypes
@@ -100039,6 +100082,7 @@ interface DataView {
                     }
                 }
             } else if (target is PropertyAccessExpression && (target.expression as? Identifier)?.text == "this") {
+                CtaSections.atE(CtaSections.E_THIS)
                 // this.prop = value — look up class property type from varTypes
                 val propName = target.name.text
                 val declaredType = varTypes["this.$propName"]
@@ -100090,9 +100134,11 @@ interface DataView {
                     checkPropertyAccessAssignment(target, expr.right, source, fileName)
                 }
             } else if (target is PropertyAccessExpression) {
+                CtaSections.atE(CtaSections.E_PA)
                 // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
                 checkPropertyAccessAssignment(target, expr.right, source, fileName)
             } else if (target is ElementAccessExpression) {
+              CtaSections.atE(CtaSections.E_ELEM)
               if (!tryEmitInferentialObjLitElementWrite(target, expr.right, source, fileName)) {
                 // B168: `this[key] = value` where `key` is a const with a string-LITERAL value
                 // late-binds to the class member named by that literal (TypeScript's late-bound

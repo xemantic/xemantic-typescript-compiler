@@ -606,4 +606,166 @@ class CtaSectionProbeTest {
         assert(CtaSections.dCalls[CtaSections.D_OBJLIT_MEM] > 0L)
         CtaSections.reset()
     }
+
+    // ── (ENGINE.1) level E: checkAssignmentExpression, round 786 ──────────────
+    //
+    // The third and last of (ENGINE.1)'s assignability sites. Its pins carry one
+    // obligation levels A-D did not: the function is RECURSIVE at exactly one
+    // place (`a = b = c`), and the partition's correctness rests on that being
+    // the ONLY place — every nested invocation is charged whole to the outer
+    // one's [CtaSections.E_RECURSE] row, so a second recursion site appearing
+    // later would silently mis-attribute a subtree. The `a = b = c` pin below
+    // is what detects it.
+
+    @Test
+    fun `the level-E name table is index-aligned and complete`() {
+        assert(CtaSections.eNames.size == CtaSections.NE)
+        assert(CtaSections.E_ENTRY == 0)
+        assert(CtaSections.E_ELEM == CtaSections.NE - 1)
+        // Source order, which is what makes the row set a partition rather than
+        // an overlay: the target type precedes the source type, which precedes
+        // the relation, which precedes the elaboration.
+        assert(CtaSections.E_TTRESOLVE < CtaSections.E_SRCTYPE)
+        assert(CtaSections.E_SRCTYPE < CtaSections.E_NARROW)
+        assert(CtaSections.E_NARROW < CtaSections.E_RELATION)
+        assert(CtaSections.E_RELATION < CtaSections.E_ELAB)
+        // The recursion row is the first thing after the wrapper transition,
+        // because the chained-assignment descent is the first thing the
+        // function does.
+        assert(CtaSections.E_RECURSE == 1)
+    }
+
+    @Test
+    fun `level E partitions every invocation and the exits sum to it`() {
+        runProbe()
+        val invocations = CtaSections.invocationsE
+        assert(invocations > 0L)
+        // The partition opens on the wrapper, so every invocation is counted
+        // there exactly once whatever early return it takes.
+        assert(CtaSections.eCalls[CtaSections.E_ENTRY] == invocations)
+        assert(CtaSections.eExitIn.sum() == invocations)
+        // The fixture's `total = total + 1` is an identifier-target assignment,
+        // so it reaches the identifier rows and the relation.
+        assert(CtaSections.eCalls[CtaSections.E_IDLIT] > 0L)
+        assert(CtaSections.eCalls[CtaSections.E_RELATION] > 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `level E is a single row under COARSE - its calibration counterpart`() {
+        runProbe(CtaSections.COARSE)
+        val invocations = CtaSections.invocationsE
+        assert(invocations > 0L)
+        // Exactly one boundary pair per invocation, all of it in the anchor —
+        // which is what makes an ON-versus-COARSE comparison price a boundary
+        // rather than a code path.
+        assert(CtaSections.eCalls[CtaSections.E_ENTRY] == invocations)
+        assert(CtaSections.eCalls.sum() == invocations)
+        assert(CtaSections.eCalls[CtaSections.E_SRCTYPE] == 0L)
+        assert(CtaSections.eCalls[CtaSections.E_RELATION] == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `nothing is recorded for level E while the probe is off`() {
+        val saved = CtaSections.mode
+        CtaSections.reset()
+        CtaSections.mode = CtaSections.OFF
+        try {
+            diagnose(source)
+        } finally {
+            CtaSections.mode = saved
+        }
+        assert(CtaSections.invocationsE == 0L)
+        assert(CtaSections.invocationsENested == 0L)
+        assert(CtaSections.eCalls.sum() == 0L)
+        assert(CtaSections.eExitIn.sum() == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `an invocation that is not an assignment exits in the entry row`() {
+        // The site's largest single population, and the one only a partition
+        // opened on the WRAPPER can see: the eligibility decision is taken
+        // INSIDE the function, so a call whose expression is not an `=` binary
+        // is a full invocation that does nothing. On the compiler profile that
+        // is 10,432 of 17,179 invocations.
+        probeFixture(
+            """
+            function host(n: number): void {
+                n + 1
+                n
+            }
+            """.trimIndent()
+        )
+        val invocations = CtaSections.invocationsE
+        assert(invocations > 0L)
+        assert(CtaSections.eExitIn[CtaSections.E_ENTRY] == invocations)
+        assert(CtaSections.eCalls[CtaSections.E_RECURSE] == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `a chained assignment is one nested invocation charged to the recursion row`() {
+        probeFixture(
+            """
+            function host(): void {
+                let a: number = 0
+                let b: number = 0
+                let c: number = 0
+                a = b = c
+            }
+            """.trimIndent()
+        )
+        // `a = b = c` is ONE outermost invocation with ONE nested one, and the
+        // nested invocation opens no partition of its own — its whole cost is
+        // the outer invocation's recursion row. If a second recursion site is
+        // ever added to the function, this count moves.
+        assert(CtaSections.invocationsENested == 1L)
+        assert(CtaSections.eCalls[CtaSections.E_RECURSE] > 0L)
+        // The nested invocation is not double-counted as an exit.
+        assert(CtaSections.eExitIn.sum() == CtaSections.invocationsE)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `the target-kind rows are mutually exclusive within one invocation`() {
+        // Each of the four target shapes lights exactly one terminal row, which
+        // is what lets the identifier rows be read as a per-invocation cost
+        // rather than an average over four different code paths.
+        probeFixture(
+            """
+            class Host {
+                p: number = 0
+                run(o: { q: number }, arr: number[]): void {
+                    this.p = 1
+                    o.q = 2
+                    arr[0] = 3
+                }
+            }
+            """.trimIndent()
+        )
+        assert(CtaSections.eCalls[CtaSections.E_THIS] == 1L)
+        assert(CtaSections.eCalls[CtaSections.E_PA] == 1L)
+        assert(CtaSections.eCalls[CtaSections.E_ELEM] == 1L)
+        // No identifier target in this fixture, so the identifier partition is
+        // untouched — the control that makes the three counts above a
+        // dispatch measurement rather than a coincidence.
+        assert(CtaSections.eCalls[CtaSections.E_IDLIT] == 0L)
+        assert(CtaSections.eCalls[CtaSections.E_RELATION] == 0L)
+        CtaSections.reset()
+    }
+
+    @Test
+    fun `the level-E rows fall monotonically through the identifier partition`() {
+        runProbe()
+        // The identifier branch is sequential: once inside it, reach can only
+        // fall. That is the property that turns the exit column into a profile.
+        assert(CtaSections.eCalls[CtaSections.E_IDLIT] >= CtaSections.eCalls[CtaSections.E_TTRESOLVE])
+        assert(CtaSections.eCalls[CtaSections.E_TTRESOLVE] >= CtaSections.eCalls[CtaSections.E_FTP])
+        assert(CtaSections.eCalls[CtaSections.E_FTP] >= CtaSections.eCalls[CtaSections.E_SRCTYPE])
+        assert(CtaSections.eCalls[CtaSections.E_SRCTYPE] >= CtaSections.eCalls[CtaSections.E_RELATION])
+        assert(CtaSections.eCalls[CtaSections.E_RELATION] >= CtaSections.eCalls[CtaSections.E_ELAB])
+        CtaSections.reset()
+    }
 }
