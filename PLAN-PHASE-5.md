@@ -20,6 +20,90 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 782 (2026-08-01) — (REL.4) IS CLOSED AND THE FLIP IS LANDED. THE INHERITED
+"RESIDUAL IS EMPTY" WAS STALE FOR THE SIXTH CONSECUTIVE ROUND, AND THE REASON IS THE
+ROUND'S REAL FINDING: EVERY SCAFFOLDED PRICE IN THIS ARC WAS MEASURED ON **compiler AND
+services ONLY**, SO A 16TH `assertNever` SITE LIVING ON **harness** WAS STRUCTURALLY
+INVISIBLE TO ALL OF THEM.** Measured price of the flip alone: **harness 94 -> 95**, one
+line, all seven other profiles set-for-set identical. With that line's cause fixed the flip
+costs **ZERO** new lines: unscaffolded 8-profile grid **46/46/46/46/46/46/46/94**,
+set-for-set IDENTICAL to the pre-flip grid on all eight. Suite 13,275 -> **13,289 / 0
+failures / 3 skipped**; cost gate exit 0, **rebaselined with the mechanism named**.
+
+- **THE PRICE WAS RE-MEASURED, NOT INHERITED, AND THE ITEM'S OWN STANDING WARNING PAID FOR
+  ITSELF AGAIN.** Baseline grid captured at HEAD first (4m17s, set-for-set identical to
+  round 780's stored grid on all eight, which is what licences the comparison), then the
+  flip built and the grid re-run. The one new line was
+  `projectServiceStateLogger.ts:412` — `Debug.assertNever(printWhen)`, i.e. cause (a),
+  which rounds 768-780 had declared closed at 15/15.
+- **WHY NOBODY SAW IT: THE ARC's SCAFFOLD WAS ONLY EVER RUN ON TWO PROFILES.** Rounds 777,
+  779 and 780 each quote a "scaffolded price" of the form `compiler N -> M, services N -> M`.
+  `projectServiceStateLogger.ts` is in `src/harness`, so it is in exactly one of the eight.
+  Round 767 — the only round that ever scaffolded all eight — did see it, inside its
+  harness 94 -> 121. **The lesson generalises past this item: a residual is empty only over
+  the population you measured, and a two-profile scaffold is not the dashboard.**
+- **THE CAUSE IS THE THIRD SCOPE AN ENUM'S DECLARATION SITE CAN PUT IT IN, AND IT WAS THE
+  ONE NOBODY HAD ADDED.** `enum PrintPropertyWhen` is declared **inside a function body**.
+  B83.5: the binder never binds a block-scoped declaration, so it is in neither the file's
+  locals (round 425's scope) nor a namespace's exports (round 769's), and
+  `resolveEnumSymbolForDiscriminant` answered null — which blinds EVERY narrowing direction
+  at once. The scope-space table has existed since round 748 (`lexicalTypeSymbolForNode`,
+  consulted by `resolveTypeNameToSymbol`); the discriminant reader simply never asked it.
+- **THE CONSULT GOES FIRST, NOT AS A MISS-FALLBACK — THE OPPOSITE OF ROUND 769's RULE, AND
+  DELIBERATELY.** Round 769 made its namespace fallback strictly additive to avoid splitting
+  the `"symId#member"` key space. Here additive is the WRONG choice: `resolveTypeNameToSymbol`
+  already prefers the scope-space symbol, so it is that symbol which types the annotation and
+  mints the member types — a discriminant reader preferring the file-level answer for a
+  SHADOWING name would key one enum through two `Symbol` instances, which is precisely the
+  round-425 split. Ordering both readers the same way makes them agree by construction.
+  Containment is `lexicalTypeSymbolForNode`'s own: a `lexicalBlockScopedEnumNames` probe
+  (empty for almost every program) and `scope.symbols` ONLY, which `declareLexical` fills
+  exclusively with names the main binder did not bind — so no conventionally-bound name can
+  move.
+- **DIAGNOSED WITHOUT THE SCAFFOLD, IN ONE 1.2-SECOND SCRATCH RUN.** The FP is invisible
+  unscaffolded only because its CONSUMER (`Debug.assertNever`) is a namespace member; the
+  defect is a plain narrowing gap and reproduces against a local
+  `declare function assertNever(x: never): never`. Two variants in ONE file — the same
+  exhaustive switch over a FILE-LEVEL enum and over a BODY-SCOPED one — named the cause
+  before any instrumentation: the first silent, the second reporting the whole enum. The
+  `Diagnostic`-constructor stack hook was not needed and was never built.
+- **TWO OF MY OWN FIRST-DRAFT PINS PASSED VACUOUSLY, AND THE CAUSE IS A PROBE-POSITION
+  ERROR WORTH RECORDING.** I wrote the subject as `const k = k0 as unknown as E`. That shape
+  is silent at the argument gate for a **FILE-LEVEL** enum too — so the silence-asserting
+  pins written with it would have passed on a broken build for a reason having nothing to do
+  with the fix, and the two message-asserting ones failed on the FIXED binary, which is how
+  it surfaced. Every subject is now a PARAMETER. Round 779 recorded the same class from the
+  other side; the general form is that a probe shape must be validated against a control
+  where the answer is already known, before it is used to measure anything.
+- **THE PINS DISCRIMINATE, MEASURED AGAINST ABLATED BINARIES — TWICE, ONE PER SUB-STEP.**
+  Narrowing fix (`R782_LEXICAL_ENUM_DISCRIMINANT = false`, recompiled): **5 of 7 fail ablated
+  and pass fixed**, the 2 holding on both sides being the file-level control and the
+  enum-identity control; three discriminate by MESSAGE. Flip (`REL4_NS_ALIAS_RECEIVER =
+  false`, recompiled): **3 of 7 fail ablated**, and all four that hold do so on purpose — a
+  plain imported function and a same-file namespace member were ALREADY checked (round 766's
+  asymmetry, which is exactly what makes the positives readable as "the alias receiver was
+  the gap"), a correct argument stays silent, and a non-namespace alias invents no TS2339.
+- **THE FLIP CHANGED NO VERDICT ANYWHERE, WHICH IS THE SURPRISE.** Turning argument
+  checking ON for 1,127 callees on compiler and 1,551 on services moved **no** profile line
+  and **no** corpus baseline. Cost gate exit 0 with `typeOfExpr.calls` +0.46%,
+  `typeOfExpr.distinct` +0.54%, `narrow.walks` +0.37%, `typeNode.cacheHits` +0.49%,
+  `globals.lookups` +0.30% — rebaselined, mechanism = exactly that population. Worth the
+  arithmetic: **+3,268 typed expressions for 1,127 newly checked callees is ~2.9 each**, not
+  the cost of a full check, because the argument loop still `continue`s for a
+  non-simple-checkable parameter — the same round-759 selection effect, read forwards.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). A block-scoped enum
+  SHADOWING a file-level one of the same name still FPs TS2339 x3 on its member accesses
+  (`Property 'Inner1' does not exist on type 'typeof Shadowed'`) — a VALUE-space gap, present
+  UNCHANGED on the ablated binary, which this round improves (the TS2345 goes) but does not
+  close. Zero measured sites on all 8 profiles. It is the value-position twin of what round
+  748 closed in type position, and it is why the shadowing case could not be pinned as a
+  positive despite being the reason the consult goes first.
+- **PREDICTIONS 1 of 3.** HIT: the two steps of the flip are one call site and the resolver
+  already existed, so the change is small. **MISSED, and both misses are the output:** I
+  expected the re-measurement to confirm "zero new lines" and it cost one; and I expected
+  the residual, if non-empty, to be a NEW cause — it was cause (a) again, in the one profile
+  the arc had stopped looking at.
+
 **Round 781 (2026-07-31) — (WIDEN.1) PROMOTED, SIZED AND LANDED. THE QUEUE'S "BLAST RADIUS
 IS EVERY `const` IN THE CORPUS" IS FALSIFIED: THE MEASURED RADIUS IS **ONE** BASELINE OF
 13,262, AND IT WAS A REAL tsc RULE WE WERE MISSING, NOT A FORM DIVERGENCE — SO NO
@@ -1083,30 +1167,46 @@ unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
   CALL, `importFixes.ts:1127` assigns enum members inline); re-classify behind the (REL.2)
   scaffold before crediting (WIDEN.1) with them.
 
-- [ ] **(REL.4) Turn argument checking ON for a call whose callee is a member of an
-  IMPORTED namespace — SIZED round 767, price measured, DO (a) FIRST.** The change
-  itself is two call sites: `computeRawTypeOfPropertyAccess`'s namespace fallback must
-  follow an `SymbolFlags.Alias` receiver, and it must do so via the barrel-aware
-  `resolveImportedNamespaceSymbol` (the general `resolveAlias` resolves **0** of the
-  compiler profile's 4,383 alias receivers, and per round 409 it must NEVER be taught
-  ESM `.js` + `export *` — that is the TS2315 flood). Each step alone is measurably
-  INERT; only the pair moves anything. It unblocks 1,127 previously-unchecked
-  `PropertyAccess` callees on compiler and 1,551 on services.
-  **The last MEASURED price of switching it on is compiler 46 -> 47, services 46 -> 47
-  (round 780; 46 -> 48 / 46 -> 49 round 779, 46 -> 52 / 46 -> 56 round 778's state,
-  46 -> 66 / 46 -> 71 round 767) — one FP, the SAME one on both profiles. Round 780
-  measured both arms behind its own scaffold and its fix-off arm reproduced round 779's
-  48/49 exactly, so that quote was accurate; every earlier one was stale by at least one.
-  Re-measure before quoting, and before flipping anything.**
-  **THE RESIDUAL IS NOW ONE LINE: `esDecorators.ts:1314`, i.e. (c) ALONE.** (a) and (b) are
-  closed. **DECISION PENDING (round 780, not taken unilaterally): flipping today adds
-  exactly +1 FP to a currently-clean dashboard** (measured on compiler and services; the
-  file is `src/compiler/transformers/esDecorators.ts`, so any profile including it pays the
-  same one). Either close (c)'s literal-widening arc first, or accept +1 knowingly and land
-  the 1,127 / 1,551 newly-checked callees the flip buys.
-  - **(a) CLOSED round 780 — all 15. `Debug.assertNever(x)` whose argument does not narrow
-    to `never`** (8 round 768, 3 round 769, 3 round 770, 1 round 777, the last 2 round 780:
-    compiler 48 -> 47, services 49 -> 47). **The two "probably not narrowable" stragglers
+- [x] **(REL.4) LANDED round 782 — argument checking is ON for a call whose callee is a
+  member of an IMPORTED namespace, at a measured cost of ZERO new diagnostics.** The change
+  is the two call sites this item named from round 767 on:
+  `computeRawTypeOfPropertyAccess`'s namespace fallback follows a `SymbolFlags.Alias`
+  receiver, via the barrel-aware `resolveImportedNamespaceSymbol` (the general
+  `resolveAlias` resolves **0** of the compiler profile's 4,383 alias receivers, and per
+  round 409 must NEVER be taught ESM `.js` + `export *` — the TS2315 flood). Each step
+  alone is measurably INERT; only the pair moves anything. It turned on argument checking
+  for **1,127** previously-unchecked `PropertyAccess` callees on compiler and **1,551** on
+  services. Unscaffolded 8-profile grid **46/46/46/46/46/46/46/94**, set-for-set identical
+  to the pre-flip grid on all eight; suite 13,289 / 0 / 3; cost gate exit 0, rebaselined
+  (`typeOfExpr.calls` +0.46% and siblings — the newly checked population, ~2.9 typed
+  expressions per newly checked callee).
+  **THE INHERITED "RESIDUAL IS EMPTY" WAS STALE — FOR THE SIXTH CONSECUTIVE ROUND — AND THE
+  REASON IS METHODOLOGICAL, NOT ARITHMETIC.** Measured cold, the flip cost **harness
+  94 -> 95**: `projectServiceStateLogger.ts:412`, a 16th cause-(a) `Debug.assertNever` site.
+  Rounds 777/779/780 could not have seen it: **every scaffolded price in this arc was
+  measured on compiler and services ONLY**, and that file is in `src/harness`. Round 767,
+  the one round that scaffolded all eight, did see it inside its harness 94 -> 121. **The
+  price history for the record: 46 -> 66 / 71 (round 767), 46 -> 52 / 56 (round 778 state),
+  46 -> 48 / 49 (round 779), 46 -> 47 / 47 (round 780), harness 94 -> 95 (round 782),
+  zero (round 782 after (a)'s 16th site).** A residual is empty only over the population you
+  measured; a two-profile scaffold is not the dashboard.
+  - **(a) CLOSED round 782 — all 16. `Debug.assertNever(x)` whose argument does not narrow
+    to `never`** (8 round 768, 3 round 769, 3 round 770, 1 round 777, 2 round 780, the last
+    1 round 782). **CAUSE 7, round 782 — a FUNCTION-BODY-SCOPED enum narrowed in no
+    direction at all**, `projectServiceStateLogger.ts:412` (harness only, which is why the
+    two-profile scaffold of rounds 777-780 could not see it). B83.5: the binder never binds
+    a block-scoped declaration, so such an enum is in neither the file's locals (round 425's
+    scope) nor a namespace's exports (round 769's) and `resolveEnumSymbolForDiscriminant`
+    answered null. Fixed by consulting round 748's scope-space table
+    (`lexicalTypeSymbolForNode`) — **FIRST, not as a miss-fallback, which is the opposite of
+    round 769's additive rule and deliberately so**: `resolveTypeNameToSymbol` already
+    prefers the scope-space symbol, so preferring the file-level one here would key a
+    SHADOWING enum through two `Symbol` instances, i.e. the round-425 split. **Still open,
+    recorded not pinned: the VALUE-position twin** — a block-scoped enum shadowing a
+    file-level one of the same name FPs TS2339 on its member accesses
+    (`Property 'X' does not exist on type 'typeof Shadowed'`), unchanged by this round, zero
+    measured sites on all 8 profiles. Earlier state of (a):
+    compiler 48 -> 47, services 49 -> 47 at round 780. **The two "probably not narrowable" stragglers
     were ordinary narrowing gaps, and the recon that called them unnarrowable read the SHAPE
     instead of asking whether the flow read ever happened.** `moduleSpecifiers.ts:1411`
     (`allowedEndings[0]`): an element access IS a reference everywhere else in the checker —
@@ -1189,11 +1289,11 @@ unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
     conditional chain — 1 error before, **0** after. The "blast radius is every `const` in
     the corpus" label is retired: the measured radius was ONE corpus baseline, which was a
     genuine missing tsc rule rather than a form divergence. See (WIDEN.1) above.
-  **SO THE RESIDUAL IS NOW EMPTY: (a), (b) AND (c) ARE ALL CLOSED, and the flip's measured
-  cost should now be ZERO new lines — RE-MEASURE BEHIND A SCAFFOLD BEFORE QUOTING THAT**
-  (every earlier quote in this item was stale by at least one). The (REL.2)
-  global enum -> MEMBER rule is EXACTLY ADDITIVE with this (+1 compiler / +5 services,
-  the same five lines, measured both ways), so the two orders are independent.
+  **THE RESIDUAL IS EMPTY AND THE FLIP IS LANDED (round 782), MEASURED AT ZERO NEW LINES
+  ACROSS ALL EIGHT PROFILES** — after (a)'s 16th site, which only the eight-profile
+  measurement could reveal. The (REL.2) global enum -> MEMBER rule was EXACTLY ADDITIVE with
+  this (+1 compiler / +5 services, the same five lines, measured both ways), so it is
+  unaffected by the order in which the two landed.
 
 - [x] **(REL.3) FIXED round 761 — and its headline claim was FALSIFIED in the same
   round.** The defect was real: `findInheritedBaseRef` enqueued a `Type.Reference`'s
