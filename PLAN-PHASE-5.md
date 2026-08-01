@@ -20,6 +20,119 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 791 (2026-08-01) — (ENGINE.2d)(b) LANDED: THE SUPPRESSION APPARATUS AT THE TOP OF
+`checkMemberAccessMissing` NOW RUNS **57 TIMES PER COMPILE INSTEAD OF 67,067** — ONLY FOR
+A CALL WHOSE BODY ACTUALLY EMITTED. THE `R_FLOW` ROW 1,132 -> 49 ms, THE PLAIN NARROWING
+WALK 794 ms / 22,270 CALLS -> 4 ms / 47, LEVEL R TOTAL 2,686 -> 1,702 ms. `narrow.walks`
+52,401 -> 27,249 (-48.0%) AND NO COUNTER ROSE. AND ROUND 790's "NO COUNTER CAN FALSIFY
+THIS" TURNED OUT TO REST ON A FALSE PREMISE, WHICH IS THE ROUND'S REAL FINDING.**
+
+- **THE PRIZE WAS RE-MEASURED AT HEAD FIRST AND ONE NUMBER HAD MOVED.** Every count of
+  round 790's reproduced (67,258 / 22,270 / 63,797 / 1,169 / 914), but the plain walk
+  read **794 ms** against round 790's 756 — inside the +-10% band, and the reason law 1
+  is a rule rather than a ritual. The whole apparatus at HEAD: b1 `getTypeOfExpression`
+  50 ms + pre-gate 49 + plain walk 794 + retry 83, b2 5 + 39, b3 1 = **1,021 ms gross**,
+  inside a `R_FLOW` row of 1,132.
+- **THE PREMISE ROUND 790 GOT WRONG.** Its veto — "(b)'s correctness is a 20-way case
+  analysis over emission sites, and no counter can falsify it, because the counter would
+  have to know what those emissions WOULD have said" — assumes the deferral must decide,
+  PER SITE, whether the suppression applies. It does not. **The three blocks only ever
+  `return`**: they suppress everything the rest of the function would emit. So the
+  deferral has to undo the BODY, not adjudicate the sites — and the body's whole effect
+  is enumerable in one grep: **42 `diagnostics.add(Diagnostic(` in 2,035 lines and ZERO
+  other references to `diagnostics`; zero `.put(`/`.remove*`; zero `current*` ambient
+  assignments; zero stack pushes** — and the same for all seven `tryEmit*`/`emit*`
+  helpers it calls (one `add` each at most, nothing else). "Run the body, then remove
+  everything it appended" is therefore equivalent BY CONSTRUCTION, no site enumerated,
+  and a 43rd emission site cannot break it.
+- **WHY THIS IS STRICTLY BETTER THAN THE LAZY-THUNK SHAPE ROUND 790 PROPOSED, AND WHY
+  ROUND 788's REJECTION OF A THUNK DOES NOT TRANSFER.** A thunk forced at each reader
+  still requires every reader to force it — the enumeration survives, just renamed; that
+  is exactly what killed round 788's lazy `contextualType` (a thunk that had to survive
+  ~14 save/restore sites in a DIFFERENT dynamic scope, where one missed site silently
+  serves the wrong value). Here the deferred call happens inside the very invocation that
+  deferred it, so no ambient state can have escaped and there is nothing to save or
+  restore. The wrapper's own state is saved and restored anyway (level R measures 0
+  nested invocations, but three slot copies make it correct if one ever appears).
+- **THE ONE SUBTLETY THAT DECIDES CORRECTNESS: THE RETRACTION FLOOR.** There IS an
+  emission ABOVE the blocks' old position — the intersection-reduction `never` TS2339 —
+  and it was never theirs to suppress. So the floor is `cmamFlowBase`, taken AT the old
+  position and left at `-1` when the body returns above it, never `diagnostics.size` at
+  function entry. A floor at entry would have silently made that diagnostic suppressible,
+  and no profile on the dashboard would have shown it.
+- **THE RESIDUAL HAZARD IS CACHE-MUTATION ORDER (round 754) AND IT WAS MEASURED, NOT
+  ARGUED.** `--verifyDeferSuppression` evaluates the predicate TWICE — eagerly at the old
+  position and again after the body — and honours the EAGER verdict, so the verify run
+  reproduces the pre-change binary's output by construction and the two halves of the
+  claim are independent (a byte-identical `--listAll`, and a zero verdict-diff).
+  **compiler 67,067 / services 92,174 / harness 109,622 comparisons, 0 type-diffs and
+  0 verdict-diffs across all 268,863**, at `Type`-INSTANCE granularity rather than
+  verdict granularity.
+- **AND THE ZERO IS NOT A DEAD INSTRUMENT — THE CONTROL SHIPS WITH IT.**
+  `--verifyDeferSuppressionBogus` hands the deferred evaluation a property name nothing
+  can resolve (CLAUDE.md's deliberately-bogus-baseline rule), which makes the round-489
+  pre-gate pass everywhere and the suppression decline everywhere: **type-diff 19,864,
+  VERDICT-DIFF 1,164** on the compiler profile.
+- **LAW 2 (round 788: skippable is not recoverable) WAS CHECKED AND DOES NOT BITE.**
+  `narrow.walks` **52,401 -> 27,249 (-48.00%)** = -25,152 against a removed population of
+  ~25,288 walks, i.e. a 0.5% residual; `typeOfExpr.calls` -10.35%, `globals.lookups`
+  -7.97%, `globals.misses` -8.10%, `typeNode.cacheHits` -5.40%; `output.errors` and
+  `spine.nodes` +0.00%. **Nothing rose.** `typeOfExpr.distinct` fell by **7** — seven
+  nodes in the whole program were typed ONLY because this block asked.
+- **THE WARM A/B CONFIRMS THE SIGN 3/3 AND ITS MAGNITUDE MUST BE DISCARDED — for the
+  same reason as round 790's, in the opposite direction.** 3 pairs, box left strictly
+  alone (the run was launched detached and NOT watched — round 774's −6.70% A/A phantom
+  is what that rule is for): deltas **−743 ms (−6.05%) / −381 ms (−3.21%) / −234 ms
+  (−2.04%)**, median **−381 ms (−3.21%), B wins 3/3**, every delta outside the ±1.0%
+  warm band. But **arm A's sd is 3.30% and arm B's 1.30%** — BOTH above the ~1%
+  quietness criterion, worse than round 790's single-arm failure — and the per-pair
+  spread is **509 ms against a 381 ms delta**, so law 7 ("only as sharp as the smaller
+  of its two spreads") is failed outright. **So the sign is confirmed and the magnitude
+  is the partition's 984 ms, not the wall's 381.** Note the direction of the discrepancy:
+  round 790's wall EXCEEDED its partition (the tell of an inflated arm); here it falls
+  short, which is the expected shape — a warm rebuild is 11.5 s against a ~27 s cold
+  compile, so a saving the JIT has already compiled is a smaller ABSOLUTE figure there
+  (round 788's observation). In PERCENT the two agree closely: 984 ms of a 27.9 s cold
+  compile is 3.5%, and the warm wall read 3.21%. Every iteration on both arms reported
+  `files/errors 78/46`, so the driver's self-falsification held.
+- **PINS: 10 new (`DeferredSuppressionTest`), 8 DISCRIMINATING ACROSS TWO COMPLEMENTARY
+  ABLATIONS.** Fault A (the predicate always declines — the NEW-false-positive direction)
+  fails 5; fault B (the retraction always fires — the DELETED-true-positive direction)
+  fails 4, three of which fault A leaves standing. The two that hold under both are the
+  eager-vs-deferred ORDER pin (neither fault perturbs order; its live counterpart is the
+  268,863-comparison profile run) and the population cross-check. The faults were run
+  SEPARATELY, so no cancellation between them is possible — round 789 had exactly that
+  happen and round 790 checked for it.
+- **WHAT DID NOT WORK, AND ONE PIN THAT WAS AIMED AT NOTHING.** (1) The first fixture
+  used a property-PATH receiver (`box.inner.extra`) as a third suppression flavour; a
+  30-second scratch-CLI probe showed **no property-path receiver emits TS2339 at all** on
+  any binary — a pre-existing gap, so the pin would have measured the compiler's silence
+  rather than the deferral. Replaced with `do-while` / `for-of` / early-return flavours,
+  all five of which emit unguarded and are silent guarded. (2) Two population pins were
+  degenerate on a small fixture (every `checkMemberAccessMissing` call there emits, so
+  `invocationsR == deferEvaluated`); fixed by adding two index-signature accesses, which
+  reach the function and leave it silently. (3) The suite caught **three pre-existing
+  probe pins whose subject had moved** — `CmamSectionProbeTest`'s walker-census
+  non-vacuity and its "the row both fires and suppresses", now restated as the NEW
+  invariant (the row is empty, the deferred call suppresses), and
+  `NarrowSectionProbeTest`'s element-access arm pin, whose old fixture's ONLY flow walk
+  was the one this block used to launch — after the deferral it measured an empty arm
+  census for a reason having nothing to do with element accesses. That is round 790's
+  "the pin was aimed at nothing" failure mode, found by the suite rather than by
+  inspection, and it is the reason a harness pin needs a fixture that would still be
+  measuring something if the thing it watches moved.
+- Suite 13,389 -> **13,399 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD
+  FIRST and again after, diffed set-for-set in BOTH directions:
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight** — both directions
+  matter more here than anywhere, because a suppression that STARTS firing deletes a true
+  positive and makes the grid look better. `--partitionCheck 2` **EQUIVALENT — 46**.
+  Cost gate rebaselined in the landing commit with the mechanism and population named.
+  Full derivation: `docs/perf/property-access-attribution.md` sections 23-29.
+  **(ENGINE.2e) is queued: level R's partition is now STALE — (b) removed the row that
+  was 42% of it — so the next target inside this function must be re-derived, not read
+  off section 12.**
+
+
 **Round 790 (2026-08-01) — (ENGINE.2d)(a) LANDED: THE ROUND-425 LOOP-ENTRY RETRY IS A
 PURE REPEAT OF THE WALK BEFORE IT 88.7% OF THE TIME, AND SKIPPING IT REMOVES 18,976
 FLOW WALKS — 26.6% OF EVERY NARROWING WALK THE COMPILER PERFORMS — FOR ZERO CHANGE IN
@@ -3574,8 +3687,49 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   confirmed and the MAGNITUDE is the partition's 438 ms, not the wall's 696. Derivation:
   `docs/perf/property-access-attribution.md` sections 17-22.
 
-- [ ] **(ENGINE.2d)(b) THE REST OF THE SUPPRESSION BLOCK — 781 ms after (a), and still the
-  largest single priced lever the arc has measured.** Of the block's original 1,219 ms,
+- [x] **(ENGINE.2d)(b) DONE round 791 — the three suppression blocks are DEFERRED to the
+  emission, and the apparatus now runs 57 times per compile instead of 67,067. Measured:
+  the `R_FLOW` row 1,132 -> 49 ms, the plain narrowing walk 794 ms / 22,270 calls ->
+  4 ms / 47, level R total 2,686 -> 1,702 ms (-984, more than the 781 priced, because
+  the deferral also removes the `getTypeOfExpression` and the round-489 pre-gate in
+  front of the walks). `narrow.walks` 52,401 -> 27,249 (-48.0%) and NO counter rose, so
+  law 2 does not bite here either.** Round 790's "no counter can falsify it" was
+  premised on the deferral having to decide, per emission site, whether the suppression
+  applies — it does not: the blocks only ever `return`, so the deferral has to undo the
+  BODY, and the body's whole effect is 42 `diagnostics.add` calls plus 7 in its helpers
+  and **nothing else** (grep-verified: no retraction, no side-set write, no ambient
+  install, no read of `diagnostics`). "Run the body, then remove what it appended at or
+  after the blocks' old position" is therefore equivalent by construction, with no site
+  enumerated and a NEW site covered automatically. The retraction FLOOR is the blocks'
+  old position, not the function entry — the one emission above them (the
+  intersection-reduction `never` TS2339) was never theirs to suppress. The residual
+  hazard, cache-mutation ORDER, was MEASURED: `--verifyDeferSuppression` evaluates the
+  predicate at both positions, honours the eager verdict (so the run reproduces the
+  pre-change binary) and compares at `Type`-INSTANCE granularity — **compiler 67,067 /
+  services 92,174 / harness 109,622, 0 type-diffs and 0 verdict-diffs across all
+  268,863** — with `--verifyDeferSuppressionBogus` as the shipped positive control
+  (type-diff 19,864, verdict-diff 1,164). Grid 46/46/46/46/46/46/46/94 with 0 added and
+  0 removed both directions; `--partitionCheck 2` EQUIVALENT; suite 13,399 / 0 / 3
+  (+10 pins, 8 discriminating across two complementary ablations). Derivation:
+  `docs/perf/property-access-attribution.md` sections 23-29.
+
+- [ ] **(ENGINE.2e) RE-OPEN LEVEL R ON THE POST-(b) SHAPE — the function is now 1,702 ms
+  and its partition is stale.** Law 1 applies to this item as much as to any: (b) removed
+  the row that was 42% of it, so the remaining rows' SHARES are all wrong and the next
+  target must be re-derived, not read off section 12. The rows that were behind the
+  suppression apparatus and are now the top of the table: `type = resolved-symbol branch`
+  296 ms / 58,547 closes with 40,308 exits, `type = union-receiver narrowing` 287 ms /
+  62,615, `identifier-receiver special cases` 190 ms / 67,067, `pre` 151 ms, `shadowed-name
+  receivers` 73 ms. **The structural question (b) answers for the flow blocks is open for
+  ALL of them**: the exit census says 86% of calls leave before the property lookup and the
+  emission tail is reached 0 times, so anything computed above an exit and consulted only
+  below one is a candidate for the same treatment — and the retraction wrapper is now
+  built, so a second deferral costs only the predicate. Re-measure first, then pick.
+  Gate as (b): corpus suite + the 8-profile grid diffed BOTH directions +
+  `--partitionCheck 2` + `cost_gate.py`.
+
+- [x] **(ENGINE.2d)(b) — the round-790 item body follows, superseded by the entry above.**
+  Of the block's original 1,219 ms,
   (a) took 438 with a LOCAL two-walker equivalence; what is left is the structural claim
   that the apparatus is in the wrong PLACE. Re-measure before starting (law 1): at HEAD
   after (a) the R_FLOW row is 1,111 ms, of which the plain walk is 756 over 22,270 calls,

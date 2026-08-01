@@ -682,3 +682,196 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --listAll --cpaSections $P
 ```
+
+---
+
+# Round 791 — (ENGINE.2d)(b): the suppression apparatus moves to the emission
+
+## 23. The headline
+
+`checkMemberAccessMissing`'s three flow-graph suppression blocks ran at the TOP
+of a 2,035-line function whose 42 emission sites are at the bottom. Round 789
+measured the consequence and round 790 left it standing: of the 22,270 calls that
+paid for a flow walk there, **0 reached the property lookup and 21,064 exited far
+downstream with the walk's answer consulted by nothing.**
+
+Re-measured at HEAD before anything was written (law 1 — and unlike round 790's,
+one number HAD moved: the plain walk read 794 ms against round 790's 756):
+
+| row | before | after |
+|---|---:|---:|
+| `R_FLOW` — the three suppression blocks | **1,132 ms** / 67,067 closes, 1,169 exits | **49 ms** / 67,067 closes, **0 exits** |
+| b1 `getTypeOfExpression(receiver)` | 50 ms / 63,797 | 0 ms / **47** |
+| b1 the round-489 pre-gate | 49 ms / 63,797 | 0 ms / **47** |
+| **b1 the PLAIN narrowing flow walk** | **794 ms / 22,270** | **4 ms / 47** |
+| b1 the round-425 loop-entry retry | 83 ms / 2,408 | 0 ms / 3 |
+| b2 base type + `getFlowAt` | 5 ms / 3,584 | 0 ms / 0 |
+| b2 the base-projection flow walk | 39 ms / 470 | 0 ms / 0 |
+| b3 the `this`-receiver block | 1 ms / 140 | 0 ms / 10 |
+| **level R total** | **2,686 ms** | **1,702 ms** |
+
+**The whole apparatus is now evaluated 57 times per compile instead of 67,067**,
+because it is asked only when the body actually appended a diagnostic. Level R
+falls **984 ms** — more than the 781 ms the queue item priced, because the item
+priced the walks and the deferral also removes the `getTypeOfExpression` and the
+pre-gate in front of them.
+
+## 24. Why this was landable when round 790 said it was not
+
+Round 790 declined (b) with a reason about falsifiability, not budget: (a)'s
+correctness was a two-way walker diff a counter could falsify, while (b)'s looked
+like "a 20-way case analysis over emission sites, and no counter can falsify it,
+because the counter would have to know what those emissions WOULD have said."
+
+That framing assumed the deferral has to *decide, per emission site, whether the
+suppression applies*. It does not. **The three blocks did exactly one thing:
+`return` — suppress everything the rest of the function would emit.** So the
+deferral needs no per-site decision at all; it needs only to undo the body's
+effect, and the body's effect is enumerable in one grep:
+
+```
+$ awk 'NR>=133738 && NR<=135774' Checker.kt | grep -c 'diagnostics.add(Diagnostic('
+42
+$ ... | grep 'diagnostics' | grep -v 'diagnostics.add(Diagnostic('     # 1 comment line
+```
+
+**In 2,035 lines the only mutation of checker state is an append to
+`diagnostics`** — no `removeAll`, no side-set write, no ambient install, no read
+of `diagnostics` back — and the same holds for all seven `tryEmit*`/`emit*`
+helpers it calls (checked mechanically, see § 27). So
+
+> run the body, then remove everything it appended at or after the blocks' old
+> position
+
+is, for diagnostics, indistinguishable from never having run the body. No
+emission site is enumerated; **adding a 43rd cannot break it.** That is what
+makes the question mechanical, and it is a stronger property than the lazy-thunk
+shape round 790 proposed (which still requires every reader to force the thunk,
+i.e. still an enumeration — the same objection that killed round 788's lazy
+`contextualType`, whose thunk would have had to survive ~14 save/restore sites in
+a DIFFERENT dynamic scope; here the deferred call happens inside the very
+invocation that deferred it, so no ambient state can have escaped).
+
+**One subtlety decides whether the floor is right.** There IS an emission ABOVE
+the blocks' old position — the intersection-reduction `never` TS2339 — and it was
+never subject to them. The retraction floor is therefore `cmamFlowBase`, set at
+the blocks' old position and left at `-1` when the body returns above it, not
+`diagnostics.size` at function entry. A floor at entry would have silently made
+that one diagnostic suppressible.
+
+## 25. What is NOT settled by that argument, and how it was measured
+
+Cache-mutation ORDER (round 754). The body now runs BETWEEN the two positions,
+and for a call the predicate suppresses it now runs at all. The predicate could
+therefore see a different resolution state than it used to.
+
+`--verifyDeferSuppression` evaluates the predicate **twice** — eagerly, where the
+blocks used to run, and again deferred, after the body — and compares. The EAGER
+verdict is the one honoured, so **the verify run's output equals the pre-change
+binary's by construction**, and the two halves of the claim are independent: a
+byte-identical `--listAll`, and a zero verdict-diff.
+
+| profile | compared | type-diff | **verdict-diff** |
+|---|---:|---:|---:|
+| compiler | 67,067 | 0 | **0** |
+| services | 92,174 | 0 | **0** |
+| harness | 109,622 | 0 | **0** |
+
+**268,863 comparisons, zero divergences**, at `Type`-INSTANCE granularity rather
+than verdict granularity (a verdict comparison alone would miss a changed type
+that happens to resolve the same property).
+
+**And the zero is not a dead instrument.** `--verifyDeferSuppressionBogus` hands
+the deferred evaluation a property name nothing can resolve — CLAUDE.md's
+"record a deliberately BOGUS baseline" discipline — which makes the round-489
+pre-gate pass everywhere and the suppression decline everywhere. On the compiler
+profile it reports **type-diff 19,864, VERDICT-DIFF 1,164**. The comparator is
+alive, and it is comparing the thing it claims to compare.
+
+## 26. Law 2 does not bite, and the counters say so
+
+Round 788: an aggregate that is *skippable* is not thereby *recoverable*, because
+a skipped CACHED resolution hands its bill to the next asker. Checked, not
+assumed:
+
+```
+narrow.walks       52,401 -> 27,249   -48.00%   (= -25,152; the removed population is ~25,288)
+typeOfExpr.calls  688,878 -> 617,600  -10.35%
+globals.lookups   902,299 -> 830,368   -7.97%
+globals.misses    884,538 -> 812,921   -8.10%
+typeNode.cacheHits 131,983 -> 124,861  -5.40%
+typeNode.cacheable 191,197 -> 184,065  -3.73%
+output.errors / spine.nodes / mapped.* / typeNode.bypassed   +0.00%
+```
+
+**No counter rose.** `narrow.walks` falls by 25,152 against a removed population
+of 25,288 walks (22,270 plain + 2,408 retry + 470 base-projection + 140 `this`,
+less the ~60 still performed) — a 0.5% residual, i.e. essentially all of it
+disappeared rather than moving. `typeOfExpr.distinct` fell by **7**: seven nodes
+in the whole program were typed ONLY because this block asked, and nothing else
+ever needed them.
+
+## 27. The mechanical check, in full
+
+The claim in § 24 is a grep, and it is worth recording exactly which one, because
+it is the whole correctness argument:
+
+* `checkMemberAccessMissingCore`, lines 133738–135774 pre-change: **42**
+  `diagnostics.add(Diagnostic(` and **zero** other references to `diagnostics`;
+  **zero** `.put(` / `.remove*` / `.clear()` on any collection; **zero**
+  assignments to a `current*` ambient field; **zero** stack pushes.
+* Its emitting/resolving helpers — `tryEmitStaticAccessTs2576`,
+  `tryEmitClassInstanceMissingTs2339`, `tryEmitUtilityWrapperTs2339`,
+  `tryEmitNamespaceMemberTs2339`, `tryEmitEnumTypedIdentReceiverTs2339`,
+  `tryEmitEnumMemberAccessTs2339`, `emitClassChainTs2551Suggestion`,
+  `shouldEmitTs2339ForHiddenNamespaceMember`,
+  `lookupInstanceMemberInResolvableChain` — **one `diagnostics.add` each at most,
+  and no other mutation** (the one hit, `v.add(`, is a local list).
+
+A future change that adds a side-set write or a retraction anywhere in that range
+invalidates the argument. That is a real obligation, and it is a *checkable* one,
+which is exactly what the case analysis over ~20 emission sites was not.
+
+## 28. Verification
+
+* Corpus suite **13,389 -> 13,399 / 0 failures / 3 skipped** (+10
+  `DeferredSuppressionTest` pins).
+* 8-profile `--listAll` grid captured at HEAD FIRST and again after, diffed
+  set-for-set in BOTH directions: **46/46/46/46/46/46/46/94, 0 added and 0
+  removed on all eight.** Both directions matter more here than anywhere: a
+  suppression that starts firing DELETES a true positive and makes the grid look
+  better.
+* `--partitionCheck 2` **EQUIVALENT — 46**.
+* Cost gate rebaselined in the landing commit, mechanism and population named.
+* **Pin discrimination: 8 of 10, across TWO complementary ablations.** Fault A
+  (the predicate always declines — the lost-suppression direction) fails 5;
+  fault B (the retraction always fires — the deleted-true-positive direction)
+  fails 4, and three of those four are pins fault A leaves standing. The two that
+  hold under both are the eager-vs-deferred ORDER pin (neither fault perturbs
+  order; its live counterpart is the 268,863-comparison profile run) and the
+  population cross-check. The two faults were run separately, so no cancellation
+  is possible between them — round 789 had exactly that happen.
+* Three pre-existing probe pins were RESTATED rather than deleted, because their
+  subject moved: `CmamSectionProbeTest`'s walker-census non-vacuity and its
+  "the flow-suppression row both fires and suppresses" now state the new
+  invariant (the row is empty, the deferred call suppresses), and
+  `NarrowSectionProbeTest`'s element-access arm pin needed a new fixture — its
+  old one's ONLY flow walk was the one this block used to launch, so after the
+  deferral it measured an empty census for a reason that had nothing to do with
+  element accesses. That is the round-790 "the pin was aimed at nothing" failure
+  mode, caught here by the suite rather than by inspection.
+
+## 29. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt); P=build/bench/tsc-project-*
+# the price and the yield
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSections $P
+# the equivalence: both evaluations, compared at Type-instance granularity
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --verifyDeferSuppression $P
+# the control: it must diverge
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --verifyDeferSuppressionBogus $P
+```
