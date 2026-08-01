@@ -3310,6 +3310,47 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Rounds 482 and 489 both optimised AROUND this scan without replacing it; read their
   notes before starting.
 
+- [ ] **(ENGINE.2c) OPEN `checkMemberAccessMissing` — THE LARGEST UNOPENED LEAF IN THE
+  COMPILE (2,292 ms gross = 8.2%, re-measured at HEAD round 789 before this item was
+  written).** Round 787 partitioned the property-access path two levels deep and stopped
+  where the mass is: level Q's engine row is ONE function of ~1,965 lines called 66,747
+  times at **34.3 us each**, and no round has ever looked inside it. Every other row of
+  levels P and Q is now under 400 ms; this one is 6x the next. Law 6 (a handler's nanos
+  are its work, not its scaffolding) says attribute INSIDE before proposing anything.
+  **DELIVERABLE: level R** — a source-order partition of `checkMemberAccessMissing`
+  (~20 rows) with an EXIT CENSUS (which row each of the 66,747 calls returns from), a
+  `COARSE` counterpart for the differential calibration, and the write-up in
+  `docs/perf/property-access-attribution.md`. **The classification to produce** is the
+  same three-way one the arc has used at four sites: ENGINE (resolve the receiver, look
+  the property up) / dedicated-walker FIREWALL (a receiver-shape special case that
+  suppresses or re-words) / traversal.
+  **PREDICTIONS, scored afterwards.**
+  **H1 — the receiver-TYPE computation dominates: the `objectType` block is >= 50% of
+  the function.** (ENGINE.1) found "compute the SOURCE type" the largest row at all
+  three assignability sites (41% at site 3), and here the analogous input occupies 848
+  of the 1,965 lines. **Falsified below 35%.**
+  **H2 — the pre-type firewall is thin: the ten receiver-shape blocks that run BEFORE
+  the type is computed (shadowed names, three flow-graph blocks, string/regex/objlit
+  receivers, New/Call/PropertyAccess receivers) cost < 20% combined**, mirroring level
+  Q where seven of eight firewall probes cost 0-25 ms together. **Falsified at >= 30%.**
+  **H3 — the exit census is TOP-HEAVY: >= 60% of the 66,747 calls return before
+  `getPropertyOfType` is ever reached.** If true the function's cost is dominated by
+  computing a type in order to discard it, and the lever is a cheaper gate rather than a
+  faster lookup. **Falsified below 40%.**
+  **H4 (the lever) — some gate that is CHEAP to evaluate sits AFTER expensive work, and
+  hoisting it is worth >= 150 ms.** Named candidates, both of which today run only after
+  the whole receiver type exists: `propName in RUNTIME_PROPERTIES` and
+  `isEnumFlavoredObjectType(objectType)`. **Falsified if the census shows < 150 ms
+  upstream of every hoistable gate — in which case say so and stop.**
+  **H5 (the wiring control) — the emission tail (spelling suggestion, `typeToString`,
+  message construction) is ~0 ms**, because 46 diagnostics fire program-wide. Round
+  786's 0.4 ms TS2322-elaboration row is the precedent; a non-trivial number here means
+  the partition is mis-wired, not that the tail is expensive.
+  **Law 4 applies before anything lands**: if a candidate skips a CACHED resolution, its
+  bill moves to the next asker — price the skip by landing it and re-reading the
+  partition, never by the census alone. Gate: corpus suite + the 8-profile `--listAll`
+  grid diffed set-for-set BOTH directions + `--partitionCheck 2` + `cost_gate.py`.
+
 - [x] **(PERF.HW) DONE round 740 — the cores are REAL, and the question was the
   wrong one: a SEQUENTIAL run already consumes 3.15 of the 4 cores.** Artifact:
   `docs/perf/worker-scaling-round740.md`.
