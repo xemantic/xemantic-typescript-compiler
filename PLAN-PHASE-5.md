@@ -20,6 +20,81 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 787 (2026-08-01) — (ENGINE.2) PROMOTED AND MEASURED: THE PROPERTY-ACCESS PATH IS
+3,815 ms = 13.7% OF A CHECK-ONLY COMPILE — 7.4x THE THREE ASSIGNABILITY SITES (ENGINE.1)
+PRICED — AND ITS DEDICATED-WALKER LAYER IS 207 ms = 0.74%, i.e. 0.088x THE ENGINE WORK.
+THE SCOPE QUESTION IS ANSWERED: WHERE THE WALKERS ARE THICKEST THE TIME IS THIN, AND
+WHERE THE TIME IS THICK THE WALKERS ARE 8% OF IT.** The queue's `- [ ]` items were all
+legitimately unavailable — (AOT.3) needs a NATIVE emit measurement (forbidden on this
+box), (WIDEN.1)(b)/(c)/(d) record 0 measured sites, (M3.0-gap-2/3) are parked/post-v1 —
+so the round took the next stage from `docs/ARCHITECTURE-RETHINK.md` § 0.1's endgame
+paragraph rather than from a checkbox, and **wrote the item and its four scored
+predictions into the queue BEFORE any code** (commit `ccee8d6c`).
+
+- **WHY THIS SITE.** Round 733 attributed the HANDLER (`cpaSpineLeave`) and stopped at
+  "88.4% of it is the pass's own checking work". Its ccet twin was then opened three
+  times ((CALL.1)/(CALL.2)/(CALL.3)) and its cta sibling twice ((TYPE.2)/(ENGINE.1)) —
+  **the cpa side never was**, and it is the biggest of the three. Re-measured at HEAD
+  before promotion per CLAUDE.md's re-measure law: `--spineSections` reads **4,449 ms**
+  (3,179 anchor-stmt + 1,270 owner-cond) against round 733's 4,653 — stable.
+- **WHAT LANDED: `CpaSections` + `--cpaSections{,Coarse,Census}`, 9 pins, and
+  `docs/perf/property-access-attribution.md`.** Level P is RECURSIVE and uses round
+  756's hand-back shape, windowed to `cpaSpineLeave`'s anchors (**399,336 invocations
+  in-window, 0 outside** — the spine is the only caller); level Q partitions
+  `checkSinglePropertyAccess`. **CENSUS is a third mode that reads NO timestamp**, so
+  the distinct-node counter that answers G4 never lands in a timing row.
+- **THE SPLIT: engine 2,364 ms (91.9%) / dedicated-walker layer 207 ms (8.0%).** Rolled
+  up with (ENGINE.1)'s three sites the four-site layer is **820 ms = 2.9%** of a
+  check-only compile. **And the layer is one walker**: of the EIGHT firewall probes that
+  run unconditionally at all 66,747 property accesses, **seven cost between 0 and 25 ms
+  COMBINED** and B464 (`emitTs18048ForClosureCapturedUndefinedReceiver`) costs **272 ms**.
+  **E4 holds a fourth time** — all eight emit diagnostics tsc emits too (TS1209 / 2339 /
+  2532 / 18048 / 2340 / 2855 / 2748 / 2341), so the layer MOVES into any replacement
+  engine; **plainly deletable here is ~0 ms.**
+- **PREDICTIONS 2 HIT / 1 UNDECIDED / 2 MISSED.** G1a (leaf >= 50%) **HIT at 76.2%**.
+  G1b (traversal < 10%) is **UNDECIDED at 9.9% with a 6.6-14% bracket** — the
+  calibration straddles the threshold and saying so is the honest answer. G2 (firewall
+  20-40%) **MISSED at 8.0%** — right direction, 2.5-5x too high. **G3 was the round's
+  hoped-for lever and is FALSIFIED by 17x**: the arrow/fn-expr scope bookkeeping — three
+  `EpochMap`/`EpochSet` copies plus `applyBodyLocalShadowing` per function node — is
+  **18 ms**, not the >= 300 ms predicted. The item's own clause said "if it comes in
+  under 150 ms, say so and stop"; said.
+- **G4's FIRST READING WAS AN ARTIFACT, AND CATCHING IT IS THE ROUND'S METHOD LESSON.**
+  It measured **2.35x** visits/distinct at level P and 1.49x at level Q — "the walk
+  re-checks a third of its property accesses", which would have been the headline.
+  **`indexSourceFile` restarts `nodeId` at 0 for EVERY `SourceFile`**, so a program-wide
+  `HashSet<Int>` of raw ids collapses one node per file onto each id and inflates the
+  ratio without bound. Keyed by `(fileName.hashCode(), nodeId)` the answer is **exactly
+  1.000 in both levels** — nothing is visited twice. An identity set is not the fix
+  either (AST nodes are data classes; `HashSet<Node>` deep-recurses `hashCode`).
+- **CALIBRATION REPORTED AS A BOUND.** Three runs per mode: ON 4,366/4,405/4,474,
+  COARSE 4,095/4,101/4,136. Δ = **304 ms** over 782,359 extra boundaries = **389 ns**,
+  bracket **198-579 ns**; Δ is **2.8x** the larger spread — usable, unlike round 786's
+  1.4x, but not sharp. **The classification does not hinge on it**: 79% of level-P
+  closes are in the two TRAVERSAL rows, and **every level-Q row closes exactly 66,747
+  times**, so a uniform boundary cost subtracts the same amount from each and cannot
+  reorder them.
+- **TWO CANDIDATES PRICED FOR (ENGINE.2b), neither clearing the +-2.0% COLD band alone,
+  together 403 ms = 1.44%.** (i) **`cpaComputeArgCtxTypes` computes 265 ms for calls
+  where nothing can read the result** — `contextualType` is read by exactly three arms,
+  and only **2,020 of 51,967 calls (3.9%)** have an argument subtree containing an
+  arrow / fn-expr / objlit; those hold 67 ms of the 332. **This is the round-759
+  qualification pointing the OTHER way and worth stating: per call the skippable
+  population IS the cheap tail (5.3 us vs 33 us, exactly as § 0's law predicts) but
+  there are 25x more of them, so the aggregate skippable share is 80% — a per-item cost
+  law does not settle an aggregate question.** (ii) **B464's innermost-closure lookup is
+  a 138 ms O(closures-in-file) LINEAR SCAN** over 15,483 reaching invocations (8.9 us
+  each, 46% of the walker); the round-489 pre-gate already works (only 15,483 of 66,747
+  get past it, and only **466** ever launch the flow walk).
+- **NOTHING WAS LANDED BUT THE HARNESS, DELIBERATELY.** (i) calls
+  `getTypeOfIdentifier` / `resolveStructuredTypeMembers` /
+  `tryInferSingleTypeParamFromArgs`, all of which mutate resolution caches, and round
+  754 showed a resolution-ORDER accident can decide a verdict — so it is not free by
+  inspection and does not belong in the last hour of a round.
+- Suite 13,342 -> **13,351 / 0 failures / 3 skipped** (+9 pins). 8-profile grid
+  **46/46/46/46/46/46/46/94**, re-captured at HEAD. `--listAll` byte-identical in
+  production, ON, COARSE and CENSUS. Cost gate **all 20 counters +0.00%**.
+
 **Round 786 (2026-08-01) — THE MISSION TRANSITIONS TO PERFORMANCE, AND (ENGINE.1) IS
 CLOSED BY MEASURING ITS LAST SITE. THE THREE-SITE DEDICATED-WALKER LAYER IS
 613 ms = 2.2% OF A CHECK-ONLY COMPILE — ONE NOISE BAND — AND ~29 ms OF IT IS
@@ -3283,7 +3358,27 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   deliberately did not start it thin. Scored predictions E1-E4 are written down in
   `docs/perf/engine-rule-price.md` § 4 — score them.
 
-- [ ] **(ENGINE.2) Price the dedicated-walker layer on the site that actually holds the
+- [x] **(ENGINE.2) CLOSED round 787 — THE PATH IS 3,815 ms = 13.7% OF A CHECK-ONLY
+  COMPILE AND ITS DEDICATED-WALKER LAYER IS 207 ms = 0.74%, i.e. 0.088x THE ENGINE
+  WORK.** Level P (recursive, hand-back shape, windowed to `cpaSpineLeave`: 399,336
+  invocations in-window, **0 outside**) + level Q + a timestamp-free CENSUS mode.
+  **Engine `checkMemberAccessMissing` 2,364 ms (91.9%) / firewall 207 ms (8.0%)**,
+  against 0.67x / 0.40x / 0.39x at (ENGINE.1)'s three sites — **the site that holds
+  the mass has by far the smallest layer share**, which is the answer to § 0.1's
+  endgame scope question. Four-site layer total: **820 ms = 2.9%**. **The layer is ONE
+  walker**: of eight firewall probes running at all 66,747 property accesses, seven
+  cost **0-25 ms COMBINED**; B464 costs 272 ms. **E4 holds a fourth time** — all eight
+  emit diagnostics tsc emits, so the layer MOVES and plainly deletable is **~0 ms**.
+  **Predictions 2 hit / 1 undecided / 2 missed; G3 (the hoped-for lever) FALSIFIED by
+  17x at 18 ms.** **G4's first reading, 2.35x, was an ARTIFACT of per-file `nodeId`
+  reuse** — keyed by (file, nodeId) it is exactly **1.000**, nothing is visited twice.
+  Calibration reported as a BOUND (Δ 304 ms = 389 ns, bracket 198-579, Δ/spread 2.8x),
+  and the classification is shown not to hinge on it. Suite 13,342 -> **13,351 / 0 / 3**
+  (+9 pins), grid **46/46/46/46/46/46/46/94**, `--listAll` identical in all four modes,
+  cost gate **all 20 counters +0.00%**. Follow-on: **(ENGINE.2b)**. Full derivation:
+  `docs/perf/property-access-attribution.md`. The original item text follows.
+
+  ORIGINAL: **Price the dedicated-walker layer on the site that actually holds the
   mass — the PROPERTY-ACCESS path, `cpaSpineLeave` -> `checkPropertyAccessInExpr` ->
   `checkSinglePropertyAccess`. PROMOTED round 787 as the next stage of
   `docs/ARCHITECTURE-RETHINK.md` § 0.1's endgame paragraph.** (ENGINE.1) answered the
@@ -3331,6 +3426,41 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Gate: corpus suite + 8-profile `--listAll` grid + `cost_gate.py`; `ab-warm.sh`
   medians AND win rate if anything lands. **A count is not a measure; price the
   population before building the fix.**
+
+- [ ] **(ENGINE.2b) The two levers (ENGINE.2) priced but did not land — 403 ms = 1.44%
+  together, and this is the FIRST candidate above a half-band the perf arc has found in
+  seven rounds.** Neither clears the +-2.0% COLD band alone, so **decide both with
+  `scripts/ab-warm.sh` (+-1.0%), on a box nobody is touching, and discard any run whose
+  printed per-arm sd exceeds ~1%.** Take them as two separate commits, each
+  independently gated, so a regression is attributable.
+  **(a) `cpaComputeArgCtxTypes` — 265 ms computed for calls where nothing can read the
+  result.** `contextualType` is read by exactly three arms of
+  `checkPropertyAccessInExpr` (ArrowFunction / FunctionExpression /
+  ObjectLiteralExpression), and only **2,020 of 51,967 calls (3.9%)** have an argument
+  subtree containing one; those hold **67 ms of the 332**. **THE PRIZE IS ALREADY
+  MEASURED — do not re-derive it, and do not multiply a count by a mean cost** (the
+  populations differ 6x per call: 5.3 us vs 33 us). The pre-gate must beat 5.1 us per
+  call, which a bounded subtree scan does easily; the probe-only
+  `cpaArgumentsCanConsumeContext` is a working conservative predicate to start from,
+  but a per-node precomputed flag is likely cheaper. **THE RISK IS NOT PERFORMANCE, IT
+  IS BEHAVIOUR**: the function calls `getTypeOfIdentifier`,
+  `resolveStructuredTypeMembers` and `tryInferSingleTypeParamFromArgs`, all of which
+  mutate resolution caches, and round 754 proved a resolution-ORDER accident can decide
+  a verdict. **Gate on the full suite AND all eight profiles set-for-set, not on the
+  compiler profile alone** — round 782's "residual is empty" was stale for six
+  consecutive rounds precisely because every price in that arc was measured on compiler
+  and services only.
+  **(b) B464's innermost-closure lookup — a 138 ms O(closures-in-file) LINEAR SCAN.**
+  `emitTs18048ForClosureCapturedUndefinedReceiver` finds the innermost closure
+  containing the receiver by scanning `graph.closureStarts` — **15,483 reaching
+  invocations at 8.9 us each, 46% of the walker**. The round-489 pre-gate already does
+  its job (only 15,483 of 66,747 get past it; only **466** ever launch the flow walk),
+  so what is left is the scan itself. Answer it from the INV.2(a) parent chain (walk up
+  to the first Arrow/FunctionExpression and match it against `closureStarts` by
+  identity/position) or from a position-sorted per-file index built once. **This is not
+  a cache** — § 0's law does not apply to replacing an O(n) scan with an O(depth) walk.
+  Rounds 482 and 489 both optimised AROUND this scan without replacing it; read their
+  notes before starting.
 
 - [x] **(PERF.HW) DONE round 740 — the cores are REAL, and the question was the
   wrong one: a SEQUENTIAL run already consumes 3.15 of the 4 cores.** Artifact:
