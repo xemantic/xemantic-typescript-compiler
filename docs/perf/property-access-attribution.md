@@ -1021,3 +1021,171 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --listAll --cmamPreGateBogus $P
 ```
+
+---
+
+# Round 794 — (ENGINE.2f): the UNION loop-entry retry, substituted
+
+## 36. The headline
+
+The prize was re-measured at HEAD before anything was built (law 1), and it had
+survived rounds 792-793 intact: `R_OT_UNION`'s round-424 loop-entry retry still
+reaches **1,859 calls for 66 ms** on the compiler profile, of which round 790's
+loop-free bracket calls **916 (49%)** provably redundant.
+
+But the item's own warning is what decides the shape of the fix, and it is
+right: **this is not (ENGINE.2d)(a), and a skip is not equivalent here.** The
+consumer's first test is the IDENTITY
+
+```kotlin
+if (loopNarrowed !== rawForNarrowing && loopNarrowed !== neverType) { … }
+```
+
+and a loop-free repeat whose flow path crosses a two-antecedent
+`FlowBranchLabel` unions `[declared, declared]`, which `getUnionType` mints
+FRESH because it does not intern. So the block genuinely runs from a
+structurally-washed state, and on the compiler profile it **suppresses 61 times
+from exactly there** (services 66, harness 71). Skipping loses those; the
+landable form is the SUBSTITUTION — hand the consumer the plain walk's own
+result, which preserves both the identity relationship (fresh vs the declared
+instance) and the member set, i.e. everything the consumer reads.
+
+## 37. The prize, measured on its own population
+
+The item quoted 32 ms as "49% of 66 ms". That is a `count × mean` extrapolation
+— the error every over-estimate in this codebase came from — so the round split
+the row instead: `N_U_RETRY_LF` for the loop-free half, `N_U_RETRY` for the
+loop-crossing one. Both arms keep exactly one `t()`/`closeN` boundary pair in
+both runs, so no round-793 boundary correction applies: this is the "ONE-SPAN
+sub-measure whose count does not change".
+
+| row | calls | pre-change (`--verifyUnionRetry`) | after |
+|---|---:|---:|---:|
+| `R_OT_UNION` the RETRY, **loop-free** half | 916 | **32 ms** | **2 ms** |
+| `R_OT_UNION` the RETRY, loop-crossing half | 943 | 42 ms | 50 ms |
+| `R_OT_UNION` the PLAIN walk | 4,218 | 183 ms | 168 ms |
+| `R_OT_UNION` the TS2339 elaboration | 3,993 | 43 ms | 30 ms |
+| level R total | 46,319 | 1,305 ms | 1,237 ms |
+
+**≈30 ms = 0.11% of a check-only compile.** The extrapolation was, for once,
+right — but it was right by luck, and the row that says so is the one to quote.
+The other rows move ±10 ms between the two runs in both directions, which is
+this harness's run-to-run noise at that scale and is why the containing row's
+329 → 279 ms is NOT the number.
+
+**No A/B was run, deliberately.** 0.11% is an order of magnitude below the warm
+protocol's ±1.0% band and two below the cold one's ±2.0%; a verdict from either
+would be noise wearing a sign. `cost_gate.py` decides instead, and it does so to
+the unit — see § 39.
+
+## 38. The equivalence, and the control that costs nothing
+
+`--verifyUnionRetry` re-walks and HONOURS the re-walk, so a run under it
+reproduces the pre-change binary by construction and IS the grid baseline. It
+compares the substituted candidate against the re-walked one at three
+granularities — `Type` INSTANCE, union MEMBER-ID SET, and the consumer's own
+suppression VERDICT:
+
+| profile | reached | loop-free (compared) | instance-diff | member-diff | VERDICT-diff |
+|---|---:|---:|---:|---:|---:|
+| compiler | 1,859 | 916 | **0** | **0** | **0** |
+| services | 2,526 | 1,191 | **0** | **0** | **0** |
+| harness | 2,722 | 1,313 | **0** | **0** | **0** |
+
+**3,420 comparisons, 0 diffs of any kind** — and instance-diff 0 is stronger
+than the argument needed: the loop-free mirror does not merely agree, it returns
+the very same `Type` instance.
+
+The zero is not a dead instrument, and no deliberately bogus flag was needed to
+show it. `--verifyUnionRetryAll` runs the same comparison over the COMPLEMENT —
+the loop-CROSSING calls the substitution never serves, where round 424's whole
+reason for existing says the two walks must disagree:
+
+| profile | compared | instance-diff | member-diff | VERDICT-diff |
+|---|---:|---:|---:|---:|
+| compiler | 1,859 | 149 | 101 | **118** |
+| services | 2,526 | 166 | 118 | **135** |
+| harness | 2,722 | 169 | 121 | **138** |
+
+That is round 790's law applied as intended: **a skip's positive control is its
+complement population, and it ships for free.**
+
+## 39. Law 2 does not bite, and the counter says so to the unit
+
+`narrow.walks` **27,256 → 26,340 = −916 exactly**, the substituted population to
+the walk. Nothing rose: `typeOfExpr.calls` −0.03%, `globals.lookups` −0.26%,
+`spine.nodes` / `typeNode.bypassed` / `mapped.*` +0.00%. Round 788's law (what
+is skippable is not thereby recoverable, because a memoized callee's first later
+asker pays instead) is checked rather than assumed, and here it does not apply:
+the retry's resolutions were driven and cached by the plain walk moments
+earlier, so the second walk had no distinct work to move.
+
+## 40. What did NOT work, and it is the more useful half
+
+**The SKIP — the fix the item told us not to write — is empirically
+indistinguishable from the substitution everywhere this repository can measure.**
+Ablated in (`suppress = false` on the loop-free arm) and run in full:
+
+* the 8-profile grid: **0 added, 0 removed** on compiler, services and harness;
+* the corpus suite: **13,419 / 0 failures / 3 skipped** — not one baseline moved.
+
+So the 61/66/71 suppressions the skip loses are all DOWNSTREAM-REDUNDANT: the
+retry's fold (`resolveMemberPropertyType(m, propName) != null` for every
+non-nullish member) strictly implies the union elaboration's own `memberHasIt`
+for the same members, so `missingMembers` is empty a few lines later and the
+elaboration would not have emitted anyway.
+
+Two things follow, and they point in opposite directions:
+
+1. **The item's veto was analytically right and empirically unnecessary.** A
+   future agent reading "skipping changes the verdict" should know that the
+   verdict it changes is, on every profile and every one of 13,419 baselines,
+   consumed by nothing.
+2. **Ship the provable one anyway.** The substitution and the skip cost the same
+   (2 ms vs 0 for a fold over an already-narrowed member list), and only one of
+   them is equivalent by construction rather than by "nothing we ran noticed".
+   When the provable form is free, "no test caught it" is not a reason to prefer
+   the unprovable one — it is only a reason not to spend a round proving it.
+
+The round's other negative result is a fixture-construction trap: **a bare
+expression-statement property access is the only shape in a small file whose
+plain walk is LOOP-FREE.** In an argument or a `return`, an earlier pass has
+already walked the same reference, the round-664 inter-walk memo serves the
+walk, `narrowWalkLaunches` does not move, and the bracket answers "unknown" —
+the conservative arm. Six candidate fixtures read `loopFree = 0` before that was
+understood; the pins' substituted population would have been empty and the two
+verifier pins vacuous.
+
+## 41. Verification
+
+* Corpus suite **13,412 → 13,419 / 0 failures / 3 skipped** (+7
+  `UnionRetrySubstitutionTest`).
+* 8-profile `--listAll` grid, diffed set-for-set in BOTH directions against the
+  same binary under `--verifyUnionRetry`: **46/46/46/46/46/46/46/94, 0 added and
+  0 removed on all eight.**
+* `--partitionCheck 2` **EQUIVALENT — 46**.
+* **Pin discrimination 2 of 7**, against fault A (the substitution ignores the
+  loop-free bracket and serves every call): `the round-424 loop-entry shapes
+  still suppress` and `the substitution emits exactly what the re-walking binary
+  emitted`. Fault B (the skip) is caught by **none** of them — and by nothing
+  else in the repository either, per § 40; that is reported rather than papered
+  over with a pin that could only assert an unobservable.
+* **Cost gate rebaselined in the landing commit**, mechanism named: `narrow.walks`
+  −916 exactly, nothing rose.
+
+## 42. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt); P=build/bench/tsc-project-*
+# the prize, split by the loop-free bracket (pre-change arm re-walks)
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSections --verifyUnionRetry $P
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSections $P
+# the equivalence over the substituted population …
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --verifyUnionRetry $P
+# … and the complement, which MUST diverge
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --verifyUnionRetryAll $P
+```

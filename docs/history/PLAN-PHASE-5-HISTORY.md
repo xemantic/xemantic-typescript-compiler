@@ -1,3 +1,183 @@
+**Round 779 (2026-07-31) — (REL.4)(b) CLOSED, AND ITS OWN LABEL IS FALSIFIED: THE FAMILY IS
+**TWO** DEFECTS AND ONLY **ONE** OF THEM IS GENERIC INFERENCE. THREE OF THE FOUR COMPILER
+LINES COME FROM A DEDICATED WALKER READING *OUR OWN* INFERENCE AS IF IT WERE THE
+PROGRAMMER'S REQUIREMENT.** Scaffolded price **compiler 52 -> 48, services 56 -> 49** —
+eleven lines, `diff` says exactly those and no new one. Unscaffolded 8-profile grid
+**46/46/46/46/46/46/46/94**, byte-identical set-for-set to round 778's on all eight. Suite
+13,242 -> **13,252 / 0 failures / 3 skipped**; cost gate exit 0, **no rebaseline**.
+
+- **DEFECT 1 (3 of 4 compiler lines, 3 of 7 services lines) IS NOT INFERENCE AT ALL.**
+  `Debug.assertIsDefined<T>(value: T, …): asserts value is NonNullable<T>` has no nullable
+  parameter to get wrong — its parameter is a bare `T`, and our inference binds
+  T := `Declaration` from `symbol.valueDeclaration` correctly. The FP is
+  `tryEmitOptionalMemberArgVsRequiredNamedTs2345`, a walker whose whole premise is *"the
+  parameter independently REQUIRES this named type, so the member's unmodelled `| undefined`
+  is the sole failure"*. Against an inferred bare type parameter that premise is
+  self-referential: the requirement is one we manufactured from the very argument being
+  judged, and a bare type parameter requires nothing. The fix is one AST predicate
+  (`paramDeclaredTypeIsOwnTypeParam`) on that walker's gate. **It must read the AST**: an
+  instantiated `Signature` carries `typeParameters = null` and its parameter symbols hold
+  the SUBSTITUTED type, so nothing on the Type side can see that the annotation ever was a
+  `T` — but `instantiateSignature` copies `valueDeclaration` through, so the annotation node
+  survives. Sites: `checker.ts:12576`, `esDecorators.ts:1093`, `esnext.ts:605`.
+- **DEFECT 2 (1 compiler / 4 services) IS the item's stated one, and it is a THREE-LINE
+  relaxation, not engine work.** `checkDefined<T>(value: T | null | undefined): T` reaches
+  round 428's nullable-union anchor, which strips the source's nullish constituents **only
+  when exactly ONE non-nullish member survives**. tsc's `__String` is itself a 3-member
+  union, so `__String | undefined` kept all four members, bound T to the whole
+  nullish-carrying union, and the call's return type carried `undefined` into
+  `checkReturnAssignability`. Now any proper non-empty non-nullish subset is used. Sites:
+  `utilities.ts:2386`, `fixClassIncorrectlyImplementsInterface.ts:71`,
+  `importFixes.ts:2093`/`2113`.
+- **SO THE QUEUE'S "M3.1, the generic-inference engine" LABEL OVER-PRICED THIS BY A LOT.**
+  Neither half needed inference infrastructure; the whole change is ~15 lines. Blocker #2's
+  arc is untouched and still open — this round is evidence about ONE family, not about it.
+- **DIAGNOSED IN ONE RUN BY HOOKING `Diagnostic`'s CONSTRUCTOR, AFTER THREE REDUCTIONS
+  FAILED FOR A REASON WORTH RECORDING.** A hand-written `plain(x: Decl)` called with
+  `Decl | undefined` is SILENT — the argument loop's `paramNotSimple` gate `continue`s
+  unless the argument is primitive — so "my reduction does not reproduce" read as "the shape
+  is wrong" when it really meant "the general relation path is not the emitter". The
+  message's `Type 'undefined' is not assignable to type 'X'.` chain is NOT a discriminator
+  either: the general TS2345 path builds the same chain for a union source. A filtered
+  `Throwable().stackTraceToString()` in `Diagnostic`'s `init`, keyed on file+line, named the
+  emitter immediately — for all four lines, in four 30-second runs.
+- **THE PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (`REL4B_GATE = false`,
+  recompiled, `Rel4bGenericInferenceTest` re-run): **5 of 10 fail ablated and pass fixed**,
+  **5 hold on both sides** — two of those are negative controls that FIRE on both (a
+  genuinely required named parameter still rejects; the same generic callee's CONCRETE
+  parameter still rejects, so the suppression is per-PARAMETER, not per-call) and three are
+  silent on both (round 428's single-survivor path, a source with no nullish member, a bare
+  `tp` parameter still inferring the whole union). The sharpest pin discriminates **by
+  MESSAGE** rather than by silence — `function f(): A | B { return checkDefinedLocal(abc) }`
+  names `'A | B | C'` fixed and `'A | B | C | null | undefined'` ablated — which is what
+  proves the strip removed the nullish members and nothing else.
+- **A PROBE-POSITION TRAP, round 777's lesson arriving from the other side: for defect 2
+  ONLY the RETURN position is observable.** A var-decl annotation (`const v: A = checkDefined(ab)`)
+  and a call-argument position (`wantsA(checkDefined(ab))`) are silent on the FIXED **and**
+  the ABLATED binary — the first because the var-decl gate does not reach it, the second
+  because of round 468's foreign-TP CallExpression bail. Four pins written that way would
+  have measured nothing. Related: a union source into a strictly SMALLER union target fires
+  while the same source into a single-member target does not, so `f(): A` cannot pin what
+  `f(): A | B` can.
+- **THE FIX IS REACHED UNSCAFFOLDED AND CHANGES NO VERDICT** — the cost gate reports
+  `typeOfExpr.calls` **-6** and `narrow.memoServed` **-2** on the compiler profile with all
+  18 other counters bit-identical and all 8 profile outputs byte-identical, so this is not a
+  zero-count green (round 753's rule). No rebaseline: every delta is 0.00%.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). (i) The defect-1 gate is
+  BARE-type-parameter only. A nested mention (`f<T>(x: Array<T>)`) is the same class of
+  error and has **0 measured sites** on all 8 profiles, so widening it would be an unmeasured
+  widening of a suppression. (ii) `(c)` (`esDecorators.ts:1314`) was NOT folded in: it is
+  cause (D), literal widening, whose blast radius is every `const` in the corpus — the queue
+  is right that it is an arc.
+- **THE FLIP'S RESIDUAL IS NOW THREE LINES, AND IT IS THE SAME THREE ON BOTH PROFILES PLUS
+  ONE.** Scaffolded compiler 48 = 46 env-legit + `moduleSpecifiers.ts:1411` + `esDecorators.ts:1314`;
+  services 49 adds `stringCompletions.ts:386`. That is exactly (a)'s two named stragglers
+  plus (c) — no unclassified line remains.
+- **PREDICTIONS 2 of 4.** HIT: (b) is exactly 4 compiler / 7 services as the item said, and
+  the fix removes precisely those with no new line; the corpus does not move (no
+  `LogicalParityDivergence`). **MISSED, and both misses are the output:** (a) I took the
+  item's word that this was one generic-inference defect — it is two, and the majority is a
+  dedicated walker; (b) I expected a var-decl probe to read the inferred return type, and it
+  reads nothing on either side.
+
+**Round 778 (2026-07-31) — (ORDER.1) CLOSED. `getTypeOfSymbol` PERSISTED EVERY RESOLUTION
+INTO A GLOBAL CACHE, INCLUDING THE ONES MADE UNDER A CALLER'S INSTANTIATION CONTEXT — THE
+EXACT CONTEXT `getTypeFromTypeNode` HAS ALWAYS REFUSED TO CACHE UNDER. SO A MEMBER TYPED BY
+A TYPE PARAMETER WAS FROZEN AS WHATEVER THE FIRST TOUCHER SAW, AND THE CRAWL SORT CHANGED
+WHO THAT WAS.** 8-profile grid **46/46/46/46/46/47/47/95 -> 46/46/46/46/46/46/46/94**,
+and the sorted diagnostic SETS are otherwise IDENTICAL to round 777's on all eight — the
+change removes exactly one line on three profiles and touches nothing else. Suite
+13,234 -> **13,242 / 0 failures / 3 skipped**. Cost gate rebaselined, +2.0% on one
+population, accounted below.
+
+- **THE MECHANISM, ONE LEVEL BELOW WHERE THE QUEUE ITEM POINTED.** `getTypeFromTypeNodeCore`
+  computes `cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty()
+  && currentTypeAliasArgs == null && !isPerFileDependentRefNode(node)` and skips `nodeTypes`
+  when it is false, because "the same node may resolve differently depending on the
+  enclosing class/interface's type parameters". `getTypeOfSymbol` wrote `symbolTypes[id]`
+  **unconditionally**. For `interface TextRangeWithKind<T extends SyntaxKind = SyntaxKind>
+  { kind: T }` that means the ONE `kind` symbol every instantiation shares (round 761) is
+  frozen at its first touch: `T` if some file materialized `TextRangeWithKind<T>`'s members
+  inside a generic scope first, `any` otherwise. The bare read at
+  `formattingScanner.ts:311` then compares `SyntaxKind` against a bare `Type.TypeParam`
+  target — which our relation correctly rejects for a single-type source — and emits
+  `TS2322: Type 'SyntaxKind' is not assignable to type 'T'`. **The fix is the missing half
+  of a gate that already exists**: persist only when the AMBIENT (caller-supplied) context
+  is empty. A context the worker installs FOR ITSELF (`pushInferenceNamespaceFor`, a
+  function's own type params) is a function of the symbol and stays cacheable, which is why
+  the gate is read at ENTRY.
+- **REPRODUCED IN 1.2 SECONDS AND MINIMIZED BY SINGLE-INGREDIENT ABLATION** (scratch project
+  + `MainKt --noEmit --listAll`, per the round-744 loop). Four ingredients tested one at a
+  time against the UNFIXED binary: the `TokenInfo` indirection is **not** needed (a direct
+  `TextRangeWithKind` parameter reproduces); a `declare`d generic function is **not** enough
+  (only a BODY that materializes `TextRangeWithKind<T>`'s members poisons it — so this is
+  member RESOLUTION, not the signature); any local annotation `TextRangeWithKind<T>` in a
+  generic scope works, `createTextRangeWithKind` is incidental; and **moving that generic
+  scope BELOW the bare read silences it entirely** — which is the order dependence in three
+  lines of TypeScript.
+- **THE QUEUE ITEM'S OWN "STRONGEST LEAD" IS FALSIFIED, AND BY READING SOURCE RATHER THAN
+  GUESSING.** The lead was `propertyTypeOnCarrier` / the round-762 carrier idiom. It cannot
+  answer this one: `propertyTypeOnCarrier` is `if (carrier is Type.Reference)
+  resolveGenericPropertyType(...) ?: getTypeOfSymbol(prop) else getTypeOfSymbol(prop)`, and
+  a bare reference to a generic whose every parameter has a DEFAULT resolves to the RAW
+  `Type.Interface`, not a `Type.Reference` (`defaultedInstantiationOfOpenGeneric` says so in
+  its first line: *"Type.Reference is NOT an Interface"*). So on this carrier
+  `propertyTypeOnCarrier` **is** `getTypeOfSymbol(prop)`, character for character — there
+  are no type arguments to substitute. The other half of the lead, the globally-`any`
+  member cache, was right, and it was right about the direction too: the cached value
+  differed between the two orders.
+- **WHAT WAS *NOT* DONE, AND WHY — the bare read still degrades to `any`.** The
+  principled answer for `TextRangeWithKind.kind` read through the DEFAULTED bare reference
+  is `SyntaxKind`, not `any`, and `defaultedInstantiationOfOpenGeneric` already computes
+  it. Applying it at resolution is documented-closed (round 754: it makes a bare
+  `TableClass` and an explicit `TableClass<any>` the same interned instance and
+  `type Table = TableClass` stops displaying as `Table`, 8 baseline lines measured);
+  applying it at the property-READ site is untried and is a strictly larger change than
+  this defect needs, since it would not by itself make the cache order-independent.
+  Recorded here rather than pinned (round 765's rule): today `token.kind = "not a kind"`
+  is silent on the bare carrier, in BOTH orders, and that is a real open gap.
+- **A SECOND DIMENSION IS LEFT OPEN ON PURPOSE.** `getTypeFromTypeNodeCore`'s gate has a
+  FOURTH conjunct, `!isPerFileDependentRefNode(node)`; `symbolTypeContextIsEmpty()` mirrors
+  only the three instantiation dimensions. A per-FILE order dependence in `symbolTypes` is
+  therefore still possible in principle; nothing on the eight profiles exhibits one, so it
+  is stated, not fixed.
+- **THE PINS DISCRIMINATE, VERIFIED AGAINST AN ABLATED BINARY, NOT ASSUMED** (round 777's
+  lesson, applied). `SymbolTypeOrderTest` is 8 tests run through one binary with
+  `SYMBOL_TYPE_ORDER_GATE` on and flipped off: **4 fail ablated and pass fixed** (the
+  generic-scope-first source order, the source-order differential, the generic-scope-first
+  PROGRAM order, the program-order differential) and **4 are identical on both sides** (the
+  benign order, a non-generic member of the same interface still rejecting a bad write, the
+  member still resolving, an instantiation missing the member still rejected). The
+  cross-FILE differential could NOT reuse `ProjectCrawlOrderTest`'s reversing `Vfs` —
+  round 776's sort makes that view answer the same program order by construction, which is
+  the whole point of it — so the two orders are produced by RENAMING the two modules.
+- **THE ABLATION IS COUNTED, NOT ASSUMED GREEN** (round 753's rule). A new `--passTiming`
+  line reports `getTypeOfSymbol cache writes: persisted 20507 vs context-bypassed 2576
+  (11.1% of first touches are order-dependent)` on the compiler profile — so the ablated
+  arm ran the suppressed write 2,576 times, and a zero-count false green is excluded.
+- **THE COST, AND IT IS THE MECHANISM'S OWN ARITHMETIC.** Suppressing 2,576 cache writes
+  means those symbols re-resolve on a later touch: `typeNode.cacheable` +0.92%,
+  `typeNode.bypassed` 103,802 -> **105,855 (+1.98%)** and, downstream of that,
+  `mapped.keyed` 25,521 -> **26,151 (+2.47%)** and `mapped.hits` 6,045 -> **6,462 (+6.90%)**
+  — the last two over the ±2% tolerance. Everything else is flat (`typeOfExpr.calls`
+  +0.01%, `narrow.walks` +0.01%, `globals.lookups` +0.04%, `spine.nodes` and
+  `output.errors` bit-identical). Priced against round 716's measurement that the WHOLE
+  bypassed population is **68 ms**, +1.98% of it is ~1.3 ms — about 0.005% of a 27 s
+  compile — bought in exchange for the compiler's verdicts no longer depending on directory
+  order. Rebaselined in this commit. Both gate runs were **bit-identical** to each other,
+  which is the round-776 reproducibility check applied to my own number.
+- **PREDICTIONS 3 of 4.** HIT: the cause is a first-touch-wins global cache; the fix removes
+  exactly the one line on exactly the three profiles; the corpus does not move (no
+  `LogicalParityDivergence` needed). **MISSED, and it is the useful one:** I expected the
+  fix to be at the READ site via `propertyTypeOnCarrier`, as the item's lead said — the
+  carrier route is structurally incapable of answering a DEFAULTED bare generic, and the
+  three minutes spent reading `defaultedInstantiationOfOpenGeneric` would have been three
+  hours spent instrumenting `resolveGenericPropertyType` had I trusted the lead.
+- **PROCESS.** The Kotlin daemon OOM'd mid-round on a rebuild (`GC overhead limit
+  exceeded`) with 1.7 GB free while the jvmTest daemon still held its heap; `./gradlew
+  --stop` + a graceful `pkill -f 'KotlinCompile[D]aemon'` then compiled in 2m23s. That is
+  BUILD.1's idle-daemon-squats trap arriving from the test side rather than the build side.
+
 **Round 777 (2026-07-31) — (REL.4)(a) CAUSE 6: AN INTERSECTION OF UNIONS HAS NO MEMBER
 LIST TO PEEL, BECAUSE tsc BUILDS ONE AT TYPE CONSTRUCTION AND WE DO NOT. `nodeFactory.ts:7112`
 CLOSED — scaffolded compiler **53 -> 52**, services **58 -> 57**, `diff` says exactly that
