@@ -20,6 +20,96 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 795 (2026-08-01) — (ENGINE.2h) LANDED, AND THE ITEM'S OWN ARITHMETIC WAS WRONG IN
+THE HELPFUL DIRECTION: THE TS2793 `implRelated` PROBE'S SINGLE READER IS REACHED **ZERO**
+TIMES ON THE COMPILER PROFILE, SO DEFERRING IT REMOVES 23,214 EVALUATIONS AND KEEPS NONE.
+Prize 79–132 ms (0.3–0.5%), quoted as a RANGE because the two ways of measuring it
+disagree by that much. `globals.lookups` −0.47%, `globals.misses` −0.48%, every other
+counter ±0.00% — nothing rose. Suite 13,419 → 13,427; grid 46×7/94 with 0 added and 0
+removed both directions, diffed against the real HEAD binary.**
+
+- **THE PRIZE WAS RE-MEASURED AT HEAD FIRST (law 1) AND IT HAD MOVED — DOWNWARD.** Round
+  793 recorded 94 ms and round 734 recorded 101; at HEAD the `--callSections` row reads
+  **81 ms raw / 72 net over 23,214 invocations**. The item's other number was wrong too, in
+  the direction that makes the change better: "57 emissions in the whole compiler profile"
+  is round 793's count for a DIFFERENT site — this probe's reader is reached **0 times**
+  on compiler, services and harness alike, which the probe's own census says outright.
+- **SO THE DEFERRAL'S OBLIGATION IS TRIVIAL WHERE ROUND 791's WAS THE WHOLE ARGUMENT.**
+  791 had to prove `checkMemberAccessMissing`'s body appends to `diagnostics` and does
+  nothing else, because its suppression guarded ~42 emission sites. Here `grep
+  implementationRelated` returns **two** hits — the parameter and one `relatedInfo.add` —
+  so there is nothing to enumerate. **What had to be checked rather than assumed is the
+  AMBIENT state at the new position**: the argument loop installs `contextualType` for the
+  argument it is checking, and if that install were still live at the emission block the
+  deferred `allArgumentsMatch` would type its arguments under a different context. It is
+  restored ~1,300 lines above the block. That is the whole correctness delta.
+- **ROUND 788's REJECTED THUNK DOES NOT TRANSFER, FOR A REASON WORTH RESTATING.** That
+  thunk failed because a lazily-computed `contextualType` had to survive ~14 save/restore
+  sites in a DIFFERENT dynamic scope. Nothing is stored here: the value is computed at the
+  point of use, inside the very invocation that declined to compute it. "Deferred" and
+  "lazy" are not the same shape, and only the second one needs every reader to cooperate.
+- **THE PRIZE IS A RANGE, AND SAYING SO IS THE POINT.** The row says 81 ms raw (~79 ms of
+  production, one boundary pair per invocation). Round 793's law says a row diff overstates
+  a saving by the boundaries that vanish with it, so it was measured a second way with the
+  boundary count IDENTICAL in both arms — the whole `SINGLE_SIG` span on the same binary,
+  with the eager evaluation restored by `--verifyImplRelated`, 2 runs per arm: **1,634 →
+  1,502 ms, Δ = 132 ms** against a within-arm spread of 43. Δ is 3× the larger spread,
+  which is the weakest differential this codebase reads, so **79–132 ms** is the honest
+  answer and not 132. **No A/B was run**: 0.3–0.5% is an order of magnitude inside the warm
+  band, and the four run totals (25.9–27.0 s in BOTH arms) say exactly that.
+- **A ONE-PAIR BEFORE/AFTER READ LOOKED EXACTLY LIKE ROUND 788's LAW AND WAS NOISE.** The
+  first after-run showed `checkArgumentsAgainstSignature` at 1,442 ms against HEAD's 1,361
+  while `SINGLE_SIG` stayed flat — the textbook picture of removed work reappearing in the
+  next asker. Running BOTH arms twice on ONE binary shows that row is flat (1,379–1,422
+  deferred, 1,416–1,421 eager) and the 81 ms is gone from the containing span. **A single
+  before/after pair cannot distinguish "the work moved" from "this run was slow", and this
+  arc has now been fooled by that in both directions.**
+- **LAW 2 CHECKED AT THE COUNTERS, AND THE MECHANISM IS WHY IT DOES NOT BITE.**
+  `globals.lookups` **−0.47% (−3,660)**, `globals.misses` −0.48%, `typeOfExpr.calls` −3,
+  all 17 others **+0.00%**; cost gate exit 0, **no rebaseline**. The census explains the
+  shape: of 23,214 evaluations only **3,660** reached a name lookup, **27** found an
+  overload implementation, **1** rebuilt its signature and **1** ran `allArgumentsMatch`.
+  So the 79–132 ms is **not type-system work at all** — it is
+  `getOverloadImplementationRelated`'s method/constructor branch scanning `binderResults`
+  and walking a file's top-level statements, an UN-CACHED AST scan with no other consumer.
+  Round 788's law bites when the skipped callee memoizes; here there is nothing to hand on.
+- **THE EQUIVALENCE IS MEASURED, AND ITS CONTROL IS DEAD ON EVERY PROFILE — REPORTED, NOT
+  HIDDEN.** `--verifyImplRelated` evaluates the probe at both positions and honours the
+  EAGER verdict, so the run reproduces the pre-change binary; `--verifyImplRelatedAll` is
+  round 790's FREE complement (every single-signature call, not only the ones reaching a
+  reader): **compiler 23,214 / services 34,891 / harness 37,318 comparisons, 0 diffs at
+  `Diagnostic` granularity** — 95,423 in total. The emission-site column is **0 comparisons**
+  because the reader is never reached, which is the prize and a dead instrument in one
+  number, and is exactly why the complement had to exist. `--verifyImplRelatedBogus` (the
+  deferred evaluation drops the `allArgumentsMatch` gate) also reads **0 on all three**,
+  because that gate never DECLINES on a tsc source tree — one candidate per compile reaches
+  it and it accepts. **The live falsifier is therefore the in-process pin**, whose fixture
+  is a one-overload-plus-rejecting-implementation shape no tsc file contains. Round 793 hit
+  the same wall from the other side; a control has to be run where the thing it watches
+  happens.
+- **PINS: 8 new (`ImplRelatedDeferralTest`), 4 DISCRIMINATING across two complementary
+  ablations run SEPARATELY.** Fault A (the deferred value is never forced) fails 3 — the
+  positive TS2793 pin, the population pin and the eager-vs-deferred pin; fault B (the
+  deferred evaluation drops the gate in production) fails 1, DISJOINT from A's set. The
+  four holders are the two bogus-control pins (they set the flag themselves, so a
+  production-path fault cannot reach them), the complement-population pin (evaluated in the
+  wrapper, which neither fault touches) and the non-overloaded control.
+- **AND THE PRE-EXISTING PROBE PIN WAS CAUGHT BEFORE THE SUITE CAUGHT IT — THE FIRST TIME
+  IN FOUR ROUNDS.** `CallSectionProbeTest`'s "the TS2793 impl probe runs once per reach of
+  the single-sig branch" is an EQUALITY that the deferral falsifies by construction;
+  restated as "strictly rarer than the branch", which is what the old equality now means as
+  a regression test. Rounds 791, 792 and 793 each discovered such a pin by running the
+  suite; grepping the probe's constant for pins before editing costs one command.
+- Suite 13,419 → **13,427 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD FIRST
+  and again after, diffed set-for-set in BOTH directions — against the real pre-change
+  binary, not only against the verify run: **46/46/46/46/46/46/46/94, 0 added and 0 removed
+  on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. Full derivation:
+  `docs/perf/call-expression-attribution.md` §§ 14-19. **THE CALL-EXPRESSION PROLOGUE
+  FAMILY IS NOW CLOSED**: round 793's re-measured inventory listed one live candidate and
+  this was it.
+  (Round 794's session note was written into its queue item rather than here; the record
+  for (ENGINE.2f) is the checked item below.)
+
 **Round 793 (2026-08-01) — (ENGINE.2g) ANSWERED: ROUND 792's METHOD GENERALISES, BUT NOT
 THE WAY THE ITEM PHRASED IT. A PRE-GATE ON `checkSingleCallExpressionTypes`' PROLOGUE —
 SEVEN DEDICATED WALKERS THAT RUN AT EVERY CALL EXPRESSION AND FIRE ZERO TIMES ON THE
@@ -990,274 +1080,6 @@ five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; s
   gone from `ps` — the ablation evidence was recovered instead through the 1.2-second
   scratch CLI, running the pin SHAPES verbatim against both binaries, which is strictly
   faster than a filtered gradle run and should probably be the default for this.
-
-**Round 782 (2026-08-01) — (REL.4) IS CLOSED AND THE FLIP IS LANDED. THE INHERITED
-"RESIDUAL IS EMPTY" WAS STALE FOR THE SIXTH CONSECUTIVE ROUND, AND THE REASON IS THE
-ROUND'S REAL FINDING: EVERY SCAFFOLDED PRICE IN THIS ARC WAS MEASURED ON **compiler AND
-services ONLY**, SO A 16TH `assertNever` SITE LIVING ON **harness** WAS STRUCTURALLY
-INVISIBLE TO ALL OF THEM.** Measured price of the flip alone: **harness 94 -> 95**, one
-line, all seven other profiles set-for-set identical. With that line's cause fixed the flip
-costs **ZERO** new lines: unscaffolded 8-profile grid **46/46/46/46/46/46/46/94**,
-set-for-set IDENTICAL to the pre-flip grid on all eight. Suite 13,275 -> **13,289 / 0
-failures / 3 skipped**; cost gate exit 0, **rebaselined with the mechanism named**.
-
-- **THE PRICE WAS RE-MEASURED, NOT INHERITED, AND THE ITEM'S OWN STANDING WARNING PAID FOR
-  ITSELF AGAIN.** Baseline grid captured at HEAD first (4m17s, set-for-set identical to
-  round 780's stored grid on all eight, which is what licences the comparison), then the
-  flip built and the grid re-run. The one new line was
-  `projectServiceStateLogger.ts:412` — `Debug.assertNever(printWhen)`, i.e. cause (a),
-  which rounds 768-780 had declared closed at 15/15.
-- **WHY NOBODY SAW IT: THE ARC's SCAFFOLD WAS ONLY EVER RUN ON TWO PROFILES.** Rounds 777,
-  779 and 780 each quote a "scaffolded price" of the form `compiler N -> M, services N -> M`.
-  `projectServiceStateLogger.ts` is in `src/harness`, so it is in exactly one of the eight.
-  Round 767 — the only round that ever scaffolded all eight — did see it, inside its
-  harness 94 -> 121. **The lesson generalises past this item: a residual is empty only over
-  the population you measured, and a two-profile scaffold is not the dashboard.**
-- **THE CAUSE IS THE THIRD SCOPE AN ENUM'S DECLARATION SITE CAN PUT IT IN, AND IT WAS THE
-  ONE NOBODY HAD ADDED.** `enum PrintPropertyWhen` is declared **inside a function body**.
-  B83.5: the binder never binds a block-scoped declaration, so it is in neither the file's
-  locals (round 425's scope) nor a namespace's exports (round 769's), and
-  `resolveEnumSymbolForDiscriminant` answered null — which blinds EVERY narrowing direction
-  at once. The scope-space table has existed since round 748 (`lexicalTypeSymbolForNode`,
-  consulted by `resolveTypeNameToSymbol`); the discriminant reader simply never asked it.
-- **THE CONSULT GOES FIRST, NOT AS A MISS-FALLBACK — THE OPPOSITE OF ROUND 769's RULE, AND
-  DELIBERATELY.** Round 769 made its namespace fallback strictly additive to avoid splitting
-  the `"symId#member"` key space. Here additive is the WRONG choice: `resolveTypeNameToSymbol`
-  already prefers the scope-space symbol, so it is that symbol which types the annotation and
-  mints the member types — a discriminant reader preferring the file-level answer for a
-  SHADOWING name would key one enum through two `Symbol` instances, which is precisely the
-  round-425 split. Ordering both readers the same way makes them agree by construction.
-  Containment is `lexicalTypeSymbolForNode`'s own: a `lexicalBlockScopedEnumNames` probe
-  (empty for almost every program) and `scope.symbols` ONLY, which `declareLexical` fills
-  exclusively with names the main binder did not bind — so no conventionally-bound name can
-  move.
-- **DIAGNOSED WITHOUT THE SCAFFOLD, IN ONE 1.2-SECOND SCRATCH RUN.** The FP is invisible
-  unscaffolded only because its CONSUMER (`Debug.assertNever`) is a namespace member; the
-  defect is a plain narrowing gap and reproduces against a local
-  `declare function assertNever(x: never): never`. Two variants in ONE file — the same
-  exhaustive switch over a FILE-LEVEL enum and over a BODY-SCOPED one — named the cause
-  before any instrumentation: the first silent, the second reporting the whole enum. The
-  `Diagnostic`-constructor stack hook was not needed and was never built.
-- **TWO OF MY OWN FIRST-DRAFT PINS PASSED VACUOUSLY, AND THE CAUSE IS A PROBE-POSITION
-  ERROR WORTH RECORDING.** I wrote the subject as `const k = k0 as unknown as E`. That shape
-  is silent at the argument gate for a **FILE-LEVEL** enum too — so the silence-asserting
-  pins written with it would have passed on a broken build for a reason having nothing to do
-  with the fix, and the two message-asserting ones failed on the FIXED binary, which is how
-  it surfaced. Every subject is now a PARAMETER. Round 779 recorded the same class from the
-  other side; the general form is that a probe shape must be validated against a control
-  where the answer is already known, before it is used to measure anything.
-- **THE PINS DISCRIMINATE, MEASURED AGAINST ABLATED BINARIES — TWICE, ONE PER SUB-STEP.**
-  Narrowing fix (`R782_LEXICAL_ENUM_DISCRIMINANT = false`, recompiled): **5 of 7 fail ablated
-  and pass fixed**, the 2 holding on both sides being the file-level control and the
-  enum-identity control; three discriminate by MESSAGE. Flip (`REL4_NS_ALIAS_RECEIVER =
-  false`, recompiled): **3 of 7 fail ablated**, and all four that hold do so on purpose — a
-  plain imported function and a same-file namespace member were ALREADY checked (round 766's
-  asymmetry, which is exactly what makes the positives readable as "the alias receiver was
-  the gap"), a correct argument stays silent, and a non-namespace alias invents no TS2339.
-- **THE FLIP CHANGED NO VERDICT ANYWHERE, WHICH IS THE SURPRISE.** Turning argument
-  checking ON for 1,127 callees on compiler and 1,551 on services moved **no** profile line
-  and **no** corpus baseline. Cost gate exit 0 with `typeOfExpr.calls` +0.46%,
-  `typeOfExpr.distinct` +0.54%, `narrow.walks` +0.37%, `typeNode.cacheHits` +0.49%,
-  `globals.lookups` +0.30% — rebaselined, mechanism = exactly that population. Worth the
-  arithmetic: **+3,268 typed expressions for 1,127 newly checked callees is ~2.9 each**, not
-  the cost of a full check, because the argument loop still `continue`s for a
-  non-simple-checkable parameter — the same round-759 selection effect, read forwards.
-- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). A block-scoped enum
-  SHADOWING a file-level one of the same name still FPs TS2339 x3 on its member accesses
-  (`Property 'Inner1' does not exist on type 'typeof Shadowed'`) — a VALUE-space gap, present
-  UNCHANGED on the ablated binary, which this round improves (the TS2345 goes) but does not
-  close. Zero measured sites on all 8 profiles. It is the value-position twin of what round
-  748 closed in type position, and it is why the shadowing case could not be pinned as a
-  positive despite being the reason the consult goes first.
-- **PREDICTIONS 1 of 3.** HIT: the two steps of the flip are one call site and the resolver
-  already existed, so the change is small. **MISSED, and both misses are the output:** I
-  expected the re-measurement to confirm "zero new lines" and it cost one; and I expected
-  the residual, if non-empty, to be a NEW cause — it was cause (a) again, in the one profile
-  the arc had stopped looking at.
-
-**Round 781 (2026-07-31) — (WIDEN.1) PROMOTED, SIZED AND LANDED. THE QUEUE'S "BLAST RADIUS
-IS EVERY `const` IN THE CORPUS" IS FALSIFIED: THE MEASURED RADIUS IS **ONE** BASELINE OF
-13,262, AND IT WAS A REAL tsc RULE WE WERE MISSING, NOT A FORM DIVERGENCE — SO NO
-`LogicalParityDivergence` WAS NEEDED.** (REL.4)(c) is CLOSED. Unscaffolded 8-profile grid
-**46/46/46/46/46/46/46/94**, set-for-set IDENTICAL to round 780's on all eight. Suite
-13,262 -> **13,275 / 0 failures / 3 skipped**; cost gate exit 0, **no rebaseline**.
-
-- **THE DEFECT IS NOT IN A WIDENER — THERE IS NO FRESH-LITERAL EXPRESSION TYPE AT ALL.**
-  `getTypeOfExpressionCore` answers `stringType` for a `StringLiteralNode`, `numberType`
-  for a `NumericLiteralNode`, and so on: a `Type.StringLiteral` is minted ONLY by
-  `literalTypeOfExpression`, a separate AST-based helper ~25 sites opt into. So `const x =
-  "a"` never had a literal type to preserve, and the fix cannot be "skip the widening" —
-  it has to READ THE LITERAL OFF THE AST. tsc's rule itself is a one-liner and a
-  DECLARATION-FLAG gate, not a freshness one (`getWidenedLiteralTypeForInitializer`,
-  checker.ts:41455: `NodeFlags.Constant || isDeclarationReadonly ? type :
-  getWidenedLiteralType(type)`).
-- **TWO GUESSES WERE MEASURED INERT BEFORE THE THIRD LANDED, AND THAT IS THE ROUND'S
-  METHOD LESSON.** The obvious sites — `getVarDeclType` and `getTypeOfVariableOrProperty`
-  (via `inferTypeFromInitializer`), both of which literally call `widenType` on a var
-  decl's initializer — were gated on const-ness, compiled, and changed **nothing**: all
-  three scratch repros were byte-identical. The actual read path is
-  `getTypeOfIdentifier` -> `currentLocalTypes`, written by
-  `checkVarDeclAssignabilityCore`'s un-annotated branch (the round-742 "own inline
-  literal-widener") and OVERWRITTEN by `spineArithRecordVarDecl`. Round 779's
-  `Diagnostic`-constructor hook named the emitter in one 30-second run after two builds of
-  reasoning had failed; a `println` at the recording site then showed
-  `inferred=string` — i.e. the value arrived at the widener ALREADY widened, which is what
-  pointed one level down to `getTypeOfExpression`.
-- **WHAT LANDED: three lines of gate plus one exclusion each side.** (i) the un-annotated
-  `currentLocalTypes` recording prefers `literalTypeOfExpression(init)` for a `const`;
-  (ii) it skips the literal->base step for it; (iii) `spineArithRecordVarDecl` repeats the
-  gate, because it runs later and would otherwise widen the preserved literal away again.
-  `varDeclIsImmutableBinding` is the one predicate (`decl.parent`'s
-  `VariableDeclarationList.flags == ConstKeyword`).
-- **BOTH EXCLUSIONS WERE FOUND BY MEASUREMENT, NOT FORESIGHT — EACH COST EXACTLY ONE
-  LINE.** (a) Skipping the whole widening for a `const` also skipped
-  `widenEnumMemberTypes`, so `const k = identifierToKeywordKind(node)` kept all 85
-  `KeywordSyntaxKind` MEMBERS, the `isModifierKind` guard failed to narrow that, and the
-  return check rejected the union: **services/server 46 -> 47, harness 94 -> 95**, the new
-  line being `completions.ts:2239`. Fixed by applying `widenEnumMemberTypes` on the
-  const path too (it is a no-op on a string/number/bigint/boolean literal, so it keeps
-  exactly the intended half). An enum member therefore still widens to its enum — WIDER
-  than tsc, so it cannot manufacture a diagnostic. (b) An ASSIGNMENT TARGET must still see
-  the widened type: `const x = 0; x = 1` began co-emitting TS2322 beside TS2588, which
-  `constDeclarations-access2` pins as wrong — and it IS wrong, tsc's
-  `checkReferenceExpression` returns false for a const target so
-  `checkTypeAssignableToAndOptionallyElaborate` never runs. `widen1ConstLiteralTypeIds`
-  (an id set mirroring the existing `nonWideningLiteralTypeIds` mechanism) marks the kept
-  literals and the assignment-target read widens them back, which makes that site provably
-  identical to its pre-(WIDEN.1) behaviour.
-- **6 OF 13 PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (`WIDEN1_CONST_KEEPS_
-  LITERAL = false`, recompiled, class re-run). The other 7 hold on both sides ON PURPOSE:
-  three pin that `let`/`var`/`let`-from-`const` still widen (they FIRE on both, by
-  MESSAGE), and four pin the exclusions and the structural cases the gate must not reach.
-  One of the discriminating six discriminates **by MESSAGE** rather than by silence —
-  `const j: "b" = k` names `'"a"'` fixed and `'string'` ablated, which is what proves the
-  const kept its literal rather than some rule going quiet.
-- **THE FIX IS REACHED UNSCAFFOLDED AND CHANGES NO VERDICT** — cost gate `typeOfExpr.calls`
-  -1,057 (-0.15%), `typeOfExpr.distinct` -147, `narrow.walks` +14, `typeNode.cacheHits`
-  -23, everything else flat, all deltas inside +/-0.15%. So this is not a zero-count green
-  (round 753's rule): the new path ran on tsc's own sources and agreed with the old answers
-  everywhere.
-- **(REL.4)(c) IS CLOSED — VERIFIED ON THE EXACT SHAPE, NOT BY ANALOGY.** A scratch project
-  carrying the real `ESDecorateClassElementContext` member list and the real 5-arm
-  `const kind = isGetAccessorDeclaration(member) ? "getter" : … : Debug.fail()` reports
-  1 error before and **0** after. So (REL.4)'s residual is now empty and the flip is a
-  decision with NO measured FP cost — but re-measure behind a scaffold before quoting that,
-  per the item's own standing warning.
-- **BUT THE (REL.2) WORKLIST'S "cause (D)" LABEL IS NOW IN DOUBT, AND THIS IS THE FINDING I
-  DID NOT EXPECT.** Reading the three remaining sites in the real sources:
-  `formattingScanner.ts:113` is `const item: TextRangeWithTriviaKind = { pos, end, kind: t }`
-  where `const t = scanner.getToken()` — a CALL initializer, so no literal exists to
-  preserve and this is the round-778 `TextRangeWithKind<T>` / enum-member family;
-  `importFixes.ts:1127` assigns ENUM MEMBERS (`ImportFixKind.AddToExisting`,
-  `AddAsTypeOnly.NotAllowed`) inline, not consts. **Neither is string-literal widening.**
-  They are invisible unscaffolded, so this round cannot prove them either way — but
-  whoever takes (REL.2) should RE-CLASSIFY them behind the scaffold before assuming
-  (WIDEN.1) closed them. Only `scanner.ts:905` remains a plausible cause-(D) site.
-- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). (i) A CALL-ARGUMENT
-  position still reads the widened type — `wantsKind(k)` for `const k = "method"` still
-  reports `Argument of type 'string'`, on both binaries, because the argument gate resolves
-  its type by a different path. No profile line needs it; it is sub-step 2 below.
-  (ii) `const o = { kind: k }` now infers `{ kind: "a" }` where tsc infers `{ kind: string }`
-  (object-literal members are MUTABLE locations in tsc — the classic `as const` gotcha).
-  Ours is NARROWER than tsc there, which in principle could manufacture an FP (`o.kind =
-  "b"` is legal in tsc); zero measured sites on all 8 profiles and the corpus is green,
-  so it is recorded, not chased. (iii) `readonly` class properties are not covered — tsc's
-  gate is `Constant || isDeclarationReadonly` and only the `Constant` half landed.
-- **PREDICTIONS 2 of 4.** HIT: the blast radius is far smaller than "every `const`"; the
-  corpus baselines AGREE with tsc rather than pinning our divergence, exactly as the
-  task's framing argued. **MISSED, and both misses are the output:** I expected the fix to
-  live in a widener and it lives in a RECORDING SITE, because there is no literal
-  expression type at all; and I expected the three (REL.2) lines to be the same defect —
-  at least two of them are not.
-- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) three times, always
-  on the build after a long `jvmTest`; `./gradlew --stop` + a graceful
-  `pkill -f 'KotlinCompile[D]aemon'` fixed it each time in ~2m30s. Also burned one 16-minute
-  build discovering that `System.getenv` does not resolve in `commonMain` — and lost the
-  error message by piping gradle through `tail`. Log to a FILE.
-
-**Round 780 (2026-07-31) — (REL.4)(a) IS CLOSED, AND BOTH "PROBABLY NOT NARROWABLE"
-STRAGGLERS WERE ORDINARY NARROWING GAPS. THE FLIP'S RESIDUAL IS NOW EXACTLY ONE LINE —
-`esDecorators.ts:1314`, i.e. (c) ALONE.** Scaffolded price, re-measured behind THIS round's
-own scaffold in both arms: **compiler 48 -> 47, services 49 -> 47**; `diff` says exactly the
-two targeted lines and no new one, and the fix-off arm reproduced round 779's 48/49 exactly
-(the price was NOT stale this time — the first round in this arc where it wasn't).
-Unscaffolded 8-profile grid **46/46/46/46/46/46/46/94**, set-for-set IDENTICAL to round
-779's on all eight. Suite 13,252 -> **13,262 / 0 failures / 3 skipped**; cost gate exit 0,
-**no rebaseline**.
-
-- **DEFECT 1 — AN ELEMENT ACCESS WAS NOT A REFERENCE *AT THE ARGUMENT GATE*, AND NOWHERE
-  ELSE.** Everything else was already in place: `getReferencePath` has encoded `a[0]` since
-  round 461, `Flow.kt`'s `ElementAccessExpression` arm records a flow node at it, and the
-  walk compares path STRINGS. But all four flow-reading arms of
-  `checkArgumentsAgainstSignature`'s argument-type computation tested
-  `arg is Identifier || arg is PropertyAccessExpression`, so an element-access argument fell
-  to the `else -> ctxApplied` tail and read the DECLARED type — which is the whole of
-  `Debug.assertNever(allowedEndings[0])` after an exhaustive `switch (allowedEndings[0])`.
-  One predicate (`argIsNarrowableRef`, path-gated so a computed index and a call chain stay
-  out) closes it. **Round 768's "an ELEMENT ACCESS that is not the switch subject at all" was
-  wrong on the mechanism**: it IS the subject by path (`allowedEndings[0]` both places) — the
-  two occurrences are different NODES, and the narrowing machinery has never cared.
-- **DEFECT 2 — A SWITCH `default:` SUBTRACTED NEITHER A NULLISH NOR A WHOLE-ENUM CONSTITUENT
-  OF A UNION SUBJECT**, and `Extension | undefined` (`stringCompletions.ts:386`) needs both.
-  (i) `case undefined:` / `case null:` DO resolve — `literalTypeOfExpression` answers
-  `undefinedType`/`nullType` for the bare identifiers — but the member test is
-  `isLiteralKindForDiscriminant`, a string/number/bigint/boolean-literal predicate, so
-  nothing ever matched them. (ii) An enum constituent is ONE member-LESS `Type.Object`
-  (round 763), so no per-member test could touch it either, where tsc — which models a
-  literal enum AS its member union — peels all 14 constituents. Fixed by teaching the
-  `matchesDirectly` union filter to also drop an identity-matched nullish member and to
-  REPLACE an enum constituent with `enumMinusMembers(m, caseMemberTypes)` (the same
-  subtraction the BARE-enum arm has used since round 765, carrying the round-746 owner rule,
-  and answering null for anything it cannot decompose). The filter became a loop with an
-  explicit `subtracted` flag because it can now SHRINK a constituent rather than only drop
-  it — `filtered.size == t.types.size` is no longer a "nothing happened" test.
-- **DIAGNOSED WITHOUT THE SCAFFOLD, WHICH IS THE REUSABLE PART.** The FPs are invisible
-  unscaffolded only because their CONSUMER (`Debug.assertNever`) is a namespace member; the
-  DEFECT is a plain narrowing gap and reproduces in a 1.2 s scratch project with a local
-  `declare function assertNever(x: never): never`. Three probes discriminated the three
-  subject shapes in one run — identifier and property-access narrow, element access does not
-  — which named the gate before any instrumentation. Also measured on the way and recorded:
-  **`getTypeOfElementAccess` applies NO flow narrowing at all** (its `getTypeOfPropertyAccess`
-  twin has since 17.34d), so `const s: boolean = a[0]` after `if (typeof a[0] === "string")`
-  still reads `string | number`. That is a SECOND gap, deliberately not taken — it is a read
-  site every element access in the program passes through, and no profile line needs it.
-- **THE PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (`REL4_ELEM_UNION_GATE =
-  false`, recompiled, class re-run): **8 of 10 fail ablated and pass fixed; 2 hold on both
-  sides** — a COMPUTED-index element access still reports the declared type (so the PATH
-  gate, not the node kind, is what admits an element access) and a partial identifier switch
-  is unchanged. Six of the eight discriminate **by MESSAGE**: `'ME.B | ME.C'` vs `'ME'`,
-  `'2'` vs `'2 | undefined'`, `'undefined'` vs `'ME | undefined'` — each names WHAT the
-  narrowing left behind, so a pin cannot be satisfied by some unrelated rule going silent.
-  One of them pins the negative direction of the same mechanism: `case null:` must NOT
-  subtract `undefined` while the enum still subtracts.
-- **THE FIX IS REACHED UNSCAFFOLDED AND CHANGES NO VERDICT** — the cost gate reports
-  `narrow.walks` +15 (+0.02%), `typeOfExpr.calls` -6 and `globals.lookups` +36 with the other
-  17 counters bit-identical, and all 8 profile outputs byte-identical. So this is not a
-  zero-count green (round 753's rule): the new arms ran and agreed with the old answers
-  everywhere on tsc's own sources except the two targeted lines.
-- **SO THE FLIP IS NOW GATED ON (c) AND NOTHING ELSE.** Scaffolded compiler 47 = 46
-  env-legit + `esDecorators.ts:1314`; services 47 = the same. The residual message —
-  `Type '{ kind: string; … }' is not assignable to type 'ESDecorateClassElementContext'` —
-  is cause (D) literal widening (`const kind = …` widens to `string` where the target wants
-  a literal union), whose blast radius is every `const` in the corpus. **NOT LANDED, and the
-  decision is left to the owner**: flipping today would add exactly 1 FP to a
-  currently-clean dashboard on the two measured profiles.
-- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). (i) The
-  `getTypeOfElementAccess` read-site gap above. (ii) After `a[0] = ME.A` inside an exhausted
-  `default:`, we answer `ME` where tsc answers `ME.A` — the FlowAssignment correctly
-  invalidates (no stale `never`), the assignment-RHS refinement just does not run for an
-  element-access path. Both are wider-than-tsc, so neither can manufacture an FP.
-- **PREDICTIONS 3 of 4.** HIT: both stragglers were closable; the scaffolded price falls by
-  exactly the two targeted lines with no new one; the unscaffolded grid does not move.
-  **MISSED, and it is the useful one:** I expected `moduleSpecifiers.ts:1411` to need a
-  narrowing RULE (round 768 had recorded it as probably not narrowable by any); it needed a
-  GATE widened to a node kind the rest of the machinery had supported for 300 rounds — the
-  "not narrowable" verdict came from reading the SHAPE instead of asking whether the read
-  ever happened.
-- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) on the fourth
-  recompile of the round, exactly BUILD.1's idle-daemon-squats trap; `./gradlew --stop` +
-  a graceful `pkill -f 'KotlinCompile[D]aemon'` freed 4.1 GB and the next build took 2m29s.
-  Budget one daemon restart per ~4 gate flips.
 
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
@@ -3732,7 +3554,36 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   anyway: it costs the same 2 ms, and "nothing we ran noticed" is not equivalence.
   Derivation: `docs/perf/property-access-attribution.md` §§ 36-42.
 
-- [ ] **(ENGINE.2h) THE TS2793 "IMPLEMENTATION WOULD HAVE SUCCEEDED" PROBE IS COMPUTED
+- [x] **(ENGINE.2h) ANSWERED round 795: LANDED, and the item's own arithmetic was wrong in
+  the helpful direction — the probe's single reader is reached ZERO times on the compiler
+  profile (the "57 emissions" was round 793's count for a different site), so the deferral
+  removes all 23,214 evaluations and keeps none.** Re-measured at HEAD first (law 1): the
+  row is **81 ms raw / 72 net**, not 94. Quoted as a RANGE, **79-132 ms (0.3-0.5%)**,
+  because the row (one boundary pair per invocation) and the same-boundary differential
+  (the whole `SINGLE_SIG` span with the eager evaluation restored on the SAME binary, 2
+  runs per arm: 1,634 -> 1,502 ms) disagree by that much, and the differential's Delta is
+  only 3x its within-arm spread. **No A/B was run** — 0.3-0.5% is an order of magnitude
+  inside the warm band. Round 791's shape with a trivial obligation (ONE reader, found by
+  one grep) and one real check: the argument loop's `contextualType` install is restored
+  ~1,300 lines above the emission block, so the ambient state at the deferred position is
+  the ambient state at the eager one. Round 788's thunk does not transfer — nothing is
+  stored, the force is inside the same invocation. Equivalence: `--verifyImplRelated`
+  honours the EAGER verdict and `--verifyImplRelatedAll` is round 790's free complement —
+  **compiler 23,214 / services 34,891 / harness 37,318 comparisons, 0 diffs** at
+  `Diagnostic` granularity; `--verifyImplRelatedBogus` reads **0 on all three** because the
+  `allArgumentsMatch` gate never declines on a tsc source tree, so the live falsifier is
+  the in-process pin (round 793's wall, from the other side). Law 2 checked:
+  `globals.lookups` -0.47%, `globals.misses` -0.48%, everything else +-0.00%, **nothing
+  rose** — what is removed is an un-cached AST scan (`binderResults` x top-level statements
+  per method-callee call), not a memoized resolution; census: 23,214 evaluations, 3,660
+  name lookups, 27 candidates, **1** `allArgumentsMatch`. Grid 46/46/46/46/46/46/46/94 with
+  0 added and 0 removed both directions against the real HEAD binary; `--partitionCheck 2`
+  EQUIVALENT; cost gate exit 0, no rebaseline; suite 13,419 -> **13,427** (+8 pins, 4
+  discriminating across two complementary ablations). **THE CALL-EXPRESSION PROLOGUE FAMILY
+  IS CLOSED** — round 793's inventory named one live candidate and this was it. Derivation:
+  `docs/perf/call-expression-attribution.md` §§ 14-19. The original item body follows.
+
+  ORIGINAL: **(ENGINE.2h) THE TS2793 "IMPLEMENTATION WOULD HAVE SUCCEEDED" PROBE IS COMPUTED
   EAGERLY AT EVERY SINGLE-SIGNATURE CALL — 94 ms over 23,214 — FOR A RELATED-INFO MESSAGE
   ONLY AN EMISSION CONSUMES.** Re-measured at HEAD round 793 (`--callSections`, nested row
   `of which TS2793 impl-would-have-succeeded probe`): `getOverloadImplementationRelated` +

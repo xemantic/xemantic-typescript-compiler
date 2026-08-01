@@ -404,3 +404,164 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --ccetPreGateBogus build/bench/tsc-harness-*
 ```
+
+---
+
+# Round 795 — (ENGINE.2h): deferring the TS2793 `implRelated` probe
+
+## 14. The headline
+
+`getOverloadImplementationRelated` + `getImplementationSignature` +
+`allArgumentsMatch` ran *before* `checkArgumentsAgainstSignature` at **every**
+single-signature call — **23,214 per compiler-profile compile** — to build a
+piece of RELATED INFO with exactly **one** reader: the TS2345 emission inside
+the argument loop. That reader is reached **0 times on the compiler profile**,
+so the deferral removes the probe outright there. (The item's "57 emissions"
+was round 793's count for a different site; measured, this one is zero.)
+
+This is round 791's DEFERRAL shape, and its obligation is trivially met: 791
+had to prove that `checkMemberAccessMissing`'s body appends to `diagnostics`
+and does nothing else, because the suppression it deferred guarded ~42 emission
+sites. Here there is **one** reader, found by one grep (`implementationRelated`
+→ two hits, the parameter and the `relatedInfo.add`), so nothing has to be
+enumerated at all.
+
+**Round 788's rejected lazy thunk does not transfer, and the reason is worth
+stating precisely.** That thunk failed because a `contextualType` computed
+lazily had to survive ~14 save/restore sites in a *different dynamic scope*.
+Nothing is stored here: the value is computed at the point of use, inside the
+very invocation that declined to compute it, and — the property that had to be
+checked rather than assumed — the argument loop's own `contextualType` install
+(`Checker.kt`, `savedContextual`) is **restored ~1,300 lines above the emission
+block**, so the ambient state at the deferred position is the ambient state at
+the eager one.
+
+## 15. The prize, re-measured at HEAD, and why it is quoted as a range
+
+`--callSections` at HEAD, compiler profile:
+
+| row | ms net | ms raw | reached |
+|---|---:|---:|---:|
+| `single signature branch` | 1,540 | 1,549 | 23,214 |
+| — of which `checkArgumentsAgainstSignature` | 1,353 | 1,361 | 23,214 |
+| — **of which the TS2793 impl probe** | **72** | **81** | **23,214** |
+
+Round 793 recorded 94 ms and round 734 recorded 101 ms for this row; at HEAD it
+is 81 ms raw. The row carries one boundary PAIR per invocation, so the in-situ
+`net` column over-corrects (365 ns in that run against the ~90 ns differential
+CLAUDE.md sanctions); the production figure implied by the row is **≈ 79 ms**.
+
+Round 793's law says a before/after row diff overstates a saving by the
+boundaries that vanish with it, so the prize is also measured a second way,
+**with the boundary count identical in both arms**: the whole `SINGLE_SIG` span
+on the SAME binary, with the eager evaluation restored by `--verifyImplRelated`
+(which evaluates it un-bracketed at its old position) versus without it. Two
+runs per arm:
+
+| arm | `SINGLE_SIG` raw | `N_SINGLE_ARGS` raw |
+|---|---:|---:|
+| deferred | 1,524 / 1,481 | 1,422 / 1,379 |
+| eager | 1,625 / 1,644 | 1,421 / 1,416 |
+
+**Δ = 132 ms** (medians 1,634 → 1,502) against a within-arm spread of 43 ms —
+a factor of 3, which is the weakest differential this codebase treats as
+readable, so it is reported as one end of a range rather than as the number.
+**The prize is 79–132 ms, 0.3–0.5% of a 26.5 s check-only compile.** No A/B was
+run: that is an order of magnitude inside the warm protocol's ±1.0% band, and
+the four run totals here (25.9–27.0 s in BOTH arms) say exactly that.
+
+**`N_SINGLE_ARGS` is flat across the two arms, and checking it was the point.**
+The first after-run read it at 1,442 against HEAD's 1,361 and looked precisely
+like round 788's law biting — the removed work reappearing in the next asker.
+Re-running both arms on one binary shows the two arms agree to within their own
+spread: that reading was noise, and a single before/after pair could not have
+told the difference.
+
+## 16. Law 2 checked at the counters: nothing rose
+
+| counter | Δ |
+|---|---:|
+| `globals.lookups` | **−0.47%** (−3,660) |
+| `globals.misses` | **−0.48%** (−3,633) |
+| `typeOfExpr.calls` | −3 |
+| everything else (17 counters) | **+0.00%** |
+
+Cost gate **exit 0, no rebaseline needed**. The mechanism the counters name is
+the interesting part: of 23,214 evaluations only **3,660** ever reached a name
+lookup and — from the probe's own census — only **27** found an overload
+implementation to point at, **1** rebuilt its signature, and **1** ran
+`allArgumentsMatch` (hence `typeOfExpr.calls` −3, not −23,000). So the 79–132 ms
+is **not** type-system work: it is `getOverloadImplementationRelated`'s
+method/constructor branch scanning `binderResults` and walking a file's
+top-level statements, an **un-cached AST scan with no consumer**, which is
+exactly the shape a deferral recovers in full. Round 788's law bites when the
+skipped callee memoizes; here there is nothing to memoize and nothing to hand on.
+
+## 17. The equivalence, and a control that is dead where it was needed
+
+`--verifyImplRelated` evaluates the probe at BOTH positions and honours the
+EAGER verdict, so the run reproduces the pre-change binary by construction and
+the diff column is a falsifier rather than a tautology. `--verifyImplRelatedAll`
+is round 790's FREE complement: the same comparison at every single-signature
+call, not only at the ones that reach a reader.
+
+| profile | emission-site comparisons | complement comparisons | diffs |
+|---|---:|---:|---:|
+| compiler | **0** | 23,214 | **0** |
+| services | **0** | 34,891 | **0** |
+| harness | **0** | 37,318 | **0** |
+
+**95,423 comparisons at `Diagnostic` granularity, 0 differences.** The
+emission-site column is 0 *because the reader is never reached on any of the
+three profiles* — which is the prize and the dead instrument in one number, and
+is why the complement had to exist.
+
+`--verifyImplRelatedBogus` (the deferred evaluation drops the
+`allArgumentsMatch` gate) reads **0 on all three profiles too**, and that is
+reported rather than hidden: the gate never DECLINES there — one candidate
+reaches it per compile and it accepts — so there is nothing for the control to
+move. Round 793 met the same wall from the other side. **The live falsifier is
+therefore the in-process pin** (`the bogus control makes the diff column fire`),
+whose fixture is a one-overload-plus-rejecting-implementation shape that no tsc
+source file contains.
+
+## 18. Verification
+
+* Corpus suite **13,419 → 13,427 / 0 failures / 3 skipped**
+  (+8 `ImplRelatedDeferralTest`).
+* 8-profile `--listAll` grid captured at HEAD **first** and again after, diffed
+  set-for-set in BOTH directions: **46/46/46/46/46/46/46/94, 0 added and 0
+  removed on all eight.** Both directions matter: a probe that starts firing
+  attaches a TS2793 to a call it does not describe, which no error COUNT sees.
+* `--partitionCheck 2` **EQUIVALENT — 46**.
+* **Pin discrimination 4 of 8**, across two complementary ablations run
+  SEPARATELY. Fault A (the deferred value is never forced) fails 3 — the
+  positive TS2793 pin, the population pin, and the eager-vs-deferred pin. Fault
+  B (the deferred evaluation drops the gate in production) fails 1, disjoint
+  from A's set: the negative control. The four that hold under both are the two
+  bogus-control pins (which set the flag themselves, so an ablation of the
+  production path cannot reach them), the complement-population pin (evaluated
+  in the wrapper, which neither fault touches) and the non-overloaded control.
+* `CallSectionProbeTest`'s "the TS2793 impl probe runs once per reach of the
+  single-sig branch" **restated** — it is now strictly rarer than the branch,
+  and the old equality is what a never-deferring build restores. Third round
+  running that a pre-existing probe pin had to move with its subject; catching
+  it before the suite did is the only new thing here.
+
+## 19. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt); P=build/bench/tsc-project-*
+# the row (after: absent — the reader is never reached on this profile)
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --callSections $P
+# the same-boundary differential: the SINGLE_SIG span with the eager
+# evaluation restored, on the same binary
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --callSections --verifyImplRelated $P
+# the equivalence over the whole population, and its (profile-dead) control
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --verifyImplRelatedAll $P
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --verifyImplRelatedBogus $P
+```
