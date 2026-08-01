@@ -155,6 +155,21 @@ fun main(args: Array<String>) {
             "--verifyLoopRetryAll", "--verifyloopretryall" -> {
                 CpaSections.verifyLoopRetry = true; CpaSections.verifyLoopRetryAll = true
             }
+            // (ENGINE.2f) round 794: keep the round-424 UNION loop-entry retry
+            // WALKING and honour its verdict — so the run reproduces the
+            // pre-substitution binary and IS the grid baseline — while comparing
+            // the substituted candidate against the re-walked one at instance,
+            // member-set and verdict granularity.
+            "--verifyUnionRetry", "--verifyunionretry" -> {
+                CpaSections.verifyUnionRetry = true
+            }
+            // ... and its positive control: run the same comparison over the
+            // COMPLEMENT (the loop-CROSSING calls the substitution never serves),
+            // where round 424's reason for existing says the two walks must
+            // disagree. A live instrument reports differences there.
+            "--verifyUnionRetryAll", "--verifyunionretryall" -> {
+                CpaSections.verifyUnionRetry = true; CpaSections.verifyUnionRetryAll = true
+            }
             // (ENGINE.2d)(b): evaluate checkMemberAccessMissing's flow-suppression
             // predicate BOTH eagerly (where the blocks used to run) and deferred
             // (after the body), honour the EAGER verdict — so the run reproduces
@@ -314,7 +329,7 @@ fun main(args: Array<String>) {
         CtaSections.mode = CtaSections.OFF
     }
     if (CpaSections.mode != CpaSections.OFF || CpaSections.verifyLoopRetry ||
-        CpaSections.verifyDeferSuppression
+        CpaSections.verifyDeferSuppression || CpaSections.verifyUnionRetry
     ) {
         println(CpaSections.report())
         println("== (ENGINE.2) csv ==")
@@ -465,6 +480,9 @@ private fun printUsage() {
           --cpaSectionsCensus  counters and distinct-node sets only; reads no timestamps
           --verifyLoopRetry  (ENGINE.2d)(a) keep the round-425 loop-entry retry and COUNT
                              every call where skipping it would change the answer
+          --verifyUnionRetry  (ENGINE.2f) keep the round-424 UNION loop-entry retry walking
+                             and honour it, while comparing the substituted candidate against
+                             the re-walked one (--verifyUnionRetryAll = the complement control)
           --verifyDeferSuppression  (ENGINE.2d)(b) evaluate checkMemberAccessMissing's flow
                              suppression BOTH eagerly and deferred, honour the eager verdict,
                              and count every disagreement (--verifyDeferSuppressionBogus = control)

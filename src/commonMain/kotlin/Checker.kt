@@ -106791,6 +106791,31 @@ interface DataView {
     }
 
     /**
+     * (ENGINE.2f) round 794 — the CONSUMER of the round-424 union loop-entry
+     * retry's result, factored out of `checkMemberAccessMissingCore` so the
+     * substituted candidate and the re-walked one go through the identical
+     * decision under `--verifyUnionRetry`. Verbatim the block it replaced:
+     * suppression-only, and a [candidate] identical to [raw] (the declared union)
+     * or collapsed to `never` decides nothing here.
+     */
+    private fun unionRetrySuppresses(candidate: Type, raw: Type, propName: String): Boolean {
+        if (candidate === raw || candidate === neverType) return false
+        val members = if (candidate is Type.Union)
+            candidate.types.filterNot { isNullishConstituent(it) }
+        else listOf(candidate)
+        return members.isNotEmpty() &&
+            members.all { m ->
+                m === anyType || m === errorType || m === unknownType ||
+                    resolveMemberPropertyType(m, propName) != null
+            }
+    }
+
+    /** (ENGINE.2f) the verifier's member-set granularity: a union's constituent
+     *  ids, a single type's own id. Probe-only — never called in production. */
+    private fun unionMemberIdSet(t: Type): Set<Int> =
+        if (t is Type.Union) t.types.map { it.id }.toSet() else setOf(t.id)
+
+    /**
      * Serialize a reference expression as a dotted path. Returns null for
      * shapes that can't be encoded (e.g., element access, call expressions).
      * Used by 17.34 PropertyAccess narrowing.
@@ -134878,18 +134903,47 @@ interface DataView {
                 if (plainWalkWashed) {
                     val uT1 = CpaSections.t()
                     CpaSections.noteUnionRetry(uLoopFree)
-                    val loopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(rawForNarrowing, objectExpr)
-                    CpaSections.closeN(CpaSections.N_U_RETRY, uT1)
-                    if (loopNarrowed !== rawForNarrowing && loopNarrowed !== neverType) {
-                        val lnMembers = if (loopNarrowed is Type.Union)
-                            loopNarrowed.types.filterNot { isNullishConstituent(it) }
-                        else listOf(loopNarrowed)
-                        if (lnMembers.isNotEmpty() &&
-                            lnMembers.all { m ->
-                                m === anyType || m === errorType || m === unknownType ||
-                                    resolveMemberPropertyType(m, propName) != null
-                            }
-                        ) return
+                    // (ENGINE.2f) round 794: SUBSTITUTE the plain walk's own result
+                    // for the retry's when the plain walk provably arrived at no
+                    // `FlowLoopLabel` and truncated nowhere (the round-790 bracket
+                    // above). The two walkers are line-by-line mirrors differing in
+                    // that ONE arm, so with the arm unreached the mirror makes the
+                    // identical traversal and answers what the plain walk answered.
+                    //
+                    // NOT a skip — that would NOT be equivalent. The consumer's first
+                    // test is the IDENTITY `loopNarrowed !== rawForNarrowing`, and a
+                    // loop-free repeat whose path crosses a branch join mints a FRESH
+                    // equal union (`getUnionType` does not intern — CLAUDE.md), so the
+                    // block genuinely runs and can suppress. Substituting preserves
+                    // both the identity relationship (fresh vs the declared instance)
+                    // and the member set, which is everything the consumer reads.
+                    val suppress: Boolean
+                    if (uLoopFree && !CpaSections.verifyUnionRetry) {
+                        suppress = unionRetrySuppresses(narrowed, rawForNarrowing, propName)
+                    } else {
+                        val loopNarrowed =
+                            getNarrowedTypeForReferenceFollowLoopEntry(rawForNarrowing, objectExpr)
+                        val rewalked = unionRetrySuppresses(loopNarrowed, rawForNarrowing, propName)
+                        if (CpaSections.verifyUnionRetry &&
+                            (uLoopFree || CpaSections.verifyUnionRetryAll)
+                        ) {
+                            CpaSections.noteUnionRetryVerified(
+                                instanceDiff = loopNarrowed !== narrowed,
+                                memberDiff = unionMemberIdSet(loopNarrowed) != unionMemberIdSet(narrowed),
+                                verdictDiff = rewalked !=
+                                    unionRetrySuppresses(narrowed, rawForNarrowing, propName),
+                            )
+                        }
+                        // The re-walked verdict is HONOURED, so a `--verifyUnionRetry`
+                        // run reproduces the pre-change binary by construction.
+                        suppress = rewalked
+                    }
+                    CpaSections.closeN(
+                        if (uLoopFree) CpaSections.N_U_RETRY_LF else CpaSections.N_U_RETRY, uT1
+                    )
+                    if (suppress) {
+                        CpaSections.noteUnionRetrySuppressed(uLoopFree)
+                        return
                     }
                 }
                 // Level S: the elaboration. Its close is skipped by the union

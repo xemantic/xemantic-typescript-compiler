@@ -3900,7 +3900,8 @@ object CpaSections {
     const val N_ID_ENUMRECV = 16
     /** [R_OT_UNION]: the PLAIN narrowing flow walk over a union receiver. */
     const val N_U_PLAIN = 17
-    /** [R_OT_UNION]: the round-424 loop-entry RETRY walk and its member fold. */
+    /** [R_OT_UNION]: the round-424 loop-entry RETRY walk and its member fold,
+     *  for the calls whose plain walk was NOT provably loop-free. */
     const val N_U_RETRY = 18
     /** [R_OT_UNION]: everything after the walks -- the TS2339 union elaboration. */
     const val N_U_ELAB = 19
@@ -3927,7 +3928,17 @@ object CpaSections {
     /** `checkMemberAccessMissingCore` for the calls it would not -- the residue. */
     const val N_PG_CORE_FAIL = 27
 
-    const val NN = 28
+    /**
+     * Round 794, (ENGINE.2f): [N_U_RETRY]'s complement -- the LOOP-FREE half, the
+     * one the substitution serves. Split off so the prize is a MEASURE of its own
+     * population rather than `49% x 66 ms`, which is exactly the
+     * `count x mean-cost` extrapolation every over-estimate in this codebase came
+     * from. Under `--verifyUnionRetry` the arm still re-walks, so the row prices
+     * the PRE-change cost; in production it prices what is left of it.
+     */
+    const val N_U_RETRY_LF = 28
+
+    const val NN = 29
 
     val nNames: Array<String> = arrayOf(
         "  of which cpaComputeArgCtxTypes (clean)",
@@ -3948,7 +3959,7 @@ object CpaSections {
         "  R_IDENT b2: B586 {}/Object receiver block",
         "  R_IDENT b3: enum-typed ident receiver",
         "  R_OT_UNION: the PLAIN narrowing FLOW WALK",
-        "  R_OT_UNION: the loop-entry RETRY walk + fold",
+        "  R_OT_UNION: the RETRY, loop-crossing half",
         "  R_OT_UNION: the TS2339 union elaboration",
         "  R_OT_IDENTSYM: lookupPerFileForNode",
         "  R_OT_IDENT: the specialised emission gates",
@@ -3958,6 +3969,7 @@ object CpaSections {
         "  PRE-GATE: the gate's own cost",
         "  PRE-GATE: the body for calls it would SKIP",
         "  PRE-GATE: the body for calls it would keep",
+        "  R_OT_UNION: the RETRY, loop-free half (subst)",
     )
 
     var nNanos: LongArray = LongArray(NN)
@@ -4070,9 +4082,66 @@ object CpaSections {
     /** Count one round-424 union retry and whether it was provably redundant. */
     @Suppress("NOTHING_TO_INLINE")
     inline fun noteUnionRetry(loopFree: Boolean) {
-        if (mode == OFF) return
+        if (mode == OFF && !verifyUnionRetry) return
         unionRetryCalls++
         if (loopFree) unionRetryLoopFree++
+    }
+
+    /**
+     * Round 794, (ENGINE.2f) — `--verifyUnionRetry`. The round-424 UNION
+     * loop-entry retry is SUBSTITUTED, not skipped: when the plain walk provably
+     * arrived at no `FlowLoopLabel` and truncated nowhere, the follow-loop-entry
+     * mirror makes the identical traversal, so its result is the plain walk's and
+     * the retry is a pure repeat. Skipping the block instead would NOT be
+     * equivalent — its first test is the IDENTITY `loopNarrowed !== raw`, and a
+     * loop-free repeat crossing a branch join mints a FRESH equal union
+     * (`getUnionType` does not intern), so the block does run and can suppress.
+     *
+     * Under this flag the retry still WALKS and its verdict is HONOURED — the run
+     * therefore reproduces the pre-change binary byte for byte, which is what
+     * makes it the grid baseline — and the substituted candidate is compared
+     * against the re-walked one at three granularities: `Type` INSTANCE, union
+     * MEMBER-ID SET, and the consumer's own suppression VERDICT.
+     */
+    var verifyUnionRetry: Boolean = false
+
+    /**
+     * The positive CONTROL for [verifyUnionRetry] (`--verifyUnionRetryAll`):
+     * run the same comparison over the COMPLEMENT population as well — the
+     * loop-CROSSING calls the substitution never serves, where round 424's whole
+     * reason for existing says the two walks must disagree. Round 790's law: a
+     * verifier that reads 0 both when the substitution is sound and when the
+     * instrument is dead proves nothing, and the complement costs nothing.
+     */
+    var verifyUnionRetryAll: Boolean = false
+
+    /** Comparisons performed under [verifyUnionRetry]. */
+    var unionRetryVerified: Long = 0
+    /** Of those, the substituted and re-walked types were different INSTANCES. */
+    var unionRetryVerifyInstanceDiff: Long = 0
+    /** Of those, their union MEMBER-ID SETS differed. */
+    var unionRetryVerifyMemberDiff: Long = 0
+    /** Of those, the consumer's suppression VERDICT differed. THE FALSIFIER. */
+    var unionRetryVerifyVerdictDiff: Long = 0
+    /** Retries that SUPPRESSED, split by whether the plain walk was loop-free —
+     *  i.e. how much observable work the substitution is actually responsible for. */
+    var unionRetrySuppressedLoopFree: Long = 0
+    var unionRetrySuppressedOther: Long = 0
+
+    /** Record one `--verifyUnionRetry` comparison. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteUnionRetryVerified(instanceDiff: Boolean, memberDiff: Boolean, verdictDiff: Boolean) {
+        unionRetryVerified++
+        if (instanceDiff) unionRetryVerifyInstanceDiff++
+        if (memberDiff) unionRetryVerifyMemberDiff++
+        if (verdictDiff) unionRetryVerifyVerdictDiff++
+    }
+
+    /** Record that a retry suppressed, split by the loop-free bracket's verdict. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteUnionRetrySuppressed(loopFree: Boolean) {
+        if (mode == OFF && !verifyUnionRetry) return
+        if (loopFree) unionRetrySuppressedLoopFree++ else unionRetrySuppressedOther++
     }
 
     /**
@@ -4210,6 +4279,9 @@ object CpaSections {
         deferEvaluated = 0; deferEmitted = 0; deferSuppressed = 0
         deferVerified = 0; deferVerifyTypeDiff = 0; deferVerifyVerdictDiff = 0
         unionRetryCalls = 0; unionRetryLoopFree = 0
+        unionRetryVerified = 0; unionRetryVerifyInstanceDiff = 0
+        unionRetryVerifyMemberDiff = 0; unionRetryVerifyVerdictDiff = 0
+        unionRetrySuppressedLoopFree = 0; unionRetrySuppressedOther = 0
         preGatePass = 0; preGateFail = 0
         preGatePassEmitted = 0; preGateFailEmitted = 0
         qNanos = LongArray(NQ); qCalls = LongArray(NQ); qExitIn = LongArray(NQ)
@@ -4462,7 +4534,19 @@ object CpaSections {
             appendLine(
                 "(ENGINE.2e) round-424 UNION retry: reached $unionRetryCalls, " +
                     "provably redundant (loop-free plain walk) $unionRetryLoopFree " +
-                    "(${unionRetryLoopFree * 1000 / unionRetryCalls / 10}%)"
+                    "(${unionRetryLoopFree * 1000 / unionRetryCalls / 10}%)" +
+                    " | SUPPRESSED loop-free $unionRetrySuppressedLoopFree, " +
+                    "loop-crossing $unionRetrySuppressedOther"
+            )
+            appendLine(
+                "(ENGINE.2f) UNION retry SUBSTITUTION: " +
+                    (if (verifyUnionRetry)
+                        "VERIFIED $unionRetryVerified" +
+                            (if (verifyUnionRetryAll) " (ALL — the complement control)" else "") +
+                            ", instance-diff $unionRetryVerifyInstanceDiff" +
+                            ", member-diff $unionRetryVerifyMemberDiff" +
+                            ", VERDICT-DIFF $unionRetryVerifyVerdictDiff"
+                    else "live (verifier off)")
             )
         }
         if (preGatePass > 0 || preGateFail > 0) {
@@ -4547,6 +4631,12 @@ object CpaSections {
         if (unionRetryCalls > 0) {
             appendLine("URETRY,\"reached\",$unionRetryCalls,0")
             appendLine("URETRY,\"loopFree\",$unionRetryLoopFree,0")
+            appendLine("URETRY,\"suppressedLoopFree\",$unionRetrySuppressedLoopFree,0")
+            appendLine("URETRY,\"suppressedOther\",$unionRetrySuppressedOther,0")
+            appendLine("URETRY,\"verified\",$unionRetryVerified,0")
+            appendLine("URETRY,\"instanceDiff\",$unionRetryVerifyInstanceDiff,0")
+            appendLine("URETRY,\"memberDiff\",$unionRetryVerifyMemberDiff,0")
+            appendLine("URETRY,\"verdictDiff\",$unionRetryVerifyVerdictDiff,0")
         }
     }
 }
