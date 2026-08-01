@@ -20,6 +20,110 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 783 (2026-08-01) — (REL.2) RE-MEASURED ON ALL EIGHT PROFILES, AND THE
+INHERITED PRICE WAS WRONG IN BOTH DIRECTIONS AT ONCE: round 765's 5-line worklist
+was MISSING TWO `program.ts` LINES ON THE COMPILER PROFILE AND MISLABELLED THREE OF
+THE FIVE IT HAD. THREE OF THE FOUR CAUSES ARE CLOSED; THE RULE IS SCAFFOLDED, NOT
+FLIPPED, WITH A ONE-LINE RESIDUAL.** Raw price against `46/46/46/46/46/46/46/94`:
+**project 46 -> 49, tsc/jsTyping/deprecatedCompat/typingsInstallerCore 46 -> 47,
+services/server 46 -> 51, harness 94 -> 99** — SEVEN distinct lines, not five. After
+this round's three fixes it is **ONE line on three profiles** (`completions.ts:2234`;
+five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; suite
+13,289 -> **13,309 / 0 failures / 3 skipped**; cost gate exit 0, no rebaseline.
+
+- **THE WORKLIST WAS RE-CLASSIFIED BEHIND THE SCAFFOLD, AS THE ITEM DEMANDED, AND ALL
+  FOUR OF ROUND 781's DOUBTS RESOLVED THE OTHER WAY.** The four causes measured:
+  **(D')** a `const` initialised from an enum MEMBER (or a conditional of members)
+  widens to the whole enum — `scanner.ts:905` (**all eight profiles**),
+  `program.ts:1366`, `program.ts:3542`; **(E)** an object-literal property value in a
+  ternary branch cannot see a flow narrow — `importFixes.ts:1127`,
+  `formattingScanner.ts:113`; **(F)** an indexed access `T["p"]` on a generic
+  instantiation answers `any` — `completions.ts:2239`; **(G)** a property-access
+  RECEIVER is flow-narrowed only when its raw type is already a union —
+  `completions.ts:2234`. Round 765's "cause (D), literal widening" label was right in
+  SPIRIT for `scanner.ts:905` and wrong for the other two it named; round 781's
+  suspicion that `formattingScanner.ts:113` and `importFixes.ts:1127` "are not literal
+  widening" was right, and they turned out to be ONE cause with each other, not with
+  anything on the list.
+- **THE TWO `program.ts` LINES ARE THE ROUND-782 LESSON REPEATING ITSELF ONE LEVEL
+  DOWN.** Round 782 found that every scaffolded price in this arc had been measured on
+  `compiler` and `services` only. This round measured all eight — and still found two
+  lines nobody had listed, on the COMPILER profile, because the arc's last scaffolded
+  price (round 765) predates (WIDEN.1) and (REL.4). **A price is a claim about a
+  BUILD, not about an item**: re-measure it after any round that lands anywhere near
+  the masking mechanism, not just after a round that touches the item.
+- **ROUND 781's ENUM-WIDENING EXCLUSION IS RETIRED, AND IT WAS LOAD-BEARING ONLY
+  BECAUSE OF A BUG ONE LEVEL AWAY.** (WIDEN.1)(a) deliberately kept widening a
+  `const`'s enum member because not doing so exposed `completions.ts:2239`. Measured
+  here: that line is cause (F) — `Modifier["kind"]` resolving to `any`, so the
+  `isModifierKind` guard narrowed nothing and the 85-member `KeywordSyntaxKind` union
+  the const now preserves was rejected wholesale. With (F) closed the exclusion buys
+  nothing and costs `scanner.ts:905` on every profile. **A deliberate exclusion is a
+  DEBT with a named creditor — re-test it when the creditor is paid.**
+- **CAUSE (F) IS FOUR LINES AND IS THE ROUND-761 IDIOM, APPLIED WHERE NOBODY HAD
+  LOOKED.** `getIndexedAccessType`'s string-literal-key arm read `getTypeOfSymbol(prop)`;
+  an interface member's symbol is SHARED by every instantiation and its cached type for
+  a type-parameter-typed member is globally `any`, so `Token<SK.X>["kind"]` was `any`
+  and the (already correct) union arm turned ONE `any` part into an `any` WHOLE. That
+  last step is why the defect was invisible: `any` is silent, so the pre-fix build
+  produced no diagnostic anywhere and the only probe that can see it reads the type out
+  of a deliberate mis-assignment.
+- **CAUSE (E) IS AN ACCEPTANCE GATE THAT CANNOT FIRE WHERE IT IS NEEDED.** The
+  object-literal value path (rounds 438/462/468) accepts a flow-narrowed value only
+  when the CONTEXTUAL property type accepts it and the raw type does not — and an
+  object literal in a TERNARY branch has no contextual type at all (`ctxObj` is null;
+  measured with a one-line probe printing `raw`/`narrowed`/`ctx`). The narrow itself
+  was always computed and always correct (`raw=K narrowed=K.A`) and was then thrown
+  away. The new third acceptance is monotone by CONSTRUCTION rather than by relation
+  test — `enumTargetsAreOwnMembers` bounds the value to a sub-union of the very enum it
+  replaces — which is what lets it fire with no contextual type at all.
+- **THE RESIDUAL, CAUSE (G), IS NOT WHAT THE QUEUE SAID IT WAS.** The item labelled
+  `completions.ts:2234`/`:2239` "a property read on a union of generic instantiations /
+  generic inference through `tryCast`", i.e. the (REL.3)/round-762 family. Measured:
+  `Modifier["kind"]` resolves correctly after (F), and a `Modifier`-typed PARAMETER's
+  `.kind` was ALWAYS `ModifierSyntaxKind` (`resolveMemberPropertyType` distributes over
+  the union properly). What fails is the RECEIVER: `computeRawTypeOfPropertyAccess`
+  flow-narrows a receiver only when its raw type is ALREADY a `Type.Union`, so
+  `isModifier(node)`'s narrow-DOWN from `Node` is never attempted and `node.kind`
+  answers `SyntaxKind`. **And `extractNullNarrowing` — the pass that records a
+  condition's narrowing into `currentLocalTypes` — has only nullish / `typeof` /
+  truthiness arms; there is NO call-predicate arm at all**, which is a bigger and more
+  general finding than the line that exposed it.
+- **9 OF 20 PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (all three
+  switches flipped to `false`, recompiled, the pin SHAPES re-run through the scratch
+  CLI side by side). Every positive pin discriminates BY MESSAGE and has to: while
+  enum -> MEMBER is still vacuous a whole enum IS assignable to one of its own members,
+  so a silence-asserting pin passes on the broken build — round 782's probe-position
+  error in a new dress. The probe target is a PRIMITIVE, which rejects every
+  enum-flavored type and NAMES the one it was given. Of the eleven that hold on both
+  sides, ten do so on purpose (a `let` still widens; a flags accumulator stays legal; a
+  const assign target stays TS2588-only; a member EXPRESSION value owed nothing to this;
+  a FOREIGN enum's member is refused by the owner rule; a non-enum literal union already
+  worked; a plain interface's indexed access is unchanged) — and ONE, the
+  indexed-access GUARD pin, is honestly non-discriminating under FULL ablation and
+  discriminates only against the const-fix-only build, which is exactly the state that
+  manufactured `completions.ts:2239`.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). The kept enum member
+  joins `widen1ConstLiteralTypeIds`, an id-keyed set — and enum member types are
+  program-wide interned singletons, so a `let k: K.A` assignment TARGET elsewhere reads
+  the widened type too. That hole is not new (round 781 shipped it for string literals,
+  which are interned the same way); it is recorded here because enum members make it
+  easier to hit. Zero corpus baselines and zero profile lines move.
+- **PREDICTIONS 2 of 5.** HIT: the price was stale, and the objlit fix closed
+  `formattingScanner.ts:113` for free once `importFixes.ts:1127` was understood — the
+  two really are one cause. **MISSED, and the misses are the output:** I expected the
+  residual to shrink from five lines to fewer, not to GROW to seven first; I expected
+  cause (D) to be a widening-site fix and it was the RETIREMENT of a deliberate
+  exclusion; and I expected the two `completions.ts` lines to share a cause — they are
+  two different ones, and closing the first is what made the second measurable at all.
+- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) twice, both times
+  on the build after a long run; `./gradlew --stop` + a graceful
+  `pkill -f 'KotlinCompile[D]aemon'` fixed it in ~2m30s each time, exactly as round 781
+  recorded. A `--tests`-filtered `jvmTest` then hung for >25 minutes with its worker JVM
+  gone from `ps` — the ablation evidence was recovered instead through the 1.2-second
+  scratch CLI, running the pin SHAPES verbatim against both binaries, which is strictly
+  faster than a filtered gradle run and should probably be the default for this.
+
 **Round 782 (2026-08-01) — (REL.4) IS CLOSED AND THE FLIP IS LANDED. THE INHERITED
 "RESIDUAL IS EMPTY" WAS STALE FOR THE SIXTH CONSECUTIVE ROUND, AND THE REASON IS THE
 ROUND'S REAL FINDING: EVERY SCAFFOLDED PRICE IN THIS ARC WAS MEASURED ON **compiler AND
@@ -1457,6 +1561,43 @@ unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
     because enum -> MEMBER is still vacuous, i.e. because of the very leniency this item
     exists to close; when the global rule lands, a member-union target starts rejecting
     the whole enum and the subtracted type is what saves those sites.
+  **ROUND 783 RE-MEASURED THE PRICE ON ALL EIGHT PROFILES, RE-CLASSIFIED THE WORKLIST,
+  AND CLOSED THREE OF ITS FOUR CAUSES. THE RULE IS WRITTEN AND SCAFFOLDED IN THE TREE
+  BEHIND `REL2_ENUM_TO_MEMBER` (the one switch in `Checker.kt` that is deliberately
+  OFF) — do not re-write it, flip it.** Raw price against
+  `46/46/46/46/46/46/46/94`: **project 46 -> 49, tsc/jsTyping/deprecatedCompat/
+  typingsInstallerCore 46 -> 47, services/server 46 -> 51, harness 94 -> 99** — SEVEN
+  distinct lines and FOUR causes, not the five lines round 765 recorded. Every label on
+  the round-765 worklist above is superseded:
+  - **(D') a `const` initialised from an enum MEMBER widens to the whole enum** —
+    `scanner.ts:905` (ALL EIGHT profiles), `program.ts:1366`, `program.ts:3542`.
+    **CLOSED round 783** by retiring (WIDEN.1)(a)'s deliberate enum exclusion, which was
+    load-bearing only because of (F) below.
+  - **(E) an object-literal property value in a TERNARY branch cannot see a flow
+    narrow** (`ctxObj` is null there, so the round-438/462/468 acceptance can never
+    fire) — `importFixes.ts:1127`, `formattingScanner.ts:113`. **CLOSED round 783** with
+    a third acceptance that is monotone by construction rather than by relation test.
+  - **(F) an indexed access `T["p"]` on a generic instantiation answers `any`** (the
+    member symbol is shared and its cached type is globally `any` — round 761) —
+    `completions.ts:2239`. **CLOSED round 783** with `propertyTypeOnCarrier`.
+  - **(G) STILL OPEN, and it is the WHOLE residual: one line, `completions.ts:2234`, on
+    services/server/harness.** `computeRawTypeOfPropertyAccess` flow-narrows a receiver
+    only when its raw type is ALREADY a `Type.Union`, so `isModifier(node)`'s
+    narrow-DOWN from `Node` is never attempted and `node.kind` answers `SyntaxKind`.
+    **This is NOT the round-762 property-read family the item claimed** — measured,
+    `Modifier["kind"]` and a `Modifier`-typed parameter's `.kind` both resolve correctly
+    now. The two candidate fixes: give `extractNullNarrowing` a CALL-PREDICATE arm (it
+    has only nullish / `typeof` / truthiness arms today, so no type-guard call ever
+    reaches `currentLocalTypes` — a general gap worth more than this line), or a SECOND
+    CHANCE at the property-read site gated on the answer being an enum's own type (cheap
+    to write, but it fires on every `node.kind` in tsc's sources, so price the flow
+    walks before landing it).
+  **NEXT ROUND: close (G), re-run the eight-profile grid, flip `REL2_ENUM_TO_MEMBER` to
+  `true`, delete `enumMemberDomainProvesNotSubtype` (round 760's site-local stand-in),
+  and only THEN check whether `kindDomainKeysExceed` / `kindDomainProvesNotSubtype` /
+  `typeGuardMemberDisjoint` became dead — measure, do not credit.** The round-764
+  subtractive narrow must NOT be deleted on a "0 differ" reading: it is verdict-neutral
+  only while the vacuous `true` stands.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
