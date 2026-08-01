@@ -3385,7 +3385,7 @@ object FrontEnd {
  * sites (ENGINE.1) priced. Round 733 attributed the HANDLER and stopped at
  * "88.4% of it is the pass's own checking work"; this partitions that work.
  *
- * **Two levels, two shapes.**
+ * **Three levels, two shapes.**
  *
  * * **Level P — `checkPropertyAccessInExpr`, and it RECURSES**, so it uses round
  *   756's hand-back shape rather than levels A-C/E's `depth != 1 => return`:
@@ -3398,6 +3398,14 @@ object FrontEnd {
  * * **Level Q — `checkSinglePropertyAccess`**, the per-property-access leaf,
  *   which does not recurse: it keeps the `depth != 1 => return` shape and counts
  *   any nested invocation in [invocationsQNested] (a pin asserts that stays 0).
+ * * **Level R — `checkMemberAccessMissing`** (round 789, (ENGINE.2c)): level Q's
+ *   engine row, one ~1,965-line function entered 66,747 times at 34.3 us each,
+ *   6x the next row of either level. Same non-recursive shape as level Q, plus an
+ *   EXIT CENSUS ([rExitIn]) recording which row each call RETURNS from — that is
+ *   what can see a gate which is cheap to evaluate but runs after expensive work,
+ *   and [rExitWalk] restricts it to the calls that paid for a flow walk. It has
+ *   TWO callers (property access and element access), so [invocationsR]
+ *   legitimately exceeds [invocationsQ]; the difference is the element accesses.
  *
  * Level P is active only inside the window `cpaSpineLeave`'s three anchor blocks
  * open ([inCpa]), so its total is directly comparable to the `--spineSections`
@@ -3541,6 +3549,96 @@ object CpaSections {
 
     const val NQ = 10
 
+    // -- level R: checkMemberAccessMissing, in source order ------------------
+    // Round 789, (ENGINE.2c). Level Q's engine row is ONE ~1,965-line function
+    // entered 66,747 times at 34.3 us each -- 6x the next row of either level and
+    // the largest unopened leaf in the compile. Like level Q it does not recurse
+    // ([invocationsRNested] is pinned at 0), so it keeps the `depth != 1 => return`
+    // shape; unlike level Q it is reached from TWO callers (property access and
+    // element access), so [invocationsR] exceeds level Q's count by the element
+    // accesses and the two are cross-checked rather than assumed equal.
+
+    /** The wrapper transition. Probe-only; absent in production. */
+    const val R_ENTRY = 0
+    /** Empty name, paren unwrap, the intersection-reduction `never` probe. */
+    const val R_PRE = 1
+    /** The two `currentShadowedNames` receiver blocks. */
+    const val R_SHADOW = 2
+    /** The three flow-graph receiver blocks (identifier / property access / `this`). */
+    const val R_FLOW = 3
+    /** The three identifier-receiver special cases. */
+    const val R_IDENT = 4
+    /** String / regex / empty-object-literal receivers. */
+    const val R_LITERAL = 5
+    /** `new X().p` -- the NewExpression receiver block. */
+    const val R_NEW = 6
+    /** `f().p` -- the CallExpression receiver block. */
+    const val R_CALL = 7
+    /** `a.b.p` / `a[k].p` -- the PropertyAccess / ElementAccess receiver block. */
+    const val R_PAEA = 8
+    /** `this.p` inside a static method. */
+    const val R_STATIC = 9
+    /** Computing the receiver type: the `this` and ArrayLiteral arms. */
+    const val R_OT_THIS = 10
+    /** Computing the receiver type: namespace-member / enum-member / cast emissions. */
+    const val R_OT_PRE = 11
+    /** Computing the receiver type: the narrowing-ELIGIBILITY gate. */
+    const val R_OT_ELIG = 12
+    /** Computing the receiver type: `getTypeOfExpression(receiver)` -- THE RAW TYPE. */
+    const val R_OT_RAW = 13
+    /** Computing the receiver type: union-receiver narrowing. */
+    const val R_OT_UNION = 14
+    /** Computing the receiver type: the non-Identifier receiver branch. */
+    const val R_OT_NONIDENT = 15
+    /** Computing the receiver type: identifier symbol resolution. */
+    const val R_OT_IDENTSYM = 16
+    /** Computing the receiver type: the resolved-symbol branch and its `else`. */
+    const val R_OT_IDENT = 17
+    /** `objectType !is Type.Object` / enum-flavored gates. */
+    const val R_TYPEGATE = 18
+    /** `resolveStructuredTypeMembers(objectType)` -- member resolution. */
+    const val R_RESOLVE = 19
+    /** The member-less-receiver block. */
+    const val R_EMPTYPROPS = 20
+    /** Post-type gates: `this`+interface, base types, Reference, RUNTIME_PROPERTIES. */
+    const val R_POSTGATE = 21
+    /** `getPropertyOfType` -- THE LOOKUP -- and the property-exists exit. */
+    const val R_PROP = 22
+    /** Late suppression blocks and the index-signature gates. */
+    const val R_LATEGATE = 23
+    /** Spelling suggestion, `typeToString`, message construction, emission. */
+    const val R_EMIT = 24
+
+    const val NR = 25
+
+    val rNames: Array<String> = arrayOf(
+        "R: wrapper transition",
+        "R: pre (empty name, unwrap, intersection-never)",
+        "R: shadowed-name receivers",
+        "R: flow-graph receiver blocks",
+        "R: identifier-receiver special cases",
+        "R: string/regex/empty-objlit receivers",
+        "R: NewExpression receiver",
+        "R: CallExpression receiver",
+        "R: PropertyAccess/ElementAccess receiver",
+        "R: this-in-static-method",
+        "R: type = this / ArrayLiteral arms",
+        "R: type = ns-member/enum-member/cast emissions",
+        "R: type = narrowing-eligibility gate",
+        "R: type = getTypeOfExpression(receiver) RAW",
+        "R: type = union-receiver narrowing",
+        "R: type = non-Identifier receiver",
+        "R: type = identifier symbol resolution",
+        "R: type = resolved-symbol branch",
+        "R: objectType gates (!is Object, enum-flavored)",
+        "R: resolveStructuredTypeMembers",
+        "R: member-less receiver block",
+        "R: post-type gates (base/Reference/runtime props)",
+        "R: getPropertyOfType (THE LOOKUP)",
+        "R: late suppression + index signatures",
+        "R: suggestion + typeToString + emission",
+    )
+
     val qNames: Array<String> = arrayOf(
         "Q: wrapper transition",
         "Q: TS1209 new-expression optional chain",
@@ -3567,6 +3665,20 @@ object CpaSections {
     var qNanos: LongArray = LongArray(NQ)
     var qCalls: LongArray = LongArray(NQ)
     var qExitIn: LongArray = LongArray(NQ)
+    var rNanos: LongArray = LongArray(NR)
+    var rCalls: LongArray = LongArray(NR)
+    var rExitIn: LongArray = LongArray(NR)
+
+    /**
+     * The exit census RESTRICTED to the calls that launched an [R_FLOW] block-1
+     * narrowing walk. This is the whole question the row poses: the walks defend
+     * an emission that happens at the BOTTOM of the function, so a walker that
+     * exits before any emission site paid for nothing. A row here is a candidate
+     * POPULATION, never a measurement of recoverable time (round 788's law).
+     */
+    var rExitWalk: LongArray = LongArray(NR)
+    /** Set by [noteRWalk] for the current invocation; read by [endR]. */
+    var rWalked: Boolean = false
 
     /** Level-P invocations inside the [inCpa] window, at every depth. */
     var invocationsP: Long = 0
@@ -3580,6 +3692,10 @@ object CpaSections {
     var invocationsQ: Long = 0
     /** Nested level-Q invocations — a pin asserts this stays 0. */
     var invocationsQNested: Long = 0
+    /** Level-R invocations — from BOTH callers (property access + element access). */
+    var invocationsR: Long = 0
+    /** Nested level-R invocations — a pin asserts this stays 0. */
+    var invocationsRNested: Long = 0
 
     /**
      * G4: distinct `PropertyAccessExpression` nodes reaching level Q. [CENSUS] only.
@@ -3621,7 +3737,24 @@ object CpaSections {
     /** B464: `getNarrowedTypeForReferenceFollowLoopEntry` — a FLOW WALK. */
     const val N_B464_NARROW = 4
 
-    const val NN = 5
+    // Round 789: inside level R's dominant row, [R_FLOW] -- three suppression
+    // blocks that run at EVERY property access and suppress 1,169 times.
+    /** R_FLOW block 1: `getTypeOfExpression(receiver)`. */
+    const val N_F1_RAW = 5
+    /** R_FLOW block 1: the round-489 pre-gate -- two `getPropertyOfType` lookups. */
+    const val N_F1_GATE = 6
+    /** R_FLOW block 1: the PLAIN narrowing FLOW WALK past that pre-gate. */
+    const val N_F1_WALK = 7
+    /** R_FLOW block 2: the base type + `getFlowAt` pre-gate. */
+    const val N_F2_PRE = 8
+    /** R_FLOW block 2: the base-projection FLOW WALK. */
+    const val N_F2_WALK = 9
+    /** R_FLOW block 3: the whole `this`-receiver narrowing block. */
+    const val N_F3 = 10
+    /** R_FLOW block 1: the round-425 loop-entry RETRY walk. */
+    const val N_F1_WALK2 = 11
+
+    const val NN = 12
 
     val nNames: Array<String> = arrayOf(
         "  of which cpaComputeArgCtxTypes (clean)",
@@ -3629,6 +3762,13 @@ object CpaSections {
         "  of which B464 getTypeOfExpression(recv)",
         "  of which B464 closureStarts scan",
         "  of which B464 narrowing FLOW WALK",
+        "  R_FLOW b1: getTypeOfExpression(receiver)",
+        "  R_FLOW b1: round-489 pre-gate (2 lookups)",
+        "  R_FLOW b1: the PLAIN narrowing FLOW WALK",
+        "  R_FLOW b2: base type + getFlowAt",
+        "  R_FLOW b2: base-projection FLOW WALK",
+        "  R_FLOW b3: this-receiver narrowing",
+        "  R_FLOW b1: the loop-entry RETRY walk",
     )
 
     var nNanos: LongArray = LongArray(NN)
@@ -3695,6 +3835,9 @@ object CpaSections {
     var curQ: Int = -1
     var curTQ: Long = 0
     var depthQ: Int = 0
+    var curR: Int = -1
+    var curTR: Long = 0
+    var depthR: Int = 0
 
     /** [beginP]'s "not measuring" sentinel — distinct from "no caller row" (-1). */
     const val P_INACTIVE = -2
@@ -3704,12 +3847,16 @@ object CpaSections {
         nNanos = LongArray(NN); nCalls = LongArray(NN)
         argCtxCalls = 0; argCtxConsumableCalls = 0; b464Reached = 0; b464Walked = 0
         qNanos = LongArray(NQ); qCalls = LongArray(NQ); qExitIn = LongArray(NQ)
+        rNanos = LongArray(NR); rCalls = LongArray(NR); rExitIn = LongArray(NR)
+        rExitWalk = LongArray(NR); rWalked = false
         invocationsP = 0; outermostP = 0; maxDepthP = 0; invocationsPOutside = 0
         invocationsQ = 0; invocationsQNested = 0
+        invocationsR = 0; invocationsRNested = 0
         distinctPa = HashSet(); distinctP = HashSet()
         inCpa = false
         curP = -1; curTP = 0; depthP = 0
         curQ = -1; curTQ = 0; depthQ = 0
+        curR = -1; curTR = 0; depthR = 0
     }
 
     // The entry points are `inline` so a production call is a static read plus a
@@ -3812,6 +3959,52 @@ object CpaSections {
         depthQ--
     }
 
+    /** Open level R's partition for one `checkMemberAccessMissing`. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginR() {
+        if (mode == OFF) return
+        depthR++
+        if (depthR != 1) { invocationsRNested++; return }
+        invocationsR++
+        rWalked = false
+        if (mode == CENSUS) return
+        curR = R_ENTRY
+        curTR = PassTiming.nowNanos()
+    }
+
+    /** Mark this invocation as one that launched an [R_FLOW] block-1 flow walk. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteRWalk() { if (mode != OFF) rWalked = true }
+
+    /** Close level R's running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atR(sec: Int) {
+        if (mode != ON || depthR != 1) return
+        val now = PassTiming.nowNanos()
+        rNanos[curR] += now - curTR
+        rCalls[curR]++
+        curR = sec
+        curTR = now
+    }
+
+    /**
+     * Close whatever level-R section is open, recording the EXIT row — which is
+     * the census that answers "how far does a typical call get", and the only way
+     * to see a gate that is cheap to evaluate but placed after expensive work.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endR() {
+        if (mode == OFF) return
+        if (mode != CENSUS && depthR == 1 && curR >= 0) {
+            rNanos[curR] += PassTiming.nowNanos() - curTR
+            rCalls[curR]++
+            rExitIn[curR]++
+            if (rWalked) rExitWalk[curR]++
+            curR = -1
+        }
+        depthR--
+    }
+
     private fun ms(n: Long): String = (n / 1_000_000).toString()
 
     fun report(): String = buildString {
@@ -3859,6 +4052,23 @@ object CpaSections {
                 )
             }
         }
+        var rTotal = 0L
+        for (s in 0 until NR) rTotal += rNanos[s]
+        if (rTotal > 0) {
+            appendLine(
+                "level R total: ${ms(rTotal)} ms over $invocationsR invocations " +
+                    "($invocationsRNested nested) — compare level Q's checkMemberAccessMissing row"
+            )
+            for (s in 0 until NR) {
+                if (rCalls[s] == 0L && rNanos[s] == 0L) continue
+                val pct = rNanos[s] * 1000 / rTotal
+                appendLine(
+                    "  ${rNames[s].padEnd(48)} ${ms(rNanos[s]).padStart(6)} ms " +
+                        "(${(pct / 10).toString().padStart(3)}.${pct % 10}%) over ${rCalls[s].toString().padStart(9)} closes" +
+                        ", exits ${rExitIn[s]} (of which walkers ${rExitWalk[s]})"
+                )
+            }
+        }
         if (argCtxCalls > 0 || b464Reached > 0) {
             appendLine(
                 "populations: cpaComputeArgCtxTypes $argCtxCalls calls, " +
@@ -3899,6 +4109,14 @@ object CpaSections {
         for (s in 0 until NQ) {
             if (qCalls[s] == 0L && qNanos[s] == 0L) continue
             appendLine("Q,\"${qNames[s].trim()}\",${qCalls[s]},${qNanos[s]}")
+        }
+        for (s in 0 until NR) {
+            if (rCalls[s] == 0L && rNanos[s] == 0L) continue
+            appendLine("R,\"${rNames[s].trim()}\",${rCalls[s]},${rNanos[s]}")
+        }
+        for (s in 0 until NR) {
+            if (rExitIn[s] == 0L) continue
+            appendLine("REXIT,\"${rNames[s].trim()}\",${rExitIn[s]},${rExitWalk[s]}")
         }
         for (s in 0 until NN) {
             if (nCalls[s] == 0L) continue

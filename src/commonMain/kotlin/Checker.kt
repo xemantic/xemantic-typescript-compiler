@@ -133706,9 +133706,16 @@ interface DataView {
         ts2576SquiggleStart: Int = diagStart,
         ts2576SquiggleLength: Int = diagLength,
     ) {
+        // (ENGINE.2c) round 789: level R — the partition of THIS function, level
+        // Q's engine row and the largest single leaf in the compile. Non-recursive
+        // (`invocationsRNested` is pinned at 0); the `finally` is what makes the
+        // EXIT CENSUS possible across ~20 early returns. See [CpaSections].
+        CpaSections.beginR()
+        try {
         // 17.57: Skip TS2339 emission when the property name is empty — that's a parser
         // error-recovery placeholder for incomplete syntax like `var p = window.` (TS1003
         // already fires for the missing identifier; emitting TS2339 would be redundant).
+        CpaSections.atR(CpaSections.R_PRE)
         if (propName.isEmpty()) return
         // Unwrap ParenthesizedExpression wrappers so `(new X).blah` / `(x).blah` reach the
         // same branches as their un-parenthesized forms. Parens only affect precedence.
@@ -133747,6 +133754,7 @@ interface DataView {
         // that exists on the LOCAL type (intersectionsAndOptionalProperties: a local
         // `let x: To` shadowing a file-level `declare let x: {...}`). Resolve against the
         // local type and bail when the member is present. Bounded to shadowed names.
+        CpaSections.atR(CpaSections.R_SHADOW)
         if (objectExpr is Identifier && !isThisAccess && objectExpr.text in currentShadowedNames) {
             val localType = currentLocalTypes[objectExpr.text]
             // Round 512: an UN-INFERABLE shadow (the anyType registration from
@@ -133814,11 +133822,14 @@ interface DataView {
         // gate and keep the diagnostic. Union receivers keep their existing narrowing paths; a
         // narrowed `never` (genuine negative-exhaustion, `instanceofWithStructurallyIdenticalTypes`)
         // is excluded so tsc's TS2339-on-`never` is preserved.
+        CpaSections.atR(CpaSections.R_FLOW)
         if (currentFlowGraph != null && !isThisAccess &&
             (objectExpr is Identifier ||
                 (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null))
         ) {
+            val f1t0 = CpaSections.t()
             val raw = getTypeOfExpression(objectExpr)
+            CpaSections.closeN(CpaSections.N_F1_RAW, f1t0)
             // Round 489 (M5.1 perf): this block SUPPRESSES a would-be TS2339 by narrowing
             // `raw` DOWN to a strict subtype that HAS the property. If `raw` ALREADY resolves
             // the property (on itself or its apparent type — exactly what the main check at
@@ -133826,10 +133837,14 @@ interface DataView {
             // can fire below, so the two expensive flow-narrowing walks are pure waste — skip
             // them. Behavior-preserving: a concrete property-present receiver emits nothing
             // either way (a member-table lookup is far cheaper than two flow walks per access).
-            if (raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType &&
+            val f1t1 = CpaSections.t()
+            val f1Pass = raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType &&
                 !(getPropertyOfType(raw, propName) != null ||
                     getPropertyOfType(getApparentType(raw), propName) != null)
-            ) {
+            CpaSections.closeN(CpaSections.N_F1_GATE, f1t1)
+            if (f1Pass) {
+                CpaSections.noteRWalk()
+                val f1t2 = CpaSections.t()
                 // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
                 // narrows a single-type receiver to a UNION — the access is safe iff
                 // EVERY member resolves the property (intersection members fold via
@@ -133848,14 +133863,19 @@ interface DataView {
                         getPropertyOfType(app, propName) != null
                     }
                 }
-                if (suppresses(getNarrowedTypeForReference(raw, objectExpr))) return
+                val f1Plain = suppresses(getNarrowedTypeForReference(raw, objectExpr))
+                CpaSections.closeN(CpaSections.N_F1_WALK, f1t2)
+                if (f1Plain) return
+                val f1t3 = CpaSections.t()
                 // Round 425: a guard BEFORE a loop narrows a read INSIDE it, but the
                 // plain walk washes back to the declared type at the FlowLoopLabel —
                 // retry with the loop-entry-following variant (the single-type sibling
                 // of round-424 fix 1's union retry; `constraint.target` inside tuple
                 // inference loops after `isTupleType(constraint)`, checker.ts).
                 // Suppression-only, so following antecedent[0] is safe here.
-                if (suppresses(getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr))) return
+                val f1Loop = suppresses(getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr))
+                CpaSections.closeN(CpaSections.N_F1_WALK2, f1t3)
+                if (f1Loop) return
             }
         }
 
@@ -133874,25 +133894,28 @@ interface DataView {
             val memberName = objectExpr.name.text
             val basePath = if (baseExpr is Identifier) baseExpr.text else null
             if (basePath != null && memberName.isNotEmpty()) {
+                val f2t0 = CpaSections.t()
                 val baseRaw = getTypeOfExpression(baseExpr)
                 val flow = getFlowAt(baseExpr) ?: getFlowAt(objectExpr)
+                CpaSections.closeN(CpaSections.N_F2_PRE, f2t0)
                 if (baseRaw is Type.Union && flow != null) {
+                    val f2t1 = CpaSections.t()
                     val narrowedBase = flowWalkWithTripCheck(baseExpr, WK_BASE_EXPR, baseRaw.id.toLong() shl 32 or (basePath.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(basePath)) {
                         narrowTypeFromFlow(baseRaw, flow, basePath, NarrowSeen(), depth = 0)
                     } ?: baseRaw
-                    if (narrowedBase !== baseRaw && narrowedBase !== neverType &&
+                    val f2Suppress = narrowedBase !== baseRaw && narrowedBase !== neverType &&
                         narrowedBase !== anyType && narrowedBase !== errorType &&
-                        checkTypeRelatedTo(narrowedBase, baseRaw, assignableRelation)
-                    ) {
-                        val baseMembers =
-                            if (narrowedBase is Type.Union) narrowedBase.types else listOf(narrowedBase)
-                        if (baseMembers.isNotEmpty() && baseMembers.all { bm ->
+                        checkTypeRelatedTo(narrowedBase, baseRaw, assignableRelation) && run {
+                            val baseMembers =
+                                if (narrowedBase is Type.Union) narrowedBase.types else listOf(narrowedBase)
+                            baseMembers.isNotEmpty() && baseMembers.all { bm ->
                                 val memberType = resolveMemberPropertyType(bm, memberName)
                                 memberType != null && (memberType === anyType ||
                                     resolveMemberPropertyType(memberType, propName) != null)
                             }
-                        ) return
-                    }
+                        }
+                    CpaSections.closeN(CpaSections.N_F2_WALK, f2t1)
+                    if (f2Suppress) return
                 }
             }
         }
@@ -133908,18 +133931,19 @@ interface DataView {
         // every non-nullish member, suppress. Suppression-only: no narrowing, or
         // narrowing back to any/never, leaves every emission below untouched.
         if (isThisAccess && currentFlowGraph != null) {
+            val f3t0 = CpaSections.t()
             val rawThis = getTypeOfExpression(objectExpr)
             val narrowedThis = getNarrowedTypeForReference(rawThis, objectExpr)
-            if (narrowedThis !== rawThis && narrowedThis !== neverType &&
-                narrowedThis !== anyType && narrowedThis !== errorType
-            ) {
-                val members = if (narrowedThis is Type.Union)
-                    narrowedThis.types.filterNot { isNullishConstituent(it) }
-                else listOf(narrowedThis)
-                if (members.isNotEmpty() &&
-                    members.all { m -> m === anyType || resolveMemberPropertyType(m, propName) != null }
-                ) return
-            }
+            val f3Suppress = narrowedThis !== rawThis && narrowedThis !== neverType &&
+                narrowedThis !== anyType && narrowedThis !== errorType && run {
+                    val members = if (narrowedThis is Type.Union)
+                        narrowedThis.types.filterNot { isNullishConstituent(it) }
+                    else listOf(narrowedThis)
+                    members.isNotEmpty() &&
+                        members.all { m -> m === anyType || resolveMemberPropertyType(m, propName) != null }
+                }
+            CpaSections.closeN(CpaSections.N_F3, f3t0)
+            if (f3Suppress) return
         }
 
         // B589 (bluebirdStaticThis): a receiver Identifier that is a USER clodule (top-level
@@ -133930,6 +133954,7 @@ interface DataView {
         // (checkModuleFileLocalNamespaceMemberRefs), present static/namespace members → none.
         // Suppress the FP TS2339 here. Corpus-unique (only `Promise` shadows a lib global as
         // a clodule); gated on the lib-merge pollution (a user-only clodule is unaffected).
+        CpaSections.atR(CpaSections.R_IDENT)
         if (objectExpr is Identifier && !isThisAccess) {
             // INV.3(c)(iii) round 507: node-keyed (a conflated name can never pass
             // the lib-decl gate below — lib-visible names classify SHARED — so this
@@ -133993,6 +134018,7 @@ interface DataView {
         // verbatim ("\"\"" / "\"foo\"") when the property isn't a String wrapper member.
         // Used by patterns like `class C extends "".bogus {}` where the heritage
         // expression is a PropertyAccessExpression on a StringLiteralNode receiver.
+        CpaSections.atR(CpaSections.R_LITERAL)
         if (objectExpr is StringLiteralNode && propName !in RUNTIME_PROPERTIES) {
             val apparent = getApparentType(stringType)
             if (apparent is Type.Object) {
@@ -134068,6 +134094,7 @@ interface DataView {
         // a satisfying declaration. Narrow gate: handles the simple "empty class + circular
         // or empty base" pattern. Display uses `ClassName<unknown, unknown, …>` based on the
         // class's type-parameter count, matching TypeScript's format for un-instantiated news.
+        CpaSections.atR(CpaSections.R_NEW)
         if (objectExpr is NewExpression) {
             val ctor = objectExpr.expression
             if (ctor is Identifier) {
@@ -134186,6 +134213,7 @@ interface DataView {
         // call-result property checking is out of scope here (no access to the
         // return type's apparent-type member table at this site without broader
         // refactoring).
+        CpaSections.atR(CpaSections.R_CALL)
         if (objectExpr is CallExpression) {
             val callType = getReturnTypeOfCallExpression(objectExpr)
             if (callType === neverType) {
@@ -134277,6 +134305,7 @@ interface DataView {
         // The PRIMITIVE_WRAPPER_INTRINSIC_NAMES gate excludes any/unknown/error, so a
         // member typed `any` (e.g. `c.unknown.length` under `class C extends Base:any`)
         // is correctly left alone.
+        CpaSections.atR(CpaSections.R_PAEA)
         if (objectExpr is PropertyAccessExpression || objectExpr is ElementAccessExpression) {
             val recvType = getTypeOfExpression(objectExpr)
             if (recvType is Type.Intrinsic &&
@@ -134369,6 +134398,7 @@ interface DataView {
 
         // === Static method "this" access ===
         // In static methods, "this" refers to the constructor type (typeof C).
+        CpaSections.atR(CpaSections.R_STATIC)
         if (isThisAccess && inStaticClassMethod && enclosingClassType is Type.Object) {
             val classSymbol = enclosingClassType.symbol ?: return
             val classDecl = classSymbol.declarations.firstOrNull() as? ClassDeclaration ?: return
@@ -134388,6 +134418,7 @@ interface DataView {
 
         // 16.0: track a display-override type for primitives whose apparent (wrapper)
         // type is used for property lookup — diagnostic must show the primitive name.
+        CpaSections.atR(CpaSections.R_OT_THIS)
         var displayTypeOverride: Type? = null
         val objectType = if (isThisAccess) {
             if (enclosingClassType == null) return
@@ -134414,6 +134445,7 @@ interface DataView {
         } else {
             // Narrow: `ns.Class.prop` — namespace import alias + class in target module's
             // locals + prop is not a static member. Emits TS2339 with `typeof Class` display.
+            CpaSections.atR(CpaSections.R_OT_PRE)
             if (objectExpr is PropertyAccessExpression &&
                 objectExpr.expression is Identifier &&
                 tryEmitNamespaceMemberTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
@@ -134479,10 +134511,13 @@ interface DataView {
             // dotted-path strings so PropertyAccess receivers narrow uniformly with
             // bare Identifiers. After the narrowing block, the identifier-symbol
             // lookup paths (globals[identName]) only apply to Identifier shapes.
+            CpaSections.atR(CpaSections.R_OT_ELIG)
             val narrowingEligible = objectExpr is Identifier ||
                 (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null)
             if (!narrowingEligible) return
+            CpaSections.atR(CpaSections.R_OT_RAW)
             val rawForNarrowing = getTypeOfExpression(objectExpr)
+            CpaSections.atR(CpaSections.R_OT_UNION)
             if (rawForNarrowing is Type.Union) {
                 val narrowed = getNarrowedTypeForReference(rawForNarrowing, objectExpr)
                 // M1.12 (round 424): a read inside a LOOP body walks back through a
@@ -134701,6 +134736,7 @@ interface DataView {
             // covered the narrowed-to-never / single-Object / Union-with-missing cases;
             // the remaining identifier-symbol lookup paths don't generalize to
             // dotted-path receivers (no `globals["A._a"]` lookup makes sense).
+            CpaSections.atR(CpaSections.R_OT_NONIDENT)
             if (objectExpr !is Identifier) {
                 // 17.130: `ClassIdent.prototype.X` — `Class.prototype` doesn't resolve to
                 // the class's instance type in our checker (no `prototype` member on the
@@ -134790,6 +134826,7 @@ interface DataView {
                 }
                 return
             }
+            CpaSections.atR(CpaSections.R_OT_IDENTSYM)
             val identName = objectExpr.text
             // B69.12: enclosing-namespace local-var shadow. When `M.X` is accessed
             // inside `namespace M2 { var M = 0; ... M.X }` (and there's an outer
@@ -134827,6 +134864,7 @@ interface DataView {
             } else null
             val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
 
+            CpaSections.atR(CpaSections.R_OT_IDENT)
             if (identSymbol != null) {
                 // INV.3(d)(ii): a receiver whose resolution has ONLY type-side
                 // declarations while its DECLARING file also namespace-imports the
@@ -135261,13 +135299,16 @@ interface DataView {
             }
         }
         // Check Interface and Object types (anonymous object literals, type literals, etc.)
+        CpaSections.atR(CpaSections.R_TYPEGATE)
         if (objectType !is Type.Object) return
         // Skip enum types
         // (REL.1)(b0): an enum MEMBER type is equally member-less, so it would match
         // the "empty receiver" TS2339 gate below (`Extension.Dts.length`).
         if (isEnumFlavoredObjectType(objectType)) return
         // Resolve members
+        CpaSections.atR(CpaSections.R_RESOLVE)
         resolveStructuredTypeMembers(objectType)
+        CpaSections.atR(CpaSections.R_EMPTYPROPS)
         if (objectType.properties.isNullOrEmpty()) {
             // B63.33: empty `{}` Type.Object — receiver typed as truly-empty (e.g.
             // `const z = {}; z.x` or `function f(): {} {} f().x`). Conservative gate:
@@ -135346,6 +135387,7 @@ interface DataView {
         // (no `Foo.Bar` base, no ambient `declare class`, no IndexSignature, no sibling
         // InterfaceDeclaration) and no member matches anywhere in the chain. Display
         // mirrors TypeScript's format: `ClassName<A, B, C>` for generic classes.
+        CpaSections.atR(CpaSections.R_POSTGATE)
         if (isThisAccess && objectType is Type.Interface
             && objectType.baseTypes != null && objectType.baseTypes!!.isNotEmpty()
             && propName !in RUNTIME_PROPERTIES
@@ -135442,6 +135484,7 @@ interface DataView {
             return
         }
         // Check if property exists in type members
+        CpaSections.atR(CpaSections.R_PROP)
         val prop = getPropertyOfType(objectType, propName)
         if (prop != null) {
             // TS2576: `this.X` in an instance method where X is a STATIC member of the
@@ -135484,6 +135527,7 @@ interface DataView {
         // reports TS2550 (never plain TS2339) for this shape. Fires for BOTH the
         // array-literal-receiver path (displayTypeOverride set) and identifier receivers
         // (which otherwise bail at the numberIndexInfo check below — Array's `[n: number]: T`).
+        CpaSections.atR(CpaSections.R_LATEGATE)
         run {
             val featureIface = when (objectType) {
                 is Type.Reference -> objectType.target.symbol?.name
@@ -135560,6 +135604,7 @@ interface DataView {
         if (objectType.properties == null && objectType is Type.Interface && objectType.symbol != null) {
             resolveStructuredTypeMembers(objectType)
         }
+        CpaSections.atR(CpaSections.R_EMIT)
         val memberNames = (objectType.properties ?: emptyList()).map { it.name }.toSet()
         val suggestion = getSpellingSuggestionFromNames(propName, memberNames)
         // For static access on class/namespace identifiers, use "typeof X" format
@@ -135646,6 +135691,9 @@ interface DataView {
                 start = diagStart,
                 length = diagLength,
             ))
+        }
+        } finally {
+            CpaSections.endR()
         }
     }
 
