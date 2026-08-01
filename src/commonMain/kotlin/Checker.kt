@@ -116591,8 +116591,26 @@ interface DataView {
             }
             else -> null
         }
-        if (nsSymbol != null && nsSymbol.flags.hasAny(SymbolFlags.Module)) {
-            val exportSym = nsSymbol.exports?.get(propName)
+        // (REL.4) round 782: an IMPORT-ALIAS receiver carries SymbolFlags.Alias and NEVER
+        // SymbolFlags.Module, so `Debug.assert(x)` — the shape of every namespace call in
+        // tsc's own sources — fell through to the `anyType` tail below, [getCalleeType]
+        // answered `anyType`, and the call's arguments were never checked AT ALL.
+        // Follow the alias with the BARREL-AWARE resolver: the general [resolveAlias]
+        // resolves 0 of the compiler profile's 4,383 alias receivers, because it cannot
+        // follow an ESM `.js` specifier into an `export *` barrel and per round 409 must
+        // NEVER be taught to (that is the TS2315 flood) — so the alias-following step and
+        // the barrel-aware step are each measurably INERT alone and only move anything as
+        // a PAIR. [resolveImportedNamespaceSymbol] is a pure symbol-table walk with no
+        // type resolution in it, so it carries none of the round-778 ambient-context
+        // hazard that would make its memo a program-order dependency.
+        val nsResolved =
+            if (REL4_NS_ALIAS_RECEIVER && nsSymbol != null &&
+                !nsSymbol.flags.hasAny(SymbolFlags.Module) &&
+                nsSymbol.flags.hasAny(SymbolFlags.Alias)
+            ) resolveImportedNamespaceSymbol(nsSymbol, mutableSetOf()) ?: nsSymbol
+            else nsSymbol
+        if (nsResolved != null && nsResolved.flags.hasAny(SymbolFlags.Module)) {
+            val exportSym = nsResolved.exports?.get(propName)
             if (exportSym != null) return getTypeOfSymbol(exportSym)
         }
         // For resolved non-anyType objects, the property wasn't found — return anyType
@@ -173935,6 +173953,15 @@ private val WIDEN1_CONST_KEEPS_LITERAL = true
  * in a commit.
  */
 private val R782_LEXICAL_ENUM_DISCRIMINANT = true
+
+/**
+ * (REL.4) round 782 ABLATION SWITCH — flip to `false` to restore the pre-782 behaviour in
+ * which a property access whose receiver is an IMPORT ALIAS of a namespace resolved to
+ * `anyType`, so the call it heads was never argument-checked at all
+ * (`Rel4NamespaceCalleeArgsTest`'s pins can then be shown to discriminate). Same top-level
+ * init-order rationale as the switches above. Never flip this in a commit.
+ */
+private val REL4_NS_ALIAS_RECEIVER = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---
