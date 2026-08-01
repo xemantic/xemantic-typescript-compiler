@@ -50558,6 +50558,22 @@ class Checker(
             "RegExp.dotAll" to ScriptTarget.ES2018,
         )
 
+        /**
+         * (ENGINE.2e) round 792 — the PROPERTY NAMES of [LIB_MIN_TARGET] and
+         * [LIB_MIN_TARGET_SOFT], without their interface qualifier.
+         *
+         * The whole lib-target hint family (TS2550) fires on properties that
+         * RESOLVE: the embedded lib declares `RegExp.dotAll`, and the diagnostic
+         * says "not at this target", not "does not exist". So a gate keyed on
+         * "the property resolves" must exclude these names or it deletes them —
+         * measured, as `doYouNeedToChangeYourTargetLibraryES2016Plus`. Keyed by
+         * NAME alone (not by interface) deliberately: it is consulted before the
+         * receiver's type is known, and over-excluding only forgoes a skip.
+         */
+        private val LIB_MIN_TARGET_PROPS: Set<String> =
+            (LIB_MIN_TARGET.keys + LIB_MIN_TARGET_SOFT.keys)
+                .mapTo(HashSet()) { it.substringAfterLast('.') }
+
         /** B238: builtin error constructors whose lib arity is target-dependent —
          *  `(message?)` pre-es2022, `(message?, options?)` from es2022 (lib.es2022.error);
          *  AggregateError (es2021) is `(errors, message?)` → `(errors, message?, options?)`. */
@@ -133793,6 +133809,43 @@ interface DataView {
      * body and counts every call on which the two disagree, at `Type`-instance
      * granularity; `--verifyDeferSuppressionBogus` is its positive control.
      */
+    /**
+     * (ENGINE.2e) round 792 — the candidate WHOLE-FUNCTION pre-gate, evaluated by
+     * `--cmamPreGate` and honoured by nothing. It asks the round-489 question at
+     * the TOP of the function instead of inside one block: does [propName]
+     * already resolve on the receiver's own type, or on its apparent type?
+     *
+     * A union receiver is excluded exactly as the round-489 gate excludes it (a
+     * union's narrowed-to-`never` and partial-coverage emissions are REAL where
+     * the declared union resolves nothing), and so are `any`/`error`/`never`,
+     * whose member tables answer nothing useful either way.
+     *
+     * The probe exists to price the idea, not to implement it: the population it
+     * would skip, the body time behind that population, and — the number that
+     * decides it — how many of those calls emit a diagnostic today.
+     */
+    private fun cmamPropertyResolvesOnReceiver(objectExprIn: Expression, propName: String): Boolean {
+        if (propName.isEmpty()) return false
+        // A later-lib member RESOLVES and is still an error: TS2550 says "not at
+        // this target", never "does not exist". [LIB_MIN_TARGET_PROPS] is the
+        // whole name space that family draws from.
+        if (propName in LIB_MIN_TARGET_PROPS) return false
+        var e = objectExprIn
+        while (e is ParenthesizedExpression) e = e.expression
+        val raw = getTypeOfExpression(e)
+        if (raw is Type.Union || raw === anyType || raw === errorType || raw === neverType) return false
+        val app = getApparentType(raw)
+        // A CLASS receiver's two sides are not cleanly separated in our member
+        // tables — an instance type resolves a STATIC member — and TS2576 ("did
+        // you mean to access the static member") is precisely the diagnostic that
+        // says so. Measured: six corpus baselines lose their error without this.
+        if ((raw as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Class) == true ||
+            (app as? Type.Object)?.symbol?.flags?.hasAny(SymbolFlags.Class) == true
+        ) return false
+        return getPropertyOfType(raw, propName) != null ||
+            getPropertyOfType(app, propName) != null
+    }
+
     private fun cmamFlowSuppresses(objectExprIn: Expression, propName: String): Boolean {
         cmamLastNarrowed = null
         if (propName.isEmpty()) return false
@@ -133997,11 +134050,38 @@ interface DataView {
         val savedVerdict = cmamEagerVerdict
         val savedNarrowed = cmamEagerNarrowed
         cmamFlowBase = -1
+        // (ENGINE.2e) round 792: price the candidate whole-function pre-gate.
+        // HONOURS NOTHING — the body runs either way, so the compiler's output is
+        // identical with and without the flag; the probe only splits the body's
+        // measured time by the gate's verdict and records how many of the calls
+        // the gate would skip actually emit. Off, this is a static read.
+        var pgPass = false
+        var pgD0 = 0
+        var pgT0 = 0L
+        if (CpaSections.preGateProbe) {
+            pgD0 = diagnostics.size
+            val gt0 = CpaSections.t()
+            pgPass = CpaSections.preGateBogus ||
+                cmamPropertyResolvesOnReceiver(objectExprIn, propName)
+            CpaSections.closeN(CpaSections.N_PG_GATE, gt0)
+            pgT0 = CpaSections.t()
+        } else if (cmamPropertyResolvesOnReceiver(objectExprIn, propName)) {
+            // THE GATE (round 792). Under `--cmamPreGate` it is computed and NOT
+            // honoured, so that run reproduces the pre-change binary and its
+            // `preGatePassEmitted` column is the falsifier rather than a tautology.
+            return
+        }
         checkMemberAccessMissingCore(
             objectExprIn, propName, diagStart, diagLength, source, fileName,
             enclosingClassType, emitTs2728RelatedInfo, keySuggestion,
             ts2576SquiggleStart, ts2576SquiggleLength,
         )
+        if (CpaSections.preGateProbe) {
+            CpaSections.closeN(
+                if (pgPass) CpaSections.N_PG_CORE_PASS else CpaSections.N_PG_CORE_FAIL, pgT0,
+            )
+            CpaSections.notePreGate(pgPass, diagnostics.size > pgD0)
+        }
         val base = cmamFlowBase
         val eagerVerdict = cmamEagerVerdict
         val eagerNarrowed = cmamEagerNarrowed
@@ -134071,6 +134151,11 @@ interface DataView {
         // with `never` display + chain. Gate on cache hit so we don't change the
         // emission for receivers that are `never` for OTHER reasons (the existing
         // narrowed-to-never path below handles those for Union receivers).
+        // Round 792 (ENGINE.2e): level S. The close below is skipped only by the
+        // whole-function `return` this block makes when it EMITS — a population
+        // the exit census already reports as 0 on every profile, so the sample
+        // loss is nil and the counter needs no compensation.
+        val preT0 = CpaSections.t()
         run {
             val reductionReason = findIntersectionReductionForExpr(objectExpr) ?: return@run
             val recvType = getTypeOfExpression(objectExpr)
@@ -134085,6 +134170,7 @@ interface DataView {
             ))
             return
         }
+        CpaSections.closeN(CpaSections.N_PRE_ISECT, preT0)
         // For the TS2576 "did you mean static member 'A.Y'" message, the suffix depends on
         // the access form — `.y` for property access, `["y"]`/`['y']` for element access.
         // Default to `.propName` if not supplied.
@@ -134176,6 +134262,7 @@ interface DataView {
         // Suppress the FP TS2339 here. Corpus-unique (only `Promise` shadows a lib global as
         // a clodule); gated on the lib-merge pollution (a user-only clodule is unaffected).
         CpaSections.atR(CpaSections.R_IDENT)
+        val idT0 = CpaSections.t()
         if (objectExpr is Identifier && !isThisAccess) {
             // INV.3(c)(iii) round 507: node-keyed (a conflated name can never pass
             // the lib-decl gate below — lib-visible names classify SHARED — so this
@@ -134188,6 +134275,7 @@ interface DataView {
                     decls.any { it in builtinLibDecls }) return
             }
         }
+        CpaSections.closeN(CpaSections.N_ID_CLODULE, idT0)
 
         // B586 (defaultBestCommonTypesHaveDecls): member access on a variable EXPLICITLY
         // annotated `{}` (empty object type) or `Object`, reading a property that is neither
@@ -134196,6 +134284,7 @@ interface DataView {
         // otherwise bails for anonymous object types. AST-gated to the literal `{}`/`Object`
         // annotation + verified absent via getPropertyOfType (so a user-augmented `Object` with
         // the member, or an inferred-empty type we resolve imprecisely, does NOT fire).
+        val idT1 = CpaSections.t()
         if (objectExpr is Identifier && !isThisAccess &&
             propName !in OBJECT_PROTOTYPE_PROPERTIES) {
             // INV.3(c)(iii) round 507: node-keyed fallback — a foreign module file's
@@ -134227,12 +134316,16 @@ interface DataView {
             }
         }
 
+        CpaSections.closeN(CpaSections.N_ID_EMPTYOBJ, idT1)
+
         // enumPropertyAccess: `x.prop` where `x` is statically an enum (member) —
         // a var initialized to `E.M`, or a param typed as a type-param `extends E`.
+        val idT2 = CpaSections.t()
         if (objectExpr is Identifier && !isThisAccess &&
             tryEmitEnumTypedIdentReceiverTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
             return
         }
+        CpaSections.closeN(CpaSections.N_ID_ENUMRECV, idT2)
 
         // 17.161: String literal receiver — `"".bogus` / `"foo".missing`. Resolves
         // to the String apparent type and emits TS2339 with the literal value displayed
@@ -134740,7 +134833,18 @@ interface DataView {
             val rawForNarrowing = getTypeOfExpression(objectExpr)
             CpaSections.atR(CpaSections.R_OT_UNION)
             if (rawForNarrowing is Type.Union) {
+                // Round 792 (ENGINE.2e), level S: the plain walk, the round-424
+                // retry and the elaboration are three different questions and the
+                // row that holds them is the second-largest in the function. The
+                // bracket around the plain walk is the round-790 one — two
+                // monotone counter reads, immediately around the call, because
+                // anything between them re-enters the checker.
+                val uT0 = CpaSections.t()
+                val uObs0 = narrowRetryRelevantObs
+                val uLaunch0 = narrowWalkLaunches
                 val narrowed = getNarrowedTypeForReference(rawForNarrowing, objectExpr)
+                val uLoopFree = narrowRetryRelevantObs == uObs0 && narrowWalkLaunches > uLaunch0
+                CpaSections.closeN(CpaSections.N_U_PLAIN, uT0)
                 // M1.12 (round 424): a read inside a LOOP body walks back through a
                 // FlowLoopLabel, where the plain variant washes back to the declared
                 // union (back-edge safety), so a PRE-loop guard (`if (!isString(text))
@@ -134762,7 +134866,10 @@ interface DataView {
                         narrowed.types.map { it.id }.toSet() ==
                         rawForNarrowing.types.map { it.id }.toSet())
                 if (plainWalkWashed) {
+                    val uT1 = CpaSections.t()
+                    CpaSections.noteUnionRetry(uLoopFree)
                     val loopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(rawForNarrowing, objectExpr)
+                    CpaSections.closeN(CpaSections.N_U_RETRY, uT1)
                     if (loopNarrowed !== rawForNarrowing && loopNarrowed !== neverType) {
                         val lnMembers = if (loopNarrowed is Type.Union)
                             loopNarrowed.types.filterNot { isNullishConstituent(it) }
@@ -134775,6 +134882,10 @@ interface DataView {
                         ) return
                     }
                 }
+                // Level S: the elaboration. Its close is skipped by the union
+                // block's own EMISSION returns (225 exits on the profile), so its
+                // `calls` column is the SILENT population, not the whole one.
+                val uT2 = CpaSections.t()
                 if (narrowed === neverType) {
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
@@ -134949,6 +135060,7 @@ interface DataView {
                         }
                     }
                 }
+                CpaSections.closeN(CpaSections.N_U_ELAB, uT2)
             }
 
             // 17.34c: paths beyond this point assume an Identifier receiver (look up
@@ -135068,7 +135180,9 @@ interface DataView {
             // module locals; per-file, an own/imported receiver resolves to the same
             // declaring-file instance and a foreign name nulls (falls to the general
             // type-based receiver path below, like any unresolvable receiver).
+            val isT0 = CpaSections.t()
             val perFileIdentSymbol = lookupPerFileForNode(objectExpr, identName)
+            CpaSections.closeN(CpaSections.N_IDSYM_LOOKUP, isT0)
             // Namespace-local ENUM receiver (`Color._map` where `Color` is an exported enum
             // declared in an ENCLOSING namespace, accessed unqualified inside that namespace).
             // `globals` does not hold namespace-local exports, so resolve from the enclosing-ns
@@ -135086,6 +135200,7 @@ interface DataView {
             val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
 
             CpaSections.atR(CpaSections.R_OT_IDENT)
+            val otT0 = CpaSections.t()
             if (identSymbol != null) {
                 // INV.3(d)(ii): a receiver whose resolution has ONLY type-side
                 // declarations while its DECLARING file also namespace-imports the
@@ -135390,7 +135505,14 @@ interface DataView {
                     }
                 }
 
+                // Level S: everything above is the specialised emission gates —
+                // their close is skipped by every gate that FIRES, so the `calls`
+                // column is the population that fell through to the general path.
+                CpaSections.closeN(CpaSections.N_OTI_GATES, otT0)
+                val otT1 = CpaSections.t()
                 val rawType = getTypeOfSymbol(identSymbol)
+                CpaSections.closeN(CpaSections.N_OTI_TYPEOF, otT1)
+                val otT2 = CpaSections.t()
                 // B186: a BindingElement-declared name (destructured binding — never typed by
                 // getTypeOfSymbol, which has no BindingElement arm) whose currentLocalTypes
                 // entry is a concrete primitive (populated by the B186 destructuring
@@ -135491,6 +135613,7 @@ interface DataView {
                         }
                     }
                 }
+                CpaSections.closeN(CpaSections.N_OTI_TAIL, otT2)
                 exprType
             } else {
                 // Fallback: try resolving from currentLocalTypes (function params, local vars)
@@ -135516,6 +135639,7 @@ interface DataView {
                 // Skip malformed types (e.g., unresolved mapped types with empty property names)
                 resolveStructuredTypeMembers(exprType)
                 if (exprType.properties != null && exprType.properties!!.any { it.name.isEmpty() }) return
+                CpaSections.closeN(CpaSections.N_OTI_ELSE, otT0)
                 exprType
             }
         }

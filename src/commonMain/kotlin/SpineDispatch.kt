@@ -3763,7 +3763,51 @@ object CpaSections {
      */
     const val N_DEFER = 12
 
-    const val NN = 13
+    // Round 792, (ENGINE.2e): level S -- a sub-partition of the FOUR biggest
+    // level-R rows once (b) removed the row that was 42% of the function. Their
+    // shares were all re-derived at HEAD before these were placed (law 1): the
+    // top four are [R_OT_IDENT] 280, [R_OT_UNION] 271, [R_IDENT] 159 and
+    // [R_PRE] 129 ms net, 68% of the function between them. A row is a location;
+    // these say what is inside it.
+
+    /** [R_PRE]: the B8.1 intersection-reduction `never` probe (the whole `run`). */
+    const val N_PRE_ISECT = 13
+    /** [R_IDENT] block 1: B589's clodule/lib-merge receiver scan. */
+    const val N_ID_CLODULE = 14
+    /** [R_IDENT] block 2: B586's `{}`/`Object`-annotated receiver block. */
+    const val N_ID_EMPTYOBJ = 15
+    /** [R_IDENT] block 3: `tryEmitEnumTypedIdentReceiverTs2339`. */
+    const val N_ID_ENUMRECV = 16
+    /** [R_OT_UNION]: the PLAIN narrowing flow walk over a union receiver. */
+    const val N_U_PLAIN = 17
+    /** [R_OT_UNION]: the round-424 loop-entry RETRY walk and its member fold. */
+    const val N_U_RETRY = 18
+    /** [R_OT_UNION]: everything after the walks -- the TS2339 union elaboration. */
+    const val N_U_ELAB = 19
+    /** [R_OT_IDENTSYM]: `lookupPerFileForNode` for the receiver identifier. */
+    const val N_IDSYM_LOOKUP = 20
+    /** [R_OT_IDENT]: the specialised emission gates ABOVE `getTypeOfSymbol`. */
+    const val N_OTI_GATES = 21
+    /** [R_OT_IDENT]: `getTypeOfSymbol(identSymbol)` -- the receiver's type. */
+    const val N_OTI_TYPEOF = 22
+    /** [R_OT_IDENT]: the `exprType` derivation and class-typed handling below it. */
+    const val N_OTI_TAIL = 23
+    /** [R_OT_IDENT]: the `identSymbol == null` fallback branch. */
+    const val N_OTI_ELSE = 24
+
+    // Round 792, (ENGINE.2e): pricing a candidate WHOLE-FUNCTION pre-gate. The
+    // three rows below are the only way to answer "what is behind the population
+    // this gate would skip" with a MEASURE rather than a count -- and the count
+    // is what every over-estimate in this codebase was built from.
+
+    /** The candidate pre-gate's OWN cost, at every call. */
+    const val N_PG_GATE = 25
+    /** `checkMemberAccessMissingCore` for the calls the gate would SKIP -- the prize. */
+    const val N_PG_CORE_PASS = 26
+    /** `checkMemberAccessMissingCore` for the calls it would not -- the residue. */
+    const val N_PG_CORE_FAIL = 27
+
+    const val NN = 28
 
     val nNames: Array<String> = arrayOf(
         "  of which cpaComputeArgCtxTypes (clean)",
@@ -3779,6 +3823,21 @@ object CpaSections {
         "  R_FLOW b3: this-receiver narrowing",
         "  R_FLOW b1: the loop-entry RETRY walk",
         "  (b) the DEFERRED suppression call (whole)",
+        "  R_PRE: intersection-reduction never probe",
+        "  R_IDENT b1: B589 clodule receiver scan",
+        "  R_IDENT b2: B586 {}/Object receiver block",
+        "  R_IDENT b3: enum-typed ident receiver",
+        "  R_OT_UNION: the PLAIN narrowing FLOW WALK",
+        "  R_OT_UNION: the loop-entry RETRY walk + fold",
+        "  R_OT_UNION: the TS2339 union elaboration",
+        "  R_OT_IDENTSYM: lookupPerFileForNode",
+        "  R_OT_IDENT: the specialised emission gates",
+        "  R_OT_IDENT: getTypeOfSymbol(identSymbol)",
+        "  R_OT_IDENT: exprType derivation + class gates",
+        "  R_OT_IDENT: the identSymbol == null branch",
+        "  PRE-GATE: the gate's own cost",
+        "  PRE-GATE: the body for calls it would SKIP",
+        "  PRE-GATE: the body for calls it would keep",
     )
 
     var nNanos: LongArray = LongArray(NN)
@@ -3876,6 +3935,67 @@ object CpaSections {
     }
 
     /**
+     * Round 792, (ENGINE.2e) — the round-424 UNION loop-entry retry, the second
+     * instance of the shape (ENGINE.2d)(a) gated in the flow-suppression block.
+     * [unionRetryCalls] is the population that reaches it; [unionRetryLoopFree]
+     * the sub-population whose plain walk provably made it a pure REPEAT (the
+     * round-790 bracket: a real traversal that arrived at no `FlowLoopLabel` and
+     * truncated nowhere). Counted BEFORE anything is changed, because a lever
+     * has to be priced before it is designed.
+     */
+    var unionRetryCalls: Long = 0
+    /** Of [unionRetryCalls], the ones whose retry is a provable pure repeat. */
+    var unionRetryLoopFree: Long = 0
+
+    /** Count one round-424 union retry and whether it was provably redundant. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteUnionRetry(loopFree: Boolean) {
+        if (mode == OFF) return
+        unionRetryCalls++
+        if (loopFree) unionRetryLoopFree++
+    }
+
+    /**
+     * Round 792, (ENGINE.2e) — `--cmamPreGate`. Prices a candidate
+     * WHOLE-FUNCTION pre-gate for `checkMemberAccessMissing`: "the property
+     * already resolves on the receiver's own (apparent) type, so nothing this
+     * function can say is true". It HONOURS NOTHING — the body always runs and
+     * the compiler's output is unchanged — and reports three things the design
+     * decision needs: the population it would skip, the body time BEHIND that
+     * population (a measure, not a count), and [preGatePassEmitted], the number
+     * of skipped calls whose body actually appended a diagnostic. **The last is
+     * the falsifier: a non-zero there is a lost diagnostic per unit.**
+     */
+    var preGateProbe: Boolean = false
+
+    /**
+     * The positive CONTROL for [preGateProbe] (`--cmamPreGateBogus`): the gate
+     * answers "yes" for EVERY call, so the skip set becomes the whole population
+     * and [preGatePassEmitted] must then equal the number of calls that emit.
+     * A zero under this flag would mean the falsifier column cannot see an
+     * emission at all — CLAUDE.md's round-765 rule, a counter reporting 0 with no
+     * control is a dead instrument.
+     */
+    var preGateBogus: Boolean = false
+
+    /** Calls whose property already resolves on the receiver — the SKIP set. */
+    var preGatePass: Long = 0
+    /** Calls where it does not. */
+    var preGateFail: Long = 0
+    /** Of [preGatePass], those whose body appended a diagnostic. THE FALSIFIER. */
+    var preGatePassEmitted: Long = 0
+    /** Of [preGateFail], those whose body appended one — the instrument's control:
+     *  a zero here would mean the emission detector never fires at all. */
+    var preGateFailEmitted: Long = 0
+
+    /** Record one pre-gate observation. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun notePreGate(pass: Boolean, emitted: Boolean) {
+        if (pass) { preGatePass++; if (emitted) preGatePassEmitted++ }
+        else { preGateFail++; if (emitted) preGateFailEmitted++ }
+    }
+
+    /**
      * (ENGINE.2d)(b) round 791 — `--verifyDeferSuppression`. Evaluates
      * `checkMemberAccessMissing`'s flow-suppression predicate TWICE per call:
      * EAGERLY, at the position the three blocks used to occupy, and again
@@ -3969,6 +4089,9 @@ object CpaSections {
         retryVerifyTypeDiff = 0; retryVerifyVerdictDiff = 0
         deferEvaluated = 0; deferEmitted = 0; deferSuppressed = 0
         deferVerified = 0; deferVerifyTypeDiff = 0; deferVerifyVerdictDiff = 0
+        unionRetryCalls = 0; unionRetryLoopFree = 0
+        preGatePass = 0; preGateFail = 0
+        preGatePassEmitted = 0; preGateFailEmitted = 0
         qNanos = LongArray(NQ); qCalls = LongArray(NQ); qExitIn = LongArray(NQ)
         rNanos = LongArray(NR); rCalls = LongArray(NR); rExitIn = LongArray(NR)
         rExitWalk = LongArray(NR); rWalked = false
@@ -4215,6 +4338,23 @@ object CpaSections {
                     else " (verifier off)")
             )
         }
+        if (unionRetryCalls > 0) {
+            appendLine(
+                "(ENGINE.2e) round-424 UNION retry: reached $unionRetryCalls, " +
+                    "provably redundant (loop-free plain walk) $unionRetryLoopFree " +
+                    "(${unionRetryLoopFree * 1000 / unionRetryCalls / 10}%)"
+            )
+        }
+        if (preGatePass > 0 || preGateFail > 0) {
+            val tot = preGatePass + preGateFail
+            appendLine(
+                "(ENGINE.2e) PRE-GATE" + (if (preGateBogus) " (BOGUS — the control)" else "") +
+                    ": would skip $preGatePass of $tot " +
+                    "(${preGatePass * 1000 / tot / 10}%) | of those, bodies that EMITTED: " +
+                    "$preGatePassEmitted   (kept calls that emitted " +
+                    "$preGateFailEmitted)"
+            )
+        }
         if (argCtxCalls > 0 || b464Reached > 0) {
             appendLine(
                 "populations: cpaComputeArgCtxTypes $argCtxCalls calls, " +
@@ -4283,6 +4423,10 @@ object CpaSections {
             appendLine("DEFER,\"verifyVerdictDiff\",$deferVerifyVerdictDiff,0")
             appendLine("RETRY,\"typeDiff\",$retryVerifyTypeDiff,0")
             appendLine("RETRY,\"verdictDiff\",$retryVerifyVerdictDiff,0")
+        }
+        if (unionRetryCalls > 0) {
+            appendLine("URETRY,\"reached\",$unionRetryCalls,0")
+            appendLine("URETRY,\"loopFree\",$unionRetryLoopFree,0")
         }
     }
 }

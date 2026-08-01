@@ -875,3 +875,149 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --listAll --verifyDeferSuppressionBogus $P
 ```
+
+---
+
+# Round 792 — (ENGINE.2e): level R re-derived, and the gate that skips a third of it
+
+## 30. The headline
+
+Round 791's closing caveat was that level R's partition had gone stale — (b)
+removed the row that was 42% of it. Re-derived at HEAD, the function is **1,629 ms
+gross / ~1,239 ms net over 67,258 invocations**, and its top four rows are:
+
+| row | net ms | closes | exits |
+|---|---:|---:|---:|
+| `type = resolved-symbol branch` | 280 | 59,266 | 40,346 |
+| `type = union-receiver narrowing` | 271 | 63,771 | 225 |
+| `identifier-receiver special cases` | 159 | 67,067 | **0** |
+| `pre` (empty name, unwrap, intersection-`never`) | 129 | 67,258 | **0** |
+
+68% of the function between them — and **not one of them is what § 12's table
+said to look at**, which is the item's own law-1 demand paying off.
+
+A level-S sub-partition (13 new nested sub-measures) then opened all four, and
+what it found is that **none of them holds a lever worth landing**:
+
+| level S row | ms | calls | verdict |
+|---|---:|---:|---|
+| `R_OT_UNION` the PLAIN narrowing walk | 157 | 4,218 | needed by the emissions it feeds |
+| `R_OT_UNION` the round-424 loop-entry RETRY | 65 | 1,859 | **49% provably redundant → 32 ms** |
+| `R_OT_UNION` the TS2339 union elaboration | 37 | 3,993 | the emission itself |
+| `R_IDENT` b1/b2/b3 (clodule / `{}`-annot / enum recv) | 65 + 67 + 40 | 67,067 each | 0 exits, all three load-bearing |
+| `R_OT_IDENT` the specialised emission gates | 16 | 4,380 | — |
+| `R_OT_IDENT` `getTypeOfSymbol(identSymbol)` | 1 | 4,380 | — |
+| `R_OT_IDENT` the `identSymbol == null` branch | 110 | 14,715 | the general path |
+| `R_OT_IDENTSYM` `lookupPerFileForNode` | 22 | 59,266 | the same lookup runs up to 3× |
+| `R_PRE` the intersection-`never` probe | 35 | 67,258 | — |
+
+The whole inventory of in-row levers came to **~80 ms (0.3%)**: the redundant half
+of the union retry (32 ms), the receiver identifier resolved up to three times
+per access (≤44 ms), and a `".$propName"` string built at every call for two
+emission sites (~5 ms). **That is the round's negative result, and it is what sent
+the question up one level.**
+
+## 31. The lever is not IN a row — it is IN FRONT of all of them
+
+The item's structural question was "what is computed above an exit and consulted
+only below one". Level S answers: almost nothing, because the rows ARE the exits.
+The generalisation that does work is the opposite one — **every one of this
+function's ~42 emissions asserts that a property is ABSENT from the receiver**, so
+a call whose property is PRESENT has nothing to say, whatever row it would have
+exited from. That is round 489's pre-gate, asked once for the whole function
+instead of inside one block.
+
+Priced with `--cmamPreGate`, which computes the gate and **honours nothing** (so
+the run reproduces the pre-change binary) and splits the body's measured time by
+the gate's verdict:
+
+| | calls | ms |
+|---|---:|---:|
+| the gate's own cost | 67,258 | **124** |
+| the body for calls it would SKIP | **20,939 (31%)** | **563** |
+| the body for calls it would keep | 46,319 | 1,285 |
+
+**Net ≈ 440 ms ≈ 1.6% of the compile** — a MEASURE of the population, not
+`count × mean` (law 1), and the only reason the number is trustworthy.
+
+## 32. The two exclusions, both found by the corpus and neither by inspection
+
+The first cut of the gate — "the property resolves on the receiver's own or
+apparent type" — measured **0 emitting calls in a 22,187-call skip set** on the
+compiler profile and still **failed 7 corpus baselines**. Both failures are places
+where *resolves* and *legal* come apart:
+
+1. **A later-lib member RESOLVES and is still an error.** TS2550 says "not at this
+   target", never "does not exist" — the embedded lib declares `RegExp.dotAll`.
+   Excluded by name: `LIB_MIN_TARGET_PROPS`, the property names of
+   `LIB_MIN_TARGET` ∪ `LIB_MIN_TARGET_SOFT`. (1 baseline.)
+2. **A class receiver's two sides are not cleanly separated in our member
+   tables** — an INSTANCE type resolves a STATIC member — and TS2576 ("did you
+   mean to access the static member") is exactly the diagnostic that says so.
+   Excluded by receiver: a `Type.Object` whose symbol is a Class, raw or apparent.
+   (6 baselines: `typeofClass`, `classStaticPropertyAccess`, `classSideInheritance1`,
+   `classImplementsClass6`, `staticInstanceResolution4`, `staticMemberExportAccess`.)
+
+**Neither was visible in the 0/22,187 measurement**, because the compiler profile
+contains no instance-reads-a-static and no under-target lib access. The
+zero was true and useless on its own; the 13k-baseline corpus is what made the
+gate landable. Read that as the general lesson: a profile-measured zero bounds
+the FREQUENCY of a hazard on that profile, never its EXISTENCE.
+
+## 33. The equivalence, measured with a shipped control
+
+`--cmamPreGate` counts, per call, whether the body the gate would have skipped
+appended a diagnostic:
+
+| profile | calls | would skip | of those, EMITTED | kept calls that emitted |
+|---|---:|---:|---:|---:|
+| compiler | 67,258 | 20,939 (31%) | **0** | 57 |
+| services | 92,371 | 29,924 (32%) | **0** | 83 |
+| harness | 109,826 | 32,463 (29%) | **0** | 89 |
+
+**83,326 skipped calls, 0 emissions**, and the whole emitting population sits in
+the kept complement. `--cmamPreGateBogus` (the gate answers yes everywhere) is the
+positive control and reports **57**, so the falsifier column is not a dead
+instrument — CLAUDE.md's round-765 rule, satisfied by a shipped flag rather than
+an argument.
+
+## 34. Verification
+
+* Corpus suite **13,399 → 13,405 / 0 failures / 3 skipped** (+6 `PreGateGuardTest`).
+* 8-profile `--listAll` grid, diffed set-for-set in BOTH directions against the
+  same binary run with `--cmamPreGate` (which honours nothing, so it IS the
+  pre-change output): **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+  eight.** Both directions matter: a gate that fires too often deletes a true
+  positive and makes the grid look better.
+* `--partitionCheck 2` **EQUIVALENT — 46**.
+* **Pin discrimination 5 of 6, across two complementary ablations run SEPARATELY.**
+  Fault A (the gate accepts everything) fails 5; fault B (both exclusions removed)
+  fails 3, all inside A's set. The pin that holds under both is the probe's own
+  bogus control, which by construction ignores the gate's content.
+* **Cost gate: rebaselined in the landing commit, with the mechanism named.**
+  `globals.lookups` **−6.05%** and `globals.misses` **−6.09%** are the skipped
+  bodies' name resolutions no longer happening; `typeOfExpr.calls` **+7.43%**
+  (+45,886) is the gate itself — one `getTypeOfExpression(receiver)` per
+  invocation, un-memoized (round 737), which is precisely the 124 ms measured
+  above. Nothing else moved more than 0.4%; `narrow.walks` +0.03%.
+* **Warm A/B (`scripts/ab-warm.sh`, 2 pairs, 6 iters): B wins 2/2, deltas −2.91%
+  and −1.41%, median −244 ms (−2.17%)**, arm sd **0.38% / 0.71%** — both inside
+  the ~1% quietness criterion, so the verdict is quotable. It CONFIRMS the
+  direction; the MAGNITUDE is taken from the partition (−440 ms), because a warm
+  rebuild is 11.3 s against the cold 26.5 s the partition was measured on and the
+  two cannot be equated (round 791 met the same gap in the same direction).
+
+## 35. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt); P=build/bench/tsc-project-*
+# level R + the level-S sub-partition
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cpaSections $P
+# the gate: its price, its yield, and the falsifier column
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cmamPreGate $P
+# the control: the falsifier column MUST fire
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --listAll --cmamPreGateBogus $P
+```

@@ -169,6 +169,23 @@ fun main(args: Array<String>) {
                 CpaSections.verifyDeferSuppression = true
                 CpaSections.verifyDeferSuppressionBogus = true
             }
+            // (ENGINE.2e) round 792: price a candidate WHOLE-FUNCTION pre-gate.
+            // Computes "does the property already resolve on the receiver's own
+            // (apparent) type" BEFORE the body, honours NOTHING, and splits the
+            // body's measured time by that verdict — so the prize is a MEASURE,
+            // never a count — while recording how many of the calls the gate
+            // would skip actually emitted. That last number is the falsifier.
+            "--cmamPreGate", "--cmampregate" -> {
+                CpaSections.reset(); CpaSections.mode = CpaSections.ON
+                CpaSections.preGateProbe = true
+            }
+            // ... and its positive control: the gate answers yes for EVERY call,
+            // so the "bodies that emitted" column must become non-zero. A dead
+            // instrument would read 0 here too.
+            "--cmamPreGateBogus", "--cmampregatebogus" -> {
+                CpaSections.reset(); CpaSections.mode = CpaSections.ON
+                CpaSections.preGateProbe = true; CpaSections.preGateBogus = true
+            }
             // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
             // ~20% of the compile and never profiled. Per-FILE spans, so no
             // calibration counterpart is needed.
@@ -434,6 +451,10 @@ private fun printUsage() {
           --verifyDeferSuppression  (ENGINE.2d)(b) evaluate checkMemberAccessMissing's flow
                              suppression BOTH eagerly and deferred, honour the eager verdict,
                              and count every disagreement (--verifyDeferSuppressionBogus = control)
+          --cmamPreGate      (ENGINE.2e) compute checkMemberAccessMissing's whole-function
+                             pre-gate WITHOUT honouring it: prints the population it would
+                             skip, the body time behind it, and how many of those calls
+                             emit — the falsifier (--cmamPreGateBogus = control)
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
