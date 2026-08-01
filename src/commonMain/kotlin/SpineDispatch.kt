@@ -3818,6 +3818,53 @@ object CpaSections {
     @Suppress("NOTHING_TO_INLINE")
     inline fun noteB464Walked() { if (mode != OFF) b464Walked++ }
 
+    /**
+     * (ENGINE.2d)(a) round 790 — `--verifyLoopRetry`. Keeps the PRE-GATE
+     * behaviour (the round-425 loop-entry retry runs at every call and is
+     * honoured) while [retryVerified] / [retryVerifyTypeDiff] /
+     * [retryVerifyVerdictDiff] count how often the skip WOULD have changed the
+     * answer. Round 788's protocol: falsify the hazard by measurement, not by
+     * inspection. Independent of [mode], so the verification run carries no
+     * timing-probe footprint. **A `retryVerifyVerdictDiff` above 0 falsifies
+     * the equivalence outright.**
+     */
+    var verifyLoopRetry: Boolean = false
+
+    /**
+     * (ENGINE.2d)(a) round 790 — the CONTROL for [verifyLoopRetry]. Records the
+     * comparison for EVERY retry call rather than only the skippable ones, so
+     * the population it covers is exactly the one where the plain walk DID
+     * arrive at a `FlowLoopLabel` (or truncated, or never ran). A non-zero
+     * `typeDiff` here is what makes the skippable population's zero mean
+     * something: it proves the instrument fires, and that the loop-label
+     * observation is the signal that separates the two populations. Implies
+     * [verifyLoopRetry].
+     */
+    var verifyLoopRetryAll: Boolean = false
+
+    /** Calls whose plain walk provably made the retry redundant — the YIELD. */
+    var retrySkippable: Long = 0
+    /** Of those, the ones the verifier actually re-ran the retry for. */
+    var retryVerified: Long = 0
+    /** Of [retryVerified], those whose retry returned a DIFFERENT Type instance. */
+    var retryVerifyTypeDiff: Long = 0
+    /** Of [retryVerified], those whose retry SUPPRESSED where the plain did not. */
+    var retryVerifyVerdictDiff: Long = 0
+
+    /** Count one call the round-425 retry is skipped for. Gated like every other
+     *  counter here, so a production call is a static read and a not-taken branch
+     *  and no worker thread ever writes this shared object. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteRetrySkippable() { if (mode != OFF || verifyLoopRetry) retrySkippable++ }
+
+    /** Record one `--verifyLoopRetry` comparison. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteRetryVerified(typeDiff: Boolean, verdictDiff: Boolean) {
+        retryVerified++
+        if (typeDiff) retryVerifyTypeDiff++
+        if (verdictDiff) retryVerifyVerdictDiff++
+    }
+
     /** `cpaComputeArgCtxTypes` invocations. */
     var argCtxCalls: Long = 0
     /** Of those, the ones whose argument subtrees can CONSUME a contextual type. */
@@ -3846,6 +3893,8 @@ object CpaSections {
         pNanos = LongArray(NP); pCalls = LongArray(NP); pArm = LongArray(NPA)
         nNanos = LongArray(NN); nCalls = LongArray(NN)
         argCtxCalls = 0; argCtxConsumableCalls = 0; b464Reached = 0; b464Walked = 0
+        retrySkippable = 0; retryVerified = 0
+        retryVerifyTypeDiff = 0; retryVerifyVerdictDiff = 0
         qNanos = LongArray(NQ); qCalls = LongArray(NQ); qExitIn = LongArray(NQ)
         rNanos = LongArray(NR); rCalls = LongArray(NR); rExitIn = LongArray(NR)
         rExitWalk = LongArray(NR); rWalked = false
@@ -4069,6 +4118,17 @@ object CpaSections {
                 )
             }
         }
+        if (retrySkippable > 0 || retryVerified > 0) {
+            appendLine(
+                "(ENGINE.2d)(a) round-425 retry: skippable $retrySkippable" +
+                    (if (verifyLoopRetry)
+                        " | VERIFIED $retryVerified" +
+                            (if (verifyLoopRetryAll) " (ALL — the control)" else "") +
+                            ", type-diff $retryVerifyTypeDiff, " +
+                            "VERDICT-DIFF $retryVerifyVerdictDiff"
+                    else " (verifier off)")
+            )
+        }
         if (argCtxCalls > 0 || b464Reached > 0) {
             appendLine(
                 "populations: cpaComputeArgCtxTypes $argCtxCalls calls, " +
@@ -4125,6 +4185,12 @@ object CpaSections {
         for (a in 0 until NPA) {
             if (pArm[a] == 0L) continue
             appendLine("ARM,\"${pArmNames[a].trim()}\",${pArm[a]},0")
+        }
+        if (retrySkippable > 0 || retryVerified > 0) {
+            appendLine("RETRY,\"skippable\",$retrySkippable,0")
+            appendLine("RETRY,\"verified\",$retryVerified,0")
+            appendLine("RETRY,\"typeDiff\",$retryVerifyTypeDiff,0")
+            appendLine("RETRY,\"verdictDiff\",$retryVerifyVerdictDiff,0")
         }
     }
 }

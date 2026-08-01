@@ -143,6 +143,18 @@ fun main(args: Array<String>) {
             "--cpaSectionsCensus", "--cpasectionscensus" -> {
                 CpaSections.reset(); CpaSections.mode = CpaSections.CENSUS
             }
+            // (ENGINE.2d)(a): keep the PRE-gate behaviour of the round-425
+            // loop-entry retry and COUNT the cases where skipping it would have
+            // changed the answer. Reads no timestamp; independent of the mode.
+            "--verifyLoopRetry", "--verifyloopretry" -> {
+                CpaSections.verifyLoopRetry = true
+            }
+            // ... and its control: verify over EVERY retry call, including the
+            // loop-crossing ones the gate never skips. A non-zero type-diff here
+            // is what makes the skippable population's zero non-vacuous.
+            "--verifyLoopRetryAll", "--verifyloopretryall" -> {
+                CpaSections.verifyLoopRetry = true; CpaSections.verifyLoopRetryAll = true
+            }
             // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
             // ~20% of the compile and never profiled. Per-FILE spans, so no
             // calibration counterpart is needed.
@@ -253,7 +265,7 @@ fun main(args: Array<String>) {
         println("== (TYPE.2) csv end ==")
         CtaSections.mode = CtaSections.OFF
     }
-    if (CpaSections.mode != CpaSections.OFF) {
+    if (CpaSections.mode != CpaSections.OFF || CpaSections.verifyLoopRetry) {
         println(CpaSections.report())
         println("== (ENGINE.2) csv ==")
         print(CpaSections.csv())
@@ -401,6 +413,8 @@ private fun printUsage() {
           --cpaSections      (ENGINE.2) attribution of checkPropertyAccessInExpr + checkSinglePropertyAccess
           --cpaSectionsCoarse  the same, entry anchors only — the differential calibration counterpart
           --cpaSectionsCensus  counters and distinct-node sets only; reads no timestamps
+          --verifyLoopRetry  (ENGINE.2d)(a) keep the round-425 loop-entry retry and COUNT
+                             every call where skipping it would change the answer
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)

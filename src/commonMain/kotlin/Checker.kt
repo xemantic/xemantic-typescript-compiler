@@ -5705,6 +5705,37 @@ class Checker(
     /** Remaining walker-invocation budget for the current outermost narrowing request. */
     private var narrowVisitsLeft = 0
 
+    /**
+     * (ENGINE.2d)(a) round 790 — MONOTONE counter of walk lambdas actually
+     * ENTERED by [getNarrowedTypeForReference]. A caller brackets its own call
+     * with this to learn whether a real traversal happened: an
+     * [isFlowAnalysisDisabledAt] bail, a missing path / flow node, and a serve
+     * from the round-664 inter-walk memo all leave it unchanged, and in every
+     * one of those cases the walk observed NOTHING, so no conclusion may be
+     * drawn from [narrowRetryRelevantObs].
+     *
+     * Monotone and never reset, which is what makes it re-entrancy-safe: a
+     * nested walk launched from inside `applyConditionNarrowing` can only ever
+     * push the bracketed reading in the CONSERVATIVE direction.
+     */
+    private var narrowWalkLaunches = 0L
+
+    /**
+     * (ENGINE.2d)(a) round 790 — MONOTONE counter of the observations that make
+     * [getNarrowedTypeForReferenceFollowLoopEntry] potentially DISAGREE with
+     * [getNarrowedTypeForReference]. The two walkers are line-by-line mirrors
+     * whose only behavioural difference is the `FlowLoopLabel` arm (plain washes
+     * to the declared type, the mirror follows `antecedents[0]`), so a plain walk
+     * that arrived at no `FlowLoopLabel` makes the identical traversal decision at
+     * every node the mirror would, and the mirror is a pure REPEAT of it.
+     *
+     * Bumped at BOTH walkers' `FlowLoopLabel` arms AND at every TRUNCATION exit
+     * (depth trip, budget/re-entry exhaustion, cycle break) — a truncated walk
+     * saw only a prefix of its own traversal, so it cannot license the claim.
+     * Everything here is conservative: an over-count only re-runs the retry.
+     */
+    private var narrowRetryRelevantObs = 0L
+
     /** True when the current walker subtree hit a depth cap / cycle-break / budget
      *  exhaustion — such results are entry-context-dependent and must NOT be memoized. */
     private var narrowWalkTruncated = false
@@ -106672,6 +106703,9 @@ interface DataView {
         val flow = getFlowAt(expr) ?: return declaredType
         val seen = NarrowSeen()
         return flowWalkWithTripCheck(expr, WK_NARROW, declaredType.id.toLong() shl 32 or (path.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(path)) {
+            // (ENGINE.2d)(a): the lambda runs iff a real traversal happens — see
+            // [narrowWalkLaunches].
+            narrowWalkLaunches++
             narrowTypeFromFlow(declaredType, flow, path, seen, depth = 0)
         } ?: declaredType
     }
@@ -107038,6 +107072,7 @@ interface DataView {
                 // reference) reports TS2563 + disables the container.
                 narrowWalkTruncated = true
                 flowDepthTripped = true
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a): a prefix is not a traversal
                 if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.truncDepth++
                 NarrowSections.close(NarrowSections.S_FF, tFF)
                 return declaredType
@@ -107048,6 +107083,7 @@ interface DataView {
                 // Our OWN re-entry/visit budgets (services-perf firewalls, not tsc
                 // semantics) — truncate SILENTLY, never TS2563.
                 narrowWalkTruncated = true
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a): a prefix is not a traversal
                 if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.truncBudget++
                 NarrowSections.close(NarrowSections.S_FF, tFF)
                 return declaredType
@@ -107071,6 +107107,7 @@ interface DataView {
             }
             if (!seen.add(flowNode.id)) {
                 narrowWalkTruncated = true
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a): a prefix is not a traversal
                 if (NarrowSections.mode != NarrowSections.OFF) NarrowSections.wSeenCycle++
                 NarrowSections.close(NarrowSections.S_FF, tFF)
                 return declaredType
@@ -107137,7 +107174,8 @@ interface DataView {
             }
             // Loop back-edge handling would require widening to declared on cycle —
             // conservative: fall back to declared type at loop joins.
-            is FlowLoopLabel -> declaredType
+            // (ENGINE.2d)(a): THE one arm where the FollowLoopEntry mirror differs.
+            is FlowLoopLabel -> { narrowRetryRelevantObs++; declaredType }
             is FlowAssignment -> {
                 // 17.30b + M1.4-prep: assignment-effect narrowing (literal-RHS union
                 // filtering for identifier targets; non-nullish-RHS exclusion for
@@ -133205,12 +133243,14 @@ interface DataView {
                 // reported at the entry point (see the narrowTypeFromFlow mirror).
                 narrowWalkTruncated = true
                 flowDepthTripped = true
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a), mirrored
                 return declaredType
             }
             if (narrowLiveDepth >= NARROW_GLOBAL_DEPTH_BUDGET ||
                 --narrowVisitsLeft < 0
             ) {
                 narrowWalkTruncated = true
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a), mirrored
                 return declaredType
             }
             // Round 736: the height disjunct, mirrored (see [NarrowFlowMemo.served]).
@@ -133221,6 +133261,7 @@ interface DataView {
             }
             if (!seen.add(flowNode.id)) {
                 narrowWalkTruncated = true
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a), mirrored
                 return declaredType
             }
             val ante = when (val fn = flowNode) {
@@ -133274,6 +133315,7 @@ interface DataView {
                 // an older claim here that they didn't cost a mis-diagnosis), but
                 // they sit on the ignored back-edge path, so the entry-type
                 // assumption stands unchanged.
+                narrowRetryRelevantObs++  // (ENGINE.2d)(a): THE divergent arm, mirrored
                 val entry = node.antecedents.firstOrNull()
                 if (entry == null) declaredType
                 else narrowTypeFromFlowFollowLoopEntry(declaredType, entry, name, seen, depth + 1, memo)
@@ -133863,19 +133905,43 @@ interface DataView {
                         getPropertyOfType(app, propName) != null
                     }
                 }
-                val f1Plain = suppresses(getNarrowedTypeForReference(raw, objectExpr))
+                // (ENGINE.2d)(a) round 790: bracket the plain walk with the two
+                // monotone observation counters, IMMEDIATELY around the call — the
+                // `suppresses` fold below re-enters the checker and can launch
+                // narrowing walks of its own, which would poison the reading.
+                val obs0 = narrowRetryRelevantObs
+                val launch0 = narrowWalkLaunches
+                val f1Narrowed = getNarrowedTypeForReference(raw, objectExpr)
+                // The retry is a pure REPEAT of the walk just performed when that
+                // walk really ran and arrived at no `FlowLoopLabel` and truncated
+                // nowhere: the two walkers are line-by-line mirrors differing in that
+                // one arm alone, so with the arm unreached every traversal decision —
+                // and hence every resolution the retry would drive, and its result —
+                // is identical. Unknown ⇒ run it. See [narrowRetryRelevantObs].
+                val loopFree = narrowRetryRelevantObs == obs0 && narrowWalkLaunches > launch0
+                val f1Plain = suppresses(f1Narrowed)
                 CpaSections.closeN(CpaSections.N_F1_WALK, f1t2)
                 if (f1Plain) return
-                val f1t3 = CpaSections.t()
-                // Round 425: a guard BEFORE a loop narrows a read INSIDE it, but the
-                // plain walk washes back to the declared type at the FlowLoopLabel —
-                // retry with the loop-entry-following variant (the single-type sibling
-                // of round-424 fix 1's union retry; `constraint.target` inside tuple
-                // inference loops after `isTupleType(constraint)`, checker.ts).
-                // Suppression-only, so following antecedent[0] is safe here.
-                val f1Loop = suppresses(getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr))
-                CpaSections.closeN(CpaSections.N_F1_WALK2, f1t3)
-                if (f1Loop) return
+                if (loopFree) CpaSections.noteRetrySkippable()
+                if (!loopFree || CpaSections.verifyLoopRetry) {
+                    val f1t3 = CpaSections.t()
+                    // Round 425: a guard BEFORE a loop narrows a read INSIDE it, but the
+                    // plain walk washes back to the declared type at the FlowLoopLabel —
+                    // retry with the loop-entry-following variant (the single-type sibling
+                    // of round-424 fix 1's union retry; `constraint.target` inside tuple
+                    // inference loops after `isTupleType(constraint)`, checker.ts).
+                    // Suppression-only, so following antecedent[0] is safe here.
+                    val f1LoopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr)
+                    val f1Loop = suppresses(f1LoopNarrowed)
+                    CpaSections.closeN(CpaSections.N_F1_WALK2, f1t3)
+                    // `--verifyLoopRetry` keeps the PRE-GATE behaviour (the retry runs
+                    // and is honoured) and counts every case in which the skip would
+                    // have changed the answer — round 788's protocol.
+                    if (loopFree || CpaSections.verifyLoopRetryAll) {
+                        CpaSections.noteRetryVerified(f1LoopNarrowed !== f1Narrowed, f1Loop)
+                    }
+                    if (f1Loop) return
+                }
             }
         }
 
