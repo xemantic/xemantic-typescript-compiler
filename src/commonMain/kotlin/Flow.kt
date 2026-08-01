@@ -181,6 +181,21 @@ class FlowGraph(
     private val flowById: Array<FlowNode?>
     private val nodeById: Array<Node?>
 
+    // (ENGINE.2b) round 788: B464's innermost-enclosing-closure query, precomputed.
+    // `emitTs18048ForClosureCapturedUndefinedReceiver` asks "which closure most
+    // tightly contains this position" once per property access whose Identifier
+    // receiver survives the round-489 pre-gate — 15,483 times on the compiler
+    // profile, each a LINEAR scan of every closure in the file (8.9 us; 138 ms =
+    // 46% of the walker, measured round 787). The question is a pure INTERVAL
+    // query, so it is answered here from a pos-sorted array plus, per entry, the
+    // index of its nearest ENCLOSING entry (one stack sweep). A query is a binary
+    // search plus a walk bounded by the closure NESTING DEPTH.
+    private val csPos: IntArray
+    private val csEnd: IntArray
+    /** Index of the nearest enclosing entry, or -1. */
+    private val csOuter: IntArray
+    private val csStart: Array<FlowStart?>
+
     init {
         val count = sourceFile?.nodeCount ?: 0
         flowById = arrayOfNulls(count)
@@ -199,6 +214,26 @@ class FlowGraph(
                 forEachChild(node, push)
             }
         }
+        // Stable sort by container pos: entries sharing a pos keep their
+        // `closureStarts` order, which is what the replaced scan's STRICT
+        // `c.pos > bestPos` selected among them (see [innermostClosureAt]).
+        val sorted = closureStarts.filter { it.container != null }.sortedBy { it.container!!.pos }
+        val n = sorted.size
+        csPos = IntArray(n)
+        csEnd = IntArray(n)
+        csOuter = IntArray(n)
+        csStart = arrayOfNulls(n)
+        val open = IntArray(n)
+        var sp = 0
+        for (i in 0 until n) {
+            val c = sorted[i].container!!
+            csPos[i] = c.pos
+            csEnd[i] = c.end
+            csStart[i] = sorted[i]
+            while (sp > 0 && csEnd[open[sp - 1]] <= c.pos) sp--
+            csOuter[i] = if (sp > 0) open[sp - 1] else -1
+            open[sp++] = i
+        }
     }
 
     /** The flow just before [node] is evaluated — array-indexed for in-tree nodes,
@@ -207,6 +242,39 @@ class FlowGraph(
         val id = (node as NodeBase).nodeId
         if (id >= 0 && id < nodeById.size && nodeById[id] === node) return flowById[id]
         return nodeToFlow[nodeKey(node)]
+    }
+
+    /**
+     * (ENGINE.2b) round 788: the [FlowStart] of the innermost closure whose
+     * container range `[pos, end)` contains [pos] — `null` when no closure does.
+     *
+     * Exactly the answer of the linear scan it replaced: *among the containers
+     * that contain [pos], the one with the greatest `container.pos`; ties broken
+     * by the earliest position in [closureStarts]* (the scan kept its incumbent
+     * on `c.pos > bestPos`, a strict comparison). Container ranges within one
+     * file are nested-or-disjoint, so the greatest-`pos` container is the
+     * innermost one, and [csOuter] walks straight up the enclosing chain.
+     */
+    fun innermostClosureAt(pos: Int): FlowStart? {
+        val n = csPos.size
+        if (n == 0) return null
+        var lo = 0
+        var hi = n - 1
+        var idx = -1
+        while (lo <= hi) {
+            val mid = (lo + hi) ushr 1
+            if (csPos[mid] <= pos) { idx = mid; lo = mid + 1 } else hi = mid - 1
+        }
+        var i = idx
+        while (i >= 0 && csEnd[i] <= pos) i = csOuter[i]
+        if (i < 0) return null
+        val tiePos = csPos[i]
+        var j = i
+        while (j > 0 && csPos[j - 1] == tiePos) {
+            j--
+            if (csEnd[j] > pos) i = j
+        }
+        return csStart[i]
     }
 }
 
