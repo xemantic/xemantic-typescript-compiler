@@ -294,7 +294,17 @@ class NarrowSectionProbeTest {
 
     @Test
     fun `an element access lights the other-kind arm`() {
-        val arms = armsFor("if (arr[0]) { arr[0].length }")
+        // Round 791: the body reads the narrowed element into a `string` rather
+        // than reaching for `.length`. The old form's only walk was the one
+        // `checkMemberAccessMissing`'s suppression block launched, and
+        // (ENGINE.2d)(b) defers that block to the emission — so the old fixture
+        // now launches no walk at all and the arm census is empty for a reason
+        // that has nothing to do with element accesses.
+        val arms = armsFor(
+            "const arr: (string | null)[] = [];\n" +
+                "if (arr[0]) { }\n" +
+                "const t: string = v;"
+        )
         assert(arms[NarrowSections.A_OTHER] > 0L)
         assert(arms[NarrowSections.A_PROPACCESS] == 0L)
         assert(arms[NarrowSections.A_IDENT] == 0L)

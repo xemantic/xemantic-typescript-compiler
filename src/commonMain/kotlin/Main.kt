@@ -155,6 +155,20 @@ fun main(args: Array<String>) {
             "--verifyLoopRetryAll", "--verifyloopretryall" -> {
                 CpaSections.verifyLoopRetry = true; CpaSections.verifyLoopRetryAll = true
             }
+            // (ENGINE.2d)(b): evaluate checkMemberAccessMissing's flow-suppression
+            // predicate BOTH eagerly (where the blocks used to run) and deferred
+            // (after the body), honour the EAGER verdict — so the run reproduces
+            // the pre-change binary's output — and count every disagreement.
+            "--verifyDeferSuppression", "--verifydefersuppression" -> {
+                CpaSections.verifyDeferSuppression = true
+            }
+            // ... and its positive control: the deferred evaluation is handed an
+            // unresolvable property name, so a live comparator MUST report
+            // differences. A zero here would mean the instrument is dead.
+            "--verifyDeferSuppressionBogus", "--verifydefersuppressionbogus" -> {
+                CpaSections.verifyDeferSuppression = true
+                CpaSections.verifyDeferSuppressionBogus = true
+            }
             // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
             // ~20% of the compile and never profiled. Per-FILE spans, so no
             // calibration counterpart is needed.
@@ -265,7 +279,9 @@ fun main(args: Array<String>) {
         println("== (TYPE.2) csv end ==")
         CtaSections.mode = CtaSections.OFF
     }
-    if (CpaSections.mode != CpaSections.OFF || CpaSections.verifyLoopRetry) {
+    if (CpaSections.mode != CpaSections.OFF || CpaSections.verifyLoopRetry ||
+        CpaSections.verifyDeferSuppression
+    ) {
         println(CpaSections.report())
         println("== (ENGINE.2) csv ==")
         print(CpaSections.csv())
@@ -415,6 +431,9 @@ private fun printUsage() {
           --cpaSectionsCensus  counters and distinct-node sets only; reads no timestamps
           --verifyLoopRetry  (ENGINE.2d)(a) keep the round-425 loop-entry retry and COUNT
                              every call where skipping it would change the answer
+          --verifyDeferSuppression  (ENGINE.2d)(b) evaluate checkMemberAccessMissing's flow
+                             suppression BOTH eagerly and deferred, honour the eager verdict,
+                             and count every disagreement (--verifyDeferSuppressionBogus = control)
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)

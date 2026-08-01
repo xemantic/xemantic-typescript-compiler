@@ -5736,6 +5736,33 @@ class Checker(
      */
     private var narrowRetryRelevantObs = 0L
 
+    /**
+     * (ENGINE.2d)(b) round 791 — `diagnostics.size` as it stood at the position
+     * `checkMemberAccessMissingCore`'s three flow-suppression blocks USED to
+     * occupy, or `-1` when that position was never reached (an empty property
+     * name, the intersection-reduction `never` emission, or either shadowed-name
+     * bail all return above it). It is the RETRACTION FLOOR: the deferred
+     * predicate may only remove diagnostics appended at or after the point the
+     * blocks it replaces would have run, which is what keeps the one emission
+     * ABOVE them — the intersection-`never` TS2339 — outside its reach, exactly
+     * as before. Written by the core, read and restored by the wrapper.
+     */
+    private var cmamFlowBase = -1
+
+    /** `--verifyDeferSuppression`: the predicate's verdict evaluated EAGERLY, at
+     *  the position the blocks used to run, before the body. */
+    private var cmamEagerVerdict = false
+
+    /** `--verifyDeferSuppression`: the `Type` instance the eager evaluation
+     *  narrowed to, for an instance-granularity comparison against the deferred
+     *  one (a verdict comparison alone would not see a changed type that happens
+     *  to resolve the same property). */
+    private var cmamEagerNarrowed: Type? = null
+
+    /** The `Type` the most recent [cmamFlowSuppresses] narrowed to, or null when
+     *  it launched no walk. Probe state for the verifier only. */
+    private var cmamLastNarrowed: Type? = null
+
     /** True when the current walker subtree hit a depth cap / cycle-break / budget
      *  exhaustion — such results are entry-context-dependent and must NOT be memoized. */
     private var narrowWalkTruncated = false
@@ -133735,7 +133762,283 @@ interface DataView {
         }
     }
 
+    /**
+     * (ENGINE.2d)(b) round 791 — the three flow-graph SUPPRESSION blocks that
+     * used to run at the TOP of [checkMemberAccessMissingCore], lifted out
+     * VERBATIM and evaluated LAZILY by [checkMemberAccessMissing] instead: only
+     * for a call whose body actually appended a diagnostic.
+     *
+     * Round 789's exit census is what made that worth doing: of the 22,270 calls
+     * that paid for a flow walk here, **0 reached the property lookup and 21,064
+     * exited far downstream with the walk's answer consulted by nothing** — an
+     * expensive suppression apparatus at the top of a function whose emission
+     * sites are at the bottom.
+     *
+     * **Why the deferral is behaviour-preserving MECHANICALLY, rather than by a
+     * case analysis over the ~20 intervening emission sites.**
+     * [checkMemberAccessMissingCore] — 2,035 lines, 42 emissions — and every one
+     * of the seven `tryEmit*`/`emit*` helpers it calls mutate exactly ONE piece
+     * of checker state: they APPEND to `diagnostics`. There is no retraction, no
+     * side-set write, no ambient install and no read of `diagnostics` anywhere in
+     * that range. So "run the body, then remove everything it appended" is, for
+     * diagnostics, indistinguishable from "never run the body" — which is what
+     * the three blocks' `return` did. No emission site has to be enumerated, and
+     * ADDING one cannot break it. The floor is [cmamFlowBase], not the function
+     * entry, so the one emission ABOVE the old position stays out of reach.
+     *
+     * What that argument does NOT settle is cache-mutation ORDER (round 754): the
+     * body now runs BEFORE this predicate instead of after it, and for the calls
+     * the predicate suppresses it now runs at all. That is MEASURED, not argued —
+     * `--verifyDeferSuppression` evaluates the predicate both before and after the
+     * body and counts every call on which the two disagree, at `Type`-instance
+     * granularity; `--verifyDeferSuppressionBogus` is its positive control.
+     */
+    private fun cmamFlowSuppresses(objectExprIn: Expression, propName: String): Boolean {
+        cmamLastNarrowed = null
+        if (propName.isEmpty()) return false
+        var objectExpr = objectExprIn
+        while (objectExpr is ParenthesizedExpression) objectExpr = objectExpr.expression
+        val isThisAccess = objectExpr is Identifier && objectExpr.text == "this"
+
+        // M1.12 (round 418): single-type narrow-DOWN suppression. Now that [resolveFlowCalleeDecl]
+        // resolves NESTED type-guard functions (`isTupleType`, `isGenericTupleType`, … — nested
+        // in `createTypeChecker`, so the binder skips them, B83.5), the flow walk NARROWS a
+        // NON-UNION receiver `x` from its wide declared type DOWN to a strict subtype (`Type` →
+        // `TupleTypeReference`). But the property-resolution + emission paths below type `x` via
+        // its declared type (`getTypeOfExpression` deliberately does NOT consult narrowing —
+        // CLAUDE.md) and the dedicated narrowing consumers (`computeRawTypeOfPropertyAccess`, the
+        // narrowed-to-never branch) are all gated on `Type.Union`, so a member that exists only
+        // on the subtype FP's TS2339 (`target.target`, checker.ts — the biggest single TS2339
+        // sub-family). If the narrowed strict subtype (`narrowed <: raw`) HAS the property,
+        // suppress. FP-safe / suppression-only: `narrowed <: raw` guarantees the subtype carries
+        // at least the declared members (so it can only ADD resolvable ones); the negative /
+        // unrelated-guard cases (`narrowByCallPredicate`'s `else -> targetType`) fail the relation
+        // gate and keep the diagnostic. Union receivers keep their existing narrowing paths; a
+        // narrowed `never` (genuine negative-exhaustion, `instanceofWithStructurallyIdenticalTypes`)
+        // is excluded so tsc's TS2339-on-`never` is preserved.
+        if (currentFlowGraph != null && !isThisAccess &&
+            (objectExpr is Identifier ||
+                (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null))
+        ) {
+            val f1t0 = CpaSections.t()
+            val raw = getTypeOfExpression(objectExpr)
+            CpaSections.closeN(CpaSections.N_F1_RAW, f1t0)
+            // Round 489 (M5.1 perf): this block SUPPRESSES a would-be TS2339 by narrowing
+            // `raw` DOWN to a strict subtype that HAS the property. If `raw` ALREADY resolves
+            // the property (on itself or its apparent type — exactly what the main check at
+            // the tail of this function consults for a concrete non-union receiver), no TS2339
+            // can fire below, so the two expensive flow-narrowing walks are pure waste — skip
+            // them. Behavior-preserving: a concrete property-present receiver emits nothing
+            // either way (a member-table lookup is far cheaper than two flow walks per access).
+            val f1t1 = CpaSections.t()
+            val f1Pass = raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType &&
+                !(getPropertyOfType(raw, propName) != null ||
+                    getPropertyOfType(getApparentType(raw), propName) != null)
+            CpaSections.closeN(CpaSections.N_F1_GATE, f1t1)
+            if (f1Pass) {
+                CpaSections.noteRWalk()
+                val f1t2 = CpaSections.t()
+                // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
+                // narrows a single-type receiver to a UNION — the access is safe iff
+                // EVERY member resolves the property (intersection members fold via
+                // resolveMemberPropertyType, the round-419 rule). The declared-UNION
+                // receiver case is excluded by the outer `raw !is Type.Union` gate, so
+                // the negative-exhaustion `never` corpus pin is untouched.
+                fun suppresses(narrowed: Type): Boolean {
+                    if (narrowed === raw || narrowed === neverType ||
+                        !checkTypeRelatedTo(narrowed, raw, assignableRelation)
+                    ) return false
+                    return if (narrowed is Type.Union) {
+                        narrowed.types.isNotEmpty() &&
+                            narrowed.types.all { m -> resolveMemberPropertyType(m, propName) != null }
+                    } else {
+                        val app = getApparentType(narrowed)
+                        getPropertyOfType(app, propName) != null
+                    }
+                }
+                // (ENGINE.2d)(a) round 790: bracket the plain walk with the two
+                // monotone observation counters, IMMEDIATELY around the call — the
+                // `suppresses` fold below re-enters the checker and can launch
+                // narrowing walks of its own, which would poison the reading.
+                val obs0 = narrowRetryRelevantObs
+                val launch0 = narrowWalkLaunches
+                val f1Narrowed = getNarrowedTypeForReference(raw, objectExpr)
+                cmamLastNarrowed = f1Narrowed
+                // The retry is a pure REPEAT of the walk just performed when that
+                // walk really ran and arrived at no `FlowLoopLabel` and truncated
+                // nowhere: the two walkers are line-by-line mirrors differing in that
+                // one arm alone, so with the arm unreached every traversal decision —
+                // and hence every resolution the retry would drive, and its result —
+                // is identical. Unknown ⇒ run it. See [narrowRetryRelevantObs].
+                val loopFree = narrowRetryRelevantObs == obs0 && narrowWalkLaunches > launch0
+                val f1Plain = suppresses(f1Narrowed)
+                CpaSections.closeN(CpaSections.N_F1_WALK, f1t2)
+                if (f1Plain) return true
+                if (loopFree) CpaSections.noteRetrySkippable()
+                if (!loopFree || CpaSections.verifyLoopRetry) {
+                    val f1t3 = CpaSections.t()
+                    // Round 425: a guard BEFORE a loop narrows a read INSIDE it, but the
+                    // plain walk washes back to the declared type at the FlowLoopLabel —
+                    // retry with the loop-entry-following variant (the single-type sibling
+                    // of round-424 fix 1's union retry; `constraint.target` inside tuple
+                    // inference loops after `isTupleType(constraint)`, checker.ts).
+                    // Suppression-only, so following antecedent[0] is safe here.
+                    val f1LoopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr)
+                    cmamLastNarrowed = f1LoopNarrowed
+                    val f1Loop = suppresses(f1LoopNarrowed)
+                    CpaSections.closeN(CpaSections.N_F1_WALK2, f1t3)
+                    // `--verifyLoopRetry` keeps the PRE-GATE behaviour (the retry runs
+                    // and is honoured) and counts every case in which the skip would
+                    // have changed the answer — round 788's protocol.
+                    if (loopFree || CpaSections.verifyLoopRetryAll) {
+                        CpaSections.noteRetryVerified(f1LoopNarrowed !== f1Narrowed, f1Loop)
+                    }
+                    if (f1Loop) return true
+                }
+            }
+        }
+
+        // Round 473 (the server-profile ProjectServiceEvent/TypingInstallerResponse family):
+        // a SIBLING-discriminant switch/if narrows the BASE of the receiver, not the
+        // receiver itself — `switch (event.eventName) { case ProjectsUpdatedInBackgroundEvent:
+        // event.data.openFiles }` reads reference "event.data", whose path the
+        // FlowSwitchClause (subject "event.eventName") cannot narrow. Narrow the BASE
+        // identifier by ITS OWN flow (the flow at the access position — the base
+        // identifier itself often has no recorded flow node, the round-412 lesson) and
+        // project the accessed member over the narrowed base: when every projected
+        // member type resolves [propName], suppress. Suppression-only + strict-subtype
+        // gated, mirroring the round-418 block above.
+        if (currentFlowGraph != null && !isThisAccess && objectExpr is PropertyAccessExpression) {
+            val baseExpr = objectExpr.expression
+            val memberName = objectExpr.name.text
+            val basePath = if (baseExpr is Identifier) baseExpr.text else null
+            if (basePath != null && memberName.isNotEmpty()) {
+                val f2t0 = CpaSections.t()
+                val baseRaw = getTypeOfExpression(baseExpr)
+                val flow = getFlowAt(baseExpr) ?: getFlowAt(objectExpr)
+                CpaSections.closeN(CpaSections.N_F2_PRE, f2t0)
+                if (baseRaw is Type.Union && flow != null) {
+                    val f2t1 = CpaSections.t()
+                    val narrowedBase = flowWalkWithTripCheck(baseExpr, WK_BASE_EXPR, baseRaw.id.toLong() shl 32 or (basePath.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(basePath)) {
+                        narrowTypeFromFlow(baseRaw, flow, basePath, NarrowSeen(), depth = 0)
+                    } ?: baseRaw
+                    cmamLastNarrowed = narrowedBase
+                    val f2Suppress = narrowedBase !== baseRaw && narrowedBase !== neverType &&
+                        narrowedBase !== anyType && narrowedBase !== errorType &&
+                        checkTypeRelatedTo(narrowedBase, baseRaw, assignableRelation) && run {
+                            val baseMembers =
+                                if (narrowedBase is Type.Union) narrowedBase.types else listOf(narrowedBase)
+                            baseMembers.isNotEmpty() && baseMembers.all { bm ->
+                                val memberType = resolveMemberPropertyType(bm, memberName)
+                                memberType != null && (memberType === anyType ||
+                                    resolveMemberPropertyType(memberType, propName) != null)
+                            }
+                        }
+                    CpaSections.closeN(CpaSections.N_F2_WALK, f2t1)
+                    if (f2Suppress) return true
+                }
+            }
+        }
+
+        // M1.12 (round 424b): `this`-receiver narrowing suppression (tsc debug.ts
+        // DebugTypeMapper: `type<TypeMapper>(this); switch (this.kind) { case …:
+        // this.source }`). `getTypeOfExpression(this)` is deliberately anyType
+        // (B101 — never wire the enclosing class into general value resolution),
+        // so the round-418 suppression above never applies to this-accesses; an
+        // `asserts value is T` call RE-TYPES `this` (the any-replacement rule in
+        // narrowByAssertCall) and a `switch (this.kind)` clause then narrows the
+        // asserted union — when the FULLY narrowed type resolves the property on
+        // every non-nullish member, suppress. Suppression-only: no narrowing, or
+        // narrowing back to any/never, leaves every emission below untouched.
+        if (isThisAccess && currentFlowGraph != null) {
+            val f3t0 = CpaSections.t()
+            val rawThis = getTypeOfExpression(objectExpr)
+            val narrowedThis = getNarrowedTypeForReference(rawThis, objectExpr)
+            cmamLastNarrowed = narrowedThis
+            val f3Suppress = narrowedThis !== rawThis && narrowedThis !== neverType &&
+                narrowedThis !== anyType && narrowedThis !== errorType && run {
+                    val members = if (narrowedThis is Type.Union)
+                        narrowedThis.types.filterNot { isNullishConstituent(it) }
+                    else listOf(narrowedThis)
+                    members.isNotEmpty() &&
+                        members.all { m -> m === anyType || resolveMemberPropertyType(m, propName) != null }
+                }
+            CpaSections.closeN(CpaSections.N_F3, f3t0)
+            if (f3Suppress) return true
+        }
+        return false
+    }
+
+    /**
+     * (ENGINE.2d)(b) round 791 — the deferral wrapper. Runs the body, and only
+     * if the body emitted anything at or after [cmamFlowBase] asks
+     * [cmamFlowSuppresses] whether the flow graph suppresses it; if so, every
+     * diagnostic the body appended from that point on is removed. See
+     * [cmamFlowSuppresses] for why that is equivalent to the blocks returning
+     * from the top, and for what is measured rather than argued.
+     */
     private fun checkMemberAccessMissing(
+        objectExprIn: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        enclosingClassType: Type?,
+        emitTs2728RelatedInfo: Boolean,
+        keySuggestion: String? = null,
+        ts2576SquiggleStart: Int = diagStart,
+        ts2576SquiggleLength: Int = diagLength,
+    ) {
+        // Saved and restored rather than merely assigned: level R measures ZERO
+        // nested invocations on every profile, but a save/restore costs three
+        // slot copies and makes the deferral correct even if one ever appears.
+        val savedBase = cmamFlowBase
+        val savedVerdict = cmamEagerVerdict
+        val savedNarrowed = cmamEagerNarrowed
+        cmamFlowBase = -1
+        checkMemberAccessMissingCore(
+            objectExprIn, propName, diagStart, diagLength, source, fileName,
+            enclosingClassType, emitTs2728RelatedInfo, keySuggestion,
+            ts2576SquiggleStart, ts2576SquiggleLength,
+        )
+        val base = cmamFlowBase
+        val eagerVerdict = cmamEagerVerdict
+        val eagerNarrowed = cmamEagerNarrowed
+        cmamFlowBase = savedBase
+        cmamEagerVerdict = savedVerdict
+        cmamEagerNarrowed = savedNarrowed
+        // base < 0: the body returned ABOVE the position the blocks occupied, so
+        // they never ran there either — nothing to defer.
+        if (base < 0) return
+        val emitted = diagnostics.size > base
+        if (!emitted && !CpaSections.verifyDeferSuppression) return
+        val t0 = CpaSections.t()
+        val deferred = cmamFlowSuppresses(
+            objectExprIn,
+            // The positive control: a property name nothing can resolve makes the
+            // round-489 pre-gate pass everywhere and `suppresses` answer false
+            // everywhere, so a live comparator MUST report differences.
+            if (CpaSections.verifyDeferSuppressionBogus) propName + "\u0000xtsc" else propName,
+        )
+        CpaSections.closeN(CpaSections.N_DEFER, t0)
+        CpaSections.noteDeferEvaluated(emitted, emitted && deferred)
+        if (CpaSections.verifyDeferSuppression) {
+            CpaSections.noteDeferVerified(
+                cmamLastNarrowed !== eagerNarrowed, deferred != eagerVerdict,
+            )
+        }
+        // Under the verifier the EAGER verdict is honoured, which makes the verify
+        // run's output equal to the PRE-change binary's output by construction —
+        // so a byte-identical `--listAll` and a zero verdict-diff are two
+        // independent halves of the same claim.
+        val honour = if (CpaSections.verifyDeferSuppression) eagerVerdict else deferred
+        if (emitted && honour) {
+            while (diagnostics.size > base) diagnostics.removeAt(diagnostics.size - 1)
+        }
+    }
+
+    private fun checkMemberAccessMissingCore(
         objectExprIn: Expression,
         propName: String,
         diagStart: Int,
@@ -133848,168 +134151,20 @@ interface DataView {
             }
         }
 
-        // M1.12 (round 418): single-type narrow-DOWN suppression. Now that [resolveFlowCalleeDecl]
-        // resolves NESTED type-guard functions (`isTupleType`, `isGenericTupleType`, … — nested
-        // in `createTypeChecker`, so the binder skips them, B83.5), the flow walk NARROWS a
-        // NON-UNION receiver `x` from its wide declared type DOWN to a strict subtype (`Type` →
-        // `TupleTypeReference`). But the property-resolution + emission paths below type `x` via
-        // its declared type (`getTypeOfExpression` deliberately does NOT consult narrowing —
-        // CLAUDE.md) and the dedicated narrowing consumers (`computeRawTypeOfPropertyAccess`, the
-        // narrowed-to-never branch) are all gated on `Type.Union`, so a member that exists only
-        // on the subtype FP's TS2339 (`target.target`, checker.ts — the biggest single TS2339
-        // sub-family). If the narrowed strict subtype (`narrowed <: raw`) HAS the property,
-        // suppress. FP-safe / suppression-only: `narrowed <: raw` guarantees the subtype carries
-        // at least the declared members (so it can only ADD resolvable ones); the negative /
-        // unrelated-guard cases (`narrowByCallPredicate`'s `else -> targetType`) fail the relation
-        // gate and keep the diagnostic. Union receivers keep their existing narrowing paths; a
-        // narrowed `never` (genuine negative-exhaustion, `instanceofWithStructurallyIdenticalTypes`)
-        // is excluded so tsc's TS2339-on-`never` is preserved.
+        // (ENGINE.2d)(b) round 791: the three flow-graph SUPPRESSION blocks that
+        // used to run HERE now run LAZILY, in [checkMemberAccessMissing], and only
+        // when this body actually appended a diagnostic. Round 789 measured why:
+        // of the 22,270 calls that paid for a flow walk here, 0 reached the
+        // property lookup and 21,064 exited far downstream with the answer
+        // consulted by nothing. [cmamFlowBase] is the retraction FLOOR — set here
+        // so that the ONE emission above this point (the intersection-reduction
+        // `never` TS2339) stays outside the deferred predicate's reach, exactly as
+        // it was when the blocks returned from here. See [cmamFlowSuppresses].
         CpaSections.atR(CpaSections.R_FLOW)
-        if (currentFlowGraph != null && !isThisAccess &&
-            (objectExpr is Identifier ||
-                (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null))
-        ) {
-            val f1t0 = CpaSections.t()
-            val raw = getTypeOfExpression(objectExpr)
-            CpaSections.closeN(CpaSections.N_F1_RAW, f1t0)
-            // Round 489 (M5.1 perf): this block SUPPRESSES a would-be TS2339 by narrowing
-            // `raw` DOWN to a strict subtype that HAS the property. If `raw` ALREADY resolves
-            // the property (on itself or its apparent type — exactly what the main check at
-            // the tail of this function consults for a concrete non-union receiver), no TS2339
-            // can fire below, so the two expensive flow-narrowing walks are pure waste — skip
-            // them. Behavior-preserving: a concrete property-present receiver emits nothing
-            // either way (a member-table lookup is far cheaper than two flow walks per access).
-            val f1t1 = CpaSections.t()
-            val f1Pass = raw !is Type.Union && raw !== anyType && raw !== errorType && raw !== neverType &&
-                !(getPropertyOfType(raw, propName) != null ||
-                    getPropertyOfType(getApparentType(raw), propName) != null)
-            CpaSections.closeN(CpaSections.N_F1_GATE, f1t1)
-            if (f1Pass) {
-                CpaSections.noteRWalk()
-                val f1t2 = CpaSections.t()
-                // Round 423: a union-TARGET guard (`x is CallExpression | NewExpression`)
-                // narrows a single-type receiver to a UNION — the access is safe iff
-                // EVERY member resolves the property (intersection members fold via
-                // resolveMemberPropertyType, the round-419 rule). The declared-UNION
-                // receiver case is excluded by the outer `raw !is Type.Union` gate, so
-                // the negative-exhaustion `never` corpus pin is untouched.
-                fun suppresses(narrowed: Type): Boolean {
-                    if (narrowed === raw || narrowed === neverType ||
-                        !checkTypeRelatedTo(narrowed, raw, assignableRelation)
-                    ) return false
-                    return if (narrowed is Type.Union) {
-                        narrowed.types.isNotEmpty() &&
-                            narrowed.types.all { m -> resolveMemberPropertyType(m, propName) != null }
-                    } else {
-                        val app = getApparentType(narrowed)
-                        getPropertyOfType(app, propName) != null
-                    }
-                }
-                // (ENGINE.2d)(a) round 790: bracket the plain walk with the two
-                // monotone observation counters, IMMEDIATELY around the call — the
-                // `suppresses` fold below re-enters the checker and can launch
-                // narrowing walks of its own, which would poison the reading.
-                val obs0 = narrowRetryRelevantObs
-                val launch0 = narrowWalkLaunches
-                val f1Narrowed = getNarrowedTypeForReference(raw, objectExpr)
-                // The retry is a pure REPEAT of the walk just performed when that
-                // walk really ran and arrived at no `FlowLoopLabel` and truncated
-                // nowhere: the two walkers are line-by-line mirrors differing in that
-                // one arm alone, so with the arm unreached every traversal decision —
-                // and hence every resolution the retry would drive, and its result —
-                // is identical. Unknown ⇒ run it. See [narrowRetryRelevantObs].
-                val loopFree = narrowRetryRelevantObs == obs0 && narrowWalkLaunches > launch0
-                val f1Plain = suppresses(f1Narrowed)
-                CpaSections.closeN(CpaSections.N_F1_WALK, f1t2)
-                if (f1Plain) return
-                if (loopFree) CpaSections.noteRetrySkippable()
-                if (!loopFree || CpaSections.verifyLoopRetry) {
-                    val f1t3 = CpaSections.t()
-                    // Round 425: a guard BEFORE a loop narrows a read INSIDE it, but the
-                    // plain walk washes back to the declared type at the FlowLoopLabel —
-                    // retry with the loop-entry-following variant (the single-type sibling
-                    // of round-424 fix 1's union retry; `constraint.target` inside tuple
-                    // inference loops after `isTupleType(constraint)`, checker.ts).
-                    // Suppression-only, so following antecedent[0] is safe here.
-                    val f1LoopNarrowed = getNarrowedTypeForReferenceFollowLoopEntry(raw, objectExpr)
-                    val f1Loop = suppresses(f1LoopNarrowed)
-                    CpaSections.closeN(CpaSections.N_F1_WALK2, f1t3)
-                    // `--verifyLoopRetry` keeps the PRE-GATE behaviour (the retry runs
-                    // and is honoured) and counts every case in which the skip would
-                    // have changed the answer — round 788's protocol.
-                    if (loopFree || CpaSections.verifyLoopRetryAll) {
-                        CpaSections.noteRetryVerified(f1LoopNarrowed !== f1Narrowed, f1Loop)
-                    }
-                    if (f1Loop) return
-                }
-            }
-        }
-
-        // Round 473 (the server-profile ProjectServiceEvent/TypingInstallerResponse family):
-        // a SIBLING-discriminant switch/if narrows the BASE of the receiver, not the
-        // receiver itself — `switch (event.eventName) { case ProjectsUpdatedInBackgroundEvent:
-        // event.data.openFiles }` reads reference "event.data", whose path the
-        // FlowSwitchClause (subject "event.eventName") cannot narrow. Narrow the BASE
-        // identifier by ITS OWN flow (the flow at the access position — the base
-        // identifier itself often has no recorded flow node, the round-412 lesson) and
-        // project the accessed member over the narrowed base: when every projected
-        // member type resolves [propName], suppress. Suppression-only + strict-subtype
-        // gated, mirroring the round-418 block above.
-        if (currentFlowGraph != null && !isThisAccess && objectExpr is PropertyAccessExpression) {
-            val baseExpr = objectExpr.expression
-            val memberName = objectExpr.name.text
-            val basePath = if (baseExpr is Identifier) baseExpr.text else null
-            if (basePath != null && memberName.isNotEmpty()) {
-                val f2t0 = CpaSections.t()
-                val baseRaw = getTypeOfExpression(baseExpr)
-                val flow = getFlowAt(baseExpr) ?: getFlowAt(objectExpr)
-                CpaSections.closeN(CpaSections.N_F2_PRE, f2t0)
-                if (baseRaw is Type.Union && flow != null) {
-                    val f2t1 = CpaSections.t()
-                    val narrowedBase = flowWalkWithTripCheck(baseExpr, WK_BASE_EXPR, baseRaw.id.toLong() shl 32 or (basePath.hashCode().toLong() and 0xFFFF_FFFFL), flowPathRoot(basePath)) {
-                        narrowTypeFromFlow(baseRaw, flow, basePath, NarrowSeen(), depth = 0)
-                    } ?: baseRaw
-                    val f2Suppress = narrowedBase !== baseRaw && narrowedBase !== neverType &&
-                        narrowedBase !== anyType && narrowedBase !== errorType &&
-                        checkTypeRelatedTo(narrowedBase, baseRaw, assignableRelation) && run {
-                            val baseMembers =
-                                if (narrowedBase is Type.Union) narrowedBase.types else listOf(narrowedBase)
-                            baseMembers.isNotEmpty() && baseMembers.all { bm ->
-                                val memberType = resolveMemberPropertyType(bm, memberName)
-                                memberType != null && (memberType === anyType ||
-                                    resolveMemberPropertyType(memberType, propName) != null)
-                            }
-                        }
-                    CpaSections.closeN(CpaSections.N_F2_WALK, f2t1)
-                    if (f2Suppress) return
-                }
-            }
-        }
-
-        // M1.12 (round 424b): `this`-receiver narrowing suppression (tsc debug.ts
-        // DebugTypeMapper: `type<TypeMapper>(this); switch (this.kind) { case …:
-        // this.source }`). `getTypeOfExpression(this)` is deliberately anyType
-        // (B101 — never wire the enclosing class into general value resolution),
-        // so the round-418 suppression above never applies to this-accesses; an
-        // `asserts value is T` call RE-TYPES `this` (the any-replacement rule in
-        // narrowByAssertCall) and a `switch (this.kind)` clause then narrows the
-        // asserted union — when the FULLY narrowed type resolves the property on
-        // every non-nullish member, suppress. Suppression-only: no narrowing, or
-        // narrowing back to any/never, leaves every emission below untouched.
-        if (isThisAccess && currentFlowGraph != null) {
-            val f3t0 = CpaSections.t()
-            val rawThis = getTypeOfExpression(objectExpr)
-            val narrowedThis = getNarrowedTypeForReference(rawThis, objectExpr)
-            val f3Suppress = narrowedThis !== rawThis && narrowedThis !== neverType &&
-                narrowedThis !== anyType && narrowedThis !== errorType && run {
-                    val members = if (narrowedThis is Type.Union)
-                        narrowedThis.types.filterNot { isNullishConstituent(it) }
-                    else listOf(narrowedThis)
-                    members.isNotEmpty() &&
-                        members.all { m -> m === anyType || resolveMemberPropertyType(m, propName) != null }
-                }
-            CpaSections.closeN(CpaSections.N_F3, f3t0)
-            if (f3Suppress) return
+        cmamFlowBase = diagnostics.size
+        if (CpaSections.verifyDeferSuppression) {
+            cmamEagerVerdict = cmamFlowSuppresses(objectExprIn, propName)
+            cmamEagerNarrowed = cmamLastNarrowed
         }
 
         // B589 (bluebirdStaticThis): a receiver Identifier that is a USER clodule (top-level

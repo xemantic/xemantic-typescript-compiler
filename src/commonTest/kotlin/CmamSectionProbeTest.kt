@@ -168,16 +168,27 @@ class CmamSectionProbeTest {
             walkers += CpaSections.rExitWalk[s]
         }
         assert(walkers <= CpaSections.invocationsR)
-        // The fixture is built so the walk actually runs — a zero here would make
-        // the subset pin vacuous.
-        assert(walkers > 0)
+        // Round 791, (ENGINE.2d)(b): the walker-restricted census is now EMPTY by
+        // construction — no call exits this function having flow-walked inside it,
+        // because the three suppression blocks were lifted OUT of it. That is not
+        // a vacuous zero, it is the measurement of the deferral: a binary that put
+        // the blocks back would make it positive again. The non-vacuity the pin
+        // needs now lives one level out, in [CpaSections.deferEvaluated].
+        assert(walkers == 0L)
+        assert(CpaSections.deferEvaluated > 0)
     }
 
     @Test
-    fun `the flow-suppression row both fires and suppresses`() {
+    fun `the flow-suppression row is empty and the deferred call suppresses instead`() {
         runProbe()
-        assert(CpaSections.rExitIn[CpaSections.R_FLOW] > 0)
-        assert(CpaSections.rExitWalk[CpaSections.R_FLOW] > 0)
+        // Round 791: the row still exists (it is where [cmamFlowBase] is taken),
+        // but nothing returns from it any more and nothing walks in it — the whole
+        // apparatus moved to the wrapper, where it runs only for a call that
+        // emitted. Both halves matter: an empty row with nothing suppressing
+        // anywhere would be a lost suppression, not a deferred one.
+        assert(CpaSections.rExitIn[CpaSections.R_FLOW] == 0L)
+        assert(CpaSections.rExitWalk[CpaSections.R_FLOW] == 0L)
+        assert(CpaSections.deferSuppressed > 0)
     }
 
     @Test

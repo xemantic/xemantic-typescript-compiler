@@ -3754,7 +3754,16 @@ object CpaSections {
     /** R_FLOW block 1: the round-425 loop-entry RETRY walk. */
     const val N_F1_WALK2 = 11
 
-    const val NN = 12
+    /**
+     * (ENGINE.2d)(b) round 791: the whole DEFERRED suppression call, timed in
+     * `checkMemberAccessMissing`'s wrapper. In production it opens only for a
+     * call whose body appended a diagnostic, so its `calls` column IS the
+     * deferral's yield: the population that still pays for the apparatus.
+     * The `R_FLOW b*` rows below now report the SAME calls from inside it.
+     */
+    const val N_DEFER = 12
+
+    const val NN = 13
 
     val nNames: Array<String> = arrayOf(
         "  of which cpaComputeArgCtxTypes (clean)",
@@ -3769,6 +3778,7 @@ object CpaSections {
         "  R_FLOW b2: base-projection FLOW WALK",
         "  R_FLOW b3: this-receiver narrowing",
         "  R_FLOW b1: the loop-entry RETRY walk",
+        "  (b) the DEFERRED suppression call (whole)",
     )
 
     var nNanos: LongArray = LongArray(NN)
@@ -3865,6 +3875,68 @@ object CpaSections {
         if (verdictDiff) retryVerifyVerdictDiff++
     }
 
+    /**
+     * (ENGINE.2d)(b) round 791 — `--verifyDeferSuppression`. Evaluates
+     * `checkMemberAccessMissing`'s flow-suppression predicate TWICE per call:
+     * EAGERLY, at the position the three blocks used to occupy, and again
+     * DEFERRED, after the body has run — then compares. The eager verdict is the
+     * one honoured, so the verify run's diagnostic output equals the PRE-change
+     * binary's by construction and the two halves of the claim are independent:
+     * a byte-identical `--listAll`, and [deferVerifyVerdictDiff] == 0.
+     *
+     * **The only thing the deferral can change is what this measures.** The
+     * retraction is complete by construction (the body's sole mutation is an
+     * append to `diagnostics`), so the residual risk is cache-mutation ORDER —
+     * the body now runs BETWEEN the two evaluations. A non-zero
+     * [deferVerifyVerdictDiff] falsifies the deferral outright.
+     */
+    var verifyDeferSuppression: Boolean = false
+
+    /**
+     * (ENGINE.2d)(b) round 791 — the positive CONTROL for
+     * [verifyDeferSuppression]: the deferred evaluation is handed a property
+     * name nothing can resolve, which makes the round-489 pre-gate pass
+     * everywhere and the suppression answer false everywhere. A live comparator
+     * MUST then report a large [deferVerifyVerdictDiff]; a zero here would mean
+     * the instrument is dead and the real run's zero says nothing. Implies
+     * [verifyDeferSuppression].
+     */
+    var verifyDeferSuppressionBogus: Boolean = false
+
+    /** Calls on which the deferred predicate was evaluated at all — in production
+     *  the yield (only a call whose body EMITTED reaches it), under the verifier
+     *  every call that reached the blocks' old position. */
+    var deferEvaluated: Long = 0
+    /** Of those, the ones whose body appended a diagnostic. */
+    var deferEmitted: Long = 0
+    /** Of those, the ones the deferred predicate SUPPRESSED (a retraction). */
+    var deferSuppressed: Long = 0
+    /** `--verifyDeferSuppression` comparisons performed. */
+    var deferVerified: Long = 0
+    /** Of [deferVerified], those whose two evaluations narrowed to a DIFFERENT
+     *  `Type` instance — a granularity finer than the verdict. */
+    var deferVerifyTypeDiff: Long = 0
+    /** Of [deferVerified], those whose two evaluations DISAGREED. Non-zero
+     *  falsifies the deferral. */
+    var deferVerifyVerdictDiff: Long = 0
+
+    /** Record one deferred evaluation. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteDeferEvaluated(emitted: Boolean, suppressed: Boolean) {
+        if (mode == OFF && !verifyDeferSuppression) return
+        deferEvaluated++
+        if (emitted) deferEmitted++
+        if (suppressed) deferSuppressed++
+    }
+
+    /** Record one `--verifyDeferSuppression` comparison. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteDeferVerified(typeDiff: Boolean, verdictDiff: Boolean) {
+        deferVerified++
+        if (typeDiff) deferVerifyTypeDiff++
+        if (verdictDiff) deferVerifyVerdictDiff++
+    }
+
     /** `cpaComputeArgCtxTypes` invocations. */
     var argCtxCalls: Long = 0
     /** Of those, the ones whose argument subtrees can CONSUME a contextual type. */
@@ -3895,6 +3967,8 @@ object CpaSections {
         argCtxCalls = 0; argCtxConsumableCalls = 0; b464Reached = 0; b464Walked = 0
         retrySkippable = 0; retryVerified = 0
         retryVerifyTypeDiff = 0; retryVerifyVerdictDiff = 0
+        deferEvaluated = 0; deferEmitted = 0; deferSuppressed = 0
+        deferVerified = 0; deferVerifyTypeDiff = 0; deferVerifyVerdictDiff = 0
         qNanos = LongArray(NQ); qCalls = LongArray(NQ); qExitIn = LongArray(NQ)
         rNanos = LongArray(NR); rCalls = LongArray(NR); rExitIn = LongArray(NR)
         rExitWalk = LongArray(NR); rWalked = false
@@ -4129,6 +4203,18 @@ object CpaSections {
                     else " (verifier off)")
             )
         }
+        if (deferEvaluated > 0 || deferVerified > 0) {
+            appendLine(
+                "(ENGINE.2d)(b) deferred suppression: evaluated $deferEvaluated" +
+                    ", body-emitted $deferEmitted, RETRACTED $deferSuppressed" +
+                    (if (verifyDeferSuppression)
+                        " | VERIFIED $deferVerified" +
+                            (if (verifyDeferSuppressionBogus) " (BOGUS — the control)" else "") +
+                            ", type-diff $deferVerifyTypeDiff, " +
+                            "VERDICT-DIFF $deferVerifyVerdictDiff"
+                    else " (verifier off)")
+            )
+        }
         if (argCtxCalls > 0 || b464Reached > 0) {
             appendLine(
                 "populations: cpaComputeArgCtxTypes $argCtxCalls calls, " +
@@ -4189,6 +4275,12 @@ object CpaSections {
         if (retrySkippable > 0 || retryVerified > 0) {
             appendLine("RETRY,\"skippable\",$retrySkippable,0")
             appendLine("RETRY,\"verified\",$retryVerified,0")
+        }
+        if (deferEvaluated > 0 || deferVerified > 0) {
+            appendLine("DEFER,\"evaluated\",$deferEvaluated,0")
+            appendLine("DEFER,\"emitted\",$deferEmitted,0")
+            appendLine("DEFER,\"retracted\",$deferSuppressed,0")
+            appendLine("DEFER,\"verifyVerdictDiff\",$deferVerifyVerdictDiff,0")
             appendLine("RETRY,\"typeDiff\",$retryVerifyTypeDiff,0")
             appendLine("RETRY,\"verdictDiff\",$retryVerifyVerdictDiff,0")
         }
