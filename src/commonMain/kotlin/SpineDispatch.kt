@@ -3373,3 +3373,540 @@ object FrontEnd {
         }
     }
 }
+
+/**
+ * (ENGINE.2) round 787 — the opt-in partition of the PROPERTY-ACCESS path, the
+ * largest single block of checking work in this compiler and the one site the
+ * (ENGINE.1) arc never reached.
+ *
+ * `cpaSpineLeave`'s two anchor rows measure **4,449 ms** on the compiler profile
+ * (3,179 anchor-stmt + 1,270 owner-cond, `--spineSections`, round 787) — ~16% of
+ * a check-only compile, against the 1,417 ms held by the three assignability
+ * sites (ENGINE.1) priced. Round 733 attributed the HANDLER and stopped at
+ * "88.4% of it is the pass's own checking work"; this partitions that work.
+ *
+ * **Two levels, two shapes.**
+ *
+ * * **Level P — `checkPropertyAccessInExpr`, and it RECURSES**, so it uses round
+ *   756's hand-back shape rather than levels A-C/E's `depth != 1 => return`:
+ *   [beginP] closes the caller's running row and RETURNS it, [endP] closes its own
+ *   and reopens the caller's. Every row is therefore SELF time, exclusive of
+ *   nested invocations, and the rows sum to the walk's true total. The count
+ *   column is boundary CLOSES (a row is also closed by every nested entry made
+ *   while it is open), so per-invocation populations come from [pArm], never
+ *   from that column.
+ * * **Level Q — `checkSinglePropertyAccess`**, the per-property-access leaf,
+ *   which does not recurse: it keeps the `depth != 1 => return` shape and counts
+ *   any nested invocation in [invocationsQNested] (a pin asserts that stays 0).
+ *
+ * Level P is active only inside the window `cpaSpineLeave`'s three anchor blocks
+ * open ([inCpa]), so its total is directly comparable to the `--spineSections`
+ * rows and the partition is a CROSS-CHECK rather than a claim; invocations
+ * reached from the legacy statement/class-member walkers are counted in
+ * [invocationsPOutside] and never timed. The window is an explicit flag rather
+ * than a "which row is open" test precisely so that it survives [COARSE].
+ *
+ * **[CENSUS] is a third mode and exists to keep a counter out of a timing run.**
+ * G4 asks whether the walk visits the same `PropertyAccessExpression` twice; the
+ * distinct-nodeId sets that answer it would otherwise be charged to whichever row
+ * was open. Under [CENSUS] no timestamp is ever read — only invocations, arms and
+ * the distinct sets — so the counters are deterministic and the timing run is
+ * unpolluted. Counters decide, wall time confirms.
+ */
+object CpaSections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Anchors only — the calibration counterpart of [ON]. */
+    const val COARSE = 2
+
+    /** Counters and distinct-node sets ONLY; no timestamp is ever read. */
+    const val CENSUS = 3
+
+    /** Opt-in; [OFF] in production. Set by `--cpaSections{,Coarse,Census}`. */
+    var mode: Int = OFF
+
+    // ── level P: checkPropertyAccessInExpr, in source order ───────────────────
+
+    /** The wrapper transition. Probe-only; absent in production. */
+    const val P_ENTRY = 0
+    /** The `when` selection and every pure pass-through arm — the walk itself. */
+    const val P_DISPATCH = 1
+    /** `checkSinglePropertyAccess` — the per-property-access leaf (level Q). */
+    const val P_SINGLE_PA = 2
+    /** `checkSingleElementAccess` — the `x[k]` leaf. */
+    const val P_SINGLE_EA = 3
+    /** `cpaComputeArgCtxTypes` — contextual types for a call's arguments. */
+    const val P_ARGCTX = 4
+    /** The per-argument `contextualType` save/install/restore loop. */
+    const val P_CALLARGS = 5
+    /** The binary left-spine's own work (tuple bounds, destructuring-private). */
+    const val P_BINARY = 6
+    /**
+     * The arrow / function-expression SCOPE bookkeeping: three `EpochMap`/
+     * `EpochSet` copies, `populateParameterLocalTypes`, `applyBodyLocalShadowing`,
+     * `applyAmbiguousBlockScopedLocals`. G3's row — the round's one candidate
+     * lever, because none of it is checking work.
+     */
+    const val P_FNSCOPE = 7
+    /** Contextual-parameter inference from the arrow's own contextual type. */
+    const val P_FNCTX = 8
+    /** `checkPropertyAccessInStatements` for a block-bodied arrow / fn expression. */
+    const val P_FNBODY = 9
+    /** The object-literal contextual-member resolution block. */
+    const val P_OBJLIT_CTX = 10
+    /** The `ClassExpression` arm: the anonymous class type and its member walks. */
+    const val P_CLASSEXPR = 11
+
+    const val NP = 12
+
+    val pNames: Array<String> = arrayOf(
+        "P: wrapper transition",
+        "P: dispatch + pass-through arms (the walk)",
+        "P: checkSinglePropertyAccess (level Q)",
+        "P: checkSingleElementAccess",
+        "P: cpaComputeArgCtxTypes",
+        "P: call-argument ctx loop",
+        "P: binary left-spine own work",
+        "P: arrow/fn-expr SCOPE bookkeeping",
+        "P: arrow/fn-expr contextual params",
+        "P: block body (checkPropertyAccessInStatements)",
+        "P: object-literal contextual members",
+        "P: ClassExpression arm",
+    )
+
+    // The arm census — how often each arm is TAKEN. Never a population: round
+    // 756 quoted an arm count as the population behind it and was 146x out.
+    const val PA_PROPACCESS = 0
+    const val PA_CALL = 1
+    const val PA_BINARY = 2
+    const val PA_COND = 3
+    const val PA_UNWRAP = 4
+    const val PA_ARROW = 5
+    const val PA_FNEXPR = 6
+    const val PA_NEW = 7
+    const val PA_ELEMACCESS = 8
+    const val PA_UNARY = 9
+    const val PA_TEMPLATE = 10
+    const val PA_ARRAYLIT = 11
+    const val PA_OBJLIT = 12
+    const val PA_TAGGED = 13
+    const val PA_CLASSEXPR = 14
+    const val PA_LEAF = 15
+
+    const val NPA = 16
+
+    val pArmNames: Array<String> = arrayOf(
+        "PropertyAccessExpression",
+        "CallExpression",
+        "BinaryExpression",
+        "ConditionalExpression",
+        "Paren/As/NonNull/TypeAssertion/Satisfies/Spread",
+        "ArrowFunction",
+        "FunctionExpression",
+        "NewExpression",
+        "ElementAccessExpression",
+        "Prefix/Postfix/Await/Delete/Void/TypeOf/Yield",
+        "TemplateExpression",
+        "ArrayLiteralExpression",
+        "ObjectLiteralExpression",
+        "TaggedTemplateExpression",
+        "ClassExpression",
+        "leaf (no arm — identifier/literal/…)",
+    )
+
+    // ── level Q: checkSinglePropertyAccess, in source order ───────────────────
+
+    /** The wrapper transition. Probe-only; absent in production. */
+    const val Q_ENTRY = 0
+    /** TS1209 — `new A?.b()` with no argument list. */
+    const val Q_TS1209 = 1
+    /** TS2339 — `.prototype` on a `new` instance. */
+    const val Q_PROTO = 2
+    /** `emitTs2532ForOptionalChainInstantiationReceiver`. */
+    const val Q_TS2532 = 3
+    /** `emitTs18048ForOptionalPropertyAccessReceiver` (loop-aware narrowing). */
+    const val Q_TS18048_OPT = 4
+    /** `emitTs18048ForClosureCapturedUndefinedReceiver`. */
+    const val Q_TS18048_CLO = 5
+    /** The `super.X` cluster: TS2340/TS2855 + `emitTs2339ForMissingSuperMember`. */
+    const val Q_SUPER = 6
+    /** TS2748 — ambient const enum under `isolatedModules`. */
+    const val Q_CONSTENUM = 7
+    /** `checkPrivateMemberAccess` — TS2341. */
+    const val Q_PRIVATE = 8
+    /** `checkMemberAccessMissing` — TS2339/TS2551, the property-resolution ENGINE. */
+    const val Q_MISSING = 9
+
+    const val NQ = 10
+
+    val qNames: Array<String> = arrayOf(
+        "Q: wrapper transition",
+        "Q: TS1209 new-expression optional chain",
+        "Q: TS2339 .prototype on an instance",
+        "Q: emitTs2532 optional-chain instantiation receiver",
+        "Q: emitTs18048 optional-property receiver",
+        "Q: emitTs18048 closure-captured receiver",
+        "Q: super.X cluster (TS2340/2855/2339)",
+        "Q: TS2748 ambient const enum",
+        "Q: checkPrivateMemberAccess (TS2341)",
+        "Q: checkMemberAccessMissing (THE ENGINE)",
+    )
+
+    /**
+     * [COARSE]'s active boundaries: one entry anchor per level, so each level's
+     * partition still spans the same wall time while every other boundary costs
+     * a static read and a not-taken branch instead of a timestamp pair. Level P's
+     * [beginP]/[endP] pair and level Q's [beginQ]/[endQ] pair always fire — that
+     * is exactly the differential.
+     */
+    var pNanos: LongArray = LongArray(NP)
+    var pCalls: LongArray = LongArray(NP)
+    var pArm: LongArray = LongArray(NPA)
+    var qNanos: LongArray = LongArray(NQ)
+    var qCalls: LongArray = LongArray(NQ)
+    var qExitIn: LongArray = LongArray(NQ)
+
+    /** Level-P invocations inside the [inCpa] window, at every depth. */
+    var invocationsP: Long = 0
+    /** Of those, the OUTERMOST ones — one per `cpaSpineLeave` anchor walk. */
+    var outermostP: Long = 0
+    /** Deepest recursion reached inside the window. */
+    var maxDepthP: Int = 0
+    /** Invocations reached from the legacy walkers; counted, never timed. */
+    var invocationsPOutside: Long = 0
+    /** Level-Q invocations (all of them, window or not). */
+    var invocationsQ: Long = 0
+    /** Nested level-Q invocations — a pin asserts this stays 0. */
+    var invocationsQNested: Long = 0
+
+    /**
+     * G4: distinct `PropertyAccessExpression` nodes reaching level Q. [CENSUS] only.
+     *
+     * **Keyed by (file, nodeId), never by nodeId alone**: `indexSourceFile`
+     * restarts `nodeId` at 0 for EVERY `SourceFile`, so a program-wide set of raw
+     * ids silently collapses one node per file onto each id and inflates any
+     * visits/distinct ratio by an unbounded factor. Round 787 measured 2.35x that
+     * way before checking, and 1.42x once keyed correctly.
+     */
+    var distinctPa: HashSet<Long> = HashSet()
+    /** G4: distinct nodes reaching level P inside the window. [CENSUS] only. */
+    var distinctP: HashSet<Long> = HashSet()
+
+    /** The (file, nodeId) key [distinctP]/[distinctPa] are keyed by. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun nodeKey(fileName: String, nodeId: Int): Long =
+        (fileName.hashCode().toLong() shl 32) or (nodeId.toLong() and 0xFFFFFFFFL)
+
+    // ── nested sub-measures, INSIDE the rows above ────────────────────────────
+    // These exist because two rows of the level-P/Q partition are large enough to
+    // be worth a follow-on and too coarse to act on: [P_ARGCTX] (346 ms over every
+    // call expression in the program) and [Q_TS18048_CLO] (296 ms over every
+    // property access). A row is a location; these say what is inside it.
+
+    /** `cpaComputeArgCtxTypes` itself, excluding the [argCtxConsumable] predicate. */
+    const val N_ARGCTX = 0
+    /**
+     * Of [N_ARGCTX], the calls whose ARGUMENT subtrees contain an arrow, a
+     * function expression or an object literal — i.e. the only calls whose
+     * computed contextual types anything can read. The complement is the prize of
+     * a pre-gate, measured rather than inferred from a count.
+     */
+    const val N_ARGCTX_CONSUMABLE = 1
+    /** B464: `getTypeOfExpression(recv)` — the round-489 pre-gate's own cost. */
+    const val N_B464_TYPEOF = 2
+    /** B464: the `closureStarts` innermost-closure scan. */
+    const val N_B464_SCAN = 3
+    /** B464: `getNarrowedTypeForReferenceFollowLoopEntry` — a FLOW WALK. */
+    const val N_B464_NARROW = 4
+
+    const val NN = 5
+
+    val nNames: Array<String> = arrayOf(
+        "  of which cpaComputeArgCtxTypes (clean)",
+        "  of which ... calls with a consumable argument",
+        "  of which B464 getTypeOfExpression(recv)",
+        "  of which B464 closureStarts scan",
+        "  of which B464 narrowing FLOW WALK",
+    )
+
+    var nNanos: LongArray = LongArray(NN)
+    var nCalls: LongArray = LongArray(NN)
+
+    /** Start a nested sub-measure, or 0 when not timing. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
+
+    /** Close a nested sub-measure opened at [t0], returning its duration. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun closeN(sec: Int, t0: Long): Long {
+        if (mode != ON) return 0L
+        val d = PassTiming.nowNanos() - t0
+        nNanos[sec] += d; nCalls[sec]++
+        return d
+    }
+
+    /** Charge an already-measured duration [d] to [sec] as well. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun addN(sec: Int, d: Long) {
+        if (mode != ON) return
+        nNanos[sec] += d; nCalls[sec]++
+    }
+
+    /**
+     * Count one `cpaComputeArgCtxTypes` call and, when [consumable] says its
+     * arguments can read a contextual type, charge its already-measured duration
+     * [d] to [N_ARGCTX_CONSUMABLE] too. [consumable] is a lambda so the predicate
+     * — itself a subtree walk — is never evaluated in production.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteArgCtx(d: Long, consumable: () -> Boolean) {
+        if (mode == OFF) return
+        argCtxCalls++
+        if (consumable()) {
+            argCtxConsumableCalls++
+            if (mode == ON) { nNanos[N_ARGCTX_CONSUMABLE] += d; nCalls[N_ARGCTX_CONSUMABLE]++ }
+        }
+    }
+
+    /** Count one B464 invocation reaching past the round-489 raw-type pre-gate. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteB464Reached() { if (mode != OFF) b464Reached++ }
+
+    /** Count one B464 invocation that launches the narrowing flow walk. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun noteB464Walked() { if (mode != OFF) b464Walked++ }
+
+    /** `cpaComputeArgCtxTypes` invocations. */
+    var argCtxCalls: Long = 0
+    /** Of those, the ones whose argument subtrees can CONSUME a contextual type. */
+    var argCtxConsumableCalls: Long = 0
+    /** B464 invocations reaching past the round-489 raw-type pre-gate. */
+    var b464Reached: Long = 0
+    /** Of those, the ones that launch the narrowing flow walk. */
+    var b464Walked: Long = 0
+
+    /** Level P's window: open only across `cpaSpineLeave`'s anchor blocks. */
+    var inCpa: Boolean = false
+    var curP: Int = -1
+    var curTP: Long = 0
+    var depthP: Int = 0
+    var curQ: Int = -1
+    var curTQ: Long = 0
+    var depthQ: Int = 0
+
+    /** [beginP]'s "not measuring" sentinel — distinct from "no caller row" (-1). */
+    const val P_INACTIVE = -2
+
+    fun reset() {
+        pNanos = LongArray(NP); pCalls = LongArray(NP); pArm = LongArray(NPA)
+        nNanos = LongArray(NN); nCalls = LongArray(NN)
+        argCtxCalls = 0; argCtxConsumableCalls = 0; b464Reached = 0; b464Walked = 0
+        qNanos = LongArray(NQ); qCalls = LongArray(NQ); qExitIn = LongArray(NQ)
+        invocationsP = 0; outermostP = 0; maxDepthP = 0; invocationsPOutside = 0
+        invocationsQ = 0; invocationsQNested = 0
+        distinctPa = HashSet(); distinctP = HashSet()
+        inCpa = false
+        curP = -1; curTP = 0; depthP = 0
+        curQ = -1; curTQ = 0; depthQ = 0
+    }
+
+    // The entry points are `inline` so a production call is a static read plus a
+    // not-taken branch rather than a call, matching [ArgSections] and [CtaSections].
+
+    /** Open level P's window — one of `cpaSpineLeave`'s anchor blocks. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun enterCpa() { if (mode != OFF) inCpa = true }
+
+    /** Close level P's window. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun exitCpa() { if (mode != OFF) inCpa = false }
+
+    /**
+     * Open level P's partition for one `checkPropertyAccessInExpr` invocation,
+     * CLOSING the caller's running row and returning it so [endP] can reopen it.
+     * Returns [P_INACTIVE] when this invocation is outside the [inCpa] window (or
+     * the probe is off), in which case [endP] must do nothing.
+     */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginP(fileName: String, nodeId: Int): Int {
+        if (mode == OFF) return P_INACTIVE
+        if (!inCpa) { invocationsPOutside++; return P_INACTIVE }
+        invocationsP++
+        if (depthP == 0) outermostP++
+        depthP++
+        if (depthP > maxDepthP) maxDepthP = depthP
+        if (mode == CENSUS) { if (nodeId >= 0) distinctP.add(nodeKey(fileName, nodeId)); return -1 }
+        val prev = curP
+        val now = PassTiming.nowNanos()
+        if (prev >= 0) { pNanos[prev] += now - curTP; pCalls[prev]++ }
+        curP = P_ENTRY
+        curTP = now
+        return prev
+    }
+
+    /** Close level P's running row and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atP(sec: Int) {
+        if (mode != ON || curP < 0) return
+        val now = PassTiming.nowNanos()
+        pNanos[curP] += now - curTP
+        pCalls[curP]++
+        curP = sec
+        curTP = now
+    }
+
+    /** Close this invocation's running row and reopen the caller's, [prev]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endP(prev: Int) {
+        if (mode == OFF || prev == P_INACTIVE) return
+        if (mode == CENSUS) { depthP--; return }
+        val now = PassTiming.nowNanos()
+        if (curP >= 0) { pNanos[curP] += now - curTP; pCalls[curP]++ }
+        depthP--
+        curP = prev
+        curTP = now
+    }
+
+    /** Count one `when` arm of `checkPropertyAccessInExpr`. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun armP(arm: Int) {
+        if (mode == OFF || !inCpa) return
+        pArm[arm]++
+    }
+
+    /** Open level Q's partition for one `checkSinglePropertyAccess`. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun beginQ(fileName: String, nodeId: Int) {
+        if (mode == OFF) return
+        depthQ++
+        if (depthQ != 1) { invocationsQNested++; return }
+        invocationsQ++
+        if (mode == CENSUS) { if (nodeId >= 0) distinctPa.add(nodeKey(fileName, nodeId)); return }
+        curQ = Q_ENTRY
+        curTQ = PassTiming.nowNanos()
+    }
+
+    /** Close level Q's running section and start [sec]. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun atQ(sec: Int) {
+        if (mode != ON || depthQ != 1) return
+        val now = PassTiming.nowNanos()
+        qNanos[curQ] += now - curTQ
+        qCalls[curQ]++
+        curQ = sec
+        curTQ = now
+    }
+
+    /** Close whatever level-Q section is open, recording the exit row. */
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun endQ() {
+        if (mode == OFF) return
+        if (mode != CENSUS && depthQ == 1 && curQ >= 0) {
+            qNanos[curQ] += PassTiming.nowNanos() - curTQ
+            qCalls[curQ]++
+            qExitIn[curQ]++
+            curQ = -1
+        }
+        depthQ--
+    }
+
+    private fun ms(n: Long): String = (n / 1_000_000).toString()
+
+    fun report(): String = buildString {
+        appendLine("== (ENGINE.2) property-access attribution: checkPropertyAccessInExpr + checkSinglePropertyAccess ==")
+        appendLine(
+            "mode=${when (mode) { ON -> "ON"; COARSE -> "COARSE"; CENSUS -> "CENSUS"; else -> "OFF" }}" +
+                "  level P: $invocationsP invocations in-window (${outermostP} outermost, max depth $maxDepthP)" +
+                ", $invocationsPOutside outside" +
+                "  level Q: $invocationsQ ($invocationsQNested nested)"
+        )
+        if (mode == CENSUS) {
+            val dp = distinctP.size
+            val dq = distinctPa.size
+            appendLine(
+                "G4 distinct-node census: level P $invocationsP visits / $dp distinct nodes = " +
+                    "${if (dp > 0) invocationsP * 100 / dp else 0}/100 ; " +
+                    "level Q $invocationsQ visits / $dq distinct PropertyAccessExpression nodes = " +
+                    "${if (dq > 0) invocationsQ * 100 / dq else 0}/100"
+            )
+        }
+        var pTotal = 0L
+        for (s in 0 until NP) pTotal += pNanos[s]
+        if (pTotal > 0) {
+            appendLine("level P total: ${ms(pTotal)} ms (compare `--spineSections` cpa anchor + owner rows)")
+            for (s in 0 until NP) {
+                if (pCalls[s] == 0L && pNanos[s] == 0L) continue
+                val pct = pNanos[s] * 1000 / pTotal
+                appendLine(
+                    "  ${pNames[s].padEnd(48)} ${ms(pNanos[s]).padStart(6)} ms " +
+                        "(${(pct / 10).toString().padStart(3)}.${pct % 10}%) over ${pCalls[s].toString().padStart(9)} closes"
+                )
+            }
+        }
+        var qTotal = 0L
+        for (s in 0 until NQ) qTotal += qNanos[s]
+        if (qTotal > 0) {
+            appendLine("level Q total: ${ms(qTotal)} ms (compare level P's checkSinglePropertyAccess row)")
+            for (s in 0 until NQ) {
+                if (qCalls[s] == 0L && qNanos[s] == 0L) continue
+                val pct = qNanos[s] * 1000 / qTotal
+                appendLine(
+                    "  ${qNames[s].padEnd(48)} ${ms(qNanos[s]).padStart(6)} ms " +
+                        "(${(pct / 10).toString().padStart(3)}.${pct % 10}%) over ${qCalls[s].toString().padStart(9)} closes" +
+                        ", exits ${qExitIn[s]}"
+                )
+            }
+        }
+        if (argCtxCalls > 0 || b464Reached > 0) {
+            appendLine(
+                "populations: cpaComputeArgCtxTypes $argCtxCalls calls, " +
+                    "$argCtxConsumableCalls with a CONSUMABLE argument " +
+                    "(${if (argCtxCalls > 0) argCtxConsumableCalls * 1000 / argCtxCalls / 10 else 0}%)" +
+                    "   B464 reached $b464Reached, flow-walked $b464Walked"
+            )
+        }
+        var nAny = false
+        for (s in 0 until NN) if (nCalls[s] != 0L) nAny = true
+        if (nAny) {
+            appendLine("nested sub-measures (INSIDE the rows above):")
+            for (s in 0 until NN) {
+                if (nCalls[s] == 0L) continue
+                appendLine(
+                    "  ${nNames[s].trim().padEnd(48)} ${ms(nNanos[s]).padStart(6)} ms " +
+                        "over ${nCalls[s].toString().padStart(9)} calls"
+                )
+            }
+        }
+        var armTotal = 0L
+        for (a in 0 until NPA) armTotal += pArm[a]
+        if (armTotal > 0) {
+            appendLine("level P arm census (arms TAKEN — never a population): $armTotal")
+            for (a in 0 until NPA) {
+                if (pArm[a] == 0L) continue
+                appendLine("  ${pArmNames[a].padEnd(48)} ${pArm[a].toString().padStart(9)}")
+            }
+        }
+    }
+
+    fun csv(): String = buildString {
+        appendLine("level,section,closes,nanos")
+        for (s in 0 until NP) {
+            if (pCalls[s] == 0L && pNanos[s] == 0L) continue
+            appendLine("P,\"${pNames[s].trim()}\",${pCalls[s]},${pNanos[s]}")
+        }
+        for (s in 0 until NQ) {
+            if (qCalls[s] == 0L && qNanos[s] == 0L) continue
+            appendLine("Q,\"${qNames[s].trim()}\",${qCalls[s]},${qNanos[s]}")
+        }
+        for (s in 0 until NN) {
+            if (nCalls[s] == 0L) continue
+            appendLine("N,\"${nNames[s].trim()}\",${nCalls[s]},${nNanos[s]}")
+        }
+        for (a in 0 until NPA) {
+            if (pArm[a] == 0L) continue
+            appendLine("ARM,\"${pArmNames[a].trim()}\",${pArm[a]},0")
+        }
+    }
+}

@@ -127,6 +127,22 @@ fun main(args: Array<String>) {
             "--ctaSectionsCoarse", "--ctasectionscoarse" -> {
                 CtaSections.reset(); CtaSections.mode = CtaSections.COARSE
             }
+            // (ENGINE.2): the opt-in attribution INSIDE checkPropertyAccessInExpr
+            // (level P, recursive) and checkSinglePropertyAccess (level Q). The
+            // property-access path is ~16% of a check-only compile — the largest
+            // single block of checking work, and the one the (ENGINE.1) arc never
+            // reached. `Coarse` is the differential calibration counterpart;
+            // `Census` reads NO timestamps and answers G4 (does the walk visit a
+            // node twice?) without polluting a timing run.
+            "--cpaSections", "--cpasections" -> {
+                CpaSections.reset(); CpaSections.mode = CpaSections.ON
+            }
+            "--cpaSectionsCoarse", "--cpasectionscoarse" -> {
+                CpaSections.reset(); CpaSections.mode = CpaSections.COARSE
+            }
+            "--cpaSectionsCensus", "--cpasectionscensus" -> {
+                CpaSections.reset(); CpaSections.mode = CpaSections.CENSUS
+            }
             // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
             // ~20% of the compile and never profiled. Per-FILE spans, so no
             // calibration counterpart is needed.
@@ -236,6 +252,13 @@ fun main(args: Array<String>) {
         print(CtaSections.csv())
         println("== (TYPE.2) csv end ==")
         CtaSections.mode = CtaSections.OFF
+    }
+    if (CpaSections.mode != CpaSections.OFF) {
+        println(CpaSections.report())
+        println("== (ENGINE.2) csv ==")
+        print(CpaSections.csv())
+        println("== (ENGINE.2) csv end ==")
+        CpaSections.mode = CpaSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -375,6 +398,9 @@ private fun printUsage() {
           --narrowSectionsDeep  (CALL.4) the same plus the getReferencePath rows
           --ctaSections      (TYPE.2) attribution of spineCtaM3StatementAnchor + checkVarDeclAssignability
           --ctaSectionsCoarse  the same, per-level anchors only — the differential calibration counterpart
+          --cpaSections      (ENGINE.2) attribution of checkPropertyAccessInExpr + checkSinglePropertyAccess
+          --cpaSectionsCoarse  the same, entry anchors only — the differential calibration counterpart
+          --cpaSectionsCensus  counters and distinct-node sets only; reads no timestamps
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)

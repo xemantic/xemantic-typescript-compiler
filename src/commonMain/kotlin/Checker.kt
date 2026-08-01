@@ -2155,6 +2155,13 @@ class Checker(
 
     private fun cpaSpineLeave(node: Node) {
         if (spineIsDts || spineIsJsLike) return
+        // (ENGINE.2) round 787: level P's window. Opened here rather than around
+        // each anchor block because the ONLY `checkPropertyAccessInExpr` calls in
+        // this handler are the four anchors (`cpaApplyDeclRecordings` makes none),
+        // so the window is exactly the population `--spineSections` reports as the
+        // cpa anchor + owner + EWTA + PropertyDeclaration rows. See [CpaSections].
+        CpaSections.enterCpa()
+        try {
         // (SPINE.1)(a): opt-in intra-handler attribution — OFF in production
         // (one static read per split; see [SpineSections]).
         val kid = (node as NodeBase).kindId
@@ -2351,6 +2358,9 @@ class Checker(
             cpaFrames.removeLast()
         }
         SpineSections.close(SpineSections.CPA_POP, kid, tp)
+        } finally {
+            CpaSections.exitCpa()
+        }
     }
 
     private class CtaFrame(
@@ -131001,6 +131011,33 @@ interface DataView {
     /** (cpa-m2b) round 580: the CallExpression arm's contextual arg-type
      *  computation, extracted VERBATIM — shared by the legacy arm and the
      *  spine ctx pull-derivation (one computation, never a fork). */
+    /**
+     * (ENGINE.2) round 787, PROBE-ONLY (called only from [CpaSections.noteArgCtx],
+     * whose lambda is never evaluated with the probe off).
+     *
+     * Can anything in [expr]'s ARGUMENT subtrees read the contextual type
+     * `cpaComputeArgCtxTypes` was called to produce? Only three arms of
+     * `checkPropertyAccessInExpr` read `contextualType` — ArrowFunction,
+     * FunctionExpression and ObjectLiteralExpression — so an argument subtree
+     * containing none of them cannot observe the computation at all. Deliberately
+     * CONSERVATIVE (answers true on a JSX/unknown shape by walking every child),
+     * because it is measuring an upper bound on a pre-gate's prize, and an
+     * over-count makes that prize look SMALLER, never larger.
+     */
+    private fun cpaArgumentsCanConsumeContext(expr: CallExpression): Boolean {
+        val args = expr.arguments
+        if (args.isEmpty()) return false
+        // Iterative — never recurse an expression subtree (the left-spine rule).
+        val work = ArrayDeque<Node>()
+        for (a in args) work.addLast(a)
+        while (work.isNotEmpty()) {
+            val n = work.removeLast()
+            if (n is ArrowFunction || n is FunctionExpression || n is ObjectLiteralExpression) return true
+            forEachChild(n) { work.addLast(it) }
+        }
+        return false
+    }
+
     private fun cpaComputeArgCtxTypes(expr: CallExpression, enclosingClassType: Type?): List<Type?>? {
         return run {
             if (expr.arguments.isNullOrEmpty()) return@run null
@@ -131132,19 +131169,36 @@ interface DataView {
         expr: Expression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // (ENGINE.2) round 787: level P partitions this walker. It RECURSES, so the
+        // probe hands the caller's running row back and reopens it on the way out
+        // — every row is SELF time, exclusive of nested invocations (round 756).
+        val cpaP = CpaSections.beginP(fileName, (expr as NodeBase).nodeId)
+        try {
+        CpaSections.atP(CpaSections.P_DISPATCH)
         when (expr) {
             is PropertyAccessExpression -> {
+                CpaSections.armP(CpaSections.PA_PROPACCESS)
                 // First recurse into subexpressions
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 // Now check this property access
+                CpaSections.atP(CpaSections.P_SINGLE_PA)
                 checkSinglePropertyAccess(expr, source, fileName, enclosingClassType)
+                CpaSections.atP(CpaSections.P_DISPATCH)
             }
             is CallExpression -> {
+                CpaSections.armP(CpaSections.PA_CALL)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 // 16.0: contextual typing for call arguments — propagate param types
                 // into object literals / arrow function params so un-annotated arrow
                 // parameters can be typed from the contextual signature.
+                CpaSections.atP(CpaSections.P_ARGCTX)
+                val cpaT0 = CpaSections.t()
                 val argCtxTypes: List<Type?>? = cpaComputeArgCtxTypes(expr, enclosingClassType)
+                // The predicate is evaluated AFTER the sub-measure closes, so its
+                // own cost is never inside the number it classifies.
+                val cpaD = CpaSections.closeN(CpaSections.N_ARGCTX, cpaT0)
+                CpaSections.noteArgCtx(cpaD) { cpaArgumentsCanConsumeContext(expr) }
+                CpaSections.atP(CpaSections.P_CALLARGS)
                 expr.arguments.forEachIndexed { i, arg ->
                     val savedCtx = contextualType
                     val argCtx = argCtxTypes?.getOrNull(i)
@@ -131155,10 +131209,13 @@ interface DataView {
                         contextualType = savedCtx
                     }
                 }
+                CpaSections.atP(CpaSections.P_DISPATCH)
             }
             is BinaryExpression -> {
+                CpaSections.armP(CpaSections.PA_BINARY)
                 // B64.5: iterative left-spine flatten. Preserve TS2493 emission for
                 // assignment-target ArrayLiteral on each spine node before flattening.
+                CpaSections.atP(CpaSections.P_BINARY)
                 val rightStack = ArrayDeque<Expression>()
                 var cur: Expression = expr
                 while (cur is BinaryExpression) {
@@ -131176,16 +131233,23 @@ interface DataView {
                     rightStack.addLast(cur.right)
                     cur = cur.left
                 }
+                CpaSections.atP(CpaSections.P_DISPATCH)
                 checkPropertyAccessInExpr(cur, source, fileName, enclosingClassType)
                 while (rightStack.isNotEmpty()) checkPropertyAccessInExpr(rightStack.removeLast(), source, fileName, enclosingClassType)
             }
             is ConditionalExpression -> {
+                CpaSections.armP(CpaSections.PA_COND)
                 checkPropertyAccessInExpr(expr.condition, source, fileName, enclosingClassType)
                 checkPropertyAccessInExpr(expr.whenTrue, source, fileName, enclosingClassType)
                 checkPropertyAccessInExpr(expr.whenFalse, source, fileName, enclosingClassType)
             }
-            is ParenthesizedExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            is ParenthesizedExpression -> {
+                CpaSections.armP(CpaSections.PA_UNWRAP)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
             is ArrowFunction -> {
+                CpaSections.armP(CpaSections.PA_ARROW)
+                CpaSections.atP(CpaSections.P_FNSCOPE)
                 val savedLocalTypes = currentLocalTypes
                 val savedParamBindings = currentParamBindingNames
                 val savedArrowShadowed = currentShadowedNames
@@ -131205,6 +131269,7 @@ interface DataView {
                     }
                 }
                 // 16.0: contextual param inference for un-annotated arrow parameters
+                CpaSections.atP(CpaSections.P_FNCTX)
                 val ctxType = contextualType
                 // B83.4d: when this arrow's body is an EXPRESSION (concise body) and its
                 // contextual type is a single-call-sig function, the body is contextually
@@ -131243,6 +131308,7 @@ interface DataView {
                 val savedCtx = contextualType
                 contextualType = bodyCtx
                 try {
+                    CpaSections.atP(CpaSections.P_FNBODY)
                     expr.body.let { body ->
                         when (body) {
                             is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
@@ -131253,37 +131319,57 @@ interface DataView {
                 } finally {
                     contextualType = savedCtx
                 }
+                CpaSections.atP(CpaSections.P_FNSCOPE)
                 currentLocalTypes = savedLocalTypes
                 currentParamBindingNames = savedParamBindings
                 currentShadowedNames = savedArrowShadowed
+                CpaSections.atP(CpaSections.P_DISPATCH)
             }
             is NewExpression -> {
+                CpaSections.armP(CpaSections.PA_NEW)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 expr.arguments?.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             }
             is ElementAccessExpression -> {
+                CpaSections.armP(CpaSections.PA_ELEMACCESS)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
                 checkPropertyAccessInExpr(expr.argumentExpression, source, fileName, enclosingClassType)
+                CpaSections.atP(CpaSections.P_SINGLE_EA)
                 checkSingleElementAccess(expr, source, fileName, enclosingClassType)
+                CpaSections.atP(CpaSections.P_DISPATCH)
             }
-            is AsExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is NonNullExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is PrefixUnaryExpression -> checkPropertyAccessInExpr(expr.operand, source, fileName, enclosingClassType)
+            is AsExpression -> {
+                CpaSections.armP(CpaSections.PA_UNWRAP)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is NonNullExpression -> {
+                CpaSections.armP(CpaSections.PA_UNWRAP)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is PrefixUnaryExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                checkPropertyAccessInExpr(expr.operand, source, fileName, enclosingClassType)
+            }
             is TemplateExpression -> {
+                CpaSections.armP(CpaSections.PA_TEMPLATE)
                 expr.templateSpans.forEach { span ->
                     checkPropertyAccessInExpr(span.expression, source, fileName, enclosingClassType)
                 }
             }
             is ArrayLiteralExpression -> {
+                CpaSections.armP(CpaSections.PA_ARRAYLIT)
                 expr.elements.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             }
             is ObjectLiteralExpression -> {
+                CpaSections.armP(CpaSections.PA_OBJLIT)
                 // 16.0: propagate contextual type into each property value so nested
                 // arrow function params can be typed from the contextual member types.
+                CpaSections.atP(CpaSections.P_OBJLIT_CTX)
                 val ctxObj = contextualType as? Type.Object
                 if (ctxObj != null) {
                     resolveStructuredTypeMembers(ctxObj)
                 }
+                CpaSections.atP(CpaSections.P_DISPATCH)
                 for (prop in expr.properties) {
                     when (prop) {
                         is PropertyAssignment -> {
@@ -131292,6 +131378,7 @@ interface DataView {
                                 is StringLiteralNode -> n.text
                                 else -> null
                             }
+                            CpaSections.atP(CpaSections.P_OBJLIT_CTX)
                             val propCtx = if (propName != null && ctxObj != null) {
                                 ctxObj.members?.get(propName)?.let { sym ->
                                     getTypeOfSymbol(sym)
@@ -131299,6 +131386,7 @@ interface DataView {
                             } else null
                             val savedCtx = contextualType
                             contextualType = if (propCtx != null && propCtx !== anyType && propCtx !== errorType) propCtx else null
+                            CpaSections.atP(CpaSections.P_DISPATCH)
                             try {
                                 checkPropertyAccessInExpr(prop.initializer, source, fileName, enclosingClassType)
                             } finally {
@@ -131320,18 +131408,48 @@ interface DataView {
                 }
             }
             is TaggedTemplateExpression -> {
+                CpaSections.armP(CpaSections.PA_TAGGED)
                 checkPropertyAccessInExpr(expr.tag, source, fileName, enclosingClassType)
             }
-            is TypeAssertionExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is SpreadElement -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is AwaitExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is DeleteExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is VoidExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is TypeOfExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is PostfixUnaryExpression -> checkPropertyAccessInExpr(expr.operand, source, fileName, enclosingClassType)
-            is SatisfiesExpression -> checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
-            is YieldExpression -> expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            is TypeAssertionExpression -> {
+                CpaSections.armP(CpaSections.PA_UNWRAP)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is SpreadElement -> {
+                CpaSections.armP(CpaSections.PA_UNWRAP)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is AwaitExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is DeleteExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is VoidExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is TypeOfExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is PostfixUnaryExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                checkPropertyAccessInExpr(expr.operand, source, fileName, enclosingClassType)
+            }
+            is SatisfiesExpression -> {
+                CpaSections.armP(CpaSections.PA_UNWRAP)
+                checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
+            }
+            is YieldExpression -> {
+                CpaSections.armP(CpaSections.PA_UNARY)
+                expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
+            }
             is FunctionExpression -> {
+                CpaSections.armP(CpaSections.PA_FNEXPR)
+                CpaSections.atP(CpaSections.P_FNSCOPE)
                 val savedLocalTypes = currentLocalTypes
                 val savedParamBindings = currentParamBindingNames
                 val savedFnExprShadowed = currentShadowedNames
@@ -131364,6 +131482,7 @@ interface DataView {
                 // callee has a single call signature, propagate the corresponding param
                 // type into `currentLocalTypes` so property access checks can find
                 // optional members and emit TS18048 etc.
+                CpaSections.atP(CpaSections.P_FNCTX)
                 val ctxType = contextualType
                 if (ctxType is Type.Object) {
                     resolveStructuredTypeMembers(ctxType)
@@ -131385,6 +131504,7 @@ interface DataView {
                 }
                 // Round 447: nested function-expression body's own `let/const x` shadows an
                 // outer same-named binding (mirrors the ArrowFunction branch above).
+                CpaSections.atP(CpaSections.P_FNSCOPE)
                 expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
                     applyBodyLocalShadowing(expr.body.statements, pn)
                     applyAmbiguousBlockScopedLocals(expr.body.statements, pn)
@@ -131392,15 +131512,20 @@ interface DataView {
                 val savedCtx = contextualType
                 contextualType = null
                 try {
+                    CpaSections.atP(CpaSections.P_FNBODY)
                     expr.body.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null) }
                 } finally {
                     contextualType = savedCtx
                 }
+                CpaSections.atP(CpaSections.P_FNSCOPE)
                 currentLocalTypes = savedLocalTypes
                 currentParamBindingNames = savedParamBindings
                 currentShadowedNames = savedFnExprShadowed
+                CpaSections.atP(CpaSections.P_DISPATCH)
             }
             is ClassExpression -> {
+                CpaSections.armP(CpaSections.PA_CLASSEXPR)
+                CpaSections.atP(CpaSections.P_CLASSEXPR)
                 // B98.r109: a class EXPRESSION (`class { m() { this.X } }`, e.g. used as a
                 // base in `class George extends class { reset() { return this.y } }`) is reached
                 // here via the ClassDeclaration heritage walk / var-decl initializer / etc., but
@@ -131427,8 +131552,12 @@ interface DataView {
                     checkPropertyAccessInClassMember(member, source, fileName, anonClassType)
                 }
                 inStaticClassMethod = savedStatic
+                CpaSections.atP(CpaSections.P_DISPATCH)
             }
-            else -> {}
+            else -> CpaSections.armP(CpaSections.PA_LEAF)
+        }
+        } finally {
+            CpaSections.endP(cpaP)
         }
     }
 
@@ -132167,8 +132296,12 @@ interface DataView {
         // case resolves to `anyType` (B467, recovered below via the closure's enclosingVarDecls),
         // so `anyType` must NOT bail — it needs the closure. Behavior-preserving: the concrete
         // path returns false here exactly as the post-scan `narrowed` check would.
+        val b464T0 = CpaSections.t()
         var raw = getTypeOfExpression(recv)
+        CpaSections.closeN(CpaSections.N_B464_TYPEOF, b464T0)
         if (raw !== anyType && (raw !is Type.Union || raw.types.none { it === undefinedType })) return false
+        CpaSections.noteB464Reached()
+        val b464T1 = CpaSections.t()
         var found: FlowStart? = null
         var bestPos = -1
         for (cs in graph.closureStarts) {
@@ -132178,6 +132311,7 @@ interface DataView {
                 found = cs
             }
         }
+        CpaSections.closeN(CpaSections.N_B464_SCAN, b464T1)
         val closure = found ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
         if (root in closure.localNames) return false
@@ -132208,7 +132342,10 @@ interface DataView {
         // closure-LOCAL guard BEFORE a loop (`if (!x) return; for (…) x.length`) is not washed out
         // to its declared type at the loop's FlowLoopLabel — checker.ts:8207 `expandedParams` FP.
         // FP-safe: it only ever narrows MORE (suppresses), never adds a TS18048.
+        CpaSections.noteB464Walked()
+        val b464T2 = CpaSections.t()
         val narrowed = getNarrowedTypeForReferenceFollowLoopEntry(raw, recv)
+        CpaSections.closeN(CpaSections.N_B464_NARROW, b464T2)
         if (narrowed !is Type.Union) return false
         if (narrowed.types.none { it === undefinedType }) return false
         // Require a meaningful non-nullish constituent so this isn't a pure
@@ -132341,6 +132478,12 @@ interface DataView {
         expr: PropertyAccessExpression, source: String, fileName: String,
         enclosingClassType: Type?,
     ) {
+        // (ENGINE.2) round 787: level Q. Non-recursive, so it keeps the
+        // `depth != 1 => return` shape; a nested invocation would be counted in
+        // `invocationsQNested` (a pin asserts it stays 0). See [CpaSections].
+        CpaSections.beginQ(fileName, (expr as NodeBase).nodeId)
+        try {
+        CpaSections.atQ(CpaSections.Q_TS1209)
         // 17.201: TS1209 — `new A?.b()` where the `?.` chains off a NewExpression
         // with NO arguments list. Parser shape: PropertyAccessExpression with
         // `questionDotToken == true`, expression == `NewExpression(arguments == null)`.
@@ -132374,6 +132517,7 @@ interface DataView {
                 }
             }
         }
+        CpaSections.atQ(CpaSections.Q_PROTO)
         // 17.190: TS2339 — `.prototype` on a NewExpression instance (e.g.
         // `new Object().prototype`). Instances never have a `prototype`
         // property; only the constructor side does. Display uses the
@@ -132404,6 +132548,7 @@ interface DataView {
         // breaks an optional chain (e.g. `a?.b<c>.d`). The synthetic paren is tagged
         // by the parser via [ParenthesizedExpression.instantiationEnd]; without the
         // narrow tag this would over-fire for every `(a?.b).c` style access. ===
+        CpaSections.atQ(CpaSections.Q_TS2532)
         emitTs2532ForOptionalChainInstantiationReceiver(expr, source, fileName)
 
         // === B81.1c: TS18048 "'X.Y' is possibly 'undefined'." for non-optional access
@@ -132411,15 +132556,18 @@ interface DataView {
         // `foo.a.b` where `a?` is optional). Consults loop-aware flow narrowing
         // so reads INSIDE a loop body see narrowing established at loop entry
         // (e.g. `if (foo.a) { for(...) { foo.a.b ... } }` suppresses). ===
+        CpaSections.atQ(CpaSections.Q_TS18048_OPT)
         emitTs18048ForOptionalPropertyAccessReceiver(expr, source, fileName)
 
         // === B464: TS18048 "'x' is possibly 'undefined'." for `x.prop` where `x` is a
         // captured (closed-over) parameter/variable inside a closure whose narrowing
         // stays `T | undefined` (e.g. `implicitConstParameters`'s f5: the variable is
         // reassigned after the closure, so the `if (x)` guard does not flow in). ===
+        CpaSections.atQ(CpaSections.Q_TS18048_CLO)
         if (emitTs18048ForClosureCapturedUndefinedReceiver(expr, source, fileName)) return
 
         // === TS2340 (ES5) / TS2855 (ES2015+): super property access restriction ===
+        CpaSections.atQ(CpaSections.Q_SUPER)
         if (expr.expression is Identifier && (expr.expression).text == "super") {
             if (options.target <= ScriptTarget.ES5) {
                 checkSuperPropertyAccessES5(expr, source, fileName, enclosingClassType)
@@ -132436,6 +132584,7 @@ interface DataView {
         // runtime as an object (TypeScript still allows the access). Without it, the access has
         // no runtime referent — isolatedModules transpilation requires per-file independence so
         // cross-file ambient const enums cannot be inlined.
+        CpaSections.atQ(CpaSections.Q_CONSTENUM)
         if (options.isolatedModules && !options.preserveConstEnums) {
             val receiver = expr.expression
             if (receiver is Identifier) {
@@ -132465,9 +132614,11 @@ interface DataView {
         }
 
         // === TS2341: Private member accessibility check ===
+        CpaSections.atQ(CpaSections.Q_PRIVATE)
         if (checkPrivateMemberAccess(expr, source, fileName, enclosingClassType)) return
 
         // === TS2339/TS2551: Property does not exist check ===
+        CpaSections.atQ(CpaSections.Q_MISSING)
         checkMemberAccessMissing(
             objectExprIn = expr.expression,
             propName = expr.name.text,
@@ -132478,6 +132629,9 @@ interface DataView {
             enclosingClassType = enclosingClassType,
             emitTs2728RelatedInfo = true,
         )
+        } finally {
+            CpaSections.endQ()
+        }
     }
 
     /**
