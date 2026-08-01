@@ -135,8 +135,8 @@ class ClosureIndexEquivalenceTest {
         val inner = graph.innermostClosureAt(gapPos)
         assert(inner != null)
         // the answer is the OUTER `mid` arrow, whose range spans the whole body
-        assert(inner!!.container!!.pos < text.indexOf("const a"))
-        assert(inner.container!!.end > text.indexOf("return [a, b]"))
+        assert(inner.container!!.pos < text.indexOf("const a"))
+        assert(inner.container.end > text.indexOf("return [a, b]"))
         assertAgreesEverywhere(src, graph)
     }
 
@@ -175,7 +175,7 @@ class ClosureIndexEquivalenceTest {
         assert(fast === slow)
         assert(fast != null)
         // innermost ⇒ no other closure container starts later and still contains `at`
-        val innerPos = fast!!.container!!.pos
+        val innerPos = fast.container!!.pos
         assert(graph.closureStarts.none {
             val c = it.container
             c != null && c.pos > innerPos && at >= c.pos && at < c.end
@@ -199,7 +199,7 @@ class ClosureIndexEquivalenceTest {
         assert(fast != null)
         // the INNER arrow owns `v` as a local — which is what makes B464's
         // `root in closure.localNames` capture test decide the right way
-        assert("v" in fast!!.localNames)
+        assert("v" in fast.localNames)
         assert(fast.container!!.pos > text.indexOf("const inner") - 1)
     }
 
