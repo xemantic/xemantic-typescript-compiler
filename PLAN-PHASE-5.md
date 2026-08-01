@@ -3283,6 +3283,55 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   deliberately did not start it thin. Scored predictions E1-E4 are written down in
   `docs/perf/engine-rule-price.md` § 4 — score them.
 
+- [ ] **(ENGINE.2) Price the dedicated-walker layer on the site that actually holds the
+  mass — the PROPERTY-ACCESS path, `cpaSpineLeave` -> `checkPropertyAccessInExpr` ->
+  `checkSinglePropertyAccess`. PROMOTED round 787 as the next stage of
+  `docs/ARCHITECTURE-RETHINK.md` § 0.1's endgame paragraph.** (ENGINE.1) answered the
+  owner-facing scope question on the three largest ASSIGNABILITY sites and measured the
+  layer at **613 ms = 2.2%**. But those three sites are 1,417 ms of a 27.9 s compile
+  between them, and the largest single block of checking work in this compiler is
+  somewhere else and has never been opened: `cpaSpineLeave`'s two anchor rows measure
+  **4,449 ms at HEAD** (3,179 anchor-stmt + 1,270 owner-cond; round 733 read 4,653 —
+  stable, re-measured round 787 before promotion per CLAUDE.md's re-measure law), i.e.
+  **~16% of the compile in ONE recursive walker plus its per-property-access leaf**.
+  Round 733 attributed the HANDLER and stopped at "88.4% is the pass's own checking
+  work"; its ccet twin was then opened three times over ((CALL.1)/(CALL.2)/(CALL.3))
+  and its cta sibling twice ((TYPE.2)/(ENGINE.1)) — **the cpa side never was.**
+  (a) Partition it: a new `CpaSections` with a RECURSIVE level P over
+  `checkPropertyAccessInExpr` (round 756's hand-back shape — `beginP` returns the
+  caller's row, `endP` reopens it, so every row is SELF time) windowed to the three
+  `cpaSpineLeave` anchor blocks so its total is directly comparable to the 4,449 ms,
+  plus a level Q over `checkSinglePropertyAccess` splitting its five `emitTs*`/`check*`
+  firewall probes from `checkMemberAccessMissing`, the TS2339 ENGINE. Opt-in,
+  behaviour-free when off, `COARSE` counterpart for the differential, own pins.
+  (b) Classify with (ENGINE.1)'s method, which is now mandatory for comparability:
+  report the layer in **ms and as a share of the COMPILE**, never as a ratio against
+  the relation, and split it into "re-implements a rule tsc also has" (MOVES into any
+  replacement engine) vs "corrects our own resolution" (DELETES).
+  **PREDICTIONS, scored (write them down so they can be falsified):**
+  **G1 — the leaf dominates the traversal:** `checkSinglePropertyAccess` +
+  `checkSingleElementAccess` are **>= 50%** of the 4,449 ms, and the `when` dispatch +
+  pure pass-through arms (the walk itself) are **< 10%** — consultation is not the
+  expense, for the fifth independent time.
+  **G2 — E1's band does NOT hold here:** the firewall layer inside
+  `checkSinglePropertyAccess` is **20-40%**, i.e. at or below the low end of
+  (ENGINE.1)'s measured 27.9-37.4%, because this site's engine call
+  (`checkMemberAccessMissing`) is a full property RESOLUTION rather than the 2.2-6.3%
+  relation call the assignability sites end in.
+  **G3 — the scope bookkeeping is the one candidate lever:** the ArrowFunction /
+  FunctionExpression arms copy three `EpochMap`/`EpochSet`s and run
+  `populateParameterLocalTypes` + `applyBodyLocalShadowing` +
+  `applyAmbiguousBlockScopedLocals` per function node. Predicted **>= 300 ms**, which
+  would be the first candidate above a half-band this arc has found in six rounds. If
+  it comes in under 150 ms, say so and stop.
+  **G4 — the walk does not duplicate itself:** `checkSinglePropertyAccess` invocations
+  / distinct `PropertyAccessExpression` nodeIds is **1.0 +- 0.05** (the anchors are
+  disjoint by construction via `cpaM3MarkAnchored`). A ratio > 1.2 would be a
+  structural finding worth more than the rest of the item.
+  Gate: corpus suite + 8-profile `--listAll` grid + `cost_gate.py`; `ab-warm.sh`
+  medians AND win rate if anything lands. **A count is not a measure; price the
+  population before building the fix.**
+
 - [x] **(PERF.HW) DONE round 740 — the cores are REAL, and the question was the
   wrong one: a SEQUENTIAL run already consumes 3.15 of the 4 cores.** Artifact:
   `docs/perf/worker-scaling-round740.md`.
