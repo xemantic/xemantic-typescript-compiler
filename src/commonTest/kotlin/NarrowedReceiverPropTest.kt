@@ -144,7 +144,16 @@ class NarrowedReceiverPropTest {
     /**
      * NEGATIVE CONTROL — a GENUINE mismatch must survive the guard. The narrowed
      * property is `string | boolean`, which still does not relate to a `string` target,
-     * so the second chance declines and the raw type is reported.
+     * so the second chance declines and the mismatch is reported.
+     *
+     * Round 785 SHARPENED THE MESSAGE, and the control is kept, not weakened: the
+     * diagnostic still fires with the same code at the same position, but (NARROW.1)'s
+     * guard-call arm now records `n: Wide` into `currentLocalTypes`, so the reported
+     * source type is the narrowed `'string | boolean'` rather than the declared
+     * `'string | number | boolean'`. That is tsc's own wording for this shape — inside
+     * `isWide(n)` the receiver IS a `Wide` — so the pre-785 text was the less accurate
+     * of the two. The `boolean` elaboration is unchanged, which is what makes this still
+     * a mismatch control rather than a silence.
      */
     @Test
     fun `negative control - a genuine mismatch survives the narrowed receiver`() {
@@ -159,6 +168,6 @@ class NarrowedReceiverPropTest {
                 }
                 """.trimIndent()
         )
-        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'string | number | boolean' is not assignable to type 'string'." })
+        assert(diagnostics.any { it.code == 2322 && it.message == "Type 'string | boolean' is not assignable to type 'string'." })
     }
 }

@@ -20,6 +20,75 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 785 (2026-08-01) — (NARROW.1) IS CLOSED. `extractNullNarrowing` HAS ITS
+TYPE-GUARD CALL ARM, AND THE CHANGE THE ITEM WARNED WOULD MOVE "THE PRIMARY TYPE OF EVERY
+GUARDED REFERENCE IN BOTH DIRECTIONS" IS **SET-FOR-SET FREE ON ALL EIGHT PROFILES WHILE
+FIRING 630-916 TIMES PER PROFILE**. IT IS NOT NEUTRAL, THOUGH: IT REMOVES TWO
+FALSE-POSITIVE CLASSES THE GRID NEVER SHOWED.** Baseline re-captured at HEAD first
+(`46/46/46/46/46/46/46/94`, matching the shipping record), then re-run with the arm:
+0 added, 0 removed, on every profile. Suite 13,323 -> **13,334 / 0 failures / 3 skipped**
+(+11 = this round's pins; **no corpus baseline moved**). Cost gate: one counter over
+tolerance, rebaselined with a named mechanism.
+
+- **THE ARM IS FIVE LINES AND OWNS NO OPINION.** `if (isFoo(x))` with a bare-Identifier
+  argument that is already in `currentLocalTypes` hands the verdict to
+  `narrowByCallPredicate` and records it only when the type actually CHANGES. Delegating
+  rather than re-deriving is what makes it impossible for this arm to disagree with the
+  flow walker about what a guard means — it decides only WHERE the answer is recorded.
+- **WHAT IT ACTUALLY BUYS: TWO FP CLASSES, NEITHER VISIBLE ON THE GRID.** A RETURN and an
+  ASSIGNMENT inside a guarded branch have no `getNarrowedTypeForReference` opt-in, so
+  `function f(x: string|number): string { if (isStr(x)) { return x; } … }` emitted TS2322
+  on code tsc accepts. Both are silent now. A third shape improved rather than flipped:
+  a genuine mismatch inside the branch now names the NARROWED source type.
+- **THE PROBE THAT LOOKS OBVIOUS IS INERT, AND THAT IS THE ROUND'S METHOD LESSON.** The
+  natural reduction — `const s: Sub = x` inside the guard — is silent on BOTH binaries,
+  because `checkVarDeclAssignability` ALREADY opts into flow narrowing. Two further
+  reductions were silent for a different reason (`Base` -> `Sub` is not rejected by our
+  relation at all, so the baseline never errored and the probe measured nothing). Only a
+  RETURN or an ASSIGNMENT with a PRIMITIVE union subject discriminates. **Round 784's
+  "probe shapes are not portable between sites" generalises: they are not portable between
+  CONSUMERS of the same site either — the discriminating question is which consumers lack
+  the opt-in, not which types are involved.**
+- **THE GREEN GRID WAS FALSIFIED BEFORE IT WAS BELIEVED.** Per the ablation law a
+  zero-diff grid is evidence of nothing until the disabled code is counted, so a temporary
+  `PassTiming` sighting/hit counter was built, measured (**compiler 1,520/630, services
+  2,115/896, harness 2,204/916, tsc 1,520/630**) and then REMOVED. 630 guarded references
+  on the compiler profile changed primary type with zero output movement — that is the
+  claim, and without the counter it would have been indistinguishable from an inert arm.
+- **THE ONE PIN THAT MOVED IS A MESSAGE, AND IT MOVED TOWARD tsc.** Round 784's
+  `NarrowedReceiverPropTest` mismatch control expected
+  `Type 'string | number | boolean' is not assignable to type 'string'.`; it now reads
+  `Type 'string | boolean' …` — same code, same position, same `boolean` elaboration,
+  because `n` IS a `Wide` inside `isWide(n)`. That is tsc's wording, so the pin was
+  CORRECTED, not switched off; no `LogicalParityDivergence` was needed. A hand-written pin
+  is not a corpus baseline and the divergence mechanism does not apply to it.
+- **COST: `typeNode.bypassed` 106,120 -> 108,336 (+2.09%), REBASELINED IN THIS COMMIT.**
+  Mechanism: each guard-call sighting resolves the predicate's TARGET type node (and the
+  guarded parameter's annotation) under an ambient instantiation context, so they land in
+  the INV.5(c) non-cacheable bucket — **+2,216 resolutions over 1,520 sightings = 1.46
+  each**, exactly the arm's population. Priced with round 716's measured ~2.2 µs per
+  outermost bypassed resolution that is **~4.9 ms of a ~27 s compile (0.017%)**. Every
+  other counter is inside 0.8%.
+- **THE PERF SHAPE THE ITEM FLAGGED DID NOT MATERIALIZE.** CLAUDE.md warns that narrowing
+  every property access would put a flow walk on the checker's hottest path; measured,
+  `narrow.walks` moved **+59 of 71,690 (+0.08%)**. `narrowByCallPredicate` resolves a
+  predicate declaration — it does not launch a walk — and the arm is additionally gated to
+  if-conditions whose argument is an already-tracked local.
+- **PINS: 7 OF 11 DISCRIMINATE, MEASURED AGAINST THE ABLATED HEAD BUILD** kept as a
+  side-by-side classpath and re-run through the ~1.2-second scratch CLI: the return, the
+  assignment, the sharpened message, the nested pair, the second-parameter subject, the
+  method-call guard, and the containment control (which fires TWICE ablated and ONCE fixed,
+  so it detects a frame leak that a pure silence pin could not see). The four
+  "must NOT narrow" controls hold on both sides on purpose.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule): the ELSE branch still gets
+  no subtractive narrow, and a `this.p` / property-path subject is not narrowed — the arm
+  keeps the bare-Identifier restriction the three existing arms carry.
+- **PREDICTIONS 2 of 4.** HIT: the arm was cheap to write, and the eight-profile grid was
+  the right gate. **MISSED, and the misses are the output:** I expected a grid PRICE to pay
+  down (there was none — the arm is free, and its value is off-grid), and I expected the
+  first natural probe to discriminate (it was inert, because the var-decl consumer already
+  opts in — the population that needed fixing was returns and assignments).
+
 **Round 784 (2026-08-01) — (REL.2) IS CLOSED. CAUSE (G) IS FIXED, THE GLOBAL
 enum -> MEMBER RELATION RULE IS FLIPPED ON, AND IT IS **SET-FOR-SET FREE ON ALL EIGHT
 PROFILES**. THE ITEM'S OWN DIAGNOSIS OF THE FIX WAS WRONG IN A USEFUL WAY: THE NARROW
@@ -1534,19 +1603,29 @@ rather than skipped quietly).
     `const k: ModifierKind = node.kind` after the guard still reports the declared type.
     Zero measured sites on all eight profiles.
 
-- [ ] **(NARROW.1) `extractNullNarrowing` has NO call-predicate arm — no type-guard call
-  has ever reached `currentLocalTypes`.** It has nullish / `typeof` / truthiness arms only
-  (Checker.kt), and it feeds BOTH the legacy cta walker's if-branch narrowing frame and the
-  spine's `ctaM3NarrowThen`. So inside `if (isFoo(x)) { … }` every consumer of
-  `getTypeOfExpression` — as opposed to the opt-in `getNarrowedTypeForReference` sites —
-  still sees `x`'s DECLARED type. Discovered round 783 and re-scoped round 784: it is NOT
-  needed for (REL.2) (whose cause (G) was closed by a monotone second chance instead), so
-  this is queued on its own merits. **Blast radius is the point of the item**: unlike a
-  second chance, an arm here changes the PRIMARY type of every guarded reference in the
-  program, in both directions — gate it on the full eight-profile grid plus the corpus, and
-  size it behind a switch before landing. CLAUDE.md's standing note that "an `if (isFoo(x))`
-  narrow IS visible to `getTypeOfExpression` consumers" is what this item falsifies; fix
-  that entry when it lands.
+- [x] **(NARROW.1) CLOSED round 785 — the call-predicate arm is LANDED and is FREE on all
+  eight profiles.** `extractNullNarrowing` now has a type-guard CALL arm gated by
+  `NARROW1_CALL_PREDICATE`, delegating its verdict wholesale to `narrowByCallPredicate`, so
+  `if (isFoo(x)) { … }` records the narrowed type into `currentLocalTypes` for the whole
+  then-branch. Grid re-captured at HEAD first (`46/46/46/46/46/46/46/94`) and re-run with
+  the arm: **set-for-set identical on all eight, in BOTH directions (0 added, 0 removed)** —
+  and NOT vacuously, the arm fires **630 / 896 / 916** times on compiler / services /
+  harness. Suite 13,323 -> **13,334 / 0 / 3** (+11 = this round's pins; zero corpus baselines
+  moved). Cost gate: `typeNode.bypassed` +2.09%, rebaselined with its mechanism.
+  - **IT REMOVES TWO FALSE-POSITIVE CLASSES.** A RETURN and an ASSIGNMENT inside a guarded
+    branch had no `getNarrowedTypeForReference` opt-in, so both emitted TS2322 on code tsc
+    accepts. The var-decl initializer never did — it already opts in — which is why the
+    obvious probe shape is silent on both binaries and cost two probe rounds to route around.
+  - **NO TRUE POSITIVE IS LOST, IN EITHER DIRECTION.** The only pre-existing pin that moved
+    is round 784's `NarrowedReceiverPropTest` mismatch control, and it moved in MESSAGE only:
+    same code, same position, source type now the narrowed `'string | boolean'` instead of
+    the declared `'string | number | boolean'` — which is tsc's own wording, so the pin was
+    corrected rather than switched off. No `LogicalParityDivergence` was needed or used.
+  - **THE FEARED PERF SHAPE DID NOT MATERIALIZE:** `narrow.walks` +59 of 71,690 (+0.08%).
+    The arm resolves a predicate, it does not launch a flow walk.
+  - **STILL OPEN, RECORDED NOT PINNED:** the ELSE branch gets no subtractive narrow (the
+    helper feeds the then-branch frame only), and the subject must be a bare Identifier that
+    is already a tracked local — a `this.p` / property-path subject is not narrowed.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,

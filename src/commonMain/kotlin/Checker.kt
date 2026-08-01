@@ -93302,6 +93302,22 @@ interface DataView {
                 else -> varName to getUnionType(filtered)
             }
         }
+        // (NARROW.1) round 785: a type-guard CALL — `if (isFoo(x)) { … }`. Without this
+        // arm no type-predicate call ever reaches [currentLocalTypes], so every consumer
+        // of `getTypeOfExpression` inside the then-branch sees `x`'s DECLARED type while
+        // only the opt-in `getNarrowedTypeForReference` sites see the guard. The subject
+        // must be a bare Identifier that is already a tracked local — the same
+        // restriction the three arms above carry — and the verdict is delegated wholesale
+        // to [narrowByCallPredicate] so this arm cannot disagree with the flow walker
+        // about what a guard means. Adopted only when it actually CHANGES the type.
+        if (NARROW1_CALL_PREDICATE && expr is CallExpression) {
+            for (arg in expr.arguments) {
+                val varName = (arg as? Identifier)?.text ?: continue
+                val varType = currentLocalTypes[varName] ?: continue
+                val narrowed = narrowByCallPredicate(varType, expr, true, varName)
+                if (narrowed !== varType) return varName to narrowed
+            }
+        }
         return null
     }
 
@@ -174092,6 +174108,19 @@ private val R784_NARROWED_RECEIVER = true
  * top-level init-order rationale as the switches above. Never flip this in a commit.
  */
 private val R783_INDEXED_ACCESS_CARRIER = true
+
+/**
+ * (NARROW.1) round 785 SWITCH — gives [Checker.extractNullNarrowing] its missing
+ * type-guard CALL arm, so `if (isFoo(x)) { … }` records `x`'s narrowed type into
+ * `currentLocalTypes` for the whole then-branch.
+ *
+ * Unlike a second chance (which can only turn a rejection into an acceptance), this
+ * changes the PRIMARY type of every guarded reference in the program, in BOTH
+ * directions — which is why it is behind a switch and why its price is measured on the
+ * full eight-profile grid, not on the compiler profile alone. Same top-level init-order
+ * rationale as the switches above.
+ */
+private val NARROW1_CALL_PREDICATE = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---
