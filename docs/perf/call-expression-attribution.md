@@ -232,3 +232,175 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --callSections build/bench/tsc-project-*
 # report + a per-section CSV between the "csv" markers
 ```
+
+---
+
+# Round 793 — (ENGINE.2g): does round 792's pre-gate generalise?
+
+## 9. The headline
+
+Round 792 skipped `checkMemberAccessMissing` entirely for 31% of its calls
+because **all ~42 of its emissions assert one proposition** — a property is
+absent — so one cheap refutation kills all of them. (ENGINE.2g) asked where else
+that works. The inventory (every figure RE-MEASURED at HEAD, law 1) is:
+
+| candidate engine | ms at HEAD | fires on the compiler profile | state |
+|---|---:|---:|---|
+| **the `checkSingleCallExpressionTypes` PROLOGUE — 7 walkers** | **219** | **0** | **taken this round** |
+| `emitTs18048` closure-captured receiver (B464) | 171 | 0 | already round-489 pre-gated |
+| `cpaComputeArgCtxTypes` | 242 (189 net of its callees) | n/a | already gated round 788 |
+| `emitTs18048` optional-property receiver | 50 | 0 | own type work, no shared key |
+| `checkPrivateMemberAccess` | 44 | 0 | too small to price |
+| TS2793 "impl would have succeeded" probe | 94 | ~0 | deferrable — left in the queue |
+| the five single-signature dedicated walkers | 61 | — | not opened |
+
+**The proposition form does NOT generalise, and that is the round's first
+finding.** The seven prologue walkers emit TS2345 / TS18048 / TS2339 / TS2349 /
+TS2754 — five different claims — so no single refutation can kill them the way
+"the property resolves" killed 42 emissions. What they share is a **KEY**: each
+is reachable only for a narrow syntactic shape of the CALLEE, so one
+classification of the callee refutes all seven at once. **The transferable method
+is "one cheap question in front of many emissions", not "one proposition".**
+
+Measured with `--ccetPreGate` (computes the gate, honours nothing, splits the
+prologue's measured time by the verdict):
+
+| profile | invocations | gate refuses | of those, FIRED | kept | of those, FIRED |
+|---|---:|---:|---:|---:|---:|
+| compiler | 52,413 | **51,394 (98.1%)** | **0** | 1,019 | 0 |
+| services | 69,555 | **68,200 (98.1%)** | **0** | 1,355 | **4** |
+| harness | 78,724 | **76,837 (97.6%)** | **0** | 1,887 | **14** |
+
+**196,431 refused invocations, 0 firings; all 18 firings in the kept
+complement.** `--ccetPreGateBogus` (the gate refuses everything) reports **14**
+on harness, so the falsifier column is alive — on the *compiler* profile it
+reports 0, because nothing there reaches a prologue emission at all, and that is
+worth stating plainly: **the control this round needed could not be run on the
+profile the prize was measured on.**
+
+## 10. The prize, and why it is smaller than the row it came from
+
+The prologue reads **219 ms as one span** (round 734: 253 ms) over 52,413
+invocations. That number is not the production cost: the span contains **six
+intermediate `CallSections.at()` boundaries** that production never executes. At
+the in-situ calibration (299–306 ns) those are 96 ms; at the differential
+boundary cost CLAUDE.md sanctions (~86–92 ns) they are 28 ms. So the production
+prologue is **123–191 ms**, and the gate refuses 98% of it.
+
+Landed, the same probe measures the seven partition rows at **66 ms raw against
+261 ms at HEAD (−195 ms)** — of which 28–92 ms is boundaries that were never
+production's to pay. Net: **≈ 105–165 ms, 0.4–0.6% of a 26.5 s check-only
+compile**, minus a gate that costs 587 ns per call as measured (one boundary
+included, so ~280–500 ns true, ~15–26 ms).
+
+**And law 2 (round 788: an aggregate that is skippable is not thereby
+recoverable) does NOT bite here — the counters say so.** The only resolution the
+skipped prologue performs is B216's `getTypeOfExpression(recv)`, and
+`getCalleeType` runs a few lines below on the same expression, so the natural
+expectation was that the work would simply move. It does not:
+
+| counter | Δ |
+|---|---:|
+| `typeOfExpr.calls` | **−1.86%** (−12,310) |
+| `globals.lookups` / `globals.misses` | −0.49% / −0.45% |
+| `narrow.memoServed` | −0.40% |
+| `mapped.hits` / `mapped.keyed` | −0.42% / −0.10% |
+| `typeNode.cacheable` / `cacheHits` / `bypassed` | −0.02% / −0.03% / −0.03% |
+| `output.errors`, `spine.nodes`, `narrow.walks` | **+0.00%** |
+
+**Nothing rose.** The B216 receiver typing is reached 10,933 times on the
+compiler profile and costs 23 ms; the counter falls by 12,310, i.e. by those
+calls plus the nested typings inside them, and stays down.
+
+## 11. The equivalence, by construction and then by measurement
+
+The gate returns `true` — run the prologue as before — whenever any walker could
+act:
+
+* `super(…)` / `super.m(…)`: TS2754, the base-constructor argument check, and
+  `handleSuperMethodCall`, all of which also `return` out of the function.
+  `getCalleeType("super")` answers `any`, so the general path never argument-checks
+  a super call — skipping the prologue would make it SILENT, not wrong, which is
+  exactly the kind of change a diagnostic-count grid cannot see.
+* a property-access callee named `reduce` / `filter` / `transform` / `create` —
+  the four name-keyed walkers' own first gates, verbatim.
+* a property-access callee with no type arguments and **at least one
+  `StringLiteralNode` argument** — B216's key arguments.
+* a file with any CJS default-as-namespace shape at all (B154).
+
+**The B216 leg is the one that needs an argument, and it has two halves.** It
+cannot EMIT without a string-literal argument (`expr.arguments[pIdx] as?
+StringLiteralNode ?: break`) — that much is a syntactic necessary condition. The
+half that makes the skip safe rather than merely quiet is that it cannot reach
+any SIDE-EFFECTING call without one either: `resolveStructuredTypeMembers` and
+`getIndexedAccessType` both sit *below* that test in the key loop, so the only
+mutation an invocation in the skip set could have performed is
+`getTypeOfExpression(recv)`. That is round 754's cache-mutation-ORDER hazard,
+bounded to a single call and then measured away by the grid.
+
+Measured: the 8-profile `--listAll` grid, diffed set-for-set in BOTH directions
+against the same binary run with `--ccetPreGate` (which honours nothing, so that
+run IS the pre-change output): **46/46/46/46/46/46/46/94, 0 added and 0 removed
+on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**; corpus suite
+**13,405 → 13,412 / 0 failures / 3 skipped**.
+
+## 11b. The warm A/B: sign yes, magnitude no — and the box was not quiet
+
+`scripts/ab-warm.sh`, 2 pairs, 8 iterations each, every iteration reporting
+`files/errors 78/46` (the driver's self-falsification held):
+
+| | A (HEAD) | B (gated) | Δ |
+|---|---:|---:|---:|
+| pair 1 | 10,737 ms | 10,668 ms | −69 ms (−0.64%) |
+| pair 2 | 11,066 ms | 10,884 ms | −182 ms (−1.64%) |
+| **median** | **10,902** | **10,776** | **−126 ms (−1.15%), B wins 2/2** |
+
+The driver prints `VERDICT: WIN of 1.2%`, and it should NOT be quoted as one:
+**arm A's sd is 2.13% and arm B's 1.42%, both above the ~1% quietness criterion**,
+and the per-pair spread (113 ms) is the same size as the delta (126 ms), so
+CLAUDE.md's law 7 fails outright. **The sign is confirmed 2/2; the magnitude is
+the partition's 105–165 ms.** That the warm median lands inside that interval is
+agreement, not confirmation.
+
+One likely cause of the noise is on the record rather than hidden: a single file
+write happened on this box during the measurement. Round 774 measured a −6.70%
+A/A phantom from polling a log; one write is far less than that, but the arm sd
+is what it is and the verdict is discarded on its own evidence.
+
+## 12. What did not work, and what the round leaves behind
+
+* **The first two candidates were dead on arrival for opposite reasons.** B464
+  and `cpaComputeArgCtxTypes` are the two biggest non-engine rows in the
+  property-access path and both already carry a pre-gate — this method has
+  already been applied to them. `checkPrivateMemberAccess` (44 ms) and the
+  optional-property TS18048 walker (50 ms) are keyed on the receiver's *kind*,
+  which is complementary to B464's rather than shared with it, so one
+  classification cannot serve both.
+* **A tempting mis-reading of the prologue's own table.** Its seven rows read
+  41 / 8 / 4 / 3 / 10 / 44 / 39 ms net, which invites the conclusion that B216
+  and the CJS lookup are the cost. They are not: at 52,413 invocations a single
+  probe boundary is 5–16 ms, so five of those seven rows are mostly their own
+  instrumentation. The measurement that decides is the ONE-SPAN row (219 ms) and
+  the nested `getTypeOfExpression` sub-measure (23 ms over 10,933) — a row of
+  300–800 ns/call in a partition whose boundary is 300 ns is not a measurement of
+  anything.
+* **Left in the queue:** the TS2793 `implRelated` probe (94 ms over 23,214 calls)
+  computes `getOverloadImplementationRelated` + `getImplementationSignature` +
+  `allArgumentsMatch` eagerly, for a related-info message consumed only when an
+  argument diagnostic is actually emitted — round 791's DEFERRAL shape rather
+  than this round's gate shape, and it needs 791's verifier, not 792's.
+
+## 13. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt); P=build/bench/tsc-project-*
+# the partition, with the gate live (six of the seven rows now reach ~1,019)
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --callSections $P
+# the gate: its price, its yield, and the falsifier column (honours nothing)
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --ccetPreGate $P
+# the control — run it on HARNESS, where the prologue actually fires
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --ccetPreGateBogus build/bench/tsc-harness-*
+```

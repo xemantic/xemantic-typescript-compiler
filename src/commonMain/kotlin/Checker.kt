@@ -5657,6 +5657,16 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val enumDomainCompleteCache = HashMap<Int, Boolean>()
 
+    /** (ENGINE.2g) round 793: the B154 leg of [ccetPrologueMayFire] asks "does THIS
+     *  file have any CJS default-as-namespace shape at all", once per call expression
+     *  in the program. [cjsDefaultNsShapes] already memoizes per file, but the lookup
+     *  is a `HashMap<String, …>` get on a path key plus a `Pair` destructure on the
+     *  gate's hot path; the checker visits files one at a time, so a single-entry
+     *  memo answers it with a reference compare. Declared before `init` per the
+     *  init-order trap. */
+    private var ccetCjsShapeFile: String? = null
+    private var ccetCjsShapeAny: Boolean = false
+
     /** (REL.1)(c) round 746: memo for [enumMemberEntries], keyed by enum symbol id.
      *  Declared before `init` per the init-order trap. */
     private val enumMemberEntriesCache = HashMap<Int, List<Pair<String, ConstantValue?>>?>()
@@ -138619,8 +138629,65 @@ interface DataView {
         try {
             checkSingleCallExpressionTypesCore(expr, source, fileName)
         } finally {
+            // (ENGINE.2g): a prologue span still open here means the core left
+            // through one of the prologue's `return`s — a firing.
+            CallSections.closePreGateIfOpen()
             CallSections.end()
         }
+    }
+
+    /**
+     * (ENGINE.2g) round 793 — the PROLOGUE pre-gate of
+     * [checkSingleCallExpressionTypesCore].
+     *
+     * The seven dedicated walkers at the top of that function run at every call
+     * expression in the program (52,413 on the compiler profile, 219 ms as one
+     * span) and fire ZERO times there. Unlike round 792's gate they do NOT share
+     * a proposition — they emit TS2345 / TS18048 / TS2339 / TS2349 / TS2754 — so
+     * one refutation cannot kill them the way "the property resolves" killed
+     * `checkMemberAccessMissing`'s 42 emissions. What they DO share is a KEY:
+     * every one of them is reachable only for a narrow syntactic shape of the
+     * CALLEE, so a single classification of the callee refutes all seven.
+     *
+     * Returns `true` — run the prologue — whenever any walker could act:
+     *
+     *  * `super(…)` / `super.m(…)` (the TS2754 emission, the base-ctor argument
+     *    check and [handleSuperMethodCall], all of which also `return`);
+     *  * a property-access callee named `reduce` / `filter` / `transform` /
+     *    `create` (the four name-keyed walkers' own first gates);
+     *  * a property-access callee with NO type arguments and at least one
+     *    `StringLiteralNode` argument — B216's key arguments. B216 cannot emit
+     *    without one (`expr.arguments[pIdx] as? StringLiteralNode ?: break`),
+     *    and — the property that makes the skip safe rather than merely quiet —
+     *    it cannot reach ANY side-effecting call without one either: the only
+     *    one above that test is `getTypeOfExpression(recv)`, which the
+     *    `getCalleeType` section performs unconditionally a few lines below;
+     *  * a file with any CJS default-as-namespace shape at all (B154).
+     *
+     * Conservative in one direction only: `true` means "run it as before".
+     */
+    private fun ccetPrologueMayFire(
+        expr: CallExpression, calleeExpr: Expression, fileName: String,
+    ): Boolean {
+        when (calleeExpr) {
+            is Identifier -> if (calleeExpr.text == "super") return true
+            is PropertyAccessExpression -> {
+                when (calleeExpr.name.text) {
+                    "reduce", "filter", "transform", "create" -> return true
+                }
+                if ((calleeExpr.expression as? Identifier)?.text == "super") return true
+                if (expr.typeArguments.isNullOrEmpty()) {
+                    for (a in expr.arguments) if (a is StringLiteralNode) return true
+                }
+            }
+            else -> {}
+        }
+        if (ccetCjsShapeFile === fileName) return ccetCjsShapeAny
+        val (direct, nsMembers) = cjsDefaultNsShapes(fileName)
+        val any = direct.isNotEmpty() || nsMembers.isNotEmpty()
+        ccetCjsShapeFile = fileName
+        ccetCjsShapeAny = any
+        return any
     }
 
     private fun checkSingleCallExpressionTypesCore(expr: CallExpression, source: String, fileName: String) {
@@ -138652,6 +138719,24 @@ interface DataView {
         CallSections.at(CallSections.B216)
         val prologueT = CallSections.t()
         val calleeExpr = expr.expression
+        // (ENGINE.2g) round 793: the prologue pre-gate. Under `--ccetPreGate` the
+        // verdict is computed, TIMED and honoured by NOTHING — the prologue runs
+        // either way, so that run reproduces this binary's predecessor and its
+        // "of those FIRED" column is a falsifier, not a tautology.
+        val pgProbe = CallSections.preGateProbe
+        val runPrologue: Boolean
+        if (pgProbe) {
+            val gt0 = CallSections.t()
+            val skip = CallSections.preGateBogus ||
+                !ccetPrologueMayFire(expr, calleeExpr, fileName)
+            CallSections.close(CallSections.N_PG_GATE, gt0)
+            CallSections.openPreGate(skip, prologueT, diagnostics.size)
+            runPrologue = true
+        } else {
+            runPrologue = ccetPrologueMayFire(expr, calleeExpr, fileName)
+        }
+        if (runPrologue) {
+        val pgD0 = diagnostics.size
         // B216: dependent indexed-access constraint (`V extends O[K1][K2]`) — per-call
         // evaluation with the key TPs fixed to this call's string-literal args.
         if (calleeExpr is PropertyAccessExpression &&
@@ -138780,8 +138865,10 @@ interface DataView {
                 if (handleSuperMethodCall(expr, calleeExpr, baseType, source, fileName)) return
             }
         }
-        // Resolve callee to get its type
         CallSections.close(CallSections.N_PROLOGUE, prologueT)
+        CallSections.closePreGate(fired = diagnostics.size > pgD0)
+        }
+        // Resolve callee to get its type
         CallSections.at(CallSections.CALLEE_TYPE)
         val calleeT0 = CallSections.t()
         val calleeType = getCalleeType(expr.expression)
@@ -156789,8 +156876,14 @@ interface DataView {
         val callee = expr.expression as? PropertyAccessExpression ?: return false
         val recv = callee.expression
         if ((recv as? Identifier)?.text == "super") return false
-        val ref = (getTypeOfExpression(recv))
-            as? Type.Reference ?: return false
+        // (ENGINE.2g) round 793: the prologue's ONLY side-effecting call for a
+        // call with no string-literal argument — everything below is a pure AST
+        // read until `expr.arguments[pIdx] as? StringLiteralNode` decides.
+        val b216T = CallSections.t()
+        val recvType = getTypeOfExpression(recv)
+        CallSections.close(CallSections.N_B216_TYPEOF, b216T)
+        val ref = recvType as? Type.Reference ?: return false
+        if (CallSections.pgOpen && CallSections.pgSkip) CallSections.pgB216Deep++
         val classArgs = ref.resolvedTypeArguments ?: return false
         if (classArgs.isEmpty() || classArgs.any { it is Type.TypeParam || it === anyType || it === errorType }) return false
         val classDecl = ref.target.symbol?.declarations?.firstOrNull { it is ClassDeclaration }

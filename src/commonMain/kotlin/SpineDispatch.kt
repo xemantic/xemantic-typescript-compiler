@@ -870,7 +870,29 @@ object CallSections {
      */
     const val OVERHEAD = 27
 
-    const val N = 28
+    /**
+     * (ENGINE.2g) round 793 — the candidate prologue PRE-GATE's own cost, one
+     * span per invocation. Probe-only: in production the gate is called
+     * unbracketed, so this row prices the instrument's subject, not the
+     * instrument.
+     */
+    const val N_PG_GATE = 28
+
+    /** The prologue span for the invocations the gate would SKIP. */
+    const val N_PG_PRO_SKIP = 29
+
+    /** The prologue span for the invocations the gate would KEEP. */
+    const val N_PG_PRO_KEEP = 30
+
+    /**
+     * B216's `getTypeOfExpression(recv)` — the prologue's ONLY type resolution,
+     * and (measured) the only side-effecting call any invocation in the skip set
+     * can reach. Everything below it in that walker is a pure AST read until a
+     * `StringLiteralNode` argument appears, which the gate requires.
+     */
+    const val N_B216_TYPEOF = 31
+
+    const val N = 32
 
     val names: Array<String> = arrayOf(
         "B216 dependent indexed-access", "reduce<U> keyof callback",
@@ -893,6 +915,10 @@ object CallSections {
         "  wrapper transition (probe-only, not production)",
         "  probe boundary, first of the invocation",
         "  probe boundary (in situ, steady state)",
+        "  (2g) the prologue pre-gate itself",
+        "  (2g) the prologue for calls it would SKIP",
+        "  (2g) the prologue for calls it would KEEP",
+        "  (2g) B216 getTypeOfExpression(recv)",
     )
 
     var nanos: LongArray = LongArray(N)
@@ -900,6 +926,44 @@ object CallSections {
 
     /** Invocations of the instrumented function (nested ones excluded). */
     var invocations: Long = 0
+
+    // ── (ENGINE.2g) round 793: the prologue pre-gate probe ───────────────────
+    /**
+     * Compute the candidate prologue pre-gate and HONOUR NOTHING — the prologue
+     * runs either way, so a run with this on reproduces the pre-change binary
+     * byte for byte and its [pgSkipFired] column is a falsifier rather than a
+     * tautology. Set by `--ccetPreGate`.
+     */
+    var preGateProbe: Boolean = false
+
+    /** The positive control: the gate refutes EVERY call (`--ccetPreGateBogus`). */
+    var preGateBogus: Boolean = false
+
+    /** Invocations whose prologue the gate would skip / would keep. */
+    var pgSkipCalls: Long = 0
+    var pgKeepCalls: Long = 0
+
+    /**
+     * Of those, the ones whose prologue actually DID something — emitted a
+     * diagnostic, or returned out of the function before reaching the callee
+     * resolution. `pgSkipFired` must be 0 for the gate to be sound; it is the
+     * number the control has to be able to move.
+     */
+    var pgSkipFired: Long = 0
+    var pgKeepFired: Long = 0
+
+    /**
+     * Skip-set invocations whose B216 walk got PAST `getTypeOfExpression(recv)`
+     * into the class/method AST reads — i.e. how deep the skipped body could
+     * possibly have gone. Pure reads from there on.
+     */
+    var pgB216Deep: Long = 0
+
+    /** Open prologue span state (probe-only; depth-1 invocations only). */
+    var pgOpen: Boolean = false
+    var pgSkip: Boolean = false
+    var pgT0: Long = 0
+    var pgD0: Int = 0
 
     /** The running section and its start timestamp; `-1` = none open. */
     var cur: Int = -1
@@ -913,6 +977,38 @@ object CallSections {
         cur = -1
         curT = 0
         depth = 0
+        pgSkipCalls = 0; pgKeepCalls = 0
+        pgSkipFired = 0; pgKeepFired = 0
+        pgB216Deep = 0
+        pgOpen = false; pgSkip = false; pgT0 = 0; pgD0 = 0
+    }
+
+    /** (ENGINE.2g) open the prologue span for one depth-1 invocation. */
+    fun openPreGate(skip: Boolean, t0: Long, d0: Int) {
+        if (!preGateProbe || depth != 1) return
+        pgOpen = true; pgSkip = skip; pgT0 = t0; pgD0 = d0
+        if (skip) pgSkipCalls++ else pgKeepCalls++
+    }
+
+    /**
+     * (ENGINE.2g) close it. [fired] is true when the prologue emitted or
+     * returned out of the function — the two effects a skip would erase.
+     */
+    fun closePreGate(fired: Boolean) {
+        if (!pgOpen) return
+        pgOpen = false
+        nanos[if (pgSkip) N_PG_PRO_SKIP else N_PG_PRO_KEEP] += PassTiming.nowNanos() - pgT0
+        calls[if (pgSkip) N_PG_PRO_SKIP else N_PG_PRO_KEEP]++
+        if (fired) { if (pgSkip) pgSkipFired++ else pgKeepFired++ }
+    }
+
+    /**
+     * Reached from the wrapper's `finally`: a span still open there means the
+     * prologue left the function through one of its seven `return`s, which is a
+     * firing whether or not it emitted.
+     */
+    fun closePreGateIfOpen() {
+        if (pgOpen) closePreGate(fired = true)
     }
 
     // The entry points are `inline` so a production call is a static read plus
@@ -995,6 +1091,18 @@ object CallSections {
                     if (s < FIRST_NESTED) ", returnedIn=${returnedIn(s)}" else ""
             )
         }
+        appendLine(
+            "(ENGINE.2g) prologue pre-gate refused ${prologueRefused()} of " +
+                "${calls[B216]} invocations (the seven walkers did not run)"
+        )
+        if (preGateProbe) {
+            appendLine(
+                "(ENGINE.2g) prologue pre-gate${if (preGateBogus) " [BOGUS CONTROL]" else ""}: " +
+                    "would SKIP $pgSkipCalls, of those FIRED $pgSkipFired; " +
+                    "kept $pgKeepCalls, of those FIRED $pgKeepFired; " +
+                    "skip-set B216 reads past the receiver type: $pgB216Deep"
+            )
+        }
     }
 
     /**
@@ -1004,10 +1112,22 @@ object CallSections {
      * branches; everything that reaches a tail branch leaves inside it.
      */
     fun returnedIn(sec: Int): Long = when (sec) {
+        // (ENGINE.2g) round 793: [B216] is no longer followed unconditionally by
+        // [REDUCE_KEYOF] — the prologue pre-gate sends a refuted invocation
+        // straight to [CALLEE_TYPE], and those are `calls[CALLEE_TYPE] -
+        // calls[N_PROLOGUE]` (an invocation that COMPLETES the prologue closes
+        // both). So the two rows at the gate's edges get their own arithmetic
+        // and the rows between them keep the plain difference.
+        B216 -> calls[B216] - calls[REDUCE_KEYOF] -
+            (calls[CALLEE_TYPE] - calls[N_PROLOGUE])
+        SUPER -> calls[SUPER] - calls[N_PROLOGUE]
         in B216 until TYPE_ARGS -> calls[sec] - calls[sec + 1]
         TYPE_ARGS -> calls[TYPE_ARGS] - calls[SINGLE_SIG] - calls[OVERLOADS]
         else -> calls[sec]
     }
+
+    /** (ENGINE.2g) invocations the prologue pre-gate refuted, in production. */
+    fun prologueRefused(): Long = calls[CALLEE_TYPE] - calls[N_PROLOGUE]
 
     /** Machine-readable dump: one line per section. */
     fun csv(): String = buildString {

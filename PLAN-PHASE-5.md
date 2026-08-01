@@ -20,6 +20,98 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 793 (2026-08-01) — (ENGINE.2g) ANSWERED: ROUND 792's METHOD GENERALISES, BUT NOT
+THE WAY THE ITEM PHRASED IT. A PRE-GATE ON `checkSingleCallExpressionTypes`' PROLOGUE —
+SEVEN DEDICATED WALKERS THAT RUN AT EVERY CALL EXPRESSION AND FIRE ZERO TIMES ON THE
+COMPILER PROFILE — REFUSES 98.1% OF 52,413 INVOCATIONS, WITH 0 FIRINGS IN 196,431 REFUSED
+CALLS ACROSS THREE PROFILES AND ALL 18 FIRINGS IN THE KEPT COMPLEMENT. Net ≈105–165 ms
+(0.4–0.6%); warm A/B B wins 2/2 at −126 ms but BOTH arm sds exceed the quietness criterion,
+so the magnitude is the partition's. Suite 13,405 → 13,412; grid 46×7/94 with 0 added and 0
+removed both directions.**
+
+- **THE ITEM'S OWN HYPOTHESIS IS FALSIFIED, AND THAT IS THE ROUND'S FIRST RESULT.**
+  (2g) asked "does the shared-PROPOSITION form generalise". It does not: the seven
+  prologue walkers emit **five different claims** (TS2345 / TS18048 / TS2339 / TS2349 /
+  TS2754), so no single refutation can kill them the way "the property resolves" killed
+  `checkMemberAccessMissing`'s 42 emissions. What they share is a **KEY** — each is
+  reachable only for a narrow syntactic shape of the CALLEE. **The transferable method is
+  "one cheap question in front of many emissions", not "one proposition"**, and the key
+  form is strictly more general (a proposition is one way to have a key).
+- **THE INVENTORY WAS RE-MEASURED AT HEAD BEFORE ANYTHING WAS CHOSEN (law 1), AND THE
+  ITEM'S THREE NAMED CANDIDATES ARE ALL DEAD.** `emitTs18048` closure-captured receiver
+  **171 ms** and `cpaComputeArgCtxTypes` **242 ms** are the two biggest non-engine rows in
+  the property-access path and **both already carry a pre-gate** (rounds 489 and 788) —
+  this method has already been applied to them; `checkPrivateMemberAccess` **44 ms** and
+  the optional-property TS18048 walker **50 ms** are keyed on the receiver KIND, which is
+  *complementary* to B464's rather than shared with it, so one classification cannot
+  serve both. The candidate that survived came from the CALL path instead: the prologue,
+  **219 ms as one span, `returnedIn=0` on all seven rows**.
+- **THE PRIZE IS SMALLER THAN THE ROW IT CAME FROM, AND THE REASON IS THE PROBE.** The
+  219 ms span contains **six intermediate `CallSections.at()` boundaries production never
+  executes** — 96 ms at the in-situ calibration (299 ns), 28 ms at the differential cost
+  CLAUDE.md sanctions (~90 ns). So the production prologue is **123–191 ms**; landed, the
+  seven rows fell **261 → 66 ms raw**, and the honest net is **≈105–165 ms = 0.4–0.6%**
+  after a gate measured at 587 ns/call (one boundary included; ~280–500 ns true).
+- **LAW 2 WAS CHECKED, NOT ASSUMED, AND DOES NOT BITE — WHICH IS THE OPPOSITE OF WHAT THE
+  MECHANISM PREDICTED.** The only resolution a refused prologue skips is B216's
+  `getTypeOfExpression(recv)`, and `getCalleeType` types the same expression a few lines
+  below, so the natural expectation was that the work would MOVE (round 788's law). It
+  does not: `typeOfExpr.calls` **−1.86% (−12,310)** against 10,933 skipped B216 typings
+  plus their nested calls, `globals.lookups` −0.49%, `narrow.memoServed` −0.40%,
+  `mapped.hits` −0.42%, and **`output.errors` / `spine.nodes` / `narrow.walks` all
+  +0.00%. Nothing rose.**
+- **THE EQUIVALENCE IS BY CONSTRUCTION FOR THE EMISSIONS AND BY A BOUND FOR THE SIDE
+  EFFECTS.** Each leg of the gate is a walker's own first gate copied verbatim (the four
+  name-keyed walkers, both `super` shapes, the per-file CJS shapes). The one leg that
+  needed an argument is B216's: it cannot EMIT without a `StringLiteralNode` argument
+  (`expr.arguments[pIdx] as? StringLiteralNode ?: break`), and — the half that makes the
+  skip safe rather than merely quiet — it cannot reach any SIDE-EFFECTING call without
+  one either, because `resolveStructuredTypeMembers` and `getIndexedAccessType` both sit
+  BELOW that test in the key loop. So round 754's cache-mutation-ORDER hazard is bounded
+  to a single type read, and then measured away by the grid.
+- **THE SHIPPED CONTROL COULD NOT BE RUN ON THE PROFILE THE PRIZE WAS MEASURED ON, AND
+  THAT IS WORTH SAYING PLAINLY.** `--ccetPreGate` honours nothing (so the run reproduces
+  the pre-change binary and IS the grid's baseline): compiler **51,394 refused / 0 fired**,
+  services **68,200 / 0**, harness **76,837 / 0**, against **0 / 4 / 14** firings in the
+  kept complements. `--ccetPreGateBogus` reports **14 on harness** — but **0 on the
+  compiler profile, because nothing there reaches a prologue emission at all**. A control
+  that is dead on the profile you priced on is not a control; the live falsifiers are the
+  harness run and the in-process probe pin.
+- **PINS: 7 new (`CcetPrologueGateTest`), 5 DISCRIMINATING across two complementary
+  ablations run SEPARATELY.** Fault A (the gate refuses everything) fails 5; fault B (the
+  string-literal leg removed) fails 1, inside A's set. The two holders are the negative
+  control (a refuted call keeps its ordinary TS2345) and the probe's own bogus control,
+  which ignores the gate's content by construction. One pin exists because the general
+  path CANNOT cover it: `getCalleeType("super")` answers `any`, so `super.m(3)`'s argument
+  check lives only in the prologue — skipping it would make the call SILENT rather than
+  wrong, which no diagnostic-count grid can see.
+- **THE WARM A/B CONFIRMS THE SIGN AND ITS MAGNITUDE IS DISCARDED ON ITS OWN EVIDENCE.**
+  2 pairs, deltas **−0.64% / −1.64%**, median **−126 ms (−1.15%), B wins 2/2**, every
+  iteration reporting `files/errors 78/46`. But **arm A's sd is 2.13% and arm B's 1.42%**,
+  both above the ~1% quietness criterion, and the per-pair spread (113 ms) equals the
+  delta (126 ms) — law 7 fails outright. **A single file write happened on the box during
+  the run and is recorded as the likely cause** rather than hidden (round 774's rule).
+- **WHAT DID NOT WORK.** (1) The obvious reading of the prologue's own table — rows at
+  41 / 8 / 4 / 3 / 10 / 44 / 39 ms net "showing" that B216 and the CJS lookup are the cost
+  — is wrong: at 52,413 invocations one probe boundary is 5–16 ms, so five of those seven
+  rows are mostly their own instrumentation, and the nested `getTypeOfExpression`
+  sub-measure prices B216's only resolution at **23 ms over 10,933 calls**. (2) Two
+  PRE-EXISTING probe pins broke because their subject moved — `CallSectionProbeTest`'s
+  "the disjoint sections partition every invocation" (the prologue sub-measure no longer
+  closes once per invocation reaching `getCalleeType`) and "the section-name table is
+  index-aligned" (the calibration rows are no longer the last three indices); both
+  restated as the NEW invariant, with the gate's own non-vacuity added. That is round
+  791/792's failure mode for the third round running. (3) The suite's first attempt died
+  on BUILD.1's `Not enough memory to run compilation` after the ablation cycle left a
+  daemon squatting — `--stop` plus a graceful Kotlin-daemon kill, then it passed.
+- Suite 13,405 → **13,412 / 0 failures / 3 skipped**. 8-profile grid diffed set-for-set in
+  BOTH directions against the same binary under `--ccetPreGate`:
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight.** `--partitionCheck 2`
+  **EQUIVALENT — 46**. Cost gate rebaselined in the landing commit with the mechanism
+  named. Full derivation: `docs/perf/call-expression-attribution.md` §§ 9-13.
+  **(ENGINE.2h) is queued: the TS2793 `implRelated` probe, 94 ms, round 791's deferral
+  shape rather than this round's gate shape.**
+
 **Round 792 (2026-08-01) — (ENGINE.2e) LANDED: A WHOLE-FUNCTION PRE-GATE SKIPS
 `checkMemberAccessMissing` ENTIRELY FOR 20,939 OF 67,258 CALLS (31%) — 563 ms OF BODY
 TIME FOR A 124 ms GATE, NET ~440 ms (1.6% OF THE COMPILE) — AND THE LEVEL-R PARTITION
@@ -3812,7 +3904,60 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Gate as (ENGINE.2e): corpus suite + the 8-profile grid diffed BOTH directions +
   `--partitionCheck 2` + `cost_gate.py`.
 
-- [ ] **(ENGINE.2g) THE PRE-GATE GENERALISES — ASK WHERE ELSE A DEDICATED-WALKER FIREWALL
+- [ ] **(ENGINE.2h) THE TS2793 "IMPLEMENTATION WOULD HAVE SUCCEEDED" PROBE IS COMPUTED
+  EAGERLY AT EVERY SINGLE-SIGNATURE CALL — 94 ms over 23,214 — FOR A RELATED-INFO MESSAGE
+  ONLY AN EMISSION CONSUMES.** Re-measured at HEAD round 793 (`--callSections`, nested row
+  `of which TS2793 impl-would-have-succeeded probe`): `getOverloadImplementationRelated` +
+  `getImplementationSignature` + `allArgumentsMatch` run before
+  `checkArgumentsAgainstSignature`, and the `implRelated` diagnostic they build is attached
+  only where an argument diagnostic actually fires — 57 emissions in the whole compiler
+  profile. **This is round 791's DEFERRAL shape, not round 792's gate shape, and the
+  difference decides the instrument**: there is no cheap refutation to compute, so the fix
+  is to pass a thunk / recompute at the emission site, and the hazard is that
+  `allArgumentsMatch` types arguments — evaluated later it sees a different ambient state
+  (round 754). So it needs 791's verifier: evaluate BOTH eagerly and deferred, honour the
+  EAGER verdict so the run reproduces the pre-change binary, and compare at `Diagnostic`
+  granularity, with a bogus positive control. **94 ms = 0.34%, so this is a
+  cheap-if-you-are-already-there item, not a headline** — and round 788's rejected lazy
+  `contextualType` thunk is the precedent to read first, because the reason it failed
+  (the thunk had to survive ~14 save/restore sites in a different dynamic scope) does NOT
+  apply here (the force site is inside the same invocation) but the shape is identical.
+  Gate as (ENGINE.2g): corpus suite + the 8-profile grid diffed BOTH directions +
+  `--partitionCheck 2` + `cost_gate.py`.
+
+- [x] **(ENGINE.2g) ANSWERED round 793: the PROPOSITION form does NOT generalise, the KEY
+  form does. Landed: a pre-gate on the `checkSingleCallExpressionTypes` PROLOGUE — seven
+  dedicated walkers that run at every call expression in the program and fire ZERO times
+  on the compiler profile — refusing 98.1% of 52,413 invocations (98.1% of services'
+  69,555, 97.6% of harness's 78,724) with 0 firings in 196,431 refused calls and all 18
+  profile firings in the kept complement.** The seven emit FIVE different claims
+  (TS2345/TS18048/TS2339/TS2349/TS2754), so no single refutation can kill them the way
+  "the property resolves" killed `checkMemberAccessMissing`'s 42; what they share is a
+  KEY — each is reachable only for a narrow syntactic shape of the CALLEE. **The
+  transferable method is "one cheap question in front of many emissions", not "one
+  proposition".** Prize: the prologue reads 219 ms as ONE span but contains six
+  intermediate probe boundaries production never pays, so the production figure is
+  **123–191 ms** and the landed rows fell **261 → 66 ms raw**; net **≈105–165 ms =
+  0.4–0.6%**. **Law 2 was checked and does NOT bite** — `typeOfExpr.calls` −1.86%
+  (−12,310) and nothing rose, although the one resolution skipped (B216's
+  `getTypeOfExpression(recv)`) is re-asked by `getCalleeType` a few lines below.
+  Equivalence is by construction for the emissions (each leg is the walker's own first
+  gate) and the B216 leg additionally proves the SIDE-EFFECT bound: `resolveStructured
+  TypeMembers`/`getIndexedAccessType` both sit BELOW the string-literal-argument test, so
+  a refused call could only ever have performed that one type read. Grid
+  46/46/46/46/46/46/46/94 with 0 added and 0 removed both directions; `--partitionCheck 2`
+  EQUIVALENT; suite 13,405 → 13,412 (+7 pins, 5 discriminating across two complementary
+  ablations run separately). Warm A/B B wins 2/2, median −126 ms (−1.15%), **but both arm
+  sds exceed the 1% quietness criterion so the magnitude is the partition's**. Derivation:
+  `docs/perf/call-expression-attribution.md` §§ 9-13. **The re-measured inventory the
+  round produced, for whoever picks up the next one: B464 171 ms and `cpaComputeArgCtxTypes`
+  242 ms are ALREADY pre-gated (rounds 489/788); `checkPrivateMemberAccess` 44 ms and the
+  optional-property TS18048 walker 50 ms are keyed on the receiver KIND, complementary to
+  B464's rather than shared, so one classification cannot serve both; the one live
+  candidate left is the TS2793 `implRelated` probe (94 ms over 23,214), which is round
+  791's DEFERRAL shape, not this round's gate shape.** The original item body follows.
+
+  ORIGINAL: **(ENGINE.2g) THE PRE-GATE GENERALISES — ASK WHERE ELSE A DEDICATED-WALKER FIREWALL
   IS ANSWERABLE BY ONE CHEAP QUESTION.** Round 792's gate works because every emission of
   `checkMemberAccessMissing` asserts the SAME proposition (a property is absent), so one
   refutation kills all 42 of them. Level Q's table has other multi-emission engines

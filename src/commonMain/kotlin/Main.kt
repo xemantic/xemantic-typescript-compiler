@@ -186,6 +186,23 @@ fun main(args: Array<String>) {
                 CpaSections.reset(); CpaSections.mode = CpaSections.ON
                 CpaSections.preGateProbe = true; CpaSections.preGateBogus = true
             }
+            // (ENGINE.2g) round 793: price the call-expression PROLOGUE pre-gate.
+            // Computes the gate, HONOURS NOTHING (so the run reproduces the
+            // pre-change binary and IS the grid's baseline output), splits the
+            // prologue's measured time by the verdict, and counts how many of the
+            // calls it would skip actually emitted or returned. That last column
+            // is the falsifier.
+            "--ccetPreGate", "--ccetpregate" -> {
+                CallSections.reset(); CallSections.mode = CallSections.ON
+                CallSections.preGateProbe = true
+            }
+            // ... and its positive control: the gate refutes EVERY call, so the
+            // "of those FIRED" column must report the profile's true prologue
+            // firing count. A dead instrument would read 0 here too.
+            "--ccetPreGateBogus", "--ccetpregatebogus" -> {
+                CallSections.reset(); CallSections.mode = CallSections.ON
+                CallSections.preGateProbe = true; CallSections.preGateBogus = true
+            }
             // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
             // ~20% of the compile and never profiled. Per-FILE spans, so no
             // calibration counterpart is needed.

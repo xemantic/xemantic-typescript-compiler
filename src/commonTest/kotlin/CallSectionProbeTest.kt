@@ -114,9 +114,13 @@ class CallSectionProbeTest {
     fun `the section-name table is index-aligned and complete`() {
         assert(CallSections.names.size == CallSections.N)
         assert(CallSections.FIRST_NESTED == CallSections.N_TS2348_SCAN)
-        assert(CallSections.OVERHEAD == CallSections.N - 1)
-        assert(CallSections.OVERHEAD_FIRST == CallSections.N - 2)
-        assert(CallSections.ENTRY == CallSections.N - 3)
+        // (ENGINE.2g) round 793 appended four rows AFTER the calibration block,
+        // so the three calibration rows are no longer the last three indices —
+        // what the pin is really about is that they stay CONTIGUOUS and in
+        // order, and that every index below [CallSections.N] is named.
+        assert(CallSections.OVERHEAD == CallSections.OVERHEAD_FIRST + 1)
+        assert(CallSections.OVERHEAD_FIRST == CallSections.ENTRY + 1)
+        assert(CallSections.N_B216_TYPEOF == CallSections.N - 1)
         assert(CallSections.OVERLOADS == CallSections.FIRST_NESTED - 1)
     }
 
@@ -158,14 +162,36 @@ class CallSectionProbeTest {
         assert(CallSections.calls[CallSections.OVERHEAD_FIRST] == invocations)
         assert(CallSections.calls[CallSections.OVERHEAD] == invocations * 8)
         // The prologue sub-measure spans seven partition sections, so it is
-        // closed once per invocation that reaches getCalleeType.
+        // closed once per invocation THAT RUNS THEM. (ENGINE.2g) round 793 put
+        // a pre-gate in front of the seven, so that is no longer every
+        // invocation reaching getCalleeType — it is exactly the ones the gate
+        // did not refute, which is also what the second section's reach counts.
         assert(
             CallSections.calls[CallSections.N_PROLOGUE] ==
+                CallSections.calls[CallSections.REDUCE_KEYOF]
+        )
+        assert(
+            CallSections.calls[CallSections.N_PROLOGUE] <=
                 CallSections.calls[CallSections.CALLEE_TYPE]
         )
+        // Non-vacuity: the gate refutes SOME of this fixture's calls and keeps
+        // others, so neither side of that inequality is trivially the whole set.
+        assert(CallSections.calls[CallSections.N_PROLOGUE] > 0L)
+        assert(
+            CallSections.calls[CallSections.N_PROLOGUE] <
+                CallSections.calls[CallSections.B216]
+        )
         // Reach counts fall monotonically along the sequential sections: an
-        // invocation can only stop reaching later ones by returning.
-        for (s in CallSections.B216 until CallSections.TYPE_ARGS) {
+        // invocation can only stop reaching later ones by returning. (ENGINE.2g)
+        // round 793 breaks the chain at exactly ONE edge — the pre-gate skips
+        // [CallSections.REDUCE_KEYOF]..[CallSections.SUPER] altogether, so the
+        // fall resumes at [CallSections.CALLEE_TYPE], which is bounded by the
+        // first section instead of by [CallSections.SUPER].
+        for (s in CallSections.B216 until CallSections.SUPER) {
+            assert(CallSections.calls[s] >= CallSections.calls[s + 1])
+        }
+        assert(CallSections.calls[CallSections.B216] >= CallSections.calls[CallSections.CALLEE_TYPE])
+        for (s in CallSections.CALLEE_TYPE until CallSections.TYPE_ARGS) {
             assert(CallSections.calls[s] >= CallSections.calls[s + 1])
         }
         // The two tail branches are mutually exclusive and together account
