@@ -1132,6 +1132,13 @@ five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; s
 - [ ] **BLOCKED-PENDING-USER (marked round 775): (AOT.1) Decide the shipped artifact — the
   REMAINING owner decision.** Guardrails: this is a release/build-matrix decision, not an
   engineering one, so the loop marks it and works past it rather than choosing.
+  **ROUND-796 RE-VERIFICATION (queue hygiene, item stays unchecked):** the marker is
+  present and the reading is correct — every open question in this item ((1) both /
+  jar-only / native-only, (2) linux-x64-only for a first release, (3) the release CI
+  budget) is a release/build-matrix decision, which CLAUDE.md § Guardrails reserves to the
+  owner. (AOT.4) — the gap-closer this item points at — LANDED at round 775, so the
+  decision is now as cheap as it will ever be; nothing further is actionable here without
+  an answer. **Do not decide it autonomously; do not re-derive this verdict.**
   **The proposal to react to, stated so a yes/no is enough.** Ship **both**, with the JVM
   jar as the canonical artifact and a linux-x64 native binary attached to releases as an
   opt-in fast path — because the two pieces of evidence point opposite ways and only that
@@ -1247,12 +1254,25 @@ five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; s
 
   </details>
 
-- [ ] **(AOT.3) Emit-mode native measurement + PGO.** (a) All round-771 figures are
+- [ ] **(AOT.3) CI-ONLY — NOT ACTIONABLE ON THIS BOX (marked round 796). Emit-mode native
+  measurement + PGO.** (a) All round-771 figures are
   `--noEmit`; the published CI ratio is emit-mode, so the two cannot be compared until
   the native binary is measured with emit (§ 0.2's standing rule). (b) `-O3
   -march=native` measured **13,325 vs 13,335 ms — nothing**, so the residual 15% against
   JVM peak is not codegen but the absence of **PGO**, which GraalVM CE cannot do. Only
   Oracle GraalVM closes it. **Do not spend further rounds on codegen flags.**
+  **ROUND-796 QUEUE HYGIENE (item stays unchecked, so it is picked up when a CI lane
+  exists).** Sub-step (a) requires BUILDING a native image (`./gradlew nativeImage`, i.e.
+  GraalVM `native-image`) and then running it — and CLAUDE.md carries an explicit OWNER
+  DIRECTIVE (round 775) that **no Kotlin/Native or GraalVM task may run on this box**,
+  issued after one froze the host for ~2 hours: with `Swap: 0` the kernel cannot page, so
+  an over-commit stalls the machine instead of OOM-killing one process. The home for this
+  work is `.github/workflows/native.yml` (already `workflow_dispatch`-only and already
+  carrying the byte-identity check); the emit-mode run belongs there as an added step.
+  Sub-step (b) is self-closing by its own last sentence. **So: nothing here is actionable
+  locally today, and the next agent should NOT re-derive that — it costs a frozen host to
+  find out.** Verified round 796 by reading the item plus the CLAUDE.md directive; no
+  native/GraalVM command was run.
 
 - [x] **(COST.2) CLOSED round 776 — the baseline did not drift; its ANCHOR was never
   reproducible.** Round 760's own commit (`07e43815`), rebuilt and re-run today, measures
@@ -1348,6 +1368,19 @@ five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; s
     MUTABLE locations in tsc — the `as const` gotcha). Ours is NARROWER, so unlike the
     enum exclusion it CAN in principle manufacture an FP (`o.kind = "b"` is legal in tsc).
     Zero measured sites; recorded, not pinned (round 765's rule).
+  - **ROUND-796 QUEUE HYGIENE — (b)/(c)/(d)'s "zero measured sites" RE-VERIFIED at HEAD,
+    and the verification is stronger than a per-shape grep.** The 8-profile grid was
+    captured at HEAD (46/46/46/46/46/46/46/94) and the **416 residual diagnostics across
+    all eight profiles contain NO TS2322 and NO TS2345 at all** — the by-code census is
+    TS2591×367 (`process`, the offline `@types/node` artifact), TS2304×24, TS2584×13,
+    TS2503×6, TS7006×3, TS2339×2, TS2593×1. Literal widening can only ever manifest as an
+    ASSIGNABILITY diagnostic (TS2322/TS2345/TS2353/TS2820), so all three open sub-steps are
+    unobservable on the dashboard by construction, not merely unobserved: (b) would need a
+    TS2345 at a call argument, (c) a TS2322 at a `readonly` member, and (d) — the
+    divergence we own, where OURS is narrower — could only ever ADD a TS2322. **The item's
+    own instruction therefore still holds unchanged: do not widen this speculatively; take
+    it when a profile line or a (REL.2) re-measurement needs it.** (Re-verify the same way:
+    the by-code census of the grid is one `grep -o "error TS[0-9]*" | sort | uniq -c`.)
   Back-pointers: **(REL.4)(c)** — CLOSED by (a). **(REL.2)** — its remaining worklist is
   labelled 3x cause (D), but round 781 read the real sources and **at least two of the
   three are not literal widening at all** (`formattingScanner.ts:113` initialises from a
