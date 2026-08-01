@@ -49643,6 +49643,13 @@ class Checker(
          *  explicit per-walk horizon. */
         private const val NARROW_MAX_DEPTH = 2000
 
+        /** (ENGINE.2b) round 788: node budget for [cpaArgsMayConsumeContext]'s bounded
+         *  pre-gate scan. Exhausting it answers TRUE (compute as before), so the budget
+         *  trades prize for a hard per-call cost ceiling and can never change a verdict.
+         *  128 leaves the measured skippable share intact (the consuming kinds sit at
+         *  the TOP of an argument subtree, not deep inside it). */
+        private const val CPA_ARGCTX_SCAN_BUDGET = 128
+
         /** P0 (services hang): hard cap on LIVE flow-walker recursion depth ACROSS
          *  re-entrant walks (tsc checker.ts `flowDepth === 2000` — a stack guard;
          *  re-entries share the budget because [narrowLiveDepth] is a checker field,
@@ -131012,28 +131019,41 @@ interface DataView {
      *  computation, extracted VERBATIM — shared by the legacy arm and the
      *  spine ctx pull-derivation (one computation, never a fork). */
     /**
-     * (ENGINE.2) round 787, PROBE-ONLY (called only from [CpaSections.noteArgCtx],
-     * whose lambda is never evaluated with the probe off).
+     * (ENGINE.2b) round 788 — the PRE-GATE on `cpaComputeArgCtxTypes`, promoted from
+     * round 787's probe-only predicate.
      *
      * Can anything in [expr]'s ARGUMENT subtrees read the contextual type
-     * `cpaComputeArgCtxTypes` was called to produce? Only three arms of
-     * `checkPropertyAccessInExpr` read `contextualType` — ArrowFunction,
-     * FunctionExpression and ObjectLiteralExpression — so an argument subtree
-     * containing none of them cannot observe the computation at all. Deliberately
-     * CONSERVATIVE (answers true on a JSX/unknown shape by walking every child),
-     * because it is measuring an upper bound on a pre-gate's prize, and an
-     * over-count makes that prize look SMALLER, never larger.
+     * `cpaComputeArgCtxTypes` was called to produce? Round 787 measured that on the
+     * compiler profile only **2,020 of 51,967 calls (3.9%)** can, so the other
+     * **265 ms** is computed for a value nothing will ever look at.
+     *
+     * FOUR node kinds consume `contextualType`, and the list is the set of its READ
+     * sites, not a guess: `checkPropertyAccessInExpr`'s ArrowFunction /
+     * FunctionExpression / ObjectLiteralExpression arms, plus
+     * `getTypeOfObjectLiteral`, `getTypeOfArrayLiteral` and
+     * `applyContextualParameterTypes` — reached from an ObjectLiteralExpression, an
+     * ArrayLiteralExpression and a function-like node respectively.
+     *
+     * DELIBERATELY CONSERVATIVE in one direction only: `true` means "compute it as
+     * before", so every uncertainty answers `true` — an unknown/JSX shape by walking
+     * its children, and a subtree bigger than [CPA_ARGCTX_SCAN_BUDGET] nodes by
+     * giving up. The budget is what keeps this a bounded pre-gate rather than a
+     * second walk of the argument subtree (which the caller is about to walk anyway).
      */
-    private fun cpaArgumentsCanConsumeContext(expr: CallExpression): Boolean {
-        val args = expr.arguments
+    private fun cpaArgsMayConsumeContext(args: List<Expression>): Boolean {
         if (args.isEmpty()) return false
+        var budget = CPA_ARGCTX_SCAN_BUDGET
         // Iterative — never recurse an expression subtree (the left-spine rule).
-        val work = ArrayDeque<Node>()
-        for (a in args) work.addLast(a)
+        val work = ArrayList<Node>(16)
+        val push: (Node) -> Unit = { work.add(it) }
+        for (a in args) work.add(a)
         while (work.isNotEmpty()) {
-            val n = work.removeLast()
-            if (n is ArrowFunction || n is FunctionExpression || n is ObjectLiteralExpression) return true
-            forEachChild(n) { work.addLast(it) }
+            if (budget-- <= 0) return true
+            when (val n = work.removeAt(work.size - 1)) {
+                is ArrowFunction, is FunctionExpression,
+                is ObjectLiteralExpression, is ArrayLiteralExpression -> return true
+                else -> forEachChild(n, push)
+            }
         }
         return false
     }
@@ -131193,11 +131213,15 @@ interface DataView {
                 // parameters can be typed from the contextual signature.
                 CpaSections.atP(CpaSections.P_ARGCTX)
                 val cpaT0 = CpaSections.t()
-                val argCtxTypes: List<Type?>? = cpaComputeArgCtxTypes(expr, enclosingClassType)
-                // The predicate is evaluated AFTER the sub-measure closes, so its
-                // own cost is never inside the number it classifies.
+                // (ENGINE.2b) round 788: PRE-GATE. `cpaComputeArgCtxTypes` resolves the
+                // callee, its members and (for a generic single signature) a whole
+                // inference mapper; 96.1% of the time it produces a value that nothing
+                // in the argument subtrees can read. See [cpaArgsMayConsumeContext].
+                val cpaConsumable = cpaArgsMayConsumeContext(expr.arguments)
+                val argCtxTypes: List<Type?>? =
+                    if (cpaConsumable) cpaComputeArgCtxTypes(expr, enclosingClassType) else null
                 val cpaD = CpaSections.closeN(CpaSections.N_ARGCTX, cpaT0)
-                CpaSections.noteArgCtx(cpaD) { cpaArgumentsCanConsumeContext(expr) }
+                CpaSections.noteArgCtx(cpaD) { cpaConsumable }
                 CpaSections.atP(CpaSections.P_CALLARGS)
                 expr.arguments.forEachIndexed { i, arg ->
                     val savedCtx = contextualType
@@ -132302,15 +132326,12 @@ interface DataView {
         if (raw !== anyType && (raw !is Type.Union || raw.types.none { it === undefinedType })) return false
         CpaSections.noteB464Reached()
         val b464T1 = CpaSections.t()
-        var found: FlowStart? = null
-        var bestPos = -1
-        for (cs in graph.closureStarts) {
-            val c = cs.container ?: continue
-            if (recv.pos >= c.pos && recv.pos < c.end && c.pos > bestPos) {
-                bestPos = c.pos
-                found = cs
-            }
-        }
+        // (ENGINE.2b) round 788: was an O(closures-in-file) linear scan run once per
+        // reaching property access (15,483 x 8.9 us = 138 ms on the compiler profile,
+        // 46% of this walker — round 787). The question is a pure interval query and
+        // is now answered from a precomputed pos-sorted index in O(nesting depth);
+        // [FlowGraph.innermostClosureAt] documents why it is the same answer.
+        val found: FlowStart? = graph.innermostClosureAt(recv.pos)
         CpaSections.closeN(CpaSections.N_B464_SCAN, b464T1)
         val closure = found ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
