@@ -1,3 +1,263 @@
+**Round 777 (2026-07-31) — (REL.4)(a) CAUSE 6: AN INTERSECTION OF UNIONS HAS NO MEMBER
+LIST TO PEEL, BECAUSE tsc BUILDS ONE AT TYPE CONSTRUCTION AND WE DO NOT. `nodeFactory.ts:7112`
+CLOSED — scaffolded compiler **53 -> 52**, services **58 -> 57**, `diff` says exactly that
+line and no other. THE SECOND SITE WAS ALREADY CLOSED BY ROUND 770, AND FIVE OF MY OWN
+PINS WERE MEASURED INERT BEFORE THEY LANDED.** Suite 13,226 -> **13,234**; all 20 cost
+counters bit-identical.
+
+- **THE MECHANISM, AND IT IS A MISSING NORMALIZATION, NOT A MISSING NARROWING ARM.** tsc's
+  `getIntersectionType` rewrites `X & (A | B)` into `X & A | X & B` at CONSTRUCTION
+  ("union types are always at the top level in type representations") and `getReducedType`
+  then drops every combination whose discriminant properties are disjoint unit types — so
+  `HasModifiers & HasDecorators` **IS** the 7-member union `HasDecorators` before any
+  narrowing runs, and the 7-arm `isParameter(node) ? … : Debug.assertNever(node)` chain
+  peels it like any other union. We store intersections un-distributed, which costs the
+  RELATION nothing (`intersectionSourceDistributes` does it on demand there) but leaves
+  flow narrowing with nothing to subtract from: the subject fell into
+  `narrowByCallPredicate`'s single-type path, where one guard can only answer "the whole
+  intersection" or `never`.
+- **THE FIX IS AN ON-DEMAND VIEW, ADOPTED ONLY WHERE IT SUBTRACTS.**
+  `distributedNarrowingType` builds the reduced union on demand (memoized by Type.id);
+  `narrowByCallPredicate` runs the existing union machinery over it and **returns the
+  ORIGINAL intersection whenever the answer is the view unchanged**, so a guard that does
+  not apply cannot alter identity or display anywhere in the program. Deliberately NOT in
+  `getIntersectionType`: distributing at construction would change every intersection's
+  identity, display and relation behaviour. Gated to >= 1 union operand (so
+  `CompilerOptions & { types: … }` and every brand/refinement intersection is untouched),
+  all operands object-capable, product < 4096 — tsc caps the same product at 100,000 and
+  errors; we decline. Live maximum on tsc's sources: 24 x 7 = **168**.
+- **THE PRICE, RE-MEASURED BEHIND THE SCAFFOLD AS THE QUEUE DEMANDED — AND THE PRIOR
+  PREDICTION WAS OFF BY ONE IN THE ROUND'S OWN FAVOUR.** Round 770 predicted compiler
+  56 -> 54; the live pre-round figure is **53**, because round 770 closed THREE lines, not
+  the two it counted — its third KDoc shape, `transformers/declarations.ts:1739`, is the
+  other of cause 6's two named sites, and it is **absent from the scaffolded output
+  entirely** (`grep -c declarations.ts:1739` = 0 in both arms). So cause 6 was one site,
+  not two, and the second closed a round before anyone looked. After this round:
+  **compiler 53 -> 52, services 58 -> 57**, one line, no new line.
+- **FIVE OF MY EIGHT PINS WERE MEASURED INERT AND REWRITTEN BEFORE LANDING. THE CAUSE IS
+  THE PROBE POSITION.** A call ARGUMENT to a plain parameter does **not** flow-narrow: the
+  argument gate performs the flow read only on its special arms — a `never` parameter
+  (rounds 441/462/766) and a bare-enum argument (round 764) — so `declare function take(s:
+  string)` reports the DECLARED type whatever narrowing did, and five pins written that
+  way produced byte-identical output on a fixed and an ablated build. Rewritten as
+  `const probe: string = node` (TS2322), every one discriminates. The single surviving
+  argument-position assertion is the `assertNever` one, i.e. exactly the arm that does read
+  flow. **A second pin defect in the same batch:** two type aliases with identical bodies
+  intern to ONE type, so `type Left = A | B; type Right = A | B` displays as `Left & Left`
+  and the pin was asserting the alias table rather than the narrowing.
+- **THE PINS WERE THEN VERIFIED AGAINST THE ABLATED BUILD, NOT ASSUMED.** All 8 shapes run
+  through one binary with the fix on and with it flag-ablated: **5 targets fail ablated and
+  pass fixed; 3 regression guards are identical on both sides** (an untouched intersection
+  still displays as itself, a no-union-operand intersection is not distributed, a guard for
+  an absent member subtracts nothing).
+- **A PRE-EXISTING DASHBOARD DELTA FOUND BY THIS ROUND'S GATE, ATTRIBUTED, AND NOT MINE:
+  services / server / harness are 47 / 47 / 95, not 46 / 46 / 94.** The new line is
+  `services/formatting/formattingScanner.ts:311 — TS2322: Type 'SyntaxKind' is not
+  assignable to type 'T'` (`tokenInfo.token.kind = container.kind` after
+  `isToken(container)`; the round-762 `Token<TKind>` carrier family). Ablating THIS round's
+  fix leaves it in place, and **reverting round 776's sorted crawl removes it** — measured
+  by rebuilding with only that hunk reverted: services returns to **46** with the line gone.
+  So round 776's program-order fix, which was gated on the compiler profile alone, moved a
+  first-touch-order-dependent generic instantiation on three other profiles. Queued below;
+  round 776's crawl sort is right and should NOT be reverted for it.
+- **GATES.** Suite **13,234 / 0 failures / 3 skipped** (13,226 + 8 pins); **all 20 cost
+  counters BIT-IDENTICAL, no rebaseline**; unscaffolded 8-profile grid
+  46/46/46/46/46/47/47/95 with 5 profiles byte-identical to `r770grid` and the 3 deltas
+  attributed above — the ablated arm reproduces them exactly, so this change moves NO
+  profile line unscaffolded (as expected: the family is invisible until the flip lands). No
+  corpus baseline moved, so no `LogicalParityDivergence`. Build warning-clean. The scaffold
+  left no residue (`grep -rn 'R777Probe\|x777' src/` is empty); arm outputs are under
+  `build/bench/r777` (gitignored).
+- **NOT TAKEN, AND RECORDED RATHER THAN PINNED** (round 765's rule). (i) A NUMERIC-literal
+  discriminant does not narrow through a `default`-less switch's no-match edge or through a
+  `default:` clause, where a string-literal and an enum-member discriminant both do — that
+  is `literalDiscriminantKeyOfType` returning null for a numeric literal *by design*
+  (round 422: numeric enums are number-comparable, so a numeric-literal annotation stays
+  unrepresented and its member is conservatively kept). Widening it widens the
+  `"symId#member"` key space, which is round 425's catastrophe; it wants its own round.
+  A plain `if (x.kind === 1)` chain narrows correctly, so this is confined to the switch
+  readers. (ii) `narrowByAssertCall` was NOT given the distributed view — no site measured.
+- **PREDICTIONS 2 of 4.** HIT: the scaffolded price falls by exactly the targeted site with
+  no new line; the cost counters do not move. **MISSED, and both misses are the output:**
+  (a) I predicted cause 6 was two sites and the price would fall by 2 — it is ONE site,
+  because round 770 silently closed the other; (b) I predicted the unscaffolded grid would
+  be byte-identical to `r770grid` on all eight — three profiles had already moved, six
+  rounds before I got here.
+
+**Round 776 (2026-07-31) — (COST.2) THE COST BASELINE DID NOT DRIFT: ITS ANCHOR WAS NEVER
+REPRODUCIBLE. ROUND 760's OWN COMMIT, REBUILT AND RE-RUN TODAY, MEASURES THE *PRE*-FIX
+NUMBERS — SO THE REDUCTION IT RECORDED (−8,253 bypassed) DOES NOT EXIST ON ITS OWN
+SOURCE, AND THE VETO IT WAS CREDITED TO IS WORTH **ONE** RESOLUTION.** Diagnosed, then
+rebaselined with the mechanism named; one real defect found on the way and fixed.
+
+- **THE DECISIVE EXPERIMENT, and it is the one the queue item asked for in a sharper
+  form.** The item proposed rebuilding `e31e7f2e`; round 775 had already done the
+  equivalent (its `Checker.kt` hunk reverted → byte-identical counters), so I went one
+  step further back and rebuilt **`07e43815` — round 760's own fix commit**, whose
+  rebaseline `bf9abfb3` recorded `typeNode.bypassed 104,162 -> 95,909 (-7.92%)`. Built
+  today, that exact source measures **104,162 / 25,583** — the PRE-fix values, bit-identical
+  to HEAD's. Its claimed drop does not exist on its own source.
+- **AND THE ATTRIBUTION WAS WRONG TOO, measured independently.** Ablating the veto the
+  drop was credited to (`enumMemberDomainProvesNotSubtype` → `return false`) at HEAD,
+  recompiled and re-run, moves `typeNode.bypassed` from **104,162 to 104,163**. One
+  resolution. Whatever produced 95,909, it was not that function — and rounds
+  763/764/765/769/770 each re-measured against that state and inherited it, which is why
+  the anchor survived six rounds of gating.
+- **WHAT WAS FALSIFIED, so the next agent does not repeat it.** (1) *Lib generation
+  nondeterminism*: regenerated twice, byte-identical (`md5 56ea74a0…`); `typescript-repo`
+  is at the pinned sha and clean; a silently-short lib is impossible because
+  `captureCommand` hard-fails on a non-zero `git` exit. (2) *The profile*: a clean copy
+  carrying only `src/` + `tsconfig.json` — no `dist/`, no `tsconfig.node.json`, no
+  `node_modules` — measures bit-identically to the original, and
+  `scripts/bench-compile-tsc.sh` has not changed since 07-27. (3) *A changed answer
+  anywhere*: `spine.nodes` 856,962 and `output.errors` 46 in every arm, and today's
+  `--listAll` on the profile is **byte-identical** to the run recorded on 2026-07-29 under
+  the old regime (`build/bench/r770grid/compiler.txt`). The two regimes agree on every
+  answer and differ only in cache accounting.
+- **THE DEFECT FOUND ON THE WAY (landed, 192922e5): program order was the FILESYSTEM's
+  readdir order.** `ProjectCompiler.walk` listed every directory through `vfs.list` — raw
+  `readdir` — and that becomes the program's root-file order, which decides which file
+  first touches a shared type node and therefore whether INV.5(c) calls the resolution
+  own-file or foreign. Measured, same 78 files, three orders: `typeNode.bypassed`
+  **104,162 / 103,644 / 103,272** and `mapped.keyed` **25,583 / 25,378 / 25,688**, with the
+  AST and all 46 diagnostics bit-identical in every arm. The sibling `@types` scan two
+  functions above already sorted, with the comment *"sorted: deterministic program order"*;
+  this walk was simply missed. **It is a partial cause at most** — an order of magnitude
+  too small for the 8,253 — and it is reported as exactly that.
+- **WHAT LANDED.** The sorted depth-first crawl + `ProjectCrawlOrderTest` (a DIFFERENTIAL
+  pin: the same project through a `Vfs` view that reverses every listing must answer the
+  same program order — which no walk inheriting the listing order can); the rebaseline at
+  **103,802 / 25,521** with the whole falsification set in the commit message; and a caveat
+  in the generated baseline header, so the next reader of those two counters learns they
+  are order-sensitive and that a pre-776 value is not comparable across boxes.
+- **WHAT IS STILL OPEN, stated rather than buried.** The 07-29→07-30 regime (95,909) is
+  not reproducible from git with the current inputs, and I could not name what produced
+  it; every input I could vary is falsified above, and the remaining variable is that
+  window's build directory, which no longer exists (07-31 15:20 was a full recompile).
+  If it recurs, the cheap discriminator is now available: rebuild the *previous* round's
+  commit and compare, rather than trusting a recorded delta.
+- **GATES.** Suite **13,226 / 0 failures / 3 skipped** (13,223 + the 3 new pins); cost gate
+  exit 0 against the new baseline; profile `--listAll` byte-identical to 07-29.
+
+**Round 775 (2026-07-31) — (AOT.4) THE CORPUS RAN NATIVELY FOR THE FIRST TIME —
+`linuxX64Test`, 9,161 TESTS, 2 FAILURES, 14m28s — AND THE SAME SESSION FROZE THE OWNER'S
+BOX FOR ~2 HOURS. BOTH ARE THE RESULT.** The goal of (AOT.4) is met and local
+Kotlin/Native work is now FORBIDDEN by owner directive; the path forward is CI.
+
+- **WHAT WORKED, AND IT WAS NOT MEMORY.** Round 772 left the item saying the test link
+  needs more RAM or a smaller daemon. It needs neither: the lever is **`Debug` instead of
+  release**. `compileKotlinLinuxX64` + `compileTestKotlinLinuxX64` cost **2m10s**,
+  `linkDebugTestLinuxX64` **1m03s** and `linkDebugExecutableLinuxX64` **1m28s**, against
+  round 772's release test link dying to the OS OOM-killer after ~22 min. Of the item's
+  five "untried levers" exactly one mattered, and the queue had it ranked third.
+- **A LINK ERROR BLOCKED IT FIRST, AND ONLY THE NATIVE TEST LINK CAN SEE IT.**
+  `BenchMain.kt` declared a top-level `main` in `com.xemantic.typescript.compiler`, the
+  same package as `Main.kt`. On the JVM those are two classes (`MainKt`/`BenchMainKt`);
+  K/N mangles a top-level function to `kfun:<package>#main(...)` with no file component,
+  so linking the main klib together with the test klib is `ld.lld: error: duplicate
+  symbol`. The main executable link never pulls in commonTest, which is why nothing had
+  ever surfaced it. Moved to `…compiler.bench` (+ the `ab-warm.sh` class name).
+- **THE TWO NATIVE-ONLY FAILURES, one fixed and one not.**
+  `enumNoInitializerFollowsNonLiteralInitializer` reported TS18056 where tsc and the JVM
+  report TS1061, on `d = (c)! satisfies number as any` — `prevInitializer is Identifier`
+  answering TRUE for a non-Identifier. Fixed by the `kind` discriminator
+  (`prevInitializer?.kind == SyntaxKind.Identifier`), which is the codebase's own M0.2
+  idiom and provably JVM-equivalent: `Identifier` is the only class declaring
+  `kind = SyntaxKind.Identifier`. **The K/N-miscompile diagnosis is SUSPECTED, NOT
+  CONFIRMED** — no minimal repro was ever obtained, and the fix cannot now be re-verified
+  natively, so the source comment says exactly that rather than asserting a compiler bug.
+  `CfaTooLargeBailTest.a deep branch chain trips the depth limit` exits the test process;
+  almost certainly platform-inherent (a native stack overflow is a hard crash,
+  `StackOverflowError.kt`) — unverified, and left open.
+- **THE COST, STATED PLAINLY.** The session made the host unresponsive for ~2 hours. The
+  reusable lesson is that **`-Xmx4g` DOES NOT BOUND A NATIVE BUILD**: the konan/LLVM
+  backend and the linked test executable are separate processes outside every JVM heap,
+  and with **zero swap** the kernel can only reclaim file-backed pages — including running
+  processes' text — so the box thrashes rather than OOM-killing and simply stops
+  answering. CLAUDE.md's memory ritual is written for JVM daemons and does not transfer.
+  New hard rule in CLAUDE.md: never run a Kotlin/Native or GraalVM build on this box.
+- **WHAT LANDED THIS ROUND (closing session, JVM-only).** The `Checker.kt` fix with an
+  honest comment; the `BenchMain`/`ab-warm.sh` package move; the CLAUDE.md rule; a
+  **property gate** in build.gradle.kts — linuxX64 registers only under
+  `-PenableNativeTargets=true`, verified configuration-only (`./gradlew tasks --all`
+  lists **0** linuxX64 tasks by default and **27** with the property), so `./gradlew
+  build` is untouched; and a `kotlin-native` job in `.github/workflows/native.yml`
+  (16 GB runners, `-Dorg.gradle.jvmargs=-Xmx6g` because K/N compiles inside the GRADLE
+  daemon whose heap gradle.properties pins at 1g). **The workflow is UNTESTED** — it
+  cannot be run from here, and saying so is the point.
+- **GATES: suite 13,223 / 0 failures / 3 skipped — zero regressions.** The cost gate,
+  however, **FAILED, and the failure is NOT this round's** — `typeNode.bypassed`
+  95,909 -> **104,162 (+8.61%)** and `mapped.keyed` 24,693 -> **25,583 (+3.60%)**, both
+  over the ±2% tolerance. **Falsified before it was accepted**: the `Checker.kt` hunk was
+  reverted, the module recompiled and the gate re-run, and both counters came back
+  **byte-identical** (104,162 / 25,583) — so the change accounts for none of it. Cause
+  unknown and NOT rebaselined, deliberately: `--update` here would erase the only evidence
+  that something moved. What is established — `git log` shows **no `src/commonMain` commit
+  since the baseline** (`e31e7f2e`, round 770); `spine.nodes` is bit-identical at 856,962
+  and `output.errors` at 46, so the program, its AST and its diagnostics are unchanged and
+  only type-resolution work moved; the profile's missing `@types/node` is NOT the round-730
+  trap here, since that would move the error count and it did not. **Leading hypothesis,
+  offered as a hypothesis:** round 770's rebaseline was recorded in a follow-up commit
+  after its authoring agent was killed by three API failures and the host restarted — a
+  baseline captured from a build directory that did not match its own commit would look
+  exactly like this. Queued as **(COST.2)**; the next agent to hit this must diagnose it,
+  not `--update` past it.
+- **FOR THE NEXT CI ROUND**: re-verify the TS18056 fix natively, decide whether the CFA
+  test takes a native `@Ignore`, and only then reconsider a release-mode artifact — K/N
+  measured 1.63× slower than GraalVM (round 772), so its argument is reach, not speed.
+
+**Round 774 (2026-07-31) — (AOT.2) THE WARM A/B DRIVER LANDS, AND ITS OWN VALIDATION
+FOUND THAT THE ±1.0% BAND IS A PROPERTY OF A BOX NOBODY IS TOUCHING: THE SAME BINARY
+AGAINST ITSELF READ −6.70% WHILE I POLLED THE RUN'S LOG, AND −0.36% / −0.54% / +1.02%
+WHEN I LEFT IT ALONE.** Script + docs only; no `src/` change, so no suite gate (stated
+rather than skipped quietly).
+
+- **WHAT LANDED.** `scripts/ab-warm.sh`, the warm counterpart of `ab-interleaved.sh`:
+  one fresh JVM per SAMPLE, each running `BenchMain <proj> <warmup> <iters>` and
+  contributing the MEDIAN of its measured iterations, A,B,A,B,… so both arms meet the
+  same drift. Per-process medians are the samples, never per-iteration values — iterations
+  inside one JVM share JIT state and heap, so pooling them would fake the sample count.
+  The statistical stance is COPIED from the cold driver verbatim; only the band changes
+  (1.0% vs 2.0%), which is why an A/A correctly reports NOISE-DOMINATED in both runs.
+- **SELF-FALSIFICATION IS WIRED AND WAS TESTED BY FAKING IT, not by trusting it.** The
+  driver parses every iteration's `files`/`errors` and aborts (exit 3) if any iteration
+  in any process disagrees, or if a process yields no iterations. Both paths were
+  exercised with a stub `java` on PATH emitting a deliberate `78/46 → 78/47` drift and
+  emitting nothing; both abort loudly. All 96 real iterations across the two validation
+  runs reported `78/46`.
+- **THE MEASUREMENT, AND THE PREDICTION I GOT WRONG.** I expected the first A/A to
+  reproduce round 771 and it did not: deltas **−0.19% / −6.70% / +2.47%**, process-median
+  sd **278 ms**. My first instinct was "this box is worse than round 771's" — a claim I
+  was one commit away from writing into the docs. The actual cause was **me**: I had
+  polled the log with ~100 short shell commands while it measured. Re-running the
+  IDENTICAL shape while doing nothing gave **−0.36% / −0.54% / +1.02%**, sd **48 ms
+  (0.41%)** — tighter than round 771's own 187 ms. This is round 740's "~3.15 of 4 cores"
+  finding arriving from the other side: the spare capacity a `tail` eats is exactly the
+  capacity the measurement needs. Cost: 2 × ~13.5 min, chosen as 3 pairs × (warmup 2 +
+  8 iters) to match round 771's shape exactly so the two are comparable.
+- **THE DISCRIMINATOR IS THE ARM sd, NOT THE VERDICT.** Both runs say NOISE-DOMINATED,
+  which is correct for an A/A and therefore useless for telling a good run from a
+  poisoned one. So the driver prints each arm's own run-to-run sd (round 756's rule) and
+  the docs now say: discard a warm run whose arm sd exceeds ~1%, however clean its
+  median looks.
+- **CLASSPATH CONTRACT.** `BenchMain` is in `commonTest`, so the run needs the test
+  classes while the A/B must swap only MAIN classes: the classpath is
+  `<A-or-B main dir> : build/classes/kotlin/jvm/test : <deps>`. Consequences stated in
+  the header: the test dir is SHARED and comes from the current build, so a change that
+  alters the API BenchMain calls cannot be A/B'd warm at all; and there is no B-side
+  extra-args slot, because BenchMain takes no compiler flags — a flag comparison stays a
+  cold job. The dep tail is resolved through the existing init script and cached in
+  `build/bench/cp-warm.txt`, **used only while newer than build.gradle.kts** — the
+  committed `build/bench/cp.txt` is stale (names kotlinx-io 0.9.0 / kotlin-stdlib 2.4.0
+  where the build now resolves 0.9.1 / 2.4.10), which is precisely the trap that guard
+  exists for. The driver also stops the gradle daemons before sampling (`KEEP_DAEMONS=1`
+  opts out), since an idle daemon squats GB on a zero-swap 7.7 GB box.
+- **NOT DONE, deliberately.** No arc item was re-opened — (AOT.2) is the instrument, and
+  doc § 4's caution stands: **measurable is not worth landing**, nothing got bigger, and
+  round 736's identity pre-test was rejected as UNSOUND rather than small. No
+  `build.gradle.kts` change (Guardrails). No bench TSV row — `bench/` is gitignored, so
+  the numbers live here.
+
 **Round 773 (2026-07-30/31) — (SERVER.1) STAGE 1 LANDED: A PRE-WARMED COMPILE SERVER MAKES
 THE WARM JVM THE FASTEST ARTIFACT WE SHIP — 11.9 s THROUGH A REAL SOCKET AGAINST THE AOT
 BINARY'S 13,350 ms AND THE COLD CLI'S 26,272 ms.** Code landed as `ff81d0cc`; this note,

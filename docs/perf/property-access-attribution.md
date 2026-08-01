@@ -161,6 +161,113 @@ linear scan run per property access** to find the innermost enclosing closure �
 without replacing it. It is answerable from the parent chain or a position-sorted
 index; it is not a cache.
 
+## 5b. What round 788 landed, and what the prices turned out to be
+
+Both candidates landed, as two independently gated commits. Compiler profile,
+same harness, `--cpaSections` ON:
+
+| row | round 787 | round 788 | Δ |
+|---|---:|---:|---:|
+| `P: cpaComputeArgCtxTypes` (gross) | 342 | **233** | −109 |
+| — nested sub-measure, calls with a consumable arg | 67 (2,020 calls) | 68 (2,964 calls) | — |
+| `Q: emitTs18048 closure-captured receiver` (gross) | 298 | **177** | −121 |
+| — nested sub-measure, the `closureStarts` scan | **138** (15,483) | **4** (15,483) | **−134** |
+
+### (ii) is a clean elimination; (i) is not, and the difference is the finding
+
+**(ii) B464.** The `closureStarts` scan went **138 ms → 4 ms** over the *same*
+15,483 queries — a 34× cut, and the work does not reappear anywhere, because
+nothing else wanted the answer. `FlowGraph` now precomputes, per file, a
+pos-sorted array of closure containers plus each entry's nearest ENCLOSING entry
+(one stack sweep in the constructor that already walks the tree); a query is a
+binary search plus a walk bounded by the closure NESTING DEPTH.
+`FlowGraph.innermostClosureAt` reproduces the scan's tie rule exactly (the scan's
+`c.pos > bestPos` is strict, so among equal-`pos` containers the first in
+`closureStarts` order won; the sort is stable and the query re-scans its tie
+group leftward). Verified with an in-binary differential — **15,483 queries on
+the compiler profile and 26,119 on harness, 0 mismatches** — and pinned by
+`ClosureIndexEquivalenceTest`, which carries the replaced scan as its own
+reference implementation and compares at *every position of every fixture*.
+
+**(i) the `cpaComputeArgCtxTypes` pre-gate is real but its ms do not all
+survive, and this is § 0's law wearing a third hat.** The gate skips **49,003 of
+51,967 calls (94.3%)**, and the deterministic counters confirm the work is gone:
+`typeOfExpr.calls` **−3.27%**, `globals.lookups` **−2.75%**,
+`globals.misses` **−2.75%**, `narrow.memoServed` **−5.09%** (rebaselined in the
+landing commit). But the timed row fell only **109 ms** against the 265 ms round
+787 priced, and the level-Q engine row rose by a comparable amount.
+**A resolution this function performs is CACHED, so skipping it does not delete
+the work — it MOVES it to whoever asks next.** What is genuinely deleted is the
+part with no other consumer: `resolveStructuredTypeMembers` on the callee, the
+per-argument `mapIndexed`, and above all `tryInferSingleTypeParamFromArgs` +
+`computeFixedConflictLiteralMapper` for a generic single signature. So round
+787's 265 ms was an upper bound on the *skippable* population, never a
+prediction of the *recoverable* time. **Round 787's own qualification (a
+per-item law does not settle an aggregate question) has a mirror image: an
+aggregate that is skippable is not thereby recoverable.**
+
+The gate covers **four** node kinds, not round 787's three: the probe predicate
+listed the three arms of `checkPropertyAccessInExpr` that read `contextualType`
+and missed that `getTypeOfArrayLiteral` reads it too (for its element context),
+so `ArrayLiteralExpression` is in the production predicate. That costs 944 calls
+of the skippable population (49,947 → 49,003) and is not optional. The scan is
+bounded at 128 nodes — exhaustion answers TRUE (compute as before), so the budget
+can never change a verdict; measured, it is **never reached** on the compiler
+profile, and the scan visits **3.6 nodes per call** on average.
+
+### How the order hazard was ruled out
+
+The queue item's warning was correct in kind: `cpaComputeArgCtxTypes` calls
+`getTypeOfIdentifier`, `resolveStructuredTypeMembers` and
+`tryInferSingleTypeParamFromArgs`, all of which mutate resolution caches, and a
+purely syntactic predicate cannot see a read that happens through a *foreign*
+node (`getTypeOfExpression` on an identifier can resolve a declaration elsewhere
+whose initializer is an object literal, and that computation reads — and caches
+under — the live `contextualType`). So the predicate was falsified empirically
+before it was trusted, with a temporary probe that kept the OLD behaviour
+(compute unconditionally) and counted, at each of the three foreign read sites,
+every read of a non-null value the gate would have suppressed:
+
+* compiler profile — 51,967 calls, 49,003 gate-skippable, **0 violations**;
+* harness (the superset profile, 311 files) — 77,791 calls, 71,840
+  gate-skippable, **1 violation**, in `applyContextualParameterTypes`
+  (`server/session.ts`), where the contextual type is `{} | undefined` — a
+  `Type.Union`, so the function returns on the very next line
+  (`if (ctx !is Type.Object) return`). The read is inert.
+
+Plus the standing gates: the 8-profile `--listAll` grid re-captured at HEAD and
+diffed **set-for-set in both directions, 0 added and 0 removed on all eight**;
+`--partitionCheck 2` EQUIVALENT.
+
+### The warm A/B decides nothing, and that is the honest report
+
+`scripts/ab-warm.sh /tmp/xtsc_A788 build/classes/kotlin/jvm/main 3`, box left
+strictly alone (no polling of the log during the run):
+
+| pair | A (ms) | B (ms) | Δ |
+|---|---:|---:|---:|
+| 1 | 11,930 | 12,020 | **+0.75%** |
+| 2 | 12,035 | 11,955 | **−0.66%** |
+| 3 | 12,100 | 11,920 | **−1.49%** |
+
+**Median A = 12,035 / B = 11,955, Δ = −80 ms = −0.66%, B wins 2/3.** Arm sd
+**0.71% (A)** and **0.42% (B)** — both under the ~1% quiet-box threshold, so the
+run is admissible; but the per-pair spread is **270 ms** against an **80 ms**
+median delta, and the driver's own rule fires: **`VERDICT: NOISE-DOMINATED —
+this run decides NOTHING in either direction.`** Every iteration on both arms
+reported `files/errors 78/46`, so the self-falsification held.
+
+**So the wall-clock claim for this round is: not measurable at 3 warm pairs.**
+The 403 ms combined estimate is **not confirmed**, and the direction the medians
+lean (B faster by 0.66%) is inside the band. What IS established is
+deterministic and load-immune, exactly as the driver advises when it reaches
+this verdict: the `closureStarts` scan is gone (138 → 4 ms over an identical
+query count) and four cost counters fell by 2.75–5.09%. A round that wants the
+wall number needs more pairs or a higher `ITERS`, on a box doing nothing else —
+and should note that a warm rebuild is **11.9 s** against a **~27 s** cold
+compile, so a saving whose code the JIT has already compiled is a *smaller*
+fraction of a warm run than of a cold one.
+
 ## 6. Predictions, scored
 
 | | prediction | measured | verdict |
