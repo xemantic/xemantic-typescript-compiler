@@ -111457,8 +111457,36 @@ interface DataView {
      *  a case/comparison expression under its own file's) — so a module-only name with no
      *  meaning where the node lives no longer leaks a foreign file's local. */
     private fun resolveEnumSymbolForDiscriminant(enumIdent: String, keyNode: Node): Symbol? =
-        resolveEnumSymbolFileLevel(enumIdent, keyNode)
+        lexicalEnumSymbolForDiscriminant(enumIdent, keyNode)
+            ?: resolveEnumSymbolFileLevel(enumIdent, keyNode)
             ?: enumSymbolFromEnclosingNamespace(enumIdent, keyNode)
+
+    /**
+     * (REL.4)(a) round 782: the enum name resolved in the INV.2(c) SCOPE space — an `enum`
+     * declared inside a FUNCTION/arrow/block body, which the main binder never binds
+     * (B83.5), so it is in neither the file locals nor a namespace's exports and every
+     * name-based discriminant reader answered null for it. Third and last of the scopes an
+     * enum's DECLARATION site can put it in (file level round 425, enclosing namespace
+     * round 769, function body here).
+     *
+     * FIRST, not a miss-fallback, and that is the load-bearing part: [resolveTypeNameToSymbol]
+     * already prefers [lexicalTypeSymbolForNode] (round 748), so it is the SCOPE-space symbol
+     * that types the annotation and mints the member types. A discriminant reader preferring
+     * the file-level answer for a name that shadows an outer enum would key the same enum
+     * through a different `Symbol` instance — the round-425 SPLIT key space, which is the one
+     * failure mode this space cannot survive. Ordering both readers the same way makes them
+     * agree by construction.
+     *
+     * Containment comes from [lexicalTypeSymbolForNode] itself: it probes
+     * [lexicalBlockScopedEnumNames] first (empty for almost every program → one HashSet miss)
+     * and reads `scope.symbols` ONLY, which `declareLexical` fills exclusively with names the
+     * main binder did NOT bind in that container — so no conventionally-bound name can move.
+     */
+    private fun lexicalEnumSymbolForDiscriminant(enumIdent: String, keyNode: Node): Symbol? {
+        if (!R782_LEXICAL_ENUM_DISCRIMINANT) return null
+        val sym = lexicalTypeSymbolForNode(keyNode, enumIdent) ?: return null
+        return canonicalEnumSymbol(sym)
+    }
 
     /**
      * (REL.4)(a) round 769: the enum name looked up in [keyNode]'s ENCLOSING NAMESPACE
@@ -173898,6 +173926,15 @@ private val REL4_ELEM_UNION_GATE = true
  * rationale as the switches above. Never flip this in a commit.
  */
 private val WIDEN1_CONST_KEEPS_LITERAL = true
+
+/**
+ * (REL.4)(a) round 782 ABLATION SWITCH — flip to `false` to restore the pre-782 behaviour in
+ * which a FUNCTION-BODY-scoped `enum` was invisible to every name-based discriminant reader,
+ * so no switch/guard over it narrowed (`Rel4BodyScopedEnumTest`'s pins can then be shown to
+ * discriminate). Same top-level init-order rationale as the switches above. Never flip this
+ * in a commit.
+ */
+private val R782_LEXICAL_ENUM_DISCRIMINANT = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---
