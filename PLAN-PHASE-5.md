@@ -20,6 +20,84 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 786 (2026-08-01) — THE MISSION TRANSITIONS TO PERFORMANCE, AND (ENGINE.1) IS
+CLOSED BY MEASURING ITS LAST SITE. THE THREE-SITE DEDICATED-WALKER LAYER IS
+613 ms = 2.2% OF A CHECK-ONLY COMPILE — ONE NOISE BAND — AND ~29 ms OF IT IS
+PLAINLY DELETABLE.** The queue's "TOP OF QUEUE (owner-requested 2026-07-26) — work
+this before PERF" gate is satisfied: (REL.4) landed round 782, (REL.2) round 784,
+(NARROW.1) round 785. Everything still unchecked above the perf work is either
+owner/hardware-blocked ((AOT.3) needs a NATIVE emit-mode measurement, forbidden on
+this box) or explicitly deferred with **0 measured sites** ((WIDEN.1)(b)/(c)/(d)).
+So the top open perf item was (ENGINE.1)'s site 3, and this round took it.
+
+- **WHAT LANDED: `CtaSections` level E — `checkAssignmentExpression`, 27 rows in
+  source order, wrapper/`…Core` split, exit census, `COARSE` counterpart** —
+  plus 8 pins and `docs/perf/engine-rule-price.md` §§ 5b-8. **Nothing else. That
+  is the honest outcome**: every candidate lever inside the three largest
+  assignability sites in the compiler is below the ±2.0% band, and the item exists
+  to answer a SCOPE question, not to find one.
+- **THE PRIZE WAS MEASURED BEFORE ANYTHING WAS BUILT, AND IT HAD MOVED.** Round 755
+  quoted site 3 at 373 ms; re-measured at HEAD it is **406 ms of a 27,941 ms
+  compile = 1.45%**, so the layer inside it could not exceed ~0.5% whatever the
+  split turned out to be. That is why this round is a measurement and not a fix —
+  and it is CLAUDE.md's "re-measure a number before spending a round inside it"
+  paying for itself in the first ten minutes.
+- **THE CROSS-CHECK IS WHAT MAKES THE PARTITION BELIEVABLE.** Level E totals
+  **462 ms over 17,179 invocations**; level A — an independent partition opened on
+  the CALLER — reads **465 ms over 16,538**. Two partitions from opposite sides of
+  the same call agreeing to **0.6%**, with the 641-invocation difference accounted
+  for exactly by the five legacy-walker call sites level A does not cover.
+- **THE SPLIT: engine 284 ms (72.0%) / walker 110 ms (27.9%) / bookkeeping 0.4 ms.**
+  The layer is **0.39% of the compile and 0.39× the engine work**. With sites 1
+  (326 ms / 1.21% / 0.67×) and 2 (177 ms / 0.66% / 0.40×) that is **613 ms = 2.2%**,
+  and round 755 predicted **605-630 ms** from the 28-37% band before this site was
+  opened — the measurement landed inside its own prediction interval.
+- **E2 FAILS FOR THE SECOND TIME AND THE 14× IS FINISHED.** Site 3's
+  firewall/relation ratio is **5.6×**, site 2's was 4.5×; the 14× was an artifact of
+  site 1's relation being 2.2% of its own function. It was the wrong statistic AND
+  it does not survive in its own terms.
+- **THE CALIBRATION IS WEAK, AND SAYING SO IS PART OF THE RESULT.** Three runs per
+  mode: ON **462 / 460 / 469**, COARSE **445 / 420 / 426**. Δ of medians = 36 ms over
+  103,899 extra boundaries = **347 ns**, but the COARSE spread is **25 ms**, so Δ is
+  only **1.4× the larger spread** — CLAUDE.md's rule says that is a BOUND, and the
+  bound is **144-472 ns**. **What rescues the round is a structural property, not a
+  better measurement**: the walker share reads **30.3 / 27.9 / 26.4%** across that
+  entire interval, because level E's boundaries distribute by REACH and reach is
+  near-uniform through the identifier partition — so the classification cannot
+  hinge on the calibration. A partition whose verdict DID hinge on it would have
+  had to be thrown away.
+- **THREE FINDINGS ONLY SITE 3 COULD GIVE.** (1) **61% of the invocations do nothing
+  at all** — 10,432 of 17,179 exit in the entry row because the expression is not an
+  `=` binary; the eligibility test lives INSIDE the function, unlike sites 1 and 2
+  whose callers pre-filter, and **only a partition opened on the WRAPPER can see
+  it** (~13 ms, so a shape rather than a lever). (2) **The TS2322 elaboration is
+  0.4 ms over 3,791 reaches** — site 2 reached its elaboration ONCE in the whole
+  compile, which could be dismissed as a property of a clean profile; 3,791 reaches
+  costing nothing is the stronger form, and it is now confirmed at all three sites.
+  (3) **"Compute the SOURCE type" is the largest row at every site** (160 of 394
+  classified ms here, 219 of 623 at site 2) — whatever replaces the walker layer
+  still pays it.
+- **RECURSION: ONE SITE, ONE ROW, AND A PIN THAT DETECTS A SECOND.**
+  `checkAssignmentExpression` recurses at exactly one place (`a = b = c`), so level
+  E keeps the "depth != 1 ⇒ return" shape and charges the whole nested descent to
+  the outer invocation's `E_RECURSE` row — simpler and more exactly attributed than
+  round 756's hand-back shape, which level D needed because ITS recursion is spread
+  over sixteen arms. The correctness of that choice rests on "exactly one place"
+  staying true, so a pin asserts `invocationsENested == 1` on an `a = b = c`
+  fixture: a second recursion site added later fails it instead of silently
+  mis-attributing a subtree.
+- **A METHOD TRAP WORTH THE MINUTE IT COSTS TO READ.** The first probe run after
+  `compileKotlinJvm` did not finish in **ten minutes**; the identical run later took
+  **27.7 s**. Nothing was wrong with the code — the Kotlin daemon was still holding
+  its heap next to a `-Xmx4g` compile on a 7.7 GB box with zero swap, which is
+  CLAUDE.md's documented apparent-hang. **Free the daemons between a build and a
+  measurement**, or the first data point of every session is garbage.
+- **PREDICTIONS 3 of 4.** HIT: the split would land in E1's 25-50% band; E3 would
+  hold; nothing would be landable. **MISSED**: I expected the ON-vs-COARSE
+  differential to be as sharp as level C's (739 ns over a 99 ms Δ) and it was not —
+  level E has a tenth of level C's boundary count against the same run-to-run
+  noise, which is exactly the geometry that makes a differential weak.
+
 **Round 785 (2026-08-01) — (NARROW.1) IS CLOSED. `extractNullNarrowing` HAS ITS
 TYPE-GUARD CALL ARM, AND THE CHANGE THE ITEM WARNED WOULD MOVE "THE PRIMARY TYPE OF EVERY
 GUARDED REFERENCE IN BOTH DIRECTIONS" IS **SET-FOR-SET FREE ON ALL EIGHT PROFILES WHILE
@@ -3120,7 +3198,39 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   1.87x-2.72x because xtsc is one cold run against tsc's median of three. Full derivation:
   `docs/ARCHITECTURE-RETHINK.md` § 0.2.
 
-- [ ] **ANSWERED FOR THE DECISION, round 755 — site 2 measured, E1-E4 scored, ONLY SITE 3's
+- [x] **(ENGINE.1) CLOSED round 786 — SITE 3 IS PARTITIONED, E3 IS NOW A MEASUREMENT
+  RATHER THAN A BOUND, AND THE OWNER-FACING NUMBER IS 613 ms = 2.2% OF A CHECK-ONLY
+  COMPILE.** A level-E partition of `checkAssignmentExpression` (27 rows, wrapper/`…Core`
+  split, exit census, `COARSE` counterpart) cross-checks against level A's independent
+  `A: checkAssignmentExpression` row to **0.6%** (462 ms vs 465 ms) and splits
+  **engine 284 ms (72.0%) / dedicated-walker layer 110 ms (27.9%) / bookkeeping 0.4 ms** —
+  the layer is **0.39% of the compile and 0.39x the engine work** (site 1: 1.21% / 0.67x,
+  site 2: 0.66% / 0.40x). **SCORES, all three sites now in: E1 HOLDS at all three
+  (37.4 / 28.4 / 27.9%); E2 FAILS at both sites that could test it (4.5x, 5.6x — the 14x
+  was an artifact of site 1's relation being 2.2% of its function); E3 HOLDS BY
+  MEASUREMENT — 326 + 177 + 110 = 613 ms = 2.2%, landing INSIDE round 755's 605-630 ms
+  estimate; E4 HOLDS at all three (site 3's largest group is strictFunctionTypes /
+  declared-variance / freshness, all of which tsc holds inside `isRelatedTo`, so they
+  MOVE).** **Plainly deletable across the three sites: ~29 ms = 0.1%** (site 2's legacy
+  string checker + site 3's). **Three things only site 3 could say: 61% of its 17,179
+  invocations (10,432) do nothing at all** — the eligibility test lives INSIDE the function,
+  unlike sites 1 and 2 whose callers pre-filter, and only a wrapper-opened partition sees it
+  (~13 ms, a shape not a lever); **the TS2322 elaboration is 0.4 ms over 3,791 reaches**,
+  the third and strongest confirmation that the emission machinery is free on a codebase
+  that type-checks; and **"compute the SOURCE type" is the largest row at all three sites**
+  (41% here), i.e. the irreducible part. **THE CALIBRATION IS WEAK AND IS REPORTED AS A
+  BOUND**: three runs per mode give ON 462/460/469 and COARSE 445/420/426, so Δ = 36 ms is
+  only **1.4x the larger (COARSE) spread of 25 ms** — per CLAUDE.md that is not a figure,
+  and the boundary cost is **144-472 ns**; what rescues the round is that the walker share
+  reads 30.3 / 27.9 / 26.4% across that whole interval, because boundaries distribute by
+  REACH and reach is near-uniform through the identifier partition. **NOTHING WAS LANDED
+  BUT THE HARNESS** — every candidate lever inside the three sites is below the +-2.0% band.
+  Suite 13,334 -> **13,342 / 0 / 3** (+8 pins), 8-profile grid
+  **46/46/46/46/46/46/46/94**, `--listAll` identical in all three probe modes, cost gate
+  **all 20 counters +0.00%**. Full derivation: `docs/perf/engine-rule-price.md` §§ 5b-8.
+  The round-755 text follows.
+
+  **ANSWERED FOR THE DECISION, round 755 — site 2 measured, E1-E4 scored, ONLY SITE 3's
   PARTITION LEFT (and E3 is already closed by a bound it cannot break).**
   `checkReturnAssignability` was partitioned into 15 rows (a new level C in
   `CtaSections`, its own index space so the level-A/B pins are untouched; wrapper +
