@@ -1,3 +1,169 @@
+**Round 773 (2026-07-30/31) — (SERVER.1) STAGE 1 LANDED: A PRE-WARMED COMPILE SERVER MAKES
+THE WARM JVM THE FASTEST ARTIFACT WE SHIP — 11.9 s THROUGH A REAL SOCKET AGAINST THE AOT
+BINARY'S 13,350 ms AND THE COLD CLI'S 26,272 ms.** Code landed as `ff81d0cc`; this note,
+the checkbox and the STATUS bump are the follow-up commit (the authoring session ended at
+protocol step 5 — the same failure mode round 770 recorded, and the second time in four
+rounds, so the loop now closes bookkeeping for the PREVIOUS round before picking new work).
+
+- **WHAT IT IS.** `xtsc --serve` holds one warm JVM; `xtsc --daemon <args>` sends a request
+  over a Unix domain socket. Four requests through the client on the compiler profile:
+  **26,415 / 14,311 / 11,933 / 11,907 ms**, i.e. it converges on round 771's independently
+  measured **11,580 ms** warm steady state, and the output is IDENTICAL to the direct CLI's,
+  all 46 diagnostics. **This composes with (AOT.1) rather than competing**: the GraalVM image
+  is the ideal thin CLIENT (starts in milliseconds) while the JVM SERVER keeps C2 peak.
+- **TWO INVARIANTS, both documented in the source rather than left to a reader.** Requests
+  are served **SEQUENTIALLY on one thread** — Symbol/Type ids are thread-local (INV.6(6c0))
+  and `--workers` is already measured producing 62 diagnostics where sequential produces 46,
+  so a thread-per-connection server would reopen that bug class **to save nothing**, the
+  compile being the cost and not the accept. And a request runs the **ORDINARY `main()`**
+  with stdout captured, so server output is CLI output by construction rather than by
+  testing. Reusing one JVM across compiles was already proven safe: `BenchMain` runs 12
+  in-process rebuilds all reporting 78 files / 46 errors.
+- **STAGE 2 IS DELIBERATELY ABSENT** — round 772 measured retained program state as
+  worthless on this corpus (tsc's `export *` barrels make the reverse-dependency closure the
+  whole program), so Stage 1 IS the prize.
+- **TWO BUGS FOUND BY TESTING, NOT BY INSPECTION**, which is the reusable part: a Unix socket
+  path over ~108 bytes fails as a bare `SocketException: Unix domain path too long` naming
+  neither the path nor the limit; and the check for it first landed as a `require`, which
+  **CRASHED the client instead of letting it fall back** — the very contract `--daemon`
+  documents. Non-fatal for the client, fatal only for `serve()`, pinned by a regression test.
+- **WHAT IS NOT PINNED, stated rather than implied.** 7 pins cover `CompileServer.respondTo`
+  — the whole behaviour minus the socket — and are NOT bound in-suite on purpose (a thread
+  parked in `accept()` inside a 13k-test suite is a flakiness source). The strongest
+  property, byte-identical CLI parity, is also unpinned: it needs two full compiles in one
+  method and the suite runs at Gradle's default 512 MB test heap, where that OOMs; raising
+  the suite-wide heap for one test is the wrong trade on this box. Both exclusions are
+  written into the test class. Suite **13,216 -> 13,223 / 0 failures / 3 skipped**;
+  warning-clean.
+
+**Round 771 (2026-07-30) — OWNER-DIRECTED, NOT A QUEUE ITEM: THE JVM's OWN COST WAS NEVER
+MEASURED, AND IT IS 56% OF A COLD COMPILE. AOT RECOVERS ALMOST ALL OF IT — 1.97×, OUTPUT
+BYTE-IDENTICAL ON ALL 8 PROFILES, ZERO COMPILER CHANGES.** Full derivation:
+`docs/perf/aot-native-image.md`. Nothing was integrated; three items queued as (AOT.1–3).
+
+- **THE GAP IN THE MAP.** `bench-compile-tsc.sh` forks a fresh JVM per run, so its
+  `--warmup N` warms the page cache and never the JIT: **all 341 archived CI rows are cold
+  single-shots and xtsc's steady state was unmeasured.** `BenchMain` — the one harness that
+  could answer it — existed and had never been pointed at the question. Twelve iterations in
+  one JVM: **iter 0 26,272 ms, iter 1 13,953, iters 2+ 11,112–11,716 (median 11,580)**. So
+  **~14.7 s of a 26.3 s compile is warmup.** Iter 0 reproduces round 739's independently
+  measured 26,896 ms cold check-only, which is what validates the harness.
+- **THIS IS ROUND 740 FROM THE OTHER SIDE.** That round measured 85.6 s of user CPU for a
+  27.1 s wall, ~2.2 cores of JIT, and C2 never finishing `Checker.kt` inside one run — and
+  concluded "not a single-thread lever" because starving the JIT did not move self time.
+  Correct, and it missed this: the JIT is not stealing from the compile thread, it is that
+  **the compile thread never reaches compiled code**. The evidence was in the repo for 31
+  rounds.
+- **AOT, GraalVM CE, standalone (no build-system change): 13,350 ms, 1.97× the cold JVM**,
+  and only 15% off JVM peak — on a COLD run, which is how a CLI compiler is used. RSS
+  392 MB against a 4 GB heap allowance; binary 55 MB; image build 2m 1s.
+- **THE GATE IS BYTE-IDENTITY ON ALL EIGHT PROFILES, NOT A COUNT** (two runs can agree on
+  46 and disagree on which 46). Sorted `--listAll` diff empty on every one; speedups
+  1.71–1.98×. **Two things make it more than eight green rows:** the error grid comes out
+  **46/46/46/46/46/46/46/94**, reproducing the dashboard's known composition, so the seven
+  freshly materialized profiles are right rather than merely self-consistent; and **the
+  saving is CONSTANT in absolute terms (12.4–16.0 s) across a 4× range of project size**,
+  so the ratio falls (1.98 → 1.71) only because the denominator grows. That is the
+  signature of a fixed warmup cost; per-node work would not behave that way.
+- **`-O3 -march=native` MEASURED AND WORTH NOTHING: 13,325 vs 13,335 ms.** So the residual
+  15% is not instruction selection — it is the absence of PGO, which CE cannot do. A
+  negative result that closes a direction rather than opening one.
+- **THE WARM BAND IS CALIBRATED, AND IT IS THE ROUND'S MOST REUSABLE OUTPUT.** Six A/A
+  processes: pair deltas **+0.93% / −0.98% / +0.41%**, i.e. **±1.0% = ±114 ms** against the
+  cold ±2.0% = ±536 ms — **4.7× more sensitive in absolute terms**, at lower cost per
+  sample. **Every A/B in the arc was run cold**, so items rejected as in-band deserve
+  re-examination: (CALL.4)'s 441 ms is 3.9× the warm band, the `getTypeOfExpression`
+  ceiling 7.1%, single-visit discipline 5.8%. **Stated in the doc and repeated here because
+  it is the easy mistake: MEASURABLE IS NOT WORTH LANDING** — nothing got bigger, only
+  visible, round 755's "(CALL.4) is M3.1 resolution work, not machinery" is untouched, and
+  round 736's identity pre-test was rejected as UNSOUND, not small. (AUDIT.3)'s globals
+  population stays dead at 0.3–0.6%.
+- **FOR THE PORT QUESTION THIS ROUND WAS RUN TO INFORM:** our steady-state COMPUTE is
+  11.6 s, not 26.3 s, so the architectural gap to tsgo is roughly **5×, not 13×** — and a
+  Kotlin port of tsgo would **inherit the warmup tax AOT removes for free**, being the same
+  JVM one-shot process. The port thesis is weaker than it looked, and its prize is smaller.
+- **EVIDENCE LIMITS, STATED RATHER THAN GLOSSED.** The corpus suite is a JVM harness and
+  has never run against a native binary, so the 8-profile grid is the ONLY behavioural
+  evidence and it is weaker than the suite. One box; single run per profile in the grid;
+  emit mode not measured natively. Also found: this box has **no C toolchain at all** and
+  `sudo` needs a password — the unprivileged assembly and its three traps are in doc § 8,
+  and a CI runner would need the same solved.
+
+**Round 770 (2026-07-29; note written 2026-07-30 — see PROCESS below) — (REL.4)(a) CAUSE 5,
+THE POST-SWITCH FALL-THROUGH: A `default`-LESS SWITCH'S NO-MATCH EDGE NOW SUBTRACTS EVERY
+CASE TAG. THE DEFECT WAS IN THE BINDER, NOT THE CHECKER, AND THE ROUND WAS SENT AT CAUSE 6
+AND PIVOTED.** Suite **13,207 -> 13,216** (+9 pins, `PostSwitchFallThroughNarrowingTest`);
+unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
+
+- **THE PIVOT, RECORDED BECAUSE IT IS A FINDING.** The round was queued at cause 6 (the
+  type-guard ternary chain over a node union/intersection, `nodeFactory.ts:7112` /
+  `declarations.ts:1739`). It is NOT this: cause 6's subtraction machinery is
+  `narrowByCallPredicate`'s, not `enumMinusMembers`', and an INTERSECTION subject has no
+  member list to peel — round 769 had already sized it as its own round. The shape that
+  actually blocked `Debug.assertNever` on the dashboard was cause 5, so the round took
+  cause 5. Cause 6 remains open and unchanged.
+- **THE DEFECT IS IN THE BINDER.** Leaving a `default`-less switch, `bindSwitchStatement`
+  joined the post-switch flow to a bare **FlowCondition chain asserting that every case
+  EXPRESSION is falsy**. That is the truth for the `switch (true) { case <cond>: }` idiom
+  **only** — in a discriminant switch the case expression is a VALUE (`SyntaxKind.A`), so
+  every link of the chain narrows nothing, and `Debug.assertNever(x)` after an exhaustive
+  `default`-less switch saw the WHOLE declared type. Round 768's label for this cause
+  ("does not narrow at all … NOT enum-specific, flow-graph work") is confirmed exactly:
+  the fix is in the flow graph and the pins show it works for enums, discriminated unions
+  and `typeof` tags alike.
+- **THE FIX MIRRORS tsc, AND IT IS LAYERED RATHER THAN SUBSTITUTED.** tsc encodes the same
+  edge as a switch-clause flow with an **EMPTY clause range** — binder
+  `createFlowSwitchClause(preSwitchCaseFlow, node, 0, 0)`, read by
+  `narrowTypeBySwitchOnDiscriminant` as `clauseStart === clauseEnd` ⇒ treat as `default:`.
+  We now emit `newSwitchClause(stmt, 0, 0, noMatch)` **on top of** the existing condition
+  chain instead of replacing it, so every existing `switch (true)` answer is untouched
+  (`narrowBySwitchClause` returns null for a range it cannot key and the caller keeps the
+  antecedent). Three checker readers learned that an empty range means "no case matched",
+  i.e. the SAME position as a `default:` clause and therefore the same subtraction.
+- **AND IT UNCOVERED A SECOND DEFECT, FIXED HERE TOO — found by a pin breaking, not by
+  inspection.** `narrowBySwitchOnTrue` keys purely on `clauseStart` and never consults
+  `clauseEnd`, so the new empty range read as "**clause 0 matched**" and narrowed
+  POSITIVELY on the way OUT of the switch, collapsing `switch (true) { case c1: … }` to
+  `never`. Caught by `narrowByClauseExpressionInSwitchTrue3` failing. Guarded with an
+  early `return null`: the edge's own claim — every case condition is false — is already
+  carried by the FlowCondition chain the node now sits on top of, so that function has
+  nothing left to add. **The general invariant is in CLAUDE.md**: a reader of
+  `FlowSwitchClause` that keys on `clauseStart` alone is wrong the moment an empty range
+  reaches it, and there are now four such readers.
+- **GATES.** Suite **13,216 / 0 failures / 3 skipped** (13,207 + 9); compiler profile
+  `--listAll` **46** and programFiles **78**, unchanged; cost gate exit 0 with **16 of the
+  20 counters bit-identical** and four moved — `narrow.walks` 71,326 -> **71,323**,
+  `narrow.memoServed` 45,489 -> **45,488** (the three walks that no longer run, and the one
+  memo serve they consumed), `globals.lookups` 963,052 -> **964,621** and `globals.misses`
+  948,338 -> **949,907** (**+0.16% / +0.17%**, the new switch-clause readers resolving case
+  tags that used to bail), inside the ±2% tolerance and **rebaselined** — in a follow-up
+  commit rather than the same one, which is a protocol deviation forced by the interruption
+  below, not a choice. No corpus baseline moved, so no `LogicalParityDivergence`.
+- **NOT MEASURED, AND IT IS THIS ROUND'S OPEN END.** The **scaffolded (REL.4) flip price
+  was not re-measured.** Cause 5's two lines are `checker.ts:11536` and `37648`, both in
+  `src/compiler`, so the expectation is **compiler 56 -> 54 and services 60 -> 58** — a
+  PREDICTION, not a measurement, and whoever takes (REL.4) next must re-measure behind the
+  scaffold before quoting it. The unscaffolded grid at 46 cannot see this: cause 5's lines
+  only exist while the imported-namespace pair is scaffolded on.
+- **PROCESS — why this note is a day late.** Three consecutive server-side API failures
+  (500, 529, 529) killed the authoring agent after the work was complete and before it
+  could gate. The orchestrator inspected the diff for completeness and probe residue (no
+  scaffold or instrumentation remains) and landed the code commit `619641b2` with the gate
+  results in its message; the host was then restarted before protocol step 5 ran, leaving
+  the session note, the STATUS bump, the queue update and the cost rebaseline undone. All
+  four are this commit. **The gates were re-run from scratch on the restarted host rather
+  than taken from the commit message** — suite 13,216 / 0 / 3 tallied from the 574 result
+  XMLs, cost gate re-run and rebaselined, and every number above reproduced.
+- **AND THE EVIDENCE THE ROUND NEVER RECORDED: the pins were run against the PRE-FIX
+  source.** Narrowing pins are exactly the class CLAUDE.md warns can pass on a working AND
+  a broken build, so a green run proves nothing on its own. Reverting only
+  `Checker.kt` + `Flow.kt` to `619641b2^`: **the 5 TARGETS FAIL and the 3 NEGATIVE CONTROLS
+  PASS.** The ninth pin — `a switch on true with no default still narrows through the
+  condition chain` — **passes on BOTH sides, which is correct and is the point of it**: it
+  guards the second defect, the one the fix itself introduced and then fixed, so it must
+  hold before and after. That is a regression guard, not a target, and it is labelled as
+  such here so a future round does not read it as a vacuous pin.
+
 **Round 769 (2026-07-29) — (REL.4)(a) THE NAMESPACE-SCOPED ENUM. ONE RESOLVER, ONE
 STRICTLY-ADDITIVE FALLBACK, **3 MORE `assertNever` LINES CLOSED — compiler 58 -> 56,
 services 63 -> 60** — SO FLIPPING THE NAMESPACE PAIR NOW COSTS **+10 / +14** INSTEAD OF

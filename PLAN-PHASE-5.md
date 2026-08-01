@@ -20,6 +20,89 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 784 (2026-08-01) — (REL.2) IS CLOSED. CAUSE (G) IS FIXED, THE GLOBAL
+enum -> MEMBER RELATION RULE IS FLIPPED ON, AND IT IS **SET-FOR-SET FREE ON ALL EIGHT
+PROFILES**. THE ITEM'S OWN DIAGNOSIS OF THE FIX WAS WRONG IN A USEFUL WAY: THE NARROW
+IS COMPUTED CORRECTLY AND IS SIMPLY NEVER ASKED FOR AT A PROPERTY READ.** Baseline grid
+re-captured at HEAD first (`46/46/46/46/46/46/46/94`, matching the shipping record), then
+re-run with the flip: **identical, line for line, on all eight**. Suite 13,309 ->
+**13,323 / 0 failures / 3 skipped** (all +14 are this round's pins — no corpus baseline
+moved); cost gate exit 0, every counter within 0.7%, no rebaseline.
+
+- **CAUSE (G) IS A GATE, NOT A MISSING NARROW.** `computeRawTypeOfPropertyAccess`
+  flow-narrows a receiver only when its raw type is ALREADY a `Type.Union` — a deliberate
+  gate, since narrowing every `a.b` puts a flow walk on the hottest path in the checker —
+  so `isModifier(node): node is Modifier` on a `node: Node` never reached the read and
+  `node.kind` answered `SyntaxKind` (`completions.ts:2234`). Measured with three probes at
+  once: after the guard the RECEIVER itself already reports the narrowed
+  `ModifierToken<…> | …`, a union receiver already resolves `.kind` correctly, and only the
+  narrow-DOWN-then-read composition fails. **So nothing was missing from the flow graph;
+  what was missing was a consumer.**
+- **THE PATH-BASED WALK CANNOT RECOVER IT, AND THAT IS THE NON-OBVIOUS PART.** Every
+  second-chance site in the checker calls `getNarrowedTypeForReference(raw, expr)` on the
+  WHOLE path `node.kind`, which reaches `narrowByCallPredicate`'s round-424 PREFIX arm —
+  and that arm resolves the tail on the guard TARGET through `resolvePrefixTailSegment`,
+  whose round-462 gate deliberately REFUSES a union tail (substituting a precise union tail
+  fired new errors when it was tried). `Modifier`'s `kind` is a 3-member union, so the arm
+  declines by design. The fix therefore cannot be a widening of that arm.
+- **WHAT LANDED: `propertyTypeFromNarrowedReceiver`, a second chance at the RETURN
+  rejecting path.** It narrows the RECEIVER (not the path), then re-resolves the property on
+  it — distributing over a union receiver the way `computeRawTypeOfPropertyAccess` does. It
+  is consulted only after `checkTypeRelatedTo(rawSource, target)` has already FAILED and
+  adopted only when it makes the return relate, so it is monotone by relation test and
+  cannot introduce a diagnostic anywhere. The cost of that gating is visible: `narrow.walks`
+  **+3** of 71,690, i.e. the walk is paid for only by a return that was about to fire.
+- **ROUND 783's PROPOSED FIX — `extractNullNarrowing`'s missing call-predicate arm — IS
+  NOT WHAT THIS NEEDED, AND IS STILL OPEN.** That helper feeds `currentLocalTypes` for the
+  cta/TS2322 family, and adding a guard arm there would change the PRIMARY type of every
+  guarded reference in the program. It was not required: the flow graph already answers, and
+  a monotone consumer is strictly cheaper and strictly safer. **Queued separately as
+  (NARROW.1)** — it is a real gap with its own blast radius, and rolling it into this item
+  would have bought nothing measurable.
+- **THE SINGLE-FILE REDUCTION OF THE FAILING LINE IS SILENT, AND IT COST ME A BUILD.** A
+  faithful one-file model of `isModifierLike` — enum, `Token<TKind>`, the `Modifier` union,
+  the guard, the returned `node.kind` — reports NOTHING even with the rule on. Round 760
+  recorded the reason (a guard declared beside its use resolves down a different path); the
+  same shape split across two files reproduces the profile line exactly, including its
+  message. **A reduction that goes quiet is not a refutation of the diagnosis — check the
+  round-760 file-split before rewriting the model.**
+- **PRICE ATTRIBUTION IS EXACT, MEASURED ON THE PROFILE.** With `R784_NARROWED_RECEIVER =
+  false` and the rule on, services is **47** and the extra line is
+  `completions.ts:2234 - TS2322: Type 'SyntaxKind' is not assignable to type
+  'ModifierSyntaxKind | undefined'` — the item's residual, verbatim. With the fix it is 46.
+- **ROUND 760's STAND-IN IS DELETED.** `enumMemberDomainProvesNotSubtype` existed to decline
+  one `never`-collapse the vacuous relation would otherwise wave through; the relation now
+  reaches that verdict itself, so the `&&` short-circuits where the veto used to.
+  `EnumMemberGuardNegativeBranchTest` and `GenericGuardTargetEnumMemberTest` — written for
+  the stand-in — are green on the relation's own answer, which is the deletion evidence.
+  Its two siblings named in the item, `kindDomainKeysExceed` and `kindDomainProvesNotSubtype`,
+  were ALREADY deleted in round 753 and survive only as comment prose; **checked before
+  crediting anything.** `typeGuardMemberDisjoint` is still live at 8 call sites and is NOT
+  claimed dead here — CLAUDE.md's warning that it may be unobservable post-(REL.1)(b) is a
+  measurement someone still owes.
+- **PINS: 9 OF 14 DISCRIMINATE, MEASURED AGAINST TWO ABLATED BINARIES** (`R784_NARROWED_-
+  RECEIVER = false` for the property pins, `REL2_ENUM_TO_MEMBER = false` for the relation
+  pins; the shapes re-run side by side through the 1-second scratch CLI). The five that hold
+  on both sides do so on purpose: member -> enum and member-vs-member are (REL.1)'s verdicts
+  and must not move; the covering and one-member cases must stay LEGAL or the rule is a
+  blanket rejection rather than a coverage test; and **the union-TARGET guard pin holds on
+  both sides and is documented as non-discriminating** — a guard target that is itself a
+  union already resolves its tail through the prefix machinery, which is exactly what left
+  the single-target/union-tail shape with no answer at all.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). The same second chance is
+  missing at the VAR-DECL/assignment path (`checkVarDeclAssignabilityCore`'s symmetric
+  narrowing block, ~6 lines): `const k: ModifierKind = node.kind` after the guard still
+  reports the declared type. Zero measured sites on all eight profiles, so it was left out
+  rather than landed unmeasured; it is the natural first extension if a project ever hits it.
+- **PREDICTIONS 2 of 4.** HIT: the price was worth re-measuring (it reproduced exactly, both
+  at HEAD and ablated), and the second chance closed the line with no grid movement. **MISSED,
+  and the misses are the output:** I expected `extractNullNarrowing`'s missing arm to BE the
+  fix and it was a red herring — the narrow already existed; and I expected a primitive probe
+  target to name the narrowed type as it did for round 783, but the return path's narrowing
+  block is gated to object-ish/union targets, so a `string` target skips it entirely and the
+  probe reports the un-narrowed type on a WORKING build. **A probe shape validated in one
+  round is not portable to another site's gate.**
+
 **Round 783 (2026-08-01) — (REL.2) RE-MEASURED ON ALL EIGHT PROFILES, AND THE
 INHERITED PRICE WAS WRONG IN BOTH DIRECTIONS AT ONCE: round 765's 5-line worklist
 was MISSING TWO `program.ts` LINES ON THE COMPILER PROFILE AND MISLABELLED THREE OF
@@ -832,172 +915,6 @@ rather than skipped quietly).
   `build.gradle.kts` change (Guardrails). No bench TSV row — `bench/` is gitignored, so
   the numbers live here.
 
-**Round 773 (2026-07-30/31) — (SERVER.1) STAGE 1 LANDED: A PRE-WARMED COMPILE SERVER MAKES
-THE WARM JVM THE FASTEST ARTIFACT WE SHIP — 11.9 s THROUGH A REAL SOCKET AGAINST THE AOT
-BINARY'S 13,350 ms AND THE COLD CLI'S 26,272 ms.** Code landed as `ff81d0cc`; this note,
-the checkbox and the STATUS bump are the follow-up commit (the authoring session ended at
-protocol step 5 — the same failure mode round 770 recorded, and the second time in four
-rounds, so the loop now closes bookkeeping for the PREVIOUS round before picking new work).
-
-- **WHAT IT IS.** `xtsc --serve` holds one warm JVM; `xtsc --daemon <args>` sends a request
-  over a Unix domain socket. Four requests through the client on the compiler profile:
-  **26,415 / 14,311 / 11,933 / 11,907 ms**, i.e. it converges on round 771's independently
-  measured **11,580 ms** warm steady state, and the output is IDENTICAL to the direct CLI's,
-  all 46 diagnostics. **This composes with (AOT.1) rather than competing**: the GraalVM image
-  is the ideal thin CLIENT (starts in milliseconds) while the JVM SERVER keeps C2 peak.
-- **TWO INVARIANTS, both documented in the source rather than left to a reader.** Requests
-  are served **SEQUENTIALLY on one thread** — Symbol/Type ids are thread-local (INV.6(6c0))
-  and `--workers` is already measured producing 62 diagnostics where sequential produces 46,
-  so a thread-per-connection server would reopen that bug class **to save nothing**, the
-  compile being the cost and not the accept. And a request runs the **ORDINARY `main()`**
-  with stdout captured, so server output is CLI output by construction rather than by
-  testing. Reusing one JVM across compiles was already proven safe: `BenchMain` runs 12
-  in-process rebuilds all reporting 78 files / 46 errors.
-- **STAGE 2 IS DELIBERATELY ABSENT** — round 772 measured retained program state as
-  worthless on this corpus (tsc's `export *` barrels make the reverse-dependency closure the
-  whole program), so Stage 1 IS the prize.
-- **TWO BUGS FOUND BY TESTING, NOT BY INSPECTION**, which is the reusable part: a Unix socket
-  path over ~108 bytes fails as a bare `SocketException: Unix domain path too long` naming
-  neither the path nor the limit; and the check for it first landed as a `require`, which
-  **CRASHED the client instead of letting it fall back** — the very contract `--daemon`
-  documents. Non-fatal for the client, fatal only for `serve()`, pinned by a regression test.
-- **WHAT IS NOT PINNED, stated rather than implied.** 7 pins cover `CompileServer.respondTo`
-  — the whole behaviour minus the socket — and are NOT bound in-suite on purpose (a thread
-  parked in `accept()` inside a 13k-test suite is a flakiness source). The strongest
-  property, byte-identical CLI parity, is also unpinned: it needs two full compiles in one
-  method and the suite runs at Gradle's default 512 MB test heap, where that OOMs; raising
-  the suite-wide heap for one test is the wrong trade on this box. Both exclusions are
-  written into the test class. Suite **13,216 -> 13,223 / 0 failures / 3 skipped**;
-  warning-clean.
-
-**Round 771 (2026-07-30) — OWNER-DIRECTED, NOT A QUEUE ITEM: THE JVM's OWN COST WAS NEVER
-MEASURED, AND IT IS 56% OF A COLD COMPILE. AOT RECOVERS ALMOST ALL OF IT — 1.97×, OUTPUT
-BYTE-IDENTICAL ON ALL 8 PROFILES, ZERO COMPILER CHANGES.** Full derivation:
-`docs/perf/aot-native-image.md`. Nothing was integrated; three items queued as (AOT.1–3).
-
-- **THE GAP IN THE MAP.** `bench-compile-tsc.sh` forks a fresh JVM per run, so its
-  `--warmup N` warms the page cache and never the JIT: **all 341 archived CI rows are cold
-  single-shots and xtsc's steady state was unmeasured.** `BenchMain` — the one harness that
-  could answer it — existed and had never been pointed at the question. Twelve iterations in
-  one JVM: **iter 0 26,272 ms, iter 1 13,953, iters 2+ 11,112–11,716 (median 11,580)**. So
-  **~14.7 s of a 26.3 s compile is warmup.** Iter 0 reproduces round 739's independently
-  measured 26,896 ms cold check-only, which is what validates the harness.
-- **THIS IS ROUND 740 FROM THE OTHER SIDE.** That round measured 85.6 s of user CPU for a
-  27.1 s wall, ~2.2 cores of JIT, and C2 never finishing `Checker.kt` inside one run — and
-  concluded "not a single-thread lever" because starving the JIT did not move self time.
-  Correct, and it missed this: the JIT is not stealing from the compile thread, it is that
-  **the compile thread never reaches compiled code**. The evidence was in the repo for 31
-  rounds.
-- **AOT, GraalVM CE, standalone (no build-system change): 13,350 ms, 1.97× the cold JVM**,
-  and only 15% off JVM peak — on a COLD run, which is how a CLI compiler is used. RSS
-  392 MB against a 4 GB heap allowance; binary 55 MB; image build 2m 1s.
-- **THE GATE IS BYTE-IDENTITY ON ALL EIGHT PROFILES, NOT A COUNT** (two runs can agree on
-  46 and disagree on which 46). Sorted `--listAll` diff empty on every one; speedups
-  1.71–1.98×. **Two things make it more than eight green rows:** the error grid comes out
-  **46/46/46/46/46/46/46/94**, reproducing the dashboard's known composition, so the seven
-  freshly materialized profiles are right rather than merely self-consistent; and **the
-  saving is CONSTANT in absolute terms (12.4–16.0 s) across a 4× range of project size**,
-  so the ratio falls (1.98 → 1.71) only because the denominator grows. That is the
-  signature of a fixed warmup cost; per-node work would not behave that way.
-- **`-O3 -march=native` MEASURED AND WORTH NOTHING: 13,325 vs 13,335 ms.** So the residual
-  15% is not instruction selection — it is the absence of PGO, which CE cannot do. A
-  negative result that closes a direction rather than opening one.
-- **THE WARM BAND IS CALIBRATED, AND IT IS THE ROUND'S MOST REUSABLE OUTPUT.** Six A/A
-  processes: pair deltas **+0.93% / −0.98% / +0.41%**, i.e. **±1.0% = ±114 ms** against the
-  cold ±2.0% = ±536 ms — **4.7× more sensitive in absolute terms**, at lower cost per
-  sample. **Every A/B in the arc was run cold**, so items rejected as in-band deserve
-  re-examination: (CALL.4)'s 441 ms is 3.9× the warm band, the `getTypeOfExpression`
-  ceiling 7.1%, single-visit discipline 5.8%. **Stated in the doc and repeated here because
-  it is the easy mistake: MEASURABLE IS NOT WORTH LANDING** — nothing got bigger, only
-  visible, round 755's "(CALL.4) is M3.1 resolution work, not machinery" is untouched, and
-  round 736's identity pre-test was rejected as UNSOUND, not small. (AUDIT.3)'s globals
-  population stays dead at 0.3–0.6%.
-- **FOR THE PORT QUESTION THIS ROUND WAS RUN TO INFORM:** our steady-state COMPUTE is
-  11.6 s, not 26.3 s, so the architectural gap to tsgo is roughly **5×, not 13×** — and a
-  Kotlin port of tsgo would **inherit the warmup tax AOT removes for free**, being the same
-  JVM one-shot process. The port thesis is weaker than it looked, and its prize is smaller.
-- **EVIDENCE LIMITS, STATED RATHER THAN GLOSSED.** The corpus suite is a JVM harness and
-  has never run against a native binary, so the 8-profile grid is the ONLY behavioural
-  evidence and it is weaker than the suite. One box; single run per profile in the grid;
-  emit mode not measured natively. Also found: this box has **no C toolchain at all** and
-  `sudo` needs a password — the unprivileged assembly and its three traps are in doc § 8,
-  and a CI runner would need the same solved.
-
-**Round 770 (2026-07-29; note written 2026-07-30 — see PROCESS below) — (REL.4)(a) CAUSE 5,
-THE POST-SWITCH FALL-THROUGH: A `default`-LESS SWITCH'S NO-MATCH EDGE NOW SUBTRACTS EVERY
-CASE TAG. THE DEFECT WAS IN THE BINDER, NOT THE CHECKER, AND THE ROUND WAS SENT AT CAUSE 6
-AND PIVOTED.** Suite **13,207 -> 13,216** (+9 pins, `PostSwitchFallThroughNarrowingTest`);
-unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
-
-- **THE PIVOT, RECORDED BECAUSE IT IS A FINDING.** The round was queued at cause 6 (the
-  type-guard ternary chain over a node union/intersection, `nodeFactory.ts:7112` /
-  `declarations.ts:1739`). It is NOT this: cause 6's subtraction machinery is
-  `narrowByCallPredicate`'s, not `enumMinusMembers`', and an INTERSECTION subject has no
-  member list to peel — round 769 had already sized it as its own round. The shape that
-  actually blocked `Debug.assertNever` on the dashboard was cause 5, so the round took
-  cause 5. Cause 6 remains open and unchanged.
-- **THE DEFECT IS IN THE BINDER.** Leaving a `default`-less switch, `bindSwitchStatement`
-  joined the post-switch flow to a bare **FlowCondition chain asserting that every case
-  EXPRESSION is falsy**. That is the truth for the `switch (true) { case <cond>: }` idiom
-  **only** — in a discriminant switch the case expression is a VALUE (`SyntaxKind.A`), so
-  every link of the chain narrows nothing, and `Debug.assertNever(x)` after an exhaustive
-  `default`-less switch saw the WHOLE declared type. Round 768's label for this cause
-  ("does not narrow at all … NOT enum-specific, flow-graph work") is confirmed exactly:
-  the fix is in the flow graph and the pins show it works for enums, discriminated unions
-  and `typeof` tags alike.
-- **THE FIX MIRRORS tsc, AND IT IS LAYERED RATHER THAN SUBSTITUTED.** tsc encodes the same
-  edge as a switch-clause flow with an **EMPTY clause range** — binder
-  `createFlowSwitchClause(preSwitchCaseFlow, node, 0, 0)`, read by
-  `narrowTypeBySwitchOnDiscriminant` as `clauseStart === clauseEnd` ⇒ treat as `default:`.
-  We now emit `newSwitchClause(stmt, 0, 0, noMatch)` **on top of** the existing condition
-  chain instead of replacing it, so every existing `switch (true)` answer is untouched
-  (`narrowBySwitchClause` returns null for a range it cannot key and the caller keeps the
-  antecedent). Three checker readers learned that an empty range means "no case matched",
-  i.e. the SAME position as a `default:` clause and therefore the same subtraction.
-- **AND IT UNCOVERED A SECOND DEFECT, FIXED HERE TOO — found by a pin breaking, not by
-  inspection.** `narrowBySwitchOnTrue` keys purely on `clauseStart` and never consults
-  `clauseEnd`, so the new empty range read as "**clause 0 matched**" and narrowed
-  POSITIVELY on the way OUT of the switch, collapsing `switch (true) { case c1: … }` to
-  `never`. Caught by `narrowByClauseExpressionInSwitchTrue3` failing. Guarded with an
-  early `return null`: the edge's own claim — every case condition is false — is already
-  carried by the FlowCondition chain the node now sits on top of, so that function has
-  nothing left to add. **The general invariant is in CLAUDE.md**: a reader of
-  `FlowSwitchClause` that keys on `clauseStart` alone is wrong the moment an empty range
-  reaches it, and there are now four such readers.
-- **GATES.** Suite **13,216 / 0 failures / 3 skipped** (13,207 + 9); compiler profile
-  `--listAll` **46** and programFiles **78**, unchanged; cost gate exit 0 with **16 of the
-  20 counters bit-identical** and four moved — `narrow.walks` 71,326 -> **71,323**,
-  `narrow.memoServed` 45,489 -> **45,488** (the three walks that no longer run, and the one
-  memo serve they consumed), `globals.lookups` 963,052 -> **964,621** and `globals.misses`
-  948,338 -> **949,907** (**+0.16% / +0.17%**, the new switch-clause readers resolving case
-  tags that used to bail), inside the ±2% tolerance and **rebaselined** — in a follow-up
-  commit rather than the same one, which is a protocol deviation forced by the interruption
-  below, not a choice. No corpus baseline moved, so no `LogicalParityDivergence`.
-- **NOT MEASURED, AND IT IS THIS ROUND'S OPEN END.** The **scaffolded (REL.4) flip price
-  was not re-measured.** Cause 5's two lines are `checker.ts:11536` and `37648`, both in
-  `src/compiler`, so the expectation is **compiler 56 -> 54 and services 60 -> 58** — a
-  PREDICTION, not a measurement, and whoever takes (REL.4) next must re-measure behind the
-  scaffold before quoting it. The unscaffolded grid at 46 cannot see this: cause 5's lines
-  only exist while the imported-namespace pair is scaffolded on.
-- **PROCESS — why this note is a day late.** Three consecutive server-side API failures
-  (500, 529, 529) killed the authoring agent after the work was complete and before it
-  could gate. The orchestrator inspected the diff for completeness and probe residue (no
-  scaffold or instrumentation remains) and landed the code commit `619641b2` with the gate
-  results in its message; the host was then restarted before protocol step 5 ran, leaving
-  the session note, the STATUS bump, the queue update and the cost rebaseline undone. All
-  four are this commit. **The gates were re-run from scratch on the restarted host rather
-  than taken from the commit message** — suite 13,216 / 0 / 3 tallied from the 574 result
-  XMLs, cost gate re-run and rebaselined, and every number above reproduced.
-- **AND THE EVIDENCE THE ROUND NEVER RECORDED: the pins were run against the PRE-FIX
-  source.** Narrowing pins are exactly the class CLAUDE.md warns can pass on a working AND
-  a broken build, so a green run proves nothing on its own. Reverting only
-  `Checker.kt` + `Flow.kt` to `619641b2^`: **the 5 TARGETS FAIL and the 3 NEGATIVE CONTROLS
-  PASS.** The ninth pin — `a switch on true with no default still narrows through the
-  condition chain` — **passes on BOTH sides, which is correct and is the point of it**: it
-  guards the second defect, the one the fix itself introduced and then fixed, so it must
-  hold before and after. That is a regression guard, not a target, and it is labelled as
-  such here so a future round does not read it as a vacuous pin.
-
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
   existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
@@ -1417,8 +1334,8 @@ unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
   intermediate (`type ABox<T> = Box<T>; interface S extends ABox<number>`) still
   degrades to `any`, in `getTypeFromBaseTypeExpression`; unqueued, no known consumer.
 
-- [ ] **(REL.2) Close the enum → MEMBER relation direction — BLOCKED ON NARROWING,
-  and the price is measured (round 760).** `checkTypeRelatedToCore` decides
+- [x] **(REL.2) CLOSED round 784 — the enum → MEMBER relation direction is LANDED and
+  the flip is SET-FOR-SET FREE on all eight profiles.** `checkTypeRelatedToCore` decides
   enum-vs-member VACUOUSLY (both sides are member-less `Type.Object`s), so `K` is
   assignable to `K.A`; round 746 left it deliberately and said so in a comment.
   The rule was WRITTEN, COMPILED, MEASURED AND REVERTED this round: it is correct
@@ -1592,12 +1509,44 @@ unscaffolded compiler profile `--listAll` **46**, programFiles 78, unchanged.
     CHANCE at the property-read site gated on the answer being an enum's own type (cheap
     to write, but it fires on every `node.kind` in tsc's sources, so price the flow
     walks before landing it).
-  **NEXT ROUND: close (G), re-run the eight-profile grid, flip `REL2_ENUM_TO_MEMBER` to
-  `true`, delete `enumMemberDomainProvesNotSubtype` (round 760's site-local stand-in),
-  and only THEN check whether `kindDomainKeysExceed` / `kindDomainProvesNotSubtype` /
-  `typeGuardMemberDisjoint` became dead — measure, do not credit.** The round-764
-  subtractive narrow must NOT be deleted on a "0 differ" reading: it is verdict-neutral
-  only while the vacuous `true` stands.
+  **ROUND 784 CLOSED (G) AND LANDED THE FLIP.** `REL2_ENUM_TO_MEMBER` is now an ABLATION
+  switch, not a scaffold. The grid was re-captured at HEAD first and then re-run with the
+  flip: **`46/46/46/46/46/46/46/94`, set-for-set identical on all eight**; suite 13,309 ->
+  13,323 / 0 / 3; cost gate exit 0, no rebaseline.
+  - **(G)'s fix is `propertyTypeFromNarrowedReceiver`, a SECOND CHANCE at the RETURN
+    rejecting path** — it narrows the RECEIVER (not the path) and re-resolves the property
+    on it, consulted only after the raw type has already been rejected and adopted only when
+    it makes the return relate. `narrow.walks` +3 of 71,690. **Neither of the item's two
+    candidate fixes was right:** the `extractNullNarrowing` arm was unnecessary (the narrow
+    is computed correctly and simply never asked for — requeued on its own merits as
+    (NARROW.1)), and a second chance at the property-READ site would have been the primary
+    path, i.e. the expensive one this avoids.
+  - **`enumMemberDomainProvesNotSubtype` is DELETED.** `kindDomainKeysExceed` and
+    `kindDomainProvesNotSubtype` were checked and were ALREADY deleted in round 753 — they
+    survive only as comment prose, so no deletion was credited. **`typeGuardMemberDisjoint`
+    is still live at 8 call sites and is NOT claimed dead**: CLAUDE.md's "probably
+    unobservable post-(REL.1)(b)" is a measurement still owed, and a reader's consumer must
+    be checked before it is spent.
+  - The round-764 subtractive narrow was NOT deleted, per its own warning: it was
+    verdict-neutral only while the vacuous `true` stood, and it is load-bearing now.
+  - **NOT TAKEN, RECORDED:** the same second chance is missing at the VAR-DECL/assignment
+    path (`checkVarDeclAssignabilityCore`'s symmetric narrowing block), so
+    `const k: ModifierKind = node.kind` after the guard still reports the declared type.
+    Zero measured sites on all eight profiles.
+
+- [ ] **(NARROW.1) `extractNullNarrowing` has NO call-predicate arm — no type-guard call
+  has ever reached `currentLocalTypes`.** It has nullish / `typeof` / truthiness arms only
+  (Checker.kt), and it feeds BOTH the legacy cta walker's if-branch narrowing frame and the
+  spine's `ctaM3NarrowThen`. So inside `if (isFoo(x)) { … }` every consumer of
+  `getTypeOfExpression` — as opposed to the opt-in `getNarrowedTypeForReference` sites —
+  still sees `x`'s DECLARED type. Discovered round 783 and re-scoped round 784: it is NOT
+  needed for (REL.2) (whose cause (G) was closed by a monotone second chance instead), so
+  this is queued on its own merits. **Blast radius is the point of the item**: unlike a
+  second chance, an arm here changes the PRIMARY type of every guarded reference in the
+  program, in both directions — gate it on the full eight-profile grid plus the corpus, and
+  size it behind a switch before landing. CLAUDE.md's standing note that "an `if (isFoo(x))`
+  narrow IS visible to `getTypeOfExpression` consumers" is what this item falsifies; fix
+  that entry when it lands.
 
 - [x] **(REL.1) ARC COMPLETE round 753** — (a) round 741, (b0) round 742, (b) round 744,
   (c) steps 1-5 rounds 745-753. Five enum walkers retired (`checkEnumLiteralAssignments`,
