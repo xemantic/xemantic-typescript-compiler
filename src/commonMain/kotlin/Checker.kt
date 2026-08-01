@@ -97949,6 +97949,22 @@ interface DataView {
                 }
                 if (narrowed !== sourceTypeRaw && checkTypeRelatedTo(narrowed, targetType, assignableRelation)) {
                     sourceNarrowVerified = true; narrowed
+                } else if (expr is PropertyAccessExpression &&
+                    !checkTypeRelatedTo(sourceTypeRaw, targetType, assignableRelation)
+                ) {
+                    // (REL.2) cause (G), round 784: the path-based walk above narrows
+                    // `node.kind` only through `narrowByCallPredicate`'s PREFIX arm, which
+                    // refuses a UNION tail — so `return node.kind` after `isModifier(node)`
+                    // still reports the receiver's DECLARED `SyntaxKind`. Recompute the
+                    // property from the narrowed RECEIVER instead. Gated on the raw source
+                    // having already been rejected, so the flow walk is paid for only by a
+                    // return that is about to fire, and adopted only when it relates.
+                    val viaReceiver = propertyTypeFromNarrowedReceiver(expr)
+                    if (viaReceiver != null &&
+                        checkTypeRelatedTo(viaReceiver, targetType, assignableRelation)
+                    ) {
+                        sourceNarrowVerified = true; viaReceiver
+                    } else sourceTypeRaw
                 } else sourceTypeRaw
             } else if (expr is ArrayLiteralExpression) {
                 // Round 467 (M3.4): an array-literal return whose reference elements
@@ -110757,15 +110773,19 @@ interface DataView {
         // disables, which is precisely the trap the objlit annotation fallback fell into
         // in the same round (dead on this profile, load-bearing off it).
         //
-        // Round 760 RESTORES the veto in its narrowest possible form, because round 753's
-        // stated premise is falsified by measurement: (REL.1)(a)/(b) taught the relation
-        // member-vs-member, but the enum → MEMBER direction is still decided VACUOUSLY by
-        // the structural engine (both sides are member-less `Type.Object`s), so
-        // `Node <: Modifier` still "holds" and `!isModifier(node)` still washed `node` to
-        // `never` — completions.ts:2237's TS2345 is exactly that, back after four years.
-        // The general fix belongs in [checkTypeRelatedToCore] and is SIZED there, not
-        // taken: it is right, and it costs +6/+11 profile FPs by unmasking flow-narrowing
-        // gaps. This veto is the one consumer that needs the answer today.
+        // Round 760 RESTORED the veto in its narrowest possible form
+        // (`enumMemberDomainProvesNotSubtype`) because the enum → MEMBER direction was
+        // still decided VACUOUSLY by the structural engine (both sides are member-less
+        // `Type.Object`s), so `Node <: Modifier` "held" and `!isModifier(node)` washed
+        // `node` to `never` — completions.ts:2237's TS2345.
+        //
+        // (REL.2) round 784: that stand-in is DELETED, because the general rule it stood
+        // in for has LANDED in [checkTypeRelatedToCore] — an enum is now assignable to a
+        // target built out of its own members only when those members COVER it, so
+        // `kind: SyntaxKind` vs `kind: SyntaxKind.AbstractKeyword` is rejected by the
+        // relation itself and the `&&` below short-circuits exactly where the veto used
+        // to. `EnumMemberGuardNegativeBranchTest` and `GenericGuardTargetEnumMemberTest`
+        // pin the two shapes it was restored for and stay green on the relation's answer.
         // (REL.2) round 764: a type GUARD's false branch on a bare ENUM subject. Same
         // finite-domain subtraction as the `!==` case: `!isAB(k)` on `k: K` where the
         // guard targets `K.A | K.B` leaves `K.C | K.D`, not `K`. Reached BEFORE the
@@ -110780,47 +110800,7 @@ interface DataView {
             enumMinusMembers(t, targets)?.let { if (it !== t) return it }
         }
         return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
-            !missingVsOptionalProvesNotSubtype(t, targetType) &&
-            !enumMemberDomainProvesNotSubtype(t, targetType)) neverType else t
-    }
-
-    /**
-     * Round 760: is [source] provably NOT a subtype of [target] because [target] pins a
-     * property to a single enum MEMBER where [source] types the same property as that
-     * member's whole ENUM?
-     *
-     * `SyntaxKind` is not `SyntaxKind.AbstractKeyword` — an enum is the union of its
-     * members' literal types, and a union is not a subtype of one member. The structural
-     * engine cannot see this: [getDeclaredTypeOfEnumMember] mints member types with NO
-     * members, so the two `Type.Object`s relate vacuously. Only the type-guard NEGATIVE
-     * branch consults this, and only to DECLINE a collapse to `never`; a `false` verdict
-     * leaves every existing answer untouched.
-     *
-     * A UNION [target] needs EVERY constituent proved out — the source fails to be a
-     * subtype of the union only if it is a subtype of none of them.
-     */
-    private fun enumMemberDomainProvesNotSubtype(source: Type, target: Type): Boolean {
-        if (target is Type.Union) {
-            return target.types.isNotEmpty() &&
-                target.types.all { enumMemberDomainProvesNotSubtype(source, it) }
-        }
-        val tObj = getApparentType(target) as? Type.Object ?: return false
-        val sObj = getApparentType(source) as? Type.Object ?: return false
-        resolveStructuredTypeMembers(tObj)
-        resolveStructuredTypeMembers(sObj)
-        val tProps = tObj.properties ?: return false
-        val sProps = sObj.properties ?: return false
-        return tProps.any { tp ->
-            val tt = propertyTypeOnCarrier(tObj, tp)
-            if (tt.flags.hasNone(TypeFlags.EnumLiteral)) return@any false
-            val sp = sProps.firstOrNull { it.name == tp.name } ?: return@any false
-            val st = propertyTypeOnCarrier(sObj, sp)
-            // The source must carry the OWNING enum's own type — a sibling MEMBER is
-            // (REL.1)(b)'s question and is already answered by the relation.
-            st.flags.hasAny(TypeFlags.Enum) &&
-                enumOwnTypeSymbol(st) != null &&
-                enumOwnTypeSymbol(st) === enumOfMemberTypeSymbol(tt)
-        }
+            !missingVsOptionalProvesNotSubtype(t, targetType)) neverType else t
     }
 
     /**
@@ -116397,6 +116377,47 @@ interface DataView {
             return getNarrowedTypeForReference(raw, expr)
         }
         return raw
+    }
+
+    /**
+     * (REL.2) cause (G), round 784: [expr]'s property type recomputed from a FLOW-NARROWED
+     * receiver — or `null` when the receiver does not narrow, or the property does not
+     * resolve on the narrowed type.
+     *
+     * [computeRawTypeOfPropertyAccess] flow-narrows a receiver ONLY when its raw type is
+     * already a `Type.Union` (a deliberate gate: narrowing every `a.b` in the program would
+     * put a flow walk on the hottest path in the checker). A guard that narrows DOWN from a
+     * single interface — `isModifier(node): node is Modifier` on a `node: Node` — is therefore
+     * never attempted, and `node.kind` answers `SyntaxKind` where tsc answers
+     * `ModifierSyntaxKind` (tsc completions.ts:2234). The path-based walk cannot recover it
+     * either: `narrowByCallPredicate`'s PREFIX-path arm resolves the tail `kind` on the guard
+     * target, and its round-462 gate deliberately refuses a UNION tail.
+     *
+     * This is a SECOND CHANCE, not a replacement: every caller consults it only after the
+     * plain type has already been REJECTED, and adopts the answer only when it makes the
+     * check relate — so it can turn a rejection into an acceptance and can never introduce a
+     * diagnostic. The union receiver case returns null (the primary path already handles it),
+     * which keeps the two mechanisms from disagreeing.
+     */
+    private fun propertyTypeFromNarrowedReceiver(expr: PropertyAccessExpression): Type? {
+        if (!R784_NARROWED_RECEIVER) return null
+        val recv = expr.expression
+        if (getReferencePath(recv) == null) return null
+        val raw = getTypeOfExpression(recv)
+        if (raw is Type.Union || raw === anyType || raw === errorType) return null
+        val narrowed = getNarrowedTypeForReference(raw, recv)
+        if (narrowed === raw || narrowed === neverType ||
+            narrowed === anyType || narrowed === errorType
+        ) return null
+        val propName = expr.name.text
+        enumMemberAccessType(narrowed, propName)?.let { return it }
+        val apparent = getApparentType(narrowed)
+        if (apparent is Type.Union) {
+            val parts = mutableListOf<Type>()
+            for (c in apparent.types) parts.add(resolveMemberPropertyType(c, propName) ?: return null)
+            return if (parts.size == 1) parts[0] else getUnionType(parts)
+        }
+        return resolveMemberPropertyType(apparent, propName)
     }
 
     /** M1.12 (round 419): resolve [propName]'s type on a single union MEMBER, folding an
@@ -174019,27 +174040,23 @@ private val R782_LEXICAL_ENUM_DISCRIMINANT = true
 private val REL4_NS_ALIAS_RECEIVER = true
 
 /**
- * (REL.2) round 783 SCAFFOLD SWITCH — **the one switch in this file that is OFF, and it is
- * off because the item is not closed yet, not because the rule is wrong.**
+ * (REL.2) round 784 ABLATION SWITCH — **the scaffold is retired; the rule is LANDED.**
  *
- * Turning it on decides the enum -> MEMBER relation direction the way tsc does. Re-measured
- * round 783 on ALL EIGHT profiles (never two — that omission is what cost round 782): the
- * raw price against `46/46/46/46/46/46/46/94` was `project 46 -> 49`, four profiles
- * `46 -> 47`, `services/server 46 -> 51`, `harness 94 -> 99`; with this round's three fixes
- * it is **ONE line on three profiles** — `services/server 46 -> 47`, `harness 94 -> 95`,
- * `completions.ts:2234`, the other five profiles FREE.
+ * It decides the enum -> MEMBER relation direction the way tsc does, and flipping it to
+ * `false` restores the pre-784 VACUOUS `true` (both sides are member-less `Type.Object`s),
+ * so `EnumToMemberRelationTest`'s pins can be shown to discriminate. Never flip this in a
+ * commit.
  *
- * That last line is NOT the "property read on a union of generic instantiations" the queue
- * labelled it: measured, `Modifier["kind"]` and a `Modifier`-typed PARAMETER's `.kind` both
- * resolve correctly now. What fails is the RECEIVER — `computeRawTypeOfPropertyAccess`
- * flow-narrows a receiver only when its raw type is ALREADY a `Type.Union`, so
- * `isModifier(node)`'s narrow-DOWN from `Node` is never attempted and `node.kind` answers
- * `SyntaxKind`. `extractNullNarrowing` — the pass that records a condition's narrowing into
- * `currentLocalTypes` — has no call-predicate arm at all, so the fix is either that arm or
- * a second chance at the property-read site. See PLAN-PHASE-5.md (REL.2). DO NOT flip this
- * until that line is closed and the grid is re-measured on all eight.
+ * Price, re-measured round 784 on ALL EIGHT profiles at HEAD (never two — that omission is
+ * what cost round 782): with cause (G) closed the flip is **set-for-set IDENTICAL** on all
+ * eight, `46/46/46/46/46/46/46/94`. It got there in stages — the raw price was seven
+ * distinct lines (round 783 measured `project 46 -> 49`, four profiles `46 -> 47`,
+ * `services/server 46 -> 51`, `harness 94 -> 99`), round 783 closed six of them, and the
+ * last one was `completions.ts:2234`, cause (G), closed by
+ * [propertyTypeFromNarrowedReceiver]. Round 760's site-local stand-in
+ * `enumMemberDomainProvesNotSubtype` went with it.
  */
-private val REL2_ENUM_TO_MEMBER = false
+private val REL2_ENUM_TO_MEMBER = true
 
 /**
  * (REL.2) round 783 ABLATION SWITCH — flip to `false` to restore the round-781 behaviour in
@@ -174057,6 +174074,15 @@ private val R783_CONST_KEEPS_ENUM_MEMBER = true
  * in a commit.
  */
 private val R783_OBJLIT_ENUM_NARROW = true
+
+/**
+ * (REL.2) cause (G), round 784 ABLATION SWITCH — flip to `false` to restore the pre-784
+ * behaviour in which a property read whose RECEIVER was narrowed by a type-guard call from a
+ * non-union type kept the receiver's declared property type, so `NarrowedReceiverPropTest`'s
+ * pins can be shown to discriminate. Same top-level init-order rationale as the switches
+ * above. Never flip this in a commit.
+ */
+private val R784_NARROWED_RECEIVER = true
 
 /**
  * (REL.2) round 783 ABLATION SWITCH — flip to `false` to restore the pre-783 behaviour in
