@@ -316,3 +316,192 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll --cpaSectionsCoarse $P
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll --cpaSectionsCensus $P
 ```
+
+---
+
+# Level R (round 789, (ENGINE.2c)) — inside `checkMemberAccessMissing`
+
+*Compiler profile, `--noEmit`, `-Xmx4g`, box idle. Harness: `CpaSections` level R
++ six nested sub-measures, opt-in via the same `--cpaSections{,Coarse,Census}`
+flags, behaviour-free when off.*
+
+## 10. The headline
+
+Level Q's engine row is ONE function of ~1,965 lines, entered 66,747 times at
+34.3 µs each. Re-measured at HEAD before the item was written: **2,292 ms gross,
+6× the next row of either level.** Opening it inverts the picture levels P and Q
+gave:
+
+| | ms (net) | share of the function | share of the compile |
+|---|---:|---:|---:|
+| **the three flow-graph SUPPRESSION blocks** | **1,505** | **57.1%** | **~5.4%** |
+| computing the receiver type (8 rows) | 697 | 26.4% | 2.5% |
+| the other seven receiver-shape firewall blocks | 267 | 10.1% | 1.0% |
+| post-type gates, member resolution, THE LOOKUP | 53 | 2.0% | 0.2% |
+| entry / unwrap / `never` probe | 123 | 4.7% | 0.4% |
+| suggestion + `typeToString` + emission | **0** | **0.0%** | 0 |
+
+**At levels P and Q the dedicated-walker firewall was 8.0% and the engine 91.9%.
+One level down, inside the "engine", the firewall is 67% and the property lookup
+it defends is 0.2%.** The function is not mostly a property lookup; it is mostly
+a suppression apparatus in front of one.
+
+## 11. Method and calibration
+
+Level R keeps level Q's non-recursive `depth != 1 ⇒ return` shape
+(`invocationsRNested` = 0, pinned) and adds two instruments:
+
+* **an exit census** (`rExitIn`) — which row each call RETURNS from. Nothing else
+  can see a gate that is cheap to evaluate but placed after expensive work;
+* **a walker-restricted exit census** (`rExitWalk`) — the same census over just
+  the calls that paid for a flow walk. That is what turns "this row is big" into
+  "these specific calls paid for nothing".
+
+It has TWO callers (property access and element access), so its 67,258
+invocations legitimately exceed level Q's 66,747; the 511 difference is the
+element accesses, and the two counts are cross-checked rather than assumed equal.
+
+**Calibration — sharper than round 787's, and still reported as a bound.** Three
+runs per mode on the same binary:
+
+| | run 1 | run 2 | run 3 | median | spread |
+|---|---:|---:|---:|---:|---:|
+| ON | 3,013 | 2,938 | 3,006 | **3,006** | 75 |
+| COARSE | 2,580 | 2,654 | 2,655 | **2,654** | 75 |
+
+Δ = **352 ms** over **1,177,373** extra boundaries (1,244,631 closes under ON
+against 67,258 under COARSE) = **299 ns**, bracket **240–368 ns** once both
+spreads are charged against it. Δ is **4.7×** the larger spread — against round
+787's 2.8× and round 786's 1.4×. Every net figure below carries that bracket.
+
+**Two honest caveats.** (1) The net rows sum to 2,641 ms, which agrees with the
+COARSE median (2,654) to 0.5%, but the probe-free anchor from level Q is
+2,292 ms — so the harness's own footprint is **~250–350 ms even in COARSE**
+(the `try`/`finally` plus 26 inert boundary checks in a function this size).
+Absolute row figures therefore carry ±13%; the SHARES do not, because the probe
+distributes by boundary count and is subtracted per row. (2) The largest row is
+also the one with the fewest boundaries per unit time, so the calibration cannot
+be what produced it: R_FLOW closes 67,067 times for 1,524 ms, i.e. 20 ms of probe
+against 1,505 ms of work.
+
+## 12. Level R — the partition
+
+Net = gross − closes × 299 ns.
+
+| row | gross ms | closes | **net ms** | exits | of which walkers |
+|---|---:|---:|---:|---:|---:|
+| wrapper transition (probe-only) | 16 | 67,258 | ~0 | 0 | 0 |
+| pre (empty name, unwrap, intersection-`never`) | 146 | 67,258 | 126 | 0 | 0 |
+| shadowed-name receivers | 74 | 67,258 | 55 | 191 | 0 |
+| **the three flow-graph receiver blocks** | **1,524** | 67,067 | **1,505** | 1,169 | **914** |
+| identifier-receiver special cases | 179 | 65,898 | 160 | **0** | 0 |
+| string/regex/empty-objlit receivers | 36 | 65,898 | 17 | 7 | 0 |
+| NewExpression receiver | 25 | 65,891 | 6 | 3 | 0 |
+| CallExpression receiver | 30 | 65,888 | 11 | 832 | 0 |
+| PropertyAccess/ElementAccess receiver | 33 | 65,056 | 14 | 37 | 0 |
+| this-in-static-method | 23 | 65,019 | 4 | 0 | 0 |
+| type = this / ArrayLiteral arms | 30 | 65,019 | 11 | 55 | 0 |
+| type = ns-member/enum-member/cast emissions | 52 | 64,886 | 34 | 0 | 0 |
+| type = narrowing-eligibility gate | 29 | 64,886 | 10 | 2,271 | 0 |
+| type = `getTypeOfExpression(receiver)` | 50 | 62,615 | 32 | 0 | 0 |
+| type = union-receiver narrowing | 243 | 62,615 | 225 | 216 | 0 |
+| type = non-Identifier receiver | 35 | 62,399 | 17 | 3,852 | 129 |
+| type = identifier symbol resolution | 105 | 58,547 | 88 | 0 | 0 |
+| **type = resolved-symbol branch** | 297 | 58,547 | 280 | **40,308** | **21,064** |
+| objectType gates (`!is Object`, enum-flavored) | 14 | 18,317 | 10 | 0 | 0 |
+| `resolveStructuredTypeMembers` | 7 | 18,317 | 2 | 0 | 0 |
+| member-less receiver block | 10 | 18,317 | 5 | 46 | 15 |
+| post-type gates (base/Reference/runtime props) | 35 | 18,271 | 30 | 8,944 | 71 |
+| **`getPropertyOfType` — THE LOOKUP** | 8 | 9,327 | **6** | 9,250 | **0** |
+| late suppression + index signatures | 0 | 77 | 0 | 77 | 77 |
+| suggestion + `typeToString` + emission | — | **0** | **0** | 0 | 0 |
+
+**The exit census.** 86.1% of the 67,258 calls return before the property lookup
+is reached, and the emission tail is **never reached at all** — 77 calls get as
+far as the index-signature gates and all 77 stop there. So on this profile the
+function's message-building code, spelling suggestion included, costs exactly
+nothing, which is the strongest possible form of round 786's 0.4 ms
+TS2322-elaboration finding and the wiring control this partition needed.
+
+## 13. Inside the dominant row: 1,219 ms of flow walking for 886 suppressions
+
+Six nested sub-measures split it (values from the reference run; a second run
+reproduced every COUNT exactly and every time within ±10%):
+
+| | calls | ms |
+|---|---:|---:|
+| b1 `getTypeOfExpression(receiver)` | 63,797 | 72 |
+| b1 the round-489 pre-gate (two `getPropertyOfType`) | 63,797 | **50** |
+| **b1 the PLAIN narrowing flow walk** | **22,270** | **731** |
+| **b1 the round-425 loop-entry RETRY walk** | **21,384** | **488** |
+| b2 base type + `getFlowAt` | 3,584 | 5 |
+| b2 the base-projection flow walk | 470 | 47 |
+| b3 the whole `this`-receiver block | 140 | 1 |
+
+**The round-489 pre-gate is excellent and it is not the cost**: 50 ms to stop
+41,527 of 63,797 accesses (65%) from walking. What is left is a genuine flow
+walk, twice, at every third property access.
+
+**22,270 walks is 31% of the entire compile's 71,377 narrowing walks** — this one
+firewall block is a third of all flow narrowing xtsc does.
+
+**The arithmetic that prices it.** The retry runs exactly when the plain walk did
+not suppress, so `22,270 − 21,384 = 886` is an exact count of plain-walk
+suppressions, not an estimate. The walker-restricted census shows **914** walkers
+exiting in this row in total, so **the retry and everything downstream of it in
+the row account for at most 28 more suppressions** — against 488 ms and 21,384
+walks. That is **≥17 ms per suppression**, and the round-425 retry is the
+narrowest, best-priced deletion candidate the arc has produced.
+
+**And where the other 21,356 walkers go is the finding.** Of the 22,270 calls
+that pay for a walk: 914 (4.1%) suppress; **21,064 (94.6%) exit in the
+receiver-type resolved-symbol branch**, downstream of the walk and with the
+walk's answer consulted by nothing; 129 exit in the non-Identifier branch, 71 in
+the post-type gates, 15 in the member-less block, 77 at the index-signature
+gates; and **0 reach the property lookup.** The suppression apparatus runs at the
+TOP of a function whose emission sites are at the BOTTOM, and 95% of the calls
+that pay for it never get near them.
+
+## 14. Predictions, scored
+
+| | prediction | measured | verdict |
+|---|---|---|---|
+| **H1** | the receiver-type computation is ≥ 50% of the function | **26.4%** | **FALSIFIED** (threshold was 35%) |
+| **H2** | the pre-type firewall is < 20% | **67.2%** | **FALSIFIED by 3.4×** — and it is the round's finding |
+| **H3** | ≥ 60% of calls exit before the property lookup | **86.1%** | **HIT** |
+| **H4** | a cheap gate sits after expensive work, ≥ 150 ms | see below | **HIT in the opposite direction** |
+| **H5** | the emission tail is ~0 ms | **0 ms, 0 reaches** | **HIT** |
+
+**H1 and H2 were wrong in the same direction and the error is instructive.** Both
+were extrapolated from (ENGINE.1)'s three assignability sites, where "compute the
+SOURCE type" was the largest row at every site. The analogy is false here: at an
+assignability site the source type IS the work, while at a property access the
+receiver type is mostly already resolved and the expensive thing is the
+FP-firewall built in front of the lookup. A prior taken from three sites of one
+shape does not transfer to a fourth of another shape — which is the same lesson
+round 787 recorded when its firewall prediction missed by 2.5–5×, now with the
+sign reversed.
+
+**H4 was aimed at the wrong kind of gate.** The named candidates
+(`RUNTIME_PROPERTIES`, `isEnumFlavoredObjectType`) are in rows worth 10 and 30 ms
+— nothing. What the census found instead is bigger and structurally different:
+not a cheap gate placed late, but an EXPENSIVE gate placed early, whose 95%
+majority of payers exit long before the emission it defends.
+
+## 15. Verification
+
+* Compiler-profile `--listAll`: **46 errors, byte-identical** in production, ON,
+  and COARSE, and identical again after the harness was reconstructed.
+* Corpus suite **13,380 / 0 / 3**; 8-profile grid **46/46/46/46/46/46/46/94**
+  captured at HEAD and after, diffed set-for-set BOTH directions: **0 added, 0
+  removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**; cost gate
+  **all 20 counters +0.00%**.
+
+## 16. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt)
+P=build/bench/tsc-project-*
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll --cpaSections       $P
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --listAll --cpaSectionsCoarse $P
+```

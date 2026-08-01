@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 789 (2026-08-01) — (ENGINE.2c): THE PICTURE INVERTS ONE LEVEL DOWN. At levels P
+and Q the dedicated-walker FIREWALL was 8.0% and the ENGINE 91.9%. INSIDE that engine —
+`checkMemberAccessMissing`, 2,292 ms, the largest single leaf in the compile — the
+firewall is 67% and the property lookup it defends is 0.2% (6 ms). ONE ROW, the three
+flow-graph suppression blocks, is 1,505 ms = 57% of the function and ~5.4% of a
+check-only compile; it launches 22,270 flow walks, which is 31% of EVERY narrowing walk
+the compiler performs; it buys 886 suppressions; and 94.6% of the calls that pay for it
+exit further down the function with the answer consulted by nothing. NOTHING WAS LANDED
+BUT THE HARNESS — deliberately, because both levers change emission ORDER and this round
+could not gate that honestly — and the two are queued with exact prices as (ENGINE.2d).**
+
+- **THE TARGET WAS TAKEN FROM THE MEASURED MAP AND RE-MEASURED FIRST.** Round 787
+  partitioned the property-access path two levels deep and stopped where the mass is:
+  level Q's engine row is one ~1,965-line function entered 66,747 times at **34.3 µs
+  each**, 6x the next row of either level, never opened. Re-measured at HEAD before the
+  item was written (**2,292 ms gross**, against round 787's 2,390 — stable), and the item
+  plus **five scored predictions** went into the queue in commit `030d8cc8`, before code.
+- **WHAT LANDED: level R + six nested sub-measures + 9 pins + §§ 10-16 of
+  `docs/perf/property-access-attribution.md`.** Level R keeps level Q's non-recursive
+  shape and adds two instruments the earlier levels did not need: an **EXIT CENSUS**
+  (which row each call RETURNS from — the only thing that can see a gate placed on the
+  wrong side of expensive work) and a **WALKER-RESTRICTED exit census**, which is what
+  turns "this row is big" into "these specific calls paid for nothing". It has TWO
+  callers, so its 67,258 invocations exceed level Q's 66,747 by exactly the 511 element
+  accesses — cross-checked, not assumed.
+- **THE EXIT CENSUS IS THE ROUND'S INSTRUMENT AND ITS FIRST RESULT IS A CONTROL.**
+  **86.1%** of calls return before the property lookup; the emission tail —  spelling
+  suggestion, `typeToString`, message construction — is reached **0 times** (77 calls get
+  as far as the index-signature gates and all 77 stop there). H5 predicted "~0 ms" and
+  the answer is 0 ms over 0 reaches, the strongest form of round 786's 0.4 ms elaboration
+  row, and the wiring control that makes the rest of the table trustworthy.
+- **INSIDE THE DOMINANT ROW, THE PRE-GATE IS EXCELLENT AND THE WALKS ARE THE COST.** The
+  round-489 pre-gate costs **50 ms** to stop 41,527 of 63,797 accesses from walking. What
+  is left is a real flow walk, twice: **plain 731 ms / 22,270 calls, loop-entry retry
+  488 ms / 21,384 calls.** Because the retry runs iff the plain walk did not suppress,
+  `22,270 − 21,384 = 886` is an EXACT count of plain-walk suppressions, and the walker
+  census (914 walkers exiting in the row) bounds everything after it at **≤ 28
+  suppressions for 488 ms — ≥ 17 ms each.**
+- **PREDICTIONS: 2 HIT, 2 FALSIFIED, 1 HIT IN THE OPPOSITE DIRECTION — and the two
+  failures share one cause worth carrying.** H1 (receiver-type computation ≥ 50%) read
+  **26.4%**; H2 (pre-type firewall < 20%) read **67.2%**, wrong by 3.4x. Both were
+  extrapolated from (ENGINE.1)'s three assignability sites, where "compute the SOURCE
+  type" was the largest row every time. **The analogy is false: at an assignability site
+  the source type IS the work; at a property access the receiver type is largely resolved
+  already and the expensive thing is the FP firewall in front of the lookup.** Round 787
+  recorded the same lesson with the sign reversed when its firewall prediction missed by
+  2.5-5x. H4 was aimed at the wrong kind of gate — its named candidates
+  (`RUNTIME_PROPERTIES`, `isEnumFlavoredObjectType`) are rows worth 10 and 30 ms; what the
+  census found is not a cheap gate placed late but an **expensive gate placed early**.
+- **CALIBRATION: Δ = 352 ms over 1,177,373 extra boundaries = 299 ns, bracket 240-368,
+  Δ/spread = 4.7x** (against round 787's 2.8x and round 786's 1.4x). Two caveats stated
+  in the doc rather than buried: the net rows sum to 2,641 ms against a probe-free anchor
+  of 2,292, so **the harness's own footprint is ~250-350 ms even in COARSE** and absolute
+  rows carry ±13% — while the SHARES do not, because the probe distributes by boundary
+  count and is subtracted per row; and the largest row has the FEWEST boundaries per unit
+  time (20 ms of probe against 1,505 ms of work), so the calibration cannot have produced
+  it.
+- **WHY NOTHING BUT THE HARNESS LANDED.** Both levers move a suppression relative to ~20
+  emission sites, i.e. they change WHAT IS EMITTED unless every site is covered, and they
+  change resolution-cache mutation order (round 754). Round 788's protocol for exactly
+  this — falsify the hazard empirically with a probe that keeps the OLD behaviour and
+  counts violations — needs its own measurement round, and doing it badly here would have
+  produced a green grid that proves nothing. The prices are exact and recorded instead.
+- **PROCESS FAILURE, RECORDED BECAUSE IT COST ~15 MINUTES.** To revert an ABLATION I ran
+  `git checkout src/…Checker.kt src/…SpineDispatch.kt` — and those files also carried the
+  round's UNCOMMITTED harness, which was destroyed. Rebuilt from the saved insertion
+  script plus the edit record and verified by re-measurement: **every count reproduced
+  exactly** (67,258 / 22,270 / 21,384 / 914 / 40,308), timings within run-to-run noise.
+  The rule is now in CLAUDE.md: commit the harness BEFORE ablating it.
+- **PINS: 9 new (`CmamSectionProbeTest`), 4 DISCRIMINATE** against a five-fault ablated
+  binary (exit-census sum, walker-subset, COARSE inertness, flow-row firing). Two more
+  were aimed at and NOT caught, because two of the injected faults cancelled each other —
+  suppressing the plain walk's early return let the RETRY re-derive the same suppression,
+  so both the behaviour-free pin and the funnel pin stayed green. Reported rather than
+  re-run; the remaining three are deliberate controls (name table, CENSUS-reads-no-clock,
+  the emission control that keeps the behaviour-free comparison non-vacuous).
+- Suite 13,371 -> **13,380 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD
+  FIRST and after, diffed set-for-set in BOTH directions: **46/46/46/46/46/46/46/94, 0
+  added and 0 removed on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. Cost gate
+  **all 20 counters +0.00%** (no rebaseline). Compiler-profile `--listAll` byte-identical
+  in production / ON / COARSE.
+
 **Round 788 (2026-08-01) — (ENGINE.2b) IS CLOSED: BOTH LEVERS LANDED, AND THEY ANSWER
 DIFFERENTLY. B464's `closureStarts` LINEAR SCAN IS A CLEAN ELIMINATION — 138 ms -> 4 ms
 OVER AN IDENTICAL 15,483 QUERIES. THE `cpaComputeArgCtxTypes` PRE-GATE SKIPS 94.3% OF
@@ -3310,7 +3392,17 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Rounds 482 and 489 both optimised AROUND this scan without replacing it; read their
   notes before starting.
 
-- [ ] **(ENGINE.2c) OPEN `checkMemberAccessMissing` — THE LARGEST UNOPENED LEAF IN THE
+- [x] **(ENGINE.2c) DONE round 789 — AND THE PICTURE INVERTS ONE LEVEL DOWN. At levels P
+  and Q the dedicated-walker firewall was 8.0% and the engine 91.9%; INSIDE that engine
+  the firewall is 67% and the property lookup it defends is 0.2% (6 ms). The three
+  flow-graph suppression blocks are 1,505 ms = 57% of the function and ~5.4% of a
+  check-only compile, they launch 22,270 flow walks — 31% of every narrowing walk the
+  compiler does — and they buy 886 suppressions, 95% of whose payers exit further down
+  the function without the answer being consulted. H1 and H2 were both FALSIFIED, in the
+  same direction, by extrapolating (ENGINE.1)'s assignability-site prior to a site of a
+  different shape.** Full derivation: `docs/perf/property-access-attribution.md` §§ 10-16.
+  The original item body follows.
+- [x] **(ENGINE.2c) OPEN `checkMemberAccessMissing` — THE LARGEST UNOPENED LEAF IN THE
   COMPILE (2,292 ms gross = 8.2%, re-measured at HEAD round 789 before this item was
   written).** Round 787 partitioned the property-access path two levels deep and stopped
   where the mass is: level Q's engine row is ONE function of ~1,965 lines called 66,747
@@ -3346,10 +3438,56 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   message construction) is ~0 ms**, because 46 diagnostics fire program-wide. Round
   786's 0.4 ms TS2322-elaboration row is the precedent; a non-trivial number here means
   the partition is mis-wired, not that the tail is expensive.
+  **SCORED round 789: H3 and H5 HIT, H1 and H2 FALSIFIED (both by extrapolating
+  (ENGINE.1)'s assignability-site prior to a site of a different shape), H4 hit in the
+  OPPOSITE direction — the finding is not a cheap gate placed late but an EXPENSIVE gate
+  placed early.**
   **Law 4 applies before anything lands**: if a candidate skips a CACHED resolution, its
   bill moves to the next asker — price the skip by landing it and re-reading the
   partition, never by the census alone. Gate: corpus suite + the 8-profile `--listAll`
   grid diffed set-for-set BOTH directions + `--partitionCheck 2` + `cost_gate.py`.
+
+- [ ] **(ENGINE.2d) THE TWO CANDIDATES LEVEL R EXPOSED, PRICED AND ORDERED — the smaller
+  one is nearly free to prove, the larger one is the biggest single lever the arc has
+  measured.** Both live in `checkMemberAccessMissing`'s flow-suppression row (round 789,
+  `docs/perf/property-access-attribution.md` §§ 12-13). **Do (a) first**: it is a
+  provable local equivalence, and its outcome calibrates whether (b)'s much larger prize
+  is real or merely moves.
+  **(a) THE ROUND-425 LOOP-ENTRY RETRY: 488 ms over 21,384 walks for AT MOST 28
+  suppressions — >= 17 ms per suppression.** Block 1 runs `getNarrowedTypeForReference`
+  and then, whenever that did not suppress, `getNarrowedTypeForReferenceFollowLoopEntry`.
+  The counts make the price EXACT rather than inferred: the retry runs iff the plain walk
+  did not suppress, so 22,270 - 21,384 = **886 plain suppressions**, and the
+  walker-restricted exit census reports **914** walkers leaving the row in total, so
+  everything after the plain walk accounts for <= 28. **The equivalence to prove:** the
+  two walkers are line-by-line mirrors (CLAUDE.md's walker-mirror invariant) whose ONLY
+  behavioural difference is the `FlowLoopLabel` arm — plain washes to the declared type,
+  the retry follows `antecedents[0]`. So **a plain walk that provably crossed no
+  `FlowLoopLabel` cannot be improved on by the retry**, and the retry can be skipped.
+  **The three ways this goes wrong, all to be handled conservatively (unknown => run the
+  retry):** the plain walk can TRUNCATE (`narrowWalkTruncated` already exists, reuse it);
+  it can be served by EITHER memo (round 664's inter-walk memo, round 736's
+  `NarrowFlowMemo`), in which case no traversal happened and no loop label was observed;
+  and a served subtree can hide one. **MEASURE THE YIELD BEFORE BUILDING IT** — the gate
+  is worth 488 ms only if loop-free walks are common, and tsc's checker is loop-dense; a
+  counter on the plain walk's loop-label arm answers it in one run, and if the loop-free
+  share is under ~30% say so and stop.
+  **(b) THE WHOLE SUPPRESSION BLOCK IS IN THE WRONG PLACE: 1,219 ms, and 94.6% of the
+  calls that pay for it exit before any emission site.** Of 22,270 walkers, 914 suppress,
+  **21,064 exit in the receiver-type resolved-symbol branch**, and **0 reach the property
+  lookup**. The apparatus runs at the TOP of the function; the emission it defends is at
+  the BOTTOM, reached 77 times out of 67,258. The lever is to DEFER it — evaluate the
+  suppression only where a TS2339 is about to be emitted.
+  **The two hazards, both real and both already characterised by this arc.** (i) The
+  intervening code EMITS (the New/Call/namespace/enum-member/cast blocks all emit and
+  return), so a naive deferral lets through diagnostics the gate used to suppress — every
+  emission site between the two positions must be covered, and there are ~20. (ii) It
+  changes resolution-cache mutation ORDER, which round 754 showed can decide a verdict;
+  falsify it EMPIRICALLY as round 788 did, not by inspection. **The prediction to write
+  down first:** unlike round 788's cached resolution, a narrowing walk's result is memoed
+  but round 735 measured 99.9% of walks COLD, so the bill should NOT move to another
+  asker and the recovered time should approach the priced time. **If it does not, that is
+  the more valuable finding** — it would mean round 788's law generalises past caches.
 
 - [x] **(PERF.HW) DONE round 740 — the cores are REAL, and the question was the
   wrong one: a SEQUENTIAL run already consumes 3.15 of the 4 cores.** Artifact:
