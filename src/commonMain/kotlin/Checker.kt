@@ -95302,17 +95302,24 @@ interface DataView {
                 // annotation) propagates AS-IS — `let x2 = x` keeps `"x"`.
                 // (WIDEN.1): this map is what every downstream read of the name resolves
                 // through, so it, not `widenType`, is where the const-ness gate belongs.
-                // An ENUM MEMBER is deliberately NOT kept for a `const`: tsc keeps
-                // `const e = E.A` as `E.A`, we still widen it to `E`, which is WIDER than
-                // tsc and so cannot manufacture a diagnostic. Skipping the enum arm too
-                // costs `completions.ts:2239` — `const k = identifierToKeywordKind(node)`
-                // would keep all 85 KeywordSyntaxKind MEMBERS, which the `isModifierKind`
-                // guard then fails to narrow, so the return check rejects the whole union.
-                // `widenEnumMemberTypes` is a no-op on a string/number/bigint/boolean
-                // literal, so applying it here keeps exactly the intended half.
+                // (REL.2) round 783: an ENUM MEMBER is kept for a `const` too — tsc's
+                // `getWidenedLiteralTypeForInitializer` gate is `NodeFlags.Constant`, and
+                // `getWidenedLiteralType` is the thing that turns an EnumLiteral into its
+                // enum, so `const e = E.A` is `E.A` there. Round 781 deliberately widened
+                // it anyway (WIDER than tsc, so it could not manufacture a diagnostic
+                // while enum -> MEMBER was vacuous) because keeping it exposed
+                // `completions.ts:2239`; with the global rule that line is in the residual
+                // regardless, and keeping the member is what closes `scanner.ts:905` and
+                // `program.ts:1366` on every profile. `widenEnumMemberTypes` was a no-op
+                // on a string/number/bigint/boolean literal, so dropping it changes only
+                // the enum half.
                 val widened = if (inferred.id in nonWideningLiteralTypeIds) inferred
-                    else if (keepsLiteral) widenEnumMemberTypes(inferred).also {
-                        if (it === inferred) widen1ConstLiteralTypeIds.add(it.id)
+                    else if (keepsLiteral) {
+                        if (R783_CONST_KEEPS_ENUM_MEMBER) inferred.also {
+                            widen1ConstLiteralTypeIds.add(it.id)
+                        } else widenEnumMemberTypes(inferred).also {
+                            if (it === inferred) widen1ConstLiteralTypeIds.add(it.id)
+                        }
                     }
                     else when (inferred) {
                     is Type.StringLiteral -> stringType
@@ -103188,6 +103195,32 @@ interface DataView {
     private fun enumTargetsAreOwnMembers(t: Type, targets: List<Type>): Boolean =
         targets.isNotEmpty() &&
             targets.all { it.flags.hasAny(TypeFlags.EnumLiteral) && isLiteralAssignableToMember(it, t) }
+
+    /**
+     * (REL.2) round 783: did a flow walk narrow the ENUM [raw] to a proper subset of its
+     * OWN members?
+     *
+     * The object-literal value path (round 438/462/468) accepts a flow-narrowed value only
+     * when the CONTEXTUAL property type accepts it and the raw type does not — and an
+     * object literal in a ternary BRANCH has no contextual type at all (`ctxObj` is null
+     * there), so `{ importKind }` after `importKind === ImportKind.Named ||
+     * importKind === ImportKind.Default` kept the whole enum where tsc keeps the two
+     * members. A non-enum literal union is unaffected by that gap; the enum is, because
+     * until (REL.2) the whole enum related to the member target vacuously and the loss was
+     * invisible.
+     *
+     * This third acceptance needs no contextual type because it is monotone by
+     * CONSTRUCTION rather than by relation test: [enumTargetsAreOwnMembers] is the
+     * round-746 owner rule, so the narrowed value is always a sub-union of the very type
+     * being replaced — every target that accepted the enum accepts the subset.
+     */
+    private fun enumNarrowIsOwnMemberSubset(raw: Type, narrowed: Type): Boolean {
+        if (!R783_OBJLIT_ENUM_NARROW) return false
+        if (narrowed === raw || narrowed === neverType) return false
+        if (enumOwnTypeSymbol(raw) == null) return false
+        val parts = if (narrowed is Type.Union) narrowed.types else listOf(narrowed)
+        return enumTargetsAreOwnMembers(raw, parts)
+    }
 
     /**
      * (REL.2) round 764: subtract [remove] from the enum type [t], as tsc's union
@@ -112572,7 +112605,9 @@ interface DataView {
                                 ctxUsable &&
                                 checkTypeRelatedTo(narrowed, propCtx, assignableRelation) &&
                                 !checkTypeRelatedTo(raw, propCtx, assignableRelation)
-                            if (objLitValueNullishStrip(raw, narrowed) || ctxAcceptsNarrow) narrowed else raw
+                            if (objLitValueNullishStrip(raw, narrowed) ||
+                                ctxAcceptsNarrow ||
+                                enumNarrowIsOwnMemberSubset(raw, narrowed)) narrowed else raw
                         }
                     } finally {
                         if (useCtx) contextualType = savedCtx
@@ -112615,7 +112650,8 @@ interface DataView {
                         shCtxUsable && shRaw !== anyType && shRaw !== errorType &&
                         checkTypeRelatedTo(shNarrowed, shCtx, assignableRelation) &&
                         !checkTypeRelatedTo(shRaw, shCtx, assignableRelation)
-                    val propType = if (objLitValueNullishStrip(shRaw, shNarrowed) || shCtxAcceptsNarrow)
+                    val propType = if (objLitValueNullishStrip(shRaw, shNarrowed) || shCtxAcceptsNarrow ||
+                        enumNarrowIsOwnMemberSubset(shRaw, shNarrowed))
                         shNarrowed else shRaw
                     val sym = Symbol(SymbolFlags.Property, name)
                     sym.declarations.add(prop)
@@ -145550,14 +145586,23 @@ interface DataView {
         // `checkNamespaceEnumUnionAssignments` (B266) the two whole-enum targets of
         // `enumLiteralAssignableToEnumInsideUnion`.
         //
-        // The enum → MEMBER direction is deliberately NOT decided here: tsc rejects it (a
-        // union of members is not assignable to one member) but our leniency there is
-        // pre-existing and MEASURED as load-bearing (round 760): closing it globally is
-        // correct and costs +6 compiler / +11 services FPs, because the vacuous `true` is
-        // currently masking that many flow-narrowing gaps (a type guard used as a ternary
-        // CONDITION, `===` enum narrowing across `||`). The ONE consumer that needs the
-        // right answer today — the type-guard negative branch — asks for it directly via
-        // [enumMemberDomainProvesNotSubtype]. See PLAN-PHASE-5.md (REL.2).
+        // (REL.2) round 783: the enum → MEMBER direction, decided HERE for the same reason
+        // as the two above. tsc models a literal enum AS the union of its members, so `K`
+        // is assignable to a target built out of K's members exactly when those members
+        // COVER K — which rejects `K -> K.A` for a multi-member enum and keeps the
+        // one-member and fully-covering cases. Contained to a target that is entirely
+        // members of THIS enum ([enumTargetsAreOwnMembers], the round-746 owner rule):
+        // anything else falls through to the pre-existing answer.
+        if (REL2_ENUM_TO_MEMBER) run {
+            enumOwnTypeSymbol(source) ?: return@run
+            val targets = if (target is Type.Union) target.types else listOf(target)
+            if (targets.any { enumOfMemberTypeSymbol(it) == null }) return@run
+            if (!enumTargetsAreOwnMembers(source, targets)) return@run
+            // A non-decomposable enum cannot be shown to be covered, and an enum whose
+            // domain is unknown is not a subtype of a proper subset of it.
+            val members = enumMemberTypesOf(source) ?: return false
+            return members.all { m -> targets.any { enumMemberTypesAreSameMember(m, it) } }
+        }
         run {
             val targetEnum = enumOwnTypeSymbol(target) ?: return@run
             val sourceEnum = enumOwnTypeSymbol(source) ?: enumOfMemberTypeSymbol(source) ?: return@run
@@ -152503,7 +152548,17 @@ interface DataView {
         // String literal key: T["prop"] → type of property "prop"
         if (indexType is Type.StringLiteral) {
             val prop = getPropertyOfType(objectType, indexType.value)
-            if (prop != null) return getTypeOfSymbol(prop)
+            // (REL.2) round 783: read the property THROUGH its carrier. An interface
+            // member's symbol is SHARED by every instantiation and its cached type for a
+            // type-parameter-typed member is globally `any` (round 761), so
+            // `getTypeOfSymbol` answered `any` for every `Token<SK.X>["kind"]` — and the
+            // union arm above turns one `any` part into an `any` whole, which is how
+            // tsc's own `Modifier["kind"]` (the `isModifierKind` predicate target)
+            // resolved to `any` and narrowed nothing.
+            if (prop != null) return (objectType as? Type.Object)
+                ?.takeIf { R783_INDEXED_ACCESS_CARRIER }
+                ?.let { propertyTypeOnCarrier(it, prop) }
+                ?: getTypeOfSymbol(prop)
             // Check string index signature
             if (objectType is Type.Object) {
                 resolveStructuredTypeMembers(objectType)
@@ -173962,6 +174017,55 @@ private val R782_LEXICAL_ENUM_DISCRIMINANT = true
  * init-order rationale as the switches above. Never flip this in a commit.
  */
 private val REL4_NS_ALIAS_RECEIVER = true
+
+/**
+ * (REL.2) round 783 SCAFFOLD SWITCH — **the one switch in this file that is OFF, and it is
+ * off because the item is not closed yet, not because the rule is wrong.**
+ *
+ * Turning it on decides the enum -> MEMBER relation direction the way tsc does. Re-measured
+ * round 783 on ALL EIGHT profiles (never two — that omission is what cost round 782): the
+ * raw price against `46/46/46/46/46/46/46/94` was `project 46 -> 49`, four profiles
+ * `46 -> 47`, `services/server 46 -> 51`, `harness 94 -> 99`; with this round's three fixes
+ * it is **ONE line on three profiles** — `services/server 46 -> 47`, `harness 94 -> 95`,
+ * `completions.ts:2234`, the other five profiles FREE.
+ *
+ * That last line is NOT the "property read on a union of generic instantiations" the queue
+ * labelled it: measured, `Modifier["kind"]` and a `Modifier`-typed PARAMETER's `.kind` both
+ * resolve correctly now. What fails is the RECEIVER — `computeRawTypeOfPropertyAccess`
+ * flow-narrows a receiver only when its raw type is ALREADY a `Type.Union`, so
+ * `isModifier(node)`'s narrow-DOWN from `Node` is never attempted and `node.kind` answers
+ * `SyntaxKind`. `extractNullNarrowing` — the pass that records a condition's narrowing into
+ * `currentLocalTypes` — has no call-predicate arm at all, so the fix is either that arm or
+ * a second chance at the property-read site. See PLAN-PHASE-5.md (REL.2). DO NOT flip this
+ * until that line is closed and the grid is re-measured on all eight.
+ */
+private val REL2_ENUM_TO_MEMBER = false
+
+/**
+ * (REL.2) round 783 ABLATION SWITCH — flip to `false` to restore the round-781 behaviour in
+ * which a `const` binding's inferred ENUM MEMBER widened to its whole enum, so
+ * `ConstEnumMemberTypeTest`'s pins can be shown to discriminate. Same top-level init-order
+ * rationale as the switches above. Never flip this in a commit.
+ */
+private val R783_CONST_KEEPS_ENUM_MEMBER = true
+
+/**
+ * (REL.2) round 783 ABLATION SWITCH — flip to `false` to restore the pre-783 behaviour in
+ * which an OBJECT-LITERAL property value kept the un-narrowed ENUM whenever the literal had
+ * no contextual type (a ternary branch), so `ObjLitEnumNarrowTest`'s pins can be shown to
+ * discriminate. Same top-level init-order rationale as the switches above. Never flip this
+ * in a commit.
+ */
+private val R783_OBJLIT_ENUM_NARROW = true
+
+/**
+ * (REL.2) round 783 ABLATION SWITCH — flip to `false` to restore the pre-783 behaviour in
+ * which an INDEXED ACCESS `T["p"]` read the property off its DECLARING symbol, so every
+ * `Token<SK.X>["kind"]` answered `any` and a union of them answered `any` as a whole
+ * (`IndexedAccessOnInstantiationTest`'s pins can then be shown to discriminate). Same
+ * top-level init-order rationale as the switches above. Never flip this in a commit.
+ */
+private val R783_INDEXED_ACCESS_CARRIER = true
 
 // --- B362: Unicode property tables (tsc scanner.ts 4073-4090) — file-level so they
 // are initialized before the Checker's init block runs (the init-order gotcha). ---
