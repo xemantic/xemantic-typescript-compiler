@@ -758,3 +758,123 @@ capture confirmed non-empty and non-vacuous first — **46/46/46/46/46/46/46/94,
 `cost_gate.py` **all 20 counters +0.00%**; build warning-clean. **No wall A/B,
 deliberately** — the family is bounded four times over (§§ 4.2, 5.3, 7 and round
 804) and this lands for the threshold.
+
+## 12. (JIT.1)(c) — `checkVarDeclAssignabilityCore`, 19,296 → an entry plus seven helpers
+
+*Round 808.* The largest `Checker` method left after round 807, and the first
+split of a **straight-line statement sequence** — round 804's shape, but with the
+partition markers doing the choosing rather than a probe's section list.
+
+| function | region of the committed `CtaSections` level-B partition | bytecodes |
+|---|---|---:|
+| `checkVarDeclAssignabilityCore` | `B_BINDPAT`, `B_RECORD`, `B_TARGET`, `B_SRCTYPE`, `B_NARROW`, `B_RELATION`, `B_TAIL` | **3,535** |
+| `cvdaElaborateMismatch` | `B_ELAB` body | 4,147 |
+| `cvdaPrologueWalkers` | `B_PRO1` + `B_WEAK` + `B_PRO2` + `B_PRO3` | 3,103 |
+| `cvdaPostRelationGates` | `B_POST` | 3,065 |
+| `cvdaEarlyInitGates` | `B_NUIA` + `B_PRE2` | 1,811 |
+| `cvdaMidGates` | `B_MID` | 1,514 |
+| `cvdaNestedInitTargets` | `B_NESTED` | 1,251 |
+| `cvdaRecordInferredLocalType` | `B_UNANNOT` body | 392 |
+
+Census **14 → 13**. The eight sum to **18,951 against the monolith's 19,296** —
+a fifth independent confirmation that a bytecode count is a THRESHOLD predicate
+and not a cost model (only round 804's 46,567 → 29,130 ever shrank).
+
+**What stays in the entry is what every declaration pays.** `B_BINDPAT` (the
+destructuring-pattern branch and the `name !is Identifier` bail), `B_RECORD` (the
+`varTypes` / `currentLocalTypes` / `currentLocalDeclTypeNodes` writes every
+annotated declaration makes), `B_TARGET` (the one `getTypeFromTypeNode` call),
+`B_SRCTYPE` + `B_NARROW` (the contextual-literal preservation and the flow
+narrow, i.e. the source type itself), `B_RELATION` (the `canUseTypeEngine` +
+`checkTypeRelatedTo` pair) and `B_TAIL` (the legacy string fallback). Everything
+that moved is a gate that fires for one shape and ends the check.
+
+### 12.1 The shape problem, and the one value that crosses
+
+A `when` arm exits by falling off the end (rounds 803/805/806); a loop body exits
+by `continue`/`break`/`return` (round 807). This body is a statement sequence
+punctuated by **~40 early `return`s**, none of which can cross a function
+boundary. Four regions therefore return `Boolean` (`true` = "I emitted, the
+caller must return") and the entry replays them as `if (…) return`. Two regions
+(`B_UNANNOT`, `B_ELAB`) held blocks that returned UNCONDITIONALLY, so their bare
+`return`s stay bare and the caller returns straight after the call — and for
+`B_UNANNOT` that seam is **compiler-enforced**, because the entry's
+`typeAnnotation` is smart-cast non-null immediately below the call site.
+
+**Cross-boundary values: exactly one.** `nestedMissingEmitted` is written in
+`B_NESTED` and read ~480 lines later by the `B_ELAB` gate, so
+`cvdaNestedInitTargets` returns `Boolean?` — `null` meaning "the caller must
+return", otherwise the flag. Round 804's rule decides the shape: a `Checker`
+field would need round 791's save/restore dance, because the blocks either side
+re-enter the checker and "the outer write happens last" is not guaranteed.
+
+### 12.2 Equivalence, measured (round 805's five checks)
+
+1. every moved line re-extracted from the NEW file and checked back against
+   HEAD: **seven contiguous, in-order runs**, identical modulo the 4-space dedent
+   of the two block interiors and the return-signal rewrite;
+2. the entry function **reconstructed** from HEAD with the seven regions replaced
+   by their call sites: **IDENTICAL, 222 lines**;
+3. accounting closes exactly — HEAD body 1,541 = kept 211 + moved 1,330; new
+   entry 222 = kept 211 + 11 lines of call site;
+4. every `return` enumerated by a comment-stripped token scan; the only local
+   function in the range (`fun isAnonFn`, in `B_MID`) is expression-bodied and
+   contains none, and no `return@checkVarDeclAssignabilityCore` exists;
+5. free variables computed per region rather than guessed, which is what keeps
+   the build warning-clean (an unused parameter is a warning here).
+
+### 12.3 Discrimination — two seams of five, ablated ONE AT A TIME
+
+`CvdaSplitTest` (14 pins) plus `HugeMethodLimitTest` (+3). Round 807's law was
+followed literally: **five deliberate mistakes, five separate builds**, never
+combined. Control first — the committed binary, 32 pins, 0 failed.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| M1 `cvdaPrologueWalkers`' `true` dropped | 2 — the prologue seam and the ordering pin | **DISCRIMINATED** |
+| M2 `nestedMissingEmitted` forced `false` (the `null` signal still honoured) | 1 — **exactly** the nested seam | **DISCRIMINATED, sharply** |
+| M3 `cvdaEarlyInitGates`' `true` dropped | 0 | **NOT DISCRIMINATED** |
+| M4 `cvdaMidGates`' `true` dropped | 0 | **NOT DISCRIMINATED** |
+| M5 `cvdaPostRelationGates`' `true` dropped | 0 | **NOT DISCRIMINATED** |
+
+M2 failing its own pin and *nothing else* is the sharpest available statement
+that the arm pins and the seam pins pin different things — and it is the one that
+matters most, since `nestedMissingEmitted` is the only value crossing a boundary.
+
+**Why M3/M4/M5 are green, and it is a property of the FUNCTION, not of the
+pins.** Dropping one of those `return`s does not delete the emission — the helper
+still runs and still emits; only the early exit is lost. **Every later emitter in
+this body is itself conditioned on the relation verdict** (`canUse &&
+!isAssignable` for the `B_ELAB` elaboration, `isAssignable` for most of `B_POST`),
+and the shapes those three regions own are exactly the ones where the relation
+either PASSES or `canUseTypeEngine` declines — so the later gates refuse anyway
+and nothing doubles. On today's code those three signals are **redundant guards**,
+the same finding round 807 recorded for `caasTypeParamConstraintArg`'s trailing
+`CAAS_CONTINUE`. They are kept because the monolith had them; a future rule that
+makes a later gate fire unconditionally would make them load-bearing again, and
+this table is the record that no pin would notice today.
+
+Two further seams need no pin at all: `cvdaRecordInferredLocalType`'s caller
+`return` is **compiler-enforced** (`typeAnnotation` is smart-cast non-null
+immediately below), and `cvdaElaborateMismatch`'s trailing `return` was never
+moved — it stayed in the entry.
+
+### 12.4 Gate
+
+Suite **13,562 → 13,579 / 0 failures / 3 skipped**; 8-profile grid diffed
+set-for-set BOTH directions against a purpose-built pre-split binary, every
+capture confirmed non-empty first (and the two class dirs checked to differ, with
+`cvda*` methods present in one and absent in the other) — **46/46/46/46/46/46/46/94,
+0 added and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **all 20 counters +0.00%**; build warning-clean. **No wall A/B,
+deliberately** — the family is bounded four times over (§§ 4.2, 5.3, 7 and round
+804) and this lands for the threshold.
+
+**A process note worth carrying.** Two of the seven builds this round died with
+`java.lang.OutOfMemoryError: GC overhead limit exceeded` in the Kotlin daemon —
+a run of back-to-back `compileKotlinJvm` invocations accretes daemon heap until
+BUILD.1's 5 GB stops being enough. The tell is a `jvmTest` run that reports **0
+pins ran** (the test task never started), which reads exactly like "the ablation
+compiled and changed nothing". **Check the ablation's build log for `BUILD
+SUCCESSFUL` before recording a zero**, and stop the daemons between long ablation
+batches.

@@ -23055,3 +23055,112 @@ as such rather than worked.**
   under nesting. Price the scan against the ~500 ms that remains, not against the 320 ms
   this round removed.
 - Full derivation: `docs/perf/implicit-any-attribution.md`.
+
+**Round 799 (2026-08-02) — ROUND 798's OWN EVIDENCE GAP IS CLOSED (the corpus does NOT
+see the scope-push exclusion either, so it is kept ON ARGUMENT and the code now says so),
+THE 500 ms RESIDUE IS SUB-PARTITIONED AND IS *NOT* WHAT IT LOOKED LIKE — HALF OF IT IS ONE
+ARM AT 7.9 µs — AND THE SPINE-LEAVE ALTERNATIVE WAS RE-MEASURED AND DECLINED BY PRICE.
+Landed: the sub-partition + a provably-free dispatch pre-gate worth ~55 ms (0.2%).**
+
+- **STEP 1 — ABLATION B AGAINST THE CORPUS, WHICH ROUND 798 LEFT UNRUN.** Round 798 kept
+  the scope-push exclusion in `spineIanyEdgeUnobservable` BY ARGUMENT: removing it leaves
+  the 8-profile grid byte-identical although the population is reached 11,032 times, and
+  round 792's law says the 13k-baseline corpus is the only instrument that could see a
+  shape tsc's own sources lack. Re-injected and run in full: **13,449 / 0 failures / 3
+  skipped — IDENTICAL to the un-ablated baseline. The corpus does not catch it either.**
+  **The run is evidence, not a no-op** (round 753's law): the build logged
+  `w: Checker.kt:54004:22 Unreachable code`, which only the injected `(true || …)` can
+  produce, and `jvmTest` ran in that same build; and the population is reached by the most
+  ordinary shapes there are — an eight-line file of four expression-bodied arrows counts
+  **6 `E_SCOPE_LEAF` edges**. **VERDICT, in the required words: the exclusion is KEPT ON
+  ARGUMENT, and is now *unfalsified by every instrument we have*.** The KDoc says exactly
+  that, so the next agent cannot read it as evidence-backed.
+  **The argument, restated correctly — round 798's version is true and is not the reason.**
+  It said "a scope push is an observable MUTATION, not a state definition". In fact a frame
+  pushed at a CHILDLESS node's edge is popped at that same node's leave with **no node
+  entered in between**, and every reader of `implicitAnyScopes` / `spineIanyCtx` is reached
+  only from a `spineIany*` dispatch AT a node — so the stack mutation is exactly as
+  unobservable as the context definition. Two instruments agreeing is what that predicts.
+  What is genuinely NOT unobservable: the `ArrowFunction` arm also calls
+  `contextualSigReturnTypeForCtx`, a type RESOLUTION whose interning / `symbolTypes` side
+  effects are global, so dropping the exclusion perturbs **first-touch resolution ORDER**
+  (the round-754/776/778 hazard, which has no output diff to find it by) to save **1 ms**.
+  That trade is why it stays. **No pin can discriminate this, and none is claimed to.**
+
+- **STEP 2 — THE TWO CANDIDATES, PRICED BEFORE CHOOSING.**
+  **(ii) the spine-leave handlers, RE-MEASURED at HEAD rather than inherited.**
+  `--spineSections`, against round 733: partition total **8,195 → 5,831 ms net (−29%)**,
+  the passes' OWN checking work **88.4% → 84.3%**, ambient install+restore 360 → 341,
+  outside-the-ambient 587 → 574, and the three ancestor climbs — (SPINE.1)'s named target,
+  once predicted at 1–3 s — **176 → 186 ms**. **The closure HOLDS**: the handlers shrank
+  because the passes they call got faster (rounds 787–797), while the scaffolding did not
+  move in absolute terms — ~915 ms across **eleven sections consulted 856,962 times each
+  at 5–190 ns**. There is no per-node lever in it, and the 4,916 ms of own work is
+  (ENGINE.2)/(CALL.5) territory.
+  **(i) the IANY residue, sub-partitioned by parent ARM** (row classified after the span
+  closes, so the boundary count stays 2 × 856,962 and no round-793 correction applies):
+  506 ms over 451,292 calls, of which **249 ms is ONE row — the CALL/NEW ARGUMENT edge,
+  31,575 calls at 7.9 µs each = 32% of the whole handler** — against **246 ns** for the
+  **249,471** edges that reach no arm at all. Population-vs-frequency in the usual
+  direction: the no-arm population is **8× more frequent and 4× cheaper in total**.
+  **CHOSE (i), by CONCENTRATION rather than size**: (ii) is ~915 ms with no concentration
+  anywhere in it; (i) is 506 ms with half of it in one arm with a named mechanism.
+
+- **WHAT LANDED: the arm pre-gate — ~55 ms (0.2%), free and provable.**
+  `spineIanyEdgeEnter`'s dispatch is **19 sequential `is` checks ending in `else -> {}`**;
+  `spineIanyEdgeHasArm(kindId)` answers the same question with one M0.2 tableswitch. It is
+  a no-op by construction (every arm is a concrete node class stamped with exactly the kind
+  the gate lists; `NodeKindIdTest` pins the correspondence). **Both arms twice on ONE
+  binary with an IDENTICAL boundary count** (`--ianyArmGateOff` restores the pre-799
+  chain): the NO-ARM row **120/108 → 61/61 ms** (the arms do not overlap; the chain costs
+  ~200 ns per no-arm edge), and — **quoting the ENCLOSING total, per round 798's own
+  correction** — the handler total **830 → 775 ms median = Δ 55 ms**, against a within-arm
+  spread of 12/30, i.e. Δ is only **1.8×** the larger spread. So 55 ms is an estimate whose
+  SIGN is certain and whose magnitude is not tight. **No wall-clock A/B, deliberately**:
+  0.2% is an order of magnitude inside the ±1.0% warm band, so a wall verdict would be
+  noise wearing a sign. Landed because it is free, not because it is a lever.
+
+- **WHAT DID NOT WORK / WAS NOT ATTEMPTED, AND WHY — the 249 ms row.** The arm computes
+  `contextualFnArityForCallArg` + `calleeParamGivesNoContext` (a callee resolution) to
+  decide ONE boolean, `typed`, on a `kind = 0` state with no type in it — read by exactly
+  five places (the arrow/fn-expr own arms, the objlit own arm, an objlit method, the
+  `PropertyAssignment` edge, an arrow's expression-body edge). So it is pure cost whenever
+  the argument's subtree holds no reader. **The obvious predicate is `rhsCanConsumeFnCtx` —
+  the round-472 sibling this whole arc is built on — and it is UNSOUND here.** It descends
+  only paren / conditional / `||` `??` `&&` `,` / objlit-property positions, while the
+  state's real propagation set adds two entries: **`ArrayLiteralExpression`** passes `typed`
+  to its elements (`f([{ m(a) {} }])`), and **every parent kind with NO arm** — `As`,
+  `NonNull`, satisfies, unary, spread, member access — does not redefine the state at all,
+  so it stays current for the whole subtree (`f(<any>{ m(a) {} })`). A sound predicate must
+  descend those too, stopping at the arms that REDEFINE (call/new own arms, var-decl /
+  return / expression-statement / property-declaration edges, non-logical binary operands,
+  function-like bodies). That is BOUNDED rather than quadratic — round 798's warning is
+  softened, not confirmed — but it is a real scan to be priced against 249 ms, on top of
+  which round 788's law bites (the callee type is CACHED, so part of any saving reappears;
+  round 798 lost 110 of 473 ms exactly that way). **Recorded as the deliverable instead of
+  attempted**: the obligation is now exact and the first predicate a future agent reaches
+  for is falsified with named counter-shapes.
+
+- **TWO PROCESS FAILURES, RECORDED BECAUSE THEY ARE THE REPEATABLE KIND.** (1) The first
+  pricing batch was launched with a bare `nohup … &` from a tool call and was **killed when
+  the turn ended** — the compile died mid-flight with no `BUILD SUCCESSFUL` and none of the
+  three runs executed, ~20 minutes lost. `nohup setsid … > log 2>&1 < /dev/null &` plus a
+  `.done` marker survived. (2) A **4.9 GB idle Kotlin daemon** was squatting from the
+  ablation build; stopping it (`./gradlew --stop` + a GRACEFUL bracket-pattern `pkill`,
+  never `-9`) before relaunching bought a **2m25s** compile — BUILD.1's documented
+  starvation trap is what turned the same compile into 15m43s at round 796 and 28m22s at
+  round 797.
+
+- **GATE.** Corpus suite **13,449 → 13,454 / 0 failures / 3 skipped** (+5
+  `IanyArmGateTest` pins, **4 of them discriminating**). Discrimination was measured
+  against a deliberately ablated binary — `CALL_EXPRESSION` and `VARIABLE_DECLARATION`
+  dropped from `spineIanyEdgeHasArm`, i.e. exactly the failure mode the gate introduces —
+  and it fails **7 of the 13 tests in the two classes**: the four new ones (all but the
+  negative control) plus **three PRE-EXISTING `IanyGateTest` pins**, so round 798's
+  harness already guards part of this. Results dir wiped whole before the run. **8-profile grid vs `--ianyArmGateOff` — the real pre-change path in the same
+  binary — diffed set-for-set in BOTH directions: 46/46/46/46/46/46/46/94, 0 added and 0
+  removed on every profile.** `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`:
+  **all 20 counters +0.00%, no rebaseline** — the gate removes failed `instanceof` checks
+  and no resolution, so there is nothing for a counter to see. Full derivation:
+  `docs/perf/implicit-any-attribution.md` §§ 9–12; `docs/perf/spine-leave-attribution.md`
+  § 7 carries the re-measured (SPINE.1) closure.

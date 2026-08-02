@@ -48,7 +48,8 @@ import kotlin.test.Test
  * * four regions return `Boolean` — `true` meaning "I emitted, the caller must
  *   return". **A dropped `true` shows up as the coarse whole-declaration TS2322
  *   appearing NEXT TO the specific diagnostic that was supposed to replace it**,
- *   which is why the seam pins below assert a COUNT rather than a presence;
+ *   which is why the pins below assert a COUNT rather than a presence
+ *   wherever a doubled diagnostic is possible;
  * * two regions (`cvdaRecordInferredLocalType`, `cvdaElaborateMismatch`) held
  *   blocks that returned unconditionally, so their bare `return`s stay bare and
  *   the caller returns straight after the call — for the first of the two that
@@ -63,6 +64,27 @@ import kotlin.test.Test
  *
  * Every pin is written against an OBSERVABLE of one region, never against a
  * function name — a size check already covers the names (`HugeMethodLimitTest`).
+ *
+ * **ABLATION RECORD (round 808; round 807's law — five mistakes, five SEPARATE
+ * builds, never combined, control first at 32 pins / 0 failed).** `M1` (the
+ * prologue walkers' `true` dropped) fails the prologue seam and the ordering
+ * pin. `M2` (`nestedMissingEmitted` forced `false`, the `null` signal still
+ * honoured) fails **exactly one pin, its own** — the sharpest statement that the
+ * arm pins and the seam pins pin different things, and it is the seam that
+ * matters most, since that flag is the only value crossing a boundary.
+ *
+ * **THREE SEAMS ARE NOT DISCRIMINATED, and that is a property of the FUNCTION,
+ * not of these pins:** dropping `cvdaEarlyInitGates`', `cvdaMidGates`' or
+ * `cvdaPostRelationGates`' `true` — each ALONE — leaves every pin green.
+ * The helper still runs and still emits; only the early exit is lost, and
+ * **every later emitter in this body is itself conditioned on the relation
+ * verdict** (`canUse && !isAssignable`, or `isAssignable`), while the shapes
+ * those three regions own are exactly the ones where the relation passes or
+ * `canUseTypeEngine` declines. So nothing doubles and no pin can see it. On
+ * today's code those three signals are REDUNDANT GUARDS; they are kept because
+ * the monolith had them, and if a later gate is ever made unconditional they
+ * become load-bearing with no pin to notice. Do not read their silence as
+ * coverage.
  */
 class CvdaSplitTest {
 
@@ -133,19 +155,22 @@ class CvdaSplitTest {
     // ------------------------------------------------- cvdaEarlyInitGates
 
     @Test
-    fun `early-gate seam - a null trust-me cast ENDS the check before the relation ever runs`() {
+    fun `early-gate arm - a null trust-me cast ENDS the check before the relation ever runs`() {
         val d = diagnose(
             """
             const q1: string = null!
             """
         )
-        // `null` is not assignable to `string` under strictNullChecks, so this is
-        // silent ONLY because the region's `return true` is honoured.
+        // `null` is not assignable to `string` under strictNullChecks, so the
+        // silence is this region's doing. It does NOT discriminate the region's
+        // `return true`, though — ablated (round 808's M3) the pin stays green,
+        // because the later emitters are gated on the relation verdict and
+        // decline anyway. This is an ARM pin, not a seam pin.
         assert(d.isEmpty())
     }
 
     @Test
-    fun `early-gate seam - an undefined trust-me cast does the same`() {
+    fun `early-gate arm - an undefined trust-me cast does the same`() {
         val d = diagnose(
             """
             const q2: string = undefined!
@@ -212,7 +237,7 @@ class CvdaSplitTest {
     }
 
     @Test
-    fun `mid seam - that walker ENDS the check, so the relation's own elaboration never joins it`() {
+    fun `mid arm - that walker reports once, and the relation's own elaboration does not join it`() {
         val d = diagnose(
             """
             declare const fnv2: () => void
@@ -243,7 +268,7 @@ class CvdaSplitTest {
     }
 
     @Test
-    fun `post seam - the excess-property check ENDS the check, so no second diagnostic follows it`() {
+    fun `post arm - the excess-property check reports once, with no second diagnostic after it`() {
         val d = diagnose(
             """
             interface E1 { b: number }
