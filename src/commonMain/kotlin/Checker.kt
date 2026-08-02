@@ -54012,9 +54012,38 @@ interface DataView {
         return true
     }
 
-    /** (IANY.1) parents whose child edge pushes an implicit-any SCOPE or a
-     *  namespace rather than only defining a context — an arrow's EXPRESSION
-     *  body is a childless child of one of these. */
+    /**
+     * (IANY.1) parents whose child edge pushes an implicit-any SCOPE or a
+     * namespace rather than only defining a context — an arrow's EXPRESSION
+     * body is a childless child of one of these.
+     *
+     * **ROUND 799 — THIS EXCLUSION IS KEPT ON ARGUMENT, NOT ON EVIDENCE, AND
+     * BOTH OF OUR INSTRUMENTS HAVE NOW FAILED TO FALSIFY IT.** Round 798 ran
+     * ablation B (this test removed, so the scope-push edges are skipped too)
+     * against the 8-profile grid: byte-identical. Round 799 ran the same fault
+     * against the FULL 13,449-baseline corpus suite: **13,449 / 0 failures /
+     * 3 skipped, i.e. also nothing** — and the fault was live (the build
+     * warned `Unreachable code` at the gate) with the population reached by the
+     * most ordinary shapes there are (`const id = (a) => a` alone counts six
+     * `E_SCOPE_LEAF` edges), so this is not round 753's "the ablation tested
+     * nothing".
+     *
+     * **Why nothing sees it, stated properly** (round 798's "a scope push is an
+     * observable MUTATION" is true but is not the reason): a frame pushed at a
+     * CHILDLESS node's edge is popped at that node's own leave with **no node
+     * entered in between**, and every reader of `implicitAnyScopes` /
+     * [spineIanyCtx] is reached only from a `spineIany*` dispatch AT a node. So
+     * the stack mutation is unobservable by construction, exactly as the
+     * context definition is.
+     *
+     * **What is NOT unobservable, and is why it stays**: the `ArrowFunction`
+     * arm does not only push — it calls `contextualSigReturnTypeForCtx`, a type
+     * RESOLUTION, whose side effects (interning, `symbolTypes` writes) are
+     * global and order-sensitive. Dropping it perturbs first-touch resolution
+     * ORDER, the round-754/776/778 hazard class that has no output diff to find
+     * it by, and buys **1 ms**. Keeping it is the trade; no pin can discriminate
+     * it, and none is claimed to.
+     */
     private fun spineIanyScopePushParent(k: Int): Boolean = when (k) {
         NodeKind.FUNCTION_DECLARATION, NodeKind.METHOD_DECLARATION, NodeKind.CONSTRUCTOR,
         NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR, NodeKind.FUNCTION_EXPRESSION,

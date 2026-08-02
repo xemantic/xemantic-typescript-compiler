@@ -155,11 +155,45 @@ rewrites both fields, so no later edge can read a stale pair. Pinned.
 Fault B is the more informative of the two. The excluded population is REACHED
 11,032 times per compile (its own probe row), so this is not round 753's "the
 ablation tested nothing" — the code ran and changed no verdict we can observe.
-The exclusion is kept anyway: `pushImplicitAnyScope` is an observable MUTATION,
-not a state definition, so dropping it is unsound BY ARGUMENT even where no
-instrument sees it, and the row costs 1 ms. **Whether the 13k-baseline corpus
-sees it was not measured** — round 792's rule says that is the only instrument
-that could, and it is recorded here as a lead rather than claimed either way.
+**Whether the 13k-baseline corpus sees it was not measured** — round 792's rule
+says that is the only instrument that could, and it is recorded here as a lead
+rather than claimed either way.
+
+### 6c. ROUND 799 — fault B against the corpus: it does not see it either
+
+Ablation B was re-injected and run against the FULL suite:
+**13,449 tests / 0 failures / 3 skipped — identical to the un-ablated baseline.**
+
+The run is evidence rather than a no-op, on two independent checks:
+
+* the fault was **live** — the same build logged
+  `w: Checker.kt:54004:22 Unreachable code`, which only the injected
+  `(true || …)` can produce, and `jvmTest` ran in that same build;
+* the population is **reached by the most ordinary shapes there are** — an
+  eight-line scratch file whose only content is four expression-bodied arrows
+  counts **6 `E_SCOPE_LEAF` edges** (`--ianySections`), so a 13,449-baseline
+  corpus reaches it in the thousands.
+
+**Verdict, in the required words: the exclusion is KEPT ON ARGUMENT.** It is now
+*unfalsified by every instrument we have* — the 8-profile grid (round 798) and
+the corpus suite (this round) — and the code comment says so, so that the next
+agent does not read it as evidence-backed.
+
+**The argument, restated correctly.** Round 798 justified it as "a scope push is
+an observable MUTATION, not a state definition". That is true and is not the
+reason: a frame pushed at a CHILDLESS node's edge is popped at that same node's
+leave with **no node entered in between**, and every reader of
+`implicitAnyScopes` / `spineIanyCtx` is reached only from a `spineIany*`
+dispatch AT a node — so the stack mutation is exactly as unobservable as the
+context definition is. Both instruments agreeing is what that predicts.
+
+What genuinely is *not* unobservable, and is the reason to keep it: the
+`ArrowFunction` arm does not only push a scope, it calls
+`contextualSigReturnTypeForCtx` — a type RESOLUTION whose side effects
+(interning, `symbolTypes` writes) are global. Skipping it moves **first-touch
+resolution ORDER**, the round-754/776/778 hazard class that has no output diff
+to find it by, and the row it would save is **1 ms**. No pin can discriminate
+this, and none is claimed to; the honest record is this paragraph.
 
 ## 7. What did NOT work
 
