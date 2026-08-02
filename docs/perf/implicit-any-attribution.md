@@ -145,6 +145,22 @@ A skipped edge leaves the stash set — unobservable, because the consumer's tes
 the IDENTITY `spineIanyPendingAnnDecl === decl` and every declarator's own enter
 rewrites both fields, so no later edge can read a stale pair. Pinned.
 
+## 6b. Ablation discrimination — and a null result
+
+| fault | what it does | pins failing |
+|---|---|---:|
+| **A** | the gate stops testing childlessness (refuses every non-scope-push edge) | **4** — the equivalence pin, the contextual-arrow pin, the object-literal-method pin, the declarator-stash pin |
+| **B** | the scope-push exclusion removed | **0**, and the compiler profile stays byte-identical |
+
+Fault B is the more informative of the two. The excluded population is REACHED
+11,032 times per compile (its own probe row), so this is not round 753's "the
+ablation tested nothing" — the code ran and changed no verdict we can observe.
+The exclusion is kept anyway: `pushImplicitAnyScope` is an observable MUTATION,
+not a state definition, so dropping it is unsound BY ARGUMENT even where no
+instrument sees it, and the row costs 1 ms. **Whether the 13k-baseline corpus
+sees it was not measured** — round 792's rule says that is the only instrument
+that could, and it is recorded here as a lead rather than claimed either way.
+
 ## 7. What did NOT work
 
 The first form of the IIFE pin asserted that `((v) => v)("s")` reports a TS7006

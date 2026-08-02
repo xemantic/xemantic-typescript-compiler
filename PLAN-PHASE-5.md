@@ -84,9 +84,19 @@ as such rather than worked.**
   `spineIanyVarDeclEnter`'s `spineIanyPendingAnnDecl` stash — is unobservable because its
   consumer's test is an IDENTITY against its own declarator and every declarator rewrites
   the stash; pinned rather than argued.
-- **PINS: 8 new (`IanyGateTest`), N DISCRIMINATING across two complementary ablations run
-  separately.** The harness was COMMITTED BEFORE the gate and before either ablation
-  (law 5), so both reverts were a scoped `git checkout`.
+- **PINS: 8 new (`IanyGateTest`), 4 DISCRIMINATING, and the SECOND ablation is a NULL
+  RESULT worth more than the first.** Fault A (the gate stops testing childlessness, so
+  it refuses every non-scope-push edge) fails 4 pins — the equivalence pin, the
+  contextual-arrow pin, the object-literal-method pin and the declarator-stash pin.
+  **Fault B (the scope-push exclusion removed) is caught by NOTHING**: 0 pins, and the
+  compiler profile stays byte-identical although the excluded population is REACHED
+  11,032 times per compile (the probe's own row). The exclusion is kept regardless,
+  because `pushImplicitAnyScope` is an observable MUTATION rather than a state definition
+  — it is unsound to drop BY ARGUMENT even where no instrument we have can see it, and
+  it costs 1 ms. Whether the 13k-baseline corpus sees it (round 792's rule: the only
+  instrument that sees shapes tsc's sources lack) was NOT measured — a lead, recorded.
+  The harness was COMMITTED BEFORE the gate and before either ablation (law 5), so both
+  reverts were a scoped `git checkout`.
 - **WHAT DID NOT WORK.** The IIFE pin's first form asserted that `((v) => v)("s")`
   reports TS7006 for `v`. **It does not, on a WORKING binary** — round 694's
   IIFE-argument contextual typing supplies the parameter type — so the pin failed against

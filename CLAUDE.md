@@ -110,6 +110,8 @@ Both developers and AI agents are expected to add entries as they encounter surp
 
 ### Checker walker gotchas
 
+- **`spineIanyEnterNode`'s TWO round-798 gates are COUPLED — skipping a call's `isCalleeResolvable` is sound ONLY because every argument edge that could read the resulting `kind = 1` `typed` flag is itself skipped (the "all arguments childless" condition), and the call's FRAME must still be pushed either way because it shadows an enclosing `kind = 0` state for the CALLEE subtree (an IIFE reads that).** Widening either gate alone, or adding a reader of a `kind = 1` `SpineIanyCtx` anywhere, silently breaks the other; `IanyGateTest` + `--ianyGateOff` (the pre-798 path in the same binary) are how you check.
+
 - **A NEW dedicated walker at the top of `checkSingleCallExpressionTypesCore` MUST extend `ccetPrologueMayFire` or it silently never runs (round 793).** That prologue is pre-gated by a syntactic classification of the CALLEE — `super`, a property access named `reduce`/`filter`/`transform`/`create`, a property access with a string-literal argument (B216's keys), or a file with CJS default-as-namespace shapes — and it refuses 98% of all call expressions. The gate is a superset of each walker's own first gate; a new walker with a different key is invisible to it, and the tell is a corpus baseline losing a diagnostic with no code change near the walker.
 
 
