@@ -20,6 +20,120 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 805 (2026-08-02) — (JIT.1)(c) LANDED FOR `checkPropertyAccessInExpr` (9,062 → an
+entry at 4,728 plus four `cpaExpr*` arms; census 17 → 16), AND (JIT.1)(e) — THE FAMILY'S
+LAST OPEN QUESTION, UNMEASURABLE BY EVERY A/B IN THIS ARC BECAUSE THEY ALL RUN `--noEmit`
+— IS NOW MEASURED AND ITS PRIZE IS INSIDE THE NOISE. Suite 13,514 → 13,526 / 0 / 3; grid
+46/46/46/46/46/46/46/94 with 0 added and 0 removed BOTH directions; `--partitionCheck 2`
+EQUIVALENT — 46; cost gate all 20 counters +0.00%.**
+
+- **THE BASELINE WAS RE-MEASURED AT HEAD ON A REBUILT BINARY** (`compileKotlinJvm`
+  executed, not up-to-date) and reproduced round 804 exactly: **17 of 13,923 methods over
+  8,000 bytecodes**, `checkPropertyAccessInExpr` at **9,062**. The class files on disk were
+  again older than the last landing commit, so nothing could have been quoted from them.
+- **THE SPLIT.** The four largest `when` arms move out verbatim: `checkPropertyAccessInExpr`
+  **9,062 → 4,728**, `cpaExprFunctionExpression` **1,526**, `cpaExprArrowFunction` **1,357**,
+  `cpaExprObjectLiteral` **850**, `cpaExprClassExpression` **528**. Census **17 → 16**. The
+  five sum to 8,989 against 9,062 — unlike round 804's 46,567 → 29,130, splitting this one
+  shrank nothing, which is a second reminder that **a bytecode count is a THRESHOLD
+  predicate and not a cost model**.
+- **THE SHAPE IS DIFFERENT FROM (a)'s AND THAT MATTERS.** `forEachChild` is a dense
+  `when (kindId)` TABLESWITCH, so round 803 had to split by contiguous key RANGE to keep
+  each part one switch. This function is a `when (expr) { is X -> }` INSTANCEOF CHAIN:
+  extracting arm BODIES leaves the chain's order and length untouched, so **no expression
+  kind pays an extra test**, and the hot arms (PropertyAccess / Call / Binary / the
+  unwrappers / the `else` leaf) were never candidates to move anyway — they are two lines
+  each. The four moved arms are the four LONG ones.
+- **THE EQUIVALENCE IS A MEASUREMENT, AND IT CLOSED EXACTLY.** All 224 moved lines were
+  extracted by script and re-checked against HEAD: each of the four regions appears in the
+  new file as a **CONTIGUOUS, IN-ORDER run identical modulo the 8-space dedent**, and the
+  entry function was reconstructed from HEAD with exactly those four blocks replaced by four
+  one-line arms and compared — **IDENTICAL, 171 lines**. Accounting: 167 + 4 arms + 4 headers
+  + 224 bodies + 4 closes = the 399-line original.
+- **TWO PROPERTIES MADE THE REWRITE EXACT, AND BOTH WERE ESTABLISHED BY ENUMERATION.**
+  The function contains **NO `return` at all** (grep over the whole 399-line range), so
+  nothing about control flow can change; and each of the four arms saves and restores its
+  own scope state **entirely within itself**, so there is **no cross-boundary value** —
+  round 804's returned-pair device was not needed here.
+- **(JIT.1)(e) SIZED — AND IT IS THE ROUND'S REAL RESULT.** Every A/B in this arc is
+  `--noEmit` and therefore blind to `Transformer.transformToCommonJS` (**28,991**, 3.6× the
+  limit), `transformClassBody` (16,233) and `transform` (8,934). Three things measured on
+  ONE binary (the round-805 split), compiler profile, self time, **modes named**:
+  1. **The emit path is REACHED**: the profile is `module: NodeNext` and its emitted
+     `dist/compiler/core.js` is CommonJS (155 `require(`/`exports.` occurrences), so
+     `transformToCommonJS` runs — this was not assumed.
+  2. **EMIT vs `--noEmit`, 3 interleaved pairs**: 28,062 / 27,945 / 28,060 vs 25,295 /
+     24,919 / 24,442 → medians **28,060 vs 24,919 ms, Δ +3,141 ms**, i.e. **the emit phase
+     is 12.6% on top of a check-only compile** (per-pair deltas 2,767 / 3,026 / 3,618 spanning
+     851 ms = **0.27×** the median delta, all positive). Note this is HIGHER than the 8.5%
+     CLAUDE.md carries from round 739 — quote 12.6% with the mode and the date.
+  3. **The flag A/B run in BOTH modes on the same binary**, which is what isolates the emit
+     path: `--noEmit` default vs `-XX:-DontCompileHugeMethods` → **24,524 vs 24,245 ms,
+     Δ −279 ms = −1.14%, flag wins 3/3**; EMIT default vs flag → **27,106 vs 26,790 ms,
+     Δ −316 ms = −1.17%, flag wins 3/3**. **The flag buys the SAME fraction in both modes**,
+     so the extra attributable to the three Transformer methods is **−37 ms** (medians) to
+     **−69 ms** (median of per-pair deltas) — **0.14–0.25% of an emit-mode compile, against a
+     402 ms per-pair spread in the emit arm, i.e. 5.8–10.9× the effect. NOISE-DOMINATED.**
+  **So (e) should be landed for the THRESHOLD like (c) and (d), not for a wall number.**
+  Two honest caveats: 3 pairs is thin, and the flag also makes C2 *compile* a 28,991-byte
+  method (compile time + code cache), so it can UNDER-read what a split would buy — this is
+  a bound, not a proof of zero.
+- **A SECOND, UNSOUGHT RESULT WORTH MORE THAN (e)'s: the whole-family flag is now worth
+  −1.14% in `--noEmit`, against round 802's −3.1% on the pre-split binary.** Three splits
+  (a)+(b)+(c) have taken roughly two thirds off the flag's own reading, on the same profile
+  and the same box class. That is the closest thing this family has to a cumulative
+  measurement, and it is consistent with (a) having been the large one.
+- **WHAT DID NOT WORK — one process failure, and it is a NEW shape of round 789's law.**
+  The grid script rewrites `Checker.kt` to the pre-split source, builds, snapshots, and only
+  then runs `git checkout`. It was **killed mid-`compileKotlinJvm`**, so it never reached
+  the restore: the working tree was left holding the **PRE-SPLIT MONOLITH** with no marker
+  and no `.done` file, and the class dir held a half-written build. Nothing announced this —
+  the tell was `git status --porcelain` showing one modified file the round had not touched
+  since committing. **Round 789's rule ("commit the harness before ablating") saved it**:
+  the split was already committed, so `git checkout` restored it losslessly. The fix applied
+  for the rest of the round: **run any stage that REWRITES A SOURCE FILE in the foreground,
+  and detach only the java runs.** The re-run then completed cleanly.
+- **WHAT WAS NOT RUN, STATED PLAINLY.** Ablation B (a deliberately broken seam, to show the
+  behavioural pins discriminate) **was not run** — the round's remaining budget went to the
+  grid re-run after the failure above. Ablation A's discrimination WAS established, but from
+  the class files rather than from a test run: on the pre-split binary
+  `checkPropertyAccessInExpr` reads **9,062 ≥ 8,000** and **none of the four `cpaExpr*`
+  methods exist**, which is exactly the quantity the three size pins read, so all three fail
+  there. **The seam pins' discrimination is therefore argued, not measured** — a follow-up
+  should build the two-mistake ablation (drop `cpaExprArrowFunction`'s three restore lines;
+  thread `enclosingClassType` instead of `null` into the function-expression body) and
+  confirm exactly two seam pins fail.
+- **THE PINS.** 12 new. `CpaExprSplitTest` (9) pins one ARM per helper — the four mistakes a
+  mechanical extraction actually makes are "arm not reached", "restore dropped", "argument
+  not threaded", "recursion not re-entered", so there are four SEAM pins beside them: the
+  arrow's and the function expression's parameter scopes restored when the helper returns,
+  the function-expression body walked with `enclosingClassType = null` (TS2683, never a
+  TS2339 against the enclosing class), the enclosing class restored after a class expression,
+  and a five-deep call → objlit → arrow → fn-expr → class-expression nesting proving every
+  helper recurses back into the entry. `HugeMethodLimitTest` (+3) reads `Checker`'s compiled
+  `Code` attribute lengths.
+- **NO WALL A/B FOR THE SPLIT, DELIBERATELY.** Rounds 803 and 804 bounded it twice (−3.93%
+  for the traversal primitive, NOISE for the biggest method) and this function is 9,062
+  bytecodes — the smallest split so far. Measuring it would have cost the round its emit-mode
+  sizing, which was the open question.
+- **GATE.** Suite **13,514 → 13,526 / 0 failures / 3 skipped** (+12 pins; whole results dir
+  wiped before the run, counted with the python XML parser over 610 XMLs; `CpaExprSplitTest`
+  9/0, `HugeMethodLimitTest` 9/0, `ForEachChildSplitTest` 9/0, `CmamSplitTest` 18/0).
+  8-profile grid diffed set-for-set BOTH directions against a purpose-built PRE-SPLIT binary,
+  with every capture confirmed to be a real non-empty file first (round 804's vacuous-green
+  trap): **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%, no rebaseline**. Build
+  warning-clean. Full derivation: `docs/perf/setup-phase-and-huge-methods.md` §§ 6–7.
+- **FOR THE NEXT AGENT.** (JIT.1) now has one measured verdict per shape: (a) −3.93%,
+  (b) NOISE, (c) unmeasured-by-choice, (e) 0.14–0.25% and inside the noise. **Finish (c) and
+  (d) mechanically, one method per commit, for the threshold and for (f)** — the largest
+  remaining is `checkArgumentsAgainstSignatureCore` (23,890) whose section partition is
+  already committed in `docs/perf/argument-check-attribution.md`, and the cheapest is
+  `ccetSpineEnter` (8,686, barely over). Two traps this round proves are live: a stage that
+  rewrites a source file must not be detached, and the census must be re-run on a REBUILT
+  binary before any before/after is quoted.
+
+
 **Round 804 (2026-08-02) — (JIT.1)(b) LANDED: THE BIGGEST METHOD IN THE COMPILER —
 `checkMemberAccessMissingCore`, 46,567 BYTECODES, 5.8× HotSpot's `HugeMethodLimit` — IS ONE
 ENTRY PLUS TEN CONTIGUOUS-SECTION HELPERS, ALL UNDER THE LIMIT. CENSUS 18 → 17. AND THE
@@ -976,6 +1090,36 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
   size or JVM version. **The one place a wall gain is still plausible and unmeasured is (e)**:
   every A/B in this arc is `--noEmit` and blind to the Transformer methods, while the
   published `bench-3way.sh` ratio is emit-mode on all three compilers.
+  **ROUND 805 UPDATE — (c) IS STARTED AND (e) IS MEASURED.** Census **17 → 16**:
+  `checkPropertyAccessInExpr` 9,062 → an entry at 4,728 plus `cpaExprFunctionExpression`
+  1,526 / `cpaExprArrowFunction` 1,357 / `cpaExprObjectLiteral` 850 /
+  `cpaExprClassExpression` 528. **Its `when` is an INSTANCEOF CHAIN, not a tableswitch**, so
+  extracting arm BODIES changes no dispatch cost and (a)'s contiguous-range discipline does
+  not apply; the four moved arms are simply the four long ones, and each is self-contained
+  (no cross-boundary value, and the whole function contains no `return`). **No wall A/B was
+  run for it, deliberately** — rounds 803/804 bounded the family twice and the round's budget
+  went to (e). **(e) IS NO LONGER UNMEASURED: its prize is 0.14–0.25% of an EMIT-mode compile
+  and inside the noise.** Measured on one binary: emit vs `--noEmit` = 28,060 vs 24,919 ms
+  (the emit phase is **12.6%** on top of a check-only compile — higher than the 8.5% round 739
+  recorded), and the whole-family flag buys **−1.14% in `--noEmit`** and **−1.17% in emit**,
+  i.e. the same fraction in both modes, leaving −37 to −69 ms attributable to the three
+  Transformer methods against a 402 ms per-pair spread. `transformToCommonJS` demonstrably
+  RUNS on the profile (its `dist` output is CommonJS). **So land (e) for the THRESHOLD, not
+  for a wall number**; caveats: 3 pairs is thin, and the flag also makes C2 compile a
+  28,991-byte method, so it can under-read what a split would buy. **A third fact worth
+  carrying: the whole-family flag now reads −1.14% in `--noEmit` against round 802's −3.1%
+  on the pre-split binary — (a)+(b)+(c) have taken about two thirds off the instrument's own
+  reading.**
+  - [ ] **(c) STARTED round 805 — `checkPropertyAccessInExpr` 9,062 → 4,728 + four
+    `cpaExpr*` arms (census 17 → 16); pins `CpaExprSplitTest` (9, four arms + four seams +
+    one deep-nesting recursion pin) and `HugeMethodLimitTest` (+3).** Still open in (c):
+    `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
+    `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.
+    **Owed from round 805: ablation B for the seam pins was NOT run** (drop
+    `cpaExprArrowFunction`'s three restore lines; thread `enclosingClassType` instead of
+    `null` into the function-expression body — expect exactly two seam pins to fail).
+    Ablation A was established from the class files, not a test run: the pre-split binary
+    reads `checkPropertyAccessInExpr` 9,062 and has none of the four part names.
   - **(c) The three remaining assignability/call cores** —
     `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
     `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.

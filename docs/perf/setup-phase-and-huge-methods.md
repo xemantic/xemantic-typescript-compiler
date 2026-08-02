@@ -440,7 +440,102 @@ against the monolith binary — **46/46/46/46/46/46/46/94, 0 added and 0 removed
 all eight**; `--partitionCheck 2` **EQUIVALENT — 46**; `cost_gate.py` **all 20
 counters +0.00%**.
 
-## 6. Reproduction
+## 6. (JIT.1)(c) — `checkPropertyAccessInExpr`, 9,062 → an entry plus four arms
+
+*Round 805.* The cheapest remaining candidate, and the first split of a `when` that
+is an **instanceof CHAIN** rather than a tableswitch.
+
+| function | arm | bytecodes |
+|---|---|---:|
+| `checkPropertyAccessInExpr` | everything else, incl. every hot arm | **4,728** |
+| `cpaExprFunctionExpression` | `is FunctionExpression` | 1,526 |
+| `cpaExprArrowFunction` | `is ArrowFunction` | 1,357 |
+| `cpaExprObjectLiteral` | `is ObjectLiteralExpression` | 850 |
+| `cpaExprClassExpression` | `is ClassExpression` | 528 |
+
+Census **17 → 16**. The five sum to **8,989 against the monolith's 9,062** — unlike
+round 804's 46,567 → 29,130, splitting this one shrank nothing. A bytecode count is a
+threshold predicate, not a cost model, in both directions.
+
+**Why the shape differs from (a).** `forEachChild` is a dense `when (kindId)`
+tableswitch, so round 803 had to split by contiguous key RANGE to keep each part one
+switch, and had to keep the hot kinds in the entry so no kind paid two calls. Here
+the dispatch is a linear `is X ->` chain: moving an arm's BODY leaves the chain's
+order and length untouched, so **no expression kind pays an extra test**. The four
+arms moved are simply the four LONG ones; the hot arms (PropertyAccess, Call, Binary,
+the unwrappers, the `else` leaf) are two lines each and were never candidates.
+
+**The equivalence, measured.** All 224 moved lines were extracted by script and
+re-checked against HEAD — each of the four regions is a CONTIGUOUS, IN-ORDER run
+identical modulo the 8-space dedent — and the entry function was *reconstructed* from
+HEAD with the four blocks replaced by four one-line arms and compared: identical, 171
+lines. Accounting closes exactly: 167 + 4 arms + 4 headers + 224 bodies + 4 closes =
+the 399-line original. Two properties make it exact: the function contains **no
+`return` at all**, and each moved arm saves and restores its own scope state entirely
+within itself, so there is **no cross-boundary value** (round 804's returned pair was
+not needed).
+
+**Guarded by** `CpaExprSplitTest` (9 pins: one ARM pin per helper, plus four SEAM pins
+— the arrow's and the function expression's parameter scopes restored on return, the
+function-expression body walked with `enclosingClassType = null`, the enclosing class
+restored after a class expression — plus a five-deep nesting pin that every helper
+recurses back into the entry) and `HugeMethodLimitTest` (+3, reading `Checker`'s
+compiled `Code` attribute lengths). **Discrimination is only partly measured**:
+ablation A is established from the pre-split class files (`checkPropertyAccessInExpr`
+9,062 and no `cpaExpr*` methods, so all three size pins fail), but the two-mistake
+ablation for the SEAM pins was not built — it is owed.
+
+Gate: suite **13,514 → 13,526 / 0 / 3**; 8-profile grid BOTH directions against a
+purpose-built pre-split binary, every capture confirmed non-empty first —
+**46/46/46/46/46/46/46/94, 0 added and 0 removed**; `--partitionCheck 2`
+**EQUIVALENT — 46**; `cost_gate.py` **all 20 counters +0.00%**.
+
+## 7. (JIT.1)(e) — the emit path, sized at last
+
+Every A/B in this arc runs `--noEmit`, so none of them can see
+`Transformer.transformToCommonJS` (**28,991**, 3.6× the limit), `transformClassBody`
+(16,233) or `transform` (8,934). Round 805 measured it, on ONE binary (the round-805
+split), compiler profile, self time.
+
+**First, the path is REACHED.** The profile is `module: NodeNext`, and its emitted
+`dist/compiler/core.js` is CommonJS (155 `require(`/`exports.` occurrences). This was
+checked rather than assumed — round 793's rule about controls that are dead where the
+prize is measured.
+
+**The emit phase costs 12.6%**, 3 interleaved pairs:
+
+| | run 1 | run 2 | run 3 | median |
+|---|---:|---:|---:|---:|
+| emit | 28,062 | 27,945 | 28,060 | **28,060** |
+| `--noEmit` | 25,295 | 24,919 | 24,442 | **24,919** |
+| Δ | +2,767 | +3,026 | +3,618 | **+3,141 ms = +12.6%** |
+
+The three deltas span 851 ms = **0.27×** the median delta. Note this is HIGHER than
+the 8.5% CLAUDE.md carries from round 739; quote 12.6% with the mode and the date.
+
+**But the flag buys the same fraction in BOTH modes**, which is what isolates the emit
+path — run on the same binary, 3 pairs each:
+
+| mode | default | `-XX:-DontCompileHugeMethods` | Δ | wins |
+|---|---:|---:|---:|---:|
+| `--noEmit` | 24,524 | 24,245 | **−279 ms = −1.14%** | 3/3 |
+| emit | 27,106 | 26,790 | **−316 ms = −1.17%** | 3/3 |
+
+**The difference — what the three Transformer methods cost by being interpreted — is
+−37 ms (medians) to −69 ms (median of per-pair deltas): 0.14–0.25% of an emit-mode
+compile, against a 402 ms per-pair spread in the emit arm, i.e. 5.8–10.9× the effect.
+NOISE-DOMINATED.** So **(e) is to be landed for the THRESHOLD, exactly like (c) and
+(d), not for a wall number.** Two caveats stated once: three pairs is thin, and the
+flag also makes C2 *compile* a 28,991-byte method (compile time and code cache), so it
+can UNDER-read what a split would buy — this is a bound, not a proof of zero.
+
+**A second result nobody asked for.** The whole-family flag is now worth **−1.14% in
+`--noEmit`**, against round 802's **−3.1%** on the pre-split binary. Three splits have
+taken roughly two thirds off the instrument's own reading, on the same profile and box
+class — the closest thing this family has to a cumulative measurement, and consistent
+with (a) having been the large one.
+
+## 8. Reproduction
 
 ```bash
 # the census — static, no run
