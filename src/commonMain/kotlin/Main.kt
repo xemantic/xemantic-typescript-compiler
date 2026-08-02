@@ -137,6 +137,12 @@ fun main(args: Array<String>) {
             // (level A, by callee) and checkVarDeclAssignability (level B, by
             // section). `Coarse` keeps only the per-level anchors, so an
             // ON-vs-COARSE pair prices the probe boundary differentially.
+            "--ctaSections", "--ctasections" -> {
+                CtaSections.reset(); CtaSections.mode = CtaSections.ON
+            }
+            "--ctaSectionsCoarse", "--ctasectionscoarse" -> {
+                CtaSections.reset(); CtaSections.mode = CtaSections.COARSE
+            }
             // (IANY.1): the opt-in attribution of spineIanyEnterNode — the last
             // of round 732's six biggest spine handlers with no attribution
             // round. Two spans per node (edge dispatch / own kind arms), whose
@@ -145,11 +151,11 @@ fun main(args: Array<String>) {
             "--ianySections", "--ianysections" -> {
                 IanySections.reset(); IanySections.mode = IanySections.ON
             }
-            "--ctaSections", "--ctasections" -> {
-                CtaSections.reset(); CtaSections.mode = CtaSections.ON
-            }
-            "--ctaSectionsCoarse", "--ctasectionscoarse" -> {
-                CtaSections.reset(); CtaSections.mode = CtaSections.COARSE
+            // (IANY.1) the gate as a switch: restores the pre-798 behaviour
+            // exactly, so ONE binary carries both arms — this run reproduces the
+            // pre-change binary and is a legitimate grid baseline.
+            "--ianyGateOff", "--ianygateoff" -> {
+                IanySections.gateOff = true
             }
             // (ENGINE.2): the opt-in attribution INSIDE checkPropertyAccessInExpr
             // (level P, recursive) and checkSinglePropertyAccess (level Q). The
@@ -527,6 +533,8 @@ private fun printUsage() {
           --spineSections    (SPINE.1) intra-handler attribution of the two hot leaves
           --ianySections     (IANY.1) attribution of spineIanyEnterNode, split by whether
                              the contextual state it defines can be read at all
+          --ianyGateOff      (IANY.1) restore the pre-798 behaviour of that handler — the
+                             equivalence baseline, in the same binary
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart

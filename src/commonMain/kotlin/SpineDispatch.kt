@@ -5196,6 +5196,16 @@ object IanySections {
     /** Opt-in; [OFF] in production. Set by `--ianySections`. */
     var mode: Int = OFF
 
+    /**
+     * Round 798's gate, as a switch rather than a rebuild.
+     *
+     * `true` restores the pre-798 behaviour EXACTLY — every parent edge runs and
+     * every call resolves its callee — so one binary carries both arms: the
+     * `--ianyGateOff` run IS the grid baseline and the OFF arm of a same-binary
+     * before/after row read (round 794's precedent). Production is `false`.
+     */
+    var gateOff: Boolean = false
+
     // ── the EDGE partition (one row per node that has a parent) ───────────────
     /** Childless child of a CALL/NEW parent — the argument edge, whose arm
      *  computes `calleeParamGivesNoContext` (round 737's largest single

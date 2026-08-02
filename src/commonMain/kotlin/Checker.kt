@@ -53946,7 +53946,7 @@ interface DataView {
     private fun spineIanyEnterNode(node: Node) {
         val p = (node as NodeBase).parent
         if (IanySections.mode == IanySections.OFF) {
-            if (p != null) spineIanyEdgeEnter(p, node)
+            if (p != null && !spineIanyEdgeUnobservable(p, node)) spineIanyEdgeEnter(p, node)
             spineIanyOwnEnter(node)
             return
         }
@@ -53954,7 +53954,7 @@ interface DataView {
         // closes, so the classifier never lands in a row it is measuring.
         if (p != null) {
             val t0 = PassTiming.nowNanos()
-            spineIanyEdgeEnter(p, node)
+            if (!spineIanyEdgeUnobservable(p, node)) spineIanyEdgeEnter(p, node)
             IanySections.record(spineIanyEdgeRow(p, node), PassTiming.nowNanos() - t0)
         }
         val t1 = PassTiming.nowNanos()
@@ -53963,18 +53963,58 @@ interface DataView {
     }
 
     /**
-     * (IANY.1) probe-only: a node whose subtree is EMPTY — `forEachChild`
-     * visits nothing for these three kinds, so a contextual-typing state
-     * defined for such a child has no node that could read it.
+     * (IANY.1) a node whose subtree is EMPTY — `forEachChild` visits nothing
+     * for these three kinds, so a contextual-typing state defined for such a
+     * child has no node that could read it.
      */
     private fun spineIanyChildless(n: Node): Boolean = when ((n as NodeBase).kindId) {
         NodeKind.IDENTIFIER, NodeKind.STRING_LITERAL_NODE, NodeKind.NUMERIC_LITERAL_NODE -> true
         else -> false
     }
 
-    /** (IANY.1) probe-only: parents whose child edge pushes an implicit-any
-     *  SCOPE or a namespace rather than only defining a context — an arrow's
-     *  EXPRESSION body is a childless child of one of these. */
+    /**
+     * (IANY.1) round 798 — the parent edge defines a contextual state that
+     * NOTHING can read, so running the arm is pure cost.
+     *
+     * `spineIanyCtx` has no reader outside this handler family
+     * (`spineIanyEdgeEnter`'s own arms, `spineIanyFnExprEnter`,
+     * `spineIanyObjLitMethodEnter`, `spineIanyPropAssignEdge`), and every one of
+     * those readers sits at a node INSIDE the subtree the state was defined
+     * for. A [spineIanyChildless] child has no such node — the frame would be
+     * pushed at its enter and popped at its leave with nothing in between.
+     *
+     * The exclusion is the parents whose edge does something OTHER than define
+     * a context: the seven function-likes and `ModuleDeclaration` push an
+     * implicit-any scope / a namespace symbol, and an arrow's EXPRESSION body
+     * is exactly a childless child of one of them. Every remaining arm was
+     * audited to define a context and nothing else — the only emission below a
+     * parent edge (`emitTs7006BeyondCtxArity`, in the `CallExpression` and
+     * `VariableDeclaration` arms) is itself gated on the child being an
+     * arrow/function expression, which is never childless.
+     *
+     * The one arm carrying state across the edge is `VariableDeclaration`'s:
+     * `spineIanyVarDeclEnter` stashes `spineIanyPendingAnnDecl`/`…Type` for the
+     * initializer edge to consume and clear. A skipped edge leaves the stash
+     * set — which is unobservable, because the consumer's test is the IDENTITY
+     * `spineIanyPendingAnnDecl === decl` and every declarator's own enter
+     * rewrites both fields, so no later edge can read a stale pair.
+     */
+    private fun spineIanyEdgeUnobservable(p: Node, node: Node): Boolean =
+        !IanySections.gateOff && spineIanyChildless(node) &&
+            !spineIanyScopePushParent((p as NodeBase).kindId)
+
+    /** (IANY.1) every argument childless — so every argument edge is skipped by
+     *  [spineIanyEdgeUnobservable] and no reader of the call's `typed` flag is
+     *  ever reached. A call with NO arguments qualifies trivially. */
+    private fun spineIanyArgsAllChildless(args: List<Expression>): Boolean {
+        if (IanySections.gateOff) return false
+        for (a in args) if (!spineIanyChildless(a)) return false
+        return true
+    }
+
+    /** (IANY.1) parents whose child edge pushes an implicit-any SCOPE or a
+     *  namespace rather than only defining a context — an arrow's EXPRESSION
+     *  body is a childless child of one of these. */
     private fun spineIanyScopePushParent(k: Int): Boolean = when (k) {
         NodeKind.FUNCTION_DECLARATION, NodeKind.METHOD_DECLARATION, NodeKind.CONSTRUCTOR,
         NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR, NodeKind.FUNCTION_EXPRESSION,
@@ -54102,15 +54142,25 @@ interface DataView {
                 if (spineIanyReached(node)) {
                     // The legacy CallExpression arm computed ctxProp once per call
                     // (before any argument walk, args or not).
-                    spineIanyDefineCtx(node,
-                        SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+                    // (IANY.1) round 798: the `typed` flag of a kind=1 state is read
+                    // ONLY by the two ARGUMENT edges below, so when every argument is
+                    // childless — the exact condition under which
+                    // `spineIanyEdgeUnobservable` skips all of them — nothing can read
+                    // it and `isCalleeResolvable` (a callee type resolution) is pure
+                    // cost. The FRAME is still pushed: it shadows an enclosing kind=0
+                    // state for the CALLEE's subtree, which an IIFE reads.
+                    spineIanyDefineCtx(node, SpineIanyCtx(kind = 1,
+                        typed = !spineIanyArgsAllChildless(node.arguments) &&
+                            isCalleeResolvable(node.expression)))
                 }
             }
             NodeKind.NEW_EXPRESSION -> {
                 node as NewExpression
                 if (spineIanyReached(node)) {
-                    spineIanyDefineCtx(node,
-                        SpineIanyCtx(kind = 1, typed = isCalleeResolvable(node.expression)))
+                    val args = node.arguments
+                    spineIanyDefineCtx(node, SpineIanyCtx(kind = 1,
+                        typed = args != null && !spineIanyArgsAllChildless(args) &&
+                            isCalleeResolvable(node.expression)))
                 }
             }
             else -> {}
