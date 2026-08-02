@@ -3542,8 +3542,22 @@ class Checker(
     private var spineIanyActive = false
     /** Per-file nodeId memo for [spineIanyReached] — 0 unknown / 1 reached / 2 not. */
     private var spineIanyReachMemo = ByteArray(0)
+    /** (IANY.1) round 800, PROBE ONLY — per-file nodeId marks for the CALL nodes
+     *  that have already resolved their callee in [spineIanyCallArgEdge], so the
+     *  census can separate the FIRST resolution of a call from its per-argument
+     *  repeats. Allocated only under `--ianySections`. */
+    private var spineIanyCpgncSeen = ByteArray(0)
     /** Reusable ascent buffer. */
     private val spineIanyChain = ArrayList<Node>()
+    /** Reusable worklist for [spineIanyArgSubtreeMayRead] (never re-entrant —
+     *  the scan calls nothing that can re-enter the checker). Declared HERE, with
+     *  the other checker state, and not beside its consumer: the whole checker
+     *  runs inside the `init` block, so a field declared further down the file is
+     *  still null in every pass (CLAUDE.md's declaration-order trap — this one
+     *  crashed the first round-800 probe run). */
+    private val spineIanyArgScan = ArrayList<Node>(16)
+    /** Probe-only: the step count of the last [spineIanyArgScanCore]. */
+    private var spineIanyArgScanSteps = 0
     /**
      * The maintained contextual-typing state at the current walk position; null
      * means all-defaults (the legacy recursion's default arguments). kind 0 is
@@ -49718,6 +49732,15 @@ class Checker(
          *  the TOP of an argument subtree, not deep inside it). */
         private const val CPA_ARGCTX_SCAN_BUDGET = 128
 
+        /** (IANY.1) round 800: node budget for [spineIanyArgSubtreeMayRead]'s bounded
+         *  scan. Exhausting it answers TRUE (run the arm as before), so — exactly as
+         *  for [CPA_ARGCTX_SCAN_BUDGET] — the budget trades prize for a hard per-edge
+         *  ceiling and can never change a verdict. It is far smaller than that one
+         *  because this scan STOPS at every nested call/new and at every arm that
+         *  redefines the state, so a live subtree is a short chain of member accesses
+         *  and casts, not a whole argument tree. */
+        private const val IANY_ARG_SCAN_CAP = 32
+
         /** P0 (services hang): hard cap on LIVE flow-walker recursion depth ACROSS
          *  re-entrant walks (tsc checker.ts `flowDepth === 2000` — a stack guard;
          *  re-entries share the budget because [narrowLiveDepth] is a checker field,
@@ -53747,6 +53770,9 @@ interface DataView {
             return
         }
         spineIanyReachMemo = ByteArray(result.sourceFile.nodeCount)
+        if (IanySections.mode != IanySections.OFF) {
+            spineIanyCpgncSeen = ByteArray(result.sourceFile.nodeCount)
+        }
         // The legacy per-file hygiene (every push pops via frames; belt-and-braces).
         implicitAnyScopes.clear()
         implicitAnyScopeInits.clear()
@@ -54349,22 +54375,7 @@ interface DataView {
                 spineIanyPropAssignEdge(p, node)
             }
             is CallExpression -> if (p.arguments.any { it === node } && spineIanyReached(node)) {
-                if (node is ArrowFunction || node is FunctionExpression) {
-                    // B224: contextual arity for an arrow/fn-expr ARGUMENT.
-                    val argIndex = p.arguments.indexOfFirst { it === node }
-                    val ctxArity = contextualFnArityForCallArg(p.expression, argIndex)
-                    if (ctxArity != null) {
-                        val argParams = when (node) {
-                            is ArrowFunction -> node.parameters
-                            is FunctionExpression -> node.parameters
-                        }
-                        emitTs7006BeyondCtxArity(argParams, ctxArity, spineSource, spineFileName)
-                    }
-                }
-                val callCtx = spineIanyCtx
-                val argHasCtx = callCtx != null && callCtx.kind == 1 && callCtx.typed &&
-                    !calleeParamGivesNoContext(p, p.arguments.indexOfFirst { it === node })
-                spineIanyDefineCtx(node, if (argHasCtx) SpineIanyCtx(kind = 0, typed = true) else null)
+                spineIanyCallArgEdge(p, node)
             }
             is NewExpression -> if (p.arguments?.any { it === node } == true && spineIanyReached(node)) {
                 val callCtx = spineIanyCtx
@@ -54395,6 +54406,215 @@ interface DataView {
             }
             else -> {}
         }
+    }
+
+    /**
+     * The CALL/NEW **argument** edge — round 799 measured it at **249 ms over
+     * 31,575 edges (7.9 µs each), 32% of the whole handler**, the single
+     * biggest concentration left in `spineIanyEnterNode`.
+     *
+     * Split out of [spineIanyEdgeEnter] so (IANY.1) round 800 can sub-partition
+     * it (`--ianySections`: [IanySections.A_ARITY] / [IanySections.A_CPGNC] /
+     * [IanySections.A_PRED] plus a deterministic census) without the probe
+     * boundaries landing in the 19-arm `when`.
+     *
+     * **The invariant this arm rests on**: at a reached argument edge
+     * `spineIanyCtx` is ALWAYS the CALL's own `kind = 1` frame — `reached(arg)`
+     * implies `reached(call)`, the call's own arm then defines that frame
+     * unconditionally, and every frame pushed inside the CALLEE's subtree is
+     * popped at that subtree's leave. So `callCtx != null && callCtx.kind == 1`
+     * is a tautology here and only `typed` decides.
+     *
+     * **Round 800's gate**: when [spineIanyArgSubtreeMayRead] answers that no
+     * node in the argument's subtree can read a `kind = 0` state, the whole arm
+     * is skipped — both the callee resolution and the frame. Skipping the frame
+     * leaves the call's own `kind = 1` state visible below instead of this arm's
+     * `kind = 0` / null, which is unobservable for the same reason: every reader
+     * of a `kind = 0` state is one of the two kinds the predicate stops at.
+     * `--ianyArgGateOff` restores the pre-800 arm in the same binary.
+     */
+    private fun spineIanyCallArgEdge(p: CallExpression, node: Node) {
+        val probe = IanySections.mode != IanySections.OFF
+        if (probe) IanySections.armEntries++
+        if (node is ArrowFunction || node is FunctionExpression) {
+            val t = if (probe) PassTiming.nowNanos() else 0L
+            // B224: contextual arity for an arrow/fn-expr ARGUMENT.
+            val argIndex = p.arguments.indexOfFirst { it === node }
+            val ctxArity = contextualFnArityForCallArg(p.expression, argIndex)
+            if (ctxArity != null) {
+                val argParams = when (node) {
+                    is ArrowFunction -> node.parameters
+                    is FunctionExpression -> node.parameters
+                }
+                emitTs7006BeyondCtxArity(argParams, ctxArity, spineSource, spineFileName)
+            }
+            if (probe) {
+                IanySections.armArity++
+                IanySections.record(IanySections.A_ARITY, PassTiming.nowNanos() - t)
+            }
+        } else {
+            // (IANY.1) round 800 — THE GATE. An arrow / function-expression
+            // argument is a READER by construction, so the B224 emission above
+            // can never be reached by it: the gate lives in this `else` branch
+            // rather than at the top of the function precisely so that no future
+            // edit of the reader set can silence an emission.
+            val t = if (probe) PassTiming.nowNanos() else 0L
+            // Under the probe the predicate ALWAYS runs — its cost and its
+            // verdict are what the 249 ms has to be priced against — but it only
+            // ACTS when the gate is on.
+            val mayRead = if (probe || !IanySections.argGateOff)
+                spineIanyArgSubtreeMayRead(node) else true
+            if (probe) {
+                IanySections.record(IanySections.A_PRED, PassTiming.nowNanos() - t)
+                if (!mayRead) {
+                    IanySections.armNoReader++
+                    val c = spineIanyCtx
+                    if (c != null && c.kind == 1 && c.typed) IanySections.armNoReaderCpgnc++
+                }
+            }
+            if (!mayRead && !IanySections.argGateOff) return
+        }
+        val callCtx = spineIanyCtx
+        var argHasCtx = callCtx != null && callCtx.kind == 1 && callCtx.typed
+        if (probe && !argHasCtx) IanySections.armTypedFalse++
+        if (argHasCtx) {
+            val t = if (probe) PassTiming.nowNanos() else 0L
+            if (probe) {
+                IanySections.armCpgnc++
+                val id = (p as NodeBase).nodeId
+                val seen = spineIanyCpgncSeen
+                if (id >= 0 && id < seen.size) {
+                    if (seen[id].toInt() != 0) IanySections.armCpgncRepeat++
+                    seen[id] = 1
+                }
+            }
+            argHasCtx = !calleeParamGivesNoContext(p, p.arguments.indexOfFirst { it === node })
+            if (probe) IanySections.record(IanySections.A_CPGNC, PassTiming.nowNanos() - t)
+        }
+        spineIanyDefineCtx(node, if (argHasCtx) SpineIanyCtx(kind = 0, typed = true) else null)
+    }
+
+    /**
+     * (IANY.1) round 800 — **can ANY node in [root]'s subtree read the
+     * contextual state the CALL argument edge defines?**
+     *
+     * The state is a `kind = 0` one, and its readers are exactly two node kinds:
+     * the arrow / function-expression own arm (`spineIanyFnExprEnter`) and the
+     * object-literal own arm. Every OTHER reader named in
+     * `docs/perf/implicit-any-attribution.md` § 11 — an objlit `MethodDeclaration`,
+     * the `PropertyAssignment` edge, an arrow's expression-body edge — sits
+     * strictly inside one of those two, so those two ARE the reader set.
+     *
+     * The state PROPAGATES down through the arms that inherit it (paren /
+     * conditional / array-literal / `||` `??` `&&` `,` operands) **and through
+     * every parent kind with no arm at all**, which does not redefine it —
+     * `as`, `!`, `satisfies`, unary, spread, member access, template spans.
+     * **That second set is why `rhsCanConsumeFnCtx` cannot be reused here**
+     * (round 799 § 11): it descends neither those nor array elements, so it
+     * would report "no reader" for `f([{ m(a) {} }])` and `f(<any>{ m(a) {} })`.
+     *
+     * It STOPS at a nested CALL/NEW: that node's own arm pushes a `kind = 1`
+     * frame over its whole subtree, and if it is UNREACHED so is everything
+     * below it (reach is monotone down the tree, and every reader is gated on
+     * `spineIanyReached`) — so no reader below can see our state either way.
+     *
+     * Two properties that make it safe to gate on:
+     * * **the default is `true`** — a kind not named here KEEPS the arm, so the
+     *   predicate can only ever refuse to skip;
+     * * it is **bounded, not quadratic**: the redefining kinds cut the descent,
+     *   and a hard [IANY_ARG_SCAN_CAP] step cap answers `true` beyond it, which
+     *   also removes the deep-`||`-chain stack hazard (the scan is iterative).
+     */
+    private fun spineIanyArgSubtreeMayRead(root: Node): Boolean {
+        val r = spineIanyArgScanCore(root)
+        if (IanySections.mode != IanySections.OFF) {
+            IanySections.armPredSteps += spineIanyArgScanSteps.toLong()
+        }
+        return r
+    }
+
+    private fun spineIanyArgScanCore(root: Node): Boolean {
+        val stack = spineIanyArgScan
+        stack.clear()
+        stack.add(root)
+        var steps = 0
+        while (stack.isNotEmpty()) {
+            if (++steps > IANY_ARG_SCAN_CAP) {
+                spineIanyArgScanSteps = steps
+                if (IanySections.mode != IanySections.OFF) IanySections.armPredCapped++
+                return true
+            }
+            val n = stack.removeAt(stack.size - 1)
+            when ((n as NodeBase).kindId) {
+                // ── the reader set ────────────────────────────────────────────
+                NodeKind.ARROW_FUNCTION, NodeKind.FUNCTION_EXPRESSION,
+                NodeKind.OBJECT_LITERAL_EXPRESSION -> {
+                    spineIanyArgScanSteps = steps
+                    return true
+                }
+                // ── arms that INHERIT the state — descend ─────────────────────
+                NodeKind.PARENTHESIZED_EXPRESSION ->
+                    stack.add((n as ParenthesizedExpression).expression)
+                NodeKind.CONDITIONAL_EXPRESSION -> {
+                    n as ConditionalExpression
+                    stack.add(n.whenTrue); stack.add(n.whenFalse)
+                }
+                NodeKind.ARRAY_LITERAL_EXPRESSION ->
+                    for (e in (n as ArrayLiteralExpression).elements) stack.add(e)
+                NodeKind.BINARY_EXPRESSION -> {
+                    n as BinaryExpression
+                    when (n.operator) {
+                        SyntaxKind.BarBar, SyntaxKind.QuestionQuestion -> {
+                            stack.add(n.left); stack.add(n.right)
+                        }
+                        SyntaxKind.AmpersandAmpersand, SyntaxKind.Comma -> stack.add(n.right)
+                        // every other operator's edge defines a null state
+                        else -> {}
+                    }
+                }
+                // ── NO ARM AT ALL: the state stays current below — descend ────
+                NodeKind.AS_EXPRESSION -> stack.add((n as AsExpression).expression)
+                NodeKind.SATISFIES_EXPRESSION -> stack.add((n as SatisfiesExpression).expression)
+                NodeKind.NON_NULL_EXPRESSION -> stack.add((n as NonNullExpression).expression)
+                NodeKind.TYPE_ASSERTION_EXPRESSION ->
+                    stack.add((n as TypeAssertionExpression).expression)
+                NodeKind.SPREAD_ELEMENT -> stack.add((n as SpreadElement).expression)
+                NodeKind.AWAIT_EXPRESSION -> stack.add((n as AwaitExpression).expression)
+                NodeKind.TYPE_OF_EXPRESSION -> stack.add((n as TypeOfExpression).expression)
+                NodeKind.VOID_EXPRESSION -> stack.add((n as VoidExpression).expression)
+                NodeKind.DELETE_EXPRESSION -> stack.add((n as DeleteExpression).expression)
+                NodeKind.PREFIX_UNARY_EXPRESSION ->
+                    stack.add((n as PrefixUnaryExpression).operand)
+                NodeKind.POSTFIX_UNARY_EXPRESSION ->
+                    stack.add((n as PostfixUnaryExpression).operand)
+                NodeKind.PROPERTY_ACCESS_EXPRESSION ->
+                    stack.add((n as PropertyAccessExpression).expression)
+                NodeKind.ELEMENT_ACCESS_EXPRESSION -> {
+                    n as ElementAccessExpression
+                    stack.add(n.expression); stack.add(n.argumentExpression)
+                }
+                NodeKind.TEMPLATE_EXPRESSION ->
+                    for (s in (n as TemplateExpression).templateSpans) stack.add(s.expression)
+                NodeKind.YIELD_EXPRESSION ->
+                    (n as YieldExpression).expression?.let { stack.add(it) }
+                NodeKind.COMMA_LIST_EXPRESSION ->
+                    for (e in (n as CommaListExpression).elements) stack.add(e)
+                // ── stops: no reader can see our state below these ────────────
+                NodeKind.CALL_EXPRESSION, NodeKind.NEW_EXPRESSION,
+                NodeKind.IDENTIFIER, NodeKind.STRING_LITERAL_NODE,
+                NodeKind.NUMERIC_LITERAL_NODE, NodeKind.BIG_INT_LITERAL_NODE,
+                NodeKind.REGULAR_EXPRESSION_LITERAL_NODE,
+                NodeKind.NO_SUBSTITUTION_TEMPLATE_LITERAL_NODE,
+                NodeKind.OMITTED_EXPRESSION, NodeKind.META_PROPERTY -> {}
+                // ── anything unmodelled KEEPS the arm ─────────────────────────
+                else -> {
+                    spineIanyArgScanSteps = steps
+                    return true
+                }
+            }
+        }
+        spineIanyArgScanSteps = steps
+        return false
     }
 
     /** The legacy Parenthesized/Conditional pass-through: (typed, type,

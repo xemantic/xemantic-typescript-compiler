@@ -5216,6 +5216,20 @@ object IanySections {
      */
     var armGateOff: Boolean = false
 
+    /**
+     * Round 800's CALL/NEW argument-edge gate, as a switch (same precedent).
+     *
+     * `true` restores the pre-800 arm: every reached argument of every reached
+     * call runs `calleeParamGivesNoContext` and defines a contextual state, even
+     * when nothing in the argument's subtree can read one. Production is
+     * `false`. Set by `--ianyArgGateOff`.
+     *
+     * Under `--ianySections` the predicate runs in BOTH settings — it is priced
+     * and its verdict counted either way — and this switch decides only whether
+     * it ACTS, so one run of each arm is a like-for-like row read.
+     */
+    var argGateOff: Boolean = false
+
     // ── the EDGE partition (one row per node that has a parent) ───────────────
     /** Childless child of a CALL/NEW parent — the argument edge, whose arm
      *  computes `calleeParamGivesNoContext` (round 737's largest single
@@ -5275,7 +5289,27 @@ object IanySections {
     /** Every other node kind's own arms. */
     const val OWN_OTHER = 14
 
-    const val N = 15
+    // ── ROUND 800: the S_CALL_ARG arm, sub-partitioned INSIDE ─────────────────
+    //
+    // Round 799 left `S_CALL_ARG` as half the residue — 249 ms over 31,575
+    // edges at 7.9 us each — and named its two computations without splitting
+    // them. These three rows are NESTED inside the `S_CALL_ARG` span, so they
+    // ADD boundaries to it: `S_CALL_ARG` is inflated by exactly three boundary
+    // pairs per arm entry when [mode] is [ON], and only the RELATIVE split of
+    // these rows is quoted (round 734's rule: per-section nanos are sound for
+    // relative attribution, never as a production cost model).
+    /** `contextualFnArityForCallArg` + `emitTs7006BeyondCtxArity` — reached only
+     *  for an arrow / function-expression ARGUMENT. */
+    const val A_ARITY = 15
+    /** `calleeParamGivesNoContext` — a callee TYPE resolution, reached only when
+     *  the call's own kind=1 state carries `typed = true`. */
+    const val A_CPGNC = 16
+    /** The candidate gate's own predicate (`spineIanyArgSubtreeMayRead`), run
+     *  for its cost and its verdict and then DISCARDED — this row is what the
+     *  249 ms has to be priced against. */
+    const val A_PRED = 17
+
+    const val N = 18
 
     /** The first and last row of the round-799 `E_SUBTREE` sub-partition. */
     const val S_FIRST = S_CALL_ARG
@@ -5297,13 +5331,42 @@ object IanySections {
         "own : CALL/NEW, all arguments childless",
         "own : CALL/NEW, an argument has a subtree",
         "own : every other kind",
+        "  arg-arm: contextualFnArityForCallArg + emit",
+        "  arg-arm: calleeParamGivesNoContext (callee type)",
+        "  arg-arm: the CANDIDATE PREDICATE (verdict discarded)",
     )
 
     var nanos: LongArray = LongArray(N)
     var calls: LongArray = LongArray(N)
 
+    // ── ROUND 800 census of the CALL/NEW argument arm (deterministic) ─────────
+    /** Arm entries — a reached argument of a reached CALL/NEW. */
+    var armEntries: Long = 0
+    /** Entries whose enclosing kind=1 state has `typed = false`, so the `&&`
+     *  short-circuits and `calleeParamGivesNoContext` is never reached. */
+    var armTypedFalse: Long = 0
+    /** Entries that DO reach `calleeParamGivesNoContext`. */
+    var armCpgnc: Long = 0
+    /** Of those, entries whose CALL node had already resolved its callee for an
+     *  earlier argument in the same file — the per-call REPEAT population. */
+    var armCpgncRepeat: Long = 0
+    /** Entries taking the arrow/fn-expr arity branch. */
+    var armArity: Long = 0
+    /** Entries the candidate predicate reports as having NO reader below. */
+    var armNoReader: Long = 0
+    /** …of which the ones that actually reach `calleeParamGivesNoContext` —
+     *  the only population a gate could recover anything from. */
+    var armNoReaderCpgnc: Long = 0
+    /** Predicate steps (nodes popped), and how often the step CAP was hit
+     *  (a cap hit answers `true`, i.e. it can only refuse to skip). */
+    var armPredSteps: Long = 0
+    var armPredCapped: Long = 0
+
     fun reset() {
         nanos = LongArray(N); calls = LongArray(N)
+        armEntries = 0; armTypedFalse = 0; armCpgnc = 0; armCpgncRepeat = 0
+        armArity = 0; armNoReader = 0; armNoReaderCpgnc = 0
+        armPredSteps = 0; armPredCapped = 0
     }
 
     @Suppress("NOTHING_TO_INLINE")
@@ -5314,7 +5377,10 @@ object IanySections {
 
     fun report(): String = buildString {
         appendLine("== (IANY.1) spineIanyEnterNode attribution ==")
-        val total = nanos.sum()
+        // The round-800 rows are NESTED inside `S_CALL_ARG`, so they are excluded
+        // from the handler total (including them would double-count).
+        var total = 0L
+        for (i in 0..OWN_OTHER) total += nanos[i]
         var subtreeCalls = 0L
         var subtreeNanos = 0L
         for (i in S_FIRST..S_LAST) { subtreeCalls += calls[i]; subtreeNanos += nanos[i] }
@@ -5337,6 +5403,12 @@ object IanySections {
             " $subtreeCalls calls; of that NO-ARM = ${nanos[S_NOARM] / 1_000_000} ms over" +
             " ${calls[S_NOARM]} calls" +
             " = ${if (calls[S_NOARM] == 0L) 0 else nanos[S_NOARM] / calls[S_NOARM]} ns each")
+        appendLine("  round-800 CALL/NEW argument-arm census:")
+        appendLine("    entries=$armEntries  typedFalse=$armTypedFalse  arity=$armArity")
+        appendLine("    cpgnc=$armCpgnc  of which per-call REPEAT=$armCpgncRepeat")
+        appendLine("    predicate says NO READER=$armNoReader" +
+            " (of which reach cpgnc=$armNoReaderCpgnc)" +
+            "  steps=$armPredSteps  capped=$armPredCapped")
     }
 
     fun csv(): String = buildString {

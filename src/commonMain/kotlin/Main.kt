@@ -163,6 +163,12 @@ fun main(args: Array<String>) {
             "--ianyArmGateOff", "--ianyarmgateoff" -> {
                 IanySections.armGateOff = true
             }
+            // (IANY.1) round 800: the CALL/NEW argument-edge gate as a switch —
+            // restores the pre-800 arm (every argument resolves its callee), so
+            // one binary carries both arms of the row read and the grid baseline.
+            "--ianyArgGateOff", "--ianyarggateoff" -> {
+                IanySections.argGateOff = true
+            }
             // (ENGINE.2): the opt-in attribution INSIDE checkPropertyAccessInExpr
             // (level P, recursive) and checkSinglePropertyAccess (level Q). The
             // property-access path is ~16% of a check-only compile — the largest
@@ -543,6 +549,8 @@ private fun printUsage() {
                              equivalence baseline, in the same binary
           --ianyArmGateOff   (IANY.1) restore the pre-799 parent-edge dispatch (the full
                              19-arm `is` chain for every parent kind)
+          --ianyArgGateOff   (IANY.1) restore the pre-800 CALL/NEW argument edge (resolve
+                             the callee for every argument, reader or not)
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
