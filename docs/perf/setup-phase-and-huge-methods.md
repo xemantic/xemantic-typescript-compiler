@@ -656,3 +656,105 @@ git show <pre-split-sha>:src/commonMain/kotlin/NodeWalk.kt > src/commonMain/kotl
 git checkout src/commonMain/kotlin/NodeWalk.kt && ./gradlew compileKotlinJvm
 scripts/ab-interleaved.sh /tmp/xtsc_unsplit build/classes/kotlin/jvm/main 5
 ```
+
+## 11. (JIT.1)(f) — `checkArgumentsAgainstSignatureCore`, 23,890 → an entry plus thirteen helpers
+
+*Round 807.* The largest remaining `Checker` method, and the first split of a
+**loop body** rather than a `when` dispatch.
+
+| function | region of the committed `ArgSections` partition | bytecodes |
+|---|---|---:|
+| `checkArgumentsAgainstSignatureCore` | INFER, L_PARAM, **L_ARGTYPE**, L_PRE, L_WEAK, POST | **7,173** |
+| `caasTailGatesAndRelation` | L_TAILGATE + L_RELATION | 2,792 |
+| `caasNonSimpleParamChecks` | L_NOTSIMPLE | 2,689 |
+| `caasNullishArgGates` | L_NULLISH | 2,386 |
+| `caasObjLitPerPropertyMismatch` | L_OBJLIT, per-property block | 2,061 |
+| `caasArgKindAndIndexSignature` | L_ARGKIND | 1,109 |
+| `caasWalkerArgChecks` | L_WALKERS | 1,057 |
+| `caasTypeParamConstraintArg` | L_TYPEPARAM | 976 |
+| `caasObjectLiteralVsTypeParam` | L_OBJLIT_TP | 952 |
+| `caasObjLitMissingRequired` | L_OBJLIT, missing-required block | 643 |
+| `caasObjLitProtoOverride` | L_OBJLIT, prototype-override block | 564 |
+| `caasObjectLiteralVsObjectParam` | the rest of L_OBJLIT | 456 |
+| `caasPrologueWalkers` | PRO | — |
+| `caasSingleTypeParamWalkers` | PRO2 | — |
+
+Census **15 → 14**. Like (c) and (d) and unlike (b), the split shrank nothing:
+the parts sum to roughly the monolith. Fourth independent confirmation that a
+bytecode count is a THRESHOLD predicate and not a cost model.
+
+**What stays in the entry is chosen from the measured partition, not by size.**
+`L_ARGTYPE` is 56.9% of the function (§ 4 of `argument-check-attribution.md`),
+round 796's exit census says **every** invocation returns from `POST`, and
+`L_PARAM`/`L_PRE`/`L_WEAK` are the per-iteration prologue every argument pays —
+so all six stay inline and only the low-frequency tail moves.
+
+**Two extractions were needed to cross the line, and that is the transferable
+number.** Moving the whole loop tail left the entry at **8,061** — 61 bytecodes
+over. `PRO` and `PRO2` (the eleven `tryEmit*` prologue gates, each an
+`if (…) return`, extracted as two `Boolean`-returning helpers) took it to 7,173.
+A split that lands "just over" is not a failed split; it is one extraction short.
+
+### 11.1 The shape problem this one has and (a)–(d) did not
+
+A `when` arm's only exit is falling off the end. A loop body exits by
+`continue`, `break` and — twice here — a whole-function `return`, and **none of
+the three can cross a function boundary**. Each moved region therefore returns a
+signal (`CAAS_CONTINUE` / `CAAS_BREAK` / `CAAS_RETURN` / `CAAS_NONE`) that the
+entry's call site replays.
+
+Which `continue`/`break` binds to the ARGUMENT loop and which to a nested one is
+the whole correctness question, and it was answered by a **brace-matching parser
+over the string/comment-stripped source**, not by indentation: **31 bind to the
+argument loop** (6 stay in the entry, 25 move), the rest to one of four nested
+`for` loops that move with their bodies. The two bare `return`s are both
+whole-function. One direction of this is compiler-enforced — an outer-binding
+`continue` left unconverted is `break and continue are only allowed inside a
+loop` — the other is not, which is why the parser and not the eyeball.
+
+### 11.2 Equivalence, measured (round 805's five checks)
+
+1. every moved line re-extracted from the NEW file and checked back against
+   HEAD: **twelve contiguous, in-order runs**, identical modulo the dedent;
+2. the entry function **reconstructed** from HEAD with the regions replaced by
+   the call sites: **IDENTICAL, 366 lines**;
+3. accounting closes exactly — HEAD body 1,714 = kept 313 + moved 1,401; new
+   entry 366 = kept 313 + 53 lines of call site;
+4. every `return` enumerated (11 prologue, 2 in-loop, both whole-function);
+5. **cross-boundary values: none.** Every loop-body local is read only inside
+   the region that declares it, so no helper returns a value except the three
+   `Boolean` sub-helpers of the object-literal block.
+
+### 11.3 Discrimination — five of six seams, and the sixth is honestly open
+
+`CaasSplitTest` (20 pins) plus `HugeMethodLimitTest` (+3). Six deliberate
+mistakes were injected TOGETHER, one per helper, and **exactly five of the six
+intended pins failed, and no arm pin did**: the excess-property `CAAS_BREAK`,
+the prototype-override `CAAS_RETURN`, the per-property `CAAS_RETURN`, the
+non-simple `CAAS_CONTINUE`, the TS2345 `CAAS_BREAK`. (A seventh pin — the
+post-loop rest-argument check — also failed, a knock-on of the dropped relation
+`BREAK`, which is the expected coupling and not a false pin.)
+
+**The sixth is NOT discriminated, and re-running the mistake ALONE is what
+established that.** `caasTypeParamConstraintArg`'s trailing `CAAS_CONTINUE`
+dropped by itself leaves every pin GREEN, because `caasNonSimpleParamChecks`'
+own `CAAS_CONTINUE` catches the same argument one helper later. It is a
+**redundant guard on today's code**. The replacement pin written for it
+(`q<T extends string>(t: T); q(1)` reported once, naming the constraint) fires
+only when BOTH signals are lost, and says so in its own comment.
+
+The lesson, which is round 806's with a new mechanism: **a seam pin can be blind
+not because the leak is erased upstream but because a LATER guard makes the same
+decision.** Ablate one mistake at a time, or a combined ablation will credit a
+pin with discrimination it does not have — round 807's first ablation did
+exactly that.
+
+### 11.4 Gate
+
+Suite **13,539 → 13,562 / 0 failures / 3 skipped**; 8-profile grid diffed
+set-for-set BOTH directions against a purpose-built pre-split binary, every
+capture confirmed non-empty and non-vacuous first — **46/46/46/46/46/46/46/94,
+0 added and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **all 20 counters +0.00%**; build warning-clean. **No wall A/B,
+deliberately** — the family is bounded four times over (§§ 4.2, 5.3, 7 and round
+804) and this lands for the threshold.

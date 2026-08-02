@@ -20,6 +20,95 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 807 (2026-08-02) — (JIT.1)(f) LANDED: `checkArgumentsAgainstSignatureCore`, THE
+LARGEST `Checker` METHOD LEFT (23,890 BYTECODES, 3.0x HotSpot's LIMIT), IS AN ENTRY AT
+7,173 PLUS THIRTEEN `caas*` HELPERS. CENSUS 15 -> 14. AND THE ROUND'S TRANSFERABLE RESULT
+IS NOT THE SPLIT — IT IS THAT A COMBINED ABLATION CREDITED A PIN WITH DISCRIMINATION IT
+DOES NOT HAVE, AND ONLY RE-RUNNING THE MISTAKE ALONE FOUND IT.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): 15 over the
+  limit, `checkArgumentsAgainstSignatureCore` 23,890 — the item's number reproduced. Note
+  the item's list was `Checker`-only: the full census also holds
+  `Transformer.transformToCommonJS` 28,991, `TypeScriptCompiler.compileParsedCore` 21,535,
+  `CompilerOptionsKt.applyDirective` 13,694 and the `Checker` constructor 11,298, which no
+  round has claimed. They are now written into the queue item.
+- **THE SPLIT IS A DIFFERENT SHAPE FROM (a)-(d), AND THAT IS THE POINT.** Those four moved
+  `when` ARMS, whose only exit is falling off the end. This moves runs of a **LOOP BODY**,
+  and a loop body exits by `continue`, `break` and — twice — a whole-function `return`;
+  **none of the three can cross a function boundary.** So each moved region hands a SIGNAL
+  back (`CAAS_CONTINUE` / `CAAS_BREAK` / `CAAS_RETURN` / `CAAS_NONE`) that the entry's call
+  site replays. Thirteen helpers, one per contiguous run of the ALREADY-COMMITTED
+  `ArgSections` partition: `caasTailGatesAndRelation` 2,792, `caasNonSimpleParamChecks`
+  2,689, `caasNullishArgGates` 2,386, `caasObjLitPerPropertyMismatch` 2,061,
+  `caasArgKindAndIndexSignature` 1,109, `caasWalkerArgChecks` 1,057,
+  `caasTypeParamConstraintArg` 976, `caasObjectLiteralVsTypeParam` 952,
+  `caasObjLitMissingRequired` 643, `caasObjLitProtoOverride` 564,
+  `caasObjectLiteralVsObjectParam` 456, plus `caasPrologueWalkers` / `caasSingleTypeParamWalkers`.
+- **WHICH `continue`/`break` BINDS TO THE ARGUMENT LOOP IS THE WHOLE CORRECTNESS QUESTION,
+  AND IT WAS ANSWERED BY A PARSER, NOT BY INDENTATION.** A brace matcher over the
+  string/comment-stripped source found **31 outer-binding tokens** (6 stay in the entry, 25
+  move) against four nested `for` loops that move with their bodies, and confirmed both bare
+  `return`s are whole-function. Only ONE direction of a mis-classification is
+  compiler-caught (an outer `continue` left unconverted is a compile error); the other —
+  an INNER token wrongly rewritten to a `return` — compiles and is silently wrong.
+- **TWO EXTRACTIONS WERE NEEDED, AND THE FIRST NUMBER IS THE USEFUL ONE.** Moving the whole
+  loop tail left the entry at **8,061 — 61 bytecodes OVER the limit**. Extracting `PRO` and
+  `PRO2` (the eleven `tryEmit*` prologue gates, each an `if (...) return`, as two
+  `Boolean`-returning helpers) took it to **7,173**. A split that lands just over is one
+  extraction short, not a failed split; budget for a second pass.
+- **What stays in the entry was chosen from the measured partition, not by size:**
+  `L_ARGTYPE` (56.9% of the function per (CALL.2)), `L_PARAM`/`L_PRE`/`L_WEAK` (the
+  per-iteration prologue every argument pays) and `POST`, which round 796's exit census says
+  every invocation returns from.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** twelve contiguous
+  in-order runs re-extracted and diffed against HEAD; the entry function RECONSTRUCTED from
+  HEAD with the regions replaced by call sites — **IDENTICAL at 366 lines**; accounting
+  closing exactly (HEAD body 1,714 = kept 313 + moved 1,401; entry 366 = 313 + 53);
+  every `return` enumerated; and **no cross-boundary value at all** — every loop-body local
+  is read only inside the region that declares it, so only the three `Boolean` sub-helpers
+  of the object-literal block return anything.
+- **THE LESSON, AND IT COST THE ROUND ITS LAST HOUR.** Six deliberate mistakes were injected
+  TOGETHER, one per helper. Five of the six intended pins failed and no arm pin did — so it
+  LOOKED like full coverage. It was not: the sixth pin (for
+  `caasTypeParamConstraintArg`'s trailing `CAAS_CONTINUE`) had ALSO failed in the combined
+  run only because a DIFFERENT mistake was live at the same time. **Re-run with that mistake
+  ALONE, every pin stays GREEN** — `caasNonSimpleParamChecks`' own `CAAS_CONTINUE` catches
+  the same argument one helper later, so the signal is a REDUNDANT guard with no observable
+  consequence of its own. **Recorded as NOT DISCRIMINATED** in the test class, the perf doc
+  and here. Round 806's law needed one more clause: *a seam pin can be blind not because an
+  ambient reinstall erases the leak upstream, but because a LATER guard makes the same
+  decision — so ablate ONE mistake at a time, or a combined ablation will credit a pin with
+  coverage it does not have.*
+- **WHAT ELSE DID NOT WORK.** (1) A first cut dedented the object-literal sub-helpers by 24
+  instead of 16, putting their bodies at column 0 — harmless to Kotlin, caught by the
+  verifier, but it made the re-extraction check fail in a way that looked like a semantic
+  error. (2) Two long-running `./gradlew jvmTest` invocations were killed by the harness
+  mid-run (one at the foreground 600 s cut-over, one detached but not `disown`ed), each
+  costing a full re-run; the pattern that survives is `nohup setsid ... < /dev/null > log
+  2>&1 &` with a `.done` marker and NO foreground timeout wrapper. (3) The `tsc` profile
+  logged 838,622 ms during materialization (232 LOC/s against ~8,000 for its siblings) and
+  then ran normally in the grid — a contention artifact of running it beside a Kotlin
+  compile, not a property of the profile; do not read a single materialization timing as a
+  measurement.
+- **NO WALL A/B, deliberately** — the family is bounded four times over (rounds 803's
+  falsifier, 804's +0.23% NOISE-DOMINATED, 805's whole-family flag at -1.14%, and 805's
+  emit-mode sizing). This lands for the THRESHOLD: a method over the limit is permanently
+  uncompilable, so its cost cannot improve with load, input size or JVM version.
+- **GATE.** Suite **13,539 -> 13,562 / 0 failures / 3 skipped** (+23: `CaasSplitTest` 20,
+  `HugeMethodLimitTest` +3), python XML parser, whole results dir wiped first. 8-profile
+  grid diffed set-for-set BOTH directions against a purpose-built pre-split binary, every
+  capture confirmed non-empty and non-vacuous first — **46/46/46/46/46/46/46/94, 0 added
+  and 0 removed on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`
+  **all 20 counters +0.00%**. Build warning-clean. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 11.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **14 over the limit**. The next `Checker` targets
+  are `checkVarDeclAssignabilityCore` 19,296 and `checkAssignmentExpressionCore` 18,100 —
+  both STATEMENT sequences, so round 804's recipe applies unchanged and none of this
+  round's signal machinery is needed; `checkSingleCallExpressionTypesCore` 15,567 is third
+  and must keep round 793's `ccetPrologueMayFire` gate in the entry. Ablate one mistake at
+  a time.
+
+
 **Round 806 (2026-08-02) — ROUND 805's OWED ABLATION PAID, AND ITS EXPECTATION WAS WRONG:
 ONE SEAM PIN, NOT TWO, DISCRIMINATED — THE OTHER WAS BLIND BY CONSTRUCTION AND IS NOW FIXED.
 AND (JIT.1)(d) LANDED FOR `ccetSpineEnter` (8,686 -> an entry at 2,474 plus three arm
@@ -791,100 +880,6 @@ Landed: the sub-partition + a provably-free dispatch pre-gate worth ~55 ms (0.2%
   `docs/perf/implicit-any-attribution.md` §§ 9–12; `docs/perf/spine-leave-attribution.md`
   § 7 carries the re-measured (SPINE.1) closure.
 
-**Round 798 (2026-08-02) — (IANY.1) THE MAP WAS RE-DERIVED FIRST, AND IT NAMED ITS OWN
-TARGET: `spineIanyEnterNode` — the ONE handler of round 732's big six that no attribution
-round had ever opened — carries 1,031 ms, and 42% of it defines a contextual state that
-NOTHING CAN READ. Gated: 320 ms (1.1%), `getTypeOfExpression` calls −7.63%, grid
-46x7/94 with 0 added and 0 removed BOTH directions, `--partitionCheck 2` EQUIVALENT.
-Round 797's two leads are both DEAD ON ARITHMETIC (147 ms and 99 ms) and are recorded
-as such rather than worked.**
-
-- **STEP 1 — THE LIVE MAP, RE-DERIVED AT HEAD (median of 3 probe-free `--passTiming`
-  runs) AND CORRECTED IN `docs/ARCHITECTURE-RETHINK.md` § 0, which now has a 798
-  column.** What MOVED since round 758: **flow narrowing 71,414 → 17,851 walks (−75%)
-  for 2,290 → 1,158 ms (−49%)** — rounds 736/755/790/796 — plus `getTypeOfExpression`
-  calls −8.5% and `spineLeaveNode` −16.7%. What did NOT: `spineEnterNode`, the ~400
-  tail passes (3,140 ms = 10.7% of the compile), the node count, and the whole per-kind
-  concentration (CALL_EXPRESSION 17.1% of the spine over 6.1% of the nodes; the five
-  statement anchors 38% over 10.0%; IDENTIFIER 9.3% over 44.5%). **The wall did not
-  follow the counters** (29.3 s here vs ~26.5 s recorded at 758) — a statement about the
-  box and the probe load, not the compiler, and exactly why COST.1 exists.
-- **THE TWO LEADS, ADJUDICATED BY ARITHMETIC RATHER THAN BY A ROUND.** (A)
-  `getTypeOfExpression` on PropertyAccess + Call arguments is **147 ms = 0.50%**, and it
-  is the cost of typing a composite argument rather than waste — a subset of the row
-  round 797 already bounded, inside regions closed by round 737 and rounds 789–792. (B)
-  the 8,574 arguments typed to `any` and discarded are **99 ms = 0.34%** with a
-  recoverable part of ZERO (nothing can know a type is `any` without computing it). Both
-  are below half a noise band; neither was worth a round, and saying so IS the answer
-  the item wanted.
-- **THE TARGET THE MAP NAMED.** Five of round 732's six biggest handlers have been
-  opened; `spineIanyEnterNode` (the round-532 migration of `checkImplicitAnyParameters`,
-  a DOWNWARD-CONTEXT walker) had not, and still measures **1,063 ms raw / 1,031 ms net**
-  over all 856,962 nodes.
-- **THE PROPOSITION, AND WHY IT IS NOT A GUESS.** `spineIanyCtx` has no reader outside
-  its own family, and every reader sits INSIDE the subtree the state was defined for. So
-  a state defined for a CHILDLESS child (`forEachChild` visits nothing for IDENTIFIER /
-  STRING_LITERAL_NODE / NUMERIC_LITERAL_NODE) can never be read, and neither can a
-  CALL's own `kind = 1` state when every argument is childless — its `typed` flag is
-  consulted ONLY by the argument edges, which is exactly the population the first gate
-  skips. **The two gates are COUPLED**, and the call's FRAME is still pushed either way
-  because it shadows an enclosing state for the CALLEE's subtree. **The sibling
-  assignment arm has applied this reasoning since round 472** (*"Resolve the LHS type
-  ONLY when the RHS can consume a fn context"*) and never generalised it: round 783's
-  debt with a named creditor, collected.
-- **MEASURED, BOTH ARMS TWICE ON ONE BINARY, WITH AN IDENTICAL BOUNDARY COUNT.** The
-  probe takes two spans per node and classifies the ROW AFTER the span closes, so its
-  boundary count is a function of the node count alone — round 793's correction does not
-  apply to a before/after read of its rows. Skippable rows **473/478 → 45/47 ms** (429
-  removed), but **110 ms REAPPEARS** in the surviving population — round 788's law to
-  the letter, because a childless argument used to be the first to type the callee and a
-  sibling with a subtree now pays for the same cached resolution. **The honest prize is
-  the handler total: 1,102/1,080 → 789/753, Δ = 320 ms against a within-arm spread of
-  22/36 (8.9x) = ~1.1%.** Deterministic confirmation: `typeOfExpr.calls` **−7.63%**
-  (649,410 → 599,880), distinct −5.30%, `globals.lookups` −4.39%, misses −4.42%.
-  **What ROSE**: `typeNode.bypassed` +0.11% and `narrow.walks` by exactly **2 walks** —
-  the round-754/778 resolution-ORDER effect, inside tolerance and reported, not smoothed.
-  Baseline rebased in the landing commit.
-- **NO WALL-CLOCK A/B, DELIBERATELY.** 1.1% IS the warm band, not well above it, and
-  round 788's law makes a C2-compiled saving a smaller fraction of a warm run still.
-  Rounds 794/795/796 declined on the same ground; the counters decide.
-- **EQUIVALENCE.** 8-profile grid, gated vs `--ianyGateOff` (the pre-798 path in the
-  SAME binary, round 794's precedent): **46/46/46/46/46/46/46/94, 0 added and 0 removed
-  BOTH directions on every profile**; `--partitionCheck 2` **EQUIVALENT — 46**; corpus
-  suite **13,449 / 0 / 3** (+8 pins). The one arm carrying state ACROSS a skipped edge —
-  `spineIanyVarDeclEnter`'s `spineIanyPendingAnnDecl` stash — is unobservable because its
-  consumer's test is an IDENTITY against its own declarator and every declarator rewrites
-  the stash; pinned rather than argued.
-- **PINS: 8 new (`IanyGateTest`), 4 DISCRIMINATING, and the SECOND ablation is a NULL
-  RESULT worth more than the first.** Fault A (the gate stops testing childlessness, so
-  it refuses every non-scope-push edge) fails 4 pins — the equivalence pin, the
-  contextual-arrow pin, the object-literal-method pin and the declarator-stash pin.
-  **Fault B (the scope-push exclusion removed) is caught by NOTHING**: 0 pins, and the
-  compiler profile stays byte-identical although the excluded population is REACHED
-  11,032 times per compile (the probe's own row). The exclusion is kept regardless,
-  because `pushImplicitAnyScope` is an observable MUTATION rather than a state definition
-  — it is unsound to drop BY ARGUMENT even where no instrument we have can see it, and
-  it costs 1 ms. Whether the 13k-baseline corpus sees it (round 792's rule: the only
-  instrument that sees shapes tsc's sources lack) was NOT measured — a lead, recorded.
-  The harness was COMMITTED BEFORE the gate and before either ablation (law 5), so both
-  reverts were a scoped `git checkout`.
-- **WHAT DID NOT WORK.** The IIFE pin's first form asserted that `((v) => v)("s")`
-  reports TS7006 for `v`. **It does not, on a WORKING binary** — round 694's
-  IIFE-argument contextual typing supplies the parameter type — so the pin failed against
-  a correct gate, exactly round 797's failure one round later. Restated as the
-  equivalence it was written to defend (the same source under both settings of
-  `IanySections.gateOff` must give the same diagnostics), which is strictly stronger.
-  Also: the first background measurement battery was killed mid-run by the harness while
-  two nested wait-loops were outstanding, costing ~15 minutes — run one wait, not two.
-- **WHAT IS LEFT IN THE HANDLER, for whoever takes it next.** ~770 ms probed, **63% of it
-  in ONE row** (`edge: child with a subtree`, 497 ms over 451,292 calls). Extending the
-  gate means answering *"can this subtree read a `kind = 0` state?"*, which is NOT a
-  one-kind test — the state propagates through paren/conditional/logical-binary/
-  array-literal/object-literal edges AND through every parent kind with no arm at all
-  (`AsExpression`, `NonNullExpression`, …), so a conservative subtree scan is quadratic
-  under nesting. Price the scan against the ~500 ms that remains, not against the 320 ms
-  this round removed.
-- Full derivation: `docs/perf/implicit-any-attribution.md`.
 
 
 
@@ -1023,11 +1018,41 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     `checkDuplicateDeclarations` 12,935, `tryInferSingleTypeParamFromArgs` 11,930,
     `checkIndexSigInStatement` 10,928, `access$checkBigintPropertyNames$emit` 10,339,
     `checkReturnAssignabilityCore` 9,743.
-  - **(c) The three remaining assignability/call cores** —
-    `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
-    `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.
-    Each already has a committed section partition from rounds 787–797, which IS a split
-    plan. One method per commit.
+  - [x] **(f) DONE round 807 — `checkArgumentsAgainstSignatureCore` 23,890 → an entry at
+    7,173 plus THIRTEEN `caas*` helpers (456–2,792), one per contiguous run of the
+    committed `ArgSections` partition; census 15 → 14.** **First split of a LOOP BODY, and
+    that is the transferable part**: a `when` arm exits only by falling off the end, a loop
+    body exits by `continue`, `break` and a whole-function `return`, none of which crosses a
+    function boundary — so each region returns a signal (`CAAS_CONTINUE`/`CAAS_BREAK`/
+    `CAAS_RETURN`/`CAAS_NONE`) the entry replays. Which token binds to the ARGUMENT loop and
+    which to a nested one was decided by a **brace-matching parser over the
+    string/comment-stripped source** (31 bind to the argument loop, 25 of them inside moved
+    regions; both bare `return`s are whole-function) — indentation is not evidence, and only
+    one direction of the mistake is compiler-caught. The hot rows stay inline per the
+    measured partition: `L_ARGTYPE` (56.9% of the function), plus `L_PARAM`/`L_PRE`/`L_WEAK`
+    and the `POST` row round 796's exit census says every invocation returns from.
+    **Two extractions were needed:** moving the loop tail alone left the entry at **8,061**,
+    61 bytecodes over, and `PRO`+`PRO2` (the eleven `tryEmit*` prologue gates) took it to
+    7,173 — a split that lands "just over" is one extraction short, not a failed split.
+    Equivalence by round 805's five checks, all green (entry reconstruction IDENTICAL at 366
+    lines; **no cross-boundary value at all**). Pins `CaasSplitTest` (20) +
+    `HugeMethodLimitTest` (+3). **Discrimination: five of six seams, and the sixth is
+    recorded OPEN** — `caasTypeParamConstraintArg`'s trailing `CAAS_CONTINUE` dropped ALONE
+    leaves every pin green, because `caasNonSimpleParamChecks`' own `CAAS_CONTINUE` catches
+    the same argument one helper later; it is a redundant guard on today's code. Full
+    derivation: `docs/perf/setup-phase-and-huge-methods.md` § 11.
+  - **(c) The two remaining assignability cores and the call core** —
+    `checkVarDeclAssignabilityCore` 19,296, `checkAssignmentExpressionCore` 18,100,
+    `checkSingleCallExpressionTypesCore` 15,567 (round 807 took
+    `checkArgumentsAgainstSignatureCore` — see (f)). Each already has a committed section
+    partition from rounds 787–797, which IS a split plan. One method per commit. **Two of
+    the three are `Core` functions whose bodies are STATEMENT sequences, not loops, so (b)'s
+    recipe applies; `checkSingleCallExpressionTypesCore` carries the round-793
+    `ccetPrologueMayFire` gate and must keep it in the entry.** The non-`Checker` tail is
+    also still open and was never in this item's list: `Transformer.transformToCommonJS`
+    28,991, `TypeScriptCompiler.compileParsedCore` 21,535, `Transformer.transformClassBody`
+    16,233, `CompilerOptionsKt.applyDirective` 13,694, the `Checker` constructor 11,298,
+    `access$checkBigintPropertyNames$emit` 10,339, `Transformer.transform` 8,934.
   - **(d) The tail of the list** — `checkDuplicateDeclarations` 12,935,
     `tryInferSingleTypeParamFromArgs` 11,930, `checkIndexSigInStatement` 10,928,
     `access$checkBigintPropertyNames$emit` 10,339, `checkReturnAssignabilityCore` 9,743,

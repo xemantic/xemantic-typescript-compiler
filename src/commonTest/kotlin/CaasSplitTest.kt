@@ -63,11 +63,22 @@ import kotlin.test.Test
  *   conformance claims: if the suppression is ever removed on purpose, restate
  *   them, do not delete them.
  *
- * Two helpers have no arm pin of their own, and that is recorded rather than
- * papered over: `caasPrologueWalkers` and `caasSingleTypeParamWalkers` hold the
- * eleven `tryEmit*` gates whose shapes are corpus-unique generic-inference
- * fixtures; they are covered by the generated corpus suite and by the 8-profile
- * grid, not from here.
+ * **What is NOT covered, stated plainly.** Two helpers have no arm pin of their
+ * own: `caasPrologueWalkers` and `caasSingleTypeParamWalkers` hold the eleven
+ * `tryEmit*` gates whose shapes are corpus-unique generic-inference fixtures;
+ * they are covered by the generated corpus suite and the 8-profile grid, not
+ * from here. And ONE SEAM IS NOT DISCRIMINATED: `caasTypeParamConstraintArg`'s
+ * trailing `CAAS_CONTINUE`. Dropping it alone was ablated and every pin stayed
+ * GREEN, because `caasNonSimpleParamChecks`' own `CAAS_CONTINUE` catches the
+ * same argument one helper later — so on today's code that signal is a
+ * REDUNDANT guard with no observable consequence of its own.
+ *
+ * Round 807's ablation record, for the next agent: six deliberate mistakes were
+ * injected together (each helper's signal dropped in turn) and **five of the six
+ * intended pins failed and no other arm pin did** — excess-property BREAK,
+ * proto-override RETURN, per-property RETURN, non-simple CONTINUE, relation
+ * BREAK. The sixth (the type-parameter CONTINUE) is the undiscriminated one
+ * above.
  */
 class CaasSplitTest {
 
@@ -241,11 +252,35 @@ class CaasSplitTest {
     // ------------------------------------------- caasTypeParamConstraintArg
 
     @Test
-    fun `type-parameter seam - an unconstrained type-parameter parameter CONTINUES past the relation`() {
-        // Equivalence pin, not a conformance claim: a bare `Type.TypeParam`
-        // target is REJECTED by this relation for a single-type source, so
-        // losing this helper's CAAS_CONTINUE turns every call of an
-        // unconstrained generic into a TS2345.
+    fun `type-parameter path - a constraint violation is reported ONCE, naming the constraint`() {
+        // NOT a seam pin for `caasTypeParamConstraintArg` alone, and that is a
+        // MEASUREMENT, not a caveat. Dropping this helper's trailing
+        // CAAS_CONTINUE by itself changes NOTHING on any fixture tried: the
+        // argument simply falls into `caasNonSimpleParamChecks`, whose own
+        // CAAS_CONTINUE catches it. Only when BOTH are dropped does the argument
+        // reach the general relation and get reported a second time, naming the
+        // bare type parameter ('T') beside the constraint ('string') — which is
+        // what this pin sees. The trailing CONTINUE is therefore a REDUNDANT
+        // guard on today's code, and no pin can discriminate it on its own.
+        val d = diagnose(
+            """
+            declare function q<T extends string>(t: T): void
+            q(1)
+            """
+        )
+        assert(d.count { it.code == 2345 } == 1)
+        assert(d.any {
+            it.code == 2345 && it.message == "Argument of type 'number' is not assignable to parameter of type 'string'."
+        })
+        assert(d.none { it.message.endsWith("parameter of type 'T'.") })
+    }
+
+    @Test
+    fun `type-parameter arm - an unconstrained type-parameter parameter accepts any argument`() {
+        // NOT a seam pin, and recorded as such: dropping the helper's trailing
+        // CAAS_CONTINUE leaves this GREEN (measured on an ablated binary),
+        // because a bare `Type.TypeParam` target is accepted downstream anyway.
+        // It pins the behaviour, not the signal.
         val d = diagnose(
             """
             declare function r<T>(t: T): void
