@@ -5848,8 +5848,16 @@ class Checker(
         // explains every downstream "unknown name" the missing lib would produce.
         pass("checkLibOption") { checkLibOption() }
         // 0. Merge built-in type declarations into globals (before user files)
-        mergeSymbolTable(globals, libGlobals)
+        // (SETUP.1, round 802: the ~15 statements between here and the first
+        // `if (!declarationOnly)` pass are the SETUP phase — they used to be the
+        // whole of `--passTiming`'s unattributed `outside-pass` row. Each is now
+        // wrapped in its own `init:*` pass, which makes the partition exhaustive
+        // BY CONSTRUCTION: `outside-pass` is the residue and must stay ~0. The
+        // wrappers are ~15 extra lambda invocations per compile when
+        // PassTiming.enabled is false — see the `pass` KDoc.)
+        pass("init:mergeLibGlobals") { mergeSymbolTable(globals, libGlobals) }
         // 0b. Wire globalArrayType from built-in lib (if Array was parsed)
+        pass("init:wireGlobalArrayTypes") {
         globals["Array"]?.let { arraySym ->
             if (arraySym.flags.hasAny(SymbolFlags.Interface)) {
                 val arrayType = getDeclaredTypeOfClassOrInterface(arraySym)
@@ -5868,12 +5876,13 @@ class Checker(
                 globalReadonlyArrayType = roType
             }
         }
+        }
         // 0d. 17.33: collect UMD globals from `export as namespace X;` in .d.ts
         // files + module-file set for TS2304 → TS2686 upgrade. Runs BEFORE the
         // step-1 merge since INV.3(d): [umdGlobalNames] feeds the merge's
         // keep-predicate ([moduleLocalContributesGlobally]) — the misparsed
         // `export as namespace X` namespace must keep merging globally.
-        collectUmdGlobalsAndModuleFiles()
+        pass("init:collectUmdGlobalsAndModuleFiles") { collectUmdGlobalsAndModuleFiles() }
         // 0e. INV.3(d): names with a legitimate NON-module global meaning — lib
         // globals (= the step-0 merge's key set) + script-file locals. A module
         // local colliding with one of these is the SHARED class: its merge is
@@ -5881,10 +5890,12 @@ class Checker(
         // importers whose barrel aliases the general resolver cannot follow —
         // retiring SHARED names is a LATER leg (needs per-file resolution at
         // every lib-name consumer). Only MODULE-ONLY names retire in this leg.
+        pass("init:mergeSharedKeepNames") {
         mergeSharedKeepNames = HashSet<String>(globals.keys).also { keep ->
             for (result in binderResults) {
                 if (!isModuleFile(result.sourceFile.statements)) keep.addAll(result.locals.keys)
             }
+        }
         }
         // 1. Merge file-level symbols into globals — INV.3(d): a MODULE file's
         // MODULE-ONLY top-level locals (no lib/script/global-contribution
@@ -5898,6 +5909,7 @@ class Checker(
         // misparsed `export as namespace X` UMD namespace. Script files (incl.
         // ambient .d.ts without module syntax) keep the full merge — their
         // locals ARE the global namespace.
+        pass("init:mergeFileLocalsIntoGlobals") {
         for (result in binderResults) {
             if (isModuleFile(result.sourceFile.statements)) {
                 for ((name, symbol) in result.locals) {
@@ -5908,6 +5920,7 @@ class Checker(
             } else {
                 mergeSymbolTable(globals, result.locals)
             }
+        }
         }
         // 1a4 (round 471; the round-445 conflatedInterfaceFiles ecology is deleted —
         // round 513, INV.3(d)(v)): names of top-level interfaces declared in ANY module
@@ -5921,7 +5934,7 @@ class Checker(
         // position-based and COLLIDES across files, so two codefix files'
         // identically-positioned `Info | undefined` annotations would share one
         // cached resolution (a cross-file leak the old conflated-ref bypass guarded).
-        run {
+        pass("init:moduleTypeNameIndex") {
             val names = HashSet<String>()
             val typeNameFiles = HashMap<String, MutableSet<String>>()
             for (result in binderResults) {
@@ -5946,23 +5959,24 @@ class Checker(
         // (snapshot the pre-augmentation key set so the per-file visibility
         // model can tell augmentation-ADDED names — legitimately global —
         // from module-file leaks).
-        val preAugmentationGlobalsKeys: Set<String> = HashSet(globals.keys)
-        mergeModuleAugmentations()
+        var preAugmentationGlobalsKeys: Set<String> = emptySet()
+        pass("init:snapshotPreAugGlobalKeys") { preAugmentationGlobalsKeys = HashSet(globals.keys) }
+        pass("init:mergeModuleAugmentations") { mergeModuleAugmentations() }
         // 1b2. INV.3(b)(ii): compute the per-file visibility sets now that the
         // membership of [globals] has settled (steps 0/1/1b) — feeds the
         // [globalsForFile] conflation gate always, and installs the INV.3(a)
         // lookup classifier on top when instrumentation is on.
-        computePerFileVisibility(preAugmentationGlobalsKeys)
+        pass("init:computePerFileVisibility") { computePerFileVisibility(preAugmentationGlobalsKeys) }
         // 1c. 17.32a: build per-file scope tables (NOT YET CONSUMED — pure infra
         // foundation for future Blocker #3 substeps).
-        buildPerFileScopes()
+        pass("init:buildPerFileScopes") { buildPerFileScopes() }
         // (1d moved to 0d — before the step-1 merge — for the INV.3(d) keep-predicate.)
         // 2. Compute all enum member values
-        computeAllEnumValues()
+        pass("init:computeAllEnumValues") { computeAllEnumValues() }
         // 3. Track import references across all files
-        trackAllImportReferences()
+        pass("init:trackAllImportReferences") { trackAllImportReferences() }
         // 3b. Build per-file type maps for file-level declarations
-        buildFileLocalTypeMaps()
+        pass("init:buildFileLocalTypeMaps") { buildFileLocalTypeMaps() }
 
         // For declarationOnly mode, only run class strict-mode checks (TS1210) plus
         // name-resolution (TS2304/TS2552/…). B95g (round 82): emitDeclarationOnly still
@@ -5970,6 +5984,7 @@ class Checker(
         // undefined → TS2304) — checkUnresolvedNames is a self-contained name-resolution
         // walker (no TS6131-style unused FPs that the broader declaration-only mode avoids).
         if (declarationOnly) {
+            pass("init:declarationOnlyDispatch") {
             checkClassStrictModeIdentifiers()
             checkUnresolvedNames()
             // B520: JSDoc @typedef/@property type-name resolution (TS2304/TS2552) is a
@@ -5996,6 +6011,7 @@ class Checker(
             // import-type/unresolved-generic), so it is FP-safe under declarationOnly.
             if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
                 checkPropertyInitialization()
+            }
             }
         }
 
@@ -6027,6 +6043,7 @@ class Checker(
         // corpus shape; our consumers never walk these references otherwise). After
         // the first trip the container is disabled, so the whole file costs ONE
         // 2000-step walk (the wrapper's pre-check skips the rest).
+        pass("init:evolvingArrayUseSiteWalks") {
         for (res in binderResults) {
             if (isDtsFile(res.sourceFile.fileName)) continue
             val autoArrayNames = res.sourceFile.statements
@@ -6053,6 +6070,7 @@ class Checker(
             } finally {
                 currentFlowGraph = null
             }
+        }
         }
         // 5x. The SET-based definite-assignment pass (TS2454) + its two sibling
         // flow passes moved to the check-spine slot (INV.4(d) walker 5, round
@@ -7875,15 +7893,18 @@ class Checker(
         // Approximation vs tsc: tsc keeps a TS2454 reported BEFORE the trip point within
         // the same container (single in-order pass); we drop those too — observable only
         // on synthetic deep-CFG files (zero trips on the corpus and tsc's own sources).
+        pass("init:flowDisabledTs2454Retraction") {
         if (flowDisabledRanges.isNotEmpty()) {
             diagnostics.removeAll { d ->
                 d.code == 2454 && d.start != null &&
                     flowDisabledRanges[d.fileName]?.any { r -> d.start in r } == true
             }
         }
+        }
         // (M3.0-gap-3 B1) Drop a return-path engine TS2322 whose position a dedicated pin
         // walker also reported — see [tpTargetReturnDiags]. Identity-keyed and conditional
         // on an actual duplicate, so a diagnostic alone at its position always survives.
+        pass("init:tpTargetReturnDedup") {
         for (d in tpTargetReturnDiags) {
             val samePosition = diagnostics.count {
                 it.code == 2322 && it.fileName == d.fileName && it.start == d.start
@@ -7892,6 +7913,7 @@ class Checker(
                 val idx = diagnostics.indexOfFirst { it === d }
                 if (idx >= 0) diagnostics.removeAt(idx)
             }
+        }
         }
         } // end if (!declarationOnly)
         PassTiming.noteInitEnd()
