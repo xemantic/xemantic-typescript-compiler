@@ -3902,7 +3902,31 @@ object FrontEnd {
     /** Declaration (`.d.ts`) emit per program file — INSIDE [POST]. */
     const val DECL_EMIT = 11
 
-    const val N = 12
+    // ---- (FRONT.2) round 801 — the three components of `Binder.bind`, INSIDE
+    // [BIND]. `bind()` is literally three statements, so this partition is
+    // exhaustive by construction and its boundary cost is 3 timestamp pairs per
+    // FILE (78 files = 234 pairs, ~21 us against a ~1,550 ms row) — the first
+    // partition in this arc with no boundary-cost caveat at all.
+
+    /** `bindStatements` — the conventional top-level declaration bind. INSIDE [BIND]. */
+    const val BIND_DECL = 12
+    /** `bindLexicalScopes` — the INV.2(c) whole-tree scope walk. INSIDE [BIND]. */
+    const val BIND_LEX = 13
+    /** `FlowGraphBuilder().build` — whole-tree flow-graph construction. INSIDE [BIND]. */
+    const val BIND_FLOW = 14
+
+    // ---- (FRONT.2) level 2 — the three B464 closure-start collectors, INSIDE
+    // [BIND_FLOW]. They run only where a closure's FlowStart is minted, so the
+    // boundary count is 3 per CLOSURE, not per node.
+
+    /** `collectReassignedNamesInRange` — the B464 text scan + its result set. */
+    const val FLOW_REASSIGN = 15
+    /** `collectClosureLocalNames` — params + body-declared names of one closure. */
+    const val FLOW_LOCALNAMES = 16
+    /** `collectEnclosingVarDecls` — the enclosing function body's `var` decls. */
+    const val FLOW_VARDECLS = 17
+
+    const val N = 18
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -3917,6 +3941,23 @@ object FrontEnd {
         "  of which Transformer.transform",
         "  of which Emitter.emit",
         "  of which declaration emit",
+        "  of which bindStatements (decls)",
+        "  of which bindLexicalScopes",
+        "  of which FlowGraphBuilder.build",
+        "    B464 collectReassignedNamesInRange",
+        "    B464 collectClosureLocalNames",
+        "    B467 collectEnclosingVarDecls",
+    )
+
+    /**
+     * Display order — the sub-rows print under the phase they decompose, while
+     * the TOTAL is still summed over the disjoint top-level phases only.
+     */
+    private val order: IntArray = intArrayOf(
+        CONFIG, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
+        BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
+        FLOW_REASSIGN, FLOW_LOCALNAMES, FLOW_VARDECLS,
+        CHECK, POST, TRANSFORM, EMIT, DECL_EMIT,
     )
 
     var nanos: LongArray = LongArray(N)
@@ -3930,11 +3971,34 @@ object FrontEnd {
     var parsedReused: Long = 0
     var parsedFresh: Long = 0
 
+    /**
+     * (FRONT.2) census — the POPULATION behind the two whole-tree bind walks, so
+     * their nanos can be read per node rather than per file (round 758's law:
+     * a count of entries is never a measure of the work behind it, and the
+     * converse — a total without its population cannot be compared to anything).
+     */
+    var lexNodePops: Long = 0
+    var flowNodesBuilt: Long = 0
+    var flowGraphsBuilt: Long = 0
+
+    /**
+     * (FRONT.2) level-2 census — the B464 closure-start block. `reassignNames` is
+     * the SUM of the returned set sizes: it is what separates "called often" from
+     * "each call is huge", which per-call nanos alone cannot do. `reassignChars`
+     * is the text actually re-scanned (a cache MISS only).
+     */
+    var closureStarts: Long = 0
+    var reassignNames: Long = 0
+    var reassignScans: Long = 0
+    var reassignChars: Long = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
         filesRead = 0; charsRead = 0
         parsedReused = 0; parsedFresh = 0
+        lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
+        closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0
     }
 
     /** Start a span, or 0 when off. */
@@ -3960,6 +4024,33 @@ object FrontEnd {
         filesRead++; charsRead += chars
     }
 
+    /** (FRONT.2) — one call per file, from `FlowGraphBuilder.build`. */
+    fun addFlowCensus(flowNodes: Long) {
+        if (mode != ON) return
+        flowNodesBuilt += flowNodes
+        flowGraphsBuilt++
+    }
+
+    /** (FRONT.2) — one call per file, from `Binder.bindLexicalScopes`. */
+    fun addLexCensus(nodePops: Long) {
+        if (mode != ON) return
+        lexNodePops += nodePops
+    }
+
+    /** (FRONT.2) — one call per CLOSURE FlowStart, from `FlowGraphBuilder`. */
+    fun addClosureCensus(names: Long) {
+        if (mode != ON) return
+        closureStarts++
+        reassignNames += names
+    }
+
+    /** (FRONT.2) — one call per reassign-scan cache MISS. */
+    fun addReassignScan(chars: Long) {
+        if (mode != ON) return
+        reassignScans++
+        reassignChars += chars
+    }
+
     fun report(): String = buildString {
         appendLine("== (FRONT.1) front-end attribution ==")
         appendLine(
@@ -3969,13 +4060,32 @@ object FrontEnd {
         var total = 0L
         for (s in 0..POST) if (s != READ && s != PREPARSE) total += nanos[s]
         appendLine("phases (disjoint except the two crawl sub-sums): total ${total / 1_000_000} ms")
-        for (s in 0 until N) {
+        for (s in order) {
             val c = calls[s]
             if (c == 0L) continue
             val pct = if (total > 0) nanos[s] * 1000 / total else 0
             appendLine(
                 "  ${names[s].padEnd(38)} ${(nanos[s] / 1_000_000).toString().padStart(6)} ms " +
                     "(${(pct / 10).toString().padStart(3)}.${pct % 10}%) over ${c.toString().padStart(6)} calls"
+            )
+        }
+        if (calls[BIND_FLOW] > 0) {
+            val sub = nanos[BIND_DECL] + nanos[BIND_LEX] + nanos[BIND_FLOW]
+            appendLine(
+                "  bind residue (bind - its three components): " +
+                    "${(nanos[BIND] - sub) / 1_000_000} ms"
+            )
+            appendLine(
+                "  bind census: lexical-walk node pops $lexNodePops, " +
+                    "flow nodes built $flowNodesBuilt, flow graphs $flowGraphsBuilt"
+            )
+            val walk = nanos[BIND_FLOW] -
+                (nanos[FLOW_REASSIGN] + nanos[FLOW_LOCALNAMES] + nanos[FLOW_VARDECLS])
+            appendLine(
+                "  flow census: closure starts $closureStarts, reassigned-name entries " +
+                    "$reassignNames (${if (closureStarts > 0) reassignNames / closureStarts else 0}/closure), " +
+                    "text scans $reassignScans over $reassignChars chars; " +
+                    "walk residue ${walk / 1_000_000} ms"
             )
         }
         val frontEnd = nanos[CONFIG] + nanos[CRAWL] + nanos[PARSE] + nanos[IMPORTS] + nanos[BIND]

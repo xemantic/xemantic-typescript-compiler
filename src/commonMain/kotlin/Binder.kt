@@ -74,9 +74,19 @@ class Binder(private val options: CompilerOptions) {
     fun bind(sourceFile: SourceFile): BinderResult {
         val fileLocals = symbolTable()
         currentScope = fileLocals
+        // (FRONT.2) round 801 — the three components of a bind, partitioned.
+        // Exhaustive by construction (this function is these three statements)
+        // and 3 timestamp pairs per FILE, so unlike every per-node partition in
+        // this arc the boundary cost needs no calibration: 78 files x 3 pairs.
+        val feD = FrontEnd.t()
         bindStatements(sourceFile.statements)
+        FrontEnd.close(FrontEnd.BIND_DECL, feD)
+        val feL = FrontEnd.t()
         val lexicalScopes = bindLexicalScopes(sourceFile, fileLocals)
+        FrontEnd.close(FrontEnd.BIND_LEX, feL)
+        val feF = FrontEnd.t()
         val flowGraph = FlowGraphBuilder().build(sourceFile)
+        FrontEnd.close(FrontEnd.BIND_FLOW, feF)
         return BinderResult(sourceFile, fileLocals, nodeToSymbol, moduleInstanceStates, flowGraph, lexicalScopes)
     }
 
@@ -586,9 +596,14 @@ class Binder(private val options: CompilerOptions) {
         }
 
         pushChildren(sourceFile, root)
+        // (FRONT.2) census — a LOCAL counter, so the walk carries one register
+        // increment and no probe-mode branch; only the hand-off at the end is
+        // conditional. Pops are the walk's real population.
+        var pops = 0L
         while (nodeStack.isNotEmpty()) {
             val node = nodeStack.removeAt(nodeStack.size - 1)
             val scope = scopeStack.removeAt(scopeStack.size - 1)
+            pops++
             when (node) {
                 is FunctionDeclaration -> {
                     // The function's NAME binds into the enclosing fresh scope
@@ -781,6 +796,7 @@ class Binder(private val options: CompilerOptions) {
                 else -> pushChildren(node, scope)
             }
         }
+        FrontEnd.addLexCensus(pops)
         return scopes
     }
 

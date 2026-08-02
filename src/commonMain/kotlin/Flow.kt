@@ -356,6 +356,10 @@ class FlowGraphBuilder {
         reassignScanCache.clear() // per-file text — a reused builder must not serve stale scans
         currentFlow = newStart(sourceFile)
         bindEachStatement(sourceFile.statements)
+        // (FRONT.2) census — `nextId` IS the number of flow nodes minted for this
+        // file; recorded so the BIND_FLOW row can be read per flow node instead
+        // of per file. Behaviour-free when the probe is off.
+        FrontEnd.addFlowCensus(nextId.toLong())
         return FlowGraph(nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList())
     }
 
@@ -904,15 +908,28 @@ class FlowGraphBuilder {
         val enclosing = functionLikeStack.lastOrNull()
         currentFlow =
             if ((container is ArrowFunction || container is FunctionExpression) && enclosing != null) {
+                // (FRONT.2) round 801 — level 2 of the bind partition. Three
+                // spans per CLOSURE (not per node), so the boundary count is
+                // bounded by `closureStarts` and is reported beside them.
+                val feR = FrontEnd.t()
+                val reassigned = collectReassignedNamesInRange(
+                    sourceText, container.pos, enclosing.end,
+                )
+                FrontEnd.close(FrontEnd.FLOW_REASSIGN, feR)
+                val feL = FrontEnd.t()
+                val locals = collectClosureLocalNames(parameters, body)
+                FrontEnd.close(FrontEnd.FLOW_LOCALNAMES, feL)
+                val feV = FrontEnd.t()
+                val varDecls = collectEnclosingVarDecls(enclosing)
+                FrontEnd.close(FrontEnd.FLOW_VARDECLS, feV)
+                FrontEnd.addClosureCensus(reassigned.size.toLong())
                 FlowStart(
                     id = nextId++,
                     container = container,
                     outerFlow = savedFlow,
-                    reassignedAfterNames = collectReassignedNamesInRange(
-                        sourceText, container.pos, enclosing.end,
-                    ),
-                    localNames = collectClosureLocalNames(parameters, body),
-                    enclosingVarDecls = collectEnclosingVarDecls(enclosing),
+                    reassignedAfterNames = reassigned,
+                    localNames = locals,
+                    enclosingVarDecls = varDecls,
                 ).also { closureStarts.add(it) }
             } else {
                 newStart(container)
@@ -969,6 +986,7 @@ class FlowGraphBuilder {
         if (scan == null || scan.start > start) {
             scan = scanReassignedEntries(source, start, hi)
             reassignScanCache[hi] = scan
+            FrontEnd.addReassignScan((hi - start).toLong())
         }
         // First entry with position >= start (positions ascend); all entries are < hi.
         var lo = 0
