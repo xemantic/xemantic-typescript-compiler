@@ -144211,6 +144211,46 @@ interface DataView {
     }
 
     /**
+     * (CALL.6) round 797: the level-S sub-partition's ARGUMENT classifier.
+     *
+     * Probe-only — reached solely from inside `ArgSections.mode == ON`, so it
+     * costs production nothing. It exists because round 796's exit census
+     * localised 69% of the argument-typing time onto ONE `continue` whose
+     * predicate reads the PARAMETER, while the cost being localised belongs to
+     * the ARGUMENT (round 759). Only a classification of the argument itself
+     * can say what that population is.
+     *
+     * `true` / `false` / `null` / `undefined` / `this` all parse as
+     * [Identifier] (Parser.kt's keyword arms), so they are split out — they are
+     * constants with no symbol to resolve and would otherwise inflate the
+     * identifier row with the cheapest arguments in the compile.
+     */
+    private fun argSectionKindOf(arg: Expression): Int = when (arg) {
+        is Identifier -> when (arg.text) {
+            "true", "false", "null", "undefined", "this" -> ArgSections.K_KEYWORD
+            else -> ArgSections.K_IDENT
+        }
+        is PropertyAccessExpression -> ArgSections.K_PROP_ACCESS
+        is ElementAccessExpression -> ArgSections.K_ELEM_ACCESS
+        is CallExpression, is NewExpression -> ArgSections.K_CALL
+        is ArrowFunction -> ArgSections.K_ARROW
+        is FunctionExpression -> ArgSections.K_FN_EXPR
+        is ObjectLiteralExpression -> ArgSections.K_OBJ_LIT
+        is ArrayLiteralExpression -> ArgSections.K_ARRAY_LIT
+        is StringLiteralNode, is NumericLiteralNode, is BigIntLiteralNode,
+        is NoSubstitutionTemplateLiteralNode, is TemplateExpression,
+        is RegularExpressionLiteralNode, is TaggedTemplateExpression ->
+            ArgSections.K_LITERAL
+        is BinaryExpression, is ConditionalExpression, is PrefixUnaryExpression,
+        is PostfixUnaryExpression, is TypeOfExpression, is AwaitExpression ->
+            ArgSections.K_OPERATOR
+        is AsExpression, is NonNullExpression, is ParenthesizedExpression,
+        is TypeAssertionExpression, is SatisfiesExpression ->
+            ArgSections.K_CAST_LIKE
+        else -> ArgSections.K_OTHER
+    }
+
+    /**
      * (CALL.2)(a): the opt-in intra-function attribution boundary. OFF in
      * production — the core is then called directly, with no `try`/`finally`
      * and no bookkeeping. When on, [ArgSections.end] closes whatever section
@@ -144385,6 +144425,12 @@ interface DataView {
             val useCtx = paramType is Type.Object &&
                 (arg is ArrowFunction || arg is FunctionExpression || arg is ObjectLiteralExpression)
             if (useCtx) contextualType = paramType
+            // (CALL.6) the level-S classification. Taken INSIDE the already-open
+            // L_ARGTYPE row, so it adds no boundary — every nanosecond it
+            // attributes is a span the partition was already timing.
+            if (ArgSections.mode == ArgSections.ON) {
+                ArgSections.noteArgKind(argSectionKindOf(arg), useCtx)
+            }
             // 17.67: contextual literal preservation for call args (extends 17.66's
             // var-decl init / assignment-RHS pattern). When the param's type contains
             // literal types and the arg is a literal expression, preserve the literal
@@ -144421,16 +144467,21 @@ interface DataView {
                 // M3.1 (round 429c): a non-null-asserted arg (`readFile(path)!`) types
                 // as its nullish-stripped union (tsc NonNullable) — LOCAL strip only.
                 val ctxApplied = stripNullishForNonNullArg(arg, ctxAppliedRaw)
+                // (CALL.6) round 797: the whole arm chain as ONE sub-measure, so
+                // the argType row is gtoe + literal + chain + a named residue.
+                val chainT = ArgSections.t()
                 // B469: narrow a reference argument by the flow graph. PropertyAccess
                 // args already narrow inside getTypeOfPropertyAccess, but bare Identifier
                 // args do not (getTypeOfIdentifier never consults narrowing), so narrow
                 // them explicitly here. Only Union types can be refined.
-                if (argIsNarrowableRef && ctxApplied is Type.Union) {
+                val chainResult = if (argIsNarrowableRef && ctxApplied is Type.Union) {
                     // (CALL.5)(b) round 796: the already-relates pre-gate — see
                     // [ArgNarrowGate]. Round 764 gave this shape to the enum arm
                     // below and declined to generalise; the debt is re-tested here.
+                    val gateRelT = ArgSections.t()
                     val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
                         checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+                    ArgSections.close(ArgSections.N_GATE_REL, gateRelT)
                     if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
                         ArgNarrowGate.note(ArgNarrowGate.UNION, true, false)
                         ctxApplied
@@ -144535,8 +144586,10 @@ interface DataView {
                     // generalisation of the enum arm's round-764 second chance
                     // to this arm. See [ArgNarrowGate] for why it is
                     // acceptance-preserving and what the census measures.
+                    val gateRelT = ArgSections.t()
                     val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
                         checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+                    ArgSections.close(ArgSections.N_GATE_REL, gateRelT)
                     if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
                         ArgNarrowGate.note(ArgNarrowGate.M34, true, false)
                         ctxApplied
@@ -144574,6 +144627,8 @@ interface DataView {
                     if (refined) n else ctxApplied
                     }
                 } else ctxApplied
+                ArgSections.close(ArgSections.N_ARM_CHAIN, chainT)
+                chainResult
             } finally {
                 if (useCtx) contextualType = savedContextual
             }

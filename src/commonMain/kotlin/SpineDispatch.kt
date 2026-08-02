@@ -1393,16 +1393,33 @@ object ArgSections {
     const val N_NARROW_RELATING = 32
     const val N_NARROW_NONRELATING = 33
 
+    // -- (CALL.6) round 797: the rest of the [L_ARGTYPE] row ------------------
+    /**
+     * The whole narrowing-ARM CHAIN (the `if (union) … else if (never) … else
+     * if (enum) … else if (iface/str/num) … else ctxApplied`), which contains
+     * [N_NARROW], [N_ARGTYPE_REL] and [N_GATE_REL].
+     *
+     * With [N_GET_TYPE_OF_EXPR] and [N_LITERAL] it closes [L_ARGTYPE] to a
+     * SMALL named residue (the contextual install, `argIsNarrowableRef`,
+     * `voidIifeArgType`, `stripNullishForNonNullArg`, the `finally`) — without
+     * it the row's biggest term was a residual, and § 0's history is what a
+     * named residual costs.
+     */
+    const val N_ARM_CHAIN = 34
+
+    /** The (CALL.5)(b) pre-gate's own `checkTypeRelatedTo`, both arms. */
+    const val N_GATE_REL = 35
+
     /** The wrapper's own transition. Probe-only; absent in production. */
-    const val ENTRY = 34
+    const val ENTRY = 36
 
     /** The FIRST empty boundary span of an invocation — not steady state. */
-    const val OVERHEAD_FIRST = 35
+    const val OVERHEAD_FIRST = 37
 
     /** In-situ steady-state empty boundaries; a pessimistic upper bound (round 734). */
-    const val OVERHEAD = 36
+    const val OVERHEAD = 38
 
-    const val N = 37
+    const val N = 39
 
     val names: Array<String> = arrayOf(
         "prologue walkers (10, generic-gated)",
@@ -1439,6 +1456,8 @@ object ArgSections {
         "      - its getTypeOfExpression, exiting",
         "      - its narrowing walks, REACHING",
         "      - its narrowing walks, exiting",
+        "  of which the narrowing ARM CHAIN",
+        "    of which the (CALL.5) pre-gate relation",
         "  wrapper transition (probe-only)",
         "  probe boundary, first of the invocation",
         "  probe boundary (in situ, steady state)",
@@ -1537,6 +1556,74 @@ object ArgSections {
     /** True between [iteration] and the boundary that closes that iteration. */
     var iterOpen: Boolean = false
 
+    // ── (CALL.6) round 797: the level-S sub-partition BY ARGUMENT KIND ────────
+    //
+    // Round 796's exit census localised 69% of the argument-typing time and 81%
+    // of the narrowing onto ONE `continue` (the `!isSimpleCheckableType` block)
+    // and hypothesised — round 759's sentence, never measured — that those
+    // iterations are "arrows and callbacks typed under an installed contextual
+    // type". A row cannot answer that: the exit is a property of the PARAMETER
+    // while the cost is a property of the ARGUMENT, so the population has to be
+    // classified by what the argument IS.
+    //
+    // Like the exit census this adds NO boundary: the classification is a
+    // `when` over the argument node taken INSIDE the already-open [L_ARGTYPE]
+    // row, and every nanosecond it attributes is a span the partition was
+    // already timing. The five totals are printed as partition checks.
+
+    /** The iteration never reached [L_ARGTYPE] (arity / spread / `any` gates). */
+    const val K_NONE = 0
+    const val K_IDENT = 1
+    const val K_KEYWORD = 2
+    const val K_PROP_ACCESS = 3
+    const val K_ELEM_ACCESS = 4
+    const val K_CALL = 5
+    const val K_ARROW = 6
+    const val K_FN_EXPR = 7
+    const val K_OBJ_LIT = 8
+    const val K_ARRAY_LIT = 9
+    const val K_LITERAL = 10
+    const val K_OPERATOR = 11
+    const val K_CAST_LIKE = 12
+    const val K_OTHER = 13
+    const val KINDS = 14
+
+    val kindNames: Array<String> = arrayOf(
+        "(never reached argType)",
+        "Identifier",
+        "true/false/null/undefined/this",
+        "PropertyAccess",
+        "ElementAccess",
+        "Call / New",
+        "ArrowFunction",
+        "FunctionExpression",
+        "ObjectLiteral",
+        "ArrayLiteral",
+        "literal (string/number/template)",
+        "operator (binary/cond/unary/…)",
+        "as / ! / (…) / satisfies",
+        "other",
+    )
+
+    /** Loop iterations whose argument was of each kind (i.e. reached [L_ARGTYPE]). */
+    var kindIters: LongArray = LongArray(KINDS)
+
+    /** …of which installed a CONTEXTUAL type for the argument (`useCtx`). */
+    var kindCtx: LongArray = LongArray(KINDS)
+
+    /** The [L_ARGTYPE] row, [N_GET_TYPE_OF_EXPR] and [N_NARROW], split by kind. */
+    var kindArgType: LongArray = LongArray(KINDS)
+    var kindGtoe: LongArray = LongArray(KINDS)
+    var kindNarrow: LongArray = LongArray(KINDS)
+    var kindNarrowCalls: LongArray = LongArray(KINDS)
+
+    /** Kind × EXIT row: iterations, and the argType nanos they had paid. */
+    var kindExitIters: LongArray = LongArray(KINDS * N)
+    var kindExitArgType: LongArray = LongArray(KINDS * N)
+
+    /** The kind of the argument the running iteration is checking. */
+    var curArgKind: Int = K_NONE
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -1553,7 +1640,27 @@ object ArgSections {
         exitNarrowNanos = LongArray(N)
         exitNarrowCalls = LongArray(N)
         iterOpen = false
+        kindIters = LongArray(KINDS)
+        kindCtx = LongArray(KINDS)
+        kindArgType = LongArray(KINDS)
+        kindGtoe = LongArray(KINDS)
+        kindNarrow = LongArray(KINDS)
+        kindNarrowCalls = LongArray(KINDS)
+        kindExitIters = LongArray(KINDS * N)
+        kindExitArgType = LongArray(KINDS * N)
+        curArgKind = K_NONE
         clearPending()
+    }
+
+    /**
+     * (CALL.6) record the kind of the argument whose type is about to be
+     * computed. Called from inside the already-open [L_ARGTYPE] row, so it adds
+     * no boundary; the classification itself is a `when` over the node.
+     */
+    fun noteArgKind(kind: Int, ctx: Boolean) {
+        curArgKind = kind
+        kindIters[kind]++
+        if (ctx) kindCtx[kind]++
     }
 
     /**
@@ -1565,6 +1672,11 @@ object ArgSections {
         exitArgTypeNanos[cur] += censusArgType
         exitNarrowNanos[cur] += censusNarrow
         exitNarrowCalls[cur] += censusNarrowCalls
+        // (CALL.6) the same close, crossed with the ARGUMENT KIND — this is the
+        // cell that answers "what is the 39% that leaves at L_NOTSIMPLE".
+        kindExitIters[curArgKind * N + cur]++
+        kindExitArgType[curArgKind * N + cur] += censusArgType
+        curArgKind = K_NONE
         censusArgType = 0L
         censusNarrow = 0L
         censusNarrowCalls = 0L
@@ -1625,6 +1737,7 @@ object ArgSections {
             if (cur == L_ARGTYPE) {
                 pendingArgType = d
                 censusArgType = d
+                kindArgType[curArgKind] += d
             } else if (pendingArgType >= 0L && (sec == L_RELATION || sec == L_PARAM)) {
                 flushPending(if (sec == L_RELATION) 0 else 1)
             }
@@ -1660,6 +1773,7 @@ object ArgSections {
                 if (mode == ON && cur == L_ARGTYPE) {
                     pendingArgType = d
                     censusArgType = d
+                    kindArgType[curArgKind] += d
                 }
                 // (CALL.5) the INVOCATION census: `cur` is the row the call
                 // returned from — a prologue `return`, one of the two `return`s
@@ -1690,7 +1804,10 @@ object ArgSections {
         calls[sec]++
         // (AUDIT.2): park it with the iteration's argType span — the exit class
         // is not known for another eleven sections.
-        if (sec == N_GET_TYPE_OF_EXPR) pendingGtoe += d
+        if (sec == N_GET_TYPE_OF_EXPR) {
+            pendingGtoe += d
+            kindGtoe[curArgKind] += d
+        }
     }
 
     /**
@@ -1706,6 +1823,7 @@ object ArgSections {
         nanos[N_NARROW] += d; calls[N_NARROW]++
         pendingNarrow += d; pendingNarrowCalls++
         censusNarrow += d; censusNarrowCalls++
+        kindNarrow[curArgKind] += d; kindNarrowCalls[curArgKind]++
         if (!changed) { nanos[N_NARROW_IDENTITY] += d; calls[N_NARROW_IDENTITY]++ }
         val b = if (d < 10_000L) 0 else if (d < 100_000L) 1 else if (d < 1_000_000L) 2 else 3
         narrowBucketCalls[b]++; narrowBucketNanos[b] += d
@@ -1822,6 +1940,67 @@ object ArgSections {
             appendLine(
                 "  census check: invocations $censusInv vs $invocations" +
                     if (censusInv == invocations) "  EXACT" else "  *** MISMATCH ***"
+            )
+        }
+        var kindTotal = 0L
+        for (k in 0 until KINDS) kindTotal += kindIters[k]
+        if (kindTotal > 0L) {
+            appendLine("-- (CALL.6) LEVEL-S: the argType row split by ARGUMENT KIND (raw ns) --")
+            appendLine(
+                "   ${"kind".padEnd(34)} ${"iters".padStart(7)} ${"ctx".padStart(6)}" +
+                    " ${"argType".padStart(8)} ${"gToExpr".padStart(8)} ${"narrow".padStart(8)}" +
+                    " ${"walks".padStart(6)} ${"ns/iter".padStart(9)}"
+            )
+            for (k in 0 until KINDS) {
+                if (kindIters[k] == 0L && k != K_NONE) continue
+                appendLine(
+                    "   ${kindNames[k].padEnd(34)} ${kindIters[k].toString().padStart(7)}" +
+                        " ${kindCtx[k].toString().padStart(6)}" +
+                        " ${(kindArgType[k] / 1_000_000).toString().padStart(6)} ms" +
+                        " ${(kindGtoe[k] / 1_000_000).toString().padStart(6)} ms" +
+                        " ${(kindNarrow[k] / 1_000_000).toString().padStart(6)} ms" +
+                        " ${kindNarrowCalls[k].toString().padStart(6)}" +
+                        " ${
+                            (if (kindIters[k] > 0) kindArgType[k] / kindIters[k] else 0)
+                                .toString().padStart(9)
+                        }"
+                )
+            }
+            var kIters = 0L; var kArg = 0L; var kGtoe = 0L; var kNar = 0L; var kNarC = 0L
+            for (k in 0 until KINDS) {
+                kIters += kindIters[k]; kArg += kindArgType[k]; kGtoe += kindGtoe[k]
+                kNar += kindNarrow[k]; kNarC += kindNarrowCalls[k]
+            }
+            appendLine(
+                "  partition check: iters $kIters vs argType row ${calls[L_ARGTYPE]}" +
+                    "; argType $kArg vs ${nanos[L_ARGTYPE]}" +
+                    "; gToExpr $kGtoe vs ${nanos[N_GET_TYPE_OF_EXPR]}" +
+                    "; narrow $kNar/$kNarC vs ${nanos[N_NARROW]}/${calls[N_NARROW]}" +
+                    if (kIters == calls[L_ARGTYPE] && kArg == nanos[L_ARGTYPE] &&
+                        kGtoe == nanos[N_GET_TYPE_OF_EXPR] && kNar == nanos[N_NARROW] &&
+                        kNarC == calls[N_NARROW]
+                    ) "  EXACT" else "  *** MISMATCH ***"
+            )
+            appendLine("-- (CALL.6) LEVEL-S: KIND x EXIT ROW (iterations / argType ms) --")
+            for (k in 0 until KINDS) {
+                var any = false
+                for (s in 0 until FIRST_NESTED) if (kindExitIters[k * N + s] != 0L) any = true
+                if (!any) continue
+                val sb = StringBuilder()
+                for (s in 0 until FIRST_NESTED) {
+                    val it0 = kindExitIters[k * N + s]
+                    if (it0 == 0L) continue
+                    sb.append("  [").append(names[s].trim().removePrefix("loop: ")).append("] ")
+                        .append(it0).append(" / ")
+                        .append(kindExitArgType[k * N + s] / 1_000_000).append(" ms")
+                }
+                appendLine("   ${kindNames[k].padEnd(34)}$sb")
+            }
+            var kx = 0L
+            for (i in kindExitIters.indices) kx += kindExitIters[i]
+            appendLine(
+                "  partition check: kind x exit iterations $kx vs $iterations" +
+                    if (kx == iterations) "  EXACT" else "  *** MISMATCH ***"
             )
         }
         appendLine("-- narrowing-walk cost distribution (all three sites) --")
