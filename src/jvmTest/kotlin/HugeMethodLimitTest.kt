@@ -40,9 +40,12 @@ import kotlin.test.fail
  * `-XX:+PrintCompilation` prints no "too large" line (the compile is never
  * *proposed*, so it is never *skipped*; round 802 grepped an 11,796-line log and
  * got 0 hits). `scripts/huge_methods.py` is the whole-program census; this test
- * is the always-on guard for [forEachChild], the traversal primitive every walk
- * in the compiler goes through, which round 802 measured at **9,750 bytecodes**
- * and round 803 split below the limit.
+ * is the always-on guard for the two functions split so far: [forEachChild], the
+ * traversal primitive every walk in the compiler goes through (round 802
+ * measured it at **9,750 bytecodes**, round 803 split it), and
+ * `Checker.checkMemberAccessMissingCore`, which at **46,567 bytecodes** was the
+ * largest method in the compiler and round 789's largest leaf in the compile
+ * (round 804 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -90,6 +93,59 @@ class HugeMethodLimitTest {
         val parts = sizes.filterKeys { it.startsWith("forEachChild") }
         assert(parts.size >= 3)
         assert(parts.values.min() > 500)
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — the ten helpers `checkMemberAccessMissingCore` was
+     * split into. It was **46,567 bytecodes**, 5.8x the limit and the single
+     * largest method in the compiler; round 789 measured it as the largest leaf in
+     * the compile as well.
+     */
+    private val cmamSplitParts = setOf(
+        "cmamCheckLiteralAndNewReceiver",
+        "cmamCheckCallAndAccessReceiver",
+        "cmamGeneralReceiverType",
+        "cmamCheckCastAndNamespaceReceiver",
+        "cmamCheckUnionReceiverNarrowing",
+        "cmamCheckNonIdentifierReceiver",
+        "cmamCheckIdentSymbolTypeGates",
+        "cmamCheckIdentSymbolValueGates",
+        "cmamCheckResolvedObjectType",
+        "cmamEmitMissingProperty",
+    )
+
+    @Test
+    fun `checkMemberAccessMissingCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val core = sizes["checkMemberAccessMissingCore"]
+            ?: fail("checkMemberAccessMissingCore not found in Checker")
+        // Positive control: the parse really did read a large method (it is 6,425
+        // bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(core > 2000)
+        assert(core < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkMemberAccessMissing split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = cmamSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in cmamSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkMemberAccessMissing split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in cmamSplitParts }
+        assert(parts.size == 10)
+        // A "split" that left one part holding everything would clear the limit
+        // test by luck. Measured smallest part: 611 bytecodes.
+        assert(parts.values.min() > 400)
+        // ... and the sum must still be the bulk of the original 46,567, i.e. the
+        // body was MOVED, not deleted.
+        assert(parts.values.sum() > 20000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */

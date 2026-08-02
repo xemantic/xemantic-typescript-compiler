@@ -134597,6 +134597,25 @@ interface DataView {
         }
     }
 
+    /**
+     * (JIT.1)(b) round 804 — THE ENTRY OF A TEN-WAY SPLIT. This function was
+     * 46,567 bytecodes, 5.8x HotSpot's 8,000-byte `HugeMethodLimit`, so HotSpot
+     * never JIT-compiled it: it ran in the interpreter for the whole process
+     * (`docs/perf/setup-phase-and-huge-methods.md` § 3). The split is by
+     * CONTIGUOUS SECTION, along round 789's already-committed level-R partition
+     * boundaries (the `CpaSections.atR` markers), so every `cmam*` helper below
+     * holds one verbatim run of the original body and the execution order is
+     * unchanged. Each helper returns the signal its region used to make with a
+     * bare `return`.
+     *
+     * ROUND 791'S INVARIANT SURVIVES BY CONSTRUCTION: the deferred flow
+     * suppression in [checkMemberAccessMissing] is sound only while this body and
+     * its `tryEmit*` helpers APPEND to `diagnostics` and do nothing else. The
+     * split moves code between methods and introduces no new mutable state -- the
+     * one value that used to cross a section boundary in a local (the display-type
+     * override) is RETURNED rather than stashed in a field, so no save/restore and
+     * no re-entrancy argument is needed. See [cmamGeneralReceiverType].
+     */
     private fun checkMemberAccessMissingCore(
         objectExprIn: Expression,
         propName: String,
@@ -134806,6 +134825,80 @@ interface DataView {
         }
         CpaSections.closeN(CpaSections.N_ID_ENUMRECV, idT2)
 
+        // (JIT.1)(b): R_LITERAL / R_NEW -- the literal and `new` receiver shapes.
+        if (cmamCheckLiteralAndNewReceiver(
+                objectExpr, propName, diagStart, diagLength, source, fileName,
+                ts2576Start, ts2576Length,
+            )) return
+        // (JIT.1)(b): R_CALL / R_PAEA / R_STATIC -- call, member-access and
+        // static-`this` receiver shapes.
+        if (cmamCheckCallAndAccessReceiver(
+                objectExpr, propName, diagStart, diagLength, source, fileName,
+                isThisAccess, enclosingClassType, suggestionKey, ts2576Start, ts2576Length,
+            )) return
+
+        // 16.0: track a display-override type for primitives whose apparent (wrapper)
+        // type is used for property lookup — diagnostic must show the primitive name.
+        CpaSections.atR(CpaSections.R_OT_THIS)
+        var displayTypeOverride: Type? = null
+        val objectType = if (isThisAccess) {
+            if (enclosingClassType == null) return
+            enclosingClassType
+        } else if (objectExpr is ArrayLiteralExpression) {
+            // 16.4: `[1,2,3].NonexistantMethod()` → TS2339 against `number[]`.
+            val rawArr = getTypeOfArrayLiteral(objectExpr)
+            if (rawArr === anyType || rawArr === errorType) return
+            if (rawArr !is Type.Reference || rawArr.target !== globalArrayType) return
+            // Widen literal element types for display: [1,2,3] → number[] (not (1|2|3)[]).
+            val args = rawArr.resolvedTypeArguments
+            if (!args.isNullOrEmpty()) {
+                val widened = args.map { t ->
+                    if (t is Type.Union) {
+                        val ws = t.types.map { getWidenedLiteralType(it) }.distinct()
+                        if (ws.size == 1) ws[0] else getUnionType(ws)
+                    } else getWidenedLiteralType(t)
+                }
+                displayTypeOverride = if (widened == args) rawArr else getOrInternReference(rawArr.target, widened)
+            } else {
+                displayTypeOverride = rawArr
+            }
+            rawArr
+        } else {
+            // (JIT.1)(b): R_OT_PRE .. R_OT_IDENT -- the general receiver-type path.
+            // Returns null where the original block `return`ed from the whole
+            // function, and (objectType, displayTypeOverride) otherwise.
+            val general = cmamGeneralReceiverType(
+                objectExpr, propName, diagStart, diagLength, source, fileName,
+                keySuggestion, suggestionKey, ts2576Start, ts2576Length,
+            ) ?: return
+            displayTypeOverride = general.second
+            general.first
+        }
+        // (JIT.1)(b): R_TYPEGATE .. R_EMIT -- everything downstream of the receiver
+        // type, ending in the emission tail.
+        cmamCheckResolvedObjectType(
+            objectExpr, objectType, displayTypeOverride, propName, diagStart, diagLength,
+            source, fileName, isThisAccess, emitTs2728RelatedInfo,
+        )
+        } finally {
+            CpaSections.endR()
+        }
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R sections `R_LITERAL` and `R_NEW`, verbatim.
+     * Returns true where the original code returned from the whole function.
+     */
+    private fun cmamCheckLiteralAndNewReceiver(
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        ts2576Start: Int,
+        ts2576Length: Int,
+    ): Boolean {
         // 17.161: String literal receiver — `"".bogus` / `"foo".missing`. Resolves
         // to the String apparent type and emits TS2339 with the literal value displayed
         // verbatim ("\"\"" / "\"foo\"") when the property isn't a String wrapper member.
@@ -134830,7 +134923,7 @@ interface DataView {
                             fileName = fileName, line = line, character = character,
                             start = diagStart, length = diagLength,
                         ))
-                        return
+                        return true
                     }
                     diagnostics.add(Diagnostic(
                         message = "Property '$propName' does not exist on type '$display'.",
@@ -134840,7 +134933,7 @@ interface DataView {
                     ))
                 }
             }
-            return
+            return true
         }
 
         // B241: regex-literal receiver (`/foo/g.dotAll`) — resolve via the RegExp
@@ -134859,7 +134952,7 @@ interface DataView {
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
                     ))
-                    return
+                    return true
                 }
             }
         }
@@ -134879,7 +134972,7 @@ interface DataView {
                     start = ts2576Start, length = ts2576Length,
                 ))
             }
-            return
+            return true
         }
 
         // 16.4cq: `new ClassName(...).prop` or `(new ClassName(...)).prop` — emit TS2339 when
@@ -134910,8 +135003,8 @@ interface DataView {
                     // members (the bifurcation model), so `class C2 {} namespace C2 {…}`
                     // keeps instance-side access checkable — `new C2().unrelated` is TS2339
                     // even though `C2.unrelated` (static side) is fine.
-                    if (ctorSym.declarations.count { it is ClassDeclaration } > 1) return
-                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration }) return
+                    if (ctorSym.declarations.count { it is ClassDeclaration } > 1) return true
+                    if (ctorSym.declarations.any { it !is ClassDeclaration && it !is ModuleDeclaration }) return true
                     val classDecl = ctorSym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                     if (classDecl != null && propName !in RUNTIME_PROPERTIES) {
                         // Walk own members + extends chain. `false` means the chain
@@ -134995,9 +135088,29 @@ interface DataView {
                     start = diagStart, length = diagLength,
                 ))
             }
-            return
+            return true
         }
+        return false
+    }
 
+    /**
+     * (JIT.1)(b) round 804 — level-R sections `R_CALL`, `R_PAEA` and `R_STATIC`,
+     * verbatim. Returns true where the original code returned from the whole
+     * function.
+     */
+    private fun cmamCheckCallAndAccessReceiver(
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        isThisAccess: Boolean,
+        enclosingClassType: Type?,
+        suggestionKey: String,
+        ts2576Start: Int,
+        ts2576Length: Int,
+    ): Boolean {
         // 17.37: CallExpression receiver returning `never` — emit TS2339 'never'.
         // Covers `foo([]).bar` where `foo<T>(x: T[]): T` infers T = never from the
         // empty array literal arg, then `.bar` accesses a property on never.
@@ -135017,7 +135130,7 @@ interface DataView {
                     fileName = fileName, line = line, character = character,
                     start = diagStart, length = diagLength,
                 ))
-                return
+                return true
             }
             // B64.1: CallExpression receiver returning a primitive (number/string/
             // boolean/bigint) — emit TS2339 when the property is absent from the
@@ -135033,7 +135146,7 @@ interface DataView {
                 val apparent = getApparentType(callType)
                 if (apparent is Type.Object) {
                     resolveStructuredTypeMembers(apparent)
-                    if (getPropertyOfType(apparent, propName) != null) return
+                    if (getPropertyOfType(apparent, propName) != null) return true
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     // B65.1: route through typeToString so TemplateLiteralType-sourced
                     // intrinsics render their original source text (e.g.
@@ -135044,7 +135157,7 @@ interface DataView {
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
                     ))
-                    return
+                    return true
                 }
             }
             // B241: `Symbol("foo").description` — a `symbol`-typed call result whose
@@ -135060,7 +135173,7 @@ interface DataView {
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
                     ))
-                    return
+                    return true
                 }
             }
             // B241: nullable-union call result (`"...".match(...).groups`) — strip
@@ -135084,11 +135197,11 @@ interface DataView {
                             fileName = fileName, line = line, character = character,
                             start = diagStart, length = diagLength,
                         ))
-                        return
+                        return true
                     }
                 }
             }
-            return
+            return true
         }
 
         // extendFromAny: a PropertyAccess/ElementAccess receiver whose type resolves to a
@@ -135107,7 +135220,7 @@ interface DataView {
                 val apparent = getApparentType(recvType)
                 if (apparent is Type.Object) {
                     resolveStructuredTypeMembers(apparent)
-                    if (getPropertyOfType(apparent, propName) != null) return
+                    if (getPropertyOfType(apparent, propName) != null) return true
                     val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
                     diagnostics.add(Diagnostic(
                         message = "Property '$propName' does not exist on type '${typeToString(recvType)}'.",
@@ -135115,7 +135228,7 @@ interface DataView {
                         fileName = fileName, line = line, character = character,
                         start = diagStart, length = diagLength,
                     ))
-                    return
+                    return true
                 }
             }
             // staticMemberExportAccess: a CHAINED PropertyAccess receiver (`$.sammy.bar`,
@@ -135135,7 +135248,7 @@ interface DataView {
                     val mergedWithTypeShape = tsym.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration }
                     val classDecl = tsym.declarations.firstOrNull { it is ClassDeclaration } as? ClassDeclaration
                     if (!mergedWithTypeShape && classDecl != null && classDecl.typeParameters.isNullOrEmpty()) {
-                        if (tryEmitStaticAccessTs2576(tsym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, recvType)) return
+                        if (tryEmitStaticAccessTs2576(tsym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, recvType)) return true
                         if (lookupInstanceMemberInResolvableChain(classDecl, propName) == false &&
                             !isStaticMemberOfClass(classDecl, propName) && propName !in RUNTIME_PROPERTIES) {
                             val typeName = classDecl.name?.text ?: tsym.name
@@ -135147,7 +135260,7 @@ interface DataView {
                                 start = diagStart, length = diagLength,
                             ))
                         }
-                        return
+                        return true
                     }
                 }
             }
@@ -135184,7 +135297,7 @@ interface DataView {
                             start = diagStart, length = diagLength,
                         ))
                     }
-                    return
+                    return true
                 }
             }
         }
@@ -135193,11 +135306,11 @@ interface DataView {
         // In static methods, "this" refers to the constructor type (typeof C).
         CpaSections.atR(CpaSections.R_STATIC)
         if (isThisAccess && inStaticClassMethod && enclosingClassType is Type.Object) {
-            val classSymbol = enclosingClassType.symbol ?: return
-            val classDecl = classSymbol.declarations.firstOrNull() as? ClassDeclaration ?: return
-            if (isStaticMemberOfClass(classDecl, propName)) return
-            if (classSymbol.exports?.containsKey(propName) == true) return
-            if (propName in RUNTIME_PROPERTIES) return
+            val classSymbol = enclosingClassType.symbol ?: return true
+            val classDecl = classSymbol.declarations.firstOrNull() as? ClassDeclaration ?: return true
+            if (isStaticMemberOfClass(classDecl, propName)) return true
+            if (classSymbol.exports?.containsKey(propName) == true) return true
+            if (propName in RUNTIME_PROPERTIES) return true
             val typeName = "typeof ${classSymbol.name}"
             val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
             diagnostics.add(Diagnostic(
@@ -135206,951 +135319,1079 @@ interface DataView {
                 fileName = fileName, line = line, character = character,
                 start = diagStart, length = diagLength,
             ))
-            return
+            return true
+        }
+        return false
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R sections `R_OT_PRE` .. `R_OT_IDENT`: the
+     * general receiver-type path, i.e. the `else` arm of the original
+     * `val objectType = …` expression, verbatim.
+     *
+     * Returns null exactly where that arm returned from the whole function, and
+     * otherwise the pair the arm used to leave behind: the receiver type it
+     * evaluated to, plus the display-type override it had assigned into the
+     * caller's local. Returned rather than written to a field ON PURPOSE — a field
+     * would need round 791's save/restore dance to stay correct under a nested
+     * invocation, and the pair costs at most one allocation per surviving call.
+     */
+    private fun cmamGeneralReceiverType(
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        keySuggestion: String?,
+        suggestionKey: String,
+        ts2576Start: Int,
+        ts2576Length: Int,
+    ): Pair<Type, Type?>? {
+        var displayTypeOverride: Type? = null
+        // (JIT.1)(b): R_OT_PRE — the namespace-member / enum-member / cast gates.
+        if (cmamCheckCastAndNamespaceReceiver(
+                objectExpr, propName, diagStart, diagLength, source, fileName,
+            )) return null
+        // Phase 17 / Blocker #1 step 2c: narrowed-to-never on receiver emits
+        // TS2339 with 'never' display. Walks the flow graph from the receiver
+        // expression's recorded flow node; when narrowing collapses a Union
+        // receiver to never via exhaustive typeof/instanceof/equality checks,
+        // the property access is invalid. Uses `getTypeOfExpression` so this
+        // works for function-local identifiers (parameters, locals) too — not
+        // just file-level globals. Gate: only when raw type is a Union (most
+        // common narrow-to-never shape; single-type contradictions are rarer
+        // and the existing identSymbol-resolution path already handles them).
+        //
+        // 17.34c: extended to also accept `objectExpr is PropertyAccessExpression`
+        // (gated via `getReferencePath(objectExpr) != null` so only pure
+        // Identifier-or-PropertyAccess chains qualify; calls/parens/element-access
+        // still bail early). The narrowing helpers from 17.34a/b consume
+        // dotted-path strings so PropertyAccess receivers narrow uniformly with
+        // bare Identifiers. After the narrowing block, the identifier-symbol
+        // lookup paths (globals[identName]) only apply to Identifier shapes.
+        CpaSections.atR(CpaSections.R_OT_ELIG)
+        val narrowingEligible = objectExpr is Identifier ||
+            (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null)
+        if (!narrowingEligible) return null
+        CpaSections.atR(CpaSections.R_OT_RAW)
+        val rawForNarrowing = getTypeOfExpression(objectExpr)
+        CpaSections.atR(CpaSections.R_OT_UNION)
+        if (rawForNarrowing is Type.Union) {
+            // (JIT.1)(b): R_OT_UNION — the union-receiver narrowing block.
+            if (cmamCheckUnionReceiverNarrowing(
+                    rawForNarrowing, objectExpr, propName, diagStart, diagLength, source, fileName,
+                )) return null
         }
 
-        // 16.0: track a display-override type for primitives whose apparent (wrapper)
-        // type is used for property lookup — diagnostic must show the primitive name.
-        CpaSections.atR(CpaSections.R_OT_THIS)
-        var displayTypeOverride: Type? = null
-        val objectType = if (isThisAccess) {
-            if (enclosingClassType == null) return
-            enclosingClassType
-        } else if (objectExpr is ArrayLiteralExpression) {
-            // 16.4: `[1,2,3].NonexistantMethod()` → TS2339 against `number[]`.
-            val rawArr = getTypeOfArrayLiteral(objectExpr)
-            if (rawArr === anyType || rawArr === errorType) return
-            if (rawArr !is Type.Reference || rawArr.target !== globalArrayType) return
-            // Widen literal element types for display: [1,2,3] → number[] (not (1|2|3)[]).
-            val args = rawArr.resolvedTypeArguments
-            if (!args.isNullOrEmpty()) {
-                val widened = args.map { t ->
-                    if (t is Type.Union) {
-                        val ws = t.types.map { getWidenedLiteralType(it) }.distinct()
-                        if (ws.size == 1) ws[0] else getUnionType(ws)
-                    } else getWidenedLiteralType(t)
-                }
-                displayTypeOverride = if (widened == args) rawArr else getOrInternReference(rawArr.target, widened)
-            } else {
-                displayTypeOverride = rawArr
+        // 17.34c: paths beyond this point assume an Identifier receiver (look up
+        // the bare name in globals to drive namespace/typeof/wrapper-type emissions).
+        // PropertyAccess receivers exit here — the narrowing block above already
+        // covered the narrowed-to-never / single-Object / Union-with-missing cases;
+        // the remaining identifier-symbol lookup paths don't generalize to
+        // dotted-path receivers (no `globals["A._a"]` lookup makes sense).
+        CpaSections.atR(CpaSections.R_OT_NONIDENT)
+        if (objectExpr !is Identifier) {
+            // (JIT.1)(b): R_OT_NONIDENT — the non-Identifier receiver emissions.
+            cmamCheckNonIdentifierReceiver(
+                objectExpr, propName, diagStart, diagLength, source, fileName, keySuggestion,
+            )
+            return null
+        }
+        CpaSections.atR(CpaSections.R_OT_IDENTSYM)
+        val identName = objectExpr.text
+        // B69.12: enclosing-namespace local-var shadow. When `M.X` is accessed
+        // inside `namespace M2 { var M = 0; ... M.X }` (and there's an outer
+        // `namespace M { export class X {} }`), the `var M` shadows the outer
+        // namespace within M2's body. Walk the namespace stack innermost-first
+        // looking for a Variable symbol (not also Module) that shadows.
+        var enclosingNsShadow: Symbol? = null
+        for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
+            val sym = ns.exports?.get(identName) ?: continue
+            if (sym.flags.hasAny(SymbolFlags.Variable) &&
+                !sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Class)) {
+                enclosingNsShadow = sym
+                break
             }
-            rawArr
-        } else {
-            // Narrow: `ns.Class.prop` — namespace import alias + class in target module's
-            // locals + prop is not a static member. Emits TS2339 with `typeof Class` display.
-            CpaSections.atR(CpaSections.R_OT_PRE)
-            if (objectExpr is PropertyAccessExpression &&
-                objectExpr.expression is Identifier &&
-                tryEmitNamespaceMemberTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
-                return
-            }
-            // 17.22: `E.A.prop` / `M.N.E.A.prop` — enum-member access then property. Emits
-            // TS2339 with `E.A` display when prop is absent from both Number and String
-            // wrapper apparent types. Base may be a bare Identifier or a qualified chain.
-            if (objectExpr is PropertyAccessExpression &&
-                (objectExpr.expression is Identifier || objectExpr.expression is PropertyAccessExpression) &&
-                tryEmitEnumMemberAccessTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
-                return
-            }
-            // B98.r100 (structural-receiver TS2339, narrowest slice): a property access
-            // on a CAST receiver `(x as T).p` / `<T>x.p` where T resolves to a base-less,
-            // signature-less, index-signature-less NAMED Interface that lacks `p`. A cast
-            // is an EXPLICIT type assertion, so a missing member is unambiguously TS2339
-            // (`missingDomElement_UsingDomLib`: `(({}) as any as HTMLMissingElement).textContent`
-            // where `interface HTMLMissingElement {}`). `checkMemberAccessMissing` otherwise
-            // bails on non-Identifier receivers (the broad structural-receiver gap); this is
-            // the FP-safest decomposed slice — gated to a cast receiver + a simple named
-            // interface with no base/sigs/index (so apparent-type/Object.prototype members
-            // can't be missed) + propName not a RUNTIME_PROPERTY.
-            run {
-                var castInner: Expression = objectExpr
-                while (castInner is ParenthesizedExpression) castInner = castInner.expression
-                if ((castInner is AsExpression || castInner is TypeAssertionExpression) &&
-                    propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
-                    val castType = getTypeOfExpression(objectExpr)
-                    if (castType is Type.Interface && castType.symbol != null &&
-                        castType.baseTypes.isNullOrEmpty() &&
-                        castType.callSignatures.isNullOrEmpty() &&
-                        castType.constructSignatures.isNullOrEmpty() &&
-                        castType.stringIndexInfo == null && castType.numberIndexInfo == null) {
-                        resolveStructuredTypeMembers(castType)
-                        if (getPropertyOfType(castType, propName) == null) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '${typeToString(castType)}'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                    }
+        }
+        // INV.3(d): the bare-Identifier receiver resolves node-keyed (the name is
+        // read from the CURRENT file's AST) — the merged consult leaked foreign
+        // module locals; per-file, an own/imported receiver resolves to the same
+        // declaring-file instance and a foreign name nulls (falls to the general
+        // type-based receiver path below, like any unresolvable receiver).
+        val isT0 = CpaSections.t()
+        val perFileIdentSymbol = lookupPerFileForNode(objectExpr, identName)
+        CpaSections.closeN(CpaSections.N_IDSYM_LOOKUP, isT0)
+        // Namespace-local ENUM receiver (`Color._map` where `Color` is an exported enum
+        // declared in an ENCLOSING namespace, accessed unqualified inside that namespace).
+        // `globals` does not hold namespace-local exports, so resolve from the enclosing-ns
+        // export tables (innermost-first). Gated to a pure Enum (no Module): other kinds
+        // (var/module/class) have their own globals-rooted paths, and a pure enum skips every
+        // intermediate branch below (all require Function/Class/Alias/Module flags) to reach
+        // the B95e enum-receiver branch, which owns the TS2339/TS2551 emit.
+        val nsEnumShadow: Symbol? = if (enclosingNsShadow == null && perFileIdentSymbol == null) {
+            propertyAccessEnclosingNamespaces.asReversed().firstNotNullOfOrNull { ns ->
+                ns.exports?.get(identName)?.takeIf {
+                    it.flags.hasAny(SymbolFlags.Enum) && !it.flags.hasAny(SymbolFlags.Module)
                 }
             }
-            // Phase 17 / Blocker #1 step 2c: narrowed-to-never on receiver emits
-            // TS2339 with 'never' display. Walks the flow graph from the receiver
-            // expression's recorded flow node; when narrowing collapses a Union
-            // receiver to never via exhaustive typeof/instanceof/equality checks,
-            // the property access is invalid. Uses `getTypeOfExpression` so this
-            // works for function-local identifiers (parameters, locals) too — not
-            // just file-level globals. Gate: only when raw type is a Union (most
-            // common narrow-to-never shape; single-type contradictions are rarer
-            // and the existing identSymbol-resolution path already handles them).
-            //
-            // 17.34c: extended to also accept `objectExpr is PropertyAccessExpression`
-            // (gated via `getReferencePath(objectExpr) != null` so only pure
-            // Identifier-or-PropertyAccess chains qualify; calls/parens/element-access
-            // still bail early). The narrowing helpers from 17.34a/b consume
-            // dotted-path strings so PropertyAccess receivers narrow uniformly with
-            // bare Identifiers. After the narrowing block, the identifier-symbol
-            // lookup paths (globals[identName]) only apply to Identifier shapes.
-            CpaSections.atR(CpaSections.R_OT_ELIG)
-            val narrowingEligible = objectExpr is Identifier ||
-                (objectExpr is PropertyAccessExpression && getReferencePath(objectExpr) != null)
-            if (!narrowingEligible) return
-            CpaSections.atR(CpaSections.R_OT_RAW)
-            val rawForNarrowing = getTypeOfExpression(objectExpr)
-            CpaSections.atR(CpaSections.R_OT_UNION)
-            if (rawForNarrowing is Type.Union) {
-                // Round 792 (ENGINE.2e), level S: the plain walk, the round-424
-                // retry and the elaboration are three different questions and the
-                // row that holds them is the second-largest in the function. The
-                // bracket around the plain walk is the round-790 one — two
-                // monotone counter reads, immediately around the call, because
-                // anything between them re-enters the checker.
-                val uT0 = CpaSections.t()
-                val uObs0 = narrowRetryRelevantObs
-                val uLaunch0 = narrowWalkLaunches
-                val narrowed = getNarrowedTypeForReference(rawForNarrowing, objectExpr)
-                val uLoopFree = narrowRetryRelevantObs == uObs0 && narrowWalkLaunches > uLaunch0
-                CpaSections.closeN(CpaSections.N_U_PLAIN, uT0)
-                // M1.12 (round 424): a read inside a LOOP body walks back through a
-                // FlowLoopLabel, where the plain variant washes back to the declared
-                // union (back-edge safety), so a PRE-loop guard (`if (!isString(text))
-                // return; … while (…) text.charCodeAt(…)` — tsc's own parseResponseFile)
-                // never suppressed the union TS2339. Retry with the loop-entry-following
-                // variant, SUPPRESSION-ONLY (every non-nullish loop-narrowed member
-                // resolves the property → return, no diagnostic): the emission paths
-                // below keep the PLAIN result, so a loop back-edge can never mint a new
-                // narrowed-to-never / partial-coverage emission (the B78.2 soundness
-                // concern — back-edge reassignment is not tracked — only ever costs a
-                // false negative here, never a new FP). The "plain walk did not
-                // narrow" gate is STRUCTURAL, not identity: a 2-antecedent
-                // FlowBranchLabel (any `&&`/`||` condition on the path) unions
-                // [declared, declared] and `getUnionType` MINTS a fresh Type.Union
-                // (it does not intern — CLAUDE.md), so identity `===` misses the
-                // wash whenever the path crosses a branch join.
-                val plainWalkWashed = narrowed === rawForNarrowing ||
-                    (narrowed is Type.Union &&
-                        narrowed.types.map { it.id }.toSet() ==
-                        rawForNarrowing.types.map { it.id }.toSet())
-                if (plainWalkWashed) {
-                    val uT1 = CpaSections.t()
-                    CpaSections.noteUnionRetry(uLoopFree)
-                    // (ENGINE.2f) round 794: SUBSTITUTE the plain walk's own result
-                    // for the retry's when the plain walk provably arrived at no
-                    // `FlowLoopLabel` and truncated nowhere (the round-790 bracket
-                    // above). The two walkers are line-by-line mirrors differing in
-                    // that ONE arm, so with the arm unreached the mirror makes the
-                    // identical traversal and answers what the plain walk answered.
-                    //
-                    // NOT a skip — that would NOT be equivalent. The consumer's first
-                    // test is the IDENTITY `loopNarrowed !== rawForNarrowing`, and a
-                    // loop-free repeat whose path crosses a branch join mints a FRESH
-                    // equal union (`getUnionType` does not intern — CLAUDE.md), so the
-                    // block genuinely runs and can suppress. Substituting preserves
-                    // both the identity relationship (fresh vs the declared instance)
-                    // and the member set, which is everything the consumer reads.
-                    val suppress: Boolean
-                    if (uLoopFree && !CpaSections.verifyUnionRetry) {
-                        suppress = unionRetrySuppresses(narrowed, rawForNarrowing, propName)
-                    } else {
-                        val loopNarrowed =
-                            getNarrowedTypeForReferenceFollowLoopEntry(rawForNarrowing, objectExpr)
-                        val rewalked = unionRetrySuppresses(loopNarrowed, rawForNarrowing, propName)
-                        if (CpaSections.verifyUnionRetry &&
-                            (uLoopFree || CpaSections.verifyUnionRetryAll)
-                        ) {
-                            CpaSections.noteUnionRetryVerified(
-                                instanceDiff = loopNarrowed !== narrowed,
-                                memberDiff = unionMemberIdSet(loopNarrowed) != unionMemberIdSet(narrowed),
-                                verdictDiff = rewalked !=
-                                    unionRetrySuppresses(narrowed, rawForNarrowing, propName),
-                            )
-                        }
-                        // The re-walked verdict is HONOURED, so a `--verifyUnionRetry`
-                        // run reproduces the pre-change binary by construction.
-                        suppress = rewalked
-                    }
-                    CpaSections.closeN(
-                        if (uLoopFree) CpaSections.N_U_RETRY_LF else CpaSections.N_U_RETRY, uT1
-                    )
-                    if (suppress) {
-                        CpaSections.noteUnionRetrySuppressed(uLoopFree)
-                        return
-                    }
-                }
-                // Level S: the elaboration. Its close is skipped by the union
-                // block's own EMISSION returns (225 exits on the profile), so its
-                // `calls` column is the SILENT population, not the whole one.
-                val uT2 = CpaSections.t()
-                if (narrowed === neverType) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type 'never'.",
-                        category = DiagnosticCategory.Error, code = 2339,
-                        fileName = fileName, line = line, character = character,
-                        start = diagStart, length = diagLength,
-                    ))
-                    return
-                }
-                // Phase 17 / Blocker #1 step 2g: multi-member union TS2339 elaboration.
-                // When the narrowed receiver is still a Union with at least one member
-                // missing the property AND at least one member having it (partial
-                // coverage), emit TS2339 with the union display + a chain line naming
-                // the first missing member. Mirrors TypeScript's baseline format.
-                //
-                // 17.7b: gate widened from "all missing are primitives" to "any missing
-                // member" once 17.7a discriminant-property narrowing landed — the prior
-                // restriction existed only because un-narrowed discriminated unions
-                // (e.g. `partiallyDiscriminantedUnions_ts`'s `if (ab.type === 'a') if
-                // (ab.subtype === 2) ab.foo`) would FP. With discriminant narrowing in
-                // place, the union collapses to the right member and this branch is
-                // skipped (single Type.Object, not Union). Only patterns that genuinely
-                // shouldn't narrow (e.g. `controlFlowAliasing_ts`'s `const isFoo =
-                // obj.kind === 'foo'; if (isFoo) obj.foo` — TypeScript doesn't track
-                // aliased conditions for narrowing) reach this elaboration with a
-                // partial-coverage Union.
-                // B293: a union whose every member is WELL-RESOLVED (a string/number
-                // literal, or a single-decl heritage-free user interface) supports the
-                // full tsc behavior: all-missing emission (not just partial coverage),
-                // tsc type-id member ordering (display + first-missing chain pick),
-                // alias-name receiver displays ('AB'), the 'length' prototype-gate
-                // bypass (interfaces genuinely lack it), and TS2551 spelling
-                // suggestions from the union's COMMON properties.
-                val wellResolvedUnionMember = { m: Type ->
-                    m is Type.StringLiteral || m is Type.NumberLiteral ||
-                        (m is Type.Interface &&
-                            (m.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration)
-                                ?.let { it.heritageClauses.isNullOrEmpty() && it !in builtinLibDecls } == true)
-                }
-                val allWellResolved = narrowed is Type.Union &&
-                    narrowed.types.filterNot { isNullishConstituent(it) }
-                        .let { it.isNotEmpty() && it.all(wellResolvedUnionMember) }
-                if (narrowed is Type.Union && propName.isNotEmpty() &&
-                    (propName !in RUNTIME_PROPERTIES || (allWellResolved && propName == "length"))) {
-                    // B277: nullish constituents never participate in the TS2339 union
-                    // elaboration — tsc reports nullable receivers via TS18048/TS2532
-                    // (and `x?.y` checks NonNullable(x)), never a TS2339 chain naming
-                    // 'undefined'/'null'. Filtering them prevents the `x?.y` FP.
-                    val members = narrowed.types.filterNot { isNullishConstituent(it) }
-                    fun memberHasIt(m: Type): Boolean {
-                        if (m === anyType || m === errorType || m === unknownType) return true
-                        if (typeHasOwnProperty(getApparentType(m), propName)) return true
-                        // round 419: an INTERSECTION member is `Type.Intersection`, not `Type.Object`,
-                        // so `typeHasOwnProperty` bails — fold its constituents (a property exists on
-                        // `A & B` iff ANY constituent has it), else `PropertyAccessExpression |
-                        // (ElementAccessExpression & Declaration & {…})` FP's TS2339 on `.parent`.
-                        return resolveMemberPropertyType(m, propName) != null
-                    }
-                    val missingMembers = members.filter { !memberHasIt(it) }
-                    val anyHasIt = members.any { memberHasIt(it) }
-                    // Round 512 (post-retire FN unmasked): a union of ALL-ANONYMOUS plain
-                    // object members (`type Shape = {width} | {height}`) missing the
-                    // property EVERYWHERE is a genuine tsc error — pre-retire the
-                    // conflated receiver resolved to a sibling interface and fired
-                    // through the single-interface branch by accident. Anonymous
-                    // TypeLiteral members have reliably-synthesized member tables, so
-                    // the all-missing verdict is trustworthy; index-signature /
-                    // callable members bail (an index sig legitimately provides any
-                    // property). tsc emits NO member chain for the all-missing case.
-                    val allAnonPlainObjects = members.isNotEmpty() && members.all { m ->
-                        m is Type.Object && m !is Type.Interface && m !is Type.Reference &&
-                            m.symbol == null && run {
-                                resolveStructuredTypeMembers(m)
-                                m.stringIndexInfo == null && m.numberIndexInfo == null &&
-                                    m.callSignatures.isNullOrEmpty() &&
-                                    m.constructSignatures.isNullOrEmpty() &&
-                                    !m.members.isNullOrEmpty()
-                            }
-                    }
-                    if (missingMembers.isNotEmpty() && (anyHasIt || allWellResolved || allAnonPlainObjects)) {
-                        val orderedMissing = if (allWellResolved) missingMembers.sortedBy { it.id } else missingMembers
-                        val missingMember = orderedMissing.first()
-                        // Receiver annotated with a bare alias-of-union reference displays
-                        // the ALIAS name (tsc shows 'AB', not 'A | B').
-                        val aliasName: String? = run {
-                            val recvId = objectExpr as? Identifier ?: return@run null
-                            val rsym = currentFileLocals?.get(recvId.text) ?: globals[recvId.text] ?: return@run null
-                            val vd = rsym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
-                            val ann = vd?.type as? TypeReference ?: return@run null
-                            if (ann.typeArguments != null) return@run null
-                            val annName = (ann.typeName as? Identifier)?.text ?: return@run null
-                            val asym = currentFileLocals?.get(annName) ?: globals[annName] ?: return@run null
-                            val alias = asym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
-                            if (alias?.type is UnionType) annName else null
-                        }
-                        val unionDisplay = aliasName ?: typeToString(
-                            if (allWellResolved) Type.Union(members.sortedBy { it.id }) else narrowed)
-                        val memberDisplay = typeToString(missingMember)
-                        // TS2551 for an all-interface well-resolved union when the union's
-                        // COMMON property set carries a close spelling match.
-                        var suggestion: String? = null
-                        if (allWellResolved && members.all { it is Type.Interface }) {
-                            val commonProps = members.map { m ->
-                                resolveStructuredTypeMembers(m as Type.Interface)
-                                (m).properties?.mapTo(mutableSetOf()) { it.name } ?: mutableSetOf()
-                            }.reduceOrNull { a, b -> a.apply { retainAll(b) } } ?: mutableSetOf()
-                            suggestion = getSpellingSuggestionFromNames(propName, commonProps)
-                        }
-                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                        diagnostics.add(Diagnostic(
-                            message = if (suggestion != null)
-                                "Property '$propName' does not exist on type '$unionDisplay'. Did you mean '$suggestion'?"
-                            else
-                                "Property '$propName' does not exist on type '$unionDisplay'.",
-                            category = DiagnosticCategory.Error, code = if (suggestion != null) 2551 else 2339,
-                            fileName = fileName, line = line, character = character,
-                            start = diagStart, length = diagLength,
-                            // The round-512 all-missing anonymous case carries no member
-                            // chain (tsc names a member only when SOME member has it);
-                            // the pre-existing partial/well-resolved paths keep theirs.
-                            messageChain = if (anyHasIt || allWellResolved)
-                                listOf("  Property '$propName' does not exist on type '$memberDisplay'.")
-                            else emptyList(),
-                        ))
-                        return
-                    }
-                }
-                // Phase 17 / Blocker #1 step 2h (17.7c/17.7d): narrowed-to-single-Object
-                // emission. When discriminant/typeof/instanceof narrowing collapses a Union
-                // to a single Type.Object — anonymous (`{ kind: 'a', a: string }`) or named
-                // interface without base types — accessing a property missing on that single
-                // member fires TS2339. Conservative gates:
-                //   - `narrowed` must be a Type.Object that is NOT a Type.Reference
-                //     (generic instantiation — `resolveGenericPropertyType` interaction
-                //     not handled here).
-                //   - For Type.Interface variants: skip if base types are non-empty
-                //     (mirrors the line ~40300 skip — incomplete inheritance resolution).
-                //     17.7d widening: allow Type.Interface with empty/null baseTypes (the
-                //     standard discriminated-union case `interface A { kind:'a'; aProps:string }`).
-                //   - Narrowing must have ACTUALLY changed the type (`narrowed !== rawForNarrowing`);
-                //   - `propName` must not be empty or a RUNTIME_PROPERTIES member;
-                //   - the property must not exist on the narrowed type.
-                // Display uses the narrowed type's string form (NOT the un-narrowed union),
-                // matching TypeScript's baseline format for narrowed property access.
-                if (narrowed is Type.Object && narrowed !is Type.Reference &&
-                    propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES
-                ) {
-                    val skipForBaseTypes = narrowed is Type.Interface &&
-                        narrowed.baseTypes != null && narrowed.baseTypes!!.isNotEmpty()
-                    if (!skipForBaseTypes) {
-                        resolveStructuredTypeMembers(narrowed)
-                        // Round 479: an index signature provides EVERY (string-index) /
-                        // numeric (number-index) property — `settings.typeScriptVersion`
-                        // on `interface CompilerSettings { [name: string]: string }` is
-                        // legal, so a narrowed single-interface receiver with an index
-                        // sig never draws TS2339 (tsc resolves the access to the index
-                        // value type). The un-narrowed path already has this bail; the
-                        // narrowed-single-Object emission missed it.
-                        val indexSigProvides = narrowed.stringIndexInfo != null ||
-                            (narrowed.numberIndexInfo != null && isNumericLiteralName(propName))
-                        if (!indexSigProvides && getPropertyOfType(narrowed, propName) == null) {
-                            val narrowedDisplay = typeToString(narrowed)
-                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '$narrowedDisplay'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                    }
-                }
-                CpaSections.closeN(CpaSections.N_U_ELAB, uT2)
-            }
+        } else null
+        val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
 
-            // 17.34c: paths beyond this point assume an Identifier receiver (look up
-            // the bare name in globals to drive namespace/typeof/wrapper-type emissions).
-            // PropertyAccess receivers exit here — the narrowing block above already
-            // covered the narrowed-to-never / single-Object / Union-with-missing cases;
-            // the remaining identifier-symbol lookup paths don't generalize to
-            // dotted-path receivers (no `globals["A._a"]` lookup makes sense).
-            CpaSections.atR(CpaSections.R_OT_NONIDENT)
-            if (objectExpr !is Identifier) {
-                // 17.130: `ClassIdent.prototype.X` — `Class.prototype` doesn't resolve to
-                // the class's instance type in our checker (no `prototype` member on the
-                // static side), so the receiver type is anyType and the standard checks bail.
-                // Detect the syntactic shape and route to `tryEmitClassInstanceMissingTs2339`
-                // with the class symbol's declared instance type so missing-property emission
-                // fires on `A.prototype.foo` when `foo` isn't on A's instance shape.
-                if (objectExpr is PropertyAccessExpression &&
-                    objectExpr.name.text == "prototype" &&
-                    objectExpr.expression is Identifier
-                ) {
-                    val classIdent = objectExpr.expression
-                    val rawSym = currentFileLocals?.get(classIdent.text) ?: globals[classIdent.text]
-                    val classSym = rawSym?.let {
-                        if (it.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(it) else it
-                    }
-                    if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
-                        val classType = getDeclaredTypeOfSymbol(classSym)
-                        if (classType is Type.Interface) {
-                            tryEmitClassInstanceMissingTs2339(classSym, classType, propName, objectExpr, diagStart, diagLength, source, fileName)
-                        }
-                    }
-                }
-                // B98.r138 (TS2339): a QUALIFIED namespace member that is a NON-EXPORTED
-                // import alias — e.g. `new m2.m3.c()` where `c` inside `namespace m3` is
-                // `import c = x.c` WITHOUT an `export` keyword, so it is not accessible
-                // from outside m3 → "Property 'c' does not exist on type 'typeof m3'.".
-                // FP firewall (load-bearing — an earlier `isNameExportedFromNamespace`
-                // gate over-fired on legitimately-exported function/class/var members of
-                // ambient namespaces): fire ONLY when the resolved member symbol's
-                // declarations are ALL non-exported `ImportEqualsDeclaration`s (a private
-                // import alias) — exported members and `export import` aliases are excluded
-                // by construction; ambient `declare namespace` (NamespaceModule) receivers
-                // are excluded (their members are implicitly exported).
-                if (objectExpr is PropertyAccessExpression &&
-                    (keySuggestion == null || keySuggestion.startsWith(".")) &&
-                    propName.isNotEmpty() && propName[0] !in '0'..'9' &&
-                    propName !in RUNTIME_PROPERTIES) {
-                    val recvSym = resolveQualifiedValueSymbol(objectExpr)
-                    val memberSym = recvSym?.takeIf {
-                        it.flags.hasAny(SymbolFlags.Module) &&
-                            !it.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Alias or SymbolFlags.NamespaceModule)
-                    }?.exports?.get(propName)
-                    if (memberSym != null && memberSym.declarations.isNotEmpty() &&
-                        memberSym.declarations.all { it is ImportEqualsDeclaration && ModifierFlag.Export !in it.modifiers }) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$propName' does not exist on type 'typeof ${objectExpr.name.text}'.",
-                            category = DiagnosticCategory.Error, code = 2339,
-                            fileName = fileName, line = line, character = character,
-                            start = diagStart, length = diagLength,
-                        ))
-                        return
-                    }
-                }
-                // B130 (TS2339): a QUALIFIED namespace member declared ONLY in a
-                // NON-EXPORTED `namespace X { export var m }` block of a function+namespace
-                // (or multi-block namespace) merge — e.g. `M.foo.x` where `foo` merges
-                // `export function foo`, `export namespace foo { export var y }` (exported
-                // → y visible) and `namespace foo { export var x }` (NOT exported → x not
-                // externally visible). A member only in a non-exported block is never
-                // accessible from outside → "Property 'x' does not exist on type 'typeof
-                // foo'.". FP-safe by construction (a non-exported-block-only member is
-                // always a TS2339 in TS; mirrors B98.r138's non-exported-member rule).
-                if (objectExpr is PropertyAccessExpression &&
-                    (keySuggestion == null || keySuggestion.startsWith(".")) &&
-                    propName.isNotEmpty() && propName[0] !in '0'..'9' &&
-                    propName !in RUNTIME_PROPERTIES) {
-                    val recvSym = resolveQualifiedValueSymbol(objectExpr)
-                    val nsBlocks = recvSym?.takeIf {
-                        it.flags.hasAny(SymbolFlags.Module) && !it.flags.hasAny(SymbolFlags.NamespaceModule)
-                    }?.declarations?.filterIsInstance<ModuleDeclaration>() ?: emptyList()
-                    if (nsBlocks.size >= 2 && recvSym?.exports?.containsKey(propName) == true) {
-                        val inExportedBlock = nsBlocks.any { ModifierFlag.Export in it.modifiers && moduleBlockExports(it, propName) }
-                        val inNonExportedBlock = nsBlocks.any { ModifierFlag.Export !in it.modifiers && moduleBlockExports(it, propName) }
-                        if (!inExportedBlock && inNonExportedBlock) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type 'typeof ${objectExpr.name.text}'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                    }
-                }
-                return
-            }
-            CpaSections.atR(CpaSections.R_OT_IDENTSYM)
-            val identName = objectExpr.text
-            // B69.12: enclosing-namespace local-var shadow. When `M.X` is accessed
-            // inside `namespace M2 { var M = 0; ... M.X }` (and there's an outer
-            // `namespace M { export class X {} }`), the `var M` shadows the outer
-            // namespace within M2's body. Walk the namespace stack innermost-first
-            // looking for a Variable symbol (not also Module) that shadows.
-            var enclosingNsShadow: Symbol? = null
-            for (ns in propertyAccessEnclosingNamespaces.asReversed()) {
-                val sym = ns.exports?.get(identName) ?: continue
-                if (sym.flags.hasAny(SymbolFlags.Variable) &&
-                    !sym.flags.hasAny(SymbolFlags.Module or SymbolFlags.Class)) {
-                    enclosingNsShadow = sym
-                    break
+        CpaSections.atR(CpaSections.R_OT_IDENT)
+        val otT0 = CpaSections.t()
+        if (identSymbol != null) {
+            // Hoisted verbatim out of the type-gates section below (a pure function
+            // of `keySuggestion`) because both gate helpers read it.
+            val isPropertyAccessShape = keySuggestion == null || keySuggestion.startsWith(".")
+            // (JIT.1)(b): R_OT_IDENT, first half — the type-side / class / function
+            // specialised gates.
+            if (cmamCheckIdentSymbolTypeGates(
+                    identSymbol, identName, propName, diagStart, diagLength, source, fileName,
+                    isPropertyAccessShape,
+                )) return null
+            // (JIT.1)(b): R_OT_IDENT, second half — the alias / module / enum gates.
+            if (cmamCheckIdentSymbolValueGates(
+                    identSymbol, identName, propName, diagStart, diagLength, source, fileName,
+                    isPropertyAccessShape,
+                )) return null
+            // Level S: everything above is the specialised emission gates —
+            // their close is skipped by every gate that FIRES, so the `calls`
+            // column is the population that fell through to the general path.
+            CpaSections.closeN(CpaSections.N_OTI_GATES, otT0)
+            val otT1 = CpaSections.t()
+            val rawType = getTypeOfSymbol(identSymbol)
+            CpaSections.closeN(CpaSections.N_OTI_TYPEOF, otT1)
+            val otT2 = CpaSections.t()
+            // B186: a BindingElement-declared name (destructured binding — never typed by
+            // getTypeOfSymbol, which has no BindingElement arm) whose currentLocalTypes
+            // entry is a concrete primitive (populated by the B186 destructuring
+            // recognizer) proceeds through the apparent-type path instead of bailing.
+            var bindingElementPrimitive: Type? = null
+            if (rawType === anyType || rawType === errorType || rawType === unknownType) {
+                val lt = currentLocalTypes[identName]
+                if (identSymbol.valueDeclaration is BindingElement &&
+                    (lt === stringType || lt === numberType || lt === booleanType)) {
+                    bindingElementPrimitive = lt
+                } else {
+                    tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
+                    return null
                 }
             }
-            // INV.3(d): the bare-Identifier receiver resolves node-keyed (the name is
-            // read from the CURRENT file's AST) — the merged consult leaked foreign
-            // module locals; per-file, an own/imported receiver resolves to the same
-            // declaring-file instance and a foreign name nulls (falls to the general
-            // type-based receiver path below, like any unresolvable receiver).
-            val isT0 = CpaSections.t()
-            val perFileIdentSymbol = lookupPerFileForNode(objectExpr, identName)
-            CpaSections.closeN(CpaSections.N_IDSYM_LOOKUP, isT0)
-            // Namespace-local ENUM receiver (`Color._map` where `Color` is an exported enum
-            // declared in an ENCLOSING namespace, accessed unqualified inside that namespace).
-            // `globals` does not hold namespace-local exports, so resolve from the enclosing-ns
-            // export tables (innermost-first). Gated to a pure Enum (no Module): other kinds
-            // (var/module/class) have their own globals-rooted paths, and a pure enum skips every
-            // intermediate branch below (all require Function/Class/Alias/Module flags) to reach
-            // the B95e enum-receiver branch, which owns the TS2339/TS2551 emit.
-            val nsEnumShadow: Symbol? = if (enclosingNsShadow == null && perFileIdentSymbol == null) {
-                propertyAccessEnclosingNamespaces.asReversed().firstNotNullOfOrNull { ns ->
-                    ns.exports?.get(identName)?.takeIf {
-                        it.flags.hasAny(SymbolFlags.Enum) && !it.flags.hasAny(SymbolFlags.Module)
-                    }
-                }
-            } else null
-            val identSymbol = enclosingNsShadow ?: perFileIdentSymbol ?: nsEnumShadow
-
-            CpaSections.atR(CpaSections.R_OT_IDENT)
-            val otT0 = CpaSections.t()
-            if (identSymbol != null) {
-                // INV.3(d)(ii): a receiver whose resolution has ONLY type-side
-                // declarations while its DECLARING file also namespace-imports the
-                // same name (`import * as B from "./b"` + `interface B` — tsc's
-                // alias+interface merge, noCrashOnImportShadowing) reads its VALUE
-                // side from the namespace import: `B.zzz` resolves the target
-                // module's exports, so every interface-receiver TS2339 path below
-                // is the wrong space. Suppression-only bail (module-member absence
-                // stays owned by the module-receiver branches).
-                if (identSymbol.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration } &&
-                    identSymbol.declarations.none {
-                        it is ClassDeclaration || it is FunctionDeclaration || it is EnumDeclaration ||
-                            it is VariableDeclaration || it is ModuleDeclaration
-                    }) {
-                    val typeDecl = identSymbol.declarations.first {
-                        it is InterfaceDeclaration || it is TypeAliasDeclaration
-                    }
-                    val declFile = owningSourceFile(typeDecl)
-                    val hasNsImportOfName = declFile?.statements?.any { st ->
-                        st is ImportDeclaration &&
-                            (st.importClause?.namedBindings as? NamespaceImport)?.name?.text == identName
-                    } == true
-                    if (hasNsImportOfName) return
-                }
-                // B240: `fn.name` where fn is a plain no-param function declaration and
-                // the lib excludes es2015 — Function.name lives in lib.es2015.core, so
-                // the access is TS2339 with the function-type display ('() => void').
-                // Ultra-narrow gate (single corpus consumer): annotation-less no-param
-                // FunctionDeclaration with no value-returning body → '() => void'.
-                if (propName == "name" && !libFeatureAvailable(ScriptTarget.ES2015) &&
-                    identSymbol.flags.hasAny(SymbolFlags.Function) &&
-                    !identSymbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable) &&
+            // For primitive types (e.g. `declare var foo: number`), resolve to the
+            // wrapper interface's apparent type so property lookups fire TS2339 when
+            // the property doesn't exist on the wrapper. Display uses the primitive name.
+            // Narrow gate: only fire for file-level Variable declarations with an
+            // explicit type annotation — avoids FPs on function params/destructured
+            // bindings whose inferred types may be stale primitives.
+            // B69.11: also accept top-level (parent == null) literal-initialized vars
+            // (`var x = 5;` / `var s = "y";` / `var b = true|false;`). Skip when the
+            // name is locally shadowed via `currentLocalTypes` (function/arrow scope) —
+            // detected by comparing the local type to the file-level symbol type: if
+            // they differ (after literal widening), an inner scope shadows the file
+            // var and the gate must not fire.
+            // B69.12: namespace-local-var shadow case (enclosingNsShadow != null) is
+            // also literal-init eligible — bypass the parent==null check because
+            // namespace-internal vars have a parent. localShadow is irrelevant here
+            // (currentLocalTypes doesn't carry namespace-internal vars).
+            val exprType = if (bindingElementPrimitive != null) {
+                displayTypeOverride = bindingElementPrimitive
+                getApparentType(bindingElementPrimitive)
+            } else if (rawType !is Type.Object) {
+                val decl = identSymbol.valueDeclaration
+                val annotated = decl is VariableDeclaration && decl.type != null
+                val isNsShadow = enclosingNsShadow != null
+                val localShadow = !isNsShadow && currentLocalTypes[identName]?.let {
+                    it !== rawType && it !== getWidenedLiteralType(rawType)
+                } == true
+                val literalInferred = !annotated && decl is VariableDeclaration &&
+                    (isNsShadow || identSymbol.parent == null) &&
                     identSymbol.declarations.size == 1 &&
-                    identSymbol.exports?.containsKey(propName) != true) {
-                    val fnDecl = identSymbol.declarations.firstOrNull() as? FunctionDeclaration
-                    if (fnDecl != null && fnDecl.parameters.isEmpty() && fnDecl.type == null &&
-                        fnDecl.body?.statements?.none { it is ReturnStatement } == true) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                        diagnostics.add(Diagnostic(
-                            message = "Property 'name' does not exist on type '() => void'.",
-                            category = DiagnosticCategory.Error, code = 2339,
-                            fileName = fileName, line = line, character = character,
-                            start = diagStart, length = diagLength,
-                        ))
-                        return
+                    !localShadow && when (val init = decl.initializer) {
+                        is NumericLiteralNode -> true
+                        is StringLiteralNode -> true
+                        is Identifier -> init.text == "true" || init.text == "false"
+                        else -> false
                     }
-                }
-                // 17.194: TS2339 for `A.foo()` where A is a top-level class and
-                // `foo` is an instance method (not static). Display uses `typeof
-                // ClassName`. Conservative gate: identifier resolves to a Class
-                // symbol with EXACTLY ONE declaration that is a ClassDeclaration
-                // (no merge with namespace/var/function), valueDeclaration is
-                // also that ClassDeclaration (rules out cross-file leaks where
-                // the symbol is mostly a variable but flagged Class), no extends
-                // (heritage complicates static-member lookup), `foo` isn't a
-                // static member, isn't in RUNTIME_PROPERTIES, and isn't an
-                // exported namespace member. Also gated on PropertyAccessExpression
-                // shape (keySuggestion null or starts with `.`) — element access
-                // `C[1]` is NOT diagnosable here (could be reading a static).
-                val isPropertyAccessShape = keySuggestion == null || keySuggestion.startsWith(".")
-                if (isPropertyAccessShape &&
-                    identSymbol.flags.hasAny(SymbolFlags.Class) &&
-                    !identSymbol.flags.hasAny(SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable or SymbolFlags.Function) &&
+                // B83.4i: also accept a `CallExpression`-initialized var whose
+                // resolved type is a concrete primitive intrinsic. `getTypeOfSymbol`
+                // (above) already resolved the call's return type — when it lands on
+                // a non-Object primitive (number/string/boolean/etc., NOT any/error/
+                // unknown, filtered above), property access on it is checkable via the
+                // wrapper apparent type, exactly like a literal-initialized var. Gate
+                // mirrors `literalInferred` (top-level OR namespace-shadow, single
+                // declaration, not locally shadowed) so it only fires for the same
+                // narrow file-level var population. Unblocks `var n = arr.map(...)
+                // .reduce(...); n.bogus` → TS2339 (genericReduce). Skipped when the
+                // call's return type is a Type.Object (handled by the else branch).
+                // Exclude when the name is bound by an enclosing function/method
+                // parameter (including destructured patterns like `[x]` / `{x}`) —
+                // there the identifier refers to the param, not the file-level var,
+                // so the file-var's call-inferred type must NOT drive TS2339. This is
+                // the `function foo([x]: {a}[]){ return x.a }` + `var x = foo(...)`
+                // shadow case (functionOverloads43). The `localShadow` check above
+                // misses destructured params because they aren't in `currentLocalTypes`;
+                // `currentParamBindingNames` tracks destructured-param binding names
+                // for exactly this purpose (populated in populateParameterLocalTypes).
+                val shadowedByParam = identName in currentParamBindingNames
+                val callInferred = !annotated && !literalInferred && !shadowedByParam &&
+                    decl is VariableDeclaration &&
+                    (isNsShadow || identSymbol.parent == null) &&
                     identSymbol.declarations.size == 1 &&
-                    propName !in RUNTIME_PROPERTIES &&
-                    propName.isNotEmpty() && propName[0] !in '0'..'9') {
-                    val classDecl = identSymbol.declarations.firstOrNull() as? ClassDeclaration
-                    val isPureClass = classDecl != null && identSymbol.valueDeclaration === classDecl
-                    val hasExtends = classDecl?.heritageClauses?.any {
-                        it.token == SyntaxKind.ExtendsKeyword
-                    } == true
-                    if (isPureClass && !hasExtends && !isStaticMemberOfClass(classDecl, propName)) {
-                        if (identSymbol.exports?.containsKey(propName) != true) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type 'typeof $identName'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                    }
-                }
-                // === Namespace/Module property access ===
-                // B98.r52: `import x = require('./m')` / `import x from './m'` resolving to
-                // `export = <value>` whose type is an ANONYMOUS object (e.g.
-                // `declare var server: { (): connectExport; foo: Date }` / `var x = {...}`).
-                // The alias isn't a Module/Variable symbol so all other paths bail, but the
-                // resolved value type is a concrete anonymous Type.Object we can check for a
-                // genuinely-missing property. Tightly gated: anonymous (symbol == null, not
-                // Interface/Reference), no index signatures, a real shape, property absent.
-                if (identSymbol.flags.hasAny(SymbolFlags.Alias) &&
-                    isPropertyAccessShape && propName.isNotEmpty() &&
-                    propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
-                    val aliasType = getTypeOfSymbol(identSymbol)
-                    if (aliasType is Type.Object && aliasType !is Type.Reference &&
-                        aliasType !is Type.Interface && aliasType.symbol == null) {
-                        resolveStructuredTypeMembers(aliasType)
-                        val hasShape = !aliasType.properties.isNullOrEmpty() ||
-                            !aliasType.callSignatures.isNullOrEmpty() ||
-                            !aliasType.constructSignatures.isNullOrEmpty()
-                        if (hasShape && aliasType.stringIndexInfo == null && aliasType.numberIndexInfo == null &&
-                            (aliasType.properties == null || aliasType.properties!!.none { it.name.isEmpty() }) &&
-                            getPropertyOfType(aliasType, propName) == null) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '${typeToString(aliasType)}'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                    }
-                }
-                // B140: property access on `import X = require("./Y.json")` where Y.json is
-                // EMPTY (or literally `{}`) — its type is `{}`, so ANY property access is
-                // TS2339 "Property 'x' does not exist on type '{}'.". FP-safe: only fires for
-                // an import-equals alias to a JSON file whose content is unambiguously the
-                // empty object (so every property access genuinely doesn't exist). Populated
-                // JSON falls through (we don't model its shape → no emit).
-                run {
-                    if (!isPropertyAccessShape || propName.isEmpty()) return@run
-                    val spec = getImportEqualsSpecifier(identSymbol) ?: return@run
-                    if (!spec.endsWith(".json")) return@run
-                    val content = resolveJsonModuleContent(spec) ?: return@run
-                    val stripped = content.replace(Regex("\\s"), "")
-                    if (stripped.isNotEmpty() && stripped != "{}") return@run
-                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type '{}'.",
-                        category = DiagnosticCategory.Error, code = 2339,
-                        fileName = fileName, line = line, character = character,
-                        start = diagStart, length = diagLength,
-                    ))
-                    return
-                }
-                // B114: module-namespace property access via `import Foo = require("./b")`
-                // — emit TS2339 when `Foo.x` accesses a member the resolved MODULE does not
-                // export (display `typeof import("b")`). FP firewall (load-bearing): the
-                // target must resolve to a `.ts`/`.d.ts` FILE (explicit `export` statements →
-                // reliable tracking; `.js`/CJS targets are EXCLUDED because our
-                // module.exports analysis is incomplete and would FP), the alias must resolve
-                // to a Module symbol (an `export =` alias resolves to a VALUE, not a module —
-                // handled by the B98.r52 anon-object branch above), the target file must have
-                // NO `export * from` re-export (those add members absent from `locals`), and
-                // the property must be absent from the module's exports.
-                run {
-                    if (!isPropertyAccessShape || propName.isEmpty() ||
-                        propName[0] in '0'..'9' || propName in RUNTIME_PROPERTIES) return@run
-                    val spec = getImportEqualsSpecifier(identSymbol) ?: return@run
-                    val decl = identSymbol.declarations.firstOrNull { it is ImportEqualsDeclaration }
-                    val targetFile = resolveModuleSpecifier(spec, decl) ?: return@run
-                    if (!(targetFile.endsWith(".ts") || targetFile.endsWith(".tsx"))) return@run
-                    val targetResult = fileResults[targetFile] ?: return@run
-                    // FP firewall: a `export * from "..."` re-export contributes members not
-                    // present in `locals` → bail rather than risk a false TS2339.
-                    val hasStarReexport = targetResult.sourceFile.statements.any {
-                        it is ExportDeclaration && it.exportClause == null && it.moduleSpecifier != null
-                    }
-                    if (hasStarReexport) return@run
-                    val resolved = resolveAlias(identSymbol)
-                    if (!resolved.flags.hasAny(SymbolFlags.Module)) return@run
-                    val exports = resolved.exports ?: return@run
-                    if (exports.containsKey(propName)) return@run
-                    val base = targetFile.substringAfterLast('/')
-                        .removeSuffix(".d.ts").removeSuffix(".tsx").removeSuffix(".ts")
-                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$propName' does not exist on type 'typeof import(\"$base\")'.",
-                        category = DiagnosticCategory.Error, code = 2339,
-                        fileName = fileName, line = line, character = character,
-                        start = diagStart, length = diagLength,
-                    ))
-                    return
-                }
-                // Skip import aliases — can't reliably resolve imported module exports
-                if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return
-                if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class) &&
-                    !identSymbol.flags.hasAny(SymbolFlags.Variable)) {
-                    // B360: a UMD global (`export as namespace X`) — the parser misparses
-                    // the construct into a bogus `namespace X` whose exports do NOT
-                    // reflect the real module's exports. Member access is unknowable — bail.
-                    if (identName in umdGlobalNames) return
-                    // B63.34: Skip the namespace path when the symbol ALSO carries Variable
-                    // flag — typically caused by `mergeSymbolTable` polluting an unrelated
-                    // module symbol with a same-named `let`/`const` declaration. In that
-                    // case, the variable's type annotation should drive property lookup
-                    // (falls through to the `getTypeOfSymbol(identSymbol)` branch below).
-                    val exports = identSymbol.exports
-                    if (exports != null) {
-                        // B98.r92: VALUE access `Foo2.Bar` where `Bar` in Foo2 is a
-                        // NON-exported nested namespace (value-side hidden) plus an
-                        // exported `interface Bar` (type-only). `isNameExportedFromNamespace`
-                        // returns true (interface export / Module flag), suppressing the
-                        // error — but for a value access neither is reachable → TS2339.
-                        // Narrow gate: non-ambient enclosing ns + a hidden (non-exported)
-                        // nested namespace of that name + NO value-accessible export.
-                        if (isPropertyAccessShape && propName.isNotEmpty() && propName[0] !in '0'..'9' &&
-                            propName !in RUNTIME_PROPERTIES &&
-                            shouldEmitTs2339ForHiddenNamespaceMember(identSymbol, propName)) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type 'typeof $identName'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                        if (isNameExportedFromNamespace(identSymbol, propName)) return
-                        // Enum members are always accessible on the enum type
-                        if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return
-                        if (propName in RUNTIME_PROPERTIES) return
-                        val typeName = "typeof $identName"
-                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                        // B241: a later-lib namespace member (`Intl.PluralRules`) gets
-                        // TS2550 with the lib hint instead of plain TS2339.
-                        val nsMinTarget = LIB_MIN_TARGET["$identName.$propName"]
-                        if (nsMinTarget != null && !libFeatureAvailable(nsMinTarget) &&
-                            identSymbol.declarations.all { it in builtinLibDecls }) {
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '$typeName'. Do you need to change your target library? Try changing the 'lib' compiler option to '${nsMinTarget.name.lowercase()}' or later.",
-                                category = DiagnosticCategory.Error, code = 2550,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                            return
-                        }
-                        // A USER type-only / UNINSTANTIATED namespace (only types/interfaces, no
-                        // value exports) used in VALUE position is owned by TS2708 ("Cannot use
-                        // namespace as a value") — don't ALSO emit TS2339 for a member access on it
-                        // (namespaceMergedWithImportAliasNoCrash: `Library.foo`). Excludes lib
-                        // namespaces (Intl etc.), whose TS2550 lib-target hint above already returned.
-                        val nsDecls = identSymbol.declarations.filterIsInstance<ModuleDeclaration>()
-                        if (nsDecls.isNotEmpty() && nsDecls.none { isNamespaceInstantiated(it) } &&
-                            identSymbol.declarations.none { it in builtinLibDecls }) return
-                        diagnostics.add(Diagnostic(
-                            message = "Property '$propName' does not exist on type '$typeName'.",
-                            category = DiagnosticCategory.Error, code = 2339,
-                            fileName = fileName, line = line, character = character,
-                            start = diagStart, length = diagLength,
-                        ))
-                        return
-                    }
-                    return
-                }
-
-                // B95e (round 82): enum-receiver missing member, e.g. `U8.bit_2` where the
-                // enum U8 (RegularEnum, no Module flag → not handled above) has member BIT_2.
-                // TS2551 "Property 'bit_2' does not exist on type 'typeof U8'. Did you mean
-                // 'BIT_2'?" + related TS2728 at the member declaration. Falls to plain TS2339
-                // when no close spelling match. Gated on a pure Enum symbol whose exports hold
-                // the members (always — the receiver here is already an Identifier).
-                run {
-                    val enumExports = identSymbol.exports
-                    // Only PROPERTY access `E.foo` (isPropertyAccessShape) — NOT element access
-                    // `E[0]` (numeric enum reverse-mapping `E[0]` is valid) nor `E["x"]`. Also
-                    // skip an all-numeric propName defensively (reverse mapping).
-                    val isNumericProp = propName.isNotEmpty() && propName.all { it in '0'..'9' }
-                    if (identSymbol.flags.hasAny(SymbolFlags.Enum)
-                        && !identSymbol.flags.hasAny(SymbolFlags.Module)
-                        && enumExports != null
-                        && isPropertyAccessShape
-                        && !isNumericProp
-                    ) {
-                        if (enumExports.containsKey(propName) || propName in RUNTIME_PROPERTIES) return
-                        val typeName = "typeof $identName"
-                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
-                        val suggestion = getSpellingSuggestionFromNames(propName, enumExports.keys)
-                        if (suggestion != null) {
-                            val memberDecl = enumExports[suggestion]?.declarations?.firstOrNull() as? EnumMember
-                            val related = memberDecl?.let { md ->
-                                val nm = md.name
-                                val namePos = nm.pos
-                                val nameLen = (nm as? Identifier)?.text?.length ?: (nm.end - nm.pos).coerceAtLeast(1)
-                                val (rl, rc) = getLineAndCharacterOfPosition(source, namePos)
-                                listOf(Diagnostic(
-                                    message = "'$suggestion' is declared here.",
-                                    category = DiagnosticCategory.Message, code = 2728,
-                                    fileName = fileName, line = rl, character = rc,
-                                    start = namePos, length = nameLen,
-                                ))
-                            } ?: emptyList()
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
-                                category = DiagnosticCategory.Error, code = 2551,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                                relatedInformation = related,
-                            ))
-                        } else {
-                            diagnostics.add(Diagnostic(
-                                message = "Property '$propName' does not exist on type '$typeName'.",
-                                category = DiagnosticCategory.Error, code = 2339,
-                                fileName = fileName, line = line, character = character,
-                                start = diagStart, length = diagLength,
-                            ))
-                        }
-                        return
-                    }
-                }
-
-                // Level S: everything above is the specialised emission gates —
-                // their close is skipped by every gate that FIRES, so the `calls`
-                // column is the population that fell through to the general path.
-                CpaSections.closeN(CpaSections.N_OTI_GATES, otT0)
-                val otT1 = CpaSections.t()
-                val rawType = getTypeOfSymbol(identSymbol)
-                CpaSections.closeN(CpaSections.N_OTI_TYPEOF, otT1)
-                val otT2 = CpaSections.t()
-                // B186: a BindingElement-declared name (destructured binding — never typed by
-                // getTypeOfSymbol, which has no BindingElement arm) whose currentLocalTypes
-                // entry is a concrete primitive (populated by the B186 destructuring
-                // recognizer) proceeds through the apparent-type path instead of bailing.
-                var bindingElementPrimitive: Type? = null
-                if (rawType === anyType || rawType === errorType || rawType === unknownType) {
-                    val lt = currentLocalTypes[identName]
-                    if (identSymbol.valueDeclaration is BindingElement &&
-                        (lt === stringType || lt === numberType || lt === booleanType)) {
-                        bindingElementPrimitive = lt
-                    } else {
-                        tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
-                        return
-                    }
-                }
-                // For primitive types (e.g. `declare var foo: number`), resolve to the
-                // wrapper interface's apparent type so property lookups fire TS2339 when
-                // the property doesn't exist on the wrapper. Display uses the primitive name.
-                // Narrow gate: only fire for file-level Variable declarations with an
-                // explicit type annotation — avoids FPs on function params/destructured
-                // bindings whose inferred types may be stale primitives.
-                // B69.11: also accept top-level (parent == null) literal-initialized vars
-                // (`var x = 5;` / `var s = "y";` / `var b = true|false;`). Skip when the
-                // name is locally shadowed via `currentLocalTypes` (function/arrow scope) —
-                // detected by comparing the local type to the file-level symbol type: if
-                // they differ (after literal widening), an inner scope shadows the file
-                // var and the gate must not fire.
-                // B69.12: namespace-local-var shadow case (enclosingNsShadow != null) is
-                // also literal-init eligible — bypass the parent==null check because
-                // namespace-internal vars have a parent. localShadow is irrelevant here
-                // (currentLocalTypes doesn't carry namespace-internal vars).
-                val exprType = if (bindingElementPrimitive != null) {
-                    displayTypeOverride = bindingElementPrimitive
-                    getApparentType(bindingElementPrimitive)
-                } else if (rawType !is Type.Object) {
-                    val decl = identSymbol.valueDeclaration
-                    val annotated = decl is VariableDeclaration && decl.type != null
-                    val isNsShadow = enclosingNsShadow != null
-                    val localShadow = !isNsShadow && currentLocalTypes[identName]?.let {
-                        it !== rawType && it !== getWidenedLiteralType(rawType)
-                    } == true
-                    val literalInferred = !annotated && decl is VariableDeclaration &&
-                        (isNsShadow || identSymbol.parent == null) &&
-                        identSymbol.declarations.size == 1 &&
-                        !localShadow && when (val init = decl.initializer) {
-                            is NumericLiteralNode -> true
-                            is StringLiteralNode -> true
-                            is Identifier -> init.text == "true" || init.text == "false"
-                            else -> false
-                        }
-                    // B83.4i: also accept a `CallExpression`-initialized var whose
-                    // resolved type is a concrete primitive intrinsic. `getTypeOfSymbol`
-                    // (above) already resolved the call's return type — when it lands on
-                    // a non-Object primitive (number/string/boolean/etc., NOT any/error/
-                    // unknown, filtered above), property access on it is checkable via the
-                    // wrapper apparent type, exactly like a literal-initialized var. Gate
-                    // mirrors `literalInferred` (top-level OR namespace-shadow, single
-                    // declaration, not locally shadowed) so it only fires for the same
-                    // narrow file-level var population. Unblocks `var n = arr.map(...)
-                    // .reduce(...); n.bogus` → TS2339 (genericReduce). Skipped when the
-                    // call's return type is a Type.Object (handled by the else branch).
-                    // Exclude when the name is bound by an enclosing function/method
-                    // parameter (including destructured patterns like `[x]` / `{x}`) —
-                    // there the identifier refers to the param, not the file-level var,
-                    // so the file-var's call-inferred type must NOT drive TS2339. This is
-                    // the `function foo([x]: {a}[]){ return x.a }` + `var x = foo(...)`
-                    // shadow case (functionOverloads43). The `localShadow` check above
-                    // misses destructured params because they aren't in `currentLocalTypes`;
-                    // `currentParamBindingNames` tracks destructured-param binding names
-                    // for exactly this purpose (populated in populateParameterLocalTypes).
-                    val shadowedByParam = identName in currentParamBindingNames
-                    val callInferred = !annotated && !literalInferred && !shadowedByParam &&
-                        decl is VariableDeclaration &&
-                        (isNsShadow || identSymbol.parent == null) &&
-                        identSymbol.declarations.size == 1 &&
-                        !localShadow && decl.initializer is CallExpression
-                    if ((!annotated && !literalInferred && !callInferred) || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return
-                    if (propName.isEmpty()) return
-                    displayTypeOverride = if (literalInferred) getWidenedLiteralType(rawType) else rawType
-                    getApparentType(rawType)
-                } else rawType
-                if (exprType !is Type.Object) return
-                // For variables, skip class-typed access (may be narrowed via instanceof).
-                // Anonymous object types (typeSym == null) ARE checkable — e.g.
-                // `declare var x: { a: string }; x.missing` → TS2339.
-                if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
-                    val typeSym = exprType.symbol
-                    if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
-                        // Instance-side class type (Type.Interface) — the narrowing concern
-                        // applies: the variable may be narrowed by `instanceof`, so bail.
-                        // Constructor-side `typeof K` (Type.Object with Class symbol) carries
-                        // the static members as properties and falls through to normal
-                        // property-missing checks (TS2339) below.
-                        if (exprType is Type.Interface) {
-                            if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return
-                            tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
-                            return
-                        }
-                    }
-                }
-                CpaSections.closeN(CpaSections.N_OTI_TAIL, otT2)
-                exprType
-            } else {
-                // Fallback: try resolving from currentLocalTypes (function params, local vars)
-                val rawType = getTypeOfIdentifier(objectExpr)
-                if (rawType === anyType || rawType === errorType || rawType === unknownType) return
-                // 16.0: For primitive types, use the apparent (wrapper) type so that
-                // e.g. `s: string` can detect `s.hmm` as TS2339 via the String wrapper.
-                val exprType = if (rawType !is Type.Object) {
-                    displayTypeOverride = rawType
-                    getApparentType(rawType)
-                } else rawType
-                if (exprType !is Type.Object) return
-                // For local variables, skip class-typed (may be narrowed) — same
-                // instance-side-only gate as the globals branch above.
+                    !localShadow && decl.initializer is CallExpression
+                if ((!annotated && !literalInferred && !callInferred) || !identSymbol.flags.hasAny(SymbolFlags.Variable)) return null
+                if (propName.isEmpty()) return null
+                displayTypeOverride = if (literalInferred) getWidenedLiteralType(rawType) else rawType
+                getApparentType(rawType)
+            } else rawType
+            if (exprType !is Type.Object) return null
+            // For variables, skip class-typed access (may be narrowed via instanceof).
+            // Anonymous object types (typeSym == null) ARE checkable — e.g.
+            // `declare var x: { a: string }; x.missing` → TS2339.
+            if (identSymbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
                 val typeSym = exprType.symbol
                 if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
+                    // Instance-side class type (Type.Interface) — the narrowing concern
+                    // applies: the variable may be narrowed by `instanceof`, so bail.
+                    // Constructor-side `typeof K` (Type.Object with Class symbol) carries
+                    // the static members as properties and falls through to normal
+                    // property-missing checks (TS2339) below.
                     if (exprType is Type.Interface) {
-                        if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return
+                        if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return null
                         tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
-                        return
+                        return null
                     }
                 }
-                // Skip malformed types (e.g., unresolved mapped types with empty property names)
-                resolveStructuredTypeMembers(exprType)
-                if (exprType.properties != null && exprType.properties!!.any { it.name.isEmpty() }) return
-                CpaSections.closeN(CpaSections.N_OTI_ELSE, otT0)
-                exprType
+            }
+            CpaSections.closeN(CpaSections.N_OTI_TAIL, otT2)
+            return Pair(exprType, displayTypeOverride)
+        } else {
+            // Fallback: try resolving from currentLocalTypes (function params, local vars)
+            val rawType = getTypeOfIdentifier(objectExpr)
+            if (rawType === anyType || rawType === errorType || rawType === unknownType) return null
+            // 16.0: For primitive types, use the apparent (wrapper) type so that
+            // e.g. `s: string` can detect `s.hmm` as TS2339 via the String wrapper.
+            val exprType = if (rawType !is Type.Object) {
+                displayTypeOverride = rawType
+                getApparentType(rawType)
+            } else rawType
+            if (exprType !is Type.Object) return null
+            // For local variables, skip class-typed (may be narrowed) — same
+            // instance-side-only gate as the globals branch above.
+            val typeSym = exprType.symbol
+            if (typeSym != null && typeSym.flags.hasAny(SymbolFlags.Class)) {
+                if (exprType is Type.Interface) {
+                    if (tryEmitStaticAccessTs2576(typeSym, propName, ts2576Start, ts2576Length, suggestionKey, source, fileName, exprType)) return null
+                    tryEmitClassInstanceMissingTs2339(typeSym, rawType, propName, objectExpr, diagStart, diagLength, source, fileName)
+                    return null
+                }
+            }
+            // Skip malformed types (e.g., unresolved mapped types with empty property names)
+            resolveStructuredTypeMembers(exprType)
+            if (exprType.properties != null && exprType.properties!!.any { it.name.isEmpty() }) return null
+            CpaSections.closeN(CpaSections.N_OTI_ELSE, otT0)
+            return Pair(exprType, displayTypeOverride)
+        }
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R section `R_OT_PRE`, verbatim. Returns true
+     * where the original code returned from the whole function.
+     */
+    private fun cmamCheckCastAndNamespaceReceiver(
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        // Narrow: `ns.Class.prop` — namespace import alias + class in target module's
+        // locals + prop is not a static member. Emits TS2339 with `typeof Class` display.
+        CpaSections.atR(CpaSections.R_OT_PRE)
+        if (objectExpr is PropertyAccessExpression &&
+            objectExpr.expression is Identifier &&
+            tryEmitNamespaceMemberTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
+            return true
+        }
+        // 17.22: `E.A.prop` / `M.N.E.A.prop` — enum-member access then property. Emits
+        // TS2339 with `E.A` display when prop is absent from both Number and String
+        // wrapper apparent types. Base may be a bare Identifier or a qualified chain.
+        if (objectExpr is PropertyAccessExpression &&
+            (objectExpr.expression is Identifier || objectExpr.expression is PropertyAccessExpression) &&
+            tryEmitEnumMemberAccessTs2339(objectExpr, propName, diagStart, diagLength, source, fileName)) {
+            return true
+        }
+        // B98.r100 (structural-receiver TS2339, narrowest slice): a property access
+        // on a CAST receiver `(x as T).p` / `<T>x.p` where T resolves to a base-less,
+        // signature-less, index-signature-less NAMED Interface that lacks `p`. A cast
+        // is an EXPLICIT type assertion, so a missing member is unambiguously TS2339
+        // (`missingDomElement_UsingDomLib`: `(({}) as any as HTMLMissingElement).textContent`
+        // where `interface HTMLMissingElement {}`). `checkMemberAccessMissing` otherwise
+        // bails on non-Identifier receivers (the broad structural-receiver gap); this is
+        // the FP-safest decomposed slice — gated to a cast receiver + a simple named
+        // interface with no base/sigs/index (so apparent-type/Object.prototype members
+        // can't be missed) + propName not a RUNTIME_PROPERTY.
+        run {
+            var castInner: Expression = objectExpr
+            while (castInner is ParenthesizedExpression) castInner = castInner.expression
+            if ((castInner is AsExpression || castInner is TypeAssertionExpression) &&
+                propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
+                val castType = getTypeOfExpression(objectExpr)
+                if (castType is Type.Interface && castType.symbol != null &&
+                    castType.baseTypes.isNullOrEmpty() &&
+                    castType.callSignatures.isNullOrEmpty() &&
+                    castType.constructSignatures.isNullOrEmpty() &&
+                    castType.stringIndexInfo == null && castType.numberIndexInfo == null) {
+                    resolveStructuredTypeMembers(castType)
+                    if (getPropertyOfType(castType, propName) == null) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                        diagnostics.add(Diagnostic(
+                            message = "Property '$propName' does not exist on type '${typeToString(castType)}'.",
+                            category = DiagnosticCategory.Error, code = 2339,
+                            fileName = fileName, line = line, character = character,
+                            start = diagStart, length = diagLength,
+                        ))
+                        return true
+                    }
+                }
             }
         }
+        return false
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R section `R_OT_UNION` (the body of the
+     * `if (rawForNarrowing is Type.Union)` block), verbatim. Returns true where the
+     * original code returned from the whole function.
+     */
+    private fun cmamCheckUnionReceiverNarrowing(
+        rawForNarrowing: Type.Union,
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        // Round 792 (ENGINE.2e), level S: the plain walk, the round-424
+        // retry and the elaboration are three different questions and the
+        // row that holds them is the second-largest in the function. The
+        // bracket around the plain walk is the round-790 one — two
+        // monotone counter reads, immediately around the call, because
+        // anything between them re-enters the checker.
+        val uT0 = CpaSections.t()
+        val uObs0 = narrowRetryRelevantObs
+        val uLaunch0 = narrowWalkLaunches
+        val narrowed = getNarrowedTypeForReference(rawForNarrowing, objectExpr)
+        val uLoopFree = narrowRetryRelevantObs == uObs0 && narrowWalkLaunches > uLaunch0
+        CpaSections.closeN(CpaSections.N_U_PLAIN, uT0)
+        // M1.12 (round 424): a read inside a LOOP body walks back through a
+        // FlowLoopLabel, where the plain variant washes back to the declared
+        // union (back-edge safety), so a PRE-loop guard (`if (!isString(text))
+        // return; … while (…) text.charCodeAt(…)` — tsc's own parseResponseFile)
+        // never suppressed the union TS2339. Retry with the loop-entry-following
+        // variant, SUPPRESSION-ONLY (every non-nullish loop-narrowed member
+        // resolves the property → return, no diagnostic): the emission paths
+        // below keep the PLAIN result, so a loop back-edge can never mint a new
+        // narrowed-to-never / partial-coverage emission (the B78.2 soundness
+        // concern — back-edge reassignment is not tracked — only ever costs a
+        // false negative here, never a new FP). The "plain walk did not
+        // narrow" gate is STRUCTURAL, not identity: a 2-antecedent
+        // FlowBranchLabel (any `&&`/`||` condition on the path) unions
+        // [declared, declared] and `getUnionType` MINTS a fresh Type.Union
+        // (it does not intern — CLAUDE.md), so identity `===` misses the
+        // wash whenever the path crosses a branch join.
+        val plainWalkWashed = narrowed === rawForNarrowing ||
+            (narrowed is Type.Union &&
+                narrowed.types.map { it.id }.toSet() ==
+                rawForNarrowing.types.map { it.id }.toSet())
+        if (plainWalkWashed) {
+            val uT1 = CpaSections.t()
+            CpaSections.noteUnionRetry(uLoopFree)
+            // (ENGINE.2f) round 794: SUBSTITUTE the plain walk's own result
+            // for the retry's when the plain walk provably arrived at no
+            // `FlowLoopLabel` and truncated nowhere (the round-790 bracket
+            // above). The two walkers are line-by-line mirrors differing in
+            // that ONE arm, so with the arm unreached the mirror makes the
+            // identical traversal and answers what the plain walk answered.
+            //
+            // NOT a skip — that would NOT be equivalent. The consumer's first
+            // test is the IDENTITY `loopNarrowed !== rawForNarrowing`, and a
+            // loop-free repeat whose path crosses a branch join mints a FRESH
+            // equal union (`getUnionType` does not intern — CLAUDE.md), so the
+            // block genuinely runs and can suppress. Substituting preserves
+            // both the identity relationship (fresh vs the declared instance)
+            // and the member set, which is everything the consumer reads.
+            val suppress: Boolean
+            if (uLoopFree && !CpaSections.verifyUnionRetry) {
+                suppress = unionRetrySuppresses(narrowed, rawForNarrowing, propName)
+            } else {
+                val loopNarrowed =
+                    getNarrowedTypeForReferenceFollowLoopEntry(rawForNarrowing, objectExpr)
+                val rewalked = unionRetrySuppresses(loopNarrowed, rawForNarrowing, propName)
+                if (CpaSections.verifyUnionRetry &&
+                    (uLoopFree || CpaSections.verifyUnionRetryAll)
+                ) {
+                    CpaSections.noteUnionRetryVerified(
+                        instanceDiff = loopNarrowed !== narrowed,
+                        memberDiff = unionMemberIdSet(loopNarrowed) != unionMemberIdSet(narrowed),
+                        verdictDiff = rewalked !=
+                            unionRetrySuppresses(narrowed, rawForNarrowing, propName),
+                    )
+                }
+                // The re-walked verdict is HONOURED, so a `--verifyUnionRetry`
+                // run reproduces the pre-change binary by construction.
+                suppress = rewalked
+            }
+            CpaSections.closeN(
+                if (uLoopFree) CpaSections.N_U_RETRY_LF else CpaSections.N_U_RETRY, uT1
+            )
+            if (suppress) {
+                CpaSections.noteUnionRetrySuppressed(uLoopFree)
+                return true
+            }
+        }
+        // Level S: the elaboration. Its close is skipped by the union
+        // block's own EMISSION returns (225 exits on the profile), so its
+        // `calls` column is the SILENT population, not the whole one.
+        val uT2 = CpaSections.t()
+        if (narrowed === neverType) {
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type 'never'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return true
+        }
+        // Phase 17 / Blocker #1 step 2g: multi-member union TS2339 elaboration.
+        // When the narrowed receiver is still a Union with at least one member
+        // missing the property AND at least one member having it (partial
+        // coverage), emit TS2339 with the union display + a chain line naming
+        // the first missing member. Mirrors TypeScript's baseline format.
+        //
+        // 17.7b: gate widened from "all missing are primitives" to "any missing
+        // member" once 17.7a discriminant-property narrowing landed — the prior
+        // restriction existed only because un-narrowed discriminated unions
+        // (e.g. `partiallyDiscriminantedUnions_ts`'s `if (ab.type === 'a') if
+        // (ab.subtype === 2) ab.foo`) would FP. With discriminant narrowing in
+        // place, the union collapses to the right member and this branch is
+        // skipped (single Type.Object, not Union). Only patterns that genuinely
+        // shouldn't narrow (e.g. `controlFlowAliasing_ts`'s `const isFoo =
+        // obj.kind === 'foo'; if (isFoo) obj.foo` — TypeScript doesn't track
+        // aliased conditions for narrowing) reach this elaboration with a
+        // partial-coverage Union.
+        // B293: a union whose every member is WELL-RESOLVED (a string/number
+        // literal, or a single-decl heritage-free user interface) supports the
+        // full tsc behavior: all-missing emission (not just partial coverage),
+        // tsc type-id member ordering (display + first-missing chain pick),
+        // alias-name receiver displays ('AB'), the 'length' prototype-gate
+        // bypass (interfaces genuinely lack it), and TS2551 spelling
+        // suggestions from the union's COMMON properties.
+        val wellResolvedUnionMember = { m: Type ->
+            m is Type.StringLiteral || m is Type.NumberLiteral ||
+                (m is Type.Interface &&
+                    (m.symbol?.declarations?.singleOrNull() as? InterfaceDeclaration)
+                        ?.let { it.heritageClauses.isNullOrEmpty() && it !in builtinLibDecls } == true)
+        }
+        val allWellResolved = narrowed is Type.Union &&
+            narrowed.types.filterNot { isNullishConstituent(it) }
+                .let { it.isNotEmpty() && it.all(wellResolvedUnionMember) }
+        if (narrowed is Type.Union && propName.isNotEmpty() &&
+            (propName !in RUNTIME_PROPERTIES || (allWellResolved && propName == "length"))) {
+            // B277: nullish constituents never participate in the TS2339 union
+            // elaboration — tsc reports nullable receivers via TS18048/TS2532
+            // (and `x?.y` checks NonNullable(x)), never a TS2339 chain naming
+            // 'undefined'/'null'. Filtering them prevents the `x?.y` FP.
+            val members = narrowed.types.filterNot { isNullishConstituent(it) }
+            fun memberHasIt(m: Type): Boolean {
+                if (m === anyType || m === errorType || m === unknownType) return true
+                if (typeHasOwnProperty(getApparentType(m), propName)) return true
+                // round 419: an INTERSECTION member is `Type.Intersection`, not `Type.Object`,
+                // so `typeHasOwnProperty` bails — fold its constituents (a property exists on
+                // `A & B` iff ANY constituent has it), else `PropertyAccessExpression |
+                // (ElementAccessExpression & Declaration & {…})` FP's TS2339 on `.parent`.
+                return resolveMemberPropertyType(m, propName) != null
+            }
+            val missingMembers = members.filter { !memberHasIt(it) }
+            val anyHasIt = members.any { memberHasIt(it) }
+            // Round 512 (post-retire FN unmasked): a union of ALL-ANONYMOUS plain
+            // object members (`type Shape = {width} | {height}`) missing the
+            // property EVERYWHERE is a genuine tsc error — pre-retire the
+            // conflated receiver resolved to a sibling interface and fired
+            // through the single-interface branch by accident. Anonymous
+            // TypeLiteral members have reliably-synthesized member tables, so
+            // the all-missing verdict is trustworthy; index-signature /
+            // callable members bail (an index sig legitimately provides any
+            // property). tsc emits NO member chain for the all-missing case.
+            val allAnonPlainObjects = members.isNotEmpty() && members.all { m ->
+                m is Type.Object && m !is Type.Interface && m !is Type.Reference &&
+                    m.symbol == null && run {
+                        resolveStructuredTypeMembers(m)
+                        m.stringIndexInfo == null && m.numberIndexInfo == null &&
+                            m.callSignatures.isNullOrEmpty() &&
+                            m.constructSignatures.isNullOrEmpty() &&
+                            !m.members.isNullOrEmpty()
+                    }
+            }
+            if (missingMembers.isNotEmpty() && (anyHasIt || allWellResolved || allAnonPlainObjects)) {
+                val orderedMissing = if (allWellResolved) missingMembers.sortedBy { it.id } else missingMembers
+                val missingMember = orderedMissing.first()
+                // Receiver annotated with a bare alias-of-union reference displays
+                // the ALIAS name (tsc shows 'AB', not 'A | B').
+                val aliasName: String? = run {
+                    val recvId = objectExpr as? Identifier ?: return@run null
+                    val rsym = currentFileLocals?.get(recvId.text) ?: globals[recvId.text] ?: return@run null
+                    val vd = rsym.declarations.firstOrNull { it is VariableDeclaration } as? VariableDeclaration
+                    val ann = vd?.type as? TypeReference ?: return@run null
+                    if (ann.typeArguments != null) return@run null
+                    val annName = (ann.typeName as? Identifier)?.text ?: return@run null
+                    val asym = currentFileLocals?.get(annName) ?: globals[annName] ?: return@run null
+                    val alias = asym.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
+                    if (alias?.type is UnionType) annName else null
+                }
+                val unionDisplay = aliasName ?: typeToString(
+                    if (allWellResolved) Type.Union(members.sortedBy { it.id }) else narrowed)
+                val memberDisplay = typeToString(missingMember)
+                // TS2551 for an all-interface well-resolved union when the union's
+                // COMMON property set carries a close spelling match.
+                var suggestion: String? = null
+                if (allWellResolved && members.all { it is Type.Interface }) {
+                    val commonProps = members.map { m ->
+                        resolveStructuredTypeMembers(m as Type.Interface)
+                        (m).properties?.mapTo(mutableSetOf()) { it.name } ?: mutableSetOf()
+                    }.reduceOrNull { a, b -> a.apply { retainAll(b) } } ?: mutableSetOf()
+                    suggestion = getSpellingSuggestionFromNames(propName, commonProps)
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = if (suggestion != null)
+                        "Property '$propName' does not exist on type '$unionDisplay'. Did you mean '$suggestion'?"
+                    else
+                        "Property '$propName' does not exist on type '$unionDisplay'.",
+                    category = DiagnosticCategory.Error, code = if (suggestion != null) 2551 else 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                    // The round-512 all-missing anonymous case carries no member
+                    // chain (tsc names a member only when SOME member has it);
+                    // the pre-existing partial/well-resolved paths keep theirs.
+                    messageChain = if (anyHasIt || allWellResolved)
+                        listOf("  Property '$propName' does not exist on type '$memberDisplay'.")
+                    else emptyList(),
+                ))
+                return true
+            }
+        }
+        // Phase 17 / Blocker #1 step 2h (17.7c/17.7d): narrowed-to-single-Object
+        // emission. When discriminant/typeof/instanceof narrowing collapses a Union
+        // to a single Type.Object — anonymous (`{ kind: 'a', a: string }`) or named
+        // interface without base types — accessing a property missing on that single
+        // member fires TS2339. Conservative gates:
+        //   - `narrowed` must be a Type.Object that is NOT a Type.Reference
+        //     (generic instantiation — `resolveGenericPropertyType` interaction
+        //     not handled here).
+        //   - For Type.Interface variants: skip if base types are non-empty
+        //     (mirrors the line ~40300 skip — incomplete inheritance resolution).
+        //     17.7d widening: allow Type.Interface with empty/null baseTypes (the
+        //     standard discriminated-union case `interface A { kind:'a'; aProps:string }`).
+        //   - Narrowing must have ACTUALLY changed the type (`narrowed !== rawForNarrowing`);
+        //   - `propName` must not be empty or a RUNTIME_PROPERTIES member;
+        //   - the property must not exist on the narrowed type.
+        // Display uses the narrowed type's string form (NOT the un-narrowed union),
+        // matching TypeScript's baseline format for narrowed property access.
+        if (narrowed is Type.Object && narrowed !is Type.Reference &&
+            propName.isNotEmpty() && propName !in RUNTIME_PROPERTIES
+        ) {
+            val skipForBaseTypes = narrowed is Type.Interface &&
+                narrowed.baseTypes != null && narrowed.baseTypes!!.isNotEmpty()
+            if (!skipForBaseTypes) {
+                resolveStructuredTypeMembers(narrowed)
+                // Round 479: an index signature provides EVERY (string-index) /
+                // numeric (number-index) property — `settings.typeScriptVersion`
+                // on `interface CompilerSettings { [name: string]: string }` is
+                // legal, so a narrowed single-interface receiver with an index
+                // sig never draws TS2339 (tsc resolves the access to the index
+                // value type). The un-narrowed path already has this bail; the
+                // narrowed-single-Object emission missed it.
+                val indexSigProvides = narrowed.stringIndexInfo != null ||
+                    (narrowed.numberIndexInfo != null && isNumericLiteralName(propName))
+                if (!indexSigProvides && getPropertyOfType(narrowed, propName) == null) {
+                    val narrowedDisplay = typeToString(narrowed)
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$narrowedDisplay'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return true
+                }
+            }
+        }
+        CpaSections.closeN(CpaSections.N_U_ELAB, uT2)
+        return false
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R section `R_OT_NONIDENT` (the body of the
+     * `if (objectExpr !is Identifier)` block), verbatim. Its bare `return`s stay
+     * bare: the caller returns unconditionally after this call, exactly as the
+     * original block's trailing `return` did.
+     */
+    private fun cmamCheckNonIdentifierReceiver(
+        objectExpr: Expression,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        keySuggestion: String?,
+    ) {
+        // 17.130: `ClassIdent.prototype.X` — `Class.prototype` doesn't resolve to
+        // the class's instance type in our checker (no `prototype` member on the
+        // static side), so the receiver type is anyType and the standard checks bail.
+        // Detect the syntactic shape and route to `tryEmitClassInstanceMissingTs2339`
+        // with the class symbol's declared instance type so missing-property emission
+        // fires on `A.prototype.foo` when `foo` isn't on A's instance shape.
+        if (objectExpr is PropertyAccessExpression &&
+            objectExpr.name.text == "prototype" &&
+            objectExpr.expression is Identifier
+        ) {
+            val classIdent = objectExpr.expression
+            val rawSym = currentFileLocals?.get(classIdent.text) ?: globals[classIdent.text]
+            val classSym = rawSym?.let {
+                if (it.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(it) else it
+            }
+            if (classSym != null && classSym.flags.hasAny(SymbolFlags.Class)) {
+                val classType = getDeclaredTypeOfSymbol(classSym)
+                if (classType is Type.Interface) {
+                    tryEmitClassInstanceMissingTs2339(classSym, classType, propName, objectExpr, diagStart, diagLength, source, fileName)
+                }
+            }
+        }
+        // B98.r138 (TS2339): a QUALIFIED namespace member that is a NON-EXPORTED
+        // import alias — e.g. `new m2.m3.c()` where `c` inside `namespace m3` is
+        // `import c = x.c` WITHOUT an `export` keyword, so it is not accessible
+        // from outside m3 → "Property 'c' does not exist on type 'typeof m3'.".
+        // FP firewall (load-bearing — an earlier `isNameExportedFromNamespace`
+        // gate over-fired on legitimately-exported function/class/var members of
+        // ambient namespaces): fire ONLY when the resolved member symbol's
+        // declarations are ALL non-exported `ImportEqualsDeclaration`s (a private
+        // import alias) — exported members and `export import` aliases are excluded
+        // by construction; ambient `declare namespace` (NamespaceModule) receivers
+        // are excluded (their members are implicitly exported).
+        if (objectExpr is PropertyAccessExpression &&
+            (keySuggestion == null || keySuggestion.startsWith(".")) &&
+            propName.isNotEmpty() && propName[0] !in '0'..'9' &&
+            propName !in RUNTIME_PROPERTIES) {
+            val recvSym = resolveQualifiedValueSymbol(objectExpr)
+            val memberSym = recvSym?.takeIf {
+                it.flags.hasAny(SymbolFlags.Module) &&
+                    !it.flags.hasAny(SymbolFlags.Class or SymbolFlags.Variable or SymbolFlags.Alias or SymbolFlags.NamespaceModule)
+            }?.exports?.get(propName)
+            if (memberSym != null && memberSym.declarations.isNotEmpty() &&
+                memberSym.declarations.all { it is ImportEqualsDeclaration && ModifierFlag.Export !in it.modifiers }) {
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type 'typeof ${objectExpr.name.text}'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
+                return
+            }
+        }
+        // B130 (TS2339): a QUALIFIED namespace member declared ONLY in a
+        // NON-EXPORTED `namespace X { export var m }` block of a function+namespace
+        // (or multi-block namespace) merge — e.g. `M.foo.x` where `foo` merges
+        // `export function foo`, `export namespace foo { export var y }` (exported
+        // → y visible) and `namespace foo { export var x }` (NOT exported → x not
+        // externally visible). A member only in a non-exported block is never
+        // accessible from outside → "Property 'x' does not exist on type 'typeof
+        // foo'.". FP-safe by construction (a non-exported-block-only member is
+        // always a TS2339 in TS; mirrors B98.r138's non-exported-member rule).
+        if (objectExpr is PropertyAccessExpression &&
+            (keySuggestion == null || keySuggestion.startsWith(".")) &&
+            propName.isNotEmpty() && propName[0] !in '0'..'9' &&
+            propName !in RUNTIME_PROPERTIES) {
+            val recvSym = resolveQualifiedValueSymbol(objectExpr)
+            val nsBlocks = recvSym?.takeIf {
+                it.flags.hasAny(SymbolFlags.Module) && !it.flags.hasAny(SymbolFlags.NamespaceModule)
+            }?.declarations?.filterIsInstance<ModuleDeclaration>() ?: emptyList()
+            if (nsBlocks.size >= 2 && recvSym?.exports?.containsKey(propName) == true) {
+                val inExportedBlock = nsBlocks.any { ModifierFlag.Export in it.modifiers && moduleBlockExports(it, propName) }
+                val inNonExportedBlock = nsBlocks.any { ModifierFlag.Export !in it.modifiers && moduleBlockExports(it, propName) }
+                if (!inExportedBlock && inNonExportedBlock) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'typeof ${objectExpr.name.text}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return
+                }
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R section `R_OT_IDENT`, first half: the
+     * type-side-only bail, the `fn.name` gate and the class-instance gate,
+     * verbatim apart from `isPropertyAccessShape` moving to the caller. Returns
+     * true where the original code returned from the whole function.
+     */
+    private fun cmamCheckIdentSymbolTypeGates(
+        identSymbol: Symbol,
+        identName: String,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        isPropertyAccessShape: Boolean,
+    ): Boolean {
+        // INV.3(d)(ii): a receiver whose resolution has ONLY type-side
+        // declarations while its DECLARING file also namespace-imports the
+        // same name (`import * as B from "./b"` + `interface B` — tsc's
+        // alias+interface merge, noCrashOnImportShadowing) reads its VALUE
+        // side from the namespace import: `B.zzz` resolves the target
+        // module's exports, so every interface-receiver TS2339 path below
+        // is the wrong space. Suppression-only bail (module-member absence
+        // stays owned by the module-receiver branches).
+        if (identSymbol.declarations.any { it is InterfaceDeclaration || it is TypeAliasDeclaration } &&
+            identSymbol.declarations.none {
+                it is ClassDeclaration || it is FunctionDeclaration || it is EnumDeclaration ||
+                    it is VariableDeclaration || it is ModuleDeclaration
+            }) {
+            val typeDecl = identSymbol.declarations.first {
+                it is InterfaceDeclaration || it is TypeAliasDeclaration
+            }
+            val declFile = owningSourceFile(typeDecl)
+            val hasNsImportOfName = declFile?.statements?.any { st ->
+                st is ImportDeclaration &&
+                    (st.importClause?.namedBindings as? NamespaceImport)?.name?.text == identName
+            } == true
+            if (hasNsImportOfName) return true
+        }
+        // B240: `fn.name` where fn is a plain no-param function declaration and
+        // the lib excludes es2015 — Function.name lives in lib.es2015.core, so
+        // the access is TS2339 with the function-type display ('() => void').
+        // Ultra-narrow gate (single corpus consumer): annotation-less no-param
+        // FunctionDeclaration with no value-returning body → '() => void'.
+        if (propName == "name" && !libFeatureAvailable(ScriptTarget.ES2015) &&
+            identSymbol.flags.hasAny(SymbolFlags.Function) &&
+            !identSymbol.flags.hasAny(SymbolFlags.Class or SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable) &&
+            identSymbol.declarations.size == 1 &&
+            identSymbol.exports?.containsKey(propName) != true) {
+            val fnDecl = identSymbol.declarations.firstOrNull() as? FunctionDeclaration
+            if (fnDecl != null && fnDecl.parameters.isEmpty() && fnDecl.type == null &&
+                fnDecl.body?.statements?.none { it is ReturnStatement } == true) {
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property 'name' does not exist on type '() => void'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
+                return true
+            }
+        }
+        // 17.194: TS2339 for `A.foo()` where A is a top-level class and
+        // `foo` is an instance method (not static). Display uses `typeof
+        // ClassName`. Conservative gate: identifier resolves to a Class
+        // symbol with EXACTLY ONE declaration that is a ClassDeclaration
+        // (no merge with namespace/var/function), valueDeclaration is
+        // also that ClassDeclaration (rules out cross-file leaks where
+        // the symbol is mostly a variable but flagged Class), no extends
+        // (heritage complicates static-member lookup), `foo` isn't a
+        // static member, isn't in RUNTIME_PROPERTIES, and isn't an
+        // exported namespace member. Also gated on PropertyAccessExpression
+        // shape (keySuggestion null or starts with `.`) — element access
+        // `C[1]` is NOT diagnosable here (could be reading a static).
+        if (isPropertyAccessShape &&
+            identSymbol.flags.hasAny(SymbolFlags.Class) &&
+            !identSymbol.flags.hasAny(SymbolFlags.Module or SymbolFlags.Alias or SymbolFlags.Variable or SymbolFlags.Function) &&
+            identSymbol.declarations.size == 1 &&
+            propName !in RUNTIME_PROPERTIES &&
+            propName.isNotEmpty() && propName[0] !in '0'..'9') {
+            val classDecl = identSymbol.declarations.firstOrNull() as? ClassDeclaration
+            val isPureClass = classDecl != null && identSymbol.valueDeclaration === classDecl
+            val hasExtends = classDecl?.heritageClauses?.any {
+                it.token == SyntaxKind.ExtendsKeyword
+            } == true
+            if (isPureClass && !hasExtends && !isStaticMemberOfClass(classDecl, propName)) {
+                if (identSymbol.exports?.containsKey(propName) != true) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'typeof $identName'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R section `R_OT_IDENT`, second half: the
+     * import-alias, module/namespace and enum receiver gates, verbatim. Returns
+     * true where the original code returned from the whole function.
+     */
+    private fun cmamCheckIdentSymbolValueGates(
+        identSymbol: Symbol,
+        identName: String,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        isPropertyAccessShape: Boolean,
+    ): Boolean {
+        // === Namespace/Module property access ===
+        // B98.r52: `import x = require('./m')` / `import x from './m'` resolving to
+        // `export = <value>` whose type is an ANONYMOUS object (e.g.
+        // `declare var server: { (): connectExport; foo: Date }` / `var x = {...}`).
+        // The alias isn't a Module/Variable symbol so all other paths bail, but the
+        // resolved value type is a concrete anonymous Type.Object we can check for a
+        // genuinely-missing property. Tightly gated: anonymous (symbol == null, not
+        // Interface/Reference), no index signatures, a real shape, property absent.
+        if (identSymbol.flags.hasAny(SymbolFlags.Alias) &&
+            isPropertyAccessShape && propName.isNotEmpty() &&
+            propName !in RUNTIME_PROPERTIES && propName[0] !in '0'..'9') {
+            val aliasType = getTypeOfSymbol(identSymbol)
+            if (aliasType is Type.Object && aliasType !is Type.Reference &&
+                aliasType !is Type.Interface && aliasType.symbol == null) {
+                resolveStructuredTypeMembers(aliasType)
+                val hasShape = !aliasType.properties.isNullOrEmpty() ||
+                    !aliasType.callSignatures.isNullOrEmpty() ||
+                    !aliasType.constructSignatures.isNullOrEmpty()
+                if (hasShape && aliasType.stringIndexInfo == null && aliasType.numberIndexInfo == null &&
+                    (aliasType.properties == null || aliasType.properties!!.none { it.name.isEmpty() }) &&
+                    getPropertyOfType(aliasType, propName) == null) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '${typeToString(aliasType)}'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return true
+                }
+            }
+        }
+        // B140: property access on `import X = require("./Y.json")` where Y.json is
+        // EMPTY (or literally `{}`) — its type is `{}`, so ANY property access is
+        // TS2339 "Property 'x' does not exist on type '{}'.". FP-safe: only fires for
+        // an import-equals alias to a JSON file whose content is unambiguously the
+        // empty object (so every property access genuinely doesn't exist). Populated
+        // JSON falls through (we don't model its shape → no emit).
+        run {
+            if (!isPropertyAccessShape || propName.isEmpty()) return@run
+            val spec = getImportEqualsSpecifier(identSymbol) ?: return@run
+            if (!spec.endsWith(".json")) return@run
+            val content = resolveJsonModuleContent(spec) ?: return@run
+            val stripped = content.replace(Regex("\\s"), "")
+            if (stripped.isNotEmpty() && stripped != "{}") return@run
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type '{}'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return true
+        }
+        // B114: module-namespace property access via `import Foo = require("./b")`
+        // — emit TS2339 when `Foo.x` accesses a member the resolved MODULE does not
+        // export (display `typeof import("b")`). FP firewall (load-bearing): the
+        // target must resolve to a `.ts`/`.d.ts` FILE (explicit `export` statements →
+        // reliable tracking; `.js`/CJS targets are EXCLUDED because our
+        // module.exports analysis is incomplete and would FP), the alias must resolve
+        // to a Module symbol (an `export =` alias resolves to a VALUE, not a module —
+        // handled by the B98.r52 anon-object branch above), the target file must have
+        // NO `export * from` re-export (those add members absent from `locals`), and
+        // the property must be absent from the module's exports.
+        run {
+            if (!isPropertyAccessShape || propName.isEmpty() ||
+                propName[0] in '0'..'9' || propName in RUNTIME_PROPERTIES) return@run
+            val spec = getImportEqualsSpecifier(identSymbol) ?: return@run
+            val decl = identSymbol.declarations.firstOrNull { it is ImportEqualsDeclaration }
+            val targetFile = resolveModuleSpecifier(spec, decl) ?: return@run
+            if (!(targetFile.endsWith(".ts") || targetFile.endsWith(".tsx"))) return@run
+            val targetResult = fileResults[targetFile] ?: return@run
+            // FP firewall: a `export * from "..."` re-export contributes members not
+            // present in `locals` → bail rather than risk a false TS2339.
+            val hasStarReexport = targetResult.sourceFile.statements.any {
+                it is ExportDeclaration && it.exportClause == null && it.moduleSpecifier != null
+            }
+            if (hasStarReexport) return@run
+            val resolved = resolveAlias(identSymbol)
+            if (!resolved.flags.hasAny(SymbolFlags.Module)) return@run
+            val exports = resolved.exports ?: return@run
+            if (exports.containsKey(propName)) return@run
+            val base = targetFile.substringAfterLast('/')
+                .removeSuffix(".d.ts").removeSuffix(".tsx").removeSuffix(".ts")
+            val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+            diagnostics.add(Diagnostic(
+                message = "Property '$propName' does not exist on type 'typeof import(\"$base\")'.",
+                category = DiagnosticCategory.Error, code = 2339,
+                fileName = fileName, line = line, character = character,
+                start = diagStart, length = diagLength,
+            ))
+            return true
+        }
+        // Skip import aliases — can't reliably resolve imported module exports
+        if (identSymbol.flags.hasAny(SymbolFlags.Alias)) return true
+        if (identSymbol.flags.hasAny(SymbolFlags.Module) && !identSymbol.flags.hasAny(SymbolFlags.Class) &&
+            !identSymbol.flags.hasAny(SymbolFlags.Variable)) {
+            // B360: a UMD global (`export as namespace X`) — the parser misparses
+            // the construct into a bogus `namespace X` whose exports do NOT
+            // reflect the real module's exports. Member access is unknowable — bail.
+            if (identName in umdGlobalNames) return true
+            // B63.34: Skip the namespace path when the symbol ALSO carries Variable
+            // flag — typically caused by `mergeSymbolTable` polluting an unrelated
+            // module symbol with a same-named `let`/`const` declaration. In that
+            // case, the variable's type annotation should drive property lookup
+            // (falls through to the `getTypeOfSymbol(identSymbol)` branch below).
+            val exports = identSymbol.exports
+            if (exports != null) {
+                // B98.r92: VALUE access `Foo2.Bar` where `Bar` in Foo2 is a
+                // NON-exported nested namespace (value-side hidden) plus an
+                // exported `interface Bar` (type-only). `isNameExportedFromNamespace`
+                // returns true (interface export / Module flag), suppressing the
+                // error — but for a value access neither is reachable → TS2339.
+                // Narrow gate: non-ambient enclosing ns + a hidden (non-exported)
+                // nested namespace of that name + NO value-accessible export.
+                if (isPropertyAccessShape && propName.isNotEmpty() && propName[0] !in '0'..'9' &&
+                    propName !in RUNTIME_PROPERTIES &&
+                    shouldEmitTs2339ForHiddenNamespaceMember(identSymbol, propName)) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type 'typeof $identName'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return true
+                }
+                if (isNameExportedFromNamespace(identSymbol, propName)) return true
+                // Enum members are always accessible on the enum type
+                if (identSymbol.flags.hasAny(SymbolFlags.Enum) && exports.containsKey(propName)) return true
+                if (propName in RUNTIME_PROPERTIES) return true
+                val typeName = "typeof $identName"
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                // B241: a later-lib namespace member (`Intl.PluralRules`) gets
+                // TS2550 with the lib hint instead of plain TS2339.
+                val nsMinTarget = LIB_MIN_TARGET["$identName.$propName"]
+                if (nsMinTarget != null && !libFeatureAvailable(nsMinTarget) &&
+                    identSymbol.declarations.all { it in builtinLibDecls }) {
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$typeName'. Do you need to change your target library? Try changing the 'lib' compiler option to '${nsMinTarget.name.lowercase()}' or later.",
+                        category = DiagnosticCategory.Error, code = 2550,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                    return true
+                }
+                // A USER type-only / UNINSTANTIATED namespace (only types/interfaces, no
+                // value exports) used in VALUE position is owned by TS2708 ("Cannot use
+                // namespace as a value") — don't ALSO emit TS2339 for a member access on it
+                // (namespaceMergedWithImportAliasNoCrash: `Library.foo`). Excludes lib
+                // namespaces (Intl etc.), whose TS2550 lib-target hint above already returned.
+                val nsDecls = identSymbol.declarations.filterIsInstance<ModuleDeclaration>()
+                if (nsDecls.isNotEmpty() && nsDecls.none { isNamespaceInstantiated(it) } &&
+                    identSymbol.declarations.none { it in builtinLibDecls }) return true
+                diagnostics.add(Diagnostic(
+                    message = "Property '$propName' does not exist on type '$typeName'.",
+                    category = DiagnosticCategory.Error, code = 2339,
+                    fileName = fileName, line = line, character = character,
+                    start = diagStart, length = diagLength,
+                ))
+                return true
+            }
+            return true
+        }
+
+        // B95e (round 82): enum-receiver missing member, e.g. `U8.bit_2` where the
+        // enum U8 (RegularEnum, no Module flag → not handled above) has member BIT_2.
+        // TS2551 "Property 'bit_2' does not exist on type 'typeof U8'. Did you mean
+        // 'BIT_2'?" + related TS2728 at the member declaration. Falls to plain TS2339
+        // when no close spelling match. Gated on a pure Enum symbol whose exports hold
+        // the members (always — the receiver here is already an Identifier).
+        run {
+            val enumExports = identSymbol.exports
+            // Only PROPERTY access `E.foo` (isPropertyAccessShape) — NOT element access
+            // `E[0]` (numeric enum reverse-mapping `E[0]` is valid) nor `E["x"]`. Also
+            // skip an all-numeric propName defensively (reverse mapping).
+            val isNumericProp = propName.isNotEmpty() && propName.all { it in '0'..'9' }
+            if (identSymbol.flags.hasAny(SymbolFlags.Enum)
+                && !identSymbol.flags.hasAny(SymbolFlags.Module)
+                && enumExports != null
+                && isPropertyAccessShape
+                && !isNumericProp
+            ) {
+                if (enumExports.containsKey(propName) || propName in RUNTIME_PROPERTIES) return true
+                val typeName = "typeof $identName"
+                val (line, character) = getLineAndCharacterOfPosition(source, diagStart)
+                val suggestion = getSpellingSuggestionFromNames(propName, enumExports.keys)
+                if (suggestion != null) {
+                    val memberDecl = enumExports[suggestion]?.declarations?.firstOrNull() as? EnumMember
+                    val related = memberDecl?.let { md ->
+                        val nm = md.name
+                        val namePos = nm.pos
+                        val nameLen = (nm as? Identifier)?.text?.length ?: (nm.end - nm.pos).coerceAtLeast(1)
+                        val (rl, rc) = getLineAndCharacterOfPosition(source, namePos)
+                        listOf(Diagnostic(
+                            message = "'$suggestion' is declared here.",
+                            category = DiagnosticCategory.Message, code = 2728,
+                            fileName = fileName, line = rl, character = rc,
+                            start = namePos, length = nameLen,
+                        ))
+                    } ?: emptyList()
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$typeName'. Did you mean '$suggestion'?",
+                        category = DiagnosticCategory.Error, code = 2551,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                        relatedInformation = related,
+                    ))
+                } else {
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$propName' does not exist on type '$typeName'.",
+                        category = DiagnosticCategory.Error, code = 2339,
+                        fileName = fileName, line = line, character = character,
+                        start = diagStart, length = diagLength,
+                    ))
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R sections `R_TYPEGATE` .. `R_POSTGATE`,
+     * verbatim; tail-calls [cmamEmitMissingProperty] where the original body fell
+     * through into `R_PROP`.
+     */
+    private fun cmamCheckResolvedObjectType(
+        objectExpr: Expression,
+        objectType: Type,
+        displayTypeOverride: Type?,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        isThisAccess: Boolean,
+        emitTs2728RelatedInfo: Boolean,
+    ) {
         // Check Interface and Object types (anonymous object literals, type literals, etc.)
         CpaSections.atR(CpaSections.R_TYPEGATE)
         if (objectType !is Type.Object) return
@@ -136336,6 +136577,31 @@ interface DataView {
             ))
             return
         }
+        cmamEmitMissingProperty(
+            objectExpr, objectType, displayTypeOverride, propName, diagStart, diagLength,
+            source, fileName, isThisAccess, emitTs2728RelatedInfo,
+        )
+    }
+
+    /**
+     * (JIT.1)(b) round 804 — level-R sections `R_PROP`, `R_LATEGATE` and `R_EMIT`,
+     * verbatim: the property lookup, the later-lib gates and the emission tail.
+     * Round 789 measured the emission tail as reached ZERO times on the compiler
+     * profile; it is here because it is the coldest code in the function, not
+     * because it is cheap.
+     */
+    private fun cmamEmitMissingProperty(
+        objectExpr: Expression,
+        objectType: Type.Object,
+        displayTypeOverride: Type?,
+        propName: String,
+        diagStart: Int,
+        diagLength: Int,
+        source: String,
+        fileName: String,
+        isThisAccess: Boolean,
+        emitTs2728RelatedInfo: Boolean,
+    ) {
         // Check if property exists in type members
         CpaSections.atR(CpaSections.R_PROP)
         val prop = getPropertyOfType(objectType, propName)
@@ -136544,9 +136810,6 @@ interface DataView {
                 start = diagStart,
                 length = diagLength,
             ))
-        }
-        } finally {
-            CpaSections.endR()
         }
     }
 
