@@ -131831,84 +131831,7 @@ interface DataView {
                 CpaSections.armP(CpaSections.PA_UNWRAP)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
             }
-            is ArrowFunction -> {
-                CpaSections.armP(CpaSections.PA_ARROW)
-                CpaSections.atP(CpaSections.P_FNSCOPE)
-                val savedLocalTypes = currentLocalTypes
-                val savedParamBindings = currentParamBindingNames
-                val savedArrowShadowed = currentShadowedNames
-                currentLocalTypes = EpochMap(currentLocalTypes)
-                currentParamBindingNames = EpochSet(currentParamBindingNames)
-                currentShadowedNames = EpochSet(currentShadowedNames)
-                populateParameterLocalTypes(expr.parameters)
-                // Round 447: a Block-bodied nested arrow's own `let/const x` shadows an outer
-                // same-named binding for reads INSIDE it — record the inner annotation into
-                // currentLocalTypes (completions.ts's inner `let exportInfo: SymbolExportInfo`
-                // shadows an outer `const exportInfo: ExportInfoMap`; without this the reads
-                // resolved to ExportInfoMap → FP TS2339). Mirrors checkFunctionBody's call.
-                (expr.body as? Block)?.let { b ->
-                    expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
-                        applyBodyLocalShadowing(b.statements, pn)
-                        applyAmbiguousBlockScopedLocals(b.statements, pn)
-                    }
-                }
-                // 16.0: contextual param inference for un-annotated arrow parameters
-                CpaSections.atP(CpaSections.P_FNCTX)
-                val ctxType = contextualType
-                // B83.4d: when this arrow's body is an EXPRESSION (concise body) and its
-                // contextual type is a single-call-sig function, the body is contextually
-                // typed by that signature's RETURN type. Propagate it so a callback-
-                // returning-a-callback shape `() => (a => a.foo)` carries the inner
-                // contextual `(a: T) => void` into the inner arrow. Default to null.
-                var bodyCtx: Type? = null
-                if (ctxType is Type.Object) {
-                    resolveStructuredTypeMembers(ctxType)
-                    val sigs = ctxType.callSignatures
-                    if (sigs != null && sigs.size == 1) {
-                        val sig = sigs[0]
-                        for ((i, param) in expr.parameters.withIndex()) {
-                            if (param.type != null) continue
-                            if (i >= sig.parameters.size) break
-                            val pName = param.name as? Identifier ?: continue
-                            val pType = getTypeOfSymbol(sig.parameters[i])
-                            if (pType === anyType || pType === errorType) continue
-                            // Round 569: an UN-INFERRED callee TP in the contextual
-                            // param type means OUR inference failed where tsc would
-                            // have bound it — registering the bare TP turns downstream
-                            // uncertainty-bails into constraint-based FP verdicts
-                            // (fourslashImpl span.prefixText), and makes the verdict
-                            // depend on WHEN the TP's constraint materialized. Skip
-                            // (the param stays any — suppression-only), matching the
-                            // B136 concreteness discipline.
-                            if (typeContainsUnresolvedTypeParam(pType)) continue
-                            currentLocalTypes[pName.text] = pType
-                        }
-                        if (expr.body is Expression) {
-                            val ret = sig.resolvedReturnType
-                            if (ret != null && ret !== anyType && ret !== errorType) bodyCtx = ret
-                        }
-                    }
-                }
-                val savedCtx = contextualType
-                contextualType = bodyCtx
-                try {
-                    CpaSections.atP(CpaSections.P_FNBODY)
-                    expr.body.let { body ->
-                        when (body) {
-                            is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
-                            is Expression -> checkPropertyAccessInExpr(body, source, fileName, enclosingClassType)
-                            else -> {}
-                        }
-                    }
-                } finally {
-                    contextualType = savedCtx
-                }
-                CpaSections.atP(CpaSections.P_FNSCOPE)
-                currentLocalTypes = savedLocalTypes
-                currentParamBindingNames = savedParamBindings
-                currentShadowedNames = savedArrowShadowed
-                CpaSections.atP(CpaSections.P_DISPATCH)
-            }
+            is ArrowFunction -> cpaExprArrowFunction(expr, source, fileName, enclosingClassType)
             is NewExpression -> {
                 CpaSections.armP(CpaSections.PA_NEW)
                 checkPropertyAccessInExpr(expr.expression, source, fileName, enclosingClassType)
@@ -131944,53 +131867,7 @@ interface DataView {
                 CpaSections.armP(CpaSections.PA_ARRAYLIT)
                 expr.elements.forEach { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             }
-            is ObjectLiteralExpression -> {
-                CpaSections.armP(CpaSections.PA_OBJLIT)
-                // 16.0: propagate contextual type into each property value so nested
-                // arrow function params can be typed from the contextual member types.
-                CpaSections.atP(CpaSections.P_OBJLIT_CTX)
-                val ctxObj = contextualType as? Type.Object
-                if (ctxObj != null) {
-                    resolveStructuredTypeMembers(ctxObj)
-                }
-                CpaSections.atP(CpaSections.P_DISPATCH)
-                for (prop in expr.properties) {
-                    when (prop) {
-                        is PropertyAssignment -> {
-                            val propName = when (val n = prop.name) {
-                                is Identifier -> n.text
-                                is StringLiteralNode -> n.text
-                                else -> null
-                            }
-                            CpaSections.atP(CpaSections.P_OBJLIT_CTX)
-                            val propCtx = if (propName != null && ctxObj != null) {
-                                ctxObj.members?.get(propName)?.let { sym ->
-                                    getTypeOfSymbol(sym)
-                                }
-                            } else null
-                            val savedCtx = contextualType
-                            contextualType = if (propCtx != null && propCtx !== anyType && propCtx !== errorType) propCtx else null
-                            CpaSections.atP(CpaSections.P_DISPATCH)
-                            try {
-                                checkPropertyAccessInExpr(prop.initializer, source, fileName, enclosingClassType)
-                            } finally {
-                                contextualType = savedCtx
-                            }
-                        }
-                        is ShorthandPropertyAssignment -> {}
-                        is SpreadAssignment -> {
-                            val savedCtx = contextualType
-                            contextualType = null
-                            try {
-                                checkPropertyAccessInExpr(prop.expression, source, fileName, enclosingClassType)
-                            } finally {
-                                contextualType = savedCtx
-                            }
-                        }
-                        else -> {}
-                    }
-                }
-            }
+            is ObjectLiteralExpression -> cpaExprObjectLiteral(expr, source, fileName, enclosingClassType)
             is TaggedTemplateExpression -> {
                 CpaSections.armP(CpaSections.PA_TAGGED)
                 checkPropertyAccessInExpr(expr.tag, source, fileName, enclosingClassType)
@@ -132031,118 +131908,303 @@ interface DataView {
                 CpaSections.armP(CpaSections.PA_UNARY)
                 expr.expression?.let { checkPropertyAccessInExpr(it, source, fileName, enclosingClassType) }
             }
-            is FunctionExpression -> {
-                CpaSections.armP(CpaSections.PA_FNEXPR)
-                CpaSections.atP(CpaSections.P_FNSCOPE)
-                val savedLocalTypes = currentLocalTypes
-                val savedParamBindings = currentParamBindingNames
-                val savedFnExprShadowed = currentShadowedNames
-                currentLocalTypes = EpochMap(currentLocalTypes)
-                currentParamBindingNames = EpochSet(currentParamBindingNames)
-                currentShadowedNames = EpochSet(currentShadowedNames)
-                // 16.0: shadow outer vars with unannotated function-expression params
-                // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
-                // type the inner `s` from the outer scope.
-                for (param in expr.parameters) {
-                    // B83.4i: register destructured-param binding names for the
-                    // call-inferred-var TS2339 shadow gate (see populateParameterLocalTypes).
-                    if (param.name is ArrayBindingPattern || param.name is ObjectBindingPattern) {
-                        collectBindingNames(param.name, currentParamBindingNames)
-                    }
-                    val pName = (param.name as? Identifier)?.text ?: continue
-                    if (param.type != null) {
-                        val pt = getTypeFromTypeNode(param.type)
-                        if (pt !== anyType && pt !== errorType) {
-                            currentLocalTypes[pName] = pt
-                            continue
-                        }
-                    }
-                    // Unannotated param: remove any outer binding so property access falls back to `any`
-                    currentLocalTypes.remove(pName)
-                }
-                // B81.1b: contextual param inference for un-annotated function-expression
-                // parameters — mirror the ArrowFunction infrastructure above. When the
-                // FunctionExpression appears as an argument to a CallExpression whose
-                // callee has a single call signature, propagate the corresponding param
-                // type into `currentLocalTypes` so property access checks can find
-                // optional members and emit TS18048 etc.
-                CpaSections.atP(CpaSections.P_FNCTX)
-                val ctxType = contextualType
-                if (ctxType is Type.Object) {
-                    resolveStructuredTypeMembers(ctxType)
-                    val sigs = ctxType.callSignatures
-                    if (sigs != null && sigs.size == 1) {
-                        val sig = sigs[0]
-                        for ((i, param) in expr.parameters.withIndex()) {
-                            if (param.type != null) continue
-                            if (i >= sig.parameters.size) break
-                            val pName = param.name as? Identifier ?: continue
-                            val pType = getTypeOfSymbol(sig.parameters[i])
-                            if (pType === anyType || pType === errorType) continue
-                            // Round 569: skip un-inferred callee TPs (see the
-                            // ArrowFunction twin above).
-                            if (typeContainsUnresolvedTypeParam(pType)) continue
-                            currentLocalTypes[pName.text] = pType
-                        }
-                    }
-                }
-                // Round 447: nested function-expression body's own `let/const x` shadows an
-                // outer same-named binding (mirrors the ArrowFunction branch above).
-                CpaSections.atP(CpaSections.P_FNSCOPE)
-                expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
-                    applyBodyLocalShadowing(expr.body.statements, pn)
-                    applyAmbiguousBlockScopedLocals(expr.body.statements, pn)
-                }
-                val savedCtx = contextualType
-                contextualType = null
-                try {
-                    CpaSections.atP(CpaSections.P_FNBODY)
-                    expr.body.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null) }
-                } finally {
-                    contextualType = savedCtx
-                }
-                CpaSections.atP(CpaSections.P_FNSCOPE)
-                currentLocalTypes = savedLocalTypes
-                currentParamBindingNames = savedParamBindings
-                currentShadowedNames = savedFnExprShadowed
-                CpaSections.atP(CpaSections.P_DISPATCH)
-            }
-            is ClassExpression -> {
-                CpaSections.armP(CpaSections.PA_CLASSEXPR)
-                CpaSections.atP(CpaSections.P_CLASSEXPR)
-                // B98.r109: a class EXPRESSION (`class { m() { this.X } }`, e.g. used as a
-                // base in `class George extends class { reset() { return this.y } }`) is reached
-                // here via the ClassDeclaration heritage walk / var-decl initializer / etc., but
-                // had no handler — so `this.X` inside its method bodies was never checked and a
-                // missing member silently produced no TS2339. Mirror the ClassDeclaration branch
-                // of checkPropertyAccessInStatement: walk the anon class's own heritage
-                // expressions, build a transient Type.Interface for `this` (synthetic Class
-                // symbol named "(Anonymous class)" so typeToString renders the matching display
-                // for the diagnostic), then walk each member with that classType. The synthetic
-                // symbol is never published to the binder tables (check-pass-local). ClassExpression
-                // member/heritage/type-param resolution was just enabled in
-                // getDeclaredTypeOfClassOrInterface / resolveInterfaceMembers / resolveBaseTypesLazy.
-                expr.heritageClauses?.forEach { clause ->
-                    clause.types.forEach { ewta ->
-                        checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType = null)
-                    }
-                }
-                val anonSym = Symbol(SymbolFlags.Class, "(Anonymous class)")
-                anonSym.declarations.add(expr)
-                val anonClassType = getDeclaredTypeOfSymbol(anonSym)
-                val savedStatic = inStaticClassMethod
-                inStaticClassMethod = false
-                for (member in expr.members) {
-                    checkPropertyAccessInClassMember(member, source, fileName, anonClassType)
-                }
-                inStaticClassMethod = savedStatic
-                CpaSections.atP(CpaSections.P_DISPATCH)
-            }
+            is FunctionExpression -> cpaExprFunctionExpression(expr, source, fileName, enclosingClassType)
+            is ClassExpression -> cpaExprClassExpression(expr, source, fileName, enclosingClassType)
             else -> CpaSections.armP(CpaSections.PA_LEAF)
         }
         } finally {
             CpaSections.endP(cpaP)
         }
+    }
+
+    /**
+     * (JIT.1)(c) round 805 — The `ArrowFunction` arm of [checkPropertyAccessInExpr]: its own
+     * `currentLocalTypes`/binding/shadow scope, contextual parameter inference
+     * from a single-call-signature contextual type, and the body walk.
+     *
+     * Extracted VERBATIM so `checkPropertyAccessInExpr` itself falls below
+     * HotSpot's 8,000-bytecode `HugeMethodLimit`; above it a method is never
+     * JIT-compiled at all. There is no cross-boundary state: the arm's saves
+     * and restores are entirely its own, and the whole function contains no
+     * `return`, so the extraction cannot change control flow.
+     */
+    private fun cpaExprArrowFunction(
+        expr: ArrowFunction, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        CpaSections.armP(CpaSections.PA_ARROW)
+        CpaSections.atP(CpaSections.P_FNSCOPE)
+        val savedLocalTypes = currentLocalTypes
+        val savedParamBindings = currentParamBindingNames
+        val savedArrowShadowed = currentShadowedNames
+        currentLocalTypes = EpochMap(currentLocalTypes)
+        currentParamBindingNames = EpochSet(currentParamBindingNames)
+        currentShadowedNames = EpochSet(currentShadowedNames)
+        populateParameterLocalTypes(expr.parameters)
+        // Round 447: a Block-bodied nested arrow's own `let/const x` shadows an outer
+        // same-named binding for reads INSIDE it — record the inner annotation into
+        // currentLocalTypes (completions.ts's inner `let exportInfo: SymbolExportInfo`
+        // shadows an outer `const exportInfo: ExportInfoMap`; without this the reads
+        // resolved to ExportInfoMap → FP TS2339). Mirrors checkFunctionBody's call.
+        (expr.body as? Block)?.let { b ->
+            expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
+                applyBodyLocalShadowing(b.statements, pn)
+                applyAmbiguousBlockScopedLocals(b.statements, pn)
+            }
+        }
+        // 16.0: contextual param inference for un-annotated arrow parameters
+        CpaSections.atP(CpaSections.P_FNCTX)
+        val ctxType = contextualType
+        // B83.4d: when this arrow's body is an EXPRESSION (concise body) and its
+        // contextual type is a single-call-sig function, the body is contextually
+        // typed by that signature's RETURN type. Propagate it so a callback-
+        // returning-a-callback shape `() => (a => a.foo)` carries the inner
+        // contextual `(a: T) => void` into the inner arrow. Default to null.
+        var bodyCtx: Type? = null
+        if (ctxType is Type.Object) {
+            resolveStructuredTypeMembers(ctxType)
+            val sigs = ctxType.callSignatures
+            if (sigs != null && sigs.size == 1) {
+                val sig = sigs[0]
+                for ((i, param) in expr.parameters.withIndex()) {
+                    if (param.type != null) continue
+                    if (i >= sig.parameters.size) break
+                    val pName = param.name as? Identifier ?: continue
+                    val pType = getTypeOfSymbol(sig.parameters[i])
+                    if (pType === anyType || pType === errorType) continue
+                    // Round 569: an UN-INFERRED callee TP in the contextual
+                    // param type means OUR inference failed where tsc would
+                    // have bound it — registering the bare TP turns downstream
+                    // uncertainty-bails into constraint-based FP verdicts
+                    // (fourslashImpl span.prefixText), and makes the verdict
+                    // depend on WHEN the TP's constraint materialized. Skip
+                    // (the param stays any — suppression-only), matching the
+                    // B136 concreteness discipline.
+                    if (typeContainsUnresolvedTypeParam(pType)) continue
+                    currentLocalTypes[pName.text] = pType
+                }
+                if (expr.body is Expression) {
+                    val ret = sig.resolvedReturnType
+                    if (ret != null && ret !== anyType && ret !== errorType) bodyCtx = ret
+                }
+            }
+        }
+        val savedCtx = contextualType
+        contextualType = bodyCtx
+        try {
+            CpaSections.atP(CpaSections.P_FNBODY)
+            expr.body.let { body ->
+                when (body) {
+                    is Block -> checkPropertyAccessInStatements(body.statements, source, fileName, enclosingClassType)
+                    is Expression -> checkPropertyAccessInExpr(body, source, fileName, enclosingClassType)
+                    else -> {}
+                }
+            }
+        } finally {
+            contextualType = savedCtx
+        }
+        CpaSections.atP(CpaSections.P_FNSCOPE)
+        currentLocalTypes = savedLocalTypes
+        currentParamBindingNames = savedParamBindings
+        currentShadowedNames = savedArrowShadowed
+        CpaSections.atP(CpaSections.P_DISPATCH)
+    }
+
+    /**
+     * (JIT.1)(c) round 805 — The `ObjectLiteralExpression` arm of [checkPropertyAccessInExpr]:
+     * per-property contextual-type propagation into each property value.
+     *
+     * Extracted VERBATIM so `checkPropertyAccessInExpr` itself falls below
+     * HotSpot's 8,000-bytecode `HugeMethodLimit`; above it a method is never
+     * JIT-compiled at all. There is no cross-boundary state: the arm's saves
+     * and restores are entirely its own, and the whole function contains no
+     * `return`, so the extraction cannot change control flow.
+     */
+    private fun cpaExprObjectLiteral(
+        expr: ObjectLiteralExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        CpaSections.armP(CpaSections.PA_OBJLIT)
+        // 16.0: propagate contextual type into each property value so nested
+        // arrow function params can be typed from the contextual member types.
+        CpaSections.atP(CpaSections.P_OBJLIT_CTX)
+        val ctxObj = contextualType as? Type.Object
+        if (ctxObj != null) {
+            resolveStructuredTypeMembers(ctxObj)
+        }
+        CpaSections.atP(CpaSections.P_DISPATCH)
+        for (prop in expr.properties) {
+            when (prop) {
+                is PropertyAssignment -> {
+                    val propName = when (val n = prop.name) {
+                        is Identifier -> n.text
+                        is StringLiteralNode -> n.text
+                        else -> null
+                    }
+                    CpaSections.atP(CpaSections.P_OBJLIT_CTX)
+                    val propCtx = if (propName != null && ctxObj != null) {
+                        ctxObj.members?.get(propName)?.let { sym ->
+                            getTypeOfSymbol(sym)
+                        }
+                    } else null
+                    val savedCtx = contextualType
+                    contextualType = if (propCtx != null && propCtx !== anyType && propCtx !== errorType) propCtx else null
+                    CpaSections.atP(CpaSections.P_DISPATCH)
+                    try {
+                        checkPropertyAccessInExpr(prop.initializer, source, fileName, enclosingClassType)
+                    } finally {
+                        contextualType = savedCtx
+                    }
+                }
+                is ShorthandPropertyAssignment -> {}
+                is SpreadAssignment -> {
+                    val savedCtx = contextualType
+                    contextualType = null
+                    try {
+                        checkPropertyAccessInExpr(prop.expression, source, fileName, enclosingClassType)
+                    } finally {
+                        contextualType = savedCtx
+                    }
+                }
+                else -> {}
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(c) round 805 — The `FunctionExpression` arm of [checkPropertyAccessInExpr] — the
+     * `ArrowFunction` twin, with un-annotated params SHADOWING the outer binding
+     * and a statement body.
+     *
+     * Extracted VERBATIM so `checkPropertyAccessInExpr` itself falls below
+     * HotSpot's 8,000-bytecode `HugeMethodLimit`; above it a method is never
+     * JIT-compiled at all. There is no cross-boundary state: the arm's saves
+     * and restores are entirely its own, and the whole function contains no
+     * `return`, so the extraction cannot change control flow.
+     */
+    private fun cpaExprFunctionExpression(
+        expr: FunctionExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        CpaSections.armP(CpaSections.PA_FNEXPR)
+        CpaSections.atP(CpaSections.P_FNSCOPE)
+        val savedLocalTypes = currentLocalTypes
+        val savedParamBindings = currentParamBindingNames
+        val savedFnExprShadowed = currentShadowedNames
+        currentLocalTypes = EpochMap(currentLocalTypes)
+        currentParamBindingNames = EpochSet(currentParamBindingNames)
+        currentShadowedNames = EpochSet(currentShadowedNames)
+        // 16.0: shadow outer vars with unannotated function-expression params
+        // so `(s: string) => ... || function (s) { s.aaa }` does not falsely
+        // type the inner `s` from the outer scope.
+        for (param in expr.parameters) {
+            // B83.4i: register destructured-param binding names for the
+            // call-inferred-var TS2339 shadow gate (see populateParameterLocalTypes).
+            if (param.name is ArrayBindingPattern || param.name is ObjectBindingPattern) {
+                collectBindingNames(param.name, currentParamBindingNames)
+            }
+            val pName = (param.name as? Identifier)?.text ?: continue
+            if (param.type != null) {
+                val pt = getTypeFromTypeNode(param.type)
+                if (pt !== anyType && pt !== errorType) {
+                    currentLocalTypes[pName] = pt
+                    continue
+                }
+            }
+            // Unannotated param: remove any outer binding so property access falls back to `any`
+            currentLocalTypes.remove(pName)
+        }
+        // B81.1b: contextual param inference for un-annotated function-expression
+        // parameters — mirror the ArrowFunction infrastructure above. When the
+        // FunctionExpression appears as an argument to a CallExpression whose
+        // callee has a single call signature, propagate the corresponding param
+        // type into `currentLocalTypes` so property access checks can find
+        // optional members and emit TS18048 etc.
+        CpaSections.atP(CpaSections.P_FNCTX)
+        val ctxType = contextualType
+        if (ctxType is Type.Object) {
+            resolveStructuredTypeMembers(ctxType)
+            val sigs = ctxType.callSignatures
+            if (sigs != null && sigs.size == 1) {
+                val sig = sigs[0]
+                for ((i, param) in expr.parameters.withIndex()) {
+                    if (param.type != null) continue
+                    if (i >= sig.parameters.size) break
+                    val pName = param.name as? Identifier ?: continue
+                    val pType = getTypeOfSymbol(sig.parameters[i])
+                    if (pType === anyType || pType === errorType) continue
+                    // Round 569: skip un-inferred callee TPs (see the
+                    // ArrowFunction twin above).
+                    if (typeContainsUnresolvedTypeParam(pType)) continue
+                    currentLocalTypes[pName.text] = pType
+                }
+            }
+        }
+        // Round 447: nested function-expression body's own `let/const x` shadows an
+        // outer same-named binding (mirrors the ArrowFunction branch above).
+        CpaSections.atP(CpaSections.P_FNSCOPE)
+        expr.parameters.mapNotNull { p -> (p.name as? Identifier)?.text }.toSet().let { pn ->
+            applyBodyLocalShadowing(expr.body.statements, pn)
+            applyAmbiguousBlockScopedLocals(expr.body.statements, pn)
+        }
+        val savedCtx = contextualType
+        contextualType = null
+        try {
+            CpaSections.atP(CpaSections.P_FNBODY)
+            expr.body.let { checkPropertyAccessInStatements(it.statements, source, fileName, enclosingClassType = null) }
+        } finally {
+            contextualType = savedCtx
+        }
+        CpaSections.atP(CpaSections.P_FNSCOPE)
+        currentLocalTypes = savedLocalTypes
+        currentParamBindingNames = savedParamBindings
+        currentShadowedNames = savedFnExprShadowed
+        CpaSections.atP(CpaSections.P_DISPATCH)
+    }
+
+    /**
+     * (JIT.1)(c) round 805 — The `ClassExpression` arm of [checkPropertyAccessInExpr]: a transient
+     * anonymous class type for `this`, then each member walked under it.
+     *
+     * Extracted VERBATIM so `checkPropertyAccessInExpr` itself falls below
+     * HotSpot's 8,000-bytecode `HugeMethodLimit`; above it a method is never
+     * JIT-compiled at all. There is no cross-boundary state: the arm's saves
+     * and restores are entirely its own, and the whole function contains no
+     * `return`, so the extraction cannot change control flow.
+     */
+    private fun cpaExprClassExpression(
+        expr: ClassExpression, source: String, fileName: String,
+        enclosingClassType: Type?,
+    ) {
+        CpaSections.armP(CpaSections.PA_CLASSEXPR)
+        CpaSections.atP(CpaSections.P_CLASSEXPR)
+        // B98.r109: a class EXPRESSION (`class { m() { this.X } }`, e.g. used as a
+        // base in `class George extends class { reset() { return this.y } }`) is reached
+        // here via the ClassDeclaration heritage walk / var-decl initializer / etc., but
+        // had no handler — so `this.X` inside its method bodies was never checked and a
+        // missing member silently produced no TS2339. Mirror the ClassDeclaration branch
+        // of checkPropertyAccessInStatement: walk the anon class's own heritage
+        // expressions, build a transient Type.Interface for `this` (synthetic Class
+        // symbol named "(Anonymous class)" so typeToString renders the matching display
+        // for the diagnostic), then walk each member with that classType. The synthetic
+        // symbol is never published to the binder tables (check-pass-local). ClassExpression
+        // member/heritage/type-param resolution was just enabled in
+        // getDeclaredTypeOfClassOrInterface / resolveInterfaceMembers / resolveBaseTypesLazy.
+        expr.heritageClauses?.forEach { clause ->
+            clause.types.forEach { ewta ->
+                checkPropertyAccessInExpr(ewta.expression, source, fileName, enclosingClassType = null)
+            }
+        }
+        val anonSym = Symbol(SymbolFlags.Class, "(Anonymous class)")
+        anonSym.declarations.add(expr)
+        val anonClassType = getDeclaredTypeOfSymbol(anonSym)
+        val savedStatic = inStaticClassMethod
+        inStaticClassMethod = false
+        for (member in expr.members) {
+            checkPropertyAccessInClassMember(member, source, fileName, anonClassType)
+        }
+        inStaticClassMethod = savedStatic
+        CpaSections.atP(CpaSections.P_DISPATCH)
     }
 
     // -----------------------------------------------------------------------

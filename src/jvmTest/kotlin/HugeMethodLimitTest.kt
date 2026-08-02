@@ -40,12 +40,13 @@ import kotlin.test.fail
  * `-XX:+PrintCompilation` prints no "too large" line (the compile is never
  * *proposed*, so it is never *skipped*; round 802 grepped an 11,796-line log and
  * got 0 hits). `scripts/huge_methods.py` is the whole-program census; this test
- * is the always-on guard for the two functions split so far: [forEachChild], the
+ * is the always-on guard for the functions split so far: [forEachChild], the
  * traversal primitive every walk in the compiler goes through (round 802
  * measured it at **9,750 bytecodes**, round 803 split it), and
  * `Checker.checkMemberAccessMissingCore`, which at **46,567 bytecodes** was the
  * largest method in the compiler and round 789's largest leaf in the compile
- * (round 804 split it).
+ * (round 804 split it), and `Checker.checkPropertyAccessInExpr` at **9,062**
+ * (round 805 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -146,6 +147,51 @@ class HugeMethodLimitTest {
         // ... and the sum must still be the bulk of the original 46,567, i.e. the
         // body was MOVED, not deleted.
         assert(parts.values.sum() > 20000)
+    }
+
+    /**
+     * (JIT.1)(c) round 805 — the four helpers `checkPropertyAccessInExpr` was
+     * split into. It was **9,062 bytecodes**; its four largest `when` arms are now
+     * `cpaExpr*` functions and the entry is 4,728.
+     */
+    private val cpaExprSplitParts = setOf(
+        "cpaExprArrowFunction",
+        "cpaExprObjectLiteral",
+        "cpaExprFunctionExpression",
+        "cpaExprClassExpression",
+    )
+
+    @Test
+    fun `checkPropertyAccessInExpr is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val fn = sizes["checkPropertyAccessInExpr"]
+            ?: fail("checkPropertyAccessInExpr not found in Checker")
+        // Positive control: the parse really did read a large method (it is 4,728
+        // bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(fn > 2000)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkPropertyAccessInExpr split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = cpaExprSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in cpaExprSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkPropertyAccessInExpr split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in cpaExprSplitParts }
+        assert(parts.size == 4)
+        // Measured smallest part: 528 bytecodes (the ClassExpression arm).
+        assert(parts.values.min() > 300)
+        // ... and the sum must still be the bulk of what left the entry, i.e. the
+        // arms were MOVED, not deleted. Measured sum: 4,261.
+        assert(parts.values.sum() > 3000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
