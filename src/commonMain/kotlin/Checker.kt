@@ -145137,72 +145137,17 @@ interface DataView {
             ArgSections.at(ArgSections.OVERHEAD)
             ArgSections.at(ArgSections.OVERHEAD)
         }
-        ArgSections.at(ArgSections.PRO)
-        // 17.31a: Single-typeParam inference for non-overloaded sigs.
-        // When the gate matches, instantiate the signature with the inferred T so
-        // subsequent T-typed parameters are checked against the substituted type
-        // instead of falling through the 16.4i bare-TypeParam continue. Eg.
-        // `f<T>(x: T, y: T)` called with `f(1, "")` infers T=number from arg[0],
-        // then arg[1]: "" vs number fires TS2345 via the standard path.
-        // 17.31b: pass source/fileName so the helper can emit literal-preserving
-        // TS2345 directly for context-sensitive sigs (function-type-T param).
-        // B192: self-referential mapped constraint with `as` key-remap — the inferred T
-        // must satisfy `{ [K in keyof T as `${K}y`]: number }` (instantiated with T :=
-        // the arg's own type), which the standard inference+relation path can't see
-        // (the constraint bakes to anyType at signature build).
-        // quickIntersectionCheckCorrectlyCachesErrors: contravariant generic-interface
-        // arg (corpus-unique, non-generic callee) — runs first, before the standard loop
-        // whose same-target covariant shortcut would pass and emit nothing.
-        if (tryEmitGenericInterfaceContravariantArgTs2345(args, sigIn, source, fileName)) return
-        // identicalTypesNoDifferByCheckOrder: object-literal at a rest-param position whose
-        // `renderAs` prop's `FunctionComponentN<…>` type-arg alias is `Required<Pick<Base,"x">> & …`
-        // over an OPTIONAL `x?:string` → TS2322 with a 6-line chain (corpus-unique AST shape).
-        if (tryEmitFunctionComponentRestArgTs2322(args, sigIn, source, fileName)) return
-        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
-            tryEmitSelfRefMappedConstraintTs2345(args, sigIn, source, fileName)) return
-        // literalTypeNameAssertionNotTriggered: `f<T>(obj: T, key: keyof T)` where the
-        // bare-T arg is a module namespace and the keyof-T literal isn't an export name.
-        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
-            tryEmitModuleNamespaceKeyofTs2345(args, sigIn, source, fileName)) return
-        // inferenceShouldFailOnEvolvingArrays: a `{ [K in U]: T }[U]` inference-blocking
-        // param simplifies to T → check the arg against T's constraint (corpus-unique shape).
-        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
-            tryEmitBlockingMappedIndexedAccessArg(args, sigIn, source, fileName)) return
-        // inferenceFromIncompleteSource: generic-const callee `f({…})` whose single param is a
-        // user interface `Iface<…bare TPs…>` and the object literal is missing a required prop.
-        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
-            tryEmitGenericObjectLiteralMissingPropTs2345(args, sigIn, source, fileName)) return
-        // recursiveTupleTypeInference: `foo(gK)` with `foo<T>(g: G<T>)` where G is a homomorphic
-        // mapped type over a recursive-conditional `F<NonNullable<...>>` — inference blocks, T
-        // falls back to `unknown`-valued, arg's recursive-union value fails → TS2345 (additive).
-        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
-            tryEmitRecursiveTupleInferenceTs2345(args, sigIn, source, fileName)) return
-        // B586 (defaultBestCommonTypesHaveDecls): `f<T>(x: T, y: T)` with conflicting
-        // LITERAL bare-T args (`concat(1, "")`) — tsc fixes T to the FIRST literal and
-        // reports the conflicting arg's literal vs the fixed literal (`'""'` ≁ `'1'`),
-        // not the widened `'string'`/`'number'` the standard path shows.
-        if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
-            tryEmitBareTypeParamConflictLiteralTs2345(args, sigIn, source, fileName)) return
+        if (caasPrologueWalkers(
+                args, sigIn, source, fileName, calleeGenericInstantiation,
+        )) return
         ArgSections.at(ArgSections.INFER)
         val sig = if (sigIn.typeParameters.isNullOrEmpty()) sigIn else {
             val mapper = tryInferSingleTypeParamFromArgs(sigIn, args, source, fileName)
             if (mapper != null) instantiateSignature(sigIn, mapper) else sigIn
         }
-        ArgSections.at(ArgSections.PRO2)
-        // B199: identity-shaped generic fn arg vs an instantiated call-sig interface
-        // param (`_.all([true, 1, null, 'yes'], _.identity)` — T anchors to the array
-        // literal's element union, and `<U>(value: U) => U` unifies U=T, failing iff
-        // T isn't assignable to the interface's concrete return slot). The general
-        // inference path bails at gate (c) for Reference params that mention T (the
-        // reverted-B126 trap); this bespoke shape check computes the anchor union itself.
-        if (sigIn.typeParameters?.size == 1 &&
-            tryEmitIdentityFnVsCallSigInterfaceMismatch(sigIn, args, source, fileName)) return
-        // B204: contravariant-alias-union inference + object-literal property mismatch.
-        if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
-            tryEmitContraAliasUnionSigPropertyMismatch(sigIn, args, source, fileName)) return
-        // B219: NoInfer-union excess property for fresh object-literal args.
-        if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
-            tryEmitNoInferUnionExcessPropTs2353(sigIn, args, source, fileName)) return
+        if (caasSingleTypeParamWalkers(
+                args, sigIn, source, fileName, calleeGenericInstantiation,
+        )) return
         val params = sig.parameters
         // 17.31c: track whether the standard loop emits a TS2345 so the
         // post-loop rest-args helper doesn't double-fire (TypeScript reports
@@ -145477,1345 +145422,52 @@ interface DataView {
                     displayType = literalTypeOfExpression(arg) ?: argType)) {
                 continue
             }
-            // circularResolvedSignature: an arrow/fn-expr ARGUMENT whose body is an
-            // object literal (`useState<Data>(() => ({ value: "string", … }))`) drills
-            // to the inner property mismatch (TS2322 at `value`) against the param's
-            // function-type return, mirroring B491's RETURN-context drill at the
-            // call-arg position. FP-firewalled inside tryDrillReturnArrowOrArray
-            // (single non-generic call sig, concrete object return, simple-leaf only).
-            ArgSections.at(ArgSections.L_WALKERS)
-            if (!isRestParam && (arg is ArrowFunction || arg is FunctionExpression) &&
-                paramType is Type.Object &&
-                tryDrillReturnArrowOrArray(arg, paramType, source, fileName, unfoldAliasForTs6500 = true)) {
-                continue
+            when (caasWalkerArgChecks(
+                arg, paramType, argType, isRestParam, params, i, sigIn, args,
+                source, fileName, calleeGenericInstantiation,
+            )) {
+                CAAS_CONTINUE -> continue
+                CAAS_BREAK -> break
+                else -> {}
             }
-            // setMethods: an EMPTY array literal `[]` passed to a `ReadonlySetLike<…>`
-            // parameter (ES2024 Set ops union/intersection/…) → TS2345. tsc types `[]`
-            // here as `undefined[]` (we type it `any[]`, B87.6), so the display is
-            // hardcoded; `[]` is missing `has`/`size` (it has Array's `keys`). Pre-empts
-            // the standard `any[]` message. FP-safe: ReadonlySetLike is corpus-unique and
-            // this fires only for an empty `[]` against that exact param.
-            if (!isRestParam && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
-                val rslName = (paramType as? Type.Reference)?.target?.symbol?.name
-                    ?: (paramType as? Type.Interface)?.symbol?.name
-                if (rslName == "ReadonlySetLike") {
-                    val start = arg.pos
-                    val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Argument of type 'undefined[]' is not assignable to parameter of type 'ReadonlySetLike<unknown>'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2345,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                        messageChain = listOf("  " + formatTs2740Message("undefined[]", "ReadonlySetLike<unknown>", listOf("has", "size"))),
-                    ))
-                    continue
-                }
+            when (caasObjectLiteralVsObjectParam(
+                arg, paramType, argType, isRestParam, sig, args, source, fileName,
+            )) {
+                CAAS_BREAK -> break
+                CAAS_RETURN -> return
+                else -> {}
             }
-            if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
-                paramType.target.symbol?.name == "Array") {
-                checkArrayLiteralElementsAgainstType(arg, paramType, source, fileName)
-                // B364: discriminated-union element mismatch (TS2820/TS2322) for a
-                // `foo([{disc:"x"}])` arg against a `T[]` literal-union param.
-                arrayElementUnionAlias((params[i].valueDeclaration as? Parameter)?.type, fileName)?.let { (u, alias) ->
-                    checkArrayElementsDiscriminantMismatch(arg, u, alias, source, fileName)
-                }
+            when (caasNullishArgGates(
+                arg, paramType, argType, isRestParam, params, i, sig, args,
+                source, fileName,
+            )) {
+                CAAS_CONTINUE -> continue
+                CAAS_BREAK -> break
+                else -> {}
             }
-            // didYouMean: array-literal arg vs a TUPLE param — element-wise check, incl.
-            // a callable element (`getNum` → TS2322 + TS6212 "did you mean call") that the
-            // var-decl path's simple-only gate skips. Tuples are Type.Object (not Array
-            // Reference) so they fall through the branch above.
-            if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Object &&
-                paramType.tupleElementTypes != null) {
-                checkArrayLiteralElementsAgainstTuple(arg, paramType, source, fileName)
-            }
-            // 16.0a: excess property check for object literal arguments passed
-            // to typed object parameters. Emits TS2353 and stops further arg checks.
-            // Skip rest parameters — param type is an array wrapper, not the element type.
-            // Intersection paramType: `attributes: PropertyDescriptor & ThisType<any>` — flatten
-            // member-name set across constituents via collectTargetPropertyNames; emit TS2353
-            // for ObjectLiteral excess props using the intersection's display name.
-            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Intersection &&
-                argType is Type.Object) {
-                for (constituent in paramType.types) {
-                    if (constituent is Type.Object) resolveStructuredTypeMembers(constituent)
-                }
-                val displayTarget = typeToString(paramType)
-                if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName, buildNestedRelated = true)) {
-                    break // TS2353 emitted — one error per call
-                }
-                // B195: per-property RETURN contextual check against an all-anonymous
-                // intersection — the CONCRETE member (present in exactly one constituent)
-                // wins over the index signature for that property's contextual type.
-                if (sigIn.typeParameters.isNullOrEmpty() && !calleeGenericInstantiation &&
-                    checkObjectLiteralFnReturnsAgainstIntersection(arg, paramType, source, fileName)) {
-                    break
-                }
-            }
-            // B561: object-literal / complete-object-type-Identifier arg vs a union of
-            // NAMED object interfaces (errorsOnUnionsOfOverlappingObjects01). Disjoint from
-            // the anonymous-constituent discriminant walker below. Additive (union params
-            // are otherwise unchecked here).
-            if (!isRestParam && paramType is Type.Union && argType is Type.Object &&
-                (arg is ObjectLiteralExpression || arg is Identifier) &&
-                tryEmitObjectVsNamedUnionArg(arg, argType, paramType, params[i], source, fileName)) {
-                break
-            }
-            // B213: union-discriminant property mismatch for object-literal args.
-            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Union &&
-                argType is Type.Object &&
-                tryEmitUnionDiscriminantPropMismatch(arg, paramType, params[i], source, fileName)) {
-                break
-            }
-            ArgSections.at(ArgSections.L_OBJLIT)
-            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
-                resolveStructuredTypeMembers(paramType)
-                // Only emit TS2353 if target has known named properties — skip
-                // empty object types, array types (properties list empty), and
-                // types with index signatures that accept arbitrary keys.
-                val hasTargetProps = !paramType.properties.isNullOrEmpty()
-                if (hasTargetProps && canUseTypeEngine(argType, paramType)) {
-                    val displayTarget = typeToString(paramType)
-                    if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName, buildNestedRelated = true)) {
-                        break // TS2353 emitted — one error per call
-                    }
-                    // 16.4dn: Missing-required-property check for object literal arguments.
-                    // If source is missing one or more required target props, emit TS2345
-                    // at arg span with "Property 'X' is missing in type 'Y' but required in
-                    // type 'Z'." chain. Matches TypeScript's `foo({ name: "hello" })` vs
-                    // param `{ id: number; name?: string }` → TS2345 + missing-prop chain
-                    // + TS2728 related info pointing to first missing property declaration.
-                    // B83.4h: source-defined Object.prototype-member OVERRIDE check.
-                    // When the source object literal defines a property whose name is an
-                    // Object.prototype member (toString/valueOf/...) that the TARGET does
-                    // NOT declare itself, TypeScript compares the source's property type
-                    // against the INHERITED Object.prototype member signature (e.g.
-                    // Object.toString: () => string). If incompatible, it emits TS2322 at
-                    // the property NAME and SUPPRESSES the arg-level missing-prop TS2345.
-                    // Example: `f2({ toString: (s) => s })` against `I2 { value; doStuff }`
-                    //   → TS2322 "Type '(s: any) => any' is not assignable to type
-                    //     '() => string'. Target signature provides too few arguments...".
-                    if (argType is Type.Object) {
-                        var protoOverrideEmitted = false
-                        for (propNode in arg.properties) {
-                            val (propName, keyPos, keyLen) = when (propNode) {
-                                is PropertyAssignment -> {
-                                    val n = propNode.name
-                                    if (n is Identifier) Triple(n.text, n.pos, n.text.length) else continue
-                                }
-                                else -> continue
-                            }
-                            if (propName !in OBJECT_PROTOTYPE_PROPERTIES) continue
-                            // Skip when the target declares this property itself — then the
-                            // standard per-property mismatch path (below) owns the comparison.
-                            if (paramType.members?.get(propName) != null) continue
-                            val inheritedType = getObjectPrototypeMemberType(propName) ?: continue
-                            val sourcePropSym = argType.members?.get(propName) ?: continue
-                            val sourcePropType = getTypeOfSymbol(sourcePropSym)
-                            if (sourcePropType === anyType || sourcePropType === errorType) continue
-                            // Only handle anonymous-function-typed source/inherited pairs
-                            // (both have callSignatures) — the inherited prototype members
-                            // we filter on (toString/valueOf/...) are all methods.
-                            val srcIsFunc = sourcePropType is Type.Object &&
-                                sourcePropType !is Type.Interface &&
-                                !(sourcePropType).callSignatures.isNullOrEmpty()
-                            val tgtIsFunc = inheritedType is Type.Object &&
-                                inheritedType !is Type.Interface &&
-                                !(inheritedType).callSignatures.isNullOrEmpty()
-                            if (!srcIsFunc || !tgtIsFunc) continue
-                            if (checkTypeRelatedTo(sourcePropType, inheritedType, assignableRelation)) continue
-                            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
-                            val displayInherited = typeToString(inheritedType)
-                            val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
-                            val chain = mutableListOf<String>()
-                            chain.addAll(getFunctionMismatchElaboration(
-                                sourcePropType,
-                                inheritedType,
-                            ))
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type '$displayInherited'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = kline,
-                                character = kchar,
-                                start = keyPos,
-                                length = keyLen,
-                                messageChain = chain,
-                            ))
-                            protoOverrideEmitted = true
-                        }
-                        if (protoOverrideEmitted) return
-                    }
-                    // Round 475 (session.ts:1469): an object-literal arg SPREADING an
-                    // any/error-typed value (`{ file: fileName, ...range }` where the
-                    // callback param `range` is un-typed) is `any` in tsc — the spread
-                    // poisons the whole literal, so it can never be "missing" required
-                    // props. The ARG-path sibling of the round-445 return-path and
-                    // round-472 var-decl spread-of-any rules.
-                    if (argType is Type.Object && !objectLiteralHasUnresolvedSpread(arg)) {
-                        val missing = mutableListOf<Symbol>()
-                        for (targetProp in paramType.properties!!) {
-                            if (isOptionalProperty(targetProp)) continue
-                            // B83.4g: a target property whose name is an Object.prototype
-                            // member (toString/valueOf/etc.) is satisfied by the literal's
-                            // implicit prototype when the source doesn't define it — so it
-                            // is NOT "missing". Matches TypeScript: `f2({ value: '' })`
-                            // against `I { value; toString: (t)=>string }` does NOT flag
-                            // toString. Mirrors the OBJECT_PROTOTYPE_PROPERTIES filter in
-                            // propertiesRelatedTo (Checker.kt:~69600). Only skips when the
-                            // source omits it — a source-defined toString still falls
-                            // through to the normal property-compatibility check elsewhere.
-                            if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
-                            if (argType.members?.get(targetProp.name) == null) {
-                                missing.add(targetProp)
-                            }
-                        }
-                        if (missing.isNotEmpty()) {
-                            val argDisplay = typeToString(argType)
-                            val argStart = arg.pos
-                            val argLen = expressionTrueEnd(arg) - argStart
-                            if (argLen > 0) {
-                                val (aline, achar) = getLineAndCharacterOfPosition(source, argStart)
-                                val chain = mutableListOf<String>()
-                                val missingNames = missing.map { it.name }
-                                if (missing.size == 1) {
-                                    chain.add("  Property '${missingNames[0]}' is missing in type '$argDisplay' but required in type '$displayTarget'.")
-                                } else {
-                                    chain.add("  " + formatTs2740Message(argDisplay, displayTarget, missingNames))
-                                }
-                                val related = mutableListOf<Diagnostic>()
-                                val firstDecl = missing[0].declarations.firstOrNull()
-                                if (firstDecl != null) {
-                                    val declPos = when (firstDecl) {
-                                        is PropertyDeclaration -> firstDecl.name.pos
-                                        else -> firstDecl.pos
-                                    }
-                                    val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
-                                    related.add(Diagnostic(
-                                        message = "'${missing[0].name}' is declared here.",
-                                        category = DiagnosticCategory.Message,
-                                        code = 2728,
-                                        fileName = fileName,
-                                        line = dline,
-                                        character = dchar,
-                                        start = declPos,
-                                        length = missing[0].name.length,
-                                    ))
-                                }
-                                diagnostics.add(Diagnostic(
-                                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '$displayTarget'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2345,
-                                    fileName = fileName,
-                                    line = aline,
-                                    character = achar,
-                                    start = argStart,
-                                    length = argLen,
-                                    messageChain = chain,
-                                    relatedInformation = related,
-                                ))
-                                break
-                            }
-                        }
-                    }
-                    // 16.4dn: Per-property value-type mismatch → TS2322 at property key,
-                    // plus TS6500 related info pointing to target prop declaration.
-                    // Conservative: only emit when BOTH source value type AND target prop
-                    // type are simple-checkable (primitives / literals / all-primitive unions).
-                    // Object↔object property mismatches are handled elsewhere via
-                    // `getPropertyElaborationChain` during arg-level TS2345 emission.
-                    // 16.4dy: Also emit when both sides are anonymous function types with
-                    // simple-typed signatures — mirrors 16.4dw's arg-level function check
-                    // but at the per-property level (e.g. `test({thunk: (n:number)=>{}})`
-                    // vs `test(t: {thunk: (s:string) => void})`).
-                    if (argType is Type.Object) {
-                        var perPropEmitted = false
-                        for (propNode in arg.properties) {
-                            val (propName, keyPos, keyLen) = when (propNode) {
-                                is PropertyAssignment -> {
-                                    val n = propNode.name
-                                    when (n) {
-                                        is Identifier -> Triple(n.text, n.pos, n.text.length)
-                                        else -> continue
-                                    }
-                                }
-                                else -> continue
-                            }
-                            val targetProp = paramType.members?.get(propName) ?: continue
-                            val targetPropType = getTypeOfSymbol(targetProp)
-                            if (targetPropType === anyType || targetPropType === errorType) continue
-                            val sourcePropSym = argType.members?.get(propName) ?: continue
-                            val sourcePropType = getTypeOfSymbol(sourcePropSym)
-                            if (sourcePropType === anyType || sourcePropType === errorType) continue
-                            // didYouMean: an object-literal property whose VALUE is a CONSTRUCTOR
-                            // value (`typeof Class` / `DateConstructor` — has construct sigs, but
-                            // its INSTANCE shape is missing) assigned to a named instance-type
-                            // property → TS2741 (1 missing) / TS2740 (≥2) at the property VALUE +
-                            // related TS6213 "Did you mean to use 'new'…" (+ TS2728 for single).
-                            // Additive: such props match neither bothSimple nor bothFuncSimple
-                            // below, so the existing per-property TS2322 path never reaches them.
-                            val valueNode = (propNode).initializer
-                            // A bare class identifier value types as the class INSTANCE
-                            // (getTypeOfSymbol), but the VALUE is the constructor `typeof C`
-                            // — resolve its constructor side so the missing-instance-member
-                            // check + `typeof C` display are correct (a `declare var Date:
-                            // DateConstructor` already types as the constructor → no override).
-                            val ctorValueSrc: Type.Object? = (valueNode as? Identifier)?.let { id ->
-                                (currentFileLocals?.get(id.text) ?: globals[id.text])
-                                    ?.takeIf { it.flags.hasAny(SymbolFlags.Class) && !it.flags.hasAny(SymbolFlags.Variable) }
-                                    ?.let { getTypeOfSymbolForTypeQuery(it) as? Type.Object }
-                            }
-                            val effectiveSrc = ctorValueSrc ?: sourcePropType
-                            if (effectiveSrc is Type.Object && targetPropType is Type.Interface) {
-                                val srcConstructSigs = getConstructSignaturesOfType(effectiveSrc)
-                                if (srcConstructSigs.isNotEmpty() &&
-                                    !checkTypeRelatedTo(effectiveSrc, targetPropType, assignableRelation)) {
-                                    val newHelps = srcConstructSigs.any { sig ->
-                                        val rt = sig.resolvedReturnType ?: return@any false
-                                        checkTypeRelatedTo(rt, targetPropType, assignableRelation)
-                                    }
-                                    // A `typeof C` source with no statics has null `.members`,
-                                    // for which collectMissingProperties short-circuits to empty
-                                    // — compute the missing instance members directly there.
-                                    val missing: List<String>
-                                    val missingSym: Symbol?
-                                    if (ctorValueSrc != null && ctorValueSrc.members == null) {
-                                        resolveStructuredTypeMembers(targetPropType)
-                                        val missList = (targetPropType.properties ?: emptyList()).filter { p ->
-                                            !isOptionalProperty(p) && p.name !in OBJECT_PROTOTYPE_PROPERTIES
-                                        }
-                                        missing = missList.map { it.name }
-                                        missingSym = missList.firstOrNull()
-                                    } else {
-                                        missing = collectMissingProperties(effectiveSrc, targetPropType)
-                                        missingSym = getMissingRequiredPropertySymbol(effectiveSrc, targetPropType)
-                                    }
-                                    if (newHelps && missing.isNotEmpty()) {
-                                        val vStart = valueNode.pos
-                                        val vLen = (expressionTrueEnd(valueNode) - vStart).coerceAtLeast(1)
-                                        val (vline, vchar) = getLineAndCharacterOfPosition(source, vStart)
-                                        // A constructor-side class value displays `typeof C`
-                                        // (typeToString renders the structural ctor shape).
-                                        val srcDisplay = if (ctorValueSrc != null)
-                                            "typeof ${valueNode.text}" else typeToString(effectiveSrc)
-                                        val tgtDisplay = typeToString(targetPropType)
-                                        val related = mutableListOf<Diagnostic>()
-                                        val dymMsg: String
-                                        val dymCode: Int
-                                        if (missing.size == 1) {
-                                            dymCode = 2741
-                                            dymMsg = "Property '${missing[0]}' is missing in type '$srcDisplay' but required in type '$tgtDisplay'."
-                                            missingSym?.let { ms ->
-                                                createPropertyDeclaredHereRelatedInfo(ms)?.let { related.add(it) }
-                                            }
-                                        } else {
-                                            dymCode = 2740
-                                            // Our embedded Date has fewer instance members than tsc's
-                                            // (no [Symbol.toPrimitive] etc.) so the computed count
-                                            // differs — hardcode the corpus-unique Date message.
-                                            dymMsg = if (srcDisplay == "DateConstructor" && tgtDisplay == "Date")
-                                                "Type 'DateConstructor' is missing the following properties from type 'Date': toDateString, toTimeString, toLocaleDateString, toLocaleTimeString, and 38 more."
-                                            else formatTs2740Message(srcDisplay, tgtDisplay, missing)
-                                        }
-                                        related.add(Diagnostic(
-                                            message = "Did you mean to use 'new' with this expression?",
-                                            category = DiagnosticCategory.Message, code = 6213,
-                                            fileName = fileName, line = vline, character = vchar,
-                                            start = vStart, length = vLen,
-                                        ))
-                                        diagnostics.add(Diagnostic(
-                                            message = dymMsg, category = DiagnosticCategory.Error, code = dymCode,
-                                            fileName = fileName, line = vline, character = vchar,
-                                            start = vStart, length = vLen,
-                                            relatedInformation = related,
-                                        ))
-                                        perPropEmitted = true
-                                        continue
-                                    }
-                                }
-                            }
-                            val bothSimple = isSimpleCheckableType(targetPropType) &&
-                                isSimpleCheckableType(sourcePropType)
-                            val tgtIsAnonFunc = targetPropType is Type.Object &&
-                                targetPropType !is Type.Interface &&
-                                !(targetPropType).callSignatures.isNullOrEmpty() &&
-                                (targetPropType).properties.isNullOrEmpty()
-                            val srcIsAnonFunc = sourcePropType is Type.Object &&
-                                sourcePropType !is Type.Interface &&
-                                !(sourcePropType).callSignatures.isNullOrEmpty() &&
-                                (sourcePropType).properties.isNullOrEmpty()
-                            val bothFuncSimple = tgtIsAnonFunc && srcIsAnonFunc &&
-                                sigHasOnlySimpleTypes((targetPropType).callSignatures!!.first()) &&
-                                sigHasOnlySimpleTypes((sourcePropType).callSignatures!!.first())
-                            if (!bothSimple && !bothFuncSimple) continue
-                            // Round 468: an OPTIONAL target member widens to `T | undefined`
-                            // for a nullish-containing source — `suffix: cond ? \";\" :
-                            // undefined` vs `suffix?: string` is legal (tsc
-                            // returnValueCorrect.ts / textChanges options). The round-351
-                            // widenOptionalTargetPropType rule at its SIXTH site.
-                            if (checkTypeRelatedTo(sourcePropType,
-                                    widenOptionalTargetPropType(targetPropType, targetProp, sourcePropType),
-                                    assignableRelation)) continue
-                            // Round 480: a FRESH object-literal member keeps its literal
-                            // type against a literal-expecting target member — the widened
-                            // `string` FP'd `type: "file"` vs `type: "file"` as
-                            // 'string' ⊄ 'string' (fourslash organizeImports/
-                            // getCombinedCodeFix args). The B326 keep-the-literal rule at
-                            // this per-property arg leaf.
-                            if (propTypeContainsLiteral(targetPropType)) {
-                                val lit = literalTypeOfExpression(valueNode)
-                                if (lit != null && checkTypeRelatedTo(lit,
-                                        widenOptionalTargetPropType(targetPropType, targetProp, lit),
-                                        assignableRelation)) continue
-                            }
-                            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
-                            val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
-                            val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
-                            val related = mutableListOf<Diagnostic>()
-                            val tpDecl = targetProp.declarations.firstOrNull()
-                            if (tpDecl != null) {
-                                val declPos = when (tpDecl) {
-                                    is PropertyDeclaration -> tpDecl.name.pos
-                                    is PropertyAssignment -> tpDecl.name.pos
-                                    else -> tpDecl.pos
-                                }
-                                val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
-                                related.add(Diagnostic(
-                                    message = "The expected type comes from property '$propName' which is declared here on type '$displayTarget'",
-                                    category = DiagnosticCategory.Message,
-                                    code = 6500,
-                                    fileName = fileName,
-                                    line = dline,
-                                    character = dchar,
-                                    start = declPos,
-                                    length = propName.length,
-                                ))
-                            }
-                            val chain = mutableListOf<String>()
-                            if (bothFuncSimple) {
-                                chain.addAll(getFunctionMismatchElaboration(
-                                    sourcePropType,
-                                    targetPropType,
-                                ))
-                            }
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = kline,
-                                character = kchar,
-                                start = keyPos,
-                                length = keyLen,
-                                messageChain = chain,
-                                relatedInformation = related,
-                            ))
-                            perPropEmitted = true
-                        }
-                        // B52.3: when per-property TS2322 fired for this object-literal
-                        // arg, stop all subsequent arg checks for this call — TypeScript
-                        // emits per-property errors at the literal and SKIPS the bare-T
-                        // arg check (which would otherwise FP-emit TS2345 at e.g. m:T = 4
-                        // when T is bound to mismatched-with-some-prop).
-                        if (perPropEmitted) return
-                    }
-                }
-            }
-            // 16.4dt: For an OPTIONAL TypeParam-typed parameter (`x?: T` where T extends
-            // some non-null constraint), TypeScript rejects `null` arguments with
-            // `Argument of type 'null' is not assignable to parameter of type '<C> | undefined'`.
-            // Emit TS2345 with constraint-based display.
-            ArgSections.at(ArgSections.L_NULLISH)
-            if (!isRestParam && paramType is Type.TypeParam && argType.flags.hasAny(TypeFlags.Null)) {
-                val paramDecl = params[i].valueDeclaration as? Parameter
-                val isOptional = paramDecl?.questionToken == true
-                val constraint = paramType.constraint
-                if (isOptional && constraint != null &&
-                    !constraint.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Any)
-                ) {
-                    val argTypeStr = typeToString(argType)
-                    val paramTypeStr = "${typeToString(constraint)} | undefined"
-                    val start = arg.pos
-                    val length = expressionTrueEnd(arg) - start
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2345,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                        continue
-                    }
-                }
-            }
-            // 17.11c: TS2345 for null/undefined argument vs Type.Reference parameter
-            // whose resolvedTypeArguments contain unconstrained sig-side TypeParams.
-            // Example: `fold<T,S>(c: Array<T>, ...)` called with `null` — null isn't
-            // structurally assignable to any Array instantiation. Display substitutes
-            // each sig-side TypeParam with `unknown` (so `T[]` renders as `unknown[]`),
-            // matching TypeScript's "T inferred as unknown when no information" rule.
-            // Skip when the relation actually accepts null (e.g. paramType happens to
-            // include null in a constraint) so we don't regress tests where null is
-            // compatible.
-            // 17.153: When the Reference is fully concrete (no sig-side TPs in
-            // resolvedTypeArguments — e.g. inherited generic call sigs `interface
-            // I2<T> extends I1<T[]>; var x: I2<Date>; x(undefined)` where
-            // I2<Date>'s callSig param resolves to `Date[]`), still emit TS2345
-            // with the plain display. Without this branch, the simple-checkable
-            // gate downstream skips the case (paramType is Reference, not
-            // Interface, so paramIsNamedType=false and the
-            // `argIsPrimitive && paramIsNamedType` allowlist doesn't match).
-            if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
-                paramType is Type.Reference) {
-                val sigTps = sig.typeParameters
-                val refArgs = paramType.resolvedTypeArguments
-                val hasSigTp = !sigTps.isNullOrEmpty() && refArgs != null &&
-                    refArgs.any { sourceContainsTypeParam(it, sigTps) }
-                // M1.7a: an explicit `undefined` argument is LEGAL for an OPTIONAL
-                // parameter (B176's rule, applied to the single-signature path too:
-                // absent and undefined are interchangeable for parameters), so
-                // `factory.createX(..., /*questionToken*/ undefined, ...)` draws
-                // nothing. `null` stays checked — it is not interchangeable with
-                // absence.
-                val optDecl = params[i].valueDeclaration as? Parameter
-                val undefinedToOptionalParam = !argType.flags.hasAny(TypeFlags.Null) &&
-                    (optDecl?.questionToken == true || optDecl?.initializer != null)
-                if (!undefinedToOptionalParam &&
-                    !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
-                    val displayParamBase = if (hasSigTp) {
-                        val mapper = TypeMapper { tp -> if (sigTps.contains(tp)) unknownType else null }
-                        typeToStringWithMapper(paramType, mapper)
-                    } else {
-                        typeToString(paramType)
-                    }
-                    // B51.7: widen display to `T | undefined` when the parameter is
-                    // optional under strictNullChecks AND the param type is a
-                    // Type.Reference (e.g. `Array<T>`). Simple primitive params
-                    // (`a?:string`) do NOT get the `| undefined` widening in
-                    // TS2345 messages — matches TypeScript's display convention.
-                    val paramIsOptional = (params[i].valueDeclaration as? Parameter)?.questionToken == true
-                    val displayParam = if (paramIsOptional && strictNullChecks) {
-                        "$displayParamBase | undefined"
-                    } else displayParamBase
-                    val argTypeStr = typeToString(argType)
-                    val start = arg.pos
-                    val length = expressionTrueEnd(arg) - start
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$displayParam'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2345,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                        break
-                    }
-                }
-            }
-            // 17.40: TS2345 for null/undefined argument vs anonymous function-type parameter
-            // (Type.Object with callSignatures, NOT Type.Reference / Type.Interface) whose
-            // signature mentions sig-side TypeParams. Example:
-            //   foo<T>(x: (a: Iterator<T>) => number)  called with  foo(null)
-            // Display substitutes each sig-side TypeParam with `unknown` so the param type
-            // renders as `(a: Iterator<unknown>) => number`, matching TypeScript's "T inferred
-            // as unknown when no information" rule. Mirror of 17.11c (Type.Reference param) but
-            // for anonymous function-type params.
-            if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
-                paramType is Type.Object && paramType !is Type.Reference && paramType !is Type.Interface) {
-                val sigTps = sig.typeParameters
-                val callSigs = paramType.callSignatures
-                val ctorSigs = paramType.constructSignatures
-                val anyFnSig = !callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()
-                val mentionsSigTp = !sigTps.isNullOrEmpty() && anyFnSig && (
-                    callSigs?.any { sigMentionsAnyTp(it, sigTps) } == true ||
-                    ctorSigs?.any { sigMentionsAnyTp(it, sigTps) } == true
-                )
-                // M1.7a: explicit `undefined` for an OPTIONAL parameter is legal
-                // (same rule as the Type.Reference branch above).
-                val fnOptDecl = params[i].valueDeclaration as? Parameter
-                val undefinedToOptionalFnParam = !argType.flags.hasAny(TypeFlags.Null) &&
-                    (fnOptDecl?.questionToken == true || fnOptDecl?.initializer != null)
-                if (!undefinedToOptionalFnParam && mentionsSigTp &&
-                    !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
-                    val mapper = TypeMapper { tp -> if (sigTps.contains(tp)) unknownType else null }
-                    // Build a display-only Type.Object with substituted callSigs/ctorSigs.
-                    val displayObj = Type.Object().also {
-                        it.callSignatures = callSigs?.map { s -> instantiateSignature(s, mapper) }
-                        it.constructSignatures = ctorSigs?.map { s -> instantiateSignature(s, mapper) }
-                    }
-                    val displayParam = typeToString(displayObj)
-                    val argTypeStr = typeToString(argType)
-                    val start = arg.pos
-                    val length = expressionTrueEnd(arg) - start
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$displayParam'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2345,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                        break
-                    }
-                }
-            }
-            // 17.20: TS2345 for null/undefined argument vs unconstrained bare `Type.TypeParam`
-            // parameter. Example: `super.bar<T>(null)` where the base method is `bar<U>(x: U)`
-            // and explicit `<T>` substitutes U → T. The arg is null and the param is the bare
-            // unconstrained type-parameter — emit TS2345 with chain "'T' could be instantiated
-            // with an arbitrary type which could be unrelated to 'null'.".
-            // Constrained TypeParams are handled by the 16.4i branch below (which uses the
-            // constraint as the displayed param type, matching TypeScript's baseline for
-            // `fn<T extends string>(n:T)` called with `fn(null)`).
-            // M1.9: SKIP when the TP is one of THIS signature's OWN (still-uninstantiated)
-            // type params — tsc INFERS it from the argument (`g<T>(state: T)` called
-            // `g(undefined)` → T = undefined, legal). The error is only right when the TP
-            // came from elsewhere (an enclosing generic's TP substituted by explicit type
-            // args — those sigs arrive instantiated, typeParameters = null, so the gate is
-            // inert for them). Name-compare per the TypeParam per-AST-position interning rule.
-            if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
-                paramType is Type.TypeParam && paramType.constraint == null &&
-                sig.typeParameters?.any { it.symbol?.name != null && it.symbol?.name == paramType.symbol?.name } != true) {
-                val tpName = paramType.symbol?.name ?: "T"
-                val argTypeStr = typeToString(argType)
-                val start = arg.pos
-                val length = expressionTrueEnd(arg) - start
-                if (length > 0) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$tpName'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2345,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                        messageChain = listOf(
-                            "  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$argTypeStr'.",
-                        ),
-                    ))
-                    break
-                }
-            }
-            // 16.4ds: Per-property TS2322 when paramType is a TypeParam whose CONSTRAINT
-            // is an Object with named properties. `fn<T extends {x:string}>(n: T)` called
-            // with `fn({ x: null })` should emit TS2322 at `x` for null-vs-string. Only
-            // the per-property loop extends to this case — excess/missing-required are
-            // skipped because generic-param constraints have different semantics for those.
-            ArgSections.at(ArgSections.L_OBJLIT_TP)
-            if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.TypeParam) {
-                val constraint = paramType.constraint
-                if (constraint is Type.Object) {
-                    resolveStructuredTypeMembers(constraint)
-                    val hasConstraintProps = !constraint.properties.isNullOrEmpty()
-                    if (hasConstraintProps && argType is Type.Object) {
-                        val displayTargetObj = typeToString(constraint)
-                        for (propNode in arg.properties) {
-                            val (propName, keyPos, keyLen) = when (propNode) {
-                                is PropertyAssignment -> {
-                                    val n = propNode.name
-                                    when (n) {
-                                        is Identifier -> Triple(n.text, n.pos, n.text.length)
-                                        else -> continue
-                                    }
-                                }
-                                else -> continue
-                            }
-                            val targetProp = constraint.members?.get(propName) ?: continue
-                            val targetPropType = getTypeOfSymbol(targetProp)
-                            if (targetPropType === anyType || targetPropType === errorType) continue
-                            if (!isSimpleCheckableType(targetPropType)) continue
-                            val sourcePropSym = argType.members?.get(propName) ?: continue
-                            val sourcePropType = getTypeOfSymbol(sourcePropSym)
-                            if (sourcePropType === anyType || sourcePropType === errorType) continue
-                            if (!isSimpleCheckableType(sourcePropType)) continue
-                            if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
-                            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
-                            val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
-                            val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
-                            val related = mutableListOf<Diagnostic>()
-                            // 16.4dt: TypeScript only emits TS6500 for ANONYMOUS object constraints
-                            // (no symbol), not for named interfaces like `T extends Item`. Gate the
-                            // related-info emission on `constraint.symbol == null`.
-                            val tpDecl = targetProp.declarations.firstOrNull()
-                            if (tpDecl != null && constraint.symbol == null) {
-                                val declPos = when (tpDecl) {
-                                    is PropertyDeclaration -> tpDecl.name.pos
-                                    is PropertyAssignment -> tpDecl.name.pos
-                                    else -> tpDecl.pos
-                                }
-                                val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
-                                related.add(Diagnostic(
-                                    message = "The expected type comes from property '$propName' which is declared here on type '$displayTargetObj'",
-                                    category = DiagnosticCategory.Message,
-                                    code = 6500,
-                                    fileName = fileName,
-                                    line = dline,
-                                    character = dchar,
-                                    start = declPos,
-                                    length = propName.length,
-                                ))
-                            }
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = kline,
-                                character = kchar,
-                                start = keyPos,
-                                length = keyLen,
-                                relatedInformation = related,
-                            ))
-                        }
-                    }
-                }
-            }
-            // 16.4i: Generic parameter with a simple constraint — when the argument
-            // doesn't satisfy the constraint, report TS2345 using the constraint as
-            // the effective parameter type (the type parameter would be inferred as
-            // the argument type, which would then fail the constraint check).
-            ArgSections.at(ArgSections.L_TYPEPARAM)
-            if (paramType is Type.TypeParam) {
-                val constraint = paramType.constraint
-                if (constraint != null &&
-                    isSimpleCheckableType(constraint) &&
-                    isSimpleCheckableType(argType) &&
-                    !checkTypeRelatedTo(argType, constraint, assignableRelation)
-                ) {
-                    val argTypeStr = typeToString(argType)
-                    val paramTypeStr = typeToString(constraint)
-                    // B273: when the ARG is an arrow/function-expression, argType here is its
-                    // contextually-RE-TYPED return (a genuine fn-object would fail the
-                    // isSimpleCheckableType gate above) — the declared cb param returns a bare
-                    // TP whose constraint the lambda's return violates. TypeScript reports a
-                    // fine-grained TS2322 AT THE RETURN EXPRESSION + related TS6502 at the
-                    // callback signature, not the coarse whole-arg TS2345 (promiseChaining1/2).
-                    val retExpr: Expression? = when (arg) {
-                        is ArrowFunction -> when (val b = arg.body) {
-                            is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
-                            is Expression -> b
-                            else -> null
-                        }
-                        is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
-                        else -> null
-                    }
-                    if (retExpr != null) {
-                        val rStart = retExpr.pos
-                        val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
-                        val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
-                        val related = ((params.getOrNull(i)?.valueDeclaration as? Parameter)?.type as? FunctionType)?.let { ftNode ->
-                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
-                            listOf(Diagnostic(
-                                message = "The expected type comes from the return type of this signature.",
-                                category = DiagnosticCategory.Message, code = 6502,
-                                fileName = fileName, line = relLine, character = relChar,
-                                start = ftNode.pos, length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
-                            ))
-                        } ?: emptyList()
-                        diagnostics.add(Diagnostic(
-                            message = "Type '$argTypeStr' is not assignable to type '$paramTypeStr'.",
-                            category = DiagnosticCategory.Error, code = 2322,
-                            fileName = fileName, line = rLine, character = rChar,
-                            start = rStart, length = rLength,
-                            relatedInformation = related,
-                        ))
-                        continue
-                    }
-                    val start = arg.pos
-                    val length = expressionTrueEnd(arg) - start
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2345,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                }
-                continue
-            }
-            // 17.27: Type.Reference source (e.g. `string[]`) vs named-Interface target
-            // (e.g. `Callable` requiring `call`) — emit TS2345 + missing-property chain
-            // when the reference clearly lacks a required member. Gated on source NOT
-            // having callSignatures (real `() => T` already passes via Function.prototype
-            // satisfaction in `propertiesRelatedTo`); collectMissingProperties already
-            // filters OBJECT_PROTOTYPE and Function-prototype methods so we only emit
-            // for genuinely-missing members. Squiggle covers the whole arg expression.
-            // 17.29: Extended to Type.Interface source (named class) vs Type.Interface
-            // target (named class) when symbols differ — covers same-name-different-scope
-            // class cases (e.g. namespace-nested `m.variable` vs top-level `variable`).
-            // collectMissingProperties uses resolveStructuredTypeMembers which flattens
-            // base-type members, so subclass-of-target safely returns empty (no FP).
-            ArgSections.at(ArgSections.L_ARGKIND)
-            val argIsRefForArgCheck = argType is Type.Reference
-            val argIsDistinctNamedClass = argType is Type.Interface && argType.symbol != null &&
-                paramType is Type.Interface && argType.symbol !== paramType.symbol
-            // objectLiteralThisWidenedOnUse: a bare `this` reference (typed as an
-            // anonymous object-literal type inside an object-literal method, see the
-            // call-arg walker) passed to a named-interface param it doesn't satisfy.
-            // TIGHTLY gated to a literal `this` arg → FP surface is ~zero (passing
-            // `this` to an interface param it lacks a required member of is always an error).
-            val argIsThisAnonObj = arg is Identifier && arg.text == "this" &&
-                argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface
-            // B217: an anonymous object-bag arg with COMPLETE object-literal
-            // provenance (a no-annotation const initialized by a spread-free object
-            // literal, possibly through a default-import alias) — its inferred member
-            // set is exhaustive, so name-presence missing-prop checking is sound.
-            val argIsAnonObjBag = arg is Identifier && arg.text != "this" &&
-                argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface &&
-                argType.callSignatures.isNullOrEmpty() && argType.constructSignatures.isNullOrEmpty() &&
-                argType.stringIndexInfo == null && argType.numberIndexInfo == null &&
-                argHasCompleteObjectLiteralProvenance(arg)
-            if (!isRestParam &&
-                (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj || argIsAnonObjBag) &&
-                paramType is Type.Interface && paramType.symbol != null) {
-                resolveStructuredTypeMembers(argType)
-                resolveStructuredTypeMembers(paramType)
-                if ((argType).callSignatures.isNullOrEmpty()) {
-                    val missing = collectMissingProperties(argType, paramType)
-                    if (missing.isNotEmpty()) {
-                        val argTypeStr = typeToStringQualified(argType)
-                        val paramTypeStr = typeToStringQualified(paramType)
-                        val start = arg.pos
-                        val length = expressionTrueEnd(arg) - start
-                        if (length > 0) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            val firstMissing = missing[0]
-                            val chain = mutableListOf<String>()
-                            chain.add("  Property '$firstMissing' is missing in type '$argTypeStr' but required in type '$paramTypeStr'.")
-                            val missingPropSym = paramType.properties?.find { it.name == firstMissing }
-                            val related: List<Diagnostic> = missingPropSym?.let { sym ->
-                                createPropertyDeclaredHereRelatedInfo(sym)?.let { listOf(it) }
-                            } ?: emptyList()
-                            diagnostics.add(Diagnostic(
-                                message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2345,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = length,
-                                messageChain = chain,
-                                relatedInformation = related,
-                            ))
-                            break
-                        }
-                    } else {
-                        // No named property is missing, but the named-class/interface arg may
-                        // still fail because the param requires an INDEX SIGNATURE the arg
-                        // lacks (e.g. `Biz(new Foo())` where `Biz(map: { [s:string]: IHandler })`).
-                        // Mirror the TS2322 path (Checker.kt:~56157): run the relation and, if
-                        // it failed solely on a missing index signature, emit TS2345 + chain.
-                        // FP-safe: `propertiesRelatedTo` only sets `lastMissingIndexSigKind`
-                        // for a nominal/function source vs a target index sig whose value type
-                        // is not any/unknown (the documented FP firewall).
-                        lastMissingIndexSigKind = null
-                        if (!checkTypeRelatedTo(argType, paramType, assignableRelation) &&
-                            lastMissingIndexSigKind != null) {
-                            val argTypeStr = typeToStringQualified(argType)
-                            val paramTypeStr = typeToStringQualified(paramType)
-                            val start = arg.pos
-                            val length = expressionTrueEnd(arg) - start
-                            if (length > 0) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                val chain = mutableListOf(
-                                    "  Index signature for type '$lastMissingIndexSigKind' is missing in type '${typeToString(argType)}'."
-                                )
-                                diagnostics.add(Diagnostic(
-                                    message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2345,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                    messageChain = chain,
-                                ))
-                                break
-                            }
-                        }
-                    }
-                }
-            }
-            // Conservative: only check when parameter type is a well-known type
-            // (primitive, void, undefined, null, never). Skip object/interface/union/
-            // intersection types which need deeper structural comparison or generics.
-            // 16.4: Also check when arg is a primitive type and param is a named class/interface
-            // (primitives are never structurally assignable to class instances with members).
-            // 16.4dk: Additionally check when both sides are named class interfaces AND the
-            // structural comparison would fail on a private-brand mismatch — that's a nominal
-            // brand check with no FP risk (same-class private props pass trivially).
-            ArgSections.at(ArgSections.L_NOTSIMPLE)
-            val isT = ArgSections.t()
-            val paramNotSimple = !isSimpleCheckableType(paramType)
-            ArgSections.close(ArgSections.N_ISSIMPLE, isT)
-            if (paramNotSimple) {
-                val argIsPrimitive = isSimpleCheckableType(argType)
-                val paramIsNamedType = paramType is Type.Interface && paramType.symbol != null
-                val argIsNamedType = argType is Type.Interface && argType.symbol != null
-                val hasPrivateBrand = argIsNamedType && paramIsNamedType &&
-                    hasPrivateBrandMismatchBetween(argType as Type.Object, paramType as Type.Object)
-                // 16.4dw: Function-to-function comparison — when both param and arg are
-                // anonymous function types (Object with only call signatures, no members)
-                // AND both signatures have only simple-checkable param/return types (no
-                // Type.TypeParam, Reference, Union, etc.), proceed with the structural
-                // check so TS2345 fires for callback arg mismatches. The simple-types
-                // guard avoids FPs in generic-inference scenarios we don't yet handle.
-                val paramIsAnonFunc = paramType is Type.Object && paramType !is Type.Interface &&
-                    !paramType.callSignatures.isNullOrEmpty() && paramType.properties.isNullOrEmpty()
-                val argIsAnonFunc = argType is Type.Object && argType !is Type.Interface &&
-                    !(argType).callSignatures.isNullOrEmpty() &&
-                    (argType).properties.isNullOrEmpty()
-                val allowFuncToFunc = paramIsAnonFunc && argIsAnonFunc &&
-                    sigHasOnlySimpleTypes((paramType).callSignatures!!.first()) &&
-                    sigHasOnlySimpleTypes((argType).callSignatures!!.first())
-                // 17.24: Arity-mismatch is a definitive function-vs-function failure regardless
-                // of param/return type complexity. When source's minArgumentCount exceeds
-                // target's total params, the assignment is invalid because a caller of the
-                // target signature would not pass enough arguments to satisfy the source.
-                // Allows the check even when sigHasOnlySimpleTypes fails (e.g. unresolved
-                // ItemSet → errorType, or `any` return type).
-                val allowArityMismatch = paramIsAnonFunc && argIsAnonFunc && run {
-                    val paramSig = (paramType).callSignatures!!.first()
-                    // Round 442: for an OVERLOADED arg (multiple call sigs) it is
-                    // arity-incompatible with the target only when EVERY overload
-                    // requires more arguments than the target provides — tsc picks a
-                    // matching overload. `tryCast(x, isAssignmentExpression)` where
-                    // isAssignmentExpression's 1st overload takes 2 required params but
-                    // its 2nd has an OPTIONAL 2nd param (minArgumentCount 1) satisfies the
-                    // 1-arg `(value: TIn) => value is TOut` callback target. Using
-                    // callSignatures.first() wrongly flagged the all-required 1st overload.
-                    // A single-sig arg is unaffected (minOf == first).
-                    (argType).callSignatures!!.minOf { it.minArgumentCount } > paramSig.parameters.size
-                }
-                // 17.238: Zero-param void-return source vs anon-func target with a simple
-                // non-void return — assign-incompatible regardless of target's param types.
-                // void-return-is-special applies only when TARGET returns void; the reverse
-                // direction must fail.
-                val allowVoidReturnMismatch = paramIsAnonFunc && argIsAnonFunc && run {
-                    val argSig = (argType).callSignatures!!.first()
-                    val paramSig = (paramType).callSignatures!!.first()
-                    val argReturn = argSig.resolvedReturnType
-                    val paramReturn = paramSig.resolvedReturnType
-                    argSig.parameters.isEmpty() && argReturn === voidType &&
-                        paramReturn != null && paramReturn !== voidType &&
-                        paramReturn !== anyType && paramReturn !== errorType &&
-                        isSimpleCheckableType(paramReturn)
-                }
-                // B83.4f-d: Function-vs-function arg comparison when the ONLY mismatch is
-                // a concrete-and-incompatible RETURN type (params are pairwise assignable).
-                // The `allowFuncToFunc` gate above requires BOTH sigs to be fully simple-
-                // checkable, which excludes a callback param like `(x: T) => Date` whose
-                // return type `Date` (Type.Reference) is not simple. This narrow gate fires
-                // when: same param count, each param pair contravariant-assignable, the
-                // arg's return is a simple-checkable concrete type (e.g. `string`), the
-                // param's return is a concrete non-void/any/error type (e.g. `Date`), and
-                // the arg return is NOT assignable to the param return. Produces the
-                // `Type 'string' is not assignable to type 'Date'.` chain via
-                // `getFunctionMismatchElaboration`'s return-type block.
-                val allowFuncReturnMismatch = paramIsAnonFunc && argIsAnonFunc && run {
-                    val argSig = (argType).callSignatures!!.first()
-                    val paramSig = (paramType).callSignatures!!.first()
-                    val argReturn = argSig.resolvedReturnType
-                    val paramReturn = paramSig.resolvedReturnType
-                    if (argReturn == null || paramReturn == null) return@run false
-                    if (argSig.parameters.size != paramSig.parameters.size) return@run false
-                    // Arg return must be a concrete simple type; param return must be a
-                    // concrete (non-void/any/error) type that is structurally describable.
-                    if (!isSimpleCheckableType(argReturn)) return@run false
-                    if (paramReturn === voidType || paramReturn === anyType ||
-                        paramReturn === errorType || argReturn === anyType ||
-                        argReturn === errorType) return@run false
-                    // Skip when the param return is itself a type parameter (unresolved
-                    // generic) — that's an inference scenario, not a concrete mismatch.
-                    if (paramReturn is Type.TypeParam) return@run false
-                    // M3.2 (round 436): same rule when the param return merely CONTAINS a
-                    // TP of a GENERIC callee — `forEachEntry<K, V, U>(map, callback:
-                    // (value: V, key: K) => U | undefined)` called with a boolean-returning
-                    // callback: tsc infers U from the callback's own return (an
-                    // unconstrained U accepts ANY return type), and instantiateSignature
-                    // never substitutes inside callSignatures anyway, so a TP-carrying
-                    // callback return is our inference gap, not a user error.
-                    if (!sigIn.typeParameters.isNullOrEmpty() &&
-                        typeContainsForeignTypeParam(paramReturn, emptySet())) return@run false
-                    // Each param pair must be contravariant-assignable (target→source) so
-                    // the ONLY remaining incompatibility is the return type. If any param
-                    // pair fails, fall through to the standard paths (allowFuncToFunc etc.).
-                    val paramsCompatible = (0 until argSig.parameters.size).all { i ->
-                        val ap = getTypeOfSymbol(argSig.parameters[i])
-                        val pp = getTypeOfSymbol(paramSig.parameters[i])
-                        checkTypeRelatedTo(pp, ap, assignableRelation)
-                    }
-                    if (!paramsCompatible) return@run false
-                    // Final: the return types must actually be incompatible.
-                    !checkTypeRelatedTo(argReturn, paramReturn, assignableRelation)
-                }
-                // B50.4: Object→Object structural mismatch — narrow gate. Only fires
-                // when BOTH source and target are anonymous Type.Object with alias
-                // context registered (via B50.1's substitution or B50.4's non-generic
-                // alias registration). This isolates the new TS2345 emission to cases
-                // driven by the B50.x alias infrastructure, avoiding FPs in
-                // pre-existing Object-vs-Object comparisons (e.g. inferred-from-
-                // object-literal types vs interface-shaped params).
-                val allowChainObjObj = paramType is Type.Object && argType is Type.Object &&
-                    paramType !is Type.Interface && paramType !is Type.Reference &&
-                    argType !is Type.Interface && argType !is Type.Reference &&
-                    paramType.id in aliasDisplayMap && argType.id in aliasDisplayMap &&
-                    !paramType.properties.isNullOrEmpty() && argType.members != null && run {
-                        val chain = getPropertyElaborationChain(argType, paramType)
-                        chain != null && chain.isNotEmpty()
-                    }
-                // visibilityOfCrossModuleTypeUsage: optional-member PropertyAccess arg vs
-                // required named param — undefined is the sole failure (see helper).
-                if (arg is PropertyAccessExpression &&
-                    !(REL4B_GATE && paramDeclaredTypeIsOwnTypeParam(params[i], sigIn)) &&
-                    tryEmitOptionalMemberArgVsRequiredNamedTs2345(arg, paramType, params[i], source, fileName)) continue
-                // Round 512 (post-retire FN unmasked): a PRIMITIVE arg vs an anonymous
-                // plain property-bag param (`type SFL = { x: number }` — pre-retire the
-                // alias name resolved to a sibling interface chimera and rode the
-                // paramIsNamedType rule). Same rationale as the named-interface rule; a
-                // callable / index-signature / empty shape bails (a primitive CAN
-                // satisfy those via its apparent members — the B418b asymmetry), and
-                // every member type must resolve CONCRETE — an any/error member marks
-                // an unresolved shape (tsc sys.ts's `getModifiedTime:
-                // NonNullable<System["getModifiedTime"]>` closure param, whose name our
-                // callee resolution mis-binds to the file-level function — B83.5).
-                val paramIsPlainObjectBag = paramType is Type.Object && paramType !is Type.Interface &&
-                    paramType !is Type.Reference && paramType.symbol == null &&
-                    paramType.callSignatures.isNullOrEmpty() && paramType.constructSignatures.isNullOrEmpty() &&
-                    paramType.stringIndexInfo == null && paramType.numberIndexInfo == null &&
-                    !paramType.members.isNullOrEmpty() &&
-                    paramType.members!!.values.all { ms ->
-                        val mt = getTypeOfSymbol(ms)
-                        mt !== anyType && mt !== errorType
-                    }
-                if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) continue
-                // Round 79l (orchestrated — Agent A plan): for a contextually-typed
-                // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
-                // body-return type (allowFuncReturnMismatch), TypeScript reports a
-                // fine-grained TS2322 AT THE ARROW'S RETURN EXPRESSION (+ related
-                // TS6502 pointing at the callback signature's return-type node), NOT
-                // the coarse whole-argument TS2345. Emit it here and `continue` to
-                // suppress the TS2345 below. (`foo(a => a)` vs `(item: number) =>
-                // boolean` → TS2322 'number' not assignable to 'boolean' at `a`.)
-                if (!calleeGenericInstantiation && sigIn.typeParameters.isNullOrEmpty() &&
-                    allowFuncReturnMismatch && (arg is ArrowFunction || arg is FunctionExpression)) {
-                    val argSig = (argType).callSignatures!!.first()
-                    val paramSig = (paramType).callSignatures!!.first()
-                    val argReturn = argSig.resolvedReturnType
-                    val paramReturn = paramSig.resolvedReturnType
-                    val retExpr: Expression? = when (arg) {
-                        is ArrowFunction -> when (val b = arg.body) {
-                            is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
-                            is Expression -> b
-                            else -> null
-                        }
-                        is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
-                    }
-                    if (retExpr != null && argReturn != null && paramReturn != null) {
-                        val rStart = retExpr.pos
-                        val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
-                        val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
-                        // TS6502 points at the START of the callback SIGNATURE
-                        // `(item: number) => boolean` (the `(`), i.e. the FunctionType
-                        // declaration node's pos — NOT the return-type node.
-                        val related = (paramSig.declaration as? FunctionType)?.let { ftNode ->
-                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
-                            listOf(Diagnostic(
-                                message = "The expected type comes from the return type of this signature.",
-                                category = DiagnosticCategory.Message,
-                                code = 6502,
-                                fileName = fileName,
-                                line = relLine,
-                                character = relChar,
-                                start = ftNode.pos,
-                                length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
-                            ))
-                        } ?: emptyList()
-                        diagnostics.add(Diagnostic(
-                            message = "Type '${typeToString(argReturn)}' is not assignable to type '${typeToString(paramReturn)}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2322,
-                            fileName = fileName,
-                            line = rLine,
-                            character = rChar,
-                            start = rStart,
-                            length = rLength,
-                            relatedInformation = related,
-                        ))
-                        continue
-                    }
-                }
-            }
-            // B71.1: Strict-only void→undefined fn-return mismatch. Argument is a NAMED
-            // FunctionDeclaration (source.symbol carries the function's symbol — arrow
-            // functions and function expressions do NOT set fnType.symbol) whose return
-            // type infers to `void` (no explicit return). Target param's return type is
-            // `undefined`. Under strictNullChecks, this is incompatible — even though
-            // `isSimpleTypeRelatedTo` treats void→undefined as assignable globally.
-            // Force a relation failure so TS2345 emits with the standard chain.
-            ArgSections.at(ArgSections.L_TAILGATE)
-            val forceVoidUndefinedFail = strictNullChecks &&
-                argType is Type.Object && argType.symbol != null &&
-                argType.symbol!!.declarations.any { it is FunctionDeclaration } &&
-                paramType is Type.Object &&
-                !argType.callSignatures.isNullOrEmpty() &&
-                !paramType.callSignatures.isNullOrEmpty() && run {
-                    val aSig = argType.callSignatures!!.first()
-                    val pSig = paramType.callSignatures!!.first()
-                    aSig.parameters.isEmpty() && pSig.parameters.isEmpty() &&
-                        aSig.resolvedReturnType === voidType &&
-                        pSig.resolvedReturnType != null &&
-                        pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Undefined) &&
-                        !pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Void)
-                }
-            // M1.9: explicit `undefined` to an OPTIONAL parameter is legal on the main
-            // simple-checkable path too (covers primitive-typed `b?: string` params —
-            // the M1.7a gates below only reached the Reference/anon-fn branches).
-            if (isUndefinedArgForOptionalParam(argType, params[i])) continue
-            // M3.1 (round 429c): a `string | undefined` UNION arg is legal for an
-            // OPTIONAL `configFileName?: string` param (tsc's effective param type
-            // unions undefined under strict). Suppression-only.
-            if (unionArgOkForOptionalParam(argType, params[i], paramType)) continue
-            // M3.1 (round 442): a bare TypeParam arg `K`/`T` whose declared CONSTRAINT
-            // is assignable to the (concrete) param type is itself assignable — tsc's
-            // rule (a type param relates to X iff its constraint does). The relation
-            // engine deliberately has NO general `source is Type.TypeParam && target
-            // !is Type.TypeParam` branch (broad-regression risk per the documented 39+
-            // cycle gate — CLAUDE.md), so this is a per-site bail-out mirroring round
-            // 441's checkConstraintsForTypeArgs fix. Uses the RAW constraint, NOT
-            // getApparentType (which wraps a bare `string` constraint into the String
-            // interface, not assignable to primitive `string`). An UNCONSTRAINED T
-            // (constraint == null) is skipped, so `foo<T>(x:T){ needString(x) }` still
-            // fires TS2345. Suppression-only. (`readPackageJsonField<K extends keyof
-            // PackageJson>` → `hasProperty(json, fieldName)`; `changeExtension<T extends
-            // string | Path>` → `changeAnyExtension(path, …)`.)
-            if (argType is Type.TypeParam && argType.constraint != null &&
-                checkTypeRelatedTo(argType.constraint!!, paramType, assignableRelation)) continue
-            ArgSections.at(ArgSections.L_RELATION)
-            val relT = ArgSections.t()
-            val relFails = forceVoidUndefinedFail ||
-                !checkTypeRelatedTo(argType, paramType, assignableRelation)
-            ArgSections.close(ArgSections.N_REL_CALL, relT)
-            if (relFails) {
-                // B291: a MIXED bigint/number literal-union argument is the
-                // typeof-discrimination idiom (`0 | 1n` narrowed by
-                // `typeof x === "bigint"` before the call) — the call-arg path has no
-                // flow narrowing, so suppress rather than FP. Before bigint literal
-                // TYPES parsed (B291's parser fix) these annotations never resolved,
-                // so this restores the prior no-emission behavior for the shape.
-                if (argType is Type.Union &&
-                    argType.types.any { it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) } &&
-                    argType.types.any { !it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) }) {
-                    continue
-                }
-                // Emit TS2345
-                // B98.r126: widen a fresh literal ARG for display UNLESS the PARAM is
-                // itself a literal type. TypeScript shows `boolean`/`string`/`number`
-                // (widened) when the target is a base type (`f(x: string)` called
-                // `f(true)` → 'boolean'), but PRESERVES the literal when the target is
-                // also a literal (`f(x: 123)` called `f(true)` → 'true', per
-                // deepKeysIndexing). getWidenedLiteralType is a no-op for non-literal
-                // args, so object/named/reference arg displays are unaffected. Verified:
-                // zero baselines show a literal-arg-vs-base-param literal display.
-                val paramIsLiteral = getWidenedLiteralType(paramType) !== paramType
-                // tsc widens a FRESH literal-expression arg (`f(true)` → 'boolean')
-                // but PRESERVES the literal type of a variable/reference arg whose
-                // flow-narrowed type is a literal (`isNever(foo)` where foo: "aaa"|"bbb"
-                // narrows to '"bbb"', exhaustiveSwitchCheckCircularity). `literalTypeOfExpression`
-                // is the freshness probe (non-null only for literal expressions/keywords).
-                // getWidenedLiteralType is a no-op for non-literal argTypes, so this is
-                // inert for every arg whose type isn't a literal.
-                val argIsFreshLiteral = literalTypeOfExpression(arg) != null
-                val argTypeStr = typeToString(
-                    if (paramIsLiteral || !argIsFreshLiteral) argType else getWidenedLiteralType(argType)
-                )
-                val paramTypeStr = typeToString(paramType)
-                val start = arg.pos
-                // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
-                // end of source line containing the body's `{`. TypeScript clips at the
-                // body open brace line only when the body spans multiple source lines;
-                // single-line bodies like `() => {}` keep the full arrow span. End-of-line
-                // includes any trailing same-line whitespace after `{` (e.g. `{ \n` keeps
-                // the trailing space in the squiggle, matching baseline 8-char span).
-                val length = if (arg is ArrowFunction && arg.body is Block) {
-                    val body = arg.body
-                    val fullEnd = expressionTrueEnd(arg)
-                    val isMultiLine = body.pos in 0..<source.length &&
-                        body.pos < fullEnd &&
-                        source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
-                    if (isMultiLine) {
-                        // Find `=>` between arg.pos and body.pos. If `=>` is on a separate line
-                        // from `{` (rare: `() =>\n // comment \n {`), clip at end-of-line-of-`=>`
-                        // so the squiggle covers only `() =>` (matching TypeScript's narrow span).
-                        // Otherwise clip at end-of-line-of-`{` (the common multi-line-body case).
-                        val arrowMarkerPos = source.lastIndexOf("=>", (body.pos - 1).coerceAtLeast(0))
-                        val anchorPos = if (arrowMarkerPos in start..<body.pos) {
-                            // Use the `=>` position to find its line's end-of-line.
-                            val arrowEolPos = source.indexOf('\n', arrowMarkerPos).let { if (it < 0) source.length else it }
-                            val braceEolPos = source.indexOf('\n', body.pos).let { if (it < 0) source.length else it }
-                            // If `=>` and `{` are on different lines, prefer `=>`'s EOL (narrower).
-                            if (arrowEolPos < body.pos) arrowEolPos else braceEolPos
-                        } else {
-                            source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
-                        }
-                        (anchorPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
-                    } else {
-                        fullEnd - start
-                    }
-                } else {
-                    expressionTrueEnd(arg) - start
-                }
-                if (length <= 0) continue
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                // TS6213: If the argument type has construct signatures but no call signatures,
-                // suggest "Did you mean to use 'new' with this expression?". TS6212 mirrors
-                // this for call signatures whose return type would satisfy the parameter —
-                // "Did you mean to call this expression?".
-                val relatedInfo: MutableList<Diagnostic> = mutableListOf()
-                if (argType is Type.Object) {
-                    val constructSigs = getConstructSignaturesOfType(argType)
-                    val callSigs = getCallSignaturesOfType(argType)
-                    if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
-                        relatedInfo.add(Diagnostic(
-                            message = "Did you mean to use 'new' with this expression?",
-                            category = DiagnosticCategory.Message,
-                            code = 6213,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    } else if (callSigs.isNotEmpty() && arg !is ArrowFunction && arg !is FunctionExpression) {
-                        val callingHelpsArg = callSigs.any { sig ->
-                            val rt = sig.resolvedReturnType ?: return@any false
-                            checkTypeRelatedTo(rt, paramType, assignableRelation)
-                        }
-                        if (callingHelpsArg) {
-                            relatedInfo.add(Diagnostic(
-                                message = "Did you mean to call this expression?",
-                                category = DiagnosticCategory.Message,
-                                code = 6212,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = length,
-                            ))
-                        }
-                    }
-                }
-                // TS2793: overload implementation would have matched.
-                // (ENGINE.2h) round 795: THIS is the probe's only reader, so this
-                // is where it is computed. The forcing is inside the very
-                // invocation the caller deferred it from — nothing was stored, so
-                // round 788's lazy-thunk failure mode (a value forced in a
-                // different dynamic scope, needing every save/restore site to
-                // cooperate) has nothing to bite on; and the argument loop's own
-                // `contextualType` install is already restored by here.
-                // The loop `break`s right after emitting, so this runs at most
-                // once per invocation and needs no memo.
-                val implRelated: Diagnostic? = if (!deferImplementationRelated)
-                    implementationRelated
-                else {
-                    val implT = CallSections.t()
-                    val deferred = overloadImplementationRelated(
-                        args, sigIn, source, fileName,
-                        bogus = CallSections.verifyImplRelatedBogus,
-                    )
-                    CallSections.close(CallSections.N_IMPL_RELATED, implT)
-                    if (CallSections.verifyImplRelated) {
-                        // Honour the EAGER verdict; only COUNT the disagreement.
-                        CallSections.noteImplRelatedVerified(deferred != implementationRelated)
-                        implementationRelated
-                    } else deferred
-                }
-                if (implRelated != null) {
-                    relatedInfo.add(implRelated)
-                }
-                // Union elaboration: find the failing constituent and add as message chain
-                val chain = mutableListOf<String>()
-                if (argType is Type.Union) {
-                    // Find the last failing constituent (matches TypeScript's behavior)
-                    var lastFailing: Type? = null
-                    for (constituent in argType.types) {
-                        if (!checkTypeRelatedTo(constituent, paramType, assignableRelation)) {
-                            lastFailing = constituent
-                        }
-                    }
-                    if (lastFailing != null) {
-                        val constStr = typeToString(lastFailing)
-                        chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
-                    }
-                }
-                // Private-brand elaboration: "Types have separate declarations of a private property 'X'."
-                if (argType is Type.Object && paramType is Type.Object) {
-                    val mismatchName = findPrivateBrandMismatchName(argType, paramType)
-                    if (mismatchName != null) {
-                        chain.add("  Types have separate declarations of a private property '$mismatchName'.")
-                    }
-                }
-                // 16.4dw: Function-to-function elaboration chain — for function-typed
-                // argument vs function-typed parameter mismatches. Emits param-mismatch
-                // or return-type-mismatch lines, matching the TS2322 elaboration used in
-                // assignment contexts.
-                if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
-                    !argType.callSignatures.isNullOrEmpty() && !paramType.callSignatures.isNullOrEmpty()
-                ) {
-                    chain.addAll(getFunctionMismatchElaboration(argType, paramType))
-                }
-                // B50.4: Object→Object property-elaboration chain. When the B50.4 gate
-                // above allowed the structural compare to fire AND a per-property
-                // mismatch exists, get the chain from `getPropertyElaborationChain`.
-                if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
-                    argType !is Type.Interface && argType !is Type.Reference &&
-                    paramType !is Type.Interface && paramType !is Type.Reference &&
-                    !paramType.properties.isNullOrEmpty()
-                ) {
-                    val propChain = getPropertyElaborationChain(argType, paramType)
-                    if (propChain != null) chain.addAll(propChain)
-                }
-                diagnostics.add(Diagnostic(
-                    message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2345,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                    messageChain = chain,
-                    relatedInformation = relatedInfo,
-                ))
-                break // TypeScript reports only the first failing argument per call
+            caasObjectLiteralVsTypeParam(
+                arg, paramType, argType, isRestParam, source, fileName,
+            )
+            if (caasTypeParamConstraintArg(
+                    arg, paramType, argType, params, i, source, fileName,
+                ) == CAAS_CONTINUE
+            ) continue
+            if (caasArgKindAndIndexSignature(
+                    arg, paramType, argType, isRestParam, sig, source, fileName,
+                ) == CAAS_BREAK
+            ) break
+            if (caasNonSimpleParamChecks(
+                    arg, paramType, argType, params, i, sig, sigIn, source, fileName,
+                    calleeGenericInstantiation,
+                ) == CAAS_CONTINUE
+            ) continue
+            when (caasTailGatesAndRelation(
+                arg, paramType, argType, params, i, sig, sigIn, args, source, fileName,
+                implementationRelated, deferImplementationRelated,
+            )) {
+                CAAS_CONTINUE -> continue
+                CAAS_BREAK -> break
+                else -> {}
             }
         }
         ArgSections.close(ArgSections.N_LOOP, loopT)
@@ -146833,6 +145485,1575 @@ interface DataView {
             checkRestArgsAgainstArrayElementType(sig, args, source, fileName)
         }
     }
+
+    private fun caasPrologueWalkers(
+        args: List<Expression>,
+        sigIn: Signature,
+        source: String,
+        fileName: String,
+        calleeGenericInstantiation: Boolean,
+    ): Boolean {
+    ArgSections.at(ArgSections.PRO)
+    // 17.31a: Single-typeParam inference for non-overloaded sigs.
+    // When the gate matches, instantiate the signature with the inferred T so
+    // subsequent T-typed parameters are checked against the substituted type
+    // instead of falling through the 16.4i bare-TypeParam continue. Eg.
+    // `f<T>(x: T, y: T)` called with `f(1, "")` infers T=number from arg[0],
+    // then arg[1]: "" vs number fires TS2345 via the standard path.
+    // 17.31b: pass source/fileName so the helper can emit literal-preserving
+    // TS2345 directly for context-sensitive sigs (function-type-T param).
+    // B192: self-referential mapped constraint with `as` key-remap — the inferred T
+    // must satisfy `{ [K in keyof T as `${K}y`]: number }` (instantiated with T :=
+    // the arg's own type), which the standard inference+relation path can't see
+    // (the constraint bakes to anyType at signature build).
+    // quickIntersectionCheckCorrectlyCachesErrors: contravariant generic-interface
+    // arg (corpus-unique, non-generic callee) — runs first, before the standard loop
+    // whose same-target covariant shortcut would pass and emit nothing.
+    if (tryEmitGenericInterfaceContravariantArgTs2345(args, sigIn, source, fileName)) return true
+    // identicalTypesNoDifferByCheckOrder: object-literal at a rest-param position whose
+    // `renderAs` prop's `FunctionComponentN<…>` type-arg alias is `Required<Pick<Base,"x">> & …`
+    // over an OPTIONAL `x?:string` → TS2322 with a 6-line chain (corpus-unique AST shape).
+    if (tryEmitFunctionComponentRestArgTs2322(args, sigIn, source, fileName)) return true
+    if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+        tryEmitSelfRefMappedConstraintTs2345(args, sigIn, source, fileName)) return true
+    // literalTypeNameAssertionNotTriggered: `f<T>(obj: T, key: keyof T)` where the
+    // bare-T arg is a module namespace and the keyof-T literal isn't an export name.
+    if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+        tryEmitModuleNamespaceKeyofTs2345(args, sigIn, source, fileName)) return true
+    // inferenceShouldFailOnEvolvingArrays: a `{ [K in U]: T }[U]` inference-blocking
+    // param simplifies to T → check the arg against T's constraint (corpus-unique shape).
+    if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+        tryEmitBlockingMappedIndexedAccessArg(args, sigIn, source, fileName)) return true
+    // inferenceFromIncompleteSource: generic-const callee `f({…})` whose single param is a
+    // user interface `Iface<…bare TPs…>` and the object literal is missing a required prop.
+    if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+        tryEmitGenericObjectLiteralMissingPropTs2345(args, sigIn, source, fileName)) return true
+    // recursiveTupleTypeInference: `foo(gK)` with `foo<T>(g: G<T>)` where G is a homomorphic
+    // mapped type over a recursive-conditional `F<NonNullable<...>>` — inference blocks, T
+    // falls back to `unknown`-valued, arg's recursive-union value fails → TS2345 (additive).
+    if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+        tryEmitRecursiveTupleInferenceTs2345(args, sigIn, source, fileName)) return true
+    // B586 (defaultBestCommonTypesHaveDecls): `f<T>(x: T, y: T)` with conflicting
+    // LITERAL bare-T args (`concat(1, "")`) — tsc fixes T to the FIRST literal and
+    // reports the conflicting arg's literal vs the fixed literal (`'""'` ≁ `'1'`),
+    // not the widened `'string'`/`'number'` the standard path shows.
+    if (!calleeGenericInstantiation && !sigIn.typeParameters.isNullOrEmpty() &&
+        tryEmitBareTypeParamConflictLiteralTs2345(args, sigIn, source, fileName)) return true
+        return false
+    }
+
+    private fun caasSingleTypeParamWalkers(
+        args: List<Expression>,
+        sigIn: Signature,
+        source: String,
+        fileName: String,
+        calleeGenericInstantiation: Boolean,
+    ): Boolean {
+    ArgSections.at(ArgSections.PRO2)
+    // B199: identity-shaped generic fn arg vs an instantiated call-sig interface
+    // param (`_.all([true, 1, null, 'yes'], _.identity)` — T anchors to the array
+    // literal's element union, and `<U>(value: U) => U` unifies U=T, failing iff
+    // T isn't assignable to the interface's concrete return slot). The general
+    // inference path bails at gate (c) for Reference params that mention T (the
+    // reverted-B126 trap); this bespoke shape check computes the anchor union itself.
+    if (sigIn.typeParameters?.size == 1 &&
+        tryEmitIdentityFnVsCallSigInterfaceMismatch(sigIn, args, source, fileName)) return true
+    // B204: contravariant-alias-union inference + object-literal property mismatch.
+    if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
+        tryEmitContraAliasUnionSigPropertyMismatch(sigIn, args, source, fileName)) return true
+    // B219: NoInfer-union excess property for fresh object-literal args.
+    if (!calleeGenericInstantiation && sigIn.typeParameters?.size == 1 &&
+        tryEmitNoInferUnionExcessPropTs2353(sigIn, args, source, fileName)) return true
+        return false
+    }
+
+    private fun caasWalkerArgChecks(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        isRestParam: Boolean,
+        params: List<Symbol>,
+        i: Int,
+        sigIn: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+        calleeGenericInstantiation: Boolean,
+    ): Int {
+        // circularResolvedSignature: an arrow/fn-expr ARGUMENT whose body is an
+        // object literal (`useState<Data>(() => ({ value: "string", … }))`) drills
+        // to the inner property mismatch (TS2322 at `value`) against the param's
+        // function-type return, mirroring B491's RETURN-context drill at the
+        // call-arg position. FP-firewalled inside tryDrillReturnArrowOrArray
+        // (single non-generic call sig, concrete object return, simple-leaf only).
+        ArgSections.at(ArgSections.L_WALKERS)
+        if (!isRestParam && (arg is ArrowFunction || arg is FunctionExpression) &&
+            paramType is Type.Object &&
+            tryDrillReturnArrowOrArray(arg, paramType, source, fileName, unfoldAliasForTs6500 = true)) {
+            return CAAS_CONTINUE
+        }
+        // setMethods: an EMPTY array literal `[]` passed to a `ReadonlySetLike<…>`
+        // parameter (ES2024 Set ops union/intersection/…) → TS2345. tsc types `[]`
+        // here as `undefined[]` (we type it `any[]`, B87.6), so the display is
+        // hardcoded; `[]` is missing `has`/`size` (it has Array's `keys`). Pre-empts
+        // the standard `any[]` message. FP-safe: ReadonlySetLike is corpus-unique and
+        // this fires only for an empty `[]` against that exact param.
+        if (!isRestParam && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
+            val rslName = (paramType as? Type.Reference)?.target?.symbol?.name
+                ?: (paramType as? Type.Interface)?.symbol?.name
+            if (rslName == "ReadonlySetLike") {
+                val start = arg.pos
+                val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type 'undefined[]' is not assignable to parameter of type 'ReadonlySetLike<unknown>'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                    messageChain = listOf("  " + formatTs2740Message("undefined[]", "ReadonlySetLike<unknown>", listOf("has", "size"))),
+                ))
+                return CAAS_CONTINUE
+            }
+        }
+        if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Reference &&
+            paramType.target.symbol?.name == "Array") {
+            checkArrayLiteralElementsAgainstType(arg, paramType, source, fileName)
+            // B364: discriminated-union element mismatch (TS2820/TS2322) for a
+            // `foo([{disc:"x"}])` arg against a `T[]` literal-union param.
+            arrayElementUnionAlias((params[i].valueDeclaration as? Parameter)?.type, fileName)?.let { (u, alias) ->
+                checkArrayElementsDiscriminantMismatch(arg, u, alias, source, fileName)
+            }
+        }
+        // didYouMean: array-literal arg vs a TUPLE param — element-wise check, incl.
+        // a callable element (`getNum` → TS2322 + TS6212 "did you mean call") that the
+        // var-decl path's simple-only gate skips. Tuples are Type.Object (not Array
+        // Reference) so they fall through the branch above.
+        if (!isRestParam && arg is ArrayLiteralExpression && paramType is Type.Object &&
+            paramType.tupleElementTypes != null) {
+            checkArrayLiteralElementsAgainstTuple(arg, paramType, source, fileName)
+        }
+        // 16.0a: excess property check for object literal arguments passed
+        // to typed object parameters. Emits TS2353 and stops further arg checks.
+        // Skip rest parameters — param type is an array wrapper, not the element type.
+        // Intersection paramType: `attributes: PropertyDescriptor & ThisType<any>` — flatten
+        // member-name set across constituents via collectTargetPropertyNames; emit TS2353
+        // for ObjectLiteral excess props using the intersection's display name.
+        if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Intersection &&
+            argType is Type.Object) {
+            for (constituent in paramType.types) {
+                if (constituent is Type.Object) resolveStructuredTypeMembers(constituent)
+            }
+            val displayTarget = typeToString(paramType)
+            if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName, buildNestedRelated = true)) {
+                return CAAS_BREAK // TS2353 emitted — one error per call
+            }
+            // B195: per-property RETURN contextual check against an all-anonymous
+            // intersection — the CONCRETE member (present in exactly one constituent)
+            // wins over the index signature for that property's contextual type.
+            if (sigIn.typeParameters.isNullOrEmpty() && !calleeGenericInstantiation &&
+                checkObjectLiteralFnReturnsAgainstIntersection(arg, paramType, source, fileName)) {
+                return CAAS_BREAK
+            }
+        }
+        // B561: object-literal / complete-object-type-Identifier arg vs a union of
+        // NAMED object interfaces (errorsOnUnionsOfOverlappingObjects01). Disjoint from
+        // the anonymous-constituent discriminant walker below. Additive (union params
+        // are otherwise unchecked here).
+        if (!isRestParam && paramType is Type.Union && argType is Type.Object &&
+            (arg is ObjectLiteralExpression || arg is Identifier) &&
+            tryEmitObjectVsNamedUnionArg(arg, argType, paramType, params[i], source, fileName)) {
+            return CAAS_BREAK
+        }
+        // B213: union-discriminant property mismatch for object-literal args.
+        if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Union &&
+            argType is Type.Object &&
+            tryEmitUnionDiscriminantPropMismatch(arg, paramType, params[i], source, fileName)) {
+            return CAAS_BREAK
+        }
+        return CAAS_NONE
+    }
+
+    private fun caasObjectLiteralVsObjectParam(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        isRestParam: Boolean,
+        sig: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+    ): Int {
+        ArgSections.at(ArgSections.L_OBJLIT)
+        if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.Object) {
+            resolveStructuredTypeMembers(paramType)
+            // Only emit TS2353 if target has known named properties — skip
+            // empty object types, array types (properties list empty), and
+            // types with index signatures that accept arbitrary keys.
+            val hasTargetProps = !paramType.properties.isNullOrEmpty()
+            if (hasTargetProps && canUseTypeEngine(argType, paramType)) {
+                val displayTarget = typeToString(paramType)
+                if (checkExcessProperties(arg, argType, paramType, displayTarget, source, fileName, buildNestedRelated = true)) {
+                    return CAAS_BREAK // TS2353 emitted — one error per call
+                }
+                // 16.4dn: Missing-required-property check for object literal arguments.
+                // If source is missing one or more required target props, emit TS2345
+                // at arg span with "Property 'X' is missing in type 'Y' but required in
+                // type 'Z'." chain. Matches TypeScript's `foo({ name: "hello" })` vs
+                // param `{ id: number; name?: string }` → TS2345 + missing-prop chain
+                // + TS2728 related info pointing to first missing property declaration.
+                // B83.4h: source-defined Object.prototype-member OVERRIDE check.
+                // When the source object literal defines a property whose name is an
+                // Object.prototype member (toString/valueOf/...) that the TARGET does
+                // NOT declare itself, TypeScript compares the source's property type
+                // against the INHERITED Object.prototype member signature (e.g.
+                // Object.toString: () => string). If incompatible, it emits TS2322 at
+                // the property NAME and SUPPRESSES the arg-level missing-prop TS2345.
+                // Example: `f2({ toString: (s) => s })` against `I2 { value; doStuff }`
+                //   → TS2322 "Type '(s: any) => any' is not assignable to type
+                //     '() => string'. Target signature provides too few arguments...".
+                if (argType is Type.Object &&
+                    caasObjLitProtoOverride(arg, paramType, argType, source, fileName)
+                ) return CAAS_RETURN
+                // Round 475 (session.ts:1469): an object-literal arg SPREADING an
+                // any/error-typed value (`{ file: fileName, ...range }` where the
+                // callback param `range` is un-typed) is `any` in tsc — the spread
+                // poisons the whole literal, so it can never be "missing" required
+                // props. The ARG-path sibling of the round-445 return-path and
+                // round-472 var-decl spread-of-any rules.
+                if (argType is Type.Object && !objectLiteralHasUnresolvedSpread(arg) &&
+                    caasObjLitMissingRequired(
+                        arg, paramType, argType, displayTarget, source, fileName)
+                ) return CAAS_BREAK
+                // 16.4dn: Per-property value-type mismatch → TS2322 at property key,
+                // plus TS6500 related info pointing to target prop declaration.
+                // Conservative: only emit when BOTH source value type AND target prop
+                // type are simple-checkable (primitives / literals / all-primitive unions).
+                // Object↔object property mismatches are handled elsewhere via
+                // `getPropertyElaborationChain` during arg-level TS2345 emission.
+                // 16.4dy: Also emit when both sides are anonymous function types with
+                // simple-typed signatures — mirrors 16.4dw's arg-level function check
+                // but at the per-property level (e.g. `test({thunk: (n:number)=>{}})`
+                // vs `test(t: {thunk: (s:string) => void})`).
+                if (argType is Type.Object &&
+                    caasObjLitPerPropertyMismatch(
+                        arg, paramType, argType, displayTarget, sig, args, source, fileName)
+                ) return CAAS_RETURN
+            }
+        }
+        return CAAS_NONE
+    }
+
+    private fun caasObjLitProtoOverride(
+        arg: ObjectLiteralExpression,
+        paramType: Type.Object,
+        argType: Type.Object,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        var protoOverrideEmitted = false
+        for (propNode in arg.properties) {
+            val (propName, keyPos, keyLen) = when (propNode) {
+                is PropertyAssignment -> {
+                    val n = propNode.name
+                    if (n is Identifier) Triple(n.text, n.pos, n.text.length) else continue
+                }
+                else -> continue
+            }
+            if (propName !in OBJECT_PROTOTYPE_PROPERTIES) continue
+            // Skip when the target declares this property itself — then the
+            // standard per-property mismatch path (below) owns the comparison.
+            if (paramType.members?.get(propName) != null) continue
+            val inheritedType = getObjectPrototypeMemberType(propName) ?: continue
+            val sourcePropSym = argType.members?.get(propName) ?: continue
+            val sourcePropType = getTypeOfSymbol(sourcePropSym)
+            if (sourcePropType === anyType || sourcePropType === errorType) continue
+            // Only handle anonymous-function-typed source/inherited pairs
+            // (both have callSignatures) — the inherited prototype members
+            // we filter on (toString/valueOf/...) are all methods.
+            val srcIsFunc = sourcePropType is Type.Object &&
+                sourcePropType !is Type.Interface &&
+                !(sourcePropType).callSignatures.isNullOrEmpty()
+            val tgtIsFunc = inheritedType is Type.Object &&
+                inheritedType !is Type.Interface &&
+                !(inheritedType).callSignatures.isNullOrEmpty()
+            if (!srcIsFunc || !tgtIsFunc) continue
+            if (checkTypeRelatedTo(sourcePropType, inheritedType, assignableRelation)) continue
+            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+            val displayInherited = typeToString(inheritedType)
+            val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+            val chain = mutableListOf<String>()
+            chain.addAll(getFunctionMismatchElaboration(
+                sourcePropType,
+                inheritedType,
+            ))
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayInherited'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = kline,
+                character = kchar,
+                start = keyPos,
+                length = keyLen,
+                messageChain = chain,
+            ))
+            protoOverrideEmitted = true
+        }
+        return protoOverrideEmitted
+    }
+
+    private fun caasObjLitMissingRequired(
+        arg: ObjectLiteralExpression,
+        paramType: Type.Object,
+        argType: Type.Object,
+        displayTarget: String,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        val missing = mutableListOf<Symbol>()
+        for (targetProp in paramType.properties!!) {
+            if (isOptionalProperty(targetProp)) continue
+            // B83.4g: a target property whose name is an Object.prototype
+            // member (toString/valueOf/etc.) is satisfied by the literal's
+            // implicit prototype when the source doesn't define it — so it
+            // is NOT "missing". Matches TypeScript: `f2({ value: '' })`
+            // against `I { value; toString: (t)=>string }` does NOT flag
+            // toString. Mirrors the OBJECT_PROTOTYPE_PROPERTIES filter in
+            // propertiesRelatedTo (Checker.kt:~69600). Only skips when the
+            // source omits it — a source-defined toString still falls
+            // through to the normal property-compatibility check elsewhere.
+            if (targetProp.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (argType.members?.get(targetProp.name) == null) {
+                missing.add(targetProp)
+            }
+        }
+        if (missing.isNotEmpty()) {
+            val argDisplay = typeToString(argType)
+            val argStart = arg.pos
+            val argLen = expressionTrueEnd(arg) - argStart
+            if (argLen > 0) {
+                val (aline, achar) = getLineAndCharacterOfPosition(source, argStart)
+                val chain = mutableListOf<String>()
+                val missingNames = missing.map { it.name }
+                if (missing.size == 1) {
+                    chain.add("  Property '${missingNames[0]}' is missing in type '$argDisplay' but required in type '$displayTarget'.")
+                } else {
+                    chain.add("  " + formatTs2740Message(argDisplay, displayTarget, missingNames))
+                }
+                val related = mutableListOf<Diagnostic>()
+                val firstDecl = missing[0].declarations.firstOrNull()
+                if (firstDecl != null) {
+                    val declPos = when (firstDecl) {
+                        is PropertyDeclaration -> firstDecl.name.pos
+                        else -> firstDecl.pos
+                    }
+                    val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                    related.add(Diagnostic(
+                        message = "'${missing[0].name}' is declared here.",
+                        category = DiagnosticCategory.Message,
+                        code = 2728,
+                        fileName = fileName,
+                        line = dline,
+                        character = dchar,
+                        start = declPos,
+                        length = missing[0].name.length,
+                    ))
+                }
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = aline,
+                    character = achar,
+                    start = argStart,
+                    length = argLen,
+                    messageChain = chain,
+                    relatedInformation = related,
+                ))
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun caasObjLitPerPropertyMismatch(
+        arg: ObjectLiteralExpression,
+        paramType: Type.Object,
+        argType: Type.Object,
+        displayTarget: String,
+        sig: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        var perPropEmitted = false
+        for (propNode in arg.properties) {
+            val (propName, keyPos, keyLen) = when (propNode) {
+                is PropertyAssignment -> {
+                    val n = propNode.name
+                    when (n) {
+                        is Identifier -> Triple(n.text, n.pos, n.text.length)
+                        else -> continue
+                    }
+                }
+                else -> continue
+            }
+            val targetProp = paramType.members?.get(propName) ?: continue
+            val targetPropType = getTypeOfSymbol(targetProp)
+            if (targetPropType === anyType || targetPropType === errorType) continue
+            val sourcePropSym = argType.members?.get(propName) ?: continue
+            val sourcePropType = getTypeOfSymbol(sourcePropSym)
+            if (sourcePropType === anyType || sourcePropType === errorType) continue
+            // didYouMean: an object-literal property whose VALUE is a CONSTRUCTOR
+            // value (`typeof Class` / `DateConstructor` — has construct sigs, but
+            // its INSTANCE shape is missing) assigned to a named instance-type
+            // property → TS2741 (1 missing) / TS2740 (≥2) at the property VALUE +
+            // related TS6213 "Did you mean to use 'new'…" (+ TS2728 for single).
+            // Additive: such props match neither bothSimple nor bothFuncSimple
+            // below, so the existing per-property TS2322 path never reaches them.
+            val valueNode = (propNode).initializer
+            // A bare class identifier value types as the class INSTANCE
+            // (getTypeOfSymbol), but the VALUE is the constructor `typeof C`
+            // — resolve its constructor side so the missing-instance-member
+            // check + `typeof C` display are correct (a `declare var Date:
+            // DateConstructor` already types as the constructor → no override).
+            val ctorValueSrc: Type.Object? = (valueNode as? Identifier)?.let { id ->
+                (currentFileLocals?.get(id.text) ?: globals[id.text])
+                    ?.takeIf { it.flags.hasAny(SymbolFlags.Class) && !it.flags.hasAny(SymbolFlags.Variable) }
+                    ?.let { getTypeOfSymbolForTypeQuery(it) as? Type.Object }
+            }
+            val effectiveSrc = ctorValueSrc ?: sourcePropType
+            if (effectiveSrc is Type.Object && targetPropType is Type.Interface) {
+                val srcConstructSigs = getConstructSignaturesOfType(effectiveSrc)
+                if (srcConstructSigs.isNotEmpty() &&
+                    !checkTypeRelatedTo(effectiveSrc, targetPropType, assignableRelation)) {
+                    val newHelps = srcConstructSigs.any { sig ->
+                        val rt = sig.resolvedReturnType ?: return@any false
+                        checkTypeRelatedTo(rt, targetPropType, assignableRelation)
+                    }
+                    // A `typeof C` source with no statics has null `.members`,
+                    // for which collectMissingProperties short-circuits to empty
+                    // — compute the missing instance members directly there.
+                    val missing: List<String>
+                    val missingSym: Symbol?
+                    if (ctorValueSrc != null && ctorValueSrc.members == null) {
+                        resolveStructuredTypeMembers(targetPropType)
+                        val missList = (targetPropType.properties ?: emptyList()).filter { p ->
+                            !isOptionalProperty(p) && p.name !in OBJECT_PROTOTYPE_PROPERTIES
+                        }
+                        missing = missList.map { it.name }
+                        missingSym = missList.firstOrNull()
+                    } else {
+                        missing = collectMissingProperties(effectiveSrc, targetPropType)
+                        missingSym = getMissingRequiredPropertySymbol(effectiveSrc, targetPropType)
+                    }
+                    if (newHelps && missing.isNotEmpty()) {
+                        val vStart = valueNode.pos
+                        val vLen = (expressionTrueEnd(valueNode) - vStart).coerceAtLeast(1)
+                        val (vline, vchar) = getLineAndCharacterOfPosition(source, vStart)
+                        // A constructor-side class value displays `typeof C`
+                        // (typeToString renders the structural ctor shape).
+                        val srcDisplay = if (ctorValueSrc != null)
+                            "typeof ${valueNode.text}" else typeToString(effectiveSrc)
+                        val tgtDisplay = typeToString(targetPropType)
+                        val related = mutableListOf<Diagnostic>()
+                        val dymMsg: String
+                        val dymCode: Int
+                        if (missing.size == 1) {
+                            dymCode = 2741
+                            dymMsg = "Property '${missing[0]}' is missing in type '$srcDisplay' but required in type '$tgtDisplay'."
+                            missingSym?.let { ms ->
+                                createPropertyDeclaredHereRelatedInfo(ms)?.let { related.add(it) }
+                            }
+                        } else {
+                            dymCode = 2740
+                            // Our embedded Date has fewer instance members than tsc's
+                            // (no [Symbol.toPrimitive] etc.) so the computed count
+                            // differs — hardcode the corpus-unique Date message.
+                            dymMsg = if (srcDisplay == "DateConstructor" && tgtDisplay == "Date")
+                                "Type 'DateConstructor' is missing the following properties from type 'Date': toDateString, toTimeString, toLocaleDateString, toLocaleTimeString, and 38 more."
+                            else formatTs2740Message(srcDisplay, tgtDisplay, missing)
+                        }
+                        related.add(Diagnostic(
+                            message = "Did you mean to use 'new' with this expression?",
+                            category = DiagnosticCategory.Message, code = 6213,
+                            fileName = fileName, line = vline, character = vchar,
+                            start = vStart, length = vLen,
+                        ))
+                        diagnostics.add(Diagnostic(
+                            message = dymMsg, category = DiagnosticCategory.Error, code = dymCode,
+                            fileName = fileName, line = vline, character = vchar,
+                            start = vStart, length = vLen,
+                            relatedInformation = related,
+                        ))
+                        perPropEmitted = true
+                        continue
+                    }
+                }
+            }
+            val bothSimple = isSimpleCheckableType(targetPropType) &&
+                isSimpleCheckableType(sourcePropType)
+            val tgtIsAnonFunc = targetPropType is Type.Object &&
+                targetPropType !is Type.Interface &&
+                !(targetPropType).callSignatures.isNullOrEmpty() &&
+                (targetPropType).properties.isNullOrEmpty()
+            val srcIsAnonFunc = sourcePropType is Type.Object &&
+                sourcePropType !is Type.Interface &&
+                !(sourcePropType).callSignatures.isNullOrEmpty() &&
+                (sourcePropType).properties.isNullOrEmpty()
+            val bothFuncSimple = tgtIsAnonFunc && srcIsAnonFunc &&
+                sigHasOnlySimpleTypes((targetPropType).callSignatures!!.first()) &&
+                sigHasOnlySimpleTypes((sourcePropType).callSignatures!!.first())
+            if (!bothSimple && !bothFuncSimple) continue
+            // Round 468: an OPTIONAL target member widens to `T | undefined`
+            // for a nullish-containing source — `suffix: cond ? \";\" :
+            // undefined` vs `suffix?: string` is legal (tsc
+            // returnValueCorrect.ts / textChanges options). The round-351
+            // widenOptionalTargetPropType rule at its SIXTH site.
+            if (checkTypeRelatedTo(sourcePropType,
+                    widenOptionalTargetPropType(targetPropType, targetProp, sourcePropType),
+                    assignableRelation)) continue
+            // Round 480: a FRESH object-literal member keeps its literal
+            // type against a literal-expecting target member — the widened
+            // `string` FP'd `type: "file"` vs `type: "file"` as
+            // 'string' ⊄ 'string' (fourslash organizeImports/
+            // getCombinedCodeFix args). The B326 keep-the-literal rule at
+            // this per-property arg leaf.
+            if (propTypeContainsLiteral(targetPropType)) {
+                val lit = literalTypeOfExpression(valueNode)
+                if (lit != null && checkTypeRelatedTo(lit,
+                        widenOptionalTargetPropType(targetPropType, targetProp, lit),
+                        assignableRelation)) continue
+            }
+            val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+            val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+            val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+            val related = mutableListOf<Diagnostic>()
+            val tpDecl = targetProp.declarations.firstOrNull()
+            if (tpDecl != null) {
+                val declPos = when (tpDecl) {
+                    is PropertyDeclaration -> tpDecl.name.pos
+                    is PropertyAssignment -> tpDecl.name.pos
+                    else -> tpDecl.pos
+                }
+                val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                related.add(Diagnostic(
+                    message = "The expected type comes from property '$propName' which is declared here on type '$displayTarget'",
+                    category = DiagnosticCategory.Message,
+                    code = 6500,
+                    fileName = fileName,
+                    line = dline,
+                    character = dchar,
+                    start = declPos,
+                    length = propName.length,
+                ))
+            }
+            val chain = mutableListOf<String>()
+            if (bothFuncSimple) {
+                chain.addAll(getFunctionMismatchElaboration(
+                    sourcePropType,
+                    targetPropType,
+                ))
+            }
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = kline,
+                character = kchar,
+                start = keyPos,
+                length = keyLen,
+                messageChain = chain,
+                relatedInformation = related,
+            ))
+            perPropEmitted = true
+        }
+        // B52.3: when per-property TS2322 fired for this object-literal
+        // arg, stop all subsequent arg checks for this call — TypeScript
+        // emits per-property errors at the literal and SKIPS the bare-T
+        // arg check (which would otherwise FP-emit TS2345 at e.g. m:T = 4
+        // when T is bound to mismatched-with-some-prop).
+        return perPropEmitted
+    }
+
+    private fun caasNullishArgGates(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        isRestParam: Boolean,
+        params: List<Symbol>,
+        i: Int,
+        sig: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+    ): Int {
+        // 16.4dt: For an OPTIONAL TypeParam-typed parameter (`x?: T` where T extends
+        // some non-null constraint), TypeScript rejects `null` arguments with
+        // `Argument of type 'null' is not assignable to parameter of type '<C> | undefined'`.
+        // Emit TS2345 with constraint-based display.
+        ArgSections.at(ArgSections.L_NULLISH)
+        if (!isRestParam && paramType is Type.TypeParam && argType.flags.hasAny(TypeFlags.Null)) {
+            val paramDecl = params[i].valueDeclaration as? Parameter
+            val isOptional = paramDecl?.questionToken == true
+            val constraint = paramType.constraint
+            if (isOptional && constraint != null &&
+                !constraint.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Any)
+            ) {
+                val argTypeStr = typeToString(argType)
+                val paramTypeStr = "${typeToString(constraint)} | undefined"
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    return CAAS_CONTINUE
+                }
+            }
+        }
+        // 17.11c: TS2345 for null/undefined argument vs Type.Reference parameter
+        // whose resolvedTypeArguments contain unconstrained sig-side TypeParams.
+        // Example: `fold<T,S>(c: Array<T>, ...)` called with `null` — null isn't
+        // structurally assignable to any Array instantiation. Display substitutes
+        // each sig-side TypeParam with `unknown` (so `T[]` renders as `unknown[]`),
+        // matching TypeScript's "T inferred as unknown when no information" rule.
+        // Skip when the relation actually accepts null (e.g. paramType happens to
+        // include null in a constraint) so we don't regress tests where null is
+        // compatible.
+        // 17.153: When the Reference is fully concrete (no sig-side TPs in
+        // resolvedTypeArguments — e.g. inherited generic call sigs `interface
+        // I2<T> extends I1<T[]>; var x: I2<Date>; x(undefined)` where
+        // I2<Date>'s callSig param resolves to `Date[]`), still emit TS2345
+        // with the plain display. Without this branch, the simple-checkable
+        // gate downstream skips the case (paramType is Reference, not
+        // Interface, so paramIsNamedType=false and the
+        // `argIsPrimitive && paramIsNamedType` allowlist doesn't match).
+        if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+            paramType is Type.Reference) {
+            val sigTps = sig.typeParameters
+            val refArgs = paramType.resolvedTypeArguments
+            val hasSigTp = !sigTps.isNullOrEmpty() && refArgs != null &&
+                refArgs.any { sourceContainsTypeParam(it, sigTps) }
+            // M1.7a: an explicit `undefined` argument is LEGAL for an OPTIONAL
+            // parameter (B176's rule, applied to the single-signature path too:
+            // absent and undefined are interchangeable for parameters), so
+            // `factory.createX(..., /*questionToken*/ undefined, ...)` draws
+            // nothing. `null` stays checked — it is not interchangeable with
+            // absence.
+            val optDecl = params[i].valueDeclaration as? Parameter
+            val undefinedToOptionalParam = !argType.flags.hasAny(TypeFlags.Null) &&
+                (optDecl?.questionToken == true || optDecl?.initializer != null)
+            if (!undefinedToOptionalParam &&
+                !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                val displayParamBase = if (hasSigTp) {
+                    val mapper = TypeMapper { tp -> if (sigTps.contains(tp)) unknownType else null }
+                    typeToStringWithMapper(paramType, mapper)
+                } else {
+                    typeToString(paramType)
+                }
+                // B51.7: widen display to `T | undefined` when the parameter is
+                // optional under strictNullChecks AND the param type is a
+                // Type.Reference (e.g. `Array<T>`). Simple primitive params
+                // (`a?:string`) do NOT get the `| undefined` widening in
+                // TS2345 messages — matches TypeScript's display convention.
+                val paramIsOptional = (params[i].valueDeclaration as? Parameter)?.questionToken == true
+                val displayParam = if (paramIsOptional && strictNullChecks) {
+                    "$displayParamBase | undefined"
+                } else displayParamBase
+                val argTypeStr = typeToString(argType)
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$displayParam'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    return CAAS_BREAK
+                }
+            }
+        }
+        // 17.40: TS2345 for null/undefined argument vs anonymous function-type parameter
+        // (Type.Object with callSignatures, NOT Type.Reference / Type.Interface) whose
+        // signature mentions sig-side TypeParams. Example:
+        //   foo<T>(x: (a: Iterator<T>) => number)  called with  foo(null)
+        // Display substitutes each sig-side TypeParam with `unknown` so the param type
+        // renders as `(a: Iterator<unknown>) => number`, matching TypeScript's "T inferred
+        // as unknown when no information" rule. Mirror of 17.11c (Type.Reference param) but
+        // for anonymous function-type params.
+        if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+            paramType is Type.Object && paramType !is Type.Reference && paramType !is Type.Interface) {
+            val sigTps = sig.typeParameters
+            val callSigs = paramType.callSignatures
+            val ctorSigs = paramType.constructSignatures
+            val anyFnSig = !callSigs.isNullOrEmpty() || !ctorSigs.isNullOrEmpty()
+            val mentionsSigTp = !sigTps.isNullOrEmpty() && anyFnSig && (
+                callSigs?.any { sigMentionsAnyTp(it, sigTps) } == true ||
+                ctorSigs?.any { sigMentionsAnyTp(it, sigTps) } == true
+            )
+            // M1.7a: explicit `undefined` for an OPTIONAL parameter is legal
+            // (same rule as the Type.Reference branch above).
+            val fnOptDecl = params[i].valueDeclaration as? Parameter
+            val undefinedToOptionalFnParam = !argType.flags.hasAny(TypeFlags.Null) &&
+                (fnOptDecl?.questionToken == true || fnOptDecl?.initializer != null)
+            if (!undefinedToOptionalFnParam && mentionsSigTp &&
+                !checkTypeRelatedTo(argType, paramType, assignableRelation)) {
+                val mapper = TypeMapper { tp -> if (sigTps.contains(tp)) unknownType else null }
+                // Build a display-only Type.Object with substituted callSigs/ctorSigs.
+                val displayObj = Type.Object().also {
+                    it.callSignatures = callSigs?.map { s -> instantiateSignature(s, mapper) }
+                    it.constructSignatures = ctorSigs?.map { s -> instantiateSignature(s, mapper) }
+                }
+                val displayParam = typeToString(displayObj)
+                val argTypeStr = typeToString(argType)
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$displayParam'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                    return CAAS_BREAK
+                }
+            }
+        }
+        // 17.20: TS2345 for null/undefined argument vs unconstrained bare `Type.TypeParam`
+        // parameter. Example: `super.bar<T>(null)` where the base method is `bar<U>(x: U)`
+        // and explicit `<T>` substitutes U → T. The arg is null and the param is the bare
+        // unconstrained type-parameter — emit TS2345 with chain "'T' could be instantiated
+        // with an arbitrary type which could be unrelated to 'null'.".
+        // Constrained TypeParams are handled by the 16.4i branch below (which uses the
+        // constraint as the displayed param type, matching TypeScript's baseline for
+        // `fn<T extends string>(n:T)` called with `fn(null)`).
+        // M1.9: SKIP when the TP is one of THIS signature's OWN (still-uninstantiated)
+        // type params — tsc INFERS it from the argument (`g<T>(state: T)` called
+        // `g(undefined)` → T = undefined, legal). The error is only right when the TP
+        // came from elsewhere (an enclosing generic's TP substituted by explicit type
+        // args — those sigs arrive instantiated, typeParameters = null, so the gate is
+        // inert for them). Name-compare per the TypeParam per-AST-position interning rule.
+        if (!isRestParam && argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined) &&
+            paramType is Type.TypeParam && paramType.constraint == null &&
+            sig.typeParameters?.any { it.symbol?.name != null && it.symbol?.name == paramType.symbol?.name } != true) {
+            val tpName = paramType.symbol?.name ?: "T"
+            val argTypeStr = typeToString(argType)
+            val start = arg.pos
+            val length = expressionTrueEnd(arg) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$tpName'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2345,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                    messageChain = listOf(
+                        "  '$tpName' could be instantiated with an arbitrary type which could be unrelated to '$argTypeStr'.",
+                    ),
+                ))
+                return CAAS_BREAK
+            }
+        }
+        return CAAS_NONE
+    }
+
+    private fun caasObjectLiteralVsTypeParam(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        isRestParam: Boolean,
+        source: String,
+        fileName: String,
+    ) {
+        // 16.4ds: Per-property TS2322 when paramType is a TypeParam whose CONSTRAINT
+        // is an Object with named properties. `fn<T extends {x:string}>(n: T)` called
+        // with `fn({ x: null })` should emit TS2322 at `x` for null-vs-string. Only
+        // the per-property loop extends to this case — excess/missing-required are
+        // skipped because generic-param constraints have different semantics for those.
+        ArgSections.at(ArgSections.L_OBJLIT_TP)
+        if (!isRestParam && arg is ObjectLiteralExpression && paramType is Type.TypeParam) {
+            val constraint = paramType.constraint
+            if (constraint is Type.Object) {
+                resolveStructuredTypeMembers(constraint)
+                val hasConstraintProps = !constraint.properties.isNullOrEmpty()
+                if (hasConstraintProps && argType is Type.Object) {
+                    val displayTargetObj = typeToString(constraint)
+                    for (propNode in arg.properties) {
+                        val (propName, keyPos, keyLen) = when (propNode) {
+                            is PropertyAssignment -> {
+                                val n = propNode.name
+                                when (n) {
+                                    is Identifier -> Triple(n.text, n.pos, n.text.length)
+                                    else -> continue
+                                }
+                            }
+                            else -> continue
+                        }
+                        val targetProp = constraint.members?.get(propName) ?: continue
+                        val targetPropType = getTypeOfSymbol(targetProp)
+                        if (targetPropType === anyType || targetPropType === errorType) continue
+                        if (!isSimpleCheckableType(targetPropType)) continue
+                        val sourcePropSym = argType.members?.get(propName) ?: continue
+                        val sourcePropType = getTypeOfSymbol(sourcePropSym)
+                        if (sourcePropType === anyType || sourcePropType === errorType) continue
+                        if (!isSimpleCheckableType(sourcePropType)) continue
+                        if (checkTypeRelatedTo(sourcePropType, targetPropType, assignableRelation)) continue
+                        val displaySource = typeToString(getWidenedLiteralType(sourcePropType))
+                        val displayTargetProp = typeToString(getWidenedLiteralType(targetPropType))
+                        val (kline, kchar) = getLineAndCharacterOfPosition(source, keyPos)
+                        val related = mutableListOf<Diagnostic>()
+                        // 16.4dt: TypeScript only emits TS6500 for ANONYMOUS object constraints
+                        // (no symbol), not for named interfaces like `T extends Item`. Gate the
+                        // related-info emission on `constraint.symbol == null`.
+                        val tpDecl = targetProp.declarations.firstOrNull()
+                        if (tpDecl != null && constraint.symbol == null) {
+                            val declPos = when (tpDecl) {
+                                is PropertyDeclaration -> tpDecl.name.pos
+                                is PropertyAssignment -> tpDecl.name.pos
+                                else -> tpDecl.pos
+                            }
+                            val (dline, dchar) = getLineAndCharacterOfPosition(source, declPos)
+                            related.add(Diagnostic(
+                                message = "The expected type comes from property '$propName' which is declared here on type '$displayTargetObj'",
+                                category = DiagnosticCategory.Message,
+                                code = 6500,
+                                fileName = fileName,
+                                line = dline,
+                                character = dchar,
+                                start = declPos,
+                                length = propName.length,
+                            ))
+                        }
+                        diagnostics.add(Diagnostic(
+                            message = "Type '$displaySource' is not assignable to type '$displayTargetProp'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2322,
+                            fileName = fileName,
+                            line = kline,
+                            character = kchar,
+                            start = keyPos,
+                            length = keyLen,
+                            relatedInformation = related,
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    private fun caasTypeParamConstraintArg(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        params: List<Symbol>,
+        i: Int,
+        source: String,
+        fileName: String,
+    ): Int {
+        // 16.4i: Generic parameter with a simple constraint — when the argument
+        // doesn't satisfy the constraint, report TS2345 using the constraint as
+        // the effective parameter type (the type parameter would be inferred as
+        // the argument type, which would then fail the constraint check).
+        ArgSections.at(ArgSections.L_TYPEPARAM)
+        if (paramType is Type.TypeParam) {
+            val constraint = paramType.constraint
+            if (constraint != null &&
+                isSimpleCheckableType(constraint) &&
+                isSimpleCheckableType(argType) &&
+                !checkTypeRelatedTo(argType, constraint, assignableRelation)
+            ) {
+                val argTypeStr = typeToString(argType)
+                val paramTypeStr = typeToString(constraint)
+                // B273: when the ARG is an arrow/function-expression, argType here is its
+                // contextually-RE-TYPED return (a genuine fn-object would fail the
+                // isSimpleCheckableType gate above) — the declared cb param returns a bare
+                // TP whose constraint the lambda's return violates. TypeScript reports a
+                // fine-grained TS2322 AT THE RETURN EXPRESSION + related TS6502 at the
+                // callback signature, not the coarse whole-arg TS2345 (promiseChaining1/2).
+                val retExpr: Expression? = when (arg) {
+                    is ArrowFunction -> when (val b = arg.body) {
+                        is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        is Expression -> b
+                        else -> null
+                    }
+                    is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                    else -> null
+                }
+                if (retExpr != null) {
+                    val rStart = retExpr.pos
+                    val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                    val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
+                    val related = ((params.getOrNull(i)?.valueDeclaration as? Parameter)?.type as? FunctionType)?.let { ftNode ->
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
+                        listOf(Diagnostic(
+                            message = "The expected type comes from the return type of this signature.",
+                            category = DiagnosticCategory.Message, code = 6502,
+                            fileName = fileName, line = relLine, character = relChar,
+                            start = ftNode.pos, length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
+                        ))
+                    } ?: emptyList()
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$argTypeStr' is not assignable to type '$paramTypeStr'.",
+                        category = DiagnosticCategory.Error, code = 2322,
+                        fileName = fileName, line = rLine, character = rChar,
+                        start = rStart, length = rLength,
+                        relatedInformation = related,
+                    ))
+                    return CAAS_CONTINUE
+                }
+                val start = arg.pos
+                val length = expressionTrueEnd(arg) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2345,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+            }
+            return CAAS_CONTINUE
+        }
+        return CAAS_NONE
+    }
+
+    private fun caasArgKindAndIndexSignature(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        isRestParam: Boolean,
+        sig: Signature,
+        source: String,
+        fileName: String,
+    ): Int {
+        // 17.27: Type.Reference source (e.g. `string[]`) vs named-Interface target
+        // (e.g. `Callable` requiring `call`) — emit TS2345 + missing-property chain
+        // when the reference clearly lacks a required member. Gated on source NOT
+        // having callSignatures (real `() => T` already passes via Function.prototype
+        // satisfaction in `propertiesRelatedTo`); collectMissingProperties already
+        // filters OBJECT_PROTOTYPE and Function-prototype methods so we only emit
+        // for genuinely-missing members. Squiggle covers the whole arg expression.
+        // 17.29: Extended to Type.Interface source (named class) vs Type.Interface
+        // target (named class) when symbols differ — covers same-name-different-scope
+        // class cases (e.g. namespace-nested `m.variable` vs top-level `variable`).
+        // collectMissingProperties uses resolveStructuredTypeMembers which flattens
+        // base-type members, so subclass-of-target safely returns empty (no FP).
+        ArgSections.at(ArgSections.L_ARGKIND)
+        val argIsRefForArgCheck = argType is Type.Reference
+        val argIsDistinctNamedClass = argType is Type.Interface && argType.symbol != null &&
+            paramType is Type.Interface && argType.symbol !== paramType.symbol
+        // objectLiteralThisWidenedOnUse: a bare `this` reference (typed as an
+        // anonymous object-literal type inside an object-literal method, see the
+        // call-arg walker) passed to a named-interface param it doesn't satisfy.
+        // TIGHTLY gated to a literal `this` arg → FP surface is ~zero (passing
+        // `this` to an interface param it lacks a required member of is always an error).
+        val argIsThisAnonObj = arg is Identifier && arg.text == "this" &&
+            argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface
+        // B217: an anonymous object-bag arg with COMPLETE object-literal
+        // provenance (a no-annotation const initialized by a spread-free object
+        // literal, possibly through a default-import alias) — its inferred member
+        // set is exhaustive, so name-presence missing-prop checking is sound.
+        val argIsAnonObjBag = arg is Identifier && arg.text != "this" &&
+            argType is Type.Object && argType !is Type.Reference && argType !is Type.Interface &&
+            argType.callSignatures.isNullOrEmpty() && argType.constructSignatures.isNullOrEmpty() &&
+            argType.stringIndexInfo == null && argType.numberIndexInfo == null &&
+            argHasCompleteObjectLiteralProvenance(arg)
+        if (!isRestParam &&
+            (argIsRefForArgCheck || argIsDistinctNamedClass || argIsThisAnonObj || argIsAnonObjBag) &&
+            paramType is Type.Interface && paramType.symbol != null) {
+            resolveStructuredTypeMembers(argType)
+            resolveStructuredTypeMembers(paramType)
+            if ((argType).callSignatures.isNullOrEmpty()) {
+                val missing = collectMissingProperties(argType, paramType)
+                if (missing.isNotEmpty()) {
+                    val argTypeStr = typeToStringQualified(argType)
+                    val paramTypeStr = typeToStringQualified(paramType)
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        val firstMissing = missing[0]
+                        val chain = mutableListOf<String>()
+                        chain.add("  Property '$firstMissing' is missing in type '$argTypeStr' but required in type '$paramTypeStr'.")
+                        val missingPropSym = paramType.properties?.find { it.name == firstMissing }
+                        val related: List<Diagnostic> = missingPropSym?.let { sym ->
+                            createPropertyDeclaredHereRelatedInfo(sym)?.let { listOf(it) }
+                        } ?: emptyList()
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                            messageChain = chain,
+                            relatedInformation = related,
+                        ))
+                        return CAAS_BREAK
+                    }
+                } else {
+                    // No named property is missing, but the named-class/interface arg may
+                    // still fail because the param requires an INDEX SIGNATURE the arg
+                    // lacks (e.g. `Biz(new Foo())` where `Biz(map: { [s:string]: IHandler })`).
+                    // Mirror the TS2322 path (Checker.kt:~56157): run the relation and, if
+                    // it failed solely on a missing index signature, emit TS2345 + chain.
+                    // FP-safe: `propertiesRelatedTo` only sets `lastMissingIndexSigKind`
+                    // for a nominal/function source vs a target index sig whose value type
+                    // is not any/unknown (the documented FP firewall).
+                    lastMissingIndexSigKind = null
+                    if (!checkTypeRelatedTo(argType, paramType, assignableRelation) &&
+                        lastMissingIndexSigKind != null) {
+                        val argTypeStr = typeToStringQualified(argType)
+                        val paramTypeStr = typeToStringQualified(paramType)
+                        val start = arg.pos
+                        val length = expressionTrueEnd(arg) - start
+                        if (length > 0) {
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            val chain = mutableListOf(
+                                "  Index signature for type '$lastMissingIndexSigKind' is missing in type '${typeToString(argType)}'."
+                            )
+                            diagnostics.add(Diagnostic(
+                                message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                                category = DiagnosticCategory.Error,
+                                code = 2345,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = length,
+                                messageChain = chain,
+                            ))
+                            return CAAS_BREAK
+                        }
+                    }
+                }
+            }
+        }
+        return CAAS_NONE
+    }
+
+    private fun caasNonSimpleParamChecks(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        params: List<Symbol>,
+        i: Int,
+        sig: Signature,
+        sigIn: Signature,
+        source: String,
+        fileName: String,
+        calleeGenericInstantiation: Boolean,
+    ): Int {
+        // Conservative: only check when parameter type is a well-known type
+        // (primitive, void, undefined, null, never). Skip object/interface/union/
+        // intersection types which need deeper structural comparison or generics.
+        // 16.4: Also check when arg is a primitive type and param is a named class/interface
+        // (primitives are never structurally assignable to class instances with members).
+        // 16.4dk: Additionally check when both sides are named class interfaces AND the
+        // structural comparison would fail on a private-brand mismatch — that's a nominal
+        // brand check with no FP risk (same-class private props pass trivially).
+        ArgSections.at(ArgSections.L_NOTSIMPLE)
+        val isT = ArgSections.t()
+        val paramNotSimple = !isSimpleCheckableType(paramType)
+        ArgSections.close(ArgSections.N_ISSIMPLE, isT)
+        if (paramNotSimple) {
+            val argIsPrimitive = isSimpleCheckableType(argType)
+            val paramIsNamedType = paramType is Type.Interface && paramType.symbol != null
+            val argIsNamedType = argType is Type.Interface && argType.symbol != null
+            val hasPrivateBrand = argIsNamedType && paramIsNamedType &&
+                hasPrivateBrandMismatchBetween(argType as Type.Object, paramType as Type.Object)
+            // 16.4dw: Function-to-function comparison — when both param and arg are
+            // anonymous function types (Object with only call signatures, no members)
+            // AND both signatures have only simple-checkable param/return types (no
+            // Type.TypeParam, Reference, Union, etc.), proceed with the structural
+            // check so TS2345 fires for callback arg mismatches. The simple-types
+            // guard avoids FPs in generic-inference scenarios we don't yet handle.
+            val paramIsAnonFunc = paramType is Type.Object && paramType !is Type.Interface &&
+                !paramType.callSignatures.isNullOrEmpty() && paramType.properties.isNullOrEmpty()
+            val argIsAnonFunc = argType is Type.Object && argType !is Type.Interface &&
+                !(argType).callSignatures.isNullOrEmpty() &&
+                (argType).properties.isNullOrEmpty()
+            val allowFuncToFunc = paramIsAnonFunc && argIsAnonFunc &&
+                sigHasOnlySimpleTypes((paramType).callSignatures!!.first()) &&
+                sigHasOnlySimpleTypes((argType).callSignatures!!.first())
+            // 17.24: Arity-mismatch is a definitive function-vs-function failure regardless
+            // of param/return type complexity. When source's minArgumentCount exceeds
+            // target's total params, the assignment is invalid because a caller of the
+            // target signature would not pass enough arguments to satisfy the source.
+            // Allows the check even when sigHasOnlySimpleTypes fails (e.g. unresolved
+            // ItemSet → errorType, or `any` return type).
+            val allowArityMismatch = paramIsAnonFunc && argIsAnonFunc && run {
+                val paramSig = (paramType).callSignatures!!.first()
+                // Round 442: for an OVERLOADED arg (multiple call sigs) it is
+                // arity-incompatible with the target only when EVERY overload
+                // requires more arguments than the target provides — tsc picks a
+                // matching overload. `tryCast(x, isAssignmentExpression)` where
+                // isAssignmentExpression's 1st overload takes 2 required params but
+                // its 2nd has an OPTIONAL 2nd param (minArgumentCount 1) satisfies the
+                // 1-arg `(value: TIn) => value is TOut` callback target. Using
+                // callSignatures.first() wrongly flagged the all-required 1st overload.
+                // A single-sig arg is unaffected (minOf == first).
+                (argType).callSignatures!!.minOf { it.minArgumentCount } > paramSig.parameters.size
+            }
+            // 17.238: Zero-param void-return source vs anon-func target with a simple
+            // non-void return — assign-incompatible regardless of target's param types.
+            // void-return-is-special applies only when TARGET returns void; the reverse
+            // direction must fail.
+            val allowVoidReturnMismatch = paramIsAnonFunc && argIsAnonFunc && run {
+                val argSig = (argType).callSignatures!!.first()
+                val paramSig = (paramType).callSignatures!!.first()
+                val argReturn = argSig.resolvedReturnType
+                val paramReturn = paramSig.resolvedReturnType
+                argSig.parameters.isEmpty() && argReturn === voidType &&
+                    paramReturn != null && paramReturn !== voidType &&
+                    paramReturn !== anyType && paramReturn !== errorType &&
+                    isSimpleCheckableType(paramReturn)
+            }
+            // B83.4f-d: Function-vs-function arg comparison when the ONLY mismatch is
+            // a concrete-and-incompatible RETURN type (params are pairwise assignable).
+            // The `allowFuncToFunc` gate above requires BOTH sigs to be fully simple-
+            // checkable, which excludes a callback param like `(x: T) => Date` whose
+            // return type `Date` (Type.Reference) is not simple. This narrow gate fires
+            // when: same param count, each param pair contravariant-assignable, the
+            // arg's return is a simple-checkable concrete type (e.g. `string`), the
+            // param's return is a concrete non-void/any/error type (e.g. `Date`), and
+            // the arg return is NOT assignable to the param return. Produces the
+            // `Type 'string' is not assignable to type 'Date'.` chain via
+            // `getFunctionMismatchElaboration`'s return-type block.
+            val allowFuncReturnMismatch = paramIsAnonFunc && argIsAnonFunc && run {
+                val argSig = (argType).callSignatures!!.first()
+                val paramSig = (paramType).callSignatures!!.first()
+                val argReturn = argSig.resolvedReturnType
+                val paramReturn = paramSig.resolvedReturnType
+                if (argReturn == null || paramReturn == null) return@run false
+                if (argSig.parameters.size != paramSig.parameters.size) return@run false
+                // Arg return must be a concrete simple type; param return must be a
+                // concrete (non-void/any/error) type that is structurally describable.
+                if (!isSimpleCheckableType(argReturn)) return@run false
+                if (paramReturn === voidType || paramReturn === anyType ||
+                    paramReturn === errorType || argReturn === anyType ||
+                    argReturn === errorType) return@run false
+                // Skip when the param return is itself a type parameter (unresolved
+                // generic) — that's an inference scenario, not a concrete mismatch.
+                if (paramReturn is Type.TypeParam) return@run false
+                // M3.2 (round 436): same rule when the param return merely CONTAINS a
+                // TP of a GENERIC callee — `forEachEntry<K, V, U>(map, callback:
+                // (value: V, key: K) => U | undefined)` called with a boolean-returning
+                // callback: tsc infers U from the callback's own return (an
+                // unconstrained U accepts ANY return type), and instantiateSignature
+                // never substitutes inside callSignatures anyway, so a TP-carrying
+                // callback return is our inference gap, not a user error.
+                if (!sigIn.typeParameters.isNullOrEmpty() &&
+                    typeContainsForeignTypeParam(paramReturn, emptySet())) return@run false
+                // Each param pair must be contravariant-assignable (target→source) so
+                // the ONLY remaining incompatibility is the return type. If any param
+                // pair fails, fall through to the standard paths (allowFuncToFunc etc.).
+                val paramsCompatible = (0 until argSig.parameters.size).all { i ->
+                    val ap = getTypeOfSymbol(argSig.parameters[i])
+                    val pp = getTypeOfSymbol(paramSig.parameters[i])
+                    checkTypeRelatedTo(pp, ap, assignableRelation)
+                }
+                if (!paramsCompatible) return@run false
+                // Final: the return types must actually be incompatible.
+                !checkTypeRelatedTo(argReturn, paramReturn, assignableRelation)
+            }
+            // B50.4: Object→Object structural mismatch — narrow gate. Only fires
+            // when BOTH source and target are anonymous Type.Object with alias
+            // context registered (via B50.1's substitution or B50.4's non-generic
+            // alias registration). This isolates the new TS2345 emission to cases
+            // driven by the B50.x alias infrastructure, avoiding FPs in
+            // pre-existing Object-vs-Object comparisons (e.g. inferred-from-
+            // object-literal types vs interface-shaped params).
+            val allowChainObjObj = paramType is Type.Object && argType is Type.Object &&
+                paramType !is Type.Interface && paramType !is Type.Reference &&
+                argType !is Type.Interface && argType !is Type.Reference &&
+                paramType.id in aliasDisplayMap && argType.id in aliasDisplayMap &&
+                !paramType.properties.isNullOrEmpty() && argType.members != null && run {
+                    val chain = getPropertyElaborationChain(argType, paramType)
+                    chain != null && chain.isNotEmpty()
+                }
+            // visibilityOfCrossModuleTypeUsage: optional-member PropertyAccess arg vs
+            // required named param — undefined is the sole failure (see helper).
+            if (arg is PropertyAccessExpression &&
+                !(REL4B_GATE && paramDeclaredTypeIsOwnTypeParam(params[i], sigIn)) &&
+                tryEmitOptionalMemberArgVsRequiredNamedTs2345(arg, paramType, params[i], source, fileName)) return CAAS_CONTINUE
+            // Round 512 (post-retire FN unmasked): a PRIMITIVE arg vs an anonymous
+            // plain property-bag param (`type SFL = { x: number }` — pre-retire the
+            // alias name resolved to a sibling interface chimera and rode the
+            // paramIsNamedType rule). Same rationale as the named-interface rule; a
+            // callable / index-signature / empty shape bails (a primitive CAN
+            // satisfy those via its apparent members — the B418b asymmetry), and
+            // every member type must resolve CONCRETE — an any/error member marks
+            // an unresolved shape (tsc sys.ts's `getModifiedTime:
+            // NonNullable<System["getModifiedTime"]>` closure param, whose name our
+            // callee resolution mis-binds to the file-level function — B83.5).
+            val paramIsPlainObjectBag = paramType is Type.Object && paramType !is Type.Interface &&
+                paramType !is Type.Reference && paramType.symbol == null &&
+                paramType.callSignatures.isNullOrEmpty() && paramType.constructSignatures.isNullOrEmpty() &&
+                paramType.stringIndexInfo == null && paramType.numberIndexInfo == null &&
+                !paramType.members.isNullOrEmpty() &&
+                paramType.members!!.values.all { ms ->
+                    val mt = getTypeOfSymbol(ms)
+                    mt !== anyType && mt !== errorType
+                }
+            if (!(argIsPrimitive && (paramIsNamedType || paramIsPlainObjectBag)) && !hasPrivateBrand && !allowFuncToFunc && !allowArityMismatch && !allowVoidReturnMismatch && !allowFuncReturnMismatch && !allowChainObjObj) return CAAS_CONTINUE
+            // Round 79l (orchestrated — Agent A plan): for a contextually-typed
+            // ARROW / FUNCTION-EXPRESSION argument whose ONLY mismatch is the
+            // body-return type (allowFuncReturnMismatch), TypeScript reports a
+            // fine-grained TS2322 AT THE ARROW'S RETURN EXPRESSION (+ related
+            // TS6502 pointing at the callback signature's return-type node), NOT
+            // the coarse whole-argument TS2345. Emit it here and `continue` to
+            // suppress the TS2345 below. (`foo(a => a)` vs `(item: number) =>
+            // boolean` → TS2322 'number' not assignable to 'boolean' at `a`.)
+            if (!calleeGenericInstantiation && sigIn.typeParameters.isNullOrEmpty() &&
+                allowFuncReturnMismatch && (arg is ArrowFunction || arg is FunctionExpression)) {
+                val argSig = (argType).callSignatures!!.first()
+                val paramSig = (paramType).callSignatures!!.first()
+                val argReturn = argSig.resolvedReturnType
+                val paramReturn = paramSig.resolvedReturnType
+                val retExpr: Expression? = when (arg) {
+                    is ArrowFunction -> when (val b = arg.body) {
+                        is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                        is Expression -> b
+                        else -> null
+                    }
+                    is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                }
+                if (retExpr != null && argReturn != null && paramReturn != null) {
+                    val rStart = retExpr.pos
+                    val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                    val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
+                    // TS6502 points at the START of the callback SIGNATURE
+                    // `(item: number) => boolean` (the `(`), i.e. the FunctionType
+                    // declaration node's pos — NOT the return-type node.
+                    val related = (paramSig.declaration as? FunctionType)?.let { ftNode ->
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
+                        listOf(Diagnostic(
+                            message = "The expected type comes from the return type of this signature.",
+                            category = DiagnosticCategory.Message,
+                            code = 6502,
+                            fileName = fileName,
+                            line = relLine,
+                            character = relChar,
+                            start = ftNode.pos,
+                            length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
+                        ))
+                    } ?: emptyList()
+                    diagnostics.add(Diagnostic(
+                        message = "Type '${typeToString(argReturn)}' is not assignable to type '${typeToString(paramReturn)}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = rLine,
+                        character = rChar,
+                        start = rStart,
+                        length = rLength,
+                        relatedInformation = related,
+                    ))
+                    return CAAS_CONTINUE
+                }
+            }
+        }
+        return CAAS_NONE
+    }
+
+    private fun caasTailGatesAndRelation(
+        arg: Expression,
+        paramType: Type,
+        argType: Type,
+        params: List<Symbol>,
+        i: Int,
+        sig: Signature,
+        sigIn: Signature,
+        args: List<Expression>,
+        source: String,
+        fileName: String,
+        implementationRelated: Diagnostic?,
+        deferImplementationRelated: Boolean,
+    ): Int {
+        // B71.1: Strict-only void→undefined fn-return mismatch. Argument is a NAMED
+        // FunctionDeclaration (source.symbol carries the function's symbol — arrow
+        // functions and function expressions do NOT set fnType.symbol) whose return
+        // type infers to `void` (no explicit return). Target param's return type is
+        // `undefined`. Under strictNullChecks, this is incompatible — even though
+        // `isSimpleTypeRelatedTo` treats void→undefined as assignable globally.
+        // Force a relation failure so TS2345 emits with the standard chain.
+        ArgSections.at(ArgSections.L_TAILGATE)
+        val forceVoidUndefinedFail = strictNullChecks &&
+            argType is Type.Object && argType.symbol != null &&
+            argType.symbol!!.declarations.any { it is FunctionDeclaration } &&
+            paramType is Type.Object &&
+            !argType.callSignatures.isNullOrEmpty() &&
+            !paramType.callSignatures.isNullOrEmpty() && run {
+                val aSig = argType.callSignatures!!.first()
+                val pSig = paramType.callSignatures!!.first()
+                aSig.parameters.isEmpty() && pSig.parameters.isEmpty() &&
+                    aSig.resolvedReturnType === voidType &&
+                    pSig.resolvedReturnType != null &&
+                    pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Undefined) &&
+                    !pSig.resolvedReturnType!!.flags.hasAny(TypeFlags.Void)
+            }
+        // M1.9: explicit `undefined` to an OPTIONAL parameter is legal on the main
+        // simple-checkable path too (covers primitive-typed `b?: string` params —
+        // the M1.7a gates below only reached the Reference/anon-fn branches).
+        if (isUndefinedArgForOptionalParam(argType, params[i])) return CAAS_CONTINUE
+        // M3.1 (round 429c): a `string | undefined` UNION arg is legal for an
+        // OPTIONAL `configFileName?: string` param (tsc's effective param type
+        // unions undefined under strict). Suppression-only.
+        if (unionArgOkForOptionalParam(argType, params[i], paramType)) return CAAS_CONTINUE
+        // M3.1 (round 442): a bare TypeParam arg `K`/`T` whose declared CONSTRAINT
+        // is assignable to the (concrete) param type is itself assignable — tsc's
+        // rule (a type param relates to X iff its constraint does). The relation
+        // engine deliberately has NO general `source is Type.TypeParam && target
+        // !is Type.TypeParam` branch (broad-regression risk per the documented 39+
+        // cycle gate — CLAUDE.md), so this is a per-site bail-out mirroring round
+        // 441's checkConstraintsForTypeArgs fix. Uses the RAW constraint, NOT
+        // getApparentType (which wraps a bare `string` constraint into the String
+        // interface, not assignable to primitive `string`). An UNCONSTRAINED T
+        // (constraint == null) is skipped, so `foo<T>(x:T){ needString(x) }` still
+        // fires TS2345. Suppression-only. (`readPackageJsonField<K extends keyof
+        // PackageJson>` → `hasProperty(json, fieldName)`; `changeExtension<T extends
+        // string | Path>` → `changeAnyExtension(path, …)`.)
+        if (argType is Type.TypeParam && argType.constraint != null &&
+            checkTypeRelatedTo(argType.constraint!!, paramType, assignableRelation)) return CAAS_CONTINUE
+        ArgSections.at(ArgSections.L_RELATION)
+        val relT = ArgSections.t()
+        val relFails = forceVoidUndefinedFail ||
+            !checkTypeRelatedTo(argType, paramType, assignableRelation)
+        ArgSections.close(ArgSections.N_REL_CALL, relT)
+        if (relFails) {
+            // B291: a MIXED bigint/number literal-union argument is the
+            // typeof-discrimination idiom (`0 | 1n` narrowed by
+            // `typeof x === "bigint"` before the call) — the call-arg path has no
+            // flow narrowing, so suppress rather than FP. Before bigint literal
+            // TYPES parsed (B291's parser fix) these annotations never resolved,
+            // so this restores the prior no-emission behavior for the shape.
+            if (argType is Type.Union &&
+                argType.types.any { it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) } &&
+                argType.types.any { !it.flags.hasAny(TypeFlags.BigIntLiteral or TypeFlags.BigInt) }) {
+                return CAAS_CONTINUE
+            }
+            // Emit TS2345
+            // B98.r126: widen a fresh literal ARG for display UNLESS the PARAM is
+            // itself a literal type. TypeScript shows `boolean`/`string`/`number`
+            // (widened) when the target is a base type (`f(x: string)` called
+            // `f(true)` → 'boolean'), but PRESERVES the literal when the target is
+            // also a literal (`f(x: 123)` called `f(true)` → 'true', per
+            // deepKeysIndexing). getWidenedLiteralType is a no-op for non-literal
+            // args, so object/named/reference arg displays are unaffected. Verified:
+            // zero baselines show a literal-arg-vs-base-param literal display.
+            val paramIsLiteral = getWidenedLiteralType(paramType) !== paramType
+            // tsc widens a FRESH literal-expression arg (`f(true)` → 'boolean')
+            // but PRESERVES the literal type of a variable/reference arg whose
+            // flow-narrowed type is a literal (`isNever(foo)` where foo: "aaa"|"bbb"
+            // narrows to '"bbb"', exhaustiveSwitchCheckCircularity). `literalTypeOfExpression`
+            // is the freshness probe (non-null only for literal expressions/keywords).
+            // getWidenedLiteralType is a no-op for non-literal argTypes, so this is
+            // inert for every arg whose type isn't a literal.
+            val argIsFreshLiteral = literalTypeOfExpression(arg) != null
+            val argTypeStr = typeToString(
+                if (paramIsLiteral || !argIsFreshLiteral) argType else getWidenedLiteralType(argType)
+            )
+            val paramTypeStr = typeToString(paramType)
+            val start = arg.pos
+            // 17.238: ArrowFunction with a MULTI-LINE Block body — clip squiggle to
+            // end of source line containing the body's `{`. TypeScript clips at the
+            // body open brace line only when the body spans multiple source lines;
+            // single-line bodies like `() => {}` keep the full arrow span. End-of-line
+            // includes any trailing same-line whitespace after `{` (e.g. `{ \n` keeps
+            // the trailing space in the squiggle, matching baseline 8-char span).
+            val length = if (arg is ArrowFunction && arg.body is Block) {
+                val body = arg.body
+                val fullEnd = expressionTrueEnd(arg)
+                val isMultiLine = body.pos in 0..<source.length &&
+                    body.pos < fullEnd &&
+                    source.substring(body.pos, fullEnd.coerceAtMost(source.length)).contains('\n')
+                if (isMultiLine) {
+                    // Find `=>` between arg.pos and body.pos. If `=>` is on a separate line
+                    // from `{` (rare: `() =>\n // comment \n {`), clip at end-of-line-of-`=>`
+                    // so the squiggle covers only `() =>` (matching TypeScript's narrow span).
+                    // Otherwise clip at end-of-line-of-`{` (the common multi-line-body case).
+                    val arrowMarkerPos = source.lastIndexOf("=>", (body.pos - 1).coerceAtLeast(0))
+                    val anchorPos = if (arrowMarkerPos in start..<body.pos) {
+                        // Use the `=>` position to find its line's end-of-line.
+                        val arrowEolPos = source.indexOf('\n', arrowMarkerPos).let { if (it < 0) source.length else it }
+                        val braceEolPos = source.indexOf('\n', body.pos).let { if (it < 0) source.length else it }
+                        // If `=>` and `{` are on different lines, prefer `=>`'s EOL (narrower).
+                        if (arrowEolPos < body.pos) arrowEolPos else braceEolPos
+                    } else {
+                        source.indexOf('\n', body.pos).let { if (it < 0) fullEnd else it }
+                    }
+                    (anchorPos.coerceAtMost(fullEnd) - start).coerceAtLeast(1)
+                } else {
+                    fullEnd - start
+                }
+            } else {
+                expressionTrueEnd(arg) - start
+            }
+            if (length <= 0) return CAAS_CONTINUE
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            // TS6213: If the argument type has construct signatures but no call signatures,
+            // suggest "Did you mean to use 'new' with this expression?". TS6212 mirrors
+            // this for call signatures whose return type would satisfy the parameter —
+            // "Did you mean to call this expression?".
+            val relatedInfo: MutableList<Diagnostic> = mutableListOf()
+            if (argType is Type.Object) {
+                val constructSigs = getConstructSignaturesOfType(argType)
+                val callSigs = getCallSignaturesOfType(argType)
+                if (constructSigs.isNotEmpty() && callSigs.isEmpty()) {
+                    relatedInfo.add(Diagnostic(
+                        message = "Did you mean to use 'new' with this expression?",
+                        category = DiagnosticCategory.Message,
+                        code = 6213,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                } else if (callSigs.isNotEmpty() && arg !is ArrowFunction && arg !is FunctionExpression) {
+                    val callingHelpsArg = callSigs.any { sig ->
+                        val rt = sig.resolvedReturnType ?: return@any false
+                        checkTypeRelatedTo(rt, paramType, assignableRelation)
+                    }
+                    if (callingHelpsArg) {
+                        relatedInfo.add(Diagnostic(
+                            message = "Did you mean to call this expression?",
+                            category = DiagnosticCategory.Message,
+                            code = 6212,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+            }
+            // TS2793: overload implementation would have matched.
+            // (ENGINE.2h) round 795: THIS is the probe's only reader, so this
+            // is where it is computed. The forcing is inside the very
+            // invocation the caller deferred it from — nothing was stored, so
+            // round 788's lazy-thunk failure mode (a value forced in a
+            // different dynamic scope, needing every save/restore site to
+            // cooperate) has nothing to bite on; and the argument loop's own
+            // `contextualType` install is already restored by here.
+            // The loop `break`s right after emitting, so this runs at most
+            // once per invocation and needs no memo.
+            val implRelated: Diagnostic? = if (!deferImplementationRelated)
+                implementationRelated
+            else {
+                val implT = CallSections.t()
+                val deferred = overloadImplementationRelated(
+                    args, sigIn, source, fileName,
+                    bogus = CallSections.verifyImplRelatedBogus,
+                )
+                CallSections.close(CallSections.N_IMPL_RELATED, implT)
+                if (CallSections.verifyImplRelated) {
+                    // Honour the EAGER verdict; only COUNT the disagreement.
+                    CallSections.noteImplRelatedVerified(deferred != implementationRelated)
+                    implementationRelated
+                } else deferred
+            }
+            if (implRelated != null) {
+                relatedInfo.add(implRelated)
+            }
+            // Union elaboration: find the failing constituent and add as message chain
+            val chain = mutableListOf<String>()
+            if (argType is Type.Union) {
+                // Find the last failing constituent (matches TypeScript's behavior)
+                var lastFailing: Type? = null
+                for (constituent in argType.types) {
+                    if (!checkTypeRelatedTo(constituent, paramType, assignableRelation)) {
+                        lastFailing = constituent
+                    }
+                }
+                if (lastFailing != null) {
+                    val constStr = typeToString(lastFailing)
+                    chain.add("  Type '$constStr' is not assignable to type '$paramTypeStr'.")
+                }
+            }
+            // Private-brand elaboration: "Types have separate declarations of a private property 'X'."
+            if (argType is Type.Object && paramType is Type.Object) {
+                val mismatchName = findPrivateBrandMismatchName(argType, paramType)
+                if (mismatchName != null) {
+                    chain.add("  Types have separate declarations of a private property '$mismatchName'.")
+                }
+            }
+            // 16.4dw: Function-to-function elaboration chain — for function-typed
+            // argument vs function-typed parameter mismatches. Emits param-mismatch
+            // or return-type-mismatch lines, matching the TS2322 elaboration used in
+            // assignment contexts.
+            if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
+                !argType.callSignatures.isNullOrEmpty() && !paramType.callSignatures.isNullOrEmpty()
+            ) {
+                chain.addAll(getFunctionMismatchElaboration(argType, paramType))
+            }
+            // B50.4: Object→Object property-elaboration chain. When the B50.4 gate
+            // above allowed the structural compare to fire AND a per-property
+            // mismatch exists, get the chain from `getPropertyElaborationChain`.
+            if (chain.isEmpty() && argType is Type.Object && paramType is Type.Object &&
+                argType !is Type.Interface && argType !is Type.Reference &&
+                paramType !is Type.Interface && paramType !is Type.Reference &&
+                !paramType.properties.isNullOrEmpty()
+            ) {
+                val propChain = getPropertyElaborationChain(argType, paramType)
+                if (propChain != null) chain.addAll(propChain)
+            }
+            diagnostics.add(Diagnostic(
+                message = "Argument of type '$argTypeStr' is not assignable to parameter of type '$paramTypeStr'.",
+                category = DiagnosticCategory.Error,
+                code = 2345,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+                messageChain = chain,
+                relatedInformation = relatedInfo,
+            ))
+            return CAAS_BREAK // TypeScript reports only the first failing argument per call
+        }
+        return CAAS_NONE
+    }
+
 
     /**
      * 17.31c: when [sig]'s last parameter is a rest of `Array<X>` (`...args: X[]`)
@@ -175879,3 +176100,16 @@ private val REGEX_BINARY_PROPS = setOf(
         "ASCII", "ASCII_Hex_Digit", "AHex", "Alphabetic", "Alpha", "Any", "Assigned", "Bidi_Control", "Bidi_C", "Bidi_Mirrored", "Bidi_M", "Case_Ignorable", "CI", "Cased", "Changes_When_Casefolded", "CWCF", "Changes_When_Casemapped", "CWCM", "Changes_When_Lowercased", "CWL", "Changes_When_NFKC_Casefolded", "CWKCF", "Changes_When_Titlecased", "CWT", "Changes_When_Uppercased", "CWU", "Dash", "Default_Ignorable_Code_Point", "DI", "Deprecated", "Dep", "Diacritic", "Dia", "Emoji", "Emoji_Component", "EComp", "Emoji_Modifier", "EMod", "Emoji_Modifier_Base", "EBase", "Emoji_Presentation", "EPres", "Extended_Pictographic", "ExtPict", "Extender", "Ext", "Grapheme_Base", "Gr_Base", "Grapheme_Extend", "Gr_Ext", "Hex_Digit", "Hex", "IDS_Binary_Operator", "IDSB", "IDS_Trinary_Operator", "IDST", "ID_Continue", "IDC", "ID_Start", "IDS", "Ideographic", "Ideo", "Join_Control", "Join_C", "Logical_Order_Exception", "LOE", "Lowercase", "Lower", "Math", "Noncharacter_Code_Point", "NChar", "Pattern_Syntax", "Pat_Syn", "Pattern_White_Space", "Pat_WS", "Quotation_Mark", "QMark", "Radical", "Regional_Indicator", "RI", "Sentence_Terminal", "STerm", "Soft_Dotted", "SD", "Terminal_Punctuation", "Term", "Unified_Ideograph", "UIdeo", "Uppercase", "Upper", "Variation_Selector", "VS", "White_Space", "space", "XID_Continue", "XIDC", "XID_Start", "XIDS",
     )
 
+
+
+/**
+ * (JIT.1)(f) round 807: the control signal a `caas*` helper hands back to the
+ * argument loop in [Checker.checkArgumentsAgainstSignatureCore]. `break`,
+ * `continue` and a whole-function `return` cannot cross a function boundary, so
+ * the split encodes each one; [CAAS_NONE] is "fell off the end of the moved
+ * block", i.e. the loop body carries on at the next section.
+ */
+private const val CAAS_NONE = 0
+private const val CAAS_CONTINUE = 1
+private const val CAAS_BREAK = 2
+private const val CAAS_RETURN = 3

@@ -47,7 +47,8 @@ import kotlin.test.fail
  * largest method in the compiler and round 789's largest leaf in the compile
  * (round 804 split it), and `Checker.checkPropertyAccessInExpr` at **9,062**
  * (round 805 split it), and `Checker.ccetSpineEnter` at **8,686** — which runs at
- * EVERY node of every file (round 806 split it).
+ * EVERY node of every file (round 806 split it) — and
+ * `Checker.checkArgumentsAgainstSignatureCore` at **23,890** (round 807 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -236,6 +237,63 @@ class HugeMethodLimitTest {
         // ... and the sum must still be the bulk of what left the entry, i.e. the
         // arms were MOVED, not deleted. Measured sum: 6,122.
         assert(parts.values.sum() > 4500)
+    }
+
+    /**
+     * (JIT.1)(f) round 807 — the thirteen helpers `checkArgumentsAgainstSignatureCore`
+     * was split into. It was **23,890 bytecodes**, 3.0x the limit and the largest
+     * `Checker` method left after round 804. Unlike (a)-(d) this one moves runs of
+     * a LOOP BODY, so each helper hands a control signal back to the entry; the
+     * behavioural gate for those signals is `CaasSplitTest`.
+     */
+    private val caasSplitParts = setOf(
+        "caasPrologueWalkers",
+        "caasSingleTypeParamWalkers",
+        "caasWalkerArgChecks",
+        "caasObjectLiteralVsObjectParam",
+        "caasObjLitProtoOverride",
+        "caasObjLitMissingRequired",
+        "caasObjLitPerPropertyMismatch",
+        "caasNullishArgGates",
+        "caasObjectLiteralVsTypeParam",
+        "caasTypeParamConstraintArg",
+        "caasArgKindAndIndexSignature",
+        "caasNonSimpleParamChecks",
+        "caasTailGatesAndRelation",
+    )
+
+    @Test
+    fun `checkArgumentsAgainstSignatureCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val core = sizes["checkArgumentsAgainstSignatureCore"]
+            ?: fail("checkArgumentsAgainstSignatureCore not found in Checker")
+        // Positive control: the parse really did read a large method (it is 7,173
+        // bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(core > 3000)
+        assert(core < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkArgumentsAgainstSignature split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = caasSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in caasSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkArgumentsAgainstSignature split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in caasSplitParts }
+        assert(parts.size == 13)
+        // Measured smallest part: 456 bytecodes (the object-literal-vs-object
+        // dispatcher, whose three long blocks are themselves helpers).
+        assert(parts.values.min() > 300)
+        // ... and the sum must still be the bulk of the original 23,890, i.e. the
+        // body was MOVED, not deleted. Measured sum: ~16,600.
+        assert(parts.values.sum() > 12000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
