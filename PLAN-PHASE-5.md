@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 802 (2026-08-02) — (SETUP.1) THE LAST UNNAMED REGION IS ONE FUNCTION, AND THE
+ROUND'S SECOND RESULT IS BIGGER THAN THE FIRST: NINETEEN METHODS — INCLUDING THE FIVE
+LARGEST MEASURED COSTS IN THE COMPILER AND `forEachChild` — ARE ABOVE HotSpot's
+`HugeMethodLimit` AND ARE THEREFORE NEVER JIT-COMPILED AT ALL. `-XX:-DontCompileHugeMethods`
+measures −3.1%, B wins 4/4, output identical at 46 errors. Suite 13,476 → 13,481 / 0 / 3;
+cost gate 19 of 20 counters +0.00% with the twentieth a pure re-attribution.**
+
+- **STEP 1 — `outside-pass`, ATTRIBUTED, AND IT IS ONE FUNCTION.** Round 801 left it as
+  the last named-but-unopened region: **975 ms of checker-init inside no `pass()` wrapper**,
+  printed for ~300 rounds and never explained. It is the ~15 setup statements at the top of
+  `Checker.init` (the lib/global merges, per-file visibility and scope tables, enum values,
+  import references, file-local type maps) plus two end-of-init diagnostic retractions.
+  **The instrument is the wrapper itself** — each statement is now `pass("init:<name>")`,
+  which makes the partition **exhaustive BY CONSTRUCTION** (round 801's bind shape: the
+  residue is still printed and must stay ~0, so there is nothing to calibrate), at a cost of
+  ~16 lambda invocations per compile when instrumentation is off.
+- **THE ANSWER: `init:buildFileLocalTypeMaps` = 636 ms = 65% of the phase and 2.2% of the
+  compile.** Median of 3 probe-free runs (checker-init 24,688 / 24,348 / 24,495 ms — within
+  1.3% of round 801's 24,806, so the box was quiet). Second place is **89 ms**
+  (`trackAllImportReferences`), third **36 ms** (`computeAllEnumValues`), and **eleven of
+  the sixteen rows are under 2 ms**. The residue falls **975 → 144 ms** (0.5% of the
+  compile) and is recorded as a bound, not chased. It is also the ONLY setup pass that does
+  any type-system work — 80 `getTypeOfExpression` calls, every other pass zero, which is
+  pinned as a SHAPE so a new eager resolution shows up here before the cost gate sees it.
+- **NO LEVER LANDED ON THE 636 ms, DELIBERATELY — and the reason is round 788's law, not
+  timidity.** The obvious move is to defer the map (a lookup table for later passes: the
+  "state computed for a reader that may never come" shape rounds 788/798/800 mined three
+  times). But `getTypeOfSymbol` **memoises into `symbolTypes`**, so a deferral MOVES the
+  resolution to whichever pass asks first; the recoverable part is only the symbols nothing
+  ever asks for, and that number is unmeasured. Round 801 lost a lever to exactly this
+  (suffix set: row 53.5 → 0.9 ms, then `created 1143, materialized 1143`). Queued as
+  **(SETUP.2) with the census as its first sub-step and the falsifier written down**:
+  if `distinct` does not fall faster than `calls`, the work moved and the item closes.
+- **STEP 2 — THE FINDING THE ROUND WAS NOT LOOKING FOR. HotSpot's `DontCompileHugeMethods`
+  is a PRODUCT flag defaulting to `true` and `HugeMethodLimit` is 8,000 bytecodes; a method
+  above it is NEVER compiled by C1 or C2 and runs interpreted for the whole process.**
+  `scripts/huge_methods.py` (landed) is a static `javap` census: **19 of 13,910 methods
+  across 578 classes are over the limit.** `checkMemberAccessMissingCore` **46,567** (5.8×),
+  `checkArgumentsAgainstSignatureCore` **23,890**, `checkVarDeclAssignabilityCore`
+  **19,296**, `checkAssignmentExpressionCore` **18,100**, `checkSingleCallExpressionTypesCore`
+  **15,567**, `checkPropertyAccessInExpr` 9,062, `ccetSpineEnter` 8,686 — **and
+  `forEachChild` at 9,750, the traversal primitive every one of the ~400 tail passes runs
+  through.** Rounds 787–800 opened five of these one at a time and each reported "no
+  concentration, the cost is spread over the whole function". **A uniformly interpreted
+  function is exactly a function with no concentration.**
+- **THE A/B: one flag, one binary, no code change. 4 interleaved pairs, A 25.448 s vs
+  B 24.655 s median = −0.793 s = −3.1%, B wins 4/4 with every per-pair delta negative**
+  (−1.058 / −0.328 / −0.602 / −0.768), and every one of the eight runs reports `FAILED — 46
+  error(s)`. **Arm A sd 0.207 s = 0.81%; arm B sd 0.361 s = 1.46%.** The cold interleaved
+  band is ±2.0%, which −3.1% clears — but **arm B's spread is above the ~1% quietness
+  criterion, so the SIGN is certain and the MAGNITUDE is NOT tight**: read it as −3.1%
+  ±~1.5%, i.e. between half and one and a half times the largest thing this arc has landed.
+  It is not quoted as a banked win; it is quoted as the measured upper bound of (JIT.1).
+- **THE POSITIVE CONTROL IS DEAD ON THE PROFILE AND IS REPORTED AS DEAD** (round 801's rule,
+  honoured rather than rediscovered): `-XX:+PrintCompilation` prints **no** "too large" line
+  — the compile is never *proposed*, so it is never *skipped* — and grepping an 11,796-line
+  log for it returns **0**. The absence of that string is not evidence of absence of the
+  effect; the static census is the only instrument that can see this, which is why it
+  shipped as a script rather than as a grep in a session note.
+- **WHAT DID NOT WORK — three process failures, all of them recurrences.** (1) **The first
+  measurement batch fired `MainKt` against a classpath that a rebuild was still replacing**:
+  two runs died with `ClassNotFoundException` and, because the script only recorded the exit
+  code, **read as very fast runs rather than as errors**. Fixed in the script with a
+  PREFLIGHT that loads the class and aborts loudly. (2) **A bare `nohup … &` batch was
+  killed when the turn ended** — round 799 lost ~20 minutes to this and round 800 fixed it
+  with `setsid`; it recurred anyway. (3) **Two instances of the measuring script then ran
+  concurrently**, and round 740's law (a single xtsc run already takes 3.15 of 4 cores) put
+  checker-init at 29.8 / 39.2 / 42.2 s — a 70% inflation that looks exactly like a
+  catastrophic regression. Fixed with an `flock` guard and per-stage `.done` markers so a
+  partial kill is diagnosable instead of silent. **All three contaminated runs were
+  discarded, not averaged.** The lesson that generalises: a measuring script needs a
+  preflight, a lock and per-stage markers, or its failures are indistinguishable from its
+  results.
+- **ALSO RECORDED, because it looks memoizable and is not**: nothing was attempted on the
+  144 ms residue. It is the init block's `try`/`if` scaffolding plus the `pass()` machinery
+  over 417 dispatches, at 0.5% of the compile — below the band, and now bounded rather than
+  unknown.
+- **GATE.** Suite **13,476 → 13,481 / 0 failures / 3 skipped** (+5 `SetupPhasePartitionTest`
+  pins; whole results dir wiped, counted with the python XML parser). `cost_gate.py`:
+  **19 of 20 counters +0.00%**, the twentieth `typeOfExpr.outsideInit` **80 → 0**, which is
+  the round's own instrumentation and nothing else — those 80 calls are
+  `buildFileLocalTypeMaps`, previously outside every pass and now inside
+  `init:buildFileLocalTypeMaps`, so the counter independently corroborates the partition.
+  Rebaselined in the landing commit. **No 8-profile grid and no wall-clock A/B for
+  (SETUP.1), deliberately** — nothing production executes changed (the only source edit
+  beyond wrapping is `val` → `var` for one local), and the compiler profile reports 46
+  errors on all eight A/B arms. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md`.
+- **FOR THE NEXT AGENT: start at (JIT.1)(a), `forEachChild`.** One function, one file, no
+  checker semantics, already pinned by `ForEachChildOracleTest`'s reflection oracle, and the
+  largest population of any function in the compiler. The § 0.1 endgame decomposition is
+  written into the queue above with the framing that leads it: **§ 0.1 asks "does the
+  checking work itself get cheaper?" and prices its own answer at 0.6–1.2% per site — this
+  round found that the functions holding that work are not compiled at all, which is worth
+  more and costs none of the scope trade § 0.1 warns about.**
+
+
 **Round 801 (2026-08-02) — (FRONT.2) `Binder.bind` IS OPENED AND CLOSED. THE MAP WAS
 RE-DERIVED FIRST AND IT NAMED ITS TARGET BY ELIMINATION: THE ~400 TAIL PASSES ARE FLAT
 (largest 75 ms = 0.26%, only 2 of 400 do any type-system work), SO THE ROUND WENT TO THE
@@ -781,88 +878,175 @@ removed both directions.**
   **(ENGINE.2h) is queued: the TS2793 `implRelated` probe, 94 ms, round 791's deferral
   shape rather than this round's gate shape.**
 
-**Round 792 (2026-08-01) — (ENGINE.2e) LANDED: A WHOLE-FUNCTION PRE-GATE SKIPS
-`checkMemberAccessMissing` ENTIRELY FOR 20,939 OF 67,258 CALLS (31%) — 563 ms OF BODY
-TIME FOR A 124 ms GATE, NET ~440 ms (1.6% OF THE COMPILE) — AND THE LEVEL-R PARTITION
-IT CAME FROM SAYS THE FUNCTION HAS NO LEVER LEFT INSIDE ANY OF ITS ROWS. Warm A/B
--2.17%, B wins 2/2; suite 13,399 -> 13,405; grid 46/46/46/46/46/46/46/94 with 0 added
-and 0 removed both directions.**
-
-- **THE PARTITION WAS RE-DERIVED FIRST, AND EVERY SHARE HAD MOVED (the item's own law-1
-  demand).** At HEAD the function is **1,629 ms gross / ~1,239 ms net over 67,258
-  invocations**, and its top four rows are `type = resolved-symbol branch` 280 ms
-  (40,346 exits), `type = union-receiver narrowing` 271 ms, `identifier-receiver special
-  cases` 159 ms (**0 exits**) and `pre` 129 ms (**0 exits**) — 68% between them, and NOT
-  the ordering section 12 predicted.
-- **LEVEL S (13 new nested sub-measures) OPENED ALL FOUR AND FOUND NOTHING WORTH
-  LANDING — that is the round's negative result.** `R_OT_UNION` splits into the plain
-  narrowing walk 157 ms / 4,218 calls, the round-424 loop-entry RETRY 65 ms / 1,859 (of
-  which **49% are provably redundant** by round 790's loop-free bracket = 32 ms), and the
-  elaboration 37 ms; `R_IDENT`'s three firewall blocks are 65 + 67 + 40 ms with **zero
-  exits** and all three corpus-load-bearing; `R_OT_IDENT` is gates 16 ms, `getTypeOfSymbol`
-  **1 ms**, and the `identSymbol == null` general path 110 ms. Inventory of in-row levers:
-  the redundant union retry (32 ms), the receiver identifier resolved up to THREE times
-  per access (<=44 ms), a `".$propName"` built at every call for two emission sites
-  (~5 ms) — **~80 ms, 0.3%, all below any band this box can measure.**
-- **SO THE QUESTION WENT UP A LEVEL, AND THE ANSWER IS THE INVERSE OF THE ITEM'S
-  PHRASING.** "Computed above an exit and consulted only below one" finds almost nothing
-  here, because the rows ARE the exits. What generalises is round 489's pre-gate:
-  **every one of this function's ~42 emissions asserts a property is ABSENT, so a call
-  whose property is PRESENT has nothing to say from ANY row.** Priced with `--cmamPreGate`
-  (computes the gate, honours nothing, splits the body's measured time by its verdict):
-  gate 124 ms over 67,258, body-behind-the-skip-set **563 ms over 20,939**, body-kept
-  1,285 ms over 46,319. A MEASURE of the population, never `count x mean`.
-- **THE FIRST CUT MEASURED 0/22,187 EMISSIONS IN ITS SKIP SET AND STILL FAILED 7 CORPUS
-  BASELINES. That is the most useful thing this round learned.** Both failures are places
-  where *resolves* and *legal* come apart, and NEITHER is visible on any dashboard
-  profile: (1) a later-lib member RESOLVES and is still an error — TS2550 says "not at
-  this target", never "does not exist" (`RegExp.dotAll`), excluded by name via
-  `LIB_MIN_TARGET_PROPS`; (2) a class receiver's two SIDES are not cleanly separated in
-  our member tables — an instance type resolves a STATIC member — and TS2576 is precisely
-  the diagnostic that says so, excluded by receiver (a `Type.Object` whose symbol is a
-  Class, raw or apparent). **A profile-measured zero bounds a hazard's FREQUENCY on that
-  profile, never its EXISTENCE; the 13k-baseline corpus is what made this landable.**
-- **THE EQUIVALENCE IS MEASURED WITH A SHIPPED CONTROL, not argued.** `--cmamPreGate`
-  honours nothing, so the run reproduces the pre-change binary and its falsifier column
-  is not a tautology: **compiler 20,939 / services 29,924 / harness 32,463 calls in the
-  skip set, 0 emitting**, against 57 / 83 / 89 emissions in the kept complement — 83,326
-  calls, zero. `--cmamPreGateBogus` (the gate says yes everywhere) reports **57**, so the
-  column can see an emission. That is also how the grid was diffed BOTH directions
-  without rebuilding the old binary: the `--cmamPreGate` run IS the baseline output.
-- **THE COST GATE'S THREE MOVERS ARE THE MECHANISM, ITEM BY ITEM.** `globals.lookups`
-  **-6.05%** / `globals.misses` **-6.09%** are the skipped bodies' name resolutions no
-  longer happening; `typeOfExpr.calls` **+7.43%** (+45,886) is the gate itself — one
-  un-memoized `getTypeOfExpression(receiver)` per invocation (round 737), i.e. exactly the
-  124 ms measured. Nothing else moved >0.4%; `narrow.walks` +0.03%. Rebaselined in the
-  landing commit, as the protocol requires.
-- **THE WARM A/B CONFIRMS THE DIRECTION AND ITS MAGNITUDE IS THE PARTITION'S, NOT ITS
-  OWN.** 2 pairs, deltas **-2.91% / -1.41%**, median **-244 ms (-2.17%), B wins 2/2**, arm
-  sd **0.38% / 0.71%** — both inside the ~1% quietness criterion, so the verdict is
-  quotable rather than discarded. But a warm rebuild is 11.3 s against the 26.5 s cold
-  compile the partition was measured on, so -244 ms warm and -440 ms partitioned are the
-  same claim at two operating points (round 791 met the same gap in the same direction).
-- **PINS: 6 new (`PreGateGuardTest`), 5 DISCRIMINATING across two complementary ablations
-  run SEPARATELY.** Fault A (the gate accepts everything) fails 5; fault B (both
-  exclusions removed) fails 3, all inside A's set. The one that holds under both is the
-  probe's own bogus control, which ignores the gate's content by construction. The pins
-  are aimed at the EXCLUSIONS, because the gate's own effect is behaviourally invisible
-  by design — there is nothing to assert about a call that correctly emits nothing.
-- **WHAT DID NOT WORK.** (1) The three in-row levers above were priced and DECLINED —
-  0.3% between them, with real corpus risk in the identifier-resolution hoist (INV.3's
-  per-file/merged-instance minefield) for 0.16%. (2) The first fixture for the
-  "skip set never emits" pin re-declared `interface Box` in two concatenated sources and
-  measured duplicate-identifier errors instead of the invariant. (3) The union retry's
-  49%-redundant population is REAL but is NOT skippable the way (a)'s was: the branch
-  tests `loopNarrowed !== rawForNarrowing`, and a loop-free repeat still mints a FRESH
-  equal union, so a skip changes the verdict where a SUBSTITUTION of the plain result
-  would not — left in the queue as (ENGINE.2f) with that note.
-- Suite 13,399 -> **13,405 / 0 failures / 3 skipped**. 8-profile grid diffed set-for-set
-  in BOTH directions against the same binary under `--cmamPreGate`:
-  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight.** `--partitionCheck 2`
-  **EQUIVALENT — 46.** Full derivation: `docs/perf/property-access-attribution.md`
-  sections 30-35.
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+---
+
+**THE § 0.1 ENDGAME, DECOMPOSED (round 802). READ THIS FRAMING BEFORE PICKING (JIT.1).**
+
+§ 0.1 names ONE endgame — *"does the checking work itself get cheaper?"* — and prices it
+(round 739) at **0.6–1.2% for the largest of three assignability sites**, with the
+warning that removing the dedicated-walker layer *"trades the property that made the
+corpus reachable"*. Round 802 measured something that changes what that sentence means.
+**The five functions § 0.1's endgame is about — `checkMemberAccessMissingCore`,
+`checkArgumentsAgainstSignatureCore`, `checkVarDeclAssignabilityCore`,
+`checkAssignmentExpressionCore`, `checkSingleCallExpressionTypesCore` — are ALL above
+HotSpot's 8,000-bytecode `HugeMethodLimit`, and so is `forEachChild`. HotSpot never
+JIT-compiles them: they run in the interpreter for the entire compile.** So part of why
+"the checking work" is expensive is not the *shape of the rules* at all — it is that the
+functions holding them are too large to compile. `-XX:-DontCompileHugeMethods` measures
+**−3.1%, B wins 4/4** with output identical at 46 errors, and the shippable form of that
+is a **mechanical split**, which costs none of the scope trade § 0.1 warns about.
+
+**So the decomposition below leads with (JIT.1), not with the engine question**, and it
+keeps § 0.1's own endgame as (ENGINE.3)/(SCOPE.1) behind the price § 0.1 itself demands
+("do not put the scope question to the owner until the two remaining sites are in").
+Three standing facts a reader of § 0.1 must hold alongside it: **the budget in § 0.1 is a
+COLD single-process budget**, and this arc already owns a warm artifact at **11.9 s**
+(`--serve`, round 773) and a native one at **13.4 s** (round 775) against the cold JVM's
+26.5 s — so *parity is artifact-scoped*, and which artifact ships is the standing
+(AOT.1) owner decision, not an engineering one.
+
+- [ ] **(JIT.1) Split every method above HotSpot's `HugeMethodLimit` so it can be
+  JIT-compiled at all. PRIZE: MEASURED — upper bound −3.1% (793 ms), the largest measured
+  prize in the queue.** Census: `scripts/huge_methods.py` (landed round 802) —
+  **19 of 13,910 methods over 8,000 bytecodes**, listed in
+  `docs/perf/setup-phase-and-huge-methods.md` § 3.2. The A/B is one flag on one binary:
+  4 interleaved pairs, **A 25.448 s / B 24.655 s median, B wins 4/4, every per-pair delta
+  negative**; arm A sd 0.81%, **arm B sd 1.46% — above the ~1% quietness criterion, so
+  the SIGN is certain and the MAGNITUDE is ±~1.5%, not tight**. Cold interleaved band is
+  ±2.0%, which −3.1% clears.
+  **BLAST RADIUS: zero semantics, maximal surface.** A split moves code between methods
+  and changes nothing else; but these are the hottest functions in the compiler, so the
+  gate is the FULL one every time: suite, 8-profile grid BOTH directions,
+  `--partitionCheck 2`, `cost_gate.py`.
+  **FALSIFIER, stated once for the whole item:** after all sub-steps land, re-run the
+  flag A/B. If `-XX:-DontCompileHugeMethods` STILL moves the wall, the split did not
+  capture the effect and the remaining delta is C2 compiling something new rather than
+  the interpreter being avoided — in which case (JIT.2) is the only route and the split
+  is worth only what it measured on its own.
+  **CAVEAT to carry into every sub-step:** a split adds call boundaries the monolith did
+  not have, so a sub-step can legitimately measure NEGATIVE on its own while the set is
+  positive. Do not judge a single split by wall time; judge it by the census
+  (`--fail-over`) and measure the wall only over the accumulated set.
+  - **(a) FIRST — `forEachChild` (9,750 bytecodes, `NodeWalk.kt`). The smallest standalone
+    sub-step that lands as one commit, and the one with the largest population.** One
+    function, one file, a flat `when (kindId)` that splits into range-keyed helpers; NO
+    checker semantics are involved. It is the traversal primitive of the whole compiler —
+    the check spine's descent AND all ~400 tail passes, which round 801 measured at
+    **2,962 ms of pure AST traversal** and closed as "structural, treatments already
+    priced". *One treatment was never considered, because nobody knew the primitive was
+    interpreted.* **Pinned already**: `ForEachChildOracleTest`'s reflection oracle diffs
+    the enumeration against the data-class `componentN` properties, so a dropped arm fails
+    before the corpus does. Gate as above. **Prize: unmeasured alone — size it by
+    re-running the flag A/B with only this split in place** (if the flag's advantage
+    shrinks, the split is capturing it).
+  - **(b) `checkMemberAccessMissingCore` — 46,567 bytecodes, 5.8× the limit, and round
+    789's "largest leaf in the compile".** Its section boundaries are already committed
+    (round 789's level-R partition, `docs/perf/property-access-attribution.md`), so the
+    split plan is written; the deferred-suppression invariant of round 791 constrains it —
+    **`cmamFlowSuppresses` requires the function and its `tryEmit*` helpers to append to
+    `diagnostics` and do nothing else**, and a split must not break that.
+  - **(c) The three remaining assignability/call cores** —
+    `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
+    `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.
+    Each already has a committed section partition from rounds 787–797, which IS a split
+    plan. One method per commit.
+  - **(d) The tail of the list** — `checkDuplicateDeclarations` 12,935,
+    `tryInferSingleTypeParamFromArgs` 11,930, `checkIndexSigInStatement` 10,928,
+    `access$checkBigintPropertyNames$emit` 10,339, `checkReturnAssignabilityCore` 9,743,
+    `checkPropertyAccessInExpr` 9,062, `ccetSpineEnter` 8,686. Also watch the four sitting
+    JUST under the limit, one refactor from crossing it: `walkFunctionBodiesInExpr` 7,702,
+    `cpaSpineLeave` 7,359, `ctaM3StmtAnchorCore` 7,245, `cpaSpineEnter` 6,941.
+  - **(e) EMIT-mode methods — `Transformer.transformToCommonJS` 28,991,
+    `transformClassBody` 16,233, `transform` 8,934.** These do not touch a `--noEmit`
+    number at all, which is why every A/B in this arc is blind to them; they DO touch the
+    published `bench-3way.sh` ratio, which is emit-mode on all three compilers (§ 0.2).
+  - **(f) Keep it from happening again.** Run `python3 scripts/huge_methods.py
+    --fail-over 0` in the round gate once (a)–(e) land. *Wiring it into the Gradle `check`
+    task is a build-system change → (JIT.3).*
+
+- [ ] **BLOCKED-PENDING-USER (JIT.2): ship the JIT/AOT launcher flags.** Guardrail —
+  changing how the CLI is launched is a packaging decision.
+  **Proposal to react to, so a yes/no is enough.** Add `-XX:-DontCompileHugeMethods` to
+  the application's default JVM arguments, and evaluate a JDK 24/25 **AOT cache**
+  (JEP 483 class loading + linking, JEP 515 method profiling) as a second, orthogonal
+  start-up lever — the cache is generated from a training run on the user's own machine,
+  needs no per-OS build matrix, and has never been measured here. FOR: −3.1% measured for
+  the first flag, for zero code change and zero behaviour change (46 errors on both arms);
+  it also protects users on any build where a method has crept back over the limit.
+  AGAINST: it makes C2 compile a 46,000-byte method, which costs compile time and code
+  cache, and the trade was measured on a 25-second compile — it may be negative on a
+  2-second one; and (JIT.1)'s split gets the same win with no flag, so shipping the flag
+  is belt-and-braces rather than the fix. Answer needed on: (1) add the flag to the
+  launcher defaults, yes/no; (2) approve a round spent MEASURING the AOT cache (measuring
+  costs nothing but time; shipping it would come back here).
+
+- [ ] **(JIT.3) BLOCKED-PENDING-USER: wire `scripts/huge_methods.py --fail-over 0` into
+  the Gradle `check` task.** Guardrail — build-system change. **Proposal:** a method
+  crossing 8,000 bytecodes is a silent, permanent, whole-run performance cliff that no
+  existing gate can see (the corpus does not measure cost, `cost_gate.py`'s counters do
+  not move, and `-XX:+PrintCompilation` prints nothing — round 802 grepped an 11,796-line
+  log for `too large` and got 0). The census is static and takes ~2 minutes of `javap`.
+  Answer needed on: add it to `check` (costs ~2 min per build), or leave it as a
+  round-protocol step the agent runs by hand.
+
+- [ ] **(SETUP.2) `buildFileLocalTypeMaps` is 636 ms (2.2% of the compile) — MEASURE THE
+  NEVER-READ SHARE BEFORE DESIGNING ANYTHING.** Round 802's partition of `outside-pass`
+  found the whole 975 ms row is ~15 setup statements of which THIS ONE is 65%; it eagerly
+  `getTypeOfSymbol`s every file-level function / class / interface / enum / type alias /
+  import alias and every annotated variable in the program.
+  **PRIZE: unmeasured, and deliberately so.** It is bounded above by 636 ms and bounded
+  much lower by **round 788's law: `getTypeOfSymbol` MEMOISES into `symbolTypes`, so
+  deferring it MOVES the work to whichever pass asks first.** The recoverable part is only
+  the symbols nothing ever asks for. Round 801 lost a lever to exactly this shape (the
+  suffix set: row 53.5 → 0.9 ms, then `created 1143, materialized 1143`).
+  **THE FIRST SUB-STEP IS A CENSUS, NOT A CHANGE**: count reads of `fileLocalTypes` per
+  symbol and report `calls` vs `distinct`. **FALSIFIER: if `distinct` does not fall faster
+  than `calls` under a deferral, the work moved and this item CLOSES** (round 800's test).
+  **BLAST RADIUS: name resolution program-wide** — `getTypeOfIdentifier` reads this map in
+  every pass — plus the TS2589/TS2615 emissions this function owns, which are position-
+  sensitive. Gate: suite + 8-profile grid BOTH directions + `--partitionCheck 2`.
+
+- [ ] **(ENGINE.3) Finish round 739's engine-rule price at the TWO remaining assignability
+  sites — this is § 0.1's OWN precondition, in its own words: "do not put the scope
+  question to the owner until they are in".** PRIZE: not a saving — a DECISION INPUT.
+  Measured at site 1 of 3 (`docs/perf/engine-rule-price.md`): engine 483 ms (55.4%) vs
+  dedicated-walker layer 326 ms (37.4%) = **0.67×, not the 14× the arc nearly quoted**,
+  and **165 of the 326 is the weak-type rule, which MOVES into any replacement engine
+  rather than vanishing** → 0.6–1.2% for that site. Scored predictions for the other two
+  are already written down in that doc. **BLAST RADIUS: none — it is measurement only.**
+  **FALSIFIER, and the reason to do it before (SCOPE.1): if sites 2 and 3 come in at the
+  same order, the whole § 0.1 endgame is worth ~2–4%, which is LESS than (JIT.1) already
+  measured, and the scope question should NOT be put to the owner at all.**
+
+- [ ] **BLOCKED-PENDING-USER (SCOPE.1): the § 0.1 endgame proper — replace the ~1,046
+  dedicated `check*`/`emit*`/`tryEmit*` walkers with general engine rules.** Guardrail —
+  § 0.1 states plainly that this "is a SCOPE decision, not a perf task, and it trades the
+  property that made the corpus reachable" (narrow verifiable walkers are what got the
+  corpus to 100%; every broad engine attempt in this codebase regressed).
+  **DO NOT RAISE THIS UNTIL (ENGINE.3) IS IN** — § 0.1 says so itself, and round 802's
+  measurement makes the case weaker, not stronger: the largest concrete reason the
+  checking work is slow turned out to be that it is not compiled, which is fixable without
+  any scope trade. **Proposal, when the time comes:** put it to the owner as a
+  cost/benefit with the three site prices attached, not as an architecture pitch.
+
+---
+
+- [x] **(SETUP.1) DONE round 802 — `outside-pass`, the last unnamed region in the
+  compile, is ONE FUNCTION.** The 975 ms of checker-init inside no `pass()` wrapper is the
+  ~15 setup statements at the top of `Checker.init` plus two end-of-init retractions. Each
+  is now `pass("init:<name>")`, so the partition is **exhaustive by construction** (the
+  residue is still printed and must stay ~0) at a cost of ~16 lambda invocations per
+  compile. **The row falls 975 → 144 ms and `init:buildFileLocalTypeMaps` alone is 636 ms
+  = 65% of the phase and 2.2% of the compile**; second place is 89 ms
+  (`trackAllImportReferences`), then 36 ms (`computeAllEnumValues`), and eleven of the
+  sixteen rows are under 2 ms. It is also the ONLY setup pass that does type-system work
+  (80 `getTypeOfExpression` calls; every other records zero — pinned). **NO LEVER LANDED,
+  BY DESIGN**: the obvious deferral is round 788's shape and `getTypeOfSymbol` memoises,
+  so the census must come first — queued as (SETUP.2) with the falsifier written.
+  Suite 13,476 → **13,481 / 0 / 3** (+5 `SetupPhasePartitionTest` pins).
+  `docs/perf/setup-phase-and-huge-methods.md` § 1–2.
 
 - [x] **(FRONT.2) DONE round 801 — `Binder.bind` is OPENED AND CLOSED, and the round's
   two candidate levers BOTH measured zero.** Step 1 re-derived the map (median of 3

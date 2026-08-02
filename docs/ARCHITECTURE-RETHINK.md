@@ -324,6 +324,7 @@ they are the audit's ❌ rows** (`docs/perf/claim-audit-round758.md` § 4).
 | — type-node resolution (depth-0) | 311 | 580 | **491** | |
 | — member resolution | 36 | 98 | **99** | |
 | **the ~400 tail passes** | *"14 units", § 0.1* | 3,130 | **3,140** | **12.3%** (10.7% of the compile) |
+| `outside-pass` (init work in no `pass()`) — **round 802: 636 ms of it is ONE function** | — | — | **975 → 144** | 3.4% → 0.6% |
 | **front end** (wall − checker-init) | — | — | **3,755** | (12.8% of the compile) |
 | ~~**dispatch + handler machinery (residual)**~~ ❌ **A RESIDUAL THAT WAS GIVEN A NAME** — rounds 732/733/734 each measured a piece of it and found NO dispatch; real dispatch is 100–300 ms. It is the migrated passes' OWN CHECKING WORK | ~7,600 | ~12,300 | **~13,100** | **51%** |
 
@@ -395,6 +396,35 @@ asked, so the work **MOVED into the checker**, round 788's law answered against
 the change. **`bind` therefore joins `checkArgumentsAgainstSignature` (797) and
 the spine-leave handlers (733/799) as measured, bounded and closed.**
 `docs/perf/bind-attribution.md`.
+
+**ROUND-802 — `outside-pass` IS NAMED (it is one function), AND A LARGER RESULT
+CAME OUT OF THE SAME ROUND.** The 975 ms row is the ~15 setup statements at the
+top of `Checker.init`; each is now `pass("init:<name>")`, so the partition is
+exhaustive by construction and the residue falls **975 → 144 ms**.
+**`init:buildFileLocalTypeMaps` is 636 ms = 65% of the phase and 2.2% of the
+compile** — an eager `getTypeOfSymbol` over every file-level declaration —
+against 89 ms for second place and under 2 ms for eleven of the sixteen rows.
+No lever was landed on it: `getTypeOfSymbol` memoises, so a deferral MOVES the
+work (round 788), and the census is queued as (SETUP.2) with that falsifier.
+
+**AND THE ROW THIS TABLE CANNOT SHOW.** HotSpot's `DontCompileHugeMethods` is a
+product flag defaulting to **true** with `HugeMethodLimit` = **8,000
+bytecodes**; a method above it is **never compiled by C1 or C2** and runs
+interpreted for the whole process. A static `javap` census
+(`scripts/huge_methods.py`) finds **19 of 13,910 methods over the limit**,
+including **`checkMemberAccessMissingCore` 46,567**,
+`checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore`
+19,296, `checkAssignmentExpressionCore` 18,100,
+`checkSingleCallExpressionTypesCore` 15,567, `checkPropertyAccessInExpr` 9,062
+— **and `forEachChild` 9,750**, the traversal primitive of the entire compiler.
+**Rounds 787–800 opened five of those one at a time and each concluded "no
+concentration — the cost is spread over the whole function"; a uniformly
+interpreted function is exactly that.** `-XX:-DontCompileHugeMethods` measures
+**−3.1%, B wins 4/4 pairs**, output identical at 46 errors (arm B's sd is 1.46%,
+so the sign is certain and the magnitude is ±~1.5%). Queued as **(JIT.1)** — the
+shippable form is a mechanical split, which costs none of the scope trade
+§ 0.1's endgame paragraph warns about.
+`docs/perf/setup-phase-and-huge-methods.md`.
 
 **ROUND-800 ADDENDUM — `spineIanyEnterNode` IS CLOSED, AND THE HANDLER IS NOW
 FLAT.** The CALL/NEW argument arm round 799 sized at 249 ms is gated on a bounded

@@ -1,3 +1,84 @@
+**Round 792 (2026-08-01) — (ENGINE.2e) LANDED: A WHOLE-FUNCTION PRE-GATE SKIPS
+`checkMemberAccessMissing` ENTIRELY FOR 20,939 OF 67,258 CALLS (31%) — 563 ms OF BODY
+TIME FOR A 124 ms GATE, NET ~440 ms (1.6% OF THE COMPILE) — AND THE LEVEL-R PARTITION
+IT CAME FROM SAYS THE FUNCTION HAS NO LEVER LEFT INSIDE ANY OF ITS ROWS. Warm A/B
+-2.17%, B wins 2/2; suite 13,399 -> 13,405; grid 46/46/46/46/46/46/46/94 with 0 added
+and 0 removed both directions.**
+
+- **THE PARTITION WAS RE-DERIVED FIRST, AND EVERY SHARE HAD MOVED (the item's own law-1
+  demand).** At HEAD the function is **1,629 ms gross / ~1,239 ms net over 67,258
+  invocations**, and its top four rows are `type = resolved-symbol branch` 280 ms
+  (40,346 exits), `type = union-receiver narrowing` 271 ms, `identifier-receiver special
+  cases` 159 ms (**0 exits**) and `pre` 129 ms (**0 exits**) — 68% between them, and NOT
+  the ordering section 12 predicted.
+- **LEVEL S (13 new nested sub-measures) OPENED ALL FOUR AND FOUND NOTHING WORTH
+  LANDING — that is the round's negative result.** `R_OT_UNION` splits into the plain
+  narrowing walk 157 ms / 4,218 calls, the round-424 loop-entry RETRY 65 ms / 1,859 (of
+  which **49% are provably redundant** by round 790's loop-free bracket = 32 ms), and the
+  elaboration 37 ms; `R_IDENT`'s three firewall blocks are 65 + 67 + 40 ms with **zero
+  exits** and all three corpus-load-bearing; `R_OT_IDENT` is gates 16 ms, `getTypeOfSymbol`
+  **1 ms**, and the `identSymbol == null` general path 110 ms. Inventory of in-row levers:
+  the redundant union retry (32 ms), the receiver identifier resolved up to THREE times
+  per access (<=44 ms), a `".$propName"` built at every call for two emission sites
+  (~5 ms) — **~80 ms, 0.3%, all below any band this box can measure.**
+- **SO THE QUESTION WENT UP A LEVEL, AND THE ANSWER IS THE INVERSE OF THE ITEM'S
+  PHRASING.** "Computed above an exit and consulted only below one" finds almost nothing
+  here, because the rows ARE the exits. What generalises is round 489's pre-gate:
+  **every one of this function's ~42 emissions asserts a property is ABSENT, so a call
+  whose property is PRESENT has nothing to say from ANY row.** Priced with `--cmamPreGate`
+  (computes the gate, honours nothing, splits the body's measured time by its verdict):
+  gate 124 ms over 67,258, body-behind-the-skip-set **563 ms over 20,939**, body-kept
+  1,285 ms over 46,319. A MEASURE of the population, never `count x mean`.
+- **THE FIRST CUT MEASURED 0/22,187 EMISSIONS IN ITS SKIP SET AND STILL FAILED 7 CORPUS
+  BASELINES. That is the most useful thing this round learned.** Both failures are places
+  where *resolves* and *legal* come apart, and NEITHER is visible on any dashboard
+  profile: (1) a later-lib member RESOLVES and is still an error — TS2550 says "not at
+  this target", never "does not exist" (`RegExp.dotAll`), excluded by name via
+  `LIB_MIN_TARGET_PROPS`; (2) a class receiver's two SIDES are not cleanly separated in
+  our member tables — an instance type resolves a STATIC member — and TS2576 is precisely
+  the diagnostic that says so, excluded by receiver (a `Type.Object` whose symbol is a
+  Class, raw or apparent). **A profile-measured zero bounds a hazard's FREQUENCY on that
+  profile, never its EXISTENCE; the 13k-baseline corpus is what made this landable.**
+- **THE EQUIVALENCE IS MEASURED WITH A SHIPPED CONTROL, not argued.** `--cmamPreGate`
+  honours nothing, so the run reproduces the pre-change binary and its falsifier column
+  is not a tautology: **compiler 20,939 / services 29,924 / harness 32,463 calls in the
+  skip set, 0 emitting**, against 57 / 83 / 89 emissions in the kept complement — 83,326
+  calls, zero. `--cmamPreGateBogus` (the gate says yes everywhere) reports **57**, so the
+  column can see an emission. That is also how the grid was diffed BOTH directions
+  without rebuilding the old binary: the `--cmamPreGate` run IS the baseline output.
+- **THE COST GATE'S THREE MOVERS ARE THE MECHANISM, ITEM BY ITEM.** `globals.lookups`
+  **-6.05%** / `globals.misses` **-6.09%** are the skipped bodies' name resolutions no
+  longer happening; `typeOfExpr.calls` **+7.43%** (+45,886) is the gate itself — one
+  un-memoized `getTypeOfExpression(receiver)` per invocation (round 737), i.e. exactly the
+  124 ms measured. Nothing else moved >0.4%; `narrow.walks` +0.03%. Rebaselined in the
+  landing commit, as the protocol requires.
+- **THE WARM A/B CONFIRMS THE DIRECTION AND ITS MAGNITUDE IS THE PARTITION'S, NOT ITS
+  OWN.** 2 pairs, deltas **-2.91% / -1.41%**, median **-244 ms (-2.17%), B wins 2/2**, arm
+  sd **0.38% / 0.71%** — both inside the ~1% quietness criterion, so the verdict is
+  quotable rather than discarded. But a warm rebuild is 11.3 s against the 26.5 s cold
+  compile the partition was measured on, so -244 ms warm and -440 ms partitioned are the
+  same claim at two operating points (round 791 met the same gap in the same direction).
+- **PINS: 6 new (`PreGateGuardTest`), 5 DISCRIMINATING across two complementary ablations
+  run SEPARATELY.** Fault A (the gate accepts everything) fails 5; fault B (both
+  exclusions removed) fails 3, all inside A's set. The one that holds under both is the
+  probe's own bogus control, which ignores the gate's content by construction. The pins
+  are aimed at the EXCLUSIONS, because the gate's own effect is behaviourally invisible
+  by design — there is nothing to assert about a call that correctly emits nothing.
+- **WHAT DID NOT WORK.** (1) The three in-row levers above were priced and DECLINED —
+  0.3% between them, with real corpus risk in the identifier-resolution hoist (INV.3's
+  per-file/merged-instance minefield) for 0.16%. (2) The first fixture for the
+  "skip set never emits" pin re-declared `interface Box` in two concatenated sources and
+  measured duplicate-identifier errors instead of the invariant. (3) The union retry's
+  49%-redundant population is REAL but is NOT skippable the way (a)'s was: the branch
+  tests `loopNarrowed !== rawForNarrowing`, and a loop-free repeat still mints a FRESH
+  equal union, so a skip changes the verdict where a SUBSTITUTION of the plain result
+  would not — left in the queue as (ENGINE.2f) with that note.
+- Suite 13,399 -> **13,405 / 0 failures / 3 skipped**. 8-profile grid diffed set-for-set
+  in BOTH directions against the same binary under `--cmamPreGate`:
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight.** `--partitionCheck 2`
+  **EQUIVALENT — 46.** Full derivation: `docs/perf/property-access-attribution.md`
+  sections 30-35.
+
 **Round 789 (2026-08-01) — (ENGINE.2c): THE PICTURE INVERTS ONE LEVEL DOWN. At levels P
 and Q the dedicated-walker FIREWALL was 8.0% and the ENGINE 91.9%. INSIDE that engine —
 `checkMemberAccessMissing`, 2,292 ms, the largest single leaf in the compile — the
