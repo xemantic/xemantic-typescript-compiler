@@ -54,6 +54,10 @@ fun main(args: Array<String>) {
     var watchVerify = false
     var incremental = false
     var passTiming = false
+    // (FRONT.2) round 801 — print the flow-scan census. Set by --frontEnd and
+    // --verifyFlowScan; a LOCAL rather than a read of `FrontEnd.mode`, which
+    // the FrontEnd report block clears before this one runs.
+    var flowScanReport = false
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
@@ -287,6 +291,22 @@ fun main(args: Array<String>) {
             // calibration counterpart is needed.
             "--frontEnd", "--frontend" -> {
                 FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON
+                FlowScan.reset(); flowScanReport = true
+            }
+            // (FRONT.2) round 801 — the B464 reassignment-scan A/B and its
+            // equivalence verifier. Both scanners are in the binary, so these
+            // select an arm rather than needing a second build.
+            "--flowScanLegacy", "--flowscanlegacy" -> {
+                FlowScan.reset(); FlowScan.legacy = true
+            }
+            "--verifyFlowScan", "--verifyflowscan" -> {
+                FlowScan.reset(); FlowScan.verify = true; flowScanReport = true
+            }
+            "--flowScanBogus", "--flowscanbogus" -> {
+                FlowScan.bogus = true
+            }
+            "--flowEagerSet", "--floweagerset" -> {
+                FlowScan.eagerSet = true
             }
             "--partitionCheck", "--partitioncheck" -> {
                 i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
@@ -389,6 +409,10 @@ fun main(args: Array<String>) {
         print(FrontEnd.csv())
         println("== (FRONT.1) csv end ==")
         FrontEnd.mode = FrontEnd.OFF
+    }
+    if (flowScanReport) {
+        print(FlowScan.report())
+        FlowScan.verify = false; FlowScan.bogus = false
     }
     if (IanySections.mode != IanySections.OFF) {
         println(IanySections.report())
@@ -586,6 +610,10 @@ private fun printUsage() {
                              skip, the body time behind it, and how many of those calls
                              emit — the falsifier (--cmamPreGateBogus = control)
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
+          --flowScanLegacy   (FRONT.2) run the pre-801 B464 reassignment scanner (A/B arm)
+          --verifyFlowScan   (FRONT.2) run BOTH scanners and report divergences
+          --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner
+          --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)

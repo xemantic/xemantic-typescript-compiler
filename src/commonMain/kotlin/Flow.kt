@@ -310,6 +310,122 @@ class FlowGraph(
  * infrastructure with no behavior change. Step 2 will wire the graph into
  * narrowing for TS2454/TS2339/TS2774.
  */
+/**
+ * (FRONT.2) round 801 — the A/B and equivalence switch for the B464
+ * reassignment scan, the one measured concentration inside `Binder.bind`.
+ *
+ * Both scanner implementations live in the binary so the two arms run on ONE
+ * build and the boundary count is identical in both (round 793), and so the
+ * pre-801 body can serve as an oracle rather than as a memory of what the code
+ * used to say.
+ *
+ * [verify] is the discriminating instrument: it runs BOTH scanners on every
+ * real scan of a real compile and counts divergences at entry granularity.
+ * Its positive control is [bogus] — a deliberately broken fast path — because
+ * round 790's cheaper "same comparison over the complement population" control
+ * has no analogue for a pure refactor: there is no population where the two
+ * implementations are *supposed* to differ, so a zero has to be shown to be a
+ * live zero some other way.
+ *
+ * Production reads [legacy] once per scan (1,220 times per compile) and
+ * nothing else; all three flags are off by default.
+ */
+object FlowScan {
+    /** `--flowScanLegacy` — run the pre-801 scanner. The A/B's other arm. */
+    var legacy: Boolean = false
+
+    /** `--verifyFlowScan` — run BOTH and compare. Diagnostic only. */
+    var verify: Boolean = false
+
+    /** `--flowScanBogus` — positive control for [verify]: corrupt the fast path. */
+    var bogus: Boolean = false
+
+    /** `--flowEagerSet` — build the B464 suffix set eagerly (the pre-801 arm). */
+    var eagerSet: Boolean = false
+
+    /**
+     * How many B464 suffix sets were CREATED versus ever actually QUERIED.
+     * Always counted (two static increments per closure) — this ratio is the
+     * whole justification for [SuffixNameSet] and must not need a probe flag
+     * to be checkable.
+     */
+    var setsCreated: Long = 0
+    var setsMaterialized: Long = 0
+
+    var scansCompared: Long = 0
+    var scansDiverged: Long = 0
+    var entriesCompared: Long = 0
+    var entriesDiverged: Long = 0
+
+    fun reset() {
+        scansCompared = 0; scansDiverged = 0; entriesCompared = 0; entriesDiverged = 0
+        setsCreated = 0; setsMaterialized = 0
+    }
+
+    internal fun compare(fastPositions: IntArray, fastNames: Array<String>,
+                         slowPositions: IntArray, slowNames: Array<String>) {
+        scansCompared++
+        var diverged = false
+        val n = maxOf(fastPositions.size, slowPositions.size)
+        for (k in 0 until n) {
+            entriesCompared++
+            val fp = fastPositions.getOrNull(k); val sp = slowPositions.getOrNull(k)
+            val fn = fastNames.getOrNull(k); val sn = slowNames.getOrNull(k)
+            if (fp != sp || fn != sn) { entriesDiverged++; diverged = true }
+        }
+        if (diverged) scansDiverged++
+    }
+
+    fun report(): String =
+        "== (FRONT.2) flow-scan equivalence ==\n" +
+            "scans compared $scansCompared, diverged $scansDiverged; " +
+            "entries compared $entriesCompared, diverged $entriesDiverged\n" +
+            "suffix sets created $setsCreated, materialized $setsMaterialized\n"
+}
+
+/**
+ * (FRONT.2) round 801 — a B464 reassigned-name set as a VIEW over the shared
+ * scan's name array, materialised only if something ever asks it a question.
+ *
+ * The whole value is consumed at ONE place (`root in
+ * flowNode.reassignedAfterNames`, Checker.kt), reached only from a narrowing
+ * walk, and narrowing walks fell 75% between rounds 758 and 798 — so building
+ * 2,014 hash sets averaging 135 entries during the BIND was paying for answers
+ * almost nobody asks for. [FlowScan.setsCreated] and
+ * [FlowScan.setsMaterialized] make that ratio a measurement rather than an
+ * argument.
+ *
+ * `isEmpty` is answered from the bounds without materialising, because it is
+ * the one question that can be decided arithmetically. Everything else
+ * materialises, so the view is a strict `Set<String>` and not a partial one:
+ * nothing downstream has to know it is lazy.
+ */
+internal class SuffixNameSet(
+    private val names: Array<String>,
+    private val lo: Int,
+) : Set<String> {
+
+    private var built: HashSet<String>? = null
+
+    private fun materialize(): HashSet<String> {
+        var b = built
+        if (b == null) {
+            b = HashSet(((names.size - lo) * 2).coerceAtLeast(8))
+            for (k in lo until names.size) b.add(names[k])
+            built = b
+            FlowScan.setsMaterialized++
+        }
+        return b
+    }
+
+    override val size: Int get() = materialize().size
+    override fun isEmpty(): Boolean = lo >= names.size
+    override fun iterator(): Iterator<String> = materialize().iterator()
+    override fun contains(element: String): Boolean = materialize().contains(element)
+    override fun containsAll(elements: Collection<String>): Boolean =
+        materialize().containsAll(elements)
+}
+
 class FlowGraphBuilder {
 
     private val nodeToFlow: MutableMap<Long, FlowNode> = mutableMapOf()
@@ -982,12 +1098,14 @@ class FlowGraphBuilder {
         // lowest start seen serves all siblings via a position filter — exact semantics,
         // replacing the per-closure O(range) char scan that was ~14% of the tsc-source
         // self-compile (thousands of closures inside `createTypeChecker`-scale functions).
+        val feS = FrontEnd.t()
         var scan = reassignScanCache[hi]
         if (scan == null || scan.start > start) {
             scan = scanReassignedEntries(source, start, hi)
             reassignScanCache[hi] = scan
             FrontEnd.addReassignScan((hi - start).toLong())
         }
+        FrontEnd.close(FrontEnd.FLOW_SCAN, feS)
         // First entry with position >= start (positions ascend); all entries are < hi.
         var lo = 0
         var h = scan.positions.size
@@ -996,8 +1114,26 @@ class FlowGraphBuilder {
             if (scan.positions[mid] < start) lo = mid + 1 else h = mid
         }
         if (lo == scan.positions.size) return emptySet()
-        val result = mutableSetOf<String>()
-        for (k in lo until scan.positions.size) result.add(scan.names[k])
+        // (FRONT.2) round 801 — the suffix is a VIEW, not a copy. The eager form
+        // performed 273,226 `HashSet` insertions across 2,014 closures (135 per
+        // closure, and a set that size resizes ~4 times from the default
+        // capacity) to produce a value whose ONLY consumer is a single
+        // `root in flowNode.reassignedAfterNames` membership test during
+        // narrowing. [SuffixNameSet] builds the hash set on first query and
+        // counts how many are ever queried, so the claim is measured rather
+        // than assumed — the (IANY.1) shape, one phase earlier.
+        val feB = FrontEnd.t()
+        val result: Set<String> =
+            if (FlowScan.eagerSet) {
+                val eager = HashSet<String>()
+                for (k in lo until scan.positions.size) eager.add(scan.names[k])
+                FlowScan.setsMaterialized++
+                eager
+            } else {
+                SuffixNameSet(scan.names, lo)
+            }
+        FlowScan.setsCreated++
+        FrontEnd.close(FrontEnd.FLOW_SETBUILD, feB)
         return result
     }
 
@@ -1005,9 +1141,50 @@ class FlowGraphBuilder {
      *  the matched names, cached per `hi` in [reassignScanCache]. */
     private class ReassignScan(val start: Int, val positions: IntArray, val names: Array<String>)
 
+    /**
+     * (FRONT.2) unboxed neighbour read — the `Char?` of `getOrNull` boxes on the
+     * JVM at every context probe. `' '` stands for "no such character"; see
+     * [scanReassignedEntriesFast]'s comment for why that is equivalent to
+     * `null` at every site that consumes it.
+     */
+    private fun charAtOr(source: String, len: Int, k: Int): Char =
+        if (k >= 0 && k < len) source[k] else ' '
+
+    private fun isWordChar(c: Char): Boolean = c.isLetterOrDigit() || c == '_' || c == '$'
+
+    private fun isWordStartChar(c: Char): Boolean = c.isLetter() || c == '_' || c == '$'
+
     private val reassignScanCache = HashMap<Int, ReassignScan>()
 
+    /**
+     * (FRONT.2) round 801 — dispatch to the scanner under test. Both
+     * implementations live in the binary so an A/B and an equivalence verifier
+     * can run on ONE build (round 795's law 3, round 793's identical-boundary
+     * rule: the span around this call is per CLOSURE and is unchanged either
+     * way). [FlowScan.legacy] restores the pre-801 body verbatim.
+     */
     private fun scanReassignedEntries(source: String, start: Int, hi: Int): ReassignScan {
+        if (FlowScan.verify) {
+            val fast = scanReassignedEntriesFast(source, start, hi)
+            val slow = scanReassignedEntriesLegacy(source, start, hi)
+            FlowScan.compare(fast.positions, fast.names, slow.positions, slow.names)
+            return if (FlowScan.legacy) slow else fast
+        }
+        return if (FlowScan.legacy) scanReassignedEntriesLegacy(source, start, hi)
+        else scanReassignedEntriesFast(source, start, hi)
+    }
+
+    /**
+     * The pre-801 scanner, kept VERBATIM as the equivalence oracle and as the
+     * A/B's other arm. Two things make it expensive, and the census measured
+     * both: it allocates a `substring` for EVERY identifier occurrence in the
+     * range while keeping only the assignment targets, and every forward and
+     * backward context read goes through `getOrNull`, whose `Char?` return
+     * boxes on the JVM. [scanReassignedEntriesFast] removes exactly those two
+     * and changes nothing else — see its own comment for why the `' '`
+     * sentinel is equivalent to `null` at every use site here.
+     */
+    private fun scanReassignedEntriesLegacy(source: String, start: Int, hi: Int): ReassignScan {
         val positions = mutableListOf<Int>()
         val names = mutableListOf<String>()
         fun isWordChar(c: Char?) = c != null && (c.isLetterOrDigit() || c == '_' || c == '$')
@@ -1046,6 +1223,89 @@ class FlowGraphBuilder {
                 i++
             }
         }
+        return ReassignScan(start, positions.toIntArray(), names.toTypedArray())
+    }
+
+    /**
+     * (FRONT.2) round 801 — the same scan with its two measured costs removed.
+     * The VERDICT logic below is character-for-character the legacy one; only
+     * these two things differ, and neither can change an answer.
+     *
+     * 1. **The `substring` moves below the guard.** `name` is read at exactly
+     *    one place in the legacy body — inside `if (prefixInc ||
+     *    suffixAssigned)` — so allocating it before the test allocated one
+     *    String per IDENTIFIER OCCURRENCE in the range while keeping only the
+     *    assignment targets. The census reports both populations, and the ratio
+     *    is what this recovers.
+     *
+     * 2. **`getOrNull` is replaced by [charAtOr].** `CharSequence.getOrNull`
+     *    returns `Char?`, which boxes on the JVM at every forward/backward
+     *    context read. [charAtOr] returns a `' '` for out of range instead.
+     *    That is EQUIVALENT here rather than merely close, because a space and
+     *    an absent character are treated identically by every use site:
+     *    `isWordChar(' ')` is false as `isWordChar(null)` was; `' ' != '.'` as
+     *    `null != '.'`; `' ' !in "+-*&/%^=<>|?-"` so every operator arm that
+     *    required a specific character still fails; and the one arm that reads
+     *    a NEGATIVE condition — `c0 == '=' && c1 != '=' && c1 != '>'` — needed
+     *    `c1` to be neither `'='` nor `'>'`, which `null` satisfied and `' '`
+     *    satisfies. A space cannot be confused with a real neighbouring space
+     *    either, because the space-skipping loops have already advanced past
+     *    every space before these reads. `--verifyFlowScan` checks the whole
+     *    claim against the legacy implementation on real input rather than
+     *    resting on this argument.
+     */
+    private fun scanReassignedEntriesFast(source: String, start: Int, hi: Int): ReassignScan {
+        val positions = mutableListOf<Int>()
+        val names = mutableListOf<String>()
+        val len = source.length
+        var words = 0L
+        var recorded = 0L
+        var i = start
+        while (i < hi) {
+            val c = source[i]
+            if (isWordStartChar(c) &&
+                !isWordChar(charAtOr(source, len, i - 1)) &&
+                charAtOr(source, len, i - 1) != '.'
+            ) {
+                var j = i + 1
+                while (j < hi && isWordChar(source[j])) j++
+                words++
+                // prefix ++/-- (e.g. `++x`)
+                var b = i - 1
+                while (b >= 0 && (source[b] == ' ' || source[b] == '\t')) b--
+                val prefixInc = b >= 1 &&
+                    ((source[b] == '+' && source[b - 1] == '+') || (source[b] == '-' && source[b - 1] == '-'))
+                // suffix assignment operator / ++/--
+                var p = j
+                while (p < hi && (source[p] == ' ' || source[p] == '\t')) p++
+                val c0 = charAtOr(source, len, p); val c1 = charAtOr(source, len, p + 1)
+                val c2 = charAtOr(source, len, p + 2); val c3 = charAtOr(source, len, p + 3)
+                val suffixAssigned = when {
+                    (c0 == '+' && c1 == '+') || (c0 == '-' && c1 == '-') -> true
+                    c0 == '=' && c1 != '=' && c1 != '>' -> true
+                    c0 in "+-*/%^" && c1 == '=' -> true
+                    (c0 == '&' || c0 == '|') && c1 == '=' -> true
+                    (c0 == '&' && c1 == '&' || c0 == '|' && c1 == '|' || c0 == '?' && c1 == '?') && c2 == '=' -> true
+                    c0 == '*' && c1 == '*' && c2 == '=' -> true
+                    c0 == '<' && c1 == '<' && c2 == '=' -> true
+                    c0 == '>' && c1 == '>' && (c2 == '=' || (c2 == '>' && c3 == '=')) -> true
+                    else -> false
+                }
+                // The substring is built ONLY for a recorded entry — change (1).
+                if (prefixInc || suffixAssigned) {
+                    // `--flowScanBogus`: the positive control for the verifier.
+                    // Drops the `%=` form, which no other instrument here can
+                    // see, so a live verifier MUST report it.
+                    if (!(FlowScan.bogus && c0 == '%')) {
+                        positions.add(i); names.add(source.substring(i, j)); recorded++
+                    }
+                }
+                i = j
+            } else {
+                i++
+            }
+        }
+        FrontEnd.addScanCensus(words, recorded)
         return ReassignScan(start, positions.toIntArray(), names.toTypedArray())
     }
 

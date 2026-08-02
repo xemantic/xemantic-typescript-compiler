@@ -3925,8 +3925,12 @@ object FrontEnd {
     const val FLOW_LOCALNAMES = 16
     /** `collectEnclosingVarDecls` — the enclosing function body's `var` decls. */
     const val FLOW_VARDECLS = 17
+    /** The scan+cache probe INSIDE [FLOW_REASSIGN]. */
+    const val FLOW_SCAN = 18
+    /** The suffix-set construction INSIDE [FLOW_REASSIGN]. */
+    const val FLOW_SETBUILD = 19
 
-    const val N = 18
+    const val N = 20
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -3947,6 +3951,8 @@ object FrontEnd {
         "    B464 collectReassignedNamesInRange",
         "    B464 collectClosureLocalNames",
         "    B467 collectEnclosingVarDecls",
+        "      of which the text scan + cache",
+        "      of which the suffix-set build",
     )
 
     /**
@@ -3956,7 +3962,7 @@ object FrontEnd {
     private val order: IntArray = intArrayOf(
         CONFIG, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
-        FLOW_REASSIGN, FLOW_LOCALNAMES, FLOW_VARDECLS,
+        FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         CHECK, POST, TRANSFORM, EMIT, DECL_EMIT,
     )
 
@@ -3991,6 +3997,8 @@ object FrontEnd {
     var reassignNames: Long = 0
     var reassignScans: Long = 0
     var reassignChars: Long = 0
+    var scanWords: Long = 0
+    var scanRecorded: Long = 0
 
     fun reset() {
         nanos = LongArray(N)
@@ -3999,6 +4007,7 @@ object FrontEnd {
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
         closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0
+        scanWords = 0; scanRecorded = 0
     }
 
     /** Start a span, or 0 when off. */
@@ -4051,6 +4060,20 @@ object FrontEnd {
         reassignChars += chars
     }
 
+    /**
+     * (FRONT.2) — one call per scan, from the fast scanner. [words] is every
+     * identifier OCCURRENCE the scan classified (the legacy scanner allocated a
+     * `substring` for each) and [recorded] the assignment targets it kept (the
+     * only ones whose name is ever read). Their ratio IS the prize of moving
+     * the allocation below the guard, which is why it is counted rather than
+     * inferred.
+     */
+    fun addScanCensus(words: Long, recorded: Long) {
+        if (mode != ON) return
+        scanWords += words
+        scanRecorded += recorded
+    }
+
     fun report(): String = buildString {
         appendLine("== (FRONT.1) front-end attribution ==")
         appendLine(
@@ -4084,7 +4107,9 @@ object FrontEnd {
             appendLine(
                 "  flow census: closure starts $closureStarts, reassigned-name entries " +
                     "$reassignNames (${if (closureStarts > 0) reassignNames / closureStarts else 0}/closure), " +
-                    "text scans $reassignScans over $reassignChars chars; " +
+                    "text scans $reassignScans over $reassignChars chars, " +
+                    "words $scanWords -> recorded $scanRecorded " +
+                    "(${if (scanRecorded > 0) scanWords / scanRecorded else 0}x); " +
                     "walk residue ${walk / 1_000_000} ms"
             )
         }
