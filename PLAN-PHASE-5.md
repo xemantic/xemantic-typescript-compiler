@@ -20,6 +20,104 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 804 (2026-08-02) — (JIT.1)(b) LANDED: THE BIGGEST METHOD IN THE COMPILER —
+`checkMemberAccessMissingCore`, 46,567 BYTECODES, 5.8× HotSpot's `HugeMethodLimit` — IS ONE
+ENTRY PLUS TEN CONTIGUOUS-SECTION HELPERS, ALL UNDER THE LIMIT. CENSUS 18 → 17. AND THE
+WALL-CLOCK PRIZE IS HONESTLY ZERO: +0.23%, B WINS 2/5, PER-PAIR SPREAD 31× THE MEDIAN DELTA,
+DRIVER VERDICT NOISE-DOMINATED — WHICH IS EXACTLY WHERE ROUND 803's OWN FALSIFIER SAID IT
+WOULD LAND. Suite 13,493 → 13,514 / 0 / 3; grid 46×7/94 with 0 added and 0 removed BOTH
+directions; `--partitionCheck 2` EQUIVALENT; cost gate all 20 counters +0.00%.**
+
+- **THE BASELINE WAS RE-MEASURED AT HEAD FIRST, ON A BUILD, NOT FROM A RECORD.** The
+  pre-split tree was rebuilt into its own class dir and censused: **18 over the limit,
+  `checkMemberAccessMissingCore` 46,567** — round 802's numbers reproduced exactly. Round
+  776's law says a recorded figure is a claim about a build; this round owns the build.
+- **THE SPLIT.** Eleven functions along round 789's already-committed level-R boundaries
+  (the `CpaSections.atR` markers), each holding ONE contiguous run of the original body:
+  entry `checkMemberAccessMissingCore` **6,425** (`R_PRE`..`R_IDENT` + the `objectType`
+  head), `cmamCheckUnionReceiverNarrowing` 3,550, `cmamCheckIdentSymbolValueGates` 2,901,
+  `cmamGeneralReceiverType` 2,782, `cmamCheckLiteralAndNewReceiver` 2,708,
+  `cmamCheckCallAndAccessReceiver` 2,596, `cmamEmitMissingProperty` 2,472,
+  `cmamCheckResolvedObjectType` 2,358, `cmamCheckIdentSymbolTypeGates` 1,385,
+  `cmamCheckNonIdentifierReceiver` 1,342, `cmamCheckCastAndNamespaceReceiver` 611.
+  **The eleven sum to 29,130 against the monolith's 46,567** — the same source compiles to
+  37% LESS bytecode once it is not one method, which is a reminder that a bytecode count is
+  a THRESHOLD predicate and not a cost model.
+- **THE MOVE IS MECHANICAL AND THE EQUIVALENCE IS A MEASUREMENT.** All 1,918 moved lines
+  were extracted by script and checked back against HEAD: each of the **16 regions appears
+  in the new file as a CONTIGUOUS, IN-ORDER run**, identical modulo indentation and the
+  return-signal rewrite; the accounting closes exactly (1,918 moved + 1 hoisted + 16
+  brace/scaffold lines = the 1,935-line original body). What makes the rewrite exact is a
+  property established by ENUMERATION rather than by eye: **all 99 bare `return`s in that
+  function are whole-function returns** — every other `return` in the range is a `return@run`
+  or sits inside the local `fun memberHasIt` — so "bare `return` at end of line" is a sound
+  selector for the signal to convert.
+- **THE ONE VALUE THAT CROSSED A SECTION BOUNDARY IS RETURNED, NOT STASHED.** The
+  display-type override is assigned in the general receiver-type path and read by the
+  emission tail. It comes back as the second half of a pair. A `Checker` field would have
+  needed round 791's save/restore, and the argument that "the outer write happens last" is
+  NOT available here — the RHS of those assignments re-enters the checker. ≤18,317
+  allocations per compile, which round 801 already measured as nothing. **Round 791's
+  invariant therefore survives BY CONSTRUCTION**: no new mutable state, so the body still
+  only appends to `diagnostics`; round 792's whole-function pre-gate is untouched.
+- **THE PRIZE, MEASURED THE SAME WAY ROUND 803 MEASURED ITS OWN, AND IT IS NOT THERE.**
+  Monolith vs split, two class dirs, no flags, 5 interleaved pairs, box idle: **A 24.753 s /
+  B 24.809 s, Δ +56 ms = +0.23%, B wins 2/5**, deltas −671 / +56 / +189 / +28 / −232.
+  **The five deltas span 860 ms against a 28 ms median delta — 31×, where round 803's spanned
+  0.33× — and the driver's verdict is NOISE-DOMINATED.** Arm sds 1.54% / 0.82%. Reported as
+  measured; no second batch was run to hunt for a friendlier number.
+- **THIS IS THE NUMBER ROUND 803's FALSIFIER PREDICTED, WHICH IS WHY IT IS WORTH MORE THAN A
+  WIN WOULD HAVE BEEN.** After (a) landed, `-XX:-DontCompileHugeMethods` on the split binary
+  read +0.08%, 3/5, NOISE-DOMINATED — the instrument that returned 4/4-all-negative on the
+  monolith had stopped returning a signal. That BOUNDED (b)–(e) on this profile, and (b) has
+  now come in at the bound. **`forEachChild` was special**: it is on the path of every
+  traversal in the compiler, whereas this function runs 67,258 times — a large invocation
+  count and a small share of the interpreter's total work. **The remaining reason to land
+  it is the THRESHOLD, not the wall**: a method over the limit is PERMANENTLY uncompilable,
+  so its cost cannot improve with load, input size or JVM version, and (f)'s gate keeps that
+  property away from the biggest method in the compiler for zero behaviour change.
+- **THE PINS, AND BOTH ABLATIONS.** 21 new: **`CmamSplitTest`** (18) pins one display per
+  section — the display is what distinguishes the sections from each other — plus two SEAMS,
+  and **`HugeMethodLimitTest`** (+3) reads `Checker`'s compiled `Code` attribute lengths.
+  **Ablation A = the monolith class file**: none of the ten part names exist and the core
+  reads 46,567, so all three size pins fail. **Ablation B = the two mistakes a mechanical
+  split actually makes** — the display-type override dropped on the floor, and an emitting
+  section's return signal computed and ignored — built and run AFTER the harness was
+  committed (round 789's law): **exactly the two SEAM pins fail and no per-section pin does**,
+  which is the sharpest available statement that the two classes pin different things.
+- **WHAT DID NOT WORK — four process failures, three of them mine and one recurring.**
+  (1) The whole-program non-vacuity pin asserted 16 TS2339 by counting the fixtures and
+  forgetting that one of them yields the enum's TS2551 — one red test, restated at 15/1/16
+  with the measured values. (2) The measuring script's PREFLIGHT — added in round 802 to
+  catch a mid-rebuild classpath — invoked `MainKt` **with no arguments in the repo root**,
+  where it starts crawling the repo as a project; the A/B stage hung for an hour behind it
+  and was killed with an empty `ab.txt`. A preflight must be cheaper than the thing it
+  guards. (3) The grid stage computed its diff from `$W/grid-$p-MONO` while writing
+  `$W/grid-$p-MONO.txt`, so it printed `added=0 removed=0` from FILES THAT DID NOT EXIST —
+  a vacuous green that looked exactly like a clean grid; recomputed from the saved outputs.
+  (4) `pkill -f "compiler.MainKt"` killed the invoking shell, the CLAUDE.md self-match trap,
+  one round after the same file warns about it; the bracket form worked.
+- **GATE.** Suite **13,493 → 13,514 / 0 failures / 3 skipped** (+21 pins; whole results dir
+  wiped, counted with the python XML parser). 8-profile grid diffed set-for-set BOTH
+  directions against the MONOLITH binary: **46/46/46/46/46/46/46/94, 0 added and 0 removed
+  on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
+  +0.00%, no rebaseline** — a pure split moves no counter, and that is the claim being
+  verified. Build warning-clean. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 5.
+- **FOR THE NEXT AGENT: (JIT.1)(c), and read the prize discipline first.** Two rounds have
+  now measured the (JIT.1) family: (a) −3.93% for the traversal primitive, (b) NOISE for the
+  biggest method. **Do not expect (c)–(e) to pay in wall time on this profile** — round 803's
+  falsifier already bounded them. Land them for the threshold and the gate, keep each to one
+  method per commit, and use the round-803/804 recipe verbatim: contiguous ranges, a
+  script-driven move verified by re-extraction, and the hottest path left in the entry. The
+  cheapest remaining candidate is `checkPropertyAccessInExpr` (9,062, barely over);
+  the largest is `checkArgumentsAgainstSignatureCore` (23,890), whose section partition is
+  committed in `docs/perf/argument-check-attribution.md`. **(e), the emit-mode Transformer
+  methods, is the one place a wall gain is still plausible and unmeasured** — every A/B in
+  this arc is `--noEmit` and therefore blind to them, while the published `bench-3way.sh`
+  ratio is emit-mode on all three compilers.
+
+
 **Round 803 (2026-08-02) — (JIT.1)(a) LANDED: `forEachChild`, THE TRAVERSAL PRIMITIVE OF
 THE WHOLE COMPILER, IS SPLIT BELOW HotSpot's `HugeMethodLimit` AND IS WORTH −3.93% ON ITS
 OWN — B WINS 5/5 WITH THE FIVE PER-PAIR DELTAS SPANNING 0.33× THE MEDIAN DELTA. ONE
@@ -859,12 +957,25 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     the ENTRY function, and dispatch the continuations with one compare rather than a
     fall-through chain so no key pays two calls. Full derivation:
     `docs/perf/setup-phase-and-huge-methods.md` § 4.
-  - **(b) `checkMemberAccessMissingCore` — 46,567 bytecodes, 5.8× the limit, and round
-    789's "largest leaf in the compile".** Its section boundaries are already committed
-    (round 789's level-R partition, `docs/perf/property-access-attribution.md`), so the
-    split plan is written; the deferred-suppression invariant of round 791 constrains it —
-    **`cmamFlowSuppresses` requires the function and its `tryEmit*` helpers to append to
-    `diagnostics` and do nothing else**, and a split must not break that.
+  - [x] **(b) DONE round 804 — `checkMemberAccessMissingCore` 46,567 → an entry at 6,425
+    plus ten `cmam*` helpers (611–3,550), split along round 789's committed level-R
+    boundaries; census 18 → 17.** Round 791's invariant survives by construction (no new
+    mutable state — the one cross-boundary value is RETURNED as a pair, not stashed in a
+    field, which also avoids that round's save/restore). **The wall-clock prize is honestly
+    ZERO**: monolith-vs-split, 5 pairs, **+0.23%, B wins 2/5, per-pair spread 860 ms against
+    a 28 ms median delta, driver verdict NOISE-DOMINATED** — which is exactly the bound
+    round 803's falsifier had already put on (b)–(e). New pins: `CmamSplitTest` (18, one
+    display per section plus two seams) and `HugeMethodLimitTest` (+3); both verified
+    discriminating (the monolith fails all 3 size pins; a two-mistake ablation fails exactly
+    the 2 seam pins). Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 5.
+  **ROUND 804 UPDATE — (b) IS IN, AND IT MEASURED NOTHING, WHICH IS THE USEFUL RESULT.**
+  Census **18 → 17**. Read together with (a): the family has now been measured twice, at
+  −3.93% for the traversal primitive and at NOISE for the biggest method, so **(c)–(e)
+  should be landed for the THRESHOLD and the (f) gate, not for a wall number** — a method
+  over the limit is permanently uncompilable and its cost cannot improve with load, input
+  size or JVM version. **The one place a wall gain is still plausible and unmeasured is (e)**:
+  every A/B in this arc is `--noEmit` and blind to the Transformer methods, while the
+  published `bench-3way.sh` ratio is emit-mode on all three compilers.
   - **(c) The three remaining assignability/call cores** —
     `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
     `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.

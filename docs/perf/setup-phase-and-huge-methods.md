@@ -325,7 +325,122 @@ added and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
 `cost_gate.py` **all 20 counters +0.00%** (a pure split moves no counter, and
 that is the claim being verified).
 
-## 5. Reproduction
+## 5. (JIT.1)(b) — `checkMemberAccessMissingCore`, 46,567 → eleven functions
+
+*Round 804.* The largest method in the compiler, **5.8× the limit**, and round
+789's "largest single leaf in the compile". Split into an entry plus ten helpers
+along the level-R section boundaries round 789 had already committed (the
+`CpaSections.atR` markers), so every helper holds one CONTIGUOUS run of the
+original body and the execution order is unchanged.
+
+| function | level-R sections | bytecodes |
+|---|---|---:|
+| `checkMemberAccessMissingCore` | `R_PRE`..`R_IDENT` + the `objectType` head | **6,425** |
+| `cmamCheckLiteralAndNewReceiver` | `R_LITERAL`, `R_NEW` | 2,708 |
+| `cmamCheckCallAndAccessReceiver` | `R_CALL`, `R_PAEA`, `R_STATIC` | 2,596 |
+| `cmamGeneralReceiverType` | `R_OT_PRE`..`R_OT_IDENT` | 2,782 |
+| `cmamCheckCastAndNamespaceReceiver` | `R_OT_PRE` | 611 |
+| `cmamCheckUnionReceiverNarrowing` | `R_OT_UNION` | 3,550 |
+| `cmamCheckNonIdentifierReceiver` | `R_OT_NONIDENT` | 1,342 |
+| `cmamCheckIdentSymbolTypeGates` | `R_OT_IDENT`, first half | 1,385 |
+| `cmamCheckIdentSymbolValueGates` | `R_OT_IDENT`, second half | 2,901 |
+| `cmamCheckResolvedObjectType` | `R_TYPEGATE`..`R_POSTGATE` | 2,358 |
+| `cmamEmitMissingProperty` | `R_PROP`, `R_LATEGATE`, `R_EMIT` | 2,472 |
+
+Census **18 → 17**. **The eleven pieces sum to 29,130 against the monolith's
+46,567** — the same source compiles to 37% less bytecode once it is not one
+method, which is worth knowing before anyone reads a bytecode count as a cost
+model: it is a THRESHOLD predicate and nothing else.
+
+### 5.1 The move is mechanical, and that is the equivalence argument
+
+All 1,918 moved lines were extracted by script and checked back against HEAD:
+each of the **16 regions appears in the new file as a CONTIGUOUS, IN-ORDER run**,
+identical modulo indentation and the return-signal rewrite. The accounting
+closes exactly — 1,918 moved + 1 hoisted (`isPropertyAccessShape`, a pure
+function of `keySuggestion` that both gate helpers read) + 16 brace/scaffold
+lines = the 1,935-line original body.
+
+What makes the rewrite exact is a property worth stating: **all 99 bare `return`s
+in that function are whole-function returns.** Every other `return` occurrence in
+the range is a `return@run` or lives inside the local `fun memberHasIt` — checked
+by enumeration, not by eye — so "bare `return` at end of line" is a sound
+mechanical selector for the signal to convert.
+
+### 5.2 The one value that crossed a section boundary
+
+The display-type override is assigned in the general receiver-type path and read
+by the emission tail. It is now **RETURNED** (as the second half of a pair)
+rather than stashed in a `Checker` field. A field would have needed round 791's
+save/restore dance to stay correct under a nested invocation — and the RHS of
+those assignments re-enters the checker, so "the outer write happens last" is not
+guaranteed. The pair costs at most one allocation per surviving call (≤18,317 on
+the compiler profile), which round 801 already measured as nothing.
+
+**Round 791's invariant survives by construction**: the split introduces no new
+mutable state, so the body still only appends to `diagnostics`, which is what
+`cmamFlowSuppresses`' deferral needs. Round 792's whole-function pre-gate sits in
+`checkMemberAccessMissing` and is untouched.
+
+### 5.3 The prize: measured, and it is NOT there
+
+Same instrument as round 803 — build the pre-split file into its own class dir
+and interleave monolith vs split, no flags. Five pairs, self-time, box idle:
+
+| pair | A (monolith) | B (split) | Δ |
+|---|---:|---:|---:|
+| 1 | 25.388 s | 24.717 s | −0.671 |
+| 2 | 24.753 | 24.809 | +0.056 |
+| 3 | 24.683 | 24.872 | +0.189 |
+| 4 | 24.738 | 24.766 | +0.028 |
+| 5 | 25.460 | 25.228 | −0.232 |
+| **median** | **24.753** | **24.809** | **+0.056 s = +0.23%** |
+
+**B wins 2/5. Per-pair deltas span 860 ms against a median delta of 28 ms — the
+driver's own verdict is NOISE-DOMINATED.** Arm sds are 1.54% and 0.82%. Compare
+round 803, whose five deltas spanned **0.33×** the median delta and were all
+negative; here the spread is **31×** it.
+
+**This is the honest result and it was predictable from round 803's own
+falsifier.** After (a) landed, `-XX:-DontCompileHugeMethods` on the split binary
+read +0.08%, 3/5, NOISE-DOMINATED — i.e. the instrument that had returned
+4/4-all-negative on the monolith stopped returning a signal. That measurement
+BOUNDED what (b)–(e) hold on this profile, and (b) has now come in at that bound.
+Two readings, and the second is the one that generalises:
+
+1. **`forEachChild` was special.** It is on the path of *every* traversal in the
+   compiler; `checkMemberAccessMissingCore` runs 67,258 times, which is a large
+   number of invocations but a small share of the interpreter's total work.
+2. **The wall is not the only reason to do this.** The census is a THRESHOLD
+   predicate: a method over the limit is *permanently* uncompilable, so its cost
+   cannot improve with load, input size or JVM version. Landing (b) removes that
+   property from the biggest method in the compiler for zero behaviour change,
+   and the queue's (f) gate keeps it removed. A round that measures zero wall
+   here has still bought a bound.
+
+### 5.4 What guards it
+
+* **`HugeMethodLimitTest`** gains 3 tests reading the compiled `Code` attribute
+  length of `Checker` — the entry under the limit, all ten parts under it, and a
+  shape check (10 parts, smallest > 400 bytecodes, sum > 20,000, i.e. the body
+  was MOVED not deleted). **Verified DISCRIMINATING against the monolith class
+  file**: none of the ten part names exist there and `checkMemberAccessMissingCore`
+  reads 46,567, so all three fail.
+* **`CmamSplitTest`** (commonTest, 18 pins) pins what a size check cannot see:
+  one display per section — *the display is what distinguishes the sections from
+  each other* — plus two SEAMS. **Verified DISCRIMINATING against an ablation
+  carrying the two mistakes a mechanical split actually makes**: dropping the
+  display-type override on the floor, and computing an emitting section's return
+  signal but not honouring it. **Exactly the two seam pins fail**, and no
+  per-section pin does — which is the sharpest possible statement that they pin
+  different things.
+
+Gate: suite **13,493 → 13,514 / 0 / 3**; 8-profile grid diffed BOTH directions
+against the monolith binary — **46/46/46/46/46/46/46/94, 0 added and 0 removed on
+all eight**; `--partitionCheck 2` **EQUIVALENT — 46**; `cost_gate.py` **all 20
+counters +0.00%**.
+
+## 6. Reproduction
 
 ```bash
 # the census — static, no run
