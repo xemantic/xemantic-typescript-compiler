@@ -1,3 +1,259 @@
+**Round 785 (2026-08-01) — (NARROW.1) IS CLOSED. `extractNullNarrowing` HAS ITS
+TYPE-GUARD CALL ARM, AND THE CHANGE THE ITEM WARNED WOULD MOVE "THE PRIMARY TYPE OF EVERY
+GUARDED REFERENCE IN BOTH DIRECTIONS" IS **SET-FOR-SET FREE ON ALL EIGHT PROFILES WHILE
+FIRING 630-916 TIMES PER PROFILE**. IT IS NOT NEUTRAL, THOUGH: IT REMOVES TWO
+FALSE-POSITIVE CLASSES THE GRID NEVER SHOWED.** Baseline re-captured at HEAD first
+(`46/46/46/46/46/46/46/94`, matching the shipping record), then re-run with the arm:
+0 added, 0 removed, on every profile. Suite 13,323 -> **13,334 / 0 failures / 3 skipped**
+(+11 = this round's pins; **no corpus baseline moved**). Cost gate: one counter over
+tolerance, rebaselined with a named mechanism.
+
+- **THE ARM IS FIVE LINES AND OWNS NO OPINION.** `if (isFoo(x))` with a bare-Identifier
+  argument that is already in `currentLocalTypes` hands the verdict to
+  `narrowByCallPredicate` and records it only when the type actually CHANGES. Delegating
+  rather than re-deriving is what makes it impossible for this arm to disagree with the
+  flow walker about what a guard means — it decides only WHERE the answer is recorded.
+- **WHAT IT ACTUALLY BUYS: TWO FP CLASSES, NEITHER VISIBLE ON THE GRID.** A RETURN and an
+  ASSIGNMENT inside a guarded branch have no `getNarrowedTypeForReference` opt-in, so
+  `function f(x: string|number): string { if (isStr(x)) { return x; } … }` emitted TS2322
+  on code tsc accepts. Both are silent now. A third shape improved rather than flipped:
+  a genuine mismatch inside the branch now names the NARROWED source type.
+- **THE PROBE THAT LOOKS OBVIOUS IS INERT, AND THAT IS THE ROUND'S METHOD LESSON.** The
+  natural reduction — `const s: Sub = x` inside the guard — is silent on BOTH binaries,
+  because `checkVarDeclAssignability` ALREADY opts into flow narrowing. Two further
+  reductions were silent for a different reason (`Base` -> `Sub` is not rejected by our
+  relation at all, so the baseline never errored and the probe measured nothing). Only a
+  RETURN or an ASSIGNMENT with a PRIMITIVE union subject discriminates. **Round 784's
+  "probe shapes are not portable between sites" generalises: they are not portable between
+  CONSUMERS of the same site either — the discriminating question is which consumers lack
+  the opt-in, not which types are involved.**
+- **THE GREEN GRID WAS FALSIFIED BEFORE IT WAS BELIEVED.** Per the ablation law a
+  zero-diff grid is evidence of nothing until the disabled code is counted, so a temporary
+  `PassTiming` sighting/hit counter was built, measured (**compiler 1,520/630, services
+  2,115/896, harness 2,204/916, tsc 1,520/630**) and then REMOVED. 630 guarded references
+  on the compiler profile changed primary type with zero output movement — that is the
+  claim, and without the counter it would have been indistinguishable from an inert arm.
+- **THE ONE PIN THAT MOVED IS A MESSAGE, AND IT MOVED TOWARD tsc.** Round 784's
+  `NarrowedReceiverPropTest` mismatch control expected
+  `Type 'string | number | boolean' is not assignable to type 'string'.`; it now reads
+  `Type 'string | boolean' …` — same code, same position, same `boolean` elaboration,
+  because `n` IS a `Wide` inside `isWide(n)`. That is tsc's wording, so the pin was
+  CORRECTED, not switched off; no `LogicalParityDivergence` was needed. A hand-written pin
+  is not a corpus baseline and the divergence mechanism does not apply to it.
+- **COST: `typeNode.bypassed` 106,120 -> 108,336 (+2.09%), REBASELINED IN THIS COMMIT.**
+  Mechanism: each guard-call sighting resolves the predicate's TARGET type node (and the
+  guarded parameter's annotation) under an ambient instantiation context, so they land in
+  the INV.5(c) non-cacheable bucket — **+2,216 resolutions over 1,520 sightings = 1.46
+  each**, exactly the arm's population. Priced with round 716's measured ~2.2 µs per
+  outermost bypassed resolution that is **~4.9 ms of a ~27 s compile (0.017%)**. Every
+  other counter is inside 0.8%.
+- **THE PERF SHAPE THE ITEM FLAGGED DID NOT MATERIALIZE.** CLAUDE.md warns that narrowing
+  every property access would put a flow walk on the checker's hottest path; measured,
+  `narrow.walks` moved **+59 of 71,690 (+0.08%)**. `narrowByCallPredicate` resolves a
+  predicate declaration — it does not launch a walk — and the arm is additionally gated to
+  if-conditions whose argument is an already-tracked local.
+- **PINS: 7 OF 11 DISCRIMINATE, MEASURED AGAINST THE ABLATED HEAD BUILD** kept as a
+  side-by-side classpath and re-run through the ~1.2-second scratch CLI: the return, the
+  assignment, the sharpened message, the nested pair, the second-parameter subject, the
+  method-call guard, and the containment control (which fires TWICE ablated and ONCE fixed,
+  so it detects a frame leak that a pure silence pin could not see). The four
+  "must NOT narrow" controls hold on both sides on purpose.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule): the ELSE branch still gets
+  no subtractive narrow, and a `this.p` / property-path subject is not narrowed — the arm
+  keeps the bare-Identifier restriction the three existing arms carry.
+- **PREDICTIONS 2 of 4.** HIT: the arm was cheap to write, and the eight-profile grid was
+  the right gate. **MISSED, and the misses are the output:** I expected a grid PRICE to pay
+  down (there was none — the arm is free, and its value is off-grid), and I expected the
+  first natural probe to discriminate (it was inert, because the var-decl consumer already
+  opts in — the population that needed fixing was returns and assignments).
+
+**Round 784 (2026-08-01) — (REL.2) IS CLOSED. CAUSE (G) IS FIXED, THE GLOBAL
+enum -> MEMBER RELATION RULE IS FLIPPED ON, AND IT IS **SET-FOR-SET FREE ON ALL EIGHT
+PROFILES**. THE ITEM'S OWN DIAGNOSIS OF THE FIX WAS WRONG IN A USEFUL WAY: THE NARROW
+IS COMPUTED CORRECTLY AND IS SIMPLY NEVER ASKED FOR AT A PROPERTY READ.** Baseline grid
+re-captured at HEAD first (`46/46/46/46/46/46/46/94`, matching the shipping record), then
+re-run with the flip: **identical, line for line, on all eight**. Suite 13,309 ->
+**13,323 / 0 failures / 3 skipped** (all +14 are this round's pins — no corpus baseline
+moved); cost gate exit 0, every counter within 0.7%, no rebaseline.
+
+- **CAUSE (G) IS A GATE, NOT A MISSING NARROW.** `computeRawTypeOfPropertyAccess`
+  flow-narrows a receiver only when its raw type is ALREADY a `Type.Union` — a deliberate
+  gate, since narrowing every `a.b` puts a flow walk on the hottest path in the checker —
+  so `isModifier(node): node is Modifier` on a `node: Node` never reached the read and
+  `node.kind` answered `SyntaxKind` (`completions.ts:2234`). Measured with three probes at
+  once: after the guard the RECEIVER itself already reports the narrowed
+  `ModifierToken<…> | …`, a union receiver already resolves `.kind` correctly, and only the
+  narrow-DOWN-then-read composition fails. **So nothing was missing from the flow graph;
+  what was missing was a consumer.**
+- **THE PATH-BASED WALK CANNOT RECOVER IT, AND THAT IS THE NON-OBVIOUS PART.** Every
+  second-chance site in the checker calls `getNarrowedTypeForReference(raw, expr)` on the
+  WHOLE path `node.kind`, which reaches `narrowByCallPredicate`'s round-424 PREFIX arm —
+  and that arm resolves the tail on the guard TARGET through `resolvePrefixTailSegment`,
+  whose round-462 gate deliberately REFUSES a union tail (substituting a precise union tail
+  fired new errors when it was tried). `Modifier`'s `kind` is a 3-member union, so the arm
+  declines by design. The fix therefore cannot be a widening of that arm.
+- **WHAT LANDED: `propertyTypeFromNarrowedReceiver`, a second chance at the RETURN
+  rejecting path.** It narrows the RECEIVER (not the path), then re-resolves the property on
+  it — distributing over a union receiver the way `computeRawTypeOfPropertyAccess` does. It
+  is consulted only after `checkTypeRelatedTo(rawSource, target)` has already FAILED and
+  adopted only when it makes the return relate, so it is monotone by relation test and
+  cannot introduce a diagnostic anywhere. The cost of that gating is visible: `narrow.walks`
+  **+3** of 71,690, i.e. the walk is paid for only by a return that was about to fire.
+- **ROUND 783's PROPOSED FIX — `extractNullNarrowing`'s missing call-predicate arm — IS
+  NOT WHAT THIS NEEDED, AND IS STILL OPEN.** That helper feeds `currentLocalTypes` for the
+  cta/TS2322 family, and adding a guard arm there would change the PRIMARY type of every
+  guarded reference in the program. It was not required: the flow graph already answers, and
+  a monotone consumer is strictly cheaper and strictly safer. **Queued separately as
+  (NARROW.1)** — it is a real gap with its own blast radius, and rolling it into this item
+  would have bought nothing measurable.
+- **THE SINGLE-FILE REDUCTION OF THE FAILING LINE IS SILENT, AND IT COST ME A BUILD.** A
+  faithful one-file model of `isModifierLike` — enum, `Token<TKind>`, the `Modifier` union,
+  the guard, the returned `node.kind` — reports NOTHING even with the rule on. Round 760
+  recorded the reason (a guard declared beside its use resolves down a different path); the
+  same shape split across two files reproduces the profile line exactly, including its
+  message. **A reduction that goes quiet is not a refutation of the diagnosis — check the
+  round-760 file-split before rewriting the model.**
+- **PRICE ATTRIBUTION IS EXACT, MEASURED ON THE PROFILE.** With `R784_NARROWED_RECEIVER =
+  false` and the rule on, services is **47** and the extra line is
+  `completions.ts:2234 - TS2322: Type 'SyntaxKind' is not assignable to type
+  'ModifierSyntaxKind | undefined'` — the item's residual, verbatim. With the fix it is 46.
+- **ROUND 760's STAND-IN IS DELETED.** `enumMemberDomainProvesNotSubtype` existed to decline
+  one `never`-collapse the vacuous relation would otherwise wave through; the relation now
+  reaches that verdict itself, so the `&&` short-circuits where the veto used to.
+  `EnumMemberGuardNegativeBranchTest` and `GenericGuardTargetEnumMemberTest` — written for
+  the stand-in — are green on the relation's own answer, which is the deletion evidence.
+  Its two siblings named in the item, `kindDomainKeysExceed` and `kindDomainProvesNotSubtype`,
+  were ALREADY deleted in round 753 and survive only as comment prose; **checked before
+  crediting anything.** `typeGuardMemberDisjoint` is still live at 8 call sites and is NOT
+  claimed dead here — CLAUDE.md's warning that it may be unobservable post-(REL.1)(b) is a
+  measurement someone still owes.
+- **PINS: 9 OF 14 DISCRIMINATE, MEASURED AGAINST TWO ABLATED BINARIES** (`R784_NARROWED_-
+  RECEIVER = false` for the property pins, `REL2_ENUM_TO_MEMBER = false` for the relation
+  pins; the shapes re-run side by side through the 1-second scratch CLI). The five that hold
+  on both sides do so on purpose: member -> enum and member-vs-member are (REL.1)'s verdicts
+  and must not move; the covering and one-member cases must stay LEGAL or the rule is a
+  blanket rejection rather than a coverage test; and **the union-TARGET guard pin holds on
+  both sides and is documented as non-discriminating** — a guard target that is itself a
+  union already resolves its tail through the prefix machinery, which is exactly what left
+  the single-target/union-tail shape with no answer at all.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). The same second chance is
+  missing at the VAR-DECL/assignment path (`checkVarDeclAssignabilityCore`'s symmetric
+  narrowing block, ~6 lines): `const k: ModifierKind = node.kind` after the guard still
+  reports the declared type. Zero measured sites on all eight profiles, so it was left out
+  rather than landed unmeasured; it is the natural first extension if a project ever hits it.
+- **PREDICTIONS 2 of 4.** HIT: the price was worth re-measuring (it reproduced exactly, both
+  at HEAD and ablated), and the second chance closed the line with no grid movement. **MISSED,
+  and the misses are the output:** I expected `extractNullNarrowing`'s missing arm to BE the
+  fix and it was a red herring — the narrow already existed; and I expected a primitive probe
+  target to name the narrowed type as it did for round 783, but the return path's narrowing
+  block is gated to object-ish/union targets, so a `string` target skips it entirely and the
+  probe reports the un-narrowed type on a WORKING build. **A probe shape validated in one
+  round is not portable to another site's gate.**
+
+**Round 783 (2026-08-01) — (REL.2) RE-MEASURED ON ALL EIGHT PROFILES, AND THE
+INHERITED PRICE WAS WRONG IN BOTH DIRECTIONS AT ONCE: round 765's 5-line worklist
+was MISSING TWO `program.ts` LINES ON THE COMPILER PROFILE AND MISLABELLED THREE OF
+THE FIVE IT HAD. THREE OF THE FOUR CAUSES ARE CLOSED; THE RULE IS SCAFFOLDED, NOT
+FLIPPED, WITH A ONE-LINE RESIDUAL.** Raw price against `46/46/46/46/46/46/46/94`:
+**project 46 -> 49, tsc/jsTyping/deprecatedCompat/typingsInstallerCore 46 -> 47,
+services/server 46 -> 51, harness 94 -> 99** — SEVEN distinct lines, not five. After
+this round's three fixes it is **ONE line on three profiles** (`completions.ts:2234`;
+five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; suite
+13,289 -> **13,309 / 0 failures / 3 skipped**; cost gate exit 0, no rebaseline.
+
+- **THE WORKLIST WAS RE-CLASSIFIED BEHIND THE SCAFFOLD, AS THE ITEM DEMANDED, AND ALL
+  FOUR OF ROUND 781's DOUBTS RESOLVED THE OTHER WAY.** The four causes measured:
+  **(D')** a `const` initialised from an enum MEMBER (or a conditional of members)
+  widens to the whole enum — `scanner.ts:905` (**all eight profiles**),
+  `program.ts:1366`, `program.ts:3542`; **(E)** an object-literal property value in a
+  ternary branch cannot see a flow narrow — `importFixes.ts:1127`,
+  `formattingScanner.ts:113`; **(F)** an indexed access `T["p"]` on a generic
+  instantiation answers `any` — `completions.ts:2239`; **(G)** a property-access
+  RECEIVER is flow-narrowed only when its raw type is already a union —
+  `completions.ts:2234`. Round 765's "cause (D), literal widening" label was right in
+  SPIRIT for `scanner.ts:905` and wrong for the other two it named; round 781's
+  suspicion that `formattingScanner.ts:113` and `importFixes.ts:1127` "are not literal
+  widening" was right, and they turned out to be ONE cause with each other, not with
+  anything on the list.
+- **THE TWO `program.ts` LINES ARE THE ROUND-782 LESSON REPEATING ITSELF ONE LEVEL
+  DOWN.** Round 782 found that every scaffolded price in this arc had been measured on
+  `compiler` and `services` only. This round measured all eight — and still found two
+  lines nobody had listed, on the COMPILER profile, because the arc's last scaffolded
+  price (round 765) predates (WIDEN.1) and (REL.4). **A price is a claim about a
+  BUILD, not about an item**: re-measure it after any round that lands anywhere near
+  the masking mechanism, not just after a round that touches the item.
+- **ROUND 781's ENUM-WIDENING EXCLUSION IS RETIRED, AND IT WAS LOAD-BEARING ONLY
+  BECAUSE OF A BUG ONE LEVEL AWAY.** (WIDEN.1)(a) deliberately kept widening a
+  `const`'s enum member because not doing so exposed `completions.ts:2239`. Measured
+  here: that line is cause (F) — `Modifier["kind"]` resolving to `any`, so the
+  `isModifierKind` guard narrowed nothing and the 85-member `KeywordSyntaxKind` union
+  the const now preserves was rejected wholesale. With (F) closed the exclusion buys
+  nothing and costs `scanner.ts:905` on every profile. **A deliberate exclusion is a
+  DEBT with a named creditor — re-test it when the creditor is paid.**
+- **CAUSE (F) IS FOUR LINES AND IS THE ROUND-761 IDIOM, APPLIED WHERE NOBODY HAD
+  LOOKED.** `getIndexedAccessType`'s string-literal-key arm read `getTypeOfSymbol(prop)`;
+  an interface member's symbol is SHARED by every instantiation and its cached type for
+  a type-parameter-typed member is globally `any`, so `Token<SK.X>["kind"]` was `any`
+  and the (already correct) union arm turned ONE `any` part into an `any` WHOLE. That
+  last step is why the defect was invisible: `any` is silent, so the pre-fix build
+  produced no diagnostic anywhere and the only probe that can see it reads the type out
+  of a deliberate mis-assignment.
+- **CAUSE (E) IS AN ACCEPTANCE GATE THAT CANNOT FIRE WHERE IT IS NEEDED.** The
+  object-literal value path (rounds 438/462/468) accepts a flow-narrowed value only
+  when the CONTEXTUAL property type accepts it and the raw type does not — and an
+  object literal in a TERNARY branch has no contextual type at all (`ctxObj` is null;
+  measured with a one-line probe printing `raw`/`narrowed`/`ctx`). The narrow itself
+  was always computed and always correct (`raw=K narrowed=K.A`) and was then thrown
+  away. The new third acceptance is monotone by CONSTRUCTION rather than by relation
+  test — `enumTargetsAreOwnMembers` bounds the value to a sub-union of the very enum it
+  replaces — which is what lets it fire with no contextual type at all.
+- **THE RESIDUAL, CAUSE (G), IS NOT WHAT THE QUEUE SAID IT WAS.** The item labelled
+  `completions.ts:2234`/`:2239` "a property read on a union of generic instantiations /
+  generic inference through `tryCast`", i.e. the (REL.3)/round-762 family. Measured:
+  `Modifier["kind"]` resolves correctly after (F), and a `Modifier`-typed PARAMETER's
+  `.kind` was ALWAYS `ModifierSyntaxKind` (`resolveMemberPropertyType` distributes over
+  the union properly). What fails is the RECEIVER: `computeRawTypeOfPropertyAccess`
+  flow-narrows a receiver only when its raw type is ALREADY a `Type.Union`, so
+  `isModifier(node)`'s narrow-DOWN from `Node` is never attempted and `node.kind`
+  answers `SyntaxKind`. **And `extractNullNarrowing` — the pass that records a
+  condition's narrowing into `currentLocalTypes` — has only nullish / `typeof` /
+  truthiness arms; there is NO call-predicate arm at all**, which is a bigger and more
+  general finding than the line that exposed it.
+- **9 OF 20 PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (all three
+  switches flipped to `false`, recompiled, the pin SHAPES re-run through the scratch
+  CLI side by side). Every positive pin discriminates BY MESSAGE and has to: while
+  enum -> MEMBER is still vacuous a whole enum IS assignable to one of its own members,
+  so a silence-asserting pin passes on the broken build — round 782's probe-position
+  error in a new dress. The probe target is a PRIMITIVE, which rejects every
+  enum-flavored type and NAMES the one it was given. Of the eleven that hold on both
+  sides, ten do so on purpose (a `let` still widens; a flags accumulator stays legal; a
+  const assign target stays TS2588-only; a member EXPRESSION value owed nothing to this;
+  a FOREIGN enum's member is refused by the owner rule; a non-enum literal union already
+  worked; a plain interface's indexed access is unchanged) — and ONE, the
+  indexed-access GUARD pin, is honestly non-discriminating under FULL ablation and
+  discriminates only against the const-fix-only build, which is exactly the state that
+  manufactured `completions.ts:2239`.
+- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). The kept enum member
+  joins `widen1ConstLiteralTypeIds`, an id-keyed set — and enum member types are
+  program-wide interned singletons, so a `let k: K.A` assignment TARGET elsewhere reads
+  the widened type too. That hole is not new (round 781 shipped it for string literals,
+  which are interned the same way); it is recorded here because enum members make it
+  easier to hit. Zero corpus baselines and zero profile lines move.
+- **PREDICTIONS 2 of 5.** HIT: the price was stale, and the objlit fix closed
+  `formattingScanner.ts:113` for free once `importFixes.ts:1127` was understood — the
+  two really are one cause. **MISSED, and the misses are the output:** I expected the
+  residual to shrink from five lines to fewer, not to GROW to seven first; I expected
+  cause (D) to be a widening-site fix and it was the RETIREMENT of a deliberate
+  exclusion; and I expected the two `completions.ts` lines to share a cause — they are
+  two different ones, and closing the first is what made the second measurable at all.
+- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) twice, both times
+  on the build after a long run; `./gradlew --stop` + a graceful
+  `pkill -f 'KotlinCompile[D]aemon'` fixed it in ~2m30s each time, exactly as round 781
+  recorded. A `--tests`-filtered `jvmTest` then hung for >25 minutes with its worker JVM
+  gone from `ps` — the ablation evidence was recovered instead through the 1.2-second
+  scratch CLI, running the pin SHAPES verbatim against both binaries, which is strictly
+  faster than a filtered gradle run and should probably be the default for this.
+
 **Round 782 (2026-08-01) — (REL.4) IS CLOSED AND THE FLIP IS LANDED. THE INHERITED
 "RESIDUAL IS EMPTY" WAS STALE FOR THE SIXTH CONSECUTIVE ROUND, AND THE REASON IS THE
 ROUND'S REAL FINDING: EVERY SCAFFOLDED PRICE IN THIS ARC WAS MEASURED ON **compiler AND

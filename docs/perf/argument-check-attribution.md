@@ -293,3 +293,242 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --passTiming build/bench/tsc-project-*
 ```
+
+---
+
+# (CALL.5) round 796 — the EXIT CENSUS, and the lever it named
+
+*Re-measured at HEAD (`160290ef`) before any code was written, per round 755's
+rule and round 795's law 1. Every number in § 1–§ 4 above is from round 735/759
+and is now stale; the table in § 11 below is the live one.*
+
+> **HEADLINE.** The function is **~1,500 ms probe-free over 23,494 invocations
+> and 39,593 loop iterations = ~5.4% of a check-only compile**, and the exit
+> census says where that goes with a precision `leftIn` could not reach.
+> **Every single invocation returns from `POST`** — the thirteen dedicated
+> prologue walkers (103 ms net) fire ZERO times. **39% of the iterations leave
+> at the `!isSimpleCheckableType` block carrying 69% of the argument-typing time
+> and 81% of the flow narrowing.** And **narrowing is 33% of the whole
+> function** (503 ms / 9,858 walks), of which 86% returns its input unchanged.
+> The lever that follows is a pre-gate: **walk only when the un-narrowed type
+> does NOT already satisfy the parameter** — refusing 8,905 of 9,823 walks
+> (91%) for a measured **259 ms** (~0.96%), corpus- and grid-clean.
+
+## 10. What was built, and why it costs nothing
+
+`ArgSections` gained an **EXIT CENSUS**: `exitRow`, `exitInvRow`,
+`exitArgTypeNanos`, `exitNarrowNanos`, `exitNarrowCalls`.
+
+`leftIn(s)` — the pre-existing exit profile — is a DIFFERENCE of adjacent rows'
+`calls`. That is sound only while every iteration crosses every boundary in
+order: it cannot see the two `return`s inside the loop, it charges the
+prologue's early returns to nothing, and above all it can say *where* an
+iteration left but not *what that iteration had already paid for*. The census
+answers both, because it records the **row that is already open** at boundaries
+the partition was **already crossing** (`at(L_PARAM)` opens the next iteration,
+`at(POST)` follows the last one, `end()` catches a `return`).
+
+**It therefore adds NO boundary** — the ON run's boundary count is 448,473 with
+it and without it. That is what keeps a before/after ROW comparison honest
+(round 793: removing a section removes its boundaries too). Four totals are
+printed as a partition check and all four read `EXACT`: iterations, the
+`L_ARGTYPE` row's nanos, and the `N_NARROW` row's nanos *and* calls.
+
+## 11. The live table (compiler profile, HEAD, `--argSections` raw)
+
+| | ON | COARSE |
+|---|---:|---:|
+| partition | 1,621 ms raw / 448,473 boundaries | **1,506 ms** / 86,581 |
+
+Δ = 115 ms over ~860,000 extra timestamp reads ⇒ **~133 ns per boundary**
+(round 735's construction gave 89 ns; the two bracket the honest figure). The
+probe-free function is therefore **~1,500 ms**.
+
+| region | ms net | reached | left here |
+|---|---:|---:|---:|
+| the ten generic-gated prologue walkers | 55 | 23,494 | **0** |
+| `tryInferSingleTypeParamFromArgs` + `instantiateSignature` | 124 | 23,494 | **0** |
+| B199/B204/B219 single-TP walkers | 48 | 23,494 | **0** |
+| loop: gates + `getTypeOfSymbol(param)` | 35 | 39,593 | 557 |
+| **loop: `argType` computation** | **824** | 39,036 | 0 |
+| — of which `getNarrowedTypeForReference` | **478** | **9,858** | |
+| — of which `getTypeOfExpression(arg)` | 175 | 39,036 | |
+| — of which the M3.4 refinement gate | 28 | 7,368 | |
+| loop: foreign-TP + rest + weak target | 51 | 39,036 | **12,121** |
+| loop: `tryEmitWeakTypeAssignment` | 82 | 26,915 | 0 |
+| loop: arg-kind + class/index-sig block | 46 | 26,676 | 0 |
+| loop: `!isSimpleCheckableType` (196 ln) | 87 | 26,676 | **15,637** |
+| loop: `checkTypeRelatedTo` + TS2345 emit | 12 | 10,951 | 10,951 |
+| post-loop rest-args check | 17 | 23,494 | |
+
+## 12. The exit census — the two results `leftIn` could not give
+
+**(a) Every one of the 23,494 INVOCATIONS returns from `POST`.** Not one of the
+thirteen dedicated prologue walkers ever answers `true` on this profile. That is
+round 793's shape (a firewall that never fires) at **103 ms net = 0.38%** — too
+small to be worth a pre-gate on its own, and recorded so nobody re-derives it.
+
+**(b) The argument-typing time follows the ITERATIONS, and it concentrates on
+one exit.** Charging each iteration's `argType` and narrowing spans to the row
+it left from:
+
+| left at | iterations | argType | narrowing | walks |
+|---|---:|---:|---:|---:|
+| `L_PARAM` (arity/spread/any gates) | 557 | 0 ms | 0 ms | 0 |
+| `L_PRE` (any/error + foreign-TP) | 12,121 | 194 ms | 53 ms | 14 |
+| `L_TYPEPARAM` | 239 | 3 ms | 1 ms | 102 |
+| **`L_NOTSIMPLE`** | **15,637** | **633 ms** | **409 ms** | **7,880** |
+| `L_TAILGATE` | 88 | 0 ms | 0 ms | 37 |
+| `L_RELATION` (reached the relation) | 10,951 | 79 ms | 38 ms | 1,825 |
+
+**39% of the iterations carry 69% of the argument-typing time and 81% of the
+narrowing, and they all leave at the same `continue`.** Round 759's
+90/10 split (`argType` of args that never reach the relation) is reproduced and
+LOCALISED: it is not spread over eleven exits, it is one.
+
+## 13. The lever — and the debt it collects
+
+Round 764 gave the ENUM narrowing arm a **second chance**: walk only when the
+raw type does NOT already satisfy the parameter, *because a narrow can then only
+turn a rejection into an acceptance and never the reverse*. Its comment then
+declined to generalise and named its creditor: *"Deliberately enum-ONLY: the
+Interface/`unknown`/`string`/`number` arms below are corpus-pinned (round
+428b/429c/438) and walk unconditionally."* Round 783's rule — **a deliberate
+exclusion is a debt with a named creditor; re-test it** — applies, and the debt
+turns out to be payable.
+
+The structural argument is that both remaining arms exist to SUPPRESS a TS2345
+that the wide type would have caused (M3.4 substitutes only a `refined` type
+that relates; B469 substitutes a sub-union). **Where the wide type already
+relates there is no TS2345 to suppress**, so the corpus pins that motivated
+those arms are all in the population the gate KEEPS.
+
+**Refusal rates, measured (`--argNarrowCensus`):**
+
+| arm | reached | refused | % |
+|---|---:|---:|---:|
+| B469 union argument | 2,455 | 1,916 | 78% |
+| M3.4 iface/`unknown`/`string`/`number` | 7,368 | 6,989 | **94%** |
+| **total** | **9,823** | **8,905** | **91%** |
+
+## 14. Equivalence — measured, because the argument here is NOT airtight
+
+The narrowed type is read by ~11 blocks below the arm (the weak-type rule's
+shared-property test, the `!isSimpleCheckableType` shape classification, a
+message's display), so "the relation verdict cannot move" does not by itself
+license the change. The census therefore counts, over the OLD behaviour, how
+many refusals **would have substituted a different type** — the exact set of
+argument types that differ between the two binaries:
+
+| profile | refusals that would substitute | kept-complement substitutions (control) |
+|---|---:|---:|
+| compiler | 787 (B469 401 + M3.4 386) | 578 |
+| services | 1,134 (523 + 611) | 902 |
+| harness | 1,138 (527 + 611) | 927 |
+
+**That is not zero, and it is reported rather than smoothed.** What IS zero is
+everything downstream: the 8-profile grid is identical set-for-set in BOTH
+directions (46/46/46/46/46/46/46/94, 0 added and 0 removed), `--partitionCheck
+2` is EQUIVALENT at 46, and the full corpus suite — the only instrument that
+sees shapes tsc's own sources do not contain (round 792) — is unchanged at
+13,435 / 0 / 3.
+
+The control is FREE (round 790): the same counter over the complement the gate
+never refuses reports 578 / 902 / 927 substitutions, so the zero above is not a
+dead instrument and no deliberately bogus flag was needed.
+
+## 15. The prize, measured the way round 794 measured its own
+
+The `L_ARGTYPE` row has an **identical boundary count in both arms** (39,036),
+so its difference needs no round-793 boundary correction. Both arms run **twice
+on one binary** (round 795's law 3 — a single before/after pair cannot tell "the
+work moved" from "this run was slow"):
+
+| arm | run 1 | run 2 | mean |
+|---|---:|---:|---:|
+| gate ON | 601.7 ms | 637.7 ms | **619.7** |
+| gate OFF (`--argNarrowGateOff`) | 910.6 ms | 847.8 ms | **879.2** |
+
+**Δ = 259 ms**, against a within-arm spread of 36 / 63 ms — Δ is 4.1× the larger
+spread. The whole-partition raw total gives Δ = 295 ms (1,429 vs 1,724) on a
+boundary count differing by 8. So the honest figure is **259–295 ms = 0.95–1.1%
+of a check-only compile.**
+
+The narrowing sub-measure falls **503 → 148 ms** (9,858 → 953 walks), i.e. ~330
+ms of walking removed against ~70 ms of gate relation calls — which is why the
+row moves less than the walks do. Note the KEPT walks are the EXPENSIVE ones:
+155 µs each against 51 µs before, because a reference whose wide type does not
+satisfy its parameter is exactly the one with real flow facts to find.
+
+**No wall-clock A/B was run, deliberately.** 0.95–1.1% is the warm protocol's
+±1.0% band, not "well above" it; a verdict there would be noise wearing a sign
+(round 788: a saving already compiled by C2 is a SMALLER fraction of the warm
+run). The counters decide.
+
+## 16. Round 788's law, checked at the counters
+
+Skipping a CACHED computation moves work rather than deleting it, so the
+question is which of the skipped callees memoize. Rebaselined in the landing
+commit:
+
+| counter | before | after | |
+|---|---:|---:|---|
+| `narrow.walks` | 26,340 | 17,851 | **−32.2%** |
+| `typeNode.cacheable` | 183,843 | 171,681 | −6.6% |
+| `typeNode.cacheHits` | 124,608 | 112,458 | −9.8% |
+| `typeNode.bypassed` | 107,280 | 110,653 | **+3.1%** |
+| `globals.lookups` | 774,370 | 758,673 | −2.0% |
+| `globals.misses` | 757,968 | 742,183 | −2.1% |
+| `typeOfExpr.calls` | 650,995 | 649,410 | −0.2% |
+| every other counter | | | +0.00% |
+
+`narrow.walks` −8,489 against 8,905 refusals: the 416 difference is refusals
+whose walk would have returned at `getReferencePath`/`getFlowAt` before
+`flowWalkWithTripCheck` counted anything.
+
+**`typeNode.bypassed` rising 3.1% IS round 788's law, and it is small.** Total
+type-node resolutions fall 291,123 → 282,334 (**−3.0%**); what rises is the
+BYPASSED share, because a resolution that used to happen inside a narrowing walk
+(in a context the round-548 gate calls cacheable) now happens later, in a
+bypassed one. Work moved, but far less of it than was removed — which the 259 ms
+row delta independently confirms. (That counter is also ~1% program-order
+sensitive, so part of the +3.1% is not even attributable here.)
+
+## 17. What did NOT work, and one thing that nearly wasted the round
+
+* **The first fixture pinned nothing.** Its guards were `if (isIdent(n)) { … }`
+  — and since round 785 a type-guard CALL in an `if` condition writes its narrow
+  into `currentLocalTypes` for the THEN branch, so the argument arrives ALREADY
+  narrowed, the flow read never happens, and the gate refuses trivially. The
+  census read `refused == reached` on both arms with **zero** substitutions.
+  **Every guard in a narrowing-at-an-argument fixture must be an EARLY RETURN**
+  (or a ternary / `&&`), which is the same list CLAUDE.md gives for enums.
+* **`Cat | Dog` → `Cat` emits nothing**, so it is useless as a negative control
+  for the union arm; `Dog` → `Cat` was used instead.
+* **A pre-existing probe pin died and was RESTATED, not deleted** — for the
+  fourth round running. `ArgSectionProbeTest`'s "the narrowing sites agree with
+  the combined row" asserted `perSite > 0`, and the gate refuses BOTH of that
+  fixture's walks (its union parameter accepts the un-narrowed union, and its
+  `if`-body argument is pre-narrowed by round 785). An early-return-guarded call
+  was added to the fixture, so `> 0` now asserts something strictly stronger:
+  that the gate has a live complement.
+* **BUILD.1 bit again**: a `compileKotlinJvm` launched with an idle Kotlin
+  daemon still holding its heap failed with *Not enough memory to run
+  compilation* after **15m43s**, where the same compile takes **2m26s** once
+  `./gradlew --stop` + a graceful `pkill` have run FIRST. Stop the daemons
+  BEFORE the build, never after.
+
+## 18. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt)
+# the partition + the exit census
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --argSections build/bench/tsc-project-*
+# the same with the gate disabled — the A arm of § 15
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --argSections --argNarrowGateOff build/bench/tsc-project-*
+# the equivalence instrument: old behaviour + the verdict
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --argNarrowCensus build/bench/tsc-project-*
+```

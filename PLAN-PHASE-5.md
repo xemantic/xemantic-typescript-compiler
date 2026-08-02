@@ -20,6 +20,112 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 796 (2026-08-02) — (CALL.5) PROMOTED AND DONE: THE ARGUMENT CHECK IS PARTITIONED BY
+EXIT, AND THE CENSUS NAMES A LEVER ROUND 764 HAD ALREADY DECLINED ONCE. Every one of the
+23,494 invocations returns from `POST` (thirteen dedicated prologue walkers, 0 firings),
+39% of the iterations leave at ONE `continue` carrying 69% of the argument-typing time and
+81% of the narrowing, and narrowing is 33% of the whole function with 86% of its walks
+returning their input unchanged. The already-relates pre-gate refuses 8,905 of 9,823 walks
+(91%) for a measured 259 ms (~0.96%), `narrow.walks` −32.2%. Suite 13,427 → 13,435; grid
+46×7/94, 0 added and 0 removed both directions; `--partitionCheck 2` EQUIVALENT. Queue
+hygiene first: (AOT.1) confirmed owner-blocked, (AOT.3) marked CI-ONLY, (WIDEN.1)(b)/(c)/(d)
+re-verified at zero sites.**
+
+- **QUEUE HYGIENE, and one of the three verdicts came out stronger than "still zero".** The
+  8-profile grid at HEAD holds **416 residual diagnostics and NOT ONE of them is TS2322 or
+  TS2345** (TS2591×367 — the offline `@types/node` artifact — plus TS2304×24, TS2584×13,
+  TS2503×6, TS7006×3, TS2339×2, TS2593×1). Literal widening can only ever manifest as an
+  ASSIGNABILITY diagnostic, so (WIDEN.1)(b)/(c)/(d) are unobservable on the dashboard **by
+  construction**, not merely unobserved — including (d), the divergence we OWN, which could
+  only ever ADD a TS2322. (AOT.1)'s BLOCKED-PENDING-USER marker is correct and its
+  gap-closer (AOT.4) already landed, so the decision is as cheap as it will get. (AOT.3)(a)
+  needs a GraalVM image build, which CLAUDE.md forbids on this box under an owner directive
+  (a frozen host for ~2 hours; `Swap: 0`), and (b) is self-closing by its own last sentence
+  — marked CI-ONLY so the next agent does not pay to re-derive it. No native/GraalVM
+  command was run.
+- **THE PRIZE WAS RE-MEASURED AT HEAD BEFORE ANY CODE (law 1) AND THE FUNCTION IS BIGGER
+  THAN THE ITEM SAID**: ON partition 1,621 ms raw against COARSE 1,506, ⇒ **~1,500 ms
+  probe-free = ~5.4% of a check-only compile** over 23,494 invocations / 39,593 iterations.
+  Round 735's whole § 4 table is stale by up to 25% and is superseded in the doc.
+- **THE CENSUS ADDS NO BOUNDARY, WHICH IS THE POINT.** It records the row already open at
+  boundaries the partition was already crossing — `at(L_PARAM)` opens the next iteration,
+  `at(POST)` follows the last, `end()` catches a `return` — so the ON boundary count is
+  448,473 with and without it and round 793's "a row diff overstates by N × boundary" does
+  not apply to anything measured through it. Four partition checks print EXACT (iterations,
+  the argType row, and the narrow row in nanos AND calls).
+- **RESULT (a): NOT ONE INVOCATION RETURNS EARLY.** All 23,494 reach `POST`, so the ten
+  generic-gated prologue walkers and the three single-TP walkers — **103 ms net** — never
+  answer `true` on this profile. That is round 793's shape at 0.38%: recorded, and
+  deliberately NOT gated, because it is a third of one noise band.
+- **RESULT (b): THE COST FOLLOWS ONE EXIT.** 15,637 of 39,593 iterations (39%) leave at the
+  `!isSimpleCheckableType` block carrying **633 ms of the 911 ms argType row and 409 ms of
+  the 503 ms narrowing, 7,880 of 9,858 walks**. The next biggest exit (`L_PRE`, 12,121
+  iterations) carries 194 ms and **14** walks. Round 759's "the 72% that never reach the
+  relation carry 89% of the argument-typing time" is reproduced — and localised: it is not
+  spread across eleven exits, it is one `continue`.
+- **THE LEVER COLLECTS A DEBT WITH A NAMED CREDITOR (round 783's rule).** Round 764 gave the
+  ENUM arm a second chance — walk only when the raw type does NOT already satisfy the
+  parameter — and wrote *"Deliberately enum-ONLY: the Interface/`unknown`/`string`/`number`
+  arms below are corpus-pinned (round 428b/429c/438) and walk unconditionally."* The
+  generalisation holds for a reason the comment did not consider: **both arms exist to
+  SUPPRESS a TS2345 that the wide type would cause, so every corpus pin that motivated them
+  is in the population the gate KEEPS.** Refusal 8,905 of 9,823 (91%): B469 78%, M3.4 94%.
+- **THE EQUIVALENCE IS NOT AIRTIGHT BY ARGUMENT, SO IT WAS MEASURED — AND THE NUMBER IS NOT
+  ZERO.** The narrowed type is read by ~11 blocks below the arm (the weak-type rule's
+  shared-property test, the `!isSimpleCheckableType` shape classification, displays), so
+  `--argNarrowCensus` keeps the OLD behaviour and counts refusals that WOULD have
+  substituted: **compiler 787, services 1,134, harness 1,138**. What IS zero is everything
+  downstream — grid **46/46/46/46/46/46/46/94 with 0 added and 0 removed BOTH directions**
+  against the real pre-change binary, `--partitionCheck 2` **EQUIVALENT — 46**, and the
+  corpus suite (round 792: the only instrument that sees shapes tsc's sources lack)
+  unchanged. Round 790's FREE complement control reports **578 / 902 / 927**, so no bogus
+  flag was needed to show the instrument is alive.
+- **THE PRIZE, MEASURED ROUND-794-STYLE AND ROUND-795-CAREFULLY.** The `L_ARGTYPE` row has
+  an IDENTICAL boundary count in both arms (39,036), and both arms were run **twice on one
+  binary**: ON 601.7 / 637.7 ms, OFF 910.6 / 847.8 ms ⇒ **Δ = 259 ms against a within-arm
+  spread of 36 / 63** (Δ = 4.1× the larger spread). The whole partition gives 295 ms. So
+  **259–295 ms = 0.95–1.1%**. The narrowing sub-measure falls 503 → 148 ms (9,858 → 953
+  walks): ~330 ms of walking removed against ~70 ms of gate relation calls. **The KEPT
+  walks are the EXPENSIVE ones — 155 µs each against 51 µs before** — because a reference
+  whose wide type fails its parameter is exactly the one with real flow facts to find.
+- **NO WALL-CLOCK A/B, DELIBERATELY.** 0.95–1.1% IS the warm band, not "well above" it, and
+  round 788's law says a saving C2 has already compiled is a smaller fraction of the warm
+  run still. Rounds 794 and 795 declined on the same ground; the counters decide.
+- **ROUND 788's LAW BITES, AND IT IS SMALL.** `narrow.walks` **26,340 → 17,851 (−32.2%)**,
+  `globals.lookups`/`misses` −2.0/−2.1%, `typeOfExpr.calls` −0.2% — and `typeNode.bypassed`
+  **+3.1%**, the one riser. Total type-node resolutions FALL 291,123 → 282,334 (−3.0%);
+  what rises is the BYPASSED share, because a resolution that used to happen inside a
+  narrowing walk (a context the round-548 gate calls cacheable) now happens later in a
+  bypassed one. Work moved, far less than was removed — which the 259 ms row delta confirms
+  independently. Rebaselined in the landing commit; the counters reproduced **bit-identical**
+  across two runs on a verified-clean rebuild (round 776's rule).
+- **PINS: 8 new (`ArgNarrowGateTest`), 5 DISCRIMINATING across two complementary ablations
+  run SEPARATELY.** Fault A (the gate refuses everything) fails 4 new pins plus the restated
+  probe pin; fault B (the gate's polarity inverted) fails 2, a subset of A's. The holders
+  are the production-mode assertion, the negative control (its calls have no guard, so no
+  narrowing arm is involved), the risky-population census pin and the never-arm pin — all
+  evaluated on paths neither fault reaches.
+- **WHAT DID NOT WORK — and the first one nearly wasted the round.** The fixture was written
+  with `if (isIdent(n)) { … }` guards and pinned NOTHING: since round 785 a type-guard CALL
+  in an `if` condition writes its narrow into `currentLocalTypes` for the THEN branch, so
+  the argument arrives ALREADY narrowed, no flow read happens, and the gate refuses
+  trivially — the census read `refused == reached` with **zero** substitutions on both arms.
+  **A narrowing-at-an-argument fixture needs an EARLY-RETURN guard** (or a ternary / `&&`),
+  the same list CLAUDE.md gives for enums. Second: `Cat | Dog` → `Cat` emits nothing, so it
+  is useless as a union negative control (`Dog` → `Cat` was used). Third: for the FOURTH
+  round running, a pre-existing probe pin died — `ArgSectionProbeTest`'s `perSite > 0`, both
+  of whose fixture walks the gate refuses — and was RESTATED, not deleted, by adding an
+  early-return-guarded call so `> 0` now asserts that the gate has a live complement.
+  Fourth: BUILD.1 bit again — a `compileKotlinJvm` launched with an idle Kotlin daemon still
+  holding its heap failed *Not enough memory to run compilation* after **15m43s**, where the
+  identical compile takes **2m26s** once `./gradlew --stop` + a graceful `pkill` have run
+  FIRST. Fifth, a process failure worth one line: the trim-on-write step was first run with
+  a line range that swallowed the ENTIRE QUEUE into the history file — caught by a line
+  count, undone with `git checkout`, which also destroyed this note's first draft. **Commit
+  the note BEFORE trimming.**
+- Suite 13,427 → **13,435 / 0 failures / 3 skipped**. Full derivation:
+  `docs/perf/argument-check-attribution.md` §§ 10–18.
+
 **Round 795 (2026-08-01) — (ENGINE.2h) LANDED, AND THE ITEM'S OWN ARITHMETIC WAS WRONG IN
 THE HELPFUL DIRECTION: THE TS2793 `implRelated` PROBE'S SINGLE READER IS REACHED **ZERO**
 TIMES ON THE COMPILER PROFILE, SO DEFERRING IT REMOVES 23,214 EVALUATIONS AND KEEPS NONE.
@@ -825,261 +931,6 @@ So the top open perf item was (ENGINE.1)'s site 3, and this round took it.
   level E has a tenth of level C's boundary count against the same run-to-run
   noise, which is exactly the geometry that makes a differential weak.
 
-**Round 785 (2026-08-01) — (NARROW.1) IS CLOSED. `extractNullNarrowing` HAS ITS
-TYPE-GUARD CALL ARM, AND THE CHANGE THE ITEM WARNED WOULD MOVE "THE PRIMARY TYPE OF EVERY
-GUARDED REFERENCE IN BOTH DIRECTIONS" IS **SET-FOR-SET FREE ON ALL EIGHT PROFILES WHILE
-FIRING 630-916 TIMES PER PROFILE**. IT IS NOT NEUTRAL, THOUGH: IT REMOVES TWO
-FALSE-POSITIVE CLASSES THE GRID NEVER SHOWED.** Baseline re-captured at HEAD first
-(`46/46/46/46/46/46/46/94`, matching the shipping record), then re-run with the arm:
-0 added, 0 removed, on every profile. Suite 13,323 -> **13,334 / 0 failures / 3 skipped**
-(+11 = this round's pins; **no corpus baseline moved**). Cost gate: one counter over
-tolerance, rebaselined with a named mechanism.
-
-- **THE ARM IS FIVE LINES AND OWNS NO OPINION.** `if (isFoo(x))` with a bare-Identifier
-  argument that is already in `currentLocalTypes` hands the verdict to
-  `narrowByCallPredicate` and records it only when the type actually CHANGES. Delegating
-  rather than re-deriving is what makes it impossible for this arm to disagree with the
-  flow walker about what a guard means — it decides only WHERE the answer is recorded.
-- **WHAT IT ACTUALLY BUYS: TWO FP CLASSES, NEITHER VISIBLE ON THE GRID.** A RETURN and an
-  ASSIGNMENT inside a guarded branch have no `getNarrowedTypeForReference` opt-in, so
-  `function f(x: string|number): string { if (isStr(x)) { return x; } … }` emitted TS2322
-  on code tsc accepts. Both are silent now. A third shape improved rather than flipped:
-  a genuine mismatch inside the branch now names the NARROWED source type.
-- **THE PROBE THAT LOOKS OBVIOUS IS INERT, AND THAT IS THE ROUND'S METHOD LESSON.** The
-  natural reduction — `const s: Sub = x` inside the guard — is silent on BOTH binaries,
-  because `checkVarDeclAssignability` ALREADY opts into flow narrowing. Two further
-  reductions were silent for a different reason (`Base` -> `Sub` is not rejected by our
-  relation at all, so the baseline never errored and the probe measured nothing). Only a
-  RETURN or an ASSIGNMENT with a PRIMITIVE union subject discriminates. **Round 784's
-  "probe shapes are not portable between sites" generalises: they are not portable between
-  CONSUMERS of the same site either — the discriminating question is which consumers lack
-  the opt-in, not which types are involved.**
-- **THE GREEN GRID WAS FALSIFIED BEFORE IT WAS BELIEVED.** Per the ablation law a
-  zero-diff grid is evidence of nothing until the disabled code is counted, so a temporary
-  `PassTiming` sighting/hit counter was built, measured (**compiler 1,520/630, services
-  2,115/896, harness 2,204/916, tsc 1,520/630**) and then REMOVED. 630 guarded references
-  on the compiler profile changed primary type with zero output movement — that is the
-  claim, and without the counter it would have been indistinguishable from an inert arm.
-- **THE ONE PIN THAT MOVED IS A MESSAGE, AND IT MOVED TOWARD tsc.** Round 784's
-  `NarrowedReceiverPropTest` mismatch control expected
-  `Type 'string | number | boolean' is not assignable to type 'string'.`; it now reads
-  `Type 'string | boolean' …` — same code, same position, same `boolean` elaboration,
-  because `n` IS a `Wide` inside `isWide(n)`. That is tsc's wording, so the pin was
-  CORRECTED, not switched off; no `LogicalParityDivergence` was needed. A hand-written pin
-  is not a corpus baseline and the divergence mechanism does not apply to it.
-- **COST: `typeNode.bypassed` 106,120 -> 108,336 (+2.09%), REBASELINED IN THIS COMMIT.**
-  Mechanism: each guard-call sighting resolves the predicate's TARGET type node (and the
-  guarded parameter's annotation) under an ambient instantiation context, so they land in
-  the INV.5(c) non-cacheable bucket — **+2,216 resolutions over 1,520 sightings = 1.46
-  each**, exactly the arm's population. Priced with round 716's measured ~2.2 µs per
-  outermost bypassed resolution that is **~4.9 ms of a ~27 s compile (0.017%)**. Every
-  other counter is inside 0.8%.
-- **THE PERF SHAPE THE ITEM FLAGGED DID NOT MATERIALIZE.** CLAUDE.md warns that narrowing
-  every property access would put a flow walk on the checker's hottest path; measured,
-  `narrow.walks` moved **+59 of 71,690 (+0.08%)**. `narrowByCallPredicate` resolves a
-  predicate declaration — it does not launch a walk — and the arm is additionally gated to
-  if-conditions whose argument is an already-tracked local.
-- **PINS: 7 OF 11 DISCRIMINATE, MEASURED AGAINST THE ABLATED HEAD BUILD** kept as a
-  side-by-side classpath and re-run through the ~1.2-second scratch CLI: the return, the
-  assignment, the sharpened message, the nested pair, the second-parameter subject, the
-  method-call guard, and the containment control (which fires TWICE ablated and ONCE fixed,
-  so it detects a frame leak that a pure silence pin could not see). The four
-  "must NOT narrow" controls hold on both sides on purpose.
-- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule): the ELSE branch still gets
-  no subtractive narrow, and a `this.p` / property-path subject is not narrowed — the arm
-  keeps the bare-Identifier restriction the three existing arms carry.
-- **PREDICTIONS 2 of 4.** HIT: the arm was cheap to write, and the eight-profile grid was
-  the right gate. **MISSED, and the misses are the output:** I expected a grid PRICE to pay
-  down (there was none — the arm is free, and its value is off-grid), and I expected the
-  first natural probe to discriminate (it was inert, because the var-decl consumer already
-  opts in — the population that needed fixing was returns and assignments).
-
-**Round 784 (2026-08-01) — (REL.2) IS CLOSED. CAUSE (G) IS FIXED, THE GLOBAL
-enum -> MEMBER RELATION RULE IS FLIPPED ON, AND IT IS **SET-FOR-SET FREE ON ALL EIGHT
-PROFILES**. THE ITEM'S OWN DIAGNOSIS OF THE FIX WAS WRONG IN A USEFUL WAY: THE NARROW
-IS COMPUTED CORRECTLY AND IS SIMPLY NEVER ASKED FOR AT A PROPERTY READ.** Baseline grid
-re-captured at HEAD first (`46/46/46/46/46/46/46/94`, matching the shipping record), then
-re-run with the flip: **identical, line for line, on all eight**. Suite 13,309 ->
-**13,323 / 0 failures / 3 skipped** (all +14 are this round's pins — no corpus baseline
-moved); cost gate exit 0, every counter within 0.7%, no rebaseline.
-
-- **CAUSE (G) IS A GATE, NOT A MISSING NARROW.** `computeRawTypeOfPropertyAccess`
-  flow-narrows a receiver only when its raw type is ALREADY a `Type.Union` — a deliberate
-  gate, since narrowing every `a.b` puts a flow walk on the hottest path in the checker —
-  so `isModifier(node): node is Modifier` on a `node: Node` never reached the read and
-  `node.kind` answered `SyntaxKind` (`completions.ts:2234`). Measured with three probes at
-  once: after the guard the RECEIVER itself already reports the narrowed
-  `ModifierToken<…> | …`, a union receiver already resolves `.kind` correctly, and only the
-  narrow-DOWN-then-read composition fails. **So nothing was missing from the flow graph;
-  what was missing was a consumer.**
-- **THE PATH-BASED WALK CANNOT RECOVER IT, AND THAT IS THE NON-OBVIOUS PART.** Every
-  second-chance site in the checker calls `getNarrowedTypeForReference(raw, expr)` on the
-  WHOLE path `node.kind`, which reaches `narrowByCallPredicate`'s round-424 PREFIX arm —
-  and that arm resolves the tail on the guard TARGET through `resolvePrefixTailSegment`,
-  whose round-462 gate deliberately REFUSES a union tail (substituting a precise union tail
-  fired new errors when it was tried). `Modifier`'s `kind` is a 3-member union, so the arm
-  declines by design. The fix therefore cannot be a widening of that arm.
-- **WHAT LANDED: `propertyTypeFromNarrowedReceiver`, a second chance at the RETURN
-  rejecting path.** It narrows the RECEIVER (not the path), then re-resolves the property on
-  it — distributing over a union receiver the way `computeRawTypeOfPropertyAccess` does. It
-  is consulted only after `checkTypeRelatedTo(rawSource, target)` has already FAILED and
-  adopted only when it makes the return relate, so it is monotone by relation test and
-  cannot introduce a diagnostic anywhere. The cost of that gating is visible: `narrow.walks`
-  **+3** of 71,690, i.e. the walk is paid for only by a return that was about to fire.
-- **ROUND 783's PROPOSED FIX — `extractNullNarrowing`'s missing call-predicate arm — IS
-  NOT WHAT THIS NEEDED, AND IS STILL OPEN.** That helper feeds `currentLocalTypes` for the
-  cta/TS2322 family, and adding a guard arm there would change the PRIMARY type of every
-  guarded reference in the program. It was not required: the flow graph already answers, and
-  a monotone consumer is strictly cheaper and strictly safer. **Queued separately as
-  (NARROW.1)** — it is a real gap with its own blast radius, and rolling it into this item
-  would have bought nothing measurable.
-- **THE SINGLE-FILE REDUCTION OF THE FAILING LINE IS SILENT, AND IT COST ME A BUILD.** A
-  faithful one-file model of `isModifierLike` — enum, `Token<TKind>`, the `Modifier` union,
-  the guard, the returned `node.kind` — reports NOTHING even with the rule on. Round 760
-  recorded the reason (a guard declared beside its use resolves down a different path); the
-  same shape split across two files reproduces the profile line exactly, including its
-  message. **A reduction that goes quiet is not a refutation of the diagnosis — check the
-  round-760 file-split before rewriting the model.**
-- **PRICE ATTRIBUTION IS EXACT, MEASURED ON THE PROFILE.** With `R784_NARROWED_RECEIVER =
-  false` and the rule on, services is **47** and the extra line is
-  `completions.ts:2234 - TS2322: Type 'SyntaxKind' is not assignable to type
-  'ModifierSyntaxKind | undefined'` — the item's residual, verbatim. With the fix it is 46.
-- **ROUND 760's STAND-IN IS DELETED.** `enumMemberDomainProvesNotSubtype` existed to decline
-  one `never`-collapse the vacuous relation would otherwise wave through; the relation now
-  reaches that verdict itself, so the `&&` short-circuits where the veto used to.
-  `EnumMemberGuardNegativeBranchTest` and `GenericGuardTargetEnumMemberTest` — written for
-  the stand-in — are green on the relation's own answer, which is the deletion evidence.
-  Its two siblings named in the item, `kindDomainKeysExceed` and `kindDomainProvesNotSubtype`,
-  were ALREADY deleted in round 753 and survive only as comment prose; **checked before
-  crediting anything.** `typeGuardMemberDisjoint` is still live at 8 call sites and is NOT
-  claimed dead here — CLAUDE.md's warning that it may be unobservable post-(REL.1)(b) is a
-  measurement someone still owes.
-- **PINS: 9 OF 14 DISCRIMINATE, MEASURED AGAINST TWO ABLATED BINARIES** (`R784_NARROWED_-
-  RECEIVER = false` for the property pins, `REL2_ENUM_TO_MEMBER = false` for the relation
-  pins; the shapes re-run side by side through the 1-second scratch CLI). The five that hold
-  on both sides do so on purpose: member -> enum and member-vs-member are (REL.1)'s verdicts
-  and must not move; the covering and one-member cases must stay LEGAL or the rule is a
-  blanket rejection rather than a coverage test; and **the union-TARGET guard pin holds on
-  both sides and is documented as non-discriminating** — a guard target that is itself a
-  union already resolves its tail through the prefix machinery, which is exactly what left
-  the single-target/union-tail shape with no answer at all.
-- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). The same second chance is
-  missing at the VAR-DECL/assignment path (`checkVarDeclAssignabilityCore`'s symmetric
-  narrowing block, ~6 lines): `const k: ModifierKind = node.kind` after the guard still
-  reports the declared type. Zero measured sites on all eight profiles, so it was left out
-  rather than landed unmeasured; it is the natural first extension if a project ever hits it.
-- **PREDICTIONS 2 of 4.** HIT: the price was worth re-measuring (it reproduced exactly, both
-  at HEAD and ablated), and the second chance closed the line with no grid movement. **MISSED,
-  and the misses are the output:** I expected `extractNullNarrowing`'s missing arm to BE the
-  fix and it was a red herring — the narrow already existed; and I expected a primitive probe
-  target to name the narrowed type as it did for round 783, but the return path's narrowing
-  block is gated to object-ish/union targets, so a `string` target skips it entirely and the
-  probe reports the un-narrowed type on a WORKING build. **A probe shape validated in one
-  round is not portable to another site's gate.**
-
-**Round 783 (2026-08-01) — (REL.2) RE-MEASURED ON ALL EIGHT PROFILES, AND THE
-INHERITED PRICE WAS WRONG IN BOTH DIRECTIONS AT ONCE: round 765's 5-line worklist
-was MISSING TWO `program.ts` LINES ON THE COMPILER PROFILE AND MISLABELLED THREE OF
-THE FIVE IT HAD. THREE OF THE FOUR CAUSES ARE CLOSED; THE RULE IS SCAFFOLDED, NOT
-FLIPPED, WITH A ONE-LINE RESIDUAL.** Raw price against `46/46/46/46/46/46/46/94`:
-**project 46 -> 49, tsc/jsTyping/deprecatedCompat/typingsInstallerCore 46 -> 47,
-services/server 46 -> 51, harness 94 -> 99** — SEVEN distinct lines, not five. After
-this round's three fixes it is **ONE line on three profiles** (`completions.ts:2234`;
-five profiles FREE). Shipping grid set-for-set IDENTICAL to HEAD on all eight; suite
-13,289 -> **13,309 / 0 failures / 3 skipped**; cost gate exit 0, no rebaseline.
-
-- **THE WORKLIST WAS RE-CLASSIFIED BEHIND THE SCAFFOLD, AS THE ITEM DEMANDED, AND ALL
-  FOUR OF ROUND 781's DOUBTS RESOLVED THE OTHER WAY.** The four causes measured:
-  **(D')** a `const` initialised from an enum MEMBER (or a conditional of members)
-  widens to the whole enum — `scanner.ts:905` (**all eight profiles**),
-  `program.ts:1366`, `program.ts:3542`; **(E)** an object-literal property value in a
-  ternary branch cannot see a flow narrow — `importFixes.ts:1127`,
-  `formattingScanner.ts:113`; **(F)** an indexed access `T["p"]` on a generic
-  instantiation answers `any` — `completions.ts:2239`; **(G)** a property-access
-  RECEIVER is flow-narrowed only when its raw type is already a union —
-  `completions.ts:2234`. Round 765's "cause (D), literal widening" label was right in
-  SPIRIT for `scanner.ts:905` and wrong for the other two it named; round 781's
-  suspicion that `formattingScanner.ts:113` and `importFixes.ts:1127` "are not literal
-  widening" was right, and they turned out to be ONE cause with each other, not with
-  anything on the list.
-- **THE TWO `program.ts` LINES ARE THE ROUND-782 LESSON REPEATING ITSELF ONE LEVEL
-  DOWN.** Round 782 found that every scaffolded price in this arc had been measured on
-  `compiler` and `services` only. This round measured all eight — and still found two
-  lines nobody had listed, on the COMPILER profile, because the arc's last scaffolded
-  price (round 765) predates (WIDEN.1) and (REL.4). **A price is a claim about a
-  BUILD, not about an item**: re-measure it after any round that lands anywhere near
-  the masking mechanism, not just after a round that touches the item.
-- **ROUND 781's ENUM-WIDENING EXCLUSION IS RETIRED, AND IT WAS LOAD-BEARING ONLY
-  BECAUSE OF A BUG ONE LEVEL AWAY.** (WIDEN.1)(a) deliberately kept widening a
-  `const`'s enum member because not doing so exposed `completions.ts:2239`. Measured
-  here: that line is cause (F) — `Modifier["kind"]` resolving to `any`, so the
-  `isModifierKind` guard narrowed nothing and the 85-member `KeywordSyntaxKind` union
-  the const now preserves was rejected wholesale. With (F) closed the exclusion buys
-  nothing and costs `scanner.ts:905` on every profile. **A deliberate exclusion is a
-  DEBT with a named creditor — re-test it when the creditor is paid.**
-- **CAUSE (F) IS FOUR LINES AND IS THE ROUND-761 IDIOM, APPLIED WHERE NOBODY HAD
-  LOOKED.** `getIndexedAccessType`'s string-literal-key arm read `getTypeOfSymbol(prop)`;
-  an interface member's symbol is SHARED by every instantiation and its cached type for
-  a type-parameter-typed member is globally `any`, so `Token<SK.X>["kind"]` was `any`
-  and the (already correct) union arm turned ONE `any` part into an `any` WHOLE. That
-  last step is why the defect was invisible: `any` is silent, so the pre-fix build
-  produced no diagnostic anywhere and the only probe that can see it reads the type out
-  of a deliberate mis-assignment.
-- **CAUSE (E) IS AN ACCEPTANCE GATE THAT CANNOT FIRE WHERE IT IS NEEDED.** The
-  object-literal value path (rounds 438/462/468) accepts a flow-narrowed value only
-  when the CONTEXTUAL property type accepts it and the raw type does not — and an
-  object literal in a TERNARY branch has no contextual type at all (`ctxObj` is null;
-  measured with a one-line probe printing `raw`/`narrowed`/`ctx`). The narrow itself
-  was always computed and always correct (`raw=K narrowed=K.A`) and was then thrown
-  away. The new third acceptance is monotone by CONSTRUCTION rather than by relation
-  test — `enumTargetsAreOwnMembers` bounds the value to a sub-union of the very enum it
-  replaces — which is what lets it fire with no contextual type at all.
-- **THE RESIDUAL, CAUSE (G), IS NOT WHAT THE QUEUE SAID IT WAS.** The item labelled
-  `completions.ts:2234`/`:2239` "a property read on a union of generic instantiations /
-  generic inference through `tryCast`", i.e. the (REL.3)/round-762 family. Measured:
-  `Modifier["kind"]` resolves correctly after (F), and a `Modifier`-typed PARAMETER's
-  `.kind` was ALWAYS `ModifierSyntaxKind` (`resolveMemberPropertyType` distributes over
-  the union properly). What fails is the RECEIVER: `computeRawTypeOfPropertyAccess`
-  flow-narrows a receiver only when its raw type is ALREADY a `Type.Union`, so
-  `isModifier(node)`'s narrow-DOWN from `Node` is never attempted and `node.kind`
-  answers `SyntaxKind`. **And `extractNullNarrowing` — the pass that records a
-  condition's narrowing into `currentLocalTypes` — has only nullish / `typeof` /
-  truthiness arms; there is NO call-predicate arm at all**, which is a bigger and more
-  general finding than the line that exposed it.
-- **9 OF 20 PINS DISCRIMINATE, MEASURED AGAINST AN ABLATED BINARY** (all three
-  switches flipped to `false`, recompiled, the pin SHAPES re-run through the scratch
-  CLI side by side). Every positive pin discriminates BY MESSAGE and has to: while
-  enum -> MEMBER is still vacuous a whole enum IS assignable to one of its own members,
-  so a silence-asserting pin passes on the broken build — round 782's probe-position
-  error in a new dress. The probe target is a PRIMITIVE, which rejects every
-  enum-flavored type and NAMES the one it was given. Of the eleven that hold on both
-  sides, ten do so on purpose (a `let` still widens; a flags accumulator stays legal; a
-  const assign target stays TS2588-only; a member EXPRESSION value owed nothing to this;
-  a FOREIGN enum's member is refused by the owner rule; a non-enum literal union already
-  worked; a plain interface's indexed access is unchanged) — and ONE, the
-  indexed-access GUARD pin, is honestly non-discriminating under FULL ablation and
-  discriminates only against the const-fix-only build, which is exactly the state that
-  manufactured `completions.ts:2239`.
-- **NOT TAKEN, RECORDED RATHER THAN PINNED** (round 765's rule). The kept enum member
-  joins `widen1ConstLiteralTypeIds`, an id-keyed set — and enum member types are
-  program-wide interned singletons, so a `let k: K.A` assignment TARGET elsewhere reads
-  the widened type too. That hole is not new (round 781 shipped it for string literals,
-  which are interned the same way); it is recorded here because enum members make it
-  easier to hit. Zero corpus baselines and zero profile lines move.
-- **PREDICTIONS 2 of 5.** HIT: the price was stale, and the objlit fix closed
-  `formattingScanner.ts:113` for free once `importFixes.ts:1127` was understood — the
-  two really are one cause. **MISSED, and the misses are the output:** I expected the
-  residual to shrink from five lines to fewer, not to GROW to seven first; I expected
-  cause (D) to be a widening-site fix and it was the RETIREMENT of a deliberate
-  exclusion; and I expected the two `completions.ts` lines to share a cause — they are
-  two different ones, and closing the first is what made the second measurable at all.
-- **PROCESS.** The Kotlin daemon OOM'd (`GC overhead limit exceeded`) twice, both times
-  on the build after a long run; `./gradlew --stop` + a graceful
-  `pkill -f 'KotlinCompile[D]aemon'` fixed it in ~2m30s each time, exactly as round 781
-  recorded. A `--tests`-filtered `jvmTest` then hung for >25 minutes with its worker JVM
-  gone from `ps` — the ablation evidence was recovered instead through the 1.2-second
-  scratch CLI, running the pin SHAPES verbatim against both binaries, which is strictly
-  faster than a filtered gradle run and should probably be the default for this.
 
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
@@ -3249,6 +3100,51 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   ratio: **2.28x (median of 340 CI runs) / 2.40x (last 30), EMIT mode**; per-row spread
   1.87x-2.72x because xtsc is one cold run against tsc's median of three. Full derivation:
   `docs/ARCHITECTURE-RETHINK.md` § 0.2.
+
+- [x] **(CALL.5) DONE round 796 — PROMOTED to the top of PERF by the round-796 agent as
+  the next perf item (back-pointer: (ENGINE.2h), round 795, whose closing sentence made
+  `checkArgumentsAgainstSignature` — 1,353–1,442 ms over 23,214 calls, the ENCLOSING
+  region of the three rows rounds 793–795 removed — the largest single measured cost
+  left). Two deliverables: (a) an EXIT CENSUS over the round-735 `ArgSections` partition,
+  (b) the lever it named.**
+  - **(a) THE EXIT CENSUS, and it costs no boundary.** `leftIn` derived an exit profile by
+    DIFFERENCING adjacent rows' `calls` — blind to the two `return`s inside the loop, to
+    the prologue's returns, and unable to say what an exiting iteration had already PAID
+    for. The census records the row already open at boundaries the partition was already
+    crossing, so the ON boundary count is unchanged (448,473 either way) and a
+    before/after ROW comparison stays valid (round 793). Four partition checks print
+    EXACT. Two findings `leftIn` could not give: **every one of the 23,494 invocations
+    returns from `POST`** (the thirteen dedicated prologue walkers, 103 ms net, fire ZERO
+    times), and **15,637 of 39,593 iterations (39%) leave at the one
+    `!isSimpleCheckableType` `continue` carrying 633 ms of the 911 ms argType row (69%)
+    and 409 ms of the 503 ms narrowing (81%)** — round 759's 90/10 split reproduced and
+    LOCALISED to a single exit.
+  - **(b) THE LEVER: the already-relates pre-gate, which COLLECTS ROUND 764's DEBT.** That
+    round gave the ENUM narrowing arm a second-chance shape and declined to generalise, in
+    a comment naming its creditor ("deliberately enum-ONLY: the
+    Interface/`unknown`/`string`/`number` arms below are corpus-pinned"). Round 783's rule
+    says re-test such an exclusion; it is payable, because both remaining arms exist to
+    SUPPRESS a TS2345 the wide type would cause, so the pins that motivated them all live
+    in the population the gate KEEPS. **Refuses 8,905 of 9,823 walks (91%)** — B469
+    1,916/2,455, M3.4 6,989/7,368 — for a measured **259 ms** on the `L_ARGTYPE` row
+    (identical boundary count in both arms, both arms run TWICE per round 795's law 3;
+    295 ms on the whole partition) = **0.95–1.1%**. `narrow.walks` **−32.2%**.
+  - **THE EQUIVALENCE IS NOT AIRTIGHT BY ARGUMENT AND WAS MEASURED**: the narrowed type is
+    read by ~11 blocks below the arm, and the census counts **787 / 1,134 / 1,138**
+    refusals per compiler/services/harness profile that WOULD have substituted a different
+    type. Everything downstream is nevertheless unchanged: grid 46×7/94 with 0 added and 0
+    removed BOTH directions, `--partitionCheck 2` EQUIVALENT, corpus 13,435/0/3.
+    Round 790's FREE complement control reports 578/902/927, so the zeros are not a dead
+    instrument. Full derivation: `docs/perf/argument-check-attribution.md` §§ 10–18.
+  - **WHAT IS LEFT IN THIS FUNCTION, for whoever picks it up.** After the gate it is
+    ~1,240 ms. `L_ARGTYPE` is still ~600 ms, of which `getTypeOfExpression(arg)` is 175
+    and the KEPT narrowing 148 (953 walks at 155 µs — the expensive tail, and round 736
+    already closed the memo failure behind it). `INFER` is 124 ms, the thirteen
+    never-firing prologue walkers 103, `L_WEAK` 82, `L_NOTSIMPLE` 87. **No remaining row
+    is above half a noise band**, so the next unit here is a level-S sub-partition of
+    `L_ARGTYPE`'s `getTypeOfExpression` by ARGUMENT KIND (the 15,637 that exit at
+    `L_NOTSIMPLE` are arrows and callbacks typed under an installed contextual type,
+    round 759), not another gate.
 
 - [x] **(ENGINE.1) CLOSED round 786 — SITE 3 IS PARTITIONED, E3 IS NOW A MEASUREMENT
   RATHER THAN A BOUND, AND THE OWNER-FACING NUMBER IS 613 ms = 2.2% OF A CHECK-ONLY
