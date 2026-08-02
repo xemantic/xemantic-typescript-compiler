@@ -20,6 +20,91 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 798 (2026-08-02) — (IANY.1) THE MAP WAS RE-DERIVED FIRST, AND IT NAMED ITS OWN
+TARGET: `spineIanyEnterNode` — the ONE handler of round 732's big six that no attribution
+round had ever opened — carries 1,031 ms, and 42% of it defines a contextual state that
+NOTHING CAN READ. Gated: 320 ms (1.1%), `getTypeOfExpression` calls −7.63%, grid
+46x7/94 with 0 added and 0 removed BOTH directions, `--partitionCheck 2` EQUIVALENT.
+Round 797's two leads are both DEAD ON ARITHMETIC (147 ms and 99 ms) and are recorded
+as such rather than worked.**
+
+- **STEP 1 — THE LIVE MAP, RE-DERIVED AT HEAD (median of 3 probe-free `--passTiming`
+  runs) AND CORRECTED IN `docs/ARCHITECTURE-RETHINK.md` § 0, which now has a 798
+  column.** What MOVED since round 758: **flow narrowing 71,414 → 17,851 walks (−75%)
+  for 2,290 → 1,158 ms (−49%)** — rounds 736/755/790/796 — plus `getTypeOfExpression`
+  calls −8.5% and `spineLeaveNode` −16.7%. What did NOT: `spineEnterNode`, the ~400
+  tail passes (3,140 ms = 10.7% of the compile), the node count, and the whole per-kind
+  concentration (CALL_EXPRESSION 17.1% of the spine over 6.1% of the nodes; the five
+  statement anchors 38% over 10.0%; IDENTIFIER 9.3% over 44.5%). **The wall did not
+  follow the counters** (29.3 s here vs ~26.5 s recorded at 758) — a statement about the
+  box and the probe load, not the compiler, and exactly why COST.1 exists.
+- **THE TWO LEADS, ADJUDICATED BY ARITHMETIC RATHER THAN BY A ROUND.** (A)
+  `getTypeOfExpression` on PropertyAccess + Call arguments is **147 ms = 0.50%**, and it
+  is the cost of typing a composite argument rather than waste — a subset of the row
+  round 797 already bounded, inside regions closed by round 737 and rounds 789–792. (B)
+  the 8,574 arguments typed to `any` and discarded are **99 ms = 0.34%** with a
+  recoverable part of ZERO (nothing can know a type is `any` without computing it). Both
+  are below half a noise band; neither was worth a round, and saying so IS the answer
+  the item wanted.
+- **THE TARGET THE MAP NAMED.** Five of round 732's six biggest handlers have been
+  opened; `spineIanyEnterNode` (the round-532 migration of `checkImplicitAnyParameters`,
+  a DOWNWARD-CONTEXT walker) had not, and still measures **1,063 ms raw / 1,031 ms net**
+  over all 856,962 nodes.
+- **THE PROPOSITION, AND WHY IT IS NOT A GUESS.** `spineIanyCtx` has no reader outside
+  its own family, and every reader sits INSIDE the subtree the state was defined for. So
+  a state defined for a CHILDLESS child (`forEachChild` visits nothing for IDENTIFIER /
+  STRING_LITERAL_NODE / NUMERIC_LITERAL_NODE) can never be read, and neither can a
+  CALL's own `kind = 1` state when every argument is childless — its `typed` flag is
+  consulted ONLY by the argument edges, which is exactly the population the first gate
+  skips. **The two gates are COUPLED**, and the call's FRAME is still pushed either way
+  because it shadows an enclosing state for the CALLEE's subtree. **The sibling
+  assignment arm has applied this reasoning since round 472** (*"Resolve the LHS type
+  ONLY when the RHS can consume a fn context"*) and never generalised it: round 783's
+  debt with a named creditor, collected.
+- **MEASURED, BOTH ARMS TWICE ON ONE BINARY, WITH AN IDENTICAL BOUNDARY COUNT.** The
+  probe takes two spans per node and classifies the ROW AFTER the span closes, so its
+  boundary count is a function of the node count alone — round 793's correction does not
+  apply to a before/after read of its rows. Skippable rows **473/478 → 45/47 ms** (429
+  removed), but **110 ms REAPPEARS** in the surviving population — round 788's law to
+  the letter, because a childless argument used to be the first to type the callee and a
+  sibling with a subtree now pays for the same cached resolution. **The honest prize is
+  the handler total: 1,102/1,080 → 789/753, Δ = 320 ms against a within-arm spread of
+  22/36 (8.9x) = ~1.1%.** Deterministic confirmation: `typeOfExpr.calls` **−7.63%**
+  (649,410 → 599,880), distinct −5.30%, `globals.lookups` −4.39%, misses −4.42%.
+  **What ROSE**: `typeNode.bypassed` +0.11% and `narrow.walks` by exactly **2 walks** —
+  the round-754/778 resolution-ORDER effect, inside tolerance and reported, not smoothed.
+  Baseline rebased in the landing commit.
+- **NO WALL-CLOCK A/B, DELIBERATELY.** 1.1% IS the warm band, not well above it, and
+  round 788's law makes a C2-compiled saving a smaller fraction of a warm run still.
+  Rounds 794/795/796 declined on the same ground; the counters decide.
+- **EQUIVALENCE.** 8-profile grid, gated vs `--ianyGateOff` (the pre-798 path in the
+  SAME binary, round 794's precedent): **46/46/46/46/46/46/46/94, 0 added and 0 removed
+  BOTH directions on every profile**; `--partitionCheck 2` **EQUIVALENT — 46**; corpus
+  suite **13,449 / 0 / 3** (+8 pins). The one arm carrying state ACROSS a skipped edge —
+  `spineIanyVarDeclEnter`'s `spineIanyPendingAnnDecl` stash — is unobservable because its
+  consumer's test is an IDENTITY against its own declarator and every declarator rewrites
+  the stash; pinned rather than argued.
+- **PINS: 8 new (`IanyGateTest`), N DISCRIMINATING across two complementary ablations run
+  separately.** The harness was COMMITTED BEFORE the gate and before either ablation
+  (law 5), so both reverts were a scoped `git checkout`.
+- **WHAT DID NOT WORK.** The IIFE pin's first form asserted that `((v) => v)("s")`
+  reports TS7006 for `v`. **It does not, on a WORKING binary** — round 694's
+  IIFE-argument contextual typing supplies the parameter type — so the pin failed against
+  a correct gate, exactly round 797's failure one round later. Restated as the
+  equivalence it was written to defend (the same source under both settings of
+  `IanySections.gateOff` must give the same diagnostics), which is strictly stronger.
+  Also: the first background measurement battery was killed mid-run by the harness while
+  two nested wait-loops were outstanding, costing ~15 minutes — run one wait, not two.
+- **WHAT IS LEFT IN THE HANDLER, for whoever takes it next.** ~770 ms probed, **63% of it
+  in ONE row** (`edge: child with a subtree`, 497 ms over 451,292 calls). Extending the
+  gate means answering *"can this subtree read a `kind = 0` state?"*, which is NOT a
+  one-kind test — the state propagates through paren/conditional/logical-binary/
+  array-literal/object-literal edges AND through every parent kind with no arm at all
+  (`AsExpression`, `NonNullExpression`, …), so a conservative subtree scan is quadratic
+  under nesting. Price the scan against the ~500 ms that remains, not against the 320 ms
+  this round removed.
+- Full derivation: `docs/perf/implicit-any-attribution.md`.
+
 **Round 797 (2026-08-02) — (CALL.6) DONE: THE LEVEL-S SUB-PARTITION SAYS ROUND 796's
 HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS WRONG BY 14x — the 15,640 iterations that
 leave at `!isSimpleCheckableType` are 48% bare Identifier and 32% PropertyAccess, not
@@ -865,81 +950,6 @@ THAT IS SKIPPABLE IS NOT THEREBY RECOVERABLE. AND THE WARM A/B DECIDES NOTHING.*
   Cost gate rebaselined in the landing commit with the mechanism and population named.
   Full derivation: `docs/perf/property-access-attribution.md` § 5b.
 
-**Round 787 (2026-08-01) — (ENGINE.2) PROMOTED AND MEASURED: THE PROPERTY-ACCESS PATH IS
-3,815 ms = 13.7% OF A CHECK-ONLY COMPILE — 7.4x THE THREE ASSIGNABILITY SITES (ENGINE.1)
-PRICED — AND ITS DEDICATED-WALKER LAYER IS 207 ms = 0.74%, i.e. 0.088x THE ENGINE WORK.
-THE SCOPE QUESTION IS ANSWERED: WHERE THE WALKERS ARE THICKEST THE TIME IS THIN, AND
-WHERE THE TIME IS THICK THE WALKERS ARE 8% OF IT.** The queue's `- [ ]` items were all
-legitimately unavailable — (AOT.3) needs a NATIVE emit measurement (forbidden on this
-box), (WIDEN.1)(b)/(c)/(d) record 0 measured sites, (M3.0-gap-2/3) are parked/post-v1 —
-so the round took the next stage from `docs/ARCHITECTURE-RETHINK.md` § 0.1's endgame
-paragraph rather than from a checkbox, and **wrote the item and its four scored
-predictions into the queue BEFORE any code** (commit `ccee8d6c`).
-
-- **WHY THIS SITE.** Round 733 attributed the HANDLER (`cpaSpineLeave`) and stopped at
-  "88.4% of it is the pass's own checking work". Its ccet twin was then opened three
-  times ((CALL.1)/(CALL.2)/(CALL.3)) and its cta sibling twice ((TYPE.2)/(ENGINE.1)) —
-  **the cpa side never was**, and it is the biggest of the three. Re-measured at HEAD
-  before promotion per CLAUDE.md's re-measure law: `--spineSections` reads **4,449 ms**
-  (3,179 anchor-stmt + 1,270 owner-cond) against round 733's 4,653 — stable.
-- **WHAT LANDED: `CpaSections` + `--cpaSections{,Coarse,Census}`, 9 pins, and
-  `docs/perf/property-access-attribution.md`.** Level P is RECURSIVE and uses round
-  756's hand-back shape, windowed to `cpaSpineLeave`'s anchors (**399,336 invocations
-  in-window, 0 outside** — the spine is the only caller); level Q partitions
-  `checkSinglePropertyAccess`. **CENSUS is a third mode that reads NO timestamp**, so
-  the distinct-node counter that answers G4 never lands in a timing row.
-- **THE SPLIT: engine 2,364 ms (91.9%) / dedicated-walker layer 207 ms (8.0%).** Rolled
-  up with (ENGINE.1)'s three sites the four-site layer is **820 ms = 2.9%** of a
-  check-only compile. **And the layer is one walker**: of the EIGHT firewall probes that
-  run unconditionally at all 66,747 property accesses, **seven cost between 0 and 25 ms
-  COMBINED** and B464 (`emitTs18048ForClosureCapturedUndefinedReceiver`) costs **272 ms**.
-  **E4 holds a fourth time** — all eight emit diagnostics tsc emits too (TS1209 / 2339 /
-  2532 / 18048 / 2340 / 2855 / 2748 / 2341), so the layer MOVES into any replacement
-  engine; **plainly deletable here is ~0 ms.**
-- **PREDICTIONS 2 HIT / 1 UNDECIDED / 2 MISSED.** G1a (leaf >= 50%) **HIT at 76.2%**.
-  G1b (traversal < 10%) is **UNDECIDED at 9.9% with a 6.6-14% bracket** — the
-  calibration straddles the threshold and saying so is the honest answer. G2 (firewall
-  20-40%) **MISSED at 8.0%** — right direction, 2.5-5x too high. **G3 was the round's
-  hoped-for lever and is FALSIFIED by 17x**: the arrow/fn-expr scope bookkeeping — three
-  `EpochMap`/`EpochSet` copies plus `applyBodyLocalShadowing` per function node — is
-  **18 ms**, not the >= 300 ms predicted. The item's own clause said "if it comes in
-  under 150 ms, say so and stop"; said.
-- **G4's FIRST READING WAS AN ARTIFACT, AND CATCHING IT IS THE ROUND'S METHOD LESSON.**
-  It measured **2.35x** visits/distinct at level P and 1.49x at level Q — "the walk
-  re-checks a third of its property accesses", which would have been the headline.
-  **`indexSourceFile` restarts `nodeId` at 0 for EVERY `SourceFile`**, so a program-wide
-  `HashSet<Int>` of raw ids collapses one node per file onto each id and inflates the
-  ratio without bound. Keyed by `(fileName.hashCode(), nodeId)` the answer is **exactly
-  1.000 in both levels** — nothing is visited twice. An identity set is not the fix
-  either (AST nodes are data classes; `HashSet<Node>` deep-recurses `hashCode`).
-- **CALIBRATION REPORTED AS A BOUND.** Three runs per mode: ON 4,366/4,405/4,474,
-  COARSE 4,095/4,101/4,136. Δ = **304 ms** over 782,359 extra boundaries = **389 ns**,
-  bracket **198-579 ns**; Δ is **2.8x** the larger spread — usable, unlike round 786's
-  1.4x, but not sharp. **The classification does not hinge on it**: 79% of level-P
-  closes are in the two TRAVERSAL rows, and **every level-Q row closes exactly 66,747
-  times**, so a uniform boundary cost subtracts the same amount from each and cannot
-  reorder them.
-- **TWO CANDIDATES PRICED FOR (ENGINE.2b), neither clearing the +-2.0% COLD band alone,
-  together 403 ms = 1.44%.** (i) **`cpaComputeArgCtxTypes` computes 265 ms for calls
-  where nothing can read the result** — `contextualType` is read by exactly three arms,
-  and only **2,020 of 51,967 calls (3.9%)** have an argument subtree containing an
-  arrow / fn-expr / objlit; those hold 67 ms of the 332. **This is the round-759
-  qualification pointing the OTHER way and worth stating: per call the skippable
-  population IS the cheap tail (5.3 us vs 33 us, exactly as § 0's law predicts) but
-  there are 25x more of them, so the aggregate skippable share is 80% — a per-item cost
-  law does not settle an aggregate question.** (ii) **B464's innermost-closure lookup is
-  a 138 ms O(closures-in-file) LINEAR SCAN** over 15,483 reaching invocations (8.9 us
-  each, 46% of the walker); the round-489 pre-gate already works (only 15,483 of 66,747
-  get past it, and only **466** ever launch the flow walk).
-- **NOTHING WAS LANDED BUT THE HARNESS, DELIBERATELY.** (i) calls
-  `getTypeOfIdentifier` / `resolveStructuredTypeMembers` /
-  `tryInferSingleTypeParamFromArgs`, all of which mutate resolution caches, and round
-  754 showed a resolution-ORDER accident can decide a verdict — so it is not free by
-  inspection and does not belong in the last hour of a round.
-- Suite 13,342 -> **13,351 / 0 failures / 3 skipped** (+9 pins). 8-profile grid
-  **46/46/46/46/46/46/46/94**, re-captured at HEAD. `--listAll` byte-identical in
-  production, ON, COARSE and CENSUS. Cost gate **all 20 counters +0.00%**.
-
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
   existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
@@ -1163,6 +1173,25 @@ predictions into the queue BEFORE any code** (commit `ccee8d6c`).
   only evidence that anything moved, which is precisely what COST.1 exists to prevent.
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+- [x] **(IANY.1) DONE round 798 — `spineIanyEnterNode` is OPENED, and the gate it exposed
+  removes 320 ms (~1.1%).** The last of round 732's six biggest spine handlers with no
+  attribution round: 1,063 ms raw / 1,031 ms net over all 856,962 nodes, the round-532
+  migration of `checkImplicitAnyParameters`. **42% of it defines a contextual state that
+  nothing can read** — `spineIanyCtx` has no reader outside its own family and every
+  reader sits INSIDE the subtree the state was defined for, so a CHILDLESS child
+  (IDENTIFIER / STRING_LITERAL_NODE / NUMERIC_LITERAL_NODE, all empty under
+  `forEachChild`) and a CALL whose arguments are ALL childless are both unobservable.
+  Landed: `IanySections` + `--ianySections` (two spans per node, row classified after the
+  span closes, boundary count a function of the node count alone) and `--ianyGateOff`
+  (the pre-798 path in the same binary = the grid baseline), plus the coupled two-part
+  gate. Grid **46x7/94, 0 added and 0 removed BOTH directions**, `--partitionCheck 2`
+  EQUIVALENT, suite **13,449 / 0 / 3**, cost gate rebased (`typeOfExpr.calls` −7.63%).
+  **STILL OPEN, sized**: ~500 ms sits in one row (`edge: child with a subtree`), and
+  extending the gate needs a SUBTREE predicate ("can this subtree read a `kind = 0`
+  state?") whose conservative form is quadratic under nesting — price the scan against
+  the 500 ms that remains, not against the 320 this round removed
+  (`docs/perf/implicit-any-attribution.md` § 8).
 
 - [x] **(ORDER.1) `formattingScanner.ts:311` is a PROGRAM-ORDER-dependent FP that round
   776 introduced and round 777 attributed — services / server / harness are 46 -> 47 /

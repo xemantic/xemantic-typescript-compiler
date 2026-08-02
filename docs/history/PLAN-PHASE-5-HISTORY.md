@@ -1,5 +1,81 @@
 **Round 785 (2026-08-01) — (NARROW.1) IS CLOSED. `extractNullNarrowing` HAS ITS
 TYPE-GUARD CALL ARM, AND THE CHANGE THE ITEM WARNED WOULD MOVE "THE PRIMARY TYPE OF EVERY
+
+**Round 787 (2026-08-01) — (ENGINE.2) PROMOTED AND MEASURED: THE PROPERTY-ACCESS PATH IS
+3,815 ms = 13.7% OF A CHECK-ONLY COMPILE — 7.4x THE THREE ASSIGNABILITY SITES (ENGINE.1)
+PRICED — AND ITS DEDICATED-WALKER LAYER IS 207 ms = 0.74%, i.e. 0.088x THE ENGINE WORK.
+THE SCOPE QUESTION IS ANSWERED: WHERE THE WALKERS ARE THICKEST THE TIME IS THIN, AND
+WHERE THE TIME IS THICK THE WALKERS ARE 8% OF IT.** The queue's `- [ ]` items were all
+legitimately unavailable — (AOT.3) needs a NATIVE emit measurement (forbidden on this
+box), (WIDEN.1)(b)/(c)/(d) record 0 measured sites, (M3.0-gap-2/3) are parked/post-v1 —
+so the round took the next stage from `docs/ARCHITECTURE-RETHINK.md` § 0.1's endgame
+paragraph rather than from a checkbox, and **wrote the item and its four scored
+predictions into the queue BEFORE any code** (commit `ccee8d6c`).
+
+- **WHY THIS SITE.** Round 733 attributed the HANDLER (`cpaSpineLeave`) and stopped at
+  "88.4% of it is the pass's own checking work". Its ccet twin was then opened three
+  times ((CALL.1)/(CALL.2)/(CALL.3)) and its cta sibling twice ((TYPE.2)/(ENGINE.1)) —
+  **the cpa side never was**, and it is the biggest of the three. Re-measured at HEAD
+  before promotion per CLAUDE.md's re-measure law: `--spineSections` reads **4,449 ms**
+  (3,179 anchor-stmt + 1,270 owner-cond) against round 733's 4,653 — stable.
+- **WHAT LANDED: `CpaSections` + `--cpaSections{,Coarse,Census}`, 9 pins, and
+  `docs/perf/property-access-attribution.md`.** Level P is RECURSIVE and uses round
+  756's hand-back shape, windowed to `cpaSpineLeave`'s anchors (**399,336 invocations
+  in-window, 0 outside** — the spine is the only caller); level Q partitions
+  `checkSinglePropertyAccess`. **CENSUS is a third mode that reads NO timestamp**, so
+  the distinct-node counter that answers G4 never lands in a timing row.
+- **THE SPLIT: engine 2,364 ms (91.9%) / dedicated-walker layer 207 ms (8.0%).** Rolled
+  up with (ENGINE.1)'s three sites the four-site layer is **820 ms = 2.9%** of a
+  check-only compile. **And the layer is one walker**: of the EIGHT firewall probes that
+  run unconditionally at all 66,747 property accesses, **seven cost between 0 and 25 ms
+  COMBINED** and B464 (`emitTs18048ForClosureCapturedUndefinedReceiver`) costs **272 ms**.
+  **E4 holds a fourth time** — all eight emit diagnostics tsc emits too (TS1209 / 2339 /
+  2532 / 18048 / 2340 / 2855 / 2748 / 2341), so the layer MOVES into any replacement
+  engine; **plainly deletable here is ~0 ms.**
+- **PREDICTIONS 2 HIT / 1 UNDECIDED / 2 MISSED.** G1a (leaf >= 50%) **HIT at 76.2%**.
+  G1b (traversal < 10%) is **UNDECIDED at 9.9% with a 6.6-14% bracket** — the
+  calibration straddles the threshold and saying so is the honest answer. G2 (firewall
+  20-40%) **MISSED at 8.0%** — right direction, 2.5-5x too high. **G3 was the round's
+  hoped-for lever and is FALSIFIED by 17x**: the arrow/fn-expr scope bookkeeping — three
+  `EpochMap`/`EpochSet` copies plus `applyBodyLocalShadowing` per function node — is
+  **18 ms**, not the >= 300 ms predicted. The item's own clause said "if it comes in
+  under 150 ms, say so and stop"; said.
+- **G4's FIRST READING WAS AN ARTIFACT, AND CATCHING IT IS THE ROUND'S METHOD LESSON.**
+  It measured **2.35x** visits/distinct at level P and 1.49x at level Q — "the walk
+  re-checks a third of its property accesses", which would have been the headline.
+  **`indexSourceFile` restarts `nodeId` at 0 for EVERY `SourceFile`**, so a program-wide
+  `HashSet<Int>` of raw ids collapses one node per file onto each id and inflates the
+  ratio without bound. Keyed by `(fileName.hashCode(), nodeId)` the answer is **exactly
+  1.000 in both levels** — nothing is visited twice. An identity set is not the fix
+  either (AST nodes are data classes; `HashSet<Node>` deep-recurses `hashCode`).
+- **CALIBRATION REPORTED AS A BOUND.** Three runs per mode: ON 4,366/4,405/4,474,
+  COARSE 4,095/4,101/4,136. Δ = **304 ms** over 782,359 extra boundaries = **389 ns**,
+  bracket **198-579 ns**; Δ is **2.8x** the larger spread — usable, unlike round 786's
+  1.4x, but not sharp. **The classification does not hinge on it**: 79% of level-P
+  closes are in the two TRAVERSAL rows, and **every level-Q row closes exactly 66,747
+  times**, so a uniform boundary cost subtracts the same amount from each and cannot
+  reorder them.
+- **TWO CANDIDATES PRICED FOR (ENGINE.2b), neither clearing the +-2.0% COLD band alone,
+  together 403 ms = 1.44%.** (i) **`cpaComputeArgCtxTypes` computes 265 ms for calls
+  where nothing can read the result** — `contextualType` is read by exactly three arms,
+  and only **2,020 of 51,967 calls (3.9%)** have an argument subtree containing an
+  arrow / fn-expr / objlit; those hold 67 ms of the 332. **This is the round-759
+  qualification pointing the OTHER way and worth stating: per call the skippable
+  population IS the cheap tail (5.3 us vs 33 us, exactly as § 0's law predicts) but
+  there are 25x more of them, so the aggregate skippable share is 80% — a per-item cost
+  law does not settle an aggregate question.** (ii) **B464's innermost-closure lookup is
+  a 138 ms O(closures-in-file) LINEAR SCAN** over 15,483 reaching invocations (8.9 us
+  each, 46% of the walker); the round-489 pre-gate already works (only 15,483 of 66,747
+  get past it, and only **466** ever launch the flow walk).
+- **NOTHING WAS LANDED BUT THE HARNESS, DELIBERATELY.** (i) calls
+  `getTypeOfIdentifier` / `resolveStructuredTypeMembers` /
+  `tryInferSingleTypeParamFromArgs`, all of which mutate resolution caches, and round
+  754 showed a resolution-ORDER accident can decide a verdict — so it is not free by
+  inspection and does not belong in the last hour of a round.
+- Suite 13,342 -> **13,351 / 0 failures / 3 skipped** (+9 pins). 8-profile grid
+  **46/46/46/46/46/46/46/94**, re-captured at HEAD. `--listAll` byte-identical in
+  production, ON, COARSE and CENSUS. Cost gate **all 20 counters +0.00%**.
+
 GUARDED REFERENCE IN BOTH DIRECTIONS" IS **SET-FOR-SET FREE ON ALL EIGHT PROFILES WHILE
 FIRING 630-916 TIMES PER PROFILE**. IT IS NOT NEUTRAL, THOUGH: IT REMOVES TWO
 FALSE-POSITIVE CLASSES THE GRID NEVER SHOWED.** Baseline re-captured at HEAD first

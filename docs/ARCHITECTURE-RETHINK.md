@@ -299,27 +299,54 @@ this section, this section is the measurement.*
 **§1 says the cost is "uncached type recomputation". It is not.** Full attribution
 of a compiler-profile run (`--passTiming`, new INV.4(g)/INV.5(c5) counters):
 
-**RE-MEASURED ROUND 758** (HEAD `7d49c910`, ~40 rounds and two landed wins
-later). The 716 column is kept because several queue items still quote it; the
-758 column is the live one. **Read the two flagged rows with their caveats —
+**RE-MEASURED ROUND 798** (2026-08-02, HEAD `750849af`, **median of 3 probe-free
+`--passTiming` runs**; the 758 column was HEAD `7d49c910`). CLAUDE.md's own
+standing warning is why: *"the absolute figures here go stale fast — re-measure a
+number before spending a round inside it"*, and five landings (rounds 793–797)
+had moved them. The 716/758 columns are kept because queue items quote them; the
+**798 column is the live one**. **Read the two flagged rows with their caveats —
 they are the audit's ❌ rows** (`docs/perf/claim-audit-round758.md` § 4).
 
-| | 716 ms | **758 ms** | share of checker-init |
-|---|---:|---:|---:|
-| `checkSpine` | 14,292 | **22,104** | **84.4%** (74% of the compile) |
-| — `spineEnterNode` | 7,166 | **11,155** | |
-| — `spineLeaveNode` | 5,478 | **8,046** | |
-| — unresolved-names family | 840 | **1,223** | |
-| — `forEachChild` | 255 | **557** | |
-| — scope maintenance | 25 | **53** | |
-| **the INSTRUMENTED type-system rows** ⚠️ | **5,056** | **6,907** | **26.4%** |
-| — flow-narrowing walks | 2,437 (69,917) | **2,290** (71,414) | |
-| — `getTypeOfExpression` ⚠️ **double counts** (round 737: charges a subtree once per nesting level, ×~1.6) | 1,804 (624,810) | **3,254** (709,357) | |
-| — relations (depth-0) | 468 | **685** | |
-| — type-node resolution (depth-0) | 311 | **580** | |
-| — member resolution | 36 | **98** | |
-| **the ~400 tail passes** | *"14 units", § 0.1* | **3,130** | **11.9%** (10.4% of the compile) |
-| ~~**dispatch + handler machinery (residual)**~~ ❌ **A RESIDUAL THAT WAS GIVEN A NAME** — rounds 732/733/734 each measured a piece of it and found NO dispatch; real dispatch is 100–300 ms. It is the migrated passes' OWN CHECKING WORK | ~7,600 | **~12,300** | **47%** |
+| | 716 ms | 758 ms | **798 ms** | share of checker-init |
+|---|---:|---:|---:|---:|
+| whole compile (wall) | — | ~26,500 | **29,304** (28,501–30,002) | |
+| checker-init | — | 26,200 | **25,557** (24,746–25,934) | |
+| `checkSpine` | 14,292 | 22,104 | **21,578** | **84.4%** (73.6% of the compile) |
+| — `spineEnterNode` | 7,166 | 11,155 | **11,942** | |
+| — `spineLeaveNode` | 5,478 | 8,046 | **6,705** ⬇ −16.7% | |
+| — unresolved-names family | 840 | 1,223 | **1,233** | |
+| — `forEachChild` | 255 | 557 | **532** | |
+| — scope maintenance | 25 | 53 | **53** | |
+| **the INSTRUMENTED type-system rows** ⚠️ | 5,056 | 6,907 | **5,536** | **21.7%** |
+| — flow-narrowing walks | 2,437 (69,917) | 2,290 (71,414) | **1,158 (17,851)** ⬇ **−49% ms, −75% walks** | |
+| — `getTypeOfExpression` ⚠️ **double counts** (round 737: charges a subtree once per nesting level, ×~1.6) | 1,804 (624,810) | 3,254 (709,357) | **3,127 (649,410)** | |
+| — relations (depth-0) | 468 | 685 | **661** | |
+| — type-node resolution (depth-0) | 311 | 580 | **491** | |
+| — member resolution | 36 | 98 | **99** | |
+| **the ~400 tail passes** | *"14 units", § 0.1* | 3,130 | **3,140** | **12.3%** (10.7% of the compile) |
+| **front end** (wall − checker-init) | — | — | **3,755** | (12.8% of the compile) |
+| ~~**dispatch + handler machinery (residual)**~~ ❌ **A RESIDUAL THAT WAS GIVEN A NAME** — rounds 732/733/734 each measured a piece of it and found NO dispatch; real dispatch is 100–300 ms. It is the migrated passes' OWN CHECKING WORK | ~7,600 | ~12,300 | **~13,100** | **51%** |
+
+**What actually moved since 758, and what did not.** The one structural change is
+**flow narrowing**: 71,414 walks → **17,851** (−75%) for 2,290 → **1,158 ms**
+(−49%) — rounds 736, 755, 790 and above all 796's already-relates argument gate.
+`getTypeOfExpression` calls fell 709,357 → 649,410 (−8.5%) and `spineLeaveNode`
+6,705 (−16.7%), while `spineEnterNode`, the tail passes, the node count and the
+per-kind concentration are FLAT. **The wall did not move with them** — 29.3 s
+here against ~26.5 s recorded at 758 — which is a statement about the box and the
+`--passTiming` load, not about the compiler; the counters are the comparable
+quantity (COST.1), and this is exactly why. **The per-kind shape is unchanged**
+and still a LOCATION, not a lever: CALL_EXPRESSION 3,680 ms = **17.1%** of the
+spine over 6.1% of the nodes, the five statement-anchor kinds 8,206 ms = **38%**
+over 10.0%, IDENTIFIER 2,006 ms = **9.3%** over 44.5%.
+
+**The per-handler table (round-798 `--dispatchProbe`, net of 37 ns/call), against
+round 732's:** `cpaSpineLeave` 4,366 → **3,005**, `spineCtaM3StatementAnchor`
+2,900 → **2,918**, `ccetSpineLeave` 3,046 → **2,732**, `spineIanyEnterNode`
+1,025 → **1,031**, `ccetSpineEnter` 920 → **866**, `ctaSpineEnter` 586 → **706**,
+`spineArithLeaveNode` **615**. Five of those six had been opened by an attribution
+round; **`spineIanyEnterNode` was the one that had not, and round 798 opened it**
+(`docs/perf/implicit-any-attribution.md`) and landed a 320 ms gate in it.
 
 ⚠️ The type-system row set is **inflated and incomplete at once**: the
 `getTypeOfExpression` row double counts (737), while round 734 showed the row
