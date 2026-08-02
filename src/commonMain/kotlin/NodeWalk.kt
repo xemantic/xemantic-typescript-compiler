@@ -41,13 +41,28 @@ package com.xemantic.typescript.compiler
  * data-class properties — a missed child position would otherwise silently exempt
  * a whole subtree from indexing/walking (cf. the MappedType-constraint gotcha).
  *
+ * (JIT.1), round 803: SPLIT INTO THREE FUNCTIONS BY [NodeKind] RANGE, AND THE
+ * SPLIT IS THE POINT. At 9,750 bytecodes this single `when` was above HotSpot's
+ * `HugeMethodLimit` (8,000; `DontCompileHugeMethods` is a product flag that
+ * defaults to true), so the traversal primitive of the entire compiler was NEVER
+ * JIT-COMPILED — it ran interpreted for the whole process, invisibly:
+ * `-XX:+PrintCompilation` prints no "too large" line, because the compile is
+ * never *proposed*. The three parts cover DISJOINT CONTIGUOUS kind ranges, so
+ * each is still one dense tableswitch, and the ranges are chosen so every HOT
+ * kind (IDENTIFIER — 44.5% of all nodes — the literals, PROPERTY_ACCESS / CALL /
+ * BINARY, the statement anchors) stays in THIS function and pays no extra call;
+ * only the member / type / supporting / JSX kinds pay one static call, and none
+ * pays two. ENUMERATION ORDER IS UNCHANGED — every arm was moved verbatim.
+ * [HugeMethodLimitTest] pins the sizes; `scripts/huge_methods.py` is the
+ * whole-program census.
+ *
  * Note [MappedType.typeParameter] is visited as a child and [TypeParameter]'s own
  * children include its `constraint` — a generic walk reaches mapped-type
  * constraints without the per-walker special case.
  */
 fun forEachChild(node: Node, action: (Node) -> Unit) {
-    when ((node as NodeBase).kindId) {
-        // ── grouping is cosmetic: a dense when(Int) compiles to one tableswitch ──
+    val kind = (node as NodeBase).kindId
+    when (kind) {
         NodeKind.IDENTIFIER -> {}
         NodeKind.PROPERTY_ACCESS_EXPRESSION -> { node as PropertyAccessExpression; action(node.expression); action(node.name) }
         NodeKind.CALL_EXPRESSION -> {
@@ -59,19 +74,6 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.STRING_LITERAL_NODE -> {}
         NodeKind.NUMERIC_LITERAL_NODE -> {}
         NodeKind.BINARY_EXPRESSION -> { node as BinaryExpression; action(node.left); action(node.right) }
-        NodeKind.KEYWORD_TYPE_NODE -> {}
-        NodeKind.TYPE_REFERENCE -> {
-            node as TypeReference
-            action(node.typeName)
-            node.typeArguments?.forEach(action)
-        }
-        NodeKind.PARAMETER -> {
-            node as Parameter
-            action(node.name)
-            node.type?.let(action)
-            node.initializer?.let(action)
-            node.decorators?.forEach(action)
-        }
         NodeKind.EXPRESSION_STATEMENT -> { node as ExpressionStatement; action(node.expression) }
         NodeKind.BLOCK -> { node as Block; node.statements.forEach(action) }
         NodeKind.VARIABLE_DECLARATION -> {
@@ -265,6 +267,32 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.OMITTED_EXPRESSION -> {}
         NodeKind.COMMA_LIST_EXPRESSION -> { node as CommaListExpression; node.elements.forEach(action) }
 
+        // ── supporting kinds that happen to carry a low id ──
+        NodeKind.SOURCE_FILE -> { node as SourceFile; node.statements.forEach(action) }
+        NodeKind.TEMPLATE_SPAN -> { node as TemplateSpan; action(node.expression); action(node.literal) }
+        else ->
+            // Disjoint continuation ranges — NOT a fall-through chain, so no kind
+            // pays more than one extra static call.
+            if (kind < NodeKind.PARAMETER) forEachChildOfMemberOrType(node, kind, action)
+            else forEachChildOfSupportingNode(node, kind, action)
+    }
+}
+
+/**
+ * (JIT.1) [forEachChild] part 2 of 3 — the CLASS ELEMENT and TYPE NODE kinds
+ * ([NodeKind.PROPERTY_DECLARATION] .. [NodeKind.KEYWORD_TYPE_NODE]). Arms moved
+ * verbatim from the single pre-803 `when`; [kind] is the caller's already-read
+ * [NodeBase.kindId], so this is one further tableswitch and nothing else.
+ */
+private fun forEachChildOfMemberOrType(node: Node, kind: Int, action: (Node) -> Unit) {
+    when (kind) {
+        NodeKind.KEYWORD_TYPE_NODE -> {}
+        NodeKind.TYPE_REFERENCE -> {
+            node as TypeReference
+            action(node.typeName)
+            node.typeArguments?.forEach(action)
+        }
+
         // ── class elements ──
         NodeKind.PROPERTY_DECLARATION -> {
             node as PropertyDeclaration
@@ -374,10 +402,27 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         }
         NodeKind.THIS_TYPE -> {}
         NodeKind.INFER_TYPE -> { node as InferType; action(node.typeParameter) }
+        else -> unstampedKindError(node)
+    }
+}
+
+/**
+ * (JIT.1) [forEachChild] part 3 of 3 — [NodeKind.PARAMETER] and above: the
+ * supporting nodes (parameters, decorators, heritage clauses, members, binding
+ * patterns, clauses, import/export specifiers) and the JSX kinds. Arms moved
+ * verbatim from the single pre-803 `when`.
+ */
+private fun forEachChildOfSupportingNode(node: Node, kind: Int, action: (Node) -> Unit) {
+    when (kind) {
+        NodeKind.PARAMETER -> {
+            node as Parameter
+            action(node.name)
+            node.type?.let(action)
+            node.initializer?.let(action)
+            node.decorators?.forEach(action)
+        }
 
         // ── supporting nodes ──
-        NodeKind.SOURCE_FILE -> { node as SourceFile; node.statements.forEach(action) }
-        NodeKind.TEMPLATE_SPAN -> { node as TemplateSpan; action(node.expression); action(node.literal) }
         NodeKind.DECORATOR -> { node as Decorator; action(node.expression) }
         NodeKind.HERITAGE_CLAUSE -> { node as HeritageClause; node.types.forEach(action) }
         NodeKind.EXPRESSION_WITH_TYPE_ARGUMENTS -> {
@@ -469,11 +514,18 @@ fun forEachChild(node: Node, action: (Node) -> Unit) {
         NodeKind.JSX_TEXT -> {}
         NodeKind.JSX_EXPRESSION_CONTAINER -> { node as JsxExpressionContainer; node.expression?.let(action) }
         NodeKind.JSX_FRAGMENT -> { node as JsxFragment; node.children.forEach(action) }
-        else -> error(
-            "forEachChild: unstamped kindId on ${node::class.simpleName} — the class is missing its init { kindId = ... } stamp"
-        )
+        else -> unstampedKindError(node)
     }
 }
+
+/**
+ * The loud `else` the M0.2 stamp contract relies on — a class missing its
+ * `init { kindId = ... }` stamp carries [NodeBase.kindId] = −1 and crashes every
+ * parse here rather than silently exempting its subtree from every walk.
+ */
+private fun unstampedKindError(node: Node): Nothing = error(
+    "forEachChild: unstamped kindId on ${node::class.simpleName} — the class is missing its init { kindId = ... } stamp"
+)
 
 /**
  * INV.2(a): stamps dense per-file identity onto a freshly parsed tree — preorder
