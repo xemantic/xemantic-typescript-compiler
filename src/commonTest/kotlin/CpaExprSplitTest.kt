@@ -48,9 +48,11 @@ import kotlin.test.Test
  * gets a pin: one ARM pin per helper (the arm fires at all), and four SEAM pins:
  *
  * * the arrow's and the function expression's parameter scopes are **restored**
- *   when the helper returns (a dropped restore leaks the inner parameter type
- *   into the enclosing scope, which is silent unless something reads the outer
- *   name AFTER the function);
+ *   when the helper returns — read from a LATER ARGUMENT OF THE SAME CALL,
+ *   because `withCpaFrameAmbient` reinstalls `currentLocalTypes` at every
+ *   per-statement anchor and therefore erases the leak at the statement
+ *   boundary (round 806's ablation: the original next-statement shape stayed
+ *   GREEN against a binary with the restores deleted);
  * * a function expression's body is walked with `enclosingClassType = null`, not
  *   with the enclosing class — a helper that "helpfully" threaded its own
  *   parameter through would type `this` as the enclosing class instead of `any`;
@@ -64,6 +66,7 @@ class CpaExprSplitTest {
         interface Outer { o: string }
         declare function run(cb: (b: Box) => void): void;
         declare function runF(cb: (b: Box) => void): void;
+        declare function two(cb: (b: Box) => void, x: string): void;
     """.trimIndent() + "\n"
 
     // ------------------------------------------------------------------- arms
@@ -110,40 +113,46 @@ class CpaExprSplitTest {
 
     // ------------------------------------------------------------------ seams
 
+    // Round 806, paying round 805's owed ablation B: the two restore seams below
+    // were originally written as "the NEXT STATEMENT sees the outer binding
+    // again", and that shape CANNOT discriminate — `withCpaFrameAmbient` (the
+    // per-statement anchor install in `cpaSpineLeave`) saves and restores
+    // `currentLocalTypes` around EVERY statement dispatch, so a dropped restore
+    // inside an arm is invisible the moment the statement ends. Measured:
+    // dropping `cpaExprArrowFunction`'s three restore lines left the original
+    // pin GREEN. A leak is only observable WITHIN one statement, so both pins
+    // now read the outer binding from a LATER ARGUMENT OF THE SAME CALL.
+
     @Test
-    fun `ArrowFunction seam - the arrow's parameter scope is restored after the arm returns`() {
+    fun `ArrowFunction seam - the arrow's parameter scope is restored before the next argument`() {
         val d = diagnose(
             prelude +
                 """
-                declare const b: Outer;
-                run(b => { b.v; });
-                b.o;
-                b.v;
+                function host(b: Outer): void {
+                  two(b => { b.v; }, b.v);
+                }
                 """.trimIndent(),
         )
-        // The arrow's `b: Box` must not survive the arm: after it, `b` is `Outer`
-        // again, so `b.o` is legal and `b.v` is not.
+        // The arrow's `b: Box` must not survive the arm: the SECOND argument of
+        // the same call sees `b` as `Outer` again, so `b.v` is an error there.
         assert(d.any {
             it.code == 2339 && it.message == "Property 'v' does not exist on type 'Outer'."
         })
-        assert(d.none { it.code == 2339 && it.message.contains("'o'") })
     }
 
     @Test
-    fun `FunctionExpression seam - the parameter scope is restored after the arm returns`() {
+    fun `FunctionExpression seam - the parameter scope is restored before the next argument`() {
         val d = diagnose(
             prelude +
                 """
-                declare const b: Outer;
-                runF(function (b) { b.v; });
-                b.o;
-                b.v;
+                function host(b: Outer): void {
+                  two(function (b) { b.v; }, b.v);
+                }
                 """.trimIndent(),
         )
         assert(d.any {
             it.code == 2339 && it.message == "Property 'v' does not exist on type 'Outer'."
         })
-        assert(d.none { it.code == 2339 && it.message.contains("'o'") })
     }
 
     @Test
