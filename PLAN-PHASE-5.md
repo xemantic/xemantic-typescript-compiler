@@ -20,6 +20,100 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 801 (2026-08-02) — (FRONT.2) `Binder.bind` IS OPENED AND CLOSED. THE MAP WAS
+RE-DERIVED FIRST AND IT NAMED ITS TARGET BY ELIMINATION: THE ~400 TAIL PASSES ARE FLAT
+(largest 75 ms = 0.26%, only 2 of 400 do any type-system work), SO THE ROUND WENT TO THE
+FRONT END'S 1,549 ms BIND — NEVER PARTITIONED IN 800 ROUNDS. TWO LEVERS BUILT, BOTH
+MEASURED ZERO, AND ONE OF THEM WAS KILLED BY ITS OWN CENSUS AFTER ITS ROW HAD ALREADY
+COLLAPSED. Suite 13,476/0/3, grid 46×7/94 with 0 added and 0 removed BOTH directions,
+cost gate all 20 counters +0.00%.**
+
+- **STEP 1 — THE MAP, RE-DERIVED, AND NOTHING LARGE WAS STALE.** Median of 3 probe-free
+  `--passTiming` runs at `d26c6988`, with `./gradlew --stop` plus a graceful bracket-pattern
+  Kotlin-daemon kill INSIDE the measuring script (round 800's 270× misread was exactly this).
+  Wall 29.12/28.57/28.39 s — a 2.6% spread, and the absolute ns/call sanity-checked against
+  the 798 table before anything was believed. Every 798 row held to within a few percent;
+  the compile is ~2.5% faster, which is the 481 ms rounds 798–800 landed. § 0 now carries a
+  dated 801 column.
+- **THE TWO NEW ROWS ARE THE ROUND'S REAL FINDING, and neither needed instrumentation —
+  only someone to add up what `--passTiming` already prints.** (1) **The ~400 tail passes are
+  2,962 ms and FLAT**: largest `checkSpreadPropertyOverrides` **75 ms = 0.26% of the
+  compile**, top 20 = 33%, top 50 = 62%, and 300 of them hold 11%. Decisively, **only 2 of
+  400 call `getTypeOfExpression` at all and NONE narrows** — so the tail is not type-system
+  work, it is ~400 pure AST traversals with syntactic predicates. That is a STRUCTURAL cost,
+  and its two treatments are already measured and closed (M0.4's 25% recovery,
+  superseded-as-mis-ordered; (DISPATCH.1) at 4.8%; deletion closed twice in 619/620). **So
+  the prompt's second candidate was eliminated by measurement rather than by memory.**
+  (2) **`outside-pass` = 975 ms** — checker-init work inside no `pass()` wrapper, a row no
+  column had ever named.
+- **STEP 2 — THE BIND, PARTITIONED, AND IT IS THE FIRST PARTITION IN THIS ARC WITH NO
+  BOUNDARY-COST CAVEAT.** `bind()` is literally three statements, so the partition is
+  exhaustive BY CONSTRUCTION and costs 3 timestamp pairs per FILE (123 files ≈ 33 µs against
+  ~1,530 ms) — no round-734 differential calibration needed, and the measured residue is
+  **−13 ms (0.8%)**. **`bindStatements` 31 ms (2%) / `bindLexicalScopes` ~470 ms (31%, over
+  876,201 node pops) / `FlowGraphBuilder.build` ~1,050 ms (67%, over 236,587 flow nodes)**.
+  The census is what makes those readable: 1,050 ms over 236,587 nodes is **4.4 µs per flow
+  node**, ~1000× an allocation, which is what rules out the minting as the cost. Level 2,
+  three spans per CLOSURE (2,014, not per node): **`collectReassignedNamesInRange` 275–444 ms**,
+  `collectClosureLocalNames` 3–4 ms, `collectEnclosingVarDecls` 16–20 ms, and **~700 ms of
+  residue that is the flow walk itself, at 3.0 µs per flow node.**
+- **LEVER A — hoist the `substring`, unbox the neighbour reads. MEASURED ZERO.** The census
+  sized the target exactly rather than by inference: **382,520 identifier occurrences
+  classified against 15,331 recorded — 24×, i.e. 367,189 `String`s allocated and discarded**,
+  plus a boxed `Char?` at every context probe (`getOrNull`). Both removed, both arms on ONE
+  binary, twice each, identical boundary counts: **fast 314/362 ms vs legacy 317/320 ms.**
+  Nothing. *An allocation count is not a cost* — round 758's population-vs-frequency law one
+  level down, and the round's own prediction falsified by its own instrument.
+- **THE EQUIVALENCE IS MEASURED, NOT ARGUED, AND ITS CONTROL IS HONESTLY DEAD.** The pre-801
+  scanner is kept VERBATIM as the oracle: `--verifyFlowScan` runs both on every real scan and
+  reports **scans compared 1220, diverged 0; entries compared 15331, diverged 0**, with
+  production `--listAll` identical. **`--flowScanBogus`, the positive control, reports 0 on
+  the compiler profile** — tsc's own sources contain no `%=` in a scanned range — so it is
+  reported as dead THERE and the falsification is carried by a fixture pin instead. That is
+  round 793's rule applied to this round rather than rediscovered by the next one.
+- **LEVER B — defer the suffix set. ROW COLLAPSED, THEN ITS OWN CENSUS KILLED THE CLAIM.**
+  The value has exactly ONE consumer (`root in flowNode.reassignedAfterNames`) reached only
+  from a narrowing walk, and walks fell 75% between 758 and 798 — the (IANY.1) "a state
+  nothing can read" shape, one phase earlier. `SuffixNameSet` is a view materialising on
+  first question; the row fell **53.5 → 0.9 ms** and for an hour that looked like a small
+  win. Then the census: **suffix sets created 1143, materialized 1143.** Every set IS
+  eventually asked, so the work is **MOVED into the checker, not deleted** — round 788's law,
+  answered AGAINST the round's own change. **VERDICT NEUTRAL**, kept because it is equivalent
+  and verified, explicitly NOT quoted as a win. This is round 800's calls-vs-distinct test in
+  its simplest form (a ratio of 1.000 means moved), and the lesson is that **the ratio is
+  cheap and belongs BEFORE the timing, not after it.**
+- **THE BOUND, which is the round's deliverable.** `bind` = 1,549 ms = 6.0%, and after this
+  round every part of it is named: 31 ms of declaration binding; ~470 ms of one iterative
+  whole-tree scope walk at **540 ns per node pop**, which every later phase reads; ~280 ms of
+  a text scan the round-433 cache already reduced to 1,220 executions over 6.26 M chars (63%
+  of the program's source), whose per-char work lever A showed is not allocation; ~20 ms of
+  other collectors; 38–53 ms of suffix sets that move rather than vanish; and **~700 ms of
+  single-pass flow-graph construction the checker requires**. Nothing here is a suppression, a
+  cache, or an unread state. **`bind` joins `checkArgumentsAgainstSignature` (797) and the
+  spine-leave handlers (733/799) as measured, bounded and CLOSED.**
+- **PINS: 15 new (`FlowScanEquivalenceTest`), and one of them EARNED ITS KEEP INSIDE THIS
+  ROUND.** They pin B464's operator semantics, which were entirely unpinned before today
+  (plain `=`, `%=`, `>>>=`, postfix `++`; and the negative controls `==`, `=>` and a
+  same-named PROPERTY write — the last three being exactly the sites where the `' '` sentinel
+  has to behave like `null`), plus two in-process ARM-EQUIVALENCE pins, the verifier's own
+  liveness, the view's arithmetic `isEmpty` short-circuit, and flag defaults. **The pin that
+  paid**: the first draft of the deferral pin asserted a STRICT inequality between the two
+  arms' materialisation counts and FAILED — because in a small fixture the checker questions
+  every closure. That red test is how round 788's law surfaced at all; restated as `<=`, with
+  the profile census carrying the real claim. Discrimination: the `%=` pins fail against
+  `--flowScanBogus`, and the equivalence pins fail against either arm being wrong.
+- **WHAT ELSE DID NOT WORK.** A memo over the returned suffix was designed and ABANDONED
+  UNBUILT: the result is a pure function of `(start, hi)` and every closure has a distinct
+  `container.pos`, so the key is distinct by construction and the hit rate would be ~0.
+  Recorded because the shape looks memoizable and is not.
+- Suite 13,461 → **13,476 / 0 failures / 3 skipped**. Grid against the real pre-change path
+  in the same binary (`--flowEagerSet --flowScanLegacy`): **46/94/46/46/46/46/46/46, 0 added
+  and 0 removed BOTH directions**. `--partitionCheck 2` **EQUIVALENT — 46**. Cost gate **all
+  20 counters +0.00%, no rebaseline**. **No wall-clock A/B, deliberately** — nothing measured
+  here is within an order of magnitude of the ±1.0% warm band. Full derivation:
+  `docs/perf/bind-attribution.md`.
+
+
 **Round 800 (2026-08-02) — (IANY.1) THE 249 ms ARM IS GATED: 93% OF ITS CALLEE
 RESOLUTIONS BOUGHT NOTHING. 106 ms (0.36%) off the handler, `typeOfExpr.calls` −4.21%
 and `distinct` −6.18% — the latter FASTER, which is round 788's law ANSWERED rather than
@@ -768,230 +862,44 @@ and 0 removed both directions.**
   **EQUIVALENT — 46.** Full derivation: `docs/perf/property-access-attribution.md`
   sections 30-35.
 
-**Round 791 (2026-08-01) — (ENGINE.2d)(b) LANDED: THE SUPPRESSION APPARATUS AT THE TOP OF
-`checkMemberAccessMissing` NOW RUNS **57 TIMES PER COMPILE INSTEAD OF 67,067** — ONLY FOR
-A CALL WHOSE BODY ACTUALLY EMITTED. THE `R_FLOW` ROW 1,132 -> 49 ms, THE PLAIN NARROWING
-WALK 794 ms / 22,270 CALLS -> 4 ms / 47, LEVEL R TOTAL 2,686 -> 1,702 ms. `narrow.walks`
-52,401 -> 27,249 (-48.0%) AND NO COUNTER ROSE. AND ROUND 790's "NO COUNTER CAN FALSIFY
-THIS" TURNED OUT TO REST ON A FALSE PREMISE, WHICH IS THE ROUND'S REAL FINDING.**
-
-- **THE PRIZE WAS RE-MEASURED AT HEAD FIRST AND ONE NUMBER HAD MOVED.** Every count of
-  round 790's reproduced (67,258 / 22,270 / 63,797 / 1,169 / 914), but the plain walk
-  read **794 ms** against round 790's 756 — inside the +-10% band, and the reason law 1
-  is a rule rather than a ritual. The whole apparatus at HEAD: b1 `getTypeOfExpression`
-  50 ms + pre-gate 49 + plain walk 794 + retry 83, b2 5 + 39, b3 1 = **1,021 ms gross**,
-  inside a `R_FLOW` row of 1,132.
-- **THE PREMISE ROUND 790 GOT WRONG.** Its veto — "(b)'s correctness is a 20-way case
-  analysis over emission sites, and no counter can falsify it, because the counter would
-  have to know what those emissions WOULD have said" — assumes the deferral must decide,
-  PER SITE, whether the suppression applies. It does not. **The three blocks only ever
-  `return`**: they suppress everything the rest of the function would emit. So the
-  deferral has to undo the BODY, not adjudicate the sites — and the body's whole effect
-  is enumerable in one grep: **42 `diagnostics.add(Diagnostic(` in 2,035 lines and ZERO
-  other references to `diagnostics`; zero `.put(`/`.remove*`; zero `current*` ambient
-  assignments; zero stack pushes** — and the same for all seven `tryEmit*`/`emit*`
-  helpers it calls (one `add` each at most, nothing else). "Run the body, then remove
-  everything it appended" is therefore equivalent BY CONSTRUCTION, no site enumerated,
-  and a 43rd emission site cannot break it.
-- **WHY THIS IS STRICTLY BETTER THAN THE LAZY-THUNK SHAPE ROUND 790 PROPOSED, AND WHY
-  ROUND 788's REJECTION OF A THUNK DOES NOT TRANSFER.** A thunk forced at each reader
-  still requires every reader to force it — the enumeration survives, just renamed; that
-  is exactly what killed round 788's lazy `contextualType` (a thunk that had to survive
-  ~14 save/restore sites in a DIFFERENT dynamic scope, where one missed site silently
-  serves the wrong value). Here the deferred call happens inside the very invocation that
-  deferred it, so no ambient state can have escaped and there is nothing to save or
-  restore. The wrapper's own state is saved and restored anyway (level R measures 0
-  nested invocations, but three slot copies make it correct if one ever appears).
-- **THE ONE SUBTLETY THAT DECIDES CORRECTNESS: THE RETRACTION FLOOR.** There IS an
-  emission ABOVE the blocks' old position — the intersection-reduction `never` TS2339 —
-  and it was never theirs to suppress. So the floor is `cmamFlowBase`, taken AT the old
-  position and left at `-1` when the body returns above it, never `diagnostics.size` at
-  function entry. A floor at entry would have silently made that diagnostic suppressible,
-  and no profile on the dashboard would have shown it.
-- **THE RESIDUAL HAZARD IS CACHE-MUTATION ORDER (round 754) AND IT WAS MEASURED, NOT
-  ARGUED.** `--verifyDeferSuppression` evaluates the predicate TWICE — eagerly at the old
-  position and again after the body — and honours the EAGER verdict, so the verify run
-  reproduces the pre-change binary's output by construction and the two halves of the
-  claim are independent (a byte-identical `--listAll`, and a zero verdict-diff).
-  **compiler 67,067 / services 92,174 / harness 109,622 comparisons, 0 type-diffs and
-  0 verdict-diffs across all 268,863**, at `Type`-INSTANCE granularity rather than
-  verdict granularity.
-- **AND THE ZERO IS NOT A DEAD INSTRUMENT — THE CONTROL SHIPS WITH IT.**
-  `--verifyDeferSuppressionBogus` hands the deferred evaluation a property name nothing
-  can resolve (CLAUDE.md's deliberately-bogus-baseline rule), which makes the round-489
-  pre-gate pass everywhere and the suppression decline everywhere: **type-diff 19,864,
-  VERDICT-DIFF 1,164** on the compiler profile.
-- **LAW 2 (round 788: skippable is not recoverable) WAS CHECKED AND DOES NOT BITE.**
-  `narrow.walks` **52,401 -> 27,249 (-48.00%)** = -25,152 against a removed population of
-  ~25,288 walks, i.e. a 0.5% residual; `typeOfExpr.calls` -10.35%, `globals.lookups`
-  -7.97%, `globals.misses` -8.10%, `typeNode.cacheHits` -5.40%; `output.errors` and
-  `spine.nodes` +0.00%. **Nothing rose.** `typeOfExpr.distinct` fell by **7** — seven
-  nodes in the whole program were typed ONLY because this block asked.
-- **THE WARM A/B CONFIRMS THE SIGN 3/3 AND ITS MAGNITUDE MUST BE DISCARDED — for the
-  same reason as round 790's, in the opposite direction.** 3 pairs, box left strictly
-  alone (the run was launched detached and NOT watched — round 774's −6.70% A/A phantom
-  is what that rule is for): deltas **−743 ms (−6.05%) / −381 ms (−3.21%) / −234 ms
-  (−2.04%)**, median **−381 ms (−3.21%), B wins 3/3**, every delta outside the ±1.0%
-  warm band. But **arm A's sd is 3.30% and arm B's 1.30%** — BOTH above the ~1%
-  quietness criterion, worse than round 790's single-arm failure — and the per-pair
-  spread is **509 ms against a 381 ms delta**, so law 7 ("only as sharp as the smaller
-  of its two spreads") is failed outright. **So the sign is confirmed and the magnitude
-  is the partition's 984 ms, not the wall's 381.** Note the direction of the discrepancy:
-  round 790's wall EXCEEDED its partition (the tell of an inflated arm); here it falls
-  short, which is the expected shape — a warm rebuild is 11.5 s against a ~27 s cold
-  compile, so a saving the JIT has already compiled is a smaller ABSOLUTE figure there
-  (round 788's observation). In PERCENT the two agree closely: 984 ms of a 27.9 s cold
-  compile is 3.5%, and the warm wall read 3.21%. Every iteration on both arms reported
-  `files/errors 78/46`, so the driver's self-falsification held.
-- **PINS: 10 new (`DeferredSuppressionTest`), 8 DISCRIMINATING ACROSS TWO COMPLEMENTARY
-  ABLATIONS.** Fault A (the predicate always declines — the NEW-false-positive direction)
-  fails 5; fault B (the retraction always fires — the DELETED-true-positive direction)
-  fails 4, three of which fault A leaves standing. The two that hold under both are the
-  eager-vs-deferred ORDER pin (neither fault perturbs order; its live counterpart is the
-  268,863-comparison profile run) and the population cross-check. The faults were run
-  SEPARATELY, so no cancellation between them is possible — round 789 had exactly that
-  happen and round 790 checked for it.
-- **WHAT DID NOT WORK, AND ONE PIN THAT WAS AIMED AT NOTHING.** (1) The first fixture
-  used a property-PATH receiver (`box.inner.extra`) as a third suppression flavour; a
-  30-second scratch-CLI probe showed **no property-path receiver emits TS2339 at all** on
-  any binary — a pre-existing gap, so the pin would have measured the compiler's silence
-  rather than the deferral. Replaced with `do-while` / `for-of` / early-return flavours,
-  all five of which emit unguarded and are silent guarded. (2) Two population pins were
-  degenerate on a small fixture (every `checkMemberAccessMissing` call there emits, so
-  `invocationsR == deferEvaluated`); fixed by adding two index-signature accesses, which
-  reach the function and leave it silently. (3) The suite caught **three pre-existing
-  probe pins whose subject had moved** — `CmamSectionProbeTest`'s walker-census
-  non-vacuity and its "the row both fires and suppresses", now restated as the NEW
-  invariant (the row is empty, the deferred call suppresses), and
-  `NarrowSectionProbeTest`'s element-access arm pin, whose old fixture's ONLY flow walk
-  was the one this block used to launch — after the deferral it measured an empty arm
-  census for a reason having nothing to do with element accesses. That is round 790's
-  "the pin was aimed at nothing" failure mode, found by the suite rather than by
-  inspection, and it is the reason a harness pin needs a fixture that would still be
-  measuring something if the thing it watches moved.
-- Suite 13,389 -> **13,399 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD
-  FIRST and again after, diffed set-for-set in BOTH directions:
-  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight** — both directions
-  matter more here than anywhere, because a suppression that STARTS firing deletes a true
-  positive and makes the grid look better. `--partitionCheck 2` **EQUIVALENT — 46**.
-  Cost gate rebaselined in the landing commit with the mechanism and population named.
-  Full derivation: `docs/perf/property-access-attribution.md` sections 23-29.
-  **(ENGINE.2e) is queued: level R's partition is now STALE — (b) removed the row that
-  was 42% of it — so the next target inside this function must be re-derived, not read
-  off section 12.**
-
-
-**Round 790 (2026-08-01) — (ENGINE.2d)(a) LANDED: THE ROUND-425 LOOP-ENTRY RETRY IS A
-PURE REPEAT OF THE WALK BEFORE IT 88.7% OF THE TIME, AND SKIPPING IT REMOVES 18,976
-FLOW WALKS — 26.6% OF EVERY NARROWING WALK THE COMPILER PERFORMS — FOR ZERO CHANGE IN
-ANY DIAGNOSTIC ON ANY OF THE EIGHT PROFILES. Measured: the retry row 528 ms / 21,384
-walks -> 90 ms / 2,408, its containing R_FLOW row 1,548 -> 1,111 ms, level R total
-3,094 -> 2,618. ROUND 788's LAW DOES NOT BITE HERE AND THE COUNTERS SAY SO TO THE UNIT:
-`narrow.walks` falls by EXACTLY 18,976, the number of retries skipped, and NO counter
-rises. (b) IS NOT ATTEMPTED — see the verdict at the end.**
-
-- **THE PRIZE WAS RE-MEASURED AT HEAD FIRST, AND EVERY COUNT OF ROUND 789's REPRODUCED
-  EXACTLY** (67,258 / 22,270 / 21,384 / 914 / 40,308 / 63,797; the retry read 528 ms
-  gross against round 789's 488 net, inside the stated +-10% run-to-run band). The
-  target had not moved while it sat in the queue — which round 786 and round 755 both
-  show is not safe to assume.
-- **THE EQUIVALENCE IS PROVABLE, AND STRONGER THAN "SAME RESULT".** `narrowTypeFromFlow`
-  and `narrowTypeFromFlowFollowLoopEntry` are line-by-line mirrors; arm by arm, plus the
-  fast-forward loop, both budgets, the `seen` set and both memos, they are identical, and
-  the ONLY difference is the `FlowLoopLabel` arm. So a plain walk that arrived at no
-  `FlowLoopLabel` makes exactly the traversal the mirror would, reaches the same nodes and
-  returns the same type — and because every resolution the mirror would drive was already
-  driven and CACHED by the plain walk moments earlier, the second walk is a pure REPEAT.
-  **That is also what disposes of the cache-mutation-order hazard (round 754) which kept
-  round 789 from landing this: a repeat mutates nothing new.**
-- **THE THREE CAVEATS THE ITEM ENUMERATED, HANDLED AS "UNKNOWN => RUN IT".** (1) The walk
-  never ran — flow analysis disabled, no reference path, no flow node, or a serve from
-  the round-664 INTER-walk memo; `narrowWalkLaunches` is bumped INSIDE the walk lambda,
-  so all four leave it unchanged. (2) The walk TRUNCATED (depth trip, visit/re-entry
-  budget, `seen` cycle) and saw only a prefix; every truncation exit in BOTH walkers
-  bumps `narrowRetryRelevantObs`. (3) **A serve from the round-736 INTRA-walk
-  `NarrowFlowMemo` is NOT a hazard, and saying why is worth more than the fix**: that memo
-  is constructed fresh at each outermost entry, so anything it serves was walked earlier
-  in the SAME walk and its loop labels were already observed. The item listed it as a
-  caveat; it is one only for the inter-walk memo.
-- **MONOTONE COUNTERS ARE WHAT MAKE THE BRACKET RE-ENTRANCY-SAFE.** A boolean flag reset
-  before the walk would be silently clobbered by a nested walk launched from inside
-  `applyConditionNarrowing`; two never-reset counters can only ever push the reading in
-  the CONSERVATIVE direction. The bracket is closed IMMEDIATELY after the walk returns —
-  the `suppresses` fold that follows re-enters the checker and would poison it.
-- **THE HAZARD WAS FALSIFIED BY MEASUREMENT, NOT BY THE ARGUMENT ABOVE (round 788's
-  protocol).** `--verifyLoopRetry` keeps the PRE-gate behaviour — the retry runs and is
-  honoured — and counts, per skippable call, whether the retry returned a different
-  `Type` INSTANCE and whether it suppressed where the plain walk had not: **compiler
-  18,976 / 0 / 0, services 24,290 / 0 / 0, harness 24,681 / 0 / 0. 67,947 comparisons,
-  zero divergences, at instance granularity rather than verdict granularity.**
-- **AND THE ZERO IS NOT A DEAD INSTRUMENT — THE CONTROL SHIPS WITH IT.**
-  `--verifyLoopRetryAll` runs the same comparison over the population the gate never
-  skips, i.e. the calls whose plain walk DID cross a loop label, and reports
-  `type-diff 2, VERDICT-DIFF 2` on the round's fixture: those calls really do disagree,
-  in the direction that matters. The complement population supplies the positive control
-  for free, so no bogus baseline had to be injected (CLAUDE.md's round-765 rule).
-- **LAW 2 (round 788: skippable is not recoverable) WAS CHECKED BEFORE IT WAS CLAIMED,
-  AND DOES NOT APPLY.** The item wrote the prediction down first — a narrowing walk's
-  result is memoed but round 735 measured essentially every launched walk COLD, so the
-  bill should not move — and it HIT: `narrow.walks` **71,377 -> 52,401**, a drop of
-  **exactly** the 18,976 skipped retries; `globals.lookups` -4.28%, `globals.misses`
-  -4.36%, `typeOfExpr.calls` -0.12%, `typeNode.cacheHits` -0.51%; **nothing rose**. The
-  saving is also visible at every level of the partition (sub-measure -438 ms, R_FLOW row
-  -437, level R total -476, level Q total -462), which is the shape a real removal has
-  and an absorbed one does not.
-- **THE WARM A/B WINS 3/3 IN DIRECTION AND ITS MAGNITUDE MUST BE DISCARDED — reported
-  as the driver's own rule requires.** 3 pairs, deltas **-1.83% / -5.13% / -6.11%**,
-  median **-635 ms (-5.66% on the medians), B wins 3/3**, and even the SMALLEST delta is
-  outside the +-1.0% warm band, so the sign is not in doubt. But **arm A's sd is 2.47%**
-  against arm B's 0.88%, above the ~1% quietness criterion CLAUDE.md sets for a warm run,
-  and the per-pair spread is 535 ms against a 635 ms delta (ratio 1.19, i.e. law 7's
-  "only as sharp as the smaller of its two spreads" is failed) — arm A drifted upward
-  across the run (11,819 -> 12,381 -> 12,299 ms) while arm B did not. **So the honest
-  reading is: direction confirmed, magnitude not measured**; the quoted -696 ms EXCEEDS
-  the 438 ms measured by the partition, which is itself the tell of an inflated arm
-  rather than a bigger win. The DETERMINISTIC counters are the primary evidence and they
-  are exact.
-- **PINS: 9 new (`LoopEntryRetryGateTest`), and they need no ablated binary to have
-  teeth** — `--verifyLoopRetry` carries the pre-gate implementation as its own reference
-  (round 788's `ClosureIndexEquivalenceTest` shape). They cover the round-425 shape
-  itself, `do-while` / `for-of` / a NESTED loop / a property-PATH receiver, the
-  gate-equals-pre-gate comparison, the skippable population's zero, the control's
-  non-zero, the arithmetic that the divergences live outside the skipped population,
-  production inertness of the counters, and that the gate is a FILTER (some retries
-  skipped, some kept) rather than a deletion. Discrimination is reported in the
-  ablation line below.
-- **ABLATION: 7 of the 9 pins DISCRIMINATE.** Against a binary whose `loopFree` is forced
-  true (the gate ignores the loop-label observation), seven fail — including the
-  round-425 shape itself, the four other loop flavours, the gate-vs-pre-gate comparison,
-  and both verifier pins. The two that hold are exactly the two deliberate controls (the
-  unguarded negative control and the production-inertness pin), which is what they are
-  for. **No two faults cancelled** — round 789 reported a cancellation and this round
-  checked for one rather than assuming its absence.
-- **WHAT DID NOT WORK.** The first draft of the ninth pin asserted that an ELEMENT-ACCESS
-  receiver (`m[k].nothere`) still emits TS2339 — it does not, at all, on any binary: that
-  is a pre-existing gap unrelated to this gate, and the pin was measuring the compiler's
-  silence rather than the gate's conservatism. Replaced with the four extra
-  `FlowLoopLabel` flavours, which do discriminate. Recorded because "the pin failed" and
-  "the pin was aimed at nothing" look identical in a red suite.
-- **(b) — THE WHOLE SUPPRESSION BLOCK, 1,219 ms — WAS DELIBERATELY NOT ATTEMPTED, and the
-  reason is now sharper than round 789's.** (a) removes 438 of those 1,219 ms with a
-  LOCAL equivalence that could be proved and then measured; (b) has none — it moves a
-  suppression across ~20 emission sites, so its correctness argument is a 20-way case
-  analysis rather than a two-walker diff, and its own hazard (i) is exactly the thing
-  this round's method cannot falsify with a counter, because the counter would have to
-  know what the intervening emissions WOULD have said. The remaining 781 ms is still
-  the largest single priced lever in the arc and stays queued with its price re-measured.
-- Suite 13,380 -> **13,389 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD
-  FIRST and again after, diffed set-for-set in BOTH directions:
-  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight** — both directions
-  matters here more than anywhere, because a suppression that STARTS firing deletes a
-  true positive and makes the grid look better. `--partitionCheck 2` **EQUIVALENT — 46**.
-  Cost gate rebaselined in the same commit with the mechanism and population named.
-  Full derivation: `docs/perf/property-access-attribution.md` sections 17-22.
-
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+- [x] **(FRONT.2) DONE round 801 — `Binder.bind` is OPENED AND CLOSED, and the round's
+  two candidate levers BOTH measured zero.** Step 1 re-derived the map (median of 3
+  probe-free `--passTiming` runs, § 0's new 801 column) and it named its own target by
+  ELIMINATION: the ~400 tail passes are 2,962 ms but **FLAT** (largest 75 ms = 0.26%;
+  300 of them hold 11%; **only 2 of 400 do any type-system work and 0 narrow**), so the
+  tail is ~400 pure traversals whose structural treatments — M0.4 and (DISPATCH.1) — are
+  already measured and closed. That left the front end, and inside it **`bind`, 1,549 ms
+  = 6.0% of the compile, never partitioned in 800 rounds**. `bind()` is three statements,
+  so the partition is exhaustive BY CONSTRUCTION and costs 3 timestamp pairs per FILE —
+  the first in this arc with no boundary-cost caveat at all. **`bindStatements` 31 /
+  `bindLexicalScopes` ~470 (876,201 node pops) / `FlowGraphBuilder.build` ~1,050
+  (236,587 flow nodes), residue −13 ms.** Level 2, three spans per CLOSURE:
+  `collectReassignedNamesInRange` **275–444 ms over 2,014 closures**, the other two
+  collectors 3 and 17 ms, and **~700 ms is the flow walk itself at 3.0 µs per flow node**.
+  **LEVER A — hoist the `substring`, unbox the neighbour reads.** The census sized it
+  exactly: **382,520 identifier occurrences classified, 15,331 recorded — 24×, i.e.
+  367,189 needless `String`s**, plus a boxed `Char?` per context probe. Both arms on ONE
+  binary, twice each, identical boundary counts: **fast 314/362 vs legacy 317/320 — ZERO.**
+  *An allocation count is not a cost*, which is round 758's population-vs-frequency law
+  one level down. **LEVER B — defer the suffix set.** Its one consumer is
+  `root in flowNode.reassignedAfterNames`, reached only from a narrowing walk, and walks
+  fell 75% since 758 — the (IANY.1) shape one phase earlier. `SuffixNameSet` collapsed
+  the row **53.5 → 0.9 ms**, and then its own census answered round 788's law AGAINST it:
+  **created 1143, materialized 1143** — every set is eventually asked, so the work is
+  **MOVED into the checker, not deleted. NEUTRAL, and not quoted as a win.** **So `bind`
+  joins `checkArgumentsAgainstSignature` (797) and the spine-leave handlers (733/799) as
+  measured, bounded and CLOSED**; the largest thing left in it is a single-pass
+  construction of a graph the checker requires. Suite 13,461 → **13,476 / 0 / 3** (+15
+  pins; one of them CAUGHT lever B's false claim before the write-up did). Grid vs the
+  real pre-change path in the same binary (`--flowEagerSet --flowScanLegacy`)
+  **46/94/46/46/46/46/46/46, 0 added and 0 removed BOTH directions**; `--partitionCheck 2`
+  **EQUIVALENT — 46**; cost gate **all 20 counters +0.00%**. **No wall A/B, deliberately.**
+  **The positive control is DEAD ON THE PROFILE and says so**: `--flowScanBogus` reports 0
+  divergences there (tsc's sources hold no `%=` in a scanned range) and fires only in the
+  fixture — round 793's rule, honoured rather than hidden. Full derivation:
+  `docs/perf/bind-attribution.md`.
 
 - [x] **(IANY.1) DONE round 798 — `spineIanyEnterNode` is OPENED, and the gate it exposed
   removes 320 ms (~1.1%).** The last of round 732's six biggest spine handlers with no

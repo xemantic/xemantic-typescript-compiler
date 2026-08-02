@@ -361,6 +361,41 @@ therefore took the smaller but CONCENTRATED target — the (IANY.1) residue, who
 506 ms is half one arm (the CALL/NEW argument edge at 7.9 µs × 31,575) — and
 landed a further 55 ms there. `docs/perf/spine-leave-attribution.md` § 7.
 
+**ROUND-801 RE-DERIVATION — the 801 column, and the two rows that redirected
+the round.** Median of 3 probe-free `--passTiming` runs at `d26c6988`, daemons
+stopped *inside* the measuring script. **Nothing large was stale**: every 798
+row held to within a few percent, the movement being the ~2.5% rounds 798-800
+landed. Wall **28,570** (29.12/28.57/28.39 s), checker-init **24,806**,
+`checkSpine` **20,610** (83.1% of init, 72.1% of the compile), enter **11,226**,
+leave **6,549**, ures **1,200**, `forEachChild` **520**, narrowing **1,122 ms /
+17,853 walks**, `getTypeOfExpression` **2,961** ⚠️, relations **628**, type-node
+**485**, front end **3,764** (13.2%).
+
+**The two NEW rows are what matters.** (1) **The ~400 tail passes are 2,962 ms
+and FLAT** — largest **75 ms = 0.26% of the compile**, top 20 = 33%, 300 passes
+= 11%, and **only 2 of 400 call `getTypeOfExpression` at all while 0 narrow**.
+So the tail is ~400 pure AST traversals with syntactic predicates: a
+STRUCTURAL cost whose treatments (M0.4, DISPATCH.1) are already measured and
+closed, and no per-pass lever exists. (2) **`outside-pass` = 975 ms** — init
+work inside no `pass()` wrapper, never named before.
+
+**ROUND-801 — `Binder.bind` IS OPENED AND CLOSED.** The front end's bind was
+1,549 ms (6.0%) and had never been partitioned. `bind()` is three statements,
+so the partition is exhaustive by construction at 3 timestamp pairs per FILE —
+the first in this arc needing no boundary calibration. It is `bindStatements`
+**31**, `bindLexicalScopes` **~470** (876,201 node pops), `FlowGraphBuilder.build`
+**~1,050** (236,587 flow nodes), residue **−13 ms**. Inside the flow build,
+`collectReassignedNamesInRange` holds **275-444 ms over 2,014 closures**;
+**~700 ms is the flow walk itself at 3.0 µs per flow node**.
+**Two levers built, both measured ZERO.** Removing **367,189 String
+allocations** from the B464 text scan: **0 ms** (an allocation count is not a
+cost). Deferring the suffix set: the row fell 53.5 → 0.9 ms and then its own
+census read **created 1143, materialized 1143** — every set is eventually
+asked, so the work **MOVED into the checker**, round 788's law answered against
+the change. **`bind` therefore joins `checkArgumentsAgainstSignature` (797) and
+the spine-leave handlers (733/799) as measured, bounded and closed.**
+`docs/perf/bind-attribution.md`.
+
 **ROUND-800 ADDENDUM — `spineIanyEnterNode` IS CLOSED, AND THE HANDLER IS NOW
 FLAT.** The CALL/NEW argument arm round 799 sized at 249 ms is gated on a bounded
 reader predicate: callee resolutions **20,812 → 1,439 (−93.1%)**, handler total
