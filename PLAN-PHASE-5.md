@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 806 (2026-08-02) — ROUND 805's OWED ABLATION PAID, AND ITS EXPECTATION WAS WRONG:
+ONE SEAM PIN, NOT TWO, DISCRIMINATED — THE OTHER WAS BLIND BY CONSTRUCTION AND IS NOW FIXED.
+AND (JIT.1)(d) LANDED FOR `ccetSpineEnter` (8,686 -> an entry at 2,474 plus three arm
+helpers; census 16 -> 15). Suite 13,526 -> 13,539 / 0 / 3; grid 46/46/46/46/46/46/46/94 with
+0 added and 0 removed BOTH directions; `--partitionCheck 2` EQUIVALENT — 46; cost gate all
+20 counters +0.00%.**
+
+- **THE OWED ABLATION (STEP 1), PAID — AND THE FINDING IS THE PIN, NOT THE SPLIT.** Round 805
+  named two mistakes and predicted exactly two seam-pin failures. Measured: **ONE failed.**
+  `FunctionExpression seam - the body is walked with no enclosing class type` FAILED as
+  predicted; `ArrowFunction seam - the arrow's parameter scope is restored after the arm
+  returns` **PASSED against a binary with those restores deleted.**
+- **WHY, AND IT IS A GENERAL TRAP.** `withCpaFrameAmbient` — the per-statement anchor install
+  in `cpaSpineLeave` — saves and restores `currentLocalTypes` around **every** statement
+  dispatch, so a restore dropped inside an arm is ERASED AT THE STATEMENT BOUNDARY. Both
+  restore pins read the outer binding from the NEXT STATEMENT, i.e. from the one position
+  that provably cannot see the leak. Measured over a 4-shape probe (next statement / later
+  objlit property / comma operator / later call argument): **4 errors on a correct binary, 1
+  on the ablated one** — the last three discriminate, the first does not. Both pins now read
+  a LATER ARGUMENT OF THE SAME CALL, and a re-run with THREE mistakes (both restores plus the
+  `enclosingClassType` thread) fails **exactly the three seam pins and no arm pin**.
+- **(JIT.1)(d) — `ccetSpineEnter`.** 8,686 -> `ccetSpineEnter` **2,474** +
+  `ccetEnterBlock` **2,848** + `ccetEnterClassDeclaration` **1,946** +
+  `ccetEnterFunctionLike` **1,328**. Census **16 -> 15**. The four sum to 8,596 against 8,686
+  — a THIRD confirmation that a bytecode count is a threshold predicate and not a cost model.
+  Baseline re-measured at HEAD on a REBUILT binary first (16 of 13,927; the disk class files
+  again predated the landing commit).
+- **THE SPLIT SHAPE, AND WHAT DECIDED IT.** The dispatch is a `when (node.kindId)`; moving arm
+  BODIES leaves all four keys and the switch untouched, so no kind pays an extra test. What
+  STAYS is chosen by FREQUENCY, not size: `MODULE_DECLARATION` (17 lines) and the two trailing
+  blocks, which run for **every** node.
+- **EQUIVALENCE MEASURED (round 805's method, all five checks green).** Each moved region
+  re-extracted from the new file is a CONTIGUOUS, IN-ORDER run of HEAD modulo a 4-/8-space
+  dedent; the entry reconstructed from HEAD with three one-line arms is **IDENTICAL, 80
+  lines**; accounting closes exactly (80 = 246 − 162 − 7 + 3); the function's ONLY `return` is
+  the prologue's dts/js-like guard, which stays in the entry, and there is none in the moved
+  arms; no helper returns a value.
+- **WHAT DID NOT WORK — the trailing-blocks seam is NOT discriminated, and I could not make it
+  be.** Two ablations were run on the ccet split. The combined one (frame push dropped + BLOCK
+  arm as an early `return`) fails **3 pins**; the early-`return` mistake ALONE fails **the same
+  3**, so the frame-push mistake has no uniquely-its-own failure and the seam pin written for
+  the early `return` (an `if` type guard with a Block then-statement) stays GREEN — that
+  narrowing is supplied redundantly by another pass. A replacement using the OTHER trailing
+  block (the ForIn/ForOf loop-var shadow) **discriminated 1-vs-0 under the real-lib project
+  CLI and did NOT reproduce under `diagnose()`, which uses the EMBEDDED lib**, so it was not
+  adopted. Recorded rather than papered over.
+- **PROCESS.** The Kotlin daemon was killed by the OS mid-build (`DaemonCrashedException`,
+  then "Compile without Kotlin daemon" — which would have OOMed in Gradle's own 1g). Killed
+  the build, `./gradlew --stop` + a graceful bracket-pattern Kotlin-daemon kill, relaunched;
+  cost one from-scratch compile. Separately, two grid attempts were thrown away before the
+  real one: `/tmp` is mounted **noexec** (a copied script must be run as `bash script`, not
+  `./script`), the bench script derives `REPO_ROOT` from its own path (a copy outside the repo
+  resolves it to `/tmp`), and `--no-emit` **overwrites** `NOEMIT_ARGS` after the `--listAll`
+  patch, so arm B captured the CLI's 30-diagnostic print cap and the diff read a uniform
+  `B_err 30` on all eight profiles — caught by the round-804 vacuity guard, not by the numbers
+  looking wrong.
+- **GATE.** Suite **13,526 -> 13,539 / 0 failures / 3 skipped** (+13: 10 `CcetSpineEnterSplitTest`
+  + 3 `HugeMethodLimitTest`; whole results dir wiped, counted with the python XML parser over
+  611 XMLs; `CpaExprSplitTest` 9/0, `HugeMethodLimitTest` 12/0, `CmamSplitTest` 18/0,
+  `ForEachChildSplitTest` 9/0). 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built PRE-SPLIT binary, every capture confirmed non-empty first:
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%, no rebaseline**. Build
+  warning-clean (0 `w:` lines). Census **16 -> 15**. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` §§ 8-9.
+- **NO WALL A/B, DELIBERATELY.** The family is bounded three times (−3.93% for the traversal
+  primitive, NOISE for the biggest method, −1.14% for the whole-family flag after three
+  splits). This lands for the THRESHOLD and the (f) gate.
+- **FOR THE NEXT AGENT.** Still over the limit and in scope: `checkArgumentsAgainstSignatureCore`
+  **23,890** (its section partition is already committed in
+  `docs/perf/argument-check-attribution.md`), `checkVarDeclAssignabilityCore` 19,296,
+  `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567,
+  `checkDuplicateDeclarations` 12,935, `tryInferSingleTypeParamFromArgs` 11,930,
+  `checkIndexSigInStatement` 10,928, `access$checkBigintPropertyNames$emit` 10,339,
+  `checkReturnAssignabilityCore` 9,743, plus (e)'s three Transformer methods. Three traps this
+  round proves live: **a seam pin must be validated against the mistake it names** (an ambient
+  reinstall upstream can make a whole class of seams unobservable); **a shape validated with
+  the project CLI is not automatically a valid pin**, because `diagnose()` uses the embedded
+  lib and the CLI uses the real ones; and the grid's arm-B capture must be checked for the
+  CLI's print cap, not just for non-emptiness.
+
+
 **Round 805 (2026-08-02) — (JIT.1)(c) LANDED FOR `checkPropertyAccessInExpr` (9,062 → an
 entry at 4,728 plus four `cpaExpr*` arms; census 17 → 16), AND (JIT.1)(e) — THE FAMILY'S
 LAST OPEN QUESTION, UNMEASURABLE BY EVERY A/B IN THIS ARC BECAUSE THEY ALL RUN `--noEmit`
@@ -804,92 +886,6 @@ as such rather than worked.**
   this round removed.
 - Full derivation: `docs/perf/implicit-any-attribution.md`.
 
-**Round 797 (2026-08-02) — (CALL.6) DONE: THE LEVEL-S SUB-PARTITION SAYS ROUND 796's
-HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS WRONG BY 14x — the 15,640 iterations that
-leave at `!isSimpleCheckableType` are 48% bare Identifier and 32% PropertyAccess, not
-"arrows and callbacks typed under an installed contextual type" (527 = 3.4%; a contextual
-type is installed for 575 of 39,036 iterations = 1.5%). The item's literal question
-answers the same way from the other side: PropertyAccess + Call are 26.6% of the
-iterations and 73% of the `getTypeOfExpression` row. NO LEVER — the row is ~600 ms =
-2.2% and every term in it is either irreducible or already bought. Suite 13,435 ->
-13,441; cost gate 20/20 at +0.00%; `--partitionCheck 2` EQUIVALENT; production/ON/COARSE
-`--listAll` identical.**
-
-- **LAW 1 FIRST, AND IT PAID AGAIN — SMALL DRIFT, ONE REAL MOVE.** Two `--argSections`
-  runs at HEAD before a line was written: invocations **23,494** and iterations
-  **39,593** reproduce to the unit, `L_ARGTYPE` reads 598/601 ms net against the item's
-  "~600", and every exit count matches (`L_NOTSIMPLE` 15,640 vs 15,637). What HAD moved
-  is `INFER` (124 -> 130/135) and the item's `L_NOTSIMPLE` row (87 -> 93/103) — small,
-  but the point of re-measuring is that you cannot know which until you look.
-- **WHAT WAS BUILT, AND WHY IT COSTS NO BOUNDARY.** A 14-way classification of the
-  ARGUMENT node taken inside the already-open `L_ARGTYPE` row — so, exactly like round
-  796's exit census, every nanosecond it attributes is a span the partition was already
-  timing (round 793's correction does not apply to anything read through it). Five
-  totals print as partition checks and all five read **EXACT**: iterations, the argType
-  row, the `getTypeOfExpression` row, the narrowing row in nanos AND calls, and the KIND
-  x EXIT cross-tab against `iterations`. `true`/`false`/`null`/`undefined`/`this` are
-  split out of the identifier row because Parser.kt's keyword arms all produce an
-  `Identifier` — 938 iterations that would otherwise dilute it with the cheapest
-  arguments in the compile.
-- **THE FALSIFICATION, AND WHY THE PRIOR WAS PLAUSIBLE.** Round 759 wrote that the
-  function-vs-function exit's population is "arrows and callbacks typed under an
-  installed contextual type"; round 796 repeated it and queued this round to test it.
-  Measured: **Identifier 7,575 + PropertyAccess 5,032 = 80% of the 15,640 iterations and
-  89% of the 497 ms they carry; arrows + function expressions 527 = 3.4% / 3.2%.** The
-  prior mistook the PARAMETER for the ARGUMENT — a parameter that is not
-  simple-checkable sounds like a callback and is usually an INTERFACE, whose arguments
-  are ordinary names. Round 759's own law ("the exit predicate reads the parameter while
-  the cost belongs to the argument") is what it violated.
-- **THE ITEM'S QUESTION, ANSWERED.** `getTypeOfExpression` by kind: **PropertyAccess
-  11.2 us x 7,774 and Call 23.0 us x 2,612 = 73% of the row over 26.6% of the
-  iterations**, while Identifier — 46.5% of all iterations — is **0.8 us** and 7% of it.
-  A bare name costs a map read; a composite expression costs a resolution. Note the
-  direction: here the RARE kinds are the expensive ones, which is why a partition and
-  not a count was required.
-- **THE NUMBER THAT CHANGES THE MAP.** Two new sub-measures (`N_ARM_CHAIN`,
-  `N_GATE_REL`) close the argType row to a named residue, and they price round 796's own
-  gate directly for the first time: **131-137 ms over 9,823 calls = 13.3 us each**,
-  against the "~70 ms of gate relation calls" that round obtained by subtraction. It is
-  still net-positive (it removes ~390 ms of walking) and it cannot be cheapened:
-  `checkTypeRelatedToCore` already short-circuits on `source === target`, so the 13.3 us
-  is genuine structural work on tsc's big interfaces, and round 796 measured only 416 of
-  8,905 refusals as bailing early at `getReferencePath`/`getFlowAt`. Both arms priced
-  separately stay net-positive (B469 33 ms of gate for ~90 ms of walking; M3.4 99 for
-  ~286).
-- **THE RESIDUE IS THE PROBE, QUANTITATIVELY — not a story.** Everything unbracketed
-  inside the row is four `is` tests, `stripNullishForNonNullArg` and `voidIifeArgType`
-  (both immediate returns for the shapes that dominate) and a `finally`. The row carries
-  **7 nested timestamp reads per iteration** and the harness's own in-situ empty-span
-  calibration reads **423-429 ns**: 7 x 423 = **2.96 us against the measured 3.3 us**.
-- **TWO ASIDES THE CROSS-TAB GAVE FOR FREE.** (1) **66% of the 10,946 iterations that
-  reach the assignability relation carry a LITERAL argument** (7,185, 22 ms of argType
-  between them) — which is why the TS2345 relation call is 5-7 ms: it is mostly
-  `isSimpleTypeRelatedTo` on a literal. (2) **22% of ALL iterations type an identifier to
-  `any` and discard it** (8,574, 99 ms, plus 1,968 property accesses and 1,176 calls).
-  Nothing can know that without typing them, so it is not a lever — but it is the
-  largest paid-for-and-discarded population in the function and a MODELLING signal.
-- **NO LEVER, STATED AS A BOUND (the legitimate outcome the item allowed).** After
-  (CALL.5)(b) the row is ~600 ms = 2.2% of a check-only compile: ~200 ms irreducible
-  type resolution (round 737 closed the recompute direction; this function types each
-  argument once), ~135 ms of narrowing over 953 walks at 141 us (round 735's tail after
-  796 removed 91% of the walks; round 736 closed the memo behind it), ~131 ms of gate
-  that buys 390, ~24 ms of literal preservation, and the probe. Half a noise band is
-  ~275 ms; nothing comes close.
-- **PINS: 6 new (`ArgKindCensusTest`), 4 DISCRIMINATING across two complementary
-  ablations run SEPARATELY.** Fault A (the kind hook records nothing) fails 3; fault B
-  (the arm-chain bracket opened at its own close, i.e. measuring the wrong span) fails 1,
-  disjoint from A's. The two pins neither fault reaches are the index-alignment pin and
-  the records-nothing-when-off pin, both structural — reported, not papered over. The
-  harness was COMMITTED BEFORE the ablations (law 4), so both reverts were a scoped
-  `git checkout`.
-- **WHAT DID NOT WORK.** The fixture's first cross-tab pin asserted the ARROW argument
-  exits at `L_NOTSIMPLE` — it does not, in a small fixture, and the pin failed on a
-  WORKING binary. It was restated to assert what the round actually found (the exit is
-  reached by IDENTIFIER arguments) plus a partition invariant over the arrow population,
-  which is strictly stronger than the original intent. Also: no 8-profile grid and no
-  wall-clock A/B were run, deliberately — nothing production executes changed (cost gate
-  20/20 at +0.00% IS the sharper form of that question), and there is no prize to A/B.
-- Full derivation: `docs/perf/argument-check-attribution.md` sections 19-26.
 
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
@@ -1010,11 +1006,23 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     one deep-nesting recursion pin) and `HugeMethodLimitTest` (+3).** Still open in (c):
     `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
     `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.
-    **Owed from round 805: ablation B for the seam pins was NOT run** (drop
-    `cpaExprArrowFunction`'s three restore lines; thread `enclosingClassType` instead of
-    `null` into the function-expression body — expect exactly two seam pins to fail).
-    Ablation A was established from the class files, not a test run: the pre-split binary
-    reads `checkPropertyAccessInExpr` 9,062 and has none of the four part names.
+    **ROUND 805's OWED ABLATION IS PAID (round 806) — and its expectation was WRONG: ONE
+    seam pin failed, not two.** The `enclosingClassType` mistake was caught; the dropped
+    arrow-restore was NOT, because `withCpaFrameAmbient` reinstalls `currentLocalTypes` at
+    every per-statement anchor and both restore pins read the NEXT STATEMENT. Both now read
+    a LATER ARGUMENT OF THE SAME CALL, and a three-mistake re-run fails exactly the three
+    seam pins and no arm pin. Nothing is owed here any more.
+  - [x] **(d) DONE round 806 — `ccetSpineEnter` 8,686 → an entry at 2,474 plus
+    `ccetEnterBlock` 2,848 / `ccetEnterClassDeclaration` 1,946 / `ccetEnterFunctionLike`
+    1,328; census 16 → 15.** It runs at EVERY node of every file. Arm BODIES move, so the
+    `when (node.kindId)` keeps all four keys and no kind pays an extra test; what STAYS is
+    chosen by frequency (`MODULE_DECLARATION` plus the two trailing blocks). Equivalence
+    measured by round 805's five checks, all green. Pins `CcetSpineEnterSplitTest` (10) and
+    `HugeMethodLimitTest` (+3). **Honest limit: the trailing-blocks seam is NOT
+    discriminated** — see the round-806 note. **The remaining (d) tail is unchanged:**
+    `checkDuplicateDeclarations` 12,935, `tryInferSingleTypeParamFromArgs` 11,930,
+    `checkIndexSigInStatement` 10,928, `access$checkBigintPropertyNames$emit` 10,339,
+    `checkReturnAssignabilityCore` 9,743.
   - **(c) The three remaining assignability/call cores** —
     `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
     `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.

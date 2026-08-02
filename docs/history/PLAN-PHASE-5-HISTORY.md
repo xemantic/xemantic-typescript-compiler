@@ -1,3 +1,90 @@
+**Round 797 (2026-08-02) — (CALL.6) DONE: THE LEVEL-S SUB-PARTITION SAYS ROUND 796's
+HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS WRONG BY 14x — the 15,640 iterations that
+leave at `!isSimpleCheckableType` are 48% bare Identifier and 32% PropertyAccess, not
+"arrows and callbacks typed under an installed contextual type" (527 = 3.4%; a contextual
+type is installed for 575 of 39,036 iterations = 1.5%). The item's literal question
+answers the same way from the other side: PropertyAccess + Call are 26.6% of the
+iterations and 73% of the `getTypeOfExpression` row. NO LEVER — the row is ~600 ms =
+2.2% and every term in it is either irreducible or already bought. Suite 13,435 ->
+13,441; cost gate 20/20 at +0.00%; `--partitionCheck 2` EQUIVALENT; production/ON/COARSE
+`--listAll` identical.**
+
+- **LAW 1 FIRST, AND IT PAID AGAIN — SMALL DRIFT, ONE REAL MOVE.** Two `--argSections`
+  runs at HEAD before a line was written: invocations **23,494** and iterations
+  **39,593** reproduce to the unit, `L_ARGTYPE` reads 598/601 ms net against the item's
+  "~600", and every exit count matches (`L_NOTSIMPLE` 15,640 vs 15,637). What HAD moved
+  is `INFER` (124 -> 130/135) and the item's `L_NOTSIMPLE` row (87 -> 93/103) — small,
+  but the point of re-measuring is that you cannot know which until you look.
+- **WHAT WAS BUILT, AND WHY IT COSTS NO BOUNDARY.** A 14-way classification of the
+  ARGUMENT node taken inside the already-open `L_ARGTYPE` row — so, exactly like round
+  796's exit census, every nanosecond it attributes is a span the partition was already
+  timing (round 793's correction does not apply to anything read through it). Five
+  totals print as partition checks and all five read **EXACT**: iterations, the argType
+  row, the `getTypeOfExpression` row, the narrowing row in nanos AND calls, and the KIND
+  x EXIT cross-tab against `iterations`. `true`/`false`/`null`/`undefined`/`this` are
+  split out of the identifier row because Parser.kt's keyword arms all produce an
+  `Identifier` — 938 iterations that would otherwise dilute it with the cheapest
+  arguments in the compile.
+- **THE FALSIFICATION, AND WHY THE PRIOR WAS PLAUSIBLE.** Round 759 wrote that the
+  function-vs-function exit's population is "arrows and callbacks typed under an
+  installed contextual type"; round 796 repeated it and queued this round to test it.
+  Measured: **Identifier 7,575 + PropertyAccess 5,032 = 80% of the 15,640 iterations and
+  89% of the 497 ms they carry; arrows + function expressions 527 = 3.4% / 3.2%.** The
+  prior mistook the PARAMETER for the ARGUMENT — a parameter that is not
+  simple-checkable sounds like a callback and is usually an INTERFACE, whose arguments
+  are ordinary names. Round 759's own law ("the exit predicate reads the parameter while
+  the cost belongs to the argument") is what it violated.
+- **THE ITEM'S QUESTION, ANSWERED.** `getTypeOfExpression` by kind: **PropertyAccess
+  11.2 us x 7,774 and Call 23.0 us x 2,612 = 73% of the row over 26.6% of the
+  iterations**, while Identifier — 46.5% of all iterations — is **0.8 us** and 7% of it.
+  A bare name costs a map read; a composite expression costs a resolution. Note the
+  direction: here the RARE kinds are the expensive ones, which is why a partition and
+  not a count was required.
+- **THE NUMBER THAT CHANGES THE MAP.** Two new sub-measures (`N_ARM_CHAIN`,
+  `N_GATE_REL`) close the argType row to a named residue, and they price round 796's own
+  gate directly for the first time: **131-137 ms over 9,823 calls = 13.3 us each**,
+  against the "~70 ms of gate relation calls" that round obtained by subtraction. It is
+  still net-positive (it removes ~390 ms of walking) and it cannot be cheapened:
+  `checkTypeRelatedToCore` already short-circuits on `source === target`, so the 13.3 us
+  is genuine structural work on tsc's big interfaces, and round 796 measured only 416 of
+  8,905 refusals as bailing early at `getReferencePath`/`getFlowAt`. Both arms priced
+  separately stay net-positive (B469 33 ms of gate for ~90 ms of walking; M3.4 99 for
+  ~286).
+- **THE RESIDUE IS THE PROBE, QUANTITATIVELY — not a story.** Everything unbracketed
+  inside the row is four `is` tests, `stripNullishForNonNullArg` and `voidIifeArgType`
+  (both immediate returns for the shapes that dominate) and a `finally`. The row carries
+  **7 nested timestamp reads per iteration** and the harness's own in-situ empty-span
+  calibration reads **423-429 ns**: 7 x 423 = **2.96 us against the measured 3.3 us**.
+- **TWO ASIDES THE CROSS-TAB GAVE FOR FREE.** (1) **66% of the 10,946 iterations that
+  reach the assignability relation carry a LITERAL argument** (7,185, 22 ms of argType
+  between them) — which is why the TS2345 relation call is 5-7 ms: it is mostly
+  `isSimpleTypeRelatedTo` on a literal. (2) **22% of ALL iterations type an identifier to
+  `any` and discard it** (8,574, 99 ms, plus 1,968 property accesses and 1,176 calls).
+  Nothing can know that without typing them, so it is not a lever — but it is the
+  largest paid-for-and-discarded population in the function and a MODELLING signal.
+- **NO LEVER, STATED AS A BOUND (the legitimate outcome the item allowed).** After
+  (CALL.5)(b) the row is ~600 ms = 2.2% of a check-only compile: ~200 ms irreducible
+  type resolution (round 737 closed the recompute direction; this function types each
+  argument once), ~135 ms of narrowing over 953 walks at 141 us (round 735's tail after
+  796 removed 91% of the walks; round 736 closed the memo behind it), ~131 ms of gate
+  that buys 390, ~24 ms of literal preservation, and the probe. Half a noise band is
+  ~275 ms; nothing comes close.
+- **PINS: 6 new (`ArgKindCensusTest`), 4 DISCRIMINATING across two complementary
+  ablations run SEPARATELY.** Fault A (the kind hook records nothing) fails 3; fault B
+  (the arm-chain bracket opened at its own close, i.e. measuring the wrong span) fails 1,
+  disjoint from A's. The two pins neither fault reaches are the index-alignment pin and
+  the records-nothing-when-off pin, both structural — reported, not papered over. The
+  harness was COMMITTED BEFORE the ablations (law 4), so both reverts were a scoped
+  `git checkout`.
+- **WHAT DID NOT WORK.** The fixture's first cross-tab pin asserted the ARROW argument
+  exits at `L_NOTSIMPLE` — it does not, in a small fixture, and the pin failed on a
+  WORKING binary. It was restated to assert what the round actually found (the exit is
+  reached by IDENTIFIER arguments) plus a partition invariant over the arrow population,
+  which is strictly stronger than the original intent. Also: no 8-profile grid and no
+  wall-clock A/B were run, deliberately — nothing production executes changed (cost gate
+  20/20 at +0.00% IS the sharper form of that question), and there is no prize to A/B.
+- Full derivation: `docs/perf/argument-check-attribution.md` sections 19-26.
+
 **Round 796 (2026-08-02) — (CALL.5) PROMOTED AND DONE: THE ARGUMENT CHECK IS PARTITIONED BY
 EXIT, AND THE CENSUS NAMES A LEVER ROUND 764 HAD ALREADY DECLINED ONCE. Every one of the
 23,494 invocations returns from `POST` (thirteen dedicated prologue walkers, 0 firings),

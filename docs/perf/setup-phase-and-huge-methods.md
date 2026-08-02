@@ -535,7 +535,106 @@ taken roughly two thirds off the instrument's own reading, on the same profile a
 class — the closest thing this family has to a cumulative measurement, and consistent
 with (a) having been the large one.
 
-## 8. Reproduction
+## 8. (JIT.1)(c)'s owed ablation, paid — and one of the two seam pins did not discriminate
+
+*Round 806.* Round 805 stated plainly that ablation B was not run. Run now, with
+exactly the two mistakes it named — `cpaExprArrowFunction`'s three scope RESTORE
+lines dropped, and `enclosingClassType` threaded into the function-expression
+body instead of the literal `null`. **Expected two failures; got one.**
+
+| pin | verdict |
+|---|---|
+| `FunctionExpression seam - the body is walked with no enclosing class type` | **FAIL** (as predicted) |
+| `ArrowFunction seam - the arrow's parameter scope is restored after the arm returns` | **pass** — the pin is blind |
+
+**The mechanism is `withCpaFrameAmbient`.** It is the per-statement anchor
+install in `cpaSpineLeave`, and it saves and restores `currentLocalTypes` around
+**every** statement dispatch. So a restore dropped inside an arm is erased at the
+statement boundary, and both restore pins were reading the outer binding from the
+**next statement** — the one position that provably cannot see the leak.
+
+A leak is observable only WITHIN one statement. Measured over a probe carrying
+four shapes (next statement / later object-literal property / comma operator /
+later call argument): **4 errors on a correct binary, 1 on the ablated one** —
+the last three discriminate, the first does not. Both pins now read the outer
+binding from a **later argument of the same call**.
+
+**Re-run after the fix, with three mistakes (both restores dropped plus the
+`enclosingClassType` thread): exactly the three seam pins fail and no arm pin
+does.** That is the sharpest available statement that the arm pins and the seam
+pins pin different things.
+
+The transferable law: **a seam pin must be validated against the mistake it
+names, because an ambient reinstall upstream can make a whole class of seams
+unobservable** — and "the pin is green on the broken binary" is the only way to
+find out.
+
+## 9. (JIT.1)(d) — `ccetSpineEnter`, 8,686 → an entry plus three arm helpers
+
+*Round 806.* Cheapest remaining candidate, and the one that runs most often:
+`ccetSpineEnter` is called at **every node of every file**.
+
+| function | arm | bytecodes |
+|---|---|---:|
+| `ccetSpineEnter` | `MODULE_DECLARATION` + both trailing blocks | **2,474** |
+| `ccetEnterBlock` | `BLOCK` (5 parent-kind sub-arms) | 2,848 |
+| `ccetEnterClassDeclaration` | `CLASS_DECLARATION` | 1,946 |
+| `ccetEnterFunctionLike` | `ARROW_FUNCTION`, `FUNCTION_EXPRESSION` | 1,328 |
+
+Census **16 → 15**. The four sum to **8,596 against the monolith's 8,686** —
+like round 805's split and unlike round 804's 46,567 → 29,130, this one shrank
+nothing. Third independent confirmation that a bytecode count is a THRESHOLD
+predicate and not a cost model.
+
+**Shape.** The dispatch is a `when (node.kindId)`, so extracting arm BODIES
+leaves all four keys and the switch itself untouched and no kind pays an extra
+test — (a)'s contiguous-range discipline applies only when the switch itself has
+to be cut. What stays in the entry is chosen by frequency, not by size:
+`MODULE_DECLARATION` is 17 lines, and the two trailing blocks (the ForIn/ForOf
+loop-var shadow and the If-arm type-guard override) run for **every** node.
+
+**Equivalence, measured.** Each of the three moved regions, re-extracted from the
+new file, is a CONTIGUOUS, IN-ORDER run of HEAD modulo a 4- or 8-space dedent;
+the entry function reconstructed from HEAD with the three blocks replaced by
+three one-line arms is IDENTICAL at 80 lines; the accounting closes exactly
+(80 = 246 − 162 moved − 7 scaffold + 3 arms); the function's only `return` is the
+prologue's `spineIsDts || spineIsJsLike` guard, which stays in the entry, and
+there is none inside the moved arms; and no helper returns a value — each arm's
+only effect is the shared `ccetFrames` push, which is what the LATER
+`ccetSpineEnter` and `ccetSpineLeave` calls read and pop.
+
+**Guarded by** `CcetSpineEnterSplitTest` (10 pins, every one observing the frame
+through a CALL ARGUMENT because the ccet pass's emission is
+`checkSingleCallExpressionTypes` — a property read would be answered by the cpa
+pass and could not discriminate) and `HugeMethodLimitTest` (+3).
+
+**Discrimination, measured — established, but NOT pin-by-mistake.** Two ablations
+were run. Against the combined one (the `ClassDeclaration` helper's frame push
+dropped **and** the `BLOCK` arm turned into an early `return`), **three pins
+fail**: both `ClassDeclaration` arm pins and the method-body `this` pin. Against
+the early-`return` mistake **alone**, the **same three** fail — so the class is
+sensitive to that mistake, but not through the seam pin written for it, and the
+frame-push mistake has no failure that is uniquely its own.
+
+**What is NOT discriminated, stated plainly: the trailing-blocks seam.** The pin
+written for it (an `if` with a user type guard and a Block then-statement,
+asserting the narrowed `A`) stays green on the early-`return` binary — that
+narrowing is supplied redundantly by another pass. A replacement using the OTHER
+trailing block, the ForIn/ForOf loop-var shadow, **discriminated under the
+real-lib CLI (1 error on the broken binary, 0 on a correct one) and did NOT
+reproduce under `diagnose()`, which uses the embedded lib** — so it was not
+adopted. The lesson is the round-730 lib-split one arriving in a new place: **a
+shape validated with the project CLI is not automatically a valid pin, because
+the two paths do not use the same lib.**
+
+Gate: suite **13,526 → 13,539 / 0 / 3**; 8-profile grid diffed set-for-set BOTH
+directions against a purpose-built pre-split binary, every capture confirmed
+non-empty first — **46/46/46/46/46/46/46/94, 0 added and 0 removed**;
+`--partitionCheck 2` **EQUIVALENT — 46**; `cost_gate.py` **all 20 counters
++0.00%**; build warning-clean. **No wall A/B, deliberately** — the family is
+bounded three times over (§§ 4.2, 5.3, 7) and this lands for the threshold.
+
+## 10. Reproduction
 
 ```bash
 # the census — static, no run
