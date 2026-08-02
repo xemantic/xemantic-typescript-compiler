@@ -532,3 +532,228 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --argNarrowCensus build/bench/tsc-project-*
 ```
+
+---
+
+# (CALL.6) round 797 — the LEVEL-S sub-partition: by ARGUMENT KIND, and into the arm chain
+
+*Re-measured at HEAD (`ee3a3809`) before any code was written, per round 755's
+rule and round 795's law 1. The § 11 table above is round 796's; § 20 below is
+the live one.*
+
+> **HEADLINE — ROUND 796's HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS
+> FALSE, AND THE MISS IS 14×.** The 15,640 iterations that leave at the
+> `!isSimpleCheckableType` `continue` were expected (round 759's sentence,
+> repeated by round 796 and never measured) to be *"arrows and callbacks typed
+> under an installed contextual type"*. They are **48% bare Identifiers and 32%
+> PropertyAccesses**; arrows and function expressions together are **527 of
+> 15,640 = 3.4% of the iterations and 3.2% of the argType time they carry**, and
+> a CONTEXTUAL type is installed for **575 of all 39,036 iterations (1.5%)**.
+> The item's literal question — split `getTypeOfExpression` by argument kind —
+> answers the same way from the other side: **PropertyAccess + Call are 26.6% of
+> the iterations and 73% of that row**, while Identifier + literal + keyword are
+> **65% of the iterations and 7%**. **NO LEVER WAS FOUND** and none was landed:
+> after the round-796 gate the whole row is ~600 ms (2.2% of a check-only
+> compile) and its largest term is 200 ms of irreducible type resolution.
+
+## 19. What was built
+
+Two things, both inside `ArgSections`, both `ON`-only:
+
+* **The KIND census** (`kindIters` / `kindCtx` / `kindArgType` / `kindGtoe` /
+  `kindNarrow` / `kindNarrowCalls`, plus the `kindExitIters` / `kindExitArgType`
+  **cross-tab against the exit row**). A 14-way classification of the argument
+  node (`Checker.argSectionKindOf`), taken INSIDE the already-open `L_ARGTYPE`
+  row. **Like round 796's exit census it adds no boundary** — every nanosecond
+  it attributes is a span the partition was already timing, so a before/after
+  row comparison stays valid (round 793). Five totals print as partition checks
+  and all five read **EXACT**: iterations, the argType row, the
+  `getTypeOfExpression` row, the narrowing row in nanos AND calls, and the
+  cross-tab against `iterations`.
+* **`N_ARM_CHAIN` and `N_GATE_REL`** — the whole narrowing arm chain as one
+  sub-measure, and the (CALL.5)(b) pre-gate's own `checkTypeRelatedTo`. Before
+  them the argType row's second-largest term was a RESIDUAL; § 0's history is
+  what a named residual costs.
+
+`true` / `false` / `null` / `undefined` / `this` are split out of `K_IDENT`
+because Parser.kt's keyword arms all produce an `Identifier`: they are 938
+iterations with no symbol to resolve and would otherwise dilute the identifier
+row with the cheapest arguments in the compile.
+
+## 20. HEAD re-measured first (law 1) — the item's numbers held, one moved
+
+Two runs, compiler profile, `--argSections` at `ee3a3809`. **ms NET**, the same
+column the item quoted (raw in brackets):
+
+| | run 1 | run 2 | item said |
+|---|---:|---:|---|
+| partition | 1,254 [1,443] | 1,240 [1,432] | ~1,240 |
+| `L_ARGTYPE` | 598 [614] | 601 [617] | ~600 |
+| — `getTypeOfExpression` | 183 [200] | 208 [225] | 175 |
+| — narrowing | 146 [147] | 139 [140] | 148, 953 walks (953 here) |
+| `INFER` | 135 | 130 | 124 |
+| the 13 prologue walkers | 101 | 106 | 103 |
+| `L_NOTSIMPLE` | 103 | 93 | 87 |
+| `L_WEAK` | 84 | 76 | 82 |
+
+Invocations **23,494** and iterations **39,593** reproduce to the unit, as do
+every exit count (`L_NOTSIMPLE` 15,640 vs 15,637 — three iterations of drift
+across two builds).
+
+## 21. The composition — what the 39,036 typed arguments ARE
+
+`--argSections`, run 2 (the quieter run; run 1 in brackets where it differs
+materially). Raw ms.
+
+| kind | iterations | ctx installed | argType | of which gToExpr | narrow | walks |
+|---|---:|---:|---:|---:|---:|---:|
+| Identifier | 18,165 (46.5%) | 0 | **367** (54%) | 14 | 131 | 831 |
+| PropertyAccess | 7,774 (19.9%) | 0 | 151 | **87** | 3 | 118 |
+| literal (string/number/template) | 7,272 (18.6%) | 0 | 23 | 1 | 0 | 0 |
+| Call / New | 2,612 (6.7%) | 0 | 76 | **60** | 0 | 0 |
+| operator (binary/cond/unary) | 1,017 | 0 | 22 | 17 | 0 | 0 |
+| true/false/null/undefined/this | 938 | 0 | 4 | 0 | 0 | 3 |
+| **ArrowFunction** | **546 (1.4%)** | **532** | **16** | 14 | 0 | 0 |
+| as / `!` / `(…)` / satisfies | 350 | 0 | 4 | 1 | 0 | 0 |
+| ElementAccess | 160 | 0 | 2 | 0 | 0 | 1 |
+| ArrayLiteral | 112 | 0 | 2 | 2 | 0 | 0 |
+| ObjectLiteral | 88 | 41 | 4 | 3 | 0 | 0 |
+| FunctionExpression | 2 | 2 | 0 | 0 | 0 | 0 |
+| **total** | **39,036** | **575** | **675** [754] | **204** [250] | **135** [166] | **953** |
+
+**`getTypeOfExpression` by kind is the item's question, answered:**
+PropertyAccess **87 ms / 7,774 = 11.2 µs** and Call **60 ms / 2,612 = 23.0 µs**
+are **72% of the row over 26.6% of the iterations**, while Identifier is
+**14 ms / 18,165 = 0.8 µs** — a bare name costs a map read, a composite
+expression costs a resolution. Round 758's population-vs-frequency law, with
+the ratio running the other way from the usual: here the *rare* kinds are the
+expensive ones, which is exactly why a partition and not a count was required.
+
+## 22. KIND × EXIT — the falsification
+
+Iterations / argType ms charged to the row the iteration left from (run 1):
+
+| kind | `L_PRE` (any/error, foreign-TP) | `L_NOTSIMPLE` | `L_RELATION` | `L_TYPEPARAM` | `L_TAILGATE` |
+|---|---|---|---|---|---|
+| Identifier | **8,574 / 99 ms** | **7,575 / 270 ms** | 1,827 / 26 ms | 147 / 3 | 42 / 0 |
+| PropertyAccess | 1,968 / 18 ms | **5,032 / 171 ms** | 749 / 11 ms | 24 / 0 | 1 / 0 |
+| literal | — | 74 / 0 ms | **7,185 / 22 ms** | 13 / 0 | — |
+| Call / New | 1,176 / 49 ms | 1,060 / 12 ms | 362 / 3 ms | 14 / 0 | — |
+| operator | 175 / 2 ms | 545 / 18 ms | 291 / 3 ms | 5 / 0 | 1 / 0 |
+| keyword | — | 410 / 2 ms | 469 / 5 ms | 13 / 0 | 46 / 0 |
+| **ArrowFunction** | — | **525 / 16 ms** | 21 / 3 ms | — | — |
+| as/`!`/`(…)` | 75 / 0 | 237 / 3 ms | 33 / 0 | 5 / 0 | — |
+| ObjectLiteral | 2 / 0 | 73 / 3 ms | — | 13 / 0 | — |
+| ArrayLiteral | 25 / 0 | 87 / 2 ms | — | — | — |
+| ElementAccess | 126 / 1 ms | 20 / 0 | 9 / 0 | 5 / 0 | — |
+| FunctionExpression | — | 2 / 0 | — | — | — |
+
+**Three results.**
+
+**(a) The `L_NOTSIMPLE` population is not what it was said to be.** Identifier
+7,575 + PropertyAccess 5,032 = **80% of its 15,640 iterations and 89% of its
+497 ms**; arrows + function expressions are **527 iterations (3.4%) and 16 ms
+(3.2%)**. The prior was not merely imprecise, it named a population 14× too
+small — and it was inherited unchallenged from round 759 through round 796
+because *a `!isSimpleCheckableType` parameter* sounds like *a callback*. It is
+not: it is any parameter that is not a simple checkable type, which most
+INTERFACE parameters are, and their arguments are ordinary names.
+
+**(b) The check the function exists for runs mostly on trivia.** Of the 10,946
+iterations that reach the assignability relation, **7,185 (66%) are literals**,
+costing 22 ms of argType between them. That is why the TS2345 relation call is
+5–7 ms over 10,946 (round 796 measured 12 ms for the whole row): it is mostly
+`isSimpleTypeRelatedTo` on a literal, not a structural comparison.
+
+**(c) 22% of all iterations type an identifier to `any` and throw it away.**
+8,574 identifiers (plus 1,968 property accesses and 1,176 calls) leave at
+`argType === anyType || errorType`. Nothing can know that without typing them,
+so it is not a lever — but it is the largest single "paid for, discarded"
+population in the function, and it is a modelling signal, not a perf one.
+
+## 23. The argType row, closed to a named residue
+
+Run 2, raw, with the two new sub-measures live (which is why the row reads 675
+rather than HEAD's 617 — see § 24):
+
+| term | ms | reached | each |
+|---|---:|---:|---:|
+| `getTypeOfExpression(arg)` | 204 | 39,036 | 5.2 µs |
+| the narrowing ARM CHAIN | **320** | 39,036 | 8.2 µs |
+| — of which the **(CALL.5)(b) pre-gate relation** | **131** | **9,823** | **13.3 µs** |
+| — of which `getNarrowedTypeForReference` | 135 | 953 | 141 µs |
+| — of which the M3.4 refinement relation | 10 | 379 | 28 µs |
+| — chain residue | 44 | | 1.1 µs |
+| `literalTypeOfExpression` + `propTypeContainsLiteral` | 24 | 39,036 | 0.6 µs |
+| row residue | 127 | 39,036 | 3.3 µs |
+
+**The one number that changes the map: round 796 priced its own gate at "~70 ms
+of gate relation calls" by subtraction. Measured directly it is 131–137 ms** —
+9,823 calls at 13.3 µs, because the sources it compares are tsc's big
+interfaces. That does not overturn the gate (it removes ~390 ms of walking for
+that 133), but it halves the headroom anyone would have assumed was there, and
+it is now a measurement rather than a residual.
+
+**The row residue is the probe, quantitatively.** Everything unbracketed inside
+the row is four `is` tests, `stripNullishForNonNullArg` (an immediate return
+unless the type is a union), `voidIifeArgType` (an immediate return unless the
+argument is a call) and a `finally`. The row carries **7 nested timestamp reads
+per iteration**, and the harness's own in-situ empty-span calibration reads
+**423–429 ns** — 7 × 423 = **2.96 µs against the measured 3.3 µs**. The residue
+is not code.
+
+## 24. Why no lever, stated as a bound
+
+After (CALL.5)(b) the row is ~600 ms probe-free = **2.2% of a check-only
+compile**, and it decomposes into four things, none of which is above half a
+noise band (±2% ≈ 550 ms):
+
+* **~200 ms `getTypeOfExpression`**, 73% of it resolving property accesses and
+  calls. Round 737 already closed the recompute direction program-wide (×2.76 =
+  2.05 cross-handler × 1.34 recursion, largest actionable merge 166 ms), and
+  this function types each argument exactly once.
+* **~135 ms of narrowing over 953 walks at 141 µs.** This is round 735's
+  monster tail after round 796 removed 91% of the walks: what remains is
+  precisely the population with real flow facts to find, and round 736 already
+  closed the memo failure behind it.
+* **~131 ms the gate's own relation**, which buys the ~390 ms above. Its
+  refusal population cannot be reached more cheaply: `checkTypeRelatedToCore`
+  already short-circuits on `source === target`, so the 13.3 µs is genuine
+  structural work; and round 796 measured that only 416 of 8,905 refusals would
+  have bailed at `getReferencePath`/`getFlowAt`, so a "does this reference have
+  flow facts at all" pre-refutation reaches 4.7% of it.
+* **~24 ms of literal preservation** and a residue that is the probe.
+
+**Both remaining arms stay gated**: priced separately, B469 pays 33 ms of gate
+to avoid ~90 ms of walking and M3.4 pays 99 ms to avoid ~286 ms. Neither
+inverts.
+
+## 25. Verification
+
+* Full corpus suite: **13,441 tests, 0 failures, 3 skipped** (13,435 + 6 new
+  `ArgKindCensusTest` pins).
+* Compiler profile `--listAll`: production, `--argSections` and
+  `--argSectionsCoarse` are **identical** (46 errors, identical sorted lines).
+* `--partitionCheck 2`: **EQUIVALENT — 46**.
+* `scripts/cost_gate.py`: all 20 deterministic counters **+0.00%**, exit 0, no
+  rebaseline — the change is probe-only (`argSectionKindOf` is unreachable with
+  `ArgSections.mode == OFF`; the single production edit names the arm chain's
+  value).
+* **No 8-profile grid and no wall-clock A/B were run, deliberately.** Nothing
+  was landed that production executes, so the grid's question is answered more
+  sharply by the cost gate's 20 counters at +0.00% on the profile plus 13,441
+  unchanged corpus baselines; and there is no prize to A/B.
+* **Ablations, run separately.** Fault A (the kind hook records nothing) fails
+  **3** of the 6 pins; fault B (the arm-chain bracket opened at its own close,
+  i.e. measuring the wrong span) fails **1**, disjoint from A's. The two pins
+  neither fault reaches are the index-alignment pin and the records-nothing-when-
+  off pin, both structural — reported rather than papered over.
+
+## 26. Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt)
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --argSections build/bench/tsc-project-*
+# the level-S tables are the two "(CALL.6) LEVEL-S" blocks of the report
+```

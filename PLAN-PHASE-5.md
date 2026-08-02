@@ -20,6 +20,93 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 797 (2026-08-02) — (CALL.6) DONE: THE LEVEL-S SUB-PARTITION SAYS ROUND 796's
+HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS WRONG BY 14x — the 15,640 iterations that
+leave at `!isSimpleCheckableType` are 48% bare Identifier and 32% PropertyAccess, not
+"arrows and callbacks typed under an installed contextual type" (527 = 3.4%; a contextual
+type is installed for 575 of 39,036 iterations = 1.5%). The item's literal question
+answers the same way from the other side: PropertyAccess + Call are 26.6% of the
+iterations and 73% of the `getTypeOfExpression` row. NO LEVER — the row is ~600 ms =
+2.2% and every term in it is either irreducible or already bought. Suite 13,435 ->
+13,441; cost gate 20/20 at +0.00%; `--partitionCheck 2` EQUIVALENT; production/ON/COARSE
+`--listAll` identical.**
+
+- **LAW 1 FIRST, AND IT PAID AGAIN — SMALL DRIFT, ONE REAL MOVE.** Two `--argSections`
+  runs at HEAD before a line was written: invocations **23,494** and iterations
+  **39,593** reproduce to the unit, `L_ARGTYPE` reads 598/601 ms net against the item's
+  "~600", and every exit count matches (`L_NOTSIMPLE` 15,640 vs 15,637). What HAD moved
+  is `INFER` (124 -> 130/135) and the item's `L_NOTSIMPLE` row (87 -> 93/103) — small,
+  but the point of re-measuring is that you cannot know which until you look.
+- **WHAT WAS BUILT, AND WHY IT COSTS NO BOUNDARY.** A 14-way classification of the
+  ARGUMENT node taken inside the already-open `L_ARGTYPE` row — so, exactly like round
+  796's exit census, every nanosecond it attributes is a span the partition was already
+  timing (round 793's correction does not apply to anything read through it). Five
+  totals print as partition checks and all five read **EXACT**: iterations, the argType
+  row, the `getTypeOfExpression` row, the narrowing row in nanos AND calls, and the KIND
+  x EXIT cross-tab against `iterations`. `true`/`false`/`null`/`undefined`/`this` are
+  split out of the identifier row because Parser.kt's keyword arms all produce an
+  `Identifier` — 938 iterations that would otherwise dilute it with the cheapest
+  arguments in the compile.
+- **THE FALSIFICATION, AND WHY THE PRIOR WAS PLAUSIBLE.** Round 759 wrote that the
+  function-vs-function exit's population is "arrows and callbacks typed under an
+  installed contextual type"; round 796 repeated it and queued this round to test it.
+  Measured: **Identifier 7,575 + PropertyAccess 5,032 = 80% of the 15,640 iterations and
+  89% of the 497 ms they carry; arrows + function expressions 527 = 3.4% / 3.2%.** The
+  prior mistook the PARAMETER for the ARGUMENT — a parameter that is not
+  simple-checkable sounds like a callback and is usually an INTERFACE, whose arguments
+  are ordinary names. Round 759's own law ("the exit predicate reads the parameter while
+  the cost belongs to the argument") is what it violated.
+- **THE ITEM'S QUESTION, ANSWERED.** `getTypeOfExpression` by kind: **PropertyAccess
+  11.2 us x 7,774 and Call 23.0 us x 2,612 = 73% of the row over 26.6% of the
+  iterations**, while Identifier — 46.5% of all iterations — is **0.8 us** and 7% of it.
+  A bare name costs a map read; a composite expression costs a resolution. Note the
+  direction: here the RARE kinds are the expensive ones, which is why a partition and
+  not a count was required.
+- **THE NUMBER THAT CHANGES THE MAP.** Two new sub-measures (`N_ARM_CHAIN`,
+  `N_GATE_REL`) close the argType row to a named residue, and they price round 796's own
+  gate directly for the first time: **131-137 ms over 9,823 calls = 13.3 us each**,
+  against the "~70 ms of gate relation calls" that round obtained by subtraction. It is
+  still net-positive (it removes ~390 ms of walking) and it cannot be cheapened:
+  `checkTypeRelatedToCore` already short-circuits on `source === target`, so the 13.3 us
+  is genuine structural work on tsc's big interfaces, and round 796 measured only 416 of
+  8,905 refusals as bailing early at `getReferencePath`/`getFlowAt`. Both arms priced
+  separately stay net-positive (B469 33 ms of gate for ~90 ms of walking; M3.4 99 for
+  ~286).
+- **THE RESIDUE IS THE PROBE, QUANTITATIVELY — not a story.** Everything unbracketed
+  inside the row is four `is` tests, `stripNullishForNonNullArg` and `voidIifeArgType`
+  (both immediate returns for the shapes that dominate) and a `finally`. The row carries
+  **7 nested timestamp reads per iteration** and the harness's own in-situ empty-span
+  calibration reads **423-429 ns**: 7 x 423 = **2.96 us against the measured 3.3 us**.
+- **TWO ASIDES THE CROSS-TAB GAVE FOR FREE.** (1) **66% of the 10,946 iterations that
+  reach the assignability relation carry a LITERAL argument** (7,185, 22 ms of argType
+  between them) — which is why the TS2345 relation call is 5-7 ms: it is mostly
+  `isSimpleTypeRelatedTo` on a literal. (2) **22% of ALL iterations type an identifier to
+  `any` and discard it** (8,574, 99 ms, plus 1,968 property accesses and 1,176 calls).
+  Nothing can know that without typing them, so it is not a lever — but it is the
+  largest paid-for-and-discarded population in the function and a MODELLING signal.
+- **NO LEVER, STATED AS A BOUND (the legitimate outcome the item allowed).** After
+  (CALL.5)(b) the row is ~600 ms = 2.2% of a check-only compile: ~200 ms irreducible
+  type resolution (round 737 closed the recompute direction; this function types each
+  argument once), ~135 ms of narrowing over 953 walks at 141 us (round 735's tail after
+  796 removed 91% of the walks; round 736 closed the memo behind it), ~131 ms of gate
+  that buys 390, ~24 ms of literal preservation, and the probe. Half a noise band is
+  ~275 ms; nothing comes close.
+- **PINS: 6 new (`ArgKindCensusTest`), 4 DISCRIMINATING across two complementary
+  ablations run SEPARATELY.** Fault A (the kind hook records nothing) fails 3; fault B
+  (the arm-chain bracket opened at its own close, i.e. measuring the wrong span) fails 1,
+  disjoint from A's. The two pins neither fault reaches are the index-alignment pin and
+  the records-nothing-when-off pin, both structural — reported, not papered over. The
+  harness was COMMITTED BEFORE the ablations (law 4), so both reverts were a scoped
+  `git checkout`.
+- **WHAT DID NOT WORK.** The fixture's first cross-tab pin asserted the ARROW argument
+  exits at `L_NOTSIMPLE` — it does not, in a small fixture, and the pin failed on a
+  WORKING binary. It was restated to assert what the round actually found (the exit is
+  reached by IDENTIFIER arguments) plus a partition invariant over the arrow population,
+  which is strictly stronger than the original intent. Also: no 8-profile grid and no
+  wall-clock A/B were run, deliberately — nothing production executes changed (cost gate
+  20/20 at +0.00% IS the sharper form of that question), and there is no prize to A/B.
+- Full derivation: `docs/perf/argument-check-attribution.md` sections 19-26.
+
 **Round 796 (2026-08-02) — (CALL.5) PROMOTED AND DONE: THE ARGUMENT CHECK IS PARTITIONED BY
 EXIT, AND THE CENSUS NAMES A LEVER ROUND 764 HAD ALREADY DECLINED ONCE. Every one of the
 23,494 invocations returns from `POST` (thirteen dedicated prologue walkers, 0 firings),
@@ -852,85 +939,6 @@ predictions into the queue BEFORE any code** (commit `ccee8d6c`).
 - Suite 13,342 -> **13,351 / 0 failures / 3 skipped** (+9 pins). 8-profile grid
   **46/46/46/46/46/46/46/94**, re-captured at HEAD. `--listAll` byte-identical in
   production, ON, COARSE and CENSUS. Cost gate **all 20 counters +0.00%**.
-
-**Round 786 (2026-08-01) — THE MISSION TRANSITIONS TO PERFORMANCE, AND (ENGINE.1) IS
-CLOSED BY MEASURING ITS LAST SITE. THE THREE-SITE DEDICATED-WALKER LAYER IS
-613 ms = 2.2% OF A CHECK-ONLY COMPILE — ONE NOISE BAND — AND ~29 ms OF IT IS
-PLAINLY DELETABLE.** The queue's "TOP OF QUEUE (owner-requested 2026-07-26) — work
-this before PERF" gate is satisfied: (REL.4) landed round 782, (REL.2) round 784,
-(NARROW.1) round 785. Everything still unchecked above the perf work is either
-owner/hardware-blocked ((AOT.3) needs a NATIVE emit-mode measurement, forbidden on
-this box) or explicitly deferred with **0 measured sites** ((WIDEN.1)(b)/(c)/(d)).
-So the top open perf item was (ENGINE.1)'s site 3, and this round took it.
-
-- **WHAT LANDED: `CtaSections` level E — `checkAssignmentExpression`, 27 rows in
-  source order, wrapper/`…Core` split, exit census, `COARSE` counterpart** —
-  plus 8 pins and `docs/perf/engine-rule-price.md` §§ 5b-8. **Nothing else. That
-  is the honest outcome**: every candidate lever inside the three largest
-  assignability sites in the compiler is below the ±2.0% band, and the item exists
-  to answer a SCOPE question, not to find one.
-- **THE PRIZE WAS MEASURED BEFORE ANYTHING WAS BUILT, AND IT HAD MOVED.** Round 755
-  quoted site 3 at 373 ms; re-measured at HEAD it is **406 ms of a 27,941 ms
-  compile = 1.45%**, so the layer inside it could not exceed ~0.5% whatever the
-  split turned out to be. That is why this round is a measurement and not a fix —
-  and it is CLAUDE.md's "re-measure a number before spending a round inside it"
-  paying for itself in the first ten minutes.
-- **THE CROSS-CHECK IS WHAT MAKES THE PARTITION BELIEVABLE.** Level E totals
-  **462 ms over 17,179 invocations**; level A — an independent partition opened on
-  the CALLER — reads **465 ms over 16,538**. Two partitions from opposite sides of
-  the same call agreeing to **0.6%**, with the 641-invocation difference accounted
-  for exactly by the five legacy-walker call sites level A does not cover.
-- **THE SPLIT: engine 284 ms (72.0%) / walker 110 ms (27.9%) / bookkeeping 0.4 ms.**
-  The layer is **0.39% of the compile and 0.39× the engine work**. With sites 1
-  (326 ms / 1.21% / 0.67×) and 2 (177 ms / 0.66% / 0.40×) that is **613 ms = 2.2%**,
-  and round 755 predicted **605-630 ms** from the 28-37% band before this site was
-  opened — the measurement landed inside its own prediction interval.
-- **E2 FAILS FOR THE SECOND TIME AND THE 14× IS FINISHED.** Site 3's
-  firewall/relation ratio is **5.6×**, site 2's was 4.5×; the 14× was an artifact of
-  site 1's relation being 2.2% of its own function. It was the wrong statistic AND
-  it does not survive in its own terms.
-- **THE CALIBRATION IS WEAK, AND SAYING SO IS PART OF THE RESULT.** Three runs per
-  mode: ON **462 / 460 / 469**, COARSE **445 / 420 / 426**. Δ of medians = 36 ms over
-  103,899 extra boundaries = **347 ns**, but the COARSE spread is **25 ms**, so Δ is
-  only **1.4× the larger spread** — CLAUDE.md's rule says that is a BOUND, and the
-  bound is **144-472 ns**. **What rescues the round is a structural property, not a
-  better measurement**: the walker share reads **30.3 / 27.9 / 26.4%** across that
-  entire interval, because level E's boundaries distribute by REACH and reach is
-  near-uniform through the identifier partition — so the classification cannot
-  hinge on the calibration. A partition whose verdict DID hinge on it would have
-  had to be thrown away.
-- **THREE FINDINGS ONLY SITE 3 COULD GIVE.** (1) **61% of the invocations do nothing
-  at all** — 10,432 of 17,179 exit in the entry row because the expression is not an
-  `=` binary; the eligibility test lives INSIDE the function, unlike sites 1 and 2
-  whose callers pre-filter, and **only a partition opened on the WRAPPER can see
-  it** (~13 ms, so a shape rather than a lever). (2) **The TS2322 elaboration is
-  0.4 ms over 3,791 reaches** — site 2 reached its elaboration ONCE in the whole
-  compile, which could be dismissed as a property of a clean profile; 3,791 reaches
-  costing nothing is the stronger form, and it is now confirmed at all three sites.
-  (3) **"Compute the SOURCE type" is the largest row at every site** (160 of 394
-  classified ms here, 219 of 623 at site 2) — whatever replaces the walker layer
-  still pays it.
-- **RECURSION: ONE SITE, ONE ROW, AND A PIN THAT DETECTS A SECOND.**
-  `checkAssignmentExpression` recurses at exactly one place (`a = b = c`), so level
-  E keeps the "depth != 1 ⇒ return" shape and charges the whole nested descent to
-  the outer invocation's `E_RECURSE` row — simpler and more exactly attributed than
-  round 756's hand-back shape, which level D needed because ITS recursion is spread
-  over sixteen arms. The correctness of that choice rests on "exactly one place"
-  staying true, so a pin asserts `invocationsENested == 1` on an `a = b = c`
-  fixture: a second recursion site added later fails it instead of silently
-  mis-attributing a subtree.
-- **A METHOD TRAP WORTH THE MINUTE IT COSTS TO READ.** The first probe run after
-  `compileKotlinJvm` did not finish in **ten minutes**; the identical run later took
-  **27.7 s**. Nothing was wrong with the code — the Kotlin daemon was still holding
-  its heap next to a `-Xmx4g` compile on a 7.7 GB box with zero swap, which is
-  CLAUDE.md's documented apparent-hang. **Free the daemons between a build and a
-  measurement**, or the first data point of every session is garbage.
-- **PREDICTIONS 3 of 4.** HIT: the split would land in E1's 25-50% band; E3 would
-  hold; nothing would be landable. **MISSED**: I expected the ON-vs-COARSE
-  differential to be as sharp as level C's (739 ns over a 99 ms Δ) and it was not —
-  level E has a tenth of level C's boundary count against the same run-to-run
-  noise, which is exactly the geometry that makes a differential weak.
-
 
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
@@ -3144,7 +3152,46 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
     is above half a noise band**, so the next unit here is a level-S sub-partition of
     `L_ARGTYPE`'s `getTypeOfExpression` by ARGUMENT KIND (the 15,637 that exit at
     `L_NOTSIMPLE` are arrows and callbacks typed under an installed contextual type,
-    round 759), not another gate.
+    round 759), not another gate. **ROUND 797 DID THAT AND THE PARENTHESIS WAS FALSE —
+    see (CALL.6) below.**
+
+- [x] **(CALL.6) DONE round 797 — THE LEVEL-S SUB-PARTITION LANDED, ROUND 796's
+  HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS FALSIFIED BY 14x, AND THE HONEST
+  VERDICT IS *NO LEVER*.** The `L_ARGTYPE` row is split by a 14-way classification of
+  the ARGUMENT (plus the contextual-install column and a KIND x EXIT-ROW cross-tab), and
+  two new sub-measures (`N_ARM_CHAIN`, `N_GATE_REL`) close the row to a named residue.
+  Like round 796's exit census it adds **no boundary**; five partition checks print
+  EXACT.
+  - **THE FALSIFICATION.** The 15,640 iterations leaving at `!isSimpleCheckableType` are
+    **48% bare Identifier + 32% PropertyAccess (80% of the iterations, 89% of the
+    497 ms)**; arrows + function expressions are **527 = 3.4% of the iterations and 3.2%
+    of the cost**, and a contextual type is installed for **575 of 39,036 iterations
+    (1.5%)**. *A parameter that is not simple-checkable sounds like a callback and is
+    usually an INTERFACE, whose arguments are ordinary names.*
+  - **THE ITEM'S OWN QUESTION, ANSWERED.** `getTypeOfExpression` by kind: PropertyAccess
+    (11.2 us) + Call (23.0 us) are **73% of the row over 26.6% of the iterations**;
+    Identifier — 46.5% of all iterations — is **0.8 us** and 7% of it.
+  - **THE NUMBER THAT CHANGES THE MAP: round 796's own gate relation is 131-137 ms over
+    9,823 calls (13.3 us each), not the "~70 ms" it estimated by subtraction.** Still
+    net-positive (it removes ~390 ms of walking), and un-cheapenable:
+    `checkTypeRelatedToCore` already short-circuits on `source === target`, and round
+    796 measured only 416 of 8,905 refusals as bailing at
+    `getReferencePath`/`getFlowAt`.
+  - **TWO ASIDES WORTH THE CROSS-TAB.** 66% of the 10,946 iterations that reach the
+    assignability relation carry a LITERAL argument (22 ms of argType between them) —
+    the check the function exists for runs mostly on trivia; and **22% of all iterations
+    type an identifier to `any` and discard it** (8,574, 99 ms), which is a modelling
+    signal, not a perf one.
+  - **NO LEVER, AS A BOUND.** The row is ~600 ms = 2.2% of a check-only compile and
+    decomposes into ~200 ms irreducible type resolution, ~135 ms of the narrowing tail
+    round 736 already closed the memo behind, ~131 ms of gate that buys 390, ~24 ms of
+    literal preservation, and a residue that IS the probe (7 nested timestamp reads x
+    the harness's own 423 ns in-situ figure = 2.96 us against a measured 3.3 us).
+    Nothing is above half a noise band. Suite 13,435 -> **13,441 / 0 / 3** (+6 pins, 4
+    discriminating across two complementary ablations run separately); cost gate **20/20
+    at +0.00%**, `--partitionCheck 2` EQUIVALENT — 46, production/ON/COARSE `--listAll`
+    identical. **No grid and no A/B, deliberately: nothing production executes changed.**
+    Full derivation: `docs/perf/argument-check-attribution.md` sections 19-26.
 
 - [x] **(ENGINE.1) CLOSED round 786 — SITE 3 IS PARTITIONED, E3 IS NOW A MEASUREMENT
   RATHER THAN A BOUND, AND THE OWNER-FACING NUMBER IS 613 ms = 2.2% OF A CHECK-ONLY
