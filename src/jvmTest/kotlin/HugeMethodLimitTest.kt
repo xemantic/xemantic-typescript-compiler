@@ -46,7 +46,8 @@ import kotlin.test.fail
  * `Checker.checkMemberAccessMissingCore`, which at **46,567 bytecodes** was the
  * largest method in the compiler and round 789's largest leaf in the compile
  * (round 804 split it), and `Checker.checkPropertyAccessInExpr` at **9,062**
- * (round 805 split it).
+ * (round 805 split it), and `Checker.ccetSpineEnter` at **8,686** — which runs at
+ * EVERY node of every file (round 806 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -192,6 +193,49 @@ class HugeMethodLimitTest {
         // ... and the sum must still be the bulk of what left the entry, i.e. the
         // arms were MOVED, not deleted. Measured sum: 4,261.
         assert(parts.values.sum() > 3000)
+    }
+
+    /**
+     * (JIT.1)(d) round 806 — the three helpers `ccetSpineEnter` was split into.
+     * It was **8,686 bytecodes** and it runs at EVERY node of every file; three of
+     * its four `when (node.kindId)` arms moved out and the entry is 2,474.
+     */
+    private val ccetEnterSplitParts = setOf(
+        "ccetEnterBlock",
+        "ccetEnterClassDeclaration",
+        "ccetEnterFunctionLike",
+    )
+
+    @Test
+    fun `ccetSpineEnter is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val fn = sizes["ccetSpineEnter"] ?: fail("ccetSpineEnter not found in Checker")
+        // Positive control: the parse really did read a substantial method (it is
+        // 2,474 bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(fn > 1000)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the ccetSpineEnter split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = ccetEnterSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in ccetEnterSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the ccetSpineEnter split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in ccetEnterSplitParts }
+        assert(parts.size == 3)
+        // Measured smallest part: 1,328 bytecodes (the FunctionLike arm).
+        assert(parts.values.min() > 800)
+        // ... and the sum must still be the bulk of what left the entry, i.e. the
+        // arms were MOVED, not deleted. Measured sum: 6,122.
+        assert(parts.values.sum() > 4500)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */

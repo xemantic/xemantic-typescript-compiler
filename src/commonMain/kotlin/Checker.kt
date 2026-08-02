@@ -1161,134 +1161,8 @@ class Checker(
         // instanceof chain — hand-converted; the ArrowFunction/FunctionExpression
         // arm's union-smart-cast shapes are restructured to explicit if/casts).
         when (node.kindId) {
-            NodeKind.BLOCK -> { node as Block; when ((parent as? NodeBase)?.kindId ?: -1) {
-                NodeKind.FUNCTION_DECLARATION -> { parent as FunctionDeclaration; if (node === parent.body) {
-                    val (scope, ast) = ccetFnTpScope(parent.typeParameters, top)
-                    val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
-                        scope, ast, top.superBaseSig, top.superBaseType, dead = top.dead)
-                    ccetFrames.addLast(frame)
-                    withCcetFrameAmbient(frame) {
-                        populateParameterLocalTypes(parent.parameters)
-                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
-                        shadowNestedFunctionNames(node.statements)
-                    }
-                } }
-                NodeKind.METHOD_DECLARATION -> {
-                    parent as MethodDeclaration
-                    val cls = parent.parent
-                    if (node === parent.body && cls is ClassDeclaration) {
-                        // The class frame (pushed at the ClassDeclaration enter)
-                        // is the base; static methods drop the class TP scope
-                        // but mint fresh own-TPs (B74.5).
-                        val isStatic = ModifierFlag.Static in parent.modifiers
-                        val classFrame = ccetFrames.lastOrNull { it.owner === cls } ?: top
-                        val outerScope = ccetFrames.elementAtOrNull(
-                            ccetFrames.indexOfLast { it.owner === cls } - 1)
-                        var scope = classFrame.tpScope
-                        if (isStatic) {
-                            val baseScope = outerScope?.tpScope
-                            val mtps = parent.typeParameters
-                            scope = if (mtps.isNullOrEmpty()) baseScope else {
-                                val ns = baseScope?.toMutableMap() ?: mutableMapOf()
-                                for (tpNode in mtps) {
-                                    val tp = Type.TypeParam()
-                                    tp.symbol = Symbol(SymbolFlags.TypeParameter, tpNode.name.text)
-                                    ns[tpNode.name.text] = tp
-                                }
-                                ns
-                            }
-                        }
-                        val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
-                            scope, classFrame.tpAst, top.superBaseSig, classFrame.superBaseType,
-                            dead = top.dead)
-                        ccetFrames.addLast(frame)
-                        withCcetFrameAmbient(frame) {
-                            populateParameterLocalTypes(parent.parameters)
-                            applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
-                            if (!isStatic && classFrame.classSym != null) {
-                                val instType = getDeclaredTypeOfSymbol(classFrame.classSym)
-                                if (instType !== anyType && instType !== errorType) {
-                                    currentLocalTypes["this"] = instType
-                                }
-                            }
-                        }
-                    } else if (node === parent.body) {
-                        // Objlit methods: the withObjThis this-typed copy.
-                        ccetObjlitMemberFrame(node, parent.parameters, parent)
-                    }
-                }
-                NodeKind.CONSTRUCTOR -> {
-                    parent as Constructor
-                    val cls = parent.parent
-                    if (node === parent.body && cls is ClassDeclaration) {
-                        val classFrame = ccetFrames.lastOrNull { it.owner === cls } ?: top
-                        val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
-                            classFrame.tpScope, classFrame.tpAst,
-                            classFrame.superBaseSig, classFrame.superBaseType, dead = top.dead)
-                        ccetFrames.addLast(frame)
-                        withCcetFrameAmbient(frame) {
-                            populateParameterLocalTypes(parent.parameters)
-                            applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
-                        }
-                    }
-                }
-                NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR -> {
-                    // Class accessors: NO copies in legacy (bodies share). Objlit
-                    // accessors: the withObjThis this-typed copy.
-                    val owner2 = parent as ClassElement
-                    val cls = (parent as NodeBase).parent
-                    if (cls is ObjectLiteralExpression) {
-                        val params = when (owner2) {
-                            is GetAccessor -> owner2.parameters
-                            is SetAccessor -> owner2.parameters
-                            else -> emptyList()
-                        }
-                        ccetObjlitMemberFrame(node, params, owner2)
-                    }
-                }
-            } }
-            NodeKind.CLASS_DECLARATION -> {
-                node as ClassDeclaration
-                // The class-level frame: class TP scope + classSym + the
-                // baseResolution pair, maps SHARED with the enclosing frame.
-                val classSym = node.name?.let { name ->
-                    globals[name.text] ?: ccetFrames.lastOrNull { it.nsSymbol != null }
-                        ?.nsSymbol?.exports?.get(name.text)
-                }
-                val classTps: List<Type.TypeParam> = if (classSym != null) {
-                    var tps: List<Type.TypeParam> = emptyList()
-                    withCcetFrameAmbient(top) {
-                        tps = (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
-                    }
-                    tps
-                } else emptyList()
-                val scope = if (classTps.isEmpty()) top.tpScope else {
-                    val ns = top.tpScope?.toMutableMap() ?: mutableMapOf()
-                    for (tp in classTps) tp.symbol?.name?.let { ns[it] = tp }
-                    ns
-                }
-                var baseSig: Signature? = null
-                var baseType: Type? = null
-                val scopedFrame = CcetFrame(node, top.localTypes, top.paramBindings,
-                    scope, top.tpAst, top.superBaseSig, top.superBaseType,
-                    classSym = classSym, dead = top.dead)
-                withCcetFrameAmbient(scopedFrame) {
-                    val extClause = node.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
-                    val baseExpr = extClause?.types?.firstOrNull()
-                    val baseName = (baseExpr?.expression as? Identifier)?.text
-                    val baseSym = baseName?.let { globals[it] }
-                    if (baseExpr != null && baseSym != null) {
-                        val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
-                            getTypeFromTypeNode(tn).takeIf { it !== errorType }
-                        }.orEmpty()
-                        baseSig = buildBaseConstructorSignatureForSuper(baseSym, typeArgs)
-                        baseType = buildBaseInstanceTypeForSuper(baseSym, typeArgs)
-                    }
-                }
-                ccetFrames.addLast(CcetFrame(node, top.localTypes, top.paramBindings,
-                    scope, top.tpAst, baseSig, baseType,
-                    classSym = classSym, dead = top.dead))
-            }
+            NodeKind.BLOCK -> ccetEnterBlock(node as Block, parent, top)
+            NodeKind.CLASS_DECLARATION -> ccetEnterClassDeclaration(node as ClassDeclaration, top)
             NodeKind.MODULE_DECLARATION -> {
                 node as ModuleDeclaration
                 if (ModifierFlag.Declare in node.modifiers) {
@@ -1306,47 +1180,7 @@ class Checker(
                         nsSymbol = nsSym, dead = top.dead))
                 }
             }
-            NodeKind.ARROW_FUNCTION, NodeKind.FUNCTION_EXPRESSION -> {
-                val params = if (node is ArrowFunction) node.parameters
-                    else (node as FunctionExpression).parameters
-                // B246: a FunctionType-annotated var's fn-expr/arrow initializer
-                // takes the CONTEXTUAL param typing instead of own-param anyType.
-                val declParent = parent as? VariableDeclaration
-                val ctxAnn = (declParent?.type as? FunctionType)
-                    ?.takeIf { declParent.initializer === node }
-                val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
-                    top.tpScope, top.tpAst, top.superBaseSig, top.superBaseType, dead = top.dead)
-                ccetFrames.addLast(frame)
-                withCcetFrameAmbient(frame) {
-                    if (ctxAnn != null) {
-                        populateParameterLocalTypes(params)
-                        for ((i, p) in params.withIndex()) {
-                            val nm = (p.name as? Identifier)?.text ?: continue
-                            if (p.dotDotDotToken) continue
-                            val base: Type? = if (p.type != null) currentLocalTypes[nm]
-                            else ctxAnn.parameters.getOrNull(i)?.takeIf { !it.dotDotDotToken }
-                                ?.type?.let { getTypeFromTypeNode(it) }
-                            if (base == null || base === anyType || base === errorType) continue
-                            val t = if (p.questionToken && strictNullChecks && p.initializer == null) {
-                                getUnionType(listOf(base, undefinedType))
-                            } else base
-                            currentLocalTypes[nm] = t
-                        }
-                        (node.let { if (it is ArrowFunction) it.body else (it as FunctionExpression).body } as? Block)?.let { b ->
-                            applyCallTypesBodyLocalShadowing(b.statements, params)
-                        }
-                    } else {
-                        val ownNames = mutableSetOf<String>()
-                        for (p in params) collectBindingNames(p.name, ownNames)
-                        for (n in ownNames) currentLocalTypes[n] = anyType
-                        val body = if (node is ArrowFunction) node.body else (node as FunctionExpression).body
-                        (body as? Block)?.let { b ->
-                            applyCallTypesBodyLocalShadowing(b.statements, params)
-                            shadowNestedFunctionNames(b.statements)
-                        }
-                    }
-                }
-            }
+            NodeKind.ARROW_FUNCTION, NodeKind.FUNCTION_EXPRESSION -> ccetEnterFunctionLike(node, parent, top)
         }
         // ForIn/ForOf loop-var shadow around the BODY (colliding names only).
         run {
@@ -1396,6 +1230,207 @@ class Checker(
                     listOf(topF.localTypes[name]), listOf(topF.localTypes.containsKey(name)),
                     emptyList()))
                 topF.localTypes[name] = t
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 806 — the `Block` arm of [ccetSpineEnter]: the ccet frame
+     * pushed for a function / method / constructor / accessor BODY.
+     *
+     * Extracted VERBATIM so [ccetSpineEnter] itself falls below HotSpot's
+     * 8,000-bytecode `HugeMethodLimit`; above it a method is never JIT-compiled
+     * at all and runs in the interpreter for the whole process. The arm contains
+     * no `return` and produces no value — its only effect is the shared
+     * [ccetFrames] push — so the extraction cannot change control flow, and in
+     * particular the two trailing blocks of [ccetSpineEnter] (the ForIn/ForOf
+     * loop-var shadow and the If-arm type-guard override) still run after it.
+     */
+    private fun ccetEnterBlock(node: Block, parent: Node?, top: CcetFrame) {
+        when ((parent as? NodeBase)?.kindId ?: -1) {
+            NodeKind.FUNCTION_DECLARATION -> { parent as FunctionDeclaration; if (node === parent.body) {
+                val (scope, ast) = ccetFnTpScope(parent.typeParameters, top)
+                val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
+                    scope, ast, top.superBaseSig, top.superBaseType, dead = top.dead)
+                ccetFrames.addLast(frame)
+                withCcetFrameAmbient(frame) {
+                    populateParameterLocalTypes(parent.parameters)
+                    applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                    shadowNestedFunctionNames(node.statements)
+                }
+            } }
+            NodeKind.METHOD_DECLARATION -> {
+                parent as MethodDeclaration
+                val cls = parent.parent
+                if (node === parent.body && cls is ClassDeclaration) {
+                    // The class frame (pushed at the ClassDeclaration enter)
+                    // is the base; static methods drop the class TP scope
+                    // but mint fresh own-TPs (B74.5).
+                    val isStatic = ModifierFlag.Static in parent.modifiers
+                    val classFrame = ccetFrames.lastOrNull { it.owner === cls } ?: top
+                    val outerScope = ccetFrames.elementAtOrNull(
+                        ccetFrames.indexOfLast { it.owner === cls } - 1)
+                    var scope = classFrame.tpScope
+                    if (isStatic) {
+                        val baseScope = outerScope?.tpScope
+                        val mtps = parent.typeParameters
+                        scope = if (mtps.isNullOrEmpty()) baseScope else {
+                            val ns = baseScope?.toMutableMap() ?: mutableMapOf()
+                            for (tpNode in mtps) {
+                                val tp = Type.TypeParam()
+                                tp.symbol = Symbol(SymbolFlags.TypeParameter, tpNode.name.text)
+                                ns[tpNode.name.text] = tp
+                            }
+                            ns
+                        }
+                    }
+                    val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
+                        scope, classFrame.tpAst, top.superBaseSig, classFrame.superBaseType,
+                        dead = top.dead)
+                    ccetFrames.addLast(frame)
+                    withCcetFrameAmbient(frame) {
+                        populateParameterLocalTypes(parent.parameters)
+                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                        if (!isStatic && classFrame.classSym != null) {
+                            val instType = getDeclaredTypeOfSymbol(classFrame.classSym)
+                            if (instType !== anyType && instType !== errorType) {
+                                currentLocalTypes["this"] = instType
+                            }
+                        }
+                    }
+                } else if (node === parent.body) {
+                    // Objlit methods: the withObjThis this-typed copy.
+                    ccetObjlitMemberFrame(node, parent.parameters, parent)
+                }
+            }
+            NodeKind.CONSTRUCTOR -> {
+                parent as Constructor
+                val cls = parent.parent
+                if (node === parent.body && cls is ClassDeclaration) {
+                    val classFrame = ccetFrames.lastOrNull { it.owner === cls } ?: top
+                    val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
+                        classFrame.tpScope, classFrame.tpAst,
+                        classFrame.superBaseSig, classFrame.superBaseType, dead = top.dead)
+                    ccetFrames.addLast(frame)
+                    withCcetFrameAmbient(frame) {
+                        populateParameterLocalTypes(parent.parameters)
+                        applyCallTypesBodyLocalShadowing(node.statements, parent.parameters)
+                    }
+                }
+            }
+            NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR -> {
+                // Class accessors: NO copies in legacy (bodies share). Objlit
+                // accessors: the withObjThis this-typed copy.
+                val owner2 = parent as ClassElement
+                val cls = (parent as NodeBase).parent
+                if (cls is ObjectLiteralExpression) {
+                    val params = when (owner2) {
+                        is GetAccessor -> owner2.parameters
+                        is SetAccessor -> owner2.parameters
+                        else -> emptyList()
+                    }
+                    ccetObjlitMemberFrame(node, params, owner2)
+                }
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 806 — the `ClassDeclaration` arm of [ccetSpineEnter]: the
+     * class-level frame carrying the class type-parameter scope, the class
+     * symbol and the resolved `super` base signature/type.
+     *
+     * Extracted VERBATIM (see [ccetEnterBlock] for why). The frame it pushes is
+     * read at every member BODY enter — a LATER, separate [ccetSpineEnter] call
+     * — which is exactly the cross-boundary effect the split must preserve.
+     */
+    private fun ccetEnterClassDeclaration(node: ClassDeclaration, top: CcetFrame) {
+        // The class-level frame: class TP scope + classSym + the
+        // baseResolution pair, maps SHARED with the enclosing frame.
+        val classSym = node.name?.let { name ->
+            globals[name.text] ?: ccetFrames.lastOrNull { it.nsSymbol != null }
+                ?.nsSymbol?.exports?.get(name.text)
+        }
+        val classTps: List<Type.TypeParam> = if (classSym != null) {
+            var tps: List<Type.TypeParam> = emptyList()
+            withCcetFrameAmbient(top) {
+                tps = (getDeclaredTypeOfSymbol(classSym) as? Type.Interface)?.typeParameters.orEmpty()
+            }
+            tps
+        } else emptyList()
+        val scope = if (classTps.isEmpty()) top.tpScope else {
+            val ns = top.tpScope?.toMutableMap() ?: mutableMapOf()
+            for (tp in classTps) tp.symbol?.name?.let { ns[it] = tp }
+            ns
+        }
+        var baseSig: Signature? = null
+        var baseType: Type? = null
+        val scopedFrame = CcetFrame(node, top.localTypes, top.paramBindings,
+            scope, top.tpAst, top.superBaseSig, top.superBaseType,
+            classSym = classSym, dead = top.dead)
+        withCcetFrameAmbient(scopedFrame) {
+            val extClause = node.heritageClauses?.firstOrNull { it.token == SyntaxKind.ExtendsKeyword }
+            val baseExpr = extClause?.types?.firstOrNull()
+            val baseName = (baseExpr?.expression as? Identifier)?.text
+            val baseSym = baseName?.let { globals[it] }
+            if (baseExpr != null && baseSym != null) {
+                val typeArgs = baseExpr.typeArguments?.mapNotNull { tn ->
+                    getTypeFromTypeNode(tn).takeIf { it !== errorType }
+                }.orEmpty()
+                baseSig = buildBaseConstructorSignatureForSuper(baseSym, typeArgs)
+                baseType = buildBaseInstanceTypeForSuper(baseSym, typeArgs)
+            }
+        }
+        ccetFrames.addLast(CcetFrame(node, top.localTypes, top.paramBindings,
+            scope, top.tpAst, baseSig, baseType,
+            classSym = classSym, dead = top.dead))
+    }
+
+    /**
+     * (JIT.1)(d) round 806 — the `ArrowFunction`/`FunctionExpression` arm of
+     * [ccetSpineEnter], including B246's contextual parameter typing from a
+     * `FunctionType`-annotated variable declaration.
+     *
+     * Extracted VERBATIM (see [ccetEnterBlock] for why).
+     */
+    private fun ccetEnterFunctionLike(node: Node, parent: Node?, top: CcetFrame) {
+        val params = if (node is ArrowFunction) node.parameters
+            else (node as FunctionExpression).parameters
+        // B246: a FunctionType-annotated var's fn-expr/arrow initializer
+        // takes the CONTEXTUAL param typing instead of own-param anyType.
+        val declParent = parent as? VariableDeclaration
+        val ctxAnn = (declParent?.type as? FunctionType)
+            ?.takeIf { declParent.initializer === node }
+        val frame = CcetFrame(node, EpochMap(top.localTypes), EpochSet(top.paramBindings),
+            top.tpScope, top.tpAst, top.superBaseSig, top.superBaseType, dead = top.dead)
+        ccetFrames.addLast(frame)
+        withCcetFrameAmbient(frame) {
+            if (ctxAnn != null) {
+                populateParameterLocalTypes(params)
+                for ((i, p) in params.withIndex()) {
+                    val nm = (p.name as? Identifier)?.text ?: continue
+                    if (p.dotDotDotToken) continue
+                    val base: Type? = if (p.type != null) currentLocalTypes[nm]
+                    else ctxAnn.parameters.getOrNull(i)?.takeIf { !it.dotDotDotToken }
+                        ?.type?.let { getTypeFromTypeNode(it) }
+                    if (base == null || base === anyType || base === errorType) continue
+                    val t = if (p.questionToken && strictNullChecks && p.initializer == null) {
+                        getUnionType(listOf(base, undefinedType))
+                    } else base
+                    currentLocalTypes[nm] = t
+                }
+                (node.let { if (it is ArrowFunction) it.body else (it as FunctionExpression).body } as? Block)?.let { b ->
+                    applyCallTypesBodyLocalShadowing(b.statements, params)
+                }
+            } else {
+                val ownNames = mutableSetOf<String>()
+                for (p in params) collectBindingNames(p.name, ownNames)
+                for (n in ownNames) currentLocalTypes[n] = anyType
+                val body = if (node is ArrowFunction) node.body else (node as FunctionExpression).body
+                (body as? Block)?.let { b ->
+                    applyCallTypesBodyLocalShadowing(b.statements, params)
+                    shadowNestedFunctionNames(b.statements)
+                }
             }
         }
     }
