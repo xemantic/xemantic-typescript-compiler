@@ -220,3 +220,138 @@ kind that has no arm at all (`AsExpression`, `NonNullExpression`, …). A
 conservative subtree scan would be quadratic under nesting. **Anyone who takes it
 must price the scan against the ~500 ms that is left, not against the 320 ms this
 round removed.**
+
+---
+
+# ROUND 799 — the residue, sub-partitioned; a 55 ms dispatch gate; and why the obvious predicate is unsound
+
+*Compiler profile, HEAD `5fdf3634` + this round's probe. Same instrument, one
+more level: the `E_SUBTREE` row is now classified BY PARENT ARM, still AFTER the
+span closes, so the boundary count is unchanged (2 × 856,962) and no round-793
+correction applies to any before/after read below.*
+
+## 9. Where the 500 ms is
+
+Round 798 left "63% of the post-gate handler in one row … the arms doing their
+actual work" — a residual with a name, which is exactly what the round-758 audit
+forbids. Measured (production arm, two runs):
+
+| row | ms (2 runs) | calls | ns each |
+|---|---:|---:|---:|
+| edge: childless, CALL/NEW parent | 5 / 8 | 100,745 | 57–84 |
+| edge: childless, other parent | 21 / 20 | 293,815 | 68–74 |
+| edge: childless, scope-push parent (EXCLUDED) | 2 / 2 | 11,032 | 188–197 |
+| **subtree: CALL/NEW parent, child is an ARGUMENT** | **249 / 245** | 31,575 | **7,900** |
+| subtree: CALL/NEW parent, child is the CALLEE | 5 / 6 | 11,778 | ~500 |
+| subtree: VariableDeclaration parent | 19 / 19 | 14,762 | ~1,330 |
+| subtree: ReturnStatement parent | 19 / 24 | 10,396 | ~2,100 |
+| subtree: BinaryExpression parent | 60 / 61 | 50,454 | ~1,200 |
+| subtree: scope-push parent (a real body) | 32 / 25 | 41,788 | ~700 |
+| subtree: Property{Assignment,Declaration} parent | 13 / 18 | 8,179 | ~2,000 |
+| subtree: pass-through parent | 43 / 44 | 32,889 | ~1,340 |
+| subtree: **NO ARM AT ALL** | 61 / 61 | 249,471 | **246** |
+| own: CALL/NEW, all arguments childless | 12 / 16 | 27,213 | ~530 |
+| own: CALL/NEW, an argument has a subtree | 60 / 65 | 25,853 | ~2,420 |
+| own: every other kind | 160 / 161 | 803,896 | ~200 |
+| **handler total** | **769 / 781** | | |
+| *of which the residue* | *506 / 507* | *451,292* | |
+
+**Half the residue is ONE arm.** The CALL/NEW **argument** edge is 249 ms over
+31,575 calls at **7.9 µs each** — 32% of the whole handler — against 246 ns for
+the 249,471 edges that reach no arm at all. This is population-vs-frequency in
+the direction the arc keeps getting wrong: the no-arm population is **8× more
+frequent** and **4× cheaper in total**.
+
+## 10. What landed: the arm pre-gate (55 ms)
+
+`spineIanyEdgeEnter`'s dispatch is a chain of **19 sequential `is` checks ending
+in `else -> {}`**. 249,471 of the 451,292 subtree edges — plus most of the
+childless ones — match none of them, so the chain is pure consultation.
+`spineIanyEdgeHasArm(kindId)` answers the same question with one M0.2
+tableswitch. It is a no-op by construction: every arm is a concrete node class
+stamped with exactly the kind the gate lists (`NodeKindIdTest` pins the
+correspondence).
+
+Both arms, twice, on ONE binary, with an IDENTICAL boundary count
+(`--ianyArmGateOff` restores the pre-799 chain):
+
+| | gated (2 runs) | pre-799 (2 runs) |
+|---|---:|---:|
+| the NO-ARM row | **61 / 61 ms** | 120 / 108 ms |
+| **handler total** | **769 / 781** | 815 / 845 |
+
+* The row **halves**, and the two arms' readings do not overlap — the 19-check
+  chain costs **~200 ns per no-arm edge**.
+* **Quote the ENCLOSING total, not the row** (round 798's own correction):
+  medians 775 → 830 = **Δ 55 ms**, against a within-arm spread of 12 / 30. Δ is
+  only **1.8×** the larger spread, so 55 ms is an estimate, not a tight bound —
+  the row read (61/61 vs 120/108, no overlap) is what makes the sign certain.
+* **55 ms is ~0.2% of a check-only compile.** It is landed because it is free and
+  provable, NOT because it is a lever; **no wall-clock A/B was run**, and one
+  would be meaningless an order of magnitude inside the ±1.0% warm band.
+* Output: 46 diagnostics on the compiler profile in both arms, identical sorted
+  lines; the 8-profile grid is in the round note.
+
+## 11. The 249 ms row, and the obligation any gate on it must discharge
+
+The arm computes `contextualFnArityForCallArg` (arrow/fn-expr arguments only)
+and then `calleeParamGivesNoContext` — a callee resolution — to decide one
+boolean, `typed`, on a `kind = 0` state with **no type in it**. That state is
+read by five places: the `ArrowFunction` / `FunctionExpression` own arms
+(`spineIanyFnExprEnter`), the `ObjectLiteralExpression` own arm, an objlit
+`MethodDeclaration` (`spineIanyObjLitMethodEnter`), the `PropertyAssignment`
+edge, and an arrow's expression-body edge. **So the arm is pure cost whenever
+the argument's subtree contains no such reader.**
+
+**The obvious reuse is `rhsCanConsumeFnCtx` — the round-472 sibling the whole
+(IANY.1) arc is built on — and it is UNSOUND here.** It descends only
+paren / conditional / `||` `??` `&&` `,` / objlit-property positions. The state's
+actual propagation set is larger by two entries:
+
+1. **`ArrayLiteralExpression`** passes `typed` to its elements (only an
+   arrow/fn-expr element is cleared), so `f([{ m(a) {} }])` has a reader that
+   `rhsCanConsumeFnCtx` reports as absent;
+2. **every parent kind with NO arm** — `AsExpression`, `NonNullExpression`,
+   satisfies, unary, spread, member access, … — does not redefine the state, so
+   it simply stays current for the whole subtree below. `f(<any>{ m(a) {} })` is
+   the same failure.
+
+A sound predicate therefore has to descend the no-arm positions too, stopping at
+the arms that REDEFINE the state (call/new own arms, var-decl / return /
+expression-statement / property-declaration edges, non-logical binary operands,
+function-like body edges). That is bounded, not quadratic — the redefining arms
+cut it — but it is a real scan whose cost has to be priced against **249 ms**,
+and round 788's law applies on top: `calleeParamGivesNoContext` resolves a
+**cached** callee type, so part of any saving reappears in the next asker (round
+798 lost 110 of 473 ms exactly this way).
+
+**Not attempted this round, deliberately, and this section is the deliverable
+instead**: the obligation is now stated exactly, and the one predicate a future
+agent would reach for first is falsified with named counter-shapes.
+
+## 12. How the alternative was priced — (SPINE.1) re-measured at HEAD
+
+The round's other candidate was the two big leave handlers (`cpaSpineLeave`
+3,005 ms, `ccetSpineLeave` 2,732 ms per round 798's `--dispatchProbe`), whose
+round-733 closure was five rounds old. Re-measured with `--spineSections` at
+HEAD, against round 733:
+
+| | round 733 | **round 799** |
+|---|---:|---:|
+| partition total (cpa+ccet leave), net | 8,195 ms | **5,831 ms** (−29%) |
+| — the passes' OWN checking work | 7,241 = **88.4%** | 4,916 = **84.3%** |
+| — ambient install + restore | 360 = 4.4% | 341 = 5.8% |
+| — outside the ambient (gates, pops, restores) | 587 = 7.2% | 574 = 9.8% |
+| — the three ancestor climbs | 176 = 2.1% | **186 = 3.2%** |
+| `ccet` anchor per CALL_EXPRESSION | 55.9 µs | 49.6 µs |
+
+**The closure HOLDS.** The handlers shrank by 29% and every structural ratio
+moved by two or three points; the scaffolding is still ~730 ms spread over
+**eleven sections consulted 856,962 times each at 5–190 ns**, and (SPINE.1)'s own
+named target — memoizing the ancestor climbs — is still 186 ms, wrong by an order
+of magnitude, exactly as round 733 found. The 4,916 ms of own work belongs to
+(ENGINE.2) / (CALL.5) and is not a spine question.
+
+**So the choice was by concentration, not by size**: (ii) is ~730 ms with no
+concentration anywhere in it; (i) is 506 ms of which **249 ms is one arm with a
+named mechanism**. (i) wins even though its total is smaller.

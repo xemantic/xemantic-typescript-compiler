@@ -54053,11 +54053,59 @@ interface DataView {
 
     /** (IANY.1) probe-only row classifier for the EDGE span. */
     private fun spineIanyEdgeRow(p: Node, node: Node): Int {
-        if (!spineIanyChildless(node)) return IanySections.E_SUBTREE
         val pk = (p as NodeBase).kindId
+        if (!spineIanyChildless(node)) return spineIanySubtreeRow(p, pk, node)
         if (spineIanyScopePushParent(pk)) return IanySections.E_SCOPE_LEAF
         return if (pk == NodeKind.CALL_EXPRESSION || pk == NodeKind.NEW_EXPRESSION)
             IanySections.E_SKIP_CALLARG else IanySections.E_SKIP_OTHER
+    }
+
+    /**
+     * (IANY.1) round 799 — the kinds [spineIanyEdgeEnter]'s `when (p)` has an
+     * arm for. MUST stay in exact correspondence with that `when`: adding an arm
+     * without adding its kind here makes the arm silently unreachable, and the
+     * tell is a corpus baseline losing a diagnostic with no change near the arm
+     * (the same failure mode as `ccetPrologueMayFire`, round 793).
+     */
+    private fun spineIanyEdgeHasArm(k: Int): Boolean = when (k) {
+        NodeKind.FUNCTION_DECLARATION, NodeKind.METHOD_DECLARATION, NodeKind.CONSTRUCTOR,
+        NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR, NodeKind.FUNCTION_EXPRESSION,
+        NodeKind.ARROW_FUNCTION, NodeKind.MODULE_DECLARATION,
+        NodeKind.VARIABLE_DECLARATION, NodeKind.EXPRESSION_STATEMENT,
+        NodeKind.RETURN_STATEMENT, NodeKind.PROPERTY_DECLARATION,
+        NodeKind.PROPERTY_ASSIGNMENT, NodeKind.CALL_EXPRESSION, NodeKind.NEW_EXPRESSION,
+        NodeKind.BINARY_EXPRESSION, NodeKind.PARENTHESIZED_EXPRESSION,
+        NodeKind.CONDITIONAL_EXPRESSION, NodeKind.ARRAY_LITERAL_EXPRESSION -> true
+        else -> false
+    }
+
+    /**
+     * (IANY.1) round 799 — probe-only sub-partition of round 798's residue row
+     * (`edge: child with a subtree`, 63% of the post-gate handler), BY THE ARM
+     * the parent edge reaches. The point of the partition is its last row:
+     * `S_NOARM` is the population whose parent kind matches NONE of
+     * [spineIanyEdgeEnter]'s 19 `is` arms, so the entire dispatch is a chain of
+     * failed `instanceof` checks — the only part of the residue a cheaper
+     * DISPATCH could recover, as opposed to the arms' own work.
+     */
+    private fun spineIanySubtreeRow(p: Node, pk: Int, node: Node): Int = when (pk) {
+        NodeKind.CALL_EXPRESSION ->
+            if ((p as CallExpression).arguments.any { it === node })
+                IanySections.S_CALL_ARG else IanySections.S_CALL_OTHER
+        NodeKind.NEW_EXPRESSION ->
+            if ((p as NewExpression).arguments?.any { it === node } == true)
+                IanySections.S_CALL_ARG else IanySections.S_CALL_OTHER
+        NodeKind.VARIABLE_DECLARATION -> IanySections.S_VARDECL
+        NodeKind.RETURN_STATEMENT -> IanySections.S_RETURN
+        NodeKind.BINARY_EXPRESSION -> IanySections.S_BINARY
+        NodeKind.FUNCTION_DECLARATION, NodeKind.METHOD_DECLARATION, NodeKind.CONSTRUCTOR,
+        NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR, NodeKind.FUNCTION_EXPRESSION,
+        NodeKind.ARROW_FUNCTION, NodeKind.MODULE_DECLARATION -> IanySections.S_SCOPEPUSH
+        NodeKind.PROPERTY_ASSIGNMENT, NodeKind.PROPERTY_DECLARATION -> IanySections.S_PROP
+        NodeKind.PARENTHESIZED_EXPRESSION, NodeKind.CONDITIONAL_EXPRESSION,
+        NodeKind.ARRAY_LITERAL_EXPRESSION, NodeKind.EXPRESSION_STATEMENT ->
+            IanySections.S_PASSTHRU
+        else -> IanySections.S_NOARM
     }
 
     /** (IANY.1) probe-only row classifier for the OWN span. */
@@ -54218,6 +54266,14 @@ interface DataView {
      *  ns pushes, and the contextual-typing definitions of every edge the
      *  legacy recursion passed explicit arguments over. */
     private fun spineIanyEdgeEnter(p: Node, node: Node) {
+        // (IANY.1) round 799 — the parent-edge dispatch below is a chain of 19
+        // sequential `is` checks ending in `else -> {}`. A parent whose kind
+        // matches none of them reaches that `else`, so the whole chain is pure
+        // consultation. `spineIanyEdgeHasArm` answers the same question with ONE
+        // tableswitch on the M0.2 `kindId`, and is a no-op by construction:
+        // every arm below is a concrete node class, each stamped with exactly
+        // the kind the gate lists (`NodeKindIdTest` pins that correspondence).
+        if (!IanySections.armGateOff && !spineIanyEdgeHasArm((p as NodeBase).kindId)) return
         when (p) {
             is FunctionDeclaration -> if (node === p.body && spineIanyReached(node)) {
                 spineIanyPushScope(node, p.parameters)

@@ -200,3 +200,34 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
      --noEmit --passTiming --listAll --spineSections build/bench/tsc-project-*
 # report + a per-(section, kind) CSV between the "csv" markers
 ```
+
+---
+
+## 7. ROUND-799 RE-MEASUREMENT AT HEAD — THE CLOSURE HOLDS
+
+Round 799 considered these two handlers as its lever (round 798's
+`--dispatchProbe`: `cpaSpineLeave` 3,005 ms, `ccetSpineLeave` 2,732 ms) and
+re-derived § 2 rather than inheriting it, per the standing "re-measure a number
+before spending a round inside it" rule. `--spineSections`, compiler profile,
+HEAD `5fdf3634`:
+
+| | round 733 | **round 799** |
+|---|---:|---:|
+| partition total, net | 8,195 ms | **5,831 ms** (−29%) |
+| — the passes' OWN checking work | 7,241 = **88.4%** | 4,916 = **84.3%** |
+| — ambient install + restore | 360 = 4.4% | 341 = 5.8% |
+| — outside the ambient | 587 = 7.2% | 574 = 9.8% |
+| — the three ancestor climbs | 176 = 2.1% | **186 = 3.2%** |
+| `cpaM2ChainOk` / `cpaM2StmtPosition` / `ccetM3ChainOk` | 77 / 8 / 91 | 75 / 13 / 98 |
+| `ccet` anchor, per CALL_EXPRESSION | 55.9 µs | 49.6 µs |
+
+**Both of § 3's verdicts stand, five rounds and a 29% shrink later.** The
+handlers got smaller because the passes they call got faster (rounds 787–797);
+the scaffolding did not move in absolute terms at all — 341 + 574 = ~915 ms
+across ELEVEN sections consulted 856,962 times each at 5–190 ns, with the
+climbs 186 ms of it. There is no per-node lever here, and the 4,916 ms of own
+work is (ENGINE.2) / (CALL.5) territory, not a spine question.
+
+Round 799 therefore declined this target and took the (IANY.1) residue instead —
+smaller in total (506 ms) but **concentrated**: 249 ms of it is a single arm.
+`docs/perf/implicit-any-attribution.md` § 12 records the comparison.

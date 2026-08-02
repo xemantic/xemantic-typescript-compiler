@@ -5206,6 +5206,16 @@ object IanySections {
      */
     var gateOff: Boolean = false
 
+    /**
+     * Round 799's arm pre-gate, as a switch rather than a rebuild (round 794's
+     * precedent, same as [gateOff]).
+     *
+     * `true` restores the pre-799 dispatch: `spineIanyEdgeEnter` runs its full
+     * 19-arm `is` chain for every parent kind, including the kinds that have no
+     * arm at all. Production is `false`. Set by `--ianyArmGateOff`.
+     */
+    var armGateOff: Boolean = false
+
     // ── the EDGE partition (one row per node that has a parent) ───────────────
     /** Childless child of a CALL/NEW parent — the argument edge, whose arm
      *  computes `calleeParamGivesNoContext` (round 737's largest single
@@ -5217,25 +5227,73 @@ object IanySections {
      *  namespace (function-likes, `ModuleDeclaration`) — an arrow's EXPRESSION
      *  body is exactly this, so it is excluded from the skippable population. */
     const val E_SCOPE_LEAF = 2
-    /** A child with a subtree: the population no leaf gate can touch. */
-    const val E_SUBTREE = 3
+    // ── ROUND 799: the E_SUBTREE residue, sub-partitioned BY PARENT ARM ───────
+    //
+    // Round 798 left 63% of the post-gate handler in ONE row — "edge: child with
+    // a subtree", 497 ms over 451,292 calls — and said only that it is "the arms
+    // doing their actual work". These rows say WHICH arm, and they separate the
+    // population that reaches NO arm at all (the pure `when (p)` consultation)
+    // from the populations that do work. Classification happens AFTER the span
+    // closes, exactly as the level-1 rows do, so **the boundary count is still a
+    // function of the node count alone** and no round-793 correction applies.
+    /** Parent is a CALL/NEW and the child IS an argument — the arm that computes
+     *  `contextualFnArityForCallArg` + `calleeParamGivesNoContext`. */
+    const val S_CALL_ARG = 3
+    /** Parent is a CALL/NEW and the child is NOT an argument (the callee, type
+     *  arguments) — the arm is entered and its `if` declines. */
+    const val S_CALL_OTHER = 4
+    /** Parent is a `VariableDeclaration` (the initializer edge + the annotation
+     *  stash). */
+    const val S_VARDECL = 5
+    /** Parent is a `ReturnStatement` — `spineIanyReturnCtxAt` plus, for the five
+     *  ctx-consuming shapes, a `getTypeFromTypeNodeSafeNsAware` resolution. */
+    const val S_RETURN = 6
+    /** Parent is a `BinaryExpression` — the assignment-target resolution
+     *  (`resolveAssignTargetCtxTypeForImplicitAny`) and the operand inherits. */
+    const val S_BINARY = 7
+    /** Parent pushes a scope/namespace (the seven function-likes,
+     *  `ModuleDeclaration`) and the child has a subtree — a real body. */
+    const val S_SCOPEPUSH = 8
+    /** Parent is a `PropertyAssignment` / `PropertyDeclaration`. */
+    const val S_PROP = 9
+    /** A pass-through arm: `ParenthesizedExpression`, `ConditionalExpression`,
+     *  `ArrayLiteralExpression`, `ExpressionStatement`. */
+    const val S_PASSTHRU = 10
+    /** **NO ARM AT ALL** — the parent's kind matches none of the 19 `is` arms of
+     *  `spineIanyEdgeEnter`, so the whole dispatch is a chain of failed
+     *  `instanceof` checks ending in `else -> {}`. This is the only row a
+     *  cheaper DISPATCH could recover, and it is the reason the sub-partition
+     *  exists. */
+    const val S_NOARM = 11
 
     // ── the OWN partition (one row per node) ──────────────────────────────────
     /** CALL/NEW whose arguments are ALL childless (a no-argument call included)
      *  — its `isCalleeResolvable` context is unobservable. */
-    const val OWN_CALL_LEAFARGS = 4
+    const val OWN_CALL_LEAFARGS = 12
     /** CALL/NEW with at least one argument that has a subtree. */
-    const val OWN_CALL_OTHER = 5
+    const val OWN_CALL_OTHER = 13
     /** Every other node kind's own arms. */
-    const val OWN_OTHER = 6
+    const val OWN_OTHER = 14
 
-    const val N = 7
+    const val N = 15
+
+    /** The first and last row of the round-799 `E_SUBTREE` sub-partition. */
+    const val S_FIRST = S_CALL_ARG
+    const val S_LAST = S_NOARM
 
     val names: Array<String> = arrayOf(
         "edge: childless child, CALL/NEW parent",
         "edge: childless child, other parent",
         "edge: childless child, scope-push parent (EXCLUDED)",
-        "edge: child with a subtree",
+        "edge+subtree: CALL/NEW parent, child is an ARGUMENT",
+        "edge+subtree: CALL/NEW parent, child is the CALLEE",
+        "edge+subtree: VariableDeclaration parent",
+        "edge+subtree: ReturnStatement parent",
+        "edge+subtree: BinaryExpression parent",
+        "edge+subtree: scope-push parent (a real body)",
+        "edge+subtree: Property{Assignment,Declaration} parent",
+        "edge+subtree: pass-through parent (paren/cond/array/exprstmt)",
+        "edge+subtree: NO ARM AT ALL (pure when(p) consultation)",
         "own : CALL/NEW, all arguments childless",
         "own : CALL/NEW, an argument has a subtree",
         "own : every other kind",
@@ -5257,7 +5315,10 @@ object IanySections {
     fun report(): String = buildString {
         appendLine("== (IANY.1) spineIanyEnterNode attribution ==")
         val total = nanos.sum()
-        appendLine("total ${total / 1_000_000} ms over ${calls[E_SUBTREE] +
+        var subtreeCalls = 0L
+        var subtreeNanos = 0L
+        for (i in S_FIRST..S_LAST) { subtreeCalls += calls[i]; subtreeNanos += nanos[i] }
+        appendLine("total ${total / 1_000_000} ms over ${subtreeCalls +
             calls[E_SKIP_CALLARG] + calls[E_SKIP_OTHER] + calls[E_SCOPE_LEAF]} edge spans" +
             " + ${calls[OWN_OTHER] + calls[OWN_CALL_LEAFARGS] + calls[OWN_CALL_OTHER]} own spans")
         for (i in 0 until N) {
@@ -5272,6 +5333,10 @@ object IanySections {
         val prize = nanos[E_SKIP_CALLARG] + nanos[E_SKIP_OTHER] + nanos[OWN_CALL_LEAFARGS]
         appendLine("  UNOBSERVABLE-BY-CONSTRUCTION population: ${prize / 1_000_000} ms" +
             " = ${prize * 100 / (if (total == 0L) 1 else total)}% of the handler")
+        appendLine("  round-799 subtree residue: ${subtreeNanos / 1_000_000} ms over" +
+            " $subtreeCalls calls; of that NO-ARM = ${nanos[S_NOARM] / 1_000_000} ms over" +
+            " ${calls[S_NOARM]} calls" +
+            " = ${if (calls[S_NOARM] == 0L) 0 else nanos[S_NOARM] / calls[S_NOARM]} ns each")
     }
 
     fun csv(): String = buildString {

@@ -157,6 +157,12 @@ fun main(args: Array<String>) {
             "--ianyGateOff", "--ianygateoff" -> {
                 IanySections.gateOff = true
             }
+            // (IANY.1) round 799: the arm pre-gate as a switch — restores the
+            // pre-799 19-arm `is` chain for every parent kind, so one binary
+            // carries both arms of the residue-row read.
+            "--ianyArmGateOff", "--ianyarmgateoff" -> {
+                IanySections.armGateOff = true
+            }
             // (ENGINE.2): the opt-in attribution INSIDE checkPropertyAccessInExpr
             // (level P, recursive) and checkSinglePropertyAccess (level Q). The
             // property-access path is ~16% of a check-only compile — the largest
@@ -535,6 +541,8 @@ private fun printUsage() {
                              the contextual state it defines can be read at all
           --ianyGateOff      (IANY.1) restore the pre-798 behaviour of that handler — the
                              equivalence baseline, in the same binary
+          --ianyArmGateOff   (IANY.1) restore the pre-799 parent-edge dispatch (the full
+                             19-arm `is` chain for every parent kind)
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
