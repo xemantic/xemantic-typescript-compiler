@@ -20,6 +20,115 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 799 (2026-08-02) — ROUND 798's OWN EVIDENCE GAP IS CLOSED (the corpus does NOT
+see the scope-push exclusion either, so it is kept ON ARGUMENT and the code now says so),
+THE 500 ms RESIDUE IS SUB-PARTITIONED AND IS *NOT* WHAT IT LOOKED LIKE — HALF OF IT IS ONE
+ARM AT 7.9 µs — AND THE SPINE-LEAVE ALTERNATIVE WAS RE-MEASURED AND DECLINED BY PRICE.
+Landed: the sub-partition + a provably-free dispatch pre-gate worth ~55 ms (0.2%).**
+
+- **STEP 1 — ABLATION B AGAINST THE CORPUS, WHICH ROUND 798 LEFT UNRUN.** Round 798 kept
+  the scope-push exclusion in `spineIanyEdgeUnobservable` BY ARGUMENT: removing it leaves
+  the 8-profile grid byte-identical although the population is reached 11,032 times, and
+  round 792's law says the 13k-baseline corpus is the only instrument that could see a
+  shape tsc's own sources lack. Re-injected and run in full: **13,449 / 0 failures / 3
+  skipped — IDENTICAL to the un-ablated baseline. The corpus does not catch it either.**
+  **The run is evidence, not a no-op** (round 753's law): the build logged
+  `w: Checker.kt:54004:22 Unreachable code`, which only the injected `(true || …)` can
+  produce, and `jvmTest` ran in that same build; and the population is reached by the most
+  ordinary shapes there are — an eight-line file of four expression-bodied arrows counts
+  **6 `E_SCOPE_LEAF` edges**. **VERDICT, in the required words: the exclusion is KEPT ON
+  ARGUMENT, and is now *unfalsified by every instrument we have*.** The KDoc says exactly
+  that, so the next agent cannot read it as evidence-backed.
+  **The argument, restated correctly — round 798's version is true and is not the reason.**
+  It said "a scope push is an observable MUTATION, not a state definition". In fact a frame
+  pushed at a CHILDLESS node's edge is popped at that same node's leave with **no node
+  entered in between**, and every reader of `implicitAnyScopes` / `spineIanyCtx` is reached
+  only from a `spineIany*` dispatch AT a node — so the stack mutation is exactly as
+  unobservable as the context definition. Two instruments agreeing is what that predicts.
+  What is genuinely NOT unobservable: the `ArrowFunction` arm also calls
+  `contextualSigReturnTypeForCtx`, a type RESOLUTION whose interning / `symbolTypes` side
+  effects are global, so dropping the exclusion perturbs **first-touch resolution ORDER**
+  (the round-754/776/778 hazard, which has no output diff to find it by) to save **1 ms**.
+  That trade is why it stays. **No pin can discriminate this, and none is claimed to.**
+
+- **STEP 2 — THE TWO CANDIDATES, PRICED BEFORE CHOOSING.**
+  **(ii) the spine-leave handlers, RE-MEASURED at HEAD rather than inherited.**
+  `--spineSections`, against round 733: partition total **8,195 → 5,831 ms net (−29%)**,
+  the passes' OWN checking work **88.4% → 84.3%**, ambient install+restore 360 → 341,
+  outside-the-ambient 587 → 574, and the three ancestor climbs — (SPINE.1)'s named target,
+  once predicted at 1–3 s — **176 → 186 ms**. **The closure HOLDS**: the handlers shrank
+  because the passes they call got faster (rounds 787–797), while the scaffolding did not
+  move in absolute terms — ~915 ms across **eleven sections consulted 856,962 times each
+  at 5–190 ns**. There is no per-node lever in it, and the 4,916 ms of own work is
+  (ENGINE.2)/(CALL.5) territory.
+  **(i) the IANY residue, sub-partitioned by parent ARM** (row classified after the span
+  closes, so the boundary count stays 2 × 856,962 and no round-793 correction applies):
+  506 ms over 451,292 calls, of which **249 ms is ONE row — the CALL/NEW ARGUMENT edge,
+  31,575 calls at 7.9 µs each = 32% of the whole handler** — against **246 ns** for the
+  **249,471** edges that reach no arm at all. Population-vs-frequency in the usual
+  direction: the no-arm population is **8× more frequent and 4× cheaper in total**.
+  **CHOSE (i), by CONCENTRATION rather than size**: (ii) is ~915 ms with no concentration
+  anywhere in it; (i) is 506 ms with half of it in one arm with a named mechanism.
+
+- **WHAT LANDED: the arm pre-gate — ~55 ms (0.2%), free and provable.**
+  `spineIanyEdgeEnter`'s dispatch is **19 sequential `is` checks ending in `else -> {}`**;
+  `spineIanyEdgeHasArm(kindId)` answers the same question with one M0.2 tableswitch. It is
+  a no-op by construction (every arm is a concrete node class stamped with exactly the kind
+  the gate lists; `NodeKindIdTest` pins the correspondence). **Both arms twice on ONE
+  binary with an IDENTICAL boundary count** (`--ianyArmGateOff` restores the pre-799
+  chain): the NO-ARM row **120/108 → 61/61 ms** (the arms do not overlap; the chain costs
+  ~200 ns per no-arm edge), and — **quoting the ENCLOSING total, per round 798's own
+  correction** — the handler total **830 → 775 ms median = Δ 55 ms**, against a within-arm
+  spread of 12/30, i.e. Δ is only **1.8×** the larger spread. So 55 ms is an estimate whose
+  SIGN is certain and whose magnitude is not tight. **No wall-clock A/B, deliberately**:
+  0.2% is an order of magnitude inside the ±1.0% warm band, so a wall verdict would be
+  noise wearing a sign. Landed because it is free, not because it is a lever.
+
+- **WHAT DID NOT WORK / WAS NOT ATTEMPTED, AND WHY — the 249 ms row.** The arm computes
+  `contextualFnArityForCallArg` + `calleeParamGivesNoContext` (a callee resolution) to
+  decide ONE boolean, `typed`, on a `kind = 0` state with no type in it — read by exactly
+  five places (the arrow/fn-expr own arms, the objlit own arm, an objlit method, the
+  `PropertyAssignment` edge, an arrow's expression-body edge). So it is pure cost whenever
+  the argument's subtree holds no reader. **The obvious predicate is `rhsCanConsumeFnCtx` —
+  the round-472 sibling this whole arc is built on — and it is UNSOUND here.** It descends
+  only paren / conditional / `||` `??` `&&` `,` / objlit-property positions, while the
+  state's real propagation set adds two entries: **`ArrayLiteralExpression`** passes `typed`
+  to its elements (`f([{ m(a) {} }])`), and **every parent kind with NO arm** — `As`,
+  `NonNull`, satisfies, unary, spread, member access — does not redefine the state at all,
+  so it stays current for the whole subtree (`f(<any>{ m(a) {} })`). A sound predicate must
+  descend those too, stopping at the arms that REDEFINE (call/new own arms, var-decl /
+  return / expression-statement / property-declaration edges, non-logical binary operands,
+  function-like bodies). That is BOUNDED rather than quadratic — round 798's warning is
+  softened, not confirmed — but it is a real scan to be priced against 249 ms, on top of
+  which round 788's law bites (the callee type is CACHED, so part of any saving reappears;
+  round 798 lost 110 of 473 ms exactly that way). **Recorded as the deliverable instead of
+  attempted**: the obligation is now exact and the first predicate a future agent reaches
+  for is falsified with named counter-shapes.
+
+- **TWO PROCESS FAILURES, RECORDED BECAUSE THEY ARE THE REPEATABLE KIND.** (1) The first
+  pricing batch was launched with a bare `nohup … &` from a tool call and was **killed when
+  the turn ended** — the compile died mid-flight with no `BUILD SUCCESSFUL` and none of the
+  three runs executed, ~20 minutes lost. `nohup setsid … > log 2>&1 < /dev/null &` plus a
+  `.done` marker survived. (2) A **4.9 GB idle Kotlin daemon** was squatting from the
+  ablation build; stopping it (`./gradlew --stop` + a GRACEFUL bracket-pattern `pkill`,
+  never `-9`) before relaunching bought a **2m25s** compile — BUILD.1's documented
+  starvation trap is what turned the same compile into 15m43s at round 796 and 28m22s at
+  round 797.
+
+- **GATE.** Corpus suite **13,449 → 13,454 / 0 failures / 3 skipped** (+5
+  `IanyArmGateTest` pins, **4 of them discriminating**). Discrimination was measured
+  against a deliberately ablated binary — `CALL_EXPRESSION` and `VARIABLE_DECLARATION`
+  dropped from `spineIanyEdgeHasArm`, i.e. exactly the failure mode the gate introduces —
+  and it fails **7 of the 13 tests in the two classes**: the four new ones (all but the
+  negative control) plus **three PRE-EXISTING `IanyGateTest` pins**, so round 798's
+  harness already guards part of this. Results dir wiped whole before the run. **8-profile grid vs `--ianyArmGateOff` — the real pre-change path in the same
+  binary — diffed set-for-set in BOTH directions: 46/46/46/46/46/46/46/94, 0 added and 0
+  removed on every profile.** `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`:
+  **all 20 counters +0.00%, no rebaseline** — the gate removes failed `instanceof` checks
+  and no resolution, so there is nothing for a counter to see. Full derivation:
+  `docs/perf/implicit-any-attribution.md` §§ 9–12; `docs/perf/spine-leave-attribution.md`
+  § 7 carries the re-measured (SPINE.1) closure.
+
 **Round 798 (2026-08-02) — (IANY.1) THE MAP WAS RE-DERIVED FIRST, AND IT NAMED ITS OWN
 TARGET: `spineIanyEnterNode` — the ONE handler of round 732's big six that no attribution
 round had ever opened — carries 1,031 ms, and 42% of it defines a contextual state that
@@ -876,90 +985,6 @@ could not gate that honestly — and the two are queued with exact prices as (EN
   **all 20 counters +0.00%** (no rebaseline). Compiler-profile `--listAll` byte-identical
   in production / ON / COARSE.
 
-**Round 788 (2026-08-01) — (ENGINE.2b) IS CLOSED: BOTH LEVERS LANDED, AND THEY ANSWER
-DIFFERENTLY. B464's `closureStarts` LINEAR SCAN IS A CLEAN ELIMINATION — 138 ms -> 4 ms
-OVER AN IDENTICAL 15,483 QUERIES. THE `cpaComputeArgCtxTypes` PRE-GATE SKIPS 94.3% OF
-ITS CALLS AND DROPS FOUR COST COUNTERS BY 2.75-5.09%, BUT RECOVERS 109 ms OF THE 265
-PRICED — BECAUSE THE RESOLUTION IT SKIPS IS *CACHED*, SO THE WORK MOVES TO THE NEXT
-ASKER INSTEAD OF DISAPPEARING. ROUND 787's LAW GAINS ITS MIRROR IMAGE: AN AGGREGATE
-THAT IS SKIPPABLE IS NOT THEREBY RECOVERABLE. AND THE WARM A/B DECIDES NOTHING.**
-
-- **(b) THE SCAN IS GONE AND THE ANSWER IS PROVABLY THE SAME ONE.** `FlowGraph` now
-  precomputes, in the constructor that already walks the tree, a pos-sorted array of
-  closure containers plus each entry's nearest ENCLOSING entry (one stack sweep); a
-  query is a binary search plus a walk bounded by the closure NESTING DEPTH. Measured
-  on the compiler profile: the nested `closureStarts` sub-measure **138 ms -> 4 ms**
-  over the SAME 15,483 queries, and B464's whole level-Q row **298 -> 177 ms**.
-  `innermostClosureAt` reproduces the scan's tie rule too — the scan's `c.pos > bestPos`
-  is STRICT, so among equal-`pos` containers the FIRST in `closureStarts` order won;
-  the sort is stable and the query re-scans its tie group leftward.
-- **THE EQUIVALENCE WAS MEASURED, NOT ARGUED.** A temporary in-binary differential ran
-  both implementations at every query: **15,483 on compiler, 26,119 on harness, 0
-  mismatches**. Then pinned so it stays true: `ClosureIndexEquivalenceTest` carries the
-  REPLACED SCAN as its own reference implementation and compares at every position of
-  every fixture, which makes those pins self-discriminating — they need no ablated
-  binary to have teeth (6 of 9 fail against one anyway).
-- **(a) THE PRE-GATE IS REAL AND ITS PRIZE IS NOT.** `cpaArgsMayConsumeContext` skips
-  **49,003 of 51,967 calls (94.3%)**, and the deterministic counters confirm the work is
-  gone: `typeOfExpr.calls` **-3.27%**, `globals.lookups` **-2.75%**, `globals.misses`
-  **-2.75%**, `narrow.memoServed` **-5.09%**, with `output.errors` and `spine.nodes` at
-  +0.00%. But the timed row falls **342 -> 233 ms**, i.e. **109 of the 265**, and the
-  level-Q engine row rises by a comparable amount. **A resolution this function performs
-  is CACHED, so skipping it does not delete the callee's type — it hands the bill to
-  whoever asks next.** What is genuinely deleted is the part with no other consumer:
-  `resolveStructuredTypeMembers` on the callee, the per-argument `mapIndexed`, and
-  `tryInferSingleTypeParamFromArgs` / `computeFixedConflictLiteralMapper` for a generic
-  single signature. Round 787 was right that a per-item cost law does not settle an
-  aggregate question; the mirror image is that **an aggregate that is SKIPPABLE is not
-  thereby RECOVERABLE**, and only the second one could have been learned by landing it.
-- **THE PROBE HAD MISSED A READER, AND FINDING IT IS WHY THE PREDICATE IS FOUR KINDS,
-  NOT THREE.** Round 787 enumerated the three arms of `checkPropertyAccessInExpr` that
-  read `contextualType`; `getTypeOfArrayLiteral` reads it too (element context), so
-  `ArrayLiteralExpression` is in the production predicate. It costs 944 calls of the
-  skippable population (49,947 -> 49,003) and is not optional. The scan is capped at 128
-  nodes and exhaustion answers TRUE (compute as before), so the budget can never change
-  a verdict; measured, it is NEVER reached and the scan visits **3.6 nodes per call**.
-- **THE ORDER HAZARD THE ITEM FLAGGED WAS FALSIFIED, NOT REASONED AWAY.** A syntactic
-  predicate cannot see a read reached through a FOREIGN node (`getTypeOfExpression` on
-  an identifier can resolve a declaration elsewhere whose initializer is an object
-  literal, and that computation reads the live `contextualType`). So a temporary probe
-  kept the OLD behaviour — compute unconditionally — and counted, at each foreign read
-  site, every read of a non-null value the gate WOULD have suppressed: **compiler 0
-  violations of 49,003 skippable calls; harness 1 of 71,840**, in
-  `applyContextualParameterTypes` (`server/session.ts`) where the contextual type is
-  `{} | undefined` — a `Type.Union`, so the function returns on the very next line
-  (`if (ctx !is Type.Object) return`). **Inert, and knowing WHY it is inert is the
-  difference between a gate and a guess.**
-- **THE WARM A/B DECIDES NOTHING, AND THE ROUND REPORTS THAT RATHER THAN A MEDIAN.**
-  3 pairs, box left strictly alone: pair deltas **+0.75% / -0.66% / -1.49%**, median
-  **A 12,035 / B 11,955 = -0.66%, B wins 2/3**. Arm sd **0.71% (A) / 0.42% (B)** — both
-  under the ~1% quiet-box threshold, so the run is admissible — but the per-pair spread
-  is **270 ms against an 80 ms delta**, and the driver's own rule fires:
-  **`VERDICT: NOISE-DOMINATED`**. Every iteration on both arms reported
-  `files/errors 78/46`, so the self-falsification held. **The 403 ms is NOT confirmed at
-  the wall.** Worth carrying: a warm rebuild is **11.9 s** against a **~27 s** cold
-  compile, so a saving whose code the JIT has already compiled is a smaller FRACTION of
-  a warm run than of a cold one — the protocol that is more sensitive in ms is less
-  sensitive in percent for exactly this kind of change.
-- **WHAT DID NOT WORK.** (1) The obvious reading of the argctx row — "265 ms skippable
-  means 265 ms recoverable" — is wrong by 2.4x, and no amount of population-counting
-  would have caught it; only landing it and re-reading the partition did. (2) A
-  *provably* value-identical design was considered and rejected: making `contextualType`
-  LAZY (a thunk forced at read) removes the enumerate-every-reader risk entirely, but it
-  needs the pending state saved and restored at ~14 save/restore sites, a single missed
-  one silently serves the wrong value, and **it does not remove the hazard it would be
-  bought for** — the cache-mutation ORDER still changes, just at a different moment. The
-  empirical falsification is cheaper and stronger. (3) The 3-pair warm protocol is not
-  enough instrument for a ~0.5% change on this box; a future round should raise `ITERS`
-  or the pair count rather than quote this median.
-- Suite 13,351 -> **13,371 / 0 failures / 3 skipped** (+20 pins; **15 discriminate**
-  against an ablated binary — the 5 holders are the empty-`closureStarts` controls and
-  the two silence-asserting negative controls, both deliberate). 8-profile grid
-  **46/46/46/46/46/46/46/94**, re-captured at HEAD FIRST and diffed set-for-set in BOTH
-  directions: **0 added, 0 removed on all eight**. `--partitionCheck 2` EQUIVALENT.
-  Cost gate rebaselined in the landing commit with the mechanism and population named.
-  Full derivation: `docs/perf/property-access-attribution.md` § 5b.
-
 - [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
   nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
   existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
@@ -1202,6 +1227,21 @@ THAT IS SKIPPABLE IS NOT THEREBY RECOVERABLE. AND THE WARM A/B DECIDES NOTHING.*
   state?") whose conservative form is quadratic under nesting — price the scan against
   the 500 ms that remains, not against the 320 this round removed
   (`docs/perf/implicit-any-attribution.md` § 8).
+  **ROUND-799 FOLLOW-UP — the residue is SUB-PARTITIONED and the ablation-B gap is
+  CLOSED** (`docs/perf/implicit-any-attribution.md` §§ 9–12): 506 ms over 451,292 calls,
+  of which **249 ms is ONE arm** — the CALL/NEW ARGUMENT edge, 31,575 calls at **7.9 µs**
+  — against 246 ns for the 249,471 edges that reach no arm at all. Landed there: the arm
+  pre-gate `spineIanyEdgeHasArm` (one M0.2 tableswitch replacing 19 sequential `is`
+  checks), **handler total 830 → 775 ms = Δ 55 ms (0.2%)**, provably a no-op, grid
+  46×7/94 both directions, cost gate +0.00% on all 20. Ablation B (the scope-push
+  exclusion removed) was run against the FULL corpus: **13,449 / 0 / 3, unchanged** — so
+  the exclusion is **unfalsified by BOTH instruments and is kept ON ARGUMENT**, which the
+  KDoc now says. **WHAT IS LEFT, with its obligation stated**: the 249 ms arm resolves a
+  callee to decide one `typed` boolean read by five places; `rhsCanConsumeFnCtx` — the
+  obvious reuse — is **UNSOUND** for it (it misses `ArrayLiteralExpression` elements and
+  every NO-ARM parent, which do not redefine the state), and the sound predicate is
+  BOUNDED rather than quadratic (it stops at the redefining arms) but must still be priced
+  against 249 ms with round 788's cached-callee reappearance on top.
 
 - [x] **(ORDER.1) `formattingScanner.ts:311` is a PROGRAM-ORDER-dependent FP that round
   776 introduced and round 777 attributed — services / server / harness are 46 -> 47 /

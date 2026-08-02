@@ -348,6 +348,19 @@ round 732's:** `cpaSpineLeave` 4,366 → **3,005**, `spineCtaM3StatementAnchor`
 round; **`spineIanyEnterNode` was the one that had not, and round 798 opened it**
 (`docs/perf/implicit-any-attribution.md`) and landed a 320 ms gate in it.
 
+**ROUND-799 ADDENDUM — the two biggest rows of that table are RE-MEASURED and the
+round-733 closure HOLDS.** `--spineSections` at HEAD against round 733: the
+cpa+ccet leave partition is **8,195 → 5,831 ms net (−29%)**, the passes' OWN
+checking work **88.4% → 84.3%**, the ambient install+restore 360 → 341 ms, and
+the three ancestor climbs — (SPINE.1)'s named target — **176 → 186 ms**. The
+handlers shrank because the passes they call got faster (rounds 787–797); the
+scaffolding did not move in absolute terms, and is still ~915 ms across ELEVEN
+sections consulted 856,962 times each at 5–190 ns. **There is no per-node lever
+in either handler**; what is left in them is (ENGINE.2)/(CALL.5) work. Round 799
+therefore took the smaller but CONCENTRATED target — the (IANY.1) residue, whose
+506 ms is half one arm (the CALL/NEW argument edge at 7.9 µs × 31,575) — and
+landed a further 55 ms there. `docs/perf/spine-leave-attribution.md` § 7.
+
 ⚠️ The type-system row set is **inflated and incomplete at once**: the
 `getTypeOfExpression` row double counts (737), while round 734 showed the row
 set MISSES the argument-check and callee-resolution code that calls those

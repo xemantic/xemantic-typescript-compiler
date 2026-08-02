@@ -21893,3 +21893,87 @@ So the top open perf item was (ENGINE.1)'s site 3, and this round took it.
   differential to be as sharp as level C's (739 ns over a 99 ms Δ) and it was not —
   level E has a tenth of level C's boundary count against the same run-to-run
   noise, which is exactly the geometry that makes a differential weak.
+
+**Round 788 (2026-08-01) — (ENGINE.2b) IS CLOSED: BOTH LEVERS LANDED, AND THEY ANSWER
+DIFFERENTLY. B464's `closureStarts` LINEAR SCAN IS A CLEAN ELIMINATION — 138 ms -> 4 ms
+OVER AN IDENTICAL 15,483 QUERIES. THE `cpaComputeArgCtxTypes` PRE-GATE SKIPS 94.3% OF
+ITS CALLS AND DROPS FOUR COST COUNTERS BY 2.75-5.09%, BUT RECOVERS 109 ms OF THE 265
+PRICED — BECAUSE THE RESOLUTION IT SKIPS IS *CACHED*, SO THE WORK MOVES TO THE NEXT
+ASKER INSTEAD OF DISAPPEARING. ROUND 787's LAW GAINS ITS MIRROR IMAGE: AN AGGREGATE
+THAT IS SKIPPABLE IS NOT THEREBY RECOVERABLE. AND THE WARM A/B DECIDES NOTHING.**
+
+- **(b) THE SCAN IS GONE AND THE ANSWER IS PROVABLY THE SAME ONE.** `FlowGraph` now
+  precomputes, in the constructor that already walks the tree, a pos-sorted array of
+  closure containers plus each entry's nearest ENCLOSING entry (one stack sweep); a
+  query is a binary search plus a walk bounded by the closure NESTING DEPTH. Measured
+  on the compiler profile: the nested `closureStarts` sub-measure **138 ms -> 4 ms**
+  over the SAME 15,483 queries, and B464's whole level-Q row **298 -> 177 ms**.
+  `innermostClosureAt` reproduces the scan's tie rule too — the scan's `c.pos > bestPos`
+  is STRICT, so among equal-`pos` containers the FIRST in `closureStarts` order won;
+  the sort is stable and the query re-scans its tie group leftward.
+- **THE EQUIVALENCE WAS MEASURED, NOT ARGUED.** A temporary in-binary differential ran
+  both implementations at every query: **15,483 on compiler, 26,119 on harness, 0
+  mismatches**. Then pinned so it stays true: `ClosureIndexEquivalenceTest` carries the
+  REPLACED SCAN as its own reference implementation and compares at every position of
+  every fixture, which makes those pins self-discriminating — they need no ablated
+  binary to have teeth (6 of 9 fail against one anyway).
+- **(a) THE PRE-GATE IS REAL AND ITS PRIZE IS NOT.** `cpaArgsMayConsumeContext` skips
+  **49,003 of 51,967 calls (94.3%)**, and the deterministic counters confirm the work is
+  gone: `typeOfExpr.calls` **-3.27%**, `globals.lookups` **-2.75%**, `globals.misses`
+  **-2.75%**, `narrow.memoServed` **-5.09%**, with `output.errors` and `spine.nodes` at
+  +0.00%. But the timed row falls **342 -> 233 ms**, i.e. **109 of the 265**, and the
+  level-Q engine row rises by a comparable amount. **A resolution this function performs
+  is CACHED, so skipping it does not delete the callee's type — it hands the bill to
+  whoever asks next.** What is genuinely deleted is the part with no other consumer:
+  `resolveStructuredTypeMembers` on the callee, the per-argument `mapIndexed`, and
+  `tryInferSingleTypeParamFromArgs` / `computeFixedConflictLiteralMapper` for a generic
+  single signature. Round 787 was right that a per-item cost law does not settle an
+  aggregate question; the mirror image is that **an aggregate that is SKIPPABLE is not
+  thereby RECOVERABLE**, and only the second one could have been learned by landing it.
+- **THE PROBE HAD MISSED A READER, AND FINDING IT IS WHY THE PREDICATE IS FOUR KINDS,
+  NOT THREE.** Round 787 enumerated the three arms of `checkPropertyAccessInExpr` that
+  read `contextualType`; `getTypeOfArrayLiteral` reads it too (element context), so
+  `ArrayLiteralExpression` is in the production predicate. It costs 944 calls of the
+  skippable population (49,947 -> 49,003) and is not optional. The scan is capped at 128
+  nodes and exhaustion answers TRUE (compute as before), so the budget can never change
+  a verdict; measured, it is NEVER reached and the scan visits **3.6 nodes per call**.
+- **THE ORDER HAZARD THE ITEM FLAGGED WAS FALSIFIED, NOT REASONED AWAY.** A syntactic
+  predicate cannot see a read reached through a FOREIGN node (`getTypeOfExpression` on
+  an identifier can resolve a declaration elsewhere whose initializer is an object
+  literal, and that computation reads the live `contextualType`). So a temporary probe
+  kept the OLD behaviour — compute unconditionally — and counted, at each foreign read
+  site, every read of a non-null value the gate WOULD have suppressed: **compiler 0
+  violations of 49,003 skippable calls; harness 1 of 71,840**, in
+  `applyContextualParameterTypes` (`server/session.ts`) where the contextual type is
+  `{} | undefined` — a `Type.Union`, so the function returns on the very next line
+  (`if (ctx !is Type.Object) return`). **Inert, and knowing WHY it is inert is the
+  difference between a gate and a guess.**
+- **THE WARM A/B DECIDES NOTHING, AND THE ROUND REPORTS THAT RATHER THAN A MEDIAN.**
+  3 pairs, box left strictly alone: pair deltas **+0.75% / -0.66% / -1.49%**, median
+  **A 12,035 / B 11,955 = -0.66%, B wins 2/3**. Arm sd **0.71% (A) / 0.42% (B)** — both
+  under the ~1% quiet-box threshold, so the run is admissible — but the per-pair spread
+  is **270 ms against an 80 ms delta**, and the driver's own rule fires:
+  **`VERDICT: NOISE-DOMINATED`**. Every iteration on both arms reported
+  `files/errors 78/46`, so the self-falsification held. **The 403 ms is NOT confirmed at
+  the wall.** Worth carrying: a warm rebuild is **11.9 s** against a **~27 s** cold
+  compile, so a saving whose code the JIT has already compiled is a smaller FRACTION of
+  a warm run than of a cold one — the protocol that is more sensitive in ms is less
+  sensitive in percent for exactly this kind of change.
+- **WHAT DID NOT WORK.** (1) The obvious reading of the argctx row — "265 ms skippable
+  means 265 ms recoverable" — is wrong by 2.4x, and no amount of population-counting
+  would have caught it; only landing it and re-reading the partition did. (2) A
+  *provably* value-identical design was considered and rejected: making `contextualType`
+  LAZY (a thunk forced at read) removes the enumerate-every-reader risk entirely, but it
+  needs the pending state saved and restored at ~14 save/restore sites, a single missed
+  one silently serves the wrong value, and **it does not remove the hazard it would be
+  bought for** — the cache-mutation ORDER still changes, just at a different moment. The
+  empirical falsification is cheaper and stronger. (3) The 3-pair warm protocol is not
+  enough instrument for a ~0.5% change on this box; a future round should raise `ITERS`
+  or the pair count rather than quote this median.
+- Suite 13,351 -> **13,371 / 0 failures / 3 skipped** (+20 pins; **15 discriminate**
+  against an ablated binary — the 5 holders are the empty-`closureStarts` controls and
+  the two silence-asserting negative controls, both deliberate). 8-profile grid
+  **46/46/46/46/46/46/46/94**, re-captured at HEAD FIRST and diffed set-for-set in BOTH
+  directions: **0 added, 0 removed on all eight**. `--partitionCheck 2` EQUIVALENT.
+  Cost gate rebaselined in the landing commit with the mechanism and population named.
+  Full derivation: `docs/perf/property-access-attribution.md` § 5b.
