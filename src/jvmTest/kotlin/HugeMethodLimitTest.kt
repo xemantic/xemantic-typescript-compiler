@@ -296,6 +296,58 @@ class HugeMethodLimitTest {
         assert(parts.values.sum() > 12000)
     }
 
+    /**
+     * (JIT.1)(c) round 808 — the seven helpers `checkVarDeclAssignabilityCore`
+     * was split into. It was **19,296 bytecodes**, 2.4x the limit and the largest
+     * `Checker` method left after round 807. Its body is a STRAIGHT-LINE
+     * statement sequence, so each helper holds one contiguous run of the
+     * committed `CtaSections` level-B partition and hands a return signal back;
+     * the behavioural gate for those signals is `CvdaSplitTest`.
+     */
+    private val cvdaSplitParts = setOf(
+        "cvdaPrologueWalkers",
+        "cvdaRecordInferredLocalType",
+        "cvdaEarlyInitGates",
+        "cvdaNestedInitTargets",
+        "cvdaMidGates",
+        "cvdaPostRelationGates",
+        "cvdaElaborateMismatch",
+    )
+
+    @Test
+    fun `checkVarDeclAssignabilityCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val core = sizes["checkVarDeclAssignabilityCore"]
+            ?: fail("checkVarDeclAssignabilityCore not found in Checker")
+        // Positive control: the parse really did read a substantial method (it is
+        // 3,535 bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(core > 1500)
+        assert(core < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkVarDeclAssignability split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = cvdaSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in cvdaSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkVarDeclAssignability split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in cvdaSplitParts }
+        assert(parts.size == 7)
+        // Measured smallest part: 392 bytecodes (the unannotated-declaration
+        // recording, the shortest run of the level-B partition).
+        assert(parts.values.min() > 250)
+        // ... and the sum must still be the bulk of the original 19,296, i.e. the
+        // body was MOVED, not deleted. Measured sum: ~15,400.
+        assert(parts.values.sum() > 12000)
+    }
+
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
     private class ClassFileReader(private val b: ByteArray) {
         private var p = 0
