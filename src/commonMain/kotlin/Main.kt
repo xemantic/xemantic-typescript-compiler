@@ -137,6 +137,14 @@ fun main(args: Array<String>) {
             // (level A, by callee) and checkVarDeclAssignability (level B, by
             // section). `Coarse` keeps only the per-level anchors, so an
             // ON-vs-COARSE pair prices the probe boundary differentially.
+            // (IANY.1): the opt-in attribution of spineIanyEnterNode — the last
+            // of round 732's six biggest spine handlers with no attribution
+            // round. Two spans per node (edge dispatch / own kind arms), whose
+            // boundary count is a function of the node count alone, so a
+            // before/after read of its rows carries no round-793 correction.
+            "--ianySections", "--ianysections" -> {
+                IanySections.reset(); IanySections.mode = IanySections.ON
+            }
             "--ctaSections", "--ctasections" -> {
                 CtaSections.reset(); CtaSections.mode = CtaSections.ON
             }
@@ -364,6 +372,13 @@ fun main(args: Array<String>) {
         println("== (FRONT.1) csv end ==")
         FrontEnd.mode = FrontEnd.OFF
     }
+    if (IanySections.mode != IanySections.OFF) {
+        println(IanySections.report())
+        println("== (IANY.1) csv ==")
+        print(IanySections.csv())
+        println("== (IANY.1) csv end ==")
+        IanySections.mode = IanySections.OFF
+    }
     if (CtaSections.mode != CtaSections.OFF) {
         println(CtaSections.report())
         println("== (TYPE.2) csv ==")
@@ -510,6 +525,8 @@ private fun printUsage() {
           --dispatchProbe    (DISPATCH.1) per-handler/per-kind spine attribution
           --dispatchGated    (DISPATCH.1) run only the derived per-kind handler table
           --spineSections    (SPINE.1) intra-handler attribution of the two hot leaves
+          --ianySections     (IANY.1) attribution of spineIanyEnterNode, split by whether
+                             the contextual state it defines can be read at all
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart

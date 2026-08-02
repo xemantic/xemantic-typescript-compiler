@@ -5140,3 +5140,132 @@ object CpaSections {
         }
     }
 }
+
+/**
+ * (IANY.1) round 798 — the first attribution of `spineIanyEnterNode`, the
+ * LARGEST spine handler no round had ever opened.
+ *
+ * ## Why here
+ *
+ * Round 732's per-handler table named six handlers holding 71% of the spine;
+ * five of them have since been opened (`cpaSpineLeave` → (SPINE.1)/(ENGINE.2),
+ * `spineCtaM3StatementAnchor` → (TYPE.2), `ccetSpineLeave` → (CALL.1)/(CALL.5),
+ * `ccetSpineEnter`, `ctaSpineEnter` → (ENGINE.1)). `spineIanyEnterNode` — the
+ * round-532 migration of `checkImplicitAnyParameters`, a DOWNWARD-CONTEXT
+ * walker — is the one that was not, and the round-798 re-derivation of § 0
+ * measures it at **1,063 ms raw / 1,031 ms net over all 856,962 nodes**.
+ *
+ * ## The question it is built to answer
+ *
+ * The handler's state ([Checker.spineIanyCtx]) is read by NOTHING outside its
+ * own family: the edge arms, `spineIanyFnExprEnter`, `spineIanyObjLitMethodEnter`
+ * and `spineIanyPropAssignEdge`. Every one of those readers sits at a node
+ * INSIDE the subtree the context was defined for. **So a context defined for a
+ * CHILDLESS child can never be read** — `forEachChild` visits nothing for
+ * `IDENTIFIER` / `STRING_LITERAL_NODE` / `NUMERIC_LITERAL_NODE`, so the frame is
+ * pushed and popped with no node in between. The same argument one level up:
+ * a CALL's own `kind = 1` context is read only by its ARGUMENTS' edges, so a
+ * call whose arguments are all childless cannot be observed either.
+ *
+ * The sibling arm three screens up in `spineIanyEdgeEnter` already applies
+ * exactly this reasoning at the ASSIGNMENT edge — *"Resolve the LHS type ONLY
+ * when the RHS can consume a fn context (bounds first-touch resolution-order
+ * changes and per-assignment cost to the shapes that need it)"* — and was never
+ * generalised. That is round 783's "a deliberate exclusion is a debt with a
+ * named creditor", and this probe prices the debt before anything is changed.
+ *
+ * ## What it measures, and what it does NOT
+ *
+ * Two spans per node — one around the EDGE dispatch, one around the node's OWN
+ * kind arms — attributed to disjoint rows. The row is classified AFTER the span
+ * closes, so the classifier's own cost is probe-only and never lands in a row.
+ * **The boundary count is a property of the node count alone (2 × 856,962), so
+ * it is IDENTICAL with and without any gate that shortens these spans** — round
+ * 793's "removing a section removes its boundaries" correction does not apply to
+ * a before/after read of these rows.
+ *
+ * Nanos are probe-inflated by two timestamp pairs per node and are sound for
+ * RELATIVE attribution and for a same-boundary before/after diff, never as a
+ * production cost model (rounds 734/735).
+ */
+object IanySections {
+
+    const val OFF = 0
+    const val ON = 1
+
+    /** Opt-in; [OFF] in production. Set by `--ianySections`. */
+    var mode: Int = OFF
+
+    // ── the EDGE partition (one row per node that has a parent) ───────────────
+    /** Childless child of a CALL/NEW parent — the argument edge, whose arm
+     *  computes `calleeParamGivesNoContext` (round 737's largest single
+     *  `getTypeOfExpression` origin: 71,998 calls). */
+    const val E_SKIP_CALLARG = 0
+    /** Childless child of any other non-scope-pushing parent. */
+    const val E_SKIP_OTHER = 1
+    /** Childless child of a parent that pushes an implicit-any SCOPE or a
+     *  namespace (function-likes, `ModuleDeclaration`) — an arrow's EXPRESSION
+     *  body is exactly this, so it is excluded from the skippable population. */
+    const val E_SCOPE_LEAF = 2
+    /** A child with a subtree: the population no leaf gate can touch. */
+    const val E_SUBTREE = 3
+
+    // ── the OWN partition (one row per node) ──────────────────────────────────
+    /** CALL/NEW whose arguments are ALL childless (a no-argument call included)
+     *  — its `isCalleeResolvable` context is unobservable. */
+    const val OWN_CALL_LEAFARGS = 4
+    /** CALL/NEW with at least one argument that has a subtree. */
+    const val OWN_CALL_OTHER = 5
+    /** Every other node kind's own arms. */
+    const val OWN_OTHER = 6
+
+    const val N = 7
+
+    val names: Array<String> = arrayOf(
+        "edge: childless child, CALL/NEW parent",
+        "edge: childless child, other parent",
+        "edge: childless child, scope-push parent (EXCLUDED)",
+        "edge: child with a subtree",
+        "own : CALL/NEW, all arguments childless",
+        "own : CALL/NEW, an argument has a subtree",
+        "own : every other kind",
+    )
+
+    var nanos: LongArray = LongArray(N)
+    var calls: LongArray = LongArray(N)
+
+    fun reset() {
+        nanos = LongArray(N); calls = LongArray(N)
+    }
+
+    @Suppress("NOTHING_TO_INLINE")
+    inline fun record(row: Int, d: Long) {
+        nanos[row] += d
+        calls[row]++
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (IANY.1) spineIanyEnterNode attribution ==")
+        val total = nanos.sum()
+        appendLine("total ${total / 1_000_000} ms over ${calls[E_SUBTREE] +
+            calls[E_SKIP_CALLARG] + calls[E_SKIP_OTHER] + calls[E_SCOPE_LEAF]} edge spans" +
+            " + ${calls[OWN_OTHER] + calls[OWN_CALL_LEAFARGS] + calls[OWN_CALL_OTHER]} own spans")
+        for (i in 0 until N) {
+            if (calls[i] == 0L) continue
+            appendLine(
+                "  ${names[i].padEnd(52)} ${(nanos[i] / 1_000_000).toString().padStart(6)} ms" +
+                    " over ${calls[i].toString().padStart(8)} calls" +
+                    " = ${(nanos[i] / calls[i]).toString().padStart(6)} ns each" +
+                    " (${nanos[i] * 100 / (if (total == 0L) 1 else total)}%)"
+            )
+        }
+        val prize = nanos[E_SKIP_CALLARG] + nanos[E_SKIP_OTHER] + nanos[OWN_CALL_LEAFARGS]
+        appendLine("  UNOBSERVABLE-BY-CONSTRUCTION population: ${prize / 1_000_000} ms" +
+            " = ${prize * 100 / (if (total == 0L) 1 else total)}% of the handler")
+    }
+
+    fun csv(): String = buildString {
+        appendLine("row,name,calls,nanos")
+        for (i in 0 until N) appendLine("$i,\"${names[i]}\",${calls[i]},${nanos[i]}")
+    }
+}

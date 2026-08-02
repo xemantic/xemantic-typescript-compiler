@@ -53945,7 +53945,66 @@ interface DataView {
      *  own frames nest inside its parent-edge frames), then node-kind handling. */
     private fun spineIanyEnterNode(node: Node) {
         val p = (node as NodeBase).parent
-        if (p != null) spineIanyEdgeEnter(p, node)
+        if (IanySections.mode == IanySections.OFF) {
+            if (p != null) spineIanyEdgeEnter(p, node)
+            spineIanyOwnEnter(node)
+            return
+        }
+        // (IANY.1) two spans per node; the ROW is classified after the span
+        // closes, so the classifier never lands in a row it is measuring.
+        if (p != null) {
+            val t0 = PassTiming.nowNanos()
+            spineIanyEdgeEnter(p, node)
+            IanySections.record(spineIanyEdgeRow(p, node), PassTiming.nowNanos() - t0)
+        }
+        val t1 = PassTiming.nowNanos()
+        spineIanyOwnEnter(node)
+        IanySections.record(spineIanyOwnRow(node), PassTiming.nowNanos() - t1)
+    }
+
+    /**
+     * (IANY.1) probe-only: a node whose subtree is EMPTY — `forEachChild`
+     * visits nothing for these three kinds, so a contextual-typing state
+     * defined for such a child has no node that could read it.
+     */
+    private fun spineIanyChildless(n: Node): Boolean = when ((n as NodeBase).kindId) {
+        NodeKind.IDENTIFIER, NodeKind.STRING_LITERAL_NODE, NodeKind.NUMERIC_LITERAL_NODE -> true
+        else -> false
+    }
+
+    /** (IANY.1) probe-only: parents whose child edge pushes an implicit-any
+     *  SCOPE or a namespace rather than only defining a context — an arrow's
+     *  EXPRESSION body is a childless child of one of these. */
+    private fun spineIanyScopePushParent(k: Int): Boolean = when (k) {
+        NodeKind.FUNCTION_DECLARATION, NodeKind.METHOD_DECLARATION, NodeKind.CONSTRUCTOR,
+        NodeKind.GET_ACCESSOR, NodeKind.SET_ACCESSOR, NodeKind.FUNCTION_EXPRESSION,
+        NodeKind.ARROW_FUNCTION, NodeKind.MODULE_DECLARATION -> true
+        else -> false
+    }
+
+    /** (IANY.1) probe-only row classifier for the EDGE span. */
+    private fun spineIanyEdgeRow(p: Node, node: Node): Int {
+        if (!spineIanyChildless(node)) return IanySections.E_SUBTREE
+        val pk = (p as NodeBase).kindId
+        if (spineIanyScopePushParent(pk)) return IanySections.E_SCOPE_LEAF
+        return if (pk == NodeKind.CALL_EXPRESSION || pk == NodeKind.NEW_EXPRESSION)
+            IanySections.E_SKIP_CALLARG else IanySections.E_SKIP_OTHER
+    }
+
+    /** (IANY.1) probe-only row classifier for the OWN span. */
+    private fun spineIanyOwnRow(node: Node): Int = when ((node as NodeBase).kindId) {
+        NodeKind.CALL_EXPRESSION ->
+            if ((node as CallExpression).arguments.all { spineIanyChildless(it) })
+                IanySections.OWN_CALL_LEAFARGS else IanySections.OWN_CALL_OTHER
+        NodeKind.NEW_EXPRESSION ->
+            if ((node as NewExpression).arguments?.all { spineIanyChildless(it) } != false)
+                IanySections.OWN_CALL_LEAFARGS else IanySections.OWN_CALL_OTHER
+        else -> IanySections.OWN_OTHER
+    }
+
+    /** The node's OWN kind arms (split out of [spineIanyEnterNode] so (IANY.1)
+     *  can time them separately from the parent-edge dispatch). */
+    private fun spineIanyOwnEnter(node: Node) {
         when ((node as NodeBase).kindId) {
             NodeKind.FUNCTION_DECLARATION -> {
                 node as FunctionDeclaration
