@@ -20,6 +20,95 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 803 (2026-08-02) — (JIT.1)(a) LANDED: `forEachChild`, THE TRAVERSAL PRIMITIVE OF
+THE WHOLE COMPILER, IS SPLIT BELOW HotSpot's `HugeMethodLimit` AND IS WORTH −3.93% ON ITS
+OWN — B WINS 5/5 WITH THE FIVE PER-PAIR DELTAS SPANNING 0.33× THE MEDIAN DELTA. ONE
+FUNCTION MEASURED LARGER THAN ROUND 802's WHOLE-FAMILY FLAG A/B, AND THE ITEM'S OWN
+FALSIFIER, RUN EARLY, NOW RETURNS NO SIGNAL. Suite 13,481 → 13,493 / 0 / 3; grid 46×7/94
+with 0 added and 0 removed BOTH directions; cost gate all 20 counters +0.00%.**
+
+- **THE BASELINE WAS RE-MEASURED AT HEAD FIRST, and it reproduced exactly**: 19 of 13,910
+  methods over 8,000 bytecodes, `forEachChild` at 9,750, grid 46/94/46/46/46/46/46/46.
+  A recorded figure is a claim about a build, not a commit (round 776) — and here the
+  build at HEAD had to be made before anything could be believed, because the class files
+  on disk predated round 802's own landing commit.
+- **THE SPLIT.** Three functions over DISJOINT CONTIGUOUS `NodeKind` ranges, so each is
+  still ONE dense tableswitch: `forEachChild` 0–69 (**4,353**),
+  `forEachChildOfMemberOrType` 70–102 (**2,728**), `forEachChildOfSupportingNode` 103–137
+  (**2,175**). Census **19 → 18**. The ranges are chosen, not arbitrary: **every hot kind
+  stays in the ENTRY function** (IDENTIFIER is 44.5% of all nodes; so are the literals,
+  PROPERTY_ACCESS / CALL / BINARY and the five statement anchors), and the continuation is
+  **one compare plus one static call, never a fall-through chain**, so no kind pays two.
+- **THE ARMS WERE MOVED BY SCRIPT AND THE MOVE WAS VERIFIED BY DIFF, NOT BY READING.** All
+  138 arm bodies were extracted from HEAD and from the rewritten file and compared: every
+  one byte-identical, the only differences being the seven cosmetic `// ── group ──`
+  comments (re-added afterwards). That is what makes "the enumeration is unchanged" a
+  measurement rather than an intention — and it is the technique (b)–(e) should copy,
+  because those functions are 2–5× larger again.
+- **THE PRIZE, MEASURED DIRECTLY RATHER THAN INFERRED.** The queue said to size this by
+  re-running the flag A/B. There is a sharper instrument: build the PRE-SPLIT file into
+  its own class dir and interleave **monolith vs split** — same source otherwise, same
+  JVM, no flags. 5 pairs, self-time, daemons stopped inside the script, box otherwise
+  idle: **A 26.314 s / B 25.280 s, Δ −1,034 ms = −3.93%, B wins 5/5**, per-pair deltas
+  −929 / −695 / −1,034 / −974 / −850. Arm sds are 1.30% and 1.22% — above the ~1%
+  quietness criterion — **but the pairing is what carries this one**: the five deltas span
+  **339 ms = 0.33× the median delta**, because both arms drift upward together across the
+  run and the interleave cancels the drift (compare round 802, whose deltas spanned 730 ms
+  against a 793 ms median). 46 errors on all twelve runs.
+- **ONE SPLIT BEAT THE WHOLE-FAMILY FLAG (−3.1%), AND THAT IS NOT A CONTRADICTION** — the
+  flag also makes C2 compile a 46,567-byte method, which costs compile time and code cache
+  (§ 3.4 predicted exactly this), whereas the split pays none of it. **So the −3.1% is NOT
+  a budget for (b)–(e) to divide up.** The two figures were also taken on different days
+  on a box whose arm sd ranged 0.8%–2.8%; they must not be subtracted from one another.
+- **THE ITEM'S FALSIFIER WAS RUN EARLY, AND ITS ANSWER IS HONEST BUT BLUNT.** On the split
+  binary, `-XX:-DontCompileHugeMethods` reads **+0.08%, B wins 3/5, deltas −408 / −2 /
+  −916 / +1,220 / +1,248, spread 2,164 ms — the driver's own verdict is NOISE-DOMINATED**
+  (arm sds 2.49% / 2.78%; the box was measurably noisier than during the run above). The
+  correct statement is not "the flag now does nothing": it is that **the instrument that
+  returned 4/4-all-negative on the monolith returns a straddling 3/5 here**, at a pair
+  count where an effect of round 802's size would have shown. It BOUNDS (b)–(e) on this
+  profile; it does not license skipping them — 18 methods are still interpreted.
+- **THE PINS, AND WHY THE EXISTING ORACLE WAS NOT ENOUGH.** `ForEachChildOracleTest`
+  compares child SETS (plus the count) against the data-class `componentN` properties by
+  reflection — it does **not** pin ORDER, and order is load-bearing (decorators visit LAST;
+  `indexSourceFile` turns this order into the dense preorder `nodeId` sequence every later
+  phase keys on). Two new test classes, 12 pins: **`HugeMethodLimitTest`** (jvmTest) parses
+  `NodeWalkKt`'s class file and reads each method's `Code` attribute length — the same
+  number `javap` prints and HotSpot compares — and **`ForEachChildSplitTest`** (commonTest)
+  pins the enumeration order per part and both SEAMS. **Both verified DISCRIMINATING
+  against ablated binaries, built after the harness was committed** (round 789's law: the
+  revert is `git checkout <file>`, which destroys uncommitted work in that same file):
+  ablation A rebuilds the pre-split monolith → **all 3 `HugeMethodLimitTest` tests fail**
+  and `ForEachChildSplitTest` passes, which is exactly right and shows the two classes pin
+  different things; ablation B carries a boundary typo (`kind < KEYWORD_TYPE_NODE`) plus a
+  swapped action order in the `PARAMETER` arm → **the seam pin, the order pin and the
+  whole-tree pin fail**, alongside three pre-existing oracle tests.
+- **WHAT DID NOT WORK.** (1) The whole-tree pin's non-vacuity control asserted
+  `visited > 80` on a fixture that holds **66** nodes — a red test on the first suite run,
+  the round's only failure, and a reminder that a threshold guessed rather than measured is
+  a coin flip; restated at `> 50` with the measured value in the comment. (2) The census
+  had to be re-run at HEAD before it could be quoted at all: the class files on disk were
+  older than round 802's landing commit, so the "before" numbers would have been a claim
+  about a build nobody had. (3) No process failures this round — the lock, the preflight
+  (a two-line type-check whose TS2322 must appear) and the per-stage `.done` markers from
+  round 802's script were reused verbatim and cost nothing.
+- **GATE.** Suite **13,481 → 13,493 / 0 failures / 3 skipped** (+12 pins; whole results dir
+  wiped, counted with the python XML parser). 8-profile grid diffed set-for-set BOTH
+  directions against the pre-change binary's captured `--listAll`:
+  **46/94/46/46/46/46/46/46, 0 added and 0 removed on all eight.** `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%, no rebaseline** — a pure
+  split moves no counter, and "nothing changed" is exactly the claim that needed
+  verifying. Build stayed warning-clean. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 4.
+- **FOR THE NEXT AGENT: (JIT.1)(b), `checkMemberAccessMissingCore` at 46,567 bytecodes —
+  5.8× the limit and round 789's largest leaf in the compile.** Its section partition is
+  already committed (round 789's level R), so the split plan is written; the constraint to
+  respect is round 791's `cmamFlowSuppresses` invariant (the function and its `tryEmit*`
+  helpers must append to `diagnostics` and do nothing else). Use round 803's recipe: a
+  CONTIGUOUS-range/section split verified by a mechanical body-diff, the hottest path left
+  in the entry function, and the prize measured as monolith-vs-split rather than by flag.
+
+
 **Round 802 (2026-08-02) — (SETUP.1) THE LAST UNNAMED REGION IS ONE FUNCTION, AND THE
 ROUND'S SECOND RESULT IS BIGGER THAN THE FIRST: NINETEEN METHODS — INCLUDING THE FIVE
 LARGEST MEASURED COSTS IN THE COMPILER AND `forEachChild` — ARE ABOVE HotSpot's
@@ -696,188 +785,6 @@ re-verified at zero sites.**
 - Suite 13,427 → **13,435 / 0 failures / 3 skipped**. Full derivation:
   `docs/perf/argument-check-attribution.md` §§ 10–18.
 
-**Round 795 (2026-08-01) — (ENGINE.2h) LANDED, AND THE ITEM'S OWN ARITHMETIC WAS WRONG IN
-THE HELPFUL DIRECTION: THE TS2793 `implRelated` PROBE'S SINGLE READER IS REACHED **ZERO**
-TIMES ON THE COMPILER PROFILE, SO DEFERRING IT REMOVES 23,214 EVALUATIONS AND KEEPS NONE.
-Prize 79–132 ms (0.3–0.5%), quoted as a RANGE because the two ways of measuring it
-disagree by that much. `globals.lookups` −0.47%, `globals.misses` −0.48%, every other
-counter ±0.00% — nothing rose. Suite 13,419 → 13,427; grid 46×7/94 with 0 added and 0
-removed both directions, diffed against the real HEAD binary.**
-
-- **THE PRIZE WAS RE-MEASURED AT HEAD FIRST (law 1) AND IT HAD MOVED — DOWNWARD.** Round
-  793 recorded 94 ms and round 734 recorded 101; at HEAD the `--callSections` row reads
-  **81 ms raw / 72 net over 23,214 invocations**. The item's other number was wrong too, in
-  the direction that makes the change better: "57 emissions in the whole compiler profile"
-  is round 793's count for a DIFFERENT site — this probe's reader is reached **0 times**
-  on compiler, services and harness alike, which the probe's own census says outright.
-- **SO THE DEFERRAL'S OBLIGATION IS TRIVIAL WHERE ROUND 791's WAS THE WHOLE ARGUMENT.**
-  791 had to prove `checkMemberAccessMissing`'s body appends to `diagnostics` and does
-  nothing else, because its suppression guarded ~42 emission sites. Here `grep
-  implementationRelated` returns **two** hits — the parameter and one `relatedInfo.add` —
-  so there is nothing to enumerate. **What had to be checked rather than assumed is the
-  AMBIENT state at the new position**: the argument loop installs `contextualType` for the
-  argument it is checking, and if that install were still live at the emission block the
-  deferred `allArgumentsMatch` would type its arguments under a different context. It is
-  restored ~1,300 lines above the block. That is the whole correctness delta.
-- **ROUND 788's REJECTED THUNK DOES NOT TRANSFER, FOR A REASON WORTH RESTATING.** That
-  thunk failed because a lazily-computed `contextualType` had to survive ~14 save/restore
-  sites in a DIFFERENT dynamic scope. Nothing is stored here: the value is computed at the
-  point of use, inside the very invocation that declined to compute it. "Deferred" and
-  "lazy" are not the same shape, and only the second one needs every reader to cooperate.
-- **THE PRIZE IS A RANGE, AND SAYING SO IS THE POINT.** The row says 81 ms raw (~79 ms of
-  production, one boundary pair per invocation). Round 793's law says a row diff overstates
-  a saving by the boundaries that vanish with it, so it was measured a second way with the
-  boundary count IDENTICAL in both arms — the whole `SINGLE_SIG` span on the same binary,
-  with the eager evaluation restored by `--verifyImplRelated`, 2 runs per arm: **1,634 →
-  1,502 ms, Δ = 132 ms** against a within-arm spread of 43. Δ is 3× the larger spread,
-  which is the weakest differential this codebase reads, so **79–132 ms** is the honest
-  answer and not 132. **No A/B was run**: 0.3–0.5% is an order of magnitude inside the warm
-  band, and the four run totals (25.9–27.0 s in BOTH arms) say exactly that.
-- **A ONE-PAIR BEFORE/AFTER READ LOOKED EXACTLY LIKE ROUND 788's LAW AND WAS NOISE.** The
-  first after-run showed `checkArgumentsAgainstSignature` at 1,442 ms against HEAD's 1,361
-  while `SINGLE_SIG` stayed flat — the textbook picture of removed work reappearing in the
-  next asker. Running BOTH arms twice on ONE binary shows that row is flat (1,379–1,422
-  deferred, 1,416–1,421 eager) and the 81 ms is gone from the containing span. **A single
-  before/after pair cannot distinguish "the work moved" from "this run was slow", and this
-  arc has now been fooled by that in both directions.**
-- **LAW 2 CHECKED AT THE COUNTERS, AND THE MECHANISM IS WHY IT DOES NOT BITE.**
-  `globals.lookups` **−0.47% (−3,660)**, `globals.misses` −0.48%, `typeOfExpr.calls` −3,
-  all 17 others **+0.00%**; cost gate exit 0, **no rebaseline**. The census explains the
-  shape: of 23,214 evaluations only **3,660** reached a name lookup, **27** found an
-  overload implementation, **1** rebuilt its signature and **1** ran `allArgumentsMatch`.
-  So the 79–132 ms is **not type-system work at all** — it is
-  `getOverloadImplementationRelated`'s method/constructor branch scanning `binderResults`
-  and walking a file's top-level statements, an UN-CACHED AST scan with no other consumer.
-  Round 788's law bites when the skipped callee memoizes; here there is nothing to hand on.
-- **THE EQUIVALENCE IS MEASURED, AND ITS CONTROL IS DEAD ON EVERY PROFILE — REPORTED, NOT
-  HIDDEN.** `--verifyImplRelated` evaluates the probe at both positions and honours the
-  EAGER verdict, so the run reproduces the pre-change binary; `--verifyImplRelatedAll` is
-  round 790's FREE complement (every single-signature call, not only the ones reaching a
-  reader): **compiler 23,214 / services 34,891 / harness 37,318 comparisons, 0 diffs at
-  `Diagnostic` granularity** — 95,423 in total. The emission-site column is **0 comparisons**
-  because the reader is never reached, which is the prize and a dead instrument in one
-  number, and is exactly why the complement had to exist. `--verifyImplRelatedBogus` (the
-  deferred evaluation drops the `allArgumentsMatch` gate) also reads **0 on all three**,
-  because that gate never DECLINES on a tsc source tree — one candidate per compile reaches
-  it and it accepts. **The live falsifier is therefore the in-process pin**, whose fixture
-  is a one-overload-plus-rejecting-implementation shape no tsc file contains. Round 793 hit
-  the same wall from the other side; a control has to be run where the thing it watches
-  happens.
-- **PINS: 8 new (`ImplRelatedDeferralTest`), 4 DISCRIMINATING across two complementary
-  ablations run SEPARATELY.** Fault A (the deferred value is never forced) fails 3 — the
-  positive TS2793 pin, the population pin and the eager-vs-deferred pin; fault B (the
-  deferred evaluation drops the gate in production) fails 1, DISJOINT from A's set. The
-  four holders are the two bogus-control pins (they set the flag themselves, so a
-  production-path fault cannot reach them), the complement-population pin (evaluated in the
-  wrapper, which neither fault touches) and the non-overloaded control.
-- **AND THE PRE-EXISTING PROBE PIN WAS CAUGHT BEFORE THE SUITE CAUGHT IT — THE FIRST TIME
-  IN FOUR ROUNDS.** `CallSectionProbeTest`'s "the TS2793 impl probe runs once per reach of
-  the single-sig branch" is an EQUALITY that the deferral falsifies by construction;
-  restated as "strictly rarer than the branch", which is what the old equality now means as
-  a regression test. Rounds 791, 792 and 793 each discovered such a pin by running the
-  suite; grepping the probe's constant for pins before editing costs one command.
-- Suite 13,419 → **13,427 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD FIRST
-  and again after, diffed set-for-set in BOTH directions — against the real pre-change
-  binary, not only against the verify run: **46/46/46/46/46/46/46/94, 0 added and 0 removed
-  on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. Full derivation:
-  `docs/perf/call-expression-attribution.md` §§ 14-19. **THE CALL-EXPRESSION PROLOGUE
-  FAMILY IS NOW CLOSED**: round 793's re-measured inventory listed one live candidate and
-  this was it.
-  (Round 794's session note was written into its queue item rather than here; the record
-  for (ENGINE.2f) is the checked item below.)
-
-**Round 793 (2026-08-01) — (ENGINE.2g) ANSWERED: ROUND 792's METHOD GENERALISES, BUT NOT
-THE WAY THE ITEM PHRASED IT. A PRE-GATE ON `checkSingleCallExpressionTypes`' PROLOGUE —
-SEVEN DEDICATED WALKERS THAT RUN AT EVERY CALL EXPRESSION AND FIRE ZERO TIMES ON THE
-COMPILER PROFILE — REFUSES 98.1% OF 52,413 INVOCATIONS, WITH 0 FIRINGS IN 196,431 REFUSED
-CALLS ACROSS THREE PROFILES AND ALL 18 FIRINGS IN THE KEPT COMPLEMENT. Net ≈105–165 ms
-(0.4–0.6%); warm A/B B wins 2/2 at −126 ms but BOTH arm sds exceed the quietness criterion,
-so the magnitude is the partition's. Suite 13,405 → 13,412; grid 46×7/94 with 0 added and 0
-removed both directions.**
-
-- **THE ITEM'S OWN HYPOTHESIS IS FALSIFIED, AND THAT IS THE ROUND'S FIRST RESULT.**
-  (2g) asked "does the shared-PROPOSITION form generalise". It does not: the seven
-  prologue walkers emit **five different claims** (TS2345 / TS18048 / TS2339 / TS2349 /
-  TS2754), so no single refutation can kill them the way "the property resolves" killed
-  `checkMemberAccessMissing`'s 42 emissions. What they share is a **KEY** — each is
-  reachable only for a narrow syntactic shape of the CALLEE. **The transferable method is
-  "one cheap question in front of many emissions", not "one proposition"**, and the key
-  form is strictly more general (a proposition is one way to have a key).
-- **THE INVENTORY WAS RE-MEASURED AT HEAD BEFORE ANYTHING WAS CHOSEN (law 1), AND THE
-  ITEM'S THREE NAMED CANDIDATES ARE ALL DEAD.** `emitTs18048` closure-captured receiver
-  **171 ms** and `cpaComputeArgCtxTypes` **242 ms** are the two biggest non-engine rows in
-  the property-access path and **both already carry a pre-gate** (rounds 489 and 788) —
-  this method has already been applied to them; `checkPrivateMemberAccess` **44 ms** and
-  the optional-property TS18048 walker **50 ms** are keyed on the receiver KIND, which is
-  *complementary* to B464's rather than shared with it, so one classification cannot
-  serve both. The candidate that survived came from the CALL path instead: the prologue,
-  **219 ms as one span, `returnedIn=0` on all seven rows**.
-- **THE PRIZE IS SMALLER THAN THE ROW IT CAME FROM, AND THE REASON IS THE PROBE.** The
-  219 ms span contains **six intermediate `CallSections.at()` boundaries production never
-  executes** — 96 ms at the in-situ calibration (299 ns), 28 ms at the differential cost
-  CLAUDE.md sanctions (~90 ns). So the production prologue is **123–191 ms**; landed, the
-  seven rows fell **261 → 66 ms raw**, and the honest net is **≈105–165 ms = 0.4–0.6%**
-  after a gate measured at 587 ns/call (one boundary included; ~280–500 ns true).
-- **LAW 2 WAS CHECKED, NOT ASSUMED, AND DOES NOT BITE — WHICH IS THE OPPOSITE OF WHAT THE
-  MECHANISM PREDICTED.** The only resolution a refused prologue skips is B216's
-  `getTypeOfExpression(recv)`, and `getCalleeType` types the same expression a few lines
-  below, so the natural expectation was that the work would MOVE (round 788's law). It
-  does not: `typeOfExpr.calls` **−1.86% (−12,310)** against 10,933 skipped B216 typings
-  plus their nested calls, `globals.lookups` −0.49%, `narrow.memoServed` −0.40%,
-  `mapped.hits` −0.42%, and **`output.errors` / `spine.nodes` / `narrow.walks` all
-  +0.00%. Nothing rose.**
-- **THE EQUIVALENCE IS BY CONSTRUCTION FOR THE EMISSIONS AND BY A BOUND FOR THE SIDE
-  EFFECTS.** Each leg of the gate is a walker's own first gate copied verbatim (the four
-  name-keyed walkers, both `super` shapes, the per-file CJS shapes). The one leg that
-  needed an argument is B216's: it cannot EMIT without a `StringLiteralNode` argument
-  (`expr.arguments[pIdx] as? StringLiteralNode ?: break`), and — the half that makes the
-  skip safe rather than merely quiet — it cannot reach any SIDE-EFFECTING call without
-  one either, because `resolveStructuredTypeMembers` and `getIndexedAccessType` both sit
-  BELOW that test in the key loop. So round 754's cache-mutation-ORDER hazard is bounded
-  to a single type read, and then measured away by the grid.
-- **THE SHIPPED CONTROL COULD NOT BE RUN ON THE PROFILE THE PRIZE WAS MEASURED ON, AND
-  THAT IS WORTH SAYING PLAINLY.** `--ccetPreGate` honours nothing (so the run reproduces
-  the pre-change binary and IS the grid's baseline): compiler **51,394 refused / 0 fired**,
-  services **68,200 / 0**, harness **76,837 / 0**, against **0 / 4 / 14** firings in the
-  kept complements. `--ccetPreGateBogus` reports **14 on harness** — but **0 on the
-  compiler profile, because nothing there reaches a prologue emission at all**. A control
-  that is dead on the profile you priced on is not a control; the live falsifiers are the
-  harness run and the in-process probe pin.
-- **PINS: 7 new (`CcetPrologueGateTest`), 5 DISCRIMINATING across two complementary
-  ablations run SEPARATELY.** Fault A (the gate refuses everything) fails 5; fault B (the
-  string-literal leg removed) fails 1, inside A's set. The two holders are the negative
-  control (a refuted call keeps its ordinary TS2345) and the probe's own bogus control,
-  which ignores the gate's content by construction. One pin exists because the general
-  path CANNOT cover it: `getCalleeType("super")` answers `any`, so `super.m(3)`'s argument
-  check lives only in the prologue — skipping it would make the call SILENT rather than
-  wrong, which no diagnostic-count grid can see.
-- **THE WARM A/B CONFIRMS THE SIGN AND ITS MAGNITUDE IS DISCARDED ON ITS OWN EVIDENCE.**
-  2 pairs, deltas **−0.64% / −1.64%**, median **−126 ms (−1.15%), B wins 2/2**, every
-  iteration reporting `files/errors 78/46`. But **arm A's sd is 2.13% and arm B's 1.42%**,
-  both above the ~1% quietness criterion, and the per-pair spread (113 ms) equals the
-  delta (126 ms) — law 7 fails outright. **A single file write happened on the box during
-  the run and is recorded as the likely cause** rather than hidden (round 774's rule).
-- **WHAT DID NOT WORK.** (1) The obvious reading of the prologue's own table — rows at
-  41 / 8 / 4 / 3 / 10 / 44 / 39 ms net "showing" that B216 and the CJS lookup are the cost
-  — is wrong: at 52,413 invocations one probe boundary is 5–16 ms, so five of those seven
-  rows are mostly their own instrumentation, and the nested `getTypeOfExpression`
-  sub-measure prices B216's only resolution at **23 ms over 10,933 calls**. (2) Two
-  PRE-EXISTING probe pins broke because their subject moved — `CallSectionProbeTest`'s
-  "the disjoint sections partition every invocation" (the prologue sub-measure no longer
-  closes once per invocation reaching `getCalleeType`) and "the section-name table is
-  index-aligned" (the calibration rows are no longer the last three indices); both
-  restated as the NEW invariant, with the gate's own non-vacuity added. That is round
-  791/792's failure mode for the third round running. (3) The suite's first attempt died
-  on BUILD.1's `Not enough memory to run compilation` after the ablation cycle left a
-  daemon squatting — `--stop` plus a graceful Kotlin-daemon kill, then it passed.
-- Suite 13,405 → **13,412 / 0 failures / 3 skipped**. 8-profile grid diffed set-for-set in
-  BOTH directions against the same binary under `--ccetPreGate`:
-  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight.** `--partitionCheck 2`
-  **EQUIVALENT — 46**. Cost gate rebaselined in the landing commit with the mechanism
-  named. Full derivation: `docs/perf/call-expression-attribution.md` §§ 9-13.
-  **(ENGINE.2h) is queued: the TS2793 `implRelated` probe, 94 ms, round 791's deferral
-  shape rather than this round's gate shape.**
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 ---
@@ -925,22 +832,33 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
   capture the effect and the remaining delta is C2 compiling something new rather than
   the interpreter being avoided — in which case (JIT.2) is the only route and the split
   is worth only what it measured on its own.
+  **ROUND 803 UPDATE — (a) IS IN, AND IT MEASURED LARGER THAN THE WHOLE-FAMILY FLAG.**
+  Census **19 → 18**. A monolith-vs-split A/B (a sharper instrument than the flag: two
+  class dirs, same source otherwise, no flags) reads **−1,034 ms = −3.93%, B wins 5/5,
+  five deltas spanning 339 ms = 0.33× the median delta**. Two corrections this hands to
+  the remaining sub-steps: (1) **the "upper bound −3.1%" framing above is not a budget to
+  divide up** — the flag makes C2 compile a 46,567-byte method, which costs compile time
+  and code cache, so a split can and did beat it; (2) **the CAVEAT below is falsified for
+  (a)** — the extra call boundary cost nothing measurable, because the range split keeps
+  every hot kind in the entry function. The item's own falsifier was run early against the
+  split binary: **+0.08%, B wins 3/5, spread 2,164 ms, driver verdict NOISE-DOMINATED** —
+  i.e. the instrument that returned 4/4-all-negative on the monolith no longer returns a
+  signal, which BOUNDS what (b)–(e) hold on this profile but does not license skipping
+  them (18 methods are still interpreted, one at 5.8× the limit).
   **CAVEAT to carry into every sub-step:** a split adds call boundaries the monolith did
   not have, so a sub-step can legitimately measure NEGATIVE on its own while the set is
   positive. Do not judge a single split by wall time; judge it by the census
   (`--fail-over`) and measure the wall only over the accumulated set.
-  - **(a) FIRST — `forEachChild` (9,750 bytecodes, `NodeWalk.kt`). The smallest standalone
-    sub-step that lands as one commit, and the one with the largest population.** One
-    function, one file, a flat `when (kindId)` that splits into range-keyed helpers; NO
-    checker semantics are involved. It is the traversal primitive of the whole compiler —
-    the check spine's descent AND all ~400 tail passes, which round 801 measured at
-    **2,962 ms of pure AST traversal** and closed as "structural, treatments already
-    priced". *One treatment was never considered, because nobody knew the primitive was
-    interpreted.* **Pinned already**: `ForEachChildOracleTest`'s reflection oracle diffs
-    the enumeration against the data-class `componentN` properties, so a dropped arm fails
-    before the corpus does. Gate as above. **Prize: unmeasured alone — size it by
-    re-running the flag A/B with only this split in place** (if the flag's advantage
-    shrinks, the split is capturing it).
+  - [x] **(a) DONE round 803 — `forEachChild` 9,750 → 4,353 / 2,728 / 2,175 across three
+    range-keyed functions; −3.93%, B wins 5/5 (monolith vs split, 5 interleaved pairs).**
+    New pins: `HugeMethodLimitTest` (reads the compiled `Code` attribute length — the only
+    instrument in the repo that can see this) and `ForEachChildSplitTest` (enumeration
+    ORDER + both seams; the reflection oracle pins the child SET only). Both verified
+    discriminating against ablated binaries. **The transferable recipe for (b)–(e):** split
+    by a CONTIGUOUS key range so each part stays one tableswitch, keep the hottest keys in
+    the ENTRY function, and dispatch the continuations with one compare rather than a
+    fall-through chain so no key pays two calls. Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 4.
   - **(b) `checkMemberAccessMissingCore` — 46,567 bytecodes, 5.8× the limit, and round
     789's "largest leaf in the compile".** Its section boundaries are already committed
     (round 789's level-R partition, `docs/perf/property-access-attribution.md`), so the

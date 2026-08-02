@@ -236,7 +236,96 @@ error(s)`, the compiler profile's expected count, on both arms.
   a 2-second one. The SPLIT does not have this problem, which is another reason
   to prefer it over the flag.
 
-## 4. Reproduction
+## 4. (JIT.1)(a) — `forEachChild` split, and it is worth **−3.93%** on its own
+
+*Round 803.* The first sub-step landed: `forEachChild` (9,750 bytecodes) is now
+three functions over **disjoint contiguous `NodeKind` ranges**, so each is still
+one dense tableswitch.
+
+| function | kind range | bytecodes |
+|---|---|---:|
+| `forEachChild` | `SOURCE_FILE` .. `COMMA_LIST_EXPRESSION` (0–69) | **4,353** |
+| `forEachChildOfMemberOrType` | `PROPERTY_DECLARATION` .. `KEYWORD_TYPE_NODE` (70–102) | **2,728** |
+| `forEachChildOfSupportingNode` | `PARAMETER` .. `JSX_FRAGMENT` (103–137) | **2,175** |
+
+Census **19 → 18** methods over the limit. The ranges are not arbitrary: every
+HOT kind (IDENTIFIER — 44.5% of all nodes — the literals, PROPERTY_ACCESS /
+CALL / BINARY, the five statement anchors) stays in the ENTRY function and pays
+no extra call, and the continuation is one compare plus one static call rather
+than a fall-through chain, so **no kind pays two**. Every arm was moved
+verbatim; the 138 arm bodies were diffed against the pre-split file
+mechanically and are byte-identical apart from the cosmetic group comments.
+
+### 4.1 The prize, measured directly rather than inferred
+
+The queue item said to size this by re-running the flag A/B. There is a sharper
+instrument: build the pre-split file into its own class dir and A/B **monolith
+vs split**, same source otherwise, same JVM, no flags. Five interleaved pairs,
+self-time, daemons stopped inside the script, nothing else running:
+
+| pair | A (monolith) | B (split) | Δ |
+|---|---:|---:|---:|
+| 1 | 25.729 s | 24.800 s | −0.929 |
+| 2 | 25.804 | 25.109 | −0.695 |
+| 3 | 26.314 | 25.280 | −1.034 |
+| 4 | 26.342 | 25.368 | −0.974 |
+| 5 | 26.479 | 25.629 | −0.850 |
+| **median** | **26.314** | **25.280** | **−1.034 s = −3.93%** |
+
+**B wins 5/5 and every per-pair delta is negative.** Arm sds are 342 ms (1.30%)
+and 308 ms (1.22%) — above the ~1% quietness criterion — **but the pairing is
+what carries this one**: the five deltas span only 339 ms, i.e. **0.33× the
+median delta**, because both arms drift upward together across the run and the
+interleave cancels the drift. Compare round 802's flag A/B, where the deltas
+spanned 730 ms against a 793 ms median. Errors identical at 46 on all twelve
+runs.
+
+**One split of one function measures larger than the whole family's flag A/B
+(−3.1%), and that is not a contradiction**: the flag makes C2 compile a
+46,567-byte method too, which costs compile time and code cache (§ 3.4 flagged
+exactly this), whereas the split pays none of it. The two numbers were also
+taken on different days on a box whose arm sd moved between 0.8% and 2.8%, so
+they should not be subtracted from one another.
+
+### 4.2 The item's own falsifier, run early — and it is honest but blunt
+
+(JIT.1) says: after the sub-steps land, re-run the flag A/B; if
+`-XX:-DontCompileHugeMethods` STILL moves the wall, the split did not capture
+the effect. Run against the split binary, 5 pairs: **+0.08%, B wins 3/5,
+per-pair deltas −408 / −2 / −916 / +1,220 / +1,248, spread 2,164 ms — the
+driver's own verdict is NOISE-DOMINATED**, with arm sds 2.49% and 2.78% (the
+box was measurably noisier than during the 4.1 run).
+
+So the honest statement is *not* "the flag now does nothing": it is that **the
+same instrument that returned 4/4 with every delta negative on the monolith
+returns a straddling 3/5 on the split binary**, at a pair count where an effect
+of round 802's size would have shown. It bounds what (b)–(e) still have on the
+table as *not obviously large on this profile*, and it does not license
+skipping them — 18 methods are still interpreted, including one at 5.8× the
+limit.
+
+### 4.3 What guards it now
+
+* **`HugeMethodLimitTest`** (jvmTest) parses `NodeWalkKt`'s compiled class file
+  and reads each method's `Code` attribute length — the same number `javap`
+  prints and the same number HotSpot compares against the limit. Verified
+  DISCRIMINATING: rebuilt against the pre-split file, **all three of its tests
+  fail**.
+* **`ForEachChildSplitTest`** (commonTest) pins what a size check cannot see and
+  what `ForEachChildOracleTest` does NOT pin — the enumeration **ORDER** (the
+  oracle compares child SETS) and both **seams** between the parts. Verified
+  DISCRIMINATING against a second ablated binary carrying a boundary typo
+  (`kind < KEYWORD_TYPE_NODE`) plus a swapped action order in the `PARAMETER`
+  arm: the seam pin, the order pin and the whole-tree pin fail, alongside three
+  pre-existing oracle tests.
+
+Gate: suite **13,481 → 13,493 / 0 / 3**; 8-profile grid diffed BOTH directions
+against the pre-change binary's captured output — **46/94/46/46/46/46/46/46, 0
+added and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **all 20 counters +0.00%** (a pure split moves no counter, and
+that is the claim being verified).
+
+## 5. Reproduction
 
 ```bash
 # the census — static, no run
@@ -250,4 +339,11 @@ java -Xmx4g -cp "build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)" \
 # the flag A/B (alternate the arms; stop the Gradle and Kotlin daemons first)
 java -Xmx4g                             -cp "$CP" …MainKt --noEmit "$PROJ"
 java -Xmx4g -XX:-DontCompileHugeMethods -cp "$CP" …MainKt --noEmit "$PROJ"
+
+# a SPLIT's own prize (round 803's instrument — sharper than the flag A/B):
+# build the pre-split file into its own class dir, then interleave the two dirs.
+git show <pre-split-sha>:src/commonMain/kotlin/NodeWalk.kt > src/commonMain/kotlin/NodeWalk.kt
+./gradlew compileKotlinJvm && cp -r build/classes/kotlin/jvm/main /tmp/xtsc_unsplit
+git checkout src/commonMain/kotlin/NodeWalk.kt && ./gradlew compileKotlinJvm
+scripts/ab-interleaved.sh /tmp/xtsc_unsplit build/classes/kotlin/jvm/main 5
 ```
