@@ -1498,6 +1498,45 @@ object ArgSections {
     var pendingNarrow: Long = 0L
     var pendingNarrowCalls: Long = 0L
 
+    // ── (CALL.5) round 796: the EXIT CENSUS ───────────────────────────────────
+    //
+    // Round 789's instrument, in the shape this function needs. [leftIn] already
+    // derives an exit profile by DIFFERENCING adjacent rows' `calls`, which is
+    // sound only while every iteration passes through every boundary in order —
+    // it cannot see the two `return`s inside the loop, it charges the prologue's
+    // early returns to nothing, and it can say WHERE an iteration left but not
+    // WHAT that iteration had already paid for. The census below answers both,
+    // and it adds NO boundary: every count is taken at a boundary the partition
+    // was already crossing, from the row that is already open.
+    //
+    // That property is load-bearing (round 793): a before/after row comparison
+    // stays valid because the ON run's boundary COUNT is unchanged by it.
+
+    /** Loop ITERATIONS that left the loop body from each row. */
+    var exitRow: LongArray = LongArray(N)
+
+    /** INVOCATIONS that returned (or fell out of the post-loop) from each row. */
+    var exitInvRow: LongArray = LongArray(N)
+
+    /** [L_ARGTYPE] nanos charged to the row the paying iteration LEFT from. */
+    var exitArgTypeNanos: LongArray = LongArray(N)
+
+    /** [N_NARROW] nanos and walks, charged the same way. */
+    var exitNarrowNanos: LongArray = LongArray(N)
+    var exitNarrowCalls: LongArray = LongArray(N)
+
+    /**
+     * The census's own copies of the parked spans. They must NOT be the
+     * `pending*` fields: [flushPending] clears those the moment an iteration
+     * reaches [L_RELATION], which is several boundaries before it exits.
+     */
+    var censusArgType: Long = 0L
+    var censusNarrow: Long = 0L
+    var censusNarrowCalls: Long = 0L
+
+    /** True between [iteration] and the boundary that closes that iteration. */
+    var iterOpen: Boolean = false
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -1508,7 +1547,28 @@ object ArgSections {
         cur = -1
         curT = 0
         depth = 0
+        exitRow = LongArray(N)
+        exitInvRow = LongArray(N)
+        exitArgTypeNanos = LongArray(N)
+        exitNarrowNanos = LongArray(N)
+        exitNarrowCalls = LongArray(N)
+        iterOpen = false
         clearPending()
+    }
+
+    /**
+     * (CALL.5) close the running iteration's census against [cur] — the row it
+     * is leaving from. Called only from a boundary the partition already had.
+     */
+    fun closeIterCensus() {
+        exitRow[cur]++
+        exitArgTypeNanos[cur] += censusArgType
+        exitNarrowNanos[cur] += censusNarrow
+        exitNarrowCalls[cur] += censusNarrowCalls
+        censusArgType = 0L
+        censusNarrow = 0L
+        censusNarrowCalls = 0L
+        iterOpen = false
     }
 
     /** Drop whatever the current iteration has parked. */
@@ -1564,9 +1624,14 @@ object ArgSections {
         if (mode == ON) {
             if (cur == L_ARGTYPE) {
                 pendingArgType = d
+                censusArgType = d
             } else if (pendingArgType >= 0L && (sec == L_RELATION || sec == L_PARAM)) {
                 flushPending(if (sec == L_RELATION) 0 else 1)
             }
+            // (CALL.5) `at(L_PARAM)` opens the NEXT iteration and `at(POST)` follows
+            // the last one, so both close whatever iteration is still running —
+            // against [cur], which has not been reassigned yet.
+            if (iterOpen && (sec == L_PARAM || sec == POST)) closeIterCensus()
         }
         cur = sec
         curT = now
@@ -1577,6 +1642,7 @@ object ArgSections {
     inline fun iteration() {
         if (mode == OFF || depth != 1) return
         iterations++
+        if (mode == ON) iterOpen = true
     }
 
     /** Close whatever section is still open (the invocation may have returned). */
@@ -1591,7 +1657,17 @@ object ArgSections {
                 // Only reachable if the invocation left INSIDE the argType block
                 // (it cannot today — the block is an expression with a `finally`);
                 // charging it keeps the partition exact if that ever changes.
-                if (mode == ON && cur == L_ARGTYPE) pendingArgType = d
+                if (mode == ON && cur == L_ARGTYPE) {
+                    pendingArgType = d
+                    censusArgType = d
+                }
+                // (CALL.5) the INVOCATION census: `cur` is the row the call
+                // returned from — a prologue `return`, one of the two `return`s
+                // inside the loop, or POST for a normal completion.
+                if (mode == ON) {
+                    exitInvRow[cur]++
+                    if (iterOpen) closeIterCensus()
+                }
                 cur = -1
             }
             // The last iteration never sees another `at(L_PARAM)`, and the two
@@ -1629,6 +1705,7 @@ object ArgSections {
         nanos[site] += d; calls[site]++
         nanos[N_NARROW] += d; calls[N_NARROW]++
         pendingNarrow += d; pendingNarrowCalls++
+        censusNarrow += d; censusNarrowCalls++
         if (!changed) { nanos[N_NARROW_IDENTITY] += d; calls[N_NARROW_IDENTITY]++ }
         val b = if (d < 10_000L) 0 else if (d < 100_000L) 1 else if (d < 1_000_000L) 2 else 3
         narrowBucketCalls[b]++; narrowBucketNanos[b] += d
@@ -1709,6 +1786,44 @@ object ArgSections {
                 )
             }
         }
+        var censusIters = 0L
+        for (s in 0 until N) censusIters += exitRow[s]
+        if (censusIters > 0L) {
+            appendLine("-- (CALL.5) EXIT CENSUS — where each ITERATION left, and what it had paid --")
+            appendLine("   (argType/narrow are RAW nanos, charged to the row the iteration LEFT from)")
+            for (s in 0 until FIRST_NESTED) {
+                if (exitRow[s] == 0L) continue
+                appendLine(
+                    "  ${names[s].padEnd(42)} ${exitRow[s].toString().padStart(7)} left here" +
+                        ", argType ${(exitArgTypeNanos[s] / 1_000_000).toString().padStart(4)} ms" +
+                        ", narrow ${(exitNarrowNanos[s] / 1_000_000).toString().padStart(4)} ms" +
+                        " /${exitNarrowCalls[s].toString().padStart(6)} walks"
+                )
+            }
+            var ceArg = 0L
+            var ceNar = 0L
+            var ceNarC = 0L
+            for (s in 0 until N) { ceArg += exitArgTypeNanos[s]; ceNar += exitNarrowNanos[s]; ceNarC += exitNarrowCalls[s] }
+            appendLine(
+                "  census check: iterations $censusIters vs $iterations" +
+                    "; argType $ceArg ns vs row ${nanos[L_ARGTYPE]}" +
+                    "; narrow $ceNar ns / $ceNarC vs row ${nanos[N_NARROW]} / ${calls[N_NARROW]}" +
+                    if (censusIters == iterations && ceArg == nanos[L_ARGTYPE] &&
+                        ceNar == nanos[N_NARROW] && ceNarC == calls[N_NARROW]
+                    ) "  EXACT" else "  *** MISMATCH ***"
+            )
+            appendLine("-- (CALL.5) EXIT CENSUS — where each INVOCATION returned --")
+            var censusInv = 0L
+            for (s in 0 until N) censusInv += exitInvRow[s]
+            for (s in 0 until FIRST_NESTED) {
+                if (exitInvRow[s] == 0L) continue
+                appendLine("  ${names[s].padEnd(42)} ${exitInvRow[s].toString().padStart(7)} returned here")
+            }
+            appendLine(
+                "  census check: invocations $censusInv vs $invocations" +
+                    if (censusInv == invocations) "  EXACT" else "  *** MISMATCH ***"
+            )
+        }
         appendLine("-- narrowing-walk cost distribution (all three sites) --")
         val labels = arrayOf("< 10 us", "10-100 us", "0.1-1 ms", ">= 1 ms")
         for (b in 0 until 4) {
@@ -1736,6 +1851,116 @@ object ArgSections {
             if (calls[s] == 0L) continue
             appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
         }
+    }
+}
+
+/**
+ * (CALL.5)(b) round 796 — the ALREADY-RELATES pre-gate on the argument check's
+ * two unconditional narrowing arms, and its own equivalence instrument.
+ *
+ * **What it does.** In `checkArgumentsAgainstSignatureCore` the argument type is
+ * flow-narrowed at three sites. Round 764 gave the ENUM site a "second chance"
+ * shape — *walk only when the raw type does NOT already satisfy the parameter*,
+ * because a narrow can then only turn a rejection into an acceptance and never
+ * the reverse — and measured that skipping the already-relating calls removed
+ * 3,406 walks. It then declined to generalise, in a comment that names its
+ * creditor: *"Deliberately enum-ONLY: the Interface/`unknown`/`string`/`number`
+ * arms below are corpus-pinned"*. Round 796 re-tests that debt (the round-783
+ * rule) on the two arms that hold the mass — measured at HEAD, **B469 116 ms /
+ * 2,455 walks and M3.4 300 ms / 7,368 walks, of a 478 ms narrowing total that is
+ * 33% of the whole function**.
+ *
+ * **Why the gate is acceptance-preserving.** It fires only when the UNNARROWED
+ * type already relates to the parameter, i.e. only where the assignability
+ * emission at the bottom of the loop was going to stay silent either way. What
+ * it can still change is a CONSUMER other than that relation — the weak-type
+ * rule's shared-property test, the `!isSimpleCheckableType` block's shape
+ * classification, a display. That is not arguable from the source, so it is
+ * MEASURED: [CENSUS] keeps the old behaviour and counts, per arm, how many
+ * refusals would have SUBSTITUTED a different type. A refusal that would not
+ * have substituted cannot change anything at all, by construction.
+ *
+ * **The positive control is free** (round 790): the same counter over the KEPT
+ * complement — the walks the gate never refuses — must be non-zero, and is
+ * ([keptChanged]). No deliberately bogus flag is needed to prove the instrument
+ * is alive.
+ */
+object ArgNarrowGate {
+
+    /** Pre-round-796 behaviour: both arms walk unconditionally, no gate evaluated. */
+    const val OFF = 0
+
+    /**
+     * Evaluate the gate, RECORD its verdict, and then behave exactly as [OFF]
+     * did — so a `--verifyArgNarrowGate` run reproduces the pre-change binary
+     * by construction and is a legitimate grid baseline.
+     */
+    const val CENSUS = 1
+
+    /** Act on the gate. The production setting since round 796. */
+    const val ON = 2
+
+    var mode: Int = ON
+
+    /** The B469 arm: a UNION-typed narrowable reference argument. */
+    const val UNION = 0
+
+    /** The M3.4 arm: Interface / `unknown` / `string` / `number` / enum-flavored. */
+    const val M34 = 1
+
+    val armNames: Array<String> = arrayOf("B469 union arg", "M3.4 iface/str/num arg")
+
+    /** Arm reached with the gate live (i.e. a walk was in prospect). */
+    var reached: LongArray = LongArray(2)
+
+    /** …of which the gate refused (the raw type already relates to the parameter). */
+    var refused: LongArray = LongArray(2)
+
+    /**
+     * …of which the walk WOULD have substituted a different type. Only [CENSUS]
+     * can fill this: under [ON] the walk does not happen. **This is the number
+     * the change stands or falls on** — it is exactly the set of argument types
+     * that differ between the gated and ungated binaries.
+     */
+    var refusedChanged: LongArray = LongArray(2)
+
+    /** The FREE positive control: substitutions in the complement the gate keeps. */
+    var keptChanged: LongArray = LongArray(2)
+
+    fun reset() {
+        reached = LongArray(2); refused = LongArray(2)
+        refusedChanged = LongArray(2); keptChanged = LongArray(2)
+    }
+
+    /** Record one visit to [arm]. [changed] is unknown (false) when no walk ran. */
+    fun note(arm: Int, gateRefuses: Boolean, changed: Boolean) {
+        reached[arm]++
+        if (gateRefuses) {
+            refused[arm]++
+            if (changed) refusedChanged[arm]++
+        } else if (changed) keptChanged[arm]++
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (CALL.5)(b) argument-narrowing already-relates gate ==")
+        appendLine("mode: ${when (mode) { OFF -> "OFF"; CENSUS -> "CENSUS (old behaviour + verdict)"; else -> "ON" }}")
+        for (a in 0 until 2) {
+            if (reached[a] == 0L) continue
+            appendLine(
+                "  ${armNames[a].padEnd(24)} reached ${reached[a].toString().padStart(6)}" +
+                    ", refused ${refused[a].toString().padStart(6)}" +
+                    " (${refused[a] * 100 / reached[a]}%)" +
+                    ", of those SUBSTITUTING ${refusedChanged[a]}" +
+                    "   [kept-complement substitutions: ${keptChanged[a]}]"
+            )
+        }
+        val rc = refusedChanged[0] + refusedChanged[1]
+        val kc = keptChanged[0] + keptChanged[1]
+        appendLine(
+            "  verdict: $rc refusal(s) would have substituted" +
+                (if (mode == CENSUS && kc == 0L) "  *** CONTROL DEAD — kept complement never substitutes ***"
+                else if (mode == CENSUS) "  (control alive: $kc)" else "")
+        )
     }
 }
 

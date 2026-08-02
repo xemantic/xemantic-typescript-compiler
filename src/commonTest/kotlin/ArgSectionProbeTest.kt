@@ -72,6 +72,19 @@ class ArgSectionProbeTest {
             return total
         }
         main({ kind: 1 }, "a", "b")
+        // (CALL.5)(b) round 796: since the already-relates pre-gate landed, a
+        // narrowing walk is launched at an argument only when the UNNARROWED
+        // type does not already satisfy the parameter — and `if (isIdent(n)) {
+        // takesIdent(n) }` above is not that shape twice over: round 785 writes
+        // the guard's narrow into `currentLocalTypes` for the THEN branch, so
+        // the argument arrives already narrowed. An EARLY-RETURN guard into a
+        // parameter the wide type fails is the shape that still walks, and the
+        // narrowing pins below need it or they measure an empty population.
+        function keptWalk(n: Node): number {
+            if (!isIdent(n)) { return 0 }
+            return takesIdent(n)
+        }
+        keptWalk({ kind: 1 })
         // The instrumented function's OWN emission, so an ON/OFF comparison of
         // the diagnostics is not vacuous: a wrong argument type is TS2345,
         // emitted from the last section this probe partitions.
@@ -212,11 +225,19 @@ class ArgSectionProbeTest {
         val perSite = ArgSections.calls[ArgSections.N_NARROW_UNION] +
             ArgSections.calls[ArgSections.N_NARROW_NEVER] +
             ArgSections.calls[ArgSections.N_NARROW_M34]
+        // (CALL.5)(b) round 796 RESTATED this pin rather than deleting it. It
+        // used to be satisfied by the fixture's `widen(u)` and `if (isIdent(n))`
+        // calls; the already-relates pre-gate refuses BOTH (the union parameter
+        // accepts the un-narrowed union, and the `if`-body argument is already
+        // narrowed by round 785), so `perSite` went to 0 and the pin failed by
+        // construction. `keptWalk` restores a walk the gate must NOT refuse, so
+        // `> 0` now asserts something stronger than it did: that the gate has a
+        // live complement.
         assert(perSite > 0L)
         assert(ArgSections.calls[ArgSections.N_NARROW] == perSite)
         assert(ArgSections.narrowBucketCalls.sum() == perSite)
-        // Identity walks are a SUBSET, and the fixture's `widen(u)` union
-        // argument plus its guarded `takesIdent(n)` give both outcomes room.
+        // Identity walks are a SUBSET, and the fixture's `keptWalk(n)` guarded
+        // argument gives both outcomes room.
         assert(ArgSections.calls[ArgSections.N_NARROW_IDENTITY] <= perSite)
         // A narrowing walk is nested inside the argType computation.
         assert(perSite <= ArgSections.calls[ArgSections.L_ARGTYPE])

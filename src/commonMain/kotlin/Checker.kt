@@ -144426,10 +144426,23 @@ interface DataView {
                 // args do not (getTypeOfIdentifier never consults narrowing), so narrow
                 // them explicitly here. Only Union types can be refined.
                 if (argIsNarrowableRef && ctxApplied is Type.Union) {
-                    val nwT = ArgSections.t()
-                    val nw = getNarrowedTypeForReference(ctxApplied, arg)
-                    ArgSections.closeNarrow(ArgSections.N_NARROW_UNION, nwT, nw !== ctxApplied)
-                    nw
+                    // (CALL.5)(b) round 796: the already-relates pre-gate — see
+                    // [ArgNarrowGate]. Round 764 gave this shape to the enum arm
+                    // below and declined to generalise; the debt is re-tested here.
+                    val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
+                        checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+                    if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
+                        ArgNarrowGate.note(ArgNarrowGate.UNION, true, false)
+                        ctxApplied
+                    } else {
+                        val nwT = ArgSections.t()
+                        val nw = getNarrowedTypeForReference(ctxApplied, arg)
+                        ArgSections.closeNarrow(ArgSections.N_NARROW_UNION, nwT, nw !== ctxApplied)
+                        if (ArgNarrowGate.mode != ArgNarrowGate.OFF) {
+                            ArgNarrowGate.note(ArgNarrowGate.UNION, gateRefuses, nw !== ctxApplied)
+                        }
+                        nw
+                    }
                 } else if (argIsNarrowableRef &&
                     paramType === neverType && ctxApplied !is Type.Union) {
                     // Round 441: `assertNever(x)` / `assertType<never>(x)` whose arg has a
@@ -144518,6 +144531,16 @@ interface DataView {
                     // refinement (a union of case-matched members) would take the
                     // union-arg emission path and manufacture an FP where the declared
                     // interface previously stayed silent.
+                    // (CALL.5)(b) round 796: the already-relates pre-gate, the
+                    // generalisation of the enum arm's round-764 second chance
+                    // to this arm. See [ArgNarrowGate] for why it is
+                    // acceptance-preserving and what the census measures.
+                    val gateRefuses = ArgNarrowGate.mode != ArgNarrowGate.OFF &&
+                        checkTypeRelatedTo(ctxApplied, paramType, assignableRelation)
+                    if (gateRefuses && ArgNarrowGate.mode == ArgNarrowGate.ON) {
+                        ArgNarrowGate.note(ArgNarrowGate.M34, true, false)
+                        ctxApplied
+                    } else {
                     val nwT = ArgSections.t()
                     val n = getNarrowedTypeForReference(ctxApplied, arg)
                     ArgSections.closeNarrow(ArgSections.N_NARROW_M34, nwT, n !== ctxApplied)
@@ -144545,7 +144568,11 @@ interface DataView {
                         (checkTypeRelatedTo(n, ctxApplied, assignableRelation) ||
                             checkTypeRelatedTo(n, paramType, assignableRelation))))
                     ArgSections.close(ArgSections.N_ARGTYPE_REL, agrT)
+                    if (ArgNarrowGate.mode != ArgNarrowGate.OFF) {
+                        ArgNarrowGate.note(ArgNarrowGate.M34, gateRefuses, refined)
+                    }
                     if (refined) n else ctxApplied
+                    }
                 } else ctxApplied
             } finally {
                 if (useCtx) contextualType = savedContextual

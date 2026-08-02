@@ -101,6 +101,22 @@ fun main(args: Array<String>) {
             "--argSectionsCoarse", "--argsectionscoarse" -> {
                 ArgSections.reset(); ArgSections.mode = ArgSections.COARSE
             }
+            // (CALL.5)(b): the already-relates pre-gate on the argument check's
+            // two unconditional narrowing arms. CENSUS keeps the OLD behaviour
+            // and only records the verdict, so it reproduces the pre-change
+            // binary and is a legitimate grid baseline; ON acts on it.
+            "--argNarrowCensus", "--argnarrowcensus" -> {
+                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.CENSUS
+            }
+            "--verifyArgNarrowGate", "--verifyargnarrowgate" -> {
+                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.CENSUS
+            }
+            "--argNarrowGate", "--argnarrowgate" -> {
+                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.ON
+            }
+            "--argNarrowGateOff", "--argnarrowgateoff" -> {
+                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.OFF
+            }
             // (CALL.3)(a): the opt-in attribution INSIDE narrowTypeFromFlow — the
             // arrivals-vs-distinct census plus the per-arrival split. `Coarse`
             // keeps only the whole-walk anchor, so an ON-vs-COARSE pair prices
@@ -324,6 +340,9 @@ fun main(args: Array<String>) {
     } else if (CallSections.verifyImplRelated) {
         println(CallSections.implRelatedReport())
     }
+    if (ArgNarrowGate.mode == ArgNarrowGate.CENSUS) {
+        println(ArgNarrowGate.report())
+    }
     if (ArgSections.mode != ArgSections.OFF) {
         println(ArgSections.report())
         println("== (CALL.2) csv ==")
@@ -494,6 +513,12 @@ private fun printUsage() {
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
+          --argNarrowCensus  (CALL.5)(b) evaluate the argument-narrowing already-relates
+                             gate, keep the OLD behaviour, and report per arm how many
+                             refusals would have SUBSTITUTED a different type
+                             (--verifyArgNarrowGate is the same thing under its
+                              equivalence-instrument name; --argNarrowGate acts on the
+                              gate, --argNarrowGateOff restores the pre-796 behaviour)
           --narrowSections   (CALL.3) intra-walk attribution of narrowTypeFromFlow (arrivals vs distinct)
           --narrowSectionsCoarse  the same, whole-walk anchor only — the calibration counterpart
           --narrowSectionsDeep  (CALL.4) the same plus the getReferencePath rows
