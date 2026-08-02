@@ -49,16 +49,18 @@ import kotlin.test.Test
  * and each has a pin here:
  *
  * 1. an **`ArrayLiteralExpression`** passes the state to its elements, so
- *    `mountAll([{ run(a) {} }])` has a reader it reports as absent;
- * 2. **every parent kind with NO arm at all** — `as`, `satisfies`, `!`, unary,
- *    spread, member access, template spans — does not redefine the state, so it
- *    stays current for the whole subtree below: `mount({ run(a) {} } as any)`
- *    is the same failure.
+ *    `mountAll([{ run(a) {} }])` has a reader it reports as absent — **REAL,
+ *    and the ablation fails this pin**;
+ * 2. **every parent kind with NO arm at all** (`as`, `satisfies`, `!`, unary,
+ *    spread, member access, template spans) — **VACUOUS, measured round 800**:
+ *    those are precisely the kinds the REACH classifier `spineIanyEdge` also has
+ *    no arm for, so nothing below an `as` is walked and no reader exists there
+ *    to protect. See the pin below, which is what will announce it if that ever
+ *    changes.
  *
- * Both pins fail against a predicate that omits the corresponding descent, and
- * both were checked to REACH the population (round 797's law) — the
- * `--ianySections` census asserts a non-zero arm-entry count on the same
- * fixtures.
+ * Every pin here was checked to REACH the population (round 797's law) — the
+ * `--ianySections` census asserts a non-zero arm-entry AND skip count on the
+ * same fixtures.
  */
 class IanyArgGateTest {
 
@@ -76,17 +78,30 @@ class IanyArgGateTest {
         assert(d.none { it.code == 7006 })
     }
 
+    /**
+     * ROUND 800's CORRECTION TO ROUND 799 § 11, pinned so it cannot rot back.
+     *
+     * § 11 named TWO counter-shapes that falsify `rhsCanConsumeFnCtx` as this
+     * arm's predicate. The array-literal one (above) is REAL — the ablation
+     * fails it. The other, `f(<any>{ m(a) {} })`, is **VACUOUS**: the no-arm
+     * parent kinds are exactly the kinds `spineIanyEdge` — the REACH classifier
+     * — also has no arm for, so nothing below an `as` is walked at all and there
+     * is no reader there to protect. `spineIanyArgSubtreeMayRead` descends them
+     * anyway, as insurance for the day `spineIanyEdge` gains such an arm; this
+     * pin is what would announce that day, by counting 2 instead of 1.
+     */
     @Test
-    fun `an object literal under a NO-ARM parent keeps its contextual type`() {
+    fun `a no-arm parent is not walked at all - so it holds no reader to protect`() {
         val d = diagnose(
             """
-            declare function mount(o: { run(a: string): void }): void;
-            mount({ run(a) { a.length; } } as any);
+            declare function loose(o: any): void;
+            loose({ run(a) { } });
+            loose({ run(b) { } } as any);
             """.trimIndent()
         )
-        // `as` has no arm in `spineIanyEdgeEnter`, so it does not redefine the
-        // state — the object literal below it still reads the argument edge's.
-        assert(d.none { it.code == 7006 })
+        // `loose(o: any)` denies the argument any contextual type, so a REACHED
+        // object-literal method reports its parameter. Exactly one does: `a`.
+        assert(d.count { it.code == 7006 } == 1)
     }
 
     @Test

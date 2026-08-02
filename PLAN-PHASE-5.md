@@ -20,6 +20,94 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 800 (2026-08-02) — (IANY.1) THE 249 ms ARM IS GATED: 93% OF ITS CALLEE
+RESOLUTIONS BOUGHT NOTHING. 106 ms (0.36%) off the handler, `typeOfExpr.calls` −4.21%
+and `distinct` −6.18% — the latter FASTER, which is round 788's law ANSWERED rather than
+assumed: 14,813 expression nodes are now typed NOWHERE in the compile. Grid 46×7/94 with
+0 added and 0 removed BOTH directions, `--partitionCheck 2` EQUIVALENT, suite 13,461/0/3.
+AND round 799's own § 11 is CORRECTED: one of its two counter-shapes is VACUOUS.**
+
+- **STEP 1 — RE-MEASURED AT HEAD BEFORE BUILDING (law 1), AND THE INHERITED NUMBER HELD.**
+  Round 799 handed forward "249 ms over 31,575 edges at 7.9 µs = 32% of the handler". At
+  HEAD, on a quiet box, the arm row reads **196/190 ms** and the handler total **724/707**
+  — the same shape (the round-799 figure was taken with one less nested boundary pair).
+  Unlike rounds 795–799, nothing inherited had to be thrown away.
+
+- **STEP 2 — THE SUB-PARTITION, WHICH KILLED THE CHEAP IDEA FIRST.** Three rows nested
+  inside the arm (`A_ARITY` / `A_CPGNC` / `A_PRED`) plus a deterministic census. Two
+  findings, both against expectation: (a) **the "free" gate does not exist** — at a
+  reached argument edge `spineIanyCtx` is ALWAYS the call's own `kind = 1` frame (reach is
+  monotone; the call's own arm defines it unconditionally), so `typed = false` occurs
+  **15 times in 20,827** and a state-only gate would skip 0.07% of the population;
+  (b) **21% of the resolutions were per-CALL REPEATS** (4,412 of 20,812) — a k-argument
+  call resolves its callee k times, `getTypeOfExpression` having no per-node memo. The
+  reader-predicate subsumes that population without a cache (repeats → 22), which is what
+  § 0's law predicts for one.
+
+- **WHAT LANDED: `spineIanyArgSubtreeMayRead`, built to § 11's stated obligation.** Reader
+  set = ARROW / FUNCTION_EXPRESSION / OBJECT_LITERAL (every other reader § 11 names sits
+  strictly inside one of those three); descends the arms that INHERIT the state (paren /
+  conditional / array-literal / `||` `??` `&&` `,`) and every no-arm parent; STOPS at a
+  nested CALL/NEW (its own arm shadows the whole subtree, and an UNREACHED call makes
+  everything below unreached, reach being monotone). **Default `true`, so it can only ever
+  refuse to skip**, and a 32-step cap (0 hits) bounds it and removes the deep-`||` stack
+  hazard. Measured cost: **1.87 steps per edge**.
+
+- **THE PRICE, QUOTED AS THE ENCLOSING TOTAL (round 798's own correction).** Both arms
+  twice on ONE binary (`--ianyArgGateOff`), identical boundary counts, predicate priced
+  INSIDE both arms: callee resolutions **20,812 → 1,439 (−93.1%)**, the arm row
+  **196/190 → 93/96 ms**, and the **HANDLER TOTAL 724/707 → 602/617 = Δ 106 ms** against a
+  within-arm spread of 17/15, i.e. **6.2×** the larger spread. **≈0.36% of a check-only
+  compile.** A single `--passTiming` pair agrees (`checkSpine` 21,047.6 → 20,949.4).
+  **No wall-clock A/B** — 0.36% is a third of the ±1.0% warm band; the counters decide.
+
+- **ROUND 788's LAW, ANSWERED INSTEAD OF ASSUMED.** The obligation was that a CACHED
+  callee type makes part of any saving reappear (round 798 lost 110 of 473 ms that way).
+  Here `typeOfExpr.distinct` falls **6.18%** against `calls` **4.21%** — distinct falling
+  FASTER means **14,813 expression nodes are typed NOWHERE in the compile**, i.e. this arm
+  was their only consumer and the work is deleted, not moved. `globals.lookups` −1.68%,
+  misses −1.69%; **`narrow.walks` +0.00%** and `typeNode.bypassed` **+5 of 110,776** (the
+  round-754/778 order effect, three orders inside tolerance). Rebased in the landing commit.
+
+- **THE ABLATION, AND WHAT IT CORRECTED IN ROUND 799.** Fault = the predicate stops
+  descending array elements AND `as`, i.e. exactly the `rhsCanConsumeFnCtx` propagation set
+  § 11 falsified. **2 of 20 pins fail** — the array-literal pin and the equivalence pin —
+  and the `as` pin does NOT, which is the round's second finding: **`spineIanyEdge`, the
+  REACH classifier, has no `AsExpression` arm**, and its arm set is essentially the same
+  set `spineIanyEdgeEnter` has arms for. So nothing below an `as` is walked at all
+  (`loose({run(b){}} as any)` reports nothing while `loose({run(a){}})` and
+  `loose([{run(c){}}])` both report) — **§ 11's second counter-shape proves nothing; only
+  the array-literal one is real.** The no-arm descents are KEPT as dead-today insurance
+  (1.87 steps is not worth coupling the gate's soundness to another function's classifier)
+  and a restated pin now counts 2 instead of 1 the day that changes.
+
+- **WHAT DID NOT WORK.** (1) The first probe build crashed on the DOCUMENTED
+  declaration-order trap — `spineIanyArgScan` declared beside its consumer ~50k lines below
+  the `init` block is null in every pass; one build lost. (2) **The first timing batch was
+  measured on a thrashing box and every row read ~270× too large** (the childless-CALL row
+  6,483 ms against its true 5–11 ms; a compile took 9.6 min instead of 26 s) because the
+  build's own **Kotlin daemon was still resident** when the runs started — BUILD.1's trap,
+  ONE ROUND after round 799 wrote it down. The tell was not the arm ratio (which survived)
+  but the absolute ns/call against round 799's table; the deterministic census was immune
+  and is what carried the round. **Stop the daemons INSIDE the script, between the build
+  and the runs.** (3) A per-call callee cache as a standalone idea is dead — the predicate
+  already collapses the repeats.
+
+- **GATE.** Suite **13,454 → 13,461 / 0 failures / 3 skipped** (+7 pins, whole results dir
+  wiped). **8-profile grid vs `--ianyArgGateOff` — the real pre-change path in the same
+  binary — diffed set-for-set in BOTH directions: 46/46/46/46/46/46/46/94, 0 added and 0
+  removed on every profile.** `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`: two
+  counters FELL beyond tolerance (above), rebaselined in the landing commit; nothing rose.
+  Full derivation: `docs/perf/implicit-any-attribution.md` §§ 13–18.
+
+- **FOR THE NEXT AGENT: `spineIanyEnterNode` IS DONE.** Rounds 798/799/800 took
+  320 + 55 + 106 = **481 ms out of a 1,031 ms handler**, and the residue is FLAT — the
+  largest rows left are `own: every other kind` (~165 ms over 803,896 nodes at ~200 ns, a
+  per-node floor), `BinaryExpression parent` (~55 ms over 50,454) and the already-gated
+  NO-ARM row (~60 ms over 249,471 at ~240 ns). There is no concentration to attack.
+  **Re-derive the live map (§ 0) before choosing the next target** — three of the last six
+  rounds found an inherited figure stale.
+
 **Round 799 (2026-08-02) — ROUND 798's OWN EVIDENCE GAP IS CLOSED (the corpus does NOT
 see the scope-push exclusion either, so it is kept ON ARGUMENT and the code now says so),
 THE 500 ms RESIDUE IS SUB-PARTITIONED AND IS *NOT* WHAT IT LOOKED LIKE — HALF OF IT IS ONE
@@ -903,310 +991,6 @@ rises. (b) IS NOT ATTEMPTED — see the verdict at the end.**
   Full derivation: `docs/perf/property-access-attribution.md` sections 17-22.
 
 
-**Round 789 (2026-08-01) — (ENGINE.2c): THE PICTURE INVERTS ONE LEVEL DOWN. At levels P
-and Q the dedicated-walker FIREWALL was 8.0% and the ENGINE 91.9%. INSIDE that engine —
-`checkMemberAccessMissing`, 2,292 ms, the largest single leaf in the compile — the
-firewall is 67% and the property lookup it defends is 0.2% (6 ms). ONE ROW, the three
-flow-graph suppression blocks, is 1,505 ms = 57% of the function and ~5.4% of a
-check-only compile; it launches 22,270 flow walks, which is 31% of EVERY narrowing walk
-the compiler performs; it buys 886 suppressions; and 94.6% of the calls that pay for it
-exit further down the function with the answer consulted by nothing. NOTHING WAS LANDED
-BUT THE HARNESS — deliberately, because both levers change emission ORDER and this round
-could not gate that honestly — and the two are queued with exact prices as (ENGINE.2d).**
-
-- **THE TARGET WAS TAKEN FROM THE MEASURED MAP AND RE-MEASURED FIRST.** Round 787
-  partitioned the property-access path two levels deep and stopped where the mass is:
-  level Q's engine row is one ~1,965-line function entered 66,747 times at **34.3 µs
-  each**, 6x the next row of either level, never opened. Re-measured at HEAD before the
-  item was written (**2,292 ms gross**, against round 787's 2,390 — stable), and the item
-  plus **five scored predictions** went into the queue in commit `030d8cc8`, before code.
-- **WHAT LANDED: level R + six nested sub-measures + 9 pins + §§ 10-16 of
-  `docs/perf/property-access-attribution.md`.** Level R keeps level Q's non-recursive
-  shape and adds two instruments the earlier levels did not need: an **EXIT CENSUS**
-  (which row each call RETURNS from — the only thing that can see a gate placed on the
-  wrong side of expensive work) and a **WALKER-RESTRICTED exit census**, which is what
-  turns "this row is big" into "these specific calls paid for nothing". It has TWO
-  callers, so its 67,258 invocations exceed level Q's 66,747 by exactly the 511 element
-  accesses — cross-checked, not assumed.
-- **THE EXIT CENSUS IS THE ROUND'S INSTRUMENT AND ITS FIRST RESULT IS A CONTROL.**
-  **86.1%** of calls return before the property lookup; the emission tail —  spelling
-  suggestion, `typeToString`, message construction — is reached **0 times** (77 calls get
-  as far as the index-signature gates and all 77 stop there). H5 predicted "~0 ms" and
-  the answer is 0 ms over 0 reaches, the strongest form of round 786's 0.4 ms elaboration
-  row, and the wiring control that makes the rest of the table trustworthy.
-- **INSIDE THE DOMINANT ROW, THE PRE-GATE IS EXCELLENT AND THE WALKS ARE THE COST.** The
-  round-489 pre-gate costs **50 ms** to stop 41,527 of 63,797 accesses from walking. What
-  is left is a real flow walk, twice: **plain 731 ms / 22,270 calls, loop-entry retry
-  488 ms / 21,384 calls.** Because the retry runs iff the plain walk did not suppress,
-  `22,270 − 21,384 = 886` is an EXACT count of plain-walk suppressions, and the walker
-  census (914 walkers exiting in the row) bounds everything after it at **≤ 28
-  suppressions for 488 ms — ≥ 17 ms each.**
-- **PREDICTIONS: 2 HIT, 2 FALSIFIED, 1 HIT IN THE OPPOSITE DIRECTION — and the two
-  failures share one cause worth carrying.** H1 (receiver-type computation ≥ 50%) read
-  **26.4%**; H2 (pre-type firewall < 20%) read **67.2%**, wrong by 3.4x. Both were
-  extrapolated from (ENGINE.1)'s three assignability sites, where "compute the SOURCE
-  type" was the largest row every time. **The analogy is false: at an assignability site
-  the source type IS the work; at a property access the receiver type is largely resolved
-  already and the expensive thing is the FP firewall in front of the lookup.** Round 787
-  recorded the same lesson with the sign reversed when its firewall prediction missed by
-  2.5-5x. H4 was aimed at the wrong kind of gate — its named candidates
-  (`RUNTIME_PROPERTIES`, `isEnumFlavoredObjectType`) are rows worth 10 and 30 ms; what the
-  census found is not a cheap gate placed late but an **expensive gate placed early**.
-- **CALIBRATION: Δ = 352 ms over 1,177,373 extra boundaries = 299 ns, bracket 240-368,
-  Δ/spread = 4.7x** (against round 787's 2.8x and round 786's 1.4x). Two caveats stated
-  in the doc rather than buried: the net rows sum to 2,641 ms against a probe-free anchor
-  of 2,292, so **the harness's own footprint is ~250-350 ms even in COARSE** and absolute
-  rows carry ±13% — while the SHARES do not, because the probe distributes by boundary
-  count and is subtracted per row; and the largest row has the FEWEST boundaries per unit
-  time (20 ms of probe against 1,505 ms of work), so the calibration cannot have produced
-  it.
-- **WHY NOTHING BUT THE HARNESS LANDED.** Both levers move a suppression relative to ~20
-  emission sites, i.e. they change WHAT IS EMITTED unless every site is covered, and they
-  change resolution-cache mutation order (round 754). Round 788's protocol for exactly
-  this — falsify the hazard empirically with a probe that keeps the OLD behaviour and
-  counts violations — needs its own measurement round, and doing it badly here would have
-  produced a green grid that proves nothing. The prices are exact and recorded instead.
-- **PROCESS FAILURE, RECORDED BECAUSE IT COST ~15 MINUTES.** To revert an ABLATION I ran
-  `git checkout src/…Checker.kt src/…SpineDispatch.kt` — and those files also carried the
-  round's UNCOMMITTED harness, which was destroyed. Rebuilt from the saved insertion
-  script plus the edit record and verified by re-measurement: **every count reproduced
-  exactly** (67,258 / 22,270 / 21,384 / 914 / 40,308), timings within run-to-run noise.
-  The rule is now in CLAUDE.md: commit the harness BEFORE ablating it.
-- **PINS: 9 new (`CmamSectionProbeTest`), 4 DISCRIMINATE** against a five-fault ablated
-  binary (exit-census sum, walker-subset, COARSE inertness, flow-row firing). Two more
-  were aimed at and NOT caught, because two of the injected faults cancelled each other —
-  suppressing the plain walk's early return let the RETRY re-derive the same suppression,
-  so both the behaviour-free pin and the funnel pin stayed green. Reported rather than
-  re-run; the remaining three are deliberate controls (name table, CENSUS-reads-no-clock,
-  the emission control that keeps the behaviour-free comparison non-vacuous).
-- Suite 13,371 -> **13,380 / 0 failures / 3 skipped**. 8-profile grid captured at HEAD
-  FIRST and after, diffed set-for-set in BOTH directions: **46/46/46/46/46/46/46/94, 0
-  added and 0 removed on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. Cost gate
-  **all 20 counters +0.00%** (no rebaseline). Compiler-profile `--listAll` byte-identical
-  in production / ON / COARSE.
-
-- [x] **(AOT.1a) INTEGRATED round 772 (owner: "Please integrate GraalVM").** `./gradlew
-  nativeImage` builds the AOT executable to `build/native/xtsc` — a plain task using the
-  existing `runCommand`/ProcessBuilder idiom, NOT the `org.graalvm.buildtools.native`
-  plugin, which expects the `application`/`java` conventions this KMP build does not use.
-  **Verified end to end**: the gradle-built binary is **byte-identical to the JVM on all 8
-  profiles** (12.8–22.1 s), full suite **13,216 / 0 / 3** unchanged, and the
-  no-GraalVM path was TESTED and then FIXED — it reported a bare
-  `IOException: Cannot run program "native-image"`, so the task now probes PATH itself and
-  says what to install and which flag to pass. Reflection metadata lives in
-  `src/jvmMain/resources/META-INF/native-image/…` (18 entries, all kotlinx-coroutines
-  atomic field updaters) and is auto-discovered from the classpath. **Deliberately NOT
-  wired into `build`/`check`** — it needs GraalVM plus a C toolchain and adds ~2 min, and
-  it produces a distribution artifact rather than a verification.
-  `.github/workflows/native.yml` is **`workflow_dispatch` only** (no cost per push) and
-  carries the byte-identity check; it is UNTESTED on CI, being unrunnable from here.
-- [x] **(SERVER.1) DONE round 773 — Stage 1 shipped (`xtsc --serve` / `xtsc --daemon`),
-  measured at 11,907 ms through a real Unix socket against the cold CLI's 26,415 ms; output
-  identical to the direct CLI's. Stage 2 stays dead. Body kept for the design record.**
-  Pre-warmed compile server + thin client — the prize is MEASURED and it is
-  Stage 1 ONLY (owner-proposed round 772, sized the same session).** A long-lived warm JVM
-  answering compile requests from a minimal CLI. **The warm JVM is the FASTEST artifact we
-  have** — 11,580 ms against the GraalVM binary's 13,350 ms and a 26,272 ms cold CLI — so
-  this is worth ~2.3x over today and ~13% over shipping AOT alone.
-  **Design: native thin CLIENT + JVM SERVER**, which composes with (AOT.1) rather than
-  competing — the Graal binary is an ideal client (instant start, no JVM) while the server
-  stays on the JVM precisely because C2 peak beats Graal's AOT code.
-  - **STAGE 1 — reuse the JVM, NOT the program. This is the whole prize, and it is
-    already proven safe**: `BenchMain` ran 12 in-process rebuilds reporting identical
-    `files=78 errors=46`, so a fresh program per request in one warm JVM carries
-    essentially no new correctness surface. Missing piece is only the TRANSPORT (a socket
-    protocol + client), not the compiler.
-  - **STAGE 2 — reuse program state: MEASURED AND DEAD for self-compile.** Round 772 drove
-    the existing `--watch` on the compiler profile: a LEAF edit (`semver.ts`, 3 dependents)
-    yields `incremental recheck of 77/78 file(s)` at 13,529 ms, and `checker.ts` / `types.ts`
-    do not qualify at all (`rebuilding…`, 12,002 / 11,208 ms). All three ARE the warm
-    full-rebuild time. Cause: tsc's sources are `export *` barrels, so reverse-dependency
-    closure ≈ the whole program. **The INV.7(d1) machinery existing does NOT make this
-    cheap** — do not price a design off it. May still pay on a well-layered user project;
-    re-measure there before reviving.
-  - **Costs to weigh, and one of them already bit**: a resident daemon inherits staleness,
-    version skew and memory residency — an idle 3.76 GB Kotlin daemon is what froze this box
-    during round 772. And state reuse is where this codebase has already been wrong:
-    `--workers` produced 62 diagnostics against sequential's 46. Stage 1 avoids both by
-    keeping per-request state fresh.
-  - Precedent, including next door: `tsserver` is exactly this for TypeScript, tsgo ships an
-    LSP server, plus Nailgun / Bazel persistent workers / Roslyn VBCSCompiler / the Gradle
-    and Kotlin daemons.
-
-- [ ] **BLOCKED-PENDING-USER (marked round 775): (AOT.1) Decide the shipped artifact — the
-  REMAINING owner decision.** Guardrails: this is a release/build-matrix decision, not an
-  engineering one, so the loop marks it and works past it rather than choosing.
-  **ROUND-796 RE-VERIFICATION (queue hygiene, item stays unchecked):** the marker is
-  present and the reading is correct — every open question in this item ((1) both /
-  jar-only / native-only, (2) linux-x64-only for a first release, (3) the release CI
-  budget) is a release/build-matrix decision, which CLAUDE.md § Guardrails reserves to the
-  owner. (AOT.4) — the gap-closer this item points at — LANDED at round 775, so the
-  decision is now as cheap as it will ever be; nothing further is actionable here without
-  an answer. **Do not decide it autonomously; do not re-derive this verdict.**
-  **The proposal to react to, stated so a yes/no is enough.** Ship **both**, with the JVM
-  jar as the canonical artifact and a linux-x64 native binary attached to releases as an
-  opt-in fast path — because the two pieces of evidence point opposite ways and only that
-  split respects both. For it: −49% of a cold compile for zero compiler changes, and the
-  8-profile grid is byte-identical. Against it: **the corpus suite has never run against
-  any native build**, so a shipped binary would carry 8 profiles of evidence where the jar
-  carries 13,223 tests — and per-OS/arch CI (the Apple targets have no builder here) is a
-  standing cost paid every release. Publishing linux-x64 only, clearly labelled as such,
-  buys the speed for the CI-and-container case that most wants it while keeping the
-  evidence gap off the default path. **(AOT.4) is what would close that gap** — a native
-  `linuxX64Test` run of the full corpus — so a decision is cheaper AFTER it, and the loop
-  is working it next. Answer needed on: (1) both / jar-only / native-only, (2) whether
-  linux-x64-only is acceptable for a first release, (3) whether the release CI budget for
-  a ~2-minute image build per platform is approved.
-  (AOT.1a)
-  above makes the binary buildable and verified; what is still open is whether it SHIPS,
-  and as what: release-attached native binaries need a per-OS/arch matrix (this box can
-  only produce linux-x64, and the Apple targets have no builder), which is a different
-  question from "can we build one".
-  The measurement behind it: a GraalVM CE native image runs the compiler profile in
-  **13,350 ms against the JVM's 26,272 ms (1.97×)**, with `--listAll` output
-  **byte-identical to the JVM's on all 8 profiles** (grid in the doc § 2), 392 MB RSS
-  against a 4 GB heap allowance, and a 2-minute image build. That is **−49% of a cold
-  compile for zero compiler changes** — larger than everything the rounds-482–759 arc
-  landed, combined, and orthogonal to it. The remaining decision is
-  whether the shipped artifact is a native binary, a JVM jar, or both, and it
-  interacts with the multiplatform story (a native image is per-OS/arch, so CI would
-  need a build matrix). Blockers to be aware of, both recorded: the corpus suite is a
-  JVM harness and has never run against a native binary, so the 8-profile grid is the
-  only behavioural evidence; and a CI runner needs a C toolchain, which this box did
-  not have (doc § 8 records the unprivileged workaround and its three traps).
-- [x] **(AOT.2) DONE round 774 — Adopt the WARM protocol for compiler-level A/B — cheap,
-  and it changes what is measurable.** Driver landed as `scripts/ab-warm.sh`; the band
-  reproduces at ±1.0% **on an idle box only** (round-774 note below; doc § 4a).
-  Calibrated round 771 (doc § 4): six A/A processes give a warm
-  band of **±1.0% = ±114 ms** against the cold protocol's ±2.0% = ±536 ms, i.e. **4.7×
-  more sensitive in absolute terms**, and ten warm iterations cost less than four cold
-  runs. The harness already exists (`BenchMain`) and is self-falsifying (every iteration
-  prints its own files/errors). **This re-opens items the arc rejected as in-band, and
-  the list is in doc § 4** — (CALL.4)'s 441 ms residue is 3.9× the warm band, the
-  `getTypeOfExpression` ceiling 7.1%, single-visit discipline 5.8%. **Read the two
-  cautions there before re-opening any of them: nothing got bigger, only visible, and
-  round 736's identity pre-test was rejected as UNSOUND rather than small.** `AUDIT.3`'s
-  globals population stays dead at 0.3–0.6%.
-- [x] **(AOT.4) DONE round 775 — THE CORPUS HAS NOW RUN NATIVELY: `linuxX64Test` links
-  and executes, **9,161 tests completed, 2 failed**, in 14m28s. The evidence gap (AOT.1)
-  carries is closed for linux-x64.** **THE LEVER WAS `Debug`, NOT MEMORY**: round 772's
-  RELEASE test link died to the OS OOM-killer after ~22 min, while the DEBUG path costs
-  `compileKotlinLinuxX64` + `compileTestKotlinLinuxX64` **2m10s** and
-  `linkDebugTestLinuxX64` **1m03s** (`linkDebugExecutableLinuxX64` 1m28s) — so of the
-  item's old "untried levers" list only the debug-link one mattered, and the rest are
-  now moot. **A hard link error had to be fixed first**: `BenchMain.kt` declared a
-  top-level `main` in the compiler's own package, and K/N mangles that with no file
-  component, so it collided with `Main.kt`'s (`ld.lld: duplicate symbol
-  kfun:com.xemantic.typescript.compiler#main(...)`) — only the native TEST link can see
-  it, since the main executable never pulls in commonTest. Moved to `…compiler.bench`.
-  **THE TWO NATIVE-ONLY FAILURES.** (1) `enumNoInitializerFollowsNonLiteralInitializer`
-  reported TS18056 where tsc and the JVM report TS1061, on `d = (c)! satisfies number as
-  any` — i.e. `prevInitializer is Identifier` answered TRUE for a non-Identifier. Fixed
-  by switching the discriminator to `prevInitializer?.kind == SyntaxKind.Identifier`, the
-  codebase's own M0.2 idiom and provably JVM-equivalent; **the K/N-miscompile diagnosis is
-  SUSPECTED, NOT CONFIRMED — no minimal repro was obtained, and the fix was never
-  re-verified natively.** (2) `CfaTooLargeBailTest.a deep branch chain trips the depth
-  limit` exits the test process — almost certainly platform-inherent (a native stack
-  overflow is a hard crash, `StackOverflowError.kt`), unverified.
-  **FURTHER LOCAL NATIVE WORK IS FORBIDDEN (owner, round 775): the session froze the host
-  for ~2 hours.** The path forward is CI — `.github/workflows/native.yml` now carries a
-  `kotlin-native` job (UNTESTED; it cannot be run from here), and `build.gradle.kts`
-  registers linuxX64 only under `-PenableNativeTargets=true`, so `./gradlew build` is
-  unaffected. Follow-ups for a CI round: re-verify the TS18056 fix natively, decide
-  whether the CFA test gets a native `@Ignore`, and only then reconsider a release-mode
-  native artifact (K/N measured 1.63× SLOWER than GraalVM, so the argument is reach).
-
-  <details><summary>Superseded pre-775 body (round 772 state)</summary>
-
-  There are TWO
-  different "native" paths: **(A)** GraalVM native-image, integrated as `./gradlew
-  nativeImage` and measured; **(B)** Kotlin/Native, an LLVM backend with no JVM at all.
-  **Round 771 concluded B could not compile on this box and that was WRONG** — it tuned
-  `-Pkotlin.native.jvmArgs`, which nothing reads. **Kotlin/Native compiles inside the
-  GRADLE daemon**, so its heap is `org.gradle.jvmargs`, which BUILD.1 pinned to 1g to make
-  room for the 5 GB Kotlin daemon; the JVM-compile memory fix is precisely what starved it.
-  With `-Dorg.gradle.jvmargs=-Xmx6g`: **`compileKotlinLinuxX64` succeeds in 2m04s** and
-  **`compileTestKotlinLinuxX64` in a further 23s, 0 errors**.
-  **The accumulated `commonTest` drift is MEASURED and FIXED: 7 errors, all one class**
-  (commas in backtick test names — CLAUDE.md rule 1), against round 672's 169. Fixed in
-  place; the names now satisfy the native rule, which the JVM never checks.
-  **THE MAIN EXECUTABLE LINKS AND IS MEASURED (round 772, later the same session):**
-  `linkReleaseExecutableLinuxX64` succeeds in **8m05s at -Xmx4g** — a SMALLER heap than the
-  6g that froze the box, which is the counter-intuitive lesson (a 6g daemon starves the OS
-  and the OOM-killer takes something; 4g fails gracefully or, here, succeeds). The binary is
-  **byte-identical to the JVM** and **1.63× SLOWER than GraalVM** — 21,787 ms vs 13,350 ms,
-  at 3× the RSS in half the binary size; full table in the doc § 2b. **The queue's own prior
-  was correct**, so GraalVM is the shipping path for speed and K/N's remaining argument is
-  reach, not performance.
-  **What remains is the TEST link**: `linuxX64Test` died after ~22 min with `Gradle build
-  daemon disappeared unexpectedly` — the OS OOM-killer, not a Java OOM, so there is nothing
-  in the log to grep. **That attempt was at 6g and is worth ONE retry at 4g**, since the main
-  link then succeeded at 4g where the test link failed at 6g; untried.
-  **Untried levers, cheapest first** (from Kotlin's tips page): `org.gradle.workers.max=1`;
-  a smaller daemon (4–5g) since the killer is the OS and not the heap; `linkDebugTest*`
-  rather than anything release/`-opt`; `kotlin.incremental.native=true`; and the page's
-  own first rule, **"avoid huge classes"**, which a 110k-line `Checker.kt` maximally
-  violates. Or simply a 16–32 GB machine.
-  **Why it is still worth finishing even though (A) works:** it is the only path to
-  binaries with no JVM anywhere (macOS/Windows/Linux), plausibly this project's real
-  differentiator against tsgo; and `linuxX64Test` would run the 13,216-test corpus
-  NATIVELY, closing the evidence gap (AOT.1) carries (the suite has never run against any
-  native build). **linuxX64 is left COMMENTED OUT** in build.gradle.kts — with the link
-  failing, enabling it would break `./gradlew build`. My prior, stated so it can be
-  falsified: K/N will be SLOWER than GraalVM here, because a type checker is
-  allocation-heavy and K/N's optimizer and GC trail Graal's on that profile.
-
-  </details>
-
-- [ ] **(AOT.3) CI-ONLY — NOT ACTIONABLE ON THIS BOX (marked round 796). Emit-mode native
-  measurement + PGO.** (a) All round-771 figures are
-  `--noEmit`; the published CI ratio is emit-mode, so the two cannot be compared until
-  the native binary is measured with emit (§ 0.2's standing rule). (b) `-O3
-  -march=native` measured **13,325 vs 13,335 ms — nothing**, so the residual 15% against
-  JVM peak is not codegen but the absence of **PGO**, which GraalVM CE cannot do. Only
-  Oracle GraalVM closes it. **Do not spend further rounds on codegen flags.**
-  **ROUND-796 QUEUE HYGIENE (item stays unchecked, so it is picked up when a CI lane
-  exists).** Sub-step (a) requires BUILDING a native image (`./gradlew nativeImage`, i.e.
-  GraalVM `native-image`) and then running it — and CLAUDE.md carries an explicit OWNER
-  DIRECTIVE (round 775) that **no Kotlin/Native or GraalVM task may run on this box**,
-  issued after one froze the host for ~2 hours: with `Swap: 0` the kernel cannot page, so
-  an over-commit stalls the machine instead of OOM-killing one process. The home for this
-  work is `.github/workflows/native.yml` (already `workflow_dispatch`-only and already
-  carrying the byte-identity check); the emit-mode run belongs there as an added step.
-  Sub-step (b) is self-closing by its own last sentence. **So: nothing here is actionable
-  locally today, and the next agent should NOT re-derive that — it costs a frozen host to
-  find out.** Verified round 796 by reading the item plus the CLAUDE.md directive; no
-  native/GraalVM command was run.
-
-- [x] **(COST.2) CLOSED round 776 — the baseline did not drift; its ANCHOR was never
-  reproducible.** Round 760's own commit (`07e43815`), rebuilt and re-run today, measures
-  the PRE-fix `104,162 / 25,583`, so the `-7.92%` its rebaseline recorded does not exist on
-  its own source; ablating the veto it was credited to moves the counter by ONE resolution
-  (104,162 → 104,163). Rebaselined at `103,802 / 25,521` WITH the mechanism and the full
-  falsification set (`af7c7d08`). Found and fixed on the way (`192922e5`): program order was
-  the filesystem's `readdir` order, and these two counters move ~1% with it — a partial
-  cause at most, and the gate header now carries the caveat. What is still open: the
-  07-29→07-30 regime itself is unexplained, and its build directory no longer exists.
-  Original item below.
-
-  **(COST.2) The cost baseline drifted with no source change — DIAGNOSE IT, DO NOT
-  `--update` PAST IT (found round 775).** `python3 scripts/cost_gate.py` fails at HEAD:
-  `typeNode.bypassed` 95,909 -> **104,162 (+8.61%)**, `mapped.keyed` 24,693 -> **25,583
-  (+3.60%)**. **Round 775's change is excluded by experiment**, not by argument — the hunk
-  was reverted, the module recompiled and the gate re-run, giving byte-identical counters,
-  so this predates it. Constraints any explanation must fit: **no `src/commonMain` commit
-  since the baseline** (`e31e7f2e`, round 770); `spine.nodes` bit-identical at 856,962 and
-  `output.errors` at 46, so the AST and every diagnostic are unchanged and ONLY
-  type-resolution work moved; and the profile's absent `@types/node` is not the round-730
-  trap, which would have moved the error count. **Leading hypothesis: the round-770
-  rebaseline is itself wrong** — it was recorded in a follow-up commit after that round's
-  agent died to three API failures and the host restarted, and a baseline captured from a
-  build dir that did not match its own commit reproduces exactly this signature. Cheapest
-  decisive test: check out `e31e7f2e` clean, full rebuild, re-run the gate — if it reports
-  104,162 there too, the baseline was mis-recorded and rebaselining is then correct AND
-  explained. **Until someone does that, `--update` is forbidden here**: it would delete the
-  only evidence that anything moved, which is precisely what COST.1 exists to prevent.
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 - [x] **(IANY.1) DONE round 798 — `spineIanyEnterNode` is OPENED, and the gate it exposed
@@ -1242,6 +1026,23 @@ could not gate that honestly — and the two are queued with exact prices as (EN
   every NO-ARM parent, which do not redefine the state), and the sound predicate is
   BOUNDED rather than quadratic (it stops at the redefining arms) but must still be priced
   against 249 ms with round 788's cached-callee reappearance on top.
+  **ROUND-800 CLOSE — THE ARM IS GATED AND THIS ITEM IS FINISHED**
+  (`docs/perf/implicit-any-attribution.md` §§ 13–18). `spineIanyArgSubtreeMayRead` is the
+  sound predicate: reader set = ARROW / FUNCTION_EXPRESSION / OBJECT_LITERAL, descending
+  the inheriting arms and every no-arm parent, stopping at a nested CALL/NEW, defaulting
+  to `true`, capped at 32 steps (0 hits) and costing **1.87 steps per edge**. Callee
+  resolutions **20,812 → 1,439 (−93.1%)**, arm row 196/190 → 93/96 ms, **HANDLER TOTAL
+  724/707 → 602/617 = Δ 106 ms (0.36%)**, 6.2× the within-arm spread. Round 788's law is
+  ANSWERED, not assumed: `typeOfExpr.distinct` −6.18% against `calls` −4.21%, so 14,813
+  nodes are typed NOWHERE in the compile and the work is deleted rather than moved. Grid
+  46×7/94 both directions, `--partitionCheck 2` EQUIVALENT, suite **13,461 / 0 / 3**.
+  **Two corrections recorded**: the "free" `typed = false` gate does not exist (15 of
+  20,827 — at a reached argument edge the state is ALWAYS the call's own kind=1 frame),
+  and **§ 11's second counter-shape is VACUOUS** — `spineIanyEdge`, the REACH classifier,
+  has no `AsExpression` arm, so nothing below an `as` is walked and only the
+  array-literal counter-shape is real. **NOTHING CONCENTRATED IS LEFT IN THIS HANDLER**:
+  798+799+800 removed 481 ms of 1,031, and the residue is a flat ~200 ns/node floor.
+  Re-derive § 0 before picking the next target.
 
 - [x] **(ORDER.1) `formattingScanner.ts:311` is a PROGRAM-ORDER-dependent FP that round
   776 introduced and round 777 attributed — services / server / harness are 46 -> 47 /

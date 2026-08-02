@@ -361,6 +361,22 @@ therefore took the smaller but CONCENTRATED target — the (IANY.1) residue, who
 506 ms is half one arm (the CALL/NEW argument edge at 7.9 µs × 31,575) — and
 landed a further 55 ms there. `docs/perf/spine-leave-attribution.md` § 7.
 
+**ROUND-800 ADDENDUM — `spineIanyEnterNode` IS CLOSED, AND THE HANDLER IS NOW
+FLAT.** The CALL/NEW argument arm round 799 sized at 249 ms is gated on a bounded
+reader predicate: callee resolutions **20,812 → 1,439 (−93.1%)**, handler total
+**724/707 → 602/617 ms (Δ 106 ms, ~0.36%)**, `typeOfExpr.calls` −4.21% and
+**`distinct` −6.18%** — distinct falling FASTER is the measured answer to round
+788's law, because 14,813 expression nodes are now typed nowhere in the compile,
+i.e. that arm was their only consumer. **Rounds 798+799+800 removed 481 ms of a
+1,031 ms handler and there is no concentration left in it**: the residue is
+`own : every other kind` (~165 ms over 803,896 nodes at ~200 ns — a per-node
+floor), `BinaryExpression parent` (~55 ms over 50,454) and the already-tableswitched
+NO-ARM row (~60 ms over 249,471). Round 800 also corrected round 799's own § 11:
+the no-arm parent kinds are exactly the kinds the REACH classifier `spineIanyEdge`
+lacks an arm for, so nothing below an `as` is walked and only the array-literal
+counter-shape against `rhsCanConsumeFnCtx` is real.
+`docs/perf/implicit-any-attribution.md` §§ 13–18.
+
 ⚠️ The type-system row set is **inflated and incomplete at once**: the
 `getTypeOfExpression` row double counts (737), while round 734 showed the row
 set MISSES the argument-check and callee-resolution code that calls those

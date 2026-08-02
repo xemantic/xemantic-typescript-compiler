@@ -54509,9 +54509,17 @@ interface DataView {
      * conditional / array-literal / `||` `??` `&&` `,` operands) **and through
      * every parent kind with no arm at all**, which does not redefine it —
      * `as`, `!`, `satisfies`, unary, spread, member access, template spans.
-     * **That second set is why `rhsCanConsumeFnCtx` cannot be reused here**
-     * (round 799 § 11): it descends neither those nor array elements, so it
-     * would report "no reader" for `f([{ m(a) {} }])` and `f(<any>{ m(a) {} })`.
+     *
+     * **`rhsCanConsumeFnCtx` cannot be reused here** (round 799 § 11) because it
+     * descends neither of those. Round 800 measured which half of that argument
+     * bites: **`f([{ m(a) {} }])` is a REAL counter-shape** (an ablation that
+     * drops the array descent fails two pins), while **`f(<any>{ m(a) {} })` is
+     * VACUOUS** — the no-arm kinds are exactly the kinds the REACH classifier
+     * [spineIanyEdge] also lacks an arm for, so nothing below an `as` is walked
+     * and there is no reader there at all. The no-arm descents below are
+     * therefore DEAD TODAY and kept deliberately, as insurance for the day
+     * `spineIanyEdge` gains such an arm; `IanyArgGateTest`'s "a no-arm parent is
+     * not walked at all" pin is what will announce that day.
      *
      * It STOPS at a nested CALL/NEW: that node's own arm pushes a `kind = 1`
      * frame over its whole subtree, and if it is UNREACHED so is everything

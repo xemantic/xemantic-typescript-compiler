@@ -355,3 +355,155 @@ of magnitude, exactly as round 733 found. The 4,916 ms of own work belongs to
 **So the choice was by concentration, not by size**: (ii) is ~730 ms with no
 concentration anywhere in it; (i) is 506 ms of which **249 ms is one arm with a
 named mechanism**. (i) wins even though its total is smaller.
+
+---
+
+# ROUND 800 — the 249 ms arm, gated: 93% of its callee resolutions bought nothing, and one of round 799's two counter-shapes was vacuous
+
+*Compiler profile, HEAD `d0720411` + this round. Same instrument, one level
+deeper: the `S_CALL_ARG` arm is now sub-partitioned INSIDE (`A_ARITY` /
+`A_CPGNC` / `A_PRED`) plus a deterministic census. Those three rows are NESTED
+in the `S_CALL_ARG` span, so they inflate it by three boundary pairs per entry —
+identically in both arms, so every before/after read below is like-for-like, and
+only the RELATIVE split of the nested rows is quoted (round 734's rule).*
+
+## 13. What the arm actually spends, at HEAD
+
+| | calls | pre-800 (2 runs) | gated (2 runs) |
+|---|---:|---:|---:|
+| the arm row `S_CALL_ARG` | 31,575 | 196 / 190 ms | **93 / 96 ms** |
+| — of which `calleeParamGivesNoContext` | 20,812 → 1,439 | 110 / 117 ms | **26 / 24 ms** |
+| — of which `contextualFnArityForCallArg` + emit | 1,150 | 2 / 1 ms | 1 / 2 ms |
+| — of which THE PREDICATE (runs in BOTH arms) | 19,677 | 24 / 16 ms | 20 / 23 ms |
+| **handler total** | | **724 / 707 ms** | **602 / 617 ms** |
+
+* **Δ = 106 ms on the HANDLER total** (medians 715.5 → 609.5) against a
+  within-arm spread of 17 / 15 ms — Δ is **6.2×** the larger spread. **≈0.36% of
+  a check-only compile.** Round 798's correction is obeyed: the row Δ (98 ms) is
+  quoted only as the sign check, the enclosing total is the claim.
+* The predicate is priced INSIDE both arms, so the 106 ms is already NET of it.
+* A single `--passTiming` pair agrees: `checkSpine` 21,047.6 → 20,949.4 ms.
+* **No wall-clock A/B**, deliberately: 0.36% is a third of the warm ±1.0% band.
+
+## 14. The census — deterministic, and it decides the round
+
+Reproducing to the unit across all four runs:
+
+| | pre-800 | gated |
+|---|---:|---:|
+| arm entries (reached CALL argument edges) | 20,827 | 20,827 |
+| entries reaching `calleeParamGivesNoContext` | 20,812 | **1,439 (−93.1%)** |
+| …of which a per-CALL repeat of an earlier argument | 4,412 | 22 |
+| entries with `typed = false` (the `&&` short-circuits) | **15** | 0 |
+| predicate verdict "no reader below" | 19,388 of 19,677 | same |
+| predicate steps / cap hits (cap = 32) | **1.87 each / 0** | same |
+
+Two things fall out of the middle rows and neither was expected:
+
+* **The "free" gate does not exist.** Only **15** of 20,827 entries have
+  `typed = false`; at a reached argument edge `spineIanyCtx` is ALWAYS the
+  call's own `kind = 1` frame (reach is monotone, and the call's own arm defines
+  that frame unconditionally), so `callCtx != null && callCtx.kind == 1` is a
+  tautology and `typed` is true essentially always. A gate keyed on the state
+  alone would have skipped 0.07% of the population.
+* **21% of the resolutions were per-call REPEATS** — a k-argument call resolved
+  its callee k times, because `getTypeOfExpression` has no per-node memo. The
+  reader-predicate subsumes that population (repeats fall 4,412 → 22) without a
+  cache, which is the outcome § 0's law would predict for one.
+
+## 15. Round 788's law, answered instead of assumed
+
+The obligation was that the callee type is CACHED, so part of any saving
+reappears in the next asker — round 798 lost 110 of 473 ms exactly that way.
+Here the COST.1 counters say most of it does **not**:
+
+| counter | pre-800 | gated | Δ |
+|---|---:|---:|---:|
+| `typeOfExpr.calls` | 599,880 | 574,636 | **−4.21%** |
+| `typeOfExpr.distinct` | 239,674 | 224,861 | **−6.18%** |
+| `globals.lookups` | 725,348 | 713,194 | −1.68% |
+| `globals.misses` | 709,402 | 697,380 | −1.69% |
+| `narrow.walks` | 17,853 | 17,853 | **+0.00%** |
+| `typeNode.bypassed` | 110,776 | 110,781 | +5 |
+
+**`distinct` falling FASTER than `calls` is the discriminating fact**: 14,813
+expression nodes are now typed **nowhere in the whole compile**, i.e. for them
+this arm was the only consumer and the work is deleted rather than moved. (The
+handler total and `checkSpine` moving together says the same thing from the
+other side.) The +5 on `typeNode.bypassed` is the round-754/778 first-touch
+order effect, three orders of magnitude inside tolerance.
+
+## 16. The predicate
+
+`spineIanyArgSubtreeMayRead`, built to § 11's stated obligation:
+
+* **reader set** = `ArrowFunction` / `FunctionExpression` / `ObjectLiteral`.
+  Every other reader § 11 names (an objlit `MethodDeclaration`, the
+  `PropertyAssignment` edge, an arrow's expression body) sits strictly inside
+  one of those three, so those three ARE the set;
+* **descends** the arms that inherit the state — paren / conditional /
+  array-literal / `||` `??` `&&` `,` operands — plus every no-arm parent;
+* **stops** at a nested CALL/NEW: its own arm pushes a `kind = 1` frame over its
+  whole subtree, and if it is UNREACHED so is everything below it (reach is
+  monotone and every reader is gated on `spineIanyReached`), so no reader below
+  can see our state either way;
+* **defaults to `true`** — an unmodelled kind KEEPS the arm, so the predicate can
+  only ever refuse to skip — and is **bounded**: a 32-step cap answers `true`
+  beyond it (0 hits on the compiler profile), which also removes the deep-`||`
+  chain stack hazard, since the scan is iterative.
+
+Skipping the arm leaves the call's own `kind = 1` state visible below instead of
+this arm's `kind = 0`/null. That is unobservable for the same reason: every
+reader of a `kind = 0` state is one of the three kinds the scan stops at, and the
+INTERMEDIATE arms that would have inherited it (paren, `||`, array) only pass it
+on to those same readers.
+
+## 17. ONE OF ROUND 799's TWO COUNTER-SHAPES IS VACUOUS — and the ablation is how it showed
+
+Fault: the predicate stops descending array elements AND `as` — i.e. exactly
+the `rhsCanConsumeFnCtx` propagation set § 11 falsified. Result: **2 of 20 pins
+fail** — the array-literal pin and the equivalence pin. The `as` pin did **not**
+fail, and the reason is not a weak pin:
+
+```
+declare function loose(o: any): void;
+loose({ run(a) { } });          // TS7006 for `a`
+loose({ run(b) { } } as any);   // NOTHING for `b`
+loose([{ run(c) { } }]);        // TS7006 for `c`
+```
+
+**`spineIanyEdge` — the REACH classifier — has no `AsExpression` arm**, and the
+no-arm kinds of `spineIanyEdgeEnter` are essentially that same set. So nothing
+below an `as` is walked at all: `f(<any>{ m(a) {} })` has no reader to lose, and
+§ 11's second counter-shape proves nothing. The array one is real and is pinned.
+
+The no-arm descents are KEPT anyway — 1.87 steps of scan is not worth trading
+for a soundness coupling to a classifier in another function — and they are
+documented as dead-today insurance, with a pin (`a no-arm parent is not walked
+at all`) that starts counting 2 instead of 1 the day `spineIanyEdge` gains such
+an arm.
+
+## 18. What did NOT work, and what the next agent should know
+
+* **The first probe run crashed on the documented declaration-order trap.**
+  `spineIanyArgScan` was declared beside its consumer ~50k lines down; the whole
+  checker runs inside `init`, so it was null in every pass. NPE on a non-nullable
+  `val`, exactly as CLAUDE.md says. Cost: one build.
+* **The first timing batch was measured on a thrashing box and every row was
+  ~270× too large** (the childless-CALL row read 6,483 ms against its true
+  5–11 ms). The build's own Kotlin daemon was still resident when the runs
+  started — BUILD.1's trap, one round after round 799 recorded it — and a
+  compile took 9.6 minutes instead of 26 seconds. **The tell is not the ratio
+  between arms (which survived) but the ABSOLUTE ns/call against the previous
+  round's table**; the deterministic census was unaffected and is what carried
+  the round. Stop the daemons in the same script, between the build and the runs.
+* **`typed = false` as a free gate is dead** (§ 14) and so is a per-call callee
+  cache as a standalone idea — the predicate already collapses the repeats.
+* **What is left in the handler**: after this round the arm is ~95 ms of a ~610 ms
+  handler. The next-largest rows are `own : every other kind` (≈165 ms over
+  803,896 nodes at ~200 ns — a per-node floor, not a lever), `BinaryExpression
+  parent` (≈55 ms over 50,454) and `NO ARM AT ALL` (≈60 ms over 249,471 at
+  ~240 ns, already tableswitched by round 799). **There is no concentration left
+  in `spineIanyEnterNode`** — three rounds have taken 320 + 55 + 106 = 481 ms out
+  of a 1,031 ms handler, and the residue is flat. The map should be re-derived
+  before the next round spends itself here.
