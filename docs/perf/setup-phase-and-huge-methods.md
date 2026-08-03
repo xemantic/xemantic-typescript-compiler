@@ -1601,3 +1601,179 @@ method preserves order and is safe, ADDING a field is not), and
 `access$checkBigintPropertyNames$emit` **10,339**, which is not the 8-line local
 `emit` its name suggests but the whole per-file body the anonymous walker object
 closes over.
+
+## 18. (JIT.1)(d) — the `Checker` constructor, 11,298 → an entry plus ten helpers
+
+*Round 814.* The cheapest remaining `Checker` target, and the one whose shape
+breaks the pattern the previous seven rounds established.
+
+| function | region of the `init` body | bytecodes |
+|---|---|---:|
+| `Checker.<init>` | the `try`/`catch` boundary, `PassTiming.noteInitStart`/`noteInitEnd`, the two `declarationOnly` branches, ten call sites — **and the class's 494 property initializers** | **5,538** |
+| `initCheckPasses5` | `checkOptionalParamNullishArithmetic` .. `checkCircularClassBaseViaDefaultTypeArg` (67 dispatches) | 804 |
+| `initCheckPasses6` | `checkCircularBaseTypeReferences` .. `checkCallTypeArgCount` (61) | 799 |
+| `initCheckPasses2` | `checkJsDocTypedefIndexSignature` .. `checkDefaultImports` (61) | 792 |
+| `initCheckPasses4` | `checkUninitializedLetCapturedReads` .. `checkDestructuringDefaultTypeMismatches` (63) | 786 |
+| `initCheckPasses3` | `checkNamespaceImportSyntheticDefaultCall` .. `checkCrossNamespaceClassHeritageUBD` (55) | 752 |
+| `initCheckPasses7` | `checkReverseMappedExcessProps` .. `checkConditionalTypeAssignabilityDeferred` (41) | 661 |
+| `initCheckPasses8` | `checkBuiltinIterator` .. `init:tpTargetReturnDedup` (49) | 588 |
+| `initCheckPasses1` | `checkUnusedDeclarations` .. `checkJSDocTypedefTags` (24) | 415 |
+| `initSetupPasses` | the (SETUP.1) prologue, `checkLibOption` .. `init:buildFileLocalTypeMaps` (14) | 185 |
+| `initDeclarationOnlyPasses` | the body of `if (declarationOnly)` (1) | 12 |
+
+Census **8 → 7**, and the `Checker` list is down to **two**. The eleven sum to
+**11,332 against the monolith's 11,298** — the split ADDED 34 bytecodes (the ten
+call sites), an eleventh confirmation that a bytecode count is a THRESHOLD
+predicate and not a cost model.
+
+### 18.1 Two things about this target that are not true of any earlier one
+
+**(a) The frequency argument is DEGENERATE, and pretending otherwise would be a
+lie.** Every round from 807 to 813 chose what stays in the entry by asking which
+regions every input pays for — a measured partition (807–811) or a structural
+guard (812, 813). A constructor runs **exactly once per compile and every input
+pays all of it**. Nothing here is cold, nothing can be "moved because it is
+rarely reached", and the only cut criterion left is SIZE. The eight checking runs
+are therefore contiguous slices of roughly equal code-line count, and the doc says
+so rather than dressing an arbitrary cut as an argument.
+
+**(b) 5,538 of the entry's bytecodes are not the pass sequence at all.** They are
+the class's **494 property initializers**, which a JVM constructor cannot delegate
+to a helper: `private val x = …` compiles into `<init>` by definition. So the
+whole ~437-dispatch sequence is worth only ~5,760 bytecodes (~13 each — the
+`pass("name") { … }` lambdas are separate methods, because `pass` is deliberately
+non-inline), and the constructor was over the limit chiefly because the two
+halves happened to sum past it. The consequence for a future agent: **the entry's
+headroom, 2,462 bytecodes, is consumed by ADDING FIELDS, not by adding passes** —
+a new `pass(…)` line lands in a helper, a new `private val` lands in `<init>`. At
+~11 bytecodes per field that is room for roughly 200 more.
+
+A corollary worth stating because it bounds the prize honestly: the constructor
+runs once, and its inline work was never the loop-bearing part (the loops all live
+inside `pass` lambdas, i.e. in their own methods, already JIT-eligible). **This
+split therefore buys no wall time and none was measured.** It lands for the
+threshold and for sub-item (f), the `--fail-over 0` gate.
+
+### 18.2 The shape, and why no helper needs a signal
+
+`scripts/init_split_analyze.py` (round 811's length-preserving stripper plus a
+depth walk seeded at the `init {` line) reports:
+
+* **443 body-level statements**, of which `return`/`break`/`continue`: **zero**.
+  A constructor body cannot contain a bare `return` that skips the rest, so no
+  helper needs an (f)-style `Boolean` protocol and none was invented.
+* **no loops at body level** — every `for` in those 2,094 lines is inside a
+  `pass(…)` lambda, so nothing binds a `continue` across a region boundary
+  (round 812's whole shape problem is absent here).
+* **exactly two body-level locals**: `preAugmentationGlobalsKeys` (declared and
+  read only inside the setup prologue) and `shouldCheckDefiniteAssignment`
+  (declared at the top of run 1, read 400 lines later — still inside run 1, which
+  is **why the first boundary sits where it does**). So **cross-boundary values:
+  none**, and every helper is parameterless — which the verifier asserts rather
+  than assumes.
+
+Nine of the ten regions move with **dedent 0**: the `if (!declarationOnly) { … }`
+body is written at the same indentation as the `try` body, which is exactly a
+private method's body indentation. Only the `declarationOnly` branch dedents (4).
+
+### 18.3 Equivalence, measured (round 805's five checks)
+
+`scripts/init_split_{analyze,apply,verify}.py`, all green:
+
+1. all ten moved runs re-extracted from the NEW file and compared against HEAD:
+   **ten contiguous, in-order runs** (133 / 29 / 572 / 218 / 231 / 241 / 229 /
+   181 / 147 / 80 lines), identical modulo the uniform dedent;
+2. the `init` block **reconstructed** from HEAD with the regions replaced by their
+   call sites: **IDENTICAL, 43 lines**;
+3. accounting closes exactly — HEAD `init` 2,094 = kept 33 + moved 2,061; new
+   entry 43 = kept 33 + 10 call lines;
+4. `return`/`break`/`continue` enumerated on both sides: 15 and 15 (all of them
+   inside `pass` lambdas; **0 at body level**);
+5. free variables per region — none, re-asserted as "every helper signature is
+   `()`" plus "the ten call sites appear in the regions' source order", which is
+   the property this target's correctness actually reduces to.
+
+### 18.4 Discrimination — the seams a pure sequence still has
+
+`CtorSplitTest` (13 pins) plus `HugeMethodLimitTest` (+3). **All 13 pins were
+validated on the UNSPLIT binary first — 13 ran, 0 failed.**
+
+A split with no cross-boundary values and no control flow has only two things it
+can get wrong — the ORDER of the runs and which side of the `declarationOnly`
+guard they sit on — and each was ablated ALONE, on its own build, with the pin
+count confirmed to have RUN every time.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| `initCheckPasses8()` moved to the HEAD of the block (run 8 no longer last) | **1** — **exactly** its seam pin | **DISCRIMINATED, sharply** |
+| `initCheckPasses1()` hoisted OUT of `if (!declarationOnly)` | **2** | **DISCRIMINATED** |
+| the `initCheckPasses5()` call deleted | **1** — its arm pin | **DISCRIMINATED** |
+
+* **ORDER.** `checkBuiltinIterator` is the FIRST pass of run 8 and RETRACTS every
+  TS2339 of a file matching its gate — a diagnostic `checkSpine` (run 1) emitted.
+  It can only do that while run 8 runs after run 1: reorder them and the
+  retraction runs against a list that does not yet hold the diagnostic, so the
+  TS2339 survives. The pin has its own positive control (the same source WITHOUT
+  the gate string must report the TS2339), so it is not a vacuous `none { … }` —
+  which matters here because the pin it replaced failed exactly that way (§ 18.5).
+* **THE `declarationOnly` GUARD.** The eight checking runs stay inside
+  `if (!declarationOnly)`. The pin compiles an `emitDeclarationOnly` project and
+  asserts that a name-resolution error is still reported (the declarationOnly run
+  ran) while an unused local is NOT (run 1 did not). The second failure under this
+  ablation is a knock-on and is expected: with run 1 also running, the TS2304 is
+  reported TWICE, so the arm pin's `count == 1` fails alongside the seam pin.
+* **THE ARM PINS BIND TO THEIR RUN.** Deleting one call site (run 5) fails
+  **exactly one** pin — the TS2456 circular-type-alias arm — and nothing else, so
+  the one-arm-per-helper set really does localise a dropped call.
+
+The full arm set is one diagnostic only a pass in that run produces: TS6046 /
+TS2304-under-emitDeclarationOnly / TS6133 / TS2307 / TS1185 / TS1108 / TS2456 /
+TS2729 / TS7022 / the retraction.
+
+### 18.5 What did not work
+
+* **The first choice of run-8 arm pin, `applyDomLibSuggestionRewrite`, is
+  unreachable from a hand-written source.** It rewrites a TS2339 whose receiver is
+  an EMPTY user-declared DOM stub (`interface Element {}`) into TS2812 — but our
+  checker emits **no diagnostic at all** for a property read on a member-less
+  interface, on four shapes probed (`Element`/`Node`/`HTMLDivElement`, with and
+  without `@lib`). The pin failed on the UNSPLIT binary, which is the cheap order
+  working exactly as round 813 described; the seam pin written beside it
+  (`none { it.code == 2339 }`) passed **vacuously** on an empty diagnostic list,
+  which is the failure mode a positive control exists to catch. Both were replaced
+  by the `checkBuiltinIterator` retraction pair above.
+* A foreground `./gradlew` invocation is not viable in this harness: the tool's
+  2-minute ceiling kills the shell mid-task. Every Gradle run this round was
+  `nohup setsid … &` with a `.done` marker.
+* The first `compileKotlinJvm` of the round died after 11m21s with BUILD.1's
+  `Not enough memory to run compilation`, and the third ablation build died after
+  4m58s with the Kotlin daemon's `GC overhead limit exceeded` — the same failure
+  in its two costumes, four rounds running. Its only tell in an ablation is
+  **`PINS RAN 0`**, which is indistinguishable from a clean ablation; recovery is
+  `./gradlew --stop` plus a graceful bracket-pattern
+  `pkill -f 'KotlinCompile[D]aemon'` (never `-9`), after which the same build
+  succeeded in ~1m30s.
+
+### 18.6 Gate
+
+Census re-measured at HEAD on a rebuilt binary first — **8** over the limit,
+`Checker.<init>` **11,298**, reproducing the round-813 handoff exactly; the
+after-number measured the same way on the binary built from the split source —
+**7**. Suite **13,671 → 13,687 / 0 failures / 3 skipped** (+16: 13 `CtorSplitTest`
++ 3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first.
+8-profile grid diffed set-for-set BOTH directions against a purpose-built
+pre-split binary, class dirs confirmed to differ (`javap` finds 447
+`init*Passes` entries in one and 0 in the other), every capture checked non-empty
+and non-truncated — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+eight**; `--partitionCheck 2` **EQUIVALENT — 46**; `cost_gate.py` **all 20
+counters +0.00%**; no `w:` and no `e:` lines in the compiles that produced the
+binaries. **No wall A/B, deliberately** — see § 18.1(b).
+
+**The `Checker` list is now ONE, plus one odd one.**
+`tryInferSingleTypeParamFromArgs` **11,930** — two 300–400-line
+`for (i in params.indices)` bodies plus a 132-line constraint block, with mutable
+locals crossing every boundary, so it is the first target in the family that
+needs a real data-flow answer rather than a contiguity argument — and
+`access$checkBigintPropertyNames$emit` **10,339**, which is not the 8-line local
+`emit` its name suggests but the whole per-file body the anonymous walker object
+closes over.
