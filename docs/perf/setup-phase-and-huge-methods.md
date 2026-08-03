@@ -2617,3 +2617,207 @@ answer (mutable locals cross every candidate boundary) and the second is a stati
 initializer whose content is the class's object-level constants, shrinkable only
 by moving those initializers into helper methods it calls — and priceable by no
 A/B in this repo, since it runs once, at class load.
+
+---
+
+## 25. (JIT.1)(e) — `Checker.<clinit>`, 10,339 → 3,156 plus seven top-level builders
+
+Round 820. The last shape in this arc that no contiguity argument settles, and
+the only one whose target is not a function anybody wrote: a **static
+initializer**.
+
+### 25.1 What is actually in a Kotlin `<clinit>`, and what is not
+
+`Checker`'s companion object declares **276** members. Only **50** of them cost
+`<clinit>` anything at all, and the reason is a detail of the class-file format
+rather than of Kotlin: a `private const val` of a primitive or `String` type is
+emitted as a `static final` field carrying a **`ConstantValue` attribute**, which
+the JVM installs without executing a single bytecode. The ~200 `const val`
+dispatch tags in that companion (`URES_EDGE_ROOT`, `DA_STMT_LEAK`, `TAV_CONT`, …)
+are therefore free.
+
+All 10,339 bytecodes are the **collection** constants — `setOf`/`mapOf` over
+hundreds of string literals, each element an `ldc` + `aastore` pair into a
+`vararg` array. `scripts/clinit_split_analyze.py` attributes them per property
+through the `LineNumberTable`, exactly as `method_bytes_by_line.py` does for a
+normal method, but matching `javap`'s `  static {};` rendering — which has **no
+parameter list**, and is why round 802's census never started a method there
+(§ 21.2).
+
+| property | HEAD lines | measured | builder |
+|---|---|---:|---|
+| `KNOWN_GLOBALS` | 50484–50652 | **2,992** | `ckConstKnownGlobals` |
+| `DOM_GLOBAL_NAMES` | 50676–50747 | **1,368** | `ckConstDomGlobalNames` |
+| `KNOWN_GENERIC_BUILTINS` | 50795–50835 | **787** | `ckConstKnownGenericBuiltins` |
+| `LIB_MIN_TARGET` (the `mapOf` only) | 50863–50930 | **671** | `ckConstLibMinTargetBase` |
+| `VALUE_ONLY_GLOBALS` | 50755–50783 | **553** | `ckConstValueOnlyGlobals` |
+| `KEYWORD_IDENTIFIERS` | 50435–50459 | **497** | `ckConstKeywordIdentifiers` |
+| `NODE_BUILTIN_MODULES` | 50212–50223 | **371** | `ckConstNodeBuiltinModules` |
+
+7,239 of the 10,339 moved. The 43 remaining collection constants are all under
+140 bytecodes each and were left alone: the entry lands at **3,156**, i.e. 39% of
+the limit, and moving more would buy margin nobody needs.
+
+**The frequency argument, honestly: there is none.** A static initializer runs
+ONCE, at class load, so this is unmeasurable by every A/B in this repo and by
+`cost_gate.py` (which measured **all 20 counters +0.00%**). It lands for the
+(JIT.1)(f) ratchet and for nothing else. Saying so is the point: the JIT cliff
+this arc exists to close is a *whole-run interpreted* penalty, and a method that
+executes once does not have one.
+
+### 25.2 Why the builders are TOP-LEVEL, and the one constraint that decides what can move
+
+A companion `private fun` compiles to an **instance method on
+`Checker$Companion`**, which `<clinit>` would have to reach through the very
+static `Companion` field it is in the middle of installing. A top-level private
+function compiles to a static method on the file class `CheckerKt`, so each call
+site is a plain `invokestatic` with no receiver and no initialisation order to
+reason about. (Kotlin adds a 3-byte `access$ckConst*` bridge per builder, because
+the caller is a different class — 21 bytes for all seven.)
+
+The price of that choice is the **one structural constraint on this split**: a
+Kotlin `private` companion member is NOT visible to a top-level function in the
+same file. Six of the seven regions read nothing at all; `LIB_MIN_TARGET`'s
+initializer is
+
+    mapOf( … ) + TYPED_ARRAY_NAMES.flatMap { ta -> … }.toMap()
+
+and `TYPED_ARRAY_NAMES` is such a member — so **only the leading `mapOf(…)`
+literal moved and the tail stayed in the companion**. That is not a compromise to
+apologise for, it is the seam this round's arm A6 ablates.
+
+### 25.3 The parts sum to LESS — a fourth measurement, and a mechanism that is neither of the two known ones
+
+    entry            10,339 -> 3,156
+    seven builders                7,078
+    access$ bridges                  21
+    ------------------------------------
+    total            10,339 -> 10,255   (84 fewer, 0.81%)
+
+Round 816's mechanism (boxed `var` capture into a non-inline lambda) cannot apply
+— a `<clinit>` of constant literals captures nothing. Round 817's (2-byte
+`aload N` → 1-byte `aload_N`) cannot apply either — **a static initializer of
+`putstatic`s has no locals at all**. So the third and fourth rounds in a row
+produce a different combination, and here the residue is small and is the
+array-build bookkeeping around each `setOf`/`mapOf` call, not a systematic
+addressing win. **"The parts sum to less" is still not a law; measure yours, and
+do not carry a mechanism across shapes.**
+
+### 25.4 Equivalence, measured (round 805's five checks, in the shape a hoist takes)
+
+`scripts/clinit_split_{analyze,apply,verify}.py`, all green:
+
+ 1. **VERBATIM** — each builder body re-extracted from the NEW file and
+    re-indented by 8 is byte-identical to HEAD's text inside the property, and
+    each builder's declared return type and `setOf(`/`mapOf(` head are HEAD's;
+ 2. **RECONSTRUCTION** — un-applying the split reproduces HEAD's `Checker.kt`
+    **byte for byte (10,258,399 chars)**, which is also what proves nothing else
+    in the file moved;
+ 3. **PARTITION** — 416 removed lines, no overlap, `416 == 402 moved + 7
+    declaration + 7 closing`;
+ 4. **CONTROL FLOW** — a literal has none, so the check is that it HAS none (0
+    `return`/`continue`/`break`/`if`/`when`/`for`/`while` tokens per region) plus
+    the **element count** of each literal (top-level commas at the builder's own
+    depth): 52 / 70 / 389 / 186 / 78 / 39 / 50, identical on both sides. A hoist
+    that silently dropped a member would survive a diff of the wrong region and
+    fail this;
+ 5. **FREE VARIABLES** — no moved region references a companion member or `this`.
+    The census this runs against is bounded to the `companion object` block, and
+    it carries a control in **both directions**: it must contain `KNOWN_GLOBALS`
+    and must NOT contain the stdlib infix `to`. Its first run failed exactly that
+    control — an unbounded indent-8 scan of a 176k-line file collects 3,212
+    "members" and reports `to` as one of them;
+ 6. **CALLED EXACTLY ONCE** — each builder name occurs exactly twice in the file
+    (declaration + one call site), and every property's declaration head is
+    unchanged from HEAD.
+
+### 25.5 Discrimination — and the substitution that fires THREE pins, not one
+
+Pins validated on the UNSPLIT binary first: **66 ran, exactly 5 failed and they
+are the 5 size/ratchet pins**, which must fail there. So all 10 behavioural pins
+describe HEAD. On the split binary: **66 ran, 0 failed.**
+
+Each arm is ONE mistake, alone, on its own build, with the failure count
+PREDICTED before the run.
+
+| arm | mistake | predicted | actual |
+|---|---|---:|---:|
+| A1 | `KNOWN_GLOBALS` gets `ckConstDomGlobalNames()` | 1 | **2** |
+| A2 | `VALUE_ONLY_GLOBALS` gets `ckConstKeywordIdentifiers()` | 1 | **1** ✔ |
+| A3 | `KEYWORD_IDENTIFIERS` gets `ckConstValueOnlyGlobals()` | 1 | **2** |
+| A4 | `NODE_BUILTIN_MODULES` gets `ckConstKeywordIdentifiers()` | 1 | **1** ✔ |
+| A5 | `DOM_GLOBAL_NAMES` gets `ckConstNodeBuiltinModules()` | 1 | **1** ✔ |
+| A6 | the `+ TYPED_ARRAY_NAMES.flatMap { … }` TAIL dropped | 1 | **1** ✔ |
+| A7 | **NEGATIVE CONTROL** — the seven builder DECLARATIONS reordered | 0 | **0** ✔ |
+
+Every arm reports `RAN 66`, so no arm is a vacuous pass. **Five of the six
+mistakes type-check** — the compiler reports `0 e:` for A1–A5 — which is the
+whole reason these pins exist.
+
+**BOTH UNDER-PREDICTIONS HAVE THE SAME CAUSE, AND IT IS A RULE FOR THE NEXT
+SWAP-STYLE ABLATION.** The extra failure in A1 and in A3 is the same pin, *value
+global used as a type is TS2749*, whose subject is `parseInt` — and `parseInt` is
+a member of **both** sets those two arms substitute. Its consumer,
+`isValueOnlyTypeRef`, reads `name in KNOWN_GLOBALS && name !in
+VALUE_ONLY_GLOBALS`, so `KNOWN_GLOBALS` is UPSTREAM of it: A1 replaces
+`KNOWN_GLOBALS` with a set that does not hold `parseInt` (`DOM_GLOBAL_NAMES` is a
+strict 186-name subset of the 385, and `parseInt` is one of the 199 dropped), so
+the name stops resolving at all and the pin's diagnostic changes code rather than
+disappearing. **When arms swap sets, predict from the PIN SUBJECT's membership in
+the set being substituted IN, not only from which constant the pin is "about".**
+
+**Two seams stated rather than ablated.** `ckConstKnownGenericBuiltins` returns
+`Map<String, Pair<Int, String>>` and `ckConstLibMinTargetBase`
+`Map<String, ScriptTarget>`, so no substitution among the seven type-checks for
+either — the only mistake reachable at those two call sites is a hand-edited
+body, which the VERBATIM and element-count checks (§ 25.4) already refuse. Their
+pins (TS2314's arity + display name, TS2550's `es2022` message) are live and
+green, but nothing in this round put them in front of a wrong binary.
+
+**WHAT DID NOT WORK.** Two of the seven arms — A3 and A7 — first came back
+`RAN 0` with `e: java.lang.OutOfMemoryError: GC overhead limit exceeded` in
+`compileKotlinJvm`: seven successive full `Checker.kt` compiles in one script,
+with no `--stop` between them, walk straight into BUILD.1's 5 GB ceiling because
+an idle Kotlin daemon keeps its heap. **A vacuous arm is not a result** — both
+were re-run with `./gradlew --stop` plus a bracket-pattern
+`pkill -f 'KotlinCompile[D]aemon'` and an 8-second settle before each build, and
+only then did they report. Any batch of more than ~2 arms needs that hygiene
+in the loop, not just at the end.
+
+### 25.6 Gate
+
+Suite **13,778 → 13,791 / 0 failures / 3 skipped** (+13: 10
+`ClinitConstantHoistTest` + 3 `HugeMethodLimitTest` size pins), whole results dir
+wiped first, counted with the python XML parser. 8-profile grid diffed set-for-set
+BOTH directions against a purpose-built pre-split binary, identical direct `java`
+command, absolute class dirs, class dirs confirmed to differ (**14 `ckConst`
+methods in `CheckerKt` vs 0**), every capture non-empty and free of an `and N more
+error` marker — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
+`--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
++0.00%**. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:` and 0
+`e:`**. `huge_methods.py --fail-over 1` exits 0.
+
+**No wall A/B was run and none should be** — see § 25.1.
+
+### 25.7 (JIT.1) IS AT ONE, AND THE LAST ONE IS THE ONE NOBODY HAS SOLVED
+
+`Checker.tryInferSingleTypeParamFromArgs` **11,930** is the whole remaining
+census. This round measured it rather than attempting it, and the measurement is
+why it was not attempted:
+
+* its body is **1,064 lines** (115503–116566 at HEAD), and its bytecodes are
+  **flat** — bucketed into 25-line windows the largest window is **449** of
+  11,930, i.e. there is no region a contiguity argument can lift out;
+* **2,643 of the 11,930 (22%) are INLINED stdlib bodies** carrying synthetic line
+  numbers past the end of the file, so they are charged to their call sites and
+  spread further still;
+* the shape is a parameter-gate loop with whole-function `return`s, then
+  `for (tp in orderedTps) { … }` holding essentially everything, with
+  `candidates` / `tpSawAnyArg` / `mapperPairs` mutated across every candidate
+  boundary. **That is a DATA-FLOW problem** — per-region read/write sets and
+  liveness — not the contiguity problem every other target in this arc was.
+
+**A measurement trap for whoever takes it:** `Checker.kt` exceeds 65,536 lines
+and the `LineNumberTable` is a `u2`, so this function's line numbers WRAP — they
+are reported as 49967–51030 and must have 65,536 added back. Un-corrected they
+land inside the `companion object` (49544–51796) and look entirely plausible.

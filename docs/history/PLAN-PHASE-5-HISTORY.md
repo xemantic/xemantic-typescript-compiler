@@ -1,4 +1,85 @@
-**Round 808 (2026-08-02) — (JIT.1)(c) LANDED FOR `checkVarDeclAssignabilityCore`: 19,296
+**Round 810 (2026-08-03) — (JIT.1)(h) LANDED FOR `checkReturnAssignabilityCore`: 9,743
+BYTECODES -> AN ENTRY AT 4,052 PLUS TWO `cra*` HELPERS. CENSUS 12 -> 11. THE ROUND'S
+TRANSFERABLE RESULT IS A MIRROR OF ROUND 807's: **A SPLIT THAT LANDS JUST *UNDER* THE
+LIMIT IS ALSO ONE EXTRACTION SHORT** — AND A SEAM WHOSE ONLY DOWNSTREAM CONSUMER IS A
+LEGACY DOUBLE-CHECK CANNOT BE DISCRIMINATED BY ANY SHAPE.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **12** over the
+  limit, `checkReturnAssignabilityCore` **9,743** — the round-809 handoff reproduced exactly.
+- **THE TARGET WAS CHOSEN FOR ITS COMMITTED PARTITION, not for its size.** Round 809 handed
+  over two candidates: `checkSingleCallExpressionTypesCore` (15,567, bigger, but its
+  boundaries would have to be derived and it carries the round-793 `ccetPrologueMayFire`
+  constraint) and this one (9,743, with a ready-made plan in `CtaSections` **level C**).
+  The standing preference for an already-committed partition decided it. **ccet remains the
+  next target and is untouched.**
+- **THE SPLIT.** Entry **4,052** plus `craGuardWalkers` **3,706** (`C_WALKERS`) and
+  `craElaborateReturnMismatch` **1,851** (`C_ELAB`). The three sum to **9,609 against
+  9,743** — a SEVENTH confirmation that a bytecode count is a THRESHOLD predicate and not a
+  cost model.
+- **WHICH REGIONS MOVE WAS ALSO ALREADY MEASURED.** Level C (round 755) prices every row,
+  and the two cheapest are the two largest blocks: `C_ELAB`, the 218-line TS2322
+  elaboration, is **1 reach in a whole compiler self-compile** (the profile produces no
+  TS2322 at a return at all), and `C_WALKERS` is the FP firewall the same partition
+  classifies as the dedicated-walker layer. Everything level C prices as ENGINE work stays
+  inline: the SOURCE type (219 ms), flow narrowing (115), `checkConditionalReturnBranches`
+  (46), `canUseTypeEngine` + `checkTypeRelatedTo` (39), the TARGET type (20).
+- **THE MARGIN LESSON, WHICH IS THIS ROUND'S MAIN CARRY.** `C_ELAB` alone took the entry to
+  **7,803** — under the limit, and the census duly read 11. That is not a margin: 197
+  bytecodes is one edit, and the failure would land on somebody else's commit as a red
+  guard pin. Round 807 recorded "a split that lands JUST OVER is one extraction short";
+  the mirror is now recorded too. A second region took the entry to 4,052.
+- **SHAPE.** `C_WALKERS` is a run of guard blocks each ending in a bare `return`, so it
+  returns `Boolean` and the entry replays it as `if (...) return`; its 20 `return@run`
+  labels never crossed the boundary. `C_ELAB` ended in an UNCONDITIONAL `return`, so it is
+  `Unit` and its call site returns after it. The `return` -> `return true` rewrite was
+  applied by locating matches on the STRING/COMMENT-STRIPPED line and splicing at that
+  offset in the RAW line, asserting nothing but whitespace follows the token — so a
+  `return` in a comment or a string cannot be rewritten and a two-token line fails loudly.
+- **CROSS-BOUNDARY VALUES: NONE — computed, not assumed.** All 20 `val`/`var` declarations
+  were listed with their brace depth and intersected per region. The only local either
+  region declares that outlives a statement is `effObjTarget`, declared and dead inside
+  `C_WALKERS`. One pair constrains the partition and both its rows stay in the entry:
+  `savedContextual`/`useCtx`, set in `C_CTX` and read in `C_SRCTYPE`.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** two contiguous,
+  in-order runs of 281 and 217 lines re-extracted and compared verbatim against HEAD (the
+  return rewrite undone first); the entry **reconstructed** from HEAD with both regions
+  replaced by their call sites — **IDENTICAL at 344 lines**; accounting closes exactly
+  (826 = 328 kept + 281 + 217); every `return` enumerated (53 = 33 bare + 20 `@run`; the new
+  entry has 16 bare = 14 kept + 2 at the call sites); free variables computed per region.
+- **DISCRIMINATION: 1 OF 2, two separate builds, control first (13 pins ran, 0 failed), and
+  every ablation confirmed to have RUN 13 pins.** Ignoring `craGuardWalkers`' `true` fails
+  **3 pins** — and NOT the one written as its seam: the excess-property pin stays green
+  because an object literal with an EXCESS property still relates structurally, so the
+  relation adds nothing; the three that fail are the property-MISMATCH pins. Dropping the
+  entry's `return` after `craElaborateReturnMismatch` fails **0**.
+- **THE UNDISCRIMINATED SEAM WAS RE-ATTEMPTED, NOT MERELY RECORDED.** The suspicion after
+  the first run was that the legacy string tail could not TYPE the sources the arm pins
+  used, so the TS2739 pin was rewritten from a `declare const src: {}` source to a
+  PARAMETER source (`function f(src: S): P`) — a shape `varTypes` holds, whose engine
+  emission is a TS2739 the string path would follow with a TS2322, a difference no dedup
+  could hide. **0 pins failed again.** So the finding is about the FUNCTION: the only thing
+  after that return is `C_STRTAIL`, a legacy double-check that emits for nothing the engine
+  has already rejected — which is round 755's measurement seen from the other side (85% of
+  invocations exit inside the string tail and it is worth 15 ms). The return is a redundant
+  guard on today's code; the pin written for it is **renamed** to say what it actually
+  tests, per the standing rule.
+- **WHAT DID NOT WORK, twice each.** (1) The first nesting pin — a returned
+  `function inner(): P { return {a: "s"} }` — asserts a diagnostic that does not exist on a
+  WORKING build (that inner return is not checked in that position at all), i.e. it pinned
+  an open gap; replaced by a returned ARROW with a block body, which is checked. Round
+  765's rule applies: an open gap belongs in a session note, never in a pin. (2) TWO builds
+  died with the round-808 Kotlin-daemon `GC overhead limit exceeded` — one incremental
+  build of the split itself and one of the PRE-SPLIT grid binary — costing ~15 minutes;
+  both recovered by `./gradlew --stop` + a graceful bracket-pattern Kotlin-daemon kill.
+- Suite 13,596 -> **13,612 / 0 failures / 3 skipped** (13 `CraSplitTest` + 3
+  `HugeMethodLimitTest`); 8-profile grid diffed BOTH directions against a purpose-built
+  pre-split binary, with the two class dirs confirmed to DIFFER (`javap` finds 3 `cra*`
+  entries in one, 0 in the other) — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+  eight**; `--partitionCheck 2` **EQUIVALENT — 46**; cost gate **all 20 counters +0.00%**;
+  build warning-clean (`^w:` and `^e:` both 0). **No wall A/B, deliberately** — the family
+  is bounded four times over. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 14.
+
 BYTECODES (2.4x HotSpot's LIMIT) -> AN ENTRY AT 3,535 PLUS SEVEN `cvda*` HELPERS. CENSUS
 14 -> 13. THE SHAPE IS A STRAIGHT-LINE STATEMENT SEQUENCE — ROUND 804's RECIPE, WITH THE
 COMMITTED `CtaSections` LEVEL-B MARKERS DOING THE CHOOSING.**
@@ -111,6 +192,8 @@ COMMITTED `CtaSections` LEVEL-B MARKERS DOING THE CHOOSING.**
   themselves conditioned on the relation verdict, so three of five did not.
 
 
+
+**Round 808 (2026-08-02) — (JIT.1)(c) LANDED FOR `checkVarDeclAssignabilityCore`: 19,296
 
 **Round 807 (2026-08-02) — (JIT.1)(f) LANDED: `checkArgumentsAgainstSignatureCore`, THE
 LARGEST `Checker` METHOD LEFT (23,890 BYTECODES, 3.0x HotSpot's LIMIT), IS AN ENTRY AT

@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 820 (2026-08-03) — (JIT.1)(e) LANDED FOR `Checker.<clinit>`: 10,339 BYTECODES ->
+3,156 PLUS SEVEN TOP-LEVEL `ckConst*` BUILDERS. CENSUS 2 -> 1. THE LAST SHAPE NOBODY IN
+THIS ARC HAD SPLIT — A STATIC INITIALIZER.**
+
+- **Census re-measured at HEAD on a rebuilt binary first** (law 1): **2**, named exactly as
+  the round-819 handoff left them. After: **1**, measured the same way on the split binary.
+  `Checker.<clinit>` **10,339 -> 3,156**.
+- **WHAT IS ACTUALLY IN A `<clinit>`, AND WHAT IS FREE.** The companion declares **276**
+  members and only **50** cost anything: a Kotlin `private const val` of a primitive/`String`
+  carries a **`ConstantValue` attribute** and executes NO bytecode, so the ~200 dispatch tags
+  (`URES_EDGE_ROOT`, `DA_STMT_LEAK`, `TAV_CONT`, …) are free. All 10,339 are `setOf`/`mapOf`
+  literals. Regions MEASURED before the edit with the new `scripts/clinit_split_analyze.py`
+  (which matches `javap`'s `  static {};` rendering — the thing round 817 found the census
+  regex could not): `KNOWN_GLOBALS` **2,992** / `DOM_GLOBAL_NAMES` **1,368** /
+  `KNOWN_GENERIC_BUILTINS` **787** / `LIB_MIN_TARGET` (the `mapOf` only) **671** /
+  `VALUE_ONLY_GLOBALS` **553** / `KEYWORD_IDENTIFIERS` **497** / `NODE_BUILTIN_MODULES`
+  **371** = 7,239 of 10,339 moved. The other 43 collection constants are all under 140.
+- **THE FREQUENCY ARGUMENT IS THAT THERE ISN'T ONE, AND SAYING SO IS THE POINT.** A static
+  initializer runs ONCE, at class load: no A/B in this repo can price it and `cost_gate.py`
+  measured all 20 counters +0.00%. It lands for the (JIT.1)(f) ratchet. The JIT cliff this
+  arc exists to close is a WHOLE-RUN interpreted penalty, and a method that executes once
+  does not have one.
+- **WHY TOP-LEVEL, AND THE ONE CONSTRAINT THAT DECIDES WHAT CAN MOVE.** A companion
+  `private fun` is an instance method on `Checker$Companion`, which `<clinit>` would have to
+  reach through the very static field it is installing; a top-level `private fun` is a plain
+  `invokestatic` on `CheckerKt` (Kotlin adds a 3-byte `access$` bridge per builder, 21 bytes
+  in all). The price: **a `private` companion member is INVISIBLE to a top-level function in
+  the same file** — so `LIB_MIN_TARGET`, whose initializer ends `+ TYPED_ARRAY_NAMES.flatMap
+  { … }.toMap()`, moved only its leading `mapOf(…)` and kept the tail in the companion. That
+  boundary is arm A6.
+- **THE PARTS SUM TO LESS AGAIN — 84 FEWER (0.81%) — AND NEITHER KNOWN MECHANISM APPLIES.**
+  3,156 + 7,078 + 21 = 10,255 vs 10,339. Round 816's boxing needs a captured `var` (there is
+  none) and round 817's slot addressing needs LOCALS (**a `<clinit>` of `putstatic`s has
+  none**). Fourth round, fourth combination: **"the parts sum to less" is still not a law.**
+- **EQUIVALENCE (round 805's five checks, in the shape a HOIST takes).** Bodies re-extracted
+  from the NEW file at dedent 8 are byte-identical to HEAD's; the file **RECONSTRUCTS from
+  HEAD byte for byte (10,258,399 chars)**; PARTITION `416 removed == 402 moved + 7 decl + 7
+  close`; control flow is checked to be ABSENT (0 tokens per region) plus the literal
+  ELEMENT COUNT per region (52/70/389/186/78/39/50) identical on both sides; free variables
+  — no region reads a companion member or `this`; and a sixth check, each builder referenced
+  exactly twice (declaration + one call site) with the property's declaration head unchanged.
+- **DISCRIMINATION — pins validated on the UNSPLIT binary first (66 ran, exactly 5 failed and
+  they are the 5 size/ratchet pins); 66 ran / 0 failed on the split. Each mistake alone, count
+  PREDICTED first:** A1 `KNOWN_GLOBALS` <- DOM builder predicted 1, **2**; A2 `VALUE_ONLY` <-
+  keyword builder predicted 1, **1**; A3 `KEYWORD_IDENTIFIERS` <- value-only builder predicted
+  1, **2**; A4 `NODE_BUILTIN_MODULES` <- keyword builder predicted 1, **1**; A5
+  `DOM_GLOBAL_NAMES` <- node-modules builder predicted 1, **1**; A6 the `TYPED_ARRAY_NAMES`
+  TAIL dropped predicted 1, **1**; A7 NEGATIVE CONTROL (the seven builder DECLARATIONS
+  reordered) predicted 0, **0**. Every arm `RAN 66`; **five of the six mistakes type-check
+  (0 `e:`)**, which is exactly why the pins exist.
+- **BOTH UNDER-PREDICTIONS HAVE ONE CAUSE, AND IT IS A RULE.** The extra failure in A1 and A3
+  is the same pin (TS2749 on `parseInt`), because `parseInt` is a member of BOTH sets those
+  arms substitute and `KNOWN_GLOBALS` is UPSTREAM of `isValueOnlyTypeRef`. **Predict from the
+  PIN SUBJECT's membership in the set being substituted IN, not from which constant the pin is
+  "about".** Two seams are STATED rather than ablated: the two `Map`-returning builders have
+  unique types, so no substitution among the seven type-checks at their call sites.
+- **WHAT DID NOT WORK.** A3 and A7 first returned `RAN 0` — `OutOfMemoryError: GC overhead
+  limit exceeded` in `compileKotlinJvm`. Seven successive full `Checker.kt` compiles in one
+  script with no `--stop` between them walk into BUILD.1's ceiling, because an idle Kotlin
+  daemon keeps its heap. **A vacuous arm is not a result**: both were re-run with `--stop` +
+  a bracket-pattern `pkill` + an 8 s settle before each build. Any batch over ~2 arms needs
+  that hygiene INSIDE the loop.
+- **GATE.** Suite **13,778 -> 13,791 / 0 failures / 3 skipped** (+13). 8-profile grid BOTH
+  directions vs a purpose-built pre-split binary, class dirs confirmed to differ (14 `ckConst`
+  methods vs 0), every capture non-empty — **46/46/46/46/46/46/46/94, 0 added and 0 removed**.
+  `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**.
+  `--rerun-tasks` **0 `w:` / 0 `e:`**. `huge_methods.py --fail-over 1` exits 0.
+- **(JIT.1) IS AT ONE, AND THIS ROUND MEASURED THE LAST TARGET RATHER THAN ATTEMPTING IT.**
+  `tryInferSingleTypeParamFromArgs` is **1,064 lines** and its bytecodes are FLAT — the
+  largest 25-line window is **449** of 11,930 — with **22% (2,643) INLINED stdlib bodies**
+  charged to their call sites, and its bulk is one `for (tp in orderedTps)` loop mutating
+  `candidates`/`tpSawAnyArg`/`mapperPairs` across every candidate boundary. It needs a
+  per-region read/write-set and liveness answer, not a contiguity one. **MEASUREMENT TRAP
+  for whoever takes it: `Checker.kt` exceeds 65,536 lines and the `LineNumberTable` is a
+  `u2`, so this function's lines WRAP** — they report as 49967-51030 and must have 65,536
+  added back; un-corrected they land inside the `companion object` and look plausible.
+- **STILL OPEN, NOT TAKEN: round 819's `tcjsMoveDetachedHeaderComments` counted ablation.**
+  It did not fit beside seven ablation builds plus the full gate. The design stands: it needs
+  a counter at the region's EMITTING branch (not at its entry), inert by default, read after
+  a full corpus run — a corpus zero bounds frequency, never existence.
+- Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 25.
+
 **Round 819 (2026-08-03) — (JIT.1)(e) LANDED FOR `Transformer.transformToCommonJS`:
 28,991 BYTECODES -> AN ENTRY AT 2,944 PLUS NINETEEN `tcjs*` HELPERS. CENSUS 3 -> 2, AND
 EVERY `Transformer` ENTRY IS GONE. THE NEW SHAPE: A MOVED REGION THAT `continue`s THE
@@ -1012,89 +1094,6 @@ FOR DERIVING THEM" — AND ITS PARTITION HAS BEEN IN THE SOURCE SINCE ROUND 734.
   one edit under the limit.
 
 
-**Round 810 (2026-08-03) — (JIT.1)(h) LANDED FOR `checkReturnAssignabilityCore`: 9,743
-BYTECODES -> AN ENTRY AT 4,052 PLUS TWO `cra*` HELPERS. CENSUS 12 -> 11. THE ROUND'S
-TRANSFERABLE RESULT IS A MIRROR OF ROUND 807's: **A SPLIT THAT LANDS JUST *UNDER* THE
-LIMIT IS ALSO ONE EXTRACTION SHORT** — AND A SEAM WHOSE ONLY DOWNSTREAM CONSUMER IS A
-LEGACY DOUBLE-CHECK CANNOT BE DISCRIMINATED BY ANY SHAPE.**
-
-- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **12** over the
-  limit, `checkReturnAssignabilityCore` **9,743** — the round-809 handoff reproduced exactly.
-- **THE TARGET WAS CHOSEN FOR ITS COMMITTED PARTITION, not for its size.** Round 809 handed
-  over two candidates: `checkSingleCallExpressionTypesCore` (15,567, bigger, but its
-  boundaries would have to be derived and it carries the round-793 `ccetPrologueMayFire`
-  constraint) and this one (9,743, with a ready-made plan in `CtaSections` **level C**).
-  The standing preference for an already-committed partition decided it. **ccet remains the
-  next target and is untouched.**
-- **THE SPLIT.** Entry **4,052** plus `craGuardWalkers` **3,706** (`C_WALKERS`) and
-  `craElaborateReturnMismatch` **1,851** (`C_ELAB`). The three sum to **9,609 against
-  9,743** — a SEVENTH confirmation that a bytecode count is a THRESHOLD predicate and not a
-  cost model.
-- **WHICH REGIONS MOVE WAS ALSO ALREADY MEASURED.** Level C (round 755) prices every row,
-  and the two cheapest are the two largest blocks: `C_ELAB`, the 218-line TS2322
-  elaboration, is **1 reach in a whole compiler self-compile** (the profile produces no
-  TS2322 at a return at all), and `C_WALKERS` is the FP firewall the same partition
-  classifies as the dedicated-walker layer. Everything level C prices as ENGINE work stays
-  inline: the SOURCE type (219 ms), flow narrowing (115), `checkConditionalReturnBranches`
-  (46), `canUseTypeEngine` + `checkTypeRelatedTo` (39), the TARGET type (20).
-- **THE MARGIN LESSON, WHICH IS THIS ROUND'S MAIN CARRY.** `C_ELAB` alone took the entry to
-  **7,803** — under the limit, and the census duly read 11. That is not a margin: 197
-  bytecodes is one edit, and the failure would land on somebody else's commit as a red
-  guard pin. Round 807 recorded "a split that lands JUST OVER is one extraction short";
-  the mirror is now recorded too. A second region took the entry to 4,052.
-- **SHAPE.** `C_WALKERS` is a run of guard blocks each ending in a bare `return`, so it
-  returns `Boolean` and the entry replays it as `if (...) return`; its 20 `return@run`
-  labels never crossed the boundary. `C_ELAB` ended in an UNCONDITIONAL `return`, so it is
-  `Unit` and its call site returns after it. The `return` -> `return true` rewrite was
-  applied by locating matches on the STRING/COMMENT-STRIPPED line and splicing at that
-  offset in the RAW line, asserting nothing but whitespace follows the token — so a
-  `return` in a comment or a string cannot be rewritten and a two-token line fails loudly.
-- **CROSS-BOUNDARY VALUES: NONE — computed, not assumed.** All 20 `val`/`var` declarations
-  were listed with their brace depth and intersected per region. The only local either
-  region declares that outlives a statement is `effObjTarget`, declared and dead inside
-  `C_WALKERS`. One pair constrains the partition and both its rows stay in the entry:
-  `savedContextual`/`useCtx`, set in `C_CTX` and read in `C_SRCTYPE`.
-- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** two contiguous,
-  in-order runs of 281 and 217 lines re-extracted and compared verbatim against HEAD (the
-  return rewrite undone first); the entry **reconstructed** from HEAD with both regions
-  replaced by their call sites — **IDENTICAL at 344 lines**; accounting closes exactly
-  (826 = 328 kept + 281 + 217); every `return` enumerated (53 = 33 bare + 20 `@run`; the new
-  entry has 16 bare = 14 kept + 2 at the call sites); free variables computed per region.
-- **DISCRIMINATION: 1 OF 2, two separate builds, control first (13 pins ran, 0 failed), and
-  every ablation confirmed to have RUN 13 pins.** Ignoring `craGuardWalkers`' `true` fails
-  **3 pins** — and NOT the one written as its seam: the excess-property pin stays green
-  because an object literal with an EXCESS property still relates structurally, so the
-  relation adds nothing; the three that fail are the property-MISMATCH pins. Dropping the
-  entry's `return` after `craElaborateReturnMismatch` fails **0**.
-- **THE UNDISCRIMINATED SEAM WAS RE-ATTEMPTED, NOT MERELY RECORDED.** The suspicion after
-  the first run was that the legacy string tail could not TYPE the sources the arm pins
-  used, so the TS2739 pin was rewritten from a `declare const src: {}` source to a
-  PARAMETER source (`function f(src: S): P`) — a shape `varTypes` holds, whose engine
-  emission is a TS2739 the string path would follow with a TS2322, a difference no dedup
-  could hide. **0 pins failed again.** So the finding is about the FUNCTION: the only thing
-  after that return is `C_STRTAIL`, a legacy double-check that emits for nothing the engine
-  has already rejected — which is round 755's measurement seen from the other side (85% of
-  invocations exit inside the string tail and it is worth 15 ms). The return is a redundant
-  guard on today's code; the pin written for it is **renamed** to say what it actually
-  tests, per the standing rule.
-- **WHAT DID NOT WORK, twice each.** (1) The first nesting pin — a returned
-  `function inner(): P { return {a: "s"} }` — asserts a diagnostic that does not exist on a
-  WORKING build (that inner return is not checked in that position at all), i.e. it pinned
-  an open gap; replaced by a returned ARROW with a block body, which is checked. Round
-  765's rule applies: an open gap belongs in a session note, never in a pin. (2) TWO builds
-  died with the round-808 Kotlin-daemon `GC overhead limit exceeded` — one incremental
-  build of the split itself and one of the PRE-SPLIT grid binary — costing ~15 minutes;
-  both recovered by `./gradlew --stop` + a graceful bracket-pattern Kotlin-daemon kill.
-- Suite 13,596 -> **13,612 / 0 failures / 3 skipped** (13 `CraSplitTest` + 3
-  `HugeMethodLimitTest`); 8-profile grid diffed BOTH directions against a purpose-built
-  pre-split binary, with the two class dirs confirmed to DIFFER (`javap` finds 3 `cra*`
-  entries in one, 0 in the other) — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
-  eight**; `--partitionCheck 2` **EQUIVALENT — 46**; cost gate **all 20 counters +0.00%**;
-  build warning-clean (`^w:` and `^e:` both 0). **No wall A/B, deliberately** — the family
-  is bounded four times over. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md` § 14.
-
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 ---
@@ -1280,6 +1279,26 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     THRESHOLD and the (f) gate. Their behavioural gate is the corpus EMIT baselines — 993
     of the 5,692 `compiles to JavaScript matching` subtests carry a CommonJS-shaped
     baseline. Full derivations: `docs/perf/setup-phase-and-huge-methods.md` §§ 19–20, 22–24.
+  - [x] **(g) DONE round 820 — `Checker.<clinit>` 10,339 → 3,156 plus seven top-level
+    `ckConst*` builders; census 2 → 1.** The last shape in the arc no contiguity argument
+    settles: a STATIC INITIALIZER. Only **50** of the companion's 276 members cost it
+    anything — a `private const val` of a primitive/`String` carries a `ConstantValue`
+    attribute and executes no bytecode — so all 10,339 are `setOf`/`mapOf` literals, and it
+    shrinks only by hoisting them into functions it calls. **TOP-LEVEL functions**
+    (`CheckerKt`, an `invokestatic`), not companion ones, which would have to be reached
+    through the very static field `<clinit>` is installing; the price is that **a `private`
+    companion member is invisible to a top-level function in the same file**, so
+    `LIB_MIN_TARGET` moved only its leading `mapOf(…)` and kept the
+    `+ TYPED_ARRAY_NAMES.flatMap { … }` tail. **The frequency argument is that there is
+    none** — a static initializer runs once, at class load, so nothing here is priceable
+    and no wall A/B was run. The risk this shape carries instead is a **WRONG-SET
+    SUBSTITUTION**: five builders return `Set<String>`, so a mixed-up call site type-checks
+    (5 of the 6 ablation arms compiled with 0 `e:`) and silently changes which names the
+    checker believes exist. Discrimination 7 arms, 4 at the predicted count, 2
+    UNDER-predicted for one shared reason (the TS2749 pin's subject `parseInt` is a member
+    of both substituted sets, and `KNOWN_GLOBALS` is upstream of its consumer), plus a
+    negative control at its predicted 0. Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 25.
   - [x] **(f) DONE round 807 — `checkArgumentsAgainstSignatureCore` 23,890 → an entry at
     7,173 plus THIRTEEN `caas*` helpers (456–2,792), one per contiguous run of the
     committed `ArgSections` partition; census 15 → 14.** **First split of a LOOP BODY, and
