@@ -20,6 +20,111 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 813 (2026-08-03) — (JIT.1)(d) LANDED FOR `checkIndexSigInStatement`: 10,928
+BYTECODES -> AN ENTRY AT 1,010 PLUS SEVEN `cis*` HELPERS. CENSUS 9 -> 8, AND THE `Checker`
+LIST IS DOWN TO TWO PLUS ONE ODD ONE. FOUR SEAMS, FOUR DISCRIMINATED — BUT THE FIRST ONE
+ONLY AFTER A PURPOSE-BUILT RETRY THAT REPLACED A BLIND PIN.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **9** over the
+  limit, `checkIndexSigInStatement` **10,928** — the round-812 handoff reproduced exactly.
+  The after-number was measured the same way on the binary built from the split source: **8**.
+- **THE SPLIT.** Entry **1,010** plus `cisCheckNamedInterfaceIndexValueConflict` **2,680**,
+  `cisCheckAnonIndexValueConflict` **1,684**, `cisCheckNumericMethodsVsNumberIndex` **1,623**,
+  `cisFindStringIndexSig` **1,504**, `cisCheckPropsVsStringIndex` **1,021**,
+  `cisCheckMethodsVsPrimitiveStringIndex` **822** and
+  `cisCheckNumericNamePropsVsNumberIndex` **359**. The eight sum to **10,703 against
+  10,928** — a TENTH confirmation that a bytecode count is a THRESHOLD predicate and not a
+  cost model. Headroom **6,990**, round 810's lesson with room to spare.
+- **WHAT STAYS IN THE ENTRY IS WHAT EVERY INPUT PAYS — a GUARD again, not a probe (this
+  target has no partition either), but a sharper one than round 812's because the guards
+  are statement-KIND tests.** The entry keeps the `TypeAliasDeclaration` and
+  `VariableStatement` branches (both `return`), the `when` whose `else` arm **`return`s for
+  every statement kind that is not a class, an interface or a module**, the
+  `ModuleDeclaration` recursion, the number- and string-index-signature lookups, the two
+  guards and the "no usable string index type" early return — i.e. exactly what a class or
+  interface WITHOUT a string index signature pays. Every moved region is behind one of
+  those. As in round 812 this BOUNDS the moved population rather than pricing it, and that
+  is said in the doc rather than implied.
+- **THE SHAPE: NO RETURN SIGNALS AT ALL.** All 6 bare `return`s of the 543-line body are in
+  the kept dispatch head; the only `return` tokens inside any moved region are three in a
+  local `fun` that moves whole, and all 32 `continue`s are inside loops their own region
+  owns (brace-matching census, not indentation). So unlike (f)/(g)/(h)/(c) no helper needs
+  a `Boolean` protocol. **The ONE cross-boundary value** is the string index signature —
+  HEAD seeded a `var` from the type's OWN members and let a base-class walk overwrite it —
+  and `cisFindStringIndexSig` RETURNS it (round 804's rule; a field would need round 791's
+  save/restore, and this function recurses through `ModuleDeclaration`).
+- **ONE STRUCTURAL DETAIL WORTH COPYING.** Two regions hold a `when (stmt)` that is
+  exhaustive only because of an enclosing `if (stmt is ClassDeclaration || stmt is
+  InterfaceDeclaration)`. Moving the `if` STATEMENT (condition included) instead of its
+  body keeps both verbatim and needs no invented `else` arm — and costs nothing, because
+  at that point in the entry the condition is already true by construction.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green;
+  `scripts/indexsig_split_{analyze,apply,verify}.py`):** seven contiguous in-order runs
+  (38/32/57/126/46/51/95 lines) re-extracted from the NEW file and compared verbatim
+  against HEAD; the entry **reconstructed** from HEAD — **IDENTICAL at 105 lines**;
+  accounting closing exactly (543 = 98 kept + 445 moved; entry 105 = 98 + 7 call lines);
+  every `return` and `continue` enumerated (6/32 on both sides); free variables per region,
+  re-asserted against the signatures and the call sites. **A free-variable scan must not
+  count `.members` as a read of the local `members`** — an unqualified `\bmembers\b` claims
+  three regions need a parameter they never use, and an unused parameter is a warning here.
+- **PINS VALIDATED ON THE UNSPLIT BINARY FIRST — 16 ran, 0 failed — which is the cheap
+  order and caught TWO WRONG PINS before any code moved.** The type-alias branch `return`s
+  BEFORE the string-index machinery, so `type T = { [s: string]: number; p: string }`
+  reports no TS2411 at all (its own product is 17.159's TS1337, which needs the alias's
+  type-parameter names); and TS2374 fires once per duplicate SIGNATURE, not once per type.
+- **DISCRIMINATION 4 OF 4, each mistake alone on its own build, control first (49 pins ran,
+  0 failed), every run's pin count confirmed.** `cisFindStringIndexSig` returning only the
+  OWN signature -> **1** pin; the entry passing `null` for `numberIndexSig` -> **exactly 1**;
+  passing `false` for `stringIndexTypeIsPrimitive` -> **2**; dropping the entry's
+  `if (stringIndexTypeIsPrimitive)` guard -> **2**. The last two fail through round 812's
+  mechanism unchanged — the mistake ADDS a diagnostic, so what sees it is a `none { … }`
+  assertion and a `count == 1` assertion, never a count pin on the arm's own code.
+- **THE ROUND'S TRANSFERABLE RESULT: A ZERO WAS A BLIND PIN, NOT A REDUNDANT GUARD, AND THE
+  DIFF FOUND THE SHAPE.** The seam pin first written for the returned signature (an
+  interface extending a class with `[s: string]: number`) stayed GREEN on the ablated
+  binary — a sibling pass reports the same TS2411 for a PRIMITIVE inherited index type.
+  Instead of recording the seam undiscriminated, the ablated binary was DIFFED against the
+  committed one over eight inherited-index shapes; **exactly one line differs** — a method
+  checked against an inherited CALLABLE string index value type. That is now the seam pin
+  (it fails on the ablated binary and on nothing else, 1 of 17) and the old pin is renamed
+  as an arm pin carrying a comment about what it cannot see. Rounds 810/811 recorded zeros
+  after retries that failed; this is the first retry in the family that SUCCEEDED, and the
+  instrument that made it cheap was a whole-file differential rather than a guessed shape.
+- **WHAT DID NOT WORK.** (1) The blind seam pin above. (2) One ablation build died with the
+  Kotlin daemon's `GC overhead limit exceeded` after 5m51s, whose only tell is
+  `pins ran = 0`; a plain rebuild succeeded in 2m22s and the ablation then reported
+  normally — round 808's rule again. (3) A first probe run reported the ablated arm as
+  producing NOTHING, which reads exactly like a crashed binary: the two arms' classpaths
+  were one absolute and one RELATIVE, and the probe `cd`s into the scratch project.
+- **GATE.** Suite **13,651 -> 13,671 / 0 failures / 3 skipped** (+20: 17 `CisSplitTest` +
+  3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first. 8-profile
+  grid diffed set-for-set BOTH directions against a purpose-built pre-split binary, class
+  dirs confirmed to differ (15 `cis*` entries vs 0), every capture non-empty and
+  non-truncated — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
+  `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No
+  `w:` and no `e:` lines in any compile. **No wall A/B, deliberately** — the family is
+  bounded four times over. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 17.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **8 over the limit and the `Checker` list is down
+  to two plus one odd one**: `tryInferSingleTypeParamFromArgs` **11,930** (the hard one —
+  two 300-400 line `for (i in params.indices)` bodies plus a 132-line constraint block,
+  with mutable locals `candidates`/`tpSawAnyArg` crossing every boundary), the `Checker`
+  **constructor 11,298** (contiguous runs of ~417 `pass("init:…")` dispatches, no returns,
+  no loops — moving statements OUT of `init` into a private method preserves order and is
+  safe, ADDING a field is not), and `access$checkBigintPropertyNames$emit` **10,339**,
+  which is NOT the 8-line local `emit` its name suggests but the whole
+  `checkBigintPropertyNames` per-file body the anonymous walker object closes over, so it
+  is split by restructuring that walker. **Neither of the two has a partition** (checked
+  round 812). The constructor is the cheapest remaining and its seams are unusual: with no
+  returns and no cross-boundary locals there may be nothing to ablate, in which case say so
+  and let the suite be the pin. The non-`Checker` tail is unchanged:
+  `Transformer.transformToCommonJS` **28,991**, `TypeScriptCompiler.compileParsedCore`
+  **21,535**, `Transformer.transformClassBody` **16,233**, `CompilerOptionsKt.applyDirective`
+  **13,694**, `Transformer.transform` **8,934** — the three Transformer ones are sub-item
+  **(e)**, sized at 0.14-0.25%. **(f) — wiring `huge_methods.py --fail-over 0` into the
+  round gate — becomes runnable once (d)/(e) land.**
+
+
 **Round 812 (2026-08-03) — (JIT.1)(d) LANDED FOR `checkDuplicateDeclarations`: 12,935
 BYTECODES -> AN ENTRY AT 2,801 PLUS FIVE `cdd*` HELPERS. CENSUS 10 -> 9. FIRST TARGET IN
 THE ARC WITH NO COMMITTED PARTITION OF ANY KIND — AND THE FREQUENCY ARGUMENT CAME FROM A
@@ -823,102 +928,6 @@ EQUIVALENT — 46; cost gate all 20 counters +0.00%.**
   binary before any before/after is quoted.
 
 
-**Round 804 (2026-08-02) — (JIT.1)(b) LANDED: THE BIGGEST METHOD IN THE COMPILER —
-`checkMemberAccessMissingCore`, 46,567 BYTECODES, 5.8× HotSpot's `HugeMethodLimit` — IS ONE
-ENTRY PLUS TEN CONTIGUOUS-SECTION HELPERS, ALL UNDER THE LIMIT. CENSUS 18 → 17. AND THE
-WALL-CLOCK PRIZE IS HONESTLY ZERO: +0.23%, B WINS 2/5, PER-PAIR SPREAD 31× THE MEDIAN DELTA,
-DRIVER VERDICT NOISE-DOMINATED — WHICH IS EXACTLY WHERE ROUND 803's OWN FALSIFIER SAID IT
-WOULD LAND. Suite 13,493 → 13,514 / 0 / 3; grid 46×7/94 with 0 added and 0 removed BOTH
-directions; `--partitionCheck 2` EQUIVALENT; cost gate all 20 counters +0.00%.**
-
-- **THE BASELINE WAS RE-MEASURED AT HEAD FIRST, ON A BUILD, NOT FROM A RECORD.** The
-  pre-split tree was rebuilt into its own class dir and censused: **18 over the limit,
-  `checkMemberAccessMissingCore` 46,567** — round 802's numbers reproduced exactly. Round
-  776's law says a recorded figure is a claim about a build; this round owns the build.
-- **THE SPLIT.** Eleven functions along round 789's already-committed level-R boundaries
-  (the `CpaSections.atR` markers), each holding ONE contiguous run of the original body:
-  entry `checkMemberAccessMissingCore` **6,425** (`R_PRE`..`R_IDENT` + the `objectType`
-  head), `cmamCheckUnionReceiverNarrowing` 3,550, `cmamCheckIdentSymbolValueGates` 2,901,
-  `cmamGeneralReceiverType` 2,782, `cmamCheckLiteralAndNewReceiver` 2,708,
-  `cmamCheckCallAndAccessReceiver` 2,596, `cmamEmitMissingProperty` 2,472,
-  `cmamCheckResolvedObjectType` 2,358, `cmamCheckIdentSymbolTypeGates` 1,385,
-  `cmamCheckNonIdentifierReceiver` 1,342, `cmamCheckCastAndNamespaceReceiver` 611.
-  **The eleven sum to 29,130 against the monolith's 46,567** — the same source compiles to
-  37% LESS bytecode once it is not one method, which is a reminder that a bytecode count is
-  a THRESHOLD predicate and not a cost model.
-- **THE MOVE IS MECHANICAL AND THE EQUIVALENCE IS A MEASUREMENT.** All 1,918 moved lines
-  were extracted by script and checked back against HEAD: each of the **16 regions appears
-  in the new file as a CONTIGUOUS, IN-ORDER run**, identical modulo indentation and the
-  return-signal rewrite; the accounting closes exactly (1,918 moved + 1 hoisted + 16
-  brace/scaffold lines = the 1,935-line original body). What makes the rewrite exact is a
-  property established by ENUMERATION rather than by eye: **all 99 bare `return`s in that
-  function are whole-function returns** — every other `return` in the range is a `return@run`
-  or sits inside the local `fun memberHasIt` — so "bare `return` at end of line" is a sound
-  selector for the signal to convert.
-- **THE ONE VALUE THAT CROSSED A SECTION BOUNDARY IS RETURNED, NOT STASHED.** The
-  display-type override is assigned in the general receiver-type path and read by the
-  emission tail. It comes back as the second half of a pair. A `Checker` field would have
-  needed round 791's save/restore, and the argument that "the outer write happens last" is
-  NOT available here — the RHS of those assignments re-enters the checker. ≤18,317
-  allocations per compile, which round 801 already measured as nothing. **Round 791's
-  invariant therefore survives BY CONSTRUCTION**: no new mutable state, so the body still
-  only appends to `diagnostics`; round 792's whole-function pre-gate is untouched.
-- **THE PRIZE, MEASURED THE SAME WAY ROUND 803 MEASURED ITS OWN, AND IT IS NOT THERE.**
-  Monolith vs split, two class dirs, no flags, 5 interleaved pairs, box idle: **A 24.753 s /
-  B 24.809 s, Δ +56 ms = +0.23%, B wins 2/5**, deltas −671 / +56 / +189 / +28 / −232.
-  **The five deltas span 860 ms against a 28 ms median delta — 31×, where round 803's spanned
-  0.33× — and the driver's verdict is NOISE-DOMINATED.** Arm sds 1.54% / 0.82%. Reported as
-  measured; no second batch was run to hunt for a friendlier number.
-- **THIS IS THE NUMBER ROUND 803's FALSIFIER PREDICTED, WHICH IS WHY IT IS WORTH MORE THAN A
-  WIN WOULD HAVE BEEN.** After (a) landed, `-XX:-DontCompileHugeMethods` on the split binary
-  read +0.08%, 3/5, NOISE-DOMINATED — the instrument that returned 4/4-all-negative on the
-  monolith had stopped returning a signal. That BOUNDED (b)–(e) on this profile, and (b) has
-  now come in at the bound. **`forEachChild` was special**: it is on the path of every
-  traversal in the compiler, whereas this function runs 67,258 times — a large invocation
-  count and a small share of the interpreter's total work. **The remaining reason to land
-  it is the THRESHOLD, not the wall**: a method over the limit is PERMANENTLY uncompilable,
-  so its cost cannot improve with load, input size or JVM version, and (f)'s gate keeps that
-  property away from the biggest method in the compiler for zero behaviour change.
-- **THE PINS, AND BOTH ABLATIONS.** 21 new: **`CmamSplitTest`** (18) pins one display per
-  section — the display is what distinguishes the sections from each other — plus two SEAMS,
-  and **`HugeMethodLimitTest`** (+3) reads `Checker`'s compiled `Code` attribute lengths.
-  **Ablation A = the monolith class file**: none of the ten part names exist and the core
-  reads 46,567, so all three size pins fail. **Ablation B = the two mistakes a mechanical
-  split actually makes** — the display-type override dropped on the floor, and an emitting
-  section's return signal computed and ignored — built and run AFTER the harness was
-  committed (round 789's law): **exactly the two SEAM pins fail and no per-section pin does**,
-  which is the sharpest available statement that the two classes pin different things.
-- **WHAT DID NOT WORK — four process failures, three of them mine and one recurring.**
-  (1) The whole-program non-vacuity pin asserted 16 TS2339 by counting the fixtures and
-  forgetting that one of them yields the enum's TS2551 — one red test, restated at 15/1/16
-  with the measured values. (2) The measuring script's PREFLIGHT — added in round 802 to
-  catch a mid-rebuild classpath — invoked `MainKt` **with no arguments in the repo root**,
-  where it starts crawling the repo as a project; the A/B stage hung for an hour behind it
-  and was killed with an empty `ab.txt`. A preflight must be cheaper than the thing it
-  guards. (3) The grid stage computed its diff from `$W/grid-$p-MONO` while writing
-  `$W/grid-$p-MONO.txt`, so it printed `added=0 removed=0` from FILES THAT DID NOT EXIST —
-  a vacuous green that looked exactly like a clean grid; recomputed from the saved outputs.
-  (4) `pkill -f "compiler.MainKt"` killed the invoking shell, the CLAUDE.md self-match trap,
-  one round after the same file warns about it; the bracket form worked.
-- **GATE.** Suite **13,493 → 13,514 / 0 failures / 3 skipped** (+21 pins; whole results dir
-  wiped, counted with the python XML parser). 8-profile grid diffed set-for-set BOTH
-  directions against the MONOLITH binary: **46/46/46/46/46/46/46/94, 0 added and 0 removed
-  on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
-  +0.00%, no rebaseline** — a pure split moves no counter, and that is the claim being
-  verified. Build warning-clean. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md` § 5.
-- **FOR THE NEXT AGENT: (JIT.1)(c), and read the prize discipline first.** Two rounds have
-  now measured the (JIT.1) family: (a) −3.93% for the traversal primitive, (b) NOISE for the
-  biggest method. **Do not expect (c)–(e) to pay in wall time on this profile** — round 803's
-  falsifier already bounded them. Land them for the threshold and the gate, keep each to one
-  method per commit, and use the round-803/804 recipe verbatim: contiguous ranges, a
-  script-driven move verified by re-extraction, and the hottest path left in the entry. The
-  cheapest remaining candidate is `checkPropertyAccessInExpr` (9,062, barely over);
-  the largest is `checkArgumentsAgainstSignatureCore` (23,890), whose section partition is
-  committed in `docs/perf/argument-check-attribution.md`. **(e), the emit-mode Transformer
-  methods, is the one place a wall gain is still plausible and unmeasured** — every A/B in
-  this arc is `--noEmit` and therefore blind to them, while the published `bench-3way.sh`
-  ratio is emit-mode on all three compilers.
 
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
@@ -1065,11 +1074,32 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     chosen by frequency (`MODULE_DECLARATION` plus the two trailing blocks). Equivalence
     measured by round 805's five checks, all green. Pins `CcetSpineEnterSplitTest` (10) and
     `HugeMethodLimitTest` (+3). **Honest limit: the trailing-blocks seam is NOT
-    discriminated** — see the round-806 note. **The remaining (d) tail after round 812:**
+    discriminated** — see the round-806 note. **The remaining (d) tail after round 813:**
     `tryInferSingleTypeParamFromArgs` 11,930, the `Checker` constructor 11,298,
-    `checkIndexSigInStatement` 10,928, `access$checkBigintPropertyNames$emit` 10,339
+    `access$checkBigintPropertyNames$emit` 10,339
     (`checkDuplicateDeclarations` 12,935 went at round 812;
+    `checkIndexSigInStatement` 10,928 at round 813;
     `checkReturnAssignabilityCore` 9,743 at round 810).
+    **ROUND 813 — `checkIndexSigInStatement` 10,928 → an entry at 1,010 plus SEVEN `cis*`
+    helpers (359–2,680); census 9 → 8.** Second target with no committed partition, and the
+    guard argument is sharper than round 812's because the guards are statement-KIND tests:
+    the entry keeps the type-alias and variable-statement branches, the `when` whose `else`
+    arm `return`s for every kind that is not a class/interface/module, the module recursion,
+    the two index-signature lookups and the "no usable string index type" early return —
+    every moved region sits behind one of those. **NO region contains a whole-function
+    `return` and no `continue` escapes its region, so no helper needs a return signal at
+    all**; the ONE cross-boundary value (the string index signature, a `var` HEAD's
+    base-class walk mutated) is RETURNED. Moving each `if` STATEMENT rather than its body
+    keeps two `when (stmt)`s exhaustive without an invented `else`, and costs nothing —
+    their condition is already true by construction at that point. Equivalence by round
+    805's five checks, all green (entry reconstruction IDENTICAL at 105 lines). Pins
+    `CisSplitTest` (17) + `HugeMethodLimitTest` (+3). **Discrimination 4 of 4 — but the
+    first only after a PURPOSE-BUILT RETRY**: the seam pin first written for the returned
+    signature is BLIND (a sibling pass reports the same TS2411 for a primitive inherited
+    index type), and diffing the ablated binary against the committed one over eight
+    inherited-index shapes found the ONE line that is uniquely ours — a method against an
+    inherited CALLABLE index value type. Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 17.
   - [x] **(f) DONE round 807 — `checkArgumentsAgainstSignatureCore` 23,890 → an entry at
     7,173 plus THIRTEEN `caas*` helpers (456–2,792), one per contiguous run of the
     committed `ArgSections` partition; census 15 → 14.** **First split of a LOOP BODY, and

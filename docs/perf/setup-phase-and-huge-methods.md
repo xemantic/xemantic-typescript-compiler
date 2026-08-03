@@ -1431,3 +1431,173 @@ added and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
 three compiles. **No wall A/B, deliberately** — the family is bounded four times
 over (§§ 4.2, 5.3, 7 and round 804) and this lands for the threshold and the (f)
 gate.
+
+## 17. (JIT.1)(d) — `checkIndexSigInStatement`, 10,928 → an entry plus seven helpers
+
+*Round 813.* The second target with **no committed partition of any kind** (round
+812 checked all four remaining `Checker` targets and found none), and the one the
+handoff called the easiest of them: a straight sequence of self-contained blocks
+whose only cross-boundary value is a `var` one block mutates.
+
+| function | region of the body | bytecodes |
+|---|---|---:|
+| `checkIndexSigInStatement` | the dispatch head, the two index-signature lookups, the guards, the early `return`s | **1,010** |
+| `cisCheckNamedInterfaceIndexValueConflict` | B98.r128b's TS2413 + B272's primitive pair | 2,680 |
+| `cisCheckAnonIndexValueConflict` | B98.r20's TS2413 for anonymous index values | 1,684 |
+| `cisCheckNumericMethodsVsNumberIndex` | B272's TS2411 for numeric-named methods | 1,623 |
+| `cisFindStringIndexSig` | the own-then-inherited `[s: string]: T` lookup | 1,504 |
+| `cisCheckPropsVsStringIndex` | the general TS2411 property loop | 1,021 |
+| `cisCheckMethodsVsPrimitiveStringIndex` | 16.4ez's TS2411 for methods vs a primitive index | 822 |
+| `cisCheckNumericNamePropsVsNumberIndex` | 17.191's numeric-name property loop | 359 |
+
+Census **9 → 8**. The eight sum to **10,703 against the monolith's 10,928** — a
+tenth confirmation that a bytecode count is a THRESHOLD predicate and not a cost
+model (only round 804's 46,567 → 29,130 ever shrank). The entry keeps **6,990
+bytecodes of headroom**, which is round 810's lesson applied with room to spare.
+
+### 17.1 What stays in the entry is what EVERY input pays — a guard, not a probe
+
+With no partition to read, the frequency argument is structural, and here it is
+sharper than round 812's because the guards are *kind* tests on the statement:
+
+* the entry keeps the `TypeAliasDeclaration` branch and the `VariableStatement`
+  branch, both of which `return`;
+* it keeps the `when` that decides whether the statement has members at all —
+  **every other statement kind `return`s in its `else` arm**, so the entire rest
+  of the function is behind "this statement is a class or an interface";
+* it keeps the `ModuleDeclaration` recursion, the `numberIndexSig` and
+  `stringIndexSig` lookups (whose results two and three helpers read), the
+  `numberIndexType != null` guard, the `stringIndexTypeIsPrimitive` guard, and
+  the early `return` for "no usable string index type" — **which is what every
+  class or interface WITHOUT a string index signature pays and nothing more**;
+* every moved region is behind one of those.
+
+Like round 812 this BOUNDS the moved population rather than pricing it, and the
+same caveat applies: it is a weaker instrument than rounds 807–811's measured
+partitions. It is also decisive in the same way — no measurement can make a
+moved region run more often than its guard admits.
+
+### 17.2 The shape, and the one value that crosses
+
+The analysis (`scripts/indexsig_split_analyze.py`, round 811's length-preserving
+stripper plus round 812's brace-matching `continue` census) reports, per region:
+
+* **no region contains a whole-function `return`.** All 6 bare `return`s in the
+  543-line body are in the kept dispatch head; the only other `return` tokens in
+  any moved region are three inside `fun nonEmptyUserIface`, a local function that
+  moves whole. So — unlike (f), (g), (h) and (c) — **no helper needs a return
+  signal at all**, and the split introduces no `Boolean` protocol.
+* **no `continue` escapes its region**: all 32 are inside loops the region owns.
+* **exactly one local crosses a boundary** — the string index signature. HEAD
+  declared it `var`, seeded it from the type's OWN members and let a base-class
+  walk overwrite it; `cisFindStringIndexSig` RETURNS it instead, per round 804's
+  rule (a `Checker` field would need round 791's save/restore, and this function
+  recurses through `ModuleDeclaration`).
+
+Two smaller boundaries are values the entry computes and a helper reads:
+`numberIndexSig` (read by the anonymous-value check as its `effNumberSig` seed)
+and `stringIndexTypeIsPrimitive` (read by the general property loop, where it is
+what makes that loop DEFER methods instead of double-reporting them).
+
+A detail worth recording because it removed the only non-mechanical edit this
+split would otherwise have needed: **two regions contain a `when (stmt)` that is
+exhaustive only because of an enclosing `if (stmt is ClassDeclaration || stmt is
+InterfaceDeclaration)`.** Moving the *body* would have forced an `else` arm into
+each; moving the **whole `if` statement, condition included**, keeps them verbatim
+— and costs nothing, because at that point in the entry the condition is already
+true by construction (the `members` `when` returned for every other kind).
+
+### 17.3 Equivalence, measured (round 805's five checks)
+
+`scripts/indexsig_split_{analyze,apply,verify}.py`, all green:
+
+1. all seven moved runs re-extracted from the NEW file and compared against HEAD:
+   **seven contiguous, in-order runs** (38 / 32 / 57 / 126 / 46 / 51 / 95 lines),
+   identical modulo a uniform dedent (4 for two of them, 0 for the rest);
+2. the entry **reconstructed** from HEAD with the regions replaced by their call
+   sites: **IDENTICAL, 105 lines**;
+3. accounting closes exactly — HEAD body 543 = kept 98 + moved 445; new entry
+   105 = kept 98 + 7 call lines;
+4. every `return` and `continue` enumerated on both sides: **6 bare returns and
+   32 continues in HEAD, 6 and 32 in the new tree**;
+5. free variables computed PER REGION and then re-asserted against what the
+   helper signatures and the call sites actually name. The check that matters
+   here is a small one: a free-variable scan must not count `.members` as a read
+   of the local `members` — an unqualified `\bmembers\b` reports three regions as
+   needing a parameter they never use, and an unused parameter is a build warning
+   in this project.
+
+### 17.4 Discrimination — 4 of 4, and the first one only after a purpose-built retry
+
+`CisSplitTest` (17 pins) plus `HugeMethodLimitTest` (+3). **All 16 original pins
+were validated on the UNSPLIT binary first — 16 ran, 0 failed** — so they state
+HEAD's behaviour rather than the split's; that run also caught two wrong pins
+before any code moved (see § 17.5). Control on the split binary: 49 pins ran, 0
+failed. Each mistake alone, on its own build, pin count confirmed every time.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| `cisFindStringIndexSig` returns only the OWN signature | **1** — its seam pin | **DISCRIMINATED** (after a retry) |
+| the entry passes `null` for `numberIndexSig` | **1** — **exactly** its seam pin | **DISCRIMINATED, sharply** |
+| the entry passes `false` for `stringIndexTypeIsPrimitive` | **2** | **DISCRIMINATED** |
+| the entry's `if (stringIndexTypeIsPrimitive)` guard dropped | **2** | **DISCRIMINATED** |
+
+**The first one is the round's transferable result.** The seam pin written for
+it — an interface extending a class that declares `[s: string]: number`, with a
+`string` property — stayed **GREEN on the ablated binary**, i.e. it was blind:
+a sibling pass reports the same TS2411 for a PRIMITIVE inherited index type.
+Rather than record the seam as undiscriminated, the ablated binary was **diffed
+against the committed one over eight inherited-index shapes** (interface-extends-
+class, class-extends-class, interface-extends-interface, `implements`, inherited
+primitive vs a method, a numeric property, an inherited CALLABLE index, an
+inherited index PAIR). **Exactly one line differs**: a method checked against an
+inherited **callable** string index value type. Seven of the eight are supplied
+redundantly by a sibling pass and only that one is uniquely ours. The pin is now
+that shape, it fails on the ablated binary and on nothing else, and the old pin is
+renamed as an arm pin carrying a comment about what it does not discriminate.
+
+The last two fail through round 812's mechanism unchanged: **the failure mode of
+a dropped value here is a SUPERSEDED check running anyway**, so what sees it is a
+`none { … }` assertion (a method WITH parameters must stay silent while the string
+index type is primitive) and a `count == 1` assertion — a count pin on the arm's
+own code cannot.
+
+### 17.5 What did not work
+
+* Two of the sixteen pins failed on the unsplit control and were wrong, not the
+  compiler: the type-alias branch `return`s **before** the string-index
+  machinery, so `type T = { [s: string]: number; p: string }` reports no TS2411
+  at all (the branch's own product is 17.159's TS1337, which needs the alias's
+  type-parameter names — a sharper pin for it); and TS2374 fires **once per
+  duplicate signature**, not once per type. Both were caught by running the pins
+  against HEAD before the split, which is the cheap order.
+* One ablation build died with the Kotlin daemon's **`GC overhead limit
+  exceeded`** after 5m51s. Its only tell is `pins ran = 0`; a plain rebuild
+  succeeded in 2m22s and the ablation then reported normally. Round 808's rule
+  again: **check the build succeeded before recording a zero.**
+
+### 17.6 Gate
+
+Census re-measured at HEAD on a rebuilt binary first — **9** over the limit,
+`checkIndexSigInStatement` **10,928**, reproducing the round-812 handoff exactly;
+the after-number measured the same way on the binary built from the split source
+— **8**. Suite **13,651 → 13,671 / 0 failures / 3 skipped** (+20: 17
+`CisSplitTest` + 3 `HugeMethodLimitTest`), python XML parser, whole results dir
+wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+purpose-built pre-split binary, class dirs confirmed to differ (`javap` finds 15
+`cis*` entries in one and 0 in the other), every capture checked non-empty and
+non-truncated — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**;
+`--partitionCheck 2` **EQUIVALENT — 46**; `cost_gate.py` **all 20 counters
++0.00%**; no `w:` and no `e:` lines in the compiles that produced the binaries.
+**No wall A/B, deliberately** — the family is bounded four times over (§§ 4.2,
+5.3, 7 and round 804) and this lands for the threshold and the (f) gate.
+
+**The `Checker` list is now two, plus one odd one.** `tryInferSingleTypeParamFromArgs`
+**11,930** (two 300–400-line `for (i in params.indices)` bodies plus a 132-line
+constraint block, with mutable locals crossing every boundary — the hard one), the
+`Checker` **constructor 11,298** (contiguous runs of its ~417 `pass("init:…")`
+dispatches; no returns, no loops; moving statements OUT of `init` into a private
+method preserves order and is safe, ADDING a field is not), and
+`access$checkBigintPropertyNames$emit` **10,339**, which is not the 8-line local
+`emit` its name suggests but the whole per-file body the anonymous walker object
+closes over.
