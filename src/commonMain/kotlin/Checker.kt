@@ -50209,18 +50209,7 @@ class Checker(
          *  (without `@types/node`) get TS2591 with the standard "install
          *  @types/node" hint instead of generic TS2307. The `node:` prefix
          *  variant is checked separately at the call site. */
-        private val NODE_BUILTIN_MODULES = setOf(
-            "assert", "async_hooks", "buffer", "child_process", "cluster",
-            "console", "constants", "crypto", "dgram", "diagnostics_channel",
-            "dns", "domain", "events", "fs", "fs/promises", "http", "http2",
-            "https", "inspector", "module", "net", "os", "path",
-            "path/posix", "path/win32", "perf_hooks", "process", "punycode",
-            "querystring", "readline", "readline/promises", "repl", "stream",
-            "stream/consumers", "stream/promises", "stream/web",
-            "string_decoder", "sys", "test", "timers", "timers/promises",
-            "tls", "trace_events", "tty", "url", "util", "util/types", "v8",
-            "vm", "wasi", "worker_threads", "zlib",
-        )
+        private val NODE_BUILTIN_MODULES = ckConstNodeBuiltinModules()
 
         /** Built-in global identifiers that cannot be redeclared (TS2397). */
         private val BUILTIN_GLOBAL_CONFLICT_NAMES = setOf("undefined", "globalThis")
@@ -50432,31 +50421,7 @@ class Checker(
          * Keywords/reserved words that parse as Identifier nodes in our AST.
          * These should never trigger TS2304.
          */
-        private val KEYWORD_IDENTIFIERS: Set<String> = setOf(
-            // JS keywords
-            "this", "super", "true", "false", "null",
-            "if", "else", "for", "while", "do", "switch", "case", "default",
-            "break", "continue", "return", "throw", "try", "catch", "finally",
-            "new", "delete", "typeof", "instanceof", "in", "of", "with",
-            "var", "const", "function", "class", "extends",
-            "import", "export", "from", "as",
-            "void", "yield", "debugger",
-            // TS type keywords (may appear as Identifiers after parser recovery)
-            "any", "number", "string", "boolean", "symbol", "bigint",
-            "object", "never", "unknown",
-            // TS modifiers/contextual keywords
-            // Note: "public", "private", "protected" are NOT excluded here — they fire TS2304
-            // when used as standalone identifiers in expression context (e.g., `public\nclass C`).
-            "readonly", "abstract",
-            "static", "declare", "override", "accessor",
-            "async", "await", "type", "namespace", "module",
-            "interface", "enum", "implements", "is",
-            "infer", "keyof", "unique", "asserts", "satisfies",
-            // JS strict mode reserved words
-            "package",
-            // ECMAScript resource management
-            "using",
-        )
+        private val KEYWORD_IDENTIFIERS: Set<String> = ckConstKeywordIdentifiers()
 
         /**
          * Well-known global names from lib.d.ts and common environments.
@@ -50481,175 +50446,7 @@ class Checker(
             "describe", "suite", "it", "test",
         )
 
-        internal val KNOWN_GLOBALS: Set<String> = setOf(
-            // Special identifiers
-            "undefined", "globalThis",
-            // lib.dom value globals resolvable by bare name (config-gated via DOM_GLOBAL_NAMES)
-            "name",
-            // ES5 globals
-            "NaN", "Infinity", "eval",
-            "parseInt", "parseFloat", "isNaN", "isFinite",
-            "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
-            "escape", "unescape",
-            // ES5 constructors/types
-            "Object", "Function", "Boolean", "Symbol",
-            "Error", "AggregateError", "EvalError", "RangeError",
-            "ReferenceError", "SyntaxError", "TypeError", "URIError",
-            "Number", "BigInt", "Math", "Date",
-            "String", "RegExp",
-            "Array", "Int8Array", "Uint8Array", "Uint8ClampedArray",
-            "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
-            "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
-            "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry",
-            "ArrayBuffer", "SharedArrayBuffer", "ArrayBufferView", "DataView", "Atomics",
-            "JSON", "Promise", "Proxy", "Reflect", "Intl",
-            // Iterators/generators
-            "Generator", "GeneratorFunction", "AsyncGenerator", "AsyncGeneratorFunction",
-            "Iterator", "AsyncIterator",
-            "IteratorResult", "IteratorYieldResult", "IteratorReturnResult", "IteratorObject",
-            // TypeScript utility types (used in type positions)
-            "Partial", "Required", "Readonly", "Record", "Pick", "Omit",
-            "Exclude", "Extract", "NonNullable", "Parameters", "ConstructorParameters",
-            "ReturnType", "InstanceType", "ThisType", "ThisParameterType",
-            "OmitThisParameter", "Uppercase", "Lowercase", "Capitalize", "Uncapitalize",
-            "Awaited", "NoInfer",
-            "Iterable", "IterableIterator", "AsyncIterable", "AsyncIterableIterator",
-            "RegExpMatchArray", "RegExpExecArray", "FlatArray",
-            "PromiseLike", "ArrayLike", "ReadonlyArray", "ReadonlyMap", "ReadonlySet",
-            "TemplateStringsArray",
-            "PropertyKey", "PropertyDescriptor", "PropertyDescriptorMap",
-            "TypedPropertyDescriptor",
-            "ClassDecorator", "PropertyDecorator", "MethodDecorator", "ParameterDecorator",
-            "PromiseConstructorLike",
-            "Exclude", "Extract",
-            // Console & timers
-            "console",
-            "setTimeout", "clearTimeout", "setInterval", "clearInterval",
-            "setImmediate", "clearImmediate",
-            "queueMicrotask",
-            // DOM — common types
-            "document", "window", "navigator", "location", "history", "screen",
-            "self", "top", "parent", "frames", "opener",
-            "alert", "confirm", "prompt", "open", "close", "print",
-            "requestAnimationFrame", "cancelAnimationFrame",
-            "requestIdleCallback", "cancelIdleCallback",
-            "fetch", "Headers", "Request", "Response",
-            "URL", "URLSearchParams",
-            "FormData", "Blob", "File", "FileReader", "FileList",
-            "AbortController", "AbortSignal",
-            "TextEncoder", "TextDecoder",
-            "atob", "btoa",
-            "Event", "CustomEvent", "ErrorEvent",
-            "MouseEvent", "KeyboardEvent", "TouchEvent", "FocusEvent",
-            "InputEvent", "WheelEvent", "PointerEvent", "DragEvent",
-            "AnimationEvent", "TransitionEvent", "UIEvent", "ClipboardEvent",
-            "CompositionEvent", "ProgressEvent", "PageTransitionEvent",
-            "PopStateEvent", "HashChangeEvent", "StorageEvent",
-            "MessageEvent", "BeforeUnloadEvent",
-            "EventTarget", "EventListener",
-            "Element", "HTMLElement", "SVGElement",
-            "Node", "NodeList", "HTMLCollection", "NamedNodeMap",
-            "Document", "DocumentFragment", "DocumentType",
-            "Window", "Navigator",
-            "HTMLDivElement", "HTMLSpanElement", "HTMLInputElement",
-            "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement",
-            "HTMLImageElement", "HTMLVideoElement", "HTMLAudioElement",
-            "HTMLCanvasElement", "HTMLTextAreaElement", "HTMLSelectElement",
-            "HTMLOptionElement", "HTMLTableElement", "HTMLTableRowElement",
-            "HTMLTableCellElement", "HTMLIFrameElement", "HTMLScriptElement",
-            "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
-            "HTMLHeadElement", "HTMLBodyElement", "HTMLHtmlElement",
-            "HTMLLIElement", "HTMLUListElement", "HTMLOListElement",
-            "HTMLParagraphElement", "HTMLHeadingElement", "HTMLBRElement",
-            "HTMLHRElement", "HTMLPreElement", "HTMLTemplateElement",
-            "HTMLSlotElement", "HTMLLabelElement", "HTMLFieldSetElement",
-            "HTMLLegendElement", "HTMLDataListElement", "HTMLOutputElement",
-            "HTMLProgressElement", "HTMLMeterElement", "HTMLDetailsElement",
-            "HTMLDialogElement", "HTMLMenuElement",
-            "SVGSVGElement", "SVGPathElement", "SVGCircleElement",
-            "SVGRectElement", "SVGLineElement", "SVGTextElement",
-            "Text", "Comment", "CDATASection", "ProcessingInstruction",
-            "Attr", "CharacterData", "ChildNode", "ParentNode",
-            "DOMRect", "DOMRectReadOnly", "DOMPoint", "DOMPointReadOnly",
-            "DOMMatrix", "DOMMatrixReadOnly", "DOMQuad",
-            "Range", "Selection", "TreeWalker", "NodeIterator",
-            "MutationObserver", "MutationRecord",
-            "IntersectionObserver", "IntersectionObserverEntry",
-            "ResizeObserver", "ResizeObserverEntry",
-            "PerformanceObserver", "PerformanceEntry",
-            "CSSStyleDeclaration", "CSSStyleSheet", "CSSRule", "CSSStyleRule",
-            "MediaQueryList", "MediaQueryListEvent",
-            "Storage", "localStorage", "sessionStorage",
-            "XMLHttpRequest", "XMLSerializer", "DOMParser",
-            "WebSocket", "EventSource", "BroadcastChannel",
-            "MessageChannel", "MessagePort",
-            "Worker", "SharedWorker", "ServiceWorker",
-            "ServiceWorkerRegistration", "ServiceWorkerContainer",
-            "Notification", "PushManager", "PushSubscription",
-            "Cache", "CacheStorage",
-            "Crypto", "CryptoKey", "SubtleCrypto", "crypto",
-            "performance", "Performance", "PerformanceObserver",
-            "ReadableStream", "WritableStream", "TransformStream",
-            "ReadableStreamDefaultReader", "WritableStreamDefaultWriter",
-            "ByteLengthQueuingStrategy", "CountQueuingStrategy",
-            "Image", "ImageData", "ImageBitmap",
-            "CanvasRenderingContext2D", "WebGLRenderingContext", "WebGL2RenderingContext",
-            "OffscreenCanvas",
-            "AudioContext", "AudioBuffer", "AudioNode",
-            "MediaStream", "MediaRecorder",
-            "RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate",
-            "Geolocation", "GeolocationPosition",
-            "Clipboard", "ClipboardItem",
-            "VisualViewport",
-            // Web Locks API
-            "Lock", "LockManager", "LockOptions",
-            "indexedDB", "IDBDatabase", "IDBObjectStore", "IDBTransaction",
-            "IDBRequest", "IDBCursor", "IDBKeyRange",
-            "structuredClone", "reportError",
-            // Windows scripting / runtime
-            "WScript", "Windows",
-            // Node.js
-            // NOTE: `require`, `module`, `process`, `Buffer` are intentionally
-            // NOT in KNOWN_GLOBALS — they require `@types/node` to be available.
-            // TypeScript emits TS2591 (with "@types/node" hint) for unresolved
-            // references; see `NODE_BUILTIN_GLOBALS_TS2591` below.
-            // NOTE: `global` is intentionally NOT here — it is NOT an ambient
-            // value in a module/script without `@types/node`; a bare `global.x`
-            // must report TS2304/TS2552 (GH#42209, spellingSuggestionGlobal*).
-            "exports",
-            "__dirname", "__filename",
-            "__non_webpack_require__",
-            // Web Worker APIs
-            "importScripts",
-            // Testing frameworks. NOTE: `describe`/`suite`/`it`/`test` are NOT here —
-            // they live in TEST_RUNNER_GLOBALS_TS2593 (B227): TypeScript emits TS2593
-            // ("install type definitions for a test runner") for unresolved uses, so
-            // seeding them would silently mask that diagnostic. They are still seeded
-            // for `.js`/`.jsx` files (see the B66.1-style addAll in checkUnresolvedNames).
-            "expect", "jest", "beforeEach", "afterEach",
-            "beforeAll", "afterAll",
-            // NOTE: `$`/`jQuery` are NOT here — they live in JQUERY_GLOBALS_TS2592 (B237):
-            // TypeScript emits TS2592 ("install type definitions for jQuery") for
-            // unresolved uses, so seeding them would mask that diagnostic. They are
-            // still seeded for `.js`/`.jsx` files (see checkUnresolvedNames).
-            // Common global augmentations
-            "Symbol",
-            // JSX namespace (available when JSX is enabled)
-            "JSX",
-            // Window-property globals (lib.dom.d.ts) — needed for TS2552 spelling suggestions.
-            "frameElement",
-            // DOM interface maps (used in type positions for element tag name resolution)
-            "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
-            "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
-            "GlobalEventHandlers", "WindowOrWorkerGlobalScope",
-            // Additional DOM/lib types used in type positions
-            "NodeListOf", "HTMLCollectionOf",
-            "BodyInit", "HeadersInit", "RequestInit", "ResponseInit",
-            "EventListenerOrEventListenerObject",
-            "AddEventListenerOptions", "EventListenerOptions",
-            "PromiseSettledResult", "PromiseFulfilledResult", "PromiseRejectedResult",
-            "BufferSource", "BlobPart",
-        )
+        internal val KNOWN_GLOBALS: Set<String> = ckConstKnownGlobals()
 
         /**
          * 17.122: Subset of [KNOWN_GLOBALS] declared in lib.dom.d.ts /
@@ -50673,78 +50470,7 @@ class Checker(
          * suggestions naming a DOM global — TypeScript's baseline format renders
          * the position as `lib.dom.d.ts:--:--` (line/char masked).
          */
-        private val DOM_GLOBAL_NAMES: Set<String> = setOf(
-            // DOM — common types
-            "name", // lib.dom `declare const name: void` (window.name)
-            "document", "window", "navigator", "location", "history", "screen",
-            "self", "top", "parent", "frames", "opener",
-            "alert", "confirm", "prompt", "open", "close", "print",
-            "requestAnimationFrame", "cancelAnimationFrame",
-            "requestIdleCallback", "cancelIdleCallback",
-            "fetch", "Headers", "Request", "Response",
-            "URL", "URLSearchParams",
-            "FormData", "Blob", "File", "FileReader", "FileList",
-            "AbortController", "AbortSignal",
-            "TextEncoder", "TextDecoder",
-            "atob", "btoa",
-            "Event", "CustomEvent", "ErrorEvent",
-            "MouseEvent", "KeyboardEvent", "TouchEvent", "FocusEvent",
-            "InputEvent", "WheelEvent", "PointerEvent", "DragEvent",
-            "AnimationEvent", "TransitionEvent", "UIEvent", "ClipboardEvent",
-            "CompositionEvent", "ProgressEvent", "PageTransitionEvent",
-            "PopStateEvent", "HashChangeEvent", "StorageEvent",
-            "MessageEvent", "BeforeUnloadEvent",
-            "EventTarget", "EventListener",
-            "Element", "HTMLElement", "SVGElement",
-            "Node", "NodeList", "HTMLCollection", "NamedNodeMap",
-            "Document", "DocumentFragment", "DocumentType",
-            "Window", "Navigator",
-            "HTMLDivElement", "HTMLSpanElement", "HTMLInputElement",
-            "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement",
-            "HTMLImageElement", "HTMLVideoElement", "HTMLAudioElement",
-            "HTMLCanvasElement", "HTMLTextAreaElement", "HTMLSelectElement",
-            "HTMLOptionElement", "HTMLTableElement", "HTMLTableRowElement",
-            "HTMLTableCellElement", "HTMLIFrameElement", "HTMLScriptElement",
-            "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
-            "HTMLHeadElement", "HTMLBodyElement", "HTMLHtmlElement",
-            "Text", "Comment",
-            "DOMRect", "DOMRectReadOnly", "DOMPoint", "DOMPointReadOnly",
-            "DOMMatrix", "DOMMatrixReadOnly", "DOMQuad",
-            "Range", "Selection", "TreeWalker", "NodeIterator",
-            "MutationObserver", "MutationRecord",
-            "IntersectionObserver", "IntersectionObserverEntry",
-            "ResizeObserver", "ResizeObserverEntry",
-            "PerformanceObserver", "PerformanceEntry",
-            "CSSStyleDeclaration", "CSSStyleSheet", "CSSRule", "CSSStyleRule",
-            "MediaQueryList", "MediaQueryListEvent",
-            "Storage", "localStorage", "sessionStorage",
-            "XMLHttpRequest", "XMLSerializer", "DOMParser",
-            "WebSocket", "EventSource", "BroadcastChannel",
-            "MessageChannel", "MessagePort",
-            "Worker", "SharedWorker", "ServiceWorker",
-            "ServiceWorkerRegistration", "ServiceWorkerContainer",
-            "Notification", "PushManager", "PushSubscription",
-            "Cache", "CacheStorage",
-            "Crypto", "CryptoKey", "SubtleCrypto", "crypto",
-            "performance", "Performance",
-            "ReadableStream", "WritableStream", "TransformStream",
-            "Image", "ImageData", "ImageBitmap",
-            "OffscreenCanvas",
-            "AudioContext", "AudioBuffer", "AudioNode",
-            "MediaStream", "MediaRecorder",
-            "RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate",
-            "Geolocation", "GeolocationPosition",
-            "Clipboard", "ClipboardItem",
-            "VisualViewport",
-            // Web Locks API
-            "Lock", "LockManager", "LockOptions",
-            // Frame element
-            "frameElement",
-            // DOM interface maps
-            "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
-            "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
-            "GlobalEventHandlers", "WindowOrWorkerGlobalScope",
-        )
+        private val DOM_GLOBAL_NAMES: Set<String> = ckConstDomGlobalNames()
 
         /**
          * Subset of [KNOWN_GLOBALS] that are pure runtime values, not usable in type positions.
@@ -50752,35 +50478,7 @@ class Checker(
          * a mistyped type name. Duals (classes, interfaces) are NOT listed here because they work
          * in both positions. `undefined`/`null` are excluded from this list — they work as types.
          */
-        private val VALUE_ONLY_GLOBALS: Set<String> = setOf(
-            "globalThis", "NaN", "Infinity", "eval", "name",
-            "parseInt", "parseFloat", "isNaN", "isFinite",
-            "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
-            "escape", "unescape",
-            "Math", "JSON", "Atomics", "Reflect", "Intl",
-            "console",
-            "setTimeout", "clearTimeout", "setInterval", "clearInterval",
-            "setImmediate", "clearImmediate", "queueMicrotask",
-            "location", "history", "screen",
-            "self", "top", "parent", "frames", "opener",
-            "alert", "confirm", "prompt", "open", "close", "print",
-            "requestAnimationFrame", "cancelAnimationFrame",
-            "requestIdleCallback", "cancelIdleCallback",
-            "fetch", "atob", "btoa",
-            "localStorage", "sessionStorage",
-            "crypto", "performance",
-            "indexedDB", "structuredClone", "reportError",
-            "WScript", "Windows",
-            // require, module, process, Buffer — removed (see KNOWN_GLOBALS note).
-            // `global` removed too (see KNOWN_GLOBALS note — GH#42209).
-            "exports",
-            "__dirname", "__filename", "__non_webpack_require__",
-            "importScripts",
-            "describe", "it", "test", "expect", "jest",
-            "beforeEach", "afterEach", "beforeAll", "afterAll", "suite",
-            "\$", "jQuery",
-            "document", "window", "navigator",
-        )
+        private val VALUE_ONLY_GLOBALS: Set<String> = ckConstValueOnlyGlobals()
 
         /**
          * Known built-in generic types from lib.d.ts with their type parameter counts
@@ -50792,47 +50490,7 @@ class Checker(
             "push", "pop", "shift", "unshift", "splice", "fill", "copyWithin", "sort", "reverse",
         )
 
-        private val KNOWN_GENERIC_BUILTINS: Map<String, Pair<Int, String>> = mapOf(
-            "Array" to (1 to "Array<T>"),
-            "ReadonlyArray" to (1 to "ReadonlyArray<T>"),
-            "Promise" to (1 to "Promise<T>"),
-            "PromiseLike" to (1 to "PromiseLike<T>"),
-            "ArrayLike" to (1 to "ArrayLike<T>"),
-            "Map" to (2 to "Map<K, V>"),
-            "ReadonlyMap" to (2 to "ReadonlyMap<K, V>"),
-            "Set" to (1 to "Set<T>"),
-            "ReadonlySet" to (1 to "ReadonlySet<T>"),
-            "WeakMap" to (2 to "WeakMap<K, V>"),
-            "WeakSet" to (1 to "WeakSet<T>"),
-            "WeakRef" to (1 to "WeakRef<T>"),
-            "Partial" to (1 to "Partial<T>"),
-            "Required" to (1 to "Required<T>"),
-            "Readonly" to (1 to "Readonly<T>"),
-            "Record" to (2 to "Record<K, T>"),
-            "Pick" to (2 to "Pick<T, K>"),
-            "Omit" to (2 to "Omit<T, K>"),
-            "Exclude" to (2 to "Exclude<T, U>"),
-            "Extract" to (2 to "Extract<T, U>"),
-            "NonNullable" to (1 to "NonNullable<T>"),
-            "Parameters" to (1 to "Parameters<T>"),
-            "ConstructorParameters" to (1 to "ConstructorParameters<T>"),
-            "ReturnType" to (1 to "ReturnType<T>"),
-            "InstanceType" to (1 to "InstanceType<T>"),
-            "ThisType" to (1 to "ThisType<T>"),
-            "ThisParameterType" to (1 to "ThisParameterType<T>"),
-            "OmitThisParameter" to (1 to "OmitThisParameter<T>"),
-            "Awaited" to (1 to "Awaited<T>"),
-            "NoInfer" to (1 to "NoInfer<T>"),
-            "Iterable" to (1 to "Iterable<T>"),
-            "IterableIterator" to (1 to "IterableIterator<T>"),
-            "AsyncIterable" to (1 to "AsyncIterable<T>"),
-            "AsyncIterableIterator" to (1 to "AsyncIterableIterator<T>"),
-            "Generator" to (3 to "Generator<T, TReturn, TNext>"),
-            "AsyncGenerator" to (3 to "AsyncGenerator<T, TReturn, TNext>"),
-            "TypedPropertyDescriptor" to (1 to "TypedPropertyDescriptor<T>"),
-            "ProxyHandler" to (1 to "ProxyHandler<T>"),
-            "FinalizationRegistry" to (1 to "FinalizationRegistry<T>"),
-        )
+        private val KNOWN_GENERIC_BUILTINS: Map<String, Pair<Int, String>> = ckConstKnownGenericBuiltins()
 
         /** B242: the 11 typed-array globals — `declare var X: XConstructor` in the
          *  real lib; our embedded lib has interface-only declarations, so `new X()`
@@ -50860,74 +50518,8 @@ class Checker(
          * at `@target: es2015`. NOT a comprehensive lib-version map — adding more entries
          * requires verifying against TypeScript's actual lib subsetting per target.
          */
-        private val LIB_MIN_TARGET: Map<String, ScriptTarget> = mapOf(
-            "Array.at" to ScriptTarget.ES2022,
-            "Array.findLast" to ScriptTarget.ES2023,
-            "Array.findLastIndex" to ScriptTarget.ES2023,
-            "Array.toSpliced" to ScriptTarget.ES2023,
-            "Array.toSorted" to ScriptTarget.ES2023,
-            "Array.toReversed" to ScriptTarget.ES2023,
-            "Array.with" to ScriptTarget.ES2023,
-            "Array.includes" to ScriptTarget.ES2016,
-            "ReadonlyArray.at" to ScriptTarget.ES2022,
-            "ReadonlyArray.includes" to ScriptTarget.ES2016,
-            // Promise.finally is es2018; at es2015 target the Promise instance shape
-            // is { then, catch, [Symbol.toStringTag] } (matches TypeScript's lib subsetting).
-            "Promise.finally" to ScriptTarget.ES2018,
-            // B238: Error.cause is es2022 (lib.es2022.error.d.ts).
-            "Error.cause" to ScriptTarget.ES2022,
-            // B239: corpus-verified later-lib members (doYouNeedToChangeYourTargetLibrary
-            // family). NOTE: Array.flat/flatMap are deliberately ABSENT — filtering them
-            // would shift the Blocker-#4 "and N more" member counts (genericArrayExtenstions).
-            "String.padStart" to ScriptTarget.ES2017,
-            "String.padEnd" to ScriptTarget.ES2017,
-            "String.trimStart" to ScriptTarget.ES2019,
-            "String.trimEnd" to ScriptTarget.ES2019,
-            "String.trimLeft" to ScriptTarget.ES2019,
-            "String.trimRight" to ScriptTarget.ES2019,
-            "String.matchAll" to ScriptTarget.ES2020,
-            "String.replaceAll" to ScriptTarget.ES2021,
-            "String.at" to ScriptTarget.ES2022,
-            "ObjectConstructor.values" to ScriptTarget.ES2017,
-            "ObjectConstructor.entries" to ScriptTarget.ES2017,
-            "ObjectConstructor.getOwnPropertyDescriptors" to ScriptTarget.ES2017,
-            "ObjectConstructor.fromEntries" to ScriptTarget.ES2019,
-            "PromiseConstructor.allSettled" to ScriptTarget.ES2020,
-            "PromiseConstructor.any" to ScriptTarget.ES2021,
-            "RegExpMatchArray.groups" to ScriptTarget.ES2018,
-            "RegExpExecArray.groups" to ScriptTarget.ES2018,
-            // NOTE: RegExp.dotAll (es2018) is deliberately ABSENT — filtering it shifts
-            // the "and N more" missing-property count for RegExp targets at es2015
-            // (assigningFromObjectToAnythingElse expects "and 11 more" with our member set).
-            "Symbol.description" to ScriptTarget.ES2019,
-            "SymbolConstructor.matchAll" to ScriptTarget.ES2020,
-            "Date.toTemporalInstant" to ScriptTarget.ESNext,
-            // B241: Intl members (lib.es2017.intl / es2018.intl).
-            "DateTimeFormat.formatToParts" to ScriptTarget.ES2017,
-            "NumberFormat.formatToParts" to ScriptTarget.ES2018,
-            "Intl.PluralRules" to ScriptTarget.ES2018,
-            // B239: es2015-level members (modularizeLibrary_ErrorFromUsingES6Features…).
-            "ArrayConstructor.from" to ScriptTarget.ES2015,
-            "ArrayConstructor.of" to ScriptTarget.ES2015,
-            "Math.sign" to ScriptTarget.ES2015,
-            "RegExp.flags" to ScriptTarget.ES2015,
-            "String.includes" to ScriptTarget.ES2015,
-            "String.startsWith" to ScriptTarget.ES2015,
-            "String.endsWith" to ScriptTarget.ES2015,
-            "String.repeat" to ScriptTarget.ES2015,
-            // ES2024/ES2025 Set set-operations (lib.es2025.collection.d.ts in the pinned tsc).
-            // Gated at ESNext (our ScriptTarget has no ES2025): absent at es2020 (the self-compile
-            // lib — where tsc's own `const set: Set<T> = { has, add, … }` shim satisfies Set),
-            // present at esnext (the `setMethods` corpus test's @target). No corpus baseline has a
-            // `Set<>` missing-property display, so filtering shifts no "and N more" count.
-            "Set.union" to ScriptTarget.ESNext,
-            "Set.intersection" to ScriptTarget.ESNext,
-            "Set.difference" to ScriptTarget.ESNext,
-            "Set.symmetricDifference" to ScriptTarget.ESNext,
-            "Set.isSubsetOf" to ScriptTarget.ESNext,
-            "Set.isSupersetOf" to ScriptTarget.ESNext,
-            "Set.isDisjointFrom" to ScriptTarget.ESNext,
-        ) + TYPED_ARRAY_NAMES.flatMap { ta ->
+        private val LIB_MIN_TARGET: Map<String, ScriptTarget> =
+            ckConstLibMinTargetBase() + TYPED_ARRAY_NAMES.flatMap { ta ->
             // B242: per-typed-array later-lib members (indexAt / findLast family).
             // The embedded typed-array interfaces don't declare these, so the
             // entries are lookup-only (no member-count impact).
@@ -176834,3 +176426,450 @@ private const val CAAS_NONE = 0
 private const val CAAS_CONTINUE = 1
 private const val CAAS_BREAK = 2
 private const val CAAS_RETURN = 3
+
+// ---------------------------------------------------------------------------
+// (JIT.1)(e) round 820 — companion-constant builders hoisted out of
+// `Checker.<clinit>`.
+//
+// A static initializer over 8,000 bytecodes is never JIT-compiled, and
+// `Checker.<clinit>` was 10,339 — entirely the seven collection constants
+// below, whose hundreds of string literals are `putstatic`-ed one at a time.
+// Each builder is called exactly once, from the property initializer that used
+// to hold its body, so this is a pure relocation: same values, same order, same
+// visibility (the properties keep theirs; these functions are file-private).
+//
+// They are TOP-LEVEL rather than companion members on purpose — a companion
+// function would have to be reached through the `Companion` field `<clinit>` is
+// itself installing, and a top-level private function is a plain `invokestatic`
+// with no initialisation order to reason about.
+// ---------------------------------------------------------------------------
+
+/** [Checker.Companion.NODE_BUILTIN_MODULES]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstNodeBuiltinModules(): Set<String> = setOf(
+    "assert", "async_hooks", "buffer", "child_process", "cluster",
+    "console", "constants", "crypto", "dgram", "diagnostics_channel",
+    "dns", "domain", "events", "fs", "fs/promises", "http", "http2",
+    "https", "inspector", "module", "net", "os", "path",
+    "path/posix", "path/win32", "perf_hooks", "process", "punycode",
+    "querystring", "readline", "readline/promises", "repl", "stream",
+    "stream/consumers", "stream/promises", "stream/web",
+    "string_decoder", "sys", "test", "timers", "timers/promises",
+    "tls", "trace_events", "tty", "url", "util", "util/types", "v8",
+    "vm", "wasi", "worker_threads", "zlib",
+)
+
+/** [Checker.Companion.KEYWORD_IDENTIFIERS]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstKeywordIdentifiers(): Set<String> = setOf(
+    // JS keywords
+    "this", "super", "true", "false", "null",
+    "if", "else", "for", "while", "do", "switch", "case", "default",
+    "break", "continue", "return", "throw", "try", "catch", "finally",
+    "new", "delete", "typeof", "instanceof", "in", "of", "with",
+    "var", "const", "function", "class", "extends",
+    "import", "export", "from", "as",
+    "void", "yield", "debugger",
+    // TS type keywords (may appear as Identifiers after parser recovery)
+    "any", "number", "string", "boolean", "symbol", "bigint",
+    "object", "never", "unknown",
+    // TS modifiers/contextual keywords
+    // Note: "public", "private", "protected" are NOT excluded here — they fire TS2304
+    // when used as standalone identifiers in expression context (e.g., `public\nclass C`).
+    "readonly", "abstract",
+    "static", "declare", "override", "accessor",
+    "async", "await", "type", "namespace", "module",
+    "interface", "enum", "implements", "is",
+    "infer", "keyof", "unique", "asserts", "satisfies",
+    // JS strict mode reserved words
+    "package",
+    // ECMAScript resource management
+    "using",
+)
+
+/** [Checker.Companion.KNOWN_GLOBALS]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstKnownGlobals(): Set<String> = setOf(
+    // Special identifiers
+    "undefined", "globalThis",
+    // lib.dom value globals resolvable by bare name (config-gated via DOM_GLOBAL_NAMES)
+    "name",
+    // ES5 globals
+    "NaN", "Infinity", "eval",
+    "parseInt", "parseFloat", "isNaN", "isFinite",
+    "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+    "escape", "unescape",
+    // ES5 constructors/types
+    "Object", "Function", "Boolean", "Symbol",
+    "Error", "AggregateError", "EvalError", "RangeError",
+    "ReferenceError", "SyntaxError", "TypeError", "URIError",
+    "Number", "BigInt", "Math", "Date",
+    "String", "RegExp",
+    "Array", "Int8Array", "Uint8Array", "Uint8ClampedArray",
+    "Int16Array", "Uint16Array", "Int32Array", "Uint32Array",
+    "Float32Array", "Float64Array", "BigInt64Array", "BigUint64Array",
+    "Map", "Set", "WeakMap", "WeakSet", "WeakRef", "FinalizationRegistry",
+    "ArrayBuffer", "SharedArrayBuffer", "ArrayBufferView", "DataView", "Atomics",
+    "JSON", "Promise", "Proxy", "Reflect", "Intl",
+    // Iterators/generators
+    "Generator", "GeneratorFunction", "AsyncGenerator", "AsyncGeneratorFunction",
+    "Iterator", "AsyncIterator",
+    "IteratorResult", "IteratorYieldResult", "IteratorReturnResult", "IteratorObject",
+    // TypeScript utility types (used in type positions)
+    "Partial", "Required", "Readonly", "Record", "Pick", "Omit",
+    "Exclude", "Extract", "NonNullable", "Parameters", "ConstructorParameters",
+    "ReturnType", "InstanceType", "ThisType", "ThisParameterType",
+    "OmitThisParameter", "Uppercase", "Lowercase", "Capitalize", "Uncapitalize",
+    "Awaited", "NoInfer",
+    "Iterable", "IterableIterator", "AsyncIterable", "AsyncIterableIterator",
+    "RegExpMatchArray", "RegExpExecArray", "FlatArray",
+    "PromiseLike", "ArrayLike", "ReadonlyArray", "ReadonlyMap", "ReadonlySet",
+    "TemplateStringsArray",
+    "PropertyKey", "PropertyDescriptor", "PropertyDescriptorMap",
+    "TypedPropertyDescriptor",
+    "ClassDecorator", "PropertyDecorator", "MethodDecorator", "ParameterDecorator",
+    "PromiseConstructorLike",
+    "Exclude", "Extract",
+    // Console & timers
+    "console",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+    "setImmediate", "clearImmediate",
+    "queueMicrotask",
+    // DOM — common types
+    "document", "window", "navigator", "location", "history", "screen",
+    "self", "top", "parent", "frames", "opener",
+    "alert", "confirm", "prompt", "open", "close", "print",
+    "requestAnimationFrame", "cancelAnimationFrame",
+    "requestIdleCallback", "cancelIdleCallback",
+    "fetch", "Headers", "Request", "Response",
+    "URL", "URLSearchParams",
+    "FormData", "Blob", "File", "FileReader", "FileList",
+    "AbortController", "AbortSignal",
+    "TextEncoder", "TextDecoder",
+    "atob", "btoa",
+    "Event", "CustomEvent", "ErrorEvent",
+    "MouseEvent", "KeyboardEvent", "TouchEvent", "FocusEvent",
+    "InputEvent", "WheelEvent", "PointerEvent", "DragEvent",
+    "AnimationEvent", "TransitionEvent", "UIEvent", "ClipboardEvent",
+    "CompositionEvent", "ProgressEvent", "PageTransitionEvent",
+    "PopStateEvent", "HashChangeEvent", "StorageEvent",
+    "MessageEvent", "BeforeUnloadEvent",
+    "EventTarget", "EventListener",
+    "Element", "HTMLElement", "SVGElement",
+    "Node", "NodeList", "HTMLCollection", "NamedNodeMap",
+    "Document", "DocumentFragment", "DocumentType",
+    "Window", "Navigator",
+    "HTMLDivElement", "HTMLSpanElement", "HTMLInputElement",
+    "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement",
+    "HTMLImageElement", "HTMLVideoElement", "HTMLAudioElement",
+    "HTMLCanvasElement", "HTMLTextAreaElement", "HTMLSelectElement",
+    "HTMLOptionElement", "HTMLTableElement", "HTMLTableRowElement",
+    "HTMLTableCellElement", "HTMLIFrameElement", "HTMLScriptElement",
+    "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
+    "HTMLHeadElement", "HTMLBodyElement", "HTMLHtmlElement",
+    "HTMLLIElement", "HTMLUListElement", "HTMLOListElement",
+    "HTMLParagraphElement", "HTMLHeadingElement", "HTMLBRElement",
+    "HTMLHRElement", "HTMLPreElement", "HTMLTemplateElement",
+    "HTMLSlotElement", "HTMLLabelElement", "HTMLFieldSetElement",
+    "HTMLLegendElement", "HTMLDataListElement", "HTMLOutputElement",
+    "HTMLProgressElement", "HTMLMeterElement", "HTMLDetailsElement",
+    "HTMLDialogElement", "HTMLMenuElement",
+    "SVGSVGElement", "SVGPathElement", "SVGCircleElement",
+    "SVGRectElement", "SVGLineElement", "SVGTextElement",
+    "Text", "Comment", "CDATASection", "ProcessingInstruction",
+    "Attr", "CharacterData", "ChildNode", "ParentNode",
+    "DOMRect", "DOMRectReadOnly", "DOMPoint", "DOMPointReadOnly",
+    "DOMMatrix", "DOMMatrixReadOnly", "DOMQuad",
+    "Range", "Selection", "TreeWalker", "NodeIterator",
+    "MutationObserver", "MutationRecord",
+    "IntersectionObserver", "IntersectionObserverEntry",
+    "ResizeObserver", "ResizeObserverEntry",
+    "PerformanceObserver", "PerformanceEntry",
+    "CSSStyleDeclaration", "CSSStyleSheet", "CSSRule", "CSSStyleRule",
+    "MediaQueryList", "MediaQueryListEvent",
+    "Storage", "localStorage", "sessionStorage",
+    "XMLHttpRequest", "XMLSerializer", "DOMParser",
+    "WebSocket", "EventSource", "BroadcastChannel",
+    "MessageChannel", "MessagePort",
+    "Worker", "SharedWorker", "ServiceWorker",
+    "ServiceWorkerRegistration", "ServiceWorkerContainer",
+    "Notification", "PushManager", "PushSubscription",
+    "Cache", "CacheStorage",
+    "Crypto", "CryptoKey", "SubtleCrypto", "crypto",
+    "performance", "Performance", "PerformanceObserver",
+    "ReadableStream", "WritableStream", "TransformStream",
+    "ReadableStreamDefaultReader", "WritableStreamDefaultWriter",
+    "ByteLengthQueuingStrategy", "CountQueuingStrategy",
+    "Image", "ImageData", "ImageBitmap",
+    "CanvasRenderingContext2D", "WebGLRenderingContext", "WebGL2RenderingContext",
+    "OffscreenCanvas",
+    "AudioContext", "AudioBuffer", "AudioNode",
+    "MediaStream", "MediaRecorder",
+    "RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate",
+    "Geolocation", "GeolocationPosition",
+    "Clipboard", "ClipboardItem",
+    "VisualViewport",
+    // Web Locks API
+    "Lock", "LockManager", "LockOptions",
+    "indexedDB", "IDBDatabase", "IDBObjectStore", "IDBTransaction",
+    "IDBRequest", "IDBCursor", "IDBKeyRange",
+    "structuredClone", "reportError",
+    // Windows scripting / runtime
+    "WScript", "Windows",
+    // Node.js
+    // NOTE: `require`, `module`, `process`, `Buffer` are intentionally
+    // NOT in KNOWN_GLOBALS — they require `@types/node` to be available.
+    // TypeScript emits TS2591 (with "@types/node" hint) for unresolved
+    // references; see `NODE_BUILTIN_GLOBALS_TS2591` below.
+    // NOTE: `global` is intentionally NOT here — it is NOT an ambient
+    // value in a module/script without `@types/node`; a bare `global.x`
+    // must report TS2304/TS2552 (GH#42209, spellingSuggestionGlobal*).
+    "exports",
+    "__dirname", "__filename",
+    "__non_webpack_require__",
+    // Web Worker APIs
+    "importScripts",
+    // Testing frameworks. NOTE: `describe`/`suite`/`it`/`test` are NOT here —
+    // they live in TEST_RUNNER_GLOBALS_TS2593 (B227): TypeScript emits TS2593
+    // ("install type definitions for a test runner") for unresolved uses, so
+    // seeding them would silently mask that diagnostic. They are still seeded
+    // for `.js`/`.jsx` files (see the B66.1-style addAll in checkUnresolvedNames).
+    "expect", "jest", "beforeEach", "afterEach",
+    "beforeAll", "afterAll",
+    // NOTE: `$`/`jQuery` are NOT here — they live in JQUERY_GLOBALS_TS2592 (B237):
+    // TypeScript emits TS2592 ("install type definitions for jQuery") for
+    // unresolved uses, so seeding them would mask that diagnostic. They are
+    // still seeded for `.js`/`.jsx` files (see checkUnresolvedNames).
+    // Common global augmentations
+    "Symbol",
+    // JSX namespace (available when JSX is enabled)
+    "JSX",
+    // Window-property globals (lib.dom.d.ts) — needed for TS2552 spelling suggestions.
+    "frameElement",
+    // DOM interface maps (used in type positions for element tag name resolution)
+    "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
+    "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
+    "GlobalEventHandlers", "WindowOrWorkerGlobalScope",
+    // Additional DOM/lib types used in type positions
+    "NodeListOf", "HTMLCollectionOf",
+    "BodyInit", "HeadersInit", "RequestInit", "ResponseInit",
+    "EventListenerOrEventListenerObject",
+    "AddEventListenerOptions", "EventListenerOptions",
+    "PromiseSettledResult", "PromiseFulfilledResult", "PromiseRejectedResult",
+    "BufferSource", "BlobPart",
+)
+
+/** [Checker.Companion.DOM_GLOBAL_NAMES]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstDomGlobalNames(): Set<String> = setOf(
+    // DOM — common types
+    "name", // lib.dom `declare const name: void` (window.name)
+    "document", "window", "navigator", "location", "history", "screen",
+    "self", "top", "parent", "frames", "opener",
+    "alert", "confirm", "prompt", "open", "close", "print",
+    "requestAnimationFrame", "cancelAnimationFrame",
+    "requestIdleCallback", "cancelIdleCallback",
+    "fetch", "Headers", "Request", "Response",
+    "URL", "URLSearchParams",
+    "FormData", "Blob", "File", "FileReader", "FileList",
+    "AbortController", "AbortSignal",
+    "TextEncoder", "TextDecoder",
+    "atob", "btoa",
+    "Event", "CustomEvent", "ErrorEvent",
+    "MouseEvent", "KeyboardEvent", "TouchEvent", "FocusEvent",
+    "InputEvent", "WheelEvent", "PointerEvent", "DragEvent",
+    "AnimationEvent", "TransitionEvent", "UIEvent", "ClipboardEvent",
+    "CompositionEvent", "ProgressEvent", "PageTransitionEvent",
+    "PopStateEvent", "HashChangeEvent", "StorageEvent",
+    "MessageEvent", "BeforeUnloadEvent",
+    "EventTarget", "EventListener",
+    "Element", "HTMLElement", "SVGElement",
+    "Node", "NodeList", "HTMLCollection", "NamedNodeMap",
+    "Document", "DocumentFragment", "DocumentType",
+    "Window", "Navigator",
+    "HTMLDivElement", "HTMLSpanElement", "HTMLInputElement",
+    "HTMLButtonElement", "HTMLFormElement", "HTMLAnchorElement",
+    "HTMLImageElement", "HTMLVideoElement", "HTMLAudioElement",
+    "HTMLCanvasElement", "HTMLTextAreaElement", "HTMLSelectElement",
+    "HTMLOptionElement", "HTMLTableElement", "HTMLTableRowElement",
+    "HTMLTableCellElement", "HTMLIFrameElement", "HTMLScriptElement",
+    "HTMLStyleElement", "HTMLLinkElement", "HTMLMetaElement",
+    "HTMLHeadElement", "HTMLBodyElement", "HTMLHtmlElement",
+    "Text", "Comment",
+    "DOMRect", "DOMRectReadOnly", "DOMPoint", "DOMPointReadOnly",
+    "DOMMatrix", "DOMMatrixReadOnly", "DOMQuad",
+    "Range", "Selection", "TreeWalker", "NodeIterator",
+    "MutationObserver", "MutationRecord",
+    "IntersectionObserver", "IntersectionObserverEntry",
+    "ResizeObserver", "ResizeObserverEntry",
+    "PerformanceObserver", "PerformanceEntry",
+    "CSSStyleDeclaration", "CSSStyleSheet", "CSSRule", "CSSStyleRule",
+    "MediaQueryList", "MediaQueryListEvent",
+    "Storage", "localStorage", "sessionStorage",
+    "XMLHttpRequest", "XMLSerializer", "DOMParser",
+    "WebSocket", "EventSource", "BroadcastChannel",
+    "MessageChannel", "MessagePort",
+    "Worker", "SharedWorker", "ServiceWorker",
+    "ServiceWorkerRegistration", "ServiceWorkerContainer",
+    "Notification", "PushManager", "PushSubscription",
+    "Cache", "CacheStorage",
+    "Crypto", "CryptoKey", "SubtleCrypto", "crypto",
+    "performance", "Performance",
+    "ReadableStream", "WritableStream", "TransformStream",
+    "Image", "ImageData", "ImageBitmap",
+    "OffscreenCanvas",
+    "AudioContext", "AudioBuffer", "AudioNode",
+    "MediaStream", "MediaRecorder",
+    "RTCPeerConnection", "RTCSessionDescription", "RTCIceCandidate",
+    "Geolocation", "GeolocationPosition",
+    "Clipboard", "ClipboardItem",
+    "VisualViewport",
+    // Web Locks API
+    "Lock", "LockManager", "LockOptions",
+    // Frame element
+    "frameElement",
+    // DOM interface maps
+    "ElementTagNameMap", "HTMLElementTagNameMap", "SVGElementTagNameMap",
+    "HTMLElementEventMap", "WindowEventMap", "DocumentEventMap",
+    "GlobalEventHandlers", "WindowOrWorkerGlobalScope",
+)
+
+/** [Checker.Companion.VALUE_ONLY_GLOBALS]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstValueOnlyGlobals(): Set<String> = setOf(
+    "globalThis", "NaN", "Infinity", "eval", "name",
+    "parseInt", "parseFloat", "isNaN", "isFinite",
+    "decodeURI", "decodeURIComponent", "encodeURI", "encodeURIComponent",
+    "escape", "unescape",
+    "Math", "JSON", "Atomics", "Reflect", "Intl",
+    "console",
+    "setTimeout", "clearTimeout", "setInterval", "clearInterval",
+    "setImmediate", "clearImmediate", "queueMicrotask",
+    "location", "history", "screen",
+    "self", "top", "parent", "frames", "opener",
+    "alert", "confirm", "prompt", "open", "close", "print",
+    "requestAnimationFrame", "cancelAnimationFrame",
+    "requestIdleCallback", "cancelIdleCallback",
+    "fetch", "atob", "btoa",
+    "localStorage", "sessionStorage",
+    "crypto", "performance",
+    "indexedDB", "structuredClone", "reportError",
+    "WScript", "Windows",
+    // require, module, process, Buffer — removed (see KNOWN_GLOBALS note).
+    // `global` removed too (see KNOWN_GLOBALS note — GH#42209).
+    "exports",
+    "__dirname", "__filename", "__non_webpack_require__",
+    "importScripts",
+    "describe", "it", "test", "expect", "jest",
+    "beforeEach", "afterEach", "beforeAll", "afterAll", "suite",
+    "\$", "jQuery",
+    "document", "window", "navigator",
+)
+
+/** [Checker.Companion.KNOWN_GENERIC_BUILTINS]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstKnownGenericBuiltins(): Map<String, Pair<Int, String>> = mapOf(
+    "Array" to (1 to "Array<T>"),
+    "ReadonlyArray" to (1 to "ReadonlyArray<T>"),
+    "Promise" to (1 to "Promise<T>"),
+    "PromiseLike" to (1 to "PromiseLike<T>"),
+    "ArrayLike" to (1 to "ArrayLike<T>"),
+    "Map" to (2 to "Map<K, V>"),
+    "ReadonlyMap" to (2 to "ReadonlyMap<K, V>"),
+    "Set" to (1 to "Set<T>"),
+    "ReadonlySet" to (1 to "ReadonlySet<T>"),
+    "WeakMap" to (2 to "WeakMap<K, V>"),
+    "WeakSet" to (1 to "WeakSet<T>"),
+    "WeakRef" to (1 to "WeakRef<T>"),
+    "Partial" to (1 to "Partial<T>"),
+    "Required" to (1 to "Required<T>"),
+    "Readonly" to (1 to "Readonly<T>"),
+    "Record" to (2 to "Record<K, T>"),
+    "Pick" to (2 to "Pick<T, K>"),
+    "Omit" to (2 to "Omit<T, K>"),
+    "Exclude" to (2 to "Exclude<T, U>"),
+    "Extract" to (2 to "Extract<T, U>"),
+    "NonNullable" to (1 to "NonNullable<T>"),
+    "Parameters" to (1 to "Parameters<T>"),
+    "ConstructorParameters" to (1 to "ConstructorParameters<T>"),
+    "ReturnType" to (1 to "ReturnType<T>"),
+    "InstanceType" to (1 to "InstanceType<T>"),
+    "ThisType" to (1 to "ThisType<T>"),
+    "ThisParameterType" to (1 to "ThisParameterType<T>"),
+    "OmitThisParameter" to (1 to "OmitThisParameter<T>"),
+    "Awaited" to (1 to "Awaited<T>"),
+    "NoInfer" to (1 to "NoInfer<T>"),
+    "Iterable" to (1 to "Iterable<T>"),
+    "IterableIterator" to (1 to "IterableIterator<T>"),
+    "AsyncIterable" to (1 to "AsyncIterable<T>"),
+    "AsyncIterableIterator" to (1 to "AsyncIterableIterator<T>"),
+    "Generator" to (3 to "Generator<T, TReturn, TNext>"),
+    "AsyncGenerator" to (3 to "AsyncGenerator<T, TReturn, TNext>"),
+    "TypedPropertyDescriptor" to (1 to "TypedPropertyDescriptor<T>"),
+    "ProxyHandler" to (1 to "ProxyHandler<T>"),
+    "FinalizationRegistry" to (1 to "FinalizationRegistry<T>"),
+)
+
+/** [Checker.Companion.LIB_MIN_TARGET]'s literal, hoisted out of `<clinit>`. */
+private fun ckConstLibMinTargetBase(): Map<String, ScriptTarget> = mapOf(
+    "Array.at" to ScriptTarget.ES2022,
+    "Array.findLast" to ScriptTarget.ES2023,
+    "Array.findLastIndex" to ScriptTarget.ES2023,
+    "Array.toSpliced" to ScriptTarget.ES2023,
+    "Array.toSorted" to ScriptTarget.ES2023,
+    "Array.toReversed" to ScriptTarget.ES2023,
+    "Array.with" to ScriptTarget.ES2023,
+    "Array.includes" to ScriptTarget.ES2016,
+    "ReadonlyArray.at" to ScriptTarget.ES2022,
+    "ReadonlyArray.includes" to ScriptTarget.ES2016,
+    // Promise.finally is es2018; at es2015 target the Promise instance shape
+    // is { then, catch, [Symbol.toStringTag] } (matches TypeScript's lib subsetting).
+    "Promise.finally" to ScriptTarget.ES2018,
+    // B238: Error.cause is es2022 (lib.es2022.error.d.ts).
+    "Error.cause" to ScriptTarget.ES2022,
+    // B239: corpus-verified later-lib members (doYouNeedToChangeYourTargetLibrary
+    // family). NOTE: Array.flat/flatMap are deliberately ABSENT — filtering them
+    // would shift the Blocker-#4 "and N more" member counts (genericArrayExtenstions).
+    "String.padStart" to ScriptTarget.ES2017,
+    "String.padEnd" to ScriptTarget.ES2017,
+    "String.trimStart" to ScriptTarget.ES2019,
+    "String.trimEnd" to ScriptTarget.ES2019,
+    "String.trimLeft" to ScriptTarget.ES2019,
+    "String.trimRight" to ScriptTarget.ES2019,
+    "String.matchAll" to ScriptTarget.ES2020,
+    "String.replaceAll" to ScriptTarget.ES2021,
+    "String.at" to ScriptTarget.ES2022,
+    "ObjectConstructor.values" to ScriptTarget.ES2017,
+    "ObjectConstructor.entries" to ScriptTarget.ES2017,
+    "ObjectConstructor.getOwnPropertyDescriptors" to ScriptTarget.ES2017,
+    "ObjectConstructor.fromEntries" to ScriptTarget.ES2019,
+    "PromiseConstructor.allSettled" to ScriptTarget.ES2020,
+    "PromiseConstructor.any" to ScriptTarget.ES2021,
+    "RegExpMatchArray.groups" to ScriptTarget.ES2018,
+    "RegExpExecArray.groups" to ScriptTarget.ES2018,
+    // NOTE: RegExp.dotAll (es2018) is deliberately ABSENT — filtering it shifts
+    // the "and N more" missing-property count for RegExp targets at es2015
+    // (assigningFromObjectToAnythingElse expects "and 11 more" with our member set).
+    "Symbol.description" to ScriptTarget.ES2019,
+    "SymbolConstructor.matchAll" to ScriptTarget.ES2020,
+    "Date.toTemporalInstant" to ScriptTarget.ESNext,
+    // B241: Intl members (lib.es2017.intl / es2018.intl).
+    "DateTimeFormat.formatToParts" to ScriptTarget.ES2017,
+    "NumberFormat.formatToParts" to ScriptTarget.ES2018,
+    "Intl.PluralRules" to ScriptTarget.ES2018,
+    // B239: es2015-level members (modularizeLibrary_ErrorFromUsingES6Features…).
+    "ArrayConstructor.from" to ScriptTarget.ES2015,
+    "ArrayConstructor.of" to ScriptTarget.ES2015,
+    "Math.sign" to ScriptTarget.ES2015,
+    "RegExp.flags" to ScriptTarget.ES2015,
+    "String.includes" to ScriptTarget.ES2015,
+    "String.startsWith" to ScriptTarget.ES2015,
+    "String.endsWith" to ScriptTarget.ES2015,
+    "String.repeat" to ScriptTarget.ES2015,
+    // ES2024/ES2025 Set set-operations (lib.es2025.collection.d.ts in the pinned tsc).
+    // Gated at ESNext (our ScriptTarget has no ES2025): absent at es2020 (the self-compile
+    // lib — where tsc's own `const set: Set<T> = { has, add, … }` shim satisfies Set),
+    // present at esnext (the `setMethods` corpus test's @target). No corpus baseline has a
+    // `Set<>` missing-property display, so filtering shifts no "and N more" count.
+    "Set.union" to ScriptTarget.ESNext,
+    "Set.intersection" to ScriptTarget.ESNext,
+    "Set.difference" to ScriptTarget.ESNext,
+    "Set.symmetricDifference" to ScriptTarget.ESNext,
+    "Set.isSubsetOf" to ScriptTarget.ESNext,
+    "Set.isSupersetOf" to ScriptTarget.ESNext,
+    "Set.isDisjointFrom" to ScriptTarget.ESNext,
+)
