@@ -20,6 +20,89 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 810 (2026-08-03) — (JIT.1)(h) LANDED FOR `checkReturnAssignabilityCore`: 9,743
+BYTECODES -> AN ENTRY AT 4,052 PLUS TWO `cra*` HELPERS. CENSUS 12 -> 11. THE ROUND'S
+TRANSFERABLE RESULT IS A MIRROR OF ROUND 807's: **A SPLIT THAT LANDS JUST *UNDER* THE
+LIMIT IS ALSO ONE EXTRACTION SHORT** — AND A SEAM WHOSE ONLY DOWNSTREAM CONSUMER IS A
+LEGACY DOUBLE-CHECK CANNOT BE DISCRIMINATED BY ANY SHAPE.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **12** over the
+  limit, `checkReturnAssignabilityCore` **9,743** — the round-809 handoff reproduced exactly.
+- **THE TARGET WAS CHOSEN FOR ITS COMMITTED PARTITION, not for its size.** Round 809 handed
+  over two candidates: `checkSingleCallExpressionTypesCore` (15,567, bigger, but its
+  boundaries would have to be derived and it carries the round-793 `ccetPrologueMayFire`
+  constraint) and this one (9,743, with a ready-made plan in `CtaSections` **level C**).
+  The standing preference for an already-committed partition decided it. **ccet remains the
+  next target and is untouched.**
+- **THE SPLIT.** Entry **4,052** plus `craGuardWalkers` **3,706** (`C_WALKERS`) and
+  `craElaborateReturnMismatch` **1,851** (`C_ELAB`). The three sum to **9,609 against
+  9,743** — a SEVENTH confirmation that a bytecode count is a THRESHOLD predicate and not a
+  cost model.
+- **WHICH REGIONS MOVE WAS ALSO ALREADY MEASURED.** Level C (round 755) prices every row,
+  and the two cheapest are the two largest blocks: `C_ELAB`, the 218-line TS2322
+  elaboration, is **1 reach in a whole compiler self-compile** (the profile produces no
+  TS2322 at a return at all), and `C_WALKERS` is the FP firewall the same partition
+  classifies as the dedicated-walker layer. Everything level C prices as ENGINE work stays
+  inline: the SOURCE type (219 ms), flow narrowing (115), `checkConditionalReturnBranches`
+  (46), `canUseTypeEngine` + `checkTypeRelatedTo` (39), the TARGET type (20).
+- **THE MARGIN LESSON, WHICH IS THIS ROUND'S MAIN CARRY.** `C_ELAB` alone took the entry to
+  **7,803** — under the limit, and the census duly read 11. That is not a margin: 197
+  bytecodes is one edit, and the failure would land on somebody else's commit as a red
+  guard pin. Round 807 recorded "a split that lands JUST OVER is one extraction short";
+  the mirror is now recorded too. A second region took the entry to 4,052.
+- **SHAPE.** `C_WALKERS` is a run of guard blocks each ending in a bare `return`, so it
+  returns `Boolean` and the entry replays it as `if (...) return`; its 20 `return@run`
+  labels never crossed the boundary. `C_ELAB` ended in an UNCONDITIONAL `return`, so it is
+  `Unit` and its call site returns after it. The `return` -> `return true` rewrite was
+  applied by locating matches on the STRING/COMMENT-STRIPPED line and splicing at that
+  offset in the RAW line, asserting nothing but whitespace follows the token — so a
+  `return` in a comment or a string cannot be rewritten and a two-token line fails loudly.
+- **CROSS-BOUNDARY VALUES: NONE — computed, not assumed.** All 20 `val`/`var` declarations
+  were listed with their brace depth and intersected per region. The only local either
+  region declares that outlives a statement is `effObjTarget`, declared and dead inside
+  `C_WALKERS`. One pair constrains the partition and both its rows stay in the entry:
+  `savedContextual`/`useCtx`, set in `C_CTX` and read in `C_SRCTYPE`.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** two contiguous,
+  in-order runs of 281 and 217 lines re-extracted and compared verbatim against HEAD (the
+  return rewrite undone first); the entry **reconstructed** from HEAD with both regions
+  replaced by their call sites — **IDENTICAL at 344 lines**; accounting closes exactly
+  (826 = 328 kept + 281 + 217); every `return` enumerated (53 = 33 bare + 20 `@run`; the new
+  entry has 16 bare = 14 kept + 2 at the call sites); free variables computed per region.
+- **DISCRIMINATION: 1 OF 2, two separate builds, control first (13 pins ran, 0 failed), and
+  every ablation confirmed to have RUN 13 pins.** Ignoring `craGuardWalkers`' `true` fails
+  **3 pins** — and NOT the one written as its seam: the excess-property pin stays green
+  because an object literal with an EXCESS property still relates structurally, so the
+  relation adds nothing; the three that fail are the property-MISMATCH pins. Dropping the
+  entry's `return` after `craElaborateReturnMismatch` fails **0**.
+- **THE UNDISCRIMINATED SEAM WAS RE-ATTEMPTED, NOT MERELY RECORDED.** The suspicion after
+  the first run was that the legacy string tail could not TYPE the sources the arm pins
+  used, so the TS2739 pin was rewritten from a `declare const src: {}` source to a
+  PARAMETER source (`function f(src: S): P`) — a shape `varTypes` holds, whose engine
+  emission is a TS2739 the string path would follow with a TS2322, a difference no dedup
+  could hide. **0 pins failed again.** So the finding is about the FUNCTION: the only thing
+  after that return is `C_STRTAIL`, a legacy double-check that emits for nothing the engine
+  has already rejected — which is round 755's measurement seen from the other side (85% of
+  invocations exit inside the string tail and it is worth 15 ms). The return is a redundant
+  guard on today's code; the pin written for it is **renamed** to say what it actually
+  tests, per the standing rule.
+- **WHAT DID NOT WORK, twice each.** (1) The first nesting pin — a returned
+  `function inner(): P { return {a: "s"} }` — asserts a diagnostic that does not exist on a
+  WORKING build (that inner return is not checked in that position at all), i.e. it pinned
+  an open gap; replaced by a returned ARROW with a block body, which is checked. Round
+  765's rule applies: an open gap belongs in a session note, never in a pin. (2) TWO builds
+  died with the round-808 Kotlin-daemon `GC overhead limit exceeded` — one incremental
+  build of the split itself and one of the PRE-SPLIT grid binary — costing ~15 minutes;
+  both recovered by `./gradlew --stop` + a graceful bracket-pattern Kotlin-daemon kill.
+- Suite 13,596 -> **13,612 / 0 failures / 3 skipped** (13 `CraSplitTest` + 3
+  `HugeMethodLimitTest`); 8-profile grid diffed BOTH directions against a purpose-built
+  pre-split binary, with the two class dirs confirmed to DIFFER (`javap` finds 3 `cra*`
+  entries in one, 0 in the other) — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+  eight**; `--partitionCheck 2` **EQUIVALENT — 46**; cost gate **all 20 counters +0.00%**;
+  build warning-clean (`^w:` and `^e:` both 0). **No wall A/B, deliberately** — the family
+  is bounded four times over. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 14.
+
+
 **Round 809 (2026-08-03) — (JIT.1)(g) LANDED FOR `checkAssignmentExpressionCore`: 18,100
 BYTECODES (2.3x HotSpot's LIMIT) -> AN ENTRY AT 3,861 PLUS NINE `cae*` HELPERS. CENSUS
 13 -> 12. AND THE ROUND'S REAL RESULT IS THAT THE SEAM PREDICTIONS WERE WRONG IN BOTH
@@ -803,98 +886,6 @@ cost gate 19 of 20 counters +0.00% with the twentieth a pure re-attribution.**
   more and costs none of the scope trade § 0.1 warns about.**
 
 
-**Round 801 (2026-08-02) — (FRONT.2) `Binder.bind` IS OPENED AND CLOSED. THE MAP WAS
-RE-DERIVED FIRST AND IT NAMED ITS TARGET BY ELIMINATION: THE ~400 TAIL PASSES ARE FLAT
-(largest 75 ms = 0.26%, only 2 of 400 do any type-system work), SO THE ROUND WENT TO THE
-FRONT END'S 1,549 ms BIND — NEVER PARTITIONED IN 800 ROUNDS. TWO LEVERS BUILT, BOTH
-MEASURED ZERO, AND ONE OF THEM WAS KILLED BY ITS OWN CENSUS AFTER ITS ROW HAD ALREADY
-COLLAPSED. Suite 13,476/0/3, grid 46×7/94 with 0 added and 0 removed BOTH directions,
-cost gate all 20 counters +0.00%.**
-
-- **STEP 1 — THE MAP, RE-DERIVED, AND NOTHING LARGE WAS STALE.** Median of 3 probe-free
-  `--passTiming` runs at `d26c6988`, with `./gradlew --stop` plus a graceful bracket-pattern
-  Kotlin-daemon kill INSIDE the measuring script (round 800's 270× misread was exactly this).
-  Wall 29.12/28.57/28.39 s — a 2.6% spread, and the absolute ns/call sanity-checked against
-  the 798 table before anything was believed. Every 798 row held to within a few percent;
-  the compile is ~2.5% faster, which is the 481 ms rounds 798–800 landed. § 0 now carries a
-  dated 801 column.
-- **THE TWO NEW ROWS ARE THE ROUND'S REAL FINDING, and neither needed instrumentation —
-  only someone to add up what `--passTiming` already prints.** (1) **The ~400 tail passes are
-  2,962 ms and FLAT**: largest `checkSpreadPropertyOverrides` **75 ms = 0.26% of the
-  compile**, top 20 = 33%, top 50 = 62%, and 300 of them hold 11%. Decisively, **only 2 of
-  400 call `getTypeOfExpression` at all and NONE narrows** — so the tail is not type-system
-  work, it is ~400 pure AST traversals with syntactic predicates. That is a STRUCTURAL cost,
-  and its two treatments are already measured and closed (M0.4's 25% recovery,
-  superseded-as-mis-ordered; (DISPATCH.1) at 4.8%; deletion closed twice in 619/620). **So
-  the prompt's second candidate was eliminated by measurement rather than by memory.**
-  (2) **`outside-pass` = 975 ms** — checker-init work inside no `pass()` wrapper, a row no
-  column had ever named.
-- **STEP 2 — THE BIND, PARTITIONED, AND IT IS THE FIRST PARTITION IN THIS ARC WITH NO
-  BOUNDARY-COST CAVEAT.** `bind()` is literally three statements, so the partition is
-  exhaustive BY CONSTRUCTION and costs 3 timestamp pairs per FILE (123 files ≈ 33 µs against
-  ~1,530 ms) — no round-734 differential calibration needed, and the measured residue is
-  **−13 ms (0.8%)**. **`bindStatements` 31 ms (2%) / `bindLexicalScopes` ~470 ms (31%, over
-  876,201 node pops) / `FlowGraphBuilder.build` ~1,050 ms (67%, over 236,587 flow nodes)**.
-  The census is what makes those readable: 1,050 ms over 236,587 nodes is **4.4 µs per flow
-  node**, ~1000× an allocation, which is what rules out the minting as the cost. Level 2,
-  three spans per CLOSURE (2,014, not per node): **`collectReassignedNamesInRange` 275–444 ms**,
-  `collectClosureLocalNames` 3–4 ms, `collectEnclosingVarDecls` 16–20 ms, and **~700 ms of
-  residue that is the flow walk itself, at 3.0 µs per flow node.**
-- **LEVER A — hoist the `substring`, unbox the neighbour reads. MEASURED ZERO.** The census
-  sized the target exactly rather than by inference: **382,520 identifier occurrences
-  classified against 15,331 recorded — 24×, i.e. 367,189 `String`s allocated and discarded**,
-  plus a boxed `Char?` at every context probe (`getOrNull`). Both removed, both arms on ONE
-  binary, twice each, identical boundary counts: **fast 314/362 ms vs legacy 317/320 ms.**
-  Nothing. *An allocation count is not a cost* — round 758's population-vs-frequency law one
-  level down, and the round's own prediction falsified by its own instrument.
-- **THE EQUIVALENCE IS MEASURED, NOT ARGUED, AND ITS CONTROL IS HONESTLY DEAD.** The pre-801
-  scanner is kept VERBATIM as the oracle: `--verifyFlowScan` runs both on every real scan and
-  reports **scans compared 1220, diverged 0; entries compared 15331, diverged 0**, with
-  production `--listAll` identical. **`--flowScanBogus`, the positive control, reports 0 on
-  the compiler profile** — tsc's own sources contain no `%=` in a scanned range — so it is
-  reported as dead THERE and the falsification is carried by a fixture pin instead. That is
-  round 793's rule applied to this round rather than rediscovered by the next one.
-- **LEVER B — defer the suffix set. ROW COLLAPSED, THEN ITS OWN CENSUS KILLED THE CLAIM.**
-  The value has exactly ONE consumer (`root in flowNode.reassignedAfterNames`) reached only
-  from a narrowing walk, and walks fell 75% between 758 and 798 — the (IANY.1) "a state
-  nothing can read" shape, one phase earlier. `SuffixNameSet` is a view materialising on
-  first question; the row fell **53.5 → 0.9 ms** and for an hour that looked like a small
-  win. Then the census: **suffix sets created 1143, materialized 1143.** Every set IS
-  eventually asked, so the work is **MOVED into the checker, not deleted** — round 788's law,
-  answered AGAINST the round's own change. **VERDICT NEUTRAL**, kept because it is equivalent
-  and verified, explicitly NOT quoted as a win. This is round 800's calls-vs-distinct test in
-  its simplest form (a ratio of 1.000 means moved), and the lesson is that **the ratio is
-  cheap and belongs BEFORE the timing, not after it.**
-- **THE BOUND, which is the round's deliverable.** `bind` = 1,549 ms = 6.0%, and after this
-  round every part of it is named: 31 ms of declaration binding; ~470 ms of one iterative
-  whole-tree scope walk at **540 ns per node pop**, which every later phase reads; ~280 ms of
-  a text scan the round-433 cache already reduced to 1,220 executions over 6.26 M chars (63%
-  of the program's source), whose per-char work lever A showed is not allocation; ~20 ms of
-  other collectors; 38–53 ms of suffix sets that move rather than vanish; and **~700 ms of
-  single-pass flow-graph construction the checker requires**. Nothing here is a suppression, a
-  cache, or an unread state. **`bind` joins `checkArgumentsAgainstSignature` (797) and the
-  spine-leave handlers (733/799) as measured, bounded and CLOSED.**
-- **PINS: 15 new (`FlowScanEquivalenceTest`), and one of them EARNED ITS KEEP INSIDE THIS
-  ROUND.** They pin B464's operator semantics, which were entirely unpinned before today
-  (plain `=`, `%=`, `>>>=`, postfix `++`; and the negative controls `==`, `=>` and a
-  same-named PROPERTY write — the last three being exactly the sites where the `' '` sentinel
-  has to behave like `null`), plus two in-process ARM-EQUIVALENCE pins, the verifier's own
-  liveness, the view's arithmetic `isEmpty` short-circuit, and flag defaults. **The pin that
-  paid**: the first draft of the deferral pin asserted a STRICT inequality between the two
-  arms' materialisation counts and FAILED — because in a small fixture the checker questions
-  every closure. That red test is how round 788's law surfaced at all; restated as `<=`, with
-  the profile census carrying the real claim. Discrimination: the `%=` pins fail against
-  `--flowScanBogus`, and the equivalence pins fail against either arm being wrong.
-- **WHAT ELSE DID NOT WORK.** A memo over the returned suffix was designed and ABANDONED
-  UNBUILT: the result is a pure function of `(start, hi)` and every closure has a distinct
-  `container.pos`, so the key is distinct by construction and the hit rate would be ~0.
-  Recorded because the shape looks memoizable and is not.
-- Suite 13,461 → **13,476 / 0 failures / 3 skipped**. Grid against the real pre-change path
-  in the same binary (`--flowEagerSet --flowScanLegacy`): **46/94/46/46/46/46/46/46, 0 added
-  and 0 removed BOTH directions**. `--partitionCheck 2` **EQUIVALENT — 46**. Cost gate **all
-  20 counters +0.00%, no rebaseline**. **No wall-clock A/B, deliberately** — nothing measured
-  here is within an order of magnitude of the ±1.0% warm band. Full derivation:
-  `docs/perf/bind-attribution.md`.
 
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
@@ -1069,14 +1060,35 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     discriminate and does not; `caeForeignTpTargetAndClassRhs` was argued redundant and is
     the round's sharpest single-pin result. Full derivation:
     `docs/perf/setup-phase-and-huge-methods.md` § 13.
+  - [x] **(h) DONE round 810 — `checkReturnAssignabilityCore` 9,743 → an entry at 4,052
+    plus `craGuardWalkers` 3,706 and `craElaborateReturnMismatch` 1,851, two contiguous
+    regions of the committed `CtaSections` **level-C** partition; census 12 → 11.** The
+    smallest over-limit `Checker` method (1.2x the limit), so the question was *how little*
+    to move, and level C — a MEASURED partition — answers it: `C_ELAB` is **1 reach in a
+    whole compiler self-compile** and `C_WALKERS` is the dedicated-walker FP firewall, while
+    every row level C prices as engine work stays inline. **THE CARRY: a split that lands
+    just UNDER the limit is one extraction short too** — `C_ELAB` alone left the entry at
+    7,803, a 197-byte margin that the next edit would cross. Equivalence by round 805's five
+    checks, all green (entry reconstruction IDENTICAL at 344 lines; **no cross-boundary
+    value**). Pins `CraSplitTest` (13) + `HugeMethodLimitTest` (+3). **Discrimination: 1 of
+    2, and the undiscriminated one survived a purpose-built retry** — everything after the
+    elaboration is the LEGACY STRING TAIL, which emits for nothing the engine has already
+    rejected, so no shape can discriminate that seam. Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 14.
   - **(c) The call core** —
     `checkSingleCallExpressionTypesCore` 15,567
     (round 807 took `checkArgumentsAgainstSignatureCore` — see (f); **round 808 took
     `checkVarDeclAssignabilityCore` 19,296 → an entry at 3,535 plus seven `cvda*` helpers,
     one per contiguous run of the committed `CtaSections` level-B partition; census
-    14 → 13**; **round 809 took `checkAssignmentExpressionCore` — see (g)**). Each already
+    14 → 13**; **round 809 took `checkAssignmentExpressionCore` — see (g)**; **round 810
+    took `checkReturnAssignabilityCore` from the (d) tail — see (h)**). Each already
     has a committed section partition from rounds 787–797, which
-    IS a split plan. One method per commit.
+    IS a split plan. One method per commit. **`checkSingleCallExpressionTypesCore` is now
+    the only method left in THIS sub-item, and the largest `Checker` method over the limit
+    anywhere (the four ahead of it are two emit-mode Transformer methods, `compileParsedCore`
+    and `applyDirective`, all of which run once per compile or only under emit).** Unlike
+    (f)–(h) its boundaries are NOT committed as a `*Sections` partition, so this one has to
+    derive them — budget for that.
     **`checkSingleCallExpressionTypesCore` carries the round-793 `ccetPrologueMayFire` gate
     and must keep it in the entry.** The non-`Checker` tail is
     also still open and was never in this item's list: `Transformer.transformToCommonJS`
@@ -1085,8 +1097,9 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     `access$checkBigintPropertyNames$emit` 10,339, `Transformer.transform` 8,934.
   - **(d) The tail of the list** — `checkDuplicateDeclarations` 12,935,
     `tryInferSingleTypeParamFromArgs` 11,930, `checkIndexSigInStatement` 10,928,
-    `access$checkBigintPropertyNames$emit` 10,339, `checkReturnAssignabilityCore` 9,743,
-    `checkPropertyAccessInExpr` 9,062, `ccetSpineEnter` 8,686. Also watch the four sitting
+    `access$checkBigintPropertyNames$emit` 10,339 (`checkReturnAssignabilityCore` 9,743
+    went at round 810 — see (h); `checkPropertyAccessInExpr` 9,062 at round 805 and
+    `ccetSpineEnter` 8,686 at round 806). Also watch the four sitting
     JUST under the limit, one refactor from crossing it: `walkFunctionBodiesInExpr` 7,702,
     `cpaSpineLeave` 7,359, `ctaM3StmtAnchorCore` 7,245, `cpaSpineEnter` 6,941.
   - **(e) EMIT-mode methods — `Transformer.transformToCommonJS` 28,991,

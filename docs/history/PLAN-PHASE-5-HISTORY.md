@@ -1,3 +1,97 @@
+**Round 801 (2026-08-02) — (FRONT.2) `Binder.bind` IS OPENED AND CLOSED. THE MAP WAS
+RE-DERIVED FIRST AND IT NAMED ITS TARGET BY ELIMINATION: THE ~400 TAIL PASSES ARE FLAT
+(largest 75 ms = 0.26%, only 2 of 400 do any type-system work), SO THE ROUND WENT TO THE
+FRONT END'S 1,549 ms BIND — NEVER PARTITIONED IN 800 ROUNDS. TWO LEVERS BUILT, BOTH
+MEASURED ZERO, AND ONE OF THEM WAS KILLED BY ITS OWN CENSUS AFTER ITS ROW HAD ALREADY
+COLLAPSED. Suite 13,476/0/3, grid 46×7/94 with 0 added and 0 removed BOTH directions,
+cost gate all 20 counters +0.00%.**
+
+- **STEP 1 — THE MAP, RE-DERIVED, AND NOTHING LARGE WAS STALE.** Median of 3 probe-free
+  `--passTiming` runs at `d26c6988`, with `./gradlew --stop` plus a graceful bracket-pattern
+  Kotlin-daemon kill INSIDE the measuring script (round 800's 270× misread was exactly this).
+  Wall 29.12/28.57/28.39 s — a 2.6% spread, and the absolute ns/call sanity-checked against
+  the 798 table before anything was believed. Every 798 row held to within a few percent;
+  the compile is ~2.5% faster, which is the 481 ms rounds 798–800 landed. § 0 now carries a
+  dated 801 column.
+- **THE TWO NEW ROWS ARE THE ROUND'S REAL FINDING, and neither needed instrumentation —
+  only someone to add up what `--passTiming` already prints.** (1) **The ~400 tail passes are
+  2,962 ms and FLAT**: largest `checkSpreadPropertyOverrides` **75 ms = 0.26% of the
+  compile**, top 20 = 33%, top 50 = 62%, and 300 of them hold 11%. Decisively, **only 2 of
+  400 call `getTypeOfExpression` at all and NONE narrows** — so the tail is not type-system
+  work, it is ~400 pure AST traversals with syntactic predicates. That is a STRUCTURAL cost,
+  and its two treatments are already measured and closed (M0.4's 25% recovery,
+  superseded-as-mis-ordered; (DISPATCH.1) at 4.8%; deletion closed twice in 619/620). **So
+  the prompt's second candidate was eliminated by measurement rather than by memory.**
+  (2) **`outside-pass` = 975 ms** — checker-init work inside no `pass()` wrapper, a row no
+  column had ever named.
+- **STEP 2 — THE BIND, PARTITIONED, AND IT IS THE FIRST PARTITION IN THIS ARC WITH NO
+  BOUNDARY-COST CAVEAT.** `bind()` is literally three statements, so the partition is
+  exhaustive BY CONSTRUCTION and costs 3 timestamp pairs per FILE (123 files ≈ 33 µs against
+  ~1,530 ms) — no round-734 differential calibration needed, and the measured residue is
+  **−13 ms (0.8%)**. **`bindStatements` 31 ms (2%) / `bindLexicalScopes` ~470 ms (31%, over
+  876,201 node pops) / `FlowGraphBuilder.build` ~1,050 ms (67%, over 236,587 flow nodes)**.
+  The census is what makes those readable: 1,050 ms over 236,587 nodes is **4.4 µs per flow
+  node**, ~1000× an allocation, which is what rules out the minting as the cost. Level 2,
+  three spans per CLOSURE (2,014, not per node): **`collectReassignedNamesInRange` 275–444 ms**,
+  `collectClosureLocalNames` 3–4 ms, `collectEnclosingVarDecls` 16–20 ms, and **~700 ms of
+  residue that is the flow walk itself, at 3.0 µs per flow node.**
+- **LEVER A — hoist the `substring`, unbox the neighbour reads. MEASURED ZERO.** The census
+  sized the target exactly rather than by inference: **382,520 identifier occurrences
+  classified against 15,331 recorded — 24×, i.e. 367,189 `String`s allocated and discarded**,
+  plus a boxed `Char?` at every context probe (`getOrNull`). Both removed, both arms on ONE
+  binary, twice each, identical boundary counts: **fast 314/362 ms vs legacy 317/320 ms.**
+  Nothing. *An allocation count is not a cost* — round 758's population-vs-frequency law one
+  level down, and the round's own prediction falsified by its own instrument.
+- **THE EQUIVALENCE IS MEASURED, NOT ARGUED, AND ITS CONTROL IS HONESTLY DEAD.** The pre-801
+  scanner is kept VERBATIM as the oracle: `--verifyFlowScan` runs both on every real scan and
+  reports **scans compared 1220, diverged 0; entries compared 15331, diverged 0**, with
+  production `--listAll` identical. **`--flowScanBogus`, the positive control, reports 0 on
+  the compiler profile** — tsc's own sources contain no `%=` in a scanned range — so it is
+  reported as dead THERE and the falsification is carried by a fixture pin instead. That is
+  round 793's rule applied to this round rather than rediscovered by the next one.
+- **LEVER B — defer the suffix set. ROW COLLAPSED, THEN ITS OWN CENSUS KILLED THE CLAIM.**
+  The value has exactly ONE consumer (`root in flowNode.reassignedAfterNames`) reached only
+  from a narrowing walk, and walks fell 75% between 758 and 798 — the (IANY.1) "a state
+  nothing can read" shape, one phase earlier. `SuffixNameSet` is a view materialising on
+  first question; the row fell **53.5 → 0.9 ms** and for an hour that looked like a small
+  win. Then the census: **suffix sets created 1143, materialized 1143.** Every set IS
+  eventually asked, so the work is **MOVED into the checker, not deleted** — round 788's law,
+  answered AGAINST the round's own change. **VERDICT NEUTRAL**, kept because it is equivalent
+  and verified, explicitly NOT quoted as a win. This is round 800's calls-vs-distinct test in
+  its simplest form (a ratio of 1.000 means moved), and the lesson is that **the ratio is
+  cheap and belongs BEFORE the timing, not after it.**
+- **THE BOUND, which is the round's deliverable.** `bind` = 1,549 ms = 6.0%, and after this
+  round every part of it is named: 31 ms of declaration binding; ~470 ms of one iterative
+  whole-tree scope walk at **540 ns per node pop**, which every later phase reads; ~280 ms of
+  a text scan the round-433 cache already reduced to 1,220 executions over 6.26 M chars (63%
+  of the program's source), whose per-char work lever A showed is not allocation; ~20 ms of
+  other collectors; 38–53 ms of suffix sets that move rather than vanish; and **~700 ms of
+  single-pass flow-graph construction the checker requires**. Nothing here is a suppression, a
+  cache, or an unread state. **`bind` joins `checkArgumentsAgainstSignature` (797) and the
+  spine-leave handlers (733/799) as measured, bounded and CLOSED.**
+- **PINS: 15 new (`FlowScanEquivalenceTest`), and one of them EARNED ITS KEEP INSIDE THIS
+  ROUND.** They pin B464's operator semantics, which were entirely unpinned before today
+  (plain `=`, `%=`, `>>>=`, postfix `++`; and the negative controls `==`, `=>` and a
+  same-named PROPERTY write — the last three being exactly the sites where the `' '` sentinel
+  has to behave like `null`), plus two in-process ARM-EQUIVALENCE pins, the verifier's own
+  liveness, the view's arithmetic `isEmpty` short-circuit, and flag defaults. **The pin that
+  paid**: the first draft of the deferral pin asserted a STRICT inequality between the two
+  arms' materialisation counts and FAILED — because in a small fixture the checker questions
+  every closure. That red test is how round 788's law surfaced at all; restated as `<=`, with
+  the profile census carrying the real claim. Discrimination: the `%=` pins fail against
+  `--flowScanBogus`, and the equivalence pins fail against either arm being wrong.
+- **WHAT ELSE DID NOT WORK.** A memo over the returned suffix was designed and ABANDONED
+  UNBUILT: the result is a pure function of `(start, hi)` and every closure has a distinct
+  `container.pos`, so the key is distinct by construction and the hit rate would be ~0.
+  Recorded because the shape looks memoizable and is not.
+- Suite 13,461 → **13,476 / 0 failures / 3 skipped**. Grid against the real pre-change path
+  in the same binary (`--flowEagerSet --flowScanLegacy`): **46/94/46/46/46/46/46/46, 0 added
+  and 0 removed BOTH directions**. `--partitionCheck 2` **EQUIVALENT — 46**. Cost gate **all
+  20 counters +0.00%, no rebaseline**. **No wall-clock A/B, deliberately** — nothing measured
+  here is within an order of magnitude of the ±1.0% warm band. Full derivation:
+  `docs/perf/bind-attribution.md`.
+
+
 **Round 797 (2026-08-02) — (CALL.6) DONE: THE LEVEL-S SUB-PARTITION SAYS ROUND 796's
 
 **Round 800 (2026-08-02) — (IANY.1) THE 249 ms ARM IS GATED: 93% OF ITS CALLEE

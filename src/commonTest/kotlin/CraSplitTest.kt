@@ -62,9 +62,33 @@ import kotlin.test.Test
  *
  * **What this class pins that a size check cannot.** `HugeMethodLimitTest` sees
  * the bytecode counts; it cannot see that each helper still RUNS for the shape it
- * owns, nor that a dropped return signal would let the relation emit a SECOND
+ * owns, nor that a dropped return signal would let a later gate emit a SECOND
  * diagnostic at the same return. Each arm pin names the helper it exercises and
- * asserts its distinctive MESSAGE; the seam pins assert a COUNT.
+ * asserts its distinctive MESSAGE.
+ *
+ * **Honest limits (round 807's law: ablate ONE mistake at a time).** Two seams,
+ * two deliberate mistakes, one per build, control first (13 pins ran, 0 failed) —
+ * and every ablation run confirmed to have RUN 13 pins, so no zero here is round
+ * 808's dead-build artefact.
+ *
+ *  * **`craGuardWalkers`' `true` ignored: 3 pins fail — DISCRIMINATED.** They are
+ *    the three property-level pins; the relation then reaches the same object
+ *    literal and adds its coarse whole-value TS2322 at the `return`.
+ *  * **The `return` after `craElaborateReturnMismatch` dropped: 0 pins fail —
+ *    NOT DISCRIMINATED**, and it survived a second attempt built for it (the
+ *    TS2739 arm pin was rewritten from a `declare const` source to a PARAMETER
+ *    source precisely so the legacy string tail would have a type it can name).
+ *    The reason is a property of the FUNCTION: the only thing after that return
+ *    is `C_STRTAIL`, the legacy string checker, and it emits for NONE of the
+ *    shapes the engine has already rejected here — a literal source, a widened
+ *    literal, a union source, a type-parameter target and an interface parameter
+ *    were all tried. On today's code the return is a redundant guard, which is
+ *    the same measurement round 755 recorded from the other side (the string
+ *    tail is 15 ms of pure double-checking). It is kept because the monolith had
+ *    it, and this note is the record that no pin would notice if a future rule
+ *    made it load-bearing again.
+ *
+ * The per-seam table is in `docs/perf/setup-phase-and-huge-methods.md` § 14.3.
  */
 class CraSplitTest {
 
@@ -74,9 +98,10 @@ class CraSplitTest {
      * The excess-property guard: the walker owns the diagnostic AND the position
      * (the offending KEY, not the `return` keyword).
      *
-     * Doubles as the helper's SEAM pin — see the count assertion: with the entry
-     * ignoring `craGuardWalkers`' `true`, control reaches the relation, which
-     * rejects the same object literal and adds a coarse TS2322 at the `return`.
+     * NOT a discriminating seam pin, measured: with the entry ignoring
+     * `craGuardWalkers`' `true` this stays GREEN, because an object literal with an
+     * EXCESS property still relates structurally, so the relation adds nothing. The
+     * three pins that do discriminate are the property-MISMATCH ones below.
      */
     @Test
     fun `craGuardWalkers owns the excess-property report for a returned object literal`() {
@@ -172,9 +197,9 @@ class CraSplitTest {
     fun `craElaborateReturnMismatch emits TS2739 for a source missing two properties`() {
         val ds = diagnose(
             """
+            interface S { x: number }
             interface P { a: number; b: number }
-            declare const src: {};
-            function f(): P { return src; }
+            function f(src: S): P { return src; }
             """
         )
         assert(ds.count { it.code == 2739 } == 1)
@@ -237,13 +262,17 @@ class CraSplitTest {
     // ── seams and ordering ────────────────────────────────────────────────────
 
     /**
-     * The `C_ELAB` seam: the entry returns unconditionally after the helper, so the
-     * LEGACY STRING TAIL (`C_STRTAIL`) never re-checks a return the engine has
-     * already rejected. Dropping that `return` makes the string path emit a second
-     * TS2322 at the same position.
+     * A single-emission guard, NOT a discriminating seam pin — say so, per the
+     * standing rule that an undiscriminating pin must not carry a name claiming
+     * otherwise. It asserts that two rejected returns produce exactly two TS2322 at
+     * two distinct positions, which is what a future second emitter after the
+     * elaboration would break; dropping the entry's own `return` after
+     * `craElaborateReturnMismatch` does NOT break it (measured), because the only
+     * thing that follows is the legacy string tail and it emits for none of these
+     * shapes.
      */
     @Test
-    fun `the elaboration seam emits exactly one diagnostic per rejected return`() {
+    fun `exactly one diagnostic lands per rejected return`() {
         val ds = diagnose(
             """
             function f(): string { return 1; }

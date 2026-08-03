@@ -1025,3 +1025,119 @@ and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
 `cost_gate.py` **all 20 counters +0.00%**; no `w:` lines in the compile that
 produced the binary. **No wall A/B, deliberately** — the family is bounded four
 times over (§§ 4.2, 5.3, 7 and round 804) and this lands for the threshold.
+
+## 14. (JIT.1)(h) — `checkReturnAssignabilityCore`, 9,743 → an entry plus two helpers
+
+*Round 810.* The smallest over-limit `Checker` method — only **1.2×** the limit,
+against (f)'s 3.0× and (g)'s 2.3× — and the first one where the question was not
+*how* to partition but *how little* to move.
+
+| function | region of the committed `CtaSections` level-C partition | bytecodes |
+|---|---|---:|
+| `checkReturnAssignabilityCore` | head, `C_GEN`, `C_FIRE1`, `C_TUPLE`, `C_TARGET`, `C_CONDBR`, `C_CTX`, `C_SRCTYPE`, `C_NARROW`, `C_FTP`, `C_RELATION`, `C_MIDGUARD`, `C_STRTAIL` | **4,052** |
+| `craGuardWalkers` | `C_WALKERS` | 3,706 |
+| `craElaborateReturnMismatch` | `C_ELAB` | 1,851 |
+
+Census **12 → 11**. The three sum to **9,609 against 9,743** — a seventh
+confirmation that a bytecode count is a THRESHOLD predicate and not a cost model.
+
+**The partition was already committed, and so was the ARGUMENT for which regions
+to move.** Level C (§ 5) is a *measured* partition, and its two cheapest rows are
+exactly the two largest blocks:
+
+* `C_ELAB` — the 218-line TS2322 elaboration — is **1 reach in a whole compiler
+  self-compile**. § 5 already called this out: the block every reader assumes is
+  expensive runs once, because tsc's own sources produce no TS2322 at a return.
+* `C_WALKERS` is the FP-firewall guard cluster the same partition classifies as
+  the dedicated-walker layer (118 ms net of a 741 ms function, 9,340 reaches).
+
+Everything level C prices as ENGINE work stays inline: the SOURCE type (219 ms),
+flow narrowing (115), `checkConditionalReturnBranches` (46), `canUseTypeEngine` +
+`checkTypeRelatedTo` (39), the TARGET type (20).
+
+**A margin note the next agent should copy.** `C_ELAB` alone took the entry to
+**7,803** — under the limit, and 197 bytecodes is not a margin: the entry would
+cross back on the next edit and the guard pin would fail on somebody else's
+commit. Round 807's rule ("a split that lands just over is one extraction short")
+has a mirror: *a split that lands just under is one extraction short too.*
+
+### 14.1 The shape, and the one thing that constrains the partition
+
+`C_WALKERS` is a run of guard blocks each ending in a bare `return`, so it returns
+`Boolean` (`true` = "a guard fired — it has either emitted or proved the return
+legal — and the caller must return") and the entry replays it as `if (…) return`.
+Its 20 `return@run` labels are internal to blocks that move whole and never
+crossed the boundary. `C_ELAB` ends in an UNCONDITIONAL `return`, so it is `Unit`
+and its call site returns unconditionally after it.
+
+**Cross-boundary values: none**, computed rather than assumed. Every `val`/`var`
+in the function was listed with its brace depth (20 of them) and intersected per
+region against the identifiers that region uses. The only local either region
+declares that outlives a statement is `effObjTarget`, declared at what was line
+98789 and dead by 98840 — both inside `C_WALKERS`. One pair constrains the
+partition and both its rows stay in the entry: `savedContextual`/`useCtx` are set
+in `C_CTX` and read in `C_SRCTYPE`.
+
+### 14.2 Equivalence, measured (round 805's five checks)
+
+1. both moved runs re-extracted from the NEW file and checked back against HEAD:
+   **two contiguous, in-order runs** of 281 and 217 lines, identical modulo the
+   dedent and the `return` → `return true` rewrite (which was undone before the
+   comparison);
+2. the entry **reconstructed** from HEAD with the two regions replaced by their
+   call sites: **IDENTICAL, 344 lines**;
+3. accounting closes exactly — HEAD body 826 = kept 328 + 281 + 217;
+4. every `return` enumerated: HEAD 53 = 33 bare + 20 `@run`; the new entry has
+   **16 bare = 14 kept + 2 at the call sites**, `craGuardWalkers` 15 (14 rewritten
+   + the added `return false`) and `craElaborateReturnMismatch` 5;
+5. free variables computed per region, which is what keeps the build
+   warning-clean (an unused parameter is a warning here).
+
+The `return` rewrite was applied by locating matches on the STRING/COMMENT-
+STRIPPED line and splicing at that offset in the raw line, with an assertion that
+nothing but whitespace follows the token — so a `return` inside a comment or a
+string cannot be rewritten, and a line carrying two of them fails loudly.
+
+### 14.3 Discrimination — 1 of 2, and the second survived a purpose-built retry
+
+`CraSplitTest` (13 pins) plus `HugeMethodLimitTest` (+3). Control first: 13 pins
+ran, 0 failed. Each mistake was injected ALONE, on its own build, and every run
+was confirmed to have RUN 13 pins (round 808's dead-build tell).
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| the entry ignores `craGuardWalkers`' `true` | **3** — the three property-level pins | **DISCRIMINATED** |
+| the entry drops its `return` after `craElaborateReturnMismatch` | 0 | **NOT DISCRIMINATED** (twice) |
+
+**What the first one teaches is that the pin that looked like the seam was not.**
+The excess-property pin (`return { a: 1, b: 2 }` against `{ a: number }`) stays
+GREEN under the mistake — an object literal with an excess property still relates
+STRUCTURALLY, so the relation adds nothing. The pins that fail are the property-
+MISMATCH ones, where the relation really does reach the same literal and append
+its coarse whole-value TS2322 at the `return`.
+
+**The second was re-attempted, not merely recorded.** The first run left every pin
+green; the suspicion was that the legacy string tail (`C_STRTAIL`) simply could
+not type the sources the arm pins used, so the TS2739 pin was rewritten from a
+`declare const src: {}` source to a PARAMETER source (`function f(src: S): P`), a
+shape whose type the string path holds in `varTypes` and whose engine emission is
+a TS2739 the string path would follow with a TS2322 — a diff no dedup could hide.
+It made no difference: **0 pins failed again.** So the finding is about the
+function, not the pins — *the only thing after that return is a legacy
+double-check that emits for nothing the engine has already rejected*, which is § 5
+point 2 seen from the other side (85% of invocations exit inside the string tail
+and it is worth 15 ms). On today's code the return is a redundant guard; it is
+kept because the monolith had it, and the pin that was written for it is
+**renamed** to say what it actually tests, per the standing rule.
+
+### 14.4 Gate
+
+Suite **13,596 → 13,612 / 0 failures / 3 skipped**; 8-profile grid diffed
+set-for-set BOTH directions against a purpose-built pre-split binary, with the two
+class dirs confirmed to differ (`javap` finds 3 `cra*` entries in one and 0 in the
+other) and every capture confirmed non-empty — **46/46/46/46/46/46/46/94, 0 added
+and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **all 20 counters +0.00%**; no `w:` and no `e:` lines in the
+compile that produced the binary. **No wall A/B, deliberately** — the family is
+bounded four times over (§§ 4.2, 5.3, 7 and round 804) and this lands for the
+threshold and the (f) falsifier.
