@@ -115163,7 +115163,6 @@ interface DataView {
         // Build a multi-mapper covering every TP that can be inferred from at
         // least one arg position; return null if any TP has no candidates
         // (uninferable) so the bare-TypeParam continue path keeps firing.
-        data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?, val fromObjLit: Boolean = false)
         val mapperPairs = mutableListOf<Pair<Type.TypeParam, Type>>()
 
         // B83.4a (two-pass anchor/callback split): pass-1 gathers candidates from
@@ -115193,744 +115192,24 @@ interface DataView {
         }
         for (tp in orderedTps) {
             val candidates = mutableListOf<Candidate>()
-            // Round 440: track whether this TP had an `any`-typed arg soft-skipped at a
-            // return-type site — if it's the ONLY reason the candidate list ends up empty,
-            // bind T = any (tsc infers `T = any` from an `any` arg) instead of leaving the
-            // return's TP un-inferred (`Debug.checkDefined(pos)` where `pos` is a
-            // destructured-const local typed anyType → `T | null | undefined` yields no
-            // candidate → return `T`, FP'ing against a concrete consumer).
-            var tpSawAnyArg = false
-            // Pass 1: anchor positions (non-callback).
-            for (i in params.indices) {
-                if (i >= args.size) break
-                val pt = getTypeOfSymbol(params[i])
-                val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
-                val isBareT = pt === tp
-                val isRestT = isRest && i == params.size - 1 && isArrayOfTypeParam(pt, tp)
-                // 17.31e: non-rest `Array<tp>` — extract element type from same-target
-                // Array Reference call arg (no per-rest-arg fan-out).
-                val isArrayT = !isRest && isArrayOfTypeParam(pt, tp)
-                // 17.38: anonymous Object literal with all-TypeParam members — gather
-                // candidates from the arg ObjectLiteralExpression's same-named property
-                // values for members typed as the current `tp`.
-                val isObjLitOfT = !isRest && !isBareT && !isRestT && !isArrayT &&
-                    isAnonymousObjectWithTypeParamMembers(pt, tpsSet)
-                val isFnTypedOfT = false  // B83.4a: pass-1 skips fn-typed (handled in pass-2)
-                // (i) M3.1 (round 428): `T | undefined` (mode 1) / `T[] | undefined`
-                // (mode 2) union params contribute candidates with the arg's nullish
-                // members stripped; a purely-nullish arg contributes NOTHING (soft
-                // skip — `append(undefined, x)` still infers from `x`).
-                val unionMode = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT)
-                    nullableUnionOfTpMode(pt, tp) else 0
-                // (j) M3.1 (round 430b): predicate-position callback `(x: Base) =>
-                // x is tp` — tp binds from a NAMED guard arg's own predicate target
-                // (`getFirstJSDocTag(node, isJSDocAugmentsTag)` → T = JSDocAugmentsTag).
-                val isPredT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
-                    unionMode == 0 && predicatePositionTpOf(params[i], tps) === tp
-                // (k) round 460: union param with a `tp[][]` member (flatten anchor).
-                val isDblArrT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
-                    unionMode == 0 && !isPredT && unionHasDoubleArrayOfTp(pt, tp)
-                // (l) round 466: `(tp | <droppable falsy/nullish>)[]` — compact anchor.
-                val arrUnionDrops = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
-                    unionMode == 0 && !isPredT && !isDblArrT) arrayOfTpUnionDroppables(pt, tp) else null
-                if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT && !isDblArrT && arrUnionDrops == null) continue
-                fun isNamedLikeAtom(t: Type): Boolean =
-                    t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
-                        t.flags.hasAny(
-                            TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
-                            TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
-                            TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                        )
-                val argRange = if (isRestT) i until args.size else i..i
-                for (ai in argRange) {
-                    if (ai >= args.size) break
-                    val arg = args[ai]
-                    if (arg is SpreadElement) continue
-                    // (j) round 430b: predicate-position candidate — the NAMED guard
-                    // arg's own predicate target (barrel-aware resolution via
-                    // predicateTargetTypeOfGuardExpr). Unresolvable / inline-arrow /
-                    // predicate-less args contribute nothing (soft skip) — branches
-                    // BEFORE the standard rawArgType path, which would type the guard
-                    // as a callable object and hard-bail at the named-like gate.
-                    if (isPredT) {
-                        val t = predicateTargetTypeOfGuardExpr(arg) ?: continue
-                        if (t === anyType || t === errorType) continue
-                        candidates.add(Candidate(ai, t, null))
-                        continue
-                    }
-                    // (k) round 460: array-of-array arg for the `tp[][]` union anchor —
-                    // `flatten(supportedTSExtensions)` where the arg is
-                    // `readonly Extension[][]` binds tp := Extension. Soft-skip
-                    // anything that isn't a clean array-of-array of a named-like
-                    // (or enum) element.
-                    if (isDblArrT) {
-                        // Round 471: a `&&`-guarded nullable arg reads its flow-narrowed
-                        // type (`focusLocations && flatten(focusLocations)`, tsc
-                        // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
-                        // the anchor and T stayed unbound while the arg CHECK narrowed,
-                        // FP-firing TS2345. Nullish-strip-gated (monotone).
-                        // Round 471: a `&&`-guarded nullable arg reads its flow-narrowed
-                        // type (`focusLocations && flatten(focusLocations)`, tsc
-                        // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
-                        // the anchor and T stayed unbound while the arg CHECK narrowed,
-                        // FP-firing TS2345. Nullish-strip-gated (monotone).
-                        val rawArg0 = getTypeOfExpression(arg)
-                        val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
-                            val narrowed = getNarrowedTypeForReference(rawArg0, arg)
-                            if (objLitValueNullishStrip(rawArg0, narrowed)) narrowed else rawArg0
-                        } else rawArg0
-                        val inner = arrayRefElement(rawArg) ?: continue
-                        val elem = arrayRefElement(inner) ?: continue
-                        if (elem === anyType || elem === errorType) continue
-                        val widened = widenType(elem)
-                        val ok = isNamedLikeAtom(widened) ||
-                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) }) ||
-                            (widened is Type.Object && widened.symbol?.flags?.hasAny(SymbolFlags.Enum) == true)
-                        if (!ok) continue
-                        candidates.add(Candidate(ai, widened, null))
-                        continue
-                    }
-                    // (l) round 466: `(tp | droppables)[]` param — the candidate is the
-                    // arg's element union MINUS members assignable to a droppable
-                    // (`compact([a, b, undefined])` binds T without the undefined).
-                    // Soft-skip anything that isn't a clean array arg.
-                    if (arrUnionDrops != null) {
-                        // Round 471: same flow-narrowed arg read as the (k) anchor above.
-                        // Round 471: same flow-narrowed arg read as the (k) anchor above.
-                        val rawArg0 = getTypeOfExpression(arg)
-                        val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
-                            val narrowed = getNarrowedTypeForReference(rawArg0, arg)
-                            if (objLitValueNullishStrip(rawArg0, narrowed)) narrowed else rawArg0
-                        } else rawArg0
-                        val elem = arrayRefElement(rawArg) ?: continue
-                        if (elem === anyType || elem === errorType) continue
-                        val members = (elem as? Type.Union)?.types ?: listOf(elem)
-                        val kept = members.filter { m ->
-                            m !== anyType && m !== errorType &&
-                                arrUnionDrops.none { d -> checkTypeRelatedTo(m, d, assignableRelation) }
-                        }
-                        if (kept.isEmpty()) continue
-                        val widened = widenType(if (kept.size == 1) kept[0] else getUnionType(kept))
-                        val ok = isNamedLikeAtom(widened) ||
-                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })
-                        if (!ok) continue
-                        candidates.add(Candidate(ai, widened, null))
-                        continue
-                    }
-                    // 17.38: object-literal-of-T inference — walk arg's properties matching
-                    // pt's tp-typed members; LUB-as-Union over collected widened types.
-                    // Branches BEFORE the standard rawArgType bail because the arg as a whole
-                    // is a Type.Object, but its property values may include `undefined` /
-                    // string-literal / etc. that the standard bail would reject.
-                    if (isObjLitOfT) {
-                        if (arg !is ObjectLiteralExpression) continue
-                        val ptObj = pt as? Type.Object ?: continue
-                        val ptMembers = ptObj.members ?: continue
-                        val collectedTypes = mutableListOf<Type>()
-                        for ((memberName, memberSym) in ptMembers) {
-                            val mt = getTypeOfSymbol(memberSym)
-                            if (mt !== tp) continue
-                            val propAssign = arg.properties.firstOrNull { p ->
-                                p is PropertyAssignment && getPropertyKeyName(p.name) == memberName
-                            } as? PropertyAssignment
-                            if (propAssign == null) continue
-                            val rawValue = getTypeOfExpression(propAssign.initializer)
-                            if (rawValue === anyType || rawValue === errorType) return null
-                            collectedTypes.add(widenType(rawValue))
-                        }
-                        if (collectedTypes.isEmpty()) continue
-                        val argType = if (collectedTypes.size == 1) collectedTypes[0]
-                                      else getUnionType(collectedTypes)
-                        if (argType === anyType || argType === errorType) return null
-                        val isNamedLike = isNamedLikeAtom(argType) ||
-                            (argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
-                        if (!isNamedLike) return null
-                        candidates.add(Candidate(ai, argType, null, fromObjLit = true))
-                        continue
-                    }
-                    // B83.1 gate (f) candidate extraction: arg's callback supplies tp via
-                    // its single Identifier-named parameter's type annotation. Bail when
-                    // arg is not an ArrowFunction/FunctionExpression, when the callback's
-                    // arity or shape doesn't match, when the lambda's param lacks an
-                    // annotation, or when the annotated type fails to resolve cleanly
-                    // (anyType/errorType/null/undefined/void). Skip the standard rawArgType
-                    // path because lambda exprs typically have anonymous Type.Object types
-                    // that the named-like gate below would reject.
-                    if (isFnTypedOfT) {
-                        val argParams = when (arg) {
-                            is ArrowFunction -> arg.parameters
-                            is FunctionExpression -> arg.parameters
-                            else -> null
-                        } ?: continue
-                        if (argParams.size != 1) continue
-                        val lp = argParams[0]
-                        if (lp.dotDotDotToken) continue
-                        if (lp.name !is Identifier) continue
-                        val lpTypeNode = lp.type ?: continue
-                        val lpType = getTypeFromTypeNode(lpTypeNode)
-                        if (lpType === anyType || lpType === errorType) return null
-                        if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-                        val widened = widenType(lpType)
-                        if (!isNamedLikeAtom(widened) &&
-                            !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
-                        candidates.add(Candidate(ai, widened, null))
-                        continue
-                    }
-                    // 17.37: empty array literal `[]` arg for `Array<tp>` param infers tp = `never`.
-                    // `getTypeOfArrayLiteral` returns anyType for empty arrays (can't infer element
-                    // type), but TypeScript's spec-mandated behavior here is to fall back to never
-                    // for inference — the array contains no elements that could constrain the
-                    // element type. Skip the standard rawArgType anyType bail in this narrow case.
-                    if ((isArrayT || unionMode == 2) && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
-                        candidates.add(Candidate(ai, neverType, null))
-                        continue
-                    }
-                    val rawArgType0Declared = getTypeOfExpression(arg)
-                    // Round 464 (M3.4 × M3.1): a bare Identifier/PropertyAccess arg whose
-                    // DECLARED type is a union infers from its flow-NARROWED type (tsc
-                    // infers from narrowed arg types) — `const name = cloneNode(node)`
-                    // inside `switch (node.kind) { case SyntaxKind.Identifier: … }` binds
-                    // T := Identifier, not the declared EntityName union (tsc
-                    // typeSerializer.ts serializeEntityNameAsExpression). Gated to
-                    // union-declared reference args + a strict non-never refinement that
-                    // still relates to the declared type, so inference only ever gets
-                    // MORE precise; a null flow graph is a no-op inside the narrower.
-                    val rawArgType0 = if (rawArgType0Declared is Type.Union &&
-                        (arg is Identifier || arg is PropertyAccessExpression)) {
-                        val n = getNarrowedTypeForReference(rawArgType0Declared, arg)
-                        if (n !== rawArgType0Declared && n !== neverType && n !== errorType &&
-                            n !== anyType && checkTypeRelatedTo(n, rawArgType0Declared, assignableRelation)) n
-                        else rawArgType0Declared
-                    } else rawArgType0Declared
-                    // M3.1 (round 428): a UNION arg in an Array<tp> / union-of-tp param
-                    // position contributes its single non-nullish member (`Statement[] |
-                    // undefined` → `Statement[]` — tsc's `x = append(x, item)` idiom).
-                    // Multiple non-nullish members stay unhandled: soft-skip for
-                    // union-mode params, hard bail preserved for the legacy shapes.
-                    val rawArgType = if ((isArrayT || unionMode != 0) && rawArgType0 is Type.Union) {
-                        val nonNullish = rawArgType0.types.filter {
-                            !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
-                        }
-                        // (REL.4)(b) round 779: a `tp | null | undefined` parameter REMOVES
-                        // the source's nullish constituents before inferring tp — that is
-                        // what makes `Debug.checkDefined<T>(value: T | null | undefined): T`
-                        // return the non-nullable side. The round-428 rule only did so when
-                        // exactly ONE non-nullish member remained, so a MULTI-member source
-                        // (`__String | undefined`, whose `__String` is itself a 3-member
-                        // union) bound tp to the whole nullish-carrying union and the call's
-                        // return type kept `undefined`.
-                        if (nonNullish.size == 1) nonNullish[0]
-                        else if (REL4B_GATE && nonNullish.size > 1 && nonNullish.size < rawArgType0.types.size)
-                            getUnionType(nonNullish)
-                        else rawArgType0
-                    } else rawArgType0
-                    if (rawArgType === anyType || rawArgType === errorType) {
-                        // M3.1 (round 428): at the RETURN-TYPE call site an untypeable
-                        // arg (an unmodeled local — e.g. a for-of loop var — resolves to
-                        // anyType) contributes NO candidate instead of killing the whole
-                        // inference: `x = append(x, item)` still anchors T from `x`.
-                        // The arg-vs-param call site keeps the hard bail (its consumers
-                        // CHECK args against the substituted params — a wrong partial
-                        // inference there could emit, not just suppress).
-                        if (forReturnType && rawArgType === anyType) { tpSawAnyArg = true; continue }
-                        return null
-                    }
-                    // INV.3(d)(i): a CALL-EXPRESSION arg whose type still carries a
-                    // TypeParam is a nested call whose own inference did not complete
-                    // (checker.ts:7358's `setTextRangeWorker(factory.createNodeArray(
-                    // undefined, …), nodes)` — createNodeArray's un-inferred `T extends
-                    // Node` leaks through `NodeArray<T>`, name-AND-shape-colliding with
-                    // the enclosing fn's `T extends Node`, so the foreign-TP return gate
-                    // cannot classify it). Contribute no candidate and let the tp degrade
-                    // to anyType (the tpSawAnyArg mechanism) — exactly the pre-INV.3(d)
-                    // behavior where the merged-alias callee degraded the whole arg to
-                    // any. The round-468 CallExpression gate keeps an own-TP
-                    // identifier/parameter arg anchoring (`append(arr, item)` with
-                    // `arr: T[]` stays inferred). forReturnType-only: the arg-vs-param
-                    // site's consumers CHECK args against substituted params, where a
-                    // partial mapper could emit rather than merely suppress.
-                    if (forReturnType && arg is CallExpression &&
-                        typeContainsForeignTypeParam(rawArgType, emptySet())) {
-                        tpSawAnyArg = true; continue
-                    }
-                    if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
-                        // A purely-nullish arg for a NULLABLE union param contributes no
-                        // candidate (`append(undefined, x)` — tp comes from `x`).
-                        if (unionMode != 0) continue
-                        return null
-                    }
-                    // 17.31e: for `Array<tp>` param, the inference candidate is the
-                    // arg's element type (extracted from same-target `Array<X>` ref).
-                    // Bail when arg isn't a same-target Array Reference (e.g. plain
-                    // `Type.Object` or `Type.Reference Set<X>`) — too many edge cases
-                    // for this conservative substep. (Union-mode params soft-skip
-                    // instead — the shape is a new capability, never a new bail.)
-                    val argType = if (isArrayT || unionMode == 2) {
-                        if (rawArgType !is Type.Reference) { if (unionMode == 2) continue else return null }
-                        // Round 430: a `readonly X[]` arg (Reference(ReadonlyArray, [X]))
-                        // anchors the element like a mutable array.
-                        val argRefName = rawArgType.target.symbol?.name
-                        if (argRefName != "Array" && argRefName != "ReadonlyArray") { if (unionMode == 2) continue else return null }
-                        val refArgs = rawArgType.resolvedTypeArguments
-                        if (refArgs == null || refArgs.size != 1) { if (unionMode == 2) continue else return null }
-                        val element = refArgs[0]
-                        // 17.31f: widen Union constituents (`widenType` falls through on Union),
-                        // so `Array<undefined | "def">` infers T = `string | undefined` rather
-                        // than bailing at the named-like gate below. Single-type elements still
-                        // go through the existing widenType path.
-                        if (element is Type.Union) getUnionType(element.types.map { widenType(it) })
-                        else widenType(element)
-                    } else rawArgType
-                    if (argType === anyType || argType === errorType) return null
-                    if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-                    // 17.31a refinement: only fire when the inferred type is a "named-like"
-                    // type (Interface, Reference, Intrinsic / literal) AND, when T has a
-                    // constraint, the inferred type satisfies it. Anonymous Type.Object
-                    // results (object literals like `{x: null}`) go through the bare-T
-                    // path so existing per-property constraint elaborations (16.4ds /
-                    // 16.4dt) keep firing — substitution would erase paramType's TypeParam
-                    // identity and skip those branches.
-                    val isNamedLike = isNamedLikeAtom(argType) ||
-                        // 17.31f: Union-of-named-likes from the isArrayT path. Anonymous-Object
-                        // members in heterogeneous-array elements (e.g. `[{a:1}, "def"]` →
-                        // `Array<{a:1} | "def">`) are still rejected because `{a:1}` widens to
-                        // an anonymous Type.Object that fails this check.
-                        ((isArrayT || unionMode != 0) && argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
-                    // 17.41: at the return-type call site, allow anonymous Type.Object
-                    // arg types (substitute T into the return type for downstream display).
-                    // Arg-vs-param call site keeps the bail (forReturnType=false default) so
-                    // 16.4ds / 16.4dt per-property elaborations keep firing on object-literal
-                    // args. Net-zero on the suite alone — pairs with intersection elaboration
-                    // (follow-up substep) to flip `errorMessagesIntersectionTypes01/02_ts`.
-                    if (!isNamedLike && !forReturnType) return null
-                    // 17.31e: for Array<tp> path the literal type is null (we don't have
-                    // a single literal to attach to the array's element type).
-                    val literal = if (isArrayT || unionMode == 2) null else literalTypeOfExpression(arg)
-                    candidates.add(Candidate(ai, argType, literal))
-                }
-            }
-            // Pass 2 (B83.4a): callback (B83.1 gate (f)) positions. Walks the same
-            // params/args but only collects candidates from function-typed param
-            // shapes (anonymous Type.Object with 1 callSig whose single Identifier
-            // param is exactly `tp`). Currently bails at `lp.type ?: continue` for
-            // un-annotated lambdas — B83.4b/c/d will replace that bail with
-            // contextual back-propagation from the partial mapper assembled by
-            // pass-1 across other TPs. Net-zero in isolation: produces the same
-            // candidate set as the pre-restructure single-pass loop for any sig
-            // shape that reaches gate (f).
-            fun isNamedLikeAtom(t: Type): Boolean =
-                t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
-                    t.flags.hasAny(
-                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
-                        TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
-                        TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
-                    ) ||
-                    // Round 466: a branded intersection (`string & { __pathBrand }` —
-                    // tsc's Path) is a legitimate callback-return candidate.
-                    isBrandedNamedLikeIntersection(t)
-            for (i in params.indices) {
-                if (i >= args.size) break
-                val pt = getTypeOfSymbol(params[i])
-                val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
-                if (isRest) continue
-                if (pt === tp) continue
-                if (isArrayOfTypeParam(pt, tp)) continue
-                if (isAnonymousObjectWithTypeParamMembers(pt, tpsSet)) continue
-                val isFnTypedOfT = fnTypedParamBareTpMatch(pt, tpsSet, currentTp = tp) === tp
-                // B83.3: multi-param callback fallback. Returns slot list with
-                // the current `tp` appearing in at least one slot; null slots
-                // are concrete params we ignore for THIS tp's candidate gathering.
-                val multiSlots = if (!isFnTypedOfT) {
-                    fnTypedParamMultiBareTpMatch(pt, tpsSet, currentTp = tp)
-                        ?.takeIf { slots -> slots.any { it === tp } }
-                } else null
-                // B83.4d-quick (NEW 2026-05-27): callback-return-tp inference for the
-                // shape `f<S,T>(arg1: S, cb: (x: S) => T): T` (S already inferred via
-                // pass-1, T comes from the un-annotated lambda's concise body re-typed
-                // under `currentLocalTypes[lp.name] = mapper(S)`). Triggered ONLY when
-                // (a) the existing isFnTypedOfT / multiSlots paths don't apply (callback
-                // param isn't current `tp`), (b) the callback param IS some OTHER tp
-                // (otherTp ∈ tps, otherTp != tp), (c) callback return type MENTIONS the
-                // current tp, (d) otherTp is already in mapperPairs (inferred earlier),
-                // (e) the lambda is concise-body (single expression — NOT Block), (f)
-                // lambda has exactly 1 Identifier param, no annotation. Narrow gate;
-                // intentionally skips Block bodies and multi-param shapes (B83.4 follow-up).
-                if (!isFnTypedOfT && multiSlots == null) {
-                    val fnObj = pt as? Type.Object
-                    val callbackSig = fnObj?.callSignatures?.singleOrNull()
-                    val callbackParam = callbackSig?.parameters?.singleOrNull()
-                    val callbackParamType = callbackParam?.let {
-                        getTypeOfSymbol(it)
-                    }
-                    val callbackReturn = callbackSig?.resolvedReturnType
-                    val otherTp = (callbackParamType as? Type.TypeParam)
-                        ?.takeIf { it in tpsSet && it !== tp }
-                    val otherTpMapped = otherTp?.let { o -> mapperPairs.firstOrNull { it.first === o }?.second }
-                    // B83.4i (NEW 2026-05-28): callback-return-TP inference when the
-                    // callback params are FULLY CONCRETE (mention NO TP) and the
-                    // callback RETURN type is exactly the current `tp`. This is the
-                    // `Array.map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[]`
-                    // shape after the receiver's T is already substituted to a concrete
-                    // type (so the callback param `value` is `number`, not a TP). The
-                    // existing B83.4b/d-quick branches require a callback PARAM that is a
-                    // TP to anchor from; here there is none — the only TP is the return
-                    // `U`. Re-type the un-annotated lambda's (concise OR single-return)
-                    // body under `currentLocalTypes[paramName] = <concrete sig param type>`
-                    // for each lambda param, and use the widened body type as the
-                    // candidate for `tp`. Gate NARROWLY: anonymous fn-shaped Type.Object,
-                    // single callSig, callback return type IS exactly `tp` (not a nested
-                    // mention), every callback param type concrete (no TP mention), lambda
-                    // param count matches the callback's, all params un-annotated
-                    // Identifier names, no rest params, `tp` not yet anchored.
-                    if (fnObj != null && callbackSig != null &&
-                        // Round 466: `tp | undefined` callback returns qualify like bare
-                        // tp (a nullish body value contributes nothing to the binding).
-                        (callbackReturn === tp || (callbackReturn is Type.Union &&
-                            callbackReturn.types.all {
-                                it === tp || it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null)
-                            } && callbackReturn.types.any { it === tp })) &&
-                        otherTp == null && mapperPairs.none { it.first === tp } &&
-                        callbackSig.parameters.isNotEmpty() &&
-                        fnObj !is Type.Interface && fnObj !is Type.Reference &&
-                        fnObj.symbol == null &&
-                        fnObj.constructSignatures.isNullOrEmpty() &&
-                        fnObj.members.isNullOrEmpty() &&
-                        fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
-                        // Resolve each callback param type; all must be concrete (no TP mention).
-                        val sigParamTypes = mutableListOf<Type>()
-                        var concreteOk = true
-                        for (sp in callbackSig.parameters) {
-                            if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { concreteOk = false; break }
-                            val spt = getTypeOfSymbol(sp)
-                            if (spt === anyType || spt === errorType) { concreteOk = false; break }
-                            if (tps.any { typeMentionsTypeParam(spt, it) }) { concreteOk = false; break }
-                            sigParamTypes.add(spt)
-                        }
-                        if (concreteOk) {
-                            val arg = args[i]
-                            // Round 466 (Blocker #2): a NAMED-function callback arg
-                            // (`fileNames.map(toPathInBuildInfoDirectory)`) contributes
-                            // the named fn's RETURN type as the candidate for the
-                            // return-position TP — the Identifier sibling of the
-                            // arrow-body re-typing below. Resolution + all-candidates-
-                            // agree gating live in namedFnCallbackReturnType.
-                            if (arg is Identifier) {
-                                val nfr = namedFnCallbackReturnType(arg)
-                                if (nfr != null &&
-                                    !nfr.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
-                                    val widened = widenType(nfr)
-                                    if (isNamedLikeAtom(widened) ||
-                                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
-                                        candidates.add(Candidate(i, widened, null))
-                                    }
-                                }
-                            }
-                            val (argParamsLocal, argBody) = when (arg) {
-                                is ArrowFunction -> arg.parameters to arg.body
-                                is FunctionExpression -> arg.parameters to arg.body
-                                else -> null to null
-                            }
-                            // Lambda may declare FEWER params than the callback shape
-                            // (e.g. `(value, index, array) => ...` vs `s => ...`) — bind
-                            // only the lambda's declared params to the leading sig params.
-                            if (argParamsLocal != null && argBody != null &&
-                                argParamsLocal.isNotEmpty() &&
-                                argParamsLocal.size <= sigParamTypes.size) {
-                                val lpNames = mutableListOf<String>()
-                                var lpOk = true
-                                for (lp in argParamsLocal) {
-                                    val lpName = (lp.name as? Identifier)?.text
-                                    if (lp.dotDotDotToken || lpName == null || lp.type != null) {
-                                        lpOk = false; break
-                                    }
-                                    lpNames.add(lpName)
-                                }
-                                if (lpOk) {
-                                    val effectiveBodyExpr: Expression? = when (argBody) {
-                                        is Block -> {
-                                            var retStmt: ReturnStatement? = null
-                                            var multi = false
-                                            for (s in argBody.statements) {
-                                                if (s is ReturnStatement) {
-                                                    if (retStmt != null) { multi = true; break }
-                                                    retStmt = s
-                                                }
-                                            }
-                                            if (multi) null else retStmt?.expression
-                                        }
-                                        is Expression -> argBody
-                                        else -> null
-                                    }
-                                    if (effectiveBodyExpr != null) {
-                                        val savedLocalTypes = currentLocalTypes
-                                        currentLocalTypes = EpochMap(currentLocalTypes)
-                                        for ((idx, name) in lpNames.withIndex()) {
-                                            currentLocalTypes[name] = sigParamTypes[idx]
-                                        }
-                                        val bodyType = try {
-                                            retypeInferenceBodyExpr(effectiveBodyExpr)
-                                        } finally {
-                                            currentLocalTypes = savedLocalTypes
-                                        }
-                                        if (bodyType !== anyType && bodyType !== errorType &&
-                                            !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
-                                            val widened = widenType(bodyType)
-                                            if (isNamedLikeAtom(widened) ||
-                                                (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
-                                                candidates.add(Candidate(i, widened, null))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // B83.4b (NEW 2026-05-27): multi-param callback parallel of B83.4d-quick.
-                    // Shape: `f<S,T,U>(arg1: S, arg2: T, cb: (x: S, y: T) => U): U` — S and T
-                    // already inferred via pass-1's anchor positions, U comes from the un-
-                    // annotated lambda's body re-typed under `currentLocalTypes[x]=mapper(S),
-                    // currentLocalTypes[y]=mapper(T)`. Gate: (a) multi-param callback (2+ params),
-                    // (b) ALL callback params are bare TPs in tps and all DIFFERENT from current
-                    // `tp` (pure callback-return-tp shape — no current-tp slot to gather from),
-                    // (c) ALL those TPs already in mapperPairs, (d) callback return MENTIONS the
-                    // current tp, (e) lambda has matching param count, all un-annotated Identifier
-                    // names. Narrow: rejects mixed shapes (some slots = current tp, some other).
-                    if (fnObj != null && callbackSig != null && callbackReturn != null &&
-                        callbackSig.parameters.size >= 2 &&
-                        typeMentionsTypeParam(callbackReturn, tp) &&
-                        fnObj !is Type.Interface && fnObj !is Type.Reference &&
-                        fnObj.symbol == null &&
-                        fnObj.constructSignatures.isNullOrEmpty() &&
-                        fnObj.members.isNullOrEmpty() &&
-                        fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
-                        // Collect per-slot resolved (otherTp, mappedType) pairs; bail if any
-                        // slot isn't a bare TP in tps, equals current tp, or isn't in mapperPairs.
-                        val slotMapped = mutableListOf<Type>()
-                        val slotTps = mutableListOf<Type.TypeParam>()
-                        var slotsOk = true
-                        for (sp in callbackSig.parameters) {
-                            if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { slotsOk = false; break }
-                            val spt = getTypeOfSymbol(sp)
-                            val slotTp = spt as? Type.TypeParam
-                            if (slotTp == null || slotTp !in tpsSet || slotTp === tp) { slotsOk = false; break }
-                            val mapped = mapperPairs.firstOrNull { it.first === slotTp }?.second
-                            if (mapped == null) { slotsOk = false; break }
-                            slotMapped.add(mapped)
-                            slotTps.add(slotTp)
-                        }
-                        if (slotsOk) {
-                            val arg = args[i]
-                            val (argParamsLocal, argBody) = when (arg) {
-                                is ArrowFunction -> arg.parameters to arg.body
-                                is FunctionExpression -> arg.parameters to arg.body
-                                else -> null to null
-                            }
-                            if (argParamsLocal != null && argBody != null &&
-                                argParamsLocal.size == callbackSig.parameters.size) {
-                                // Validate ALL lambda params: Identifier-named, no dotDotDot, no annotation.
-                                val lpNames = mutableListOf<String>()
-                                var lpOk = true
-                                for (lp in argParamsLocal) {
-                                    val lpName = (lp.name as? Identifier)?.text
-                                    if (lp.dotDotDotToken || lpName == null || lp.type != null) {
-                                        lpOk = false; break
-                                    }
-                                    lpNames.add(lpName)
-                                }
-                                if (lpOk) {
-                                    val effectiveBodyExpr: Expression? = when (argBody) {
-                                        is Block -> {
-                                            var retStmt: ReturnStatement? = null
-                                            var multi = false
-                                            for (s in argBody.statements) {
-                                                if (s is ReturnStatement) {
-                                                    if (retStmt != null) { multi = true; break }
-                                                    retStmt = s
-                                                }
-                                            }
-                                            if (multi) null else retStmt?.expression
-                                        }
-                                        is Expression -> argBody
-                                        else -> null
-                                    }
-                                    if (effectiveBodyExpr != null) {
-                                        val savedLocalTypes = currentLocalTypes
-                                        currentLocalTypes = EpochMap(currentLocalTypes)
-                                        for ((idx, name) in lpNames.withIndex()) {
-                                            currentLocalTypes[name] = slotMapped[idx]
-                                        }
-                                        // B86.1b-3 (multi-param): publish ALL slot TP→mapped bindings to
-                                        // currentInferenceMapper so any nested ArrowFunction body re-typing
-                                        // path (e.g. applyContextualParameterTypes for a nested callback)
-                                        // can substitute outer TPs for their concrete mappings. Mirror of
-                                        // the single-param branch below.
-                                        val savedMapper = currentInferenceMapper
-                                        val newMapper = (savedMapper ?: emptyMap()).toMutableMap()
-                                        for ((idx, slotTpVal) in slotTps.withIndex()) {
-                                            val slotType = slotMapped[idx]
-                                            if (slotType !== anyType && slotType !== errorType) {
-                                                newMapper[slotTpVal] = slotType
-                                            }
-                                        }
-                                        currentInferenceMapper = newMapper
-                                        val bodyType = try {
-                                            retypeInferenceBodyExpr(effectiveBodyExpr)
-                                        } finally {
-                                            currentLocalTypes = savedLocalTypes
-                                            currentInferenceMapper = savedMapper
-                                        }
-                                        if (bodyType !== anyType && bodyType !== errorType &&
-                                            !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
-                                            val widened = widenType(bodyType)
-                                            if (isNamedLikeAtom(widened) ||
-                                                (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
-                                                candidates.add(Candidate(i, widened, null))
-                                            } else if (widened is Type.TypeParam && widened === tp &&
-                                                mapperPairs.none { it.first === tp }) {
-                                                // B83.4c (NEW 2026-05-27): identity-anchor for body-bare-tp shape.
-                                                // When un-annotated lambda body's resolved type IS exactly the current
-                                                // tp (no anchor yet in mapperPairs), add `tp` as a self-anchor candidate.
-                                                // Handles e.g. body `[x, x]` typed as `[tp, tp]` where the tuple wrapper
-                                                // would already pass the named-like check; this catches the bare-tp leaf case
-                                                // that the named-like gate silently drops. Gate excludes TPs already
-                                                // anchored elsewhere (would create redundant identity candidate).
-                                                candidates.add(Candidate(i, tp, null))
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if (fnObj != null && otherTp != null && otherTpMapped != null &&
-                        callbackReturn != null && typeMentionsTypeParam(callbackReturn, tp) &&
-                        fnObj !is Type.Interface && fnObj !is Type.Reference &&
-                        fnObj.symbol == null &&
-                        fnObj.constructSignatures.isNullOrEmpty() &&
-                        fnObj.members.isNullOrEmpty() &&
-                        fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
-                        val arg = args[i]
-                        val (argParamsLocal, argBody) = when (arg) {
-                            is ArrowFunction -> arg.parameters to arg.body
-                            is FunctionExpression -> arg.parameters to arg.body
-                            else -> null to null
-                        }
-                        if (argParamsLocal != null && argParamsLocal.size == 1 && argBody != null) {
-                            val lp = argParamsLocal[0]
-                            val lpName = (lp.name as? Identifier)?.text
-                            if (!lp.dotDotDotToken && lpName != null && lp.type == null) {
-                                // B83.4d-quick-Block (NEW): extend the concise-body inference
-                                // path to Block bodies with EXACTLY one top-level
-                                // ReturnStatement whose expression we can type-re-resolve
-                                // under the pushed currentLocalTypes. Multi-return / no-return
-                                // bodies still bail. Mirrors the inferReturnTypeFromBody
-                                // single-return-extraction pattern (single-return is the
-                                // tractable shape).
-                                val effectiveBodyExpr: Expression? = when (argBody) {
-                                    is Block -> {
-                                        var retStmt: ReturnStatement? = null
-                                        var multi = false
-                                        for (s in argBody.statements) {
-                                            if (s is ReturnStatement) {
-                                                if (retStmt != null) { multi = true; break }
-                                                retStmt = s
-                                            }
-                                        }
-                                        if (multi) null else retStmt?.expression
-                                    }
-                                    is Expression -> argBody
-                                    else -> null
-                                }
-                                if (effectiveBodyExpr != null) {
-                                    val savedLocalTypes = currentLocalTypes
-                                    currentLocalTypes = EpochMap(currentLocalTypes)
-                                    currentLocalTypes[lpName] = otherTpMapped
-                                    // B86.1b-3 (single-param): publish the same TP→mapped binding to
-                                    // currentInferenceMapper so any nested ArrowFunction body re-typing
-                                    // path (e.g. applyContextualParameterTypes for a nested callback)
-                                    // can substitute the outer TP for its concrete mapping. Narrow gate:
-                                    // single-param branch only this iteration; multi-param branch
-                                    // (~line 54515) deferred to a follow-up iteration.
-                                    val savedMapper = currentInferenceMapper
-                                    val newMapper = (savedMapper ?: emptyMap()).toMutableMap()
-                                    newMapper[otherTp] = otherTpMapped
-                                    currentInferenceMapper = newMapper
-                                    val bodyType = try {
-                                        retypeInferenceBodyExpr(effectiveBodyExpr)
-                                    } finally {
-                                        currentLocalTypes = savedLocalTypes
-                                        currentInferenceMapper = savedMapper
-                                    }
-                                    if (bodyType !== anyType && bodyType !== errorType &&
-                                        !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
-                                        val widened = widenType(bodyType)
-                                        if (isNamedLikeAtom(widened) ||
-                                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
-                                            candidates.add(Candidate(i, widened, null))
-                                        } else if (widened is Type.TypeParam && widened === tp &&
-                                            mapperPairs.none { it.first === tp }) {
-                                            // B83.4c (NEW 2026-05-27): identity-anchor — mirror of the
-                                            // multi-param branch (see ~line 54393). Catches body-bare-tp
-                                            // shape that the named-like gate would silently drop.
-                                            candidates.add(Candidate(i, tp, null))
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    continue
-                }
-                val arg = args[i]
-                if (arg is SpreadElement) continue
-                val argParams = when (arg) {
-                    is ArrowFunction -> arg.parameters
-                    is FunctionExpression -> arg.parameters
-                    else -> null
-                } ?: continue
-                if (isFnTypedOfT) {
-                    // B83.1 single-param case.
-                    if (argParams.size != 1) continue
-                    val lp = argParams[0]
-                    if (lp.dotDotDotToken) continue
-                    if (lp.name !is Identifier) continue
-                    val lpTypeNode = lp.type ?: continue
-                    val lpType = getTypeFromTypeNode(lpTypeNode)
-                    if (lpType === anyType || lpType === errorType) return null
-                    if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-                    val widened = widenType(lpType)
-                    if (!isNamedLikeAtom(widened) &&
-                        !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
-                    candidates.add(Candidate(i, widened, null))
-                } else {
-                    // B83.3 multi-param case. Match lambda's parameter count to
-                    // the callback shape's parameter count exactly. For each slot
-                    // matching `tp`, gather a candidate from the lambda's
-                    // corresponding annotated param. Bail (continue) on
-                    // un-annotated lambda — B83.4 territory.
-                    val slots = multiSlots!!
-                    if (argParams.size != slots.size) continue
-                    var bailed = false
-                    val newCandidates = mutableListOf<Candidate>()
-                    for ((slotIdx, slotTp) in slots.withIndex()) {
-                        if (slotTp !== tp) continue
-                        val lp = argParams[slotIdx]
-                        if (lp.dotDotDotToken) { bailed = true; break }
-                        if (lp.name !is Identifier) { bailed = true; break }
-                        val lpTypeNode = lp.type
-                        if (lpTypeNode == null) { bailed = true; break }
-                        val lpType = getTypeFromTypeNode(lpTypeNode)
-                        if (lpType === anyType || lpType === errorType) return null
-                        if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
-                        val widened = widenType(lpType)
-                        if (!isNamedLikeAtom(widened) &&
-                            !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
-                        newCandidates.add(Candidate(i, widened, null))
-                    }
-                    if (bailed) continue
-                    candidates.addAll(newCandidates)
-                }
-            }
+            val tpSawAnyArg = tispGatherAnchorCandidates(
+                tp = tp,
+                tps = tps,
+                tpsSet = tpsSet,
+                params = params,
+                args = args,
+                forReturnType = forReturnType,
+                candidates = candidates,
+            ) ?: return null
+            tispGatherCallbackCandidates(
+                tp = tp,
+                tps = tps,
+                tpsSet = tpsSet,
+                params = params,
+                args = args,
+                mapperPairs = mapperPairs,
+                candidates = candidates,
+            ) ?: return null
             if (candidates.isEmpty()) {
                 // Round 440: an `any` arg in a T-position at a return-type site binds T = any
                 // (tsc-faithful; strictly suppression-only — an `any` return is assignable to
@@ -115966,137 +115245,17 @@ interface DataView {
             // constraint as effective param type) from being bypassed.
             val constraint = tp.constraint
             if (constraint != null) {
-                // Round 729: the round-725 rule's THIRD arm. An INFERRED candidate that is an
-                // intersection carrying a TypeParam constituent (`T & { m: 1 }` — and, since
-                // the real lib spells `NonNullable<T>` as `T & {}`, every non-nullable form of
-                // a type parameter) satisfies the callee's constraint whenever that
-                // constituent's own constraint does, because `T ⊆ constraint(T)`. The relation
-                // has no TypeParam-source-via-constraint rule on purpose (round 456), so
-                // without this the whole inference bails and the callee's return type stays
-                // OPEN — which then FPs against a concrete consumer. Evaluated only inside the
-                // already-failing branch, so it costs nothing on the passing path.
-                var ok = checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
-                if (!ok && firstWidened is Type.Intersection &&
-                    intersectionSatisfiesViaTypeParamConstraint(firstWidened, constraint)) {
-                    ok = true
-                }
-                if (!ok) {
-                    // B98.r118: a PRIMITIVE arg whose inferred type fails the type
-                    // param's STRUCTURED constraint (a named interface or an anonymous
-                    // object literal — `foo<T extends Item>("abc", …)`,
-                    // `fill<B extends typeof A>(32)`). 16.4i already handles a
-                    // simple-checkable constraint (`T extends number`), so this is the
-                    // complementary case: constraint not simple-checkable and not a
-                    // Type.Reference (whose self-referential/instantiated display is
-                    // unreliable — e.g. `Comparable<T>`). Emit TS2345 at the failing
-                    // (first) arg with the constraint as the displayed parameter type,
-                    // then return null. The standard arg-check loop passes a bare-TP
-                    // param trivially (unconstrained apparent type `{}`), so this never
-                    // double-emits. FP-safe: a primitive that genuinely fails a
-                    // structured constraint is always TS2345 in TypeScript.
-                    if (source != null && fileName != null &&
-                        constraint !== anyType && constraint !== errorType &&
-                        isSimpleCheckableType(firstWidened) &&
-                        (constraint is Type.Interface ||
-                            (constraint is Type.Object && constraint !is Type.Reference &&
-                                !constraint.members.isNullOrEmpty() &&
-                                constraint.callSignatures.isNullOrEmpty() &&
-                                constraint.constructSignatures.isNullOrEmpty()))) {
-                        val arg = args[first.argIdx]
-                        // B273: an ARROW/FN-EXPRESSION arg anchored the TP via its RETURN
-                        // (the cb param's declared return is the bare TP) — TypeScript reports
-                        // TS2322 at the RETURN EXPRESSION + related TS6502 at the callback
-                        // signature, not the coarse whole-arg TS2345 (promiseChaining1/2).
-                        if (arg is ArrowFunction || arg is FunctionExpression) {
-                            val retExpr: Expression? = when (arg) {
-                                is ArrowFunction -> when (val b = arg.body) {
-                                    is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
-                                    is Expression -> b
-                                    else -> null
-                                }
-                                is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
-                            }
-                            if (retExpr != null) {
-                                val rStart = retExpr.pos
-                                val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
-                                val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
-                                val related = ((params.getOrNull(first.argIdx)?.valueDeclaration as? Parameter)?.type as? FunctionType)?.let { ftNode ->
-                                    val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
-                                    listOf(Diagnostic(
-                                        message = "The expected type comes from the return type of this signature.",
-                                        category = DiagnosticCategory.Message, code = 6502,
-                                        fileName = fileName, line = relLine, character = relChar,
-                                        start = ftNode.pos, length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
-                                    ))
-                                } ?: emptyList()
-                                diagnostics.add(Diagnostic(
-                                    message = "Type '${typeToString(firstWidened)}' is not assignable to type '${typeToString(constraint)}'.",
-                                    category = DiagnosticCategory.Error, code = 2322,
-                                    fileName = fileName, line = rLine, character = rChar,
-                                    start = rStart, length = rLength,
-                                    relatedInformation = related,
-                                ))
-                                return null
-                            }
-                        }
-                        if (arg !is SpreadElement) {
-                            val start = arg.pos
-                            val length = expressionTrueEnd(arg) - start
-                            if (length > 0) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "Argument of type '${typeToString(firstWidened)}' is not assignable to parameter of type '${typeToString(constraint)}'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2345,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                ))
-                            }
-                        }
-                    } else if (source != null && fileName != null &&
-                        constraint is Type.Reference &&
-                        constraint.resolvedTypeArguments?.any { typeMentionsTypeParam(it, tp) } == true &&
-                        isSimpleCheckableType(getWidenedLiteralType(firstWidened)) &&
-                        effectiveCandidates.size >= 2 &&
-                        effectiveCandidates.all { it.literalType != null }) {
-                        // B98.r128 (Blocker #2): a multi-literal-anchor TP whose inferred union
-                        // fails a SELF-REFERENTIAL Type.Reference constraint
-                        // (`<T extends Comparable<T>>` called `max2(1, 2)`). TypeScript displays
-                        // T as the UNION of the literal arg types (`1 | 2`) substituted into the
-                        // constraint (`Comparable<1 | 2>`), while the failing arg is shown WIDENED
-                        // (`number`). Complements B98.r118 (which excludes Reference constraints
-                        // because a SINGLE-anchor instantiated-Reference display is unreliable);
-                        // gated to the multi-literal-anchor shape so that excluded case stays out.
-                        val unionForDisplay = getUnionType(effectiveCandidates.map { it.literalType!! })
-                        val tpMapper = TypeMapper { t ->
-                            if (t === tp || (t.symbol != null && t.symbol === tp.symbol))
-                                unionForDisplay else null
-                        }
-                        val substituted = instantiateType(constraint, tpMapper)
-                        val arg = args[first.argIdx]
-                        if (arg !is SpreadElement) {
-                            val start = arg.pos
-                            val length = expressionTrueEnd(arg) - start
-                            if (length > 0) {
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "Argument of type '${typeToString(getWidenedLiteralType(firstWidened))}' is not assignable to parameter of type '${typeToString(substituted)}'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2345,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = length,
-                                ))
-                            }
-                        }
-                    }
-                    return null
-                }
+                tispCheckConstraint(
+                    tp = tp,
+                    constraint = constraint,
+                    firstWidened = firstWidened,
+                    first = first,
+                    effectiveCandidates = effectiveCandidates,
+                    params = params,
+                    args = args,
+                    source = source,
+                    fileName = fileName,
+                ) ?: return null
             }
 
             // 17.31b multi-arg conflict detection: scan subsequent candidates, find
@@ -116155,6 +115314,964 @@ interface DataView {
 
         if (mapperPairs.isEmpty()) return null
         return createTypeMapper(mapperPairs.map { it.first }, mapperPairs.map { it.second })
+    }
+
+    /**
+     * One inference candidate gathered for a single type parameter by
+     * [tryInferSingleTypeParamFromArgs]: the argument position it came from, the
+     * widened type it contributes, the literal form kept for TS2345 display, and
+     * whether it came from an object literal's property values (a weaker anchor,
+     * see B52.3).
+     *
+     * (JIT.1)(e) round 821: this was a LOCAL data class inside
+     * [tryInferSingleTypeParamFromArgs]. It is nested here unchanged so the
+     * gathering helpers split out of that function can name it in their
+     * signatures.
+     */
+    private data class Candidate(val argIdx: Int, val widenedType: Type, val literalType: Type?, val fromObjLit: Boolean = false)
+
+    /**
+     * (JIT.1)(e) round 821 — pass 1 of [tryInferSingleTypeParamFromArgs]'s
+     * per-type-parameter candidate gathering: the ANCHOR positions (bare-`tp`,
+     * rest-`tp[]`, `Array<tp>`, anonymous-object-of-`tp` members, the nullable
+     * union modes, predicate position, the `tp[][]` and droppable-union
+     * anchors). Moved VERBATIM out of the `for (tp in orderedTps)` loop.
+     *
+     * Appends to [candidates] (a container the caller owns), and RETURNS the
+     * `tpSawAnyArg` flag, which is the only value that crossed the boundary as
+     * a rebind. **`null` means the whole inference bails** — every `return
+     * null` inside the moved text was a whole-function bail before the split
+     * and still is, via the caller's `?: return null`.
+     */
+    private fun tispGatherAnchorCandidates(
+        tp: Type.TypeParam,
+        tps: List<Type.TypeParam>,
+        tpsSet: Set<Type.TypeParam>,
+        params: List<Symbol>,
+        args: List<Expression>,
+        forReturnType: Boolean,
+        candidates: MutableList<Candidate>,
+    ): Boolean? {
+        // Round 440: track whether this TP had an `any`-typed arg soft-skipped at a
+        // return-type site — if it's the ONLY reason the candidate list ends up empty,
+        // bind T = any (tsc infers `T = any` from an `any` arg) instead of leaving the
+        // return's TP un-inferred (`Debug.checkDefined(pos)` where `pos` is a
+        // destructured-const local typed anyType → `T | null | undefined` yields no
+        // candidate → return `T`, FP'ing against a concrete consumer).
+        var tpSawAnyArg = false
+        // Pass 1: anchor positions (non-callback).
+        for (i in params.indices) {
+            if (i >= args.size) break
+            val pt = getTypeOfSymbol(params[i])
+            val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            val isBareT = pt === tp
+            val isRestT = isRest && i == params.size - 1 && isArrayOfTypeParam(pt, tp)
+            // 17.31e: non-rest `Array<tp>` — extract element type from same-target
+            // Array Reference call arg (no per-rest-arg fan-out).
+            val isArrayT = !isRest && isArrayOfTypeParam(pt, tp)
+            // 17.38: anonymous Object literal with all-TypeParam members — gather
+            // candidates from the arg ObjectLiteralExpression's same-named property
+            // values for members typed as the current `tp`.
+            val isObjLitOfT = !isRest && !isBareT && !isRestT && !isArrayT &&
+                isAnonymousObjectWithTypeParamMembers(pt, tpsSet)
+            val isFnTypedOfT = false  // B83.4a: pass-1 skips fn-typed (handled in pass-2)
+            // (i) M3.1 (round 428): `T | undefined` (mode 1) / `T[] | undefined`
+            // (mode 2) union params contribute candidates with the arg's nullish
+            // members stripped; a purely-nullish arg contributes NOTHING (soft
+            // skip — `append(undefined, x)` still infers from `x`).
+            val unionMode = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT)
+                nullableUnionOfTpMode(pt, tp) else 0
+            // (j) M3.1 (round 430b): predicate-position callback `(x: Base) =>
+            // x is tp` — tp binds from a NAMED guard arg's own predicate target
+            // (`getFirstJSDocTag(node, isJSDocAugmentsTag)` → T = JSDocAugmentsTag).
+            val isPredT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                unionMode == 0 && predicatePositionTpOf(params[i], tps) === tp
+            // (k) round 460: union param with a `tp[][]` member (flatten anchor).
+            val isDblArrT = !isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                unionMode == 0 && !isPredT && unionHasDoubleArrayOfTp(pt, tp)
+            // (l) round 466: `(tp | <droppable falsy/nullish>)[]` — compact anchor.
+            val arrUnionDrops = if (!isRest && !isBareT && !isRestT && !isArrayT && !isObjLitOfT &&
+                unionMode == 0 && !isPredT && !isDblArrT) arrayOfTpUnionDroppables(pt, tp) else null
+            if (!isBareT && !isRestT && !isArrayT && !isObjLitOfT && !isFnTypedOfT && unionMode == 0 && !isPredT && !isDblArrT && arrUnionDrops == null) continue
+            fun isNamedLikeAtom(t: Type): Boolean =
+                t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
+                    t.flags.hasAny(
+                        TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                        TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                        TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                    )
+            val argRange = if (isRestT) i until args.size else i..i
+            for (ai in argRange) {
+                if (ai >= args.size) break
+                val arg = args[ai]
+                if (arg is SpreadElement) continue
+                // (j) round 430b: predicate-position candidate — the NAMED guard
+                // arg's own predicate target (barrel-aware resolution via
+                // predicateTargetTypeOfGuardExpr). Unresolvable / inline-arrow /
+                // predicate-less args contribute nothing (soft skip) — branches
+                // BEFORE the standard rawArgType path, which would type the guard
+                // as a callable object and hard-bail at the named-like gate.
+                if (isPredT) {
+                    val t = predicateTargetTypeOfGuardExpr(arg) ?: continue
+                    if (t === anyType || t === errorType) continue
+                    candidates.add(Candidate(ai, t, null))
+                    continue
+                }
+                // (k) round 460: array-of-array arg for the `tp[][]` union anchor —
+                // `flatten(supportedTSExtensions)` where the arg is
+                // `readonly Extension[][]` binds tp := Extension. Soft-skip
+                // anything that isn't a clean array-of-array of a named-like
+                // (or enum) element.
+                if (isDblArrT) {
+                    // Round 471: a `&&`-guarded nullable arg reads its flow-narrowed
+                    // type (`focusLocations && flatten(focusLocations)`, tsc
+                    // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
+                    // the anchor and T stayed unbound while the arg CHECK narrowed,
+                    // FP-firing TS2345. Nullish-strip-gated (monotone).
+                    // Round 471: a `&&`-guarded nullable arg reads its flow-narrowed
+                    // type (`focusLocations && flatten(focusLocations)`, tsc
+                    // mapCode.ts) — the raw `TextSpan[][] | undefined` soft-skipped
+                    // the anchor and T stayed unbound while the arg CHECK narrowed,
+                    // FP-firing TS2345. Nullish-strip-gated (monotone).
+                    val rawArg0 = getTypeOfExpression(arg)
+                    val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
+                        val narrowed = getNarrowedTypeForReference(rawArg0, arg)
+                        if (objLitValueNullishStrip(rawArg0, narrowed)) narrowed else rawArg0
+                    } else rawArg0
+                    val inner = arrayRefElement(rawArg) ?: continue
+                    val elem = arrayRefElement(inner) ?: continue
+                    if (elem === anyType || elem === errorType) continue
+                    val widened = widenType(elem)
+                    val ok = isNamedLikeAtom(widened) ||
+                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) }) ||
+                        (widened is Type.Object && widened.symbol?.flags?.hasAny(SymbolFlags.Enum) == true)
+                    if (!ok) continue
+                    candidates.add(Candidate(ai, widened, null))
+                    continue
+                }
+                // (l) round 466: `(tp | droppables)[]` param — the candidate is the
+                // arg's element union MINUS members assignable to a droppable
+                // (`compact([a, b, undefined])` binds T without the undefined).
+                // Soft-skip anything that isn't a clean array arg.
+                if (arrUnionDrops != null) {
+                    // Round 471: same flow-narrowed arg read as the (k) anchor above.
+                    // Round 471: same flow-narrowed arg read as the (k) anchor above.
+                    val rawArg0 = getTypeOfExpression(arg)
+                    val rawArg = if (arg is Identifier || arg is PropertyAccessExpression) {
+                        val narrowed = getNarrowedTypeForReference(rawArg0, arg)
+                        if (objLitValueNullishStrip(rawArg0, narrowed)) narrowed else rawArg0
+                    } else rawArg0
+                    val elem = arrayRefElement(rawArg) ?: continue
+                    if (elem === anyType || elem === errorType) continue
+                    val members = (elem as? Type.Union)?.types ?: listOf(elem)
+                    val kept = members.filter { m ->
+                        m !== anyType && m !== errorType &&
+                            arrUnionDrops.none { d -> checkTypeRelatedTo(m, d, assignableRelation) }
+                    }
+                    if (kept.isEmpty()) continue
+                    val widened = widenType(if (kept.size == 1) kept[0] else getUnionType(kept))
+                    val ok = isNamedLikeAtom(widened) ||
+                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })
+                    if (!ok) continue
+                    candidates.add(Candidate(ai, widened, null))
+                    continue
+                }
+                // 17.38: object-literal-of-T inference — walk arg's properties matching
+                // pt's tp-typed members; LUB-as-Union over collected widened types.
+                // Branches BEFORE the standard rawArgType bail because the arg as a whole
+                // is a Type.Object, but its property values may include `undefined` /
+                // string-literal / etc. that the standard bail would reject.
+                if (isObjLitOfT) {
+                    if (arg !is ObjectLiteralExpression) continue
+                    val ptObj = pt as? Type.Object ?: continue
+                    val ptMembers = ptObj.members ?: continue
+                    val collectedTypes = mutableListOf<Type>()
+                    for ((memberName, memberSym) in ptMembers) {
+                        val mt = getTypeOfSymbol(memberSym)
+                        if (mt !== tp) continue
+                        val propAssign = arg.properties.firstOrNull { p ->
+                            p is PropertyAssignment && getPropertyKeyName(p.name) == memberName
+                        } as? PropertyAssignment
+                        if (propAssign == null) continue
+                        val rawValue = getTypeOfExpression(propAssign.initializer)
+                        if (rawValue === anyType || rawValue === errorType) return null
+                        collectedTypes.add(widenType(rawValue))
+                    }
+                    if (collectedTypes.isEmpty()) continue
+                    val argType = if (collectedTypes.size == 1) collectedTypes[0]
+                                  else getUnionType(collectedTypes)
+                    if (argType === anyType || argType === errorType) return null
+                    val isNamedLike = isNamedLikeAtom(argType) ||
+                        (argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
+                    if (!isNamedLike) return null
+                    candidates.add(Candidate(ai, argType, null, fromObjLit = true))
+                    continue
+                }
+                // B83.1 gate (f) candidate extraction: arg's callback supplies tp via
+                // its single Identifier-named parameter's type annotation. Bail when
+                // arg is not an ArrowFunction/FunctionExpression, when the callback's
+                // arity or shape doesn't match, when the lambda's param lacks an
+                // annotation, or when the annotated type fails to resolve cleanly
+                // (anyType/errorType/null/undefined/void). Skip the standard rawArgType
+                // path because lambda exprs typically have anonymous Type.Object types
+                // that the named-like gate below would reject.
+                if (isFnTypedOfT) {
+                    val argParams = when (arg) {
+                        is ArrowFunction -> arg.parameters
+                        is FunctionExpression -> arg.parameters
+                        else -> null
+                    } ?: continue
+                    if (argParams.size != 1) continue
+                    val lp = argParams[0]
+                    if (lp.dotDotDotToken) continue
+                    if (lp.name !is Identifier) continue
+                    val lpTypeNode = lp.type ?: continue
+                    val lpType = getTypeFromTypeNode(lpTypeNode)
+                    if (lpType === anyType || lpType === errorType) return null
+                    if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                    val widened = widenType(lpType)
+                    if (!isNamedLikeAtom(widened) &&
+                        !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                    candidates.add(Candidate(ai, widened, null))
+                    continue
+                }
+                // 17.37: empty array literal `[]` arg for `Array<tp>` param infers tp = `never`.
+                // `getTypeOfArrayLiteral` returns anyType for empty arrays (can't infer element
+                // type), but TypeScript's spec-mandated behavior here is to fall back to never
+                // for inference — the array contains no elements that could constrain the
+                // element type. Skip the standard rawArgType anyType bail in this narrow case.
+                if ((isArrayT || unionMode == 2) && arg is ArrayLiteralExpression && arg.elements.isEmpty()) {
+                    candidates.add(Candidate(ai, neverType, null))
+                    continue
+                }
+                val rawArgType0Declared = getTypeOfExpression(arg)
+                // Round 464 (M3.4 × M3.1): a bare Identifier/PropertyAccess arg whose
+                // DECLARED type is a union infers from its flow-NARROWED type (tsc
+                // infers from narrowed arg types) — `const name = cloneNode(node)`
+                // inside `switch (node.kind) { case SyntaxKind.Identifier: … }` binds
+                // T := Identifier, not the declared EntityName union (tsc
+                // typeSerializer.ts serializeEntityNameAsExpression). Gated to
+                // union-declared reference args + a strict non-never refinement that
+                // still relates to the declared type, so inference only ever gets
+                // MORE precise; a null flow graph is a no-op inside the narrower.
+                val rawArgType0 = if (rawArgType0Declared is Type.Union &&
+                    (arg is Identifier || arg is PropertyAccessExpression)) {
+                    val n = getNarrowedTypeForReference(rawArgType0Declared, arg)
+                    if (n !== rawArgType0Declared && n !== neverType && n !== errorType &&
+                        n !== anyType && checkTypeRelatedTo(n, rawArgType0Declared, assignableRelation)) n
+                    else rawArgType0Declared
+                } else rawArgType0Declared
+                // M3.1 (round 428): a UNION arg in an Array<tp> / union-of-tp param
+                // position contributes its single non-nullish member (`Statement[] |
+                // undefined` → `Statement[]` — tsc's `x = append(x, item)` idiom).
+                // Multiple non-nullish members stay unhandled: soft-skip for
+                // union-mode params, hard bail preserved for the legacy shapes.
+                val rawArgType = if ((isArrayT || unionMode != 0) && rawArgType0 is Type.Union) {
+                    val nonNullish = rawArgType0.types.filter {
+                        !it.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
+                    }
+                    // (REL.4)(b) round 779: a `tp | null | undefined` parameter REMOVES
+                    // the source's nullish constituents before inferring tp — that is
+                    // what makes `Debug.checkDefined<T>(value: T | null | undefined): T`
+                    // return the non-nullable side. The round-428 rule only did so when
+                    // exactly ONE non-nullish member remained, so a MULTI-member source
+                    // (`__String | undefined`, whose `__String` is itself a 3-member
+                    // union) bound tp to the whole nullish-carrying union and the call's
+                    // return type kept `undefined`.
+                    if (nonNullish.size == 1) nonNullish[0]
+                    else if (REL4B_GATE && nonNullish.size > 1 && nonNullish.size < rawArgType0.types.size)
+                        getUnionType(nonNullish)
+                    else rawArgType0
+                } else rawArgType0
+                if (rawArgType === anyType || rawArgType === errorType) {
+                    // M3.1 (round 428): at the RETURN-TYPE call site an untypeable
+                    // arg (an unmodeled local — e.g. a for-of loop var — resolves to
+                    // anyType) contributes NO candidate instead of killing the whole
+                    // inference: `x = append(x, item)` still anchors T from `x`.
+                    // The arg-vs-param call site keeps the hard bail (its consumers
+                    // CHECK args against the substituted params — a wrong partial
+                    // inference there could emit, not just suppress).
+                    if (forReturnType && rawArgType === anyType) { tpSawAnyArg = true; continue }
+                    return null
+                }
+                // INV.3(d)(i): a CALL-EXPRESSION arg whose type still carries a
+                // TypeParam is a nested call whose own inference did not complete
+                // (checker.ts:7358's `setTextRangeWorker(factory.createNodeArray(
+                // undefined, …), nodes)` — createNodeArray's un-inferred `T extends
+                // Node` leaks through `NodeArray<T>`, name-AND-shape-colliding with
+                // the enclosing fn's `T extends Node`, so the foreign-TP return gate
+                // cannot classify it). Contribute no candidate and let the tp degrade
+                // to anyType (the tpSawAnyArg mechanism) — exactly the pre-INV.3(d)
+                // behavior where the merged-alias callee degraded the whole arg to
+                // any. The round-468 CallExpression gate keeps an own-TP
+                // identifier/parameter arg anchoring (`append(arr, item)` with
+                // `arr: T[]` stays inferred). forReturnType-only: the arg-vs-param
+                // site's consumers CHECK args against substituted params, where a
+                // partial mapper could emit rather than merely suppress.
+                if (forReturnType && arg is CallExpression &&
+                    typeContainsForeignTypeParam(rawArgType, emptySet())) {
+                    tpSawAnyArg = true; continue
+                }
+                if (rawArgType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                    // A purely-nullish arg for a NULLABLE union param contributes no
+                    // candidate (`append(undefined, x)` — tp comes from `x`).
+                    if (unionMode != 0) continue
+                    return null
+                }
+                // 17.31e: for `Array<tp>` param, the inference candidate is the
+                // arg's element type (extracted from same-target `Array<X>` ref).
+                // Bail when arg isn't a same-target Array Reference (e.g. plain
+                // `Type.Object` or `Type.Reference Set<X>`) — too many edge cases
+                // for this conservative substep. (Union-mode params soft-skip
+                // instead — the shape is a new capability, never a new bail.)
+                val argType = if (isArrayT || unionMode == 2) {
+                    if (rawArgType !is Type.Reference) { if (unionMode == 2) continue else return null }
+                    // Round 430: a `readonly X[]` arg (Reference(ReadonlyArray, [X]))
+                    // anchors the element like a mutable array.
+                    val argRefName = rawArgType.target.symbol?.name
+                    if (argRefName != "Array" && argRefName != "ReadonlyArray") { if (unionMode == 2) continue else return null }
+                    val refArgs = rawArgType.resolvedTypeArguments
+                    if (refArgs == null || refArgs.size != 1) { if (unionMode == 2) continue else return null }
+                    val element = refArgs[0]
+                    // 17.31f: widen Union constituents (`widenType` falls through on Union),
+                    // so `Array<undefined | "def">` infers T = `string | undefined` rather
+                    // than bailing at the named-like gate below. Single-type elements still
+                    // go through the existing widenType path.
+                    if (element is Type.Union) getUnionType(element.types.map { widenType(it) })
+                    else widenType(element)
+                } else rawArgType
+                if (argType === anyType || argType === errorType) return null
+                if (argType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                // 17.31a refinement: only fire when the inferred type is a "named-like"
+                // type (Interface, Reference, Intrinsic / literal) AND, when T has a
+                // constraint, the inferred type satisfies it. Anonymous Type.Object
+                // results (object literals like `{x: null}`) go through the bare-T
+                // path so existing per-property constraint elaborations (16.4ds /
+                // 16.4dt) keep firing — substitution would erase paramType's TypeParam
+                // identity and skip those branches.
+                val isNamedLike = isNamedLikeAtom(argType) ||
+                    // 17.31f: Union-of-named-likes from the isArrayT path. Anonymous-Object
+                    // members in heterogeneous-array elements (e.g. `[{a:1}, "def"]` →
+                    // `Array<{a:1} | "def">`) are still rejected because `{a:1}` widens to
+                    // an anonymous Type.Object that fails this check.
+                    ((isArrayT || unionMode != 0) && argType is Type.Union && argType.types.all { isNamedLikeAtom(it) })
+                // 17.41: at the return-type call site, allow anonymous Type.Object
+                // arg types (substitute T into the return type for downstream display).
+                // Arg-vs-param call site keeps the bail (forReturnType=false default) so
+                // 16.4ds / 16.4dt per-property elaborations keep firing on object-literal
+                // args. Net-zero on the suite alone — pairs with intersection elaboration
+                // (follow-up substep) to flip `errorMessagesIntersectionTypes01/02_ts`.
+                if (!isNamedLike && !forReturnType) return null
+                // 17.31e: for Array<tp> path the literal type is null (we don't have
+                // a single literal to attach to the array's element type).
+                val literal = if (isArrayT || unionMode == 2) null else literalTypeOfExpression(arg)
+                candidates.add(Candidate(ai, argType, literal))
+            }
+        }
+        return tpSawAnyArg
+    }
+
+    /**
+     * (JIT.1)(e) round 821 — pass 2 of [tryInferSingleTypeParamFromArgs]'s
+     * per-type-parameter candidate gathering: the CALLBACK positions (B83.1
+     * gate (f) single- and multi-param shapes, and the B83.4b/c/d/i
+     * callback-RETURN inferences that re-type an un-annotated lambda body).
+     * Moved VERBATIM out of the `for (tp in orderedTps)` loop.
+     *
+     * Reads [mapperPairs] — the type parameters anchored by EARLIER iterations
+     * — and never writes it, which is why it can take the caller's list as a
+     * read-only `List`. Appends to [candidates]. **`null` means the whole
+     * inference bails**, as in [tispGatherAnchorCandidates].
+     */
+    private fun tispGatherCallbackCandidates(
+        tp: Type.TypeParam,
+        tps: List<Type.TypeParam>,
+        tpsSet: Set<Type.TypeParam>,
+        params: List<Symbol>,
+        args: List<Expression>,
+        mapperPairs: List<Pair<Type.TypeParam, Type>>,
+        candidates: MutableList<Candidate>,
+    ): Boolean? {
+        // Pass 2 (B83.4a): callback (B83.1 gate (f)) positions. Walks the same
+        // params/args but only collects candidates from function-typed param
+        // shapes (anonymous Type.Object with 1 callSig whose single Identifier
+        // param is exactly `tp`). Currently bails at `lp.type ?: continue` for
+        // un-annotated lambdas — B83.4b/c/d will replace that bail with
+        // contextual back-propagation from the partial mapper assembled by
+        // pass-1 across other TPs. Net-zero in isolation: produces the same
+        // candidate set as the pre-restructure single-pass loop for any sig
+        // shape that reaches gate (f).
+        fun isNamedLikeAtom(t: Type): Boolean =
+            t is Type.Interface || t is Type.Reference || t is Type.Intrinsic ||
+                t.flags.hasAny(
+                    TypeFlags.StringLiteral or TypeFlags.NumberLiteral or
+                    TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
+                    TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
+                ) ||
+                // Round 466: a branded intersection (`string & { __pathBrand }` —
+                // tsc's Path) is a legitimate callback-return candidate.
+                isBrandedNamedLikeIntersection(t)
+        for (i in params.indices) {
+            if (i >= args.size) break
+            val pt = getTypeOfSymbol(params[i])
+            val isRest = (params[i].valueDeclaration as? Parameter)?.dotDotDotToken == true
+            if (isRest) continue
+            if (pt === tp) continue
+            if (isArrayOfTypeParam(pt, tp)) continue
+            if (isAnonymousObjectWithTypeParamMembers(pt, tpsSet)) continue
+            val isFnTypedOfT = fnTypedParamBareTpMatch(pt, tpsSet, currentTp = tp) === tp
+            // B83.3: multi-param callback fallback. Returns slot list with
+            // the current `tp` appearing in at least one slot; null slots
+            // are concrete params we ignore for THIS tp's candidate gathering.
+            val multiSlots = if (!isFnTypedOfT) {
+                fnTypedParamMultiBareTpMatch(pt, tpsSet, currentTp = tp)
+                    ?.takeIf { slots -> slots.any { it === tp } }
+            } else null
+            // B83.4d-quick (NEW 2026-05-27): callback-return-tp inference for the
+            // shape `f<S,T>(arg1: S, cb: (x: S) => T): T` (S already inferred via
+            // pass-1, T comes from the un-annotated lambda's concise body re-typed
+            // under `currentLocalTypes[lp.name] = mapper(S)`). Triggered ONLY when
+            // (a) the existing isFnTypedOfT / multiSlots paths don't apply (callback
+            // param isn't current `tp`), (b) the callback param IS some OTHER tp
+            // (otherTp ∈ tps, otherTp != tp), (c) callback return type MENTIONS the
+            // current tp, (d) otherTp is already in mapperPairs (inferred earlier),
+            // (e) the lambda is concise-body (single expression — NOT Block), (f)
+            // lambda has exactly 1 Identifier param, no annotation. Narrow gate;
+            // intentionally skips Block bodies and multi-param shapes (B83.4 follow-up).
+            if (!isFnTypedOfT && multiSlots == null) {
+                val fnObj = pt as? Type.Object
+                val callbackSig = fnObj?.callSignatures?.singleOrNull()
+                val callbackParam = callbackSig?.parameters?.singleOrNull()
+                val callbackParamType = callbackParam?.let {
+                    getTypeOfSymbol(it)
+                }
+                val callbackReturn = callbackSig?.resolvedReturnType
+                val otherTp = (callbackParamType as? Type.TypeParam)
+                    ?.takeIf { it in tpsSet && it !== tp }
+                val otherTpMapped = otherTp?.let { o -> mapperPairs.firstOrNull { it.first === o }?.second }
+                // B83.4i (NEW 2026-05-28): callback-return-TP inference when the
+                // callback params are FULLY CONCRETE (mention NO TP) and the
+                // callback RETURN type is exactly the current `tp`. This is the
+                // `Array.map<U>(callbackfn: (value: T, index: number, array: T[]) => U): U[]`
+                // shape after the receiver's T is already substituted to a concrete
+                // type (so the callback param `value` is `number`, not a TP). The
+                // existing B83.4b/d-quick branches require a callback PARAM that is a
+                // TP to anchor from; here there is none — the only TP is the return
+                // `U`. Re-type the un-annotated lambda's (concise OR single-return)
+                // body under `currentLocalTypes[paramName] = <concrete sig param type>`
+                // for each lambda param, and use the widened body type as the
+                // candidate for `tp`. Gate NARROWLY: anonymous fn-shaped Type.Object,
+                // single callSig, callback return type IS exactly `tp` (not a nested
+                // mention), every callback param type concrete (no TP mention), lambda
+                // param count matches the callback's, all params un-annotated
+                // Identifier names, no rest params, `tp` not yet anchored.
+                if (fnObj != null && callbackSig != null &&
+                    // Round 466: `tp | undefined` callback returns qualify like bare
+                    // tp (a nullish body value contributes nothing to the binding).
+                    (callbackReturn === tp || (callbackReturn is Type.Union &&
+                        callbackReturn.types.all {
+                            it === tp || it.flags.hasAny(TypeFlags.Undefined or TypeFlags.Null)
+                        } && callbackReturn.types.any { it === tp })) &&
+                    otherTp == null && mapperPairs.none { it.first === tp } &&
+                    callbackSig.parameters.isNotEmpty() &&
+                    fnObj !is Type.Interface && fnObj !is Type.Reference &&
+                    fnObj.symbol == null &&
+                    fnObj.constructSignatures.isNullOrEmpty() &&
+                    fnObj.members.isNullOrEmpty() &&
+                    fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
+                    // Resolve each callback param type; all must be concrete (no TP mention).
+                    val sigParamTypes = mutableListOf<Type>()
+                    var concreteOk = true
+                    for (sp in callbackSig.parameters) {
+                        if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { concreteOk = false; break }
+                        val spt = getTypeOfSymbol(sp)
+                        if (spt === anyType || spt === errorType) { concreteOk = false; break }
+                        if (tps.any { typeMentionsTypeParam(spt, it) }) { concreteOk = false; break }
+                        sigParamTypes.add(spt)
+                    }
+                    if (concreteOk) {
+                        val arg = args[i]
+                        // Round 466 (Blocker #2): a NAMED-function callback arg
+                        // (`fileNames.map(toPathInBuildInfoDirectory)`) contributes
+                        // the named fn's RETURN type as the candidate for the
+                        // return-position TP — the Identifier sibling of the
+                        // arrow-body re-typing below. Resolution + all-candidates-
+                        // agree gating live in namedFnCallbackReturnType.
+                        if (arg is Identifier) {
+                            val nfr = namedFnCallbackReturnType(arg)
+                            if (nfr != null &&
+                                !nfr.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                val widened = widenType(nfr)
+                                if (isNamedLikeAtom(widened) ||
+                                    (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                    candidates.add(Candidate(i, widened, null))
+                                }
+                            }
+                        }
+                        val (argParamsLocal, argBody) = when (arg) {
+                            is ArrowFunction -> arg.parameters to arg.body
+                            is FunctionExpression -> arg.parameters to arg.body
+                            else -> null to null
+                        }
+                        // Lambda may declare FEWER params than the callback shape
+                        // (e.g. `(value, index, array) => ...` vs `s => ...`) — bind
+                        // only the lambda's declared params to the leading sig params.
+                        if (argParamsLocal != null && argBody != null &&
+                            argParamsLocal.isNotEmpty() &&
+                            argParamsLocal.size <= sigParamTypes.size) {
+                            val lpNames = mutableListOf<String>()
+                            var lpOk = true
+                            for (lp in argParamsLocal) {
+                                val lpName = (lp.name as? Identifier)?.text
+                                if (lp.dotDotDotToken || lpName == null || lp.type != null) {
+                                    lpOk = false; break
+                                }
+                                lpNames.add(lpName)
+                            }
+                            if (lpOk) {
+                                val effectiveBodyExpr: Expression? = when (argBody) {
+                                    is Block -> {
+                                        var retStmt: ReturnStatement? = null
+                                        var multi = false
+                                        for (s in argBody.statements) {
+                                            if (s is ReturnStatement) {
+                                                if (retStmt != null) { multi = true; break }
+                                                retStmt = s
+                                            }
+                                        }
+                                        if (multi) null else retStmt?.expression
+                                    }
+                                    is Expression -> argBody
+                                    else -> null
+                                }
+                                if (effectiveBodyExpr != null) {
+                                    val savedLocalTypes = currentLocalTypes
+                                    currentLocalTypes = EpochMap(currentLocalTypes)
+                                    for ((idx, name) in lpNames.withIndex()) {
+                                        currentLocalTypes[name] = sigParamTypes[idx]
+                                    }
+                                    val bodyType = try {
+                                        retypeInferenceBodyExpr(effectiveBodyExpr)
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
+                                    }
+                                    if (bodyType !== anyType && bodyType !== errorType &&
+                                        !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                        val widened = widenType(bodyType)
+                                        if (isNamedLikeAtom(widened) ||
+                                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                            candidates.add(Candidate(i, widened, null))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                // B83.4b (NEW 2026-05-27): multi-param callback parallel of B83.4d-quick.
+                // Shape: `f<S,T,U>(arg1: S, arg2: T, cb: (x: S, y: T) => U): U` — S and T
+                // already inferred via pass-1's anchor positions, U comes from the un-
+                // annotated lambda's body re-typed under `currentLocalTypes[x]=mapper(S),
+                // currentLocalTypes[y]=mapper(T)`. Gate: (a) multi-param callback (2+ params),
+                // (b) ALL callback params are bare TPs in tps and all DIFFERENT from current
+                // `tp` (pure callback-return-tp shape — no current-tp slot to gather from),
+                // (c) ALL those TPs already in mapperPairs, (d) callback return MENTIONS the
+                // current tp, (e) lambda has matching param count, all un-annotated Identifier
+                // names. Narrow: rejects mixed shapes (some slots = current tp, some other).
+                if (fnObj != null && callbackSig != null && callbackReturn != null &&
+                    callbackSig.parameters.size >= 2 &&
+                    typeMentionsTypeParam(callbackReturn, tp) &&
+                    fnObj !is Type.Interface && fnObj !is Type.Reference &&
+                    fnObj.symbol == null &&
+                    fnObj.constructSignatures.isNullOrEmpty() &&
+                    fnObj.members.isNullOrEmpty() &&
+                    fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
+                    // Collect per-slot resolved (otherTp, mappedType) pairs; bail if any
+                    // slot isn't a bare TP in tps, equals current tp, or isn't in mapperPairs.
+                    val slotMapped = mutableListOf<Type>()
+                    val slotTps = mutableListOf<Type.TypeParam>()
+                    var slotsOk = true
+                    for (sp in callbackSig.parameters) {
+                        if ((sp.valueDeclaration as? Parameter)?.dotDotDotToken == true) { slotsOk = false; break }
+                        val spt = getTypeOfSymbol(sp)
+                        val slotTp = spt as? Type.TypeParam
+                        if (slotTp == null || slotTp !in tpsSet || slotTp === tp) { slotsOk = false; break }
+                        val mapped = mapperPairs.firstOrNull { it.first === slotTp }?.second
+                        if (mapped == null) { slotsOk = false; break }
+                        slotMapped.add(mapped)
+                        slotTps.add(slotTp)
+                    }
+                    if (slotsOk) {
+                        val arg = args[i]
+                        val (argParamsLocal, argBody) = when (arg) {
+                            is ArrowFunction -> arg.parameters to arg.body
+                            is FunctionExpression -> arg.parameters to arg.body
+                            else -> null to null
+                        }
+                        if (argParamsLocal != null && argBody != null &&
+                            argParamsLocal.size == callbackSig.parameters.size) {
+                            // Validate ALL lambda params: Identifier-named, no dotDotDot, no annotation.
+                            val lpNames = mutableListOf<String>()
+                            var lpOk = true
+                            for (lp in argParamsLocal) {
+                                val lpName = (lp.name as? Identifier)?.text
+                                if (lp.dotDotDotToken || lpName == null || lp.type != null) {
+                                    lpOk = false; break
+                                }
+                                lpNames.add(lpName)
+                            }
+                            if (lpOk) {
+                                val effectiveBodyExpr: Expression? = when (argBody) {
+                                    is Block -> {
+                                        var retStmt: ReturnStatement? = null
+                                        var multi = false
+                                        for (s in argBody.statements) {
+                                            if (s is ReturnStatement) {
+                                                if (retStmt != null) { multi = true; break }
+                                                retStmt = s
+                                            }
+                                        }
+                                        if (multi) null else retStmt?.expression
+                                    }
+                                    is Expression -> argBody
+                                    else -> null
+                                }
+                                if (effectiveBodyExpr != null) {
+                                    val savedLocalTypes = currentLocalTypes
+                                    currentLocalTypes = EpochMap(currentLocalTypes)
+                                    for ((idx, name) in lpNames.withIndex()) {
+                                        currentLocalTypes[name] = slotMapped[idx]
+                                    }
+                                    // B86.1b-3 (multi-param): publish ALL slot TP→mapped bindings to
+                                    // currentInferenceMapper so any nested ArrowFunction body re-typing
+                                    // path (e.g. applyContextualParameterTypes for a nested callback)
+                                    // can substitute outer TPs for their concrete mappings. Mirror of
+                                    // the single-param branch below.
+                                    val savedMapper = currentInferenceMapper
+                                    val newMapper = (savedMapper ?: emptyMap()).toMutableMap()
+                                    for ((idx, slotTpVal) in slotTps.withIndex()) {
+                                        val slotType = slotMapped[idx]
+                                        if (slotType !== anyType && slotType !== errorType) {
+                                            newMapper[slotTpVal] = slotType
+                                        }
+                                    }
+                                    currentInferenceMapper = newMapper
+                                    val bodyType = try {
+                                        retypeInferenceBodyExpr(effectiveBodyExpr)
+                                    } finally {
+                                        currentLocalTypes = savedLocalTypes
+                                        currentInferenceMapper = savedMapper
+                                    }
+                                    if (bodyType !== anyType && bodyType !== errorType &&
+                                        !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                        val widened = widenType(bodyType)
+                                        if (isNamedLikeAtom(widened) ||
+                                            (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                            candidates.add(Candidate(i, widened, null))
+                                        } else if (widened is Type.TypeParam && widened === tp &&
+                                            mapperPairs.none { it.first === tp }) {
+                                            // B83.4c (NEW 2026-05-27): identity-anchor for body-bare-tp shape.
+                                            // When un-annotated lambda body's resolved type IS exactly the current
+                                            // tp (no anchor yet in mapperPairs), add `tp` as a self-anchor candidate.
+                                            // Handles e.g. body `[x, x]` typed as `[tp, tp]` where the tuple wrapper
+                                            // would already pass the named-like check; this catches the bare-tp leaf case
+                                            // that the named-like gate silently drops. Gate excludes TPs already
+                                            // anchored elsewhere (would create redundant identity candidate).
+                                            candidates.add(Candidate(i, tp, null))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if (fnObj != null && otherTp != null && otherTpMapped != null &&
+                    callbackReturn != null && typeMentionsTypeParam(callbackReturn, tp) &&
+                    fnObj !is Type.Interface && fnObj !is Type.Reference &&
+                    fnObj.symbol == null &&
+                    fnObj.constructSignatures.isNullOrEmpty() &&
+                    fnObj.members.isNullOrEmpty() &&
+                    fnObj.stringIndexInfo == null && fnObj.numberIndexInfo == null) {
+                    val arg = args[i]
+                    val (argParamsLocal, argBody) = when (arg) {
+                        is ArrowFunction -> arg.parameters to arg.body
+                        is FunctionExpression -> arg.parameters to arg.body
+                        else -> null to null
+                    }
+                    if (argParamsLocal != null && argParamsLocal.size == 1 && argBody != null) {
+                        val lp = argParamsLocal[0]
+                        val lpName = (lp.name as? Identifier)?.text
+                        if (!lp.dotDotDotToken && lpName != null && lp.type == null) {
+                            // B83.4d-quick-Block (NEW): extend the concise-body inference
+                            // path to Block bodies with EXACTLY one top-level
+                            // ReturnStatement whose expression we can type-re-resolve
+                            // under the pushed currentLocalTypes. Multi-return / no-return
+                            // bodies still bail. Mirrors the inferReturnTypeFromBody
+                            // single-return-extraction pattern (single-return is the
+                            // tractable shape).
+                            val effectiveBodyExpr: Expression? = when (argBody) {
+                                is Block -> {
+                                    var retStmt: ReturnStatement? = null
+                                    var multi = false
+                                    for (s in argBody.statements) {
+                                        if (s is ReturnStatement) {
+                                            if (retStmt != null) { multi = true; break }
+                                            retStmt = s
+                                        }
+                                    }
+                                    if (multi) null else retStmt?.expression
+                                }
+                                is Expression -> argBody
+                                else -> null
+                            }
+                            if (effectiveBodyExpr != null) {
+                                val savedLocalTypes = currentLocalTypes
+                                currentLocalTypes = EpochMap(currentLocalTypes)
+                                currentLocalTypes[lpName] = otherTpMapped
+                                // B86.1b-3 (single-param): publish the same TP→mapped binding to
+                                // currentInferenceMapper so any nested ArrowFunction body re-typing
+                                // path (e.g. applyContextualParameterTypes for a nested callback)
+                                // can substitute the outer TP for its concrete mapping. Narrow gate:
+                                // single-param branch only this iteration; multi-param branch
+                                // (~line 54515) deferred to a follow-up iteration.
+                                val savedMapper = currentInferenceMapper
+                                val newMapper = (savedMapper ?: emptyMap()).toMutableMap()
+                                newMapper[otherTp] = otherTpMapped
+                                currentInferenceMapper = newMapper
+                                val bodyType = try {
+                                    retypeInferenceBodyExpr(effectiveBodyExpr)
+                                } finally {
+                                    currentLocalTypes = savedLocalTypes
+                                    currentInferenceMapper = savedMapper
+                                }
+                                if (bodyType !== anyType && bodyType !== errorType &&
+                                    !bodyType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) {
+                                    val widened = widenType(bodyType)
+                                    if (isNamedLikeAtom(widened) ||
+                                        (widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) {
+                                        candidates.add(Candidate(i, widened, null))
+                                    } else if (widened is Type.TypeParam && widened === tp &&
+                                        mapperPairs.none { it.first === tp }) {
+                                        // B83.4c (NEW 2026-05-27): identity-anchor — mirror of the
+                                        // multi-param branch (see ~line 54393). Catches body-bare-tp
+                                        // shape that the named-like gate would silently drop.
+                                        candidates.add(Candidate(i, tp, null))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                continue
+            }
+            val arg = args[i]
+            if (arg is SpreadElement) continue
+            val argParams = when (arg) {
+                is ArrowFunction -> arg.parameters
+                is FunctionExpression -> arg.parameters
+                else -> null
+            } ?: continue
+            if (isFnTypedOfT) {
+                // B83.1 single-param case.
+                if (argParams.size != 1) continue
+                val lp = argParams[0]
+                if (lp.dotDotDotToken) continue
+                if (lp.name !is Identifier) continue
+                val lpTypeNode = lp.type ?: continue
+                val lpType = getTypeFromTypeNode(lpTypeNode)
+                if (lpType === anyType || lpType === errorType) return null
+                if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                val widened = widenType(lpType)
+                if (!isNamedLikeAtom(widened) &&
+                    !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                candidates.add(Candidate(i, widened, null))
+            } else {
+                // B83.3 multi-param case. Match lambda's parameter count to
+                // the callback shape's parameter count exactly. For each slot
+                // matching `tp`, gather a candidate from the lambda's
+                // corresponding annotated param. Bail (continue) on
+                // un-annotated lambda — B83.4 territory.
+                val slots = multiSlots!!
+                if (argParams.size != slots.size) continue
+                var bailed = false
+                val newCandidates = mutableListOf<Candidate>()
+                for ((slotIdx, slotTp) in slots.withIndex()) {
+                    if (slotTp !== tp) continue
+                    val lp = argParams[slotIdx]
+                    if (lp.dotDotDotToken) { bailed = true; break }
+                    if (lp.name !is Identifier) { bailed = true; break }
+                    val lpTypeNode = lp.type
+                    if (lpTypeNode == null) { bailed = true; break }
+                    val lpType = getTypeFromTypeNode(lpTypeNode)
+                    if (lpType === anyType || lpType === errorType) return null
+                    if (lpType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)) return null
+                    val widened = widenType(lpType)
+                    if (!isNamedLikeAtom(widened) &&
+                        !(widened is Type.Union && widened.types.all { isNamedLikeAtom(it) })) return null
+                    newCandidates.add(Candidate(i, widened, null))
+                }
+                if (bailed) continue
+                candidates.addAll(newCandidates)
+            }
+        }
+        return true
+    }
+
+    /**
+     * (JIT.1)(e) round 821 — the constraint leg of
+     * [tryInferSingleTypeParamFromArgs]: the inferred type (the widened first
+     * candidate) must satisfy `tp`'s constraint, and when it does not this is
+     * where B98.r118's TS2345 / B273's TS2322+TS6502 / B98.r128's
+     * self-referential-constraint TS2345 are emitted. Moved VERBATIM out of
+     * the `if (constraint != null) { … }` block.
+     *
+     * **`null` means the whole inference bails** — which, on this leg, is what
+     * every failing constraint does after emitting (or deliberately not
+     * emitting) its diagnostic.
+     */
+    private fun tispCheckConstraint(
+        tp: Type.TypeParam,
+        constraint: Type,
+        firstWidened: Type,
+        first: Candidate,
+        effectiveCandidates: List<Candidate>,
+        params: List<Symbol>,
+        args: List<Expression>,
+        source: String?,
+        fileName: String?,
+    ): Boolean? {
+        // Round 729: the round-725 rule's THIRD arm. An INFERRED candidate that is an
+        // intersection carrying a TypeParam constituent (`T & { m: 1 }` — and, since
+        // the real lib spells `NonNullable<T>` as `T & {}`, every non-nullable form of
+        // a type parameter) satisfies the callee's constraint whenever that
+        // constituent's own constraint does, because `T ⊆ constraint(T)`. The relation
+        // has no TypeParam-source-via-constraint rule on purpose (round 456), so
+        // without this the whole inference bails and the callee's return type stays
+        // OPEN — which then FPs against a concrete consumer. Evaluated only inside the
+        // already-failing branch, so it costs nothing on the passing path.
+        var ok = checkTypeRelatedTo(firstWidened, constraint, assignableRelation)
+        if (!ok && firstWidened is Type.Intersection &&
+            intersectionSatisfiesViaTypeParamConstraint(firstWidened, constraint)) {
+            ok = true
+        }
+        if (!ok) {
+            // B98.r118: a PRIMITIVE arg whose inferred type fails the type
+            // param's STRUCTURED constraint (a named interface or an anonymous
+            // object literal — `foo<T extends Item>("abc", …)`,
+            // `fill<B extends typeof A>(32)`). 16.4i already handles a
+            // simple-checkable constraint (`T extends number`), so this is the
+            // complementary case: constraint not simple-checkable and not a
+            // Type.Reference (whose self-referential/instantiated display is
+            // unreliable — e.g. `Comparable<T>`). Emit TS2345 at the failing
+            // (first) arg with the constraint as the displayed parameter type,
+            // then return null. The standard arg-check loop passes a bare-TP
+            // param trivially (unconstrained apparent type `{}`), so this never
+            // double-emits. FP-safe: a primitive that genuinely fails a
+            // structured constraint is always TS2345 in TypeScript.
+            if (source != null && fileName != null &&
+                constraint !== anyType && constraint !== errorType &&
+                isSimpleCheckableType(firstWidened) &&
+                (constraint is Type.Interface ||
+                    (constraint is Type.Object && constraint !is Type.Reference &&
+                        !constraint.members.isNullOrEmpty() &&
+                        constraint.callSignatures.isNullOrEmpty() &&
+                        constraint.constructSignatures.isNullOrEmpty()))) {
+                val arg = args[first.argIdx]
+                // B273: an ARROW/FN-EXPRESSION arg anchored the TP via its RETURN
+                // (the cb param's declared return is the bare TP) — TypeScript reports
+                // TS2322 at the RETURN EXPRESSION + related TS6502 at the callback
+                // signature, not the coarse whole-arg TS2345 (promiseChaining1/2).
+                if (arg is ArrowFunction || arg is FunctionExpression) {
+                    val retExpr: Expression? = when (arg) {
+                        is ArrowFunction -> when (val b = arg.body) {
+                            is Block -> b.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                            is Expression -> b
+                            else -> null
+                        }
+                        is FunctionExpression -> arg.body.statements.firstNotNullOfOrNull { (it as? ReturnStatement)?.expression }
+                    }
+                    if (retExpr != null) {
+                        val rStart = retExpr.pos
+                        val rLength = (expressionTrueEnd(retExpr) - rStart).coerceAtLeast(1)
+                        val (rLine, rChar) = getLineAndCharacterOfPosition(source, rStart)
+                        val related = ((params.getOrNull(first.argIdx)?.valueDeclaration as? Parameter)?.type as? FunctionType)?.let { ftNode ->
+                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, ftNode.pos)
+                            listOf(Diagnostic(
+                                message = "The expected type comes from the return type of this signature.",
+                                category = DiagnosticCategory.Message, code = 6502,
+                                fileName = fileName, line = relLine, character = relChar,
+                                start = ftNode.pos, length = (ftNode.type.end - ftNode.pos).coerceAtLeast(1),
+                            ))
+                        } ?: emptyList()
+                        diagnostics.add(Diagnostic(
+                            message = "Type '${typeToString(firstWidened)}' is not assignable to type '${typeToString(constraint)}'.",
+                            category = DiagnosticCategory.Error, code = 2322,
+                            fileName = fileName, line = rLine, character = rChar,
+                            start = rStart, length = rLength,
+                            relatedInformation = related,
+                        ))
+                        return null
+                    }
+                }
+                if (arg !is SpreadElement) {
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '${typeToString(firstWidened)}' is not assignable to parameter of type '${typeToString(constraint)}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+            } else if (source != null && fileName != null &&
+                constraint is Type.Reference &&
+                constraint.resolvedTypeArguments?.any { typeMentionsTypeParam(it, tp) } == true &&
+                isSimpleCheckableType(getWidenedLiteralType(firstWidened)) &&
+                effectiveCandidates.size >= 2 &&
+                effectiveCandidates.all { it.literalType != null }) {
+                // B98.r128 (Blocker #2): a multi-literal-anchor TP whose inferred union
+                // fails a SELF-REFERENTIAL Type.Reference constraint
+                // (`<T extends Comparable<T>>` called `max2(1, 2)`). TypeScript displays
+                // T as the UNION of the literal arg types (`1 | 2`) substituted into the
+                // constraint (`Comparable<1 | 2>`), while the failing arg is shown WIDENED
+                // (`number`). Complements B98.r118 (which excludes Reference constraints
+                // because a SINGLE-anchor instantiated-Reference display is unreliable);
+                // gated to the multi-literal-anchor shape so that excluded case stays out.
+                val unionForDisplay = getUnionType(effectiveCandidates.map { it.literalType!! })
+                val tpMapper = TypeMapper { t ->
+                    if (t === tp || (t.symbol != null && t.symbol === tp.symbol))
+                        unionForDisplay else null
+                }
+                val substituted = instantiateType(constraint, tpMapper)
+                val arg = args[first.argIdx]
+                if (arg !is SpreadElement) {
+                    val start = arg.pos
+                    val length = expressionTrueEnd(arg) - start
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "Argument of type '${typeToString(getWidenedLiteralType(firstWidened))}' is not assignable to parameter of type '${typeToString(substituted)}'.",
+                            category = DiagnosticCategory.Error,
+                            code = 2345,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = length,
+                        ))
+                    }
+                }
+            }
+            return null
+        }
+        return true
     }
 
     /**
