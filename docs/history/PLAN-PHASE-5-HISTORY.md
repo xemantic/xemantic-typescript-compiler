@@ -1,3 +1,117 @@
+**Round 808 (2026-08-02) — (JIT.1)(c) LANDED FOR `checkVarDeclAssignabilityCore`: 19,296
+BYTECODES (2.4x HotSpot's LIMIT) -> AN ENTRY AT 3,535 PLUS SEVEN `cvda*` HELPERS. CENSUS
+14 -> 13. THE SHAPE IS A STRAIGHT-LINE STATEMENT SEQUENCE — ROUND 804's RECIPE, WITH THE
+COMMITTED `CtaSections` LEVEL-B MARKERS DOING THE CHOOSING.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **14** over the
+  limit, `checkVarDeclAssignabilityCore` **19,296** — the round-807 handoff reproduced
+  exactly, including the non-`Checker` tail (`Transformer.transformToCommonJS` 28,991,
+  `TypeScriptCompiler.compileParsedCore` 21,535, `CompilerOptionsKt.applyDirective` 13,694,
+  the `Checker` constructor 11,298).
+- **THE SPLIT.** Entry **3,535** (`B_BINDPAT`, `B_RECORD`, `B_TARGET`, `B_SRCTYPE`,
+  `B_NARROW`, `B_RELATION`, `B_TAIL`) plus `cvdaElaborateMismatch` **4,147** (`B_ELAB`),
+  `cvdaPrologueWalkers` **3,103** (`B_PRO1`+`B_WEAK`+`B_PRO2`+`B_PRO3`),
+  `cvdaPostRelationGates` **3,065** (`B_POST`), `cvdaEarlyInitGates` **1,811**
+  (`B_NUIA`+`B_PRE2`), `cvdaMidGates` **1,514** (`B_MID`), `cvdaNestedInitTargets` **1,251**
+  (`B_NESTED`), `cvdaRecordInferredLocalType` **392** (`B_UNANNOT`). The eight sum to
+  **18,951 against 19,296** — a FIFTH confirmation that a bytecode count is a THRESHOLD
+  predicate and not a cost model (only round 804's 46,567 -> 29,130 ever shrank).
+- **WHAT STAYS IN THE ENTRY IS WHAT EVERY DECLARATION PAYS**, not what is short: the
+  `varTypes`/`currentLocalTypes`/`currentLocalDeclTypeNodes` recordings, the single
+  `getTypeFromTypeNode`, the contextual-literal + flow-narrow source-type computation, the
+  `canUseTypeEngine`+`checkTypeRelatedTo` pair and the legacy string fallback. Everything
+  that moved is a gate that fires for one shape and ends the check.
+- **THE SHAPE PROBLEM, AND IT IS THE THIRD DISTINCT ONE IN THIS FAMILY.** (a)/(c)/(d) moved
+  `when` ARMS (exit = fall off the end); (f) moved runs of a LOOP body (exit = `continue` /
+  `break` / `return`). This body is a statement sequence punctuated by **~40 early
+  `return`s**, none of which crosses a function boundary — so four regions return `Boolean`
+  (`true` = "I emitted, the caller must return") and the entry replays them as
+  `if (...) return`. **Two regions held blocks that returned UNCONDITIONALLY** (`B_UNANNOT`,
+  `B_ELAB`), so their bare `return`s stay bare and the caller returns straight after the
+  call; for `B_UNANNOT` that seam is **COMPILER-ENFORCED** (the entry's `typeAnnotation` is
+  smart-cast non-null immediately below the call site, so a missing `return` does not
+  compile) — worth knowing, because it is the one seam this family has ever had that needs
+  no pin.
+- **EXACTLY ONE VALUE CROSSES A BOUNDARY**, and round 804's rule decides its shape:
+  `nestedMissingEmitted` is written in `B_NESTED` and read ~480 lines later by the `B_ELAB`
+  gate, so `cvdaNestedInitTargets` returns `Boolean?` (`null` = the caller must return).
+  A `Checker` field would have needed round 791's save/restore dance, because the blocks
+  either side re-enter the checker and "the outer write happens last" is not guaranteed.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** seven contiguous
+  in-order runs re-extracted from the NEW file and diffed against HEAD (identical modulo the
+  4-space dedent of the two block interiors and the return-signal rewrite); the entry
+  RECONSTRUCTED from HEAD with the regions replaced by call sites — **IDENTICAL at 222
+  lines**; accounting closing exactly (HEAD body 1,541 = kept 211 + moved 1,330; entry
+  222 = 211 + 11); every `return` enumerated by a comment-stripped token scan (the only
+  local function in the range, `fun isAnonFn`, is expression-bodied and contains none, and
+  no `return@checkVarDeclAssignabilityCore` exists); free variables computed PER REGION
+  rather than guessed — which is what keeps the build warning-clean, since an unused
+  parameter is a warning here.
+- **PINS: 17 new** — `CvdaSplitTest` (14: one ARM pin per helper, the (WIDEN.1)
+  const-keeps-its-literal pin with its `let` positive control, five signal pins written
+  against a COUNT rather than a presence — two of which discriminate, see below — and an
+  ordering pin across five declarations) and
+  `HugeMethodLimitTest` (+3, reading `Checker`'s compiled `Code` attribute lengths).
+- **WHAT DID NOT WORK.** (1) The ordering pin's first fixture used `const a3: "a"|"b" = "c"`
+  and asserted a TS2820: `"c"` has no close match, so the prologue walker emits a PLAIN
+  TS2322 — a reminder that the did-you-mean form is a property of the EDIT DISTANCE, not of
+  the walker. Restated with `"strin"` against `"string" | "number"`, and the measured
+  counts recorded. (2) A first cut of the entry left a DUPLICATE `return` at both the
+  `B_UNANNOT` and `B_ELAB` call sites (each region's own trailing `return` had been moved
+  INTO the helper as well) — caught by the reconstruction check before any compile, which is
+  what that check is for. (3) The `B_PRO1` region's natural end (the comment block
+  introducing `val typeAnnotation`) had to be pulled back four lines so the comment stays
+  with the statement it documents; a region boundary is a prose decision as well as a
+  control-flow one.
+- **DISCRIMINATION: TWO SEAMS OF FIVE, AND THE OTHER THREE ARE RECORDED OPEN.** Round
+  807's law followed literally — **five mistakes, five separate builds, never combined**,
+  with a control run first (32 pins, 0 failed). **M1** (the prologue walkers' `true`
+  dropped) fails 2 pins — its own seam and the ordering pin. **M2** (`nestedMissingEmitted`
+  forced `false`, the `null` signal still honoured) fails **exactly one pin, its own** —
+  the sharpest possible statement that the arm pins and the seam pins pin different things,
+  and it is the seam that matters most because that is the only value crossing a boundary.
+  **M3/M4/M5** (the early-init, mid and post-relation gates' `true` dropped, each alone)
+  leave **every pin GREEN — NOT DISCRIMINATED**, and the reason is a property of the
+  FUNCTION: dropping the `return` does not delete the emission, and **every later emitter in
+  this body is itself conditioned on the relation verdict** (`canUse && !isAssignable`, or
+  `isAssignable`), while the shapes those three regions own are exactly the ones where the
+  relation passes or `canUseTypeEngine` declines — so nothing doubles. On today's code they
+  are REDUNDANT guards, the same finding round 807 recorded for
+  `caasTypeParamConstraintArg`. Two more seams need no pin: `cvdaRecordInferredLocalType`'s
+  caller `return` is compiler-enforced, and `cvdaElaborateMismatch`'s trailing `return`
+  never moved.
+- **A PROCESS FAILURE THAT LOOKS EXACTLY LIKE A CLEAN ABLATION.** Two of the round's seven
+  builds died with `java.lang.OutOfMemoryError: GC overhead limit exceeded` in the Kotlin
+  daemon — a run of back-to-back `compileKotlinJvm` invocations accretes daemon heap until
+  BUILD.1's 5 GB stops being enough. The tell is a `jvmTest` that reports **0 pins ran**
+  (the test task never started), which reads exactly like "the ablation compiled and changed
+  nothing". M2's first attempt was one of these and was re-run after `./gradlew --stop` +
+  a graceful bracket-pattern Kotlin-daemon kill. **Check the ablation's own build log for
+  `BUILD SUCCESSFUL` before recording a zero.**
+- **GATE.** Suite **13,562 -> 13,579 / 0 failures / 3 skipped** (+17), python XML parser,
+  whole results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built pre-split binary, every capture confirmed non-empty first and the two class
+  dirs checked to differ (`cvda*` present in one, absent in the other) —
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. Build warning-clean.
+  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 12.
+- **NO WALL A/B, deliberately** — the family is bounded four times over (round 803's
+  falsifier, 804's +0.23% NOISE-DOMINATED, 805's whole-family flag at -1.14%, 805's
+  emit-mode sizing). This lands for the THRESHOLD.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **13 over the limit**. The next `Checker` targets
+  are `checkAssignmentExpressionCore` **18,100** (a STATEMENT sequence — this round's recipe
+  applies unchanged, and its `CtaSections` level-A/C partition is the split plan) and
+  `checkSingleCallExpressionTypesCore` **15,567** (must keep round 793's
+  `ccetPrologueMayFire` gate in the entry). The non-`Checker` tail is untouched:
+  `Transformer.transformToCommonJS` 28,991, `TypeScriptCompiler.compileParsedCore` 21,535,
+  `Transformer.transformClassBody` 16,233, `CompilerOptionsKt.applyDirective` 13,694, the
+  `Checker` constructor 11,298. **Budget one build per ablation and stop the daemons between
+  batches**; and when you write a seam pin for an early `return`, first check that something
+  downstream would actually emit — in these assignability bodies most later gates are
+  themselves conditioned on the relation verdict, so three of five did not.
+
+
+
 **Round 807 (2026-08-02) — (JIT.1)(f) LANDED: `checkArgumentsAgainstSignatureCore`, THE
 LARGEST `Checker` METHOD LEFT (23,890 BYTECODES, 3.0x HotSpot's LIMIT), IS AN ENTRY AT
 7,173 PLUS THIRTEEN `caas*` HELPERS. CENSUS 15 -> 14. AND THE ROUND'S TRANSFERABLE RESULT

@@ -2266,3 +2266,163 @@ target needing a real data-flow answer), and `Checker.<clinit>` **10,339** — t
 one this round discovered, and a shape nobody in this arc has split yet: a static
 initializer, whose contents are the class's `object`-level constants, and which
 can only shrink by moving those initializers into helper methods it calls.
+
+## 23. (JIT.1)(e) — `Transformer.transformClassBody`, 16,233 → an entry at 5,202 plus nine helpers
+
+Round 818. The second largest method in the compiler, and the first target in
+the arc whose obstacles were *scoping* rather than control flow.
+
+### 23.1 The two shapes that block a mechanical split
+
+Everything in this family so far moved contiguous text into a private method and
+handed values back. This function has two constructs that make that illegal, and
+they are worth naming because any large Kotlin function can hold them:
+
+* **A LOCAL DATA CLASS.** `data class PrivateFieldInfo(…)` is declared inside the
+  body and CONSTRUCTED by one of the regions that must move. Its type cannot be
+  named from a member function, so the region cannot move while it is local. It
+  is LIFTED to a private nested data class — the only text change outside the
+  mechanical extraction, and behaviour-free: it captures nothing and never
+  escapes the transform.
+* **A LOCAL `fun` CALLED FROM BOTH SIDES OF A BOUNDARY.**
+  `buildStaticBlockIife` closes over `classTempVar`/`heritageTempVar` — the very
+  values the split decides — and is called both inside the moved static-trailing
+  loop and after it. It can neither move nor be duplicated, so it is passed as a
+  **function-typed parameter** (`::buildStaticBlockIife`), which leaves the moved
+  call site `buildStaticBlockIife(member)` textually untouched. **The ORDER that
+  makes this sound is enforced by nothing in the types**: the capture stage must
+  run first so the caller's vars hold their final values before the reference is
+  ever invoked. That is this round's first ablation.
+
+`isCapturablePrivateMethod` needed none of this treatment: both of its call sites
+are inside ONE region, so the local `fun` simply moved with them. **The test is
+where the call sites are, not what the construct is.**
+
+### 23.2 The regions, measured before the edit
+
+Sizes from `scripts/method_bytes_by_line.py`, HEAD line numbers:
+
+| region | HEAD lines | measured | helper | after |
+|---|---|---|---|---|
+| auto-accessor downlevel | 11392–11452 | 584 | `tcbLowerAutoAccessors` | 666 |
+| computed-key extraction | 11544–11625 | 1,112 | `tcbExtractComputedPropertyKeys` | 1,050 |
+| private state allocation | 11712–11813 | 1,832 | `tcbAllocatePrivateState` | 1,716 |
+| instance initializers | 11950–12051 | 1,161 | `tcbBuildInstanceInitializers` | 1,130 |
+| the constructor | 12054–12145 | 1,338 | `tcbBuildTransformedConstructor` | 1,317 |
+| the output member list | 12155–12319 | 1,677 | `tcbBuildOutputMembers` | 1,604 |
+| class-alias/heritage capture | 12372–12430 | 1,259 | `tcbCaptureClassAlias` | 1,236 |
+| the alias+private comma stmt | 12432–12515 | 1,264 | `tcbEmitAliasAndPrivateState` | 1,178 |
+| static field trailing | 12517–12609 | 979 | `tcbEmitStaticFieldTrailing` | 919 |
+
+Entry **5,202**. Six regions move at dedent 0 and three (inside the
+static-trailing `if`) at dedent 4. Only `tcbCaptureClassAlias` needs a PROLOGUE —
+three `var`s it decides and returns in a `ClassAliasCapture` holder.
+
+**The frequency argument, honestly: irrelevant.** `transformClassBody` runs once
+per CLASS, on the EMIT path, and every A/B in this arc is `--noEmit` and
+structurally blind to it. It lands for the threshold and for (JIT.1)(f).
+
+### 23.3 The parts sum to LESS — and here BOTH mechanisms fire at once
+
+16,018 against 16,233: **215 fewer**. Rounds 816 and 817 each found one cause and
+each measured the other absent. This target has both:
+
+    boxed `var` reads inside the function   31 -> 11   (round 816's mechanism)
+    2-byte aload/astore                  1,947 -> 1,850 (round 817's mechanism)
+    1-byte aload_N/astore_N                197 ->   254
+
+The 11 boxed reads that REMAIN are the entry's two alias temps, still captured by
+the local `fun buildStaticBlockIife` — which is exactly why they must stay boxed,
+and is the same property that forced the function-typed parameter. So the two
+mechanisms are not alternatives to choose between: **measure both.**
+
+**An instrument trap inside that measurement, caught by a control.** The first
+per-method attribution keyed the javap output by `line.strip()[:70]` and reported
+that `transformClassBody` held ZERO boxed reads while a whole-method slice
+reported 31. The method's own name sits PAST character 70 of its signature, so
+the truncated key did not contain it and the filter dropped it. The rewritten
+pass asserts a key containing `transformClassBody(` exists before it reports
+anything. Same family as rounds 815–817: an instrument whose input is not
+precisely bounded measures something else.
+
+### 23.4 Equivalence, measured (round 805's five checks)
+
+`scripts/tcb_split_{analyze,apply,verify}.py`, all green: nine contiguous in-order
+regions re-extracted from the NEW file and compared VERBATIM (dedent 0 for six,
+4 for three); the file RECONSTRUCTS from HEAD byte for byte (923,613 chars); the
+accounting is a PARTITION (1,321 body lines, each claimed exactly once, 840
+moved) with the ONE line that is neither kept nor moved — the lifted data class —
+named, asserted unique, and asserted present in its new form; control flow
+enumerated on both sides and BOUNDED to the changed region — `return` **2 + 5 ==
+7**, `continue`/`break` **11 == 11**; free variables per region equal to the
+parameter list plus the declared prologue, and every call site passes every
+argument BY NAME.
+
+**The free-variable matcher had to be rewritten, not reused.** Round 817's binds
+`val x: T = <expr>` to the first token of the INITIALISER (its optional
+annotation group eats `x: T = `), so on this function it bound `if` and never
+bound `members`. And a NAMED ARGUMENT (`name = …`, `initializer = …`,
+`modifiers = …`) is textually indistinguishable from a read of a same-named
+local — `transformClassBody` has parameters called `name` and `modifiers`, and
+the AST constructors it calls take arguments of exactly those names, so an
+unfiltered matcher reports every region as capturing `name`. Both filters carry a
+positive control in BOTH directions.
+
+### 23.5 Discrimination — 4 of 4, plus a negative control at its predicted zero
+
+Pins validated on the UNSPLIT binary first: **60 ran, exactly 5 failed and they
+are the 5 size/ratchet pins**, which must fail there. So all ten behavioural pins
+describe HEAD, not the split. On the split binary: **69 ran, 0 failed.**
+
+Each mistake alone, on its own build, the count PREDICTED before the run:
+
+* **the ORDER seam** — move the `tcbCaptureClassAlias` call after the two emit
+  stages. It type-checks (all three vars are declared above), and then the static
+  block's `this` is never routed through the alias, so the downlevelled arrow
+  captures the OUTER `this`. Predicted 1, failed **1**;
+* **the LIST-IDENTITY seam** — hand `tcbEmitStaticFieldTrailing` a fresh
+  `emittedStaticBlocks`. The caller's later loop skips what is recorded there, so
+  every static block is emitted TWICE. Predicted 1, failed **1**;
+* **the RETURN-SIGNAL seam** — drop `tcbBuildOutputMembers`' `constructorAdded`
+  answer; the constructor is then emitted at its source position AND prepended.
+  Predicted 1, failed **1**;
+* **a dropped call** — `tcbExtractComputedPropertyKeys`. Predicted 1, failed **1**;
+* **NEGATIVE CONTROL** — pass `heritageIn = transformedHeritage` instead of
+  `finalHeritage`. Nothing between the declaration and the call assigns
+  `finalHeritage`, so the two are the same value. Predicted **0**, failed **0**.
+
+Every arm reports `RAN 10`, so no arm is a vacuous pass.
+
+### 23.6 Gate
+
+Suite **13,739 → 13,752 / 0 failures / 3 skipped** (+13: 10 `TransformClassBodySplitTest`
++ 3 `HugeMethodLimitTest` size pins), whole results dir wiped first, counted with
+the python XML parser. 8-profile grid diffed set-for-set BOTH directions against a
+purpose-built pre-split binary, identical direct `java` command, absolute class
+dirs, class dirs confirmed to differ (14 `tcb` mentions vs 0), every capture
+checked non-empty and free of an `and N more error` marker —
+**46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
+`--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
++0.00%**. `--rerun-tasks` build **0 `w:` / 0 `e:`** — after two warnings that the
+prologue itself produced (`= null` redundant, then `var` that could be `val`; the
+moved region assigns that temp unconditionally, which is why both fired).
+`huge_methods.py --fail-over 3` exits 0.
+
+**The behavioural gate that matters here is the corpus EMIT baselines**, since no
+`--noEmit` instrument can see this function: the suite carries **5,692
+`compiles to JavaScript matching` subtests**, every one of which runs
+`transformClassBody` for every class it contains, and **55** of them are in the
+families this split's regions own — `parameterPropertyInConstructor1..4`,
+`parameterPropertyInConstructorWithPrologues`, `computedPropertyNameWithImportedKey`,
+`privateNameWeakMapCollision`, `controlFlowAutoAccessor1`,
+`classPropertyInferenceFromBroaderTypeConst` among them. All passed.
+
+### 23.7 The list is now THREE
+
+`Transformer.transformToCommonJS` **28,991**,
+`Checker.tryInferSingleTypeParamFromArgs` **11,930**, and `Checker.<clinit>`
+**10,339**. `transformToCommonJS` is this round's recipe again at 1.8× the size
+and on the same emit path; `tryInferSingleTypeParamFromArgs` still needs a
+scripted DATA-FLOW answer rather than a contiguity argument; `<clinit>` is a
+static initializer whose content is the class's object-level constants, and can
+only shrink by moving those initializers into helper methods it calls.

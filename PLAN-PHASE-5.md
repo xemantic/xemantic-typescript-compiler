@@ -20,6 +20,125 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 818 (2026-08-03) — (JIT.1)(e) LANDED FOR `Transformer.transformClassBody`:
+16,233 BYTECODES -> AN ENTRY AT 5,202 PLUS NINE `tcb*` HELPERS. CENSUS 4 -> 3 — AND IT IS
+THE FIRST TARGET WHERE **BOTH** BYTECODE-NEGATIVE MECHANISMS FIRE AT ONCE.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **4** over the
+  limit, the four named exactly as the round-817 handoff left them, `transformClassBody`
+  **16,233**. After: **3**, measured the same way on the binary built from the split source.
+- **WHY THIS TARGET.** The prompt named it and the measurement agreed: `--top`-level
+  attribution (`scripts/method_bytes_by_line.py`) shows it partitions into nine contiguous
+  regions of 584-1,832 bytecodes with exactly ONE non-trivial coupling, i.e. round 817's
+  recipe at 2x the size rather than `transformToCommonJS`'s 3.6x. `<clinit>` is a shape
+  nobody here has split and no A/B can price; `tryInferSingleTypeParamFromArgs` still needs
+  the data-flow answer.
+- **THE SPLIT.** Entry **5,202** plus `tcbAllocatePrivateState` **1,716**,
+  `tcbBuildOutputMembers` **1,604**, `tcbBuildTransformedConstructor` **1,317**,
+  `tcbCaptureClassAlias` **1,236**, `tcbEmitAliasAndPrivateState` **1,178**,
+  `tcbBuildInstanceInitializers` **1,130**, `tcbExtractComputedPropertyKeys` **1,050**,
+  `tcbEmitStaticFieldTrailing` **919**, `tcbLowerAutoAccessors` **666**. Six regions move at
+  dedent 0, three (inside the static-trailing `if`) at dedent 4; only one needs a prologue.
+- **TWO SHAPES NO EARLIER TARGET HAD, AND BOTH ARE SCOPING, NOT CONTROL FLOW.** (i) A
+  **LOCAL DATA CLASS** (`PrivateFieldInfo`) constructed by a moved region — un-nameable
+  from a member function, so LIFTED to a private nested class; behaviour-free (it captures
+  nothing and never escapes), and it is the only text change outside the extraction.
+  (ii) A **LOCAL `fun` CALLED FROM BOTH SIDES OF A BOUNDARY** (`buildStaticBlockIife`,
+  which closes over the two alias `var`s the split decides) — it can neither move nor be
+  duplicated, so it is passed as a **function-typed parameter** (`::buildStaticBlockIife`),
+  leaving the moved call site textually untouched. **The ORDER that makes that sound is
+  enforced by NOTHING in the types** — it is this round's first ablation.
+  `isCapturablePrivateMethod` needed none of it: both call sites are inside ONE region, so
+  the local `fun` MOVED with them. **The test is where the call sites are, not what the
+  construct is.**
+- **THE PARTS SUM TO 16,018 AGAINST 16,233 — 215 FEWER — AND HERE BOTH MECHANISMS FIRE.**
+  Round 816's boxing: boxed `var` reads inside the function **31 -> 11**. Round 817's
+  local-slot addressing: 2-byte `aload`/`astore` **1,947 -> 1,850**, 1-byte **197 -> 254**.
+  **The 11 boxed reads that REMAIN are the entry's two alias temps, still captured by the
+  local `fun` — the same property that forced the function-typed parameter.** So the two
+  mechanisms are not alternatives to pick between; measure both.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks;
+  `scripts/tcb_split_{analyze,apply,verify}.py`), all green:** nine regions re-extracted
+  from the NEW file and compared VERBATIM; the file RECONSTRUCTS from HEAD byte for byte
+  (**923,613 chars**); the accounting is a PARTITION (1,321 body lines, each claimed exactly
+  once, 840 moved) with the ONE line that is neither kept nor moved — the lifted data class
+  — named, asserted unique and asserted present in its new form; control flow bounded to
+  the changed region on both sides, `return` **2 + 5 == 7**, `continue`/`break` **11 == 11**;
+  free variables per region equal to the parameter list PLUS the declared prologue, every
+  call site naming every argument.
+- **THE FREE-VARIABLE MATCHER HAD TO BE REWRITTEN, NOT REUSED — TWICE OVER.** (i) Round
+  817's binds `val x: T = <expr>` to the first token of the INITIALISER (its optional
+  annotation group eats `x: T = `), so on this function it bound `if` and never bound
+  `members`. (ii) A NAMED ARGUMENT (`name = …`, `initializer = …`, `modifiers = …`) is
+  textually identical to a read of a same-named local, and `transformClassBody` has
+  parameters called `name` and `modifiers` while the AST constructors it calls take
+  arguments of exactly those names — unfiltered, every region reports capturing `name`.
+  Both filters carry a positive control in BOTH directions.
+- **PINS VALIDATED ON THE UNSPLIT BINARY FIRST — 60 ran, exactly 5 failed and they are the
+  5 size/ratchet pins**, which must fail there. On the split binary **69 ran, 0 failed**.
+  Every probe shape was read off the REAL compiler in a 1.2-second scratch project before a
+  pin was written.
+- **DISCRIMINATION 4 OF 4, each mistake alone on its own build, the COUNT predicted before
+  each run — PLUS A NEGATIVE CONTROL AT ITS PREDICTED ZERO.** (1) The **ORDER seam**
+  (capture moved after the two emit stages; the static block's `this` then never routes
+  through the alias and the downlevelled arrow captures the OUTER `this`) — predicted 1,
+  failed **1**. (2) The **LIST-IDENTITY seam** (a fresh `emittedStaticBlocks`; the caller's
+  later loop skips what is recorded there, so every static block emits TWICE) — predicted 1,
+  failed **1**. (3) The **RETURN-SIGNAL seam** (`constructorAdded` dropped; the constructor
+  is emitted at its source position AND prepended) — predicted 1, failed **1**. (4) A
+  **dropped call** (`tcbExtractComputedPropertyKeys`) — predicted 1, failed **1**.
+  (5) **NEGATIVE CONTROL**: `heritageIn = transformedHeritage` instead of `finalHeritage` —
+  nothing between the declaration and the call assigns it — predicted **0**, failed **0**.
+  Every arm reports `RAN 10`, so no arm passed vacuously.
+- **WHAT DID NOT WORK / WHAT COST TIME.** (i) The prologue itself produced TWO successive
+  warnings on a warning-clean build — `var classTempVar: String? = null` is a redundant
+  initializer (the moved region assigns it unconditionally), and the fix then drew
+  `This 'var' … can be declared as 'val'`. Two extra builds; the lesson is that a prologue
+  line is NEW code and gets the same scrutiny as the moved text, and that Kotlin's answer
+  tells you something true about the region (it is unconditionally assigned, which is also
+  why `heritageTempVar` and `finalHeritage` legitimately stay initialised `var`s).
+  (ii) The first per-method boxing attribution keyed javap output by `line.strip()[:70]`
+  and reported ZERO boxed reads in a method that has 31 — **the method's own name sits past
+  character 70 of its signature**, so the truncated key did not contain it. Caught only
+  because a whole-method slice disagreed; the rewritten pass asserts a key containing
+  `transformClassBody(` exists before reporting. (iii) Time was lost to polling background
+  builds instead of ending the turn — the CLAUDE.md rule is real and the loop is easy to
+  fall into when each poll looks cheap.
+- **SEAMS NOT DISCRIMINATED, stated rather than glossed.** `tcbEmitAliasAndPrivateState`
+  and `tcbEmitStaticFieldTrailing` both append to `trailingStatements` and were NOT shown
+  to be order-sensitive against each other; reaching a difference needs a class that has
+  both a private-method brand AND a static field whose initializer forces the alias, and no
+  probe in reach combines them. Likewise the three regions' `staticProperties` /
+  `staticBlocks` arguments could be permuted between the two emit helpers only in shapes
+  where both lists are non-empty and interleaved, which no pin here builds.
+- **GATE.** Suite **13,739 -> 13,752 / 0 failures / 3 skipped** (+13: 10
+  `TransformClassBodySplitTest` + 3 `HugeMethodLimitTest` size pins), python XML parser,
+  whole results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built pre-split binary, identical direct `java` command line, absolute class dirs,
+  class dirs confirmed to differ (14 `tcb` mentions vs 0), every capture non-empty and free
+  of an `and N more error` marker — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+  eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
+  +0.00%**. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:` and 0 `e:`**.
+  `huge_methods.py --fail-over 3` exits 0. **The gate that actually sees this function is
+  the corpus EMIT baselines**: 5,692 `compiles to JavaScript matching` subtests run
+  `transformClassBody` for every class they contain, and 55 are in the families these
+  regions own (`parameterPropertyInConstructor1..4`,
+  `parameterPropertyInConstructorWithPrologues`, `computedPropertyNameWithImportedKey`,
+  `privateNameWeakMapCollision`, `controlFlowAutoAccessor1`,
+  `classPropertyInferenceFromBroaderTypeConst`, …) — all passed. **No wall A/B was run and
+  none should be**: this is the emit path and every A/B in the arc is `--noEmit`.
+  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 23.
+- **FOR THE NEXT AGENT. (JIT.1) is at THREE, the ratchet is at 3:**
+  `Transformer.transformToCommonJS` **28,991** (this round's recipe again, same emit path,
+  1.8x the size — and the last one that is a contiguity argument),
+  `Checker.tryInferSingleTypeParamFromArgs` **11,930** (still the only target needing a
+  scripted DATA-FLOW answer), `Checker.<clinit>` **10,339** (a static initializer holding
+  the class's object-level constants; it can only shrink by moving those initializers into
+  helper methods it calls, and no A/B can price it — it runs once, at class load).
+  **Tighten the ratchet by one as each lands — `HugeMethodLimitTest` fails on a stale
+  entry, so it will insist.**
+
+
 **Round 817 (2026-08-03) — (JIT.1)(f) LANDED: THE CENSUS IS A RATCHET, IN TWO PLACES —
 AND ON ITS FIRST RUN THE SECOND INSTRUMENT FOUND THAT ONE OF THE FIVE NAMES HAD BEEN A
 PHANTOM SINCE ROUND 802. PLUS (e) FOR `Transformer.transform`, 8,934 -> AN ENTRY AT 2,989
@@ -982,118 +1101,6 @@ ARGUED FOR.**
   **16,233**, `CompilerOptionsKt.applyDirective` **13,694**, `Transformer.transform`
   **8,934**.
 
-**Round 808 (2026-08-02) — (JIT.1)(c) LANDED FOR `checkVarDeclAssignabilityCore`: 19,296
-BYTECODES (2.4x HotSpot's LIMIT) -> AN ENTRY AT 3,535 PLUS SEVEN `cvda*` HELPERS. CENSUS
-14 -> 13. THE SHAPE IS A STRAIGHT-LINE STATEMENT SEQUENCE — ROUND 804's RECIPE, WITH THE
-COMMITTED `CtaSections` LEVEL-B MARKERS DOING THE CHOOSING.**
-
-- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **14** over the
-  limit, `checkVarDeclAssignabilityCore` **19,296** — the round-807 handoff reproduced
-  exactly, including the non-`Checker` tail (`Transformer.transformToCommonJS` 28,991,
-  `TypeScriptCompiler.compileParsedCore` 21,535, `CompilerOptionsKt.applyDirective` 13,694,
-  the `Checker` constructor 11,298).
-- **THE SPLIT.** Entry **3,535** (`B_BINDPAT`, `B_RECORD`, `B_TARGET`, `B_SRCTYPE`,
-  `B_NARROW`, `B_RELATION`, `B_TAIL`) plus `cvdaElaborateMismatch` **4,147** (`B_ELAB`),
-  `cvdaPrologueWalkers` **3,103** (`B_PRO1`+`B_WEAK`+`B_PRO2`+`B_PRO3`),
-  `cvdaPostRelationGates` **3,065** (`B_POST`), `cvdaEarlyInitGates` **1,811**
-  (`B_NUIA`+`B_PRE2`), `cvdaMidGates` **1,514** (`B_MID`), `cvdaNestedInitTargets` **1,251**
-  (`B_NESTED`), `cvdaRecordInferredLocalType` **392** (`B_UNANNOT`). The eight sum to
-  **18,951 against 19,296** — a FIFTH confirmation that a bytecode count is a THRESHOLD
-  predicate and not a cost model (only round 804's 46,567 -> 29,130 ever shrank).
-- **WHAT STAYS IN THE ENTRY IS WHAT EVERY DECLARATION PAYS**, not what is short: the
-  `varTypes`/`currentLocalTypes`/`currentLocalDeclTypeNodes` recordings, the single
-  `getTypeFromTypeNode`, the contextual-literal + flow-narrow source-type computation, the
-  `canUseTypeEngine`+`checkTypeRelatedTo` pair and the legacy string fallback. Everything
-  that moved is a gate that fires for one shape and ends the check.
-- **THE SHAPE PROBLEM, AND IT IS THE THIRD DISTINCT ONE IN THIS FAMILY.** (a)/(c)/(d) moved
-  `when` ARMS (exit = fall off the end); (f) moved runs of a LOOP body (exit = `continue` /
-  `break` / `return`). This body is a statement sequence punctuated by **~40 early
-  `return`s**, none of which crosses a function boundary — so four regions return `Boolean`
-  (`true` = "I emitted, the caller must return") and the entry replays them as
-  `if (...) return`. **Two regions held blocks that returned UNCONDITIONALLY** (`B_UNANNOT`,
-  `B_ELAB`), so their bare `return`s stay bare and the caller returns straight after the
-  call; for `B_UNANNOT` that seam is **COMPILER-ENFORCED** (the entry's `typeAnnotation` is
-  smart-cast non-null immediately below the call site, so a missing `return` does not
-  compile) — worth knowing, because it is the one seam this family has ever had that needs
-  no pin.
-- **EXACTLY ONE VALUE CROSSES A BOUNDARY**, and round 804's rule decides its shape:
-  `nestedMissingEmitted` is written in `B_NESTED` and read ~480 lines later by the `B_ELAB`
-  gate, so `cvdaNestedInitTargets` returns `Boolean?` (`null` = the caller must return).
-  A `Checker` field would have needed round 791's save/restore dance, because the blocks
-  either side re-enter the checker and "the outer write happens last" is not guaranteed.
-- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** seven contiguous
-  in-order runs re-extracted from the NEW file and diffed against HEAD (identical modulo the
-  4-space dedent of the two block interiors and the return-signal rewrite); the entry
-  RECONSTRUCTED from HEAD with the regions replaced by call sites — **IDENTICAL at 222
-  lines**; accounting closing exactly (HEAD body 1,541 = kept 211 + moved 1,330; entry
-  222 = 211 + 11); every `return` enumerated by a comment-stripped token scan (the only
-  local function in the range, `fun isAnonFn`, is expression-bodied and contains none, and
-  no `return@checkVarDeclAssignabilityCore` exists); free variables computed PER REGION
-  rather than guessed — which is what keeps the build warning-clean, since an unused
-  parameter is a warning here.
-- **PINS: 17 new** — `CvdaSplitTest` (14: one ARM pin per helper, the (WIDEN.1)
-  const-keeps-its-literal pin with its `let` positive control, five signal pins written
-  against a COUNT rather than a presence — two of which discriminate, see below — and an
-  ordering pin across five declarations) and
-  `HugeMethodLimitTest` (+3, reading `Checker`'s compiled `Code` attribute lengths).
-- **WHAT DID NOT WORK.** (1) The ordering pin's first fixture used `const a3: "a"|"b" = "c"`
-  and asserted a TS2820: `"c"` has no close match, so the prologue walker emits a PLAIN
-  TS2322 — a reminder that the did-you-mean form is a property of the EDIT DISTANCE, not of
-  the walker. Restated with `"strin"` against `"string" | "number"`, and the measured
-  counts recorded. (2) A first cut of the entry left a DUPLICATE `return` at both the
-  `B_UNANNOT` and `B_ELAB` call sites (each region's own trailing `return` had been moved
-  INTO the helper as well) — caught by the reconstruction check before any compile, which is
-  what that check is for. (3) The `B_PRO1` region's natural end (the comment block
-  introducing `val typeAnnotation`) had to be pulled back four lines so the comment stays
-  with the statement it documents; a region boundary is a prose decision as well as a
-  control-flow one.
-- **DISCRIMINATION: TWO SEAMS OF FIVE, AND THE OTHER THREE ARE RECORDED OPEN.** Round
-  807's law followed literally — **five mistakes, five separate builds, never combined**,
-  with a control run first (32 pins, 0 failed). **M1** (the prologue walkers' `true`
-  dropped) fails 2 pins — its own seam and the ordering pin. **M2** (`nestedMissingEmitted`
-  forced `false`, the `null` signal still honoured) fails **exactly one pin, its own** —
-  the sharpest possible statement that the arm pins and the seam pins pin different things,
-  and it is the seam that matters most because that is the only value crossing a boundary.
-  **M3/M4/M5** (the early-init, mid and post-relation gates' `true` dropped, each alone)
-  leave **every pin GREEN — NOT DISCRIMINATED**, and the reason is a property of the
-  FUNCTION: dropping the `return` does not delete the emission, and **every later emitter in
-  this body is itself conditioned on the relation verdict** (`canUse && !isAssignable`, or
-  `isAssignable`), while the shapes those three regions own are exactly the ones where the
-  relation passes or `canUseTypeEngine` declines — so nothing doubles. On today's code they
-  are REDUNDANT guards, the same finding round 807 recorded for
-  `caasTypeParamConstraintArg`. Two more seams need no pin: `cvdaRecordInferredLocalType`'s
-  caller `return` is compiler-enforced, and `cvdaElaborateMismatch`'s trailing `return`
-  never moved.
-- **A PROCESS FAILURE THAT LOOKS EXACTLY LIKE A CLEAN ABLATION.** Two of the round's seven
-  builds died with `java.lang.OutOfMemoryError: GC overhead limit exceeded` in the Kotlin
-  daemon — a run of back-to-back `compileKotlinJvm` invocations accretes daemon heap until
-  BUILD.1's 5 GB stops being enough. The tell is a `jvmTest` that reports **0 pins ran**
-  (the test task never started), which reads exactly like "the ablation compiled and changed
-  nothing". M2's first attempt was one of these and was re-run after `./gradlew --stop` +
-  a graceful bracket-pattern Kotlin-daemon kill. **Check the ablation's own build log for
-  `BUILD SUCCESSFUL` before recording a zero.**
-- **GATE.** Suite **13,562 -> 13,579 / 0 failures / 3 skipped** (+17), python XML parser,
-  whole results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
-  purpose-built pre-split binary, every capture confirmed non-empty first and the two class
-  dirs checked to differ (`cvda*` present in one, absent in the other) —
-  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
-  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. Build warning-clean.
-  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 12.
-- **NO WALL A/B, deliberately** — the family is bounded four times over (round 803's
-  falsifier, 804's +0.23% NOISE-DOMINATED, 805's whole-family flag at -1.14%, 805's
-  emit-mode sizing). This lands for the THRESHOLD.
-- **FOR THE NEXT AGENT.** (JIT.1) is at **13 over the limit**. The next `Checker` targets
-  are `checkAssignmentExpressionCore` **18,100** (a STATEMENT sequence — this round's recipe
-  applies unchanged, and its `CtaSections` level-A/C partition is the split plan) and
-  `checkSingleCallExpressionTypesCore` **15,567** (must keep round 793's
-  `ccetPrologueMayFire` gate in the entry). The non-`Checker` tail is untouched:
-  `Transformer.transformToCommonJS` 28,991, `TypeScriptCompiler.compileParsedCore` 21,535,
-  `Transformer.transformClassBody` 16,233, `CompilerOptionsKt.applyDirective` 13,694, the
-  `Checker` constructor 11,298. **Budget one build per ablation and stop the daemons between
-  batches**; and when you write a seam pin for an early `return`, first check that something
-  downstream would actually emit — in these assignability bodies most later gates are
-  themselves conditioned on the relation verdict, so three of five did not.
-
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
@@ -1415,8 +1422,27 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     transfers to the other.** Discrimination 3 of 3 with the count predicted before each
     run (order seam 2, set-identity seam 1, dropped call 1) plus a NEGATIVE CONTROL at
     its predicted 0. § 22.
-    **Still open in (e): `Transformer.transformToCommonJS` 28,991,
-    `transformClassBody` 16,233.** The Transformer three do not touch a
+    **ROUND 818 — `Transformer.transformClassBody` 16,233 → an entry at 5,202 plus NINE
+    `tcb*` helpers (666–1,716); census 4 → 3.** Two shapes no earlier target in the arc
+    had, and both are what a purely textual split cannot survive. (i) **A LOCAL DATA
+    CLASS** (`PrivateFieldInfo`) constructed by a moved region: un-nameable from a member
+    function, so it was LIFTED to a private nested class — the only text change outside
+    the mechanical extraction, and behaviour-free because it captures nothing and never
+    escapes. (ii) **A LOCAL `fun` CALLED FROM BOTH SIDES OF A BOUNDARY**
+    (`buildStaticBlockIife`, which closes over two `var`s the split decides): it can
+    neither move nor be duplicated, so it is passed as a FUNCTION-TYPED PARAMETER
+    (`::buildStaticBlockIife`), which leaves the moved call site textually untouched —
+    **and the ORDER that makes that sound is enforced by nothing in the types**, which is
+    this round's first ablation. `isCapturablePrivateMethod` needed none of this: both its
+    call sites are inside one region, so the local `fun` MOVED with them. **The parts sum
+    to 16,018 against 16,233 — 215 FEWER — and this is the first target where BOTH
+    bytecode-negative mechanisms fire at once**: boxed-`var` reads inside the function
+    31 → 11 (round 816's; the 11 that remain are the entry's two alias temps, still
+    captured by the local `fun` — exactly why they stay boxed) AND local-slot addressing
+    2-byte 1,947 → 1,850 / 1-byte 197 → 254 (round 817's). Discrimination **4 of 4** with
+    the count predicted before each run (order 1, list-identity 1, return-signal 1,
+    dropped call 1) plus a NEGATIVE CONTROL at its predicted 0. § 23.
+    **Still open in (e): `Transformer.transformToCommonJS` 28,991.** The Transformer three do not touch a
     `--noEmit` number at all, which is why every A/B in this arc is blind to them; their
     gate is the corpus suite's EMIT baselines, and they DO touch the published
     `bench-3way.sh` ratio, which is emit-mode on all three compilers (§ 0.2).
