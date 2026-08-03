@@ -92,13 +92,14 @@ Your loop (per CLAUDE.md § Execution protocol):
 
    For anything that changes COMPILED CODE, also run the JIT ratchet (JIT.1)(f):
 
-       python3 scripts/huge_methods.py --fail-over 1
+       python3 scripts/huge_methods.py --fail-over 0
 
    A method over 8,000 bytecodes is never JIT-compiled and runs interpreted for
-   the whole process; no other gate can see it. 1 is the round-820 census, and it
-   is named (`Checker.tryInferSingleTypeParamFromArgs`) — TIGHTEN by one as each
-   lands, never raise it. The suite runs the same census (HugeMethodLimitTest)
-   and fails on a stale entry too.
+   the whole process; no other gate can see it. **The census is 0 as of round
+   821, which closed (JIT.1)** — so this gate's job now is to catch the NEXT
+   method that crosses the limit, which is how the family grew unnoticed for 800
+   rounds. Never raise the number to make it green: split the method. The suite
+   runs the same census (HugeMethodLimitTest) and fails on a stale entry too.
 
 5. For a perf claim, also run the profile and record it:
 

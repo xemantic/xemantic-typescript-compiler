@@ -2821,3 +2821,204 @@ why it was not attempted:
 and the `LineNumberTable` is a `u2`, so this function's line numbers WRAP — they
 are reported as 49967–51030 and must have 65,536 added back. Un-corrected they
 land inside the `companion object` (49544–51796) and look entirely plausible.
+
+## 26. (JIT.1)(e) — `tryInferSingleTypeParamFromArgs`, 11,930 → an entry at 1,869 plus three helpers, AND THE CENSUS REACHES ZERO
+
+Round 821. The last method over the limit, and the only one in the arc that no
+contiguity argument could settle. Round 820 measured why rather than guessing,
+and this round did what that measurement asked for: a **data-flow** answer.
+
+### 26.1 Why the usual argument does not apply here
+
+Every earlier target was cut where the bytecodes were: a fat `when` arm, a run of
+statements, a `mapOf` literal. Here there is no such place.
+
+* the body is **1,064 lines** and its bytecodes are **FLAT** — the largest 25-line
+  window is 449 of 11,930;
+* **2,643 (22.2%) are INLINED stdlib bodies** carrying synthetic line numbers, so
+  they are charged to their call sites and spread further still;
+* one `for (tp in orderedTps)` loop holds **9,368 of the 11,930**, and its regions
+  all touch the same locals — `candidates`, `tpSawAnyArg`, `mapperPairs`.
+
+So the boundaries had to come from READ/WRITE SETS and LIVENESS.
+`scripts/tisp_split_analyze.py` computes them, reusing round 818/819's
+scope-simulating machinery and adding the two things this target needs:
+`region_writes` (visible locals a region MUTATES, split into REBINDS and CONTAINER
+mutations) and `region_exits` (returns, plus `continue`/`break` classified as
+targeting a loop inside the region or the CALLER's loop).
+
+    region        lines  bytecodes  READ                          WRITE
+    PASS1           316      3,109  tp tps tpsSet params args     candidates (container)
+                                    forReturnType candidates      tpSawAnyArg (LIVE-OUT)
+    PASS2           422      5,470  tp tps tpsSet params args     candidates (container)
+                                    mapperPairs candidates
+    CONSTRAINT      131      1,566  tp constraint firstWidened    — (diagnostics only)
+                                    first effectiveCandidates
+                                    params args source fileName
+    exits: 14 / 6 / 2 returns; caller-targeting continue|break 0 / 0 / 0
+
+**Three facts turn that table into an exact split, and each is a rule worth
+carrying.**
+
+1. **A mutated CONTAINER crosses a call boundary for free.** `candidates` is
+   append-only in both passes, so it is a `MutableList` parameter and not one line
+   of the moved text changes. Only a REBIND forces a design decision.
+2. **The one rebind is RETURNED, never fielded.** `tpSawAnyArg` is the sole local
+   the analysis reports live-out, and it is the helper's return value. A field
+   would have worked and would have been wrong for the same reason round 791's
+   deferral was careful about ambient state.
+3. **`Boolean?` makes every `return null` in the moved text mean what it meant.**
+   All 22 were whole-function bails; in a `Boolean?` helper they are still
+   `return null`, and each call site writes `?: return null`. **869 lines move
+   VERBATIM** and the diff contains no hand-edited control flow to review. This is
+   the cheapest equivalence argument in the whole arc, and it is available exactly
+   when a region's only non-local exit is a single-valued bail.
+
+The one thing that is NOT a pure move: the local `data class Candidate` is hoisted
+to a private nested class, because a helper signature cannot name a class declared
+inside a function body. Its parameter list is unchanged (§ 26.3 check 6).
+
+### 26.2 The parts sum to LESS — a fifth measurement, and NO mechanism is claimed
+
+    entry               11,930 -> 1,869
+    tispGatherAnchorCandidates      3,054   (region measured 3,109)
+    tispGatherCallbackCandidates    5,388   (region measured 5,470)
+    tispCheckConstraint             1,503   (region measured 1,566)
+    ------------------------------------
+    total               11,930 -> 11,814    (116 fewer, 0.97%)
+
+Each helper is 1.8–4.0% smaller than the region it came from, and the entry is 84
+bytecodes LARGER than the arithmetic residue (1,785) — which is the three call
+sites' 23 arguments at ~3.6 bytes each. Round 816's mechanism (a boxed captured
+`var`) does not apply; round 817's (`aload N` → `aload_N` as parameters take low
+slots) is PLAUSIBLE here and **was not measured**, so it is not claimed. Fifth
+round, fifth combination: **"the parts sum to less" is still not a law — measure
+yours, and do not carry a mechanism across shapes.**
+
+### 26.3 Equivalence, measured (round 805's five checks, plus two)
+
+`scripts/tisp_split_{analyze,apply,verify}.py`, all green:
+
+ 1. **VERBATIM** — 316 / 422 / 131 lines re-extracted from the NEW file and
+    re-indented by 4 / 4 / 8 are byte-identical to HEAD's runs;
+ 2. **RECONSTRUCTION** — un-applied by pulling each helper's body back to its call
+    site (not by re-running the applier), the file reproduces HEAD **byte for byte
+    (10,257,330 chars)**, which is what proves nothing else moved;
+ 3. **PARTITION** — 870 removed lines, regions disjoint and inside the function,
+    net `+117` exactly as the accounting predicts;
+ 4. **CONTROL FLOW** — token counts equal on both sides per region (22/37, 20/31,
+    6/0 `return` / `continue|break`), and every jump is measured to target a loop
+    INSIDE its own region;
+ 5. **FREE VARIABLES** — the computed read set EQUALS each helper's parameter list
+    (7 / 7 / 9), no rebind of a caller local survives, and the live-out is the
+    declared return. Every argument is passed **BY NAME**, which matters more here
+    than in any earlier target: `source`/`fileName` are both `String?` and
+    `constraint`/`firstWidened` are both `Type`, so a positional permutation would
+    type-check and be wrong;
+ 6. the hoisted `Candidate` declaration is HEAD's modulo `private`, and every CODE
+    reference to it (22) is inside the entry plus the split block;
+ 7. each helper is called EXACTLY ONCE.
+
+The analyzer carries positive controls in both directions, including one for a
+trap that bit its first run: a NAMED ARGUMENT (`fileName = fileName`,
+`fromObjLit = true`) is textually identical to an assignment, and is told apart
+only by PARENTHESIS DEPTH — which needs char-level tracking, not a per-line regex.
+
+### 26.4 Discrimination — 5 arms, a control, and one seam that stays UNDISCRIMINATED
+
+Pins validated on the UNSPLIT binary first: **67 ran, exactly the 5 size/ratchet
+pins failed**, which is what must happen there. On the split binary: **67 ran, 0
+failed.** Each arm is ONE mistake, on its own build, with the failure count
+PREDICTED before the run (`scratchpad/predictions.txt`, recorded first).
+
+| arm | mistake | predicted | actual |
+|---|---|---:|---:|
+| A1 | pass 1 appends to a fresh list (`candidates = mutableListOf()`) | 4 | **4** ✔ |
+| A2 | `source`/`fileName` permuted at the constraint call | 1 | **1** ✔ |
+| A3 | `constraint`/`firstWidened` permuted at the constraint call | 2 | **2** ✔ |
+| A4 | the returned rebind dropped (`val tpSawAnyArg = false`) | 1 | **1** ✔ (second consumer) |
+| A5 | pass 2 gets `mapperPairs = emptyList()` | 1 | **1** ✔ |
+| A6 | **NEGATIVE CONTROL** — the three helper declarations reordered | 0 | **0** ✔ |
+
+Every arm reports `PINS RAN 67`, so no arm is a vacuous pass — round 820's
+daemon-OOM failure mode (`RAN 0`, which looks exactly like a clean result) was
+guarded by `./gradlew --stop` + a bracket-pattern `pkill` + an 8-second settle
+INSIDE the loop.
+
+**A3 matched its COUNT and not its MECHANISM, which is worth more than the tick.**
+The prediction was that swapping the two `Type` arguments inverts the displayed
+types; what actually happens is that NOTHING is emitted — with `firstWidened :=
+Item` the B98.r118 gate's `isSimpleCheckableType` refuses, and with `constraint :=
+string` the B98.r128 branch's `Type.Reference` test refuses too, so the leg falls
+straight to its `return null`. A permuted argument does not merely garble an
+output; it can silence the whole leg.
+
+**A4 NEEDED A DIFFERENT CONSUMER, NOT A DIFFERENT MISTAKE — and that is the
+round's most reusable failure.** Its first run read **0** against the prediction
+of 1, because the pin observed the any-arg fallback through an ARGUMENT POSITION:
+forcing `tpSawAnyArg` to `false` leaves the call's return as the bare type
+parameter, and **a bare `Type.TypeParam` source relates to most targets**, so
+`needNumber(Debug.checkDefined(pos))` is silent whether the flag survived or not.
+A second pin written against an ARITHMETIC consumer — `Debug.checkDefined(end) -
+pos`, the shape round 440 itself came from — discriminates it exactly: the re-run
+reads 68 ran, 1 failed, and the failure is that pin.
+
+**The rule: when an injected mistake measures inert, ask what the value FLOWS
+INTO before concluding the seam is unobservable.** An un-inferred type parameter
+is invisible to the relation (which accepts it against nearly anything) and
+visible to the arithmetic pass (which does not). Both pins stay in
+`TispSplitTest`; the argument-position one is labelled non-discriminating, so a
+future agent does not read its silence as coverage.
+
+### 26.5 Gate
+
+Suite **13,791 → 13,803 / 0 failures / 3 skipped** (+12: 9 `TispSplitTest` + 3
+`HugeMethodLimitTest` size pins), whole results dir wiped first, counted with the
+python XML parser. 8-profile grid diffed set-for-set BOTH directions against a
+purpose-built pre-split binary, identical direct `java --noEmit --listAll`
+command, absolute class dirs confirmed to differ (three `tisp*` helpers in one,
+none in the other), every capture non-empty and free of an `and N more error`
+marker — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
+`--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
++0.00%**. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:` and 0
+`e:`**. `huge_methods.py --fail-over 0` exits 0 — **588 classes, 14,271 methods,
+0 over the limit**.
+
+**No wall A/B was run and none should be**: the family is bounded four times over
+(§§ 4.2, 5.3, 7 and round 804), and after this round the flag it would toggle can
+no longer change which methods are compiled.
+
+### 26.6 (JIT.1) IS COMPLETE — what the arc cost and what it bought
+
+Census **1 → 0**, measured on rebuilt binaries at both ends. `KNOWN_OVER_LIMIT` is
+empty, `CENSUS_RATCHET` is 0, and `huge_methods.py --fail-over 0` is the standing
+round gate.
+
+Rounds **802–821**: 20 rounds, **19 methods** split, from `forEachChild` (9,750)
+and `checkMemberAccessMissingCore` (46,567, 5.8× the limit) to a static
+initializer and, last, an inference function with no seams in it. What it bought,
+stated honestly:
+
+* **one measured wall gain — −3.93%, B wins 5/5** (round 803, `forEachChild`,
+  monolith vs split). That is the largest single measured improvement in this
+  queue's history.
+* **everything else landed for the THRESHOLD.** Rounds 804 and onward measured
+  NOISE individually, and that was expected after round 803's falsifier. The
+  argument for landing them is not a wall number: a method over 8,000 bytecodes is
+  **never** JIT-compiled, so its cost cannot improve with load, input size, warm-up
+  or JVM version — and **no other gate in this repo can see it**. The corpus
+  measures meaning, `cost_gate.py`'s counters do not move, and
+  `-XX:+PrintCompilation` prints nothing (the compile is never *proposed*, so it is
+  never *skipped*).
+* **two instruments that outlive the arc**: `scripts/huge_methods.py` (the census,
+  now a ratchet in the round gate) and `HugeMethodLimitTest` (the same census
+  inside the suite, which fails on a NEW offender *and* on a stale entry). The
+  second one paid for itself on its first run by finding `Checker.<clinit>`, which
+  the script's `javap`-based reader had been charging to a 16-byte access bridge.
+
+The falsifier the item set for itself — re-run the `-XX:-DontCompileHugeMethods`
+A/B once everything is split — was already answered at round 803 against the
+partially-split binary (**+0.08%, B wins 3/5, driver verdict NOISE-DOMINATED**),
+i.e. the instrument that returned 4/4-all-negative on the monolith no longer
+returns a signal. Re-running it now would be measuring a flag that can no longer
+change which methods are compiled, because none is over the limit.

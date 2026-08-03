@@ -1,3 +1,107 @@
+**Round 811 (2026-08-03) — (JIT.1)(c) LANDED FOR `checkSingleCallExpressionTypesCore`:
+15,567 BYTECODES -> AN ENTRY AT 5,149 PLUS FOUR `ccet*` HELPERS. CENSUS 11 -> 10, AND
+SUB-ITEM (c) IS CLOSED. THE TARGET WAS HANDED OVER AS "BOUNDARIES NOT COMMITTED, BUDGET
+FOR DERIVING THEM" — AND ITS PARTITION HAS BEEN IN THE SOURCE SINCE ROUND 734.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **11** over the
+  limit, `checkSingleCallExpressionTypesCore` **15,567** — the round-810 handoff reproduced
+  exactly. The after-number was measured the same way, on the binary built from the split
+  source: **10**, with the entry absent from the over-limit list.
+- **THE HANDOFF'S ONE FACTUAL ERROR, AND IT WAS THE ROUND'S CHEAPEST WIN.** (c) was queued
+  as the one target *without* a committed `*Sections` partition. `CallSections` — round
+  734's (CALL.1)(a) instrument — partitions THIS function into 16 sections, its markers are
+  in the body, and `docs/perf/call-expression-attribution.md` §§ 3-4 publish both a
+  per-section cost table and an EXIT CENSUS over 52,413 invocations. Nothing had to be
+  derived. **Check for an existing probe object before budgeting a derivation** — three
+  rounds in a row (808/809/811) have now been decided by a partition somebody else landed.
+- **THE SPLIT.** Entry **5,149** plus `ccetUnionCalleeChecks` **3,402** (`UNION_CALLEE`),
+  `ccetNoCallSignatureDiagnostics` **2,773** (`NO_SIGS`), `ccetExplicitTypeArguments`
+  **2,118** (`TYPE_ARGS`) and `ccetPrologueWalkers` **2,068** (`B216`..`SUPER`). The five sum
+  to **15,510 against 15,567** — an EIGHTH confirmation that a bytecode count is a THRESHOLD
+  predicate and not a cost model.
+- **WHAT STAYS INLINE IS WHAT THE PARTITION PRICES, in both directions.** Stays:
+  `getCalleeType` (474 ms, every invocation), the TS2722 optional-member gate and the
+  TS2347/null-callee/any-bail cluster (102 ms, every invocation), `getCallSignaturesOfType`,
+  the SINGLE-SIGNATURE branch (1,560 ms and 42.2% of all exits) and the overload branch
+  (3,640 exits). Moves: the union-callee branch (**31** exits of 52,413), the
+  `signatures.isEmpty()` branch (**entered 0 times** on the compiler profile — its
+  `binderResults x top-level statements` scan goes with it), the explicit-type-argument
+  branch (**101** exits), and the seven prologue walkers (253 ms as one span, ZERO firings,
+  and already refused for ~98% of calls by round 793's pre-gate).
+- **THE ROUND-793 CONSTRAINT IS HONOURED BY CONSTRUCTION:** `ccetPrologueMayFire` and the
+  whole `if (runPrologue)` test **stay in the entry**; only the guarded block moved. A
+  walker moved outside that gate would silently never run.
+- **SHAPE.** Three helpers return `Boolean` (`true` = "the caller must return"); the
+  `signatures.isEmpty()` branch returned UNCONDITIONALLY, so its helper is `Unit`, its five
+  internal `return`s stay bare and the call site returns straight after it. **Cross-boundary
+  values: NONE**, computed per region rather than assumed.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green;
+  `scripts/ccet_split_{analyze,apply,verify}.py`):** four contiguous in-order runs (131 /
+  224 / 240 / 122 lines) re-extracted from the NEW file and compared verbatim against HEAD;
+  the entry **reconstructed** from HEAD with the regions replaced by their call sites —
+  **IDENTICAL at 284 lines**; accounting closing exactly (996 = 279 kept + 717 moved; new
+  entry 284 = 279 + 5); every `return` enumerated (32 bare = 10 kept + 7 + 8 + 2 rewritten
+  + 5 left bare; the new entry's 14 = 10 kept + 4 call sites); free variables per region.
+- **DISCRIMINATION: 2 OF 4, each mistake ALONE on its own build, control first (18 pins ran,
+  0 failed), every run's pin COUNT confirmed.** Dropping the entry's `return` after
+  `ccetNoCallSignatureDiagnostics` fails **6** pins; ignoring `ccetExplicitTypeArguments`'
+  `true` fails **2** (its own seam pin and the ordering pin). Ignoring `ccetPrologueWalkers`'
+  or `ccetUnionCalleeChecks`' `true` fails **0 — twice each**, because both zeros were
+  RE-ATTEMPTED with purpose-built shapes rather than merely recorded.
+- **WHY THE TWO ZEROS ARE PROPERTIES OF THE FUNCTION.** The prologue's `super` shapes cannot
+  discriminate by construction (`getCalleeType("super")` is `anyType`, so an entry running on
+  bails at the any/error gate two sections later), so the retry used the one walker whose
+  continuation reaches a real signature — a `reduce<U>` call with a `keyof` callback
+  parameter — and it is green. The union's case (b) cannot double by construction either:
+  `getCallSignaturesOfType` CONCATENATES the constituents' signatures, so a union with any
+  callable member has a non-empty list and the duplicate emitter (which lives in the
+  `signatures.isEmpty()` branch) is unreachable; the retry therefore used B516's combined
+  signature — the one case that leaves a non-empty list and still emits — and it is green
+  too. Both signals are redundant guards on today's code, kept because the monolith had
+  them; the four pins written for them are **RENAMED as arm pins**.
+- **WHAT DID NOT WORK.** (1) The first grid read **0 added / 16 removed on every profile** —
+  a regression that does not exist. Arm B was captured through `bench-compile-tsc.sh` with
+  `--listAll` patched into `NOEMIT_ARGS`, and the script's very NEXT line
+  (`[[ $NO_EMIT -eq 1 ]] && NOEMIT_ARGS=(--noEmit)`) overwrites it, so the capture was
+  truncated at 30 of 46 ("... and 16 more error(s)"). Both arms now run the identical direct
+  `java … --noEmit --listAll`, and the differ REFUSES any capture containing `and N more
+  error`. **A grid whose two arms are produced by different harnesses is not a diff.**
+  (2) The first string/comment stripper treated a `"` as running to the next `"`, so a
+  template expression embedding a string desynchronised it and it blanked 40,000 lines —
+  reported as "the function has no returns and no free variables". Round 809's
+  length-preservation check does NOT catch this (blanking preserves length); the positive
+  control that does is "a known declaration inside the range must survive stripping".
+  (3) Two pin shapes measured nothing and were replaced: `h<number>(["a"])` reports a
+  TS2322 on the array ELEMENT rather than a TS2345 on the argument, and `h<number>("a")` as
+  an expression STATEMENT already emits its TS2345 twice on a correct binary (the function
+  has a second caller, `checkCallTypesInExpr`) — a count pin has to sit in a declaration
+  initializer for that family. (4) TWO of six ablation builds died with the round-808
+  Kotlin-daemon `GC overhead limit exceeded`, one after **13m40s**; the `pins ran=0` check
+  caught both, and recovery is `./gradlew --stop` + `pkill -f 'KotlinCompile[D]aemon'`.
+- **GATE.** Suite **13,612 -> 13,633 / 0 failures / 3 skipped** (+21: 18 `CcetSplitTest` +
+  3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first. 8-profile grid
+  diffed set-for-set BOTH directions against a purpose-built pre-split binary, class dirs
+  confirmed to differ — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
+  `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No
+  `w:` and no `e:` lines in the compile that produced the binary. **No wall A/B,
+  deliberately** — the family is bounded four times over. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 15.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **10 over the limit and the `Checker` list is down
+  to four**: `checkDuplicateDeclarations` **12,935**, `tryInferSingleTypeParamFromArgs`
+  **11,930**, the `Checker` constructor **11,298** (once per compile, but it CONTAINS the
+  whole init dispatch, so (SETUP.1)'s `pass("init:…")` wrappers are its natural boundaries),
+  `checkIndexSigInStatement` **10,928** and `access$checkBigintPropertyNames$emit`
+  **10,339** — i.e. sub-item **(d)**, none of which has a committed partition, so each needs
+  its boundaries chosen from its own shape (grep for an existing probe object FIRST — this
+  round's handoff was wrong about exactly that). The non-`Checker` tail is untouched:
+  `Transformer.transformToCommonJS` **28,991**, `TypeScriptCompiler.compileParsedCore`
+  **21,535**, `Transformer.transformClassBody` **16,233**, `CompilerOptionsKt.applyDirective`
+  **13,694**, `Transformer.transform` **8,934** — the three Transformer ones are sub-item
+  **(e)**, sized at 0.14-0.25% and landed for the threshold only. **(f) — wiring
+  `huge_methods.py --fail-over 0` into the round gate — becomes runnable once (d)/(e) land.**
+  Also worth one line: `walkFunctionBodiesInExpr` **7,702** and `cpaSpineLeave` **7,359** sit
+  one edit under the limit.
+
 **Round 810 (2026-08-03) — (JIT.1)(h) LANDED FOR `checkReturnAssignabilityCore`: 9,743
 BYTECODES -> AN ENTRY AT 4,052 PLUS TWO `cra*` HELPERS. CENSUS 12 -> 11. THE ROUND'S
 TRANSFERABLE RESULT IS A MIRROR OF ROUND 807's: **A SPLIT THAT LANDS JUST *UNDER* THE

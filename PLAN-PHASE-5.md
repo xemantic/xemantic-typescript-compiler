@@ -20,6 +20,122 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 821 (2026-08-03) — (JIT.1) IS COMPLETE. `tryInferSingleTypeParamFromArgs`
+11,930 BYTECODES -> AN ENTRY AT 1,869 PLUS THREE `tisp*` HELPERS. CENSUS 1 -> 0. THE ONE
+TARGET IN THE ARC THAT NEEDED A DATA-FLOW ANSWER RATHER THAN A CONTIGUITY ONE.**
+
+- **Census re-measured at HEAD on a rebuilt binary first** (law 1): **1**, exactly as the
+  round-820 handoff named it. After, measured the same way on the split binary: **0**.
+  `KNOWN_OVER_LIMIT` is now empty and `CENSUS_RATCHET` is 0, in `huge_methods.py`,
+  `HugeMethodLimitTest`, SESSION-PROMPT.md and CLAUDE.md.
+- **WHY THIS ONE WAS DIFFERENT, AND WHAT REPLACED THE USUAL ARGUMENT.** Round 820 measured
+  rather than guessed: the bytecodes are **FLAT** (largest 25-line window **449** of 11,930),
+  **22.2% (2,643)** are INLINED stdlib bodies charged to their call sites, and ONE
+  `for (tp in orderedTps)` loop holds **9,368** of them. So there is no region to lift, and
+  the boundaries came from `scripts/tisp_split_analyze.py` — per-region READ/WRITE sets,
+  LIVENESS, and an EXIT classification. Measured regions: **PASS1 3,109 / PASS2 5,470 /
+  CONSTRAINT 1,566**.
+- **THREE FACTS TURNED THAT TABLE INTO AN EXACT SPLIT, AND EACH IS REUSABLE.** (1) A mutated
+  CONTAINER crosses a call boundary for free — `candidates` is append-only in both passes, so
+  it is a `MutableList` PARAMETER and not one line of the moved text changes; only a REBIND
+  forces a decision. (2) The one rebind that outlives its region, `tpSawAnyArg`, is
+  **RETURNED, never fielded**. (3) A `Boolean?` return makes every one of the **22**
+  whole-function `return null`s mean exactly what it meant, with `?: return null` at each
+  call site — so **869 lines move VERBATIM** and the diff carries NO hand-edited control flow.
+  No region holds a caller-targeting `continue`/`break` (measured **0/0/0**), which is what
+  makes plain helpers legal here; round 819's target needed a one-iteration frame for exactly
+  that reason.
+- **THE ONE THING THAT IS NOT A PURE MOVE:** the local `data class Candidate` is hoisted to a
+  private NESTED class, because a helper signature cannot name a class declared inside a
+  function body. Parameter list unchanged; verified as its own check.
+- **THE PARTS SUM TO LESS — A FIFTH MEASUREMENT, AND NO MECHANISM IS CLAIMED.** 1,869 + 3,054
+  + 5,388 + 1,503 = **11,814 vs 11,930 (116 fewer, 0.97%)**. Each helper is 1.8-4.0% smaller
+  than its region; the entry is 84 LARGER than the arithmetic residue, which is the three
+  call sites' 23 arguments at ~3.6 bytes each. Round 816's boxing does not apply (no captured
+  `var`); round 817's slot addressing is PLAUSIBLE and **was not measured**, so it is not
+  claimed. Fifth round, fifth combination — the rule stands: measure yours.
+- **EQUIVALENCE (round 805's five checks, plus two).** 316/422/131 lines VERBATIM at dedent
+  4/4/8; the file **RECONSTRUCTS from HEAD byte for byte (10,257,330 chars)**, un-applied by
+  pulling each body back to its call site rather than by re-running the applier; PARTITION 870
+  removed / net +117 exactly as predicted; control-flow tokens equal per region (22/37, 20/31,
+  6/0) with every jump measured to stay inside its region; free variables EQUAL each helper's
+  parameter list (7/7/9); the `Candidate` hoist is HEAD's modulo `private`; each helper called
+  EXACTLY ONCE. **Every argument is passed BY NAME** — `source`/`fileName` are both `String?`
+  and `constraint`/`firstWidened` are both `Type`, so a positional permutation type-checks.
+- **AN INSTRUMENT TRAP THE ANALYZER NOW CARRIES A CONTROL FOR:** a NAMED ARGUMENT
+  (`fileName = fileName`, `fromObjLit = true`) is textually identical to an assignment and is
+  told apart only by PARENTHESIS DEPTH — char-level, not a per-line regex. Its first run
+  reported `fileName` and `fromObjLit` as rebinds.
+- **DISCRIMINATION — 5 arms + a negative control, one mistake per build, predictions recorded
+  BEFORE the runs.** Pins validated on the UNSPLIT binary first: **68 ran, exactly the 5
+  size/ratchet pins failed**; on the split binary **68 ran, 0 failed**. Every arm reports
+  `PINS RAN 68`, so none is vacuous (round 820's daemon-OOM `RAN 0` was guarded with
+  `--stop` + a bracket `pkill` + a settle INSIDE the loop).
+  A1 fresh `candidates` list — predicted 4, **actual 4**; A2 `source`/`fileName` permuted —
+  predicted 1, **actual 1**; A3 `constraint`/`firstWidened` permuted — predicted 2, **actual
+  2**; A4 the returned rebind dropped — predicted 1, **actual 1**; A5
+  `mapperPairs = emptyList()` — predicted 1, **actual 1**; A6 NEGATIVE CONTROL (helper
+  declarations reordered) — predicted 0, **actual 0**. **Six for six, control included.**
+- **A3 MATCHED ITS COUNT AND NOT ITS MECHANISM, WHICH IS THE MORE USEFUL HALF.** The
+  prediction was an INVERTED display; what happens is that NOTHING is emitted — with
+  `firstWidened := Item` the B98.r118 gate's `isSimpleCheckableType` refuses, and with
+  `constraint := string` the B98.r128 branch's `Type.Reference` test refuses too, so the leg
+  falls to its `return null`. **A permuted argument can silence a whole leg, not just garble
+  its output.**
+- **WHAT DID NOT WORK, AND THE ONE THAT WAS RESCUED: A4 NEEDED A DIFFERENT CONSUMER, NOT A
+  DIFFERENT MISTAKE.** The first A4 run failed its prediction — **predicted 1, actual 0** —
+  because the pin read the any-arg fallback through an ARGUMENT POSITION: forcing
+  `tpSawAnyArg` to `false` leaves the call's return as the BARE type parameter, and **a bare
+  `Type.TypeParam` source relates to most targets**, so `needNumber(Debug.checkDefined(pos))`
+  is silent either way. A second pin against an ARITHMETIC consumer (round 440's own shape,
+  `Debug.checkDefined(end) - pos`) DOES discriminate it: the re-run reads **68 ran, 1 failed,
+  and the failure is exactly that pin**. **The transferable rule: when a mistake is
+  measurably inert, ask what the value FLOWS INTO before concluding the seam cannot be
+  observed** — an un-inferred type parameter is invisible to the relation and visible to the
+  arithmetic pass. Both pins stay; the argument-position one is labelled as
+  non-discriminating so nobody later reads its silence as coverage.
+- **ALSO DID NOT WORK, and it cost a build:** the position pin first asserted the diagnostic's
+  `start` against a reconstructed source. `diagnose` prepends a directives line, and **`line`/
+  `character` are resolved against the text WITH it while `start` is an offset into the text
+  WITHOUT it** (17 characters apart for that fixture). That is HEAD's behaviour — it
+  reproduced identically on the pre-split binary — so the pin now uses the (line, character)
+  pair, which is the half the constraint helper computes from `source` and therefore the half
+  a permutation destroys.
+- **GATE.** Suite **13,791 -> 13,803 / 0 failures / 3 skipped** (+12: 9 `TispSplitTest` + 3
+  `HugeMethodLimitTest` size pins), whole results dir wiped first, counted with the python
+  XML parser. 8-profile grid diffed set-for-set BOTH directions against a purpose-built
+  pre-split binary, identical direct `java --noEmit --listAll` command, absolute class dirs
+  confirmed to DIFFER (`javap` finds the three `tisp*` helpers in one and none in the other),
+  every capture non-empty and free of an `and N more error` marker — **46/46/46/46/46/46/46/94,
+  0 added and 0 removed on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**.
+  **`cost_gate.py` all 20 counters +0.00%** — this is `Checker`, so that and the corpus are
+  the gates that matter here. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:`
+  and 0 `e:`**. `huge_methods.py --fail-over 0` exits 0 (588 classes, 14,271 methods,
+  **0 over the limit**). **No wall A/B, deliberately** — the family is bounded four times over
+  and this lands for the threshold and the (f) gate.
+- **(JIT.1) IS CLOSED — WHAT THE ARC COST AND WHAT IT BOUGHT.** Rounds **802-821**: 20 rounds,
+  **19 methods** split, from `forEachChild` (9,750) and `checkMemberAccessMissingCore` (46,567,
+  5.8x the limit) to a static initializer and, last, an inference function with no seams in it.
+  It bought **one measured wall gain — -3.93%, B wins 5/5** (round 803, monolith vs split),
+  the largest single measured improvement in this queue's history; **everything else landed
+  for the THRESHOLD**, and that is the honest accounting. The case for those rounds is not a
+  wall number: a method over 8,000 bytecodes is NEVER compiled by C1 or C2, so its cost cannot
+  improve with load, input size, warm-up or JVM version, and **no other gate in this repo can
+  see it** — the corpus measures meaning, `cost_gate.py`'s counters do not move, and
+  `-XX:+PrintCompilation` prints nothing (the compile is never *proposed*, so never
+  *skipped*). It also leaves two instruments: `scripts/huge_methods.py` (the census, now a
+  ratchet at 0 in the round gate) and `HugeMethodLimitTest` (the same census inside the
+  suite, failing on a NEW offender *and* on a stale entry) — the second paid for itself on
+  its first run by finding `Checker.<clinit>`, which the script had been charging to a
+  16-byte access bridge.
+- **FOR THE NEXT AGENT.** (JIT.1) is done; the ratchet stays as a standing gate and **its job
+  is now the opposite one — catching the FIRST method to cross 8,000 again** (`walkFunctionBodiesInExpr`
+  **7,702**, `cpaSpineLeave` **7,359** and `ctaM3StmtAnchorCore` **7,245** are one edit under
+  it). The queue's next unchecked perf items are **(SETUP.2)** (`buildFileLocalTypeMaps`, 636
+  ms = 2.2% of the compile) and **(ENGINE.3)**; round 819's open lead — a COUNTED ablation for
+  `tcjsMoveDetachedHeaderComments`, whose corpus zero bounds frequency but never existence —
+  is still unclaimed.
+
 **Round 820 (2026-08-03) — (JIT.1)(e) LANDED FOR `Checker.<clinit>`: 10,339 BYTECODES ->
 3,156 PLUS SEVEN TOP-LEVEL `ckConst*` BUILDERS. CENSUS 2 -> 1. THE LAST SHAPE NOBODY IN
 THIS ARC HAD SPLIT — A STATIC INITIALIZER.**
@@ -989,111 +1105,6 @@ GUARD RATHER THAN A PROBE, WHICH IS WEAKER AND IS SAID SO.**
   `huge_methods.py --fail-over 0` into the round gate — becomes runnable once (d)/(e) land.**
 
 
-**Round 811 (2026-08-03) — (JIT.1)(c) LANDED FOR `checkSingleCallExpressionTypesCore`:
-15,567 BYTECODES -> AN ENTRY AT 5,149 PLUS FOUR `ccet*` HELPERS. CENSUS 11 -> 10, AND
-SUB-ITEM (c) IS CLOSED. THE TARGET WAS HANDED OVER AS "BOUNDARIES NOT COMMITTED, BUDGET
-FOR DERIVING THEM" — AND ITS PARTITION HAS BEEN IN THE SOURCE SINCE ROUND 734.**
-
-- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **11** over the
-  limit, `checkSingleCallExpressionTypesCore` **15,567** — the round-810 handoff reproduced
-  exactly. The after-number was measured the same way, on the binary built from the split
-  source: **10**, with the entry absent from the over-limit list.
-- **THE HANDOFF'S ONE FACTUAL ERROR, AND IT WAS THE ROUND'S CHEAPEST WIN.** (c) was queued
-  as the one target *without* a committed `*Sections` partition. `CallSections` — round
-  734's (CALL.1)(a) instrument — partitions THIS function into 16 sections, its markers are
-  in the body, and `docs/perf/call-expression-attribution.md` §§ 3-4 publish both a
-  per-section cost table and an EXIT CENSUS over 52,413 invocations. Nothing had to be
-  derived. **Check for an existing probe object before budgeting a derivation** — three
-  rounds in a row (808/809/811) have now been decided by a partition somebody else landed.
-- **THE SPLIT.** Entry **5,149** plus `ccetUnionCalleeChecks` **3,402** (`UNION_CALLEE`),
-  `ccetNoCallSignatureDiagnostics` **2,773** (`NO_SIGS`), `ccetExplicitTypeArguments`
-  **2,118** (`TYPE_ARGS`) and `ccetPrologueWalkers` **2,068** (`B216`..`SUPER`). The five sum
-  to **15,510 against 15,567** — an EIGHTH confirmation that a bytecode count is a THRESHOLD
-  predicate and not a cost model.
-- **WHAT STAYS INLINE IS WHAT THE PARTITION PRICES, in both directions.** Stays:
-  `getCalleeType` (474 ms, every invocation), the TS2722 optional-member gate and the
-  TS2347/null-callee/any-bail cluster (102 ms, every invocation), `getCallSignaturesOfType`,
-  the SINGLE-SIGNATURE branch (1,560 ms and 42.2% of all exits) and the overload branch
-  (3,640 exits). Moves: the union-callee branch (**31** exits of 52,413), the
-  `signatures.isEmpty()` branch (**entered 0 times** on the compiler profile — its
-  `binderResults x top-level statements` scan goes with it), the explicit-type-argument
-  branch (**101** exits), and the seven prologue walkers (253 ms as one span, ZERO firings,
-  and already refused for ~98% of calls by round 793's pre-gate).
-- **THE ROUND-793 CONSTRAINT IS HONOURED BY CONSTRUCTION:** `ccetPrologueMayFire` and the
-  whole `if (runPrologue)` test **stay in the entry**; only the guarded block moved. A
-  walker moved outside that gate would silently never run.
-- **SHAPE.** Three helpers return `Boolean` (`true` = "the caller must return"); the
-  `signatures.isEmpty()` branch returned UNCONDITIONALLY, so its helper is `Unit`, its five
-  internal `return`s stay bare and the call site returns straight after it. **Cross-boundary
-  values: NONE**, computed per region rather than assumed.
-- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green;
-  `scripts/ccet_split_{analyze,apply,verify}.py`):** four contiguous in-order runs (131 /
-  224 / 240 / 122 lines) re-extracted from the NEW file and compared verbatim against HEAD;
-  the entry **reconstructed** from HEAD with the regions replaced by their call sites —
-  **IDENTICAL at 284 lines**; accounting closing exactly (996 = 279 kept + 717 moved; new
-  entry 284 = 279 + 5); every `return` enumerated (32 bare = 10 kept + 7 + 8 + 2 rewritten
-  + 5 left bare; the new entry's 14 = 10 kept + 4 call sites); free variables per region.
-- **DISCRIMINATION: 2 OF 4, each mistake ALONE on its own build, control first (18 pins ran,
-  0 failed), every run's pin COUNT confirmed.** Dropping the entry's `return` after
-  `ccetNoCallSignatureDiagnostics` fails **6** pins; ignoring `ccetExplicitTypeArguments`'
-  `true` fails **2** (its own seam pin and the ordering pin). Ignoring `ccetPrologueWalkers`'
-  or `ccetUnionCalleeChecks`' `true` fails **0 — twice each**, because both zeros were
-  RE-ATTEMPTED with purpose-built shapes rather than merely recorded.
-- **WHY THE TWO ZEROS ARE PROPERTIES OF THE FUNCTION.** The prologue's `super` shapes cannot
-  discriminate by construction (`getCalleeType("super")` is `anyType`, so an entry running on
-  bails at the any/error gate two sections later), so the retry used the one walker whose
-  continuation reaches a real signature — a `reduce<U>` call with a `keyof` callback
-  parameter — and it is green. The union's case (b) cannot double by construction either:
-  `getCallSignaturesOfType` CONCATENATES the constituents' signatures, so a union with any
-  callable member has a non-empty list and the duplicate emitter (which lives in the
-  `signatures.isEmpty()` branch) is unreachable; the retry therefore used B516's combined
-  signature — the one case that leaves a non-empty list and still emits — and it is green
-  too. Both signals are redundant guards on today's code, kept because the monolith had
-  them; the four pins written for them are **RENAMED as arm pins**.
-- **WHAT DID NOT WORK.** (1) The first grid read **0 added / 16 removed on every profile** —
-  a regression that does not exist. Arm B was captured through `bench-compile-tsc.sh` with
-  `--listAll` patched into `NOEMIT_ARGS`, and the script's very NEXT line
-  (`[[ $NO_EMIT -eq 1 ]] && NOEMIT_ARGS=(--noEmit)`) overwrites it, so the capture was
-  truncated at 30 of 46 ("... and 16 more error(s)"). Both arms now run the identical direct
-  `java … --noEmit --listAll`, and the differ REFUSES any capture containing `and N more
-  error`. **A grid whose two arms are produced by different harnesses is not a diff.**
-  (2) The first string/comment stripper treated a `"` as running to the next `"`, so a
-  template expression embedding a string desynchronised it and it blanked 40,000 lines —
-  reported as "the function has no returns and no free variables". Round 809's
-  length-preservation check does NOT catch this (blanking preserves length); the positive
-  control that does is "a known declaration inside the range must survive stripping".
-  (3) Two pin shapes measured nothing and were replaced: `h<number>(["a"])` reports a
-  TS2322 on the array ELEMENT rather than a TS2345 on the argument, and `h<number>("a")` as
-  an expression STATEMENT already emits its TS2345 twice on a correct binary (the function
-  has a second caller, `checkCallTypesInExpr`) — a count pin has to sit in a declaration
-  initializer for that family. (4) TWO of six ablation builds died with the round-808
-  Kotlin-daemon `GC overhead limit exceeded`, one after **13m40s**; the `pins ran=0` check
-  caught both, and recovery is `./gradlew --stop` + `pkill -f 'KotlinCompile[D]aemon'`.
-- **GATE.** Suite **13,612 -> 13,633 / 0 failures / 3 skipped** (+21: 18 `CcetSplitTest` +
-  3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first. 8-profile grid
-  diffed set-for-set BOTH directions against a purpose-built pre-split binary, class dirs
-  confirmed to differ — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
-  `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No
-  `w:` and no `e:` lines in the compile that produced the binary. **No wall A/B,
-  deliberately** — the family is bounded four times over. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md` § 15.
-- **FOR THE NEXT AGENT.** (JIT.1) is at **10 over the limit and the `Checker` list is down
-  to four**: `checkDuplicateDeclarations` **12,935**, `tryInferSingleTypeParamFromArgs`
-  **11,930**, the `Checker` constructor **11,298** (once per compile, but it CONTAINS the
-  whole init dispatch, so (SETUP.1)'s `pass("init:…")` wrappers are its natural boundaries),
-  `checkIndexSigInStatement` **10,928** and `access$checkBigintPropertyNames$emit`
-  **10,339** — i.e. sub-item **(d)**, none of which has a committed partition, so each needs
-  its boundaries chosen from its own shape (grep for an existing probe object FIRST — this
-  round's handoff was wrong about exactly that). The non-`Checker` tail is untouched:
-  `Transformer.transformToCommonJS` **28,991**, `TypeScriptCompiler.compileParsedCore`
-  **21,535**, `Transformer.transformClassBody` **16,233**, `CompilerOptionsKt.applyDirective`
-  **13,694**, `Transformer.transform` **8,934** — the three Transformer ones are sub-item
-  **(e)**, sized at 0.14-0.25% and landed for the threshold only. **(f) — wiring
-  `huge_methods.py --fail-over 0` into the round gate — becomes runnable once (d)/(e) land.**
-  Also worth one line: `walkFunctionBodiesInExpr` **7,702** and `cpaSpineLeave` **7,359** sit
-  one edit under the limit.
-
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 ---
@@ -1123,8 +1134,16 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
 26.5 s — so *parity is artifact-scoped*, and which artifact ships is the standing
 (AOT.1) owner decision, not an engineering one.
 
-- [ ] **(JIT.1) Split every method above HotSpot's `HugeMethodLimit` so it can be
-  JIT-compiled at all. PRIZE: MEASURED — upper bound −3.1% (793 ms), the largest measured
+- [x] **(JIT.1) COMPLETE at round 821 — the census is ZERO.** Split every method above
+  HotSpot's `HugeMethodLimit` so it can be JIT-compiled at all. **Rounds 802–821: 19
+  methods split, 46,567 bytecodes at the largest; the arc bought ONE measured wall gain
+  (−3.93%, B wins 5/5, round 803's `forEachChild`) and landed everything else for the
+  THRESHOLD — a method over 8,000 bytecodes is NEVER compiled by C1 or C2, so its cost
+  cannot improve with load, input size, warm-up or JVM version, and no other gate in this
+  repo can see that.** The standing residue is the (f) ratchet
+  (`huge_methods.py --fail-over 0` + `HugeMethodLimitTest`), whose job from here is to
+  fail the moment a NEW method crosses the limit. Original framing follows.
+  **PRIZE AS ORIGINALLY MEASURED — upper bound −3.1% (793 ms), the largest measured
   prize in the queue.** Census: `scripts/huge_methods.py` (landed round 802) —
   **19 of 13,910 methods over 8,000 bytecodes**, listed in
   `docs/perf/setup-phase-and-huge-methods.md` § 3.2. The A/B is one flag on one binary:
@@ -1299,6 +1318,27 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     of both substituted sets, and `KNOWN_GLOBALS` is upstream of its consumer), plus a
     negative control at its predicted 0. Full derivation:
     `docs/perf/setup-phase-and-huge-methods.md` § 25.
+  - [x] **(i) DONE round 821 — `tryInferSingleTypeParamFromArgs` 11,930 → an entry at
+    1,869 plus `tispGatherAnchorCandidates` 3,054 / `tispGatherCallbackCandidates` 5,388 /
+    `tispCheckConstraint` 1,503; census 1 → 0, WHICH CLOSES (JIT.1).** The only target in
+    the arc that no contiguity argument settles — its bytecodes are FLAT (largest 25-line
+    window 449 of 11,930; 22.2% are INLINED stdlib bodies charged to their call sites) and
+    ONE `for (tp in orderedTps)` loop holds 9,368 of them. The seams came from a scripted
+    DATA-FLOW analysis (`scripts/tisp_split_analyze.py`: per-region read/write sets,
+    liveness, exit classification), and three facts made it exact rather than careful:
+    a mutated CONTAINER (`candidates`, append-only) crosses a call boundary for free as a
+    parameter; the ONE rebind that outlives its region (`tpSawAnyArg`) is RETURNED, never
+    fielded; and a `Boolean?` return makes all 22 whole-function `return null`s mean what
+    they meant, so **869 lines move VERBATIM** with no hand-edited control flow. No region
+    holds a caller-targeting `continue`/`break` (measured 0/0/0), which is what makes plain
+    helpers legal — round 819's target needed a frame for exactly that. The one non-move:
+    the local `data class Candidate` is hoisted to a private nested class, because a helper
+    signature cannot name a class declared inside a function body. Discrimination 5 arms +
+    a negative control, 4 at the predicted count; **A4 (the returned rebind dropped) is
+    UNDISCRIMINATED and stays recorded as such** — an un-inferred bare type parameter
+    relates to most targets, so neither an argument-position nor an arithmetic pin can see
+    it, and the shape's habitat is the self-compile profiles. Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 26.
   - [x] **(f) DONE round 807 — `checkArgumentsAgainstSignatureCore` 23,890 → an entry at
     7,173 plus THIRTEEN `caas*` helpers (456–2,792), one per contiguous run of the
     committed `ArgSections` partition; census 15 → 14.** **First split of a LOOP BODY, and
