@@ -18,13 +18,12 @@ timing, so it is a gate-able number rather than a measurement.
 
 **(JIT.1)(f) round 817 — THIS IS A ROUND-GATE STEP NOW, AS A RATCHET.** Run
 
-    python3 scripts/huge_methods.py --fail-over 2
+    python3 scripts/huge_methods.py --fail-over 1
 
-next to `cost_gate.py` in every round that touches compiled code. **2 is the
-census as of round 819, not a target**: both over-limit methods are known and
-named (`Checker.tryInferSingleTypeParamFromArgs`, `Checker.<clinit>`), so the
-ratchet catches a NEW offender the moment it appears while the known two are
-worked off one round at a time. **TIGHTEN IT BY ONE AS EACH LANDS; `--fail-over 0` is the end state, not a
+next to `cost_gate.py` in every round that touches compiled code. **1 is the
+census as of round 820, not a target**: the last over-limit method is known and
+named (`Checker.tryInferSingleTypeParamFromArgs`), so the ratchet catches a NEW
+offender the moment it appears while the known one is worked off. **TIGHTEN IT BY ONE AS EACH LANDS; `--fail-over 0` is the end state, not a
 precondition.** Raising the number is never the fix for a red gate — split the
 method.
 
@@ -39,7 +38,7 @@ Usage:
   scripts/huge_methods.py                 # census, sorted, with the over-limit set
   scripts/huge_methods.py --limit 8000    # HotSpot's HugeMethodLimit (default)
   scripts/huge_methods.py --top 40
-  scripts/huge_methods.py --fail-over 2   # non-zero exit above N over-limit methods
+  scripts/huge_methods.py --fail-over 1   # non-zero exit above N over-limit methods
 
 Reading the output: the size printed is the offset of the LAST bytecode in the
 method, which is what HotSpot compares against `HugeMethodLimit` (it is the code

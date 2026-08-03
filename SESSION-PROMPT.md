@@ -92,13 +92,13 @@ Your loop (per CLAUDE.md § Execution protocol):
 
    For anything that changes COMPILED CODE, also run the JIT ratchet (JIT.1)(f):
 
-       python3 scripts/huge_methods.py --fail-over 2
+       python3 scripts/huge_methods.py --fail-over 1
 
    A method over 8,000 bytecodes is never JIT-compiled and runs interpreted for
-   the whole process; no other gate can see it. 2 is the round-819 census, both
-   named (`Checker.tryInferSingleTypeParamFromArgs`, `Checker.<clinit>`) — TIGHTEN
-   by one as each lands, never raise it. The suite runs the same census
-   (HugeMethodLimitTest) and fails on a stale entry too.
+   the whole process; no other gate can see it. 1 is the round-820 census, and it
+   is named (`Checker.tryInferSingleTypeParamFromArgs`) — TIGHTEN by one as each
+   lands, never raise it. The suite runs the same census (HugeMethodLimitTest)
+   and fails on a stale entry too.
 
 5. For a perf claim, also run the profile and record it:
 

@@ -80,7 +80,7 @@ class HugeMethodLimitTest {
          * The honest gate today is therefore a RATCHET, not a zero: the census
          * stands at [CENSUS_RATCHET] and every one of those methods is NAMED in
          * [KNOWN_OVER_LIMIT], so a NEW offender fails immediately while the known
-         * five are worked off one round at a time. **`0` is the end state, not a
+         * ones are worked off one round at a time. **`0` is the end state, not a
          * precondition.**
          *
          * THE TIGHTENING RULE, which the second test below enforces mechanically:
@@ -95,40 +95,44 @@ class HugeMethodLimitTest {
          * `cost_gate.py`); wiring it into Gradle's `check` is a build-system
          * change and is owner-gated as queue item (JIT.3).
          */
-        const val CENSUS_RATCHET = 2
+        const val CENSUS_RATCHET = 1
 
         /**
          * The whole census, named — `<binary class name>#<method simple name>`.
          *
-         * Both are known and queued: `tryInferSingleTypeParamFromArgs` needs a
-         * scripted DATA-FLOW answer rather than the contiguity argument every
-         * split in this arc has used so far (mutable locals cross every candidate
-         * boundary), and `Checker.<clinit>` is a static initializer whose content
-         * is the class's object-level constants — it can only shrink by moving
-         * those initializers into helper methods it calls, which no A/B in this
-         * repo can price.
+         * The one left is known and queued: `tryInferSingleTypeParamFromArgs`
+         * needs a scripted DATA-FLOW answer rather than the contiguity argument
+         * every split in this arc has used so far (mutable locals cross every
+         * candidate boundary).
+         *
+         * `Checker.<clinit>` came off this list at round 820. It was a static
+         * initializer whose 10,339 bytecodes were the class's `object`-level
+         * COLLECTION constants — a `private const val` of a primitive costs
+         * `<clinit>` nothing, because it carries a `ConstantValue` attribute —
+         * so it shrank by hoisting the seven largest literals into the top-level
+         * `ckConst*` builders pinned below. No A/B in this repo could price it:
+         * a static initializer runs once, at class load.
          *
          * The `Transformer` entries are gone: round 817 split `transform`, round
          * 818 `transformClassBody` and round 819 `transformToCommonJS`. All three
          * sit on the EMIT path, so every `--noEmit` A/B in this arc was blind to
          * them and their gate was the corpus suite's emit baselines.
          *
-         * **`Checker.<clinit>` is here because THIS TEST FOUND IT, on its first
-         * run, and the reason it had never been seen is the reason a second
-         * instrument was worth building.** `scripts/huge_methods.py` reads
+         * **`Checker.<clinit>` was on this list because THIS TEST FOUND IT, on
+         * its first run, and the reason it had never been seen is the reason a
+         * second instrument was worth building.** `scripts/huge_methods.py` reads
          * `javap`, and `javap` renders the static initializer as `static {};` —
          * with no parameter list — so the script's method-header regex (which
          * requires a `(`) never started a method there and charged all 10,339 of
          * its bytecodes to whatever method happened to precede it in the class
          * file. That method is `access$checkBigintPropertyNames$emit`, a **16-byte
-         * access bridge**, which the queue has consequently carried as a
+         * access bridge**, which the queue had consequently carried as a
          * 10,339-bytecode split target since round 802. The script is fixed; the
          * lesson is that this test parses `Code` attribute lengths straight out of
          * the class file, so it has no rendering to misread.
          */
         val KNOWN_OVER_LIMIT = setOf(
             "com.xemantic.typescript.compiler.Checker#tryInferSingleTypeParamFromArgs",
-            "com.xemantic.typescript.compiler.Checker#<clinit>",
         )
 
         /**
@@ -1080,6 +1084,57 @@ class HugeMethodLimitTest {
         // 1,224 / 2,749 / 700 / 1,775 bytecodes of the 28,991, i.e. 26,564 moved.
         assert(parts.values.min() > 300)
         assert(parts.values.sum() > 24000)
+    }
+
+    /**
+     * (JIT.1)(e) round 820 — the seven top-level builders `Checker.<clinit>`'s
+     * companion constants were hoisted into. They live in `CheckerKt` (a Kotlin
+     * file class), not in `Checker`: a companion `private fun` would be an
+     * instance method on `Checker$Companion`, which `<clinit>` would have to
+     * reach through the very static field it is in the middle of installing.
+     */
+    private val clinitHoistParts = setOf(
+        "ckConstNodeBuiltinModules",
+        "ckConstKeywordIdentifiers",
+        "ckConstKnownGlobals",
+        "ckConstDomGlobalNames",
+        "ckConstValueOnlyGlobals",
+        "ckConstKnownGenericBuiltins",
+        "ckConstLibMinTargetBase",
+    )
+
+    @Test
+    fun `Checker's static initializer is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val clinit = sizes["<clinit>"] ?: fail("<clinit> not found in Checker")
+        // Positive control: the companion still initialises ~270 other
+        // properties, so the initializer is far from empty and a zero — which is
+        // what a mis-parse of the class file would produce — cannot pass this.
+        assert(clinit > 1500)
+        assert(clinit < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every hoisted companion-constant builder is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.CheckerKt")
+        val missing = clinitHoistParts - sizes.keys
+        if (missing.isNotEmpty()) fail("hoisted builders not found in CheckerKt: $missing")
+        val parts = sizes.filterKeys { it in clinitHoistParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the hoisted builders each carry a real share of the initializer`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.CheckerKt")
+        val parts = sizes.filterKeys { it in clinitHoistParts }
+        assert(parts.size == 7)
+        // Region sizes were MEASURED before the edit with
+        // scripts/clinit_split_analyze.py: 2,992 / 1,368 / 787 / 671 / 553 / 497 /
+        // 371 bytecodes of the 10,339, i.e. 7,239 moved. The smallest is
+        // NODE_BUILTIN_MODULES' 52 strings.
+        assert(parts.values.min() > 250)
+        assert(parts.values.sum() > 6000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
