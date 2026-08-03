@@ -16,11 +16,31 @@ largest measured costs in the compiler**.
 This is a static, deterministic census: it needs no run, no profile and no
 timing, so it is a gate-able number rather than a measurement.
 
+**(JIT.1)(f) round 817 — THIS IS A ROUND-GATE STEP NOW, AS A RATCHET.** Run
+
+    python3 scripts/huge_methods.py --fail-over 5
+
+next to `cost_gate.py` in every round that touches compiled code. **5 is the
+census as of round 817, not a target**: all five over-limit methods are known and
+named (`Transformer.transformToCommonJS` / `transformClassBody` / `transform`,
+`Checker.tryInferSingleTypeParamFromArgs`, `Checker.<clinit>`), so the ratchet catches a NEW
+offender the moment it appears while the known five are worked off one round at a
+time. **TIGHTEN IT BY ONE AS EACH LANDS; `--fail-over 0` is the end state, not a
+precondition.** Raising the number is never the fix for a red gate — split the
+method.
+
+The same ratchet also runs inside the suite, so it cannot be forgotten:
+`HugeMethodLimitTest` (src/jvmTest) censuses the whole compiled main output from
+the class files and fails both on a new offender and on a STALE entry (i.e. when
+a split has landed and the ratchet was not tightened). Wiring this script into
+Gradle's `check` is a build-system change and is owner-gated as queue item
+(JIT.3).
+
 Usage:
   scripts/huge_methods.py                 # census, sorted, with the over-limit set
   scripts/huge_methods.py --limit 8000    # HotSpot's HugeMethodLimit (default)
   scripts/huge_methods.py --top 40
-  scripts/huge_methods.py --fail-over 13  # non-zero exit above N over-limit methods
+  scripts/huge_methods.py --fail-over 5   # non-zero exit above N over-limit methods
 
 Reading the output: the size printed is the offset of the LAST bytecode in the
 method, which is what HotSpot compares against `HugeMethodLimit` (it is the code
@@ -62,6 +82,17 @@ REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CLASSES = os.path.join(REPO, "build", "classes", "kotlin", "jvm", "main")
 
 SIG = re.compile(r"^  [a-zA-Z$<].*\(")
+# (JIT.1)(f) round 817 — javap renders the STATIC INITIALIZER as `  static {};`,
+# with NO parameter list, so [SIG] (which requires a `(`) never starts a method
+# there and every one of `<clinit>`'s bytecodes was charged to whatever method
+# happened to precede it in the class file. That is not hypothetical: it is how
+# `Checker.access$checkBigintPropertyNames$emit` — a 16-byte access bridge — has
+# been reported as a **10,339-bytecode over-limit method** since round 802, and
+# how the REAL offender at that size, `Checker.<clinit>`, stayed invisible to
+# fourteen rounds of this census. Found by the round-817 suite ratchet, which
+# reads `Code` attribute lengths out of the class file and so has no parser to
+# be wrong.
+CLINIT = re.compile(r"^  static \{\};")
 # An opcode line: "    1234: aload_0". The trailing letter is what separates a real
 # instruction from a switch key line ("        42: 1234"), which has a number there.
 OPCODE = re.compile(r"^\s+(\d+): [a-z]")
@@ -80,7 +111,7 @@ def census(class_files):
         owner = os.path.basename(cf)[:-len(".class")]
         cur, mx = None, 0
         for line in text.split("\n"):
-            if SIG.match(line):
+            if SIG.match(line) or CLINIT.match(line):
                 if cur:
                     out.append((mx, owner, cur))
                 cur, mx = line.strip(), 0

@@ -26,6 +26,7 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import java.io.File
 import kotlin.test.Test
 import kotlin.test.fail
 
@@ -63,6 +64,116 @@ class HugeMethodLimitTest {
     private companion object {
         /** HotSpot's `HugeMethodLimit` (product-flag constant, not tunable at runtime). */
         const val HUGE_METHOD_LIMIT = 8000
+
+        /**
+         * (JIT.1)(f) round 817 — **THE RATCHET**, and the number that must only
+         * ever go DOWN.
+         *
+         * This family grew unnoticed for 800 rounds because nothing could see it:
+         * a method crossing 8,000 bytecodes is a silent, permanent, whole-run
+         * performance cliff that the corpus (which measures meaning, not cost),
+         * `cost_gate.py` (whose counters do not move) and
+         * `-XX:+PrintCompilation` (which prints nothing — the compile is never
+         * *proposed*, so it is never *skipped*) are all blind to. Round 802 found
+         * **19** over the limit by running a census for the first time.
+         *
+         * The honest gate today is therefore a RATCHET, not a zero: the census
+         * stands at [CENSUS_RATCHET] and every one of those methods is NAMED in
+         * [KNOWN_OVER_LIMIT], so a NEW offender fails immediately while the known
+         * five are worked off one round at a time. **`0` is the end state, not a
+         * precondition.**
+         *
+         * THE TIGHTENING RULE, which the second test below enforces mechanically:
+         * when a split lands, DROP the method from [KNOWN_OVER_LIMIT] and set
+         * [CENSUS_RATCHET] to the new census — `every method over the limit is one
+         * of the known, named offenders` FAILS on a stale entry, so the ratchet
+         * cannot silently stay loose after the work that should have tightened it.
+         * Raising either number is never the fix for a red gate: split the method.
+         *
+         * `scripts/huge_methods.py --fail-over <CENSUS_RATCHET>` is the same gate
+         * outside the suite (it is what a round runs by hand next to
+         * `cost_gate.py`); wiring it into Gradle's `check` is a build-system
+         * change and is owner-gated as queue item (JIT.3).
+         */
+        const val CENSUS_RATCHET = 5
+
+        /**
+         * The whole census, named — `<binary class name>#<method simple name>`.
+         *
+         * All five are known and queued: the three `Transformer` ones are
+         * (JIT.1)(e) and sit on the EMIT path (so every `--noEmit` A/B in this arc
+         * is blind to them and their gate is the corpus suite's emit baselines);
+         * `tryInferSingleTypeParamFromArgs` and `Checker.<clinit>` are the (d)
+         * tail.
+         *
+         * **`Checker.<clinit>` is here because THIS TEST FOUND IT, on its first
+         * run, and the reason it had never been seen is the reason a second
+         * instrument was worth building.** `scripts/huge_methods.py` reads
+         * `javap`, and `javap` renders the static initializer as `static {};` —
+         * with no parameter list — so the script's method-header regex (which
+         * requires a `(`) never started a method there and charged all 10,339 of
+         * its bytecodes to whatever method happened to precede it in the class
+         * file. That method is `access$checkBigintPropertyNames$emit`, a **16-byte
+         * access bridge**, which the queue has consequently carried as a
+         * 10,339-bytecode split target since round 802. The script is fixed; the
+         * lesson is that this test parses `Code` attribute lengths straight out of
+         * the class file, so it has no rendering to misread.
+         */
+        val KNOWN_OVER_LIMIT = setOf(
+            "com.xemantic.typescript.compiler.Transformer#transformToCommonJS",
+            "com.xemantic.typescript.compiler.Transformer#transformClassBody",
+            "com.xemantic.typescript.compiler.Checker#tryInferSingleTypeParamFromArgs",
+            "com.xemantic.typescript.compiler.Checker#<clinit>",
+            "com.xemantic.typescript.compiler.Transformer#transform",
+        )
+
+        /**
+         * `<binary class name>#<method>` -> `Code` length, for EVERY method of the
+         * compiled main output, computed once.
+         *
+         * The population is exactly `scripts/huge_methods.py`'s: the directory the
+         * main classes are compiled into, located from a marker resource rather
+         * than hard-coded, so it follows the build layout. The two instruments
+         * differ by a few bytes on the same method — the script reports the OFFSET
+         * of the last opcode, this reports the `Code` attribute LENGTH (what
+         * HotSpot itself compares) — which cannot change which side of 8,000 a
+         * method falls on in any real case.
+         */
+        val wholeProgramCensus: Map<String, Int> by lazy { computeCensus() }
+
+        private fun computeCensus(): Map<String, Int> {
+            val marker = "com/xemantic/typescript/compiler/Checker.class"
+            val url = HugeMethodLimitTest::class.java.classLoader.getResource(marker)
+                ?: fail("$marker is not on the test classpath")
+            if (url.protocol != "file") fail("main classes are not a directory on the classpath: $url")
+            var root = File(url.toURI())
+            repeat(marker.count { it == '/' } + 1) { root = root.parentFile }
+            if (!File(root, marker).isFile) fail("could not locate the main classes root from $url")
+            val classFiles = root.walkTopDown().filter { it.isFile && it.name.endsWith(".class") }.toList()
+            val out = LinkedHashMap<String, Int>()
+            var methods = 0
+            var largest = 0
+            for (f in classFiles) {
+                val binary = f.relativeTo(root).path
+                    .removeSuffix(".class").replace(File.separatorChar, '.')
+                for ((name, size) in ClassFileReader(f.readBytes()).methodCodeSizes()) {
+                    methods++
+                    if (size > largest) largest = size
+                    out["$binary#$name"] = size
+                }
+            }
+            // POSITIVE CONTROLS. A census that silently read nothing would pass the
+            // ratchet vacuously, which is exactly the failure round 814's empty
+            // diagnostic list produced. Measured at round 817: 578 classes, 14,001
+            // methods, largest 28,991. `largest` is deliberately checked against a
+            // bound BELOW the limit (`walkFunctionBodiesInExpr` is 7,702), so the
+            // control still holds in the end state where nothing is over 8,000.
+            val classCount = classFiles.size
+            assert(classCount >= 400)
+            assert(methods >= 10_000)
+            assert(largest > 5_000)
+            return out
+        }
     }
 
     /** method simple name -> `Code` attribute length, for one compiled class. */
@@ -72,6 +183,35 @@ class HugeMethodLimitTest {
             .getResourceAsStream(resource)?.readBytes()
             ?: fail("$resource is not on the test classpath")
         return ClassFileReader(bytes).methodCodeSizes()
+    }
+
+    @Test
+    fun `the whole-program huge-method census is at or below the ratchet`() {
+        val over = wholeProgramCensus.filterValues { it > HUGE_METHOD_LIMIT }
+        if (over.size > CENSUS_RATCHET) fail(
+            "(JIT.1)(f) RATCHET: ${over.size} methods are over HotSpot's HugeMethodLimit " +
+                "of $HUGE_METHOD_LIMIT bytecodes, and the budget is $CENSUS_RATCHET.\n" +
+                "  new offenders : ${(over.keys - KNOWN_OVER_LIMIT).sorted()}\n" +
+                "  whole census  : ${over.toList().sortedByDescending { it.second }}\n" +
+                "A method above the limit is NEVER JIT-compiled by C1 or C2 — it runs in " +
+                "the interpreter for the entire process, however hot it gets, and no other " +
+                "gate in this repo can see that. Split it; do not raise CENSUS_RATCHET."
+        )
+    }
+
+    @Test
+    fun `every method over the limit is one of the known, named offenders`() {
+        val over = wholeProgramCensus.filterValues { it > HUGE_METHOD_LIMIT }
+        val fresh = (over.keys - KNOWN_OVER_LIMIT).sorted()
+        if (fresh.isNotEmpty()) fail(
+            "(JIT.1)(f) NEW methods over HotSpot's HugeMethodLimit: " +
+                "${fresh.map { it to over[it] }} — split them, do not name them here."
+        )
+        val fixed = (KNOWN_OVER_LIMIT - over.keys).sorted()
+        if (fixed.isNotEmpty()) fail(
+            "(JIT.1)(f) TIGHTEN THE RATCHET: $fixed are no longer over the limit. " +
+                "Drop them from KNOWN_OVER_LIMIT and set CENSUS_RATCHET to ${over.size}."
+        )
     }
 
     @Test
