@@ -5879,6 +5879,56 @@ class Checker(
         if (PassTiming.enabled || PassTiming.censusMode) {
             PassTiming.diagnosticsSize = { diagnostics.size }
         }
+        initSetupPasses()
+
+        // For declarationOnly mode, only run class strict-mode checks (TS1210) plus
+        // name-resolution (TS2304/TS2552/…). B95g (round 82): emitDeclarationOnly still
+        // reports unresolved names (e.g. `[Enum.A]` in a type position where `Enum` is
+        // undefined → TS2304) — checkUnresolvedNames is a self-contained name-resolution
+        // walker (no TS6131-style unused FPs that the broader declaration-only mode avoids).
+        if (declarationOnly) {
+            initDeclarationOnlyPasses()
+        }
+
+        if (!declarationOnly) {
+        initCheckPasses1()
+        initCheckPasses2()
+        initCheckPasses3()
+        initCheckPasses4()
+        initCheckPasses5()
+        initCheckPasses6()
+        initCheckPasses7()
+        initCheckPasses8()
+        } // end if (!declarationOnly)
+        PassTiming.noteInitEnd()
+        } catch (e: StackOverflowError) {
+            // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
+            // Per-call catches used to live inline (first silently swallowing into the
+            // NONE bucket, later loud); they were physically removed (2026-07-02) once
+            // the cycle/iteration guards made overflow unreachable on the corpus. This
+            // single boundary catches any future/adversarial case that escapes the
+            // guards and SURFACES it as a diagnostic instead of crashing the compile.
+            // Do NOT re-add inline catches — fix the recursion (guard/iterate) instead.
+            reportCheckerStackOverflow(e)
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — the (SETUP.1) prologue — `checkLibOption` through
+     * `init:buildFileLocalTypeMaps`, the 14 setup passes round 802 wrapped to
+     * make `outside-pass` exhaustive by construction. Holds the `init` body's
+     * own `preAugmentationGlobalsKeys` local, whose only two readers are
+     * inside this run.
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initSetupPasses() {
         // (LIB.1)(c): report a `lib` entry that named no lib file. First, because it
         // explains every downstream "unknown name" the missing lib would produce.
         pass("checkLibOption") { checkLibOption() }
@@ -6012,45 +6062,71 @@ class Checker(
         pass("init:trackAllImportReferences") { trackAllImportReferences() }
         // 3b. Build per-file type maps for file-level declarations
         pass("init:buildFileLocalTypeMaps") { buildFileLocalTypeMaps() }
+    }
 
-        // For declarationOnly mode, only run class strict-mode checks (TS1210) plus
-        // name-resolution (TS2304/TS2552/…). B95g (round 82): emitDeclarationOnly still
-        // reports unresolved names (e.g. `[Enum.A]` in a type position where `Enum` is
-        // undefined → TS2304) — checkUnresolvedNames is a self-contained name-resolution
-        // walker (no TS6131-style unused FPs that the broader declaration-only mode avoids).
-        if (declarationOnly) {
-            pass("init:declarationOnlyDispatch") {
-            checkClassStrictModeIdentifiers()
-            checkUnresolvedNames()
-            // B520: JSDoc @typedef/@property type-name resolution (TS2304/TS2552) is a
-            // self-contained name-resolution walker (same category as checkUnresolvedNames),
-            // so it must also run under emitDeclarationOnly — e.g.
-            // reuseTypeAnnotationImportTypeInGlobalThisTypeArgument's `@typedef
-            // {Record<Keyword, ParamValueTyped>}` in a checkJs+emitDeclarationOnly file.
-            checkJsDocTypeNameResolution()
-            checkJsDocImportTypedefConstraint()
-            checkDtsImportEqualsAliasResolved()
-            // TS4081/TS4025 private-name refs are declaration-emit diagnostics and the
-            // walker is self-contained (no TS6131-style FPs), so it must also run under
-            // emitDeclarationOnly (which takes the declarationOnly path).
-            if (options.declaration) checkExportTypeAliasPrivateNameRef()
-            // TS2883/TS4023 nameability are declaration-emit diagnostics — self-contained
-            // and FP-safe — so they must also run under emitDeclarationOnly.
-            checkDeclarationEmitNameability()
-            checkDeclarationEmitComputedSymbolNameability()
-            checkDeclarationEmitHugeInferredType()
-            checkDeclarationEmitCyclicInferredReturn()
-            // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
-            // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
-            // self-contained and well-guarded (skips any/optional/declare/static/abstract/
-            // import-type/unresolved-generic), so it is FP-safe under declarationOnly.
-            if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
-                checkPropertyInitialization()
-            }
-            }
+    /**
+     * (JIT.1)(d) round 814 — the body of `if (declarationOnly)` — the
+     * `init:declarationOnlyDispatch` pass. The GUARD stays in the constructor;
+     * only its body moved.
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initDeclarationOnlyPasses() {
+        pass("init:declarationOnlyDispatch") {
+        checkClassStrictModeIdentifiers()
+        checkUnresolvedNames()
+        // B520: JSDoc @typedef/@property type-name resolution (TS2304/TS2552) is a
+        // self-contained name-resolution walker (same category as checkUnresolvedNames),
+        // so it must also run under emitDeclarationOnly — e.g.
+        // reuseTypeAnnotationImportTypeInGlobalThisTypeArgument's `@typedef
+        // {Record<Keyword, ParamValueTyped>}` in a checkJs+emitDeclarationOnly file.
+        checkJsDocTypeNameResolution()
+        checkJsDocImportTypedefConstraint()
+        checkDtsImportEqualsAliasResolved()
+        // TS4081/TS4025 private-name refs are declaration-emit diagnostics and the
+        // walker is self-contained (no TS6131-style FPs), so it must also run under
+        // emitDeclarationOnly (which takes the declarationOnly path).
+        if (options.declaration) checkExportTypeAliasPrivateNameRef()
+        // TS2883/TS4023 nameability are declaration-emit diagnostics — self-contained
+        // and FP-safe — so they must also run under emitDeclarationOnly.
+        checkDeclarationEmitNameability()
+        checkDeclarationEmitComputedSymbolNameability()
+        checkDeclarationEmitHugeInferredType()
+        checkDeclarationEmitCyclicInferredReturn()
+        // B439: TS2564 strict-property-initialization fires in emitDeclarationOnly too
+        // (tsc reports it there — e.g. jsDeclarationsInheritedTypes). The walker is
+        // self-contained and well-guarded (skips any/optional/declare/static/abstract/
+        // import-type/unresolved-generic), so it is FP-safe under declarationOnly.
+        if (!options.strictExplicitlyFalse && !options.strictPropertyInitializationExplicitlyFalse) {
+            checkPropertyInitialization()
         }
+        }
+    }
 
-        if (!declarationOnly) {
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 1 of 8:
+     * `checkUnusedDeclarations` .. `checkJSDocTypedefTags` (24 dispatches, and
+     * most of the run's bytecode is the inline
+     * `init:evolvingArrayUseSiteWalks` / definite-assignment / `checkSpine`
+     * block). Holds `shouldCheckDefiniteAssignment`, the `init` body's other
+     * local — declared and read inside this run, which is why the boundary
+     * sits where it does.
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses1() {
         // 4. Check for unused declarations (TS6133/TS6196)
         if (options.noUnusedLocals || options.noUnusedParameters) {
             pass("checkUnusedDeclarations") { checkUnusedDeclarations() }
@@ -6623,6 +6699,22 @@ class Checker(
         pass("checkJSDocTypedefTags") { checkJSDocTypedefTags() }
         // B438c: TS1337 + TS1005 for a malformed index signature inside a JSDoc inline-object
         // `@typedef {{ [key: foo] boolean }}` in a checkJs file (uniqueSymbolJs).
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 2 of 8:
+     * `checkJsDocTypedefIndexSignature` .. `checkDefaultImports` (61
+     * dispatches).
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses2() {
         pass("checkJsDocTypedefIndexSignature") { checkJsDocTypedefIndexSignature() }
         // B423: TS2304/TS2552 for an unresolvable single-identifier `@typedef {Name}` /
         // `@property {Name}` type in a checkJs .js file.
@@ -6841,6 +6933,22 @@ class Checker(
         pass("checkDtsTopLevelDeclarations") { checkDtsTopLevelDeclarations() }
         // 14b. Check default imports from modules without default export (TS1192)
         pass("checkDefaultImports") { checkDefaultImports() }
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 3 of 8:
+     * `checkNamespaceImportSyntheticDefaultCall` ..
+     * `checkCrossNamespaceClassHeritageUBD` (55 dispatches).
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses3() {
         pass("checkNamespaceImportSyntheticDefaultCall") { checkNamespaceImportSyntheticDefaultCall() }
         // 8a-bis. B235: TS2339 for absent members of `await import('<esm-pkg>')` namespaces.
         pass("checkDynamicImportNamespaceMembers") { checkDynamicImportNamespaceMembers() }
@@ -7072,6 +7180,22 @@ class Checker(
         // SPINE (M0.4 round 639, via the round-638 slot-move) — see
         // spineEvEnterNode and the pass("checkSpine") site.
         // 37a4. B337: uninitialized `let x;` captured reads (TS7034/TS7005).
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 4 of 8:
+     * `checkUninitializedLetCapturedReads` ..
+     * `checkDestructuringDefaultTypeMismatches` (63 dispatches).
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses4() {
         pass("checkUninitializedLetCapturedReads") { checkUninitializedLetCapturedReads() }
         // 37a5. B353: object-rest destructuring from a class instance — methods,
         //       accessors, and private/protected members do not spread into the
@@ -7313,6 +7437,22 @@ class Checker(
         // 72a4e2 (B276): TS2322 for typed-target default mismatches in destructuring assignments
         pass("checkDestructuringDefaultTypeMismatches") { checkDestructuringDefaultTypeMismatches() }
         // 72a4e3 (B279): TS18048 for optional number params used in straight-line arithmetic
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 5 of 8:
+     * `checkOptionalParamNullishArithmetic` ..
+     * `checkCircularClassBaseViaDefaultTypeArg` (67 dispatches).
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses5() {
         pass("checkOptionalParamNullishArithmetic") { checkOptionalParamNullishArithmetic() }
         // 72a4e4 (B281): TS2435 nested ambient modules + TS2668 export on ambient modules
         pass("checkNestedAmbientModules") { checkNestedAmbientModules() }
@@ -7542,6 +7682,22 @@ class Checker(
         // 64f3a-2. Check class base via default-type-arg indexed-access cycle (TS2310)
         pass("checkCircularClassBaseViaDefaultTypeArg") { checkCircularClassBaseViaDefaultTypeArg() }
         // B566: indexed-access-alias / homomorphic-mapped base-type cycles (TS2310/2456/2313/2751)
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 6 of 8:
+     * `checkCircularBaseTypeReferences` .. `checkCallTypeArgCount` (61
+     * dispatches).
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses6() {
         pass("checkCircularBaseTypeReferences") { checkCircularBaseTypeReferences() }
         // 64f3b. Check non-constructor extends (TS2507)
         pass("checkNonConstructorExtends") { checkNonConstructorExtends() }
@@ -7723,6 +7879,22 @@ class Checker(
         // see spineFpEnterNode at the pass("checkSpine") site.
         // 72a3. B218: TS2353 excess props for reverse-mapped single-object-literal
         // args (`{[K in keyof T & keyof C]: T[K]}` params — keys ⊆ keyof C).
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 7 of 8:
+     * `checkReverseMappedExcessProps` ..
+     * `checkConditionalTypeAssignabilityDeferred` (41 dispatches).
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses7() {
         pass("checkReverseMappedExcessProps") { checkReverseMappedExcessProps() }
         // 72b. Enum member initializers may not forward-reference later members (TS2651)
         pass("checkEnumForwardReferences") { checkEnumForwardReferences() }
@@ -7870,6 +8042,25 @@ class Checker(
         pass("checkConditionalTypeAssignabilityDeferred") { checkConditionalTypeAssignabilityDeferred() }
         // builtinIterator: suppress FP TS2339/TS7057/TS2689 (Iterator-as-interface) + re-emit the 7
         // real errors (TS2511/2515/2416×3/2345/2322 with deep IteratorResult chains). Corpus-unique.
+    }
+
+    /**
+     * (JIT.1)(d) round 814 — checking passes, run 8 of 8:
+     * `checkBuiltinIterator` .. `init:tpTargetReturnDedup` (49 dispatches).
+     * ENDS with the two RETRACTION passes
+     * (`init:flowDisabledTs2454Retraction`, `init:tpTargetReturnDedup`), which
+     * is why this run must stay last: they remove diagnostics earlier runs
+     * added.
+     *
+     * Moved VERBATIM out of the `Checker` constructor, which at **11,298
+     * bytecodes** was over HotSpot's 8,000-byte `HugeMethodLimit` and therefore
+     * never JIT-compiled. The body it came from is an ORDERED SEQUENCE of
+     * `pass("name") { … }` dispatches with no loops, no `return`/`break`/
+     * `continue` and (across the whole `init`) two locals — so the ONLY thing a
+     * split here can get wrong is the ORDER, and the only cut criterion is size.
+     * Called from `init` in this position; do not reorder.
+     */
+    private fun initCheckPasses8() {
         pass("checkBuiltinIterator") { checkBuiltinIterator() }
         // regexpExecAndMatchTypeUsages (strict): suppress + re-emit 11 possibly-undefined/eopt errors.
         pass("checkRegexpExecMatchTypeUsages") { checkRegexpExecMatchTypeUsages() }
@@ -7949,18 +8140,6 @@ class Checker(
                 if (idx >= 0) diagnostics.removeAt(idx)
             }
         }
-        }
-        } // end if (!declarationOnly)
-        PassTiming.noteInitEnd()
-        } catch (e: StackOverflowError) {
-            // Boundary safety net — the ONLY catch(StackOverflowError) in the checker.
-            // Per-call catches used to live inline (first silently swallowing into the
-            // NONE bucket, later loud); they were physically removed (2026-07-02) once
-            // the cycle/iteration guards made overflow unreachable on the corpus. This
-            // single boundary catches any future/adversarial case that escapes the
-            // guards and SURFACES it as a diagnostic instead of crashing the compile.
-            // Do NOT re-add inline catches — fix the recursion (guard/iterate) instead.
-            reportCheckerStackOverflow(e)
         }
     }
 
