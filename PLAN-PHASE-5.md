@@ -20,6 +20,122 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 812 (2026-08-03) — (JIT.1)(d) LANDED FOR `checkDuplicateDeclarations`: 12,935
+BYTECODES -> AN ENTRY AT 2,801 PLUS FIVE `cdd*` HELPERS. CENSUS 10 -> 9. FIRST TARGET IN
+THE ARC WITH NO COMMITTED PARTITION OF ANY KIND — AND THE FREQUENCY ARGUMENT CAME FROM A
+GUARD RATHER THAN A PROBE, WHICH IS WEAKER AND IS SAID SO.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **10** over the
+  limit, `checkDuplicateDeclarations` **12,935** — the round-811 handoff reproduced exactly.
+  The after-number was measured the same way on the binary built from the split source: **9**.
+- **THE HANDOFF'S ADVICE WAS FOLLOWED AND CAME BACK EMPTY.** Round 811 said to grep for an
+  existing probe object before budgeting a derivation. Done for all four remaining `Checker`
+  targets: **none of them has a `*Sections` object, a `PassTiming` row or any probe** —
+  `checkDuplicateDeclarations`, `tryInferSingleTypeParamFromArgs`, `checkIndexSigInStatement`
+  and `checkBigintPropertyNames` are all probe-free. So the boundaries were derived from the
+  shape, and the check that costs 60 seconds is still worth running: it is what made rounds
+  808/809/811 cheap, and its answer here is a fact about the remaining tail, not a miss.
+- **THE SPLIT.** Entry **2,801** plus `cddCheckImportBindings` **1,108**, `cddCheckMergedEnums`
+  **955**, `cddCheckMergedTypeParameters` **2,468**, `cddCheckExportUniformity` **2,101** and
+  `cddCheckValueRedeclarations` **3,483**. The six sum to **12,916 against 12,935** — a NINTH
+  confirmation that a bytecode count is a THRESHOLD predicate and not a cost model. The entry
+  keeps **5,199 bytecodes of headroom**, which is round 810's lesson applied.
+- **WHAT STAYS IN THE ENTRY IS WHAT EVERY INPUT PAYS — decided by a GUARD, not a probe.** The
+  entry keeps the collection loop over `statements` (the only part that scales with input
+  SIZE), the `groupBy`, the `export=` check, the group-loop head including
+  **`if (group.size < 2) continue`**, and the three-boolean `isDuplicate` tail. **Every moved
+  region sits behind that guard** — behind a name declared at least TWICE in one scope — and
+  four of the five behind a further kind predicate. This is a weaker instrument than rounds
+  807-811's measured partitions and the doc says so: it BOUNDS the moved population rather
+  than pricing it. It is also decisive in a way a cost table is not — no measurement can make
+  a moved region run more often than the guard admits.
+- **THE SHAPE PROBLEM, AND IT IS NEW: A LOOP BODY INSIDE A LOOP BODY.** Which loop a
+  `continue` binds to decides whether it is a region exit (-> `return true`) or ordinary
+  control flow (-> untouched), and **indentation is not evidence** — the region's own `for`
+  loops are indented exactly like the blocks the outer `continue`s sit in. A brace-matching
+  scan seeded from the function start (`scripts/dupdecl_split_analyze.py`) answers it: of the
+  23 `continue`s, **7 bind to the group loop and all 7 are in the V region**; the eighth in
+  that same region binds to `for (decl in group)` and is left alone. The function has **ZERO
+  whole-function `return`s** — every `return` in 872 lines is a `return@` or inside a local
+  `fun` — so no region needs an (f)-style RETURN token.
+- **TWO THINGS THE ANALYSIS FIXED BEFORE ANY CODE MOVED.** `val hasInterface` looks like part
+  of the TS2428 block it sits above and is read by the V region's TS2451 gates 200 lines
+  later, so it STAYS in the entry; and `emitted2395` is the ONLY value that crosses a
+  boundary and is RETURNED, never stashed in a field (round 804's rule). The local
+  `data class DeclInfo` is hoisted to a private nested class because five signatures name it
+  — the round's one non-mechanical edit, behaviour-free (it captures nothing and is still
+  constructed only by the collection loop).
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green;
+  `scripts/dupdecl_split_{analyze,apply,verify}.py`):** five contiguous in-order runs
+  (54/54/150/98/249 lines) re-extracted from the NEW file and compared verbatim against HEAD;
+  the entry **reconstructed** from HEAD — **IDENTICAL at 278 lines**; accounting closing
+  exactly (872 = 266 kept + 605 moved + 1 hoisted; new entry 278 = 266 + 12); every `return`
+  and `continue` enumerated (0 bare returns both sides; HEAD's 23 continues = new 17 - 1
+  replay + 7 signals); free variables per region.
+- **DISCRIMINATION: 2 OF 3, each mistake ALONE on its own build, control first (45 pins ran,
+  0 failed), every run's pin COUNT confirmed.** Discarding `cddCheckValueRedeclarations`'
+  `true` fails **1** pin (its seam); ignoring `emitted2395` fails **1** (its seam). **Both
+  fail through the same mechanism, and it is the transferable part: the failure mode of a
+  dropped signal here is a SUPERSEDED check running anyway, so the seam pin asserts a code
+  that must NOT appear** (`none { it.code == 2300 }`) while the arm pin asserts what must.
+  A count pin on the arm's OWN code cannot see this class of mistake — both arm pins stayed
+  green under both ablations, because the mistake ADDS a diagnostic instead of removing one.
+- **THE THIRD SEAM IS PROVABLY UNDISCRIMINABLE, AND THE PROOF IS EXHAUSTIVE RATHER THAN A
+  RETRY.** Flipping the block-scoped exit's `return true` to `return false` fails **0** pins,
+  as predicted from the guards: the exit is reached only when `allBlockScoped` holds, and the
+  only two things that can run after it are the
+  `hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)` block — whose condition
+  `allBlockScoped` negates term by term — and the entry's `isDuplicate` tail, which needs
+  `hasClass` or `hasVar`. Both are the complement of the predicate that reached the exit, so
+  no input can observe it. Unlike round 811's two zeros, which needed a constructed shape to
+  rule out, this one is closed by READING THE GUARDS — so no purpose-built retry was run, and
+  the pin written for it is named as an ARM pin per the standing rule.
+- **WHAT DID NOT WORK.** (1) The restore rebuild after the last ablation died with
+  `Daemon compilation failed` / `Connection to the Kotlin daemon has been unexpectedly lost`,
+  then wasted 3m56s in the `Compile without Kotlin daemon` fallback inside a 683 MiB Gradle
+  daemon before failing — the round-811 `GC overhead limit exceeded` failure in a second
+  costume. Recovery is the same: `./gradlew --stop` plus a graceful bracket-pattern
+  `pkill -f 'KotlinCompile[D]aemon'`, then rebuild (2m26s, clean). **The fallback message is
+  the tell — a build that says "Using fallback strategy" has already lost and will burn
+  minutes proving it.** (2) A stale `build-head.done` marker from an earlier round in the
+  shared scratchpad made a still-running build look finished, and the empty class dir read as
+  a broken build rather than a running one; every marker this round is `r812-`-prefixed.
+  (3) The first enum pin (`enum E { A = 1 } / enum E { B }`) emitted NOTHING — TS2432 needs
+  BOTH declarations to omit the first member's initializer — and was caught by probing the
+  shapes through the scratch-project CLI before writing a single pin, which is the cheap
+  order.
+- **GATE.** Suite **13,633 -> 13,651 / 0 failures / 3 skipped** (+18: 15 `CddSplitTest` + 3
+  `HugeMethodLimitTest`), python XML parser, whole results dir wiped first. 8-profile grid
+  diffed set-for-set BOTH directions against a purpose-built pre-split binary, class dirs
+  confirmed to differ (`javap` finds the five `cdd*` helpers in one and none in the other) —
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No `w:` and no `e:` lines in
+  the compiles that produced the binaries. **No wall A/B, deliberately** — the family is
+  bounded four times over. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 16.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **9 over the limit and the `Checker` list is down to
+  three**: `tryInferSingleTypeParamFromArgs` **11,930**, the `Checker` constructor **11,298**
+  and `checkIndexSigInStatement` **10,928**, plus the odd one out,
+  `access$checkBigintPropertyNames$emit` **10,339** — which is NOT the 8-line local `emit` its
+  name suggests but the whole `checkBigintPropertyNames` per-file body the anonymous walker
+  object closes over, so it is split by restructuring that walker, not by moving `emit`.
+  **None of the four has a partition** (checked this round). Two have an obvious shape and no
+  derivation cost: `checkIndexSigInStatement` is a straight sequence of self-contained blocks
+  with a handful of carried locals (`members`, `numberIndexSig`, the `var stringIndexSig`
+  that ONE block mutates — that mutation is the only cross-boundary value); and the
+  **constructor's `pass("init:…")` wrappers are natural boundaries** — contiguous runs of
+  ~417 dispatches, no returns, no loops (mind the CLAUDE.md rule that a `Checker` field
+  declared below the `init` block is null throughout it: moving statements OUT of `init` into
+  a private method called from `init` preserves order and is safe, ADDING a field is not).
+  `tryInferSingleTypeParamFromArgs` is the hard one: two 300-400 line `for (i in params.indices)`
+  bodies plus a 132-line constraint block, with mutable locals (`candidates`, `tpSawAnyArg`)
+  crossing every boundary. The non-`Checker` tail is unchanged: `Transformer.transformToCommonJS`
+  **28,991**, `TypeScriptCompiler.compileParsedCore` **21,535**, `Transformer.transformClassBody`
+  **16,233**, `CompilerOptionsKt.applyDirective` **13,694**, `Transformer.transform` **8,934**
+  — the three Transformer ones are sub-item **(e)**, sized at 0.14-0.25%. **(f) — wiring
+  `huge_methods.py --fail-over 0` into the round gate — becomes runnable once (d)/(e) land.**
+
+
 **Round 811 (2026-08-03) — (JIT.1)(c) LANDED FOR `checkSingleCallExpressionTypesCore`:
 15,567 BYTECODES -> AN ENTRY AT 5,149 PLUS FOUR `ccet*` HELPERS. CENSUS 11 -> 10, AND
 SUB-ITEM (c) IS CLOSED. THE TARGET WAS HANDED OVER AS "BOUNDARIES NOT COMMITTED, BUDGET
@@ -805,99 +921,6 @@ directions; `--partitionCheck 2` EQUIVALENT; cost gate all 20 counters +0.00%.**
   ratio is emit-mode on all three compilers.
 
 
-**Round 803 (2026-08-02) — (JIT.1)(a) LANDED: `forEachChild`, THE TRAVERSAL PRIMITIVE OF
-THE WHOLE COMPILER, IS SPLIT BELOW HotSpot's `HugeMethodLimit` AND IS WORTH −3.93% ON ITS
-OWN — B WINS 5/5 WITH THE FIVE PER-PAIR DELTAS SPANNING 0.33× THE MEDIAN DELTA. ONE
-FUNCTION MEASURED LARGER THAN ROUND 802's WHOLE-FAMILY FLAG A/B, AND THE ITEM'S OWN
-FALSIFIER, RUN EARLY, NOW RETURNS NO SIGNAL. Suite 13,481 → 13,493 / 0 / 3; grid 46×7/94
-with 0 added and 0 removed BOTH directions; cost gate all 20 counters +0.00%.**
-
-- **THE BASELINE WAS RE-MEASURED AT HEAD FIRST, and it reproduced exactly**: 19 of 13,910
-  methods over 8,000 bytecodes, `forEachChild` at 9,750, grid 46/94/46/46/46/46/46/46.
-  A recorded figure is a claim about a build, not a commit (round 776) — and here the
-  build at HEAD had to be made before anything could be believed, because the class files
-  on disk predated round 802's own landing commit.
-- **THE SPLIT.** Three functions over DISJOINT CONTIGUOUS `NodeKind` ranges, so each is
-  still ONE dense tableswitch: `forEachChild` 0–69 (**4,353**),
-  `forEachChildOfMemberOrType` 70–102 (**2,728**), `forEachChildOfSupportingNode` 103–137
-  (**2,175**). Census **19 → 18**. The ranges are chosen, not arbitrary: **every hot kind
-  stays in the ENTRY function** (IDENTIFIER is 44.5% of all nodes; so are the literals,
-  PROPERTY_ACCESS / CALL / BINARY and the five statement anchors), and the continuation is
-  **one compare plus one static call, never a fall-through chain**, so no kind pays two.
-- **THE ARMS WERE MOVED BY SCRIPT AND THE MOVE WAS VERIFIED BY DIFF, NOT BY READING.** All
-  138 arm bodies were extracted from HEAD and from the rewritten file and compared: every
-  one byte-identical, the only differences being the seven cosmetic `// ── group ──`
-  comments (re-added afterwards). That is what makes "the enumeration is unchanged" a
-  measurement rather than an intention — and it is the technique (b)–(e) should copy,
-  because those functions are 2–5× larger again.
-- **THE PRIZE, MEASURED DIRECTLY RATHER THAN INFERRED.** The queue said to size this by
-  re-running the flag A/B. There is a sharper instrument: build the PRE-SPLIT file into
-  its own class dir and interleave **monolith vs split** — same source otherwise, same
-  JVM, no flags. 5 pairs, self-time, daemons stopped inside the script, box otherwise
-  idle: **A 26.314 s / B 25.280 s, Δ −1,034 ms = −3.93%, B wins 5/5**, per-pair deltas
-  −929 / −695 / −1,034 / −974 / −850. Arm sds are 1.30% and 1.22% — above the ~1%
-  quietness criterion — **but the pairing is what carries this one**: the five deltas span
-  **339 ms = 0.33× the median delta**, because both arms drift upward together across the
-  run and the interleave cancels the drift (compare round 802, whose deltas spanned 730 ms
-  against a 793 ms median). 46 errors on all twelve runs.
-- **ONE SPLIT BEAT THE WHOLE-FAMILY FLAG (−3.1%), AND THAT IS NOT A CONTRADICTION** — the
-  flag also makes C2 compile a 46,567-byte method, which costs compile time and code cache
-  (§ 3.4 predicted exactly this), whereas the split pays none of it. **So the −3.1% is NOT
-  a budget for (b)–(e) to divide up.** The two figures were also taken on different days
-  on a box whose arm sd ranged 0.8%–2.8%; they must not be subtracted from one another.
-- **THE ITEM'S FALSIFIER WAS RUN EARLY, AND ITS ANSWER IS HONEST BUT BLUNT.** On the split
-  binary, `-XX:-DontCompileHugeMethods` reads **+0.08%, B wins 3/5, deltas −408 / −2 /
-  −916 / +1,220 / +1,248, spread 2,164 ms — the driver's own verdict is NOISE-DOMINATED**
-  (arm sds 2.49% / 2.78%; the box was measurably noisier than during the run above). The
-  correct statement is not "the flag now does nothing": it is that **the instrument that
-  returned 4/4-all-negative on the monolith returns a straddling 3/5 here**, at a pair
-  count where an effect of round 802's size would have shown. It BOUNDS (b)–(e) on this
-  profile; it does not license skipping them — 18 methods are still interpreted.
-- **THE PINS, AND WHY THE EXISTING ORACLE WAS NOT ENOUGH.** `ForEachChildOracleTest`
-  compares child SETS (plus the count) against the data-class `componentN` properties by
-  reflection — it does **not** pin ORDER, and order is load-bearing (decorators visit LAST;
-  `indexSourceFile` turns this order into the dense preorder `nodeId` sequence every later
-  phase keys on). Two new test classes, 12 pins: **`HugeMethodLimitTest`** (jvmTest) parses
-  `NodeWalkKt`'s class file and reads each method's `Code` attribute length — the same
-  number `javap` prints and HotSpot compares — and **`ForEachChildSplitTest`** (commonTest)
-  pins the enumeration order per part and both SEAMS. **Both verified DISCRIMINATING
-  against ablated binaries, built after the harness was committed** (round 789's law: the
-  revert is `git checkout <file>`, which destroys uncommitted work in that same file):
-  ablation A rebuilds the pre-split monolith → **all 3 `HugeMethodLimitTest` tests fail**
-  and `ForEachChildSplitTest` passes, which is exactly right and shows the two classes pin
-  different things; ablation B carries a boundary typo (`kind < KEYWORD_TYPE_NODE`) plus a
-  swapped action order in the `PARAMETER` arm → **the seam pin, the order pin and the
-  whole-tree pin fail**, alongside three pre-existing oracle tests.
-- **WHAT DID NOT WORK.** (1) The whole-tree pin's non-vacuity control asserted
-  `visited > 80` on a fixture that holds **66** nodes — a red test on the first suite run,
-  the round's only failure, and a reminder that a threshold guessed rather than measured is
-  a coin flip; restated at `> 50` with the measured value in the comment. (2) The census
-  had to be re-run at HEAD before it could be quoted at all: the class files on disk were
-  older than round 802's landing commit, so the "before" numbers would have been a claim
-  about a build nobody had. (3) No process failures this round — the lock, the preflight
-  (a two-line type-check whose TS2322 must appear) and the per-stage `.done` markers from
-  round 802's script were reused verbatim and cost nothing.
-- **GATE.** Suite **13,481 → 13,493 / 0 failures / 3 skipped** (+12 pins; whole results dir
-  wiped, counted with the python XML parser). 8-profile grid diffed set-for-set BOTH
-  directions against the pre-change binary's captured `--listAll`:
-  **46/94/46/46/46/46/46/46, 0 added and 0 removed on all eight.** `--partitionCheck 2`
-  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%, no rebaseline** — a pure
-  split moves no counter, and "nothing changed" is exactly the claim that needed
-  verifying. Build stayed warning-clean. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md` § 4.
-- **FOR THE NEXT AGENT: (JIT.1)(b), `checkMemberAccessMissingCore` at 46,567 bytecodes —
-  5.8× the limit and round 789's largest leaf in the compile.** Its section partition is
-  already committed (round 789's level R), so the split plan is written; the constraint to
-  respect is round 791's `cmamFlowSuppresses` invariant (the function and its `tryEmit*`
-  helpers must append to `diagnostics` and do nothing else). Use round 803's recipe: a
-  CONTIGUOUS-range/section split verified by a mechanical body-diff, the hottest path left
-  in the entry function, and the prize measured as monolith-vs-split rather than by flag.
-
-
-
-
-
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 ---
@@ -1042,10 +1065,11 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     chosen by frequency (`MODULE_DECLARATION` plus the two trailing blocks). Equivalence
     measured by round 805's five checks, all green. Pins `CcetSpineEnterSplitTest` (10) and
     `HugeMethodLimitTest` (+3). **Honest limit: the trailing-blocks seam is NOT
-    discriminated** — see the round-806 note. **The remaining (d) tail is unchanged:**
-    `checkDuplicateDeclarations` 12,935, `tryInferSingleTypeParamFromArgs` 11,930,
-    `checkIndexSigInStatement` 10,928, `access$checkBigintPropertyNames$emit` 10,339,
-    `checkReturnAssignabilityCore` 9,743.
+    discriminated** — see the round-806 note. **The remaining (d) tail after round 812:**
+    `tryInferSingleTypeParamFromArgs` 11,930, the `Checker` constructor 11,298,
+    `checkIndexSigInStatement` 10,928, `access$checkBigintPropertyNames$emit` 10,339
+    (`checkDuplicateDeclarations` 12,935 went at round 812;
+    `checkReturnAssignabilityCore` 9,743 at round 810).
   - [x] **(f) DONE round 807 — `checkArgumentsAgainstSignatureCore` 23,890 → an entry at
     7,173 plus THIRTEEN `caas*` helpers (456–2,792), one per contiguous run of the
     committed `ArgSections` partition; census 15 → 14.** **First split of a LOOP BODY, and
@@ -1114,11 +1138,27 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     28,991, `TypeScriptCompiler.compileParsedCore` 21,535, `Transformer.transformClassBody`
     16,233, `CompilerOptionsKt.applyDirective` 13,694, the `Checker` constructor 11,298,
     `access$checkBigintPropertyNames$emit` 10,339, `Transformer.transform` 8,934.
-  - **(d) The tail of the list** — `checkDuplicateDeclarations` 12,935,
-    `tryInferSingleTypeParamFromArgs` 11,930, `checkIndexSigInStatement` 10,928,
-    `access$checkBigintPropertyNames$emit` 10,339 (`checkReturnAssignabilityCore` 9,743
+  - **(d) The tail of the list — IN PROGRESS, 3 `Checker` methods left.**
+    **Round 812 took `checkDuplicateDeclarations` 12,935 → an entry at 2,801 plus five
+    `cdd*` helpers; census 10 → 9.** It was the first target in the arc with NO committed
+    partition of any kind — a check run over all four remaining targets and worth carrying
+    forward: **none of `tryInferSingleTypeParamFromArgs`, the `Checker` constructor,
+    `checkIndexSigInStatement` or `checkBigintPropertyNames` has one either**, so each needs
+    its boundaries from its own shape. Round 812's frequency argument came from a GUARD
+    (`if (group.size < 2) continue`) rather than a probe, which bounds the moved population
+    instead of pricing it; say so when a target has no partition. Still open:
+    `tryInferSingleTypeParamFromArgs` 11,930 (the hard one — two 300–400 line
+    `for (i in params.indices)` bodies plus a 132-line constraint block, with mutable
+    locals crossing every boundary), the **`Checker` constructor** 11,298 (natural
+    boundaries: contiguous runs of its ~417 `pass("init:…")` dispatches — no returns, no
+    loops; moving statements OUT of `init` preserves order, ADDING a field does not),
+    `checkIndexSigInStatement` 10,928 (a straight sequence of self-contained blocks; the
+    only cross-boundary value is the `var stringIndexSig` that one block mutates), and
+    `access$checkBigintPropertyNames$emit` 10,339 — which is **not** the 8-line local `emit`
+    its name suggests but the whole per-file body the anonymous walker object closes over,
+    so it is split by restructuring that walker. (`checkReturnAssignabilityCore` 9,743
     went at round 810 — see (h); `checkPropertyAccessInExpr` 9,062 at round 805 and
-    `ccetSpineEnter` 8,686 at round 806). Also watch the four sitting
+    `ccetSpineEnter` 8,686 at round 806.) Also watch the four sitting
     JUST under the limit, one refactor from crossing it: `walkFunctionBodiesInExpr` 7,702,
     `cpaSpineLeave` 7,359, `ctaM3StmtAnchorCore` 7,245, `cpaSpineEnter` 6,941.
   - **(e) EMIT-mode methods — `Transformer.transformToCommonJS` 28,991,

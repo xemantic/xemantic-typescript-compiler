@@ -1,3 +1,98 @@
+**Round 803 (2026-08-02) — (JIT.1)(a) LANDED: `forEachChild`, THE TRAVERSAL PRIMITIVE OF
+THE WHOLE COMPILER, IS SPLIT BELOW HotSpot's `HugeMethodLimit` AND IS WORTH −3.93% ON ITS
+OWN — B WINS 5/5 WITH THE FIVE PER-PAIR DELTAS SPANNING 0.33× THE MEDIAN DELTA. ONE
+FUNCTION MEASURED LARGER THAN ROUND 802's WHOLE-FAMILY FLAG A/B, AND THE ITEM'S OWN
+FALSIFIER, RUN EARLY, NOW RETURNS NO SIGNAL. Suite 13,481 → 13,493 / 0 / 3; grid 46×7/94
+with 0 added and 0 removed BOTH directions; cost gate all 20 counters +0.00%.**
+
+- **THE BASELINE WAS RE-MEASURED AT HEAD FIRST, and it reproduced exactly**: 19 of 13,910
+  methods over 8,000 bytecodes, `forEachChild` at 9,750, grid 46/94/46/46/46/46/46/46.
+  A recorded figure is a claim about a build, not a commit (round 776) — and here the
+  build at HEAD had to be made before anything could be believed, because the class files
+  on disk predated round 802's own landing commit.
+- **THE SPLIT.** Three functions over DISJOINT CONTIGUOUS `NodeKind` ranges, so each is
+  still ONE dense tableswitch: `forEachChild` 0–69 (**4,353**),
+  `forEachChildOfMemberOrType` 70–102 (**2,728**), `forEachChildOfSupportingNode` 103–137
+  (**2,175**). Census **19 → 18**. The ranges are chosen, not arbitrary: **every hot kind
+  stays in the ENTRY function** (IDENTIFIER is 44.5% of all nodes; so are the literals,
+  PROPERTY_ACCESS / CALL / BINARY and the five statement anchors), and the continuation is
+  **one compare plus one static call, never a fall-through chain**, so no kind pays two.
+- **THE ARMS WERE MOVED BY SCRIPT AND THE MOVE WAS VERIFIED BY DIFF, NOT BY READING.** All
+  138 arm bodies were extracted from HEAD and from the rewritten file and compared: every
+  one byte-identical, the only differences being the seven cosmetic `// ── group ──`
+  comments (re-added afterwards). That is what makes "the enumeration is unchanged" a
+  measurement rather than an intention — and it is the technique (b)–(e) should copy,
+  because those functions are 2–5× larger again.
+- **THE PRIZE, MEASURED DIRECTLY RATHER THAN INFERRED.** The queue said to size this by
+  re-running the flag A/B. There is a sharper instrument: build the PRE-SPLIT file into
+  its own class dir and interleave **monolith vs split** — same source otherwise, same
+  JVM, no flags. 5 pairs, self-time, daemons stopped inside the script, box otherwise
+  idle: **A 26.314 s / B 25.280 s, Δ −1,034 ms = −3.93%, B wins 5/5**, per-pair deltas
+  −929 / −695 / −1,034 / −974 / −850. Arm sds are 1.30% and 1.22% — above the ~1%
+  quietness criterion — **but the pairing is what carries this one**: the five deltas span
+  **339 ms = 0.33× the median delta**, because both arms drift upward together across the
+  run and the interleave cancels the drift (compare round 802, whose deltas spanned 730 ms
+  against a 793 ms median). 46 errors on all twelve runs.
+- **ONE SPLIT BEAT THE WHOLE-FAMILY FLAG (−3.1%), AND THAT IS NOT A CONTRADICTION** — the
+  flag also makes C2 compile a 46,567-byte method, which costs compile time and code cache
+  (§ 3.4 predicted exactly this), whereas the split pays none of it. **So the −3.1% is NOT
+  a budget for (b)–(e) to divide up.** The two figures were also taken on different days
+  on a box whose arm sd ranged 0.8%–2.8%; they must not be subtracted from one another.
+- **THE ITEM'S FALSIFIER WAS RUN EARLY, AND ITS ANSWER IS HONEST BUT BLUNT.** On the split
+  binary, `-XX:-DontCompileHugeMethods` reads **+0.08%, B wins 3/5, deltas −408 / −2 /
+  −916 / +1,220 / +1,248, spread 2,164 ms — the driver's own verdict is NOISE-DOMINATED**
+  (arm sds 2.49% / 2.78%; the box was measurably noisier than during the run above). The
+  correct statement is not "the flag now does nothing": it is that **the instrument that
+  returned 4/4-all-negative on the monolith returns a straddling 3/5 here**, at a pair
+  count where an effect of round 802's size would have shown. It BOUNDS (b)–(e) on this
+  profile; it does not license skipping them — 18 methods are still interpreted.
+- **THE PINS, AND WHY THE EXISTING ORACLE WAS NOT ENOUGH.** `ForEachChildOracleTest`
+  compares child SETS (plus the count) against the data-class `componentN` properties by
+  reflection — it does **not** pin ORDER, and order is load-bearing (decorators visit LAST;
+  `indexSourceFile` turns this order into the dense preorder `nodeId` sequence every later
+  phase keys on). Two new test classes, 12 pins: **`HugeMethodLimitTest`** (jvmTest) parses
+  `NodeWalkKt`'s class file and reads each method's `Code` attribute length — the same
+  number `javap` prints and HotSpot compares — and **`ForEachChildSplitTest`** (commonTest)
+  pins the enumeration order per part and both SEAMS. **Both verified DISCRIMINATING
+  against ablated binaries, built after the harness was committed** (round 789's law: the
+  revert is `git checkout <file>`, which destroys uncommitted work in that same file):
+  ablation A rebuilds the pre-split monolith → **all 3 `HugeMethodLimitTest` tests fail**
+  and `ForEachChildSplitTest` passes, which is exactly right and shows the two classes pin
+  different things; ablation B carries a boundary typo (`kind < KEYWORD_TYPE_NODE`) plus a
+  swapped action order in the `PARAMETER` arm → **the seam pin, the order pin and the
+  whole-tree pin fail**, alongside three pre-existing oracle tests.
+- **WHAT DID NOT WORK.** (1) The whole-tree pin's non-vacuity control asserted
+  `visited > 80` on a fixture that holds **66** nodes — a red test on the first suite run,
+  the round's only failure, and a reminder that a threshold guessed rather than measured is
+  a coin flip; restated at `> 50` with the measured value in the comment. (2) The census
+  had to be re-run at HEAD before it could be quoted at all: the class files on disk were
+  older than round 802's landing commit, so the "before" numbers would have been a claim
+  about a build nobody had. (3) No process failures this round — the lock, the preflight
+  (a two-line type-check whose TS2322 must appear) and the per-stage `.done` markers from
+  round 802's script were reused verbatim and cost nothing.
+- **GATE.** Suite **13,481 → 13,493 / 0 failures / 3 skipped** (+12 pins; whole results dir
+  wiped, counted with the python XML parser). 8-profile grid diffed set-for-set BOTH
+  directions against the pre-change binary's captured `--listAll`:
+  **46/94/46/46/46/46/46/46, 0 added and 0 removed on all eight.** `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%, no rebaseline** — a pure
+  split moves no counter, and "nothing changed" is exactly the claim that needed
+  verifying. Build stayed warning-clean. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 4.
+- **FOR THE NEXT AGENT: (JIT.1)(b), `checkMemberAccessMissingCore` at 46,567 bytecodes —
+  5.8× the limit and round 789's largest leaf in the compile.** Its section partition is
+  already committed (round 789's level R), so the split plan is written; the constraint to
+  respect is round 791's `cmamFlowSuppresses` invariant (the function and its `tryEmit*`
+  helpers must append to `diagnostics` and do nothing else). Use round 803's recipe: a
+  CONTIGUOUS-range/section split verified by a mechanical body-diff, the hottest path left
+  in the entry function, and the prize measured as monolith-vs-split rather than by flag.
+
+
+
+
+
+
+
+
 **Round 801 (2026-08-02) — (FRONT.2) `Binder.bind` IS OPENED AND CLOSED. THE MAP WAS
 RE-DERIVED FIRST AND IT NAMED ITS TARGET BY ELIMINATION: THE ~400 TAIL PASSES ARE FLAT
 (largest 75 ms = 0.26%, only 2 of 400 do any type-system work), SO THE ROUND WENT TO THE

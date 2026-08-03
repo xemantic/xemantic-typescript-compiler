@@ -1275,3 +1275,159 @@ grid read **0 added / 16 removed on every profile** — a regression that did no
 exist. The arms are now run identically (direct `java … --noEmit --listAll`) and
 the differ REFUSES any capture containing `and N more error`, alongside round
 804's non-empty check.
+
+## 16. (JIT.1)(d) — `checkDuplicateDeclarations`, 12,935 → an entry plus five helpers
+
+*Round 812.* The largest `Checker` method left over the limit, and the first
+target in the arc with **no committed partition of any kind** — the queue's
+standing advice ("grep for an existing probe object FIRST") was followed and came
+back empty: no `*Sections` object, no `PassTiming` row, no probe. The boundaries
+had to be derived from the function's own shape, and the shape gives them.
+
+| function | region of the body | bytecodes |
+|---|---|---:|
+| `checkDuplicateDeclarations` | the collection loop, the `export=` check, `groupBy`, the group-loop head and the `isDuplicate` tail | **2,801** |
+| `cddCheckImportBindings` | TS2300 for duplicate `import =` / import bindings + 17.127's default-import TS2395 | 1,108 |
+| `cddCheckMergedEnums` | TS2432 + cross-declaration member TS2300 | 955 |
+| `cddCheckMergedTypeParameters` | TS2428 | 2,468 |
+| `cddCheckExportUniformity` | TS2395 + TS2434 | 2,101 |
+| `cddCheckValueRedeclarations` | TS2393, TS2813/TS2814, TS2323, the TS2451/TS2300 block-scoped cluster | 3,483 |
+
+Census **10 → 9**. The six sum to **12,916 against 12,935** — a ninth
+confirmation that a bytecode count is a THRESHOLD predicate and not a cost model
+(only round 804's 46,567 → 29,130 ever shrank). The entry keeps **5,199 bytecodes
+of headroom**, which is round 810's lesson applied: a split landing just under
+the limit is one extraction short.
+
+### 16.1 What stays in the entry is what EVERY input pays — decided by a guard, not a probe
+
+With no partition to read, the frequency argument is STRUCTURAL and it is exact:
+
+* the entry keeps the collection loop over `statements` (165 lines, a `when` over
+  16 statement kinds) — **every statement list in the program pays it**, and it
+  is the only part of the function that is a function of the input's SIZE;
+* it keeps `decls.groupBy { it.name }`, the `export=` duplicate check, and the
+  group loop's own head — including **`if (group.size < 2) continue`**;
+* **every moved region sits behind that guard**, i.e. behind a name declared at
+  least twice in one scope, and four of the five are behind a further kind
+  predicate (`hasEnum`, `hasInterface`, an `import` in the group, …);
+* the `isDuplicate` tail stays, because it reads `hasClass`/`classCount`/
+  `namespaceVarAllowed` — all computed in the entry — and is three boolean tests.
+
+This is a weaker instrument than rounds 807–811's measured partitions and it is
+worth saying so: it bounds the moved population by a GUARD rather than pricing
+it. But the guard is decisive in a way a cost table is not — a group of one is
+the overwhelming majority of every scope, and no measurement can make the moved
+regions run more often than the guard admits.
+
+### 16.2 The shape problem: a loop body inside a loop body
+
+This is the first target whose regions live in a **nested** loop, and it brings a
+question rounds 803–811 never had to ask: **which loop does each `continue` bind
+to?** A `continue` that binds to the outer `for ((_, group) in byName)` is an
+exit from the region and must become a return signal; one that binds to an inner
+`for (decl in group)` is ordinary control flow and must be left alone. The two
+are INDISTINGUISHABLE by indentation — the region's own `for` loops are indented
+exactly like the blocks the outer `continue`s sit in.
+
+`scripts/dupdecl_split_analyze.py` answers it with a brace-matching scan seeded
+from the function start (so a region's braces are matched against their real
+enclosing context) and reports, per region, the innermost enclosing LOOP header
+of every `continue`. Result: of the 23 `continue`s in the function, **7 bind to
+the group loop and all 7 are inside the V region**; the eighth `continue` in that
+same region binds to `for (decl in group)` and is untouched. The function has
+**zero whole-function `return`s** — every `return` in its 872 lines is a
+`return@` or lives inside a local `fun` — so, unlike (f), no region needs a
+`RETURN` token.
+
+Two further facts the analysis fixed before any code moved:
+
+* **`val hasInterface` STAYS in the entry.** It is declared immediately above the
+  TS2428 block and looks like part of it, but the V region's TS2451 gates read it
+  200 lines later. Moving it with the block would have forced either a second
+  cross-boundary value or a silent recomputation.
+* **`emitted2395` is the ONLY value that crosses a boundary**, and it is
+  RETURNED, not stashed in a `Checker` field (round 804's rule: a field would
+  need round 791's save/restore to survive a nested invocation).
+
+The local `data class DeclInfo` is hoisted to a private nested class, because
+five helper signatures name it. That is the round's only non-mechanical edit and
+it is behaviour-free: the class captures nothing and is still constructed only by
+the collection loop.
+
+### 16.3 Equivalence, measured (round 805's five checks)
+
+`scripts/dupdecl_split_{analyze,apply,verify}.py`, all green:
+
+1. all five moved runs re-extracted from the NEW file and compared against HEAD:
+   **five contiguous, in-order runs** (54 / 54 / 150 / 98 / 249 lines), identical
+   modulo the dedent and the `continue` → `return true` rewrite;
+2. the entry **reconstructed** from HEAD with the regions replaced by their call
+   sites and the hoisted line removed: **IDENTICAL, 278 lines**;
+3. accounting closes exactly — HEAD body 872 = kept 266 + moved 605 + 1 hoisted;
+   new entry 278 = kept 266 + 12 lines of call site;
+4. every `return` and every `continue` enumerated: **0 bare returns** on both
+   sides, and HEAD's 23 `continue`s = the new tree's 17 − 1 replay (the V call
+   site's own `continue`) + 7 signals;
+5. free variables computed per region — no region needs a value the call site
+   does not already hold, and `hasInterface`/`classCount` were the two that
+   looked free and are not (one stays in the entry, one is shadowed inside the
+   region by its own declaration).
+
+The stripper is round 811's, with its `${ … }` brace-counting template walk and
+its positive control (three known declarations inside the range must survive
+stripping — a length check cannot see a desynchronised scanner, because blanking
+preserves length).
+
+### 16.4 Discrimination — 2 of 3, and the third is provably undiscriminable
+
+`CddSplitTest` (15 pins) plus `HugeMethodLimitTest` (+3). Each mistake alone, on
+its own build, control first (45 pins ran, 0 failed), every run's pin count
+confirmed.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| the entry discards `cddCheckValueRedeclarations`' `true` | **1** — its seam pin | **DISCRIMINATED** |
+| the entry ignores `emitted2395` | **1** — its seam pin | **DISCRIMINATED** |
+| the block-scoped exit returns `false` instead of `true` | 0 | **NOT DISCRIMINATED — and no shape can** |
+
+Both discriminating mistakes fail through the same mechanism and it is worth
+naming, because it is what made the seams testable at all: **the failure mode of
+a dropped signal here is a SUPERSEDED check running anyway**, so the pin asserts a
+diagnostic that must NOT appear (`none { it.code == 2300 }`) while a companion
+arm pin asserts what must. `export class C {} class C {}` and
+`class D {} class D {} function D() {}` both leave `hasClass && classCount >= 2`
+true, which is exactly the `isDuplicate` tail's condition — so an entry that runs
+on adds a TS2300 per declaration. Note that only ONE pin failed in each case: the
+arm pins for TS2813/TS2814 and TS2395 keep passing, because the mistake ADDS a
+diagnostic rather than removing one. A count pin on the arm's own code cannot see
+this class of mistake, which is why the seam pins are written on a different code.
+
+**The third is not a measurement failure, it is a property of the code, and the
+proof is exhaustive rather than a retry.** The exit is taken only when
+`allBlockScoped` holds, i.e. `!hasVar && !hasFunc && !hasClass && !hasEnum &&
+!hasInterface && !hasNamespace2 && !hasImport`. Exactly two things can run after
+it: the `hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)` block —
+whose condition `allBlockScoped` negates term by term — and the entry's
+`isDuplicate` tail, which needs `hasClass` or `hasVar`. Both are the complement
+of the predicate that reached the exit, so no input can observe the signal. A
+purpose-built retry was therefore not attempted: unlike round 811's two zeros,
+which needed a constructed shape to rule out, this one is closed by reading the
+guards. It is a redundant guard on today's code, kept because the monolith had
+it, and its pin is named as an ARM pin per the standing rule.
+
+### 16.5 Gate
+
+Census re-measured at HEAD on a rebuilt binary first — **10** over the limit,
+`checkDuplicateDeclarations` **12,935**, reproducing the round-811 handoff
+exactly; the after-number was measured the same way on the binary built from the
+split source — **9**. Suite **13,633 → 13,651 / 0 failures / 3 skipped** (+18:
+15 `CddSplitTest` + 3 `HugeMethodLimitTest`), python XML parser, whole results
+dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+purpose-built pre-split binary, class dirs confirmed to differ (`javap` finds the
+five `cdd*` helpers in one and none in the other) — **46/46/46/46/46/46/46/94, 0
+added and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **all 20 counters +0.00%**; no `w:` and no `e:` lines in any of the
+three compiles. **No wall A/B, deliberately** — the family is bounded four times
+over (§§ 4.2, 5.3, 7 and round 804) and this lands for the threshold and the (f)
+gate.
