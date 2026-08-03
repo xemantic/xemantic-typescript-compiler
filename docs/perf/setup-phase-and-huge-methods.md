@@ -1777,3 +1777,135 @@ needs a real data-flow answer rather than a contiguity argument — and
 `access$checkBigintPropertyNames$emit` **10,339**, which is not the 8-line local
 `emit` its name suggests but the whole per-file body the anonymous walker object
 closes over.
+
+## 19. (JIT.1)(e) — `applyDirective`, 13,694 → an entry at 89 plus four helpers
+
+*Round 815.* The first target outside `Checker`, and the one whose SIZE has the
+least to do with what it does.
+
+| function | region of the body | bytecodes |
+|---|---|---:|
+| `applyDirective` | `boolValue`, four call sites, the `?: options` tail | **89** |
+| `applyDirectiveArms2` | `"noimplicitthis"` .. `"esmoduleinterop"` (22 arms) | 4,592 |
+| `applyDirectiveArms4` | `"noresolve"` .. `"capturesuggestions"` (26 arms) | 3,708 |
+| `applyDirectiveArms3` | `"allowjs"` .. `"nofallthroughcasesinswitch"` (22 arms) | 3,164 |
+| `applyDirectiveArms1` | `"target"` .. `"noimplicitreturns"` (15 arms) | 2,240 |
+
+Census **7 → 6**. The four sum to **13,704** against the monolith's **13,694**,
+so with the 89-byte entry the split **ADDED 99 bytecodes** — the eleventh
+confirmation in this family that a bytecode count is a THRESHOLD predicate and
+not a cost model. Headroom on the largest run: **3,408**.
+
+### 19.1 Why it was over the limit, and what that implies for the remaining targets
+
+`applyDirective` is 116 lines: one `when (key)` over **85 String-constant arms**,
+each of them a single `options.copy(field = …)`. There is no loop, no recursion,
+no nesting and one `return`. It is over HotSpot's limit anyway, because
+**`CompilerOptions` is a ~150-field data class and Kotlin compiles a named-argument
+`copy` into a `copy$default` CALL SITE carrying the entire argument vector plus
+the default bitmasks** — measured **~160 bytecodes per arm**, for source that
+reads as one line.
+
+So the size here is **the arm count times the data class's field count**, and
+two things follow. (1) A future agent adding directives walks the limit back up
+at ~160 bytecodes each: the runs have 5,760 (arms1) / 3,408 (arms2) / 4,836
+(arms3) / 4,292 (arms4) of headroom, i.e. room for roughly 21–36 new arms apiece
+before another cut is needed. (2) The same multiplication applies to any `when` that copies a wide
+data class per arm, whether or not it looks big — **`javap`, not line count, is
+the instrument.**
+
+### 19.2 The frequency argument, and the seam this shape does NOT have
+
+`applyDirective` is called once per directive per file — it is not on any hot
+path, and no wall claim is made or should be. Like round 814's constructor, this
+lands for the **threshold** and for sub-item (f).
+
+What is worth recording is the seam analysis, because this target is the first
+whose partition is **provably order-insensitive**:
+
+* the 85 arm keys are **pairwise DISTINCT** (`applydirective_split_analyze.py`
+  asserts it), so a single `when` over all of them and a `?:`-chain over a
+  partition of them select the same arm whatever order the runs are consulted
+  in;
+* **no arm evaluates to `null`** — every arm is `options` or `options.copy(…)`,
+  including the two that answer `options` unchanged when `ScriptTarget`/
+  `ModuleKind` refuse the value — so `?:` cannot skip a matched arm;
+* therefore the mistakes this shape admits are exactly three: **dropping a run
+  from the chain**, **writing a run's fallthrough as `options` instead of
+  `null`** (which silently swallows every LATER run), and **recomputing
+  `boolValue`** instead of taking the entry's. `boolValue` is the only value
+  that crosses a boundary at all.
+
+### 19.3 Equivalence, measured (round 805's five checks)
+
+`scripts/applydirective_split_{analyze,apply,verify}.py`, all green:
+
+1. four contiguous, in-order runs (28 / 28 / 28 / 26 lines) re-extracted from
+   the NEW file and compared **verbatim against HEAD at dedent 0** — each helper
+   is written as a block body with `return when (key) {`, so the arms keep their
+   original 8-space indentation and no line is edited at all;
+2. the new file **RECONSTRUCTED** from HEAD by the apply step and compared byte
+   for byte: **identical, 62,424 chars**;
+3. accounting closes exactly — 110 arm lines moved; the entry is the signature +
+   `boolValue` + four call lines + `?: options` + the brace;
+4. control-flow tokens enumerated on both sides: **1 `return` in HEAD, 5 in the
+   new tree** (one per function), **0 `continue`/`break` either side**;
+5. free variables computed per run and re-asserted against the helper
+   signatures: every run reads `options`, `value` AND `boolValue`, which is what
+   keeps the warning-clean build warning-clean — an unused parameter is a `w:`
+   here, so the partition is not free to put all the boolean arms in one run.
+
+### 19.4 Discrimination — 3 of 3, plus a NEGATIVE CONTROL that measured the claim
+
+`ApplyDirectiveSplitTest` (16 pins) plus `HugeMethodLimitTest` (+3). **All 16
+were validated on the UNSPLIT binary first — 16 ran, 0 failed.** Each mistake
+alone, on its own build, pin count confirmed every time.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| the chain drops `applyDirectiveArms3` | **5** — coverage + all three run-3 arms + `boolValue` (it names `checkjs`) | **DISCRIMINATED, attributable to the run** |
+| run 1's fallthrough is `options`, not `null` | **12** — every run-2/3/4 pin, coverage, and the end-to-end directive pin | **DISCRIMINATED** |
+| the entry drops `.lowercase()` | **1** — **exactly** the `boolValue` seam pin | **DISCRIMINATED, sharply** |
+| *(negative control)* the run-1/run-2 boundary moved by one arm | **0** | **UNOBSERVABLE, as predicted** |
+
+**The fourth row is the round's transferable result.** Earlier rounds in this
+family (812's third seam, 813's first, 815's own predecessors at §§ 14.3 and
+15.3) each hit a seam they could not discriminate and had to argue around; here
+the claim "the partition POSITION is unobservable" is not an excuse
+for a missing pin, it is a **prediction that was tested**: moving
+`"noimplicitreturns"` from the end of run 1 to the head of run 2 changes nothing
+any pin can see, exactly because the keys are distinct and both runs are
+consulted. **When a split's correctness rests on a structural property, ablate
+the property's CONSEQUENCE and show the zero, rather than recording "no seam
+here".** A zero that was predicted in advance is evidence; a zero that was
+discovered is a blind pin.
+
+### 19.5 Gate
+
+Census re-measured at HEAD on a rebuilt binary first — **7** over the limit,
+`applyDirective` **13,694**, reproducing the round-814 handoff exactly; the
+after-number measured the same way on the binary built from the split source —
+**6**. Suite **13,687 → 13,706 / 0 failures / 3 skipped** (+19: 16
+`ApplyDirectiveSplitTest` + 3 `HugeMethodLimitTest`), python XML parser, whole
+results dir wiped first. 8-profile grid diffed set-for-set BOTH directions
+against a purpose-built pre-split binary, both arms running the IDENTICAL direct
+`java` command line with absolute class dirs (no bench script, so round 811's
+`NOEMIT_ARGS` truncation cannot arise), class dirs confirmed to differ (4
+`applyDirectiveArms` entries vs 0), every capture checked non-empty, non-vacuous
+and free of an `and N more error` marker — **46/46/46/46/46/46/46/94, 0 added
+and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **every counter unchanged, +0.00%**; no `w:` and no `e:` lines in
+the compile that produced the binary. **No wall A/B, deliberately** — the family
+is bounded four times over (§§ 4.2, 5.3, 7 and round 804), this function runs
+once per directive, and it lands for the threshold and the (f) gate.
+
+**The list is now six, and none of them is in `Checker`'s hot path.**
+`Transformer.transformToCommonJS` **28,991**,
+`TypeScriptCompiler.compileParsedCore` **21,535**,
+`Transformer.transformClassBody` **16,233**,
+`Checker.tryInferSingleTypeParamFromArgs` **11,930** (the hard one — two
+300–400-line `for (i in params.indices)` bodies plus a 132-line constraint block
+with mutable locals crossing every boundary, still the only target needing a real
+data-flow answer), `access$checkBigintPropertyNames$emit` **10,339** (not the
+8-line local `emit` its name suggests but the whole per-file body the anonymous
+walker object closes over), and `Transformer.transform` **8,934**.

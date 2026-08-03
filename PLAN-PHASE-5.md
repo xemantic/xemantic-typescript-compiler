@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 815 (2026-08-03) — (JIT.1)(e) LANDED FOR `applyDirective`: 13,694 BYTECODES ->
+AN ENTRY AT 89 PLUS FOUR RUNS. CENSUS 7 -> 6, THE FIRST TARGET OUTSIDE `Checker`, AND THE
+ONE WHOSE SIZE HAS THE LEAST TO DO WITH WHAT IT DOES — PLUS THE FAMILY'S FIRST NEGATIVE
+CONTROL.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **7** over the
+  limit, `applyDirective` **13,694** — the round-814 handoff reproduced exactly. The
+  after-number was measured the same way on the binary built from the split source: **6**.
+- **THE SPLIT.** Entry **89** plus `applyDirectiveArms1` **2,240** (15 arms),
+  `applyDirectiveArms2` **4,592** (22), `applyDirectiveArms3` **3,164** (22),
+  `applyDirectiveArms4` **3,708** (26). The four sum to **13,704 against 13,694** — with
+  the entry the split ADDED **99** bytecodes, an ELEVENTH confirmation that a bytecode
+  count is a THRESHOLD predicate and not a cost model.
+- **WHY CHOSEN: TRACTABILITY, STATED AS A REASON.** Of the three candidates the handoff
+  named, `tryInferSingleTypeParamFromArgs` needs a data-flow answer and the bigint walker
+  needs an anonymous object restructured; `applyDirective` is 116 lines of one `when (key)`
+  with **no loop, no recursion, one `return`, and exactly one derived local**. It is also
+  the one whose correctness reduces to a property a script can ASSERT rather than an
+  argument a human has to make.
+- **THE NUMBER THAT REFRAMES THE TARGET: ~160 BYTECODES PER ONE-LINE ARM.** Every arm is
+  `options.copy(field = …)` on a **~150-field data class**, and Kotlin compiles a
+  named-argument `copy` into a `copy$default` CALL SITE carrying the whole argument vector
+  plus the default bitmasks. **So the size is the ARM COUNT times the DATA CLASS's FIELD
+  COUNT** — this function was over HotSpot's limit while doing almost nothing, and `javap`
+  rather than line count is the instrument for the class of `when`-over-a-wide-data-class
+  that a reader would never suspect. Consequence for the next agent: **adding directives
+  walks the limit back up at ~160 bytecodes each** (headroom per run 5,760 / 3,408 / 4,836
+  / 4,292 = roughly 21-36 more arms apiece).
+- **THE FREQUENCY ARGUMENT, HONESTLY: IRRELEVANT.** `applyDirective` runs once per
+  directive per file. It is on no hot path, **no wall A/B was run and none should be**;
+  this lands for the threshold and for sub-item (f). Rounds 807-811 chose what stays inline
+  from a measured partition, 812-813 from a structural guard, 814 said its criterion was
+  size alone — here the criterion is size AND the arms are interchangeable, so the
+  partition is simply balanced by line count.
+- **THE SEAM ANALYSIS IS THE ROUND'S REAL PRODUCT, BECAUSE THIS SHAPE HAS A SEAM IT
+  PROVABLY DOES NOT HAVE.** The 85 arm keys are **pairwise DISTINCT** (the analyzer asserts
+  it) and **no arm ever evaluates to `null`**, so a single `when` and a `?:`-chain over a
+  partition select the same arm WHATEVER ORDER the runs are consulted in. The mistakes the
+  shape does admit are exactly three: dropping a run, writing a run's fallthrough as
+  `options` instead of `null` (which silently swallows every LATER run), and recomputing
+  `boolValue` — the only value that crosses a boundary at all.
+- **DISCRIMINATION 3 OF 3, EACH MISTAKE ALONE ON ITS OWN BUILD, PIN COUNT CONFIRMED — PLUS
+  A NEGATIVE CONTROL.** Dropping `applyDirectiveArms3` fails **5** (the coverage pin, all
+  three run-3 arm pins, and the `boolValue` pin, which names `checkjs`); making run 1's
+  fallthrough `options` fails **12** (every run-2/3/4 pin plus the end-to-end directive
+  pin, while run 1's own arms stay green — correctly); dropping the entry's `.lowercase()`
+  fails **exactly 1**, the `boolValue` seam pin. **And the fourth build moved the
+  run-1/run-2 boundary by one arm and failed 0** — the claim "the partition position is
+  unobservable" was tested rather than asserted. **The transferable rule: when a split's
+  correctness rests on a structural property, ablate that property's CONSEQUENCE and show
+  the PREDICTED zero; a zero you predicted is evidence, a zero you discovered is a blind
+  pin.**
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks;
+  `scripts/applydirective_split_{analyze,apply,verify}.py`):** four contiguous in-order runs
+  (28/28/28/26 lines) re-extracted from the NEW file and compared verbatim at **dedent 0**
+  (each helper is a block body with `return when (key) {`, so no arm line is edited at
+  all); the new file **RECONSTRUCTED** from HEAD byte for byte — **62,424 chars**;
+  accounting closing exactly (110 arm lines moved; entry = signature + `boolValue` + four
+  calls + the `?: options` tail + brace); control-flow tokens enumerated on both sides
+  (1 `return` in HEAD, 5 in the new tree, 0 `continue`/`break` either side); and free
+  variables re-asserted per run — **every run must read all four parameters**, because an
+  unused parameter is a `w:` in this warning-clean build, which is a real constraint on
+  how the arms may be partitioned.
+- **PINS VALIDATED ON THE UNSPLIT BINARY FIRST — 16 ran, 0 failed.** The coverage pin
+  carries its own positive control (the key list is asserted to be 85 long and
+  duplicate-free), so an empty `unhandled` cannot be the round-814 empty-list kind of
+  green.
+- **WHAT DID NOT WORK.** (1) The verifier's first run reported two FALSE failures, both in
+  the instrument: the reconstruction check compared a line LIST in which the doc comment is
+  one element containing newlines against a list read from disk where it is six lines (fixed
+  by comparing joined TEXT), and the control-flow census counted from the entry to EOF,
+  picking up every later function in the file (fixed by bounding it at the last helper's
+  closing brace). Both are the same class of error: **a whole-file check that does not
+  bound its region measures the file, not the change.** (2) Nothing else failed — no build
+  died this round, because the daemons were stopped before each one.
+- **GATE.** Suite **13,687 -> 13,706 / 0 failures / 3 skipped** (+19: 16
+  `ApplyDirectiveSplitTest` + 3 `HugeMethodLimitTest`), python XML parser, whole results
+  dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built pre-split binary, **both arms on the IDENTICAL direct `java` command line
+  with absolute class dirs** (no bench script involved, so round 811's `NOEMIT_ARGS`
+  truncation cannot arise) and the differ refusing any empty, 0-line or `and N more error`
+  capture; class dirs confirmed to differ (4 `applyDirectiveArms` entries vs 0) —
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **every counter +0.00%**. No `w:` and no `e:` lines.
+  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 19.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **6 over the limit and NONE of them is in
+  `Checker`'s hot path**: `Transformer.transformToCommonJS` **28,991**,
+  `TypeScriptCompiler.compileParsedCore` **21,535**, `Transformer.transformClassBody`
+  **16,233**, `Checker.tryInferSingleTypeParamFromArgs` **11,930**,
+  `access$checkBigintPropertyNames$emit` **10,339**, `Transformer.transform` **8,934**.
+  Cheapest next is almost certainly `compileParsedCore` (a straight pipeline of phases, the
+  same shape as round 814's constructor but WITH returns, so its helpers need signals);
+  `tryInferSingleTypeParamFromArgs` is still the one that needs a scripted data-flow answer
+  rather than a contiguity argument. **(f) — wiring `huge_methods.py --fail-over 0` into
+  the round gate — is one sub-item away.**
+
+
 **Round 814 (2026-08-03) — (JIT.1)(d) LANDED FOR THE `Checker` CONSTRUCTOR: 11,298
 BYTECODES -> AN ENTRY AT 5,538 PLUS TEN HELPERS. CENSUS 8 -> 7, AND THE `Checker` LIST IS
 DOWN TO ONE PLUS ONE ODD ONE. THE FIRST TARGET WHOSE FREQUENCY ARGUMENT IS DEGENERATE —
@@ -1107,8 +1204,24 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     `ccetSpineEnter` 8,686 at round 806.) Also watch the four sitting
     JUST under the limit, one refactor from crossing it: `walkFunctionBodiesInExpr` 7,702,
     `cpaSpineLeave` 7,359, `ctaM3StmtAnchorCore` 7,245, `cpaSpineEnter` 6,941.
-  - **(e) EMIT-mode methods — `Transformer.transformToCommonJS` 28,991,
-    `transformClassBody` 16,233, `transform` 8,934.** These do not touch a `--noEmit`
+  - **(e) The non-`Checker` tail. `CompilerOptionsKt.applyDirective` 13,694 WENT AT
+    ROUND 815** (an entry at 89 plus `applyDirectiveArms1..4` at 2,240 / 4,592 / 3,164 /
+    3,708; census 7 → 6). **The finding to carry forward: its size had nothing to do with
+    what it does.** 85 one-line `when (key)` arms, each an `options.copy(field = …)` on a
+    ~150-field data class, which Kotlin compiles into a `copy$default` CALL SITE carrying
+    the whole argument vector plus the default bitmasks — **~160 bytecodes per arm**. So a
+    dispatch table's size is the ARM COUNT times the DATA CLASS's FIELD COUNT, `javap` is
+    the instrument rather than line count, and **a future agent adding directives walks the
+    limit back up at ~160 bytecodes each** (headroom per run: 5,760 / 3,408 / 4,836 /
+    4,292 ≈ 21–36 more arms apiece). Round 815 also owes the family its first
+    **NEGATIVE CONTROL**: the claim "the partition POSITION is unobservable, because the
+    arm keys are pairwise distinct" was ABLATED (boundary moved by one arm → 0 pins fail)
+    rather than asserted — when a split's correctness rests on a structural property,
+    ablate the property's consequence and show the PREDICTED zero. Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 19.
+    **Still open in (e): `Transformer.transformToCommonJS` 28,991,
+    `TypeScriptCompiler.compileParsedCore` 21,535, `transformClassBody` 16,233,
+    `transform` 8,934.** The Transformer three do not touch a `--noEmit`
     number at all, which is why every A/B in this arc is blind to them; they DO touch the
     published `bench-3way.sh` ratio, which is emit-mode on all three compilers (§ 0.2).
   - **(f) Keep it from happening again.** Run `python3 scripts/huge_methods.py
