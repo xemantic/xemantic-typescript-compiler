@@ -51,7 +51,8 @@ import kotlin.test.fail
  * `Checker.checkArgumentsAgainstSignatureCore` at **23,890** (round 807 split it),
  * and — sub-item (d) — `Checker.checkDuplicateDeclarations` at **12,935**
  * (round 812 split it), and — sub-item (e) — `CompilerOptionsKt.applyDirective`
- * at **13,694** (round 815 split it).
+ * at **13,694** (round 815 split it) and `TypeScriptCompiler.compileParsedCore`
+ * at **21,535** (round 816 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -708,6 +709,65 @@ class HugeMethodLimitTest {
         // recurring confirmation that a bytecode count is a THRESHOLD predicate
         // and not a cost model.
         assert(parts.values.sum() > 11000)
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — the ten helpers `compileParsedCore` was split into.
+     * It was **21,535 bytecodes**, and the split is the first in this family
+     * whose parts sum to LESS than the monolith: **20,294, i.e. 1,241 FEWER**.
+     * The mechanism is worth knowing before writing another one — the monolith's
+     * `var options` is captured by the non-inline worker lambdas of the
+     * `--workers` branch, so Kotlin boxed it into a `Ref$ObjectRef` and charged
+     * **168 `getfield` + `checkcast` pairs**, ~6 bytes each, to reads spread over
+     * the whole 1,780-line body. As a helper PARAMETER it is an immutable local
+     * again and every one of those reads is a plain `aload`.
+     */
+    private val compileParsedCoreParts = setOf(
+        "cpcCheckDeprecatedOptions",
+        "cpcCheckEmitOptionConflicts",
+        "cpcCheckModuleAndLibOptions",
+        "cpcCheckProjectShapeOptions",
+        "cpcCompileSingleFile",
+        "cpcCompileMultiFile",
+        "cpcScanFiles",
+        "cpcBindAndCheck",
+        "cpcTransformAndEmit",
+        "cpcRequireOnlyOrphans",
+    )
+
+    @Test
+    fun `compileParsedCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.TypeScriptCompiler")
+        val fn = sizes["compileParsedCore"]
+            ?: fail("compileParsedCore not found in TypeScriptCompiler")
+        // Positive control: the entry is the option head plus ten calls, so it is
+        // SMALL — that the parse really read this class is pinned by the parts below.
+        assert(fn > 100)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the compileParsedCore split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.TypeScriptCompiler")
+        val missing = compileParsedCoreParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in TypeScriptCompiler: $missing")
+        val parts = sizes.filterKeys { it in compileParsedCoreParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the compileParsedCore split parts each carry a real share of the pipeline`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.TypeScriptCompiler")
+        val parts = sizes.filterKeys { it in compileParsedCoreParts }
+        assert(parts.size == 10)
+        // Measured smallest part: 595 bytecodes (`cpcRequireOnlyOrphans`).
+        assert(parts.values.min() > 400)
+        // Measured largest: 5,111 (`cpcCompileMultiFile`), i.e. real headroom.
+        assert(parts.values.max() < 6500)
+        // ... and the sum must still be the bulk of the original 21,535 — the runs
+        // were MOVED, not deleted. Measured sum: 20,001 (20,294 with the entry).
+        assert(parts.values.sum() > 18000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
