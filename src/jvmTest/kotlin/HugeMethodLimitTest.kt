@@ -547,6 +547,57 @@ class HugeMethodLimitTest {
         assert(parts.values.sum() > 8000)
     }
 
+    /**
+     * (JIT.1)(d) round 813 — the seven helpers `checkIndexSigInStatement` was
+     * split into. It was **10,928 bytecodes**; the entry is **1,010** and holds
+     * only the dispatch every statement pays for (the type-alias and
+     * variable-statement branches, the `when` that decides whether the statement
+     * has members at all, the `ModuleDeclaration` recursion, the two index-
+     * signature lookups and the "no usable string index type" early return).
+     */
+    private val cisSplitParts = setOf(
+        "cisCheckNumericNamePropsVsNumberIndex",
+        "cisFindStringIndexSig",
+        "cisCheckAnonIndexValueConflict",
+        "cisCheckNamedInterfaceIndexValueConflict",
+        "cisCheckNumericMethodsVsNumberIndex",
+        "cisCheckMethodsVsPrimitiveStringIndex",
+        "cisCheckPropsVsStringIndex",
+    )
+
+    @Test
+    fun `checkIndexSigInStatement is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val fn = sizes["checkIndexSigInStatement"]
+            ?: fail("checkIndexSigInStatement not found in Checker")
+        // Positive control: the parse really did read this method (it is 1,010
+        // bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(fn > 500)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkIndexSigInStatement split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = cisSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in cisSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkIndexSigInStatement split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in cisSplitParts }
+        assert(parts.size == 7)
+        // Measured smallest part: 359 bytecodes (the numeric-name property loop).
+        assert(parts.values.min() > 250)
+        // ... and the sum must still be the bulk of the original 10,928, i.e. the
+        // body was MOVED, not deleted. Measured sum: 9,693.
+        assert(parts.values.sum() > 7000)
+    }
+
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
     private class ClassFileReader(private val b: ByteArray) {
         private var p = 0

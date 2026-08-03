@@ -125601,47 +125601,121 @@ interface DataView {
         }
         val numberIndexType = numberIndexSig?.type?.let { getTypeFromTypeNode(it) }
         if (numberIndexType != null && numberIndexType !== anyType && numberIndexType !== errorType) {
-            for (member in members) {
-                if (member !is PropertyDeclaration) continue
-                // B98.r88: a property name is "numeric" (subject to the number index
-                // signature) when it is a NumericLiteralNode OR a string-literal name
-                // that round-trips through JS Number→String (`String(+name) === name`),
-                // e.g. "1", "-2.5", "1.2e-20", "Infinity", "NaN". Display + span differ:
-                // numeric → bare text; string-literal → quoted, span includes the quotes.
-                val rawName = member.name
-                val displayName: String
-                val nameStart: Int
-                val nameSpanLen: Int
-                when (rawName) {
-                    is NumericLiteralNode -> { displayName = rawName.text; nameStart = rawName.pos; nameSpanLen = rawName.text.length }
-                    is StringLiteralNode -> {
-                        if (!isCanonicalNumericPropertyName(rawName.text)) continue
-                        displayName = "\"${rawName.text}\""; nameStart = rawName.pos; nameSpanLen = rawName.text.length + 2
-                    }
-                    else -> continue
-                }
-                val propTypeNode = member.type ?: continue
-                val propType = getTypeFromTypeNode(propTypeNode)
-                if (propType === anyType || propType === errorType) continue
-                if (!checkTypeRelatedTo(propType, numberIndexType, assignableRelation)) {
-                    val propTypeDisplay = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
-                    val indexTypeDisplay = typeToString(numberIndexType)
-                    val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
-                    diagnostics.add(Diagnostic(
-                        message = "Property '$displayName' of type '$propTypeDisplay' is not assignable to 'number' index type '$indexTypeDisplay'.",
-                        category = DiagnosticCategory.Error,
-                        code = 2411,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = nameStart,
-                        length = nameSpanLen,
-                    ))
-                }
-            }
+            cisCheckNumericNamePropsVsNumberIndex(members, numberIndexType, source, fileName)
         }
 
         // Find string index signature: [s: string]: T (also check base class)
+        val stringIndexSig = cisFindStringIndexSig(stmt, members)
+
+        // B98.r20: TS2413 — when a type has BOTH a number and a string index signature
+        // (own or inherited), the number index value type must be assignable to the
+        // string index value type (because `obj[0]` is also `obj["0"]`). Emit at the
+        // type name. Gated to ANONYMOUS object-literal value types on both sides so the
+        // structural comparison is reliable (named/Reference values are skipped — those
+        // have the documented incomplete-comparison FP surface). The number index sig is
+        // own-first then inherited from extends bases (mirroring the string lookup above);
+        // the string sig is the already-resolved own-or-inherited `stringIndexSig`.
+        cisCheckAnonIndexValueConflict(stmt, numberIndexSig, stringIndexSig, source, fileName)
+
+        // B98.r128b: TS2413 for NAMED-interface index value types (the anonymous
+        // object-literal case above emits at the type NAME; this emits at the OWN
+        // index-SIGNATURE declaration, matching TypeScript's `indexerConstraints`
+        // baseline). When an interface has BOTH a number and a string index signature
+        // — collected across its MERGE GROUP (all declarations of the name) plus
+        // single-level `extends` bases — whose NAMED-interface values conflict because
+        // the NUMBER value is MISSING a required property of the STRING value
+        // (`collectMissingProperties` non-empty = the FP-safe B87.4 missing-property
+        // subset; a missing required property unambiguously means not-assignable), emit
+        // ONCE per merge group at the OWN index sig (prefer the number sig; fall back to
+        // the string sig when the number sig is inherited — e.g. `I extends H`). Squiggle
+        // spans `[...]: T;`. Dedup: emit only at the declaration that contains the report
+        // sig (so a merged `interface E {[s]:B}` + `interface E {[n]:A}` fires once, at
+        // the number sig). Disjoint from the anonymous path (both values must be
+        // Type.Interface), so it cannot double-emit or regress `inheritedString…2` (B98.r20).
+        cisCheckNamedInterfaceIndexValueConflict(stmt, source, fileName)
+
+        // B272: a zero-arg single-sig method with a NUMERIC name is also subject to the
+        // NUMBER index signature (own or single-level inherited) — a function type is
+        // never assignable to a primitive index value type. (The string-index side is
+        // handled by the 16.4ez primitive-methods branch below.)
+        cisCheckNumericMethodsVsNumberIndex(stmt, members, source, fileName)
+
+        val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
+        if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
+
+        // 16.4ez: TS2411 for methods — when the string index type is primitive (not a
+        // function/callable type), a method property is never assignable. Emit once per
+        // method NAME (at the first overload declaration), with display built from all
+        // overload signatures. Narrow: only fires when stringIndexType is a primitive.
+        val stringIndexTypeIsPrimitive = stringIndexType.flags.hasAny(
+            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt
+        )
+        if (stringIndexTypeIsPrimitive) {
+            cisCheckMethodsVsPrimitiveStringIndex(members, stringIndexType, source, fileName)
+        }
+
+        cisCheckPropsVsStringIndex(members, stringIndexType, stringIndexTypeIsPrimitive, source, fileName)
+    }
+
+    /**
+     * (JIT.1)(d) round 813 — 17.191's numeric-name property loop, moved verbatim out of
+     * [checkIndexSigInStatement]. Reached only when the type HAS a number index signature
+     * whose value type is neither `any` nor the error type.
+     */
+    private fun cisCheckNumericNamePropsVsNumberIndex(
+        members: List<ClassElement>,
+        numberIndexType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        for (member in members) {
+            if (member !is PropertyDeclaration) continue
+            // B98.r88: a property name is "numeric" (subject to the number index
+            // signature) when it is a NumericLiteralNode OR a string-literal name
+            // that round-trips through JS Number→String (`String(+name) === name`),
+            // e.g. "1", "-2.5", "1.2e-20", "Infinity", "NaN". Display + span differ:
+            // numeric → bare text; string-literal → quoted, span includes the quotes.
+            val rawName = member.name
+            val displayName: String
+            val nameStart: Int
+            val nameSpanLen: Int
+            when (rawName) {
+                is NumericLiteralNode -> { displayName = rawName.text; nameStart = rawName.pos; nameSpanLen = rawName.text.length }
+                is StringLiteralNode -> {
+                    if (!isCanonicalNumericPropertyName(rawName.text)) continue
+                    displayName = "\"${rawName.text}\""; nameStart = rawName.pos; nameSpanLen = rawName.text.length + 2
+                }
+                else -> continue
+            }
+            val propTypeNode = member.type ?: continue
+            val propType = getTypeFromTypeNode(propTypeNode)
+            if (propType === anyType || propType === errorType) continue
+            if (!checkTypeRelatedTo(propType, numberIndexType, assignableRelation)) {
+                val propTypeDisplay = formatTypeForDisplay(propTypeNode) ?: typeToString(propType)
+                val indexTypeDisplay = typeToString(numberIndexType)
+                val (line, character) = getLineAndCharacterOfPosition(source, nameStart)
+                diagnostics.add(Diagnostic(
+                    message = "Property '$displayName' of type '$propTypeDisplay' is not assignable to 'number' index type '$indexTypeDisplay'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2411,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = nameStart,
+                    length = nameSpanLen,
+                ))
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 813 — the own-then-inherited `[s: string]: T` lookup, moved verbatim
+     * out of [checkIndexSigInStatement]. THE ONE CROSS-BOUNDARY VALUE of that split: HEAD
+     * held it in a `var` that this block's base-class walk mutated, so it is RETURNED here
+     * rather than stashed in a field. B98.r19: an inherited string index signature is
+     * checked against the derived type's own properties.
+     */
+    private fun cisFindStringIndexSig(stmt: Statement, members: List<ClassElement>): IndexSignature? {
         var stringIndexSig = members.filterIsInstance<IndexSignature>().firstOrNull { sig ->
             sig.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.StringKeyword } == true
         }
@@ -125674,15 +125748,20 @@ interface DataView {
                 if (stringIndexSig != null) break
             }
         }
+        return stringIndexSig
+    }
 
-        // B98.r20: TS2413 — when a type has BOTH a number and a string index signature
-        // (own or inherited), the number index value type must be assignable to the
-        // string index value type (because `obj[0]` is also `obj["0"]`). Emit at the
-        // type name. Gated to ANONYMOUS object-literal value types on both sides so the
-        // structural comparison is reliable (named/Reference values are skipped — those
-        // have the documented incomplete-comparison FP surface). The number index sig is
-        // own-first then inherited from extends bases (mirroring the string lookup above);
-        // the string sig is the already-resolved own-or-inherited `stringIndexSig`.
+    /**
+     * (JIT.1)(d) round 813 — B98.r20's TS2413 for ANONYMOUS object-literal index value
+     * types (emitted at the type NAME), moved verbatim out of [checkIndexSigInStatement].
+     */
+    private fun cisCheckAnonIndexValueConflict(
+        stmt: Statement,
+        numberIndexSig: IndexSignature?,
+        stringIndexSig: IndexSignature?,
+        source: String,
+        fileName: String,
+    ) {
         if (stmt is ClassDeclaration || stmt is InterfaceDeclaration) {
             val typeName: Identifier? = when (stmt) {
                 is ClassDeclaration -> stmt.name
@@ -125740,22 +125819,14 @@ interface DataView {
                 }
             }
         }
+    }
 
-        // B98.r128b: TS2413 for NAMED-interface index value types (the anonymous
-        // object-literal case above emits at the type NAME; this emits at the OWN
-        // index-SIGNATURE declaration, matching TypeScript's `indexerConstraints`
-        // baseline). When an interface has BOTH a number and a string index signature
-        // — collected across its MERGE GROUP (all declarations of the name) plus
-        // single-level `extends` bases — whose NAMED-interface values conflict because
-        // the NUMBER value is MISSING a required property of the STRING value
-        // (`collectMissingProperties` non-empty = the FP-safe B87.4 missing-property
-        // subset; a missing required property unambiguously means not-assignable), emit
-        // ONCE per merge group at the OWN index sig (prefer the number sig; fall back to
-        // the string sig when the number sig is inherited — e.g. `I extends H`). Squiggle
-        // spans `[...]: T;`. Dedup: emit only at the declaration that contains the report
-        // sig (so a merged `interface E {[s]:B}` + `interface E {[n]:A}` fires once, at
-        // the number sig). Disjoint from the anonymous path (both values must be
-        // Type.Interface), so it cannot double-emit or regress `inheritedString…2` (B98.r20).
+    /**
+     * (JIT.1)(d) round 813 — B98.r128b's TS2413 for NAMED-interface index value types
+     * (emitted at the own index SIGNATURE), plus B272's primitive-value pair, moved
+     * verbatim out of [checkIndexSigInStatement].
+     */
+    private fun cisCheckNamedInterfaceIndexValueConflict(stmt: Statement, source: String, fileName: String) {
         if (stmt is InterfaceDeclaration) {
             val tn = stmt.name
             val isNum = { s: IndexSignature -> s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true }
@@ -125882,11 +125953,19 @@ interface DataView {
                 }
             }
         }
+    }
 
-        // B272: a zero-arg single-sig method with a NUMERIC name is also subject to the
-        // NUMBER index signature (own or single-level inherited) — a function type is
-        // never assignable to a primitive index value type. (The string-index side is
-        // handled by the 16.4ez primitive-methods branch below.)
+    /**
+     * (JIT.1)(d) round 813 — B272's TS2411 for zero-arg NUMERIC-named methods against a
+     * primitive number index value type, moved verbatim out of [checkIndexSigInStatement]
+     * (the `run { … }` wrapper is kept so the region is byte-identical to HEAD's).
+     */
+    private fun cisCheckNumericMethodsVsNumberIndex(
+        stmt: Statement,
+        members: List<ClassElement>,
+        source: String,
+        fileName: String,
+    ) {
         run {
             val isNumSig = { s: IndexSignature ->
                 s.parameters.firstOrNull()?.type?.let { it is KeywordTypeNode && it.kind == SyntaxKind.NumberKeyword } == true
@@ -125933,71 +126012,87 @@ interface DataView {
                 }
             }
         }
+    }
 
-        val stringIndexType = stringIndexSig?.type?.let { getTypeFromTypeNode(it) }
-        if (stringIndexType == null || stringIndexType === anyType || stringIndexType === errorType) return
-
-        // 16.4ez: TS2411 for methods — when the string index type is primitive (not a
-        // function/callable type), a method property is never assignable. Emit once per
-        // method NAME (at the first overload declaration), with display built from all
-        // overload signatures. Narrow: only fires when stringIndexType is a primitive.
-        val stringIndexTypeIsPrimitive = stringIndexType.flags.hasAny(
-            TypeFlags.String or TypeFlags.Number or TypeFlags.Boolean or TypeFlags.BigInt
-        )
-        if (stringIndexTypeIsPrimitive) {
-            val methodsByName = linkedMapOf<String, MutableList<MethodDeclaration>>()
-            for (m in members) {
-                if (m is MethodDeclaration) {
-                    // B272: numeric-named methods (`6(): string`) are also string-indexable.
-                    val nm = when (val n = m.name) {
-                        is Identifier -> n.text
-                        is NumericLiteralNode -> n.text
-                        else -> null
-                    } ?: continue
-                    if (nm.startsWith("#")) continue
-                    // Skip call signatures (name == "") and construct signatures (name == "new") —
-                    // per CLAUDE.md, interface call/construct signatures are encoded as
-                    // MethodDeclaration with special names; they aren't regular properties.
-                    if (nm.isEmpty() || nm == "new") continue
-                    // Skip static methods — they belong to the class's static side, not instance.
-                    if (ModifierFlag.Static in m.modifiers) continue
-                    methodsByName.getOrPut(nm) { mutableListOf() }.add(m)
-                }
-            }
-            for ((methodName, overloads) in methodsByName) {
-                val firstDecl = overloads.first()
-                val sigStrings = overloads.map { md ->
-                    val retType = md.type?.let { formatTypeForDisplay(it) ?: typeToString(getTypeFromTypeNode(it)) } ?: "any"
-                    "(): $retType" // narrow: only zero-arg overloads for this test
-                }
-                // Only fire when all overloads took no parameters (narrow safety — otherwise
-                // the display could miss-represent parameterized overloads).
-                if (overloads.any { it.parameters.isNotEmpty() }) continue
-                // B272: a SINGLE signature displays in arrow form (`() => string`);
-                // overload sets keep the brace form (`{ (): any; (): any; }`).
-                val propTypeDisplay = if (overloads.size == 1) {
-                    "() => ${sigStrings[0].removePrefix("(): ")}"
-                } else "{ ${sigStrings.joinToString("; ")}; }"
-                val indexTypeDisplay = typeToString(stringIndexType)
-                // Squiggle covers the first overload's full text through its trailing `;`.
-                val start = firstDecl.pos
-                val semiIdx = source.indexOf(';', start)
-                val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else firstDecl.end
-                val length = (end - start).coerceAtLeast(1)
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Property '$methodName' of type '$propTypeDisplay' is not assignable to 'string' index type '$indexTypeDisplay'.",
-                    category = DiagnosticCategory.Error,
-                    code = 2411,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
+    /**
+     * (JIT.1)(d) round 813 — 16.4ez's TS2411 for METHODS against a PRIMITIVE string index
+     * value type, moved verbatim out of [checkIndexSigInStatement]. The caller's
+     * `stringIndexTypeIsPrimitive` guard stays in the entry, so this runs only for the
+     * shape it owns; the same flag makes the general property loop skip methods.
+     */
+    private fun cisCheckMethodsVsPrimitiveStringIndex(
+        members: List<ClassElement>,
+        stringIndexType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        val methodsByName = linkedMapOf<String, MutableList<MethodDeclaration>>()
+        for (m in members) {
+            if (m is MethodDeclaration) {
+                // B272: numeric-named methods (`6(): string`) are also string-indexable.
+                val nm = when (val n = m.name) {
+                    is Identifier -> n.text
+                    is NumericLiteralNode -> n.text
+                    else -> null
+                } ?: continue
+                if (nm.startsWith("#")) continue
+                // Skip call signatures (name == "") and construct signatures (name == "new") —
+                // per CLAUDE.md, interface call/construct signatures are encoded as
+                // MethodDeclaration with special names; they aren't regular properties.
+                if (nm.isEmpty() || nm == "new") continue
+                // Skip static methods — they belong to the class's static side, not instance.
+                if (ModifierFlag.Static in m.modifiers) continue
+                methodsByName.getOrPut(nm) { mutableListOf() }.add(m)
             }
         }
+        for ((methodName, overloads) in methodsByName) {
+            val firstDecl = overloads.first()
+            val sigStrings = overloads.map { md ->
+                val retType = md.type?.let { formatTypeForDisplay(it) ?: typeToString(getTypeFromTypeNode(it)) } ?: "any"
+                "(): $retType" // narrow: only zero-arg overloads for this test
+            }
+            // Only fire when all overloads took no parameters (narrow safety — otherwise
+            // the display could miss-represent parameterized overloads).
+            if (overloads.any { it.parameters.isNotEmpty() }) continue
+            // B272: a SINGLE signature displays in arrow form (`() => string`);
+            // overload sets keep the brace form (`{ (): any; (): any; }`).
+            val propTypeDisplay = if (overloads.size == 1) {
+                "() => ${sigStrings[0].removePrefix("(): ")}"
+            } else "{ ${sigStrings.joinToString("; ")}; }"
+            val indexTypeDisplay = typeToString(stringIndexType)
+            // Squiggle covers the first overload's full text through its trailing `;`.
+            val start = firstDecl.pos
+            val semiIdx = source.indexOf(';', start)
+            val end = if (semiIdx >= 0 && semiIdx - start < 80) semiIdx + 1 else firstDecl.end
+            val length = (end - start).coerceAtLeast(1)
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Property '$methodName' of type '$propTypeDisplay' is not assignable to 'string' index type '$indexTypeDisplay'.",
+                category = DiagnosticCategory.Error,
+                code = 2411,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = length,
+            ))
+        }
+    }
 
+    /**
+     * (JIT.1)(d) round 813 — the general TS2411 loop (every named property, and every
+     * method when the string index value type is CALLABLE) against the string index type,
+     * moved verbatim out of [checkIndexSigInStatement]. `stringIndexTypeIsPrimitive` is
+     * passed because it is what makes this loop DEFER methods to
+     * [cisCheckMethodsVsPrimitiveStringIndex] instead of double-reporting them.
+     */
+    private fun cisCheckPropsVsStringIndex(
+        members: List<ClassElement>,
+        stringIndexType: Type,
+        stringIndexTypeIsPrimitive: Boolean,
+        source: String,
+        fileName: String,
+    ) {
         // Method-overload tracking — skip TS2411 for methods declared more than once
         // (interface overload signatures); the simple synthesis below would only see one.
         val methodNameCounts = mutableMapOf<String, Int>()
