@@ -878,3 +878,150 @@ pins ran** (the test task never started), which reads exactly like "the ablation
 compiled and changed nothing". **Check the ablation's build log for `BUILD
 SUCCESSFUL` before recording a zero**, and stop the daemons between long ablation
 batches.
+
+## 13. (JIT.1)(g) — `checkAssignmentExpressionCore`, 18,100 → an entry plus nine helpers
+
+*Round 809.* The largest `Checker` method left after round 808, and the second
+split of a **straight-line statement sequence** — but the first one where the
+partition being followed is a *different* level of the same probe object
+(`CtaSections` **level E**, round 786's own instrument, already in the source).
+
+| function | region of the committed `CtaSections` level-E partition | bytecodes |
+|---|---|---:|
+| `checkAssignmentExpressionCore` | head, `E_RECURSE`, `E_ARGS`, `E_FIRE1`, `E_IDLIT`, `E_TTRESOLVE`, `E_SRCTYPE`, `E_NARROW`, `E_RELATION`, `E_POST`, `E_LITTAIL`, `E_PA` | **3,861** |
+| `caeUnionAndMissingPropertyGuards` | `E_UNION` + `E_B175` + `E_B127` | 2,867 |
+| `caeElaborateMismatch` | `E_ELAB` | 2,803 |
+| `caeModuleAliasAndLibPairShapes` | `E_MODULE` + `E_B236` | 1,704 |
+| `caeLegacyDeclaredStringPath` | `E_DECLSTR` | 1,626 |
+| `caeIndexSigAndSignatureGuards` | `E_MID` + `E_SIGS` + `E_OBJLIT` | 1,608 |
+| `caePrototypeMemberAssign` | `E_PROTO` body | 1,319 |
+| `caeForeignTpTargetAndClassRhs` | `E_FTP` + `E_CTORID` | 674 |
+| `caeThisPropertyAssign` | `E_THIS` | 557 |
+| `caeElementAccessAssign` | `E_ELEM` | 453 |
+
+Census **13 → 12**. The ten sum to **17,472 against the monolith's 18,100** — a
+sixth independent confirmation that a bytecode count is a THRESHOLD predicate and
+not a cost model (only round 804's 46,567 → 29,130 ever shrank).
+
+**What stays in the entry is what every input pays, and here that is measurable
+rather than argued.** Round 786's level-E partition says 10,432 of the 17,179
+invocations (61%) exit in the entry row because the expression is not an `=`
+`BinaryExpression` — the eligibility test lives INSIDE this function, so unlike
+sites 1 and 2 it pays for its own dispatch. The four rows that carry the cost —
+the SOURCE type (160 ms net), flow narrowing (59), the identifier-target guards
+(33), `canUseTypeEngine`+`checkTypeRelatedTo` (20) — all stay inline, as do the
+three `tryEmit*` gates every `=` pays and the one-line `x.prop = value` arm
+(31 ms). **Everything that moved is a gate that fires for one shape and ends the
+check**, and the two largest moved regions are the two the same partition prices
+at essentially nothing: `E_ELAB` is **0.4 ms over 3,791 reaches** and the
+`E_UNION`/`E_B175`/`E_B127` guard cluster ~9 ms.
+
+### 13.1 The shape, and why there is no cross-boundary value at all
+
+38 bare `return`s, every one a whole-function return — established by a
+comment-stripped token scan, not by eye (the other 24 `return` occurrences in the
+range are `return@run` ×16 and `return@dataProp` ×8, all inside blocks that move
+whole). Seven regions therefore return `Boolean` (`true` = "I emitted, the caller
+must return") and the entry replays them as `if (…) return`; `caeThisPropertyAssign`
+and `caeElementAccessAssign` contain no `return` at all and are `Unit`.
+
+**Cross-boundary values: none** — and that was computed, not assumed. Every
+`val`/`var` in the function was listed with its brace depth, and for each region
+the in-scope prior declarations were intersected with the identifiers the region
+uses. The six the entry keeps (`target`, `targetType`, `typeAnnotation`, `tt`,
+`sourceType`, `canUse`/`isAssignable`) are passed as parameters; every other local
+a region declares is dead by that region's end, including three that *look* like
+they escape and do not: the outer `rhs` (shadowed by a new `val rhs` inside
+`E_B175`), and `b175RhsClassSym`, which is read by `E_B127`'s gate — which is
+exactly why those two rows are in the SAME helper.
+
+One boundary that constrains the partition and is worth naming: `savedContextual`
+is set at the top of `E_SRCTYPE` and restored at the end of `E_NARROW`, so no
+region may straddle that pair. Both rows stay in the entry.
+
+### 13.2 Equivalence, measured (round 805's five checks)
+
+1. every moved line re-extracted from the NEW file and checked back against HEAD:
+   **nine contiguous, in-order runs**, identical modulo the dedent and the
+   return-signal rewrite;
+2. the entry function **reconstructed** from HEAD with the nine regions replaced
+   by their call sites: **IDENTICAL, 345 lines**;
+3. accounting closes exactly — HEAD body 1,477 = kept 335 + moved 1,142; new entry
+   345 = kept 335 + 10 lines of call site;
+4. every `return` enumerated: **38 = 15 that stayed + 23 that became `return true`**,
+   plus the 7 the call sites replay = the 22 bare `return`s the new entry contains;
+5. free variables computed PER REGION rather than guessed — which is what keeps
+   the build warning-clean, since an unused parameter is a warning here.
+
+A tooling note that cost the round its first twenty minutes and will cost the
+next agent the same: **a Kotlin string/comment stripper written for brace matching
+must treat `'` as a CHAR LITERAL (`'x'` / `'\n'` / `'\uXXXX'`), never as "scan to
+the next apostrophe"** — Checker.kt contains raw-string regexes with `'` inside a
+character class (`(["\'])`, `[^'"]+`), and a naive scanner desynchronises there and
+then reports the function's body as 25,660 lines instead of 1,477. The
+length-preservation invariant (every stripped line the same length as its
+original) is the cheap check that catches it.
+
+### 13.3 Discrimination — ablated ONE AT A TIME, seven separate builds
+
+`CaeSplitTest` (14 pins) plus `HugeMethodLimitTest` (+3). Round 807's law was
+followed literally: **seven deliberate mistakes, seven separate builds**, never
+combined, each one "the entry ignores this helper's return signal"
+(`if (caeX(…)) return` → `caeX(…)`). Control first — the committed binary, 35
+pins, 0 failed.
+
+| mistake — the entry ignores this helper's `true` | pins failed | verdict |
+|---|---|---|
+| `caePrototypeMemberAssign` | 0 | **NOT DISCRIMINATED** |
+| `caeModuleAliasAndLibPairShapes` | 0 | **NOT DISCRIMINATED** |
+| `caeForeignTpTargetAndClassRhs` | 1 — **exactly** its own arm pin | **DISCRIMINATED, sharply** |
+| `caeIndexSigAndSignatureGuards` | 0 | **NOT DISCRIMINATED** |
+| `caeUnionAndMissingPropertyGuards` | 0 | **NOT DISCRIMINATED** |
+| `caeElaborateMismatch` | 3 — its arm pin, the elaboration seam pin, the ordering pin | **DISCRIMINATED** |
+| `caeLegacyDeclaredStringPath` | 0 | **NOT DISCRIMINATED** |
+
+Every one of the seven runs reported **14 pins ran**, so none of the zeros is
+round 808's dead-build artefact.
+
+**Two of seven, and the round's real result is that the PREDICTION was wrong in
+BOTH directions.** Before the ablations, `caePrototypeMemberAssign`'s signal was
+argued to discriminate (drop it and the target-kind dispatch reaches the
+`else if (target is PropertyAccessExpression)` arm, which "must" re-emit) and
+`caeForeignTpTargetAndClassRhs`'s was argued redundant (`canUseTypeEngine` skips
+class-instance-vs-constructor comparisons, so "nothing downstream can fire").
+Both are false: `checkPropertyAccessAssignment` stays silent for an
+`X.prototype.p` target, and the class-value path does change what the tail
+reports. **So the reading of the downstream gates is a way to CHOOSE which seams
+to pin, never a substitute for running the ablation** — which is the same lesson
+rounds 806 and 807 reached by two other mechanisms.
+
+Why the other four are green is the round-808 mechanism unchanged: dropping the
+`return` does not delete the emission, the helper still runs and still emits, and
+every later emitter in this body is conditioned on the relation verdict, which
+refuses these shapes anyway. On today's code they are **redundant guards**; they
+are kept because the monolith had them, and this table is the record that no pin
+would notice if a future rule made them load-bearing again.
+
+The seam pin written for `caePrototypeMemberAssign` is **renamed** in
+`CaeSplitTest` to say what it actually tests (a single-emission guard against a
+future second emitter), per the standing rule that an undiscriminating pin must
+not be left carrying a name that claims otherwise.
+
+**A process cost worth quoting for the next batch.** The driver stopped the
+Gradle daemon and gracefully killed the Kotlin daemon between ablations — which
+is what round 808's OOM demands, and which by CLAUDE.md's own BUILD.1 entry
+forces a COLD `compileKotlinJvm` every time. Seven ablations therefore cost
+**~8 minutes each rather than ~2.5**. That is the right trade (round 808 lost two
+builds to the OOM and could not tell them from clean ablations), but it must be
+budgeted: a seven-mistake batch is an hour.
+
+### 13.4 Gate
+
+Suite **13,579 → 13,596 / 0 failures / 3 skipped**; 8-profile grid diffed
+set-for-set BOTH directions against a purpose-built pre-split binary, every
+capture confirmed non-empty first and the two class dirs checked to differ (`cae*`
+methods present in one, absent in the other) — **46/46/46/46/46/46/46/94, 0 added
+and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
+`cost_gate.py` **all 20 counters +0.00%**; no `w:` lines in the compile that
+produced the binary. **No wall A/B, deliberately** — the family is bounded four
+times over (§§ 4.2, 5.3, 7 and round 804) and this lands for the threshold.

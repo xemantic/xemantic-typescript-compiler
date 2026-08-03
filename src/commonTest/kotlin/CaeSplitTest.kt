@@ -62,16 +62,28 @@ import kotlin.test.Test
  * the messages are what distinguish these regions from one another — and asserts
  * a COUNT of 1 wherever a doubled emission is the failure mode.
  *
- * **Honest limits (round 807's law: ablate ONE mistake at a time).** Of the seven
- * return signals only two are DISCRIMINATED by the pins below — see the round-809
- * session note and `docs/perf/setup-phase-and-huge-methods.md` § 13.3 for the
- * per-signal table. The reason the others are not is a property of the FUNCTION,
- * not of the pins: dropping one of those `return`s does not delete the emission,
- * and the gate of every later emitter in this body refuses the same shape anyway
- * (`canUseTypeEngine` declines a union source against an object target, and a
- * class-value-vs-construct-signature pair, and an empty object literal against a
- * wrapper interface relates vacuously). On today's code they are redundant
- * guards; they are kept because the monolith had them.
+ * **Honest limits (round 807's law: ablate ONE mistake at a time).** Seven
+ * deliberate mistakes were injected, one per build, each "the entry ignores this
+ * helper's return signal". Exactly **two of the seven are DISCRIMINATED**:
+ * `caeForeignTpTargetAndClassRhs` (1 pin) and `caeElaborateMismatch` (3 pins).
+ * The other five — `caePrototypeMemberAssign`, `caeModuleAliasAndLibPairShapes`,
+ * `caeIndexSigAndSignatureGuards`, `caeUnionAndMissingPropertyGuards`,
+ * `caeLegacyDeclaredStringPath` — leave **every pin GREEN**, and that is a
+ * property of the FUNCTION rather than of the pins: dropping the `return` does
+ * not delete the emission, and the gate of every later emitter refuses the same
+ * shape anyway (`canUseTypeEngine` declines a union source against an object
+ * target and a class-instance-vs-constructor pair; an empty object literal
+ * relates to a wrapper interface vacuously; the prototype target reaches
+ * `checkPropertyAccessAssignment`, which stays silent for it). On today's code
+ * those five are REDUNDANT guards, the same finding round 807 recorded for
+ * `caasTypeParamConstraintArg` and round 808 for three of its five. They are kept
+ * because the monolith had them.
+ *
+ * **And the prediction was wrong in BOTH directions**, which is why the ablation
+ * and not the reading decides: the prototype seam was predicted to discriminate
+ * and does not, while `caeForeignTpTargetAndClassRhs` was predicted redundant and
+ * is the sharpest single-pin result in the round. The per-signal table is in
+ * `docs/perf/setup-phase-and-huge-methods.md` § 13.3.
  */
 class CaeSplitTest {
 
@@ -110,6 +122,11 @@ class CaeSplitTest {
         )
     }
 
+    /**
+     * Doubles as this helper's SEAM pin — measured DISCRIMINATING: with the entry
+     * ignoring `caeForeignTpTargetAndClassRhs`'s `true`, this is the one pin of the
+     * fourteen that fails.
+     */
     @Test
     fun `caeForeignTpTargetAndClassRhs checks a class value against a construct signature`() {
         val ds = diagnose(
@@ -122,7 +139,7 @@ class CaeSplitTest {
         val ts2322 = ds.filter { it.code == 2322 }
         assert(ts2322.size == 1)
         assert(ts2322[0].message == "Type 'typeof C' is not assignable to type 'new (s: string) => C'.")
-        assert(ts2322[0].messageChain?.first() == "  Types of construct signatures are incompatible.")
+        assert(ts2322[0].messageChain.firstOrNull() == "  Types of construct signatures are incompatible.")
     }
 
     @Test
@@ -224,11 +241,14 @@ class CaeSplitTest {
     // ── seam pins: the return signals ─────────────────────────────────────────
 
     @Test
-    fun `the prototype seam - a dropped signal would let the property-access branch re-emit`() {
-        // `caePrototypeMemberAssign` returning `true` is what stops the target-kind
-        // dispatch below it from ALSO running `checkPropertyAccessAssignment` on the
-        // same `C.prototype.p` target. This is a COUNT pin because the failure mode
-        // is a SECOND TS2322, not a missing one.
+    fun `a prototype write is reported exactly once - NOT a discriminating seam`() {
+        // Written as the seam pin for `caePrototypeMemberAssign`'s `true`, and
+        // MEASURED NOT DISCRIMINATING: with that signal dropped, control reaches the
+        // `else if (target is PropertyAccessExpression)` arm and
+        // `checkPropertyAccessAssignment` stays silent for a `X.prototype.p` target,
+        // so nothing doubles and this pin is still green. It survives as a
+        // single-emission guard against a FUTURE second emitter for this shape —
+        // not as evidence that the signal is load-bearing. Renamed to say so.
         val ds = diagnose(
             """
             class C { p: number = 1 }

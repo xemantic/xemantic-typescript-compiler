@@ -1,4 +1,93 @@
 **Round 797 (2026-08-02) — (CALL.6) DONE: THE LEVEL-S SUB-PARTITION SAYS ROUND 796's
+
+**Round 800 (2026-08-02) — (IANY.1) THE 249 ms ARM IS GATED: 93% OF ITS CALLEE
+RESOLUTIONS BOUGHT NOTHING. 106 ms (0.36%) off the handler, `typeOfExpr.calls` −4.21%
+and `distinct` −6.18% — the latter FASTER, which is round 788's law ANSWERED rather than
+assumed: 14,813 expression nodes are now typed NOWHERE in the compile. Grid 46×7/94 with
+0 added and 0 removed BOTH directions, `--partitionCheck 2` EQUIVALENT, suite 13,461/0/3.
+AND round 799's own § 11 is CORRECTED: one of its two counter-shapes is VACUOUS.**
+
+- **STEP 1 — RE-MEASURED AT HEAD BEFORE BUILDING (law 1), AND THE INHERITED NUMBER HELD.**
+  Round 799 handed forward "249 ms over 31,575 edges at 7.9 µs = 32% of the handler". At
+  HEAD, on a quiet box, the arm row reads **196/190 ms** and the handler total **724/707**
+  — the same shape (the round-799 figure was taken with one less nested boundary pair).
+  Unlike rounds 795–799, nothing inherited had to be thrown away.
+
+- **STEP 2 — THE SUB-PARTITION, WHICH KILLED THE CHEAP IDEA FIRST.** Three rows nested
+  inside the arm (`A_ARITY` / `A_CPGNC` / `A_PRED`) plus a deterministic census. Two
+  findings, both against expectation: (a) **the "free" gate does not exist** — at a
+  reached argument edge `spineIanyCtx` is ALWAYS the call's own `kind = 1` frame (reach is
+  monotone; the call's own arm defines it unconditionally), so `typed = false` occurs
+  **15 times in 20,827** and a state-only gate would skip 0.07% of the population;
+  (b) **21% of the resolutions were per-CALL REPEATS** (4,412 of 20,812) — a k-argument
+  call resolves its callee k times, `getTypeOfExpression` having no per-node memo. The
+  reader-predicate subsumes that population without a cache (repeats → 22), which is what
+  § 0's law predicts for one.
+
+- **WHAT LANDED: `spineIanyArgSubtreeMayRead`, built to § 11's stated obligation.** Reader
+  set = ARROW / FUNCTION_EXPRESSION / OBJECT_LITERAL (every other reader § 11 names sits
+  strictly inside one of those three); descends the arms that INHERIT the state (paren /
+  conditional / array-literal / `||` `??` `&&` `,`) and every no-arm parent; STOPS at a
+  nested CALL/NEW (its own arm shadows the whole subtree, and an UNREACHED call makes
+  everything below unreached, reach being monotone). **Default `true`, so it can only ever
+  refuse to skip**, and a 32-step cap (0 hits) bounds it and removes the deep-`||` stack
+  hazard. Measured cost: **1.87 steps per edge**.
+
+- **THE PRICE, QUOTED AS THE ENCLOSING TOTAL (round 798's own correction).** Both arms
+  twice on ONE binary (`--ianyArgGateOff`), identical boundary counts, predicate priced
+  INSIDE both arms: callee resolutions **20,812 → 1,439 (−93.1%)**, the arm row
+  **196/190 → 93/96 ms**, and the **HANDLER TOTAL 724/707 → 602/617 = Δ 106 ms** against a
+  within-arm spread of 17/15, i.e. **6.2×** the larger spread. **≈0.36% of a check-only
+  compile.** A single `--passTiming` pair agrees (`checkSpine` 21,047.6 → 20,949.4).
+  **No wall-clock A/B** — 0.36% is a third of the ±1.0% warm band; the counters decide.
+
+- **ROUND 788's LAW, ANSWERED INSTEAD OF ASSUMED.** The obligation was that a CACHED
+  callee type makes part of any saving reappear (round 798 lost 110 of 473 ms that way).
+  Here `typeOfExpr.distinct` falls **6.18%** against `calls` **4.21%** — distinct falling
+  FASTER means **14,813 expression nodes are typed NOWHERE in the compile**, i.e. this arm
+  was their only consumer and the work is deleted, not moved. `globals.lookups` −1.68%,
+  misses −1.69%; **`narrow.walks` +0.00%** and `typeNode.bypassed` **+5 of 110,776** (the
+  round-754/778 order effect, three orders inside tolerance). Rebased in the landing commit.
+
+- **THE ABLATION, AND WHAT IT CORRECTED IN ROUND 799.** Fault = the predicate stops
+  descending array elements AND `as`, i.e. exactly the `rhsCanConsumeFnCtx` propagation set
+  § 11 falsified. **2 of 20 pins fail** — the array-literal pin and the equivalence pin —
+  and the `as` pin does NOT, which is the round's second finding: **`spineIanyEdge`, the
+  REACH classifier, has no `AsExpression` arm**, and its arm set is essentially the same
+  set `spineIanyEdgeEnter` has arms for. So nothing below an `as` is walked at all
+  (`loose({run(b){}} as any)` reports nothing while `loose({run(a){}})` and
+  `loose([{run(c){}}])` both report) — **§ 11's second counter-shape proves nothing; only
+  the array-literal one is real.** The no-arm descents are KEPT as dead-today insurance
+  (1.87 steps is not worth coupling the gate's soundness to another function's classifier)
+  and a restated pin now counts 2 instead of 1 the day that changes.
+
+- **WHAT DID NOT WORK.** (1) The first probe build crashed on the DOCUMENTED
+  declaration-order trap — `spineIanyArgScan` declared beside its consumer ~50k lines below
+  the `init` block is null in every pass; one build lost. (2) **The first timing batch was
+  measured on a thrashing box and every row read ~270× too large** (the childless-CALL row
+  6,483 ms against its true 5–11 ms; a compile took 9.6 min instead of 26 s) because the
+  build's own **Kotlin daemon was still resident** when the runs started — BUILD.1's trap,
+  ONE ROUND after round 799 wrote it down. The tell was not the arm ratio (which survived)
+  but the absolute ns/call against round 799's table; the deterministic census was immune
+  and is what carried the round. **Stop the daemons INSIDE the script, between the build
+  and the runs.** (3) A per-call callee cache as a standalone idea is dead — the predicate
+  already collapses the repeats.
+
+- **GATE.** Suite **13,454 → 13,461 / 0 failures / 3 skipped** (+7 pins, whole results dir
+  wiped). **8-profile grid vs `--ianyArgGateOff` — the real pre-change path in the same
+  binary — diffed set-for-set in BOTH directions: 46/46/46/46/46/46/46/94, 0 added and 0
+  removed on every profile.** `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`: two
+  counters FELL beyond tolerance (above), rebaselined in the landing commit; nothing rose.
+  Full derivation: `docs/perf/implicit-any-attribution.md` §§ 13–18.
+
+- **FOR THE NEXT AGENT: `spineIanyEnterNode` IS DONE.** Rounds 798/799/800 took
+  320 + 55 + 106 = **481 ms out of a 1,031 ms handler**, and the residue is FLAT — the
+  largest rows left are `own: every other kind` (~165 ms over 803,896 nodes at ~200 ns, a
+  per-node floor), `BinaryExpression parent` (~55 ms over 50,454) and the already-gated
+  NO-ARM row (~60 ms over 249,471 at ~240 ns). There is no concentration to attack.
+  **Re-derive the live map (§ 0) before choosing the next target** — three of the last six
+  rounds found an inherited figure stale.
+
 HYPOTHESIS ABOUT ITS OWN BIGGEST POPULATION IS WRONG BY 14x — the 15,640 iterations that
 leave at `!isSimpleCheckableType` are 48% bare Identifier and 32% PropertyAccess, not
 "arrows and callbacks typed under an installed contextual type" (527 = 3.4%; a contextual
