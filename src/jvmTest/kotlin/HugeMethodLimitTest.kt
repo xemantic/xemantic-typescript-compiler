@@ -50,7 +50,8 @@ import kotlin.test.fail
  * EVERY node of every file (round 806 split it) — and
  * `Checker.checkArgumentsAgainstSignatureCore` at **23,890** (round 807 split it),
  * and — sub-item (d) — `Checker.checkDuplicateDeclarations` at **12,935**
- * (round 812 split it).
+ * (round 812 split it), and — sub-item (e) — `CompilerOptionsKt.applyDirective`
+ * at **13,694** (round 815 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -657,6 +658,56 @@ class HugeMethodLimitTest {
         // ... and the sum must still be the bulk of what left `<init>`
         // (11,298 - 5,538 = 5,760). Measured sum: 5,794.
         assert(parts.values.sum() > 4500)
+    }
+
+    /**
+     * (JIT.1)(e) round 815 — the four runs `applyDirective` was split into. It
+     * was **13,694 bytecodes** for 85 `when (key)` arms, i.e. ~160 EACH, because
+     * every arm is an `options.copy(...)` on a ~150-field data class and so
+     * compiles to a `copy$default` call site carrying the whole argument vector
+     * plus the default bitmasks. The size is the arm count times the data
+     * class's field count — it says nothing about how much the function does.
+     */
+    private val applyDirectiveParts = setOf(
+        "applyDirectiveArms1",
+        "applyDirectiveArms2",
+        "applyDirectiveArms3",
+        "applyDirectiveArms4",
+    )
+
+    @Test
+    fun `applyDirective is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.CompilerOptionsKt")
+        val fn = sizes["applyDirective"] ?: fail("applyDirective not found in CompilerOptionsKt")
+        // Positive control: the entry is a chain of four calls, so it is SMALL —
+        // the control that the parse really read this class is the parts below.
+        assert(fn > 20)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the applyDirective split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.CompilerOptionsKt")
+        val missing = applyDirectiveParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in CompilerOptionsKt: $missing")
+        val parts = sizes.filterKeys { it in applyDirectiveParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the applyDirective split parts each carry a real share of the arms`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.CompilerOptionsKt")
+        val parts = sizes.filterKeys { it in applyDirectiveParts }
+        assert(parts.size == 4)
+        // Measured smallest run: 2,240 bytecodes (15 arms).
+        assert(parts.values.min() > 1500)
+        // ... and the sum must still be the bulk of the original 13,694, i.e. the
+        // arms were MOVED, not deleted. Measured sum: 13,704 — 99 MORE than the
+        // monolith once the 89-bytecode entry is added, which is the family's
+        // recurring confirmation that a bytecode count is a THRESHOLD predicate
+        // and not a cost model.
+        assert(parts.values.sum() > 11000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
