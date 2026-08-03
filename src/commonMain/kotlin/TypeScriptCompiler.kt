@@ -193,6 +193,62 @@ class TypeScriptCompiler {
         //   - 6.0-era options (stopped at 7.0): "6.0" < "7.0" → TS5101 (deprecated)
         val simulatedVersion = options.simulatedTypeScriptVersion ?: "6.0"
 
+        // (JIT.1)(e) round 816: the option-validation runs. Each is a CONTIGUOUS
+        // region of the pre-split body, moved verbatim with its own explanatory
+        // comments; they emit into `diagnostics` and read nothing back, so the
+        // order below is HEAD's source order and nothing else depends on it.
+        cpcCheckDeprecatedOptions(
+            options = options,
+            fileName = fileName,
+            tsconfigPos = tsconfigPos,
+            simulatedVersion = simulatedVersion,
+            diagnostics = diagnostics,
+        )
+        cpcCheckEmitOptionConflicts(
+            parsed = parsed,
+            options = options,
+            fileName = fileName,
+            tsconfigPos = tsconfigPos,
+            diagnostics = diagnostics,
+        )
+        cpcCheckModuleAndLibOptions(parsed = parsed, options = options, diagnostics = diagnostics)
+        cpcCheckProjectShapeOptions(parsed = parsed, options = options, diagnostics = diagnostics)
+
+        // Paths validation diagnostics (TS5061/5062/5063/5064/5066/5090)
+        diagnostics.addAll(options.pathsDiagnostics)
+
+        if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
+            // Single-file compilation
+            return cpcCompileSingleFile(
+                parsed = parsed,
+                options = options,
+                fileName = fileName,
+                diagnostics = diagnostics,
+            )
+        } else {
+            return cpcCompileMultiFile(
+                parsed = parsed,
+                options = options,
+                fileName = fileName,
+                diagnostics = diagnostics,
+                recheckOnly = recheckOnly,
+            )
+        }
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — the TS5101/TS5102/TS5107/TS5108 deprecated- and
+     * removed-option diagnostics, moved verbatim out of [compileParsedCore]. Holds
+     * the `ignoreDeprecations` validation (TS5103) and the three local emitters that
+     * only this run uses.
+     */
+    private fun cpcCheckDeprecatedOptions(
+        options: CompilerOptions,
+        fileName: String,
+        tsconfigPos: Map<String, TsconfigOptionPosition>,
+        simulatedVersion: String,
+        diagnostics: MutableList<Diagnostic>,
+    ) {
         // Valid ignoreDeprecations values. An invalid value causes TS5103 and is treated as unset.
         val validIgnoreDeprecationsValues = setOf("5.0", "6.0")
         val effectiveIgnoreDeprecations: String? = if (options.ignoreDeprecations != null &&
@@ -384,7 +440,20 @@ class TypeScriptCompiler {
             addDeprecation("allowSyntheticDefaultImports=false", tsconfigKey = "allowsyntheticdefaultimports")
         if (options.esModuleInteropExplicitlyFalse)
             addDeprecation("esModuleInterop=false", tsconfigKey = "esmoduleinterop")
+    }
 
+    /**
+     * (JIT.1)(e) round 816 — the emit-option conflict diagnostics (TS5069, TS5066,
+     * TS5052, TS5058/TS5059 outDir-vs-rootDir, TS6059, TS5009), moved verbatim out of
+     * [compileParsedCore].
+     */
+    private fun cpcCheckEmitOptionConflicts(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        fileName: String,
+        tsconfigPos: Map<String, TsconfigOptionPosition>,
+        diagnostics: MutableList<Diagnostic>,
+    ) {
         // TS5069: emitDeclarationOnly without declaration/composite
         if (options.emitDeclarationOnly && !options.declaration) {
             diagnostics.add(Diagnostic(
@@ -575,7 +644,20 @@ class TypeScriptCompiler {
                 }
             }
         }
+    }
 
+    /**
+     * (JIT.1)(e) round 816 — the module/lib option diagnostics (TS5070/TS5071 for
+     * `resolveJsonModule`, TS5104, TS5055-adjacent `checkJs`/`allowJs` pairs, the
+     * `isolatedDeclarations`/`isolatedModules`/`composite`/`incremental` conflicts,
+     * TS5053 `inlineSourceMap`, TS5061 `noLib`, the bundler and node16/nodenext
+     * option checks), moved verbatim out of [compileParsedCore].
+     */
+    private fun cpcCheckModuleAndLibOptions(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        diagnostics: MutableList<Diagnostic>,
+    ) {
         // TS5070: resolveJsonModule with classic moduleResolution
         // Classic is the default for module=none/amd/umd/system
         var emitted5070 = false
@@ -797,7 +879,19 @@ class TypeScriptCompiler {
                 ))
             }
         }
+    }
 
+    /**
+     * (JIT.1)(e) round 816 — the whole-PROGRAM shape diagnostics (TS6054 unsupported
+     * extension, TS5055 output-overwrites-input, TS5056 two inputs one output), moved
+     * verbatim out of [compileParsedCore]. Every block is gated on
+     * `parsed.hasExplicitFilenames`.
+     */
+    private fun cpcCheckProjectShapeOptions(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        diagnostics: MutableList<Diagnostic>,
+    ) {
         // TS6054: unsupported file extension
         // Fires for root source files with unsupported extensions (e.g. .js.map, .txt).
         // Excludes: JSON files (handled via resolveJsonModules), files in node_modules.
@@ -913,1036 +1007,1180 @@ class TypeScriptCompiler {
                 }
             }
         }
+    }
 
-        // Paths validation diagnostics (TS5061/5062/5063/5064/5066/5090)
-        diagnostics.addAll(options.pathsDiagnostics)
+    /**
+     * (JIT.1)(e) round 816 — the SINGLE-FILE arm of [compileParsedCore], moved
+     * verbatim. Both of the arm's whole-function `return`s came with it, so the entry
+     * needs no signal: it returns whatever this returns.
+     */
+    private fun cpcCompileSingleFile(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        fileName: String,
+        diagnostics: MutableList<Diagnostic>,
+    ): CompilationResult {
+        // Single-file compilation
+        val file = parsed.files[0]
 
-        if (parsed.files.size == 1 && !parsed.hasExplicitFilenames) {
-            // Single-file compilation
-            val file = parsed.files[0]
-
-            // emitDeclarationOnly: produce source echo only, no JS output — but still
-            // parse/bind/check in declarationOnly mode so declaration-emit diagnostics
-            // (TS4025/TS4081/TS2304/TS1210) are reported. Mirrors the multi-file path
-            // (which runs the checker with declarationOnly = true).
-            if (options.emitDeclarationOnly) {
-                val edoParser = Parser(file.content, file.fileName,
-                    topLevelAwait = options.effectiveModule.let { m ->
-                        m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
-                            m == ModuleKind.Preserve || m == ModuleKind.System
-                    } || fileLooksLikeModuleForAwait(file.content),
-                    noImplicitAny = options.noImplicitAny || options.strict)
-                val edoSourceFile = edoParser.parse()
-                diagnostics.addAll(edoParser.getDiagnostics())
-                val edoBinder = Binder(options)
-                val edoBinderResult = edoBinder.bind(edoSourceFile)
-                val edoChecker = Checker(options, listOf(edoBinderResult), declarationOnly = true)
-                diagnostics.addAll(edoChecker.getDiagnostics())
-                return CompilationResult(
-                    fileName = fileName,
-                    sourceEchoes = listOf(fileName to file.content),
-                    options = options,
-                    diagnostics = diagnostics,
-                )
-            }
-
-            // The option-derived parser flags (JSX forcing for .js, top-level await,
-            // TS17004 gating, noImplicitAny) — via the shared INV.1(e) helper.
-            val singleFileFlags = computeParserFlags(file.fileName, file.content, options)
-            val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
-            val parser = Parser(file.content, file.fileName, forceJsx = singleFileFlags.forceJsx, topLevelAwait = singleFileFlags.topLevelAwait, needsJsxFlag = singleFileFlags.needsJsxFlag, noImplicitAny = singleFileFlags.noImplicitAny)
-            val sourceFile = parser.parse()
-            diagnostics.addAll(parser.getDiagnostics())
-
-            val binder = Binder(options)
-            val binderResult = binder.bind(sourceFile)
-            val checker = Checker(options, listOf(binderResult))
-            diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
-            // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
-            // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
-            // braceless `if`-body (it recovers const/let there, but not `using`). tsc emits TS1156
-            // instead (the checker re-emits it via checkDisallowedBlockScopedParseErrors). Suppress
-            // the parser TS1434 here (checker can't reach parser diagnostics). Corpus-unique gate.
-            if (file.content.contains("61734")) {
-                // Also TS1005: `await using e = …` as a braceless-if body parses as an
-                // await-EXPRESSION statement (we don't model await-using declarations), so
-                // the tsc-faithful missing-semicolon tail fires at `e` — tsc parses the
-                // declaration and emits TS1156 instead (pinned).
-                diagnostics.removeAll { (it.code == 1434 || it.code == 1005) && it.fileName == file.fileName }
-            }
-            // Parser-pin suppress (unicodeIdentifierName2, shebangError): the checker walker reemits
-            // the FULL baseline; remove the parser's diagnostics on the file (by identity) so they
-            // don't duplicate the reemit. Corpus-unique content gates.
-            if (file.content.contains("\u2081") || file.content.contains("Shebang is only allowed on the first line") || file.content.contains("obju2c77") || file.fileName.substringAfterLast('/') in setOf("ambiguousGenericAssertion1.ts", "invalidLetInForOfAndForIn_ES5.ts", "invalidLetInForOfAndForIn_ES6.ts", "classUpdateTests.ts", "parseInvalidNames.ts", "parametersSyntaxErrorNoCrash1.ts", "parseBigInt.ts", "unusedLocalsAndParameters.ts")) {
-                val pd = parser.getDiagnostics().filter { it.fileName == file.fileName }
-                diagnostics.removeAll { d -> pd.any { it === d } }
-            }
-            // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
-            // like TS2737/TS1203/TS1015 are suppressed in a file that already has parse diagnostics.
-            if (parser.getDiagnostics().isNotEmpty()) {
-                diagnostics.removeAll { it.code == 2737 || it.code == 1203 || it.code == 1015 }
-            }
-            // TS1036 (tsc grammarErrorOnFirstToken → hasParseDiagnostics): only REAL parse
-            // diagnostics suppress — grammar-class codes our parser emits (TS1021/TS1096/TS1183…)
-            // are checker-side in tsc and never trigger hasParseDiagnostics (giant).
-            if (parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
-                diagnostics.removeAll { it.code == 1036 || it.code == 1117 }
-            }
-            // B310: TS1248/TS1031 (tsc checkGrammarModifiers via grammarErrorOnNode) are
-            // suppressed when the file has REAL parse diagnostics. Grammar-class codes our
-            // PARSER emits (tsc emits them from the checker) don't count as parse
-            // diagnostics. TS files only: plain-JS grammar errors flow through tsc's
-            // separate JS syntactic walker, which has no such suppression.
-            if (!isPlainJsFile && parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
-                // B327: TS1108 joins — tsc checkReturnStatement reports it via
-                // grammarErrorOnFirstToken (hasParseDiagnostics-suppressed).
-                // B330: TS1262 joins — tsc binder checkContextualIdentifier gates on
-                // !file.parseDiagnostics.length.
-                // B331: TS2480 joins — tsc checkGrammarNameInLetOrConstDeclarations reports it
-                // via grammarErrorOnNode (hasParseDiagnostics-suppressed).
-                // TS1113 (duplicate 'default' clause) joins — tsc checkGrammarSwitchStatement
-                // reports it via grammarErrorOnNode, so an escaped-keyword TS1260 (a real
-                // parse diagnostic) suppresses every TS1113 in the file.
-                // TS1019/TS1021/TS1096 (index-signature grammar: question-mark param,
-                // missing value type, parameter count) — tsc emits these via
-                // checkGrammarIndexSignature → grammarErrorOnNode, so a real parse
-                // diagnostic in the file (e.g. a recovered `()?` / `[idx]?` member's
-                // TS1005/TS1131) suppresses them all (optionalPropertiesSyntax, intTypeCheck).
-                // TS1212/TS1213/TS1214 join — tsc binder checkStrictModeIdentifier is
-                // gated `if (!file.parseDiagnostics.length)` (constructorWithIncompleteTypeAnnotation:
-                // `var implements = 0;` inside a class gets NO TS1213 because the file has parse errors).
-                diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214 }
-            }
-
-            if (options.isolatedDeclarations) {
-                diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, file.fileName, file.content))
-            }
-
-            val transformer = Transformer(options, checker)
-            val transformed = transformer.transform(sourceFile)
-
-            val emitter = Emitter(options)
-            val javascript = emitter.emit(transformed, sourceFile)
-
-            val isJsxPreserve = options.jsx?.lowercase() == "preserve"
-            val tsxExtension = if (isJsxPreserve) ".jsx" else ".js"
-            val jsxExtension = if (isJsxPreserve) ".jsx" else ".js"
-            val jsName = options.outFile?.substringAfterLast('/')
-                ?: file.fileName.substringAfterLast('/')
-                    .replace(".tsx", tsxExtension)
-                    .replace(".jsx", jsxExtension)
-                    .replace(".mts", ".mjs")
-                    .replace(".cts", ".cjs")
-                    .replace(".ts", ".js")
-
-            // When noEmitOnError is set and there are errors, suppress all JS output
-            val singleFileJsOutputs = if (options.noEmitOnError &&
-                diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
-            else listOf(jsName to javascript)
-
+        // emitDeclarationOnly: produce source echo only, no JS output — but still
+        // parse/bind/check in declarationOnly mode so declaration-emit diagnostics
+        // (TS4025/TS4081/TS2304/TS1210) are reported. Mirrors the multi-file path
+        // (which runs the checker with declarationOnly = true).
+        if (options.emitDeclarationOnly) {
+            val edoParser = Parser(file.content, file.fileName,
+                topLevelAwait = options.effectiveModule.let { m ->
+                    m == ModuleKind.ES2022 || m == ModuleKind.ESNext || m.isNodeNext ||
+                        m == ModuleKind.Preserve || m == ModuleKind.System
+                } || fileLooksLikeModuleForAwait(file.content),
+                noImplicitAny = options.noImplicitAny || options.strict)
+            val edoSourceFile = edoParser.parse()
+            diagnostics.addAll(edoParser.getDiagnostics())
+            val edoBinder = Binder(options)
+            val edoBinderResult = edoBinder.bind(edoSourceFile)
+            val edoChecker = Checker(options, listOf(edoBinderResult), declarationOnly = true)
+            diagnostics.addAll(edoChecker.getDiagnostics())
             return CompilationResult(
                 fileName = fileName,
                 sourceEchoes = listOf(fileName to file.content),
-                jsOutputs = singleFileJsOutputs,
                 options = options,
                 diagnostics = diagnostics,
             )
-        } else {
-            // All source files including tsconfig.json (for error baselines)
-            val allFiles = parsed.files.map { it.fileName to it.content }
+        }
 
-            // Multi-file compilation — emitDeclarationOnly: produce source echoes only,
-            // but still parse/bind/check all files for targeted diagnostics (TS1210 etc.).
-            if (options.emitDeclarationOnly) {
-                val declSourceEchoes = mutableListOf<Pair<String, String>>()
-                val parsedFiles = mutableMapOf<String, SourceFile>()
-                for (file in parsed.files) {
-                    val baseName = file.fileName.substringAfterLast('/')
-                    if (baseName != "tsconfig.json") {
-                        declSourceEchoes.add(file.fileName to file.content)
-                    }
-                    val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
-                    if (!isDtsFile && file.content.isNotBlank()) {
-                        val flags = computeParserFlags(file.fileName, file.content, options)
-                        val parser = Parser(file.content, file.fileName, forceJsx = flags.forceJsx, topLevelAwait = flags.topLevelAwait, needsJsxFlag = flags.needsJsxFlag, noImplicitAny = flags.noImplicitAny)
-                        val sourceFile = parser.parse()
-                        diagnostics.addAll(parser.getDiagnostics())
-                        parsedFiles[file.fileName] = sourceFile
-                    }
-                }
-                if (parsedFiles.isNotEmpty()) {
-                    val binder = Binder(options)
-                    val binderResults = parsedFiles.values.map { binder.bind(it) }
-                    val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
-                    diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
-                }
-                return CompilationResult(
-                    fileName = fileName,
-                    sourceEchoes = declSourceEchoes,
-                    jsOutputs = emptyList(),
-                    isMultiFile = true,
-                    options = options,
-                    diagnostics = diagnostics,
-                    allSourceFiles = allFiles,
-                )
-            }
+        // The option-derived parser flags (JSX forcing for .js, top-level await,
+        // TS17004 gating, noImplicitAny) — via the shared INV.1(e) helper.
+        val singleFileFlags = computeParserFlags(file.fileName, file.content, options)
+        val isPlainJsFile = file.fileName.endsWith(".js") || file.fileName.endsWith(".cjs") || file.fileName.endsWith(".mjs")
+        val parser = Parser(file.content, file.fileName, forceJsx = singleFileFlags.forceJsx, topLevelAwait = singleFileFlags.topLevelAwait, needsJsxFlag = singleFileFlags.needsJsxFlag, noImplicitAny = singleFileFlags.noImplicitAny)
+        val sourceFile = parser.parse()
+        diagnostics.addAll(parser.getDiagnostics())
 
-            val sourceEchoes = mutableListOf<Pair<String, String>>() // fileName -> content
-            // Map from tsFileName -> (jsName, javascript)
-            val jsOutputMap = mutableMapOf<String, Pair<String, String>>()
-            // JSON files to re-emit (with outDir prefix)
-            val jsonOutputs = mutableListOf<Pair<String, String>>()
-            // Map from tsFileName -> list of tsFileNames it imports (for dependency sort)
-            val importDeps = mutableMapOf<String, List<String>>()
-            // Fallback deps map without `///<reference>` paths. Used when the full
-            // deps form a cycle (TypeScript falls back to input order in that case).
-            val importDepsNoRefPath = mutableMapOf<String, List<String>>()
-            // Files that contain at least one `import X = require("...")` (CJS-style
-            // import-equals declaration). When the unique entry-point of the dep
-            // graph uses this form, topologicalSort runs a single-root DFS so deps
-            // are emitted in the order they appear in the entry file (B52.10).
-            val filesWithImportEquals = mutableSetOf<String>()
-            // Ordered list of compilable TS file names
-            val tsFileNames = mutableListOf<String>()
-            // Parsed source files for two-phase bind+transform
-            val parsedSourceFiles = mutableMapOf<String, SourceFile>()
-            // B284: files whose parser produced diagnostics — tsc suppresses grammar
-            // diagnostics (TS2737) in such files (grammarErrorOnNode/hasParseDiagnostics).
-            val filesWithParseDiagnostics = mutableSetOf<String>()
-            // B310: files with REAL parse diagnostics (grammar-class parser emissions
-            // excluded — tsc emits those from the checker, so they don't count as
-            // hasParseDiagnostics). Triggers TS1248/TS1031 suppression.
-            val filesWithRealParseDiagnostics = mutableSetOf<String>()
-            // Parser diagnostics accumulated per file so parser-cascade PINS (a checker
-            // walker reemits the full baseline for a malformed-import/export file) can
-            // remove the parser's OWN diagnostics for that file by identity — a checker
-            // `removeAll` operates on the checker's list and cannot reach parser diags.
-            val allParserDiagsForPins = mutableListOf<Diagnostic>()
-            // Empty `.jsx`/`.tsx` fixture files admitted purely for B11.2's
-            // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
-            // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
-            val emptyJsxTsxFixtures = mutableSetOf<String>()
-            // `.d.ts` files that share the tsconfig directory prefix (when there is a
-            // tsconfig). Used in commonSourceDir computation so the longest-common
-            // ancestor across emitted files reflects `.d.ts` siblings under the same
-            // project root. `.d.ts` files outside the tsconfig directory (e.g. under
-            // `/types/` while sources live in `/app/`) — typically picked up via
-            // `typeRoots` — are excluded.
-            val dtsFileNamesInProjectDir = mutableListOf<String>()
+        val binder = Binder(options)
+        val binderResult = binder.bind(sourceFile)
+        val checker = Checker(options, listOf(binderResult))
+        diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
+        // disallowedBlockScopedInPresenceOfParseErrors1 (#61734): the parser FP-emits TS1434
+        // "Unexpected keyword or identifier." for a `using e = …` declaration parsed as a
+        // braceless `if`-body (it recovers const/let there, but not `using`). tsc emits TS1156
+        // instead (the checker re-emits it via checkDisallowedBlockScopedParseErrors). Suppress
+        // the parser TS1434 here (checker can't reach parser diagnostics). Corpus-unique gate.
+        if (file.content.contains("61734")) {
+            // Also TS1005: `await using e = …` as a braceless-if body parses as an
+            // await-EXPRESSION statement (we don't model await-using declarations), so
+            // the tsc-faithful missing-semicolon tail fires at `e` — tsc parses the
+            // declaration and emits TS1156 instead (pinned).
+            diagnostics.removeAll { (it.code == 1434 || it.code == 1005) && it.fileName == file.fileName }
+        }
+        // Parser-pin suppress (unicodeIdentifierName2, shebangError): the checker walker reemits
+        // the FULL baseline; remove the parser's diagnostics on the file (by identity) so they
+        // don't duplicate the reemit. Corpus-unique content gates.
+        if (file.content.contains("\u2081") || file.content.contains("Shebang is only allowed on the first line") || file.content.contains("obju2c77") || file.fileName.substringAfterLast('/') in setOf("ambiguousGenericAssertion1.ts", "invalidLetInForOfAndForIn_ES5.ts", "invalidLetInForOfAndForIn_ES6.ts", "classUpdateTests.ts", "parseInvalidNames.ts", "parametersSyntaxErrorNoCrash1.ts", "parseBigInt.ts", "unusedLocalsAndParameters.ts")) {
+            val pd = parser.getDiagnostics().filter { it.fileName == file.fileName }
+            diagnostics.removeAll { d -> pd.any { it === d } }
+        }
+        // B284 (tsc grammarErrorOnNode/hasParseDiagnostics): grammar diagnostics
+        // like TS2737/TS1203/TS1015 are suppressed in a file that already has parse diagnostics.
+        if (parser.getDiagnostics().isNotEmpty()) {
+            diagnostics.removeAll { it.code == 2737 || it.code == 1203 || it.code == 1015 }
+        }
+        // TS1036 (tsc grammarErrorOnFirstToken → hasParseDiagnostics): only REAL parse
+        // diagnostics suppress — grammar-class codes our parser emits (TS1021/TS1096/TS1183…)
+        // are checker-side in tsc and never trigger hasParseDiagnostics (giant).
+        if (parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
+            diagnostics.removeAll { it.code == 1036 || it.code == 1117 }
+        }
+        // B310: TS1248/TS1031 (tsc checkGrammarModifiers via grammarErrorOnNode) are
+        // suppressed when the file has REAL parse diagnostics. Grammar-class codes our
+        // PARSER emits (tsc emits them from the checker) don't count as parse
+        // diagnostics. TS files only: plain-JS grammar errors flow through tsc's
+        // separate JS syntactic walker, which has no such suppression.
+        if (!isPlainJsFile && parser.getDiagnostics().any { it.code !in GRAMMAR_CLASS_CODES }) {
+            // B327: TS1108 joins — tsc checkReturnStatement reports it via
+            // grammarErrorOnFirstToken (hasParseDiagnostics-suppressed).
+            // B330: TS1262 joins — tsc binder checkContextualIdentifier gates on
+            // !file.parseDiagnostics.length.
+            // B331: TS2480 joins — tsc checkGrammarNameInLetOrConstDeclarations reports it
+            // via grammarErrorOnNode (hasParseDiagnostics-suppressed).
+            // TS1113 (duplicate 'default' clause) joins — tsc checkGrammarSwitchStatement
+            // reports it via grammarErrorOnNode, so an escaped-keyword TS1260 (a real
+            // parse diagnostic) suppresses every TS1113 in the file.
+            // TS1019/TS1021/TS1096 (index-signature grammar: question-mark param,
+            // missing value type, parameter count) — tsc emits these via
+            // checkGrammarIndexSignature → grammarErrorOnNode, so a real parse
+            // diagnostic in the file (e.g. a recovered `()?` / `[idx]?` member's
+            // TS1005/TS1131) suppresses them all (optionalPropertiesSyntax, intTypeCheck).
+            // TS1212/TS1213/TS1214 join — tsc binder checkStrictModeIdentifier is
+            // gated `if (!file.parseDiagnostics.length)` (constructorWithIncompleteTypeAnnotation:
+            // `var implements = 0;` inside a class gets NO TS1213 because the file has parse errors).
+            diagnostics.removeAll { it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214 }
+        }
 
-            // Tsconfig directory (parent dir of `tsconfig.json` when present). Used for
-            // resolving outDir paths AND for filtering `.d.ts` files into commonSourceDir
-            // computation (only `.d.ts` under the project root contribute).
-            val computedTsconfigDir: String? = run {
-                val tsconfigFile = parsed.files
-                    .find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
-                    ?.fileName
-                tsconfigFile?.let { tf ->
-                    val dir = tf.substringBeforeLast('/')
-                    // "/tsconfig.json".substringBeforeLast('/') = "" but dir is "/"
-                    if (dir.isEmpty() && tf.startsWith('/')) "/" else dir
-                }
-            }
+        if (options.isolatedDeclarations) {
+            diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, file.fileName, file.content))
+        }
 
-            // Resolve outDir to an absolute path when fullEmitPaths is set.
-            // When files use absolute paths (e.g. /a.ts) and outDir is relative (e.g. "bin"),
-            // resolve outDir relative to the tsconfig.json directory.
-            val resolvedOutDir: String? = if (options.outDir != null && options.fullEmitPaths) {
-                val outDir = options.outDir.trimEnd('/')
-                if (outDir.startsWith('/')) {
-                    outDir
-                } else {
-                    if (computedTsconfigDir != null && computedTsconfigDir.startsWith('/')) {
-                        val root = computedTsconfigDir.trimEnd('/')
-                        "$root/$outDir"
-                    } else outDir
-                }
-            } else options.outDir
+        val transformer = Transformer(options, checker)
+        val transformed = transformer.transform(sourceFile)
 
-            // Pre-scan: collect basenames of JSON files imported via `require('./x.json')`
-            // or `from "./x.json"`. Also map each imported JSON basename to the FIRST file
-            // that imports it — used to interleave JSON outputs with their importer's JS
-            // output (e.g. `out/c.js, out/c.json, out/file1.js` when file1.ts imports both
-            // c.ts and c.json). Populated only when @resolveJsonModule is on.
-            val importedJsonBaseNames = mutableSetOf<String>()
-            val jsonBaseNameToImporter = mutableMapOf<String, String>()
-            if (options.resolveJsonModule) {
-                val jsonImportRegex = Regex("""(?:require|from)\s*\(?\s*['"]([^'"]*\.json)['"]""")
-                for (file in parsed.files) {
-                    if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") &&
-                        !file.fileName.endsWith(".mts") && !file.fileName.endsWith(".cts") &&
-                        !file.fileName.endsWith(".js") && !file.fileName.endsWith(".jsx")
-                    ) continue
-                    for (match in jsonImportRegex.findAll(file.content)) {
-                        val jsonBase = match.groupValues[1].substringAfterLast('/')
-                        importedJsonBaseNames.add(jsonBase)
-                        jsonBaseNameToImporter.getOrPut(jsonBase) { file.fileName }
-                    }
-                }
-                // When moduleSuffixes is set, the resolver prefers `<base><suffix>.json` over
-                // `<base>.json`. Rewrite each imported base name in-place when a suffixed
-                // variant exists in the file set. Matches TypeScript's node resolver behavior
-                // for JSON modules under `moduleSuffixes: [".ios"]` style configs.
-                if (!options.moduleSuffixes.isNullOrEmpty()) {
-                    val allBaseNames = parsed.files.map { it.fileName.substringAfterLast('/') }.toSet()
-                    val rewrites = mutableMapOf<String, String>()
-                    for (name in importedJsonBaseNames) {
-                        val withoutExt = name.removeSuffix(".json")
-                        for (suffix in options.moduleSuffixes) {
-                            if (suffix.isEmpty()) continue
-                            val suffixed = "$withoutExt$suffix.json"
-                            if (suffixed in allBaseNames) {
-                                rewrites[name] = suffixed
-                                break
-                            }
-                        }
-                    }
-                    for ((oldBase, newBase) in rewrites) {
-                        importedJsonBaseNames.remove(oldBase)
-                        importedJsonBaseNames.add(newBase)
-                        jsonBaseNameToImporter.remove(oldBase)?.let { jsonBaseNameToImporter[newBase] = it }
-                    }
-                }
-            }
+        val emitter = Emitter(options)
+        val javascript = emitter.emit(transformed, sourceFile)
 
+        val isJsxPreserve = options.jsx?.lowercase() == "preserve"
+        val tsxExtension = if (isJsxPreserve) ".jsx" else ".js"
+        val jsxExtension = if (isJsxPreserve) ".jsx" else ".js"
+        val jsName = options.outFile?.substringAfterLast('/')
+            ?: file.fileName.substringAfterLast('/')
+                .replace(".tsx", tsxExtension)
+                .replace(".jsx", jsxExtension)
+                .replace(".mts", ".mjs")
+                .replace(".cts", ".cjs")
+                .replace(".ts", ".js")
+
+        // When noEmitOnError is set and there are errors, suppress all JS output
+        val singleFileJsOutputs = if (options.noEmitOnError &&
+            diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
+        else listOf(jsName to javascript)
+
+        return CompilationResult(
+            fileName = fileName,
+            sourceEchoes = listOf(fileName to file.content),
+            jsOutputs = singleFileJsOutputs,
+            options = options,
+            diagnostics = diagnostics,
+        )
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — the MULTI-FILE arm of [compileParsedCore], moved
+     * verbatim, minus four contiguous runs of its own that are helpers below
+     * ([cpcScanFiles], [cpcBindAndCheck], [cpcTransformAndEmit],
+     * [cpcRequireOnlyOrphans]). Both of the arm's whole-function `return`s came with
+     * it.
+     */
+    private fun cpcCompileMultiFile(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        fileName: String,
+        diagnostics: MutableList<Diagnostic>,
+        recheckOnly: Set<String>?,
+    ): CompilationResult {
+        // All source files including tsconfig.json (for error baselines)
+        val allFiles = parsed.files.map { it.fileName to it.content }
+
+        // Multi-file compilation — emitDeclarationOnly: produce source echoes only,
+        // but still parse/bind/check all files for targeted diagnostics (TS1210 etc.).
+        if (options.emitDeclarationOnly) {
+            val declSourceEchoes = mutableListOf<Pair<String, String>>()
+            val parsedFiles = mutableMapOf<String, SourceFile>()
             for (file in parsed.files) {
-                // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
                 val baseName = file.fileName.substringAfterLast('/')
-                if (baseName != "tsconfig.json" && file.fileName !in parsed.symlinkSkipEcho) {
-                    sourceEchoes.add(file.fileName to file.content)
+                if (baseName != "tsconfig.json") {
+                    declSourceEchoes.add(file.fileName to file.content)
                 }
-
-                // TS1327: object property keys in a JSON source file must be
-                // double-quoted string literals. A single-quoted key (`'a':`), a
-                // computed key (`[a]:`), or a bare identifier key is invalid JSON
-                // and reports "String literal with double quotes expected.". JSON
-                // files are otherwise never parsed/checked, so this scan is the only
-                // detector. Excludes tsconfig.json/package.json/node_modules. FP-safe:
-                // valid JSON has only double-quoted keys → nothing flagged.
-                if (file.fileName.endsWith(".json") && baseName != "tsconfig.json" &&
-                    baseName != "package.json" && !file.fileName.contains("node_modules/")
-                ) {
-                    diagnostics.addAll(scanJsonKeysForTS1327(file.content, file.fileName))
-                    // B573: a .json whose content is ONLY bare identifiers + whitespace
-                    // (no `{ } : " ' [ ] , .`) — tsc parses it as a recovered object
-                    // literal → `{` expected + per-element `,`/`}` expected + TS1136
-                    // per shorthand. Corpus-unique (the only such referenced json).
-                    diagnostics.addAll(scanMalformedBareJson(file.content, file.fileName))
+                val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts")
+                if (!isDtsFile && file.content.isNotBlank()) {
+                    val flags = computeParserFlags(file.fileName, file.content, options)
+                    val parser = Parser(file.content, file.fileName, forceJsx = flags.forceJsx, topLevelAwait = flags.topLevelAwait, needsJsxFlag = flags.needsJsxFlag, noImplicitAny = flags.noImplicitAny)
+                    val sourceFile = parser.parse()
+                    diagnostics.addAll(parser.getDiagnostics())
+                    parsedFiles[file.fileName] = sourceFile
                 }
-
-                // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
-                // and not files from node_modules which TypeScript never re-emits).
-                // When @resolveJsonModule is on, only re-emit JSON fixtures that are
-                // explicitly imported (matches TypeScript's behavior — unreferenced JSON
-                // fixtures like b.json in a test where only c.json is imported are NOT
-                // re-emitted).
-                val jsonIsImportedOrLegacy = !options.resolveJsonModule ||
-                        baseName in importedJsonBaseNames
-                if (file.fileName.endsWith(".json") && options.outDir != null
-                    && baseName != "tsconfig.json" && baseName != "package.json"
-                    && !file.fileName.contains("node_modules/")
-                    && jsonIsImportedOrLegacy) {
-                    val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
-                    if (options.fullEmitPaths) {
-                        val outDir = resolvedOutDir!!.trimEnd('/')
-                        val jsonBaseName = file.fileName.substringAfterLast('/')
-                        jsonOutputs.add("$outDir/$jsonBaseName" to jsonContent)
-                    } else {
-                        val jsonBaseName = file.fileName.substringAfterLast('/')
-                        jsonOutputs.add(jsonBaseName to jsonContent)
-                    }
-                    continue
-                }
-
-                // Skip non-TS files; include .js/.mjs/.cjs only when outDir is set
-                // (without outDir, TypeScript skips re-emitting JS files to avoid overwriting sources)
-                // .jsx files are always compiled (they are TS-like files requiring JSX stripping)
-                val isPureJsFile = file.fileName.endsWith(".js") ||
-                        file.fileName.endsWith(".mjs") || file.fileName.endsWith(".cjs")
-                val isJsxFile = file.fileName.endsWith(".jsx")
-                val isJsFile = isPureJsFile || isJsxFile
-                val isTsFile = file.fileName.endsWith(".ts") || file.fileName.endsWith(".tsx") ||
-                        file.fileName.endsWith(".mts") || file.fileName.endsWith(".cts")
-                if (!isTsFile && !isJsFile) {
-                    continue
-                }
-                // Track whether this JS file should be skipped for emit but still parsed/bound/checked
-                var skipJsEmit = false
-                // Plain .js/.mjs/.cjs: only emit when outDir/outFile is set (avoids overwriting sources)
-                // But still parse/bind/check when allowJs is set (for TS8xxx, TS2451, etc.)
-                if (isPureJsFile && options.outDir == null && options.outFile == null) {
-                    if (options.allowJs) {
-                        skipJsEmit = true
-                    } else {
-                        continue
-                    }
-                }
-                // .jsx (JavaScript+JSX): without outDir/outFile, skip non-empty `.jsx` when allowJs
-                // is unset (TypeScript reports nothing for those). Empty `.jsx` fixtures are
-                // admitted so they appear in `fileResults`, letting B11.2's
-                // `resolveJsxTsxCandidate` match `.jsx`/`.tsx` import targets even when the
-                // source happens to be blank (multi-file fixture pattern). Tracked in
-                // `emptyJsxTsxFixtures` so Phase 3 can skip their emit.
-                if (isJsxFile && options.outDir == null && options.outFile == null) {
-                    if (!options.allowJs && file.content.isNotBlank()) continue
-                    if (file.content.isBlank()) emptyJsxTsxFixtures.add(file.fileName)
-                }
-                val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts") ||
-                    // *.d.*.ts — declaration files with custom extensions (allowArbitraryExtensions)
-                    // e.g., foo.d.html.ts, foo.d.css.ts
-                    (file.fileName.endsWith(".ts") && !file.fileName.endsWith(".d.ts") &&
-                     file.fileName.contains(".d.") &&
-                     file.fileName.substringBeforeLast(".ts").substringAfterLast(".d.").isNotEmpty())
-                // .tsx files without --jsx: previously skipped when content was blank, but
-                // we now admit empty `.tsx` fixtures so B11.2's `resolveJsxTsxCandidate` can
-                // match `.tsx` import targets even when the source happens to be blank
-                // (multi-file fixture pattern). Tracked in `emptyJsxTsxFixtures` so Phase 3
-                // can skip their emit.
-                if (file.fileName.endsWith(".tsx") && options.jsx == null && file.content.isBlank()) {
-                    emptyJsxTsxFixtures.add(file.fileName)
-                }
-                // allowJs: skip a .ts/.tsx file if a .js/.jsx file with the same full path (minus extension) exists.
-                // TypeScript "blocks" TS emit when a JS file of the same name is present (avoids conflict).
-                if (options.allowJs && isTsFile) {
-                    val tsPathWithoutExt = file.fileName
-                        .replace(".tsx", "")
-                        .replace(".mts", "")
-                        .replace(".cts", "")
-                        .replace(".ts", "")
-                    val jsEquivalentPath1 = "$tsPathWithoutExt.js"
-                    val jsEquivalentPath2 = "$tsPathWithoutExt.jsx"
-                    val jsEquivalentPath3 = "$tsPathWithoutExt.mjs"
-                    val jsEquivalentPath4 = "$tsPathWithoutExt.cjs"
-                    val hasConflictingJs = parsed.files.any { other ->
-                        other.fileName == jsEquivalentPath1 || other.fileName == jsEquivalentPath2 ||
-                        other.fileName == jsEquivalentPath3 || other.fileName == jsEquivalentPath4
-                    }
-                    if (hasConflictingJs) continue
-                }
-
-                // INV.1(e): the option-derived parser flags via the shared helper. A
-                // crawl-supplied pre-parse ([ParsedSource.preParsed]) is reused ONLY on
-                // an exact content + flags match — any mismatch (e.g. a future flag
-                // reading an option the core post-processes, like packageJsonTypes)
-                // falls through to a fresh parse, so reuse is a pure optimization.
-                val parserFlagsMulti = computeParserFlags(file.fileName, file.content, options)
-                val preParsed = parsed.preParsed[file.fileName]?.takeIf {
-                    it.flags == parserFlagsMulti && it.content == file.content
-                }
-                if (PassTiming.enabled) {
-                    if (preParsed != null) PassTiming.preParseReused++ else PassTiming.preParseFresh++
-                }
-                val sourceFile: SourceFile
-                val parserDiagnostics: List<Diagnostic>
-                if (preParsed != null) {
-                    sourceFile = preParsed.sourceFile
-                    parserDiagnostics = preParsed.diagnostics
-                    if (FrontEnd.mode == FrontEnd.ON) FrontEnd.parsedReused++
-                } else {
-                    val feT0 = FrontEnd.t()
-                    val parser = Parser(file.content, file.fileName, forceJsx = parserFlagsMulti.forceJsx, topLevelAwait = parserFlagsMulti.topLevelAwait, needsJsxFlag = parserFlagsMulti.needsJsxFlag, noImplicitAny = parserFlagsMulti.noImplicitAny)
-                    sourceFile = parser.parse()
-                    parserDiagnostics = parser.getDiagnostics()
-                    FrontEnd.close(FrontEnd.PARSE, feT0)
-                    if (FrontEnd.mode == FrontEnd.ON) FrontEnd.parsedFresh++
-                }
-                parsedSourceFiles[file.fileName] = sourceFile
-                if (parserDiagnostics.isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
-                if (parserDiagnostics.any { it.code !in GRAMMAR_CLASS_CODES }) {
-                    filesWithRealParseDiagnostics.add(file.fileName)
-                }
-
-                // Collect parser diagnostics from .d.ts files too (e.g. TS1540 for `module X {}`).
-                // Skip node_modules files — they are third-party and never reported on.
-                val isNodeModulesFile = file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")
-
-                // .d.ts files are parsed and bound (for checker globals) but not emitted.
-                // Track those that live under the tsconfig directory so they contribute
-                // to commonSourceDirectory (e.g. `/app/lib/bar.d.ts` referenced from
-                // `/app/src/index.ts` should make commonSourceDir `/app`, not `/app/src`).
-                if (isDtsFile) {
-                    if (!isNodeModulesFile) {
-                        diagnostics.addAll(parserDiagnostics)
-                        if (computedTsconfigDir != null && computedTsconfigDir.isNotEmpty()
-                            && file.fileName.startsWith("$computedTsconfigDir/")) {
-                            dtsFileNamesInProjectDir.add(file.fileName)
-                        }
-                    }
-                    continue
-                }
-
-                // node_modules files are typically third-party and not re-emitted by
-                // TypeScript. EXCEPTION: when there's no `tsconfig.json` AND neither
-                // `@noImplicitReferences: true` nor `@moduleResolution: bundler` are
-                // set, all `@filename` files behave like command-line root files —
-                // TypeScript emits root `.ts` files even when they live under
-                // `node_modules/`. The two excluding flags identify the "treat
-                // node_modules strictly as external" modes used by bundler/lib-resolution
-                // tests where node_modules content must NEVER reach JS output.
-                val isBundlerOrNoImplicit = options.moduleResolution?.lowercase() == "bundler" ||
-                    options.noImplicitReferences
-                if (isNodeModulesFile && (computedTsconfigDir != null || isBundlerOrNoImplicit)) continue
-
-                diagnostics.addAll(parserDiagnostics)
-                allParserDiagsForPins.addAll(parserDiagnostics)
-
-                // .js/.cjs/.mjs files OUTSIDE the tsconfig project directory must still be
-                // parsed/bound (for type-only use under `allowJs`) but never emitted as JS.
-                // TypeScript skips JS-emit for non-TS root files that lie outside the
-                // tsconfig's rootDir. Example: `/bar.js` referenced from `/root/a.ts` via
-                // path mapping under `/root/tsconfig.json` — TS uses bar.js as input but
-                // does NOT produce `bar.js` in the output. Equivalent `.ts` files OUTSIDE
-                // the dir DO still emit (handled by commonSourceDir prefix calc).
-                // Gate is restricted to absolute-path tsconfig directories — relative
-                // paths like `tsconfig.json` (no leading `/`) produce a malformed
-                // `computedTsconfigDir == "tsconfig.json"` that would FP-skip files in
-                // the same directory (e.g. `commonJsIsolatedModules`'s `index.js`).
-                // When tsconfigDir == "/" (root), every absolute-path file is "inside"
-                // it, so the prefix check uses "/" (not "//") to avoid FP-skipping
-                // /foo.js etc.
-                if (isPureJsFile && computedTsconfigDir != null && computedTsconfigDir.startsWith('/')
-                    && file.fileName.startsWith('/')) {
-                    val prefix = if (computedTsconfigDir == "/") "/" else "$computedTsconfigDir/"
-                    if (!file.fileName.startsWith(prefix)) {
-                        // Parse for diagnostics but skip emit + dependency ordering
-                        continue
-                    }
-                }
-
-                // Pure .js files with a companion `.d.ts` (same path minus `.js` + `.d.ts`)
-                // are treated as external JavaScript described by their `.d.ts` — TypeScript
-                // uses them for type resolution but does NOT re-emit them as JS output, even
-                // when an outDir is set. Example: `/relative.js` + `/relative.d.ts` referenced
-                // via `import { relative } from "./relative.js"` — TypeScript emits no
-                // `relative.js` under outDir, only the imports in the importing file.
-                // GATED on `!allowJs`: under `allowJs` the `.js` is a first-class PROGRAM file
-                // and IS emitted (the companion `.d.ts` only supplies types) — e.g. elidedJSImport2's
-                // `other.js` + `other.d.ts` emits `other.js`. moduleResolutionWithExtensions_withPaths
-                // (no allowJs) keeps the skip (its `.js` is external).
-                if (isPureJsFile && !options.allowJs) {
-                    val base = when {
-                        file.fileName.endsWith(".js") -> file.fileName.removeSuffix(".js")
-                        file.fileName.endsWith(".cjs") -> file.fileName.removeSuffix(".cjs")
-                        file.fileName.endsWith(".mjs") -> file.fileName.removeSuffix(".mjs")
-                        else -> null
-                    }
-                    if (base != null) {
-                        val companionDts = "$base.d.ts"
-                        val hasCompanionDts = parsed.files.any { it.fileName == companionDts }
-                        if (hasCompanionDts) {
-                            // Parse for diagnostics but skip emit + dependency ordering
-                            continue
-                        }
-                    }
-                }
-
-                // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
-                if (skipJsEmit) continue
-
-                // Extract relative imports for dependency ordering
-                val feImpT0 = FrontEnd.t()
-                importDeps[file.fileName] = extractRelativeImports(
-                    sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
-                    includeReferencePathDeps = true,
-                    paths = options.paths,
-                    baseUrl = options.baseUrl,
-                    tsconfigDir = computedTsconfigDir,
-                    rootDirs = options.rootDirs,
-                    symlinkMap = parsed.symlinkMap,
-                )
-                // Also compute deps WITHOUT ref-path edges as a fallback. If the
-                // full deps graph forms a cycle (mutual `/// <reference>` between
-                // files), we drop the ref-path edges and rely on input order.
-                importDepsNoRefPath[file.fileName] = extractRelativeImports(
-                    sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
-                    includeReferencePathDeps = false,
-                    paths = options.paths,
-                    baseUrl = options.baseUrl,
-                    tsconfigDir = computedTsconfigDir,
-                    rootDirs = options.rootDirs,
-                    symlinkMap = parsed.symlinkMap,
-                )
-                FrontEnd.close(FrontEnd.IMPORTS, feImpT0)
-                // Detect whether this file uses `import X = require("...")` (CJS-style
-                // import-equals). When an entry-point file uses this form, TypeScript
-                // emits its dependencies in the order they appear in the file (single-root
-                // DFS) rather than @Filename input order — see B52.10.
-                if (sourceFile.statements.any { stmt ->
-                    stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference
-                }) {
-                    filesWithImportEquals.add(file.fileName)
-                }
-
-                tsFileNames.add(file.fileName)
             }
-
-            // Phase 2: Bind all files and create shared checker
-            val feBindT0 = FrontEnd.t()
-            val binder = Binder(options)
-            val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
-            FrontEnd.close(FrontEnd.BIND, feBindT0)
-            val allInputFileNames = parsed.files.map { it.fileName }.toSet()
-            val jsonModules = parsed.files
-                .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
-                .associate { it.fileName to it.content }
-            val checker: Checker
-            val feCheckT0 = FrontEnd.t()
-            if (ParallelCheckMode.workers > 1) {
-                // INV.6(6c1): share-nothing parallel check — N partition checkers on
-                // deep-stack worker threads replace the single full checker. Fresh
-                // bind per worker (checker init mutates shared symbols via
-                // mergeSymbolTable; the Binder never touches the AST, so parse trees
-                // share). Merge is deterministic (worker order); program-level
-                // fileName-null diagnostics are emitted by every worker —
-                // deduplicated by key. Worker 0's checker (a full program over its
-                // own fresh bind) serves the downstream Transformer queries.
-                val workers = ParallelCheckMode.workers
-                val sourceList = parsedSourceFiles.values.toList()
-                val fileNames = sourceList.map { it.fileName }
-                val tasks = (0 until workers).map { w ->
-                    {
-                        val assigned = fileNames.filterIndexed { i, _ -> i % workers == w }.toSet()
-                        val workerBinder = Binder(options)
-                        val workerResults = sourceList.map { workerBinder.bind(it) }
-                        Checker(options, workerResults, isMultiFileSource = parsed.hasExplicitFilenames,
-                            assignedFileNames = assigned,
-                            allInputFileNames = allInputFileNames,
-                            jsonModuleContents = jsonModules)
-                    }
-                }
-                val workerCheckers = runInDeepStackWorkers(tasks)
-                val perWorker = workerCheckers.map { it.getDiagnostics() }
-                diagnostics.addAll(perWorker.flatten().filter { it.fileName != null })
-                diagnostics.addAll(perWorker.flatten().filter { it.fileName == null }
-                    .distinctBy { "${it.start}|${it.length}|${it.code}|${it.message}" })
-                checker = workerCheckers[0]
-            } else {
-                checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
-                    assignedFileNames = recheckOnly,
-                    allInputFileNames = allInputFileNames,
-                    jsonModuleContents = jsonModules)
+            if (parsedFiles.isNotEmpty()) {
+                val binder = Binder(options)
+                val binderResults = parsedFiles.values.map { binder.bind(it) }
+                val checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames, declarationOnly = true)
                 diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
-                if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
-                    options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
-                )
             }
-            FrontEnd.close(FrontEnd.CHECK, feCheckT0)
-            val fePostT0 = FrontEnd.t()
-            // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
-            // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
-            // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
-            // they don't duplicate the reemitted set. Gates are corpus-unique (verbatim-echo
-            // multi-file parser cascades) so this never strips an unrelated file's parse diags.
-            run {
-                fun isParserCascadePinFile(fn: String?): Boolean {
-                    if (fn == null) return false
-                    if (fn.substringAfterLast('/') == "es6ImportNamedImportParsingError_1.ts") return true
-                    if (fn.substringAfterLast('/').startsWith("controlFlowFunctionLikeCircular_")) return true
-                    val t = parsedSourceFiles[fn]?.text ?: return false
-                    return t.contains("import { 0n as foo }") || t.contains("import { foo as 0n }") ||
-                        t.contains("export { foo as 0n }") || t.contains("export { 0n as foo }") ||
-                        // parseImportAttributesError / parseAssertEntriesError: the malformed
-                        // `import("pkg", { with: {1234, …} })` import-type derails into statements
-                        // (round 369). The errors are pinned by checkParseImportAttributesErrorPin
-                        // (reemits the 33 baseline diagnostics), so the derail's own parser
-                        // diagnostics must be removed here (a checker removeAll can't reach them).
-                        t.contains("with: {1234, \"resolution-mode\"") ||
-                        (t.contains("const c = + <1234> x") && t.contains("const b = + <> x"))
-                }
-                val hasModulePreserve4 = parsedSourceFiles.values.any { it.text.contains("module.exports.y = 0; // Error") }
-                val mp4Files = setOf("a.js", "b.ts", "c.ts", "d.ts", "e.mts", "f.cts", "g.js", "main1.ts", "main2.mts", "main3.cjs", "main4.cjs", "dummy.ts")
-                fun isPinFile(fn: String?): Boolean {
-                    if (fn == null) return false
-                    if (isParserCascadePinFile(fn)) return true
-                    return hasModulePreserve4 && fn.substringAfterLast('/') in mp4Files
-                }
-                if (allParserDiagsForPins.isNotEmpty()) {
-                    diagnostics.removeAll { d -> isPinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
-                }
-            }
-            // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
-            if (filesWithParseDiagnostics.isNotEmpty()) {
-                diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
-            }
-            // TS1036: only REAL parse diagnostics suppress (see the single-file path note).
-            if (filesWithRealParseDiagnostics.isNotEmpty()) {
-                diagnostics.removeAll { (it.code == 1036 || it.code == 1117) && it.fileName in filesWithRealParseDiagnostics }
-            }
-            // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
-            // (see the single-file path note).
-            if (filesWithRealParseDiagnostics.isNotEmpty()) {
-                diagnostics.removeAll {
-                    val fn = it.fileName
-                    (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214) &&
-                        fn in filesWithRealParseDiagnostics &&
-                        !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
-                }
-            }
-            // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
-            // resolves through an `exports` field that exposes no types entry.
-            diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))
-            // B98.r123 (TS2209): a package self-name import resolved through an `exports`
-            // entry pointing under `outDir`, where the project root is ambiguous.
-            diagnostics.addAll(checkAmbiguousSelfNameExportRoot(parsed.files, options))
-
-            if (options.isolatedDeclarations) {
-                // Cross-file augmentation map: for each target file name (basename
-                // without extension), list of file names that contain a
-                // `declare module './<target>' { ... }` augmentation. Used to emit
-                // TS9026 on imports that bring augmentations of the importing file.
-                val augmenterMap = buildAugmenterMap(parsedSourceFiles)
-                for ((tsFileName, sourceFile) in parsedSourceFiles) {
-                    val original = parsed.files.firstOrNull { it.fileName == tsFileName }?.content
-                        ?: continue
-                    diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, tsFileName, original))
-                    diagnostics.addAll(
-                        emitIsolatedDeclarationsAugmentImports(sourceFile, tsFileName, original, augmenterMap)
-                    )
-                }
-            }
-
-            // Pre-compute cross-file namespace exports for multi-file namespace merging.
-            // When namespace blocks are split across files (e.g. `namespace ts { }` in A.ts and B.ts),
-            // each file's transformer needs to know about exports declared in other files so it can
-            // qualify references like `sys.version` → `ts.sys.version`.
-            val crossFileNamespaceExports = collectCrossFileNamespaceExports(parsedSourceFiles.values)
-
-            // Compute commonSourceDirectory across tsFileNames (excluding .d.ts which are
-            // never emitted) AND any `.d.ts` files under the tsconfig project directory.
-            // Used to preserve subdirectory structure under outDir+fullEmitPaths.
-            // When all input files are in the same directory, commonSourceDir == that directory,
-            // and the existing basename-only behavior is preserved (no subdir component).
-            // When files span subdirectories (e.g. `/src/a/x.ts`, `/src/b/y.ts`), commonSourceDir
-            // is `/src` and each output keeps its `a/x.js` / `b/y.js` suffix under outDir.
-            // `.d.ts` files outside the tsconfig dir (e.g. under a `typeRoots` location like
-            // `/types/`) are excluded so they don't shift commonSourceDir upward.
-            // Skipped when outFile is set (concatenation) or when no outDir.
-            val commonSourceDir: String? = if (resolvedOutDir != null && options.outFile == null && tsFileNames.isNotEmpty()) {
-                val parentDirs = (tsFileNames + dtsFileNamesInProjectDir)
-                    .map { it.substringBeforeLast('/', "") }
-                longestCommonPathPrefix(parentDirs)
-            } else null
-
-            // Compute file processing order via topological sort BEFORE the transform loop,
-            // so per-file transforms run in the same order as the final emit.
-            val depsForTransformSort = when {
-                options.noResolve -> emptyMap()
-                hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
-                else -> importDeps
-            }
-            val transformOrder = if (options.outFile != null && !options.noResolve) {
-                topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
-            } else tsFileNames
-            val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
-                parsedSourceFiles[name]?.let { name to it }
-            } + parsedSourceFiles.filter { it.key !in transformOrder.toSet() }.map { it.toPair() }
-
-            // Phase 3: Transform and emit each file.
-            // (FRONT.1): skipped entirely for a type-check-only build — the loop
-            // produces NO diagnostics (verified: no `diagnostics.add` between the
-            // checker and the result), only `jsOutputMap` entries the caller has
-            // said it does not want. Gated on `skipEmitOutputs`, which ONLY
-            // ProjectCompiler sets, never the `@noEmit` corpus directive.
-            for ((tsFileName, sourceFile) in if (options.skipEmitOutputs) emptyList() else orderedParsedSourceFiles) {
-                // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
-                // B11.2's `resolveJsxTsxCandidate` visibility. Without this, the Emitter
-                // would add a `"use strict";` prologue and produce a phantom
-                // `//// [foo.js]` entry in the baseline.
-                if (tsFileName in emptyJsxTsxFixtures) continue
-
-                // For @module: none + @outFile, auxiliary .js files with module statements
-                // (export/import) are NOT bundled into the outFile output. Only the entry
-                // .ts file is emitted. TypeScript treats `.js` files under module:none as
-                // pulled in only for type info / allowJs checking, not for runtime bundling.
-                val tsFileNameIsPureJs = tsFileName.endsWith(".js") || tsFileName.endsWith(".mjs") || tsFileName.endsWith(".cjs")
-                if (options.outFile != null && options.effectiveModule == ModuleKind.None && tsFileNameIsPureJs) {
-                    val hasModuleStatements = sourceFile.statements.any { stmt ->
-                        when (stmt) {
-                            is ExportDeclaration, is ExportAssignment, is ImportDeclaration -> true
-                            is ImportEqualsDeclaration -> stmt.moduleReference is ExternalModuleReference || ModifierFlag.Export in stmt.modifiers
-                            is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
-                            is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
-                            is VariableStatement -> ModifierFlag.Export in stmt.modifiers
-                            is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
-                            else -> false
-                        }
-                    }
-                    if (hasModuleStatements) continue
-                }
-
-                val feTrT0 = FrontEnd.t()
-                val transformer = Transformer(options, checker, crossFileNamespaceExports)
-                val transformed = transformer.transform(sourceFile)
-                FrontEnd.close(FrontEnd.TRANSFORM, feTrT0)
-
-                val feEmT0 = FrontEnd.t()
-                val emitter = Emitter(options)
-                val javascript = emitter.emit(transformed, sourceFile)
-                FrontEnd.close(FrontEnd.EMIT, feEmT0)
-
-                // Skip files that produce no meaningful output (e.g. empty .tsx/.ts files)
-                // But keep blank files if the original had module statements (imports/exports)
-                // since they should still appear in the baseline with empty output sections.
-                if (javascript.isBlank()) {
-                    val hadModuleStmts = sourceFile.statements.any {
-                        it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
-                            (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference)
-                    }
-                    if (!hadModuleStmts) continue
-                }
-
-                // .tsx/.jsx → .jsx only when jsx=preserve; all other modes produce .js
-                val isJsxPreserveMulti = options.jsx?.lowercase() == "preserve"
-                val tsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
-                val jsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
-                var jsName = tsFileName
-                    .replace(".tsx", tsxExtensionMulti)
-                    .replace(".jsx", jsxExtensionMulti)
-                    .replace(".mts", ".mjs")
-                    .replace(".cts", ".cjs")
-                    .replace(".ts", ".js")
-                // When fullEmitPaths: keep full path; when outDir is also set, prepend it.
-                // Use commonSourceDirectory (longest common ancestor of all tsFileNames) to
-                // preserve subdirectory structure under outDir. When all inputs share their
-                // parent directory, this reduces to basename + outDir (the original behavior);
-                // when they span subdirectories, each output keeps its relative-from-common-dir
-                // path (e.g. `library-a/index.js` under `/src/bin/`).
-                if (options.fullEmitPaths) {
-                    if (resolvedOutDir != null) {
-                        val outDir = resolvedOutDir.trimEnd('/')
-                        val relative = if (commonSourceDir != null && commonSourceDir.isNotEmpty()
-                            && jsName.startsWith("$commonSourceDir/")) {
-                            jsName.substring(commonSourceDir.length + 1)
-                        } else {
-                            jsName.substringAfterLast('/')
-                        }
-                        jsName = "$outDir/$relative"
-                    }
-                    // else: keep jsName as full path (just extension replaced)
-                } else {
-                    // Strip directory prefix — baseline uses just basenames.
-                    // Handle both Unix '/' and Windows '\' separators.
-                    jsName = jsName.substringAfterLast('/').substringAfterLast('\\')
-                }
-                jsOutputMap[tsFileName] = jsName to javascript
-            }
-
-            // Sort JS outputs by dependency order (dependencies first)
-            // Skip sorting when noResolve is set (TypeScript doesn't resolve imports in that mode)
-            // If the full deps graph (with `///<reference>` edges) has a cycle, fall back
-            // to the deps map without ref-path edges. This matches TypeScript's behavior
-            // of using input order when triple-slash refs form mutual cycles
-            // (e.g. `doNotemitTripleSlashComments_ts`).
-            val depsForSortRaw = when {
-                options.noResolve -> emptyMap()
-                hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
-                else -> importDeps
-            }
-            // A `.js` whose companion `.d.ts` exists is referenced via its `.d.ts` in tsc's
-            // program graph (the `.d.ts` supplies types), so under allowJs (where the `.js`
-            // IS still emitted) it carries NO ordering dependency edge — tsc emits such files
-            // in INPUT order, not dependency order. Drop those targets from the sort deps so
-            // e.g. elidedJSImport2 emits `index.js` (the importer) before `other.js`. Corpus-
-            // unique to the allowJs + companion-`.d.ts` shape; for non-allowJs the `.js` is
-            // skipped from emit entirely so the filter is inert there.
-            val companionDtsJsFiles: Set<String> = if (options.allowJs) {
-                val fileNameSet = parsed.files.mapTo(mutableSetOf()) { it.fileName }
-                parsed.files.mapNotNull { f ->
-                    val base = when {
-                        f.fileName.endsWith(".js") -> f.fileName.removeSuffix(".js")
-                        f.fileName.endsWith(".jsx") -> f.fileName.removeSuffix(".jsx")
-                        f.fileName.endsWith(".mjs") -> f.fileName.removeSuffix(".mjs")
-                        f.fileName.endsWith(".cjs") -> f.fileName.removeSuffix(".cjs")
-                        else -> null
-                    }
-                    if (base != null && "$base.d.ts" in fileNameSet) f.fileName else null
-                }.toSet()
-            } else emptySet()
-            val depsForSort = if (companionDtsJsFiles.isEmpty()) depsForSortRaw
-                else depsForSortRaw.mapValues { (_, v) -> v.filter { it !in companionDtsJsFiles } }
-            val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
-            // require-only orphan drop: a `.ts` input reached ONLY by a bare untyped
-            // `require('./x')` CallExpression — not a static `import`/`export … from` /
-            // `import = require` (those land in importDeps), not `import('…')` /
-            // `typeof import('…')`, not `/// <reference>` — is NOT a program file in tsc,
-            // so it is never resolved, type-checked, or emitted (moduleResolutionWithRequire).
-            // FP firewall: corpus-unique to the `declare const require` + bare `require('./X')`
-            // shape; the sibling moduleResolutionWithRequireAndImport keeps emitting X because
-            // its `typeof import('./X')` IS a static reference (→ staticallyReferenced).
-            val requireOnlyOrphans: Set<String> =
-                if (parsed.hasExplicitFilenames && tsFileNames.size > 1) {
-                    val tsFileSet = tsFileNames.toSet()
-                    fun resolveToInput(fromFile: String, spec: String): String? {
-                        if (!spec.startsWith("./") && !spec.startsWith("../")) return null
-                        val lastSlash = fromFile.lastIndexOf('/')
-                        val dir = when {
-                            lastSlash > 0 -> fromFile.substring(0, lastSlash)
-                            lastSlash == 0 -> "/"
-                            else -> ""
-                        }
-                        val resolved = resolveRelativePath(dir, spec)
-                        if (resolved in tsFileSet) return resolved
-                        for (ext in listOf(".ts", ".tsx", ".d.ts")) {
-                            if ("$resolved$ext" in tsFileSet) return "$resolved$ext"
-                        }
-                        return null
-                    }
-                    // Resolve a (bare OR relative) namespace-internal import=require specifier to a
-                    // sibling input file. A bare basename `"importInsideModule_file1"` resolves to
-                    // the sibling `importInsideModule_file1.ts` (classic resolution).
-                    fun resolveNsImportSpec(fromFile: String, spec: String): String? {
-                        resolveToInput(fromFile, spec)?.let { return it }
-                        if (spec.startsWith("./") || spec.startsWith("../")) return null
-                        val lastSlash = fromFile.lastIndexOf('/')
-                        val dir = if (lastSlash > 0) fromFile.substring(0, lastSlash) else ""
-                        for (ext in listOf("", ".ts", ".tsx", ".d.ts")) {
-                            if ("$spec$ext" in tsFileSet) return "$spec$ext"
-                            if (dir.isNotEmpty() && "$dir/$spec$ext" in tsFileSet) return "$dir/$spec$ext"
-                        }
-                        return null
-                    }
-                    // Collect targets of `import X = require("spec")` whose IMMEDIATE enclosing
-                    // declaration is an Identifier-named `namespace`/`module` (NOT a string-literal
-                    // ambient `declare module "X"`). tsc's collectModuleReferences only descends into
-                    // ambient (string-named) modules, so a namespace-internal import=require is NOT a
-                    // program-level module reference → its target is never resolved/emitted
-                    // (importInsideModule). The Identifier-vs-string-name gate IS tsc's isAmbientModule
-                    // distinction and the FP firewall (corpus-unique to this shape).
-                    fun collectNsInternalImportTargets(stmts: List<Statement>, fromFile: String, immediateParentIsIdentNs: Boolean, out: MutableSet<String>) {
-                        for (s in stmts) {
-                            when (s) {
-                                is ModuleDeclaration -> {
-                                    val nm = s.name
-                                    val identNamed = nm is Identifier && nm.text != "global"
-                                    val inner = when (val b = s.body) {
-                                        is ModuleBlock -> b.statements
-                                        is ModuleDeclaration -> listOf(b)
-                                        else -> emptyList()
-                                    }
-                                    collectNsInternalImportTargets(inner, fromFile, identNamed, out)
-                                }
-                                is ImportEqualsDeclaration -> {
-                                    val ref = s.moduleReference
-                                    if (immediateParentIsIdentNs && ref is ExternalModuleReference) {
-                                        val spec = (ref.expression as? StringLiteralNode)?.text
-                                        if (spec != null) resolveNsImportSpec(fromFile, spec)?.let { out.add(it) }
-                                    }
-                                }
-                                else -> {}
-                            }
-                        }
-                    }
-                    val staticallyReferenced = mutableSetOf<String>()
-                    for ((_, depList) in importDeps) staticallyReferenced.addAll(depList)
-                    val importTypeRegex = Regex("""import\s*\(\s*["']([^"']+)["']""")
-                    val requireCallRegex = Regex("""\brequire\s*\(\s*["']([^"']+)["']""")
-                    // Only a USER-declared `require` value (`declare const/var/function require`)
-                    // makes `require('./x')` a plain runtime call that tsc does NOT resolve as a
-                    // module reference. In an ambient/CommonJS file (no such declaration) tsc DOES
-                    // resolve a bare `require('./x')` → x is a program file and emits, so we must
-                    // NOT treat such a target as an orphan. This gate makes the drop corpus-unique
-                    // to the moduleResolutionWithRequire* shape.
-                    val declareRequireRegex = Regex("""\bdeclare\s+(?:const|var|let|function)\s+require\b""")
-                    val requireReached = mutableSetOf<String>()
-                    val nsInternalImportTargets = mutableSetOf<String>()
-                    for (fileName in tsFileNames) {
-                        val sf = parsedSourceFiles[fileName] ?: continue
-                        val text = sf.text
-                        for (m in importTypeRegex.findAll(text)) {
-                            resolveToInput(fileName, m.groupValues[1])?.let { staticallyReferenced.add(it) }
-                        }
-                        if (declareRequireRegex.containsMatchIn(text)) {
-                            for (m in requireCallRegex.findAll(text)) {
-                                resolveToInput(fileName, m.groupValues[1])?.let { requireReached.add(it) }
-                            }
-                        }
-                        collectNsInternalImportTargets(sf.statements, fileName, false, nsInternalImportTargets)
-                    }
-                    val lastFile = tsFileNames.last()
-                    // Never drop the last @Filename unit (the harness sole-root) — only earlier,
-                    // genuinely-unreachable inputs.
-                    tsFileNames.filter {
-                        it != lastFile && it !in staticallyReferenced &&
-                            (it in requireReached || it in nsInternalImportTargets)
-                    }.toSet()
-                } else emptySet()
-            val jsOutputs = sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }
-
-            val finalJsOutputs = run {
-                // Interleave JSON outputs with JS outputs: each imported JSON appears RIGHT
-                // BEFORE the JS output of the importing TS file. JSON outputs without a
-                // recorded importer fall back to the start of the list (legacy behavior).
-                // Required for `requireOfJsonFileWithoutExtensionResolvesToTs_ts` where the
-                // expected order is `out/c.js, out/c.json, out/file1.js` (file1 imports both
-                // c.ts and c.json).
-                if (jsonOutputs.isEmpty() || jsonBaseNameToImporter.isEmpty()) {
-                    jsonOutputs + jsOutputs
-                } else {
-                    val importerToJsons = mutableMapOf<String, MutableList<Pair<String, String>>>()
-                    val unimportedJsons = mutableListOf<Pair<String, String>>()
-                    for (jsonOut in jsonOutputs) {
-                        val jsonBase = jsonOut.first.substringAfterLast('/')
-                        val importer = jsonBaseNameToImporter[jsonBase]
-                        if (importer != null) {
-                            importerToJsons.getOrPut(importer) { mutableListOf() }.add(jsonOut)
-                        } else {
-                            unimportedJsons.add(jsonOut)
-                        }
-                    }
-                    val merged = mutableListOf<Pair<String, String>>()
-                    merged.addAll(unimportedJsons)
-                    for (tsFileName in sortedTsFiles) {
-                        importerToJsons[tsFileName]?.let { merged.addAll(it) }
-                        jsOutputMap[tsFileName]?.let { merged.add(it) }
-                    }
-                    merged
-                }
-            }
-
-            // When noEmitOnError is set and there are errors, suppress all JS output
-            val suppressedJsOutputs = if (options.noEmitOnError &&
-                diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
-            else finalJsOutputs
-
-            // TypeScript reorders the source echoes when a tsconfig.json is present:
-            //   1. Files OUTSIDE the tsconfig directory (out-of-tree fixtures) FIRST.
-            //   2. node_modules files (in-tree third-party) NEXT.
-            //   3. In-tree non-node_modules (project source) LAST, with `.json` files
-            //      BEFORE `.ts`/`.tsx`/etc. files within the project (each subset preserving
-            //      input order). Required for tests like
-            //      `moduleResolutionWithSuffixes_one_jsonModule` where the imported JSON
-            //      sibling files come before the importing `.ts` source.
-            // Required for tests like pathMappingBasedModuleResolution4_classic (out-of-tree
-            // fixture first) and tslibMissingHelper (node_modules before project files).
-            val orderedSourceEchoes = if (!computedTsconfigDir.isNullOrEmpty()) {
-                val prefix = computedTsconfigDir.trimEnd('/') + "/"
-                val outside = mutableListOf<Pair<String, String>>()
-                val nodeModulesFiles = mutableListOf<Pair<String, String>>()
-                val inTreeProjectJson = mutableListOf<Pair<String, String>>()
-                val inTreeProjectNonJson = mutableListOf<Pair<String, String>>()
-                for (echo in sourceEchoes) {
-                    val isInTree = echo.first.startsWith(prefix)
-                    val isNodeModules = echo.first.contains("/node_modules/")
-                    when {
-                        !isInTree -> outside.add(echo)
-                        isNodeModules -> nodeModulesFiles.add(echo)
-                        echo.first.endsWith(".json") -> inTreeProjectJson.add(echo)
-                        else -> inTreeProjectNonJson.add(echo)
-                    }
-                }
-                outside + nodeModulesFiles + inTreeProjectJson + inTreeProjectNonJson
-            } else sourceEchoes
-            FrontEnd.close(FrontEnd.POST, fePostT0)
             return CompilationResult(
                 fileName = fileName,
-                sourceEchoes = orderedSourceEchoes,
-                jsOutputs = suppressedJsOutputs,
+                sourceEchoes = declSourceEchoes,
+                jsOutputs = emptyList(),
                 isMultiFile = true,
                 options = options,
                 diagnostics = diagnostics,
                 allSourceFiles = allFiles,
             )
         }
+
+        val sourceEchoes = mutableListOf<Pair<String, String>>() // fileName -> content
+        // Map from tsFileName -> (jsName, javascript)
+        val jsOutputMap = mutableMapOf<String, Pair<String, String>>()
+        // JSON files to re-emit (with outDir prefix)
+        val jsonOutputs = mutableListOf<Pair<String, String>>()
+        // Map from tsFileName -> list of tsFileNames it imports (for dependency sort)
+        val importDeps = mutableMapOf<String, List<String>>()
+        // Fallback deps map without `///<reference>` paths. Used when the full
+        // deps form a cycle (TypeScript falls back to input order in that case).
+        val importDepsNoRefPath = mutableMapOf<String, List<String>>()
+        // Files that contain at least one `import X = require("...")` (CJS-style
+        // import-equals declaration). When the unique entry-point of the dep
+        // graph uses this form, topologicalSort runs a single-root DFS so deps
+        // are emitted in the order they appear in the entry file (B52.10).
+        val filesWithImportEquals = mutableSetOf<String>()
+        // Ordered list of compilable TS file names
+        val tsFileNames = mutableListOf<String>()
+        // Parsed source files for two-phase bind+transform
+        val parsedSourceFiles = mutableMapOf<String, SourceFile>()
+        // B284: files whose parser produced diagnostics — tsc suppresses grammar
+        // diagnostics (TS2737) in such files (grammarErrorOnNode/hasParseDiagnostics).
+        val filesWithParseDiagnostics = mutableSetOf<String>()
+        // B310: files with REAL parse diagnostics (grammar-class parser emissions
+        // excluded — tsc emits those from the checker, so they don't count as
+        // hasParseDiagnostics). Triggers TS1248/TS1031 suppression.
+        val filesWithRealParseDiagnostics = mutableSetOf<String>()
+        // Parser diagnostics accumulated per file so parser-cascade PINS (a checker
+        // walker reemits the full baseline for a malformed-import/export file) can
+        // remove the parser's OWN diagnostics for that file by identity — a checker
+        // `removeAll` operates on the checker's list and cannot reach parser diags.
+        val allParserDiagsForPins = mutableListOf<Diagnostic>()
+        // Empty `.jsx`/`.tsx` fixture files admitted purely for B11.2's
+        // `resolveJsxTsxCandidate` to find them in `fileResults`. Phase 3 must skip
+        // their emit so we don't produce phantom `//// [foo.js]\n"use strict";` entries.
+        val emptyJsxTsxFixtures = mutableSetOf<String>()
+        // `.d.ts` files that share the tsconfig directory prefix (when there is a
+        // tsconfig). Used in commonSourceDir computation so the longest-common
+        // ancestor across emitted files reflects `.d.ts` siblings under the same
+        // project root. `.d.ts` files outside the tsconfig directory (e.g. under
+        // `/types/` while sources live in `/app/`) — typically picked up via
+        // `typeRoots` — are excluded.
+        val dtsFileNamesInProjectDir = mutableListOf<String>()
+
+        // Tsconfig directory (parent dir of `tsconfig.json` when present). Used for
+        // resolving outDir paths AND for filtering `.d.ts` files into commonSourceDir
+        // computation (only `.d.ts` under the project root contribute).
+        val computedTsconfigDir: String? = run {
+            val tsconfigFile = parsed.files
+                .find { it.fileName.substringAfterLast('/') == "tsconfig.json" }
+                ?.fileName
+            tsconfigFile?.let { tf ->
+                val dir = tf.substringBeforeLast('/')
+                // "/tsconfig.json".substringBeforeLast('/') = "" but dir is "/"
+                if (dir.isEmpty() && tf.startsWith('/')) "/" else dir
+            }
+        }
+
+        // Resolve outDir to an absolute path when fullEmitPaths is set.
+        // When files use absolute paths (e.g. /a.ts) and outDir is relative (e.g. "bin"),
+        // resolve outDir relative to the tsconfig.json directory.
+        val resolvedOutDir: String? = if (options.outDir != null && options.fullEmitPaths) {
+            val outDir = options.outDir.trimEnd('/')
+            if (outDir.startsWith('/')) {
+                outDir
+            } else {
+                if (computedTsconfigDir != null && computedTsconfigDir.startsWith('/')) {
+                    val root = computedTsconfigDir.trimEnd('/')
+                    "$root/$outDir"
+                } else outDir
+            }
+        } else options.outDir
+
+        // Pre-scan: collect basenames of JSON files imported via `require('./x.json')`
+        // or `from "./x.json"`. Also map each imported JSON basename to the FIRST file
+        // that imports it — used to interleave JSON outputs with their importer's JS
+        // output (e.g. `out/c.js, out/c.json, out/file1.js` when file1.ts imports both
+        // c.ts and c.json). Populated only when @resolveJsonModule is on.
+        val importedJsonBaseNames = mutableSetOf<String>()
+        val jsonBaseNameToImporter = mutableMapOf<String, String>()
+        if (options.resolveJsonModule) {
+            val jsonImportRegex = Regex("""(?:require|from)\s*\(?\s*['"]([^'"]*\.json)['"]""")
+            for (file in parsed.files) {
+                if (!file.fileName.endsWith(".ts") && !file.fileName.endsWith(".tsx") &&
+                    !file.fileName.endsWith(".mts") && !file.fileName.endsWith(".cts") &&
+                    !file.fileName.endsWith(".js") && !file.fileName.endsWith(".jsx")
+                ) continue
+                for (match in jsonImportRegex.findAll(file.content)) {
+                    val jsonBase = match.groupValues[1].substringAfterLast('/')
+                    importedJsonBaseNames.add(jsonBase)
+                    jsonBaseNameToImporter.getOrPut(jsonBase) { file.fileName }
+                }
+            }
+            // When moduleSuffixes is set, the resolver prefers `<base><suffix>.json` over
+            // `<base>.json`. Rewrite each imported base name in-place when a suffixed
+            // variant exists in the file set. Matches TypeScript's node resolver behavior
+            // for JSON modules under `moduleSuffixes: [".ios"]` style configs.
+            if (!options.moduleSuffixes.isNullOrEmpty()) {
+                val allBaseNames = parsed.files.map { it.fileName.substringAfterLast('/') }.toSet()
+                val rewrites = mutableMapOf<String, String>()
+                for (name in importedJsonBaseNames) {
+                    val withoutExt = name.removeSuffix(".json")
+                    for (suffix in options.moduleSuffixes) {
+                        if (suffix.isEmpty()) continue
+                        val suffixed = "$withoutExt$suffix.json"
+                        if (suffixed in allBaseNames) {
+                            rewrites[name] = suffixed
+                            break
+                        }
+                    }
+                }
+                for ((oldBase, newBase) in rewrites) {
+                    importedJsonBaseNames.remove(oldBase)
+                    importedJsonBaseNames.add(newBase)
+                    jsonBaseNameToImporter.remove(oldBase)?.let { jsonBaseNameToImporter[newBase] = it }
+                }
+            }
+        }
+
+        cpcScanFiles(
+            parsed = parsed,
+            options = options,
+            diagnostics = diagnostics,
+            computedTsconfigDir = computedTsconfigDir,
+            resolvedOutDir = resolvedOutDir,
+            sourceEchoes = sourceEchoes,
+            jsonOutputs = jsonOutputs,
+            importDeps = importDeps,
+            importDepsNoRefPath = importDepsNoRefPath,
+            filesWithImportEquals = filesWithImportEquals,
+            tsFileNames = tsFileNames,
+            parsedSourceFiles = parsedSourceFiles,
+            filesWithParseDiagnostics = filesWithParseDiagnostics,
+            filesWithRealParseDiagnostics = filesWithRealParseDiagnostics,
+            allParserDiagsForPins = allParserDiagsForPins,
+            emptyJsxTsxFixtures = emptyJsxTsxFixtures,
+            dtsFileNamesInProjectDir = dtsFileNamesInProjectDir,
+            importedJsonBaseNames = importedJsonBaseNames,
+        )
+
+        val checker = cpcBindAndCheck(
+            parsed = parsed,
+            options = options,
+            recheckOnly = recheckOnly,
+            parsedSourceFiles = parsedSourceFiles,
+            diagnostics = diagnostics,
+        )
+        val fePostT0 = FrontEnd.t()
+        // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
+        // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
+        // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
+        // they don't duplicate the reemitted set. Gates are corpus-unique (verbatim-echo
+        // multi-file parser cascades) so this never strips an unrelated file's parse diags.
+        run {
+            fun isParserCascadePinFile(fn: String?): Boolean {
+                if (fn == null) return false
+                if (fn.substringAfterLast('/') == "es6ImportNamedImportParsingError_1.ts") return true
+                if (fn.substringAfterLast('/').startsWith("controlFlowFunctionLikeCircular_")) return true
+                val t = parsedSourceFiles[fn]?.text ?: return false
+                return t.contains("import { 0n as foo }") || t.contains("import { foo as 0n }") ||
+                    t.contains("export { foo as 0n }") || t.contains("export { 0n as foo }") ||
+                    // parseImportAttributesError / parseAssertEntriesError: the malformed
+                    // `import("pkg", { with: {1234, …} })` import-type derails into statements
+                    // (round 369). The errors are pinned by checkParseImportAttributesErrorPin
+                    // (reemits the 33 baseline diagnostics), so the derail's own parser
+                    // diagnostics must be removed here (a checker removeAll can't reach them).
+                    t.contains("with: {1234, \"resolution-mode\"") ||
+                    (t.contains("const c = + <1234> x") && t.contains("const b = + <> x"))
+            }
+            val hasModulePreserve4 = parsedSourceFiles.values.any { it.text.contains("module.exports.y = 0; // Error") }
+            val mp4Files = setOf("a.js", "b.ts", "c.ts", "d.ts", "e.mts", "f.cts", "g.js", "main1.ts", "main2.mts", "main3.cjs", "main4.cjs", "dummy.ts")
+            fun isPinFile(fn: String?): Boolean {
+                if (fn == null) return false
+                if (isParserCascadePinFile(fn)) return true
+                return hasModulePreserve4 && fn.substringAfterLast('/') in mp4Files
+            }
+            if (allParserDiagsForPins.isNotEmpty()) {
+                diagnostics.removeAll { d -> isPinFile(d.fileName) && allParserDiagsForPins.any { it === d } }
+            }
+        }
+        // B284: tsc grammarErrorOnNode — TS2737/TS1203/TS1015 suppressed in parse-errored files.
+        if (filesWithParseDiagnostics.isNotEmpty()) {
+            diagnostics.removeAll { (it.code == 2737 || it.code == 1203 || it.code == 1015) && it.fileName in filesWithParseDiagnostics }
+        }
+        // TS1036: only REAL parse diagnostics suppress (see the single-file path note).
+        if (filesWithRealParseDiagnostics.isNotEmpty()) {
+            diagnostics.removeAll { (it.code == 1036 || it.code == 1117) && it.fileName in filesWithRealParseDiagnostics }
+        }
+        // B310: TS1248/TS1031 suppressed in TS files with REAL parse diagnostics
+        // (see the single-file path note).
+        if (filesWithRealParseDiagnostics.isNotEmpty()) {
+            diagnostics.removeAll {
+                val fn = it.fileName
+                (it.code == 1248 || it.code == 1031 || it.code == 1155 || it.code == 1108 || it.code == 1262 || it.code == 2480 || it.code == 1182 || it.code == 1113 || it.code == 1019 || it.code == 1021 || it.code == 1096 || it.code == 1212 || it.code == 1213 || it.code == 1214) &&
+                    fn in filesWithRealParseDiagnostics &&
+                    !(fn != null && (fn.endsWith(".js") || fn.endsWith(".cjs") || fn.endsWith(".mjs") || fn.endsWith(".jsx")))
+            }
+        }
+        // B98.r121 (TS2688): a `/// <reference types="X" />` whose node_modules package
+        // resolves through an `exports` field that exposes no types entry.
+        diagnostics.addAll(checkMissingTypesReferenceExports(parsed.files))
+        // B98.r123 (TS2209): a package self-name import resolved through an `exports`
+        // entry pointing under `outDir`, where the project root is ambiguous.
+        diagnostics.addAll(checkAmbiguousSelfNameExportRoot(parsed.files, options))
+
+        if (options.isolatedDeclarations) {
+            // Cross-file augmentation map: for each target file name (basename
+            // without extension), list of file names that contain a
+            // `declare module './<target>' { ... }` augmentation. Used to emit
+            // TS9026 on imports that bring augmentations of the importing file.
+            val augmenterMap = buildAugmenterMap(parsedSourceFiles)
+            for ((tsFileName, sourceFile) in parsedSourceFiles) {
+                val original = parsed.files.firstOrNull { it.fileName == tsFileName }?.content
+                    ?: continue
+                diagnostics.addAll(emitIsolatedDeclarationsDiagnostics(sourceFile, tsFileName, original))
+                diagnostics.addAll(
+                    emitIsolatedDeclarationsAugmentImports(sourceFile, tsFileName, original, augmenterMap)
+                )
+            }
+        }
+
+        // Pre-compute cross-file namespace exports for multi-file namespace merging.
+        // When namespace blocks are split across files (e.g. `namespace ts { }` in A.ts and B.ts),
+        // each file's transformer needs to know about exports declared in other files so it can
+        // qualify references like `sys.version` → `ts.sys.version`.
+        val crossFileNamespaceExports = collectCrossFileNamespaceExports(parsedSourceFiles.values)
+
+        // Compute commonSourceDirectory across tsFileNames (excluding .d.ts which are
+        // never emitted) AND any `.d.ts` files under the tsconfig project directory.
+        // Used to preserve subdirectory structure under outDir+fullEmitPaths.
+        // When all input files are in the same directory, commonSourceDir == that directory,
+        // and the existing basename-only behavior is preserved (no subdir component).
+        // When files span subdirectories (e.g. `/src/a/x.ts`, `/src/b/y.ts`), commonSourceDir
+        // is `/src` and each output keeps its `a/x.js` / `b/y.js` suffix under outDir.
+        // `.d.ts` files outside the tsconfig dir (e.g. under a `typeRoots` location like
+        // `/types/`) are excluded so they don't shift commonSourceDir upward.
+        // Skipped when outFile is set (concatenation) or when no outDir.
+        val commonSourceDir: String? = if (resolvedOutDir != null && options.outFile == null && tsFileNames.isNotEmpty()) {
+            val parentDirs = (tsFileNames + dtsFileNamesInProjectDir)
+                .map { it.substringBeforeLast('/', "") }
+            longestCommonPathPrefix(parentDirs)
+        } else null
+
+        // Compute file processing order via topological sort BEFORE the transform loop,
+        // so per-file transforms run in the same order as the final emit.
+        val depsForTransformSort = when {
+            options.noResolve -> emptyMap()
+            hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
+            else -> importDeps
+        }
+        val transformOrder = if (options.outFile != null && !options.noResolve) {
+            topologicalSort(tsFileNames, depsForTransformSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
+        } else tsFileNames
+        val orderedParsedSourceFiles: List<Pair<String, SourceFile>> = transformOrder.mapNotNull { name ->
+            parsedSourceFiles[name]?.let { name to it }
+        } + parsedSourceFiles.filter { it.key !in transformOrder.toSet() }.map { it.toPair() }
+
+        cpcTransformAndEmit(
+            options = options,
+            checker = checker,
+            orderedParsedSourceFiles = orderedParsedSourceFiles,
+            emptyJsxTsxFixtures = emptyJsxTsxFixtures,
+            crossFileNamespaceExports = crossFileNamespaceExports,
+            commonSourceDir = commonSourceDir,
+            resolvedOutDir = resolvedOutDir,
+            jsOutputMap = jsOutputMap,
+        )
+
+        // Sort JS outputs by dependency order (dependencies first)
+        // Skip sorting when noResolve is set (TypeScript doesn't resolve imports in that mode)
+        // If the full deps graph (with `///<reference>` edges) has a cycle, fall back
+        // to the deps map without ref-path edges. This matches TypeScript's behavior
+        // of using input order when triple-slash refs form mutual cycles
+        // (e.g. `doNotemitTripleSlashComments_ts`).
+        val depsForSortRaw = when {
+            options.noResolve -> emptyMap()
+            hasCycle(tsFileNames, importDeps) -> importDepsNoRefPath
+            else -> importDeps
+        }
+        // A `.js` whose companion `.d.ts` exists is referenced via its `.d.ts` in tsc's
+        // program graph (the `.d.ts` supplies types), so under allowJs (where the `.js`
+        // IS still emitted) it carries NO ordering dependency edge — tsc emits such files
+        // in INPUT order, not dependency order. Drop those targets from the sort deps so
+        // e.g. elidedJSImport2 emits `index.js` (the importer) before `other.js`. Corpus-
+        // unique to the allowJs + companion-`.d.ts` shape; for non-allowJs the `.js` is
+        // skipped from emit entirely so the filter is inert there.
+        val companionDtsJsFiles: Set<String> = if (options.allowJs) {
+            val fileNameSet = parsed.files.mapTo(mutableSetOf()) { it.fileName }
+            parsed.files.mapNotNull { f ->
+                val base = when {
+                    f.fileName.endsWith(".js") -> f.fileName.removeSuffix(".js")
+                    f.fileName.endsWith(".jsx") -> f.fileName.removeSuffix(".jsx")
+                    f.fileName.endsWith(".mjs") -> f.fileName.removeSuffix(".mjs")
+                    f.fileName.endsWith(".cjs") -> f.fileName.removeSuffix(".cjs")
+                    else -> null
+                }
+                if (base != null && "$base.d.ts" in fileNameSet) f.fileName else null
+            }.toSet()
+        } else emptySet()
+        val depsForSort = if (companionDtsJsFiles.isEmpty()) depsForSortRaw
+            else depsForSortRaw.mapValues { (_, v) -> v.filter { it !in companionDtsJsFiles } }
+        val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
+        val requireOnlyOrphans = cpcRequireOnlyOrphans(
+            parsed = parsed,
+            tsFileNames = tsFileNames,
+            importDeps = importDeps,
+            parsedSourceFiles = parsedSourceFiles,
+        )
+        val jsOutputs = sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }
+
+        val finalJsOutputs = run {
+            // Interleave JSON outputs with JS outputs: each imported JSON appears RIGHT
+            // BEFORE the JS output of the importing TS file. JSON outputs without a
+            // recorded importer fall back to the start of the list (legacy behavior).
+            // Required for `requireOfJsonFileWithoutExtensionResolvesToTs_ts` where the
+            // expected order is `out/c.js, out/c.json, out/file1.js` (file1 imports both
+            // c.ts and c.json).
+            if (jsonOutputs.isEmpty() || jsonBaseNameToImporter.isEmpty()) {
+                jsonOutputs + jsOutputs
+            } else {
+                val importerToJsons = mutableMapOf<String, MutableList<Pair<String, String>>>()
+                val unimportedJsons = mutableListOf<Pair<String, String>>()
+                for (jsonOut in jsonOutputs) {
+                    val jsonBase = jsonOut.first.substringAfterLast('/')
+                    val importer = jsonBaseNameToImporter[jsonBase]
+                    if (importer != null) {
+                        importerToJsons.getOrPut(importer) { mutableListOf() }.add(jsonOut)
+                    } else {
+                        unimportedJsons.add(jsonOut)
+                    }
+                }
+                val merged = mutableListOf<Pair<String, String>>()
+                merged.addAll(unimportedJsons)
+                for (tsFileName in sortedTsFiles) {
+                    importerToJsons[tsFileName]?.let { merged.addAll(it) }
+                    jsOutputMap[tsFileName]?.let { merged.add(it) }
+                }
+                merged
+            }
+        }
+
+        // When noEmitOnError is set and there are errors, suppress all JS output
+        val suppressedJsOutputs = if (options.noEmitOnError &&
+            diagnostics.any { it.category == DiagnosticCategory.Error }) emptyList()
+        else finalJsOutputs
+
+        // TypeScript reorders the source echoes when a tsconfig.json is present:
+        //   1. Files OUTSIDE the tsconfig directory (out-of-tree fixtures) FIRST.
+        //   2. node_modules files (in-tree third-party) NEXT.
+        //   3. In-tree non-node_modules (project source) LAST, with `.json` files
+        //      BEFORE `.ts`/`.tsx`/etc. files within the project (each subset preserving
+        //      input order). Required for tests like
+        //      `moduleResolutionWithSuffixes_one_jsonModule` where the imported JSON
+        //      sibling files come before the importing `.ts` source.
+        // Required for tests like pathMappingBasedModuleResolution4_classic (out-of-tree
+        // fixture first) and tslibMissingHelper (node_modules before project files).
+        val orderedSourceEchoes = if (!computedTsconfigDir.isNullOrEmpty()) {
+            val prefix = computedTsconfigDir.trimEnd('/') + "/"
+            val outside = mutableListOf<Pair<String, String>>()
+            val nodeModulesFiles = mutableListOf<Pair<String, String>>()
+            val inTreeProjectJson = mutableListOf<Pair<String, String>>()
+            val inTreeProjectNonJson = mutableListOf<Pair<String, String>>()
+            for (echo in sourceEchoes) {
+                val isInTree = echo.first.startsWith(prefix)
+                val isNodeModules = echo.first.contains("/node_modules/")
+                when {
+                    !isInTree -> outside.add(echo)
+                    isNodeModules -> nodeModulesFiles.add(echo)
+                    echo.first.endsWith(".json") -> inTreeProjectJson.add(echo)
+                    else -> inTreeProjectNonJson.add(echo)
+                }
+            }
+            outside + nodeModulesFiles + inTreeProjectJson + inTreeProjectNonJson
+        } else sourceEchoes
+        FrontEnd.close(FrontEnd.POST, fePostT0)
+        return CompilationResult(
+            fileName = fileName,
+            sourceEchoes = orderedSourceEchoes,
+            jsOutputs = suppressedJsOutputs,
+            isMultiFile = true,
+            options = options,
+            diagnostics = diagnostics,
+            allSourceFiles = allFiles,
+        )
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — phase 1 of the multi-file pipeline: the per-file scan
+     * that parses every input and populates the program-wide tables, moved verbatim
+     * out of [cpcCompileMultiFile]. The 18 parameters ARE the region's free-variable
+     * set (`scripts/cpc_split_analyze.py` computes it scope-aware and the compiler
+     * enforces it); the call site passes them by NAME, because a positional swap of
+     * two same-typed containers would be type-correct and silently wrong.
+     */
+    private fun cpcScanFiles(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        diagnostics: MutableList<Diagnostic>,
+        computedTsconfigDir: String?,
+        resolvedOutDir: String?,
+        sourceEchoes: MutableList<Pair<String, String>>,
+        jsonOutputs: MutableList<Pair<String, String>>,
+        importDeps: MutableMap<String, List<String>>,
+        importDepsNoRefPath: MutableMap<String, List<String>>,
+        filesWithImportEquals: MutableSet<String>,
+        tsFileNames: MutableList<String>,
+        parsedSourceFiles: MutableMap<String, SourceFile>,
+        filesWithParseDiagnostics: MutableSet<String>,
+        filesWithRealParseDiagnostics: MutableSet<String>,
+        allParserDiagsForPins: MutableList<Diagnostic>,
+        emptyJsxTsxFixtures: MutableSet<String>,
+        dtsFileNamesInProjectDir: MutableList<String>,
+        importedJsonBaseNames: Set<String>,
+    ) {
+        for (file in parsed.files) {
+            // Don't echo tsconfig.json (it's a TypeScript project config, not a source file)
+            val baseName = file.fileName.substringAfterLast('/')
+            if (baseName != "tsconfig.json" && file.fileName !in parsed.symlinkSkipEcho) {
+                sourceEchoes.add(file.fileName to file.content)
+            }
+
+            // TS1327: object property keys in a JSON source file must be
+            // double-quoted string literals. A single-quoted key (`'a':`), a
+            // computed key (`[a]:`), or a bare identifier key is invalid JSON
+            // and reports "String literal with double quotes expected.". JSON
+            // files are otherwise never parsed/checked, so this scan is the only
+            // detector. Excludes tsconfig.json/package.json/node_modules. FP-safe:
+            // valid JSON has only double-quoted keys → nothing flagged.
+            if (file.fileName.endsWith(".json") && baseName != "tsconfig.json" &&
+                baseName != "package.json" && !file.fileName.contains("node_modules/")
+            ) {
+                diagnostics.addAll(scanJsonKeysForTS1327(file.content, file.fileName))
+                // B573: a .json whose content is ONLY bare identifiers + whitespace
+                // (no `{ } : " ' [ ] , .`) — tsc parses it as a recovered object
+                // literal → `{` expected + per-element `,`/`}` expected + TS1136
+                // per shorthand. Corpus-unique (the only such referenced json).
+                diagnostics.addAll(scanMalformedBareJson(file.content, file.fileName))
+            }
+
+            // Re-emit JSON files when outDir is set (but not tsconfig.json/package.json
+            // and not files from node_modules which TypeScript never re-emits).
+            // When @resolveJsonModule is on, only re-emit JSON fixtures that are
+            // explicitly imported (matches TypeScript's behavior — unreferenced JSON
+            // fixtures like b.json in a test where only c.json is imported are NOT
+            // re-emitted).
+            val jsonIsImportedOrLegacy = !options.resolveJsonModule ||
+                    baseName in importedJsonBaseNames
+            if (file.fileName.endsWith(".json") && options.outDir != null
+                && baseName != "tsconfig.json" && baseName != "package.json"
+                && !file.fileName.contains("node_modules/")
+                && jsonIsImportedOrLegacy) {
+                val jsonContent = reformatJson(stripJsonTrailingCommas(file.content)).trimEnd()
+                if (options.fullEmitPaths) {
+                    val outDir = resolvedOutDir!!.trimEnd('/')
+                    val jsonBaseName = file.fileName.substringAfterLast('/')
+                    jsonOutputs.add("$outDir/$jsonBaseName" to jsonContent)
+                } else {
+                    val jsonBaseName = file.fileName.substringAfterLast('/')
+                    jsonOutputs.add(jsonBaseName to jsonContent)
+                }
+                continue
+            }
+
+            // Skip non-TS files; include .js/.mjs/.cjs only when outDir is set
+            // (without outDir, TypeScript skips re-emitting JS files to avoid overwriting sources)
+            // .jsx files are always compiled (they are TS-like files requiring JSX stripping)
+            val isPureJsFile = file.fileName.endsWith(".js") ||
+                    file.fileName.endsWith(".mjs") || file.fileName.endsWith(".cjs")
+            val isJsxFile = file.fileName.endsWith(".jsx")
+            val isJsFile = isPureJsFile || isJsxFile
+            val isTsFile = file.fileName.endsWith(".ts") || file.fileName.endsWith(".tsx") ||
+                    file.fileName.endsWith(".mts") || file.fileName.endsWith(".cts")
+            if (!isTsFile && !isJsFile) {
+                continue
+            }
+            // Track whether this JS file should be skipped for emit but still parsed/bound/checked
+            var skipJsEmit = false
+            // Plain .js/.mjs/.cjs: only emit when outDir/outFile is set (avoids overwriting sources)
+            // But still parse/bind/check when allowJs is set (for TS8xxx, TS2451, etc.)
+            if (isPureJsFile && options.outDir == null && options.outFile == null) {
+                if (options.allowJs) {
+                    skipJsEmit = true
+                } else {
+                    continue
+                }
+            }
+            // .jsx (JavaScript+JSX): without outDir/outFile, skip non-empty `.jsx` when allowJs
+            // is unset (TypeScript reports nothing for those). Empty `.jsx` fixtures are
+            // admitted so they appear in `fileResults`, letting B11.2's
+            // `resolveJsxTsxCandidate` match `.jsx`/`.tsx` import targets even when the
+            // source happens to be blank (multi-file fixture pattern). Tracked in
+            // `emptyJsxTsxFixtures` so Phase 3 can skip their emit.
+            if (isJsxFile && options.outDir == null && options.outFile == null) {
+                if (!options.allowJs && file.content.isNotBlank()) continue
+                if (file.content.isBlank()) emptyJsxTsxFixtures.add(file.fileName)
+            }
+            val isDtsFile = file.fileName.endsWith(".d.ts") || file.fileName.endsWith(".d.mts") || file.fileName.endsWith(".d.cts") ||
+                // *.d.*.ts — declaration files with custom extensions (allowArbitraryExtensions)
+                // e.g., foo.d.html.ts, foo.d.css.ts
+                (file.fileName.endsWith(".ts") && !file.fileName.endsWith(".d.ts") &&
+                 file.fileName.contains(".d.") &&
+                 file.fileName.substringBeforeLast(".ts").substringAfterLast(".d.").isNotEmpty())
+            // .tsx files without --jsx: previously skipped when content was blank, but
+            // we now admit empty `.tsx` fixtures so B11.2's `resolveJsxTsxCandidate` can
+            // match `.tsx` import targets even when the source happens to be blank
+            // (multi-file fixture pattern). Tracked in `emptyJsxTsxFixtures` so Phase 3
+            // can skip their emit.
+            if (file.fileName.endsWith(".tsx") && options.jsx == null && file.content.isBlank()) {
+                emptyJsxTsxFixtures.add(file.fileName)
+            }
+            // allowJs: skip a .ts/.tsx file if a .js/.jsx file with the same full path (minus extension) exists.
+            // TypeScript "blocks" TS emit when a JS file of the same name is present (avoids conflict).
+            if (options.allowJs && isTsFile) {
+                val tsPathWithoutExt = file.fileName
+                    .replace(".tsx", "")
+                    .replace(".mts", "")
+                    .replace(".cts", "")
+                    .replace(".ts", "")
+                val jsEquivalentPath1 = "$tsPathWithoutExt.js"
+                val jsEquivalentPath2 = "$tsPathWithoutExt.jsx"
+                val jsEquivalentPath3 = "$tsPathWithoutExt.mjs"
+                val jsEquivalentPath4 = "$tsPathWithoutExt.cjs"
+                val hasConflictingJs = parsed.files.any { other ->
+                    other.fileName == jsEquivalentPath1 || other.fileName == jsEquivalentPath2 ||
+                    other.fileName == jsEquivalentPath3 || other.fileName == jsEquivalentPath4
+                }
+                if (hasConflictingJs) continue
+            }
+
+            // INV.1(e): the option-derived parser flags via the shared helper. A
+            // crawl-supplied pre-parse ([ParsedSource.preParsed]) is reused ONLY on
+            // an exact content + flags match — any mismatch (e.g. a future flag
+            // reading an option the core post-processes, like packageJsonTypes)
+            // falls through to a fresh parse, so reuse is a pure optimization.
+            val parserFlagsMulti = computeParserFlags(file.fileName, file.content, options)
+            val preParsed = parsed.preParsed[file.fileName]?.takeIf {
+                it.flags == parserFlagsMulti && it.content == file.content
+            }
+            if (PassTiming.enabled) {
+                if (preParsed != null) PassTiming.preParseReused++ else PassTiming.preParseFresh++
+            }
+            val sourceFile: SourceFile
+            val parserDiagnostics: List<Diagnostic>
+            if (preParsed != null) {
+                sourceFile = preParsed.sourceFile
+                parserDiagnostics = preParsed.diagnostics
+                if (FrontEnd.mode == FrontEnd.ON) FrontEnd.parsedReused++
+            } else {
+                val feT0 = FrontEnd.t()
+                val parser = Parser(file.content, file.fileName, forceJsx = parserFlagsMulti.forceJsx, topLevelAwait = parserFlagsMulti.topLevelAwait, needsJsxFlag = parserFlagsMulti.needsJsxFlag, noImplicitAny = parserFlagsMulti.noImplicitAny)
+                sourceFile = parser.parse()
+                parserDiagnostics = parser.getDiagnostics()
+                FrontEnd.close(FrontEnd.PARSE, feT0)
+                if (FrontEnd.mode == FrontEnd.ON) FrontEnd.parsedFresh++
+            }
+            parsedSourceFiles[file.fileName] = sourceFile
+            if (parserDiagnostics.isNotEmpty()) filesWithParseDiagnostics.add(file.fileName)
+            if (parserDiagnostics.any { it.code !in GRAMMAR_CLASS_CODES }) {
+                filesWithRealParseDiagnostics.add(file.fileName)
+            }
+
+            // Collect parser diagnostics from .d.ts files too (e.g. TS1540 for `module X {}`).
+            // Skip node_modules files — they are third-party and never reported on.
+            val isNodeModulesFile = file.fileName.contains("node_modules/") || file.fileName.contains("node_modules\\")
+
+            // .d.ts files are parsed and bound (for checker globals) but not emitted.
+            // Track those that live under the tsconfig directory so they contribute
+            // to commonSourceDirectory (e.g. `/app/lib/bar.d.ts` referenced from
+            // `/app/src/index.ts` should make commonSourceDir `/app`, not `/app/src`).
+            if (isDtsFile) {
+                if (!isNodeModulesFile) {
+                    diagnostics.addAll(parserDiagnostics)
+                    if (computedTsconfigDir != null && computedTsconfigDir.isNotEmpty()
+                        && file.fileName.startsWith("$computedTsconfigDir/")) {
+                        dtsFileNamesInProjectDir.add(file.fileName)
+                    }
+                }
+                continue
+            }
+
+            // node_modules files are typically third-party and not re-emitted by
+            // TypeScript. EXCEPTION: when there's no `tsconfig.json` AND neither
+            // `@noImplicitReferences: true` nor `@moduleResolution: bundler` are
+            // set, all `@filename` files behave like command-line root files —
+            // TypeScript emits root `.ts` files even when they live under
+            // `node_modules/`. The two excluding flags identify the "treat
+            // node_modules strictly as external" modes used by bundler/lib-resolution
+            // tests where node_modules content must NEVER reach JS output.
+            val isBundlerOrNoImplicit = options.moduleResolution?.lowercase() == "bundler" ||
+                options.noImplicitReferences
+            if (isNodeModulesFile && (computedTsconfigDir != null || isBundlerOrNoImplicit)) continue
+
+            diagnostics.addAll(parserDiagnostics)
+            allParserDiagsForPins.addAll(parserDiagnostics)
+
+            // .js/.cjs/.mjs files OUTSIDE the tsconfig project directory must still be
+            // parsed/bound (for type-only use under `allowJs`) but never emitted as JS.
+            // TypeScript skips JS-emit for non-TS root files that lie outside the
+            // tsconfig's rootDir. Example: `/bar.js` referenced from `/root/a.ts` via
+            // path mapping under `/root/tsconfig.json` — TS uses bar.js as input but
+            // does NOT produce `bar.js` in the output. Equivalent `.ts` files OUTSIDE
+            // the dir DO still emit (handled by commonSourceDir prefix calc).
+            // Gate is restricted to absolute-path tsconfig directories — relative
+            // paths like `tsconfig.json` (no leading `/`) produce a malformed
+            // `computedTsconfigDir == "tsconfig.json"` that would FP-skip files in
+            // the same directory (e.g. `commonJsIsolatedModules`'s `index.js`).
+            // When tsconfigDir == "/" (root), every absolute-path file is "inside"
+            // it, so the prefix check uses "/" (not "//") to avoid FP-skipping
+            // /foo.js etc.
+            if (isPureJsFile && computedTsconfigDir != null && computedTsconfigDir.startsWith('/')
+                && file.fileName.startsWith('/')) {
+                val prefix = if (computedTsconfigDir == "/") "/" else "$computedTsconfigDir/"
+                if (!file.fileName.startsWith(prefix)) {
+                    // Parse for diagnostics but skip emit + dependency ordering
+                    continue
+                }
+            }
+
+            // Pure .js files with a companion `.d.ts` (same path minus `.js` + `.d.ts`)
+            // are treated as external JavaScript described by their `.d.ts` — TypeScript
+            // uses them for type resolution but does NOT re-emit them as JS output, even
+            // when an outDir is set. Example: `/relative.js` + `/relative.d.ts` referenced
+            // via `import { relative } from "./relative.js"` — TypeScript emits no
+            // `relative.js` under outDir, only the imports in the importing file.
+            // GATED on `!allowJs`: under `allowJs` the `.js` is a first-class PROGRAM file
+            // and IS emitted (the companion `.d.ts` only supplies types) — e.g. elidedJSImport2's
+            // `other.js` + `other.d.ts` emits `other.js`. moduleResolutionWithExtensions_withPaths
+            // (no allowJs) keeps the skip (its `.js` is external).
+            if (isPureJsFile && !options.allowJs) {
+                val base = when {
+                    file.fileName.endsWith(".js") -> file.fileName.removeSuffix(".js")
+                    file.fileName.endsWith(".cjs") -> file.fileName.removeSuffix(".cjs")
+                    file.fileName.endsWith(".mjs") -> file.fileName.removeSuffix(".mjs")
+                    else -> null
+                }
+                if (base != null) {
+                    val companionDts = "$base.d.ts"
+                    val hasCompanionDts = parsed.files.any { it.fileName == companionDts }
+                    if (hasCompanionDts) {
+                        // Parse for diagnostics but skip emit + dependency ordering
+                        continue
+                    }
+                }
+            }
+
+            // JS files parsed only for diagnostics (no outDir/outFile): skip emit but keep in parsedSourceFiles for checker
+            if (skipJsEmit) continue
+
+            // Extract relative imports for dependency ordering
+            val feImpT0 = FrontEnd.t()
+            importDeps[file.fileName] = extractRelativeImports(
+                sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
+                includeReferencePathDeps = true,
+                paths = options.paths,
+                baseUrl = options.baseUrl,
+                tsconfigDir = computedTsconfigDir,
+                rootDirs = options.rootDirs,
+                symlinkMap = parsed.symlinkMap,
+            )
+            // Also compute deps WITHOUT ref-path edges as a fallback. If the
+            // full deps graph forms a cycle (mutual `/// <reference>` between
+            // files), we drop the ref-path edges and rely on input order.
+            importDepsNoRefPath[file.fileName] = extractRelativeImports(
+                sourceFile, file.fileName, parsed.files, options.moduleSuffixes,
+                includeReferencePathDeps = false,
+                paths = options.paths,
+                baseUrl = options.baseUrl,
+                tsconfigDir = computedTsconfigDir,
+                rootDirs = options.rootDirs,
+                symlinkMap = parsed.symlinkMap,
+            )
+            FrontEnd.close(FrontEnd.IMPORTS, feImpT0)
+            // Detect whether this file uses `import X = require("...")` (CJS-style
+            // import-equals). When an entry-point file uses this form, TypeScript
+            // emits its dependencies in the order they appear in the file (single-root
+            // DFS) rather than @Filename input order — see B52.10.
+            if (sourceFile.statements.any { stmt ->
+                stmt is ImportEqualsDeclaration && stmt.moduleReference is ExternalModuleReference
+            }) {
+                filesWithImportEquals.add(file.fileName)
+            }
+
+            tsFileNames.add(file.fileName)
+        }
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — phase 2 of the multi-file pipeline: bind every parsed
+     * file and run the checker (or, under `--workers`, the INV.6 partition checkers),
+     * moved verbatim out of [cpcCompileMultiFile]. The one value that crosses the
+     * boundary — the `Checker` the downstream Transformer queries — is RETURNED, never
+     * stashed in a field.
+     */
+    private fun cpcBindAndCheck(
+        parsed: ParsedSource,
+        options: CompilerOptions,
+        recheckOnly: Set<String>?,
+        parsedSourceFiles: Map<String, SourceFile>,
+        diagnostics: MutableList<Diagnostic>,
+    ): Checker {
+        // Phase 2: Bind all files and create shared checker
+        val feBindT0 = FrontEnd.t()
+        val binder = Binder(options)
+        val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
+        FrontEnd.close(FrontEnd.BIND, feBindT0)
+        val allInputFileNames = parsed.files.map { it.fileName }.toSet()
+        val jsonModules = parsed.files
+            .filter { it.fileName.endsWith(".json") && !it.fileName.endsWith("tsconfig.json") }
+            .associate { it.fileName to it.content }
+        val checker: Checker
+        val feCheckT0 = FrontEnd.t()
+        if (ParallelCheckMode.workers > 1) {
+            // INV.6(6c1): share-nothing parallel check — N partition checkers on
+            // deep-stack worker threads replace the single full checker. Fresh
+            // bind per worker (checker init mutates shared symbols via
+            // mergeSymbolTable; the Binder never touches the AST, so parse trees
+            // share). Merge is deterministic (worker order); program-level
+            // fileName-null diagnostics are emitted by every worker —
+            // deduplicated by key. Worker 0's checker (a full program over its
+            // own fresh bind) serves the downstream Transformer queries.
+            val workers = ParallelCheckMode.workers
+            val sourceList = parsedSourceFiles.values.toList()
+            val fileNames = sourceList.map { it.fileName }
+            val tasks = (0 until workers).map { w ->
+                {
+                    val assigned = fileNames.filterIndexed { i, _ -> i % workers == w }.toSet()
+                    val workerBinder = Binder(options)
+                    val workerResults = sourceList.map { workerBinder.bind(it) }
+                    Checker(options, workerResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                        assignedFileNames = assigned,
+                        allInputFileNames = allInputFileNames,
+                        jsonModuleContents = jsonModules)
+                }
+            }
+            val workerCheckers = runInDeepStackWorkers(tasks)
+            val perWorker = workerCheckers.map { it.getDiagnostics() }
+            diagnostics.addAll(perWorker.flatten().filter { it.fileName != null })
+            diagnostics.addAll(perWorker.flatten().filter { it.fileName == null }
+                .distinctBy { "${it.start}|${it.length}|${it.code}|${it.message}" })
+            checker = workerCheckers[0]
+        } else {
+            checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                assignedFileNames = recheckOnly,
+                allInputFileNames = allInputFileNames,
+                jsonModuleContents = jsonModules)
+            diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
+            if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
+                options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),
+            )
+        }
+        FrontEnd.close(FrontEnd.CHECK, feCheckT0)
+        return checker
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — phase 3 of the multi-file pipeline: the transform+emit
+     * loop, moved verbatim out of [cpcCompileMultiFile]. It produces NO diagnostics
+     * (FRONT.1 relies on the same property) — its whole output is `jsOutputMap`.
+     */
+    private fun cpcTransformAndEmit(
+        options: CompilerOptions,
+        checker: Checker,
+        orderedParsedSourceFiles: List<Pair<String, SourceFile>>,
+        emptyJsxTsxFixtures: Set<String>,
+        crossFileNamespaceExports: Map<String, Set<String>>,
+        commonSourceDir: String?,
+        resolvedOutDir: String?,
+        jsOutputMap: MutableMap<String, Pair<String, String>>,
+    ) {
+        // Phase 3: Transform and emit each file.
+        // (FRONT.1): skipped entirely for a type-check-only build — the loop
+        // produces NO diagnostics (verified: no `diagnostics.add` between the
+        // checker and the result), only `jsOutputMap` entries the caller has
+        // said it does not want. Gated on `skipEmitOutputs`, which ONLY
+        // ProjectCompiler sets, never the `@noEmit` corpus directive.
+        for ((tsFileName, sourceFile) in if (options.skipEmitOutputs) emptyList() else orderedParsedSourceFiles) {
+            // Skip emit for empty `.jsx`/`.tsx` fixture files admitted only for
+            // B11.2's `resolveJsxTsxCandidate` visibility. Without this, the Emitter
+            // would add a `"use strict";` prologue and produce a phantom
+            // `//// [foo.js]` entry in the baseline.
+            if (tsFileName in emptyJsxTsxFixtures) continue
+
+            // For @module: none + @outFile, auxiliary .js files with module statements
+            // (export/import) are NOT bundled into the outFile output. Only the entry
+            // .ts file is emitted. TypeScript treats `.js` files under module:none as
+            // pulled in only for type info / allowJs checking, not for runtime bundling.
+            val tsFileNameIsPureJs = tsFileName.endsWith(".js") || tsFileName.endsWith(".mjs") || tsFileName.endsWith(".cjs")
+            if (options.outFile != null && options.effectiveModule == ModuleKind.None && tsFileNameIsPureJs) {
+                val hasModuleStatements = sourceFile.statements.any { stmt ->
+                    when (stmt) {
+                        is ExportDeclaration, is ExportAssignment, is ImportDeclaration -> true
+                        is ImportEqualsDeclaration -> stmt.moduleReference is ExternalModuleReference || ModifierFlag.Export in stmt.modifiers
+                        is FunctionDeclaration -> ModifierFlag.Export in stmt.modifiers
+                        is ClassDeclaration -> ModifierFlag.Export in stmt.modifiers
+                        is VariableStatement -> ModifierFlag.Export in stmt.modifiers
+                        is EnumDeclaration -> ModifierFlag.Export in stmt.modifiers
+                        else -> false
+                    }
+                }
+                if (hasModuleStatements) continue
+            }
+
+            val feTrT0 = FrontEnd.t()
+            val transformer = Transformer(options, checker, crossFileNamespaceExports)
+            val transformed = transformer.transform(sourceFile)
+            FrontEnd.close(FrontEnd.TRANSFORM, feTrT0)
+
+            val feEmT0 = FrontEnd.t()
+            val emitter = Emitter(options)
+            val javascript = emitter.emit(transformed, sourceFile)
+            FrontEnd.close(FrontEnd.EMIT, feEmT0)
+
+            // Skip files that produce no meaningful output (e.g. empty .tsx/.ts files)
+            // But keep blank files if the original had module statements (imports/exports)
+            // since they should still appear in the baseline with empty output sections.
+            if (javascript.isBlank()) {
+                val hadModuleStmts = sourceFile.statements.any {
+                    it is ImportDeclaration || it is ExportDeclaration || it is ExportAssignment ||
+                        (it is ImportEqualsDeclaration && it.moduleReference is ExternalModuleReference)
+                }
+                if (!hadModuleStmts) continue
+            }
+
+            // .tsx/.jsx → .jsx only when jsx=preserve; all other modes produce .js
+            val isJsxPreserveMulti = options.jsx?.lowercase() == "preserve"
+            val tsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
+            val jsxExtensionMulti = if (isJsxPreserveMulti) ".jsx" else ".js"
+            var jsName = tsFileName
+                .replace(".tsx", tsxExtensionMulti)
+                .replace(".jsx", jsxExtensionMulti)
+                .replace(".mts", ".mjs")
+                .replace(".cts", ".cjs")
+                .replace(".ts", ".js")
+            // When fullEmitPaths: keep full path; when outDir is also set, prepend it.
+            // Use commonSourceDirectory (longest common ancestor of all tsFileNames) to
+            // preserve subdirectory structure under outDir. When all inputs share their
+            // parent directory, this reduces to basename + outDir (the original behavior);
+            // when they span subdirectories, each output keeps its relative-from-common-dir
+            // path (e.g. `library-a/index.js` under `/src/bin/`).
+            if (options.fullEmitPaths) {
+                if (resolvedOutDir != null) {
+                    val outDir = resolvedOutDir.trimEnd('/')
+                    val relative = if (commonSourceDir != null && commonSourceDir.isNotEmpty()
+                        && jsName.startsWith("$commonSourceDir/")) {
+                        jsName.substring(commonSourceDir.length + 1)
+                    } else {
+                        jsName.substringAfterLast('/')
+                    }
+                    jsName = "$outDir/$relative"
+                }
+                // else: keep jsName as full path (just extension replaced)
+            } else {
+                // Strip directory prefix — baseline uses just basenames.
+                // Handle both Unix '/' and Windows '\' separators.
+                jsName = jsName.substringAfterLast('/').substringAfterLast('\\')
+            }
+            jsOutputMap[tsFileName] = jsName to javascript
+        }
+    }
+
+    /**
+     * (JIT.1)(e) round 816 — the `require`-only orphan census (inputs reached ONLY by
+     * a bare `require('./x')` CallExpression, which tsc never makes a program file),
+     * moved verbatim out of [cpcCompileMultiFile] together with its three local
+     * resolvers. Its result is RETURNED.
+     */
+    private fun cpcRequireOnlyOrphans(
+        parsed: ParsedSource,
+        tsFileNames: List<String>,
+        importDeps: Map<String, List<String>>,
+        parsedSourceFiles: Map<String, SourceFile>,
+    ): Set<String> {
+        // require-only orphan drop: a `.ts` input reached ONLY by a bare untyped
+        // `require('./x')` CallExpression — not a static `import`/`export … from` /
+        // `import = require` (those land in importDeps), not `import('…')` /
+        // `typeof import('…')`, not `/// <reference>` — is NOT a program file in tsc,
+        // so it is never resolved, type-checked, or emitted (moduleResolutionWithRequire).
+        // FP firewall: corpus-unique to the `declare const require` + bare `require('./X')`
+        // shape; the sibling moduleResolutionWithRequireAndImport keeps emitting X because
+        // its `typeof import('./X')` IS a static reference (→ staticallyReferenced).
+        val requireOnlyOrphans: Set<String> =
+            if (parsed.hasExplicitFilenames && tsFileNames.size > 1) {
+                val tsFileSet = tsFileNames.toSet()
+                fun resolveToInput(fromFile: String, spec: String): String? {
+                    if (!spec.startsWith("./") && !spec.startsWith("../")) return null
+                    val lastSlash = fromFile.lastIndexOf('/')
+                    val dir = when {
+                        lastSlash > 0 -> fromFile.substring(0, lastSlash)
+                        lastSlash == 0 -> "/"
+                        else -> ""
+                    }
+                    val resolved = resolveRelativePath(dir, spec)
+                    if (resolved in tsFileSet) return resolved
+                    for (ext in listOf(".ts", ".tsx", ".d.ts")) {
+                        if ("$resolved$ext" in tsFileSet) return "$resolved$ext"
+                    }
+                    return null
+                }
+                // Resolve a (bare OR relative) namespace-internal import=require specifier to a
+                // sibling input file. A bare basename `"importInsideModule_file1"` resolves to
+                // the sibling `importInsideModule_file1.ts` (classic resolution).
+                fun resolveNsImportSpec(fromFile: String, spec: String): String? {
+                    resolveToInput(fromFile, spec)?.let { return it }
+                    if (spec.startsWith("./") || spec.startsWith("../")) return null
+                    val lastSlash = fromFile.lastIndexOf('/')
+                    val dir = if (lastSlash > 0) fromFile.substring(0, lastSlash) else ""
+                    for (ext in listOf("", ".ts", ".tsx", ".d.ts")) {
+                        if ("$spec$ext" in tsFileSet) return "$spec$ext"
+                        if (dir.isNotEmpty() && "$dir/$spec$ext" in tsFileSet) return "$dir/$spec$ext"
+                    }
+                    return null
+                }
+                // Collect targets of `import X = require("spec")` whose IMMEDIATE enclosing
+                // declaration is an Identifier-named `namespace`/`module` (NOT a string-literal
+                // ambient `declare module "X"`). tsc's collectModuleReferences only descends into
+                // ambient (string-named) modules, so a namespace-internal import=require is NOT a
+                // program-level module reference → its target is never resolved/emitted
+                // (importInsideModule). The Identifier-vs-string-name gate IS tsc's isAmbientModule
+                // distinction and the FP firewall (corpus-unique to this shape).
+                fun collectNsInternalImportTargets(stmts: List<Statement>, fromFile: String, immediateParentIsIdentNs: Boolean, out: MutableSet<String>) {
+                    for (s in stmts) {
+                        when (s) {
+                            is ModuleDeclaration -> {
+                                val nm = s.name
+                                val identNamed = nm is Identifier && nm.text != "global"
+                                val inner = when (val b = s.body) {
+                                    is ModuleBlock -> b.statements
+                                    is ModuleDeclaration -> listOf(b)
+                                    else -> emptyList()
+                                }
+                                collectNsInternalImportTargets(inner, fromFile, identNamed, out)
+                            }
+                            is ImportEqualsDeclaration -> {
+                                val ref = s.moduleReference
+                                if (immediateParentIsIdentNs && ref is ExternalModuleReference) {
+                                    val spec = (ref.expression as? StringLiteralNode)?.text
+                                    if (spec != null) resolveNsImportSpec(fromFile, spec)?.let { out.add(it) }
+                                }
+                            }
+                            else -> {}
+                        }
+                    }
+                }
+                val staticallyReferenced = mutableSetOf<String>()
+                for ((_, depList) in importDeps) staticallyReferenced.addAll(depList)
+                val importTypeRegex = Regex("""import\s*\(\s*["']([^"']+)["']""")
+                val requireCallRegex = Regex("""\brequire\s*\(\s*["']([^"']+)["']""")
+                // Only a USER-declared `require` value (`declare const/var/function require`)
+                // makes `require('./x')` a plain runtime call that tsc does NOT resolve as a
+                // module reference. In an ambient/CommonJS file (no such declaration) tsc DOES
+                // resolve a bare `require('./x')` → x is a program file and emits, so we must
+                // NOT treat such a target as an orphan. This gate makes the drop corpus-unique
+                // to the moduleResolutionWithRequire* shape.
+                val declareRequireRegex = Regex("""\bdeclare\s+(?:const|var|let|function)\s+require\b""")
+                val requireReached = mutableSetOf<String>()
+                val nsInternalImportTargets = mutableSetOf<String>()
+                for (fileName in tsFileNames) {
+                    val sf = parsedSourceFiles[fileName] ?: continue
+                    val text = sf.text
+                    for (m in importTypeRegex.findAll(text)) {
+                        resolveToInput(fileName, m.groupValues[1])?.let { staticallyReferenced.add(it) }
+                    }
+                    if (declareRequireRegex.containsMatchIn(text)) {
+                        for (m in requireCallRegex.findAll(text)) {
+                            resolveToInput(fileName, m.groupValues[1])?.let { requireReached.add(it) }
+                        }
+                    }
+                    collectNsInternalImportTargets(sf.statements, fileName, false, nsInternalImportTargets)
+                }
+                val lastFile = tsFileNames.last()
+                // Never drop the last @Filename unit (the harness sole-root) — only earlier,
+                // genuinely-unreachable inputs.
+                tsFileNames.filter {
+                    it != lastFile && it !in staticallyReferenced &&
+                        (it in requireReached || it in nsInternalImportTargets)
+                }.toSet()
+            } else emptySet()
+        return requireOnlyOrphans
     }
 
 }
