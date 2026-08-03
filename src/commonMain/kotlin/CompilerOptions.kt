@@ -645,6 +645,26 @@ internal fun projectDefaults(): CompilerOptions = CompilerOptions(useRealLibs = 
 
 internal fun applyDirective(options: CompilerOptions, key: String, value: String): CompilerOptions {
     val boolValue = value.lowercase() == "true"
+    return applyDirectiveArms1(options, key, value, boolValue)
+        ?: applyDirectiveArms2(options, key, value, boolValue)
+        ?: applyDirectiveArms3(options, key, value, boolValue)
+        ?: applyDirectiveArms4(options, key, value, boolValue)
+        ?: options
+}
+
+/**
+ * (JIT.1)(e) round 815 — one contiguous run of [applyDirective]'s `when (key)`
+ * arms, verbatim. Returns `null` for a key this run does not name, which is what
+ * lets [applyDirective] chain the runs with `?:`; no arm ever evaluates to
+ * `null` itself, and the arm keys are pairwise distinct, so the chain selects
+ * exactly the arm the single `when` selected.
+ */
+private fun applyDirectiveArms1(
+    options: CompilerOptions,
+    key: String,
+    value: String,
+    boolValue: Boolean,
+): CompilerOptions? {
     return when (key) {
         "target" -> {
             val target = ScriptTarget.fromString(value.split(",")[0].trim())
@@ -674,6 +694,24 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "sourcemap" -> options.copy(sourceMap = boolValue)
         "noimplicitany" -> options.copy(noImplicitAny = boolValue, noImplicitAnyExplicitlyFalse = !boolValue)
         "noimplicitreturns" -> options.copy(noImplicitReturns = boolValue)
+        else -> null
+    }
+}
+
+/**
+ * (JIT.1)(e) round 815 — one contiguous run of [applyDirective]'s `when (key)`
+ * arms, verbatim. Returns `null` for a key this run does not name, which is what
+ * lets [applyDirective] chain the runs with `?:`; no arm ever evaluates to
+ * `null` itself, and the arm keys are pairwise distinct, so the chain selects
+ * exactly the arm the single `when` selected.
+ */
+private fun applyDirectiveArms2(
+    options: CompilerOptions,
+    key: String,
+    value: String,
+    boolValue: Boolean,
+): CompilerOptions? {
+    return when (key) {
         "noimplicitthis" -> options.copy(noImplicitThis = boolValue, noImplicitThisExplicitlyFalse = !boolValue)
         "strictnullchecks" -> options.copy(strictNullChecks = boolValue, strictNullChecksExplicitlyFalse = !boolValue)
         "useunknownincatchvariables" -> options.copy(
@@ -702,6 +740,24 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
             esModuleInterop = boolValue,
             esModuleInteropExplicitlyFalse = !boolValue,
         )
+        else -> null
+    }
+}
+
+/**
+ * (JIT.1)(e) round 815 — one contiguous run of [applyDirective]'s `when (key)`
+ * arms, verbatim. Returns `null` for a key this run does not name, which is what
+ * lets [applyDirective] chain the runs with `?:`; no arm ever evaluates to
+ * `null` itself, and the arm keys are pairwise distinct, so the chain selects
+ * exactly the arm the single `when` selected.
+ */
+private fun applyDirectiveArms3(
+    options: CompilerOptions,
+    key: String,
+    value: String,
+    boolValue: Boolean,
+): CompilerOptions? {
+    return when (key) {
         "allowjs" -> options.copy(
             allowJs = boolValue,
             allowJsExplicitlyFalse = !boolValue
@@ -730,6 +786,24 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "allowunreachablecode" -> options.copy(allowUnreachableCode = boolValue)
         "allowunusedlabels" -> options.copy(allowUnusedLabels = boolValue)
         "nofallthroughcasesinswitch" -> options.copy(noFallthroughCasesInSwitch = boolValue)
+        else -> null
+    }
+}
+
+/**
+ * (JIT.1)(e) round 815 — one contiguous run of [applyDirective]'s `when (key)`
+ * arms, verbatim. Returns `null` for a key this run does not name, which is what
+ * lets [applyDirective] chain the runs with `?:`; no arm ever evaluates to
+ * `null` itself, and the arm keys are pairwise distinct, so the chain selects
+ * exactly the arm the single `when` selected.
+ */
+private fun applyDirectiveArms4(
+    options: CompilerOptions,
+    key: String,
+    value: String,
+    boolValue: Boolean,
+): CompilerOptions? {
+    return when (key) {
         "noresolve" -> options.copy(noResolve = boolValue)
         "noimplicitreferences" -> options.copy(noImplicitReferences = boolValue)
         "moduledetection" -> options.copy(moduleDetection = value.trim())
@@ -756,7 +830,7 @@ internal fun applyDirective(options: CompilerOptions, key: String, value: String
         "allowimportingtsextensions" -> options.copy(allowImportingTsExtensions = boolValue)
         "rewriterelativeimportextensions" -> options.copy(rewriteRelativeImportExtensions = boolValue)
         "capturesuggestions" -> options.copy(captureSuggestions = boolValue)
-        else -> options
+        else -> null
     }
 }
 
