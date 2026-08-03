@@ -1,3 +1,92 @@
+**Round 807 (2026-08-02) — (JIT.1)(f) LANDED: `checkArgumentsAgainstSignatureCore`, THE
+LARGEST `Checker` METHOD LEFT (23,890 BYTECODES, 3.0x HotSpot's LIMIT), IS AN ENTRY AT
+7,173 PLUS THIRTEEN `caas*` HELPERS. CENSUS 15 -> 14. AND THE ROUND'S TRANSFERABLE RESULT
+IS NOT THE SPLIT — IT IS THAT A COMBINED ABLATION CREDITED A PIN WITH DISCRIMINATION IT
+DOES NOT HAVE, AND ONLY RE-RUNNING THE MISTAKE ALONE FOUND IT.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): 15 over the
+  limit, `checkArgumentsAgainstSignatureCore` 23,890 — the item's number reproduced. Note
+  the item's list was `Checker`-only: the full census also holds
+  `Transformer.transformToCommonJS` 28,991, `TypeScriptCompiler.compileParsedCore` 21,535,
+  `CompilerOptionsKt.applyDirective` 13,694 and the `Checker` constructor 11,298, which no
+  round has claimed. They are now written into the queue item.
+- **THE SPLIT IS A DIFFERENT SHAPE FROM (a)-(d), AND THAT IS THE POINT.** Those four moved
+  `when` ARMS, whose only exit is falling off the end. This moves runs of a **LOOP BODY**,
+  and a loop body exits by `continue`, `break` and — twice — a whole-function `return`;
+  **none of the three can cross a function boundary.** So each moved region hands a SIGNAL
+  back (`CAAS_CONTINUE` / `CAAS_BREAK` / `CAAS_RETURN` / `CAAS_NONE`) that the entry's call
+  site replays. Thirteen helpers, one per contiguous run of the ALREADY-COMMITTED
+  `ArgSections` partition: `caasTailGatesAndRelation` 2,792, `caasNonSimpleParamChecks`
+  2,689, `caasNullishArgGates` 2,386, `caasObjLitPerPropertyMismatch` 2,061,
+  `caasArgKindAndIndexSignature` 1,109, `caasWalkerArgChecks` 1,057,
+  `caasTypeParamConstraintArg` 976, `caasObjectLiteralVsTypeParam` 952,
+  `caasObjLitMissingRequired` 643, `caasObjLitProtoOverride` 564,
+  `caasObjectLiteralVsObjectParam` 456, plus `caasPrologueWalkers` / `caasSingleTypeParamWalkers`.
+- **WHICH `continue`/`break` BINDS TO THE ARGUMENT LOOP IS THE WHOLE CORRECTNESS QUESTION,
+  AND IT WAS ANSWERED BY A PARSER, NOT BY INDENTATION.** A brace matcher over the
+  string/comment-stripped source found **31 outer-binding tokens** (6 stay in the entry, 25
+  move) against four nested `for` loops that move with their bodies, and confirmed both bare
+  `return`s are whole-function. Only ONE direction of a mis-classification is
+  compiler-caught (an outer `continue` left unconverted is a compile error); the other —
+  an INNER token wrongly rewritten to a `return` — compiles and is silently wrong.
+- **TWO EXTRACTIONS WERE NEEDED, AND THE FIRST NUMBER IS THE USEFUL ONE.** Moving the whole
+  loop tail left the entry at **8,061 — 61 bytecodes OVER the limit**. Extracting `PRO` and
+  `PRO2` (the eleven `tryEmit*` prologue gates, each an `if (...) return`, as two
+  `Boolean`-returning helpers) took it to **7,173**. A split that lands just over is one
+  extraction short, not a failed split; budget for a second pass.
+- **What stays in the entry was chosen from the measured partition, not by size:**
+  `L_ARGTYPE` (56.9% of the function per (CALL.2)), `L_PARAM`/`L_PRE`/`L_WEAK` (the
+  per-iteration prologue every argument pays) and `POST`, which round 796's exit census says
+  every invocation returns from.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** twelve contiguous
+  in-order runs re-extracted and diffed against HEAD; the entry function RECONSTRUCTED from
+  HEAD with the regions replaced by call sites — **IDENTICAL at 366 lines**; accounting
+  closing exactly (HEAD body 1,714 = kept 313 + moved 1,401; entry 366 = 313 + 53);
+  every `return` enumerated; and **no cross-boundary value at all** — every loop-body local
+  is read only inside the region that declares it, so only the three `Boolean` sub-helpers
+  of the object-literal block return anything.
+- **THE LESSON, AND IT COST THE ROUND ITS LAST HOUR.** Six deliberate mistakes were injected
+  TOGETHER, one per helper. Five of the six intended pins failed and no arm pin did — so it
+  LOOKED like full coverage. It was not: the sixth pin (for
+  `caasTypeParamConstraintArg`'s trailing `CAAS_CONTINUE`) had ALSO failed in the combined
+  run only because a DIFFERENT mistake was live at the same time. **Re-run with that mistake
+  ALONE, every pin stays GREEN** — `caasNonSimpleParamChecks`' own `CAAS_CONTINUE` catches
+  the same argument one helper later, so the signal is a REDUNDANT guard with no observable
+  consequence of its own. **Recorded as NOT DISCRIMINATED** in the test class, the perf doc
+  and here. Round 806's law needed one more clause: *a seam pin can be blind not because an
+  ambient reinstall erases the leak upstream, but because a LATER guard makes the same
+  decision — so ablate ONE mistake at a time, or a combined ablation will credit a pin with
+  coverage it does not have.*
+- **WHAT ELSE DID NOT WORK.** (1) A first cut dedented the object-literal sub-helpers by 24
+  instead of 16, putting their bodies at column 0 — harmless to Kotlin, caught by the
+  verifier, but it made the re-extraction check fail in a way that looked like a semantic
+  error. (2) Two long-running `./gradlew jvmTest` invocations were killed by the harness
+  mid-run (one at the foreground 600 s cut-over, one detached but not `disown`ed), each
+  costing a full re-run; the pattern that survives is `nohup setsid ... < /dev/null > log
+  2>&1 &` with a `.done` marker and NO foreground timeout wrapper. (3) The `tsc` profile
+  logged 838,622 ms during materialization (232 LOC/s against ~8,000 for its siblings) and
+  then ran normally in the grid — a contention artifact of running it beside a Kotlin
+  compile, not a property of the profile; do not read a single materialization timing as a
+  measurement.
+- **NO WALL A/B, deliberately** — the family is bounded four times over (rounds 803's
+  falsifier, 804's +0.23% NOISE-DOMINATED, 805's whole-family flag at -1.14%, and 805's
+  emit-mode sizing). This lands for the THRESHOLD: a method over the limit is permanently
+  uncompilable, so its cost cannot improve with load, input size or JVM version.
+- **GATE.** Suite **13,539 -> 13,562 / 0 failures / 3 skipped** (+23: `CaasSplitTest` 20,
+  `HugeMethodLimitTest` +3), python XML parser, whole results dir wiped first. 8-profile
+  grid diffed set-for-set BOTH directions against a purpose-built pre-split binary, every
+  capture confirmed non-empty and non-vacuous first — **46/46/46/46/46/46/46/94, 0 added
+  and 0 removed on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`
+  **all 20 counters +0.00%**. Build warning-clean. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 11.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **14 over the limit**. The next `Checker` targets
+  are `checkVarDeclAssignabilityCore` 19,296 and `checkAssignmentExpressionCore` 18,100 —
+  both STATEMENT sequences, so round 804's recipe applies unchanged and none of this
+  round's signal machinery is needed; `checkSingleCallExpressionTypesCore` 15,567 is third
+  and must keep round 793's `ccetPrologueMayFire` gate in the entry. Ablate one mistake at
+  a time.
+
+
 **Round 804 (2026-08-02) — (JIT.1)(b) LANDED: THE BIGGEST METHOD IN THE COMPILER —
 `checkMemberAccessMissingCore`, 46,567 BYTECODES, 5.8× HotSpot's `HugeMethodLimit` — IS ONE
 ENTRY PLUS TEN CONTIGUOUS-SECTION HELPERS, ALL UNDER THE LIMIT. CENSUS 18 → 17. AND THE

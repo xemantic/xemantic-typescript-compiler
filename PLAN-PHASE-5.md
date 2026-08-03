@@ -20,6 +20,152 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 817 (2026-08-03) — (JIT.1)(f) LANDED: THE CENSUS IS A RATCHET, IN TWO PLACES —
+AND ON ITS FIRST RUN THE SECOND INSTRUMENT FOUND THAT ONE OF THE FIVE NAMES HAD BEEN A
+PHANTOM SINCE ROUND 802. PLUS (e) FOR `Transformer.transform`, 8,934 -> AN ENTRY AT 2,989
+PLUS SEVEN HELPERS; CENSUS 5 -> 4.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **5** over the
+  limit, and the five named exactly as the round-816 handoff left them.
+
+**PART A — (f), THE RATCHET.**
+
+- **THE HONEST FORM IS A RATCHET, NOT A ZERO, AND IT SHIPS TODAY.** Round 802 found 19 over
+  the limit by running a census for the first time in 800 rounds; nothing else can see this
+  (the corpus measures meaning not cost, `cost_gate.py`'s counters do not move,
+  `-XX:+PrintCompilation` prints nothing because the compile is never *proposed*). At a
+  census of 5, all five named, `--fail-over 5` catches a NEW offender immediately.
+  `--fail-over 0` is the END STATE, not a precondition.
+- **WIRED IN TWO PLACES, DELIBERATELY.** (1) `python3 scripts/huge_methods.py --fail-over
+  <census>` as a ROUND-GATE step beside `cost_gate.py` (CLAUDE.md + SESSION-PROMPT.md).
+  (2) `HugeMethodLimitTest` runs the SAME whole-program census INSIDE the suite — it walks
+  the compiled main output from a marker resource and parses every `Code` attribute length
+  — so it cannot be forgotten, and it fails on a NEW offender AND on a STALE named entry.
+  **That second direction is the tightening rule made mechanical**, and this round paid it:
+  landing Part B made the suite demand the tightening before it would go green.
+  **Gradle's `check` was deliberately NOT touched** — that is a build-system change and
+  stays owner-gated as (JIT.3). The prompt's own guardrail, honoured rather than decided.
+- **PROVEN TO FIRE — three arms, each its own build, because a gate that has never failed
+  is not known to work.** Committed state **44 pins / 0 failed**; ratchet tightened by one
+  **44 / EXACTLY 1**, the census pin; a stale named entry **44 / EXACTLY 1**, the
+  named-offenders pin. And `--fail-over 4` exits 1 against a census of 5 while
+  `--fail-over 5` exits 0.
+- **THE FIND, AND IT IS THE ROUND'S MOST VALUABLE OUTPUT. `javap` renders a static
+  initializer as `static {};` — with NO parameter list — so `huge_methods.py`'s
+  method-header regex (which requires a `(`) never started a method there and charged every
+  one of `Checker.<clinit>`'s 10,339 bytecodes to whatever method preceded it in the class
+  file. That method is `access$checkBigintPropertyNames$emit`, whose real body is 16 BYTES
+  — and which this queue has carried as a 10,339-bytecode SPLIT TARGET since round 802.**
+  The census COUNT was right and one of its five NAMES was wrong for fourteen rounds; the
+  real offender at that size had never been seen. Method count 14,001 -> 14,107 once the
+  regex was fixed: **106 static initializers had never been counted at all.** Transferable:
+  *read `Code` attribute lengths from the class file when the answer matters — a `javap`
+  rendering is a parse away from the truth* — and *a second instrument that reaches the
+  same number by a different route is worth building precisely because it can disagree.*
+
+**PART B — (e) FOR `Transformer.transform`.**
+
+- **THE SPLIT.** Entry **2,989** plus `tfCollectTopLevelNames` **1,367**,
+  `tfCollectHelperStatements` **1,182**, `tfInjectTslibImport` **1,142**,
+  `tfLiftLeadingComments` **663**, `tfElideInternalImportAliases` **636**,
+  `tfWrapNoLibMetadataArgs` **406**, `tfInjectCreateRequireHeader` **385**. Region sizes
+  were MEASURED before the edit with `scripts/method_bytes_by_line.py`.
+- **WHY THIS TARGET.** The smallest of the five and the last cheap one: a straight pipeline
+  of stages, each consuming the previous stage's list. `tryInferSingleTypeParamFromArgs`
+  still needs a scripted data-flow answer and was not attempted; the other two Transformer
+  methods are 2-3x larger.
+- **THE FREQUENCY ARGUMENT, HONESTLY: it runs ONCE PER FILE (78 on the compiler profile),
+  and it is on the EMIT path, so EVERY A/B in this arc is `--noEmit` and STRUCTURALLY BLIND
+  to it. No wall A/B was run and none should be.** It lands for the threshold and for (f).
+  **Its behavioural gate is the corpus suite's EMIT baselines** — a real gate, and the one
+  that matters here — plus `TransformSplitTest`.
+- **WHAT STAYS, BY ONE RULE.** The CommonJS and module:preserve branches hold all three
+  whole-function `return`s, so leaving them in the entry buys round 813's property:
+  **no helper needs a return signal at all**, hence none can fail to propagate one.
+- **THE PARTS SUM TO 8,770 AGAINST 8,934 — 164 FEWER — AND ROUND 816's MECHANISM IS
+  MEASURED ABSENT.** `transform` holds **0** `Ref$ObjectRef` references before and after
+  (class total 86 either way), so the boxing story does not transfer. The measured cause is
+  **LOCAL-SLOT ADDRESSING**: the monolith's ~60 live locals push almost every reference past
+  slot 3 and pay the 2-byte `aload N`/`astore N`, while a helper's sit in slots 0-3 and take
+  the 1-byte `aload_N`. Counted across entry + all seven helpers: **2-byte 841 -> 741
+  (-100), 1-byte 219 -> 288 (+69)** — 100 of the 164 bytes, prologue/epilogue netting out
+  the rest. Parameters cost nothing: Kotlin emits **no** `checkNotNullParameter` for a
+  private method (count 0). **So there are now TWO measured reasons a split can be
+  bytecode-negative, and the prior from one does not carry to the other** — check which
+  applies before claiming either.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks;
+  `scripts/transform_split_{apply,verify}.py`), all green:** seven contiguous in-order
+  regions re-extracted from the NEW file and compared VERBATIM at **dedent 0 for all
+  seven** — every value-producing region moved WITH its own `val` declaration plus one
+  added `return <name>` line, so **not one character of moved text is edited**; the file
+  RECONSTRUCTS from HEAD byte for byte (**912,136 chars**); the accounting is a PARTITION
+  (599 body lines, each claimed exactly once, 343 moved); control flow enumerated on both
+  sides and BOUNDED to the changed region on both — `return` **3 + 5 == 8**,
+  `continue`/`break` **0 == 0**; free variables per region equal to the parameter list
+  exactly, in both directions, and every call site passes every argument BY NAME.
+- **A NEW TRAP, CAUGHT BY A POSITIVE CONTROL RATHER THAN A FAILURE.** The alias elision
+  contains `return@filter` — a LABELLED return belonging to a lambda — so the family's
+  usual `(?<![@\w.])return\b` counts it on BOTH sides and would have read `+6` where the
+  truth is `+5`. The verifier's regex excludes it and carries an explicit control asserting
+  the regex does NOT match `return@filter`, so the exclusion cannot silently rot.
+- **PINS VALIDATED ON THE UNSPLIT BINARY FIRST — 56 ran, exactly 5 failed and they are the
+  5 size/ratchet pins**, which must fail there. So all 9 behavioural pins plus the CommonJS
+  control describe HEAD, not the split.
+- **DISCRIMINATION 3 OF 3, each mistake alone on its own build, the COUNT predicted before
+  each run — PLUS A NEGATIVE CONTROL AT ITS PREDICTED ZERO.** (1) Swapping the
+  `tfCollectHelperStatements` / `tfLiftLeadingComments` calls — **the ORDER seam nothing in
+  the data flow enforces**, since both take `helpers` and neither returns it, and the lift
+  reads the list BY VALUE so every helper body is silently lost — predicted 2, failed **2**,
+  exactly the two named. (2) Handing `tfCollectTopLevelNames` a FRESH set instead of the
+  caller's (the caller subtracts that very instance) — predicted exactly 1, failed **1**.
+  (3) Dropping the `tfInjectCreateRequireHeader` call — predicted exactly 1, failed **1**.
+  (4) **NEGATIVE CONTROL: moving `val isCjsFileName` INTO the helper** — a pure expression
+  over a parameter the helper already has, with exactly ONE reader, inside the moved region
+  — predicted **0**, failed **0**.
+- **WHAT DID NOT WORK / WHAT COST TIME.** (i) The verifier's stripper positive control was
+  written as `"tslib" not in <line>` and fired FALSELY: the stripper had correctly blanked
+  the string but `tslibNames.add` keeps the bare word as an IDENTIFIER — the control must
+  name the QUOTED form. Same class as rounds 815/816: an instrument whose input is not
+  precisely bounded measures something else. (ii) A KDoc written for the createRequire
+  helper contained `node*/nodenext` — and `*/` TERMINATES a KDoc; caught before the build,
+  but it is exactly the CLAUDE.md trap. (iii) The `s9` createRequire probe needed `.mts` +
+  `nodenext`; a `package.json` `"type": "module"` with a plain `.ts` file emitted CommonJS
+  and reached the branch not at all. (iv) The first comment-lift probe put an async
+  FunctionDeclaration first, which hits the `onlyAwaiter && firstOrigStmt is
+  FunctionDeclaration` exception and does NOT lift — a pin written from it would have been
+  blind. All four were caught by probing the REAL HEAD binary in a 1.3-second scratch
+  project before a single pin was written, which is the cheapest step in this recipe.
+- **SEAMS NOT DISCRIMINATED, stated rather than glossed.** `tfInjectTslibImport` takes
+  `withHelpers` (post deep-metadata hoist) and could be handed `helpersAndTransformed`
+  instead; no pin separates them, because reaching the difference needs
+  `experimentalDecorators` + `emitDecoratorMetadata` + a deep qualified type AND
+  `importHelpers` on an ESM module at once, and no corpus shape in reach combines them.
+  Likewise `tfWrapNoLibMetadataArgs` / `tfInjectCreateRequireHeader` were not shown to
+  commute or not.
+- **GATE.** Suite **13,725 -> 13,739 / 0 failures / 3 skipped** (+14: 9 `TransformSplitTest`
+  + 3 `HugeMethodLimitTest` size pins + 2 census-ratchet pins), python XML parser, whole
+  results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built pre-split binary, both arms on the IDENTICAL direct `java` command line
+  with absolute class dirs, class dirs confirmed to differ (0 vs 7 `tf*` helpers), every
+  capture checked non-empty and free of an `and N more error` marker —
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**.
+  `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:` and 0 `e:`**.
+  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` §§ 21-22.
+- **FOR THE NEXT AGENT. (JIT.1) is at FOUR, the ratchet is at 4, and the list has changed
+  shape:** `Transformer.transformToCommonJS` **28,991**, `Transformer.transformClassBody`
+  **16,233**, `Checker.tryInferSingleTypeParamFromArgs` **11,930**, and
+  `Checker.<clinit>` **10,339** — which is NOT `access$checkBigintPropertyNames$emit`, that
+  entry was the phantom above. `<clinit>` is a shape nobody here has split: a static
+  initializer holding the class's object-level constants, which can only shrink by moving
+  those initializers into helper methods it calls, and which no `--noEmit` A/B can price
+  either (it runs once, at class load). The two Transformer methods are the same emit-path
+  recipe this round used, at 2-3x the size; `tryInferSingleTypeParamFromArgs` is still the
+  only one needing a scripted data-flow answer rather than a contiguity argument.
+  **Tighten the ratchet by one as each lands — the suite test fails on a stale entry, so
+  it will insist.**
+
+
 **Round 816 (2026-08-03) — (JIT.1)(e) LANDED FOR `TypeScriptCompiler.compileParsedCore`:
 21,535 BYTECODES -> AN ENTRY AT 293 PLUS TEN HELPERS. CENSUS 6 -> 5 — AND IT IS THE FIRST
 SPLIT IN THIS FAMILY WHOSE PARTS SUM TO **LESS** THAN THE MONOLITH.**
@@ -948,94 +1094,6 @@ COMMITTED `CtaSections` LEVEL-B MARKERS DOING THE CHOOSING.**
   downstream would actually emit — in these assignability bodies most later gates are
   themselves conditioned on the relation verdict, so three of five did not.
 
-**Round 807 (2026-08-02) — (JIT.1)(f) LANDED: `checkArgumentsAgainstSignatureCore`, THE
-LARGEST `Checker` METHOD LEFT (23,890 BYTECODES, 3.0x HotSpot's LIMIT), IS AN ENTRY AT
-7,173 PLUS THIRTEEN `caas*` HELPERS. CENSUS 15 -> 14. AND THE ROUND'S TRANSFERABLE RESULT
-IS NOT THE SPLIT — IT IS THAT A COMBINED ABLATION CREDITED A PIN WITH DISCRIMINATION IT
-DOES NOT HAVE, AND ONLY RE-RUNNING THE MISTAKE ALONE FOUND IT.**
-
-- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): 15 over the
-  limit, `checkArgumentsAgainstSignatureCore` 23,890 — the item's number reproduced. Note
-  the item's list was `Checker`-only: the full census also holds
-  `Transformer.transformToCommonJS` 28,991, `TypeScriptCompiler.compileParsedCore` 21,535,
-  `CompilerOptionsKt.applyDirective` 13,694 and the `Checker` constructor 11,298, which no
-  round has claimed. They are now written into the queue item.
-- **THE SPLIT IS A DIFFERENT SHAPE FROM (a)-(d), AND THAT IS THE POINT.** Those four moved
-  `when` ARMS, whose only exit is falling off the end. This moves runs of a **LOOP BODY**,
-  and a loop body exits by `continue`, `break` and — twice — a whole-function `return`;
-  **none of the three can cross a function boundary.** So each moved region hands a SIGNAL
-  back (`CAAS_CONTINUE` / `CAAS_BREAK` / `CAAS_RETURN` / `CAAS_NONE`) that the entry's call
-  site replays. Thirteen helpers, one per contiguous run of the ALREADY-COMMITTED
-  `ArgSections` partition: `caasTailGatesAndRelation` 2,792, `caasNonSimpleParamChecks`
-  2,689, `caasNullishArgGates` 2,386, `caasObjLitPerPropertyMismatch` 2,061,
-  `caasArgKindAndIndexSignature` 1,109, `caasWalkerArgChecks` 1,057,
-  `caasTypeParamConstraintArg` 976, `caasObjectLiteralVsTypeParam` 952,
-  `caasObjLitMissingRequired` 643, `caasObjLitProtoOverride` 564,
-  `caasObjectLiteralVsObjectParam` 456, plus `caasPrologueWalkers` / `caasSingleTypeParamWalkers`.
-- **WHICH `continue`/`break` BINDS TO THE ARGUMENT LOOP IS THE WHOLE CORRECTNESS QUESTION,
-  AND IT WAS ANSWERED BY A PARSER, NOT BY INDENTATION.** A brace matcher over the
-  string/comment-stripped source found **31 outer-binding tokens** (6 stay in the entry, 25
-  move) against four nested `for` loops that move with their bodies, and confirmed both bare
-  `return`s are whole-function. Only ONE direction of a mis-classification is
-  compiler-caught (an outer `continue` left unconverted is a compile error); the other —
-  an INNER token wrongly rewritten to a `return` — compiles and is silently wrong.
-- **TWO EXTRACTIONS WERE NEEDED, AND THE FIRST NUMBER IS THE USEFUL ONE.** Moving the whole
-  loop tail left the entry at **8,061 — 61 bytecodes OVER the limit**. Extracting `PRO` and
-  `PRO2` (the eleven `tryEmit*` prologue gates, each an `if (...) return`, as two
-  `Boolean`-returning helpers) took it to **7,173**. A split that lands just over is one
-  extraction short, not a failed split; budget for a second pass.
-- **What stays in the entry was chosen from the measured partition, not by size:**
-  `L_ARGTYPE` (56.9% of the function per (CALL.2)), `L_PARAM`/`L_PRE`/`L_WEAK` (the
-  per-iteration prologue every argument pays) and `POST`, which round 796's exit census says
-  every invocation returns from.
-- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** twelve contiguous
-  in-order runs re-extracted and diffed against HEAD; the entry function RECONSTRUCTED from
-  HEAD with the regions replaced by call sites — **IDENTICAL at 366 lines**; accounting
-  closing exactly (HEAD body 1,714 = kept 313 + moved 1,401; entry 366 = 313 + 53);
-  every `return` enumerated; and **no cross-boundary value at all** — every loop-body local
-  is read only inside the region that declares it, so only the three `Boolean` sub-helpers
-  of the object-literal block return anything.
-- **THE LESSON, AND IT COST THE ROUND ITS LAST HOUR.** Six deliberate mistakes were injected
-  TOGETHER, one per helper. Five of the six intended pins failed and no arm pin did — so it
-  LOOKED like full coverage. It was not: the sixth pin (for
-  `caasTypeParamConstraintArg`'s trailing `CAAS_CONTINUE`) had ALSO failed in the combined
-  run only because a DIFFERENT mistake was live at the same time. **Re-run with that mistake
-  ALONE, every pin stays GREEN** — `caasNonSimpleParamChecks`' own `CAAS_CONTINUE` catches
-  the same argument one helper later, so the signal is a REDUNDANT guard with no observable
-  consequence of its own. **Recorded as NOT DISCRIMINATED** in the test class, the perf doc
-  and here. Round 806's law needed one more clause: *a seam pin can be blind not because an
-  ambient reinstall erases the leak upstream, but because a LATER guard makes the same
-  decision — so ablate ONE mistake at a time, or a combined ablation will credit a pin with
-  coverage it does not have.*
-- **WHAT ELSE DID NOT WORK.** (1) A first cut dedented the object-literal sub-helpers by 24
-  instead of 16, putting their bodies at column 0 — harmless to Kotlin, caught by the
-  verifier, but it made the re-extraction check fail in a way that looked like a semantic
-  error. (2) Two long-running `./gradlew jvmTest` invocations were killed by the harness
-  mid-run (one at the foreground 600 s cut-over, one detached but not `disown`ed), each
-  costing a full re-run; the pattern that survives is `nohup setsid ... < /dev/null > log
-  2>&1 &` with a `.done` marker and NO foreground timeout wrapper. (3) The `tsc` profile
-  logged 838,622 ms during materialization (232 LOC/s against ~8,000 for its siblings) and
-  then ran normally in the grid — a contention artifact of running it beside a Kotlin
-  compile, not a property of the profile; do not read a single materialization timing as a
-  measurement.
-- **NO WALL A/B, deliberately** — the family is bounded four times over (rounds 803's
-  falsifier, 804's +0.23% NOISE-DOMINATED, 805's whole-family flag at -1.14%, and 805's
-  emit-mode sizing). This lands for the THRESHOLD: a method over the limit is permanently
-  uncompilable, so its cost cannot improve with load, input size or JVM version.
-- **GATE.** Suite **13,539 -> 13,562 / 0 failures / 3 skipped** (+23: `CaasSplitTest` 20,
-  `HugeMethodLimitTest` +3), python XML parser, whole results dir wiped first. 8-profile
-  grid diffed set-for-set BOTH directions against a purpose-built pre-split binary, every
-  capture confirmed non-empty and non-vacuous first — **46/46/46/46/46/46/46/94, 0 added
-  and 0 removed on all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py`
-  **all 20 counters +0.00%**. Build warning-clean. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md` § 11.
-- **FOR THE NEXT AGENT.** (JIT.1) is at **14 over the limit**. The next `Checker` targets
-  are `checkVarDeclAssignabilityCore` 19,296 and `checkAssignmentExpressionCore` 18,100 —
-  both STATEMENT sequences, so round 804's recipe applies unchanged and none of this
-  round's signal machinery is needed; `checkSingleCallExpressionTypesCore` 15,567 is third
-  and must keep round 793's `ccetPrologueMayFire` gate in the entry. Ablate one mistake at
-  a time.
-
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
@@ -1340,19 +1398,46 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     be called with NAMED arguments** — a positional permutation of two
     `MutableList<Pair<String, String>>` type-checks and silently changes everything; the
     round's third ablation is that mistake, and it fails 2 pins.
+    **ROUND 817 — `Transformer.transform` 8,934 → an entry at 2,989 plus SEVEN `tf*`
+    helpers (385–1,367); census 5 → 4.** The first target in this arc on the EMIT path,
+    so **no wall A/B was run and none should be** — every A/B here is `--noEmit` and
+    structurally blind to it; the behavioural gate is the corpus suite's EMIT baselines
+    plus `TransformSplitTest`. What stays is decided by one rule: both module-format
+    branches hold all three whole-function `return`s, so keeping them in the entry buys
+    round 813's property that no helper needs a return signal. **The parts sum to 8,770
+    against 8,934 — 164 FEWER — and round 816's `Ref$ObjectRef` mechanism is measured
+    ABSENT (0 in `transform` before and after). The cause is LOCAL-SLOT ADDRESSING**: the
+    monolith's ~60 live locals push nearly every reference past slot 3 and pay the 2-byte
+    `aload N`, while a helper's fit in slots 0–3 and take the 1-byte `aload_N` — counted
+    2-byte 841 → 741 (−100), 1-byte 219 → 288 (+69), i.e. 100 of the 164, parameters
+    costing nothing (Kotlin emits no `checkNotNullParameter` for a private method). **So
+    there are TWO measured reasons a split can be bytecode-negative and neither prior
+    transfers to the other.** Discrimination 3 of 3 with the count predicted before each
+    run (order seam 2, set-identity seam 1, dropped call 1) plus a NEGATIVE CONTROL at
+    its predicted 0. § 22.
     **Still open in (e): `Transformer.transformToCommonJS` 28,991,
-    `transformClassBody` 16,233, `transform` 8,934.** The Transformer three do not touch a
+    `transformClassBody` 16,233.** The Transformer three do not touch a
     `--noEmit` number at all, which is why every A/B in this arc is blind to them; their
     gate is the corpus suite's EMIT baselines, and they DO touch the published
     `bench-3way.sh` ratio, which is emit-mode on all three compilers (§ 0.2).
-  - **(f) Keep it from happening again — REACHABLE NOW, and it is the cheapest item in
-    this queue.** Run `python3 scripts/huge_methods.py --fail-over N` in the round gate.
-    After round 816 the census is **5**, so the honest form today is `--fail-over 5`
-    (a ratchet that catches a NEW offender immediately), tightened by one as each of the
-    remaining five lands; `--fail-over 0` is the end state, not a precondition. All five
-    remaining offenders are known and named, four of them on the emit path, so the ratchet
-    costs nothing and closes the hole that let this family grow unnoticed for 800 rounds.
-    *Wiring it into the Gradle `check` task is a build-system change → (JIT.3).*
+  - [x] **(f) DONE round 817 — the census is a RATCHET now, in TWO places, and it found
+    a phantom in itself on its first run.** `python3 scripts/huge_methods.py
+    --fail-over <census>` is a round-gate step beside `cost_gate.py` (CLAUDE.md,
+    SESSION-PROMPT.md), and `HugeMethodLimitTest` runs the SAME whole-program census
+    inside the suite so it cannot be forgotten — failing both on a NEW offender and on a
+    STALE named entry, which is the tightening rule made mechanical. **Proven to fire,
+    three arms, each its own build:** committed state 44 pins / 0 failed; ratchet
+    tightened by one 44 / exactly 1 (the census pin); a stale entry 44 / exactly 1 (the
+    named-offenders pin). `--fail-over 4` exits 1 against a census of 5; `--fail-over 5`
+    exits 0. **THE FIND: `javap` renders a static initializer as `static {};` with NO
+    parameter list, so the script's method-header regex never started a method there and
+    charged all 10,339 of `Checker.<clinit>`'s bytecodes to the method preceding it —
+    `access$checkBigintPropertyNames$emit`, a 16-BYTE ACCESS BRIDGE this queue has
+    carried as a split target since round 802.** The count was right; one of the five
+    NAMES was wrong for fourteen rounds. Method count 14,001 → 14,107: 106 static
+    initializers had never been counted. `docs/perf/setup-phase-and-huge-methods.md`
+    § 21. *Wiring it into Gradle's `check` is a build-system change and stays owner-gated
+    → (JIT.3); this round deliberately did not decide that.*
 
 - [ ] **BLOCKED-PENDING-USER (JIT.2): ship the JIT/AOT launcher flags.** Guardrail —
   changing how the CLI is launched is a packaging decision.

@@ -2111,3 +2111,158 @@ target needing a real data-flow answer), `access$checkBigintPropertyNames$emit`
 **10,339**, `Transformer.transform` **8,934**. The Transformer three are on the
 EMIT path, which every `--noEmit` A/B in this arc is blind to; their gate is the
 corpus suite's emit baselines.
+
+---
+
+## 21. (JIT.1)(f) — the census becomes a RATCHET, and finds a phantom in itself
+
+Round 817. Two things landed: the gate that stops this family growing again, and
+the last cheap split. The gate came first, because it is what makes the rest
+unnecessary to rediscover.
+
+### 21.1 The honest form of the gate is a ratchet, not a zero
+
+Round 802 found **19** methods over HotSpot's `HugeMethodLimit` by running a
+census for the first time in 800 rounds. Nothing else could have found them: the
+corpus measures meaning and not cost, `cost_gate.py`'s counters do not move, and
+`-XX:+PrintCompilation` prints nothing at all (the compile is never *proposed*,
+so it is never *skipped*). Fourteen rounds of splitting later the census stood at
+**5**, all five known and named — so `--fail-over 0` was not available, but
+`--fail-over 5` was, **today**, and it catches a NEW offender the moment it
+appears. `0` is the end state, not a precondition.
+
+It is wired in two places, deliberately:
+
+* `python3 scripts/huge_methods.py --fail-over 5` as a ROUND-GATE step beside
+  `cost_gate.py` (CLAUDE.md, SESSION-PROMPT.md). Wiring it into Gradle's `check`
+  is a build-system change and remains owner-gated as (JIT.3) — this round did
+  not decide that on the owner's behalf;
+* `HugeMethodLimitTest` runs the same whole-program census INSIDE the suite, so
+  it cannot be forgotten. It walks the compiled main output from a marker
+  resource, parses every `Code` attribute length, and fails on a NEW offender AND
+  on a STALE entry — i.e. when a split has landed and the ratchet was not
+  tightened. That second direction is the tightening rule made mechanical.
+
+**Proven to fire, three arms, each its own build:** the committed state 44 pins /
+0 failed; the ratchet tightened by one 44 / **exactly 1**, the census pin; a
+stale named entry 44 / **exactly 1**, the named-offenders pin. And
+`--fail-over 4` exits 1 against a census of 5 while `--fail-over 5` exits 0. A
+gate that has never failed is not known to work.
+
+### 21.2 THE SECOND INSTRUMENT PAID FOR ITSELF ON ITS FIRST RUN
+
+The suite census immediately reported a method the script had never listed:
+`Checker.<clinit>`, **10,340** bytecodes.
+
+`javap` renders a static initializer as `static {};` — **with no parameter
+list**. `huge_methods.py`'s method-header regex requires a `(`, so it never
+started a method there, and every one of `<clinit>`'s bytecodes was charged to
+whatever method happened to precede it in the class file. That method is
+`Checker.access$checkBigintPropertyNames$emit`, whose real body is **16 bytes**
+(`aload`×8, one `invokestatic`, `return`) — and which this queue has carried as a
+**10,339-bytecode split target since round 802**.
+
+So the census count was right and one of its five NAMES was wrong, for fourteen
+rounds. Method count moved 14,001 → 14,107 once the regex was fixed: **106 static
+initializers had never been counted at all.**
+
+The transferable rule: **read `Code` attribute lengths from the class file when
+the answer matters; a `javap` rendering is a parse away from the truth** — and a
+second instrument that reaches the same number by a different route is worth
+building precisely because it can disagree.
+
+## 22. (JIT.1)(e) — `Transformer.transform`, 8,934 → an entry at 2,989 plus seven helpers
+
+### 22.1 The shape, and what stays
+
+`transform` is a straight pipeline: reset the per-file fields, pre-pass the
+top-level names, transform the statements, then a sequence of stages each
+consuming the previous stage's list. Seven regions moved, sizes MEASURED before
+the edit with `scripts/method_bytes_by_line.py`:
+
+| region | HEAD lines | measured | helper |
+|---|---|---|---|
+| top-level name pre-pass | 526–620 | 1,272 | `tfCollectTopLevelNames` 1,367 |
+| helper-statement list | 701–740 | 1,050 | `tfCollectHelperStatements` 1,182 |
+| leading-comment lift | 751–785 | 550 | `tfLiftLeadingComments` 663 |
+| ESM tslib import | 874–948 | 1,071 | `tfInjectTslibImport` 1,142 |
+| internal alias elision | 956–976 | 283 | `tfElideInternalImportAliases` 636 |
+| noLib metadata wrap | 983–1006 | 275 | `tfWrapNoLibMetadataArgs` 406 |
+| createRequire header | 1013–1065 | 389 | `tfInjectCreateRequireHeader` 385 |
+
+**What stays is chosen by one structural rule:** the CommonJS and module:preserve
+branches hold all three whole-function `return`s, so leaving them in the entry
+buys round 813's property — **no helper needs a return signal at all**, and
+therefore no helper can fail to propagate one.
+
+Every region moves at **dedent 0**, and every value-producing region moves WITH
+its own `val` declaration plus one added `return <name>` line, so not one
+character of the moved text is edited.
+
+### 22.2 The parts sum to LESS — for a DIFFERENT reason than round 816's
+
+8,770 against 8,934: **164 fewer**. Round 816's mechanism is measured ABSENT
+here — `transform` contains **0** `Ref$ObjectRef` references before and after,
+and the class total is 86 either way.
+
+The measured cause is **local-slot addressing**. The monolith has ~60 live
+locals, so almost every reference is past slot 3 and pays the 2-byte
+`aload N` / `astore N` form; inside a helper the same values sit in slots 0–3 and
+take the 1-byte `aload_N`. Counted across the entry and all seven helpers:
+
+    2-byte forms   841 -> 741   (-100)
+    1-byte forms   219 -> 288   (+69)
+
+i.e. 100 of the 164 bytes, with prologue/epilogue netting out the rest.
+Parameters cost nothing: Kotlin emits **no** `checkNotNullParameter` for a
+private method (count 0).
+
+**So there are now TWO measured reasons a split can be bytecode-negative, and the
+prior from one does not carry to the other.** Check which applies before claiming
+either.
+
+### 22.3 Seams, and the negative control
+
+Discrimination 3 of 3, each mistake alone on its own build, the failure COUNT
+predicted before the run:
+
+* **the ORDER seam** — swap the `tfCollectHelperStatements` and
+  `tfLiftLeadingComments` calls. Both take `helpers` and neither returns it, so
+  the swap TYPE-CHECKS; the lift reads the list by value, so every helper body is
+  silently lost. Nothing in the data flow enforces the order. Predicted 2, failed
+  **2**, exactly the two named;
+* **the SET-IDENTITY seam** — hand `tfCollectTopLevelNames` a fresh set instead of
+  the caller's, which the caller then subtracts from `topLevelTypeOnlyNames`. A
+  name that is both a type and a value (`interface X {}` beside `const X = 1`)
+  stops being exported. Predicted exactly 1, failed **1**;
+* **a dropped call** — `tfInjectCreateRequireHeader`. Predicted exactly 1, failed
+  **1**;
+* **NEGATIVE CONTROL** — move `val isCjsFileName` INTO the helper. It is a pure
+  expression over a parameter the helper already has, with exactly ONE reader,
+  inside the moved region. Predicted **0**, failed **0**.
+
+Pins were validated on the UNSPLIT binary first: 56 ran, exactly 5 failed and
+they are the 5 size/ratchet pins, which must fail there.
+
+### 22.4 Gate
+
+Suite **13,725 → 13,739 / 0 failures / 3 skipped**. 8-profile grid diffed
+set-for-set BOTH directions against a purpose-built pre-split binary, identical
+direct `java` command, absolute class dirs, class dirs confirmed to differ (0 vs
+7 `tf*` helpers) — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20
+counters +0.00%**. `--rerun-tasks` build **0 `w:` / 0 `e:`**.
+
+**No wall A/B was run and none should be.** This method is on the EMIT path and
+every A/B in this arc is `--noEmit`, so the instrument is structurally blind to
+it; the behavioural gate is the corpus suite's EMIT baselines plus
+`TransformSplitTest`.
+
+### 22.5 The list is now FOUR
+
+`Transformer.transformToCommonJS` **28,991**, `Transformer.transformClassBody`
+**16,233**, `Checker.tryInferSingleTypeParamFromArgs` **11,930** (still the only
+target needing a real data-flow answer), and `Checker.<clinit>` **10,339** — the
+one this round discovered, and a shape nobody in this arc has split yet: a static
+initializer, whose contents are the class's `object`-level constants, and which
+can only shrink by moving those initializers into helper methods it calls.
