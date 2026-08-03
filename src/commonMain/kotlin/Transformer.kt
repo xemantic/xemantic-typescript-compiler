@@ -523,6 +523,252 @@ class Transformer(
         // are interfaces — TypeScript erases them and may produce `export {}` to preserve module semantics.
         topLevelTypeOnlyNames.clear()
         val topLevelRuntimeNames = mutableSetOf<String>()
+        tfCollectTopLevelNames(
+            sourceFile = sourceFile,
+            topLevelRuntimeNames = topLevelRuntimeNames,
+        )
+        // Remove any type-only names that also have a runtime declaration
+        topLevelTypeOnlyNames -= topLevelRuntimeNames
+        // Determine if the current file has module-level syntax.
+        // In script files (no imports/exports), import aliases to type-only names must be kept
+        // since they may be referenced from other script files in the same compilation.
+        isCurrentFileModule = isModuleFile(sourceFile)
+        // Compute helper-name collisions with locally-declared names. Only relevant when
+        // `importHelpers: true` AND the file is a module (helpers come from tslib import/require).
+        // When a local declaration shadows a helper name (e.g. `declare var __decorate: any`),
+        // TypeScript renames the imported alias / property to `<helper>_1` so the helper is
+        // still callable without clashing with the user's local.
+        helperLocalCollisionMap.clear()
+        if (options.importHelpers && isCurrentFileModule) {
+            val helperNames = setOf(
+                "__makeTemplateObject", "__awaiter", "__asyncGenerator", "__await",
+                "__asyncDelegator", "__asyncValues", "__rest", "__decorate",
+                "__metadata", "__param",
+            )
+            for (name in topLevelRuntimeNames) {
+                if (name in helperNames) helperLocalCollisionMap[name] = "${name}_1"
+            }
+        }
+        // Pre-pass: collect all exported names for each namespace across merged blocks.
+        // This lets later blocks qualify references to members exported from earlier blocks.
+        collectMergedNamespaceExports(sourceFile.statements)
+        // Merge in exports from other files in the same compilation (cross-file namespace merging).
+        for ((nsName, exports) in externalNamespaceExports) {
+            mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }.addAll(exports)
+        }
+
+        // Pre-pass: collect const enum values for inlining at use sites.
+        // Values are inlined even when preserveConstEnums is true (the enum body is kept,
+        // but references are still replaced with literal values).
+        // With isolatedModules, const enums can't be inlined (no cross-file info available).
+        if (!options.isolatedModules && !options.verbatimModuleSyntax) {
+            collectConstEnumValues(sourceFile.statements)
+        }
+        val fnClsChainCount = chainTempCounter  // renameChainTemps resets it; capture for the fnCls base
+        var transformed = renameChainTemps(transformStatements(sourceFile.statements, atTopLevel = true))
+        // staticFieldWithInterfaceContext: fn-local class-expr wrapper temps rename to names
+        // AFTER the file-top hoisted pool (tsc print-time generatedNames skip) — identical
+        // to the immediate per-fn name when the file pool is empty.
+        if (fnClsTempOrder.isNotEmpty()) {
+            val base = tempVarCounter + fnClsChainCount + decKeyTempOrder.size
+            for ((ph, localIdx) in fnClsTempOrder) {
+                val real = tempNameFor(base + localIdx)
+                transformed = transformed.map { renameTempInStmt(it, ph, real) }
+            }
+        }
+        // decoratorsOnComputedProperties: rename pool-2 placeholders to their final names
+        // (continuing the sequence after pool 1's final counter — `var _a.._p; var _q..;`)
+        // and prepend the two consolidated file-top var statements.
+        if (fileHasDecoratedComputedKeys && (filePool1Vars.isNotEmpty() || decKeyTempOrder.isNotEmpty())) {
+            val renameBase = tempVarCounter + chainTempCounter
+            val realNames = decKeyTempOrder.mapIndexed { i, ph -> ph to tempNameFor(renameBase + i) }
+            for ((ph, real) in realNames) {
+                transformed = transformed.map { renameTempInStmt(it, ph, real) }
+            }
+            fun poolVarStatement(names: List<String>): Statement = VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = names.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
+                    flags = VarKeyword,
+                    pos = -1, end = -1,
+                ),
+                pos = -1, end = -1,
+            )
+            val poolStmts = mutableListOf<Statement>()
+            if (filePool1Vars.isNotEmpty()) poolStmts.add(poolVarStatement(filePool1Vars.toList()))
+            if (realNames.isNotEmpty()) poolStmts.add(poolVarStatement(realNames.map { it.second }))
+            transformed = poolStmts + transformed
+        }
+
+        // Collect helpers to inject at top of file.
+        // Helpers are emitted in the order they were first needed during transformation,
+        // matching TypeScript's first-usage ordering (e.g., __decorate before __awaiter when
+        // a class has both @decorator and async methods — decorator is processed first).
+        val helpers = mutableListOf<RawStatement>()
+        // importHelpers: true only skips inline helpers for module files (where tslib can be require()'d).
+        // Script files (non-module) can't import tslib, so they still need inline helpers.
+        val skipHelpers = options.noEmitHelpers || (options.importHelpers && isCurrentFileModule)
+        tfCollectHelperStatements(
+            skipHelpers = skipHelpers,
+            helpers = helpers,
+        )
+
+        // When helpers are present, lift leading comments from the first transformed statement
+        // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
+        // Only lift when the first original statement itself has comments (meaning the comment
+        // belongs to the first original statement, not a later one). If the first original
+        // statement was erased (e.g. `declare function`) and had no comments, the first
+        // transformed statement's comments came from a later original statement — don't lift.
+        // Exception: FunctionDeclaration keeps its comments after helpers when __awaiter is the only helper.
+        // Only lift DETACHED comments (blank line ≥2 newlines between comment end and statement pos).
+        // Adjacent comments (no blank line) stay with the statement, after helpers.
+        val helpersAndTransformed = tfLiftLeadingComments(
+            sourceFile = sourceFile,
+            transformed = transformed,
+            helpers = helpers,
+        )
+
+        // If decorator-metadata generation wrapped deep qualified names with chained safety
+        // checks, hoist `var _a, _b, ..., _<max>;` between helpers and the rest of the file.
+        // (For ES module output. CJS uses a separate hoist in the post-process below.)
+        val withHelpers = if (maxDeepMetadataTempCount > 0) {
+            val tempNames = (0 until maxDeepMetadataTempCount).map { "_${'a' + it}" }
+            val tempVarStmt = VariableStatement(
+                declarationList = VariableDeclarationList(
+                    declarations = tempNames.map { name ->
+                        VariableDeclaration(
+                            name = Identifier(text = name, pos = -1, end = -1),
+                            type = null, initializer = null, pos = -1, end = -1,
+                        )
+                    },
+                    flags = VarKeyword, pos = -1, end = -1,
+                ),
+                modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+            )
+            // Splice: after helpers (helpers.size entries) but before transformed
+            helpersAndTransformed.take(helpers.size) + tempVarStmt + helpersAndTransformed.drop(helpers.size)
+        } else helpersAndTransformed
+
+        // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files)
+        val effectiveModule = options.effectiveModule
+        val fileName = sourceFile.fileName
+        val useCJS = !isESModuleFormat(options, fileName) &&
+                (effectiveModule == ModuleKind.CommonJS ||
+                effectiveModule == ModuleKind.None ||
+                effectiveModule.isNodeNext ||
+                fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
+        if (useCJS && isModuleFile(sourceFile)) {
+            // When importHelpers: true, inject `const tslib_1 = require("tslib")` instead of inlining helpers.
+            // This applies to any helper that uses tslib (awaiter, rest, decorators, async generator, etc.).
+            val needsInlineHelperForCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
+                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
+                needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
+            // B333: automatic-runtime JSX — `const jsx_runtime_1 = require("react/jsx-runtime");`
+            // first among the body statements (lands right after the CJS exports-void0
+            // preamble); react-jsxdev adds the `_jsxFileName` const.
+            val jsxRuntimeStmts = if (jsxRuntimeCallEmitted) {
+                val mod = if (jsxDevRuntime) "react/jsx-dev-runtime" else "react/jsx-runtime"
+                val rtName = if (jsxDevRuntime) "jsx_dev_runtime_1" else "jsx_runtime_1"
+                val requireStmt = makeRequireConst(rtName, StringLiteralNode(text = mod, pos = -1, end = -1))
+                if (jsxDevRuntime) {
+                    val fileNameStmt = VariableStatement(
+                        declarationList = VariableDeclarationList(
+                            declarations = listOf(VariableDeclaration(
+                                name = Identifier(text = "_jsxFileName", pos = -1, end = -1),
+                                type = null,
+                                initializer = StringLiteralNode(
+                                    text = currentFileName.substringAfterLast('/'), pos = -1, end = -1),
+                                pos = -1, end = -1,
+                            )),
+                            flags = ConstKeyword, pos = -1, end = -1,
+                        ),
+                        modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
+                    )
+                    listOf(requireStmt, fileNameStmt)
+                } else listOf(requireStmt)
+            } else emptyList()
+            val statementsForCJS = if (options.importHelpers && needsInlineHelperForCjs) {
+                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
+                listOf(tslibStmt) + jsxRuntimeStmts + withHelpers
+            } else jsxRuntimeStmts + withHelpers
+            val cjsStatements = transformToCommonJS(statementsForCJS, sourceFile)
+            return sourceFile.copy(statements = cjsStatements)
+        }
+
+        // For module:preserve, .cts/.cjs files use CJS semantics — inject tslib require() if needed.
+        // These files don't go through transformToCommonJS (since isESModuleFormat=true for preserve),
+        // but they still need `const tslib_1 = require("tslib")` when importHelpers:true and helpers are used.
+        if (effectiveModule == ModuleKind.Preserve &&
+            (fileName.endsWith(".cts") || fileName.endsWith(".cjs")) &&
+            options.importHelpers && isCurrentFileModule
+        ) {
+            val needsInlineHelperForPreserveCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
+                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
+                needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
+            if (needsInlineHelperForPreserveCjs) {
+                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
+                return sourceFile.copy(statements = listOf(tslibStmt) + withHelpers)
+            }
+        }
+
+        // For ESM modules with importHelpers: true, inject `import { __helperA, ... } from "tslib"`
+        // at the top. CJS modules use `const tslib_1 = require("tslib")` (handled elsewhere).
+        // Note: .cjs/.cts files use CJS semantics even with module:preserve.
+        val isCjsFileName = fileName.endsWith(".cjs") || fileName.endsWith(".cts")
+        val withTslib = tfInjectTslibImport(
+            fileName = fileName,
+            isCjsFileName = isCjsFileName,
+            withHelpers = withHelpers,
+        )
+
+        // ES module import elision: erase imports whose bindings are unused in value positions
+        val elided = elideUnusedESModuleImports(withTslib)
+
+        // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
+        // when x is explicitly type-only, OR when x resolves to a const enum
+        // (whose values are inlined, so the runtime import is unnecessary).
+        val finalStatements = tfElideInternalImportAliases(
+            sourceFile = sourceFile,
+            elided = elided,
+        )
+
+        // Post-process: under `noLib && isolatedModules`, wrap `__metadata("design:type", X)`
+        // args where X is a bare Identifier in `NOLIB_RUNTIME_QUESTIONABLE` (Map, Set, …).
+        // TypeScript emits a safety check pattern since these may not exist at runtime.
+        // Applied here (after module-format-specific transforms have run) so it covers
+        // ESM/CJS outputs uniformly.
+        val noLibWrapped = tfWrapNoLibMetadataArgs(
+            finalStatements = finalStatements,
+        )
+
+        // Inject createRequire header for node*/nodenext ESM files that had an
+        // `import X = require("mod")` rewritten to `const X = __require("mod")`:
+        //   import { createRequire as _createRequire } from "module";
+        //   const __require = _createRequire(import.meta.url);
+        // Prepended before all other statements (matches TypeScript's emit order).
+        val withCreateRequire = tfInjectCreateRequireHeader(
+            noLibWrapped = noLibWrapped,
+        )
+
+        return sourceFile.copy(statements = withCreateRequire)
+    }
+
+    /**
+     * Pre-pass over the file's top-level statements: fills [topLevelTypeOnlyNames]
+     * with the names that have no runtime counterpart (interfaces, type aliases,
+     * type-only namespaces/imports, const-enum aliases whose values are inlined)
+     * and [topLevelRuntimeNames] — the CALLER's set, mutated in place — with the
+     * ones that do.
+     *
+     * The two sets are not independent: the caller subtracts the second from the
+     * first immediately afterwards, so a name that is both a type and a value
+     * (`interface X {}` beside `const X = 1`) must survive as a runtime name or
+     * `export { X }` is wrongly erased. That is why the set is a parameter rather
+     * than a return: it is the same instance the subtraction reads.
+     */
+    private fun tfCollectTopLevelNames(
+        sourceFile: SourceFile,
+        topLevelRuntimeNames: MutableSet<String>,
+    ) {
         for (stmt in sourceFile.statements) {
             when (stmt) {
                 is InterfaceDeclaration -> topLevelTypeOnlyNames.add(stmt.name.text)
@@ -618,86 +864,20 @@ class Transformer(
                 else -> {}
             }
         }
-        // Remove any type-only names that also have a runtime declaration
-        topLevelTypeOnlyNames -= topLevelRuntimeNames
-        // Determine if the current file has module-level syntax.
-        // In script files (no imports/exports), import aliases to type-only names must be kept
-        // since they may be referenced from other script files in the same compilation.
-        isCurrentFileModule = isModuleFile(sourceFile)
-        // Compute helper-name collisions with locally-declared names. Only relevant when
-        // `importHelpers: true` AND the file is a module (helpers come from tslib import/require).
-        // When a local declaration shadows a helper name (e.g. `declare var __decorate: any`),
-        // TypeScript renames the imported alias / property to `<helper>_1` so the helper is
-        // still callable without clashing with the user's local.
-        helperLocalCollisionMap.clear()
-        if (options.importHelpers && isCurrentFileModule) {
-            val helperNames = setOf(
-                "__makeTemplateObject", "__awaiter", "__asyncGenerator", "__await",
-                "__asyncDelegator", "__asyncValues", "__rest", "__decorate",
-                "__metadata", "__param",
-            )
-            for (name in topLevelRuntimeNames) {
-                if (name in helperNames) helperLocalCollisionMap[name] = "${name}_1"
-            }
-        }
-        // Pre-pass: collect all exported names for each namespace across merged blocks.
-        // This lets later blocks qualify references to members exported from earlier blocks.
-        collectMergedNamespaceExports(sourceFile.statements)
-        // Merge in exports from other files in the same compilation (cross-file namespace merging).
-        for ((nsName, exports) in externalNamespaceExports) {
-            mergedNamespaceExports.getOrPut(nsName) { mutableSetOf() }.addAll(exports)
-        }
+    }
 
-        // Pre-pass: collect const enum values for inlining at use sites.
-        // Values are inlined even when preserveConstEnums is true (the enum body is kept,
-        // but references are still replaced with literal values).
-        // With isolatedModules, const enums can't be inlined (no cross-file info available).
-        if (!options.isolatedModules && !options.verbatimModuleSyntax) {
-            collectConstEnumValues(sourceFile.statements)
-        }
-        val fnClsChainCount = chainTempCounter  // renameChainTemps resets it; capture for the fnCls base
-        var transformed = renameChainTemps(transformStatements(sourceFile.statements, atTopLevel = true))
-        // staticFieldWithInterfaceContext: fn-local class-expr wrapper temps rename to names
-        // AFTER the file-top hoisted pool (tsc print-time generatedNames skip) — identical
-        // to the immediate per-fn name when the file pool is empty.
-        if (fnClsTempOrder.isNotEmpty()) {
-            val base = tempVarCounter + fnClsChainCount + decKeyTempOrder.size
-            for ((ph, localIdx) in fnClsTempOrder) {
-                val real = tempNameFor(base + localIdx)
-                transformed = transformed.map { renameTempInStmt(it, ph, real) }
-            }
-        }
-        // decoratorsOnComputedProperties: rename pool-2 placeholders to their final names
-        // (continuing the sequence after pool 1's final counter — `var _a.._p; var _q..;`)
-        // and prepend the two consolidated file-top var statements.
-        if (fileHasDecoratedComputedKeys && (filePool1Vars.isNotEmpty() || decKeyTempOrder.isNotEmpty())) {
-            val renameBase = tempVarCounter + chainTempCounter
-            val realNames = decKeyTempOrder.mapIndexed { i, ph -> ph to tempNameFor(renameBase + i) }
-            for ((ph, real) in realNames) {
-                transformed = transformed.map { renameTempInStmt(it, ph, real) }
-            }
-            fun poolVarStatement(names: List<String>): Statement = VariableStatement(
-                declarationList = VariableDeclarationList(
-                    declarations = names.map { VariableDeclaration(name = syntheticId(it), pos = -1, end = -1) },
-                    flags = VarKeyword,
-                    pos = -1, end = -1,
-                ),
-                pos = -1, end = -1,
-            )
-            val poolStmts = mutableListOf<Statement>()
-            if (filePool1Vars.isNotEmpty()) poolStmts.add(poolVarStatement(filePool1Vars.toList()))
-            if (realNames.isNotEmpty()) poolStmts.add(poolVarStatement(realNames.map { it.second }))
-            transformed = poolStmts + transformed
-        }
-
-        // Collect helpers to inject at top of file.
-        // Helpers are emitted in the order they were first needed during transformation,
-        // matching TypeScript's first-usage ordering (e.g., __decorate before __awaiter when
-        // a class has both @decorator and async methods — decorator is processed first).
-        val helpers = mutableListOf<RawStatement>()
-        // importHelpers: true only skips inline helpers for module files (where tslib can be require()'d).
-        // Script files (non-module) can't import tslib, so they still need inline helpers.
-        val skipHelpers = options.noEmitHelpers || (options.importHelpers && isCurrentFileModule)
+    /**
+     * Appends the inline `__awaiter`/`__decorate`/... helper bodies to [helpers],
+     * in tsc's first-usage order with its two priority fix-ups
+     * (`__setFunctionName` after `__awaiter`, `__asyncValues` after `__awaiter`).
+     *
+     * Does nothing when [skipHelpers] — `noEmitHelpers`, or `importHelpers` on a
+     * module file, where the helpers come from tslib instead.
+     */
+    private fun tfCollectHelperStatements(
+        skipHelpers: Boolean,
+        helpers: MutableList<RawStatement>,
+    ) {
         if (!skipHelpers) {
             // TypeScript emits `__setFunctionName` AFTER `__awaiter` but BEFORE `__asyncGenerator`
             // (which inlines as `__await` + `__asyncGenerator`). If both helpers are needed, move
@@ -738,16 +918,18 @@ class Transformer(
                 }
             }
         }
+    }
 
-        // When helpers are present, lift leading comments from the first transformed statement
-        // to appear BEFORE the helpers (TypeScript emits: comment → helpers → first stmt).
-        // Only lift when the first original statement itself has comments (meaning the comment
-        // belongs to the first original statement, not a later one). If the first original
-        // statement was erased (e.g. `declare function`) and had no comments, the first
-        // transformed statement's comments came from a later original statement — don't lift.
-        // Exception: FunctionDeclaration keeps its comments after helpers when __awaiter is the only helper.
-        // Only lift DETACHED comments (blank line ≥2 newlines between comment end and statement pos).
-        // Adjacent comments (no blank line) stay with the statement, after helpers.
+    /**
+     * Places [helpers] in front of [transformed], lifting the first statement's
+     * DETACHED leading comments above them (tsc emits comment -> helpers ->
+     * first statement).
+     */
+    private fun tfLiftLeadingComments(
+        sourceFile: SourceFile,
+        transformed: List<Statement>,
+        helpers: List<RawStatement>,
+    ): List<Statement> {
         val helpersAndTransformed = if (helpers.isNotEmpty()) {
             val firstOrigStmt = sourceFile.statements.firstOrNull()
             val onlyAwaiter = needsAwaiterHelper && !needsRestHelper
@@ -783,94 +965,20 @@ class Transformer(
                 helpers + transformed
             }
         } else transformed
+        return helpersAndTransformed
+    }
 
-        // If decorator-metadata generation wrapped deep qualified names with chained safety
-        // checks, hoist `var _a, _b, ..., _<max>;` between helpers and the rest of the file.
-        // (For ES module output. CJS uses a separate hoist in the post-process below.)
-        val withHelpers = if (maxDeepMetadataTempCount > 0) {
-            val tempNames = (0 until maxDeepMetadataTempCount).map { "_${'a' + it}" }
-            val tempVarStmt = VariableStatement(
-                declarationList = VariableDeclarationList(
-                    declarations = tempNames.map { name ->
-                        VariableDeclaration(
-                            name = Identifier(text = name, pos = -1, end = -1),
-                            type = null, initializer = null, pos = -1, end = -1,
-                        )
-                    },
-                    flags = VarKeyword, pos = -1, end = -1,
-                ),
-                modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
-            )
-            // Splice: after helpers (helpers.size entries) but before transformed
-            helpersAndTransformed.take(helpers.size) + tempVarStmt + helpersAndTransformed.drop(helpers.size)
-        } else helpersAndTransformed
-
-        // CommonJS module transform (also for Node16/NodeNext and .cts/.cjs files)
-        val effectiveModule = options.effectiveModule
-        val fileName = sourceFile.fileName
-        val useCJS = !isESModuleFormat(options, fileName) &&
-                (effectiveModule == ModuleKind.CommonJS ||
-                effectiveModule == ModuleKind.None ||
-                effectiveModule.isNodeNext ||
-                fileName.endsWith(".cts") || fileName.endsWith(".cjs"))
-        if (useCJS && isModuleFile(sourceFile)) {
-            // When importHelpers: true, inject `const tslib_1 = require("tslib")` instead of inlining helpers.
-            // This applies to any helper that uses tslib (awaiter, rest, decorators, async generator, etc.).
-            val needsInlineHelperForCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
-                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
-                needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
-            // B333: automatic-runtime JSX — `const jsx_runtime_1 = require("react/jsx-runtime");`
-            // first among the body statements (lands right after the CJS exports-void0
-            // preamble); react-jsxdev adds the `_jsxFileName` const.
-            val jsxRuntimeStmts = if (jsxRuntimeCallEmitted) {
-                val mod = if (jsxDevRuntime) "react/jsx-dev-runtime" else "react/jsx-runtime"
-                val rtName = if (jsxDevRuntime) "jsx_dev_runtime_1" else "jsx_runtime_1"
-                val requireStmt = makeRequireConst(rtName, StringLiteralNode(text = mod, pos = -1, end = -1))
-                if (jsxDevRuntime) {
-                    val fileNameStmt = VariableStatement(
-                        declarationList = VariableDeclarationList(
-                            declarations = listOf(VariableDeclaration(
-                                name = Identifier(text = "_jsxFileName", pos = -1, end = -1),
-                                type = null,
-                                initializer = StringLiteralNode(
-                                    text = currentFileName.substringAfterLast('/'), pos = -1, end = -1),
-                                pos = -1, end = -1,
-                            )),
-                            flags = ConstKeyword, pos = -1, end = -1,
-                        ),
-                        modifiers = emptySet<ModifierFlag>(), pos = -1, end = -1,
-                    )
-                    listOf(requireStmt, fileNameStmt)
-                } else listOf(requireStmt)
-            } else emptyList()
-            val statementsForCJS = if (options.importHelpers && needsInlineHelperForCjs) {
-                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
-                listOf(tslibStmt) + jsxRuntimeStmts + withHelpers
-            } else jsxRuntimeStmts + withHelpers
-            val cjsStatements = transformToCommonJS(statementsForCJS, sourceFile)
-            return sourceFile.copy(statements = cjsStatements)
-        }
-
-        // For module:preserve, .cts/.cjs files use CJS semantics — inject tslib require() if needed.
-        // These files don't go through transformToCommonJS (since isESModuleFormat=true for preserve),
-        // but they still need `const tslib_1 = require("tslib")` when importHelpers:true and helpers are used.
-        if (effectiveModule == ModuleKind.Preserve &&
-            (fileName.endsWith(".cts") || fileName.endsWith(".cjs")) &&
-            options.importHelpers && isCurrentFileModule
-        ) {
-            val needsInlineHelperForPreserveCjs = needsAwaiterHelper || needsRestHelper || needsDecorateHelper ||
-                needsMetadataHelper || needsParamHelper || needsAsyncGeneratorHelper || needsMakeTemplateObjectHelper ||
-                needsEsDecorateHelper || needsRunInitializersHelper || needsAsyncValuesHelper
-            if (needsInlineHelperForPreserveCjs) {
-                val tslibStmt = makeRequireConst("tslib_1", StringLiteralNode(text = "tslib", pos = -1, end = -1))
-                return sourceFile.copy(statements = listOf(tslibStmt) + withHelpers)
-            }
-        }
-
-        // For ESM modules with importHelpers: true, inject `import { __helperA, ... } from "tslib"`
-        // at the top. CJS modules use `const tslib_1 = require("tslib")` (handled elsewhere).
-        // Note: .cjs/.cts files use CJS semantics even with module:preserve.
-        val isCjsFileName = fileName.endsWith(".cjs") || fileName.endsWith(".cts")
+    /**
+     * For an ESM module with `importHelpers: true`, prepends
+     * `import { __helperA, ... } from "tslib"` to [withHelpers] — sorted by helper
+     * name, aliased where a local declaration shadows one, and placed after any
+     * leading private-field `var _A_x;` hoists.
+     */
+    private fun tfInjectTslibImport(
+        fileName: String,
+        isCjsFileName: Boolean,
+        withHelpers: List<Statement>,
+    ): List<Statement> {
         val withTslib = if (options.importHelpers && isCurrentFileModule &&
             !isCjsFileName && isESModuleFormat(options, fileName)
         ) {
@@ -946,13 +1054,18 @@ class Transformer(
                 }
             } else withHelpers
         } else withHelpers
+        return withTslib
+    }
 
-        // ES module import elision: erase imports whose bindings are unused in value positions
-        val elided = elideUnusedESModuleImports(withTslib)
-
-        // Internal import alias elision: erase `var x = M.N` from `import x = M.N`
-        // when x is explicitly type-only, OR when x resolves to a const enum
-        // (whose values are inlined, so the runtime import is unnecessary).
+    /**
+     * Erases `var x = M.N` emitted for an `import x = M.N` whose alias is
+     * explicitly type-only or resolves to a const enum (its values are inlined at
+     * the use sites, so the runtime alias is dead).
+     */
+    private fun tfElideInternalImportAliases(
+        sourceFile: SourceFile,
+        elided: List<Statement>,
+    ): List<Statement> {
         val unusedAliasNames = sourceFile.statements
             .filterIsInstance<ImportEqualsDeclaration>()
             .filter { decl ->
@@ -974,12 +1087,17 @@ class Transformer(
                 name !in unusedAliasNames
             }
         } else elided
+        return finalStatements
+    }
 
-        // Post-process: under `noLib && isolatedModules`, wrap `__metadata("design:type", X)`
-        // args where X is a bare Identifier in `NOLIB_RUNTIME_QUESTIONABLE` (Map, Set, …).
-        // TypeScript emits a safety check pattern since these may not exist at runtime.
-        // Applied here (after module-format-specific transforms have run) so it covers
-        // ESM/CJS outputs uniformly.
+    /**
+     * Under `noLib` + `isolatedModules`, wraps `__metadata("design:type", X)`
+     * arguments naming a possibly-absent runtime global (Map, Set, ...) in tsc's
+     * safety-check pattern, hoisting the `var _a;` it needs to the front.
+     */
+    private fun tfWrapNoLibMetadataArgs(
+        finalStatements: List<Statement>,
+    ): List<Statement> {
         val noLibWrapped = if (options.noLib && options.isolatedModules && needsMetadataHelper) {
             val didWrapArr = BooleanArray(1) { false }
             val wrappedList = finalStatements.map { stmt ->
@@ -1004,12 +1122,16 @@ class Transformer(
                 wrappedList.subList(0, insertPos) + aVarDecl + wrappedList.subList(insertPos, wrappedList.size)
             } else finalStatements
         } else finalStatements
+        return noLibWrapped
+    }
 
-        // Inject createRequire header for node*/nodenext ESM files that had an
-        // `import X = require("mod")` rewritten to `const X = __require("mod")`:
-        //   import { createRequire as _createRequire } from "module";
-        //   const __require = _createRequire(import.meta.url);
-        // Prepended before all other statements (matches TypeScript's emit order).
+    /**
+     * Prepends the `createRequire` header a node/nodenext ESM file needs once an
+     * `import X = require("mod")` has been rewritten to `const X = __require(...)`.
+     */
+    private fun tfInjectCreateRequireHeader(
+        noLibWrapped: List<Statement>,
+    ): List<Statement> {
         val withCreateRequire = if (needsCreateRequireHelper) {
             val createRequireImport = ImportDeclaration(
                 importClause = ImportClause(
@@ -1063,8 +1185,7 @@ class Transformer(
             )
             listOf(createRequireImport, requireConst) + noLibWrapped
         } else noLibWrapped
-
-        return sourceFile.copy(statements = withCreateRequire)
+        return withCreateRequire
     }
 
     /**

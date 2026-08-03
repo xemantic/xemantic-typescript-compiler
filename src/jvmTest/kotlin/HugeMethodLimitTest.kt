@@ -95,7 +95,7 @@ class HugeMethodLimitTest {
          * `cost_gate.py`); wiring it into Gradle's `check` is a build-system
          * change and is owner-gated as queue item (JIT.3).
          */
-        const val CENSUS_RATCHET = 5
+        const val CENSUS_RATCHET = 4
 
         /**
          * The whole census, named — `<binary class name>#<method simple name>`.
@@ -124,7 +124,6 @@ class HugeMethodLimitTest {
             "com.xemantic.typescript.compiler.Transformer#transformClassBody",
             "com.xemantic.typescript.compiler.Checker#tryInferSingleTypeParamFromArgs",
             "com.xemantic.typescript.compiler.Checker#<clinit>",
-            "com.xemantic.typescript.compiler.Transformer#transform",
         )
 
         /**
@@ -908,6 +907,56 @@ class HugeMethodLimitTest {
         // ... and the sum must still be the bulk of the original 21,535 — the runs
         // were MOVED, not deleted. Measured sum: 20,001 (20,294 with the entry).
         assert(parts.values.sum() > 18000)
+    }
+
+    /**
+     * (JIT.1)(e) round 817 — the seven helpers `Transformer.transform` was split
+     * into. It was **8,934 bytecodes** and is the first target in the arc on the
+     * EMIT path, so every `--noEmit` A/B in this arc is blind to it and its
+     * behavioural gate is the corpus suite's emit baselines plus
+     * `TransformSplitTest`.
+     */
+    private val transformParts = setOf(
+        "tfCollectTopLevelNames",
+        "tfCollectHelperStatements",
+        "tfLiftLeadingComments",
+        "tfInjectTslibImport",
+        "tfElideInternalImportAliases",
+        "tfWrapNoLibMetadataArgs",
+        "tfInjectCreateRequireHeader",
+    )
+
+    @Test
+    fun `Transformer transform is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val fn = sizes["transform"] ?: fail("transform not found in Transformer")
+        // Positive control: the entry still carries the per-file state reset, the
+        // stage plumbing and the two module-format branches, so it is far from
+        // empty — a zero cannot pass this vacuously.
+        assert(fn > 1500)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the Transformer transform split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val missing = transformParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Transformer: $missing")
+        val parts = sizes.filterKeys { it in transformParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the Transformer transform split parts each carry a real share of the pipeline`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val parts = sizes.filterKeys { it in transformParts }
+        assert(parts.size == 7)
+        // Region sizes were MEASURED before the edit with
+        // scripts/method_bytes_by_line.py: 1,272 / 1,050 / 550 / 1,071 / 283 /
+        // 275 / 389 bytecodes of the 8,934, i.e. 4,890 moved.
+        assert(parts.values.min() > 200)
+        assert(parts.values.sum() > 4000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
