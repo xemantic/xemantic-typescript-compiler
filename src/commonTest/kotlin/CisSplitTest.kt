@@ -100,7 +100,11 @@ class CisSplitTest {
     // ── cisFindStringIndexSig — the one cross-boundary value ────────────────
 
     @Test
-    fun `seam - the string index signature found on a BASE type reaches the derived members`() {
+    fun `lookup arm - the string index signature found on a BASE type reaches the derived members`() {
+        // NOT a seam pin: measured (round 813) to stay GREEN when the base-class
+        // walk's contribution is dropped, because a sibling pass reports the same
+        // TS2411 for a PRIMITIVE inherited index type. The seam pin below is the
+        // shape that ablation showed to be uniquely ours.
         val d = diagnose(
             """
             class B { [s: string]: number; }
@@ -110,6 +114,25 @@ class CisSplitTest {
         assert(d.count { it.code == 2411 } == 1)
         assert(d.first { it.code == 2411 }.message ==
             "Property 'y' of type 'string' is not assignable to 'string' index type 'number'.")
+    }
+
+    @Test
+    fun `seam - an INHERITED CALLABLE string index type reaches the general property loop`() {
+        // The one shape the base-class walk is the sole producer for: a method
+        // checked against a CALLABLE inherited string index value type. Found by
+        // diffing an ablated binary (`cisFindStringIndexSig` returning only the
+        // OWN signature) against the committed one over eight inherited-index
+        // shapes — the other seven are supplied redundantly by a sibling pass.
+        val d = diagnose(
+            """
+            interface B7 { [s: string]: () => number; }
+            interface D7 extends B7 { m(): string; }
+            """
+        )
+        assert(d.count { it.code == 2411 } == 1)
+        assert(d.first { it.code == 2411 }.message ==
+            "Property 'm' of type '() => string' is not assignable to " +
+            "'string' index type '() => number'.")
     }
 
     @Test
