@@ -47,6 +47,25 @@ import kotlin.test.Test
  * file is unchanged. Each arm pin asserts the distinctive MESSAGE and a COUNT,
  * because a double emission is exactly the failure mode a dropped return signal
  * produces.
+ *
+ * **Discrimination, measured — 2 of the 4 seams, each mistake injected ALONE on
+ * its own build, control first (18 pins, 0 failed):**
+ *
+ *  * dropping the entry's `return` after [Checker.ccetNoCallSignatureDiagnostics]
+ *    fails **6** pins;
+ *  * ignoring [Checker.ccetExplicitTypeArguments]' `true` fails **2** (its own
+ *    seam pin and the ordering pin);
+ *  * ignoring [Checker.ccetPrologueWalkers]' `true` fails **0**, twice — once
+ *    against the `super` shapes and once against a purpose-built `reduce<U>`
+ *    retry — because `getCalleeType("super")` is `anyType` and the walkers'
+ *    other continuations meet `any`-typed lib parameters;
+ *  * ignoring [Checker.ccetUnionCalleeChecks]' `true` fails **0**, twice — the
+ *    duplicate emitter is unreachable by construction (see the arm pin), and
+ *    B516's combined-signature retry is green as well.
+ *
+ * Both undiscriminated signals are REDUNDANT GUARDS on today's code; they are
+ * kept because the monolith had them, and the pins written for them are named
+ * as arm pins rather than seam pins, per the standing rule.
  */
 class CcetSplitTest {
 
@@ -177,13 +196,18 @@ class CcetSplitTest {
             "Argument of type 'string' is not assignable to parameter of type 'number'.")
     }
 
-    // ── the seams: the entry must honour each helper's return signal ────────
+    // ── the two seams that DISCRIMINATE, and the four single-emission pins
+    //    written as seams that measurably do not (see the class doc) ────────
 
     @Test
-    fun `union seam - a partly-callable union is reported ONCE, not once per branch`() {
-        // The `signatures.isEmpty()` branch below carries its own "Not all
-        // constituents" emitter for the same shape, so an entry that ran on after
-        // ccetUnionCalleeChecks returned `true` would report the union twice.
+    fun `union arm - a partly-callable union yields exactly one diagnostic`() {
+        // NOT a seam pin, and it was written as one: round 811 measured that
+        // ignoring ccetUnionCalleeChecks' `true` leaves every pin GREEN. The
+        // duplicate emitter in the `signatures.isEmpty()` branch is unreachable
+        // for this shape BY CONSTRUCTION — getCallSignaturesOfType concatenates
+        // the constituents', so a union with any callable member has a non-empty
+        // signature list. What this pin really guards is single emission against a
+        // future second emitter.
         val d = diagnose(
             """
             declare const f: (() => void) | number;
@@ -220,7 +244,10 @@ class CcetSplitTest {
     }
 
     @Test
-    fun `prologue seam - a handled super call is not also checked by the ordinary path`() {
+    fun `prologue arm - a super call's arguments are reported exactly once`() {
+        // NOT a seam pin either (round 811, measured): `getCalleeType("super")` is
+        // anyType, so an entry that ignored ccetPrologueWalkers' `true` would bail
+        // at the any/error gate before any second emitter could run.
         val d = diagnose(
             """
             class B { constructor(a: string) {} }
@@ -230,6 +257,41 @@ class CcetSplitTest {
             """
         )
         assert(d.count { it.code == 2345 } == 1)
+    }
+
+    @Test
+    fun `prologue arm - a firing reduce walker yields exactly one diagnostic`() {
+        // Written as the prologue seam's purpose-built RETRY, because the `super`
+        // shapes provably cannot discriminate it: this is the one prologue walker
+        // whose continuation would reach a real signature (`reduce<U>` with a
+        // `keyof` callback parameter, which the explicit-type-argument path below
+        // would check again against the instantiated lib signature). Measured: the
+        // ablation leaves it GREEN too, so the prologue's return signal is a
+        // redundant guard on today's code and this is an ARM pin.
+        val d = diagnose(
+            """
+            interface X { a: number }
+            declare const arr: string[];
+            const r = arr.reduce<number>((acc: number, key: keyof X) => acc, 0);
+            """
+        )
+        assert(d.count { it.code == 2345 } == 1)
+    }
+
+    @Test
+    fun `union arm - a combined-signature union call is reported ONCE`() {
+        // The union seam's purpose-built RETRY: B516's combined signature is the
+        // one case that leaves a NON-EMPTY signature list and still ends in an
+        // emission, so ignoring the return signal would reach the overload path.
+        // Measured: it stays GREEN too — recorded as NOT DISCRIMINATED, and this
+        // is therefore an arm pin over B516's combined-parameter intersection.
+        val d = diagnose(
+            """
+            declare const f: ((x: number) => void) | ((x: boolean) => void);
+            f(1);
+            """
+        )
+        assert(d.size == 1)
     }
 
     // ── order, recursion, control ───────────────────────────────────────────
