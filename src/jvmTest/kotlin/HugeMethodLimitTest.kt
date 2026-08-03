@@ -95,16 +95,23 @@ class HugeMethodLimitTest {
          * `cost_gate.py`); wiring it into Gradle's `check` is a build-system
          * change and is owner-gated as queue item (JIT.3).
          */
-        const val CENSUS_RATCHET = 3
+        const val CENSUS_RATCHET = 2
 
         /**
          * The whole census, named — `<binary class name>#<method simple name>`.
          *
-         * All five are known and queued: the three `Transformer` ones are
-         * (JIT.1)(e) and sit on the EMIT path (so every `--noEmit` A/B in this arc
-         * is blind to them and their gate is the corpus suite's emit baselines);
-         * `tryInferSingleTypeParamFromArgs` and `Checker.<clinit>` are the (d)
-         * tail.
+         * Both are known and queued: `tryInferSingleTypeParamFromArgs` needs a
+         * scripted DATA-FLOW answer rather than the contiguity argument every
+         * split in this arc has used so far (mutable locals cross every candidate
+         * boundary), and `Checker.<clinit>` is a static initializer whose content
+         * is the class's object-level constants — it can only shrink by moving
+         * those initializers into helper methods it calls, which no A/B in this
+         * repo can price.
+         *
+         * The `Transformer` entries are gone: round 817 split `transform`, round
+         * 818 `transformClassBody` and round 819 `transformToCommonJS`. All three
+         * sit on the EMIT path, so every `--noEmit` A/B in this arc was blind to
+         * them and their gate was the corpus suite's emit baselines.
          *
          * **`Checker.<clinit>` is here because THIS TEST FOUND IT, on its first
          * run, and the reason it had never been seen is the reason a second
@@ -120,7 +127,6 @@ class HugeMethodLimitTest {
          * the class file, so it has no rendering to misread.
          */
         val KNOWN_OVER_LIMIT = setOf(
-            "com.xemantic.typescript.compiler.Transformer#transformToCommonJS",
             "com.xemantic.typescript.compiler.Checker#tryInferSingleTypeParamFromArgs",
             "com.xemantic.typescript.compiler.Checker#<clinit>",
         )
@@ -1009,6 +1015,71 @@ class HugeMethodLimitTest {
         // 1,677 / 1,259 / 1,264 / 979 bytecodes of the 16,233, i.e. 11,206 moved.
         assert(parts.values.min() > 400)
         assert(parts.values.sum() > 9000)
+    }
+
+    /**
+     * (JIT.1)(e) round 819 — the nineteen helpers `Transformer.transformToCommonJS`
+     * was split into. It was **28,991 bytecodes**, 3.6x the limit and the LARGEST
+     * method in the compiler. Two of them — the `VariableStatement` and
+     * `ImportDeclaration` arms — carry a ONE-ITERATION FRAME, because six
+     * `continue`s in them targeted the caller's loop; see
+     * `scripts/tcjs_split_apply.py` and `TransformToCommonJsSplitTest`.
+     */
+    private val commonJsParts = setOf(
+        "tcjsDetectModuleShape",
+        "tcjsCollectDeclaredNames",
+        "tcjsCollectNamespaceExports",
+        "tcjsCollectExportClauses",
+        "tcjsSplitPrologueDirectives",
+        "tcjsTransformVariableStatement",
+        "tcjsTransformFunctionDeclaration",
+        "tcjsTransformClassDeclaration",
+        "tcjsTransformExportAssignment",
+        "tcjsTransformImportDeclaration",
+        "tcjsTransformExportDeclaration",
+        "tcjsTransformOtherStatement",
+        "tcjsExtractEarlyPrePreamble",
+        "tcjsPrependHoistedVars",
+        "tcjsRewriteExportMutations",
+        "tcjsCollectInternalAliasNames",
+        "tcjsElideUnusedImports",
+        "tcjsMoveDetachedHeaderComments",
+        "tcjsInsertHelpersAndPrologue",
+    )
+
+    @Test
+    fun `Transformer transformToCommonJS is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val fn = sizes["transformToCommonJS"] ?: fail("transformToCommonJS not found in Transformer")
+        // Positive control: the entry still holds the ~65 collection declarations,
+        // the main `when` dispatch, the dynamic-import rewrite, the re-export
+        // placement, the default-export reordering and the void0 chain, so it is
+        // far from empty — a zero cannot pass this vacuously.
+        assert(fn > 1500)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the transformToCommonJS split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val missing = commonJsParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Transformer: $missing")
+        val parts = sizes.filterKeys { it in commonJsParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the transformToCommonJS split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val parts = sizes.filterKeys { it in commonJsParts }
+        assert(parts.size == 19)
+        // Region sizes were MEASURED before the edit with
+        // scripts/method_bytes_by_line.py: 1,383 / 2,285 / 1,182 / 923 / 322 /
+        // 4,451 / 449 / 425 / 415 / 2,756 / 2,372 / 745 / 738 / 757 / 913 /
+        // 1,224 / 2,749 / 700 / 1,775 bytecodes of the 28,991, i.e. 26,564 moved.
+        assert(parts.values.min() > 300)
+        assert(parts.values.sum() > 24000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
