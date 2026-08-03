@@ -95,7 +95,7 @@ class HugeMethodLimitTest {
          * `cost_gate.py`); wiring it into Gradle's `check` is a build-system
          * change and is owner-gated as queue item (JIT.3).
          */
-        const val CENSUS_RATCHET = 4
+        const val CENSUS_RATCHET = 3
 
         /**
          * The whole census, named — `<binary class name>#<method simple name>`.
@@ -121,7 +121,6 @@ class HugeMethodLimitTest {
          */
         val KNOWN_OVER_LIMIT = setOf(
             "com.xemantic.typescript.compiler.Transformer#transformToCommonJS",
-            "com.xemantic.typescript.compiler.Transformer#transformClassBody",
             "com.xemantic.typescript.compiler.Checker#tryInferSingleTypeParamFromArgs",
             "com.xemantic.typescript.compiler.Checker#<clinit>",
         )
@@ -957,6 +956,59 @@ class HugeMethodLimitTest {
         // 275 / 389 bytecodes of the 8,934, i.e. 4,890 moved.
         assert(parts.values.min() > 200)
         assert(parts.values.sum() > 4000)
+    }
+
+    /**
+     * (JIT.1)(e) round 818 — the nine helpers `Transformer.transformClassBody`
+     * was split into. It was **16,233 bytecodes**, 2.0x the limit and the second
+     * largest method in the compiler. Like round 817's target it is on the EMIT
+     * path, so its behavioural gate is the corpus suite's emit baselines plus
+     * `TransformClassBodySplitTest` — no `--noEmit` A/B can see it at all.
+     */
+    private val classBodyParts = setOf(
+        "tcbLowerAutoAccessors",
+        "tcbExtractComputedPropertyKeys",
+        "tcbAllocatePrivateState",
+        "tcbBuildInstanceInitializers",
+        "tcbBuildTransformedConstructor",
+        "tcbBuildOutputMembers",
+        "tcbCaptureClassAlias",
+        "tcbEmitAliasAndPrivateState",
+        "tcbEmitStaticFieldTrailing",
+    )
+
+    @Test
+    fun `Transformer transformClassBody is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val fn = sizes["transformClassBody"] ?: fail("transformClassBody not found in Transformer")
+        // Positive control: the entry still carries the member categorisation, the
+        // private-field downlevel, the private environment push and the whole
+        // trailing-statement tail, so it is far from empty — a zero cannot pass
+        // this vacuously.
+        assert(fn > 2000)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the transformClassBody split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val missing = classBodyParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Transformer: $missing")
+        val parts = sizes.filterKeys { it in classBodyParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the transformClassBody split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Transformer")
+        val parts = sizes.filterKeys { it in classBodyParts }
+        assert(parts.size == 9)
+        // Region sizes were MEASURED before the edit with
+        // scripts/method_bytes_by_line.py: 584 / 1,112 / 1,832 / 1,161 / 1,338 /
+        // 1,677 / 1,259 / 1,264 / 979 bytecodes of the 16,233, i.e. 11,206 moved.
+        assert(parts.values.min() > 400)
+        assert(parts.values.sum() > 9000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
