@@ -348,6 +348,59 @@ class HugeMethodLimitTest {
         assert(parts.values.sum() > 12000)
     }
 
+    /**
+     * (JIT.1)(g) round 809 — the nine helpers `checkAssignmentExpressionCore` was
+     * split into. It was **18,100 bytecodes**, 2.3x the limit and the largest
+     * `Checker` method left after round 808. Like (c) it is a STRAIGHT-LINE
+     * statement sequence, so each helper holds one contiguous run of the committed
+     * `CtaSections` **level-E** partition and seven of the nine hand a return
+     * signal back; the behavioural gate for those signals is `CaeSplitTest`.
+     */
+    private val caeSplitParts = setOf(
+        "caePrototypeMemberAssign",
+        "caeModuleAliasAndLibPairShapes",
+        "caeForeignTpTargetAndClassRhs",
+        "caeIndexSigAndSignatureGuards",
+        "caeUnionAndMissingPropertyGuards",
+        "caeElaborateMismatch",
+        "caeLegacyDeclaredStringPath",
+        "caeThisPropertyAssign",
+        "caeElementAccessAssign",
+    )
+
+    @Test
+    fun `checkAssignmentExpressionCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val core = sizes["checkAssignmentExpressionCore"]
+            ?: fail("checkAssignmentExpressionCore not found in Checker")
+        // Positive control: the parse really did read a substantial method (it is
+        // 3,861 bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(core > 1500)
+        assert(core < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkAssignmentExpression split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = caeSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in caeSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkAssignmentExpression split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in caeSplitParts }
+        assert(parts.size == 9)
+        // Measured smallest part: 453 bytecodes (the element-access write tail).
+        assert(parts.values.min() > 300)
+        // ... and the sum must still be the bulk of the original 18,100, i.e. the
+        // body was MOVED, not deleted. Measured sum: ~13,600.
+        assert(parts.values.sum() > 10000)
+    }
+
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
     private class ClassFileReader(private val b: ByteArray) {
         private var p = 0

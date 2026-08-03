@@ -99444,115 +99444,7 @@ interface DataView {
             // interface and compare with RHS function type. Emits TS2322 with
             // function-mismatch elaboration chain.
             CtaSections.atE(CtaSections.E_PROTO)
-            if (target is PropertyAccessExpression) {
-                val inner = target.expression
-                if (inner is PropertyAccessExpression &&
-                    inner.name.text == "prototype" &&
-                    inner.expression is Identifier
-                ) {
-                    val className = (inner.expression).text
-                    val rawSym = currentFileLocals?.get(className) ?: globals[className]
-                    val classSymbol = rawSym?.let {
-                        if (it.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(it) else it
-                    }
-                    if (classSymbol != null) {
-                        val classType = getDeclaredTypeOfSymbol(classSymbol)
-                        if (classType is Type.Interface) {
-                            resolveStructuredTypeMembers(classType)
-                            val methodSym = classType.members?.get(target.name.text)
-                            if (methodSym != null) {
-                                val methodType = getTypeOfSymbol(methodSym)
-                                if (methodType is Type.Object && !methodType.callSignatures.isNullOrEmpty()) {
-                                    val rhsType = getTypeOfExpression(expr.right)
-                                    // 16.4dr: For `function(){ return undefined; }` RHS, our
-                                    // getTypeOfFunctionExpression reports return type as anyType
-                                    // (no body-return inference). Detect this narrow pattern and
-                                    // treat the return as undefinedType for comparison purposes.
-                                    val inferredSrcReturn = (expr.right as? FunctionExpression)?.let { fe ->
-                                        val stmts = fe.body.statements
-                                        if (stmts.size == 1) {
-                                            val only = stmts[0]
-                                            if (only is ReturnStatement && only.expression is Identifier &&
-                                                (only.expression).text == "undefined") {
-                                                undefinedType
-                                            } else null
-                                        } else null
-                                    }
-                                    if (rhsType is Type.Object && !rhsType.callSignatures.isNullOrEmpty() &&
-                                        inferredSrcReturn != null
-                                    ) {
-                                        val tgtSig = methodType.callSignatures!!.first()
-                                        val tgtReturn = tgtSig.resolvedReturnType ?: anyType
-                                        if (tgtReturn !== anyType && tgtReturn !== errorType &&
-                                            !tgtReturn.flags.hasAny(TypeFlags.Void or TypeFlags.Undefined or TypeFlags.Null) &&
-                                            !checkTypeRelatedTo(inferredSrcReturn, tgtReturn, assignableRelation)
-                                        ) {
-                                        val lhsStart = inner.expression.pos
-                                        val lhsEnd = expressionTrueEnd(target)
-                                        val lhsLen = lhsEnd - lhsStart
-                                        if (lhsLen > 0) {
-                                            // Manually format display as () => <return> since our
-                                            // rhsType.callSigs.first() has return=anyType; we know
-                                            // the real return is inferredSrcReturn.
-                                            val displaySource = "() => ${typeToString(inferredSrcReturn)}"
-                                            val displayTarget = "() => ${typeToString(tgtReturn)}"
-                                            val (line, character) = getLineAndCharacterOfPosition(source, lhsStart)
-                                            val chain = mutableListOf<String>()
-                                            chain.add("  Type '${typeToString(inferredSrcReturn)}' is not assignable to type '${typeToString(tgtReturn)}'.")
-                                            diagnostics.add(Diagnostic(
-                                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                                                category = DiagnosticCategory.Error,
-                                                code = 2322,
-                                                fileName = fileName,
-                                                line = line,
-                                                character = character,
-                                                start = lhsStart,
-                                                length = lhsLen,
-                                                messageChain = chain,
-                                            ))
-                                            return
-                                        }
-                                        }
-                                    }
-                                }
-                            }
-                            // typeOfPrototype: `X.prototype.dataProp = rhs` where
-                            // `dataProp` is a DATA property. `classType.members` mirrors
-                            // both instance AND static entries under one name, so a
-                            // same-named static (`static bar = ''`) can clobber the
-                            // instance type. Resolve the INSTANCE member directly from
-                            // the class declaration. Conservative: simple-checkable
-                            // member types only; emits TS2322 on assignability failure.
-                            run dataProp@{
-                                val classDecl = classSymbol.declarations
-                                    .firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return@dataProp
-                                val instMember = classDecl.members.firstOrNull {
-                                    it is PropertyDeclaration && ModifierFlag.Static !in it.modifiers &&
-                                        getMemberNameText(it.name) == target.name.text
-                                } as? PropertyDeclaration ?: return@dataProp
-                                val memberType = (instMember.type?.let { getTypeFromTypeNode(it) }
-                                    ?: instMember.initializer?.let { getWidenedLiteralType(getTypeOfExpression(it)) })
-                                    ?: return@dataProp
-                                if (memberType === anyType || memberType === errorType) return@dataProp
-                                if (!isSimpleCheckableType(memberType)) return@dataProp
-                                val rhsType = getTypeOfExpression(expr.right)
-                                if (rhsType === anyType || rhsType === errorType) return@dataProp
-                                if (checkTypeRelatedTo(rhsType, memberType, assignableRelation)) return@dataProp
-                                val lhsStart = inner.expression.pos
-                                val lhsLen = expressionTrueEnd(target) - lhsStart
-                                if (lhsLen <= 0) return@dataProp
-                                val (line, character) = getLineAndCharacterOfPosition(source, lhsStart)
-                                diagnostics.add(Diagnostic(
-                                    message = "Type '${typeToString(rhsType)}' is not assignable to type '${typeToString(memberType)}'.",
-                                    category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
-                                    line = line, character = character, start = lhsStart, length = lhsLen,
-                                ))
-                                return
-                            }
-                        }
-                    }
-                }
-            }
+            if (caePrototypeMemberAssign(expr, target, source, fileName)) return
             if (target is Identifier) {
                 CtaSections.atE(CtaSections.E_IDLIT)
                 // B185b: `arr = [...['y']]` where arr's annotation is `<LitUnionAlias>[]` —
@@ -99603,112 +99495,7 @@ interface DataView {
                 //       and RHS is a primitive → emit TS2322 with module target display
                 //   (2) target has primitive type (`var y = 1`) and RHS is a module
                 //       alias (`y = moduleA`) → emit TS2322 with module source display
-                CtaSections.atE(CtaSections.E_MODULE)
-                val rhsModuleName = tryGetModuleImportNameForExpr(expr.right)
-                val targetSym = currentFileLocals?.get(target.text) ?: globals[target.text]
-                val targetInitModuleName = run {
-                    val initExpr = (targetSym?.valueDeclaration as? VariableDeclaration)
-                        ?.takeIf { it.type == null }
-                        ?.initializer ?: return@run null
-                    tryGetModuleImportNameForExpr(initExpr)
-                }
-                if (targetInitModuleName != null && rhsModuleName == null) {
-                    // Shape (1): target is `typeof import("X")`, RHS is something else.
-                    // Emit only when RHS is a simple primitive literal — conservative.
-                    val rhsType = getTypeOfExpression(expr.right)
-                    if (rhsType !== anyType && rhsType !== errorType &&
-                        isSimpleCheckableType(rhsType)) {
-                        val displaySource = typeToString(getWidenedLiteralType(rhsType))
-                        val displayTarget = "typeof import(\"$targetInitModuleName\")"
-                        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2322,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = target.pos,
-                            length = target.text.length,
-                        ))
-                        return
-                    }
-                } else if (rhsModuleName != null && targetInitModuleName == null) {
-                    // Shape (2): RHS is `typeof import("X")`. Check if target has a
-                    // primitive type from currentLocalTypes / annotation.
-                    var targetTypeForCheck: Type? = null
-                    val tDecl = targetSym?.valueDeclaration ?: targetSym?.declarations?.firstOrNull()
-                    val tAnno = (tDecl as? VariableDeclaration)?.type
-                        ?: (tDecl as? Parameter)?.type
-                        ?: (tDecl as? PropertyDeclaration)?.type
-                    if (tAnno != null) {
-                        targetTypeForCheck = getTypeFromTypeNode(tAnno)
-                    }
-                    if (targetTypeForCheck == null || targetTypeForCheck === anyType || targetTypeForCheck === errorType) {
-                        currentLocalTypes[target.text]?.let { lt ->
-                            if (lt !== anyType && lt !== errorType) targetTypeForCheck = lt
-                        }
-                    }
-                    if (targetTypeForCheck != null && targetTypeForCheck !== anyType && targetTypeForCheck !== errorType &&
-                        isSimpleCheckableType(targetTypeForCheck)) {
-                        val displaySource = "typeof import(\"$rhsModuleName\")"
-                        val displayTarget = typeToString(targetTypeForCheck)
-                        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2322,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = target.pos,
-                            length = target.text.length,
-                        ))
-                        return
-                    }
-                }
-                // B236: optional-vs-required presence rule for an EMBEDDED-LIB interface
-                // pair under SNC-OFF — `execResult = matchResult` (RegExpMatchArray →
-                // RegExpExecArray). With SNC off, an optional `index?: number` is plain
-                // `number`, so every relation path passes; tsc's rule is presence-based
-                // and errors regardless of strictNullChecks with the dedicated chain.
-                // varTypes-name-driven (params aren't in globals/currentLocalTypes).
-                // SNC-on keeps the pre-existing coarse-TS2322 path (gate below). Lib-only
-                // pair keeps the member-resolution FP surface at zero (mirror of B103).
-                CtaSections.atE(CtaSections.E_B236)
-                run {
-                    if (strictNullChecks) return@run
-                    val rhsId = expr.right as? Identifier ?: return@run
-                    // varTypes stores a bare named annotation as "@Name" (B54.7's
-                    // parameterized-ref marker without type args) — strip it; a
-                    // genuinely-parameterized "@Name<...>" bails.
-                    fun bareName(v: String?): String? = when {
-                        v == null -> null
-                        v.startsWith("@") -> if (v.contains('<')) null else v.removePrefix("@")
-                        else -> v
-                    }
-                    val tgtName = bareName(varTypes[target.text]) ?: return@run
-                    val srcName = bareName(varTypes[rhsId.text]) ?: return@run
-                    if (tgtName == srcName) return@run
-                    val tgtSym = globals[tgtName]?.takeIf { s ->
-                        s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
-                    val srcSym = globals[srcName]?.takeIf { s ->
-                        s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
-                    val tgtType = getDeclaredTypeOfSymbol(tgtSym) as? Type.Object ?: return@run
-                    val srcType = getDeclaredTypeOfSymbol(srcSym) as? Type.Object ?: return@run
-                    resolveStructuredTypeMembers(tgtType); resolveStructuredTypeMembers(srcType)
-                    val mismatch = findOptionalVsRequiredMismatch(srcType, tgtType) ?: return@run
-                    val pname = formatPropertyDisplayName(mismatch)
-                    val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                    diagnostics.add(Diagnostic(
-                        message = "Type '$srcName' is not assignable to type '$tgtName'.",
-                        category = DiagnosticCategory.Error, code = 2322,
-                        fileName = fileName, line = line, character = character,
-                        start = target.pos, length = target.text.length,
-                        messageChain = listOf("  Property '$pname' is optional in type '$srcName' but required in type '$tgtName'."),
-                    ))
-                    return
-                }
+                if (caeModuleAliasAndLibPairShapes(expr, target, source, fileName, varTypes)) return
                 // Try new Type-based engine for file-level and local variables
                 CtaSections.atE(CtaSections.E_TTRESOLVE)
                 var targetType: Type? = null
@@ -99768,81 +99555,7 @@ interface DataView {
                 if (targetType != null && targetType !== anyType && targetType !== errorType) {
                     CtaSections.atE(CtaSections.E_FTP)
                     val tt = targetType
-                    // Round 435f: an assignment TARGET carrying a FOREIGN type param is a
-                    // local typed from an UN-INFERRED generic call return (`let expression =
-                    // visitNode(…)` registers visitNode's raw `TOut | (TIn & undefined) |
-                    // (TVisited & undefined)` — tsc infers those TPs at the call site, so
-                    // any check against the raw type is meaningless and FP'd the visitor
-                    // family ×15). Mirrors the round-431e SOURCE gate: the enclosing fn's
-                    // OWN TPs stay checkable, as do signature-own TPs.
-                    if (typeContainsForeignTypeParam(tt, typeParams)) return
-                    // B8.1: target is `never` because its annotation is an
-                    // intersection that reduced due to a conflicting private
-                    // property. Emit TS2322 with `never` display + chain so the
-                    // standard emission path doesn't print `Type 'X' is not
-                    // assignable to type 'A & B'.` (the un-reduced form).
-                    if (tt === neverType) {
-                        val reductionReason = findIntersectionReductionForExpr(target)
-                        if (reductionReason != null) {
-                            val sourceType = getTypeOfExpression(expr.right)
-                            val displaySource = typeToString(getWidenedLiteralType(sourceType))
-                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type 'never'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = target.pos,
-                                length = target.text.length,
-                                messageChain = listOf(intersectionReductionChainMessage(reductionReason)),
-                            ))
-                            return
-                        }
-                    }
-                    // Class-Identifier-as-value RHS with construct-sig target — `d = C`.
-                    // Mirrors the var-decl branch in checkVarDeclAssignability (17.8a):
-                    // canUseTypeEngine skips class-instance-vs-constructor comparisons,
-                    // so without a special-case the assignment falls through and emits
-                    // no diagnostic. Display the source as `typeof X` and emit the
-                    // construct-signature mismatch elaboration chain.
-                    CtaSections.atE(CtaSections.E_CTORID)
-                    val rhs = expr.right
-                    if (rhs is Identifier &&
-                        tt is Type.Object &&
-                        !tt.constructSignatures.isNullOrEmpty()
-                    ) {
-                        val rhsSym = currentFileLocals?.get(rhs.text) ?: globals[rhs.text]
-                        if (rhsSym != null && rhsSym.flags.hasAny(SymbolFlags.Class) &&
-                            !rhsSym.flags.hasAny(SymbolFlags.Variable)
-                        ) {
-                            val srcCtorType = buildClassValueConstructorTypeForDisplay(rhsSym)
-                            if (srcCtorType != null) {
-                                val sourceSig = srcCtorType.constructSignatures!!.first()
-                                val targetSig = tt.constructSignatures!!.first()
-                                val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation)
-                                if (!ok) {
-                                    val displaySource = "typeof ${rhsSym.name}"
-                                    val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
-                                    val chain = getConstructMismatchElaboration(srcCtorType, tt)
-                                    val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                                        category = DiagnosticCategory.Error,
-                                        code = 2322,
-                                        fileName = fileName,
-                                        line = line,
-                                        character = character,
-                                        start = target.pos,
-                                        length = target.text.length,
-                                        messageChain = chain,
-                                    ))
-                                    return
-                                }
-                            }
-                        }
-                    }
+                    if (caeForeignTpTargetAndClassRhs(expr, target, tt, typeAnnotation, source, fileName, typeParams)) return
                     // Set contextual type for function expression parameter inference.
                     // B52.4 extends to ObjectLiteralExpression so per-property contextual
                     // typing flows into nested arrow function parameters via
@@ -99915,164 +99628,7 @@ interface DataView {
                     // round 431e: same foreign-TP rule as checkReturnAssignability's
                     // gate — an un-inferred generic call RHS (`fileIncludeReasons =
                     // append(…)` typing as `T[]`) must not be relation-checked.
-                    CtaSections.atE(CtaSections.E_MID)
-                    if (typeContainsForeignTypeParam(sourceType, typeParams)) return
-                    lastMissingPropertyName = null
-                    lastMissingIndexSigKind = null
-                    // B96-INDEXSIG (assignment path): per-property/element VALUE vs the
-                    // target's index-signature value-type (TS2322/TS2741 + TS6501).
-                    // Gated to an index-sig-ONLY target (empty members → the downstream
-                    // relation-failure block emits no coarse error for it, so no double-emit)
-                    // with an object/array-literal RHS. Mirrors the var-decl call site.
-                    if ((expr.right is ObjectLiteralExpression || expr.right is ArrayLiteralExpression) &&
-                        tt is Type.Object && tt.members.isNullOrEmpty() &&
-                        (tt.stringIndexInfo != null || tt.numberIndexInfo != null)) {
-                        checkLiteralValuesAgainstIndexSignatures(expr.right, tt, source, fileName)
-                    }
-                    // 17.111: Mirror of 17.14a's PropertyAccess branch for plain
-                    // Identifier-target assignment. canUseTypeEngine returns false
-                    // when source lacks construct sigs but target requires them
-                    // (Checker.kt:35168), short-circuiting the standard relation
-                    // path so TS2322 never fires. Detect the construct-sig mismatch
-                    // directly and emit TS2322 + "provides no match for the
-                    // signature 'new ...'" chain. Source must be a "concrete
-                    // shape": either callable (has callSignatures) or has at
-                    // least one declared property — both forms clearly lack
-                    // construct sigs. This excludes opaque sources like
-                    // import-aliased `export = Class` whose effective type
-                    // resolves to an empty Type.Object we can't introspect.
-                    // 17.235 (2026-05-13): widened to also accept property-only
-                    // sources (e.g. `{x:number}` against `{new():any}`). Skip
-                    // when target is a class/iface instance (its construct sigs
-                    // are static-side; instance structural compares should
-                    // follow the regular path).
-                    CtaSections.atE(CtaSections.E_SIGS)
-                    if (tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
-                        !isClassOrInterfaceInstanceType(tt) &&
-                        sourceType is Type.Object &&
-                        (!sourceType.callSignatures.isNullOrEmpty() ||
-                            (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
-                        sourceType.constructSignatures.isNullOrEmpty() &&
-                        // M2.2 (round 393): tsc reports a structural failure ONCE — when the
-                        // source is ALSO missing required target properties, the missing-property
-                        // path (TS2739/TS2740; here the B444 `Array = fn` walker) owns the
-                        // diagnostic and the construct-sig-mismatch TS2322 is NOT additionally
-                        // reported. Under the embedded lib `ArrayConstructor` had no construct
-                        // sig so this branch never fired for `redefineArray`; under real libs it
-                        // does, double-emitting. Defer to missing-props. (collectMissingProperties
-                        // bails on a null-members function source, so use the null-tolerant check.)
-                        !targetHasRequiredPropAbsentFromSource(sourceType, tt)) {
-                        val srcCtorElab = getNonConstructibleElaboration(sourceType, tt)
-                        if (srcCtorElab != null) {
-                            val displaySource = typeToString(sourceType)
-                            val displayTarget = if (typeAnnotation != null)
-                                formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
-                                else typeToString(tt)
-                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = target.pos,
-                                length = target.text.length,
-                                messageChain = srcCtorElab,
-                            ))
-                            return
-                        }
-                    }
-                    // 17.112: Symmetric to 17.111 — target has callSignatures
-                    // (function type) but no constructSignatures; source is a
-                    // concrete-shape Type.Object lacking callSignatures (either
-                    // constructible or property-only). canUseTypeEngine may or
-                    // may not short-circuit depending on source shape, but
-                    // emitting the chain here directly via getCallableMismatchElaboration
-                    // ensures "  Type 'X' provides no match for the signature '(): T'."
-                    // is added regardless of whether the standard path would
-                    // have produced an empty chain. 17.235 (2026-05-13): widened
-                    // to also accept property-only sources (e.g. `{x:number}`
-                    // against `{():void}`).
-                    if (tt is Type.Object && !tt.callSignatures.isNullOrEmpty() &&
-                        tt.constructSignatures.isNullOrEmpty() &&
-                        sourceType is Type.Object &&
-                        (!sourceType.constructSignatures.isNullOrEmpty() ||
-                            (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
-                        sourceType.callSignatures.isNullOrEmpty()) {
-                        val srcCallElab = getCallableMismatchElaboration(sourceType, tt)
-                        if (srcCallElab != null) {
-                            val displaySource = typeToString(sourceType)
-                            val displayTarget = if (typeAnnotation != null)
-                                formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
-                                else typeToString(tt)
-                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = target.pos,
-                                length = target.text.length,
-                                messageChain = srcCallElab,
-                            ))
-                            return
-                        }
-                    }
-                    // B71.3: `b = {}` where `b: Boolean` (or other primitive wrapper) —
-                    // empty object literal assignment to a wrapper interface. The
-                    // standard structural compare passes trivially because
-                    // OBJECT_PROTOTYPE_PROPERTIES (toString/valueOf/etc.) are filtered
-                    // out in `propertiesRelatedTo`. TypeScript emits TS2322 with chain:
-                    //   "  The types returned by 'valueOf()' are incompatible between these types."
-                    //   "    Type 'Object' is not assignable to type 'boolean'."
-                    // because source's apparent valueOf returns `Object` but target's
-                    // wrapper interface declares `valueOf(): <primitive>`. Narrow gate:
-                    // (a) RHS is an empty ObjectLiteralExpression `{}`; (b) target is
-                    // a named wrapper interface. Other shapes still go through the
-                    // standard path.
-                    CtaSections.atE(CtaSections.E_OBJLIT)
-                    if (expr.right is ObjectLiteralExpression &&
-                        (expr.right).properties.isEmpty() &&
-                        tt is Type.Interface
-                    ) {
-                        val targetName = tt.symbol?.name
-                        if (targetName in WRAPPER_INTERFACE_NAMES) {
-                            val primitive = when (targetName) {
-                                "Boolean" -> "boolean"
-                                "Number" -> "number"
-                                "String" -> "string"
-                                "BigInt" -> "bigint"
-                                "Symbol" -> "symbol"
-                                else -> null
-                            }
-                            if (primitive != null) {
-                                val displaySource = typeToString(sourceType)
-                                val displayTarget = if (typeAnnotation != null)
-                                    formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
-                                    else typeToString(tt)
-                                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                                val chain = listOf(
-                                    "  The types returned by 'valueOf()' are incompatible between these types.",
-                                    "    Type 'Object' is not assignable to type '$primitive'.",
-                                )
-                                diagnostics.add(Diagnostic(
-                                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2322,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = target.pos,
-                                    length = target.text.length,
-                                    messageChain = chain,
-                                ))
-                                return
-                            }
-                        }
-                    }
+                    if (caeIndexSigAndSignatureGuards(expr, target, tt, sourceType, typeAnnotation, source, fileName, typeParams)) return
                     // B86.7d: reverse-direction nullable-source TS2322. `canUseTypeEngine`
                     // returns false for Union-source → Object/Interface target (it skips
                     // those because most need control-flow narrowing we don't implement),
@@ -100087,205 +99643,7 @@ interface DataView {
                     // that would fire for narrowed-union / contextual-typing cases that are
                     // legitimately assignable; we ONLY fire when the unambiguous cause is a
                     // nullish member missing from the (non-nullable) target.
-                    CtaSections.atE(CtaSections.E_UNION)
-                    if (strictNullChecks && sourceType is Type.Union &&
-                        (tt is Type.Object || tt is Type.Interface) &&
-                        !typeIncludesUndefined(tt) && !typeIncludesNull(tt)
-                    ) {
-                        // First nullish constituent (in flags-value order undefined<null,
-                        // matching TypeScript's reported `undefined`) that fails assignability.
-                        val failingNullish = sourceType.types.firstOrNull {
-                            isNullishConstituent(it) &&
-                                !checkTypeRelatedTo(it, tt, assignableRelation)
-                        }
-                        if (failingNullish != null) {
-                            val displaySource = typeToString(sourceType)
-                            val displayTarget = if (typeAnnotation != null)
-                                formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
-                                else typeToString(tt)
-                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                            diagnostics.add(Diagnostic(
-                                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2322,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = target.pos,
-                                length = target.text.length,
-                                messageChain = listOf(
-                                    "  Type '${typeToString(failingNullish)}' is not assignable to type '$displayTarget'.",
-                                ),
-                            ))
-                            return
-                        }
-                    }
-                    // B87.6c (round 73): array-VARIABLE source → tuple target tuple-arity
-                    // TS2322 for ASSIGNMENT — completes the tuple-arity diagnostic uniformly
-                    // (async-return B87.6 + var-decl B87.6b + assignment B87.6c). `x = arr`
-                    // where `x: [number]`, `arr: number[]` → "Target allows only N element(s)
-                    // but source may have more." Gated: RHS not an array literal (literals are
-                    // tuple-assignable element-wise), source is `Array` Reference, target is a
-                    // tuple `Type.Object`, not already assignable. Emits at the LHS identifier.
-                    if (expr.right !is ArrayLiteralExpression &&
-                        sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
-                        tt is Type.Object && tt !is Type.Reference && tt.tupleElementTypes != null &&
-                        !checkTypeRelatedTo(sourceType, tt, assignableRelation)
-                    ) {
-                        val n = tt.tupleElementTypes!!.size
-                        val displaySource = typeToString(sourceType)
-                        val displayTarget = if (typeAnnotation != null)
-                            formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
-                        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
-                            category = DiagnosticCategory.Error, code = 2322,
-                            fileName = fileName, line = line, character = character,
-                            start = target.pos, length = target.text.length,
-                            messageChain = listOf("  Target allows only $n element(s) but source may have more."),
-                        ))
-                        return
-                    }
-                    // B175: RHS is a bare CLASS identifier — the class VALUE is its STATIC
-                    // side (`typeof B`), so the target's required INSTANCE members are
-                    // checked against the class's STATIC member set (`a = B` errors even
-                    // though `new B()` would satisfy; `a = C` with `static prop` is fine).
-                    // Squiggle = the RHS identifier (TS reports the source expression here),
-                    // related TS2728 at the target's declaration + TS6213 "Did you mean to
-                    // use 'new' with this expression?" when the INSTANCE side would satisfy.
-                    // Single-missing only (multi → bail, FN-safe). The class-identifier RHS
-                    // also SKIPS the instance-source branch below (it would mis-classify the
-                    // static side as the instance shape).
-                    CtaSections.atE(CtaSections.E_B175)
-                    val b175RhsClassSym = (expr.right as? Identifier)?.let { r ->
-                        (currentFileLocals?.get(r.text) ?: globals[r.text])?.takeIf { s ->
-                            s.flags.hasAny(SymbolFlags.Class) &&
-                                s.declarations.any { it is ClassDeclaration } &&
-                                s.declarations.none { it is InterfaceDeclaration }
-                        }
-                    }
-                    if (b175RhsClassSym != null) {
-                        if (tt is Type.Interface && tt.callSignatures.isNullOrEmpty() &&
-                            tt.constructSignatures.isNullOrEmpty()
-                        ) {
-                            resolveStructuredTypeMembers(tt)
-                            val targetStatics2 = getStaticMembersOfType(tt)
-                            val required = tt.properties.orEmpty().filter { p ->
-                                !isOptionalProperty(p) &&
-                                    targetStatics2?.containsKey(p.name) != true &&
-                                    p.name !in OBJECT_PROTOTYPE_PROPERTIES
-                            }
-                            val staticNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = true)
-                            val instanceNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = false)
-                            val missing = required.filter { it.name !in staticNames }
-                            if (missing.size == 1) {
-                                val mpName = missing[0].name
-                                val displayTarget = if (typeAnnotation != null)
-                                    formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
-                                val rhs = expr.right
-                                val (line, character) = getLineAndCharacterOfPosition(source, rhs.pos)
-                                val related = mutableListOf<Diagnostic>()
-                                val mpSym = getPropertyOfType(tt, mpName)
-                                mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { related.add(it) }
-                                if (required.all { it.name in instanceNames }) {
-                                    related.add(Diagnostic(
-                                        message = "Did you mean to use 'new' with this expression?",
-                                        category = DiagnosticCategory.Message, code = 6213,
-                                        fileName = fileName, line = line, character = character,
-                                        start = rhs.pos, length = rhs.text.length,
-                                    ))
-                                }
-                                diagnostics.add(Diagnostic(
-                                    message = "Property '$mpName' is missing in type 'typeof ${rhs.text}' but required in type '$displayTarget'.",
-                                    category = DiagnosticCategory.Error, code = 2741,
-                                    fileName = fileName, line = line, character = character,
-                                    start = rhs.pos, length = rhs.text.length,
-                                    relatedInformation = related,
-                                ))
-                                return
-                            }
-                        }
-                    }
-                    // B87.4 (round 73): class-instance source → interface/class target
-                    // missing-property. `canUseTypeEngine` blocks named→named structural
-                    // comparison (recursive-expansion risk), so `i = c` / `d = c` where the
-                    // source class lacks members the target requires emit nothing. Missing-
-                    // property is NAME-presence only (no recursion into property types), so a
-                    // narrow additive check is safe: source is a class instance, target is a
-                    // class/interface, and `collectMissingProperties` (which handles inherited
-                    // + Object.prototype members) reports ≥1 required member absent from source.
-                    // B127: also cover PLAIN interface → PLAIN interface (neither a
-                    // class) — but ONLY as a FALLBACK when `canUseTypeEngine` BLOCKS the
-                    // named→named structural path (`!canUseTypeEngine` below). The canUse
-                    // path (~58504) already handles the cases it permits (e.g. cross-file
-                    // same-named interfaces, `errorWithSameNameType`), so this fallback
-                    // never preempts it. Gated to pure property bags (no index/call sigs)
-                    // so name-presence IS the assignability criterion, and `Object`-source
-                    // is excluded (the TS2696 special-case owns that). Reaches the nested
-                    // `a = b` of `const x = a = b` via the var-decl-initializer walk.
-                    CtaSections.atE(CtaSections.E_B127)
-                    val b127SrcIsClassInstance =
-                        sourceType is Type.Interface && sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true
-                    val b127BothPlainInterfaces = sourceType is Type.Interface && tt is Type.Interface &&
-                        sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) != true &&
-                        tt.symbol?.flags?.hasAny(SymbolFlags.Class) != true &&
-                        sourceType.symbol?.name != "Object" &&
-                        sourceType.stringIndexInfo == null && sourceType.numberIndexInfo == null &&
-                        tt.stringIndexInfo == null && tt.numberIndexInfo == null &&
-                        !canUseTypeEngine(sourceType, tt)
-                    if (b175RhsClassSym == null && sourceType is Type.Interface && tt is Type.Interface &&
-                        (b127SrcIsClassInstance || b127BothPlainInterfaces) &&
-                        sourceType.callSignatures.isNullOrEmpty() && tt.callSignatures.isNullOrEmpty()
-                    ) {
-                        val missing = collectMissingProperties(sourceType, tt)
-                        if (missing.isNotEmpty()) {
-                            // inheritance1: an empty subclass source (`ImageBase extends Control {}`)
-                            // displays as its base ("Control") in the missing-property message.
-                            val displaySource = emptySubclassBaseName(sourceType) ?: typeToString(sourceType)
-                            val displayTarget = if (typeAnnotation != null)
-                                formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
-                            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                            if (missing.size >= 2) {
-                                diagnostics.add(Diagnostic(
-                                    message = formatTs2740Message(displaySource, displayTarget, missing),
-                                    category = DiagnosticCategory.Error,
-                                    code = if (missing.size <= 4) 2739 else 2740,
-                                    fileName = fileName, line = line, character = character,
-                                    start = target.pos, length = target.text.length,
-                                ))
-                            } else {
-                                val mpName = missing[0]
-                                val mpSym = getPropertyOfType(tt, mpName)
-                                val declaringDisplay = getDeclaringTypeDisplay(mpSym, tt, displayTarget)
-                                val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                                // B53.1 cross-file disambiguation (mirror of the canUse path):
-                                // when source/target share a display name but are distinct
-                                // symbols in different files, render `import("<base>").<name>`.
-                                var qualSource = displaySource
-                                var qualDeclaring = declaringDisplay
-                                if (qualSource == qualDeclaring) {
-                                    val srcSym2 = (sourceType).symbol
-                                    val tgtSym2 = (tt).symbol
-                                    if (srcSym2 != null && tgtSym2 != null && srcSym2 !== tgtSym2) {
-                                        val srcImp = getSymbolImportName(srcSym2)
-                                        val tgtImp = getSymbolImportName(tgtSym2)
-                                        if (srcImp != null && tgtImp != null && srcImp != tgtImp) {
-                                            qualSource = "import(\"$srcImp\").$qualSource"
-                                            qualDeclaring = "import(\"$tgtImp\").$qualDeclaring"
-                                        }
-                                    }
-                                }
-                                diagnostics.add(Diagnostic(
-                                    message = "Property '$mpName' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
-                                    category = DiagnosticCategory.Error, code = 2741,
-                                    fileName = fileName, line = line, character = character,
-                                    start = target.pos, length = target.text.length,
-                                    relatedInformation = listOfNotNull(relatedInfo),
-                                ))
-                            }
-                            return
-                        }
-                    }
+                    if (caeUnionAndMissingPropertyGuards(expr, target, tt, sourceType, typeAnnotation, source, fileName)) return
                     CtaSections.atE(CtaSections.E_RELATION)
                     val canUse = canUseTypeEngine(sourceType, tt)
                     val isAssignable = canUse && (bareNewMatchesTarget(expr.right, tt) ||
@@ -100335,320 +99693,8 @@ interface DataView {
                     ) {
                         return
                     }
-                    CtaSections.atE(CtaSections.E_ELAB)
-                    if (canUse && !isAssignable) {
-                        // M3.1 (round 461): a bare TypeParam SOURCE whose declared
-                        // constraint chain reaches a type assignable to the target is
-                        // itself assignable (tsc: a type param relates to X iff its
-                        // constraint does). The relation engine deliberately has NO
-                        // general TypeParam-source rule (39+ cycle gate; the round-456
-                        // broad attempt perturbed overload selection) — per-site
-                        // emission bail only, mirroring round 442's arg-check bail.
-                        // (`currentClassContainer = node` where `node: T extends
-                        // ClassLikeDeclaration`; `clone = worker(...)` returning bare T.)
-                        if (sourceType is Type.TypeParam &&
-                            bareTpConstraintRelatesTo(sourceType, tt)) {
-                            return
-                        }
-                        // Round 471: a spread of a target-typed value + target-declared
-                        // extras (tsc importFixes.ts `fix = { ...fix, ...(cond ? {} :
-                        // { addAsTypeOnly }) }`) — our spread merge keeps only the
-                        // GUARANTEED props (B426), so the relation misses the spread's
-                        // full member set. Suppression-only.
-                        if (expr.right is ObjectLiteralExpression &&
-                            objectLiteralSpreadOfTargetSatisfies(expr.right, tt)) {
-                            return
-                        }
-                        // B496: cross-typed-array assignment is owned by the dedicated
-                        // checkTypedArrayCrossAssignment walker (correct TS2322 via the
-                        // [Symbol.toStringTag] mismatch). Our embedded typed-array interfaces
-                        // are structurally incomplete (Int16Array "missing" props from Int8Array),
-                        // so the name-presence missing-property path FPs a TS2740 here — suppress.
-                        if ((sourceType as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES &&
-                            (tt as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES) {
-                            return
-                        }
-                        // M2.2 (round 393): a bare-function source missing required named
-                        // properties of a construct-signature target — tsc reports the
-                        // missing-property error (TS2739/TS2740; here B444's `Array = fn`
-                        // walker under real libs, whose ArrayConstructor now carries a
-                        // construct sig) and does NOT additionally report the construct/
-                        // call-sig mismatch. Defer to the missing-property path. Fires ONLY
-                        // when properties are genuinely missing, so a source that satisfies
-                        // all named props (and fails only on the signature) still reports the
-                        // coarse TS2322 (redefineArray).
-                        if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
-                            tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
-                            targetHasRequiredPropAbsentFromSource(sourceType, tt)) {
-                            return
-                        }
-                        // B69.5: Widen literal source for display when target type
-                        // doesn't contain literal members. TypeScript shows `boolean`
-                        // (widened) not `false` when target is `{ [n: number]: any }`
-                        // (no literal context). When target preserves literal (e.g.
-                        // `false` or `true | false`), keep the literal display.
-                        val displaySourceType = if (ts2322KeepsSourceLiteral(tt)) sourceType
-                            else getWidenedLiteralType(sourceType)
-                        val displaySourceRaw = typeToString(displaySourceType)
-                        // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
-                        // the resolved type display (`'Infinity'` / `'-Infinity'` / `'NaN'`)
-                        // over the type-annotation alias name. TypeScript expands type
-                        // aliases to their resolved form when displaying intrinsic-like
-                        // numeric values (cf. fakeInfinity1_ts: `type A = 1e999;` displays
-                        // as `'Infinity'` not `'A'`).
-                        val resolvedDisplay = typeToString(tt)
-                        val isIntrinsicNumericLiteral = resolvedDisplay == "Infinity" ||
-                            resolvedDisplay == "-Infinity" || resolvedDisplay == "NaN"
-                        // B50.6: When the resolved type is a pure function type AND has
-                        // no alias-display registered (so B50.5 deliberately unfolded it),
-                        // prefer the unfolded `typeToString` form over the annotation text.
-                        // Matches `nestedCallbackErrorNotFlattened_ts`'s expected unfolded
-                        // display for the `Cb<Cb<...>>` chain.
-                        val isPureFuncNoAlias = tt is Type.Object &&
-                            !tt.callSignatures.isNullOrEmpty() &&
-                            tt.properties.isNullOrEmpty() &&
-                            tt.members.isNullOrEmpty() &&
-                            tt.constructSignatures.isNullOrEmpty() &&
-                            tt.id !in aliasDisplayMap
-                        // B86.7b: when target is a nullable Union (`A | null | undefined`)
-                        // and source is non-nullable, strip the outer nullish constituents
-                        // from BOTH the display and the chain comparison so we report the
-                        // structural mismatch against the underlying shape (matches TypeScript's
-                        // `elaboratedErrorsOnNullableTargets01` baseline shape). The helper
-                        // returns `tt` unchanged when not applicable.
-                        val ttForDisplay = stripNullishFromDisplayTarget(tt, sourceType)
-                        val displayTargetRaw = if (isIntrinsicNumericLiteral) resolvedDisplay
-                            else if (isPureFuncNoAlias) resolvedDisplay
-                            // (REL.1)(c): an enum-MEMBER target prints QUALIFIED — see
-                            // [displayTargetAnnotation], the var-decl path's twin.
-                            else if (tt.flags.hasAny(TypeFlags.EnumLiteral)) resolvedDisplay
-                            else if (ttForDisplay !== tt) typeToString(ttForDisplay)
-                            else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: resolvedDisplay
-                            else resolvedDisplay
-                        // (REL.1)(c) round 746: two DIFFERENT enums whose simple names collide
-                        // both print fully qualified — see [enumCollisionQualifiedDisplays].
-                        val enumQualified =
-                            enumCollisionQualifiedDisplays(displaySourceType, tt, displaySourceRaw, displayTargetRaw)
-                        val displaySource = enumQualified?.first ?: displaySourceRaw
-                        val displayTarget = enumQualified?.second ?: displayTargetRaw
-                        val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
-                        // 16.4bf: Compute missing-property set directly rather than relying on
-                        // `lastMissingPropertyName` side-effect — a cached Ternary.False result
-                        // from `checkTypeRelatedTo` skips setting it, causing second+ occurrences
-                        // of the same comparison to fall through to TS2322 instead of TS2741.
-                        val allMissing = if (sourceType is Type.Object && tt is Type.Object) {
-                            collectMissingProperties(sourceType, tt)
-                        } else emptyList()
-                        val missingPropSym = lastMissingPropertySymbol
-                            ?: if (allMissing.isNotEmpty() && tt is Type.Object) {
-                                tt.properties?.find { it.name == allMissing[0] }
-                            } else null
-                        if (allMissing.isNotEmpty()) {
-                            if (shouldEmitTs2696ForObject(sourceType, tt)) {
-                                val chainLine = "  " + formatTs2740Message(displaySource, displayTarget, allMissing)
-                                diagnostics.add(Diagnostic(
-                                    message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2696,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = target.pos,
-                                    length = target.text.length,
-                                    messageChain = listOf(chainLine),
-                                ))
-                            } else if (allMissing.size >= 2) {
-                                diagnostics.add(Diagnostic(
-                                    message = formatTs2740Message(displaySource, displayTarget, allMissing),
-                                    category = DiagnosticCategory.Error,
-                                    code = if (allMissing.size <= 4) 2739 else 2740,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = target.pos,
-                                    length = target.text.length,
-                                ))
-                            } else {
-                                val missingProp = allMissing[0]
-                                val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, tt, displayTarget)
-                                val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                                // B53.1: cross-file disambiguation. When source and target are
-                                // different interfaces sharing the same display name but declared
-                                // in different files, render `import("<basename>").<name>` so the
-                                // diagnostic is unambiguous. Matches TypeScript's behavior for
-                                // `import * as A from './a'` / `B from './b'` with same-named types.
-                                var qualSource = displaySource
-                                var qualDeclaring = declaringDisplay
-                                if (qualSource == qualDeclaring) {
-                                    val srcSym = (sourceType as? Type.Interface)?.symbol
-                                    val tgtSym = (tt as? Type.Interface)?.symbol
-                                    if (srcSym != null && tgtSym != null && srcSym !== tgtSym) {
-                                        val srcImport = getSymbolImportName(srcSym)
-                                        val tgtImport = getSymbolImportName(tgtSym)
-                                        if (srcImport != null && tgtImport != null && srcImport != tgtImport) {
-                                            qualSource = "import(\"$srcImport\").$qualSource"
-                                            qualDeclaring = "import(\"$tgtImport\").$qualDeclaring"
-                                        }
-                                    }
-                                }
-                                diagnostics.add(Diagnostic(
-                                    message = "Property '$missingProp' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2741,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = target.pos,
-                                    length = target.text.length,
-                                    relatedInformation = listOfNotNull(relatedInfo),
-                                ))
-                            }
-                            return
-                        }
-                        val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
-                        val chain = mutableListOf<String>()
-                        lastChainMissingPropSymbol = null // ensure relatedInfo doesn't pick up stale state
-                        // Wrapper interface (Number/String/Boolean/Symbol/BigInt) → primitive:
-                        // emit "X is a primitive, but Y is a wrapper object. Prefer using X when
-                        // possible." TypeScript adds this advisory chain line whenever the source
-                        // is a named wrapper interface and the target is the matching primitive.
-                        val wrapperElab = getWrapperToPrimitiveElaboration(sourceType, displayTarget)
-                        if (wrapperElab != null) {
-                            chain.add(wrapperElab)
-                        } else
-                        // Function→function: add specific elaboration
-                        if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
-                            tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
-                            chain.addAll(getFunctionMismatchElaboration(sourceType, tt))
-                        } else if (sourceType is Type.Union) {
-                            // Union source: find the last failing constituent (matches TypeScript)
-                            var lastFailing: Type? = null
-                            for (constituent in sourceType.types) {
-                                if (!checkTypeRelatedTo(constituent, tt, assignableRelation)) {
-                                    lastFailing = constituent
-                                }
-                            }
-                            if (lastFailing != null) {
-                                val constStr = typeToString(lastFailing)
-                                chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
-                            }
-                        } else if (sourceType is Type.Intersection && ttForDisplay is Type.Intersection) {
-                            // B413: discriminated intersection → intersection elaboration.
-                            lastChainMissingPropSymbol = null
-                            getPropertyElaborationChain(sourceType, ttForDisplay)?.let { chain.addAll(it) }
-                        } else if (sourceType is Type.Object && ttForDisplay is Type.Union) {
-                            // B414: generic → union elaboration (unionTypeErrorMessageTypeRefs01).
-                            // `A<Foo>` vs `A<Bar> | B<Baz> | C<Kwah>` drills into the same-generic
-                            // constituent (`A<Bar>` — same interface target OR same type-alias name)
-                            // and reports the failing type-ARG mismatch directly. Gated to a
-                            // SAME-GENERIC best constituent with an actual deeper chain (FP-safe —
-                            // the assignment path emits no chain otherwise).
-                            val best = findBestUnionConstituent(sourceType, ttForDisplay)
-                            val sg = genericIdentityAndArgs(sourceType)
-                            val bg = if (best is Type.Object) genericIdentityAndArgs(best) else null
-                            if (best is Type.Object && sg != null && bg != null &&
-                                sg.first == bg.first && sg.second.size == bg.second.size) {
-                                var deeper: List<String>? = null
-                                for (i in sg.second.indices) {
-                                    if (!checkTypeRelatedTo(sg.second[i], bg.second[i], assignableRelation)) {
-                                        lastChainMissingPropSymbol = null
-                                        deeper = getPropertyElaborationChain(sg.second[i], bg.second[i])
-                                        break
-                                    }
-                                }
-                                if (deeper != null) {
-                                    chain.add("  Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(best)}'.")
-                                    deeper.forEach { chain.add("  $it") }
-                                }
-                            }
-                        } else {
-                            // Object→Object: property-level elaboration (16.1)
-                            // B86.7b: use the (possibly stripped) ttForDisplay so when target
-                            // was `A | null | undefined`, we still get the property chain
-                            // against the underlying `A`.
-                            val ttForChain = ttForDisplay
-                            // B482ext: an INTERSECTION source vs an Object target also goes
-                            // through the chain helper (`getIntersectionPropertyElaborationChain`
-                            // merges the constituents' members) — mirrors the var-decl path.
-                            // `x = y` where `x: { a?: string }`, `y: T & { a: boolean }` →
-                            // "Types of property 'a' are incompatible. Type 'boolean' is not
-                            // assignable to type 'string'.".
-                            if ((sourceType is Type.Object || sourceType is Type.Intersection) &&
-                                ttForChain is Type.Object) {
-                                lastChainMissingPropSymbol = null
-                                val propElab = getPropertyElaborationChain(sourceType, ttForChain)
-                                if (propElab != null) chain.addAll(propElab)
-                            }
-                            // 16.4cn: Missing index signature elaboration
-                            if (chain.isEmpty() && lastMissingIndexSigKind != null) {
-                                chain.add("  Index signature for type '$lastMissingIndexSigKind' is missing in type '$displaySource'.")
-                            }
-                            if (chain.isEmpty()) {
-                            if (tt is Type.TypeParam) {
-                                val targetName = tt.symbol?.name ?: "T"
-                                // B60.2: same logic as the var-decl path at ~39819.
-                                // B62.1: excess-property override (see helper docstring).
-                                val constraint = apparentConstraintOfTypeParam(tt, targetName)
-                                val constraintOk = constraint != null &&
-                                    checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
-                                    !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
-                                if (constraintOk) {
-                                    chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint)}'.")
-                                    // B60.6d: lib `Object` source hint
-                                    if (displaySource == "Object") {
-                                        chain.add("    The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?")
-                                    }
-                                } else {
-                                    chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
-                                }
-                            } else if (sourceType is Type.TypeParam) {
-                                // B60.5: source is TypeParam — emit apparent-type chain.
-                                // "Type '<constraint>' is not assignable to type '<target>'."
-                                // Gate: constraint non-null, non-error, non-any. Skip if
-                                // constraint IS the target (trivially equal). Bypass alias
-                                // display so `T extends Table` (where Table = TableClass)
-                                // expands to `TableClass<any>` not `Table`.
-                                val srcConstraint = sourceType.constraint
-                                if (srcConstraint != null && srcConstraint !== errorType && srcConstraint !== anyType && srcConstraint !== tt) {
-                                    // Temporarily mark the constraint as in-progress so
-                                    // typeToString skips aliasDisplayMap lookup.
-                                    typeToStringInProgress.add(srcConstraint.id)
-                                    val apparentDisplay = try { typeToString(srcConstraint) }
-                                        finally { typeToStringInProgress.remove(srcConstraint.id) }
-                                    if (apparentDisplay != displaySource) {
-                                        chain.add("  Type '$apparentDisplay' is not assignable to type '$displayTarget'.")
-                                    }
-                                }
-                            } else if (typeParams.isNotEmpty()) {
-                                val targetBaseName = displayTarget.substringBefore('<')
-                                if (targetBaseName in typeParams) {
-                                    chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
-                                }
-                            }
-                            }
-                        }
-                        // (REL.1)(c) round 746: the `isEnumTypeRelatedTo` elaboration — the
-                        // missing member, or the first member whose value differs. Guarded on
-                        // an EMPTY chain because an enum type carries no properties, so
-                        // nothing above can have produced one for this pair.
-                        if (chain.isEmpty()) {
-                            enumRelationElaboration(displaySourceType, tt, displayTarget)?.let { chain.add(it) }
-                        }
-                        val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
-                        diagnostics.add(Diagnostic(
-                            message = message,
-                            category = DiagnosticCategory.Error,
-                            code = 2322,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = target.pos,
-                            length = target.text.length,
-                            messageChain = chain,
-                            relatedInformation = listOfNotNull(chainRelatedInfo),
-                        ))
-                        return // Type engine handled it — skip old system
-                    }
+                    if (caeElaborateMismatch(expr, target, tt, sourceType, typeAnnotation, canUse, isAssignable,
+                            source, fileName, typeParams)) return
                     // tryCatchFinallyControlFlow: the legacy varTypes fallback below WIDENS a
                     // literal RHS (inferSimpleExprType: `1`→"number"), FP-emitting TS2322
                     // against a literal-union target (`let x: 0 | 1 | 2 | 3; x = 1` — `1` ∈
@@ -100672,45 +99718,312 @@ interface DataView {
                 }
 
                 // Fallback to old string-based system
-                CtaSections.atE(CtaSections.E_DECLSTR)
-                val declaredType = varTypes[target.text]
-                if (declaredType != null) {
-                    // B54.7 (probe re-enable for regression-identification): fallback to varTypes
-                    // lookup for Identifier RHS when same-base parameterized refs.
-                    val isParameterizedRefTarget = declaredType.startsWith("@") && declaredType.contains('<')
-                    val rhsAsIdent = expr.right as? Identifier
-                    val rhsVarType = rhsAsIdent?.let { varTypes[it.text] }
-                    // B250: intersection-annotated RHS (`let s: A & B`) assigned to a
-                    // bare in-scope TP target (`t = s` where `t: T`) — an intersection
-                    // is assignable to T only when T is one of its OWN constituents.
-                    // Chain flavor: target's (transitively resolved) constraint named in
-                    // the constituents → "assignable to the constraint ... different
-                    // subtype of constraint 'A'."; else → "could be instantiated with
-                    // an arbitrary type which could be unrelated to ...".
-                    run {
-                        val tgtTp = if (declaredType.startsWith("@") && !declaredType.contains('<'))
-                            declaredType.removePrefix("@") else return@run
-                        if (tgtTp !in typeParams) return@run
-                        val rv = rhsVarType ?: return@run
-                        if (!rv.startsWith("&")) return@run
-                        val members = rv.removePrefix("&").split(" & ")
-                        if (tgtTp in members) return@run  // `t = t_and_b` (T & B → T) is legal
-                        val displaySource = members.joinToString(" & ")
-                        var consName: String? = (currentTypeParamDecls[tgtTp]?.constraint as? TypeReference)
-                            ?.let { getTypeReferenceLastName(it.typeName) }
-                        val seenTps = mutableSetOf<String>()
-                        while (consName != null && consName in typeParams && consName !in members && seenTps.add(consName)) {
-                            consName = (currentTypeParamDecls[consName]?.constraint as? TypeReference)
-                                ?.let { getTypeReferenceLastName(it.typeName) }
+                if (caeLegacyDeclaredStringPath(expr, target, source, fileName, varTypes, typeParams)) return
+            } else if (target is PropertyAccessExpression && (target.expression as? Identifier)?.text == "this") {
+                caeThisPropertyAssign(expr, target, source, fileName, varTypes, typeParams)
+            } else if (target is PropertyAccessExpression) {
+                CtaSections.atE(CtaSections.E_PA)
+                // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
+                checkPropertyAccessAssignment(target, expr.right, source, fileName)
+            } else if (target is ElementAccessExpression) {
+              caeElementAccessAssign(expr, target, source, fileName, varTypes, typeParams)
+            }
+        }
+    }
+
+    private fun caePrototypeMemberAssign(
+        expr: BinaryExpression, target: Expression, source: String, fileName: String
+    ): Boolean {
+        if (target is PropertyAccessExpression) {
+            val inner = target.expression
+            if (inner is PropertyAccessExpression &&
+                inner.name.text == "prototype" &&
+                inner.expression is Identifier
+            ) {
+                val className = (inner.expression).text
+                val rawSym = currentFileLocals?.get(className) ?: globals[className]
+                val classSymbol = rawSym?.let {
+                    if (it.flags.hasAny(SymbolFlags.Alias)) resolveAliasTarget(it) else it
+                }
+                if (classSymbol != null) {
+                    val classType = getDeclaredTypeOfSymbol(classSymbol)
+                    if (classType is Type.Interface) {
+                        resolveStructuredTypeMembers(classType)
+                        val methodSym = classType.members?.get(target.name.text)
+                        if (methodSym != null) {
+                            val methodType = getTypeOfSymbol(methodSym)
+                            if (methodType is Type.Object && !methodType.callSignatures.isNullOrEmpty()) {
+                                val rhsType = getTypeOfExpression(expr.right)
+                                // 16.4dr: For `function(){ return undefined; }` RHS, our
+                                // getTypeOfFunctionExpression reports return type as anyType
+                                // (no body-return inference). Detect this narrow pattern and
+                                // treat the return as undefinedType for comparison purposes.
+                                val inferredSrcReturn = (expr.right as? FunctionExpression)?.let { fe ->
+                                    val stmts = fe.body.statements
+                                    if (stmts.size == 1) {
+                                        val only = stmts[0]
+                                        if (only is ReturnStatement && only.expression is Identifier &&
+                                            (only.expression).text == "undefined") {
+                                            undefinedType
+                                        } else null
+                                    } else null
+                                }
+                                if (rhsType is Type.Object && !rhsType.callSignatures.isNullOrEmpty() &&
+                                    inferredSrcReturn != null
+                                ) {
+                                    val tgtSig = methodType.callSignatures!!.first()
+                                    val tgtReturn = tgtSig.resolvedReturnType ?: anyType
+                                    if (tgtReturn !== anyType && tgtReturn !== errorType &&
+                                        !tgtReturn.flags.hasAny(TypeFlags.Void or TypeFlags.Undefined or TypeFlags.Null) &&
+                                        !checkTypeRelatedTo(inferredSrcReturn, tgtReturn, assignableRelation)
+                                    ) {
+                                    val lhsStart = inner.expression.pos
+                                    val lhsEnd = expressionTrueEnd(target)
+                                    val lhsLen = lhsEnd - lhsStart
+                                    if (lhsLen > 0) {
+                                        // Manually format display as () => <return> since our
+                                        // rhsType.callSigs.first() has return=anyType; we know
+                                        // the real return is inferredSrcReturn.
+                                        val displaySource = "() => ${typeToString(inferredSrcReturn)}"
+                                        val displayTarget = "() => ${typeToString(tgtReturn)}"
+                                        val (line, character) = getLineAndCharacterOfPosition(source, lhsStart)
+                                        val chain = mutableListOf<String>()
+                                        chain.add("  Type '${typeToString(inferredSrcReturn)}' is not assignable to type '${typeToString(tgtReturn)}'.")
+                                        diagnostics.add(Diagnostic(
+                                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                                            category = DiagnosticCategory.Error,
+                                            code = 2322,
+                                            fileName = fileName,
+                                            line = line,
+                                            character = character,
+                                            start = lhsStart,
+                                            length = lhsLen,
+                                            messageChain = chain,
+                                        ))
+                                        return true
+                                    }
+                                    }
+                                }
+                            }
                         }
-                        val chainLine = if (consName != null && consName in members) {
-                            "  '$displaySource' is assignable to the constraint of type '$tgtTp', but '$tgtTp' could be instantiated with a different subtype of constraint '$consName'."
-                        } else {
-                            "  '$tgtTp' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'."
+                        // typeOfPrototype: `X.prototype.dataProp = rhs` where
+                        // `dataProp` is a DATA property. `classType.members` mirrors
+                        // both instance AND static entries under one name, so a
+                        // same-named static (`static bar = ''`) can clobber the
+                        // instance type. Resolve the INSTANCE member directly from
+                        // the class declaration. Conservative: simple-checkable
+                        // member types only; emits TS2322 on assignability failure.
+                        run dataProp@{
+                            val classDecl = classSymbol.declarations
+                                .firstOrNull { it is ClassDeclaration } as? ClassDeclaration ?: return@dataProp
+                            val instMember = classDecl.members.firstOrNull {
+                                it is PropertyDeclaration && ModifierFlag.Static !in it.modifiers &&
+                                    getMemberNameText(it.name) == target.name.text
+                            } as? PropertyDeclaration ?: return@dataProp
+                            val memberType = (instMember.type?.let { getTypeFromTypeNode(it) }
+                                ?: instMember.initializer?.let { getWidenedLiteralType(getTypeOfExpression(it)) })
+                                ?: return@dataProp
+                            if (memberType === anyType || memberType === errorType) return@dataProp
+                            if (!isSimpleCheckableType(memberType)) return@dataProp
+                            val rhsType = getTypeOfExpression(expr.right)
+                            if (rhsType === anyType || rhsType === errorType) return@dataProp
+                            if (checkTypeRelatedTo(rhsType, memberType, assignableRelation)) return@dataProp
+                            val lhsStart = inner.expression.pos
+                            val lhsLen = expressionTrueEnd(target) - lhsStart
+                            if (lhsLen <= 0) return@dataProp
+                            val (line, character) = getLineAndCharacterOfPosition(source, lhsStart)
+                            diagnostics.add(Diagnostic(
+                                message = "Type '${typeToString(rhsType)}' is not assignable to type '${typeToString(memberType)}'.",
+                                category = DiagnosticCategory.Error, code = 2322, fileName = fileName,
+                                line = line, character = character, start = lhsStart, length = lhsLen,
+                            ))
+                            return true
                         }
+                    }
+                }
+            }
+        }
+        return false
+    }
+
+    private fun caeModuleAliasAndLibPairShapes(
+        expr: BinaryExpression, target: Identifier, source: String, fileName: String,
+        varTypes: MutableMap<String, String>
+    ): Boolean {
+        CtaSections.atE(CtaSections.E_MODULE)
+        val rhsModuleName = tryGetModuleImportNameForExpr(expr.right)
+        val targetSym = currentFileLocals?.get(target.text) ?: globals[target.text]
+        val targetInitModuleName = run {
+            val initExpr = (targetSym?.valueDeclaration as? VariableDeclaration)
+                ?.takeIf { it.type == null }
+                ?.initializer ?: return@run null
+            tryGetModuleImportNameForExpr(initExpr)
+        }
+        if (targetInitModuleName != null && rhsModuleName == null) {
+            // Shape (1): target is `typeof import("X")`, RHS is something else.
+            // Emit only when RHS is a simple primitive literal — conservative.
+            val rhsType = getTypeOfExpression(expr.right)
+            if (rhsType !== anyType && rhsType !== errorType &&
+                isSimpleCheckableType(rhsType)) {
+                val displaySource = typeToString(getWidenedLiteralType(rhsType))
+                val displayTarget = "typeof import(\"$targetInitModuleName\")"
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                ))
+                return true
+            }
+        } else if (rhsModuleName != null && targetInitModuleName == null) {
+            // Shape (2): RHS is `typeof import("X")`. Check if target has a
+            // primitive type from currentLocalTypes / annotation.
+            var targetTypeForCheck: Type? = null
+            val tDecl = targetSym?.valueDeclaration ?: targetSym?.declarations?.firstOrNull()
+            val tAnno = (tDecl as? VariableDeclaration)?.type
+                ?: (tDecl as? Parameter)?.type
+                ?: (tDecl as? PropertyDeclaration)?.type
+            if (tAnno != null) {
+                targetTypeForCheck = getTypeFromTypeNode(tAnno)
+            }
+            if (targetTypeForCheck == null || targetTypeForCheck === anyType || targetTypeForCheck === errorType) {
+                currentLocalTypes[target.text]?.let { lt ->
+                    if (lt !== anyType && lt !== errorType) targetTypeForCheck = lt
+                }
+            }
+            if (targetTypeForCheck != null && targetTypeForCheck !== anyType && targetTypeForCheck !== errorType &&
+                isSimpleCheckableType(targetTypeForCheck)) {
+                val displaySource = "typeof import(\"$rhsModuleName\")"
+                val displayTarget = typeToString(targetTypeForCheck)
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                ))
+                return true
+            }
+        }
+        // B236: optional-vs-required presence rule for an EMBEDDED-LIB interface
+        // pair under SNC-OFF — `execResult = matchResult` (RegExpMatchArray →
+        // RegExpExecArray). With SNC off, an optional `index?: number` is plain
+        // `number`, so every relation path passes; tsc's rule is presence-based
+        // and errors regardless of strictNullChecks with the dedicated chain.
+        // varTypes-name-driven (params aren't in globals/currentLocalTypes).
+        // SNC-on keeps the pre-existing coarse-TS2322 path (gate below). Lib-only
+        // pair keeps the member-resolution FP surface at zero (mirror of B103).
+        CtaSections.atE(CtaSections.E_B236)
+        run {
+            if (strictNullChecks) return@run
+            val rhsId = expr.right as? Identifier ?: return@run
+            // varTypes stores a bare named annotation as "@Name" (B54.7's
+            // parameterized-ref marker without type args) — strip it; a
+            // genuinely-parameterized "@Name<...>" bails.
+            fun bareName(v: String?): String? = when {
+                v == null -> null
+                v.startsWith("@") -> if (v.contains('<')) null else v.removePrefix("@")
+                else -> v
+            }
+            val tgtName = bareName(varTypes[target.text]) ?: return@run
+            val srcName = bareName(varTypes[rhsId.text]) ?: return@run
+            if (tgtName == srcName) return@run
+            val tgtSym = globals[tgtName]?.takeIf { s ->
+                s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
+            val srcSym = globals[srcName]?.takeIf { s ->
+                s.declarations.isNotEmpty() && s.declarations.all { it in builtinLibDecls && it is InterfaceDeclaration } } ?: return@run
+            val tgtType = getDeclaredTypeOfSymbol(tgtSym) as? Type.Object ?: return@run
+            val srcType = getDeclaredTypeOfSymbol(srcSym) as? Type.Object ?: return@run
+            resolveStructuredTypeMembers(tgtType); resolveStructuredTypeMembers(srcType)
+            val mismatch = findOptionalVsRequiredMismatch(srcType, tgtType) ?: return@run
+            val pname = formatPropertyDisplayName(mismatch)
+            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$srcName' is not assignable to type '$tgtName'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = target.pos, length = target.text.length,
+                messageChain = listOf("  Property '$pname' is optional in type '$srcName' but required in type '$tgtName'."),
+            ))
+            return true
+        }
+        return false
+    }
+
+    private fun caeForeignTpTargetAndClassRhs(
+        expr: BinaryExpression, target: Identifier, tt: Type, typeAnnotation: TypeNode?,
+        source: String, fileName: String, typeParams: Set<String>
+    ): Boolean {
+        // Round 435f: an assignment TARGET carrying a FOREIGN type param is a
+        // local typed from an UN-INFERRED generic call return (`let expression =
+        // visitNode(…)` registers visitNode's raw `TOut | (TIn & undefined) |
+        // (TVisited & undefined)` — tsc infers those TPs at the call site, so
+        // any check against the raw type is meaningless and FP'd the visitor
+        // family ×15). Mirrors the round-431e SOURCE gate: the enclosing fn's
+        // OWN TPs stay checkable, as do signature-own TPs.
+        if (typeContainsForeignTypeParam(tt, typeParams)) return true
+        // B8.1: target is `never` because its annotation is an
+        // intersection that reduced due to a conflicting private
+        // property. Emit TS2322 with `never` display + chain so the
+        // standard emission path doesn't print `Type 'X' is not
+        // assignable to type 'A & B'.` (the un-reduced form).
+        if (tt === neverType) {
+            val reductionReason = findIntersectionReductionForExpr(target)
+            if (reductionReason != null) {
+                val sourceType = getTypeOfExpression(expr.right)
+                val displaySource = typeToString(getWidenedLiteralType(sourceType))
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type 'never'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                    messageChain = listOf(intersectionReductionChainMessage(reductionReason)),
+                ))
+                return true
+            }
+        }
+        // Class-Identifier-as-value RHS with construct-sig target — `d = C`.
+        // Mirrors the var-decl branch in checkVarDeclAssignability (17.8a):
+        // canUseTypeEngine skips class-instance-vs-constructor comparisons,
+        // so without a special-case the assignment falls through and emits
+        // no diagnostic. Display the source as `typeof X` and emit the
+        // construct-signature mismatch elaboration chain.
+        CtaSections.atE(CtaSections.E_CTORID)
+        val rhs = expr.right
+        if (rhs is Identifier &&
+            tt is Type.Object &&
+            !tt.constructSignatures.isNullOrEmpty()
+        ) {
+            val rhsSym = currentFileLocals?.get(rhs.text) ?: globals[rhs.text]
+            if (rhsSym != null && rhsSym.flags.hasAny(SymbolFlags.Class) &&
+                !rhsSym.flags.hasAny(SymbolFlags.Variable)
+            ) {
+                val srcCtorType = buildClassValueConstructorTypeForDisplay(rhsSym)
+                if (srcCtorType != null) {
+                    val sourceSig = srcCtorType.constructSignatures!!.first()
+                    val targetSig = tt.constructSignatures!!.first()
+                    val ok = signatureRelatedTo(sourceSig, targetSig, assignableRelation)
+                    if (!ok) {
+                        val displaySource = "typeof ${rhsSym.name}"
+                        val displayTarget = if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
+                        val chain = getConstructMismatchElaboration(srcCtorType, tt)
                         val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
                         diagnostics.add(Diagnostic(
-                            message = "Type '$displaySource' is not assignable to type '$tgtTp'.",
+                            message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
                             category = DiagnosticCategory.Error,
                             code = 2322,
                             fileName = fileName,
@@ -100718,148 +100031,906 @@ interface DataView {
                             character = character,
                             start = target.pos,
                             length = target.text.length,
-                            messageChain = listOf(chainLine),
+                            messageChain = chain,
                         ))
-                        return
-                    }
-                    val isSameBaseRhs = rhsVarType != null &&
-                        rhsVarType.startsWith("@") && rhsVarType.contains('<') &&
-                        rhsVarType.substringBefore('<') == declaredType.substringBefore('<')
-                    // B60.6b: also fall back for bare TypeParam target with bare TypeParam RHS
-                    // (`x: T = y: U`) — both must be in the typeParams scope. Mirrors the
-                    // same-base-ref fallback for the bare case.
-                    val tgtBareName = if (declaredType.startsWith("@") && !declaredType.contains('<'))
-                        declaredType.removePrefix("@") else null
-                    val rhsBareName = if (rhsVarType != null && rhsVarType.startsWith("@") && !rhsVarType.contains('<'))
-                        rhsVarType.removePrefix("@") else null
-                    val isBareTypeParamMismatch = tgtBareName != null && rhsBareName != null &&
-                        tgtBareName != rhsBareName &&
-                        tgtBareName in typeParams && rhsBareName in typeParams
-                    // B60.7b: also fall back for bare TypeParam RHS → named non-TypeParam target.
-                    // E.g. `z: Object = x: T` where T is bare TypeParam (in scope, unconstrained).
-                    // Needs the gate from B60.7 to fire — keep targets to Object/Function.
-                    val isTypeParamToNamed = tgtBareName != null && rhsBareName != null &&
-                        rhsBareName in typeParams && tgtBareName !in typeParams &&
-                        (tgtBareName == "Object" || tgtBareName == "Function")
-                    // B212: union-of-TPs RHS (`var middle: T | U`) against a bare-TP
-                    // target — fall through so isAssignableTo's union-of-TPs rule runs.
-                    val isTpUnionMismatch = tgtBareName != null && tgtBareName in typeParams &&
-                        rhsVarType != null && rhsVarType.startsWith("|") &&
-                        rhsVarType.removePrefix("|").split(" | ").all { it in typeParams }
-                    // B212b: bare-TP RHS vs union-of-TPs target (`middle = bottom` where
-                    // middle: T | U, Bottom extends Top | T | U).
-                    val isBareTpToTpUnion = rhsBareName != null && rhsBareName in typeParams &&
-                        declaredType.startsWith("|") &&
-                        declaredType.removePrefix("|").split(" | ").all { it in typeParams }
-                    val exprType = inferSimpleExprType(expr.right, varTypes)
-                        ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType
-                            else if (isBareTypeParamMismatch) rhsVarType
-                            else if (isTypeParamToNamed) rhsVarType
-                            else if (isTpUnionMismatch) rhsVarType
-                            else if (isBareTpToTpUnion) rhsVarType
-                            else null
-                    // Round 453: `<ident> = undefined` where the target's DECLARED type
-                    // includes undefined — an OPTIONAL parameter `x?: T` (whose effective
-                    // type is `T | undefined`, tsc's B85.1a) or a `T | undefined` local.
-                    // The string `varTypes` drops the `?` (resolveSimpleTypeName → "T"),
-                    // so the relation FP-fires; the type-engine map (currentLocalTypes /
-                    // its pre-narrowing declared form narrowedDeclaredTypes) carries the
-                    // correct `T | undefined`. tsc's own generators.ts
-                    // (`leadingElement = undefined` where `leadingElement?: Expression`)
-                    // trips this. FP-safe: assigning undefined to a `T | undefined` target
-                    // is always legal (non-eOPT); a non-optional `x: T` local keeps firing.
-                    val undefinedToOptionalLocal = exprType == "undefined" &&
-                        !options.exactOptionalPropertyTypes &&
-                        (narrowedDeclaredTypes[target.text] ?: currentLocalTypes[target.text])
-                            ?.let { typeIncludesUndefined(it) } == true
-                    if (!undefinedToOptionalLocal &&
-                        exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
-                        emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
+                        return true
                     }
                 }
-            } else if (target is PropertyAccessExpression && (target.expression as? Identifier)?.text == "this") {
-                CtaSections.atE(CtaSections.E_THIS)
-                // this.prop = value — look up class property type from varTypes
-                val propName = target.name.text
-                val declaredType = varTypes["this.$propName"]
-                if (declaredType != null) {
-                    // B54.2: fall back to direct varTypes lookup for Identifier RHS when
-                    // inferSimpleExprType deliberately returns null (its standard gate skips
-                    // identifier lookup to avoid FPs with enum/union targets). For `this.X = v`
-                    // assignments inside setters/methods, the parameter type IS reliably stored
-                    // in varTypes by the class-body walker, and the RHS-narrower runs in a
-                    // fresh per-member scope so FP risk is bounded.
-                    val exprType = inferSimpleExprType(expr.right, varTypes)
-                        ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
-                    // A `this.optionalProp = undefined` write is legal: an optional
-                    // property `p?: T` has write-type `T | undefined` (non-eOPT).
-                    // The varTypes string map stores only the bare type name (drops
-                    // the `?`), so mirror checkPropertyAccessAssignment's
-                    // undefined-optional bail (89644) here — else `this.parent =
-                    // undefined` where `parent?: Symbol` FP-fires TS2322 (services.ts
-                    // SymbolObject/NodeObject constructor field resets). An explicit
-                    // `| undefined` in the declared type, or an array type, already
-                    // passes the lenient string relation. FP-safe: optional +
-                    // non-exact always accepts an undefined write.
-                    val undefinedToOptional = exprType == "undefined" &&
-                        !options.exactOptionalPropertyTypes &&
-                        thisPropertyIsOptional(propName)
-                    // Round 474 (project.ts `this.autoImportProviderHost = false`): a
-                    // LITERAL write whose literal the class property's declared union
-                    // annotation SYNTACTICALLY contains is always legal — the string
-                    // path widened the literal (false → boolean) before its relation.
-                    val literalUnionMember = returnUnionSyntacticallyContainsLiteral(
-                        (currentClassForThis?.members?.firstOrNull {
-                            it is PropertyDeclaration && (it.name as? Identifier)?.text == propName
-                        } as? PropertyDeclaration)?.type,
-                        expr.right,
-                    )
-                    if (!undefinedToOptional && !literalUnionMember &&
-                        exprType != null && !isAssignableTo(exprType, declaredType)) {
-                        // Squiggle spans "this.prop" (the entire PropertyAccessExpression)
-                        val squiggleStart = target.expression.pos
-                        val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
-                        emitTS2322(squiggleStart, squiggleLength, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
-                    }
-                } else {
-                    // B150: no class-property type string in varTypes (e.g. `this.X = v`
-                    // inside an OBJECT-LITERAL method, where `this` is the object-literal
-                    // type set in currentLocalTypes by walkObjectLiteralMemberBody). Route
-                    // through the type-engine path. FP-safe for class methods: there
-                    // getTypeOfExpression(this) yields anyType (B101) so the helper bails.
-                    checkPropertyAccessAssignment(target, expr.right, source, fileName)
-                }
-            } else if (target is PropertyAccessExpression) {
-                CtaSections.atE(CtaSections.E_PA)
-                // 16.0: x.prop = value — resolve target prop type via type engine and check assignability.
-                checkPropertyAccessAssignment(target, expr.right, source, fileName)
-            } else if (target is ElementAccessExpression) {
-              CtaSections.atE(CtaSections.E_ELEM)
-              if (!tryEmitInferentialObjLitElementWrite(target, expr.right, source, fileName)) {
-                // B168: `this[key] = value` where `key` is a const with a string-LITERAL value
-                // late-binds to the class member named by that literal (TypeScript's late-bound
-                // assignment candidates; lateBoundAssignmentCandidateJS3's `this[prop] = 12` vs
-                // a `@type {string}` member `prop`). Fold the key and reuse the
-                // varTypes["this.<lit>"] class-property write path.
-                val keyIdent = target.argumentExpression as? Identifier
-                val foldedKey = if ((target.expression as? Identifier)?.text == "this" && keyIdent != null)
-                    (resolveImportedConstLiteralValue(keyIdent.text, fileName) as? ConstantValue.StringValue)?.value
-                else null
-                val foldedDeclared = foldedKey?.let { varTypes["this.$it"] }
-                if (foldedDeclared != null) {
-                    val exprType = inferSimpleExprType(expr.right, varTypes)
-                        ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
-                    if (exprType != null && !isAssignableTo(exprType, foldedDeclared)) {
-                        val start = target.pos
-                        val length = expressionTrueEnd(target) - start
-                        emitTS2322(start, length, exprType, foldedDeclared, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
-                    }
-                } else {
-                    // B85.1d: obj[key] = value — narrowly-gated TS2322 for index-signature value mismatch.
-                    checkElementAccessAssignment(target, expr.right, source, fileName, varTypes)
-                }
-              }
             }
+        }
+        return false
+    }
+
+    private fun caeIndexSigAndSignatureGuards(
+        expr: BinaryExpression, target: Identifier, tt: Type, sourceType: Type,
+        typeAnnotation: TypeNode?, source: String, fileName: String, typeParams: Set<String>
+    ): Boolean {
+        CtaSections.atE(CtaSections.E_MID)
+        if (typeContainsForeignTypeParam(sourceType, typeParams)) return true
+        lastMissingPropertyName = null
+        lastMissingIndexSigKind = null
+        // B96-INDEXSIG (assignment path): per-property/element VALUE vs the
+        // target's index-signature value-type (TS2322/TS2741 + TS6501).
+        // Gated to an index-sig-ONLY target (empty members → the downstream
+        // relation-failure block emits no coarse error for it, so no double-emit)
+        // with an object/array-literal RHS. Mirrors the var-decl call site.
+        if ((expr.right is ObjectLiteralExpression || expr.right is ArrayLiteralExpression) &&
+            tt is Type.Object && tt.members.isNullOrEmpty() &&
+            (tt.stringIndexInfo != null || tt.numberIndexInfo != null)) {
+            checkLiteralValuesAgainstIndexSignatures(expr.right, tt, source, fileName)
+        }
+        // 17.111: Mirror of 17.14a's PropertyAccess branch for plain
+        // Identifier-target assignment. canUseTypeEngine returns false
+        // when source lacks construct sigs but target requires them
+        // (Checker.kt:35168), short-circuiting the standard relation
+        // path so TS2322 never fires. Detect the construct-sig mismatch
+        // directly and emit TS2322 + "provides no match for the
+        // signature 'new ...'" chain. Source must be a "concrete
+        // shape": either callable (has callSignatures) or has at
+        // least one declared property — both forms clearly lack
+        // construct sigs. This excludes opaque sources like
+        // import-aliased `export = Class` whose effective type
+        // resolves to an empty Type.Object we can't introspect.
+        // 17.235 (2026-05-13): widened to also accept property-only
+        // sources (e.g. `{x:number}` against `{new():any}`). Skip
+        // when target is a class/iface instance (its construct sigs
+        // are static-side; instance structural compares should
+        // follow the regular path).
+        CtaSections.atE(CtaSections.E_SIGS)
+        if (tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
+            !isClassOrInterfaceInstanceType(tt) &&
+            sourceType is Type.Object &&
+            (!sourceType.callSignatures.isNullOrEmpty() ||
+                (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
+            sourceType.constructSignatures.isNullOrEmpty() &&
+            // M2.2 (round 393): tsc reports a structural failure ONCE — when the
+            // source is ALSO missing required target properties, the missing-property
+            // path (TS2739/TS2740; here the B444 `Array = fn` walker) owns the
+            // diagnostic and the construct-sig-mismatch TS2322 is NOT additionally
+            // reported. Under the embedded lib `ArrayConstructor` had no construct
+            // sig so this branch never fired for `redefineArray`; under real libs it
+            // does, double-emitting. Defer to missing-props. (collectMissingProperties
+            // bails on a null-members function source, so use the null-tolerant check.)
+            !targetHasRequiredPropAbsentFromSource(sourceType, tt)) {
+            val srcCtorElab = getNonConstructibleElaboration(sourceType, tt)
+            if (srcCtorElab != null) {
+                val displaySource = typeToString(sourceType)
+                val displayTarget = if (typeAnnotation != null)
+                    formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
+                    else typeToString(tt)
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                    messageChain = srcCtorElab,
+                ))
+                return true
+            }
+        }
+        // 17.112: Symmetric to 17.111 — target has callSignatures
+        // (function type) but no constructSignatures; source is a
+        // concrete-shape Type.Object lacking callSignatures (either
+        // constructible or property-only). canUseTypeEngine may or
+        // may not short-circuit depending on source shape, but
+        // emitting the chain here directly via getCallableMismatchElaboration
+        // ensures "  Type 'X' provides no match for the signature '(): T'."
+        // is added regardless of whether the standard path would
+        // have produced an empty chain. 17.235 (2026-05-13): widened
+        // to also accept property-only sources (e.g. `{x:number}`
+        // against `{():void}`).
+        if (tt is Type.Object && !tt.callSignatures.isNullOrEmpty() &&
+            tt.constructSignatures.isNullOrEmpty() &&
+            sourceType is Type.Object &&
+            (!sourceType.constructSignatures.isNullOrEmpty() ||
+                (!isClassOrInterfaceInstanceType(sourceType) && !sourceType.properties.isNullOrEmpty())) &&
+            sourceType.callSignatures.isNullOrEmpty()) {
+            val srcCallElab = getCallableMismatchElaboration(sourceType, tt)
+            if (srcCallElab != null) {
+                val displaySource = typeToString(sourceType)
+                val displayTarget = if (typeAnnotation != null)
+                    formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
+                    else typeToString(tt)
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                    messageChain = srcCallElab,
+                ))
+                return true
+            }
+        }
+        // B71.3: `b = {}` where `b: Boolean` (or other primitive wrapper) —
+        // empty object literal assignment to a wrapper interface. The
+        // standard structural compare passes trivially because
+        // OBJECT_PROTOTYPE_PROPERTIES (toString/valueOf/etc.) are filtered
+        // out in `propertiesRelatedTo`. TypeScript emits TS2322 with chain:
+        //   "  The types returned by 'valueOf()' are incompatible between these types."
+        //   "    Type 'Object' is not assignable to type 'boolean'."
+        // because source's apparent valueOf returns `Object` but target's
+        // wrapper interface declares `valueOf(): <primitive>`. Narrow gate:
+        // (a) RHS is an empty ObjectLiteralExpression `{}`; (b) target is
+        // a named wrapper interface. Other shapes still go through the
+        // standard path.
+        CtaSections.atE(CtaSections.E_OBJLIT)
+        if (expr.right is ObjectLiteralExpression &&
+            (expr.right).properties.isEmpty() &&
+            tt is Type.Interface
+        ) {
+            val targetName = tt.symbol?.name
+            if (targetName in WRAPPER_INTERFACE_NAMES) {
+                val primitive = when (targetName) {
+                    "Boolean" -> "boolean"
+                    "Number" -> "number"
+                    "String" -> "string"
+                    "BigInt" -> "bigint"
+                    "Symbol" -> "symbol"
+                    else -> null
+                }
+                if (primitive != null) {
+                    val displaySource = typeToString(sourceType)
+                    val displayTarget = if (typeAnnotation != null)
+                        formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
+                        else typeToString(tt)
+                    val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                    val chain = listOf(
+                        "  The types returned by 'valueOf()' are incompatible between these types.",
+                        "    Type 'Object' is not assignable to type '$primitive'.",
+                    )
+                    diagnostics.add(Diagnostic(
+                        message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2322,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = target.pos,
+                        length = target.text.length,
+                        messageChain = chain,
+                    ))
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    private fun caeUnionAndMissingPropertyGuards(
+        expr: BinaryExpression, target: Identifier, tt: Type, sourceType: Type,
+        typeAnnotation: TypeNode?, source: String, fileName: String
+    ): Boolean {
+        CtaSections.atE(CtaSections.E_UNION)
+        if (strictNullChecks && sourceType is Type.Union &&
+            (tt is Type.Object || tt is Type.Interface) &&
+            !typeIncludesUndefined(tt) && !typeIncludesNull(tt)
+        ) {
+            // First nullish constituent (in flags-value order undefined<null,
+            // matching TypeScript's reported `undefined`) that fails assignability.
+            val failingNullish = sourceType.types.firstOrNull {
+                isNullishConstituent(it) &&
+                    !checkTypeRelatedTo(it, tt, assignableRelation)
+            }
+            if (failingNullish != null) {
+                val displaySource = typeToString(sourceType)
+                val displayTarget = if (typeAnnotation != null)
+                    formatTypeForDisplay(typeAnnotation) ?: typeToString(tt)
+                    else typeToString(tt)
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                    messageChain = listOf(
+                        "  Type '${typeToString(failingNullish)}' is not assignable to type '$displayTarget'.",
+                    ),
+                ))
+                return true
+            }
+        }
+        // B87.6c (round 73): array-VARIABLE source → tuple target tuple-arity
+        // TS2322 for ASSIGNMENT — completes the tuple-arity diagnostic uniformly
+        // (async-return B87.6 + var-decl B87.6b + assignment B87.6c). `x = arr`
+        // where `x: [number]`, `arr: number[]` → "Target allows only N element(s)
+        // but source may have more." Gated: RHS not an array literal (literals are
+        // tuple-assignable element-wise), source is `Array` Reference, target is a
+        // tuple `Type.Object`, not already assignable. Emits at the LHS identifier.
+        if (expr.right !is ArrayLiteralExpression &&
+            sourceType is Type.Reference && sourceType.target.symbol?.name == "Array" &&
+            tt is Type.Object && tt !is Type.Reference && tt.tupleElementTypes != null &&
+            !checkTypeRelatedTo(sourceType, tt, assignableRelation)
+        ) {
+            val n = tt.tupleElementTypes!!.size
+            val displaySource = typeToString(sourceType)
+            val displayTarget = if (typeAnnotation != null)
+                formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
+            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+            diagnostics.add(Diagnostic(
+                message = "Type '$displaySource' is not assignable to type '$displayTarget'.",
+                category = DiagnosticCategory.Error, code = 2322,
+                fileName = fileName, line = line, character = character,
+                start = target.pos, length = target.text.length,
+                messageChain = listOf("  Target allows only $n element(s) but source may have more."),
+            ))
+            return true
+        }
+        // B175: RHS is a bare CLASS identifier — the class VALUE is its STATIC
+        // side (`typeof B`), so the target's required INSTANCE members are
+        // checked against the class's STATIC member set (`a = B` errors even
+        // though `new B()` would satisfy; `a = C` with `static prop` is fine).
+        // Squiggle = the RHS identifier (TS reports the source expression here),
+        // related TS2728 at the target's declaration + TS6213 "Did you mean to
+        // use 'new' with this expression?" when the INSTANCE side would satisfy.
+        // Single-missing only (multi → bail, FN-safe). The class-identifier RHS
+        // also SKIPS the instance-source branch below (it would mis-classify the
+        // static side as the instance shape).
+        CtaSections.atE(CtaSections.E_B175)
+        val b175RhsClassSym = (expr.right as? Identifier)?.let { r ->
+            (currentFileLocals?.get(r.text) ?: globals[r.text])?.takeIf { s ->
+                s.flags.hasAny(SymbolFlags.Class) &&
+                    s.declarations.any { it is ClassDeclaration } &&
+                    s.declarations.none { it is InterfaceDeclaration }
+            }
+        }
+        if (b175RhsClassSym != null) {
+            if (tt is Type.Interface && tt.callSignatures.isNullOrEmpty() &&
+                tt.constructSignatures.isNullOrEmpty()
+            ) {
+                resolveStructuredTypeMembers(tt)
+                val targetStatics2 = getStaticMembersOfType(tt)
+                val required = tt.properties.orEmpty().filter { p ->
+                    !isOptionalProperty(p) &&
+                        targetStatics2?.containsKey(p.name) != true &&
+                        p.name !in OBJECT_PROTOTYPE_PROPERTIES
+                }
+                val staticNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = true)
+                val instanceNames = classMemberNamesTransitive(b175RhsClassSym, staticSide = false)
+                val missing = required.filter { it.name !in staticNames }
+                if (missing.size == 1) {
+                    val mpName = missing[0].name
+                    val displayTarget = if (typeAnnotation != null)
+                        formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
+                    val rhs = expr.right
+                    val (line, character) = getLineAndCharacterOfPosition(source, rhs.pos)
+                    val related = mutableListOf<Diagnostic>()
+                    val mpSym = getPropertyOfType(tt, mpName)
+                    mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }?.let { related.add(it) }
+                    if (required.all { it.name in instanceNames }) {
+                        related.add(Diagnostic(
+                            message = "Did you mean to use 'new' with this expression?",
+                            category = DiagnosticCategory.Message, code = 6213,
+                            fileName = fileName, line = line, character = character,
+                            start = rhs.pos, length = rhs.text.length,
+                        ))
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$mpName' is missing in type 'typeof ${rhs.text}' but required in type '$displayTarget'.",
+                        category = DiagnosticCategory.Error, code = 2741,
+                        fileName = fileName, line = line, character = character,
+                        start = rhs.pos, length = rhs.text.length,
+                        relatedInformation = related,
+                    ))
+                    return true
+                }
+            }
+        }
+        // B87.4 (round 73): class-instance source → interface/class target
+        // missing-property. `canUseTypeEngine` blocks named→named structural
+        // comparison (recursive-expansion risk), so `i = c` / `d = c` where the
+        // source class lacks members the target requires emit nothing. Missing-
+        // property is NAME-presence only (no recursion into property types), so a
+        // narrow additive check is safe: source is a class instance, target is a
+        // class/interface, and `collectMissingProperties` (which handles inherited
+        // + Object.prototype members) reports ≥1 required member absent from source.
+        // B127: also cover PLAIN interface → PLAIN interface (neither a
+        // class) — but ONLY as a FALLBACK when `canUseTypeEngine` BLOCKS the
+        // named→named structural path (`!canUseTypeEngine` below). The canUse
+        // path (~58504) already handles the cases it permits (e.g. cross-file
+        // same-named interfaces, `errorWithSameNameType`), so this fallback
+        // never preempts it. Gated to pure property bags (no index/call sigs)
+        // so name-presence IS the assignability criterion, and `Object`-source
+        // is excluded (the TS2696 special-case owns that). Reaches the nested
+        // `a = b` of `const x = a = b` via the var-decl-initializer walk.
+        CtaSections.atE(CtaSections.E_B127)
+        val b127SrcIsClassInstance =
+            sourceType is Type.Interface && sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) == true
+        val b127BothPlainInterfaces = sourceType is Type.Interface && tt is Type.Interface &&
+            sourceType.symbol?.flags?.hasAny(SymbolFlags.Class) != true &&
+            tt.symbol?.flags?.hasAny(SymbolFlags.Class) != true &&
+            sourceType.symbol?.name != "Object" &&
+            sourceType.stringIndexInfo == null && sourceType.numberIndexInfo == null &&
+            tt.stringIndexInfo == null && tt.numberIndexInfo == null &&
+            !canUseTypeEngine(sourceType, tt)
+        if (b175RhsClassSym == null && sourceType is Type.Interface && tt is Type.Interface &&
+            (b127SrcIsClassInstance || b127BothPlainInterfaces) &&
+            sourceType.callSignatures.isNullOrEmpty() && tt.callSignatures.isNullOrEmpty()
+        ) {
+            val missing = collectMissingProperties(sourceType, tt)
+            if (missing.isNotEmpty()) {
+                // inheritance1: an empty subclass source (`ImageBase extends Control {}`)
+                // displays as its base ("Control") in the missing-property message.
+                val displaySource = emptySubclassBaseName(sourceType) ?: typeToString(sourceType)
+                val displayTarget = if (typeAnnotation != null)
+                    formatTypeForDisplay(typeAnnotation) ?: typeToString(tt) else typeToString(tt)
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                if (missing.size >= 2) {
+                    diagnostics.add(Diagnostic(
+                        message = formatTs2740Message(displaySource, displayTarget, missing),
+                        category = DiagnosticCategory.Error,
+                        code = if (missing.size <= 4) 2739 else 2740,
+                        fileName = fileName, line = line, character = character,
+                        start = target.pos, length = target.text.length,
+                    ))
+                } else {
+                    val mpName = missing[0]
+                    val mpSym = getPropertyOfType(tt, mpName)
+                    val declaringDisplay = getDeclaringTypeDisplay(mpSym, tt, displayTarget)
+                    val relatedInfo = mpSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                    // B53.1 cross-file disambiguation (mirror of the canUse path):
+                    // when source/target share a display name but are distinct
+                    // symbols in different files, render `import("<base>").<name>`.
+                    var qualSource = displaySource
+                    var qualDeclaring = declaringDisplay
+                    if (qualSource == qualDeclaring) {
+                        val srcSym2 = (sourceType).symbol
+                        val tgtSym2 = (tt).symbol
+                        if (srcSym2 != null && tgtSym2 != null && srcSym2 !== tgtSym2) {
+                            val srcImp = getSymbolImportName(srcSym2)
+                            val tgtImp = getSymbolImportName(tgtSym2)
+                            if (srcImp != null && tgtImp != null && srcImp != tgtImp) {
+                                qualSource = "import(\"$srcImp\").$qualSource"
+                                qualDeclaring = "import(\"$tgtImp\").$qualDeclaring"
+                            }
+                        }
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$mpName' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
+                        category = DiagnosticCategory.Error, code = 2741,
+                        fileName = fileName, line = line, character = character,
+                        start = target.pos, length = target.text.length,
+                        relatedInformation = listOfNotNull(relatedInfo),
+                    ))
+                }
+                return true
+            }
+        }
+        return false
+    }
+
+    private fun caeElaborateMismatch(
+        expr: BinaryExpression, target: Identifier, tt: Type, sourceType: Type,
+        typeAnnotation: TypeNode?, canUse: Boolean, isAssignable: Boolean,
+        source: String, fileName: String, typeParams: Set<String>
+    ): Boolean {
+        CtaSections.atE(CtaSections.E_ELAB)
+        if (canUse && !isAssignable) {
+            // M3.1 (round 461): a bare TypeParam SOURCE whose declared
+            // constraint chain reaches a type assignable to the target is
+            // itself assignable (tsc: a type param relates to X iff its
+            // constraint does). The relation engine deliberately has NO
+            // general TypeParam-source rule (39+ cycle gate; the round-456
+            // broad attempt perturbed overload selection) — per-site
+            // emission bail only, mirroring round 442's arg-check bail.
+            // (`currentClassContainer = node` where `node: T extends
+            // ClassLikeDeclaration`; `clone = worker(...)` returning bare T.)
+            if (sourceType is Type.TypeParam &&
+                bareTpConstraintRelatesTo(sourceType, tt)) {
+                return true
+            }
+            // Round 471: a spread of a target-typed value + target-declared
+            // extras (tsc importFixes.ts `fix = { ...fix, ...(cond ? {} :
+            // { addAsTypeOnly }) }`) — our spread merge keeps only the
+            // GUARANTEED props (B426), so the relation misses the spread's
+            // full member set. Suppression-only.
+            if (expr.right is ObjectLiteralExpression &&
+                objectLiteralSpreadOfTargetSatisfies(expr.right, tt)) {
+                return true
+            }
+            // B496: cross-typed-array assignment is owned by the dedicated
+            // checkTypedArrayCrossAssignment walker (correct TS2322 via the
+            // [Symbol.toStringTag] mismatch). Our embedded typed-array interfaces
+            // are structurally incomplete (Int16Array "missing" props from Int8Array),
+            // so the name-presence missing-property path FPs a TS2740 here — suppress.
+            if ((sourceType as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES &&
+                (tt as? Type.Interface)?.symbol?.name in TYPED_ARRAY_NAMES) {
+                return true
+            }
+            // M2.2 (round 393): a bare-function source missing required named
+            // properties of a construct-signature target — tsc reports the
+            // missing-property error (TS2739/TS2740; here B444's `Array = fn`
+            // walker under real libs, whose ArrayConstructor now carries a
+            // construct sig) and does NOT additionally report the construct/
+            // call-sig mismatch. Defer to the missing-property path. Fires ONLY
+            // when properties are genuinely missing, so a source that satisfies
+            // all named props (and fails only on the signature) still reports the
+            // coarse TS2322 (redefineArray).
+            if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                tt is Type.Object && !tt.constructSignatures.isNullOrEmpty() &&
+                targetHasRequiredPropAbsentFromSource(sourceType, tt)) {
+                return true
+            }
+            // B69.5: Widen literal source for display when target type
+            // doesn't contain literal members. TypeScript shows `boolean`
+            // (widened) not `false` when target is `{ [n: number]: any }`
+            // (no literal context). When target preserves literal (e.g.
+            // `false` or `true | false`), keep the literal display.
+            val displaySourceType = if (ts2322KeepsSourceLiteral(tt)) sourceType
+                else getWidenedLiteralType(sourceType)
+            val displaySourceRaw = typeToString(displaySourceType)
+            // 17.80: For NumberLiteral targets with infinite/NaN value, prefer
+            // the resolved type display (`'Infinity'` / `'-Infinity'` / `'NaN'`)
+            // over the type-annotation alias name. TypeScript expands type
+            // aliases to their resolved form when displaying intrinsic-like
+            // numeric values (cf. fakeInfinity1_ts: `type A = 1e999;` displays
+            // as `'Infinity'` not `'A'`).
+            val resolvedDisplay = typeToString(tt)
+            val isIntrinsicNumericLiteral = resolvedDisplay == "Infinity" ||
+                resolvedDisplay == "-Infinity" || resolvedDisplay == "NaN"
+            // B50.6: When the resolved type is a pure function type AND has
+            // no alias-display registered (so B50.5 deliberately unfolded it),
+            // prefer the unfolded `typeToString` form over the annotation text.
+            // Matches `nestedCallbackErrorNotFlattened_ts`'s expected unfolded
+            // display for the `Cb<Cb<...>>` chain.
+            val isPureFuncNoAlias = tt is Type.Object &&
+                !tt.callSignatures.isNullOrEmpty() &&
+                tt.properties.isNullOrEmpty() &&
+                tt.members.isNullOrEmpty() &&
+                tt.constructSignatures.isNullOrEmpty() &&
+                tt.id !in aliasDisplayMap
+            // B86.7b: when target is a nullable Union (`A | null | undefined`)
+            // and source is non-nullable, strip the outer nullish constituents
+            // from BOTH the display and the chain comparison so we report the
+            // structural mismatch against the underlying shape (matches TypeScript's
+            // `elaboratedErrorsOnNullableTargets01` baseline shape). The helper
+            // returns `tt` unchanged when not applicable.
+            val ttForDisplay = stripNullishFromDisplayTarget(tt, sourceType)
+            val displayTargetRaw = if (isIntrinsicNumericLiteral) resolvedDisplay
+                else if (isPureFuncNoAlias) resolvedDisplay
+                // (REL.1)(c): an enum-MEMBER target prints QUALIFIED — see
+                // [displayTargetAnnotation], the var-decl path's twin.
+                else if (tt.flags.hasAny(TypeFlags.EnumLiteral)) resolvedDisplay
+                else if (ttForDisplay !== tt) typeToString(ttForDisplay)
+                else if (typeAnnotation != null) formatTypeForDisplay(typeAnnotation) ?: resolvedDisplay
+                else resolvedDisplay
+            // (REL.1)(c) round 746: two DIFFERENT enums whose simple names collide
+            // both print fully qualified — see [enumCollisionQualifiedDisplays].
+            val enumQualified =
+                enumCollisionQualifiedDisplays(displaySourceType, tt, displaySourceRaw, displayTargetRaw)
+            val displaySource = enumQualified?.first ?: displaySourceRaw
+            val displayTarget = enumQualified?.second ?: displayTargetRaw
+            val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+            // 16.4bf: Compute missing-property set directly rather than relying on
+            // `lastMissingPropertyName` side-effect — a cached Ternary.False result
+            // from `checkTypeRelatedTo` skips setting it, causing second+ occurrences
+            // of the same comparison to fall through to TS2322 instead of TS2741.
+            val allMissing = if (sourceType is Type.Object && tt is Type.Object) {
+                collectMissingProperties(sourceType, tt)
+            } else emptyList()
+            val missingPropSym = lastMissingPropertySymbol
+                ?: if (allMissing.isNotEmpty() && tt is Type.Object) {
+                    tt.properties?.find { it.name == allMissing[0] }
+                } else null
+            if (allMissing.isNotEmpty()) {
+                if (shouldEmitTs2696ForObject(sourceType, tt)) {
+                    val chainLine = "  " + formatTs2740Message(displaySource, displayTarget, allMissing)
+                    diagnostics.add(Diagnostic(
+                        message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
+                        category = DiagnosticCategory.Error,
+                        code = 2696,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = target.pos,
+                        length = target.text.length,
+                        messageChain = listOf(chainLine),
+                    ))
+                } else if (allMissing.size >= 2) {
+                    diagnostics.add(Diagnostic(
+                        message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                        category = DiagnosticCategory.Error,
+                        code = if (allMissing.size <= 4) 2739 else 2740,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = target.pos,
+                        length = target.text.length,
+                    ))
+                } else {
+                    val missingProp = allMissing[0]
+                    val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, tt, displayTarget)
+                    val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
+                    // B53.1: cross-file disambiguation. When source and target are
+                    // different interfaces sharing the same display name but declared
+                    // in different files, render `import("<basename>").<name>` so the
+                    // diagnostic is unambiguous. Matches TypeScript's behavior for
+                    // `import * as A from './a'` / `B from './b'` with same-named types.
+                    var qualSource = displaySource
+                    var qualDeclaring = declaringDisplay
+                    if (qualSource == qualDeclaring) {
+                        val srcSym = (sourceType as? Type.Interface)?.symbol
+                        val tgtSym = (tt as? Type.Interface)?.symbol
+                        if (srcSym != null && tgtSym != null && srcSym !== tgtSym) {
+                            val srcImport = getSymbolImportName(srcSym)
+                            val tgtImport = getSymbolImportName(tgtSym)
+                            if (srcImport != null && tgtImport != null && srcImport != tgtImport) {
+                                qualSource = "import(\"$srcImport\").$qualSource"
+                                qualDeclaring = "import(\"$tgtImport\").$qualDeclaring"
+                            }
+                        }
+                    }
+                    diagnostics.add(Diagnostic(
+                        message = "Property '$missingProp' is missing in type '$qualSource' but required in type '$qualDeclaring'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2741,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = target.pos,
+                        length = target.text.length,
+                        relatedInformation = listOfNotNull(relatedInfo),
+                    ))
+                }
+                return true
+            }
+            val message = "Type '$displaySource' is not assignable to type '$displayTarget'."
+            val chain = mutableListOf<String>()
+            lastChainMissingPropSymbol = null // ensure relatedInfo doesn't pick up stale state
+            // Wrapper interface (Number/String/Boolean/Symbol/BigInt) → primitive:
+            // emit "X is a primitive, but Y is a wrapper object. Prefer using X when
+            // possible." TypeScript adds this advisory chain line whenever the source
+            // is a named wrapper interface and the target is the matching primitive.
+            val wrapperElab = getWrapperToPrimitiveElaboration(sourceType, displayTarget)
+            if (wrapperElab != null) {
+                chain.add(wrapperElab)
+            } else
+            // Function→function: add specific elaboration
+            if (sourceType is Type.Object && !sourceType.callSignatures.isNullOrEmpty() &&
+                tt is Type.Object && !tt.callSignatures.isNullOrEmpty()) {
+                chain.addAll(getFunctionMismatchElaboration(sourceType, tt))
+            } else if (sourceType is Type.Union) {
+                // Union source: find the last failing constituent (matches TypeScript)
+                var lastFailing: Type? = null
+                for (constituent in sourceType.types) {
+                    if (!checkTypeRelatedTo(constituent, tt, assignableRelation)) {
+                        lastFailing = constituent
+                    }
+                }
+                if (lastFailing != null) {
+                    val constStr = typeToString(lastFailing)
+                    chain.add("  Type '$constStr' is not assignable to type '$displayTarget'.")
+                }
+            } else if (sourceType is Type.Intersection && ttForDisplay is Type.Intersection) {
+                // B413: discriminated intersection → intersection elaboration.
+                lastChainMissingPropSymbol = null
+                getPropertyElaborationChain(sourceType, ttForDisplay)?.let { chain.addAll(it) }
+            } else if (sourceType is Type.Object && ttForDisplay is Type.Union) {
+                // B414: generic → union elaboration (unionTypeErrorMessageTypeRefs01).
+                // `A<Foo>` vs `A<Bar> | B<Baz> | C<Kwah>` drills into the same-generic
+                // constituent (`A<Bar>` — same interface target OR same type-alias name)
+                // and reports the failing type-ARG mismatch directly. Gated to a
+                // SAME-GENERIC best constituent with an actual deeper chain (FP-safe —
+                // the assignment path emits no chain otherwise).
+                val best = findBestUnionConstituent(sourceType, ttForDisplay)
+                val sg = genericIdentityAndArgs(sourceType)
+                val bg = if (best is Type.Object) genericIdentityAndArgs(best) else null
+                if (best is Type.Object && sg != null && bg != null &&
+                    sg.first == bg.first && sg.second.size == bg.second.size) {
+                    var deeper: List<String>? = null
+                    for (i in sg.second.indices) {
+                        if (!checkTypeRelatedTo(sg.second[i], bg.second[i], assignableRelation)) {
+                            lastChainMissingPropSymbol = null
+                            deeper = getPropertyElaborationChain(sg.second[i], bg.second[i])
+                            break
+                        }
+                    }
+                    if (deeper != null) {
+                        chain.add("  Type '${typeToString(sourceType)}' is not assignable to type '${typeToString(best)}'.")
+                        deeper.forEach { chain.add("  $it") }
+                    }
+                }
+            } else {
+                // Object→Object: property-level elaboration (16.1)
+                // B86.7b: use the (possibly stripped) ttForDisplay so when target
+                // was `A | null | undefined`, we still get the property chain
+                // against the underlying `A`.
+                val ttForChain = ttForDisplay
+                // B482ext: an INTERSECTION source vs an Object target also goes
+                // through the chain helper (`getIntersectionPropertyElaborationChain`
+                // merges the constituents' members) — mirrors the var-decl path.
+                // `x = y` where `x: { a?: string }`, `y: T & { a: boolean }` →
+                // "Types of property 'a' are incompatible. Type 'boolean' is not
+                // assignable to type 'string'.".
+                if ((sourceType is Type.Object || sourceType is Type.Intersection) &&
+                    ttForChain is Type.Object) {
+                    lastChainMissingPropSymbol = null
+                    val propElab = getPropertyElaborationChain(sourceType, ttForChain)
+                    if (propElab != null) chain.addAll(propElab)
+                }
+                // 16.4cn: Missing index signature elaboration
+                if (chain.isEmpty() && lastMissingIndexSigKind != null) {
+                    chain.add("  Index signature for type '$lastMissingIndexSigKind' is missing in type '$displaySource'.")
+                }
+                if (chain.isEmpty()) {
+                if (tt is Type.TypeParam) {
+                    val targetName = tt.symbol?.name ?: "T"
+                    // B60.2: same logic as the var-decl path at ~39819.
+                    // B62.1: excess-property override (see helper docstring).
+                    val constraint = apparentConstraintOfTypeParam(tt, targetName)
+                    val constraintOk = constraint != null &&
+                        checkTypeRelatedTo(sourceType, constraint, assignableRelation) &&
+                        !anonymousObjectHasExcessVsConstraint(sourceType, constraint)
+                    if (constraintOk) {
+                        chain.add("  '$displaySource' is assignable to the constraint of type '$targetName', but '$targetName' could be instantiated with a different subtype of constraint '${typeToString(constraint)}'.")
+                        // B60.6d: lib `Object` source hint
+                        if (displaySource == "Object") {
+                            chain.add("    The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?")
+                        }
+                    } else {
+                        chain.add("  '$targetName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                    }
+                } else if (sourceType is Type.TypeParam) {
+                    // B60.5: source is TypeParam — emit apparent-type chain.
+                    // "Type '<constraint>' is not assignable to type '<target>'."
+                    // Gate: constraint non-null, non-error, non-any. Skip if
+                    // constraint IS the target (trivially equal). Bypass alias
+                    // display so `T extends Table` (where Table = TableClass)
+                    // expands to `TableClass<any>` not `Table`.
+                    val srcConstraint = sourceType.constraint
+                    if (srcConstraint != null && srcConstraint !== errorType && srcConstraint !== anyType && srcConstraint !== tt) {
+                        // Temporarily mark the constraint as in-progress so
+                        // typeToString skips aliasDisplayMap lookup.
+                        typeToStringInProgress.add(srcConstraint.id)
+                        val apparentDisplay = try { typeToString(srcConstraint) }
+                            finally { typeToStringInProgress.remove(srcConstraint.id) }
+                        if (apparentDisplay != displaySource) {
+                            chain.add("  Type '$apparentDisplay' is not assignable to type '$displayTarget'.")
+                        }
+                    }
+                } else if (typeParams.isNotEmpty()) {
+                    val targetBaseName = displayTarget.substringBefore('<')
+                    if (targetBaseName in typeParams) {
+                        chain.add("  '$targetBaseName' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'.")
+                    }
+                }
+                }
+            }
+            // (REL.1)(c) round 746: the `isEnumTypeRelatedTo` elaboration — the
+            // missing member, or the first member whose value differs. Guarded on
+            // an EMPTY chain because an enum type carries no properties, so
+            // nothing above can have produced one for this pair.
+            if (chain.isEmpty()) {
+                enumRelationElaboration(displaySourceType, tt, displayTarget)?.let { chain.add(it) }
+            }
+            val chainRelatedInfo = lastChainMissingPropSymbol?.let { createPropertyDeclaredHereRelatedInfo(it) }
+            diagnostics.add(Diagnostic(
+                message = message,
+                category = DiagnosticCategory.Error,
+                code = 2322,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = target.pos,
+                length = target.text.length,
+                messageChain = chain,
+                relatedInformation = listOfNotNull(chainRelatedInfo),
+            ))
+            return true // Type engine handled it — skip old system
+        }
+        return false
+    }
+
+    private fun caeLegacyDeclaredStringPath(
+        expr: BinaryExpression, target: Identifier, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, typeParams: Set<String>
+    ): Boolean {
+        CtaSections.atE(CtaSections.E_DECLSTR)
+        val declaredType = varTypes[target.text]
+        if (declaredType != null) {
+            // B54.7 (probe re-enable for regression-identification): fallback to varTypes
+            // lookup for Identifier RHS when same-base parameterized refs.
+            val isParameterizedRefTarget = declaredType.startsWith("@") && declaredType.contains('<')
+            val rhsAsIdent = expr.right as? Identifier
+            val rhsVarType = rhsAsIdent?.let { varTypes[it.text] }
+            // B250: intersection-annotated RHS (`let s: A & B`) assigned to a
+            // bare in-scope TP target (`t = s` where `t: T`) — an intersection
+            // is assignable to T only when T is one of its OWN constituents.
+            // Chain flavor: target's (transitively resolved) constraint named in
+            // the constituents → "assignable to the constraint ... different
+            // subtype of constraint 'A'."; else → "could be instantiated with
+            // an arbitrary type which could be unrelated to ...".
+            run {
+                val tgtTp = if (declaredType.startsWith("@") && !declaredType.contains('<'))
+                    declaredType.removePrefix("@") else return@run
+                if (tgtTp !in typeParams) return@run
+                val rv = rhsVarType ?: return@run
+                if (!rv.startsWith("&")) return@run
+                val members = rv.removePrefix("&").split(" & ")
+                if (tgtTp in members) return@run  // `t = t_and_b` (T & B → T) is legal
+                val displaySource = members.joinToString(" & ")
+                var consName: String? = (currentTypeParamDecls[tgtTp]?.constraint as? TypeReference)
+                    ?.let { getTypeReferenceLastName(it.typeName) }
+                val seenTps = mutableSetOf<String>()
+                while (consName != null && consName in typeParams && consName !in members && seenTps.add(consName)) {
+                    consName = (currentTypeParamDecls[consName]?.constraint as? TypeReference)
+                        ?.let { getTypeReferenceLastName(it.typeName) }
+                }
+                val chainLine = if (consName != null && consName in members) {
+                    "  '$displaySource' is assignable to the constraint of type '$tgtTp', but '$tgtTp' could be instantiated with a different subtype of constraint '$consName'."
+                } else {
+                    "  '$tgtTp' could be instantiated with an arbitrary type which could be unrelated to '$displaySource'."
+                }
+                val (line, character) = getLineAndCharacterOfPosition(source, target.pos)
+                diagnostics.add(Diagnostic(
+                    message = "Type '$displaySource' is not assignable to type '$tgtTp'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2322,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = target.pos,
+                    length = target.text.length,
+                    messageChain = listOf(chainLine),
+                ))
+                return true
+            }
+            val isSameBaseRhs = rhsVarType != null &&
+                rhsVarType.startsWith("@") && rhsVarType.contains('<') &&
+                rhsVarType.substringBefore('<') == declaredType.substringBefore('<')
+            // B60.6b: also fall back for bare TypeParam target with bare TypeParam RHS
+            // (`x: T = y: U`) — both must be in the typeParams scope. Mirrors the
+            // same-base-ref fallback for the bare case.
+            val tgtBareName = if (declaredType.startsWith("@") && !declaredType.contains('<'))
+                declaredType.removePrefix("@") else null
+            val rhsBareName = if (rhsVarType != null && rhsVarType.startsWith("@") && !rhsVarType.contains('<'))
+                rhsVarType.removePrefix("@") else null
+            val isBareTypeParamMismatch = tgtBareName != null && rhsBareName != null &&
+                tgtBareName != rhsBareName &&
+                tgtBareName in typeParams && rhsBareName in typeParams
+            // B60.7b: also fall back for bare TypeParam RHS → named non-TypeParam target.
+            // E.g. `z: Object = x: T` where T is bare TypeParam (in scope, unconstrained).
+            // Needs the gate from B60.7 to fire — keep targets to Object/Function.
+            val isTypeParamToNamed = tgtBareName != null && rhsBareName != null &&
+                rhsBareName in typeParams && tgtBareName !in typeParams &&
+                (tgtBareName == "Object" || tgtBareName == "Function")
+            // B212: union-of-TPs RHS (`var middle: T | U`) against a bare-TP
+            // target — fall through so isAssignableTo's union-of-TPs rule runs.
+            val isTpUnionMismatch = tgtBareName != null && tgtBareName in typeParams &&
+                rhsVarType != null && rhsVarType.startsWith("|") &&
+                rhsVarType.removePrefix("|").split(" | ").all { it in typeParams }
+            // B212b: bare-TP RHS vs union-of-TPs target (`middle = bottom` where
+            // middle: T | U, Bottom extends Top | T | U).
+            val isBareTpToTpUnion = rhsBareName != null && rhsBareName in typeParams &&
+                declaredType.startsWith("|") &&
+                declaredType.removePrefix("|").split(" | ").all { it in typeParams }
+            val exprType = inferSimpleExprType(expr.right, varTypes)
+                ?: if (isParameterizedRefTarget && isSameBaseRhs) rhsVarType
+                    else if (isBareTypeParamMismatch) rhsVarType
+                    else if (isTypeParamToNamed) rhsVarType
+                    else if (isTpUnionMismatch) rhsVarType
+                    else if (isBareTpToTpUnion) rhsVarType
+                    else null
+            // Round 453: `<ident> = undefined` where the target's DECLARED type
+            // includes undefined — an OPTIONAL parameter `x?: T` (whose effective
+            // type is `T | undefined`, tsc's B85.1a) or a `T | undefined` local.
+            // The string `varTypes` drops the `?` (resolveSimpleTypeName → "T"),
+            // so the relation FP-fires; the type-engine map (currentLocalTypes /
+            // its pre-narrowing declared form narrowedDeclaredTypes) carries the
+            // correct `T | undefined`. tsc's own generators.ts
+            // (`leadingElement = undefined` where `leadingElement?: Expression`)
+            // trips this. FP-safe: assigning undefined to a `T | undefined` target
+            // is always legal (non-eOPT); a non-optional `x: T` local keeps firing.
+            val undefinedToOptionalLocal = exprType == "undefined" &&
+                !options.exactOptionalPropertyTypes &&
+                (narrowedDeclaredTypes[target.text] ?: currentLocalTypes[target.text])
+                    ?.let { typeIncludesUndefined(it) } == true
+            if (!undefinedToOptionalLocal &&
+                exprType != null && !isAssignableTo(exprType, declaredType, typeParams)) {
+                emitTS2322(target.pos, target.text.length, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
+            }
+        }
+        return false
+    }
+
+    private fun caeThisPropertyAssign(
+        expr: BinaryExpression, target: PropertyAccessExpression, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, typeParams: Set<String>
+    ) {
+        CtaSections.atE(CtaSections.E_THIS)
+        // this.prop = value — look up class property type from varTypes
+        val propName = target.name.text
+        val declaredType = varTypes["this.$propName"]
+        if (declaredType != null) {
+            // B54.2: fall back to direct varTypes lookup for Identifier RHS when
+            // inferSimpleExprType deliberately returns null (its standard gate skips
+            // identifier lookup to avoid FPs with enum/union targets). For `this.X = v`
+            // assignments inside setters/methods, the parameter type IS reliably stored
+            // in varTypes by the class-body walker, and the RHS-narrower runs in a
+            // fresh per-member scope so FP risk is bounded.
+            val exprType = inferSimpleExprType(expr.right, varTypes)
+                ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
+            // A `this.optionalProp = undefined` write is legal: an optional
+            // property `p?: T` has write-type `T | undefined` (non-eOPT).
+            // The varTypes string map stores only the bare type name (drops
+            // the `?`), so mirror checkPropertyAccessAssignment's
+            // undefined-optional bail (89644) here — else `this.parent =
+            // undefined` where `parent?: Symbol` FP-fires TS2322 (services.ts
+            // SymbolObject/NodeObject constructor field resets). An explicit
+            // `| undefined` in the declared type, or an array type, already
+            // passes the lenient string relation. FP-safe: optional +
+            // non-exact always accepts an undefined write.
+            val undefinedToOptional = exprType == "undefined" &&
+                !options.exactOptionalPropertyTypes &&
+                thisPropertyIsOptional(propName)
+            // Round 474 (project.ts `this.autoImportProviderHost = false`): a
+            // LITERAL write whose literal the class property's declared union
+            // annotation SYNTACTICALLY contains is always legal — the string
+            // path widened the literal (false → boolean) before its relation.
+            val literalUnionMember = returnUnionSyntacticallyContainsLiteral(
+                (currentClassForThis?.members?.firstOrNull {
+                    it is PropertyDeclaration && (it.name as? Identifier)?.text == propName
+                } as? PropertyDeclaration)?.type,
+                expr.right,
+            )
+            if (!undefinedToOptional && !literalUnionMember &&
+                exprType != null && !isAssignableTo(exprType, declaredType)) {
+                // Squiggle spans "this.prop" (the entire PropertyAccessExpression)
+                val squiggleStart = target.expression.pos
+                val squiggleLength = target.name.pos + target.name.text.length - squiggleStart
+                emitTS2322(squiggleStart, squiggleLength, exprType, declaredType, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
+            }
+        } else {
+            // B150: no class-property type string in varTypes (e.g. `this.X = v`
+            // inside an OBJECT-LITERAL method, where `this` is the object-literal
+            // type set in currentLocalTypes by walkObjectLiteralMemberBody). Route
+            // through the type-engine path. FP-safe for class methods: there
+            // getTypeOfExpression(this) yields anyType (B101) so the helper bails.
+            checkPropertyAccessAssignment(target, expr.right, source, fileName)
+        }
+    }
+
+    private fun caeElementAccessAssign(
+        expr: BinaryExpression, target: ElementAccessExpression, source: String, fileName: String,
+        varTypes: MutableMap<String, String>, typeParams: Set<String>
+    ) {
+        CtaSections.atE(CtaSections.E_ELEM)
+        if (!tryEmitInferentialObjLitElementWrite(target, expr.right, source, fileName)) {
+          // B168: `this[key] = value` where `key` is a const with a string-LITERAL value
+          // late-binds to the class member named by that literal (TypeScript's late-bound
+          // assignment candidates; lateBoundAssignmentCandidateJS3's `this[prop] = 12` vs
+          // a `@type {string}` member `prop`). Fold the key and reuse the
+          // varTypes["this.<lit>"] class-property write path.
+          val keyIdent = target.argumentExpression as? Identifier
+          val foldedKey = if ((target.expression as? Identifier)?.text == "this" && keyIdent != null)
+              (resolveImportedConstLiteralValue(keyIdent.text, fileName) as? ConstantValue.StringValue)?.value
+          else null
+          val foldedDeclared = foldedKey?.let { varTypes["this.$it"] }
+          if (foldedDeclared != null) {
+              val exprType = inferSimpleExprType(expr.right, varTypes)
+                  ?: (expr.right as? Identifier)?.let { varTypes[it.text] }
+              if (exprType != null && !isAssignableTo(exprType, foldedDeclared)) {
+                  val start = target.pos
+                  val length = expressionTrueEnd(target) - start
+                  emitTS2322(start, length, exprType, foldedDeclared, source, fileName, hasElaboration = !isSimpleLiteral(expr.right), typeParams = typeParams)
+              }
+          } else {
+              // B85.1d: obj[key] = value — narrowly-gated TS2322 for index-signature value mismatch.
+              checkElementAccessAssignment(target, expr.right, source, fileName, varTypes)
+          }
         }
     }
 
