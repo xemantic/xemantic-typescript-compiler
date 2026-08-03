@@ -55,6 +55,11 @@ import kotlin.test.fail
  * at **13,694** (round 815 split it) and `TypeScriptCompiler.compileParsedCore`
  * at **21,535** (round 816 split it).
  *
+ * **Round 821 took the census to ZERO** with
+ * `Checker.tryInferSingleTypeParamFromArgs` (11,930), so [KNOWN_OVER_LIMIT] is
+ * empty and [CENSUS_RATCHET] is 0. From here this test's only job is to catch the
+ * NEXT method that crosses the limit — which is the job it was always for.
+ *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
  * HotSpot compares against the limit.
@@ -83,6 +88,13 @@ class HugeMethodLimitTest {
          * ones are worked off one round at a time. **`0` is the end state, not a
          * precondition.**
          *
+         * **ROUND 821: THE END STATE IS REACHED — the census is 0 and
+         * [KNOWN_OVER_LIMIT] is empty.** The ratchet keeps its shape rather than
+         * becoming an equality check, because its job is now the opposite one: it
+         * fails the moment a NEW method crosses 8,000 bytecodes, which is how this
+         * family grew unnoticed for 800 rounds in the first place. A red gate here
+         * is never fixed by raising the number.
+         *
          * THE TIGHTENING RULE, which the second test below enforces mechanically:
          * when a split lands, DROP the method from [KNOWN_OVER_LIMIT] and set
          * [CENSUS_RATCHET] to the new census — `every method over the limit is one
@@ -95,15 +107,21 @@ class HugeMethodLimitTest {
          * `cost_gate.py`); wiring it into Gradle's `check` is a build-system
          * change and is owner-gated as queue item (JIT.3).
          */
-        const val CENSUS_RATCHET = 1
+        const val CENSUS_RATCHET = 0
 
         /**
          * The whole census, named — `<binary class name>#<method simple name>`.
          *
-         * The one left is known and queued: `tryInferSingleTypeParamFromArgs`
-         * needs a scripted DATA-FLOW answer rather than the contiguity argument
-         * every split in this arc has used so far (mutable locals cross every
-         * candidate boundary).
+         * **It is EMPTY as of round 821, which closes (JIT.1).** The last entry
+         * was `Checker.tryInferSingleTypeParamFromArgs` at **11,930** bytecodes,
+         * and it was the only target in the arc that no contiguity argument
+         * settled: its bytecodes are FLAT (largest 25-line window 449) and one
+         * `for (tp in orderedTps)` loop holds essentially all of them. It was
+         * split from a scripted DATA-FLOW analysis instead — read/write sets,
+         * liveness and an exit classification per region — which found that the
+         * only value REBOUND across a boundary is `tpSawAnyArg` (returned, not
+         * fielded) and that `candidates` is append-only (so it crosses as a
+         * parameter). See `TispSplitTest` and `scripts/tisp_split_analyze.py`.
          *
          * `Checker.<clinit>` came off this list at round 820. It was a static
          * initializer whose 10,339 bytecodes were the class's `object`-level
@@ -131,9 +149,7 @@ class HugeMethodLimitTest {
          * lesson is that this test parses `Code` attribute lengths straight out of
          * the class file, so it has no rendering to misread.
          */
-        val KNOWN_OVER_LIMIT = setOf(
-            "com.xemantic.typescript.compiler.Checker#tryInferSingleTypeParamFromArgs",
-        )
+        val KNOWN_OVER_LIMIT = emptySet<String>()
 
         /**
          * `<binary class name>#<method>` -> `Code` length, for EVERY method of the
@@ -1135,6 +1151,62 @@ class HugeMethodLimitTest {
         // NODE_BUILTIN_MODULES' 52 strings.
         assert(parts.values.min() > 250)
         assert(parts.values.sum() > 6000)
+    }
+
+    /**
+     * (JIT.1)(e) round 821 — the three helpers
+     * `Checker.tryInferSingleTypeParamFromArgs` was split into, **and the last
+     * entry this census ever had**. It was **11,930 bytecodes** and it is the only
+     * target in the arc whose boundaries no contiguity argument could choose: its
+     * bytecodes are FLAT (largest 25-line window 449 of 11,930, 22% of them
+     * INLINED stdlib bodies charged to their call sites) and one
+     * `for (tp in orderedTps)` loop holds essentially everything. The seams came
+     * from a scripted DATA-FLOW analysis — `scripts/tisp_split_analyze.py` — and
+     * the behavioural gate is `TispSplitTest`.
+     */
+    private val tispSplitParts = setOf(
+        "tispGatherAnchorCandidates",
+        "tispGatherCallbackCandidates",
+        "tispCheckConstraint",
+    )
+
+    @Test
+    fun `tryInferSingleTypeParamFromArgs is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val fn = sizes["tryInferSingleTypeParamFromArgs"]
+            ?: fail("tryInferSingleTypeParamFromArgs not found in Checker")
+        // Positive control: the entry still holds the parameter-shape gate, the
+        // anchor ordering, the candidate selection and the whole conflict leg (it
+        // is 1,869 bytecodes after the split), so a zero cannot pass this
+        // vacuously.
+        assert(fn > 800)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the tryInferSingleTypeParamFromArgs split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = tispSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in tispSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the tryInferSingleTypeParamFromArgs split parts each carry a real share of the loop`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in tispSplitParts }
+        assert(parts.size == 3)
+        // Region sizes were MEASURED before the edit with the wrap-corrected
+        // per-line attribution in scripts/tisp_split_analyze.py --bytes:
+        // 3,109 / 5,470 / 1,566 bytecodes of the 11,930, i.e. 10,145 moved.
+        assert(parts.values.min() > 1000)
+        // ... and the largest helper must keep real headroom under the limit
+        // (measured 5,388), because this function accretes inference rules
+        // continuously and pass 2 is where most of them land.
+        assert(parts.values.max() < 6500)
+        assert(parts.values.sum() > 8000)
     }
 
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */

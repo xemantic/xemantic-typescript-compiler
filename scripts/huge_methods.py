@@ -18,14 +18,13 @@ timing, so it is a gate-able number rather than a measurement.
 
 **(JIT.1)(f) round 817 — THIS IS A ROUND-GATE STEP NOW, AS A RATCHET.** Run
 
-    python3 scripts/huge_methods.py --fail-over 1
+    python3 scripts/huge_methods.py --fail-over 0
 
-next to `cost_gate.py` in every round that touches compiled code. **1 is the
-census as of round 820, not a target**: the last over-limit method is known and
-named (`Checker.tryInferSingleTypeParamFromArgs`), so the ratchet catches a NEW
-offender the moment it appears while the known one is worked off. **TIGHTEN IT BY ONE AS EACH LANDS; `--fail-over 0` is the end state, not a
-precondition.** Raising the number is never the fix for a red gate — split the
-method.
+next to `cost_gate.py` in every round that touches compiled code. **The census is
+0 as of round 821, which closed (JIT.1)**: nothing in the compiled output is over
+the limit, so this gate's whole job is now to fail the moment a NEW method crosses
+8,000 — which is exactly how this family grew unnoticed for 800 rounds. Raising
+the number is never the fix for a red gate — split the method.
 
 The same ratchet also runs inside the suite, so it cannot be forgotten:
 `HugeMethodLimitTest` (src/jvmTest) censuses the whole compiled main output from
