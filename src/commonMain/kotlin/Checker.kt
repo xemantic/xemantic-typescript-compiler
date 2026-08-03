@@ -41221,6 +41221,17 @@ class Checker(
     }
 
     /**
+     * (JIT.1)(d) round 812 — one collected declaration of
+     * [checkDuplicateDeclarations]: a name, the syntactic KIND that declared it,
+     * the name node the diagnostic is reported on, and the owning statement.
+     *
+     * It was a LOCAL data class of that function until the split; five helpers
+     * now name it in their signatures, so it is a nested class. Nothing else
+     * changed — it is still constructed only by the collection loop.
+     */
+    private data class DeclInfo(val name: String, val kind: String, val nameNode: Node, val stmt: Statement? = null)
+
+    /**
      * Check for duplicate declarations at the same scope level.
      * Walks statements and tracks declaration names to detect incompatible duplicates.
      */
@@ -41232,7 +41243,6 @@ class Checker(
         inNamespaceBody: Boolean = false,
     ) {
         // Collect all declaration names with their kind and node
-        data class DeclInfo(val name: String, val kind: String, val nameNode: Node, val stmt: Statement? = null)
         val decls = mutableListOf<DeclInfo>()
 
         for (stmt in statements) {
@@ -41430,115 +41440,9 @@ class Checker(
             val hasFunc = "function" in kinds
             val classCount = group.count { it.kind == "class" }
 
-            // Check for duplicate import= declarations
-            val hasImportEq = "import=" in kinds
-            val importEqCount = group.count { it.kind == "import=" }
-            if (hasImportEq && importEqCount >= 2) {
-                for (decl in group.filter { it.kind == "import=" }) {
-                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
-                }
-            }
+            cddCheckImportBindings(group, kinds, source, fileName)
 
-            // Check for duplicate import bindings (import X + import X → TS2300 on both)
-            // Allowed: import + interface (value+type merge OK)
-            val importCount = group.count { it.kind == "import" }
-            if (importCount >= 2) {
-                for (decl in group.filter { it.kind == "import" }) {
-                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
-                }
-            }
-
-            // 17.127: TS2395 — "Individual declarations in merged declaration must be all
-            // exported or all local." Narrow scope: fires only for default imports paired
-            // with an exported var/let/const declaration of the same name. (Function /
-            // class / namespace / interface forms route through TS2440 instead — the
-            // baseline reserves TS2395 for the var-style overlap case.) Excluded entirely
-            // when the matching non-import decl is unresolved or when the import comes
-            // from a module-not-found path (TS2307 takes priority).
-            if (group.size >= 2 && group.any { it.kind == "import" }) {
-                fun declIsExportedVar(d: DeclInfo): Boolean {
-                    val s = d.stmt as? VariableStatement ?: return false
-                    return ModifierFlag.Export in s.modifiers
-                }
-                val isDefaultImport = group.any { d ->
-                    if (d.kind != "import") return@any false
-                    val s = (d.stmt as? ImportDeclaration) ?: return@any false
-                    s.importClause?.name === d.nameNode
-                }
-                val anyExportedVar = group.any { declIsExportedVar(it) }
-                if (isDefaultImport && anyExportedVar) {
-                    for (decl in group) {
-                        val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
-                            else (decl.nameNode.end - decl.nameNode.pos)
-                        val (line, character) = getLineAndCharacterOfPosition(source, decl.nameNode.pos)
-                        diagnostics.add(Diagnostic(
-                            message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
-                            category = DiagnosticCategory.Error,
-                            code = 2395,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = decl.nameNode.pos,
-                            length = nameLen,
-                        ))
-                    }
-                }
-            }
-
-            // TS2432: In merged enums, only one declaration can omit initializer for first element.
-            // Also check TS2300 for duplicate member names across merged enum declarations.
-            if (hasEnum) {
-                val enumDecls = group.filter { it.kind == "enum" }.mapNotNull { it.stmt as? EnumDeclaration }
-                if (enumDecls.size >= 2) {
-                    // TS2432: count how many declarations have their first member without an initializer
-                    val declsWithUninitFirst = enumDecls.filter { decl ->
-                        decl.members.isNotEmpty() && decl.members.first().initializer == null
-                    }
-                    if (declsWithUninitFirst.size >= 2) {
-                        // Fire TS2432 on all but the first one that omits the initializer
-                        for (decl in declsWithUninitFirst.drop(1)) {
-                            val firstMember = decl.members.first()
-                            val memberName = firstMember.name
-                            val start = memberName.pos
-                            val nameLen = when (memberName) {
-                                is Identifier -> memberName.text.length
-                                is StringLiteralNode -> memberName.text.length + 2
-                                else -> memberName.end - memberName.pos
-                            }
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "In an enum with multiple declarations, only one declaration can omit an initializer for its first enum element.",
-                                category = DiagnosticCategory.Error,
-                                code = 2432,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = nameLen,
-                            ))
-                        }
-                    }
-                    // TS2300 for duplicate member names across merged enum declarations
-                    val allMemberNames = mutableMapOf<String, MutableList<Node>>()
-                    for (decl in enumDecls) {
-                        for (m in decl.members) {
-                            val text = when (val n = m.name) {
-                                is Identifier -> n.text
-                                is StringLiteralNode -> n.text
-                                else -> continue
-                            }
-                            allMemberNames.getOrPut(text) { mutableListOf() }.add(m.name)
-                        }
-                    }
-                    for ((name, nodes) in allMemberNames) {
-                        if (nodes.size >= 2) {
-                            for (node in nodes) {
-                                emitDuplicate2300(name, node, source, fileName)
-                            }
-                        }
-                    }
-                }
-            }
+            cddCheckMergedEnums(group, hasEnum, source, fileName)
 
             // TS2428: All declarations of class/interface must have identical type parameters.
             // Applies to interface+interface AND class+interface merges (NOT class+class —
@@ -41546,156 +41450,7 @@ class Checker(
             // CONSTRAINT text (normalized whitespace), so `<T extends Function>` vs
             // `<T extends Different>` is detected even though the names match.
             val hasInterface = "interface" in kinds
-            if (hasInterface) {
-                data class GenericInfo(val nameNode: Identifier, val tps: List<TypeParameter>?, val kind: String)
-                val mergeable = group.mapNotNull { d ->
-                    when (val s = d.stmt) {
-                        is InterfaceDeclaration -> GenericInfo(s.name, s.typeParameters, "interface")
-                        is ClassDeclaration -> s.name?.let { GenericInfo(it, s.typeParameters, "class") }
-                        else -> null
-                    }
-                }
-                val ifaceCount = mergeable.count { it.kind == "interface" }
-                val classCount = mergeable.count { it.kind == "class" }
-                val applies = ifaceCount >= 2 || (classCount == 1 && ifaceCount >= 1)
-                if (applies) {
-                    data class TpSig(val name: String, val constraint: String?, val default: String?)
-                    // Extract a TypeNode's source text up to its true balanced end.
-                    // `node.end` overshoots by one token (documented gotcha), so naive
-                    // substring(pos, end) for `T = number, U = string` yields `number,`.
-                    // Walk forward from pos, balancing `<({[` against `>)}]`, stopping
-                    // at the first unbalanced closer or at `,` / `=` at depth 0.
-                    fun typeText(n: TypeNode?): String? {
-                        if (n == null) return null
-                        var i = n.pos
-                        var lastNonTrivia = i - 1
-                        var depth = 0
-                        val end = minOf(n.end, source.length)
-                        while (i < end) {
-                            val c = source[i]
-                            when (c) {
-                                '<', '(', '[', '{' -> { depth++; lastNonTrivia = i }
-                                '>', ')', ']', '}' -> {
-                                    if (depth == 0) break
-                                    depth--; lastNonTrivia = i
-                                }
-                                ',', '=' -> if (depth == 0) break else lastNonTrivia = i
-                                ' ', '\t', '\n', '\r' -> { /* trivia */ }
-                                else -> lastNonTrivia = i
-                            }
-                            i++
-                        }
-                        if (lastNonTrivia < n.pos) return null
-                        return source.substring(n.pos, lastNonTrivia + 1)
-                            .trim().replace(Regex("\\s+"), " ")
-                    }
-                    fun signature(tps: List<TypeParameter>?): List<TpSig> {
-                        if (tps.isNullOrEmpty()) return emptyList()
-                        return tps.map { TpSig(it.name.text, typeText(it.constraint), typeText(it.default)) }
-                    }
-                    // TypeScript builds a canonical "merged" type-parameter list: at each
-                    // position, the merge supplies a default if ANY declaration provided one
-                    // at that position. TS2428 fires when the canonical merge is impossible:
-                    //   - At any position: declarations with that position have differing
-                    //     names → error.
-                    //   - At any position: declarations with that position have differing
-                    //     constraints (including one-has + other-doesn't) → error.
-                    //   - At any position: two declarations supply DIFFERENT non-null
-                    //     defaults → error.
-                    //   - At any position: NO declaration at that position supplies a
-                    //     default AND a shorter declaration omits the position entirely →
-                    //     error (the merge can't fill the gap).
-                    val sigs = mergeable.map { signature(it.tps) }
-                    val maxLen = sigs.maxOf { it.size }
-                    var mismatch = false
-                    for (k in 0 until maxLen) {
-                        val present = sigs.filter { k < it.size }.map { it[k] }
-                        if (present.isEmpty()) continue
-                        if (present.distinctBy { it.name }.size > 1) { mismatch = true; break }
-                        if (present.distinctBy { it.constraint }.size > 1) { mismatch = true; break }
-                        val nonNullDefaults = present.mapNotNull { it.default }.distinct()
-                        if (nonNullDefaults.size > 1) { mismatch = true; break }
-                        val shorterCount = sigs.count { k >= it.size }
-                        if (shorterCount > 0 && nonNullDefaults.isEmpty()) { mismatch = true; break }
-                    }
-                    if (mismatch) {
-                        for (info in mergeable) {
-                            val start = info.nameNode.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "All declarations of '${info.nameNode.text}' must have identical type parameters.",
-                                category = DiagnosticCategory.Error,
-                                code = 2428,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = info.nameNode.text.length,
-                            ))
-                        }
-                    }
-                    // TS2687: all declarations of a merged INSTANCE member must have identical
-                    // modifiers (visibility / readonly / optional). Only instance Property/Method
-                    // members are compared — static members live on the static side and have no
-                    // interface partner (so a static-vs-instance same-name pair must NOT trip this).
-                    val memberSigs = mutableMapOf<String, MutableList<Pair<String, NameNode>>>()
-                    for (d in group) {
-                        val members: List<ClassElement> = when (val s = d.stmt) {
-                            is InterfaceDeclaration -> s.members
-                            is ClassDeclaration -> s.members
-                            else -> emptyList()
-                        }
-                        for (m in members) {
-                            val nameNode: NameNode
-                            val modifiers: Set<ModifierFlag>
-                            val optional: Boolean
-                            when (m) {
-                                is PropertyDeclaration -> { nameNode = m.name; modifiers = m.modifiers; optional = m.questionToken }
-                                is MethodDeclaration -> { nameNode = m.name; modifiers = m.modifiers; optional = m.questionToken }
-                                else -> continue
-                            }
-                            if (ModifierFlag.Static in modifiers) continue
-                            val text = when (nameNode) {
-                                is Identifier -> nameNode.text
-                                is StringLiteralNode -> nameNode.text
-                                is NumericLiteralNode -> nameNode.text
-                                else -> continue
-                            }
-                            if (text.isEmpty() || text == "new") continue
-                            val vis = when {
-                                ModifierFlag.Private in modifiers -> "private"
-                                ModifierFlag.Protected in modifiers -> "protected"
-                                else -> "public"
-                            }
-                            val sig = "$vis|${ModifierFlag.Readonly in modifiers}|$optional"
-                            memberSigs.getOrPut(text) { mutableListOf() }.add(sig to nameNode)
-                        }
-                    }
-                    for ((memberName, entries) in memberSigs) {
-                        if (entries.size >= 2 && entries.map { it.first }.distinct().size > 1) {
-                            for ((_, nameNode) in entries) {
-                                val start = nameNode.pos
-                                val nameLen = when (nameNode) {
-                                    is Identifier -> nameNode.text.length
-                                    is StringLiteralNode -> nameNode.text.length + 2
-                                    else -> nameNode.end - nameNode.pos
-                                }
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "All declarations of '$memberName' must have identical modifiers.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2687,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = nameLen,
-                                ))
-                            }
-                        }
-                    }
-                }
-            }
+            cddCheckMergedTypeParameters(group, hasInterface, source, fileName)
 
             // TS2567: Enum declarations can only merge with namespace or other enum declarations
             if (hasEnum && (hasClass || hasFunc || hasVar || hasInterface)) {
@@ -41732,357 +41487,19 @@ class Checker(
                     }
                 } else false
 
-                // TS2395: All declarations in a merged name must be uniformly exported or local.
-                // Check per "declaration space": Type (interface/class), Value (class/function/var),
-                // Namespace. Each space independently must have consistent export status.
-                // TypeScript models: interface→Type, class→Type+Value, function→Value,
-                // var→Value, namespace→Namespace. Only spaces with 2+ members are checked.
-                // Type aliases (not tracked here) are Type-only and transparent.
-                fun isExported(decl: DeclInfo): Boolean {
-                    return when (val s = decl.stmt) {
-                        is FunctionDeclaration -> ModifierFlag.Export in s.modifiers
-                        is VariableStatement -> ModifierFlag.Export in s.modifiers
-                        is ClassDeclaration -> ModifierFlag.Export in s.modifiers
-                        is ModuleDeclaration -> ModifierFlag.Export in s.modifiers
-                        is InterfaceDeclaration -> ModifierFlag.Export in s.modifiers
-                        else -> false
-                    }
-                }
-                // Classify each declaration into spaces
-                val typeSpaceDecls = group.filter { it.kind == "interface" || it.kind == "class" }
-                // For value space: exclude pure function overloads (handled by TS2383/TS2384/TS2385).
-                // Instantiated namespaces ALSO occupy the value space — they merge with class/function/var.
-                val instantiatedNsDecls = group.filter { it.kind == "namespace" }.filter { decl ->
-                    (decl.stmt as? ModuleDeclaration)?.let { isNamespaceInstantiated(it) } == true
-                }
-                val valueSpaceDecls = if (group.all { it.kind == "function" }) emptyList()
-                    else group.filter { it.kind == "class" || it.kind == "function" || it.kind == "var" } + instantiatedNsDecls
-                val namespaceSpaceDecls = group.filter { it.kind == "namespace" }
-                // Collect 2395-worthy positions across spaces and emit each position at most once.
-                val all2395Decls = linkedMapOf<Int, DeclInfo>()
-                for (spaceDecls in listOf(typeSpaceDecls, valueSpaceDecls, namespaceSpaceDecls)) {
-                    if (spaceDecls.size < 2) continue
-                    val exported = spaceDecls.filter { isExported(it) }
-                    val nonExported = spaceDecls.filter { !isExported(it) }
-                    if (exported.isNotEmpty() && nonExported.isNotEmpty()) {
-                        for (decl in (exported + nonExported)) {
-                            all2395Decls.getOrPut(decl.nameNode.pos) { decl }
-                        }
-                    }
-                }
-                val emitted2395 = all2395Decls.isNotEmpty()
-                for (decl in all2395Decls.values) {
-                    val start = decl.nameNode.pos
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
-                        category = DiagnosticCategory.Error,
-                        code = 2395,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = decl.name.length,
-                    ))
-                }
-                // Note: TS2434 (namespace-before-class/function merge) may fire alongside TS2395
-                // on the same declaration, so we do NOT `continue` after emitting TS2395.
-
-                // TS2434: A namespace declaration cannot be located prior to a class or function
-                // with which it is merged. Only fires for instantiated namespaces.
-                if (hasNamespace && (hasClass || hasFunc) && !isAmbientContext) {
-                    val namespaceDecls = group.filter { it.kind == "namespace" }
-                    // Only non-declare class/function declarations trigger TS2434
-                    val classFuncDecls = group.filter { decl ->
-                        (decl.kind == "class" || decl.kind == "function") &&
-                        when (val s = decl.stmt) {
-                            is ClassDeclaration -> ModifierFlag.Declare !in s.modifiers
-                            is FunctionDeclaration -> ModifierFlag.Declare !in s.modifiers
-                            else -> true
-                        }
-                    }
-                    if (classFuncDecls.isEmpty()) {} else {
-                    // Find instantiated namespace decls that appear before any non-declare class/function decl
-                    val firstClassFuncIdx = statements.indexOfFirst { s ->
-                        classFuncDecls.any { it.stmt === s }
-                    }
-                    if (firstClassFuncIdx >= 0) {
-                        for (nsDecl in namespaceDecls) {
-                            val modDecl = nsDecl.stmt as? ModuleDeclaration ?: continue
-                            // Only instantiated namespaces trigger TS2434
-                            if (!isNamespaceInstantiated(modDecl)) continue
-                            val nsIdx = statements.indexOfFirst { it === modDecl }
-                            if (nsIdx >= 0 && nsIdx < firstClassFuncIdx) {
-                                val start = nsDecl.nameNode.pos
-                                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                diagnostics.add(Diagnostic(
-                                    message = "A namespace declaration cannot be located prior to a class or function with which it is merged.",
-                                    category = DiagnosticCategory.Error,
-                                    code = 2434,
-                                    fileName = fileName,
-                                    line = line,
-                                    character = character,
-                                    start = start,
-                                    length = nsDecl.name.length,
-                                ))
-                            }
-                        }
-                    }
-                    }
-                }
+                val emitted2395 = cddCheckExportUniformity(
+                    statements, group, hasClass, hasFunc, hasNamespace,
+                    isAmbientContext, source, fileName,
+                )
                 // Skip TS2300/TS2393/TS2813/etc. when TS2395 already fired — those checks are
                 // superseded by TS2395's "all exported or all local" category.
                 if (emitted2395) continue
 
-                // TS2393: Duplicate function implementation — two functions both with bodies
-                // Fires regardless of other declaration kinds (alongside TS2300 if var/class also present)
-                if (hasFunc) {
-                    val funcDecls = group.filter { it.kind == "function" }
-                    val funcBodies = funcDecls.filter { decl ->
-                        val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
-                        hasPresentBody(funcStmt.body)
-                    }
-                    if (funcBodies.size >= 2) {
-                        for (decl in funcBodies) {
-                            val start = decl.nameNode.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Duplicate function implementation.",
-                                category = DiagnosticCategory.Error,
-                                code = 2393,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = decl.name.length,
-                            ))
-                        }
-                        // Only skip TS2300 check if ONLY functions are involved (pure overload scenario)
-                        if (!hasClass && !hasVar && !hasNamespace) continue
-                    }
-                }
-
-                // TS2813/TS2814: function + non-ambient class conflict
-                if (hasClass && hasFunc) {
-                    val funcDecls = group.filter { it.kind == "function" }
-                    val classDecls = group.filter { it.kind == "class" }
-                    // Inside a `declare namespace` (or .d.ts ambient context) the class and
-                    // function members are IMPLICITLY ambient even without their own `declare`
-                    // modifier — tsc never emits TS2813/TS2814 there (the messages literally say
-                    // "non-ambient" / "with bodies"), so the class+function overload merge is legal.
-                    val nonDeclFuncs = if (isAmbientContext) emptyList() else funcDecls.filter { decl ->
-                        val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
-                        ModifierFlag.Declare !in funcStmt.modifiers
-                    }
-                    val nonAmbientClasses = if (isAmbientContext) emptyList() else classDecls.filter { decl ->
-                        val classStmt = decl.stmt as? ClassDeclaration ?: return@filter false
-                        ModifierFlag.Declare !in classStmt.modifiers
-                    }
-                    if (nonDeclFuncs.isNotEmpty() && nonAmbientClasses.isNotEmpty()) {
-                        // Any non-declare function (with or without body) + non-ambient class
-                        // → TS2813 for class, TS2814 for function
-                        // Related info points to the first non-ambient class
-                        val relatedClass = nonAmbientClasses.first()
-                        val classStart = relatedClass.nameNode.pos
-                        val (classLine, classChar) = getLineAndCharacterOfPosition(source, classStart)
-                        val relatedInfo = Diagnostic(
-                            message = "Consider adding a 'declare' modifier to this class.",
-                            category = DiagnosticCategory.Message,
-                            code = 6506,
-                            fileName = fileName,
-                            line = classLine,
-                            character = classChar,
-                            start = classStart,
-                            length = relatedClass.name.length,
-                        )
-                        // TS2814 for all non-declare functions
-                        for (decl in nonDeclFuncs) {
-                            val start = decl.nameNode.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Function with bodies can only merge with classes that are ambient.",
-                                category = DiagnosticCategory.Error,
-                                code = 2814,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = decl.name.length,
-                                relatedInformation = listOf(relatedInfo),
-                            ))
-                        }
-                        // TS2813 for non-ambient classes
-                        for (decl in nonAmbientClasses) {
-                            val start = decl.nameNode.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Class declaration cannot implement overload list for '${decl.name}'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2813,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = decl.name.length,
-                                relatedInformation = listOf(relatedInfo),
-                            ))
-                        }
-                        // When there's also a var declaration, TS2300 fires for ALL (class+function+var)
-                        // When it's only class+function (no var), skip TS2300 (only TS2813/TS2814)
-                        if (!hasVar) continue
-                        // Fall through to emit TS2300 below (isDuplicate check)
-                    }
-
-                    // Otherwise: declare function + declare class is a legal merge.
-                    // declare class + non-declare function is ALSO legal (class provides type shape,
-                    // function provides implementation — e.g. targetTypeTest1.ts).
-                    // Only emit TS2300 for non-declare class + non-declare function (handled above via
-                    // nonAmbientClasses check) or non-declare class + non-declare function without body.
-                    val allClassesDeclare = isAmbientContext || classDecls.all { decl ->
-                        val classStmt = decl.stmt as? ClassDeclaration ?: return@all false
-                        ModifierFlag.Declare in classStmt.modifiers
-                    }
-                    // If all classes are ambient (declare), the function implements them — legal merge
-                    if (!allClassesDeclare) {
-                        // Non-ambient class + functions (without body triggers TS2813/TS2814 above)
-                        // Non-ambient class + declare function → TS2300
-                        for (decl in group) {
-                            emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
-                        }
-                    }
-                    continue
-                }
-
-                // TS2323: Cannot redeclare exported variable 'X' — fires when multiple
-                // exported var declarations have the same name (var+var is normally legal via
-                // hoisting, but exported vars occupy a fixed binding slot)
-                val varCount = group.count { it.kind == "var" }
-                if (!hasClass && !hasFunc && !hasEnum && !hasNamespace && varCount >= 2) {
-                    val allVarsExported = group.filter { it.kind == "var" }.all { decl ->
-                        val varStmt = decl.stmt as? VariableStatement ?: return@all false
-                        ModifierFlag.Export in varStmt.modifiers
-                    }
-                    if (allVarsExported) {
-                        for (decl in group.filter { it.kind == "var" }) {
-                            val start = decl.nameNode.pos
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Cannot redeclare exported variable '${decl.name}'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2323,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = decl.name.length,
-                            ))
-                        }
-                        continue
-                    }
-                }
-
-                // TS2451: Cannot redeclare block-scoped variable — fires when ALL
-                // declarations are block-scoped (let or const). When there's a mix of
-                // var and let/const, TS2300 fires instead (handled below).
-                val hasLet = "let" in kinds
-                val hasConst = "const" in kinds
-                val hasBlockScoped = hasLet || hasConst
-                val hasNamespace2 = "namespace" in kinds
-                val hasType = "type" in kinds
-
-                // TS2451: type alias + let/const (no other kinds). This is a JS-ONLY
-                // rule: in a `.js` file a `type X` alias is illegal (TS8008) so it does
-                // NOT occupy the TYPE space, and tsc treats `type X` + `const X` as a
-                // value-side block-scoped redeclaration (jsdocTypedefNoCrash2). In a
-                // `.ts`/`.tsx` file a type alias and a value const legally COEXIST
-                // (different declaration spaces) — NO error (longObjectInstantiationChain1's
-                // `type merge<…>` + `declare const merge`). So gate to JS-like files.
-                if (hasType && hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && group.size >= 2 && isJsLikeFileName(fileName)) {
-                    for (decl in group) {
-                        val start = decl.nameNode.pos
-                        val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
-                            else (decl.nameNode.end - decl.nameNode.pos)
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Cannot redeclare block-scoped variable '${decl.name}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2451,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = nameLen,
-                        ))
-                    }
-                    continue
-                }
-
-                // 17.127: skip TS2451 when an import binding is in the group — TS2395
-                // (mixed export status) and TS2440 (import conflicts with local) are emitted
-                // separately at their own checks and replace the redeclare diagnostic.
-                val hasImport = "import" in kinds || "import=" in kinds
-                val allBlockScoped = hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && !hasImport
-                // A `type` alias occupies the TYPE space, NOT the block-scoped VALUE space (in
-                // .ts/.tsx), so it neither counts toward NOR receives a block-scoped redeclaration
-                // diagnostic — only the let/const declarations do. (The JS-only `type X` + `const X`
-                // case, where the type IS a value-space redeclaration, is handled above at the
-                // isJsLikeFileName branch.) Counting `group.size` instead FP'd TS2451 on a `.ts`
-                // `type X` + `declare const X` pair (longObjectInstantiationChain1 `type merge` +
-                // `declare const merge`): only 1 block-scoped decl, no redeclaration.
-                val blockScopedDecls = group.filter { it.kind == "let" || it.kind == "const" }
-                if (allBlockScoped && blockScopedDecls.size >= 2) {
-                    for (decl in blockScopedDecls) {
-                        val start = decl.nameNode.pos
-                        val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
-                            else (decl.nameNode.end - decl.nameNode.pos)
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Cannot redeclare block-scoped variable '${decl.name}'.",
-                            category = DiagnosticCategory.Error,
-                            code = 2451,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = nameLen,
-                        ))
-                    }
-                    continue
-                }
-                // When block-scoped (let/const) mixes with var/class/func (not interface/namespace
-                // which are legal merges), emit TS2451 for const/class conflicts, TS2300 for others
-                if (hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)) {
-                    // TS2451 when block-scoped conflicts with class (TypeScript uses TS2451 for this).
-                    // Also: a block-scoped (let/const) declared FIRST that conflicts with a `var`
-                    // (no function/class/enum in the group) is a block-scoped redeclaration (TS2451);
-                    // a `var` declared first makes the symbol function-scoped → TS2300. (Order matters.)
-                    val firstDecl = group.minByOrNull { it.nameNode.pos }
-                    val firstIsBlockScoped = firstDecl?.kind == "let" || firstDecl?.kind == "const"
-                    val useTs2451 = (hasBlockScoped && hasClass && !hasVar && !hasFunc && !hasEnum) ||
-                        (hasBlockScoped && hasVar && !hasFunc && !hasClass && !hasEnum && firstIsBlockScoped)
-                    for (decl in group) {
-                        if (decl.kind == "interface" || decl.kind == "namespace") continue
-                        if (useTs2451) {
-                            val start = decl.nameNode.pos
-                            val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
-                                else (decl.nameNode.end - decl.nameNode.pos)
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "Cannot redeclare block-scoped variable '${decl.name}'.",
-                                category = DiagnosticCategory.Error,
-                                code = 2451,
-                                fileName = fileName,
-                                line = line,
-                                character = character,
-                                start = start,
-                                length = nameLen,
-                            ))
-                        } else {
-                            emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
-                        }
-                    }
-                    continue
-                }
+                if (cddCheckValueRedeclarations(
+                        group, kinds, hasVar, hasClass, hasEnum, hasFunc, hasInterface,
+                        hasNamespace, isAmbientContext, source, fileName,
+                    )
+                ) continue
 
                 val isDuplicate = (hasClass && classCount >= 2) ||
                         (hasVar && (hasClass || hasFunc)) ||
@@ -42095,6 +41512,714 @@ class Checker(
                 }
             }
         }
+    }
+
+    /**
+     * (JIT.1)(d) round 812 — the IMPORT-binding duplicates of
+     * [checkDuplicateDeclarations]: TS2300 for two `import =` declarations or two
+     * import bindings of one name, and 17.127's TS2395 for a default import paired
+     * with an exported var/let/const.
+     *
+     * Reached only for a group of two or more declarations SHARING a name, which
+     * is what the entry's `if (group.size < 2) continue` selects; the collection
+     * loop that every statement list pays for stays in the entry.
+     */
+    private fun cddCheckImportBindings(
+        group: List<DeclInfo>,
+        kinds: Set<String>,
+        source: String,
+        fileName: String,
+    ) {
+        // Check for duplicate import= declarations
+        val hasImportEq = "import=" in kinds
+        val importEqCount = group.count { it.kind == "import=" }
+        if (hasImportEq && importEqCount >= 2) {
+            for (decl in group.filter { it.kind == "import=" }) {
+                emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+            }
+        }
+
+        // Check for duplicate import bindings (import X + import X → TS2300 on both)
+        // Allowed: import + interface (value+type merge OK)
+        val importCount = group.count { it.kind == "import" }
+        if (importCount >= 2) {
+            for (decl in group.filter { it.kind == "import" }) {
+                emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+            }
+        }
+
+        // 17.127: TS2395 — "Individual declarations in merged declaration must be all
+        // exported or all local." Narrow scope: fires only for default imports paired
+        // with an exported var/let/const declaration of the same name. (Function /
+        // class / namespace / interface forms route through TS2440 instead — the
+        // baseline reserves TS2395 for the var-style overlap case.) Excluded entirely
+        // when the matching non-import decl is unresolved or when the import comes
+        // from a module-not-found path (TS2307 takes priority).
+        if (group.size >= 2 && group.any { it.kind == "import" }) {
+            fun declIsExportedVar(d: DeclInfo): Boolean {
+                val s = d.stmt as? VariableStatement ?: return false
+                return ModifierFlag.Export in s.modifiers
+            }
+            val isDefaultImport = group.any { d ->
+                if (d.kind != "import") return@any false
+                val s = (d.stmt as? ImportDeclaration) ?: return@any false
+                s.importClause?.name === d.nameNode
+            }
+            val anyExportedVar = group.any { declIsExportedVar(it) }
+            if (isDefaultImport && anyExportedVar) {
+                for (decl in group) {
+                    val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
+                        else (decl.nameNode.end - decl.nameNode.pos)
+                    val (line, character) = getLineAndCharacterOfPosition(source, decl.nameNode.pos)
+                    diagnostics.add(Diagnostic(
+                        message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
+                        category = DiagnosticCategory.Error,
+                        code = 2395,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = decl.nameNode.pos,
+                        length = nameLen,
+                    ))
+                }
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 812 — the merged-ENUM checks of
+     * [checkDuplicateDeclarations]: TS2432 (only one declaration of a merged enum
+     * may omit the first member's initializer) and TS2300 for a member name
+     * declared in two of the merged enum bodies.
+     */
+    private fun cddCheckMergedEnums(
+        group: List<DeclInfo>,
+        hasEnum: Boolean,
+        source: String,
+        fileName: String,
+    ) {
+        // TS2432: In merged enums, only one declaration can omit initializer for first element.
+        // Also check TS2300 for duplicate member names across merged enum declarations.
+        if (hasEnum) {
+            val enumDecls = group.filter { it.kind == "enum" }.mapNotNull { it.stmt as? EnumDeclaration }
+            if (enumDecls.size >= 2) {
+                // TS2432: count how many declarations have their first member without an initializer
+                val declsWithUninitFirst = enumDecls.filter { decl ->
+                    decl.members.isNotEmpty() && decl.members.first().initializer == null
+                }
+                if (declsWithUninitFirst.size >= 2) {
+                    // Fire TS2432 on all but the first one that omits the initializer
+                    for (decl in declsWithUninitFirst.drop(1)) {
+                        val firstMember = decl.members.first()
+                        val memberName = firstMember.name
+                        val start = memberName.pos
+                        val nameLen = when (memberName) {
+                            is Identifier -> memberName.text.length
+                            is StringLiteralNode -> memberName.text.length + 2
+                            else -> memberName.end - memberName.pos
+                        }
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "In an enum with multiple declarations, only one declaration can omit an initializer for its first enum element.",
+                            category = DiagnosticCategory.Error,
+                            code = 2432,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = nameLen,
+                        ))
+                    }
+                }
+                // TS2300 for duplicate member names across merged enum declarations
+                val allMemberNames = mutableMapOf<String, MutableList<Node>>()
+                for (decl in enumDecls) {
+                    for (m in decl.members) {
+                        val text = when (val n = m.name) {
+                            is Identifier -> n.text
+                            is StringLiteralNode -> n.text
+                            else -> continue
+                        }
+                        allMemberNames.getOrPut(text) { mutableListOf() }.add(m.name)
+                    }
+                }
+                for ((name, nodes) in allMemberNames) {
+                    if (nodes.size >= 2) {
+                        for (node in nodes) {
+                            emitDuplicate2300(name, node, source, fileName)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 812 — TS2428 of [checkDuplicateDeclarations]: all
+     * declarations of a merged interface (or a class merged with an interface)
+     * must have IDENTICAL type parameters — names, constraint text and defaults,
+     * compared as normalised source text.
+     *
+     * `hasInterface` is computed by the caller and STAYS there: the V region's
+     * TS2451 gates read it too, so it is not this block's to own.
+     */
+    private fun cddCheckMergedTypeParameters(
+        group: List<DeclInfo>,
+        hasInterface: Boolean,
+        source: String,
+        fileName: String,
+    ) {
+        if (hasInterface) {
+            data class GenericInfo(val nameNode: Identifier, val tps: List<TypeParameter>?, val kind: String)
+            val mergeable = group.mapNotNull { d ->
+                when (val s = d.stmt) {
+                    is InterfaceDeclaration -> GenericInfo(s.name, s.typeParameters, "interface")
+                    is ClassDeclaration -> s.name?.let { GenericInfo(it, s.typeParameters, "class") }
+                    else -> null
+                }
+            }
+            val ifaceCount = mergeable.count { it.kind == "interface" }
+            val classCount = mergeable.count { it.kind == "class" }
+            val applies = ifaceCount >= 2 || (classCount == 1 && ifaceCount >= 1)
+            if (applies) {
+                data class TpSig(val name: String, val constraint: String?, val default: String?)
+                // Extract a TypeNode's source text up to its true balanced end.
+                // `node.end` overshoots by one token (documented gotcha), so naive
+                // substring(pos, end) for `T = number, U = string` yields `number,`.
+                // Walk forward from pos, balancing `<({[` against `>)}]`, stopping
+                // at the first unbalanced closer or at `,` / `=` at depth 0.
+                fun typeText(n: TypeNode?): String? {
+                    if (n == null) return null
+                    var i = n.pos
+                    var lastNonTrivia = i - 1
+                    var depth = 0
+                    val end = minOf(n.end, source.length)
+                    while (i < end) {
+                        val c = source[i]
+                        when (c) {
+                            '<', '(', '[', '{' -> { depth++; lastNonTrivia = i }
+                            '>', ')', ']', '}' -> {
+                                if (depth == 0) break
+                                depth--; lastNonTrivia = i
+                            }
+                            ',', '=' -> if (depth == 0) break else lastNonTrivia = i
+                            ' ', '\t', '\n', '\r' -> { /* trivia */ }
+                            else -> lastNonTrivia = i
+                        }
+                        i++
+                    }
+                    if (lastNonTrivia < n.pos) return null
+                    return source.substring(n.pos, lastNonTrivia + 1)
+                        .trim().replace(Regex("\\s+"), " ")
+                }
+                fun signature(tps: List<TypeParameter>?): List<TpSig> {
+                    if (tps.isNullOrEmpty()) return emptyList()
+                    return tps.map { TpSig(it.name.text, typeText(it.constraint), typeText(it.default)) }
+                }
+                // TypeScript builds a canonical "merged" type-parameter list: at each
+                // position, the merge supplies a default if ANY declaration provided one
+                // at that position. TS2428 fires when the canonical merge is impossible:
+                //   - At any position: declarations with that position have differing
+                //     names → error.
+                //   - At any position: declarations with that position have differing
+                //     constraints (including one-has + other-doesn't) → error.
+                //   - At any position: two declarations supply DIFFERENT non-null
+                //     defaults → error.
+                //   - At any position: NO declaration at that position supplies a
+                //     default AND a shorter declaration omits the position entirely →
+                //     error (the merge can't fill the gap).
+                val sigs = mergeable.map { signature(it.tps) }
+                val maxLen = sigs.maxOf { it.size }
+                var mismatch = false
+                for (k in 0 until maxLen) {
+                    val present = sigs.filter { k < it.size }.map { it[k] }
+                    if (present.isEmpty()) continue
+                    if (present.distinctBy { it.name }.size > 1) { mismatch = true; break }
+                    if (present.distinctBy { it.constraint }.size > 1) { mismatch = true; break }
+                    val nonNullDefaults = present.mapNotNull { it.default }.distinct()
+                    if (nonNullDefaults.size > 1) { mismatch = true; break }
+                    val shorterCount = sigs.count { k >= it.size }
+                    if (shorterCount > 0 && nonNullDefaults.isEmpty()) { mismatch = true; break }
+                }
+                if (mismatch) {
+                    for (info in mergeable) {
+                        val start = info.nameNode.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "All declarations of '${info.nameNode.text}' must have identical type parameters.",
+                            category = DiagnosticCategory.Error,
+                            code = 2428,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = info.nameNode.text.length,
+                        ))
+                    }
+                }
+                // TS2687: all declarations of a merged INSTANCE member must have identical
+                // modifiers (visibility / readonly / optional). Only instance Property/Method
+                // members are compared — static members live on the static side and have no
+                // interface partner (so a static-vs-instance same-name pair must NOT trip this).
+                val memberSigs = mutableMapOf<String, MutableList<Pair<String, NameNode>>>()
+                for (d in group) {
+                    val members: List<ClassElement> = when (val s = d.stmt) {
+                        is InterfaceDeclaration -> s.members
+                        is ClassDeclaration -> s.members
+                        else -> emptyList()
+                    }
+                    for (m in members) {
+                        val nameNode: NameNode
+                        val modifiers: Set<ModifierFlag>
+                        val optional: Boolean
+                        when (m) {
+                            is PropertyDeclaration -> { nameNode = m.name; modifiers = m.modifiers; optional = m.questionToken }
+                            is MethodDeclaration -> { nameNode = m.name; modifiers = m.modifiers; optional = m.questionToken }
+                            else -> continue
+                        }
+                        if (ModifierFlag.Static in modifiers) continue
+                        val text = when (nameNode) {
+                            is Identifier -> nameNode.text
+                            is StringLiteralNode -> nameNode.text
+                            is NumericLiteralNode -> nameNode.text
+                            else -> continue
+                        }
+                        if (text.isEmpty() || text == "new") continue
+                        val vis = when {
+                            ModifierFlag.Private in modifiers -> "private"
+                            ModifierFlag.Protected in modifiers -> "protected"
+                            else -> "public"
+                        }
+                        val sig = "$vis|${ModifierFlag.Readonly in modifiers}|$optional"
+                        memberSigs.getOrPut(text) { mutableListOf() }.add(sig to nameNode)
+                    }
+                }
+                for ((memberName, entries) in memberSigs) {
+                    if (entries.size >= 2 && entries.map { it.first }.distinct().size > 1) {
+                        for ((_, nameNode) in entries) {
+                            val start = nameNode.pos
+                            val nameLen = when (nameNode) {
+                                is Identifier -> nameNode.text.length
+                                is StringLiteralNode -> nameNode.text.length + 2
+                                else -> nameNode.end - nameNode.pos
+                            }
+                            val (line, character) = getLineAndCharacterOfPosition(source, start)
+                            diagnostics.add(Diagnostic(
+                                message = "All declarations of '$memberName' must have identical modifiers.",
+                                category = DiagnosticCategory.Error,
+                                code = 2687,
+                                fileName = fileName,
+                                line = line,
+                                character = character,
+                                start = start,
+                                length = nameLen,
+                            ))
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * (JIT.1)(d) round 812 — TS2395 and TS2434 of [checkDuplicateDeclarations]:
+     * every declaration of a merged name must be uniformly exported or local
+     * (checked per declaration SPACE — type / value / namespace), and an
+     * instantiated namespace may not be located before the class or function it
+     * merges with.
+     *
+     * Returns whether TS2395 fired — **the one value that crosses a boundary in
+     * this split**. The caller reads it as `if (emitted2395) continue`, because
+     * TS2300/TS2393/TS2813/TS2451 are all superseded by the "all exported or all
+     * local" category. TS2434 deliberately fires ALONGSIDE TS2395, which is why
+     * it is inside this region rather than after the caller's `continue`.
+     */
+    private fun cddCheckExportUniformity(
+        statements: List<Statement>,
+        group: List<DeclInfo>,
+        hasClass: Boolean,
+        hasFunc: Boolean,
+        hasNamespace: Boolean,
+        isAmbientContext: Boolean,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        // TS2395: All declarations in a merged name must be uniformly exported or local.
+        // Check per "declaration space": Type (interface/class), Value (class/function/var),
+        // Namespace. Each space independently must have consistent export status.
+        // TypeScript models: interface→Type, class→Type+Value, function→Value,
+        // var→Value, namespace→Namespace. Only spaces with 2+ members are checked.
+        // Type aliases (not tracked here) are Type-only and transparent.
+        fun isExported(decl: DeclInfo): Boolean {
+            return when (val s = decl.stmt) {
+                is FunctionDeclaration -> ModifierFlag.Export in s.modifiers
+                is VariableStatement -> ModifierFlag.Export in s.modifiers
+                is ClassDeclaration -> ModifierFlag.Export in s.modifiers
+                is ModuleDeclaration -> ModifierFlag.Export in s.modifiers
+                is InterfaceDeclaration -> ModifierFlag.Export in s.modifiers
+                else -> false
+            }
+        }
+        // Classify each declaration into spaces
+        val typeSpaceDecls = group.filter { it.kind == "interface" || it.kind == "class" }
+        // For value space: exclude pure function overloads (handled by TS2383/TS2384/TS2385).
+        // Instantiated namespaces ALSO occupy the value space — they merge with class/function/var.
+        val instantiatedNsDecls = group.filter { it.kind == "namespace" }.filter { decl ->
+            (decl.stmt as? ModuleDeclaration)?.let { isNamespaceInstantiated(it) } == true
+        }
+        val valueSpaceDecls = if (group.all { it.kind == "function" }) emptyList()
+            else group.filter { it.kind == "class" || it.kind == "function" || it.kind == "var" } + instantiatedNsDecls
+        val namespaceSpaceDecls = group.filter { it.kind == "namespace" }
+        // Collect 2395-worthy positions across spaces and emit each position at most once.
+        val all2395Decls = linkedMapOf<Int, DeclInfo>()
+        for (spaceDecls in listOf(typeSpaceDecls, valueSpaceDecls, namespaceSpaceDecls)) {
+            if (spaceDecls.size < 2) continue
+            val exported = spaceDecls.filter { isExported(it) }
+            val nonExported = spaceDecls.filter { !isExported(it) }
+            if (exported.isNotEmpty() && nonExported.isNotEmpty()) {
+                for (decl in (exported + nonExported)) {
+                    all2395Decls.getOrPut(decl.nameNode.pos) { decl }
+                }
+            }
+        }
+        val emitted2395 = all2395Decls.isNotEmpty()
+        for (decl in all2395Decls.values) {
+            val start = decl.nameNode.pos
+            val (line, character) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Individual declarations in merged declaration '${decl.name}' must be all exported or all local.",
+                category = DiagnosticCategory.Error,
+                code = 2395,
+                fileName = fileName,
+                line = line,
+                character = character,
+                start = start,
+                length = decl.name.length,
+            ))
+        }
+        // Note: TS2434 (namespace-before-class/function merge) may fire alongside TS2395
+        // on the same declaration, so we do NOT `continue` after emitting TS2395.
+
+        // TS2434: A namespace declaration cannot be located prior to a class or function
+        // with which it is merged. Only fires for instantiated namespaces.
+        if (hasNamespace && (hasClass || hasFunc) && !isAmbientContext) {
+            val namespaceDecls = group.filter { it.kind == "namespace" }
+            // Only non-declare class/function declarations trigger TS2434
+            val classFuncDecls = group.filter { decl ->
+                (decl.kind == "class" || decl.kind == "function") &&
+                when (val s = decl.stmt) {
+                    is ClassDeclaration -> ModifierFlag.Declare !in s.modifiers
+                    is FunctionDeclaration -> ModifierFlag.Declare !in s.modifiers
+                    else -> true
+                }
+            }
+            if (classFuncDecls.isEmpty()) {} else {
+            // Find instantiated namespace decls that appear before any non-declare class/function decl
+            val firstClassFuncIdx = statements.indexOfFirst { s ->
+                classFuncDecls.any { it.stmt === s }
+            }
+            if (firstClassFuncIdx >= 0) {
+                for (nsDecl in namespaceDecls) {
+                    val modDecl = nsDecl.stmt as? ModuleDeclaration ?: continue
+                    // Only instantiated namespaces trigger TS2434
+                    if (!isNamespaceInstantiated(modDecl)) continue
+                    val nsIdx = statements.indexOfFirst { it === modDecl }
+                    if (nsIdx >= 0 && nsIdx < firstClassFuncIdx) {
+                        val start = nsDecl.nameNode.pos
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "A namespace declaration cannot be located prior to a class or function with which it is merged.",
+                            category = DiagnosticCategory.Error,
+                            code = 2434,
+                            fileName = fileName,
+                            line = line,
+                            character = character,
+                            start = start,
+                            length = nsDecl.name.length,
+                        ))
+                    }
+                }
+            }
+            }
+        }
+        return emitted2395
+    }
+
+    /**
+     * (JIT.1)(d) round 812 — the VALUE-space redeclaration checks of
+     * [checkDuplicateDeclarations]: TS2393 (duplicate function implementation),
+     * TS2813/TS2814 (function merged with a non-ambient class), TS2323 (redeclared
+     * exported variable) and the TS2451/TS2300 block-scoped cluster.
+     *
+     * `true` means "the caller must `continue` to the next name group": the seven
+     * `continue`s of this region that bound to the OUTER `for ((_, group) in
+     * byName)` loop are returns from here. The eighth, inside
+     * `for (decl in group)`, is untouched — which loop a `continue` binds to is a
+     * brace-matching question, and indentation is not evidence.
+     */
+    private fun cddCheckValueRedeclarations(
+        group: List<DeclInfo>,
+        kinds: Set<String>,
+        hasVar: Boolean,
+        hasClass: Boolean,
+        hasEnum: Boolean,
+        hasFunc: Boolean,
+        hasInterface: Boolean,
+        hasNamespace: Boolean,
+        isAmbientContext: Boolean,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        // TS2393: Duplicate function implementation — two functions both with bodies
+        // Fires regardless of other declaration kinds (alongside TS2300 if var/class also present)
+        if (hasFunc) {
+            val funcDecls = group.filter { it.kind == "function" }
+            val funcBodies = funcDecls.filter { decl ->
+                val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
+                hasPresentBody(funcStmt.body)
+            }
+            if (funcBodies.size >= 2) {
+                for (decl in funcBodies) {
+                    val start = decl.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Duplicate function implementation.",
+                        category = DiagnosticCategory.Error,
+                        code = 2393,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = decl.name.length,
+                    ))
+                }
+                // Only skip TS2300 check if ONLY functions are involved (pure overload scenario)
+                if (!hasClass && !hasVar && !hasNamespace) return true
+            }
+        }
+
+        // TS2813/TS2814: function + non-ambient class conflict
+        if (hasClass && hasFunc) {
+            val funcDecls = group.filter { it.kind == "function" }
+            val classDecls = group.filter { it.kind == "class" }
+            // Inside a `declare namespace` (or .d.ts ambient context) the class and
+            // function members are IMPLICITLY ambient even without their own `declare`
+            // modifier — tsc never emits TS2813/TS2814 there (the messages literally say
+            // "non-ambient" / "with bodies"), so the class+function overload merge is legal.
+            val nonDeclFuncs = if (isAmbientContext) emptyList() else funcDecls.filter { decl ->
+                val funcStmt = decl.stmt as? FunctionDeclaration ?: return@filter false
+                ModifierFlag.Declare !in funcStmt.modifiers
+            }
+            val nonAmbientClasses = if (isAmbientContext) emptyList() else classDecls.filter { decl ->
+                val classStmt = decl.stmt as? ClassDeclaration ?: return@filter false
+                ModifierFlag.Declare !in classStmt.modifiers
+            }
+            if (nonDeclFuncs.isNotEmpty() && nonAmbientClasses.isNotEmpty()) {
+                // Any non-declare function (with or without body) + non-ambient class
+                // → TS2813 for class, TS2814 for function
+                // Related info points to the first non-ambient class
+                val relatedClass = nonAmbientClasses.first()
+                val classStart = relatedClass.nameNode.pos
+                val (classLine, classChar) = getLineAndCharacterOfPosition(source, classStart)
+                val relatedInfo = Diagnostic(
+                    message = "Consider adding a 'declare' modifier to this class.",
+                    category = DiagnosticCategory.Message,
+                    code = 6506,
+                    fileName = fileName,
+                    line = classLine,
+                    character = classChar,
+                    start = classStart,
+                    length = relatedClass.name.length,
+                )
+                // TS2814 for all non-declare functions
+                for (decl in nonDeclFuncs) {
+                    val start = decl.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Function with bodies can only merge with classes that are ambient.",
+                        category = DiagnosticCategory.Error,
+                        code = 2814,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = decl.name.length,
+                        relatedInformation = listOf(relatedInfo),
+                    ))
+                }
+                // TS2813 for non-ambient classes
+                for (decl in nonAmbientClasses) {
+                    val start = decl.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Class declaration cannot implement overload list for '${decl.name}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2813,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = decl.name.length,
+                        relatedInformation = listOf(relatedInfo),
+                    ))
+                }
+                // When there's also a var declaration, TS2300 fires for ALL (class+function+var)
+                // When it's only class+function (no var), skip TS2300 (only TS2813/TS2814)
+                if (!hasVar) return true
+                // Fall through to emit TS2300 below (isDuplicate check)
+            }
+
+            // Otherwise: declare function + declare class is a legal merge.
+            // declare class + non-declare function is ALSO legal (class provides type shape,
+            // function provides implementation — e.g. targetTypeTest1.ts).
+            // Only emit TS2300 for non-declare class + non-declare function (handled above via
+            // nonAmbientClasses check) or non-declare class + non-declare function without body.
+            val allClassesDeclare = isAmbientContext || classDecls.all { decl ->
+                val classStmt = decl.stmt as? ClassDeclaration ?: return@all false
+                ModifierFlag.Declare in classStmt.modifiers
+            }
+            // If all classes are ambient (declare), the function implements them — legal merge
+            if (!allClassesDeclare) {
+                // Non-ambient class + functions (without body triggers TS2813/TS2814 above)
+                // Non-ambient class + declare function → TS2300
+                for (decl in group) {
+                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+            return true
+        }
+
+        // TS2323: Cannot redeclare exported variable 'X' — fires when multiple
+        // exported var declarations have the same name (var+var is normally legal via
+        // hoisting, but exported vars occupy a fixed binding slot)
+        val varCount = group.count { it.kind == "var" }
+        if (!hasClass && !hasFunc && !hasEnum && !hasNamespace && varCount >= 2) {
+            val allVarsExported = group.filter { it.kind == "var" }.all { decl ->
+                val varStmt = decl.stmt as? VariableStatement ?: return@all false
+                ModifierFlag.Export in varStmt.modifiers
+            }
+            if (allVarsExported) {
+                for (decl in group.filter { it.kind == "var" }) {
+                    val start = decl.nameNode.pos
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot redeclare exported variable '${decl.name}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2323,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = decl.name.length,
+                    ))
+                }
+                return true
+            }
+        }
+
+        // TS2451: Cannot redeclare block-scoped variable — fires when ALL
+        // declarations are block-scoped (let or const). When there's a mix of
+        // var and let/const, TS2300 fires instead (handled below).
+        val hasLet = "let" in kinds
+        val hasConst = "const" in kinds
+        val hasBlockScoped = hasLet || hasConst
+        val hasNamespace2 = "namespace" in kinds
+        val hasType = "type" in kinds
+
+        // TS2451: type alias + let/const (no other kinds). This is a JS-ONLY
+        // rule: in a `.js` file a `type X` alias is illegal (TS8008) so it does
+        // NOT occupy the TYPE space, and tsc treats `type X` + `const X` as a
+        // value-side block-scoped redeclaration (jsdocTypedefNoCrash2). In a
+        // `.ts`/`.tsx` file a type alias and a value const legally COEXIST
+        // (different declaration spaces) — NO error (longObjectInstantiationChain1's
+        // `type merge<…>` + `declare const merge`). So gate to JS-like files.
+        if (hasType && hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && group.size >= 2 && isJsLikeFileName(fileName)) {
+            for (decl in group) {
+                val start = decl.nameNode.pos
+                val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
+                    else (decl.nameNode.end - decl.nameNode.pos)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot redeclare block-scoped variable '${decl.name}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2451,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = nameLen,
+                ))
+            }
+            return true
+        }
+
+        // 17.127: skip TS2451 when an import binding is in the group — TS2395
+        // (mixed export status) and TS2440 (import conflicts with local) are emitted
+        // separately at their own checks and replace the redeclare diagnostic.
+        val hasImport = "import" in kinds || "import=" in kinds
+        val allBlockScoped = hasBlockScoped && !hasVar && !hasFunc && !hasClass && !hasEnum && !hasInterface && !hasNamespace2 && !hasImport
+        // A `type` alias occupies the TYPE space, NOT the block-scoped VALUE space (in
+        // .ts/.tsx), so it neither counts toward NOR receives a block-scoped redeclaration
+        // diagnostic — only the let/const declarations do. (The JS-only `type X` + `const X`
+        // case, where the type IS a value-space redeclaration, is handled above at the
+        // isJsLikeFileName branch.) Counting `group.size` instead FP'd TS2451 on a `.ts`
+        // `type X` + `declare const X` pair (longObjectInstantiationChain1 `type merge` +
+        // `declare const merge`): only 1 block-scoped decl, no redeclaration.
+        val blockScopedDecls = group.filter { it.kind == "let" || it.kind == "const" }
+        if (allBlockScoped && blockScopedDecls.size >= 2) {
+            for (decl in blockScopedDecls) {
+                val start = decl.nameNode.pos
+                val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
+                    else (decl.nameNode.end - decl.nameNode.pos)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Cannot redeclare block-scoped variable '${decl.name}'.",
+                    category = DiagnosticCategory.Error,
+                    code = 2451,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = nameLen,
+                ))
+            }
+            return true
+        }
+        // When block-scoped (let/const) mixes with var/class/func (not interface/namespace
+        // which are legal merges), emit TS2451 for const/class conflicts, TS2300 for others
+        if (hasBlockScoped && (hasVar || hasFunc || hasClass || hasEnum)) {
+            // TS2451 when block-scoped conflicts with class (TypeScript uses TS2451 for this).
+            // Also: a block-scoped (let/const) declared FIRST that conflicts with a `var`
+            // (no function/class/enum in the group) is a block-scoped redeclaration (TS2451);
+            // a `var` declared first makes the symbol function-scoped → TS2300. (Order matters.)
+            val firstDecl = group.minByOrNull { it.nameNode.pos }
+            val firstIsBlockScoped = firstDecl?.kind == "let" || firstDecl?.kind == "const"
+            val useTs2451 = (hasBlockScoped && hasClass && !hasVar && !hasFunc && !hasEnum) ||
+                (hasBlockScoped && hasVar && !hasFunc && !hasClass && !hasEnum && firstIsBlockScoped)
+            for (decl in group) {
+                if (decl.kind == "interface" || decl.kind == "namespace") continue
+                if (useTs2451) {
+                    val start = decl.nameNode.pos
+                    val nameLen = if (decl.nameNode is Identifier) (decl.nameNode).text.length
+                        else (decl.nameNode.end - decl.nameNode.pos)
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Cannot redeclare block-scoped variable '${decl.name}'.",
+                        category = DiagnosticCategory.Error,
+                        code = 2451,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = nameLen,
+                    ))
+                } else {
+                    emitDuplicate2300(decl.name, decl.nameNode, source, fileName)
+                }
+            }
+            return true
+        }
+        return false
     }
 
     /**

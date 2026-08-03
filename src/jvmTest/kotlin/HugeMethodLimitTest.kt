@@ -48,7 +48,9 @@ import kotlin.test.fail
  * (round 804 split it), and `Checker.checkPropertyAccessInExpr` at **9,062**
  * (round 805 split it), and `Checker.ccetSpineEnter` at **8,686** — which runs at
  * EVERY node of every file (round 806 split it) — and
- * `Checker.checkArgumentsAgainstSignatureCore` at **23,890** (round 807 split it).
+ * `Checker.checkArgumentsAgainstSignatureCore` at **23,890** (round 807 split it),
+ * and — sub-item (d) — `Checker.checkDuplicateDeclarations` at **12,935**
+ * (round 812 split it).
  *
  * It reads the compiled class file off the test classpath and parses the `Code`
  * attribute length directly — the same number `javap` prints and the same number
@@ -494,6 +496,54 @@ class HugeMethodLimitTest {
         assert(parts.values.min() > 1500)
         // ... and the sum must still be the bulk of the original 15,567, i.e. the
         // body was MOVED, not deleted. Measured sum: 10,361.
+        assert(parts.values.sum() > 8000)
+    }
+
+    /**
+     * (JIT.1)(d) round 812 — the five helpers `checkDuplicateDeclarations` was
+     * split into. It was **12,935 bytecodes**, the largest `Checker` method still
+     * over the limit; the entry is 2,801 and holds the collection loop every
+     * statement list pays for, while every helper sits behind the entry's
+     * `if (group.size < 2) continue`.
+     */
+    private val cddSplitParts = setOf(
+        "cddCheckImportBindings",
+        "cddCheckMergedEnums",
+        "cddCheckMergedTypeParameters",
+        "cddCheckExportUniformity",
+        "cddCheckValueRedeclarations",
+    )
+
+    @Test
+    fun `checkDuplicateDeclarations is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val fn = sizes["checkDuplicateDeclarations"]
+            ?: fail("checkDuplicateDeclarations not found in Checker")
+        // Positive control: the parse really did read a large method (it is 2,801
+        // bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(fn > 1200)
+        assert(fn < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkDuplicateDeclarations split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = cddSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in cddSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkDuplicateDeclarations split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in cddSplitParts }
+        assert(parts.size == 5)
+        // Measured smallest part: 955 bytecodes (the merged-enum checks).
+        assert(parts.values.min() > 600)
+        // ... and the sum must still be the bulk of the original 12,935, i.e. the
+        // body was MOVED, not deleted. Measured sum: 10,115.
         assert(parts.values.sum() > 8000)
     }
 
