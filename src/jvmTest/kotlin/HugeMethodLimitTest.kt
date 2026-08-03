@@ -598,6 +598,67 @@ class HugeMethodLimitTest {
         assert(parts.values.sum() > 7000)
     }
 
+    /**
+     * (JIT.1)(d) round 814 — the ten helpers the `Checker` CONSTRUCTOR was split
+     * into. `<init>` was **11,298 bytecodes**; the entry is **5,538**, and that
+     * residue is not the pass sequence but the class's **494 property
+     * initializers**, which a constructor cannot delegate away. The ten helpers
+     * are contiguous runs of the `init` body's ordered `pass("name") { … }`
+     * dispatch sequence.
+     */
+    private val ctorSplitParts = setOf(
+        "initSetupPasses",
+        "initDeclarationOnlyPasses",
+        "initCheckPasses1",
+        "initCheckPasses2",
+        "initCheckPasses3",
+        "initCheckPasses4",
+        "initCheckPasses5",
+        "initCheckPasses6",
+        "initCheckPasses7",
+        "initCheckPasses8",
+    )
+
+    @Test
+    fun `the Checker constructor is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val ctor = sizes["<init>"] ?: fail("<init> not found in Checker: ${sizes.size} methods")
+        // Positive control, and it is load-bearing here: Kotlin emits a 72-byte
+        // synthetic `<init>` bridge beside the real constructor, so a reader that
+        // kept the LAST `<init>` would report 72 and pass this vacuously.
+        assert(ctor > 3000)
+        assert(ctor < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the Checker constructor split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = ctorSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in ctorSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the Checker constructor split parts carry the dispatch sequence`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in ctorSplitParts }
+        assert(parts.size == 10)
+        // The smallest is `initDeclarationOnlyPasses` at 12 bytecodes — ONE pass
+        // dispatch — so this family's usual "every part carries a real share"
+        // floor does not apply: the cut criterion was size, and the guard's body
+        // is one statement. What must hold is that the EIGHT checking runs are
+        // each a substantial slice (measured min 415) and that the whole moved
+        // sequence is still there.
+        val runs = parts.filterKeys { it.startsWith("initCheckPasses") }
+        assert(runs.size == 8)
+        assert(runs.values.min() > 300)
+        // ... and the sum must still be the bulk of what left `<init>`
+        // (11,298 - 5,538 = 5,760). Measured sum: 5,794.
+        assert(parts.values.sum() > 4500)
+    }
+
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
     private class ClassFileReader(private val b: ByteArray) {
         private var p = 0
@@ -639,7 +700,14 @@ class HugeMethodLimitTest {
                     if (attrName == "Code") {
                         val end = p + attrLen
                         skip(4)      // max_stack, max_locals
-                        out[name] = u4()
+                        // (JIT.1)(d) round 814: a NAME can repeat — Kotlin emits a
+                        // synthetic `<init>` bridge for default arguments beside the
+                        // real constructor, and overloads share a simple name. Keep the
+                        // LARGEST, which is the one HotSpot's limit would bite; a
+                        // last-wins map reported the 72-byte bridge as `<init>` and
+                        // would have passed the constructor's limit pin vacuously.
+                        val len = u4()
+                        out[name] = maxOf(out[name] ?: 0, len)
                         p = end
                     } else skip(attrLen)
                 }
