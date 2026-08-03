@@ -401,6 +401,52 @@ class HugeMethodLimitTest {
         assert(parts.values.sum() > 10000)
     }
 
+    /**
+     * (JIT.1)(h) round 810 — the two helpers `checkReturnAssignabilityCore` was
+     * split into. It was **9,743 bytecodes**, and unlike (c)/(f)/(g) it is only
+     * 1.2x the limit, so two regions of the committed `CtaSections` **level-C**
+     * partition were enough: the guard cluster the partition classifies as the
+     * dedicated-walker layer, and the TS2322 elaboration it measures at ONE reach
+     * per compiler self-compile. The behavioural gate is `CraSplitTest`.
+     */
+    private val craSplitParts = setOf(
+        "craGuardWalkers",
+        "craElaborateReturnMismatch",
+    )
+
+    @Test
+    fun `checkReturnAssignabilityCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val core = sizes["checkReturnAssignabilityCore"]
+            ?: fail("checkReturnAssignabilityCore not found in Checker")
+        // Positive control: the parse really did read a substantial method (it is
+        // 4,052 bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(core > 1500)
+        assert(core < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkReturnAssignability split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = craSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in craSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkReturnAssignability split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in craSplitParts }
+        assert(parts.size == 2)
+        // Measured smaller part: 1,851 bytecodes (the TS2322 elaboration).
+        assert(parts.values.min() > 1200)
+        // ... and the sum must still be the bulk of the original 9,743, i.e. the
+        // body was MOVED, not deleted. Measured sum: 5,557.
+        assert(parts.values.sum() > 4500)
+    }
+
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
     private class ClassFileReader(private val b: ByteArray) {
         private var p = 0
