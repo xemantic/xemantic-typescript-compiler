@@ -1909,3 +1909,205 @@ with mutable locals crossing every boundary, still the only target needing a rea
 data-flow answer), `access$checkBigintPropertyNames$emit` **10,339** (not the
 8-line local `emit` its name suggests but the whole per-file body the anonymous
 walker object closes over), and `Transformer.transform` **8,934**.
+
+## 20. (JIT.1)(e) — `compileParsedCore`, 21,535 → an entry at 293 plus ten helpers
+
+*Round 816.* The compiler's own top-level pipeline, and the first split in this
+family whose parts sum to **less** than the monolith.
+
+| function | region of the body | bytecodes |
+|---|---|---:|
+| `cpcCompileMultiFile` | the multi-file arm, minus its own four runs | 5,111 |
+| `cpcCheckEmitOptionConflicts` | TS5069/TS5066/TS5052, `outDir`-vs-`rootDir`, TS6059, TS5009 | 3,012 |
+| `cpcScanFiles` | phase 1 — the per-file parse/scan that fills the program tables | 2,651 |
+| `cpcCheckModuleAndLibOptions` | TS5070/TS5071/TS5052/TS5053/TS5095/TS5110 and the `noLib` globals | 1,894 |
+| `cpcCheckProjectShapeOptions` | TS6054/TS5055/TS5056 — the whole-program shape checks | 1,584 |
+| `cpcBindAndCheck` | phase 2 — bind every file, run the checker (or the INV.6 workers) | 1,537 |
+| `cpcCompileSingleFile` | the single-file arm | 1,488 |
+| `cpcTransformAndEmit` | phase 3 — the transform + emit loop | 1,125 |
+| `cpcCheckDeprecatedOptions` | TS5101/TS5102/TS5103/TS5107/TS5108 | 1,004 |
+| `cpcRequireOnlyOrphans` | the `require`-only orphan census | 595 |
+| `compileParsedCore` | the option head, ten calls, the dispatch | **293** |
+
+Census **6 → 5**. The ten helpers sum to **20,001**, and with the entry the split
+is **20,294 against the monolith's 21,535 — 1,241 bytecodes FEWER**. Every
+previous round in this family added between 10 and 99; § 20.1 says why this one
+subtracted, and it is the round's most transferable finding.
+
+### 20.1 What actually drove the size: one captured `var`, 168 boxed reads
+
+`javap -c` on the pre-split binary shows the method's very first instruction is
+`new kotlin/jvm/internal/Ref$ObjectRef`. Kotlin boxes a **mutable local that a
+non-inline closure captures**, and `compileParsedCore` has exactly one:
+`var options`, reassigned once by the NodeNext `package.json` scan and captured
+by the worker lambdas of the `ParallelCheckMode.workers > 1` branch — a
+`(0 until workers).map { { … Checker(options, …) } }`, i.e. a list of function
+VALUES, which is the one closure form the compiler cannot inline away.
+
+The census of the monolith's disassembly:
+
+| instruction | count |
+|---|---:|
+| `new … Ref$ObjectRef` | 1 |
+| `putfield … Ref$ObjectRef.element` | 2 |
+| `getfield … Ref$ObjectRef.element` | **168** |
+| `checkcast … CompilerOptions` | **168** |
+
+So **~1,008 bytecodes — 4.7% of the method — existed only because one `var` was
+captured**, paid six bytes at a time at reads spread over 1,780 lines. In the
+split every helper takes `options` as a PARAMETER, which is an immutable local
+again: the boxing disappears (`Ref$ObjectRef` count across all eleven functions
+is **0**) and every one of those reads is a plain `aload`.
+
+Two things follow for the next agent. **(a) A split can be bytecode-NEGATIVE,
+so "the parts must sum to at least the monolith" is not a law** — the
+`HugeMethodLimitTest` share-check for this target asserts `> 18000` against a
+21,535 original for exactly that reason. **(b) Before hunting for size in what a
+function DOES, check what it CAPTURES**: `javap -c … | grep -c ObjectRef` is a
+one-line test, and a single non-inline closure over a `var` taxes every read of
+that variable in the whole function. Round 815 found a dispatch table's size to
+be arm-count × field-count; this is the same class of surprise from the other
+direction.
+
+### 20.2 The boundaries were MEASURED, not estimated
+
+`scripts/method_bytes_by_line.py` (new this round) attributes every bytecode of
+one method to a source line through javap's `LineNumberTable`, so each candidate
+region's size is known BEFORE the edit. Rounds 807 and 810 each landed one
+extraction short (8,061, 61 over) or a hair under (7,803, a 197-byte margin) and
+had to reason about it afterwards; here the predicted sizes were 1,319 / 3,153 /
+2,201 / 1,647 / 1,631 / 5,207 / 2,824 / 1,589 / 1,180 / 729 and the built ones
+came out uniformly 4–18% SMALLER — the boxing above, plus lower local-slot
+indices.
+
+The tool has one property a reader must know: **Kotlin inline functions
+(`map`, `filter`, `let`, `run`, …) are expanded into the caller and carry
+SYNTHETIC line numbers past the end of the file** (the JSR-45 `SMAP` maps them
+back). For `compileParsedCore` that is **4,938 of 21,535 bytecodes — 22.9% of
+the method is code that is not in its source at all**. Those bytes are charged
+to the last real line before them, i.e. to the inlining call site, which is the
+attribution a split needs.
+
+### 20.3 The frequency argument, honestly: irrelevant
+
+`compileParsedCore` runs **once per compile** — once per corpus test, once per
+project build, once per `--watch` recheck. Its interpreted cost is one pass over
+~21 k bytecodes plus 78 iterations of the file-scan loop on the compiler
+profile: microseconds. **No wall A/B was run and none should be.** Like rounds
+814 and 815 this lands for the THRESHOLD and for sub-item (f). What the split
+buys that a benchmark cannot see is that the pipeline is now made of methods
+HotSpot will compile if a future caller makes them hot — and 1,241 fewer
+bytecodes to interpret on the way.
+
+The cut criterion is therefore SIZE, with one structural rule: the two arms of
+the single-vs-multi dispatch are mutually exclusive, so a compile pays exactly
+one of them.
+
+### 20.4 The shape, and why no helper needs a signal
+
+`scripts/cpc_split_analyze.py`:
+
+* the body is **1,780 lines**: an option-validation prologue of ~750, then an
+  `if (single) … else …` whose arms are 129 and 894 lines;
+* `options` is assigned in exactly **two** places, both in the head that stays
+  in the entry; `emitted5070` is the only other `var` and it is read 6 lines
+  from where it is written, inside one region;
+* **the two arms move WHOLE**, so all four whole-function `return`s (941, 1043
+  in the single arm; 1079, 1936 in the multi arm) go with them. Every other
+  `return` in the body — 26 of them — belongs to a local `fun` that moves with
+  its region. **No helper needs a return signal at all** (round 813's property);
+* all 22 `continue`s and the single `break` bind to a loop inside their own
+  region (checked with a brace stack seeded at the function head, not by
+  indentation — round 812);
+* the only values that cross a boundary are RETURNED: the `Checker` from
+  `cpcBindAndCheck` and the `Set<String>` from `cpcRequireOnlyOrphans`. Nothing
+  is stashed in a field, so round 791's save/restore hazard cannot arise.
+
+### 20.5 The 18-parameter problem, and the rule it produces
+
+`cpcScanFiles`'s free-variable set is **18 names**, of which three are
+`MutableList<Pair<String, String>>` and four are `MutableSet<String>`. A
+POSITIONAL call site could permute two same-typed containers and still
+type-check — a silent, total behaviour change with nothing in the compiler to
+catch it. **So every call site in this split passes every argument by NAME**,
+and `cpc_split_verify.py` check 5 asserts that the named set equals the
+parameter set. § 20.7's A3 row is that claim ablated.
+
+This is where the scope-aware free-variable computation earns its keep: the
+earlier scripts in this family matched declaration names textually, which cannot
+tell `val file` in the single-file arm from `for (file in …)` in the multi-file
+one. Here the scopes are simulated with a brace stack, so "visible at the
+region" means what Kotlin means by it; the compiler then enforces the answer in
+both directions, since an unused parameter is a `w:` in this warning-clean
+build.
+
+### 20.6 Equivalence, measured (round 805's five checks)
+
+`scripts/cpc_split_{analyze,apply,verify}.py`, all green:
+
+1. ten contiguous, in-order regions re-extracted from the NEW file and compared
+   **verbatim** against HEAD — the four prologue runs at dedent 0, the six
+   arm/pipeline runs at dedent 4;
+2. the new file **RECONSTRUCTED** from HEAD by the apply step and compared byte
+   for byte: **identical, 287,974 chars**;
+3. the accounting is a PARTITION of the body: every one of the 1,780 lines is
+   claimed exactly once — 33 kept in the entry, **1,740 moved**, 3 separator
+   blanks dropped (asserted blank), 4 structural lines replaced by the dispatch;
+4. control-flow tokens enumerated on both sides, **bounded to the changed region
+   on both** (round 815's lesson): `return` 30 → 34 (+4: two dispatch arms,
+   `return checker`, `return requireOnlyOrphans`), `continue` 22 → 22, `break`
+   1 → 1;
+5. free variables computed per region equal each helper's parameter list, and
+   every call site names every argument.
+
+### 20.7 Discrimination — 3 of 3, plus a negative control, control first
+
+`CpcSplitTest` (16 pins) plus `HugeMethodLimitTest` (+3). **All 16 were validated
+on the UNSPLIT binary first: 58 pins ran, and exactly 3 failed — the three new
+SIZE pins, which must fail there.** So every behavioural pin describes HEAD, not
+the split. Each mistake was then made alone, on its own build, with the pin count
+confirmed every time.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| the `cpcCheckModuleAndLibOptions` call is dropped | **3** — both of that run's arm pins (TS5053, TS5110) and the four-code pin | **DISCRIMINATED, attributable to the run** |
+| the multi-file arm is handed `baseOptions`, not `options` | **1** — **exactly** the `options` seam (a `package.json` `"type": "module"` program stops emitting ESM) | **DISCRIMINATED, sharply** |
+| `cpcScanFiles` called POSITIONALLY with `sourceEchoes`/`jsonOutputs` swapped | **2** — the echo-order pin and the per-file JS-output count | **DISCRIMINATED** |
+| *(negative control)* the project-shape run consulted FIRST | **0** | **UNOBSERVABLE, as predicted** |
+
+The third row is the one worth carrying. It is a mistake **no compiler can
+catch**: both parameters are `MutableList<Pair<String, String>>`, so the
+positional call type-checks, and the resulting compile silently echoes nothing
+and emits the echoes as JSON outputs. The defence is not a test but the call
+convention — every argument passed by name — and the test is what notices if the
+convention lapses.
+
+The fourth row follows round 815's rule: the claim "the four validation runs are
+order-independent" rests on a structural property (each run only APPENDS to
+`diagnostics`; none reads it back; no two emit the same code), so the property's
+CONSEQUENCE was ablated and the predicted zero was shown, rather than recording
+"no order seam here".
+
+### 20.8 Gate
+
+Census re-measured at HEAD on a rebuilt binary first — **6** over the limit,
+`compileParsedCore` **21,535**, reproducing the round-815 handoff exactly; the
+after-number measured the same way on the binary built from the split source —
+**5**. Suite **13,706 → 13,725 / 0 failures / 3 skipped** (+19: 16 `CpcSplitTest`
++ 3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first.
+8-profile grid diffed set-for-set BOTH directions against `build/r816-pre`, a
+purpose-built PRE-SPLIT binary, both arms on the IDENTICAL direct `java` command
+line with absolute class dirs, class dirs confirmed to differ (0 vs 7
+`cpcCompileMultiFile` entries), every capture checked non-empty and free of an
+`and N more error` marker — **46/46/46/46/46/46/46/94, 0 added and 0 removed on
+all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20
+counters +0.00%**. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0
+`w:` and 0 `e:` lines**. **No wall A/B, deliberately** — see § 20.3.
+
+**The list is now five, and four of them are the Transformer or the hard one.**
+`Transformer.transformToCommonJS` **28,991**, `Transformer.transformClassBody`
+**16,233**, `Checker.tryInferSingleTypeParamFromArgs` **11,930** (still the only
+target needing a real data-flow answer), `access$checkBigintPropertyNames$emit`
+**10,339**, `Transformer.transform` **8,934**. The Transformer three are on the
+EMIT path, which every `--noEmit` A/B in this arc is blind to; their gate is the
+corpus suite's emit baselines.

@@ -20,6 +20,111 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 816 (2026-08-03) — (JIT.1)(e) LANDED FOR `TypeScriptCompiler.compileParsedCore`:
+21,535 BYTECODES -> AN ENTRY AT 293 PLUS TEN HELPERS. CENSUS 6 -> 5 — AND IT IS THE FIRST
+SPLIT IN THIS FAMILY WHOSE PARTS SUM TO **LESS** THAN THE MONOLITH.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **6** over the
+  limit, `compileParsedCore` **21,535** — the round-815 handoff reproduced exactly. The
+  after-number was measured the same way on the binary built from the split source: **5**.
+- **WHY THIS TARGET.** The handoff named it the cheapest next and it was, but for a reason
+  worth stating: its shape is two MUTUALLY EXCLUSIVE arms behind one dispatch plus a
+  straight prologue, so the two arms move WHOLE, all four whole-function `return`s go with
+  them, and **no helper needs a return signal at all** (round 813's property). The
+  Transformer three are on the EMIT path and `tryInferSingleTypeParamFromArgs` still needs
+  the data-flow answer; neither was cheaper.
+- **THE SPLIT.** Entry **293** plus `cpcCompileMultiFile` **5,111**,
+  `cpcCheckEmitOptionConflicts` **3,012**, `cpcScanFiles` **2,651**,
+  `cpcCheckModuleAndLibOptions` **1,894**, `cpcCheckProjectShapeOptions` **1,584**,
+  `cpcBindAndCheck` **1,537**, `cpcCompileSingleFile` **1,488**, `cpcTransformAndEmit`
+  **1,125**, `cpcCheckDeprecatedOptions` **1,004**, `cpcRequireOnlyOrphans` **595**.
+- **THE NUMBER THAT REFRAMES THE TARGET: 20,294 AGAINST 21,535 — THE SPLIT REMOVED 1,241
+  BYTECODES.** Eleven rounds have added between 10 and 99; this one SUBTRACTED, and the
+  mechanism is the round's most transferable find. The monolith's first instruction is
+  `new kotlin/jvm/internal/Ref$ObjectRef`: `var options` is captured by the worker lambdas
+  of the `ParallelCheckMode.workers > 1` branch — a list of function VALUES, the one
+  closure form Kotlin cannot inline away — so it was BOXED, and the disassembly carries
+  **168 `getfield … Ref$ObjectRef.element` + 168 `checkcast CompilerOptions`**, ~6 bytes
+  each. **~1,008 bytecodes, 4.7% of the method, existed only because one `var` was
+  captured**, paid at reads spread over 1,780 lines. As a helper PARAMETER it is an
+  immutable local again and the boxing is GONE (`Ref$ObjectRef` count across all eleven
+  functions: **0**). Consequence: "the parts must sum to at least the monolith" is NOT a
+  law, and `javap -c … | grep -c ObjectRef` is a one-line test worth running before
+  hunting for size in what a function DOES.
+- **THE BOUNDARIES WERE MEASURED, NOT ESTIMATED — new instrument,
+  `scripts/method_bytes_by_line.py`.** It attributes every one of the 21,535 bytecodes to
+  a source line through javap's `LineNumberTable`, so each region's size was known BEFORE
+  the edit (rounds 807 and 810 each landed one extraction short/over and had to reason
+  after the fact). Predicted 1,319 / 3,153 / 2,201 / 1,647 / 1,631 / 5,207 / 2,824 / 1,589
+  / 1,180 / 729; built 4-18% smaller across the board, which is the boxing above.
+  **The tool also answers a question nobody had asked: 4,938 of the 21,535 bytecodes —
+  22.9% — are INLINED stdlib bodies** (`map`/`filter`/`let`/`run`/…), which carry
+  SYNTHETIC line numbers past the end of the file and are charged here to their call site.
+- **THE FREQUENCY ARGUMENT, HONESTLY: IRRELEVANT.** `compileParsedCore` runs ONCE per
+  compile — once per corpus test, once per project build, once per `--watch` recheck. Its
+  interpreted cost is one pass over ~21 k bytecodes plus 78 iterations of the file-scan
+  loop on the compiler profile: microseconds. **No wall A/B was run and none should be**;
+  this lands for the threshold and for (f). The cut criterion is SIZE, with one structural
+  rule: the two dispatch arms are mutually exclusive, so a compile pays exactly one.
+- **THE 18-PARAMETER PROBLEM AND THE RULE IT PRODUCES.** `cpcScanFiles`'s free-variable set
+  is 18 names, three of them `MutableList<Pair<String, String>>` and four
+  `MutableSet<String>`. **A positional call could permute two same-typed containers and
+  still type-check** — silent, total, and invisible to the compiler. So every call site in
+  this split passes every argument BY NAME, and `cpc_split_verify.py` check 5 asserts the
+  named set equals the parameter set. The free-variable computation is scope-aware this
+  time (a brace-stack simulation), because a textual matcher cannot tell `val file` in the
+  single-file arm from `for (file in …)` in the multi-file one.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks;
+  `scripts/cpc_split_{analyze,apply,verify}.py`), all green:** ten contiguous in-order
+  regions re-extracted from the NEW file and compared VERBATIM against HEAD (four at
+  dedent 0, six at dedent 4); the new file **RECONSTRUCTED** from HEAD byte for byte —
+  **287,974 chars**; the accounting is a PARTITION — every one of the 1,780 body lines
+  claimed exactly once (33 kept, **1,740 moved**, 3 separator blanks dropped and asserted
+  blank, 4 structural lines replaced by the dispatch); control-flow tokens enumerated on
+  both sides and **bounded to the changed region on both** — `return` 30 -> 34 (+4, all
+  four named), `continue` 22 -> 22, `break` 1 -> 1; free variables per region equal to the
+  helper signatures.
+- **PINS VALIDATED ON THE UNSPLIT BINARY FIRST — 58 ran, exactly 3 failed, and they are
+  the three new SIZE pins**, which must fail there. So all 16 behavioural pins describe
+  HEAD, not the split.
+- **DISCRIMINATION 3 OF 3, each mistake alone on its own build, pin count confirmed —
+  PLUS A NEGATIVE CONTROL.** Dropping the `cpcCheckModuleAndLibOptions` call fails **3**
+  (its two arm pins plus the four-code pin); handing the multi-file arm `baseOptions`
+  instead of `options` fails **exactly 1**, the `options` seam (a `package.json`
+  `"type": "module"` program stops emitting ESM); a POSITIONAL `cpcScanFiles` call with
+  `sourceEchoes`/`jsonOutputs` swapped fails **2** — and that is the mistake **no compiler
+  can catch**. **The negative control — the project-shape run consulted FIRST — fails 0**,
+  as predicted from the structural property (each run only appends to `diagnostics`, none
+  reads it back, no two emit the same code).
+- **WHAT DID NOT WORK.** (1) The verifier's first run reported ONE false failure —
+  `cpcCompileMultiFile` read as 1,018 lines against a 422-line body — because its brace
+  matcher ran on the RAW text and counted `{` inside template expressions and regex
+  literals; it runs on the stripped text now. **Same class as round 815's two false
+  failures: an instrument that does not bound or sanitize its input measures something
+  else.** (2) The named-argument check then failed twice more, both times on itself: it
+  counted the `val checker =` on a call's head line as a named argument, and after that
+  fix it skipped the head line of the two ONE-LINE calls. (3) Nothing else — no build died
+  this round; the daemons were stopped before each of the ten.
+- **GATE.** Suite **13,706 -> 13,725 / 0 failures / 3 skipped** (+19: 16 `CpcSplitTest` +
+  3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first. 8-profile
+  grid diffed set-for-set BOTH directions against a purpose-built pre-split binary
+  (`build/r816-pre`), both arms on the IDENTICAL direct `java` command line with absolute
+  class dirs, class dirs confirmed to differ (0 vs 7 `cpcCompileMultiFile` entries) —
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**.
+  `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:` and 0 `e:`**.
+  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 20.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **5 over the limit**, and four of the five are
+  either the Transformer or the hard one: `Transformer.transformToCommonJS` **28,991**,
+  `Transformer.transformClassBody` **16,233**,
+  `Checker.tryInferSingleTypeParamFromArgs` **11,930**,
+  `access$checkBigintPropertyNames$emit` **10,339**, `Transformer.transform` **8,934**.
+  **The Transformer three are on the EMIT path — every A/B in this arc is `--noEmit` and
+  blind to them, so their gate is the corpus suite's emit baselines, which is a real gate
+  and should be said so when they land.** **(f) is still one sub-item away** and is now the
+  cheapest thing in the queue: `python3 scripts/huge_methods.py --fail-over 5` today,
+  tightening as the last five go.
+
 **Round 815 (2026-08-03) — (JIT.1)(e) LANDED FOR `applyDirective`: 13,694 BYTECODES ->
 AN ENTRY AT 89 PLUS FOUR RUNS. CENSUS 7 -> 6, THE FIRST TARGET OUTSIDE `Checker`, AND THE
 ONE WHOSE SIZE HAS THE LEAST TO DO WITH WHAT IT DOES — PLUS THE FAMILY'S FIRST NEGATIVE
@@ -1219,14 +1324,35 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     rather than asserted — when a split's correctness rests on a structural property,
     ablate the property's consequence and show the PREDICTED zero. Full derivation:
     `docs/perf/setup-phase-and-huge-methods.md` § 19.
+    **`TypeScriptCompiler.compileParsedCore` 21,535 WENT AT ROUND 816** (an entry at 293
+    plus ten helpers — four option-validation runs, the two dispatch arms, and four runs of
+    the multi-file arm; census 6 → 5). **Three findings to carry.** (i) **The split is
+    bytecode-NEGATIVE: 20,294 against 21,535, i.e. 1,241 FEWER** — the monolith's `var
+    options` is captured by the non-inline worker lambdas of the `--workers` branch, so
+    Kotlin BOXED it into a `Ref$ObjectRef` and charged **168 `getfield` + 168 `checkcast`
+    pairs**, ~1,008 bytecodes, to reads spread over 1,780 lines; as a helper PARAMETER the
+    boxing is gone. So "the parts must sum to at least the monolith" is not a law, and
+    `javap -c … | grep -c ObjectRef` is worth running before hunting for size in what a
+    function does. (ii) **The boundaries were MEASURED** by the new
+    `scripts/method_bytes_by_line.py` (javap `LineNumberTable` → bytecodes per source
+    line), which also shows **22.9% of the method is INLINED stdlib** carrying synthetic
+    line numbers past EOF. (iii) **An 18-parameter helper with same-typed containers must
+    be called with NAMED arguments** — a positional permutation of two
+    `MutableList<Pair<String, String>>` type-checks and silently changes everything; the
+    round's third ablation is that mistake, and it fails 2 pins.
     **Still open in (e): `Transformer.transformToCommonJS` 28,991,
-    `TypeScriptCompiler.compileParsedCore` 21,535, `transformClassBody` 16,233,
-    `transform` 8,934.** The Transformer three do not touch a `--noEmit`
-    number at all, which is why every A/B in this arc is blind to them; they DO touch the
-    published `bench-3way.sh` ratio, which is emit-mode on all three compilers (§ 0.2).
-  - **(f) Keep it from happening again.** Run `python3 scripts/huge_methods.py
-    --fail-over 0` in the round gate once (a)–(e) land. *Wiring it into the Gradle `check`
-    task is a build-system change → (JIT.3).*
+    `transformClassBody` 16,233, `transform` 8,934.** The Transformer three do not touch a
+    `--noEmit` number at all, which is why every A/B in this arc is blind to them; their
+    gate is the corpus suite's EMIT baselines, and they DO touch the published
+    `bench-3way.sh` ratio, which is emit-mode on all three compilers (§ 0.2).
+  - **(f) Keep it from happening again — REACHABLE NOW, and it is the cheapest item in
+    this queue.** Run `python3 scripts/huge_methods.py --fail-over N` in the round gate.
+    After round 816 the census is **5**, so the honest form today is `--fail-over 5`
+    (a ratchet that catches a NEW offender immediately), tightened by one as each of the
+    remaining five lands; `--fail-over 0` is the end state, not a precondition. All five
+    remaining offenders are known and named, four of them on the emit path, so the ratchet
+    costs nothing and closes the hole that let this family grow unnoticed for 800 rounds.
+    *Wiring it into the Gradle `check` task is a build-system change → (JIT.3).*
 
 - [ ] **BLOCKED-PENDING-USER (JIT.2): ship the JIT/AOT launcher flags.** Guardrail —
   changing how the CLI is launched is a packaging decision.
