@@ -20,6 +20,111 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 811 (2026-08-03) — (JIT.1)(c) LANDED FOR `checkSingleCallExpressionTypesCore`:
+15,567 BYTECODES -> AN ENTRY AT 5,149 PLUS FOUR `ccet*` HELPERS. CENSUS 11 -> 10, AND
+SUB-ITEM (c) IS CLOSED. THE TARGET WAS HANDED OVER AS "BOUNDARIES NOT COMMITTED, BUDGET
+FOR DERIVING THEM" — AND ITS PARTITION HAS BEEN IN THE SOURCE SINCE ROUND 734.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **11** over the
+  limit, `checkSingleCallExpressionTypesCore` **15,567** — the round-810 handoff reproduced
+  exactly. The after-number was measured the same way, on the binary built from the split
+  source: **10**, with the entry absent from the over-limit list.
+- **THE HANDOFF'S ONE FACTUAL ERROR, AND IT WAS THE ROUND'S CHEAPEST WIN.** (c) was queued
+  as the one target *without* a committed `*Sections` partition. `CallSections` — round
+  734's (CALL.1)(a) instrument — partitions THIS function into 16 sections, its markers are
+  in the body, and `docs/perf/call-expression-attribution.md` §§ 3-4 publish both a
+  per-section cost table and an EXIT CENSUS over 52,413 invocations. Nothing had to be
+  derived. **Check for an existing probe object before budgeting a derivation** — three
+  rounds in a row (808/809/811) have now been decided by a partition somebody else landed.
+- **THE SPLIT.** Entry **5,149** plus `ccetUnionCalleeChecks` **3,402** (`UNION_CALLEE`),
+  `ccetNoCallSignatureDiagnostics` **2,773** (`NO_SIGS`), `ccetExplicitTypeArguments`
+  **2,118** (`TYPE_ARGS`) and `ccetPrologueWalkers` **2,068** (`B216`..`SUPER`). The five sum
+  to **15,510 against 15,567** — an EIGHTH confirmation that a bytecode count is a THRESHOLD
+  predicate and not a cost model.
+- **WHAT STAYS INLINE IS WHAT THE PARTITION PRICES, in both directions.** Stays:
+  `getCalleeType` (474 ms, every invocation), the TS2722 optional-member gate and the
+  TS2347/null-callee/any-bail cluster (102 ms, every invocation), `getCallSignaturesOfType`,
+  the SINGLE-SIGNATURE branch (1,560 ms and 42.2% of all exits) and the overload branch
+  (3,640 exits). Moves: the union-callee branch (**31** exits of 52,413), the
+  `signatures.isEmpty()` branch (**entered 0 times** on the compiler profile — its
+  `binderResults x top-level statements` scan goes with it), the explicit-type-argument
+  branch (**101** exits), and the seven prologue walkers (253 ms as one span, ZERO firings,
+  and already refused for ~98% of calls by round 793's pre-gate).
+- **THE ROUND-793 CONSTRAINT IS HONOURED BY CONSTRUCTION:** `ccetPrologueMayFire` and the
+  whole `if (runPrologue)` test **stay in the entry**; only the guarded block moved. A
+  walker moved outside that gate would silently never run.
+- **SHAPE.** Three helpers return `Boolean` (`true` = "the caller must return"); the
+  `signatures.isEmpty()` branch returned UNCONDITIONALLY, so its helper is `Unit`, its five
+  internal `return`s stay bare and the call site returns straight after it. **Cross-boundary
+  values: NONE**, computed per region rather than assumed.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green;
+  `scripts/ccet_split_{analyze,apply,verify}.py`):** four contiguous in-order runs (131 /
+  224 / 240 / 122 lines) re-extracted from the NEW file and compared verbatim against HEAD;
+  the entry **reconstructed** from HEAD with the regions replaced by their call sites —
+  **IDENTICAL at 284 lines**; accounting closing exactly (996 = 279 kept + 717 moved; new
+  entry 284 = 279 + 5); every `return` enumerated (32 bare = 10 kept + 7 + 8 + 2 rewritten
+  + 5 left bare; the new entry's 14 = 10 kept + 4 call sites); free variables per region.
+- **DISCRIMINATION: 2 OF 4, each mistake ALONE on its own build, control first (18 pins ran,
+  0 failed), every run's pin COUNT confirmed.** Dropping the entry's `return` after
+  `ccetNoCallSignatureDiagnostics` fails **6** pins; ignoring `ccetExplicitTypeArguments`'
+  `true` fails **2** (its own seam pin and the ordering pin). Ignoring `ccetPrologueWalkers`'
+  or `ccetUnionCalleeChecks`' `true` fails **0 — twice each**, because both zeros were
+  RE-ATTEMPTED with purpose-built shapes rather than merely recorded.
+- **WHY THE TWO ZEROS ARE PROPERTIES OF THE FUNCTION.** The prologue's `super` shapes cannot
+  discriminate by construction (`getCalleeType("super")` is `anyType`, so an entry running on
+  bails at the any/error gate two sections later), so the retry used the one walker whose
+  continuation reaches a real signature — a `reduce<U>` call with a `keyof` callback
+  parameter — and it is green. The union's case (b) cannot double by construction either:
+  `getCallSignaturesOfType` CONCATENATES the constituents' signatures, so a union with any
+  callable member has a non-empty list and the duplicate emitter (which lives in the
+  `signatures.isEmpty()` branch) is unreachable; the retry therefore used B516's combined
+  signature — the one case that leaves a non-empty list and still emits — and it is green
+  too. Both signals are redundant guards on today's code, kept because the monolith had
+  them; the four pins written for them are **RENAMED as arm pins**.
+- **WHAT DID NOT WORK.** (1) The first grid read **0 added / 16 removed on every profile** —
+  a regression that does not exist. Arm B was captured through `bench-compile-tsc.sh` with
+  `--listAll` patched into `NOEMIT_ARGS`, and the script's very NEXT line
+  (`[[ $NO_EMIT -eq 1 ]] && NOEMIT_ARGS=(--noEmit)`) overwrites it, so the capture was
+  truncated at 30 of 46 ("... and 16 more error(s)"). Both arms now run the identical direct
+  `java … --noEmit --listAll`, and the differ REFUSES any capture containing `and N more
+  error`. **A grid whose two arms are produced by different harnesses is not a diff.**
+  (2) The first string/comment stripper treated a `"` as running to the next `"`, so a
+  template expression embedding a string desynchronised it and it blanked 40,000 lines —
+  reported as "the function has no returns and no free variables". Round 809's
+  length-preservation check does NOT catch this (blanking preserves length); the positive
+  control that does is "a known declaration inside the range must survive stripping".
+  (3) Two pin shapes measured nothing and were replaced: `h<number>(["a"])` reports a
+  TS2322 on the array ELEMENT rather than a TS2345 on the argument, and `h<number>("a")` as
+  an expression STATEMENT already emits its TS2345 twice on a correct binary (the function
+  has a second caller, `checkCallTypesInExpr`) — a count pin has to sit in a declaration
+  initializer for that family. (4) TWO of six ablation builds died with the round-808
+  Kotlin-daemon `GC overhead limit exceeded`, one after **13m40s**; the `pins ran=0` check
+  caught both, and recovery is `./gradlew --stop` + `pkill -f 'KotlinCompile[D]aemon'`.
+- **GATE.** Suite **13,612 -> 13,633 / 0 failures / 3 skipped** (+21: 18 `CcetSplitTest` +
+  3 `HugeMethodLimitTest`), python XML parser, whole results dir wiped first. 8-profile grid
+  diffed set-for-set BOTH directions against a purpose-built pre-split binary, class dirs
+  confirmed to differ — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**.
+  `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No
+  `w:` and no `e:` lines in the compile that produced the binary. **No wall A/B,
+  deliberately** — the family is bounded four times over. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 15.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **10 over the limit and the `Checker` list is down
+  to four**: `checkDuplicateDeclarations` **12,935**, `tryInferSingleTypeParamFromArgs`
+  **11,930**, the `Checker` constructor **11,298** (once per compile, but it CONTAINS the
+  whole init dispatch, so (SETUP.1)'s `pass("init:…")` wrappers are its natural boundaries),
+  `checkIndexSigInStatement` **10,928** and `access$checkBigintPropertyNames$emit`
+  **10,339** — i.e. sub-item **(d)**, none of which has a committed partition, so each needs
+  its boundaries chosen from its own shape (grep for an existing probe object FIRST — this
+  round's handoff was wrong about exactly that). The non-`Checker` tail is untouched:
+  `Transformer.transformToCommonJS` **28,991**, `TypeScriptCompiler.compileParsedCore`
+  **21,535**, `Transformer.transformClassBody` **16,233**, `CompilerOptionsKt.applyDirective`
+  **13,694**, `Transformer.transform` **8,934** — the three Transformer ones are sub-item
+  **(e)**, sized at 0.14-0.25% and landed for the threshold only. **(f) — wiring
+  `huge_methods.py --fail-over 0` into the round gate — becomes runnable once (d)/(e) land.**
+  Also worth one line: `walkFunctionBodiesInExpr` **7,702** and `cpaSpineLeave` **7,359** sit
+  one edit under the limit.
+
+
 **Round 810 (2026-08-03) — (JIT.1)(h) LANDED FOR `checkReturnAssignabilityCore`: 9,743
 BYTECODES -> AN ENTRY AT 4,052 PLUS TWO `cra*` HELPERS. CENSUS 12 -> 11. THE ROUND'S
 TRANSFERABLE RESULT IS A MIRROR OF ROUND 807's: **A SPLIT THAT LANDS JUST *UNDER* THE
@@ -789,101 +894,6 @@ with 0 added and 0 removed BOTH directions; cost gate all 20 counters +0.00%.**
   in the entry function, and the prize measured as monolith-vs-split rather than by flag.
 
 
-**Round 802 (2026-08-02) — (SETUP.1) THE LAST UNNAMED REGION IS ONE FUNCTION, AND THE
-ROUND'S SECOND RESULT IS BIGGER THAN THE FIRST: NINETEEN METHODS — INCLUDING THE FIVE
-LARGEST MEASURED COSTS IN THE COMPILER AND `forEachChild` — ARE ABOVE HotSpot's
-`HugeMethodLimit` AND ARE THEREFORE NEVER JIT-COMPILED AT ALL. `-XX:-DontCompileHugeMethods`
-measures −3.1%, B wins 4/4, output identical at 46 errors. Suite 13,476 → 13,481 / 0 / 3;
-cost gate 19 of 20 counters +0.00% with the twentieth a pure re-attribution.**
-
-- **STEP 1 — `outside-pass`, ATTRIBUTED, AND IT IS ONE FUNCTION.** Round 801 left it as
-  the last named-but-unopened region: **975 ms of checker-init inside no `pass()` wrapper**,
-  printed for ~300 rounds and never explained. It is the ~15 setup statements at the top of
-  `Checker.init` (the lib/global merges, per-file visibility and scope tables, enum values,
-  import references, file-local type maps) plus two end-of-init diagnostic retractions.
-  **The instrument is the wrapper itself** — each statement is now `pass("init:<name>")`,
-  which makes the partition **exhaustive BY CONSTRUCTION** (round 801's bind shape: the
-  residue is still printed and must stay ~0, so there is nothing to calibrate), at a cost of
-  ~16 lambda invocations per compile when instrumentation is off.
-- **THE ANSWER: `init:buildFileLocalTypeMaps` = 636 ms = 65% of the phase and 2.2% of the
-  compile.** Median of 3 probe-free runs (checker-init 24,688 / 24,348 / 24,495 ms — within
-  1.3% of round 801's 24,806, so the box was quiet). Second place is **89 ms**
-  (`trackAllImportReferences`), third **36 ms** (`computeAllEnumValues`), and **eleven of
-  the sixteen rows are under 2 ms**. The residue falls **975 → 144 ms** (0.5% of the
-  compile) and is recorded as a bound, not chased. It is also the ONLY setup pass that does
-  any type-system work — 80 `getTypeOfExpression` calls, every other pass zero, which is
-  pinned as a SHAPE so a new eager resolution shows up here before the cost gate sees it.
-- **NO LEVER LANDED ON THE 636 ms, DELIBERATELY — and the reason is round 788's law, not
-  timidity.** The obvious move is to defer the map (a lookup table for later passes: the
-  "state computed for a reader that may never come" shape rounds 788/798/800 mined three
-  times). But `getTypeOfSymbol` **memoises into `symbolTypes`**, so a deferral MOVES the
-  resolution to whichever pass asks first; the recoverable part is only the symbols nothing
-  ever asks for, and that number is unmeasured. Round 801 lost a lever to exactly this
-  (suffix set: row 53.5 → 0.9 ms, then `created 1143, materialized 1143`). Queued as
-  **(SETUP.2) with the census as its first sub-step and the falsifier written down**:
-  if `distinct` does not fall faster than `calls`, the work moved and the item closes.
-- **STEP 2 — THE FINDING THE ROUND WAS NOT LOOKING FOR. HotSpot's `DontCompileHugeMethods`
-  is a PRODUCT flag defaulting to `true` and `HugeMethodLimit` is 8,000 bytecodes; a method
-  above it is NEVER compiled by C1 or C2 and runs interpreted for the whole process.**
-  `scripts/huge_methods.py` (landed) is a static `javap` census: **19 of 13,910 methods
-  across 578 classes are over the limit.** `checkMemberAccessMissingCore` **46,567** (5.8×),
-  `checkArgumentsAgainstSignatureCore` **23,890**, `checkVarDeclAssignabilityCore`
-  **19,296**, `checkAssignmentExpressionCore` **18,100**, `checkSingleCallExpressionTypesCore`
-  **15,567**, `checkPropertyAccessInExpr` 9,062, `ccetSpineEnter` 8,686 — **and
-  `forEachChild` at 9,750, the traversal primitive every one of the ~400 tail passes runs
-  through.** Rounds 787–800 opened five of these one at a time and each reported "no
-  concentration, the cost is spread over the whole function". **A uniformly interpreted
-  function is exactly a function with no concentration.**
-- **THE A/B: one flag, one binary, no code change. 4 interleaved pairs, A 25.448 s vs
-  B 24.655 s median = −0.793 s = −3.1%, B wins 4/4 with every per-pair delta negative**
-  (−1.058 / −0.328 / −0.602 / −0.768), and every one of the eight runs reports `FAILED — 46
-  error(s)`. **Arm A sd 0.207 s = 0.81%; arm B sd 0.361 s = 1.46%.** The cold interleaved
-  band is ±2.0%, which −3.1% clears — but **arm B's spread is above the ~1% quietness
-  criterion, so the SIGN is certain and the MAGNITUDE is NOT tight**: read it as −3.1%
-  ±~1.5%, i.e. between half and one and a half times the largest thing this arc has landed.
-  It is not quoted as a banked win; it is quoted as the measured upper bound of (JIT.1).
-- **THE POSITIVE CONTROL IS DEAD ON THE PROFILE AND IS REPORTED AS DEAD** (round 801's rule,
-  honoured rather than rediscovered): `-XX:+PrintCompilation` prints **no** "too large" line
-  — the compile is never *proposed*, so it is never *skipped* — and grepping an 11,796-line
-  log for it returns **0**. The absence of that string is not evidence of absence of the
-  effect; the static census is the only instrument that can see this, which is why it
-  shipped as a script rather than as a grep in a session note.
-- **WHAT DID NOT WORK — three process failures, all of them recurrences.** (1) **The first
-  measurement batch fired `MainKt` against a classpath that a rebuild was still replacing**:
-  two runs died with `ClassNotFoundException` and, because the script only recorded the exit
-  code, **read as very fast runs rather than as errors**. Fixed in the script with a
-  PREFLIGHT that loads the class and aborts loudly. (2) **A bare `nohup … &` batch was
-  killed when the turn ended** — round 799 lost ~20 minutes to this and round 800 fixed it
-  with `setsid`; it recurred anyway. (3) **Two instances of the measuring script then ran
-  concurrently**, and round 740's law (a single xtsc run already takes 3.15 of 4 cores) put
-  checker-init at 29.8 / 39.2 / 42.2 s — a 70% inflation that looks exactly like a
-  catastrophic regression. Fixed with an `flock` guard and per-stage `.done` markers so a
-  partial kill is diagnosable instead of silent. **All three contaminated runs were
-  discarded, not averaged.** The lesson that generalises: a measuring script needs a
-  preflight, a lock and per-stage markers, or its failures are indistinguishable from its
-  results.
-- **ALSO RECORDED, because it looks memoizable and is not**: nothing was attempted on the
-  144 ms residue. It is the init block's `try`/`if` scaffolding plus the `pass()` machinery
-  over 417 dispatches, at 0.5% of the compile — below the band, and now bounded rather than
-  unknown.
-- **GATE.** Suite **13,476 → 13,481 / 0 failures / 3 skipped** (+5 `SetupPhasePartitionTest`
-  pins; whole results dir wiped, counted with the python XML parser). `cost_gate.py`:
-  **19 of 20 counters +0.00%**, the twentieth `typeOfExpr.outsideInit` **80 → 0**, which is
-  the round's own instrumentation and nothing else — those 80 calls are
-  `buildFileLocalTypeMaps`, previously outside every pass and now inside
-  `init:buildFileLocalTypeMaps`, so the counter independently corroborates the partition.
-  Rebaselined in the landing commit. **No 8-profile grid and no wall-clock A/B for
-  (SETUP.1), deliberately** — nothing production executes changed (the only source edit
-  beyond wrapping is `val` → `var` for one local), and the compiler profile reports 46
-  errors on all eight A/B arms. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md`.
-- **FOR THE NEXT AGENT: start at (JIT.1)(a), `forEachChild`.** One function, one file, no
-  checker semantics, already pinned by `ForEachChildOracleTest`'s reflection oracle, and the
-  largest population of any function in the compiler. The § 0.1 endgame decomposition is
-  written into the queue above with the framing that leads it: **§ 0.1 asks "does the
-  checking work itself get cheaper?" and prices its own answer at 0.6–1.2% per site — this
-  round found that the functions holding that work are not compiled at all, which is worth
-  more and costs none of the scope trade § 0.1 warns about.**
 
 
 
@@ -1001,11 +1011,24 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
   carrying: the whole-family flag now reads −1.14% in `--noEmit` against round 802's −3.1%
   on the pre-split binary — (a)+(b)+(c) have taken about two thirds off the instrument's own
   reading.**
-  - [ ] **(c) STARTED round 805 — `checkPropertyAccessInExpr` 9,062 → 4,728 + four
-    `cpaExpr*` arms (census 17 → 16); pins `CpaExprSplitTest` (9, four arms + four seams +
-    one deep-nesting recursion pin) and `HugeMethodLimitTest` (+3).** Still open in (c):
-    `checkArgumentsAgainstSignatureCore` 23,890, `checkVarDeclAssignabilityCore` 19,296,
-    `checkAssignmentExpressionCore` 18,100, `checkSingleCallExpressionTypesCore` 15,567.
+  - [x] **(c) DONE round 811 — the sub-item is CLOSED.** Landed across five rounds:
+    `checkPropertyAccessInExpr` 9,062 → 4,728 + four `cpaExpr*` arms (round 805, census
+    17 → 16), `checkArgumentsAgainstSignatureCore` (807, see (f)),
+    `checkVarDeclAssignabilityCore` (808), `checkAssignmentExpressionCore` (809, see (g)),
+    and finally **`checkSingleCallExpressionTypesCore` 15,567 → an entry at 5,149 plus four
+    `ccet*` helpers, one per contiguous run of the committed `CallSections` partition
+    (round 734's (CALL.1)(a) instrument — the handoff said this target had none); census
+    11 → 10.** Round 793's `ccetPrologueMayFire` gate STAYS in the entry, and what else
+    stays is what the partition prices: `getCalleeType` (474 ms), the optional-member and
+    any-bail gates (102 ms) and the single-signature branch (42.2% of all exits); what moved
+    are the three branches the same exit census puts at 0.2% of invocations or less, plus
+    the seven prologue walkers (zero firings). Equivalence by round 805's five checks
+    (entry reconstruction IDENTICAL at 284 lines; cross-boundary values NONE). Pins
+    `CcetSplitTest` (18) + `HugeMethodLimitTest` (+3). **Discrimination 2 of 4, and BOTH
+    zeros survived a purpose-built retry** — the prologue's and the union branch's return
+    signals are redundant guards on today's code, for reasons that are properties of the
+    function (see the round-811 note). Full derivation:
+    `docs/perf/setup-phase-and-huge-methods.md` § 15.
     **ROUND 805's OWED ABLATION IS PAID (round 806) — and its expectation was WRONG: ONE
     seam pin failed, not two.** The `enclosingClassType` mistake was caught; the dropped
     arrow-restore was NOT, because `withCpaFrameAmbient` reinstalls `currentLocalTypes` at
@@ -1075,22 +1098,18 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     elaboration is the LEGACY STRING TAIL, which emits for nothing the engine has already
     rejected, so no shape can discriminate that seam. Full derivation:
     `docs/perf/setup-phase-and-huge-methods.md` § 14.
-  - **(c) The call core** —
-    `checkSingleCallExpressionTypesCore` 15,567
+  - **(c) The call core — CLOSED at round 811** (`checkSingleCallExpressionTypesCore`
+    15,567 → 5,149 + four `ccet*` helpers; see the checked (c) entry above)
     (round 807 took `checkArgumentsAgainstSignatureCore` — see (f); **round 808 took
     `checkVarDeclAssignabilityCore` 19,296 → an entry at 3,535 plus seven `cvda*` helpers,
     one per contiguous run of the committed `CtaSections` level-B partition; census
     14 → 13**; **round 809 took `checkAssignmentExpressionCore` — see (g)**; **round 810
     took `checkReturnAssignabilityCore` from the (d) tail — see (h)**). Each already
     has a committed section partition from rounds 787–797, which
-    IS a split plan. One method per commit. **`checkSingleCallExpressionTypesCore` is now
-    the only method left in THIS sub-item, and the largest `Checker` method over the limit
-    anywhere (the four ahead of it are two emit-mode Transformer methods, `compileParsedCore`
-    and `applyDirective`, all of which run once per compile or only under emit).** Unlike
-    (f)–(h) its boundaries are NOT committed as a `*Sections` partition, so this one has to
-    derive them — budget for that.
-    **`checkSingleCallExpressionTypesCore` carries the round-793 `ccetPrologueMayFire` gate
-    and must keep it in the entry.** The non-`Checker` tail is
+    IS a split plan. One method per commit. **Round 811 closed the sub-item, and corrected
+    the claim that this last target had no committed partition: `CallSections` (round 734)
+    partitions it into 16 sections with an exit census already published — so GREP FOR A
+    PROBE OBJECT before budgeting a derivation.** The non-`Checker` tail is
     also still open and was never in this item's list: `Transformer.transformToCommonJS`
     28,991, `TypeScriptCompiler.compileParsedCore` 21,535, `Transformer.transformClassBody`
     16,233, `CompilerOptionsKt.applyDirective` 13,694, the `Checker` constructor 11,298,

@@ -23347,3 +23347,99 @@ Landed: the sub-partition + a provably-free dispatch pre-gate worth ~55 ms (0.2%
   and no resolution, so there is nothing for a counter to see. Full derivation:
   `docs/perf/implicit-any-attribution.md` §§ 9–12; `docs/perf/spine-leave-attribution.md`
   § 7 carries the re-measured (SPINE.1) closure.
+
+**Round 802 (2026-08-02) — (SETUP.1) THE LAST UNNAMED REGION IS ONE FUNCTION, AND THE
+ROUND'S SECOND RESULT IS BIGGER THAN THE FIRST: NINETEEN METHODS — INCLUDING THE FIVE
+LARGEST MEASURED COSTS IN THE COMPILER AND `forEachChild` — ARE ABOVE HotSpot's
+`HugeMethodLimit` AND ARE THEREFORE NEVER JIT-COMPILED AT ALL. `-XX:-DontCompileHugeMethods`
+measures −3.1%, B wins 4/4, output identical at 46 errors. Suite 13,476 → 13,481 / 0 / 3;
+cost gate 19 of 20 counters +0.00% with the twentieth a pure re-attribution.**
+
+- **STEP 1 — `outside-pass`, ATTRIBUTED, AND IT IS ONE FUNCTION.** Round 801 left it as
+  the last named-but-unopened region: **975 ms of checker-init inside no `pass()` wrapper**,
+  printed for ~300 rounds and never explained. It is the ~15 setup statements at the top of
+  `Checker.init` (the lib/global merges, per-file visibility and scope tables, enum values,
+  import references, file-local type maps) plus two end-of-init diagnostic retractions.
+  **The instrument is the wrapper itself** — each statement is now `pass("init:<name>")`,
+  which makes the partition **exhaustive BY CONSTRUCTION** (round 801's bind shape: the
+  residue is still printed and must stay ~0, so there is nothing to calibrate), at a cost of
+  ~16 lambda invocations per compile when instrumentation is off.
+- **THE ANSWER: `init:buildFileLocalTypeMaps` = 636 ms = 65% of the phase and 2.2% of the
+  compile.** Median of 3 probe-free runs (checker-init 24,688 / 24,348 / 24,495 ms — within
+  1.3% of round 801's 24,806, so the box was quiet). Second place is **89 ms**
+  (`trackAllImportReferences`), third **36 ms** (`computeAllEnumValues`), and **eleven of
+  the sixteen rows are under 2 ms**. The residue falls **975 → 144 ms** (0.5% of the
+  compile) and is recorded as a bound, not chased. It is also the ONLY setup pass that does
+  any type-system work — 80 `getTypeOfExpression` calls, every other pass zero, which is
+  pinned as a SHAPE so a new eager resolution shows up here before the cost gate sees it.
+- **NO LEVER LANDED ON THE 636 ms, DELIBERATELY — and the reason is round 788's law, not
+  timidity.** The obvious move is to defer the map (a lookup table for later passes: the
+  "state computed for a reader that may never come" shape rounds 788/798/800 mined three
+  times). But `getTypeOfSymbol` **memoises into `symbolTypes`**, so a deferral MOVES the
+  resolution to whichever pass asks first; the recoverable part is only the symbols nothing
+  ever asks for, and that number is unmeasured. Round 801 lost a lever to exactly this
+  (suffix set: row 53.5 → 0.9 ms, then `created 1143, materialized 1143`). Queued as
+  **(SETUP.2) with the census as its first sub-step and the falsifier written down**:
+  if `distinct` does not fall faster than `calls`, the work moved and the item closes.
+- **STEP 2 — THE FINDING THE ROUND WAS NOT LOOKING FOR. HotSpot's `DontCompileHugeMethods`
+  is a PRODUCT flag defaulting to `true` and `HugeMethodLimit` is 8,000 bytecodes; a method
+  above it is NEVER compiled by C1 or C2 and runs interpreted for the whole process.**
+  `scripts/huge_methods.py` (landed) is a static `javap` census: **19 of 13,910 methods
+  across 578 classes are over the limit.** `checkMemberAccessMissingCore` **46,567** (5.8×),
+  `checkArgumentsAgainstSignatureCore` **23,890**, `checkVarDeclAssignabilityCore`
+  **19,296**, `checkAssignmentExpressionCore` **18,100**, `checkSingleCallExpressionTypesCore`
+  **15,567**, `checkPropertyAccessInExpr` 9,062, `ccetSpineEnter` 8,686 — **and
+  `forEachChild` at 9,750, the traversal primitive every one of the ~400 tail passes runs
+  through.** Rounds 787–800 opened five of these one at a time and each reported "no
+  concentration, the cost is spread over the whole function". **A uniformly interpreted
+  function is exactly a function with no concentration.**
+- **THE A/B: one flag, one binary, no code change. 4 interleaved pairs, A 25.448 s vs
+  B 24.655 s median = −0.793 s = −3.1%, B wins 4/4 with every per-pair delta negative**
+  (−1.058 / −0.328 / −0.602 / −0.768), and every one of the eight runs reports `FAILED — 46
+  error(s)`. **Arm A sd 0.207 s = 0.81%; arm B sd 0.361 s = 1.46%.** The cold interleaved
+  band is ±2.0%, which −3.1% clears — but **arm B's spread is above the ~1% quietness
+  criterion, so the SIGN is certain and the MAGNITUDE is NOT tight**: read it as −3.1%
+  ±~1.5%, i.e. between half and one and a half times the largest thing this arc has landed.
+  It is not quoted as a banked win; it is quoted as the measured upper bound of (JIT.1).
+- **THE POSITIVE CONTROL IS DEAD ON THE PROFILE AND IS REPORTED AS DEAD** (round 801's rule,
+  honoured rather than rediscovered): `-XX:+PrintCompilation` prints **no** "too large" line
+  — the compile is never *proposed*, so it is never *skipped* — and grepping an 11,796-line
+  log for it returns **0**. The absence of that string is not evidence of absence of the
+  effect; the static census is the only instrument that can see this, which is why it
+  shipped as a script rather than as a grep in a session note.
+- **WHAT DID NOT WORK — three process failures, all of them recurrences.** (1) **The first
+  measurement batch fired `MainKt` against a classpath that a rebuild was still replacing**:
+  two runs died with `ClassNotFoundException` and, because the script only recorded the exit
+  code, **read as very fast runs rather than as errors**. Fixed in the script with a
+  PREFLIGHT that loads the class and aborts loudly. (2) **A bare `nohup … &` batch was
+  killed when the turn ended** — round 799 lost ~20 minutes to this and round 800 fixed it
+  with `setsid`; it recurred anyway. (3) **Two instances of the measuring script then ran
+  concurrently**, and round 740's law (a single xtsc run already takes 3.15 of 4 cores) put
+  checker-init at 29.8 / 39.2 / 42.2 s — a 70% inflation that looks exactly like a
+  catastrophic regression. Fixed with an `flock` guard and per-stage `.done` markers so a
+  partial kill is diagnosable instead of silent. **All three contaminated runs were
+  discarded, not averaged.** The lesson that generalises: a measuring script needs a
+  preflight, a lock and per-stage markers, or its failures are indistinguishable from its
+  results.
+- **ALSO RECORDED, because it looks memoizable and is not**: nothing was attempted on the
+  144 ms residue. It is the init block's `try`/`if` scaffolding plus the `pass()` machinery
+  over 417 dispatches, at 0.5% of the compile — below the band, and now bounded rather than
+  unknown.
+- **GATE.** Suite **13,476 → 13,481 / 0 failures / 3 skipped** (+5 `SetupPhasePartitionTest`
+  pins; whole results dir wiped, counted with the python XML parser). `cost_gate.py`:
+  **19 of 20 counters +0.00%**, the twentieth `typeOfExpr.outsideInit` **80 → 0**, which is
+  the round's own instrumentation and nothing else — those 80 calls are
+  `buildFileLocalTypeMaps`, previously outside every pass and now inside
+  `init:buildFileLocalTypeMaps`, so the counter independently corroborates the partition.
+  Rebaselined in the landing commit. **No 8-profile grid and no wall-clock A/B for
+  (SETUP.1), deliberately** — nothing production executes changed (the only source edit
+  beyond wrapping is `val` → `var` for one local), and the compiler profile reports 46
+  errors on all eight A/B arms. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md`.
+- **FOR THE NEXT AGENT: start at (JIT.1)(a), `forEachChild`.** One function, one file, no
+  checker semantics, already pinned by `ForEachChildOracleTest`'s reflection oracle, and the
+  largest population of any function in the compiler. The § 0.1 endgame decomposition is
+  written into the queue above with the framing that leads it: **§ 0.1 asks "does the
+  checking work itself get cheaper?" and prices its own answer at 0.6–1.2% per site — this
+  round found that the functions holding that work are not compiled at all, which is worth
+  more and costs none of the scope trade § 0.1 warns about.**

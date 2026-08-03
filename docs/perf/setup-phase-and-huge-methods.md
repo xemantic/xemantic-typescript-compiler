@@ -1141,3 +1141,137 @@ and 0 removed on all eight**; `--partitionCheck 2` **EQUIVALENT — 46**;
 compile that produced the binary. **No wall A/B, deliberately** — the family is
 bounded four times over (§§ 4.2, 5.3, 7 and round 804) and this lands for the
 threshold and the (f) falsifier.
+
+## 15. (JIT.1)(c) — `checkSingleCallExpressionTypesCore`, 15,567 → an entry plus four helpers
+
+*Round 811.* The last method of sub-item (c), the largest `Checker` method over
+the limit anywhere, and the one the queue flagged as having **no committed
+`*Sections` partition**. It has one: round 734's `CallSections` — the
+(CALL.1)(a) instrument — partitions this exact function into 16 sections, with
+an exit census and per-section costs already published in
+`call-expression-attribution.md` §§ 3–4. Nothing had to be measured to choose
+the boundaries.
+
+| function | region of the committed `CallSections` partition | bytecodes |
+|---|---|---:|
+| `checkSingleCallExpressionTypesCore` | head, `CALLEE_TYPE`, `OPT_MEMBER`, `EARLY_GATES`, `CALL_SIGS`, `SINGLE_SIG`, `OVERLOADS` | **5,149** |
+| `ccetUnionCalleeChecks` | `UNION_CALLEE` | 3,402 |
+| `ccetNoCallSignatureDiagnostics` | `NO_SIGS` | 2,773 |
+| `ccetExplicitTypeArguments` | `TYPE_ARGS` | 2,118 |
+| `ccetPrologueWalkers` | `B216` .. `SUPER` | 2,068 |
+
+Census **11 → 10**. The five sum to **15,510 against 15,567** — an eighth
+confirmation that a bytecode count is a THRESHOLD predicate and not a cost model
+(only round 804's 46,567 → 29,130 ever shrank).
+
+### 15.1 What stays inline is what the partition PRICES
+
+The exit census (§ 3 of `call-expression-attribution.md`, 52,413 invocations)
+and the per-section table decide it, in both directions:
+
+* **stays** — `getCalleeType` (474 ms, every invocation), the TS2722
+  optional-member gate and the TS2347 / null-callee / any-bail cluster (102 ms,
+  every invocation), `getCallSignaturesOfType`, the **single-signature branch**
+  (1,560 ms and 42.2% of all exits) and the overload branch (3,640 exits);
+* **moves** — the union-callee branch (**31** of 52,413 exits), the
+  `signatures.isEmpty()` branch (**entered 0 times** on the compiler profile,
+  and its `binderResults × top-level statements` scan with it), the
+  explicit-type-argument branch (**101** exits), and the seven prologue walkers,
+  which are 253 ms as one span with **zero firings** and which round 793's
+  pre-gate already refuses for ~98% of call expressions.
+
+**The constraint the queue attached to this target is honoured by
+construction:** `ccetPrologueMayFire` — and the whole `if (runPrologue)` test —
+**stays in the entry**; only the block it guards moved. A walker moved outside
+that gate would silently never run, and the tell would be a corpus baseline
+losing a diagnostic with no code change near the walker.
+
+### 15.2 The shape, and the equivalence
+
+Three regions return `Boolean` (`true` = "the caller must return"); the
+`signatures.isEmpty()` branch returned UNCONDITIONALLY, so its helper is `Unit`,
+its five internal `return`s stay bare, and the call site returns straight after
+it. Round 805's five checks, all green:
+
+1. all four moved runs re-extracted from the NEW file and compared against HEAD:
+   **four contiguous, in-order runs** (131 / 224 / 240 / 122 lines), identical
+   modulo the dedent and the return-signal rewrite;
+2. the entry **reconstructed** from HEAD with the four regions replaced by their
+   call sites: **IDENTICAL, 284 lines**;
+3. accounting closes exactly — HEAD body 996 = kept 279 + moved 717; new entry
+   284 = kept 279 + 5 lines of call site;
+4. every `return` enumerated: HEAD 32 bare (plus 34 lines carrying a labeled
+   `return@`), of which 10 stayed, 7 + 8 + 2 became `return true` and 5 stayed
+   bare inside the `Unit` helper; the new entry has **14 = 10 kept + 4 at the
+   call sites**;
+5. free variables computed per region — `prologueT`/`calleeExpr` for the
+   prologue, `calleeExpr`/`calleeType` for the two union-ish regions,
+   `typeArgs`/`signatures` for the type-argument one. **Cross-boundary values:
+   none.**
+
+A tooling note that cost this round twenty minutes and generalises past this
+file: **a Kotlin string/comment stripper must walk `${ … }` template expressions
+with a brace counter, because a template may embed further string literals**
+(`"Property '${key.text}' does not exist…"` is harmless, but
+`"${f("x")}"`-shaped code is not). A scanner that stops at the next quote
+desynchronises there and then blanks **40,000 lines**, which reads as "the
+function has no returns and no free variables" — the round-809 length-preservation
+check does NOT catch it, because blanking preserves length. The cheap catch is a
+positive control: a known declaration inside the range must survive stripping.
+
+### 15.3 Discrimination — 2 of 4, and both zeros survived a purpose-built retry
+
+`CcetSplitTest` (18 pins) plus `HugeMethodLimitTest` (+3). Each mistake alone,
+on its own build, control first (18 pins ran, 0 failed), every run's pin count
+confirmed.
+
+| mistake | pins failed | verdict |
+|---|---|---|
+| the entry drops its `return` after `ccetNoCallSignatureDiagnostics` | **6** | **DISCRIMINATED** |
+| the entry ignores `ccetExplicitTypeArguments`' `true` | **2** — its own seam pin and the ordering pin | **DISCRIMINATED** |
+| the entry ignores `ccetPrologueWalkers`' `true` | 0, **twice** | **NOT DISCRIMINATED** |
+| the entry ignores `ccetUnionCalleeChecks`' `true` | 0, **twice** | **NOT DISCRIMINATED** |
+
+**The two zeros are properties of the FUNCTION, and the retries are what
+establish that.** The prologue's `super` shapes cannot discriminate by
+construction — `getCalleeType("super")` answers `anyType`, so an entry that ran
+on would bail at the any/error gate two sections later — so the retry used the
+one walker whose continuation reaches a real signature (`reduce<U>` with a
+`keyof` callback parameter, which the explicit-type-argument path would check
+again against the instantiated lib signature). Green. The union's case (b)
+cannot double **by construction** either: `getCallSignaturesOfType` concatenates
+the constituents' signatures, so a union with any callable member has a NON-empty
+list and the duplicate emitter — which lives in the `signatures.isEmpty()`
+branch — is unreachable; the retry therefore used B516's combined signature, the
+one case that leaves a non-empty list and still emits. Green as well.
+
+Both are redundant guards on today's code, kept because the monolith had them.
+The four pins written for them are **renamed as arm pins**, per the standing
+rule, and the class doc carries the table.
+
+**A process cost, again.** Two of the round's six ablation builds died with the
+Kotlin daemon's `GC overhead limit exceeded` — one after **13m40s** — whose only
+tell is `pins ran=0`. The driver records the count for every run, which is what
+kept a dead build from being read as a clean ablation; recovery is `./gradlew
+--stop` plus `pkill -f 'KotlinCompile[D]aemon'` (never `-9`).
+
+### 15.4 Gate
+
+Suite **13,612 → 13,633 / 0 failures / 3 skipped**; 8-profile grid diffed
+set-for-set BOTH directions against a purpose-built pre-split binary, with the
+class dirs confirmed to differ (`javap` finds the four `ccet*` helpers in one
+and none in the other) — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+eight**; `--partitionCheck 2` **EQUIVALENT — 46**; `cost_gate.py` **all 20
+counters +0.00%**; no `w:` and no `e:` lines in the compile that produced the
+binary. **No wall A/B, deliberately** — the family is bounded four times over
+(§§ 4.2, 5.3, 7 and round 804) and this lands for the threshold and the (f) gate.
+
+**One trap in the grid harness, worth fixing before the next round reuses it.**
+Arm B was first captured through `scripts/bench-compile-tsc.sh` with `--listAll`
+patched into `NOEMIT_ARGS` — and the very next line of that script,
+`[[ $NO_EMIT -eq 1 ]] && NOEMIT_ARGS=(--noEmit)`, overwrites it. The capture was
+silently TRUNCATED at 30 of 46 diagnostics ("… and 16 more error(s)"), so the
+grid read **0 added / 16 removed on every profile** — a regression that did not
+exist. The arms are now run identically (direct `java … --noEmit --listAll`) and
+the differ REFUSES any capture containing `and N more error`, alongside round
+804's non-empty check.
