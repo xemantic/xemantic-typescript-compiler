@@ -24034,3 +24034,105 @@ EQUIVALENT — 46; cost gate all 20 counters +0.00%.**
   `ccetSpineEnter` (8,686, barely over). Two traps this round proves are live: a stage that
   rewrites a source file must not be detached, and the census must be re-run on a REBUILT
   binary before any before/after is quoted.
+
+**Round 809 (2026-08-03) — (JIT.1)(g) LANDED FOR `checkAssignmentExpressionCore`: 18,100
+BYTECODES (2.3x HotSpot's LIMIT) -> AN ENTRY AT 3,861 PLUS NINE `cae*` HELPERS. CENSUS
+13 -> 12. AND THE ROUND'S REAL RESULT IS THAT THE SEAM PREDICTIONS WERE WRONG IN BOTH
+DIRECTIONS — 2 OF 7 SIGNALS DISCRIMINATE, AND NEITHER OF THE TWO IS THE ONE THAT WAS
+ARGUED FOR.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **13** over the
+  limit, `checkAssignmentExpressionCore` **18,100** — the round-808 handoff reproduced
+  exactly, including the non-`Checker` tail.
+- **THE SPLIT.** Entry **3,861** plus `caeUnionAndMissingPropertyGuards` **2,867**
+  (`E_UNION`+`E_B175`+`E_B127`), `caeElaborateMismatch` **2,803** (`E_ELAB`),
+  `caeModuleAliasAndLibPairShapes` **1,704** (`E_MODULE`+`E_B236`),
+  `caeLegacyDeclaredStringPath` **1,626** (`E_DECLSTR`), `caeIndexSigAndSignatureGuards`
+  **1,608** (`E_MID`+`E_SIGS`+`E_OBJLIT`), `caePrototypeMemberAssign` **1,319** (`E_PROTO`),
+  `caeForeignTpTargetAndClassRhs` **674** (`E_FTP`+`E_CTORID`), `caeThisPropertyAssign`
+  **557** (`E_THIS`), `caeElementAccessAssign` **453** (`E_ELEM`). The ten sum to **17,472
+  against 18,100** — a SIXTH confirmation that a bytecode count is a THRESHOLD predicate and
+  not a cost model.
+- **THE PARTITION WAS ALREADY IN THE SOURCE, AND IT IS A DIFFERENT LEVEL OF THE SAME PROBE
+  OBJECT.** Round 808 followed `CtaSections` level B; this follows level **E** (round 786's
+  own instrument). Nothing new had to be measured to choose the boundaries — which is the
+  cheapest form this family has taken, and the reason to keep landing partitions even when
+  their own round finds no lever.
+- **WHAT STAYS IN THE ENTRY IS MEASURABLE HERE, NOT ARGUED.** Level E says 10,432 of 17,179
+  invocations (61%) exit in the entry row because the expression is not an `=`
+  `BinaryExpression` — the eligibility test lives INSIDE this function. The four rows
+  carrying the cost stay inline: the SOURCE type (160 ms net), flow narrowing (59), the
+  identifier-target guards (33), `canUseTypeEngine`+`checkTypeRelatedTo` (20), plus the
+  one-line `x.prop = value` arm (31). The two LARGEST moved regions are the two the same
+  partition prices at nothing: `E_ELAB` is **0.4 ms over 3,791 reaches**.
+- **CROSS-BOUNDARY VALUES: NONE — computed, not assumed.** Every `val`/`var` in the function
+  was listed with its brace depth and intersected per region against the identifiers that
+  region uses. Three look like they escape and do not: the outer `rhs` (shadowed by a new
+  `val rhs` inside `E_B175`), and `b175RhsClassSym`, read by `E_B127`'s gate — which is
+  exactly why those rows are in the SAME helper. One pair CONSTRAINS the partition:
+  `savedContextual` is set in `E_SRCTYPE` and restored at the end of `E_NARROW`, so no region
+  may straddle them; both stay in the entry.
+- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** nine contiguous
+  in-order runs re-extracted from the NEW file and diffed against HEAD; the entry
+  RECONSTRUCTED from HEAD with the regions replaced by call sites — **IDENTICAL at 345
+  lines**; accounting closing exactly (HEAD body 1,477 = kept 335 + moved 1,142; entry
+  345 = 335 + 10); every `return` enumerated (**38 = 15 kept + 23 moved**, the other 24
+  `return` occurrences being `return@run` x16 and `return@dataProp` x8); free variables
+  computed PER REGION.
+- **PINS: 17 new** — `CaeSplitTest` (14: one ARM pin per helper asserting its distinctive
+  MESSAGE and a COUNT of 1, two seam pins, an ordering pin over a file reaching five
+  helpers, a chained-assignment recursion pin, and a negative control) and
+  `HugeMethodLimitTest` (+3).
+- **DISCRIMINATION: 2 OF 7, SEVEN SEPARATE BUILDS, CONTROL FIRST (35 pins, 0 failed), AND
+  EVERY RUN CONFIRMED 14 PINS RAN** (round 808's dead-build tell). `caeForeignTpTargetAndClassRhs`
+  fails **exactly one pin, its own**; `caeElaborateMismatch` fails **three** (its arm pin,
+  the elaboration seam pin, the ordering pin). `caePrototypeMemberAssign`,
+  `caeModuleAliasAndLibPairShapes`, `caeIndexSigAndSignatureGuards`,
+  `caeUnionAndMissingPropertyGuards` and `caeLegacyDeclaredStringPath` leave **every pin
+  GREEN — recorded NOT DISCRIMINATED**, and are redundant guards on today's code.
+- **THE PREDICTION WAS WRONG IN BOTH DIRECTIONS, AND THAT IS THE TRANSFERABLE PART.** The
+  prototype seam was argued to discriminate (drop it and the target-kind dispatch reaches
+  `checkPropertyAccessAssignment`, which "must" re-emit) — it does not, because that walker
+  is silent for an `X.prototype.p` target. `caeForeignTpTargetAndClassRhs` was argued
+  redundant (`canUseTypeEngine` skips class-instance-vs-constructor) — it is the sharpest
+  single-pin result of the round. So reading the downstream gates is how you CHOOSE which
+  seams to pin, never a substitute for the ablation. The undiscriminating pin was RENAMED in
+  `CaeSplitTest` to say what it actually tests.
+- **WHAT DID NOT WORK.** (1) The first Kotlin string/comment stripper written for the brace
+  matching treated `'` as "scan to the next apostrophe"; Checker.kt has raw-string regexes
+  with `'` inside a character class (`(["\'])`, `[^'"]+`), so the scanner desynchronised and
+  reported the function body as **25,660 lines instead of 1,477**. A char literal is `'x'` /
+  `'\n'` / `'\uXXXX'` and nothing else; the cheap check is that every stripped line keeps its
+  original LENGTH. (2) `a[0] = "s"` on a `number[]` emits NOTHING, so the first
+  `caeElementAccessAssign` arm pin measured nothing — that helper's live path is B85.1d's
+  index-signature write (`this.bag[k] = "s"`). (3) Two builds died with round 808's Kotlin-
+  daemon `GC overhead limit exceeded` and were re-run after `./gradlew --stop` + a graceful
+  bracket-pattern kill. (4) A `--partitionCheck` invocation lost its classpath to shell
+  quoting (`\$(cat cp.txt)` inside a nested `bash -c`) and failed with
+  `NoClassDefFoundError: kotlin/coroutines/Continuation` — write such runs to a script file.
+- **A PROCESS COST TO BUDGET.** The ablation driver stops both daemons between mistakes
+  (round 808's OOM demands it), which by BUILD.1 forces a COLD compile every time: **~8
+  minutes per ablation rather than ~2.5**. A seven-mistake batch is an hour.
+- **GATE.** Suite **13,579 -> 13,596 / 0 failures / 3 skipped** (+17), python XML parser,
+  whole results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built pre-split binary, every capture confirmed non-empty first and the two class
+  dirs checked to differ (`cae*` present in one, absent in the other) —
+  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
+  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No `w:` lines in the
+  compile that produced the binary. Full derivation:
+  `docs/perf/setup-phase-and-huge-methods.md` § 13.
+- **NO WALL A/B, deliberately** — the family is bounded four times over. This lands for the
+  THRESHOLD.
+- **FOR THE NEXT AGENT.** (JIT.1) is at **12 over the limit**, and **the `Checker` list is
+  down to five**: `checkSingleCallExpressionTypesCore` **15,567** (next; its split MUST keep
+  round 793's `ccetPrologueMayFire` gate in the entry — that gate pre-refuses 98% of call
+  expressions and a walker outside it silently never runs), `checkDuplicateDeclarations`
+  **12,935**, `tryInferSingleTypeParamFromArgs` **11,930**, the `Checker` constructor
+  **11,298** (once per compile, but it CONTAINS the whole init dispatch),
+  `checkIndexSigInStatement` **10,928**, `access$checkBigintPropertyNames$emit` **10,339**
+  and `checkReturnAssignabilityCore` **9,743** (whose `CtaSections` level-C partition is its
+  split plan, exactly as level B and level E were for rounds 808/809). The non-`Checker`
+  tail is untouched: `Transformer.transformToCommonJS` **28,991**,
+  `TypeScriptCompiler.compileParsedCore` **21,535**, `Transformer.transformClassBody`
+  **16,233**, `CompilerOptionsKt.applyDirective` **13,694**, `Transformer.transform`
+  **8,934**.

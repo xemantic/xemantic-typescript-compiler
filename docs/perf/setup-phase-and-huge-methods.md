@@ -2426,3 +2426,194 @@ and on the same emit path; `tryInferSingleTypeParamFromArgs` still needs a
 scripted DATA-FLOW answer rather than a contiguity argument; `<clinit>` is a
 static initializer whose content is the class's object-level constants, and can
 only shrink by moving those initializers into helper methods it calls.
+
+## 24. (JIT.1)(e) — `Transformer.transformToCommonJS`, 28,991 → an entry at 2,944 plus nineteen helpers
+
+Round 819. The LARGEST method in the compiler, 3.6× the limit, and the first
+target in the arc whose regions **continue the caller's loop**.
+
+### 24.1 The shape that blocks a mechanical split: a moved region that `continue`s
+
+Everything in this family so far moved contiguous text that could only fall off
+its own end. `transformToCommonJS`'s bulk is
+
+    for (stmt in statementsToProcess) { when (stmt) { … seven arms … } }
+
+and two of those arms hold `continue`s that target THAT loop — 6 of the
+function's 27 (there are no `break`s): one in the
+`VariableStatement` arm (the `export const { x, ...rest }` object-rest path,
+which builds a comma expression and abandons the rest of the arm) and **five** in
+the `ImportDeclaration` arm (an import whose bindings are referenced nowhere, a
+namespace import with an empty name, a namespace import of a type-only module,
+and two combined default+named/namespace forms with nothing used). A `continue`
+cannot survive extraction into a member function, and rewriting it to `return`
+would be an edit to the moved text at six deeply nested sites.
+
+**The ONE-ITERATION FRAME.** Those two helpers wrap the moved region in
+
+    for (stmt in listOf(stmtIn)) { <the arm, verbatim> }
+
+A single-element loop makes `continue` mean exactly what it meant before —
+abandon the rest of THIS statement's processing — so the region moves verbatim,
+the control-flow token census is unchanged on both sides (`continue`/`break`
+27 == 27), and the frame's loop variable is `stmt`, which is what the arm's
+smart-cast subject was already called, so not one reference inside is rewritten
+either. **What the types do NOT say is that the list has one element**, which is
+this round's own ablation (§ 24.5).
+
+The instrument that decides WHICH regions need the frame is a brace-depth scan
+that remembers, per `continue`, whether a loop was opened inside the region
+(`tcjs_split_verify.outer_continues`) — and it earned its place on its first run:
+the hand-built list I had derived by eye said four in the import arm, and the
+scan said five. **A hand census of `continue`s is exactly the sort of thing that
+looks complete and is not**; the verify script now asserts that every region
+holding a caller-loop `continue` is framed and that no other region is.
+
+### 24.2 The regions, measured before the edit
+
+Sizes from `scripts/method_bytes_by_line.py`, HEAD line numbers. 24.2% of the
+method is INLINED stdlib bodies charged to their call sites.
+
+| region | HEAD lines | measured | helper |
+|---|---|---:|---|
+| module shape + preamble | 1396–1465 | 1,383 | `tcjsDetectModuleShape` |
+| declared-name pre-scan | 1533–1689 | 2,285 | `tcjsCollectDeclaredNames` |
+| reference/namespace pre-scan | 1691–1761 | 1,182 | `tcjsCollectNamespaceExports` |
+| export-clause pre-scan | 1763–1835 | 923 | `tcjsCollectExportClauses` |
+| prologue directives | 1837–1869 | 322 | `tcjsSplitPrologueDirectives` |
+| **arm** `VariableStatement` | 1876–2249 | **4,451** | `tcjsTransformVariableStatement` *(framed)* |
+| **arm** `FunctionDeclaration` | 2253–2291 | 449 | `tcjsTransformFunctionDeclaration` |
+| **arm** `ClassDeclaration` | 2295–2325 | 425 | `tcjsTransformClassDeclaration` |
+| **arm** `ExportAssignment` | 2329–2375 | 415 | `tcjsTransformExportAssignment` |
+| **arm** `ImportDeclaration` | 2379–2631 | 2,756 | `tcjsTransformImportDeclaration` *(framed)* |
+| **arm** `ExportDeclaration` | 2635–2837 | 2,372 | `tcjsTransformExportDeclaration` |
+| **arm** `else` | 2841–2918 | 745 | `tcjsTransformOtherStatement` |
+| early pre-preamble extraction | 2981–3032 | 738 | `tcjsExtractEarlyPrePreamble` |
+| hoisted vars + stubs | 3063–3118 | 757 | `tcjsPrependHoistedVars` |
+| export-mutation rewrites | 3137–3180 | 913 | `tcjsRewriteExportMutations` |
+| internal alias names | 3231–3253 | 1,224 | `tcjsCollectInternalAliasNames` |
+| import elision | 3255–3394 | 2,749 | `tcjsElideUnusedImports` |
+| detached header comments | 3396–3439 | 700 | `tcjsMoveDetachedHeaderComments` |
+| helper + prologue insertion | 3441–3559 | 1,775 | `tcjsInsertHelpersAndPrologue` |
+
+Entry **2,944**; largest helper `tcjsTransformVariableStatement` **4,335**. Six
+small post-loop blocks (2,065 bytecodes: the dynamic-import rewrite, the
+re-export placement, the default-export reordering, the void0 chain, the rename
+application and the direct-export identifier rewrite) stay in the entry
+deliberately — they are where the entry's remaining reads live, and moving them
+would buy margin nobody needs.
+
+**The frequency argument, honestly: irrelevant.** `transformToCommonJS` runs once
+per FILE on the EMIT path, and every A/B in this arc is `--noEmit`. It lands for
+the threshold and for (JIT.1)(f).
+
+### 24.3 The parts sum to LESS — and here only ONE of the two mechanisms fires
+
+28,886 against 28,991: **105 fewer**, i.e. 0.36%.
+
+    boxed `var` reads (round 816's mechanism)   0 ->    0
+    2-byte aload/astore (round 817's)       4,049 -> 3,979
+    1-byte aload_N/astore_N                   409 ->   536
+
+**Round 816's mechanism is measured ABSENT, and the reason is worth stating**:
+every lambda `transformToCommonJS` captures a `var` into (`filter`, `takeWhile`,
+`any`, `map`) is an INLINE stdlib function, so Kotlin never allocates a
+`Ref$*Ref` — the boxing round 816 measured needs a NON-inline lambda. Round 818
+found both mechanisms at once and warned that neither prior transfers; this
+round is the third distinct combination in three rounds.
+
+What is new here is the SIZE of the net: at nineteen call sites and 128
+arguments the added call machinery very nearly cancels the slot-addressing win.
+**So "the parts sum to less" is not a law either** — it is a small residual whose
+sign depends on how many arguments the boundaries carry.
+
+### 24.4 Equivalence, measured (round 805's five checks, plus a sixth)
+
+`scripts/tcjs_split_{analyze,apply,verify}.py`, all green: nineteen contiguous
+in-order regions re-extracted from the NEW file and compared VERBATIM (dedent 0
+for twelve body-level regions, 12 for the five plain arms, 8 for the two framed
+ones); the file RECONSTRUCTS from HEAD byte for byte (944,271 chars); the
+accounting is a PARTITION of the 2,173 body lines with every line claimed exactly
+once and 1,907 moved; control flow enumerated on both sides and BOUNDED to the
+changed region — `return` **1 + 10 == 11**, `continue`/`break` **27 == 27**; free
+variables per region equal the parameter list plus the declared prologue, and
+every one of the 128 arguments is passed BY NAME (74 of them are same-typed
+mutable containers a positional call could permute and still type-check).
+
+**The sixth check is the frame's**: every region holding a caller-loop
+`continue` is framed, no other region is, the frame's iterable is `listOf(<a
+parameter>)`, and the six caller-loop `continue`s are all inside one.
+
+### 24.5 Discrimination — and two seams the pins do NOT catch, stated
+
+Pins validated on the UNSPLIT binary first: **76 ran, exactly 5 failed and they
+are the 5 size/ratchet pins**, which must fail there. So all 23 behavioural pins
+describe HEAD. On the split binary: **76 ran, 0 failed.** Every arm below is one
+mistake, alone, on its own build, with the failure count PREDICTED first.
+
+| arm | mistake | predicted | actual |
+|---|---|---:|---:|
+| A1 | **ORDER** — `tcjsRewriteExportMutations` moved after the entry's own direct-export identifier rewrite | 1 | **1** ✔ |
+| A2 | **CONTAINER IDENTITY** — `tcjsTransformFunctionDeclaration` handed a fresh `functionExportStubs` | 3 | **2** |
+| A3 | **RETURN SIGNAL** — the import arm's flag write-back dropped | 3 | **3** ✔ |
+| A4 | **THE FRAME** — `listOf(stmtIn, stmtIn)` on the import arm | 2 | **1** |
+| A5 | **DROPPED CALL** — `tcjsMoveDetachedHeaderComments` | 1 | **0** |
+| A6 | **NEGATIVE CONTROL** — swap two pre-scans that read only `originalSourceFile` | 0 | **0** ✔ |
+
+Every arm reports `RAN 76`, so no arm is a vacuous pass, and every arm compiled
+with 0 `e:`.
+
+**A2 and A4 were over-predicted, and both misses are informative.** A2's third
+predicted pin exports its function through an `export { realFn }` CLAUSE, so its
+stub is appended by the `ExportDeclaration` arm, not the `FunctionDeclaration`
+one — the two arms write to the same list and my prediction attributed the stub
+to the wrong producer. A4's second predicted pin asserts that a wholly unused
+import emits nothing and a used one emits exactly one `require`; running the arm
+twice still emits nothing for the unused one (the `continue` fires both times)
+and the duplicate `require` for the used one is removed downstream, so only the
+temp-numbering pin saw it. **The frame ablation IS caught — but by one pin, not
+two, and only through the temp-var numbering.**
+
+**A5 IS AN UNDISCRIMINATED SEAM, AND THE FULL CORPUS DOES NOT DISCRIMINATE IT
+EITHER.** Dropping `tcjsMoveDetachedHeaderComments`' call left all 76 pins green,
+so the whole 13,778-test suite was run against that ablation: **13,778 / 0
+failures**. The structural reason is that `tcjsExtractEarlyPrePreamble` — the
+EARLY twin, which runs before the hoist insertions — already handles every
+header-comment shape reachable here, including one whose import is subsequently
+elided; the post-elision pass is a second chance for a shape where elision
+changes which statement is `result[1]`, and neither a probe in reach nor any of
+the 993 CommonJS emit baselines builds one. **This is a LEAD, not a licence to
+delete it**: a corpus zero bounds a shape's frequency, never its existence
+(CLAUDE.md, round 792), and the honest next step is a counted ablation (how often
+does the region's emitting branch fire?), not a deletion.
+
+### 24.6 Gate
+
+Suite **13,752 → 13,778 / 0 failures / 3 skipped** (+26: 23
+`TransformToCommonJsSplitTest` + 3 `HugeMethodLimitTest` size pins), whole
+results dir wiped first, counted with the python XML parser. 8-profile grid
+diffed set-for-set BOTH directions against a purpose-built pre-split binary,
+identical direct `java` command, absolute class dirs, class dirs confirmed to
+differ (0 `tcjs*` methods vs 20), every capture non-empty and free of an
+`and N more error` marker — **46/46/46/46/46/46/46/94, 0 added and 0 removed on
+all eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20
+counters +0.00%**. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0
+`w:` and 0 `e:`**. `huge_methods.py --fail-over 2` exits 0.
+
+**The gate that actually sees this function is the corpus EMIT baselines.** Of
+the 5,692 `compiles to JavaScript matching` subtests, **993 have a
+CommonJS-shaped baseline** — i.e. they run `transformToCommonJS` end to end — and
+they partition by the exact families these regions own: `exports.default` 116,
+`module.exports` 101, `__createBinding` 100, `__importStar` 89, `__importDefault`
+64, `__exportStar` 23, `__rest` 4 (that last one is the `VariableStatement` arm's
+object-rest path, the branch that holds its caller-loop `continue`). All passed.
+
+### 24.7 The list is now TWO
+
+`Checker.tryInferSingleTypeParamFromArgs` **11,930** and `Checker.<clinit>`
+**10,339**. Every `Transformer` entry is gone, and with it every target in this
+arc that a contiguity argument could settle: the first needs a scripted DATA-FLOW
+answer (mutable locals cross every candidate boundary) and the second is a static
+initializer whose content is the class's object-level constants, shrinkable only
+by moving those initializers into helper methods it calls — and priceable by no
+A/B in this repo, since it runs once, at class load.

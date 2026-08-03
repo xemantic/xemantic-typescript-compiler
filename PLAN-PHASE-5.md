@@ -20,6 +20,102 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 819 (2026-08-03) — (JIT.1)(e) LANDED FOR `Transformer.transformToCommonJS`:
+28,991 BYTECODES -> AN ENTRY AT 2,944 PLUS NINETEEN `tcjs*` HELPERS. CENSUS 3 -> 2, AND
+EVERY `Transformer` ENTRY IS GONE. THE NEW SHAPE: A MOVED REGION THAT `continue`s THE
+CALLER'S LOOP.**
+
+- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **3** over the
+  limit, named exactly as the round-818 handoff left them, `transformToCommonJS` **28,991**
+  — the largest method in the compiler, 3.6x the limit. After: **2**, measured the same way
+  on the binary built from the split source.
+- **THE SHAPE NO EARLIER TARGET HAD.** The bulk of this function is
+  `for (stmt in statementsToProcess) { when (stmt) { … seven arms … } }`, and two arms hold
+  `continue`s that target THAT loop — **6 of the function's 27** (there are no `break`s):
+  one in the `VariableStatement` arm (the `export const { x, ...rest }` object-rest path)
+  and five in the `ImportDeclaration` arm. A `continue` cannot survive extraction into a
+  member function. **The fix is a ONE-ITERATION FRAME**: the moved text runs inside
+  `for (stmt in listOf(stmtIn)) { … }`, where `continue` means exactly what it meant before
+  — abandon the rest of THIS statement — so the region moves VERBATIM, the control-flow
+  census is unchanged (`continue`/`break` **27 == 27**), and because the frame's loop
+  variable is `stmt` (the arm's own smart-cast subject) not one reference inside is
+  rewritten either. The alternative — rewriting six deeply nested `continue`s to
+  `return <holder>` — edits the moved text at exactly the sites hardest to verify.
+- **THE INSTRUMENT THAT DECIDES WHICH REGIONS NEED THE FRAME EARNED ITS PLACE ON ITS FIRST
+  RUN.** A brace-depth scan that asks, per `continue`, whether a loop was opened inside the
+  region (`tcjs_split_verify.outer_continues`) said **five** in the import arm; the list I
+  had derived by eye said four. A hand census of `continue`s looks complete and is not.
+  The verify script now asserts, as a sixth check, that every region holding a caller-loop
+  `continue` is framed and no other region is.
+- **REGIONS MEASURED BEFORE THE EDIT** with `scripts/method_bytes_by_line.py` — 1,383 /
+  2,285 / 1,182 / 923 / 322 / **4,451** / 449 / 425 / 415 / **2,756** / **2,372** / 745 /
+  738 / 757 / 913 / 1,224 / **2,749** / 700 / 1,775 of the 28,991. Entry **2,944**, largest
+  helper 4,335. Six small post-loop blocks (2,065 bytecodes) stay in the entry deliberately.
+  **The frequency argument is irrelevant** — this runs once per FILE on the EMIT path, and
+  every A/B in this arc is `--noEmit`.
+- **ONLY ONE OF THE TWO BYTECODE-NEGATIVE MECHANISMS FIRES, AND THE NET IS SMALL.** 28,886
+  vs 28,991 = **105 fewer (0.36%)**: 2-byte `aload/astore` 4,049 -> 3,979, 1-byte 409 ->
+  536, and round 816's boxing mechanism measures **0 both sides** — every lambda this
+  function captures a `var` into is an INLINE stdlib function, so no `Ref$*Ref` is ever
+  allocated. Three rounds, three different combinations; **"the parts sum to less" is not a
+  law** — at 19 call sites and 128 arguments the added call machinery nearly cancels the
+  slot-addressing win.
+- **EQUIVALENCE (round 805's five checks + the frame check).** Nineteen regions re-extracted
+  from the NEW file VERBATIM (dedent 0/12/8); file RECONSTRUCTS from HEAD byte for byte
+  (944,271 chars); PARTITION of 2,173 body lines, 1,907 moved, none dropped; `return`
+  **1 + 10 == 11**, `continue`/`break` **27 == 27**; free variables per region == parameters
+  + prologue, and all **128 arguments passed BY NAME** (74 are same-typed mutable containers
+  a positional call could permute and still type-check).
+- **DISCRIMINATION — pins validated on the UNSPLIT binary first (76 ran, exactly 5 failed
+  and they are the 5 size/ratchet pins), 76 ran / 0 failed on the split. Each mistake alone,
+  count PREDICTED first:** A1 ORDER (`tcjsRewriteExportMutations` after the entry's own
+  direct-export rewrite) predicted 1, **1**; A2 CONTAINER IDENTITY (fresh
+  `functionExportStubs`) predicted 3, **2**; A3 RETURN SIGNAL (import flag write-back
+  dropped) predicted 3, **3**; A4 THE FRAME (`listOf(stmtIn, stmtIn)`) predicted 2, **1**;
+  A5 DROPPED CALL (`tcjsMoveDetachedHeaderComments`) predicted 1, **0**; A6 NEGATIVE CONTROL
+  (swap two pre-scans that read only `originalSourceFile`) predicted 0, **0**. Every arm
+  `RAN 76` with 0 `e:`.
+- **THE TWO MISSES, AND THE SEAM NOTHING DISCRIMINATES.** A2's third pin exports through an
+  `export { f }` CLAUSE, so its stub is appended by the `ExportDeclaration` arm, not the
+  `FunctionDeclaration` one — two arms write the same list and the prediction blamed the
+  wrong producer. A4's second pin survives two iterations because the unused import's
+  `continue` fires both times and the duplicate `require` is removed downstream; the frame
+  is caught, but by ONE pin, through temp-var numbering. **A5 is undiscriminated by the pins
+  AND by the whole corpus**: the full suite was re-run against that ablation and came back
+  **13,778 / 0 failures**. Structural reason: `tcjsExtractEarlyPrePreamble` (the EARLY twin,
+  before the hoist insertions) already handles every header-comment shape reachable here,
+  including one whose import is later elided; the post-elision pass is a second chance for a
+  shape where elision changes which statement is `result[1]`, and neither a probe in reach
+  nor any of the 993 CommonJS emit baselines builds one. **That is a LEAD, not a licence to
+  delete** — a corpus zero bounds frequency, never existence — and the honest next step is a
+  COUNTED ablation of the region's emitting branch.
+- **GATE.** Suite **13,752 -> 13,778 / 0 failures / 3 skipped** (+26: 23
+  `TransformToCommonJsSplitTest` + 3 `HugeMethodLimitTest` size pins), python XML parser,
+  whole results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
+  purpose-built pre-split binary, identical direct `java` command, absolute class dirs,
+  class dirs confirmed to differ (0 `tcjs*` methods vs 20), every capture non-empty and free
+  of an `and N more error` marker — **46/46/46/46/46/46/46/94, 0 added and 0 removed on all
+  eight**. `--partitionCheck 2` **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters
+  +0.00%**. `compileKotlinJvm compileTestKotlinJvm --rerun-tasks`: **0 `w:` and 0 `e:`**.
+  `huge_methods.py --fail-over 2` exits 0. **The gate that actually sees this function is
+  the corpus EMIT baselines**: of the 5,692 `compiles to JavaScript matching` subtests,
+  **993 have a CommonJS-shaped baseline**, partitioned by exactly the families these regions
+  own — `exports.default` 116, `module.exports` 101, `__createBinding` 100, `__importStar`
+  89, `__importDefault` 64, `__exportStar` 23, `__rest` 4 (that last is the
+  `VariableStatement` arm's object-rest path, the branch holding its caller-loop
+  `continue`). All passed. **No wall A/B was run and none should be.**
+  Full derivation: `docs/perf/setup-phase-and-huge-methods.md` § 24.
+- **FOR THE NEXT AGENT. (JIT.1) is at TWO, the ratchet is at 2, and every remaining target
+  is a DIFFERENT KIND OF PROBLEM from the eleven this arc has solved:**
+  `Checker.tryInferSingleTypeParamFromArgs` **11,930** needs a scripted DATA-FLOW answer —
+  mutable locals cross every candidate boundary, so no contiguity argument settles it — and
+  `Checker.<clinit>` **10,339** is a static initializer holding the class's object-level
+  constants, shrinkable only by moving those initializers into helper methods it calls, and
+  priceable by no A/B in this repo (it runs once, at class load). Also open, from this
+  round: **is `tcjsMoveDetachedHeaderComments` reachable at all?** — counted ablation, not
+  deletion.
+
+
 **Round 818 (2026-08-03) — (JIT.1)(e) LANDED FOR `Transformer.transformClassBody`:
 16,233 BYTECODES -> AN ENTRY AT 5,202 PLUS NINE `tcb*` HELPERS. CENSUS 4 -> 3 — AND IT IS
 THE FIRST TARGET WHERE **BOTH** BYTECODE-NEGATIVE MECHANISMS FIRE AT ONCE.**
@@ -999,109 +1095,6 @@ LEGACY DOUBLE-CHECK CANNOT BE DISCRIMINATED BY ANY SHAPE.**
   `docs/perf/setup-phase-and-huge-methods.md` § 14.
 
 
-**Round 809 (2026-08-03) — (JIT.1)(g) LANDED FOR `checkAssignmentExpressionCore`: 18,100
-BYTECODES (2.3x HotSpot's LIMIT) -> AN ENTRY AT 3,861 PLUS NINE `cae*` HELPERS. CENSUS
-13 -> 12. AND THE ROUND'S REAL RESULT IS THAT THE SEAM PREDICTIONS WERE WRONG IN BOTH
-DIRECTIONS — 2 OF 7 SIGNALS DISCRIMINATE, AND NEITHER OF THE TWO IS THE ONE THAT WAS
-ARGUED FOR.**
-
-- **The census was re-measured at HEAD on a rebuilt binary first** (law 1): **13** over the
-  limit, `checkAssignmentExpressionCore` **18,100** — the round-808 handoff reproduced
-  exactly, including the non-`Checker` tail.
-- **THE SPLIT.** Entry **3,861** plus `caeUnionAndMissingPropertyGuards` **2,867**
-  (`E_UNION`+`E_B175`+`E_B127`), `caeElaborateMismatch` **2,803** (`E_ELAB`),
-  `caeModuleAliasAndLibPairShapes` **1,704** (`E_MODULE`+`E_B236`),
-  `caeLegacyDeclaredStringPath` **1,626** (`E_DECLSTR`), `caeIndexSigAndSignatureGuards`
-  **1,608** (`E_MID`+`E_SIGS`+`E_OBJLIT`), `caePrototypeMemberAssign` **1,319** (`E_PROTO`),
-  `caeForeignTpTargetAndClassRhs` **674** (`E_FTP`+`E_CTORID`), `caeThisPropertyAssign`
-  **557** (`E_THIS`), `caeElementAccessAssign` **453** (`E_ELEM`). The ten sum to **17,472
-  against 18,100** — a SIXTH confirmation that a bytecode count is a THRESHOLD predicate and
-  not a cost model.
-- **THE PARTITION WAS ALREADY IN THE SOURCE, AND IT IS A DIFFERENT LEVEL OF THE SAME PROBE
-  OBJECT.** Round 808 followed `CtaSections` level B; this follows level **E** (round 786's
-  own instrument). Nothing new had to be measured to choose the boundaries — which is the
-  cheapest form this family has taken, and the reason to keep landing partitions even when
-  their own round finds no lever.
-- **WHAT STAYS IN THE ENTRY IS MEASURABLE HERE, NOT ARGUED.** Level E says 10,432 of 17,179
-  invocations (61%) exit in the entry row because the expression is not an `=`
-  `BinaryExpression` — the eligibility test lives INSIDE this function. The four rows
-  carrying the cost stay inline: the SOURCE type (160 ms net), flow narrowing (59), the
-  identifier-target guards (33), `canUseTypeEngine`+`checkTypeRelatedTo` (20), plus the
-  one-line `x.prop = value` arm (31). The two LARGEST moved regions are the two the same
-  partition prices at nothing: `E_ELAB` is **0.4 ms over 3,791 reaches**.
-- **CROSS-BOUNDARY VALUES: NONE — computed, not assumed.** Every `val`/`var` in the function
-  was listed with its brace depth and intersected per region against the identifiers that
-  region uses. Three look like they escape and do not: the outer `rhs` (shadowed by a new
-  `val rhs` inside `E_B175`), and `b175RhsClassSym`, read by `E_B127`'s gate — which is
-  exactly why those rows are in the SAME helper. One pair CONSTRAINS the partition:
-  `savedContextual` is set in `E_SRCTYPE` and restored at the end of `E_NARROW`, so no region
-  may straddle them; both stay in the entry.
-- **EQUIVALENCE IS A MEASUREMENT (round 805's five checks, all green):** nine contiguous
-  in-order runs re-extracted from the NEW file and diffed against HEAD; the entry
-  RECONSTRUCTED from HEAD with the regions replaced by call sites — **IDENTICAL at 345
-  lines**; accounting closing exactly (HEAD body 1,477 = kept 335 + moved 1,142; entry
-  345 = 335 + 10); every `return` enumerated (**38 = 15 kept + 23 moved**, the other 24
-  `return` occurrences being `return@run` x16 and `return@dataProp` x8); free variables
-  computed PER REGION.
-- **PINS: 17 new** — `CaeSplitTest` (14: one ARM pin per helper asserting its distinctive
-  MESSAGE and a COUNT of 1, two seam pins, an ordering pin over a file reaching five
-  helpers, a chained-assignment recursion pin, and a negative control) and
-  `HugeMethodLimitTest` (+3).
-- **DISCRIMINATION: 2 OF 7, SEVEN SEPARATE BUILDS, CONTROL FIRST (35 pins, 0 failed), AND
-  EVERY RUN CONFIRMED 14 PINS RAN** (round 808's dead-build tell). `caeForeignTpTargetAndClassRhs`
-  fails **exactly one pin, its own**; `caeElaborateMismatch` fails **three** (its arm pin,
-  the elaboration seam pin, the ordering pin). `caePrototypeMemberAssign`,
-  `caeModuleAliasAndLibPairShapes`, `caeIndexSigAndSignatureGuards`,
-  `caeUnionAndMissingPropertyGuards` and `caeLegacyDeclaredStringPath` leave **every pin
-  GREEN — recorded NOT DISCRIMINATED**, and are redundant guards on today's code.
-- **THE PREDICTION WAS WRONG IN BOTH DIRECTIONS, AND THAT IS THE TRANSFERABLE PART.** The
-  prototype seam was argued to discriminate (drop it and the target-kind dispatch reaches
-  `checkPropertyAccessAssignment`, which "must" re-emit) — it does not, because that walker
-  is silent for an `X.prototype.p` target. `caeForeignTpTargetAndClassRhs` was argued
-  redundant (`canUseTypeEngine` skips class-instance-vs-constructor) — it is the sharpest
-  single-pin result of the round. So reading the downstream gates is how you CHOOSE which
-  seams to pin, never a substitute for the ablation. The undiscriminating pin was RENAMED in
-  `CaeSplitTest` to say what it actually tests.
-- **WHAT DID NOT WORK.** (1) The first Kotlin string/comment stripper written for the brace
-  matching treated `'` as "scan to the next apostrophe"; Checker.kt has raw-string regexes
-  with `'` inside a character class (`(["\'])`, `[^'"]+`), so the scanner desynchronised and
-  reported the function body as **25,660 lines instead of 1,477**. A char literal is `'x'` /
-  `'\n'` / `'\uXXXX'` and nothing else; the cheap check is that every stripped line keeps its
-  original LENGTH. (2) `a[0] = "s"` on a `number[]` emits NOTHING, so the first
-  `caeElementAccessAssign` arm pin measured nothing — that helper's live path is B85.1d's
-  index-signature write (`this.bag[k] = "s"`). (3) Two builds died with round 808's Kotlin-
-  daemon `GC overhead limit exceeded` and were re-run after `./gradlew --stop` + a graceful
-  bracket-pattern kill. (4) A `--partitionCheck` invocation lost its classpath to shell
-  quoting (`\$(cat cp.txt)` inside a nested `bash -c`) and failed with
-  `NoClassDefFoundError: kotlin/coroutines/Continuation` — write such runs to a script file.
-- **A PROCESS COST TO BUDGET.** The ablation driver stops both daemons between mistakes
-  (round 808's OOM demands it), which by BUILD.1 forces a COLD compile every time: **~8
-  minutes per ablation rather than ~2.5**. A seven-mistake batch is an hour.
-- **GATE.** Suite **13,579 -> 13,596 / 0 failures / 3 skipped** (+17), python XML parser,
-  whole results dir wiped first. 8-profile grid diffed set-for-set BOTH directions against a
-  purpose-built pre-split binary, every capture confirmed non-empty first and the two class
-  dirs checked to differ (`cae*` present in one, absent in the other) —
-  **46/46/46/46/46/46/46/94, 0 added and 0 removed on all eight**. `--partitionCheck 2`
-  **EQUIVALENT — 46**. `cost_gate.py` **all 20 counters +0.00%**. No `w:` lines in the
-  compile that produced the binary. Full derivation:
-  `docs/perf/setup-phase-and-huge-methods.md` § 13.
-- **NO WALL A/B, deliberately** — the family is bounded four times over. This lands for the
-  THRESHOLD.
-- **FOR THE NEXT AGENT.** (JIT.1) is at **12 over the limit**, and **the `Checker` list is
-  down to five**: `checkSingleCallExpressionTypesCore` **15,567** (next; its split MUST keep
-  round 793's `ccetPrologueMayFire` gate in the entry — that gate pre-refuses 98% of call
-  expressions and a walker outside it silently never runs), `checkDuplicateDeclarations`
-  **12,935**, `tryInferSingleTypeParamFromArgs` **11,930**, the `Checker` constructor
-  **11,298** (once per compile, but it CONTAINS the whole init dispatch),
-  `checkIndexSigInStatement` **10,928**, `access$checkBigintPropertyNames$emit` **10,339**
-  and `checkReturnAssignabilityCore` **9,743** (whose `CtaSections` level-C partition is its
-  split plan, exactly as level B and level E were for rounds 808/809). The non-`Checker`
-  tail is untouched: `Transformer.transformToCommonJS` **28,991**,
-  `TypeScriptCompiler.compileParsedCore` **21,535**, `Transformer.transformClassBody`
-  **16,233**, `CompilerOptionsKt.applyDirective` **13,694**, `Transformer.transform`
-  **8,934**.
-
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 ---
@@ -1272,6 +1265,21 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     inherited-index shapes found the ONE line that is uniquely ours — a method against an
     inherited CALLABLE index value type. Full derivation:
     `docs/perf/setup-phase-and-huge-methods.md` § 17.
+  - [x] **(e) DONE round 819 — the sub-item is CLOSED: every `Transformer`/front-end
+    method is under the limit.** Landed across five rounds: `applyDirective` 13,694 → an
+    entry at 89 plus four helpers (815), `TypeScriptCompiler.compileParsedCore` 21,535 →
+    293 plus ten (816), `Transformer.transform` 8,934 → 2,989 plus seven (817),
+    `Transformer.transformClassBody` 16,233 → 5,202 plus nine (818), and finally
+    **`Transformer.transformToCommonJS` 28,991 → an entry at 2,944 plus nineteen `tcjs*`
+    helpers (819, census 3 → 2)** — the largest method in the compiler and the first target
+    whose regions `continue` the CALLER's loop, solved with a ONE-ITERATION FRAME
+    (`for (stmt in listOf(stmtIn)) { … }`) that keeps all six such `continue`s verbatim.
+    **No wall A/B was run for any of the five and none should be**: these are the EMIT path
+    and every A/B in this arc is `--noEmit`; the (e) prize was measured at round 805 as
+    0.14–0.25% of an emit-mode compile, i.e. inside the noise, so they land for the
+    THRESHOLD and the (f) gate. Their behavioural gate is the corpus EMIT baselines — 993
+    of the 5,692 `compiles to JavaScript matching` subtests carry a CommonJS-shaped
+    baseline. Full derivations: `docs/perf/setup-phase-and-huge-methods.md` §§ 19–20, 22–24.
   - [x] **(f) DONE round 807 — `checkArgumentsAgainstSignatureCore` 23,890 → an entry at
     7,173 plus THIRTEEN `caas*` helpers (456–2,792), one per contiguous run of the
     committed `ArgSections` partition; census 15 → 14.** **First split of a LOOP BODY, and
