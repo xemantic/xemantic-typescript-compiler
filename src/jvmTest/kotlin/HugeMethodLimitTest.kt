@@ -447,6 +447,56 @@ class HugeMethodLimitTest {
         assert(parts.values.sum() > 4500)
     }
 
+    /**
+     * (JIT.1)(c) round 811 — the four helpers `checkSingleCallExpressionTypesCore`
+     * was split into. At **15,567 bytecodes** it was the largest `Checker` method
+     * left, and the boundaries are four contiguous runs of the committed
+     * `CallSections` partition (round 734's (CALL.1)(a) instrument): the seven
+     * dedicated prologue walkers behind round 793's `ccetPrologueMayFire` gate —
+     * which STAYS in the entry — plus the three branches the same partition's exit
+     * census prices at 0.2% of invocations or less. The behavioural gate is
+     * `CcetSplitTest`.
+     */
+    private val ccetSplitParts = setOf(
+        "ccetPrologueWalkers",
+        "ccetUnionCalleeChecks",
+        "ccetNoCallSignatureDiagnostics",
+        "ccetExplicitTypeArguments",
+    )
+
+    @Test
+    fun `checkSingleCallExpressionTypesCore is below HotSpot's HugeMethodLimit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val core = sizes["checkSingleCallExpressionTypesCore"]
+            ?: fail("checkSingleCallExpressionTypesCore not found in Checker")
+        // Positive control: the parse really did read a substantial method (it is
+        // 5,149 bytecodes after the split), so a zero cannot pass this vacuously.
+        assert(core > 2000)
+        assert(core < HUGE_METHOD_LIMIT)
+    }
+
+    @Test
+    fun `every part of the checkSingleCallExpressionTypes split is below the limit`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val missing = ccetSplitParts - sizes.keys
+        if (missing.isNotEmpty()) fail("split parts not found in Checker: $missing")
+        val parts = sizes.filterKeys { it in ccetSplitParts }
+        val over = parts.filterValues { it >= HUGE_METHOD_LIMIT }
+        if (over.isNotEmpty()) fail("over HotSpot's HugeMethodLimit: $over")
+    }
+
+    @Test
+    fun `the checkSingleCallExpressionTypes split parts each carry a real share of the body`() {
+        val sizes = codeSizes("com.xemantic.typescript.compiler.Checker")
+        val parts = sizes.filterKeys { it in ccetSplitParts }
+        assert(parts.size == 4)
+        // Measured smallest part: 2,068 bytecodes (the prologue walkers).
+        assert(parts.values.min() > 1500)
+        // ... and the sum must still be the bulk of the original 15,567, i.e. the
+        // body was MOVED, not deleted. Measured sum: 10,361.
+        assert(parts.values.sum() > 8000)
+    }
+
     /** A minimal JVM class-file reader — enough to walk to each method's `Code` length. */
     private class ClassFileReader(private val b: ByteArray) {
         private var p = 0

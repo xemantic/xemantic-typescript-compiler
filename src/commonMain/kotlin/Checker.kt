@@ -139835,137 +139835,7 @@ interface DataView {
             runPrologue = ccetPrologueMayFire(expr, calleeExpr, fileName)
         }
         if (runPrologue) {
-        val pgD0 = diagnostics.size
-        // B216: dependent indexed-access constraint (`V extends O[K1][K2]`) — per-call
-        // evaluation with the key TPs fixed to this call's string-literal args.
-        if (calleeExpr is PropertyAccessExpression &&
-            tryEmitDependentIndexedConstraintTs2345(expr, source, fileName)) return
-        // recursiveTypeRelations: `<arr>.reduce<U>((acc, key: keyof X) => …, init)` where the
-        // callback's currentValue param is annotated `keyof X` but the array elem is string/number.
-        CallSections.at(CallSections.REDUCE_KEYOF)
-        if (calleeExpr is PropertyAccessExpression &&
-            tryEmitReduceCallbackKeyofMismatch(expr, source, fileName)) return
-        // unionOfArraysFilterCall: `(... as [Fizz] | readonly [Buzz?]).filter(item => item?.id < 5)`
-        // — optional tuple element → callback param possibly-undefined → TS18048 (additive).
-        CallSections.at(CallSections.TUPLE_FILTER)
-        if (calleeExpr is PropertyAccessExpression &&
-            tryEmitTupleUnionFilterOptionalElementUndefined(expr, source, fileName)) return
-        // inferFromGenericFunctionReturnTypes1: `<SetOf>.transform(compose(filter(λ), map(λ)…))`
-        // — thread the element type; a last `map(x => x.method())` whose threaded type lacks the
-        // method → TS2339 (corpus-unique mini-inference, additive).
-        CallSections.at(CallSections.COMPOSE_CHAIN)
-        if (calleeExpr is PropertyAccessExpression &&
-            tryEmitComposeChainMapMemberAccess(expr, source, fileName)) return
-        // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
-        // param `object | null`; our embedded lib has `any`, so the standard arg check
-        // never fires. tsc display quirk: a non-nullish failing primitive reports
-        // against 'object' (the union member it relates to), `undefined` against the
-        // full 'object | null' (and only under strictNullChecks — nullish args are
-        // legal with SNC off). `Object.create(null/objExpr)` and shadowed `Object`
-        // never enter.
-        CallSections.at(CallSections.OBJECT_CREATE)
-        run {
-            if (calleeExpr !is PropertyAccessExpression || calleeExpr.name.text != "create") return@run
-            if ((calleeExpr.expression as? Identifier)?.text != "Object") return@run
-            if (currentFileLocals?.get("Object") != null) return@run
-            // Explicit type args already error TS2558 ("Expected 0 type arguments") and
-            // tsc then SKIPS the argument checks (assigningFromObjectToAnythingElse).
-            if (!expr.typeArguments.isNullOrEmpty()) return@run
-            if (expr.arguments.isEmpty() || expr.arguments.size > 2) return@run
-            val arg = expr.arguments[0]
-            val argType = getWidenedLiteralType(getTypeOfExpression(arg))
-            val display: String? = when {
-                argType is Type.Intrinsic && argType.intrinsicName in
-                    setOf("number", "string", "boolean", "bigint", "symbol") -> "object"
-                strictNullChecks && argType.flags.hasAny(TypeFlags.Undefined) -> "object | null"
-                else -> null
-            }
-            if (display != null) {
-                val start = arg.pos
-                val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '$display'.",
-                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
-                    line = line, character = character, start = start, length = length,
-                ))
-            }
-        }
-        // B154: calling the `default` of a CJS `export default` module from an ESM file
-        // under nodenext is TS2349 — that default IS the CJS namespace `typeof import("mod")`
-        // (no call signatures), not the inner value. Covers default/named-default imports
-        // and namespace-member-of-re-export. Early (before the anyType bail). FP-safe:
-        // tightly gated (nodenext + ESM importer + CJS target + `export default`).
-        CallSections.at(CallSections.CJS_DEFAULT_NS)
-        run {
-            val (direct, nsMembers) = cjsDefaultNsShapes(fileName)
-            if (direct.isEmpty() && nsMembers.isEmpty()) return@run
-            val base: String? = when (calleeExpr) {
-                is Identifier -> direct[calleeExpr.text]
-                is PropertyAccessExpression -> (calleeExpr.expression as? Identifier)?.let {
-                    nsMembers[it.text]?.get(calleeExpr.name.text)
-                }
-                else -> null
-            }
-            if (base != null) {
-                val (start, length) = if (calleeExpr is PropertyAccessExpression)
-                    calleeExpr.name.pos to calleeExpr.name.text.length
-                else calleeExpr.pos to (expressionTrueEnd(calleeExpr) - calleeExpr.pos)
-                if (length > 0) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "This expression is not callable.",
-                        category = DiagnosticCategory.Error, code = 2349,
-                        fileName = fileName, line = line, character = character,
-                        start = start, length = length,
-                        messageChain = listOf("  Type 'typeof import(\"$base\")' has no call signatures."),
-                    ))
-                    return
-                }
-            }
-        }
-        CallSections.at(CallSections.SUPER)
-        if (calleeExpr is Identifier && calleeExpr.text == "super" && !expr.typeArguments.isNullOrEmpty()) {
-            val typeArgs = expr.typeArguments
-            val start = typeArgs.first().pos - 1
-            val end = typeArgs.last().end
-            val length = end - start
-            if (length > 0) {
-                val (line, character) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "'super' may not use type arguments.",
-                    category = DiagnosticCategory.Error,
-                    code = 2754,
-                    fileName = fileName,
-                    line = line,
-                    character = character,
-                    start = start,
-                    length = length,
-                ))
-            }
-        }
-        // 17.19: `super(...)` arg checking via the base ctor signature stashed by the
-        // ClassDeclaration handler. `getCalleeType("super")` returns anyType (no global
-        // entry), so the standard path early-returns at the anyType bail below. Handle
-        // here, then return.
-        if (calleeExpr is Identifier && calleeExpr.text == "super") {
-            currentSuperBaseSig?.let { sig ->
-                checkArgumentsAgainstSignature(expr.arguments, sig, source, fileName)
-            }
-            return
-        }
-        // 17.20: `super.method(...)` arg checking. Resolves the method on the base
-        // instance type stashed by the ClassDeclaration handler. The standard path
-        // would treat `super` as anyType and bail before reaching arg checking.
-        if (calleeExpr is PropertyAccessExpression && calleeExpr.expression is Identifier &&
-            (calleeExpr.expression).text == "super") {
-            val baseType = currentSuperBaseType
-            if (baseType != null) {
-                if (handleSuperMethodCall(expr, calleeExpr, baseType, source, fileName)) return
-            }
-        }
-        CallSections.close(CallSections.N_PROLOGUE, prologueT)
-        CallSections.closePreGate(fired = diagnostics.size > pgD0)
+            if (ccetPrologueWalkers(expr, calleeExpr, source, fileName, prologueT)) return
         }
         // Resolve callee to get its type
         CallSections.at(CallSections.CALLEE_TYPE)
@@ -140082,603 +139952,21 @@ interface DataView {
         //   (c) all constituents callable but sigs differ structurally → "Each member ... has signatures, but none ... compatible..."
         CallSections.at(CallSections.UNION_CALLEE)
         if (calleeType is Type.Union) {
-            // (M3.4 slice, round 408) Two FP suppressions before the "not callable"
-            // verdict — BOTH only REMOVE constituents, so they can suppress a false
-            // positive but never add one (the corpus suite is the regression gate):
-            //   1. An OPTIONAL-CALL `f?.(...)` short-circuits on a nullish callee, so a
-            //      `null`/`undefined` constituent is legal (tsc drops nullish from the
-            //      apparent callee type). getCalleeType keeps them.
-            //   2. A narrowable-reference callee (Identifier / property path) may have had
-            //      its `undefined` (non-callable) member removed by a truthiness / typeof /
-            //      `??=` / `||`-assign / assert guard — but getCalleeType resolves an
-            //      Identifier callee via currentLocalTypes (the DECLARED type) WITHOUT
-            //      applying flow narrowing (getTypeOfIdentifier deliberately does not; see
-            //      the flow-narrowing gotcha). Re-narrow the callee reference here.
-            // Gated to the case that WOULD have errored (a non-callable constituent), so
-            // the case-(c) all-callable structural-mismatch path below is untouched.
-            if ((calleeExpr is Identifier || calleeExpr is PropertyAccessExpression) &&
-                calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {
-                var eff: Type = calleeType
-                if (expr.questionDotToken) {
-                    // `calleeType` is smart-cast to Type.Union above (its `.types` was read).
-                    val kept = calleeType.types.filter { !isNullishConstituent(it) }
-                    eff = when {
-                        kept.isEmpty() -> calleeType
-                        kept.size == 1 -> kept[0]
-                        else -> getUnionType(kept)
-                    }
-                }
-                if (eff is Type.Union) eff = getNarrowedTypeForReference(eff, calleeExpr)
-                fun allCallable(t: Type): Boolean = when {
-                    t === anyType || t === errorType -> true
-                    t is Type.Union -> t.types.all { allCallable(it) }
-                    else -> getCallSignaturesOfType(t).isNotEmpty()
-                }
-                if (allCallable(eff)) return
-            }
-            val constituents = calleeType.types
-            val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
-            val unionDisplay = typeToString(calleeType)
-            val computeSpan = {
-                if (calleeExpr is PropertyAccessExpression) {
-                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
-                } else {
-                    val s = calleeExpr.pos
-                    Pair(s, expressionTrueEnd(calleeExpr) - s)
-                }
-            }
-            if (nonCallable.isNotEmpty() && nonCallable.size != constituents.size) {
-                // Case (b): mixed callable / non-callable.
-                val firstMissing = nonCallable[0]
-                val missingDisplay = typeToString(firstMissing)
-                val (start, length) = computeSpan()
-                if (length > 0) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    diagnostics.add(Diagnostic(
-                        message = "This expression is not callable.",
-                        category = DiagnosticCategory.Error, code = 2349,
-                        fileName = fileName, line = line, character = character,
-                        start = start, length = length,
-                        messageChain = listOf(
-                            "  Not all constituents of type '$unionDisplay' are callable.",
-                            "    Type '$missingDisplay' has no call signatures.",
-                        ),
-                    ))
-                }
-                return
-            }
-            if (nonCallable.isEmpty() && constituents.size >= 2) {
-                // Case (c): all callable; check if sigs differ structurally (different
-                // TypeParam counts, different first-param types).
-                val sigsList = constituents.map { getCallSignaturesOfType(it).firstOrNull() }
-                val hasNullSig = sigsList.any { it == null }
-                if (!hasNullSig) {
-                    val sigs = sigsList.map { it!! }
-                    // B516: union-of-callables combined signature (tsc getUnionSignatures).
-                    // When every member call signature is type-parameter-free, has the SAME
-                    // (non-zero) required-only arity, no `this`/optional/rest params, AND at
-                    // least one parameter position has DIFFERING types across members, tsc
-                    // synthesizes ONE signature whose parameter at position i is the
-                    // INTERSECTION of the members' types there (e.g.
-                    // `((x:number)=>string) | ((x:boolean)=>string)` → `(x: number & boolean)`
-                    // = `(x: never)`). Calling it then checks the args against the combined
-                    // (often `never`) parameters — yielding TS2345 / TS2554 instead of the
-                    // (incorrect) "none of those signatures are compatible" TS2349. The
-                    // type-param gate keeps `fnUnion2`/`F3|F4`-style genuinely-incompatible
-                    // unions on the TS2349 path; the `this`-param gate (params drop `this`
-                    // at build, so a this-only sig has arity 0) excludes `unionTypeCallSignatures6`.
-                    // Round 728: tsc's `combineSignaturesOfUnionMembers` does NOT demand equal
-                    // arity or all-required parameters — it takes the LONGEST parameter list,
-                    // intersects position-wise (a position the shorter signature lacks contributes
-                    // `unknown`, i.e. nothing) and sets the combined minArgumentCount to the MAX.
-                    // Our gate demanded `minArgumentCount == pc`, so EVERY lib method carrying a
-                    // trailing optional — `forEach(cb, thisArg?)` above all — fell through to the
-                    // (incorrect) TS2349 "none of those signatures are compatible" path. REST
-                    // parameters stay excluded: the rest-tuple union below owns them.
-                    val combinedParamCount = sigs.maxOf { it.parameters.size }
-                    val combinable = run {
-                        if (combinedParamCount == 0) return@run false
-                        for (s in sigs) {
-                            if (!s.typeParameters.isNullOrEmpty()) return@run false
-                            if (s.parameters.any {
-                                    (it.valueDeclaration as? Parameter)?.dotDotDotToken == true
-                                }) return@run false
-                        }
-                        // require at least one position where the param types differ
-                        (0 until combinedParamCount).any { i ->
-                            val t0 = sigs[0].parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
-                            sigs.any { s -> s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) } !== t0 }
-                        }
-                    }
-                    if (combinable) {
-                        val pc = combinedParamCount
-                        val args = expr.arguments
-                        if (args.size > pc) {
-                            emitTS2554TooMany(sigs.maxOf { it.minArgumentCount }, pc, args.size, args, pc, source, fileName)
-                            return
-                        }
-                        for (i in 0 until minOf(args.size, pc)) {
-                            val combinedParamType =
-                                getIntersectionType(sigs.mapNotNull { s ->
-                                    s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
-                                })
-                            val arg = args[i]
-                            if (arg is SpreadElement) continue
-                            val argType = getTypeOfExpression(arg)
-                            if (argType === anyType || argType === errorType) continue
-                            if (!checkTypeRelatedTo(argType, combinedParamType, assignableRelation)) {
-                                val paramIsLiteral = getWidenedLiteralType(combinedParamType) !== combinedParamType
-                                val showLiteral = paramIsLiteral || combinedParamType === neverType
-                                val argDisplay = if (showLiteral)
-                                    typeToString(literalTypeOfExpression(arg) ?: argType)
-                                else typeToString(getWidenedLiteralType(argType))
-                                val start = arg.pos
-                                val length = expressionTrueEnd(arg) - start
-                                if (length > 0) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Argument of type '$argDisplay' is not assignable to parameter of type '${typeToString(combinedParamType)}'.",
-                                        category = DiagnosticCategory.Error, code = 2345,
-                                        fileName = fileName, line = line, character = character,
-                                        start = start, length = length,
-                                    ))
-                                }
-                            }
-                        }
-                        return
-                    }
-                    // signatureCombiningRestParameters5 (part 1): a union of fn types whose SOLE
-                    // param is a REST param typed as a fixed-length TUPLE (`(...args: [a, b]) =>
-                    // void`). tsc combines by element-wise intersecting the tuples (`[string|number,
-                    // number|boolean] & [number|boolean, string|boolean]` → positional `(number,
-                    // boolean)`); a bad arg then fails TS2345. The `combinable` gate above excludes
-                    // rest params (minArgumentCount 0 != pc), so handle the rest-tuple case here.
-                    run {
-                        val tuples = mutableListOf<List<Type>>()
-                        for (s in sigs) {
-                            if (s.parameters.size != 1 || s.minArgumentCount != 0) return@run
-                            val pt = getTypeOfSymbol(s.parameters[0]) as? Type.Object ?: return@run
-                            tuples.add(pt.tupleElementTypes ?: return@run)
-                        }
-                        val len = tuples[0].size
-                        if (len == 0 || tuples.any { it.size != len }) return@run
-                        val args = expr.arguments
-                        if (args.size > len) {
-                            emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return
-                        }
-                        for (i in 0 until minOf(args.size, len)) {
-                            val combined = reduceIntersectionForWriteType(tuples.map { it[i] })
-                            val arg = args[i]
-                            if (arg is SpreadElement) continue
-                            val argType = getTypeOfExpression(arg)
-                            if (argType === anyType || argType === errorType) continue
-                            if (!checkTypeRelatedTo(argType, combined, assignableRelation)) {
-                                val start = arg.pos
-                                val length = expressionTrueEnd(arg) - start
-                                if (length > 0) {
-                                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                                    diagnostics.add(Diagnostic(
-                                        message = "Argument of type '${typeToString(widenType(argType))}' is not assignable to parameter of type '${typeToString(combined)}'.",
-                                        category = DiagnosticCategory.Error, code = 2345,
-                                        fileName = fileName, line = line, character = character,
-                                        start = start, length = length,
-                                    ))
-                                }
-                            }
-                        }
-                        return
-                    }
-                    // unionOfArraysFilterCall: a union with an OVERLOADED member — at least one
-                    // constituent has ≥2 call signatures (e.g. `(Fizz[] | readonly Buzz[]).filter`,
-                    // where Array.filter has 2 overloads but ReadonlyArray.filter has 1). tsc combines
-                    // the parallel overload sets and reports nothing; our `differ` check below compares
-                    // only the FIRST sig of each member → spurious TS2349. Suppress. FP-safe: the only
-                    // corpus TS2349 baselines use all-single-sig members (`any{≥2}` is false for them).
-                    if (constituents.any { getCallSignaturesOfType(it).size >= 2 }) return
-                    val differ = run {
-                        for (i in sigs.indices) for (j in i + 1 until sigs.size) {
-                            val s1 = sigs[i]; val s2 = sigs[j]
-                            if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
-                            if (s1.parameters.size != s2.parameters.size) return@run true
-                            for (k in s1.parameters.indices) {
-                                val t1 = getTypeOfSymbol(s1.parameters[k])
-                                val t2 = getTypeOfSymbol(s2.parameters[k])
-                                if (t1 !== t2) return@run true
-                            }
-                        }
-                        false
-                    }
-                    if (differ) {
-                        val (start, length) = computeSpan()
-                        if (length > 0) {
-                            val (line, character) = getLineAndCharacterOfPosition(source, start)
-                            diagnostics.add(Diagnostic(
-                                message = "This expression is not callable.",
-                                category = DiagnosticCategory.Error, code = 2349,
-                                fileName = fileName, line = line, character = character,
-                                start = start, length = length,
-                                messageChain = listOf(
-                                    "  Each member of the union type '$unionDisplay' has signatures, but none of those signatures are compatible with each other.",
-                                ),
-                            ))
-                        }
-                        return
-                    }
-                }
-            }
+            if (ccetUnionCalleeChecks(expr, calleeExpr, calleeType, source, fileName)) return
         }
         // Get call signatures
         CallSections.at(CallSections.CALL_SIGS)
         val signatures = getCallSignaturesOfType(calleeType)
         CallSections.at(CallSections.NO_SIGS)
         if (signatures.isEmpty()) {
-            // 17.166: TS2348 — `var c = C();` where C is a class. The class
-            // value's type is `typeof C` with construct signatures only; calling
-            // it without `new` is a user error. Squiggle covers the full call
-            // expression (matches TypeScript's `C()` span in the baseline) —
-            // computed locally so the shared expressionTrueEnd helper stays
-            // unchanged (an earlier attempt to widen its empty-args fallback
-            // regressed -2 unrelated tests).
-            if (calleeExpr is Identifier) {
-                val sym = globals[calleeExpr.text]
-                // 17.166: gate TS2348 to symbols that are PURE classes — i.e. no
-                // FunctionDeclaration anywhere in any binderResult's source file with
-                // the same name (the binder's `canMerge` rejects Class+Function so the
-                // function decl lives in a separate slot or is overwritten — check the
-                // AST directly). Without this gate, `callOverloads3/4/5_ts` and
-                // `callOnInstance_ts` (which merge `function Foo(): Foo` /
-                // `declare function D()` with classes named the same) FP-fire TS2348.
-                val name = calleeExpr.text
-                val ts2348ScanT = CallSections.t()
-                val hasFunctionWithSameName = binderResults.any { br ->
-                    br.sourceFile.statements.any { st ->
-                        st is FunctionDeclaration && st.name?.text == name
-                    }
-                }
-                CallSections.close(CallSections.N_TS2348_SCAN, ts2348ScanT)
-                if (sym != null && sym.flags.hasAny(SymbolFlags.Class) && !hasFunctionWithSameName) {
-                    val start = expr.pos
-                    val end = if (expr.arguments.isNotEmpty()) {
-                        expressionTrueEnd(expr.arguments.last()) + 1
-                    } else {
-                        // empty `()` past the callee identifier
-                        calleeExpr.pos + calleeExpr.text.length + 2
-                    }
-                    val length = end - start
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "Value of type 'typeof ${calleeExpr.text}' is not callable. Did you mean to include 'new'?",
-                            category = DiagnosticCategory.Error,
-                            code = 2348,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                        ))
-                    }
-                    return
-                }
-            }
-            // 16.4cs: TS6234 — calling a property whose only declarations are
-            // `get`/`set` accessors. The property resolves to its return type
-            // (e.g. `number`), which has no call signatures, so an attempted
-            // `obj.prop()` is a user error — they likely meant `obj.prop`.
-            val firedTs6234 = checkTs6234GetAccessorCall(expr, calleeType, source, fileName)
-            // 16.4gk: TS2349 "This expression is not callable." Narrow gate on
-            // primitives: when the callee resolves to a Type.Intrinsic (number,
-            // string, boolean, etc.), the call is definitively invalid. Display
-            // uses the wrapper interface name (e.g. 'Number' for number).
-            // Skip when TS6234 already fired (get-accessor calls share the same
-            // primitive return-type pattern).
-            // B62.2: TS2721/TS2722/TS2723 for nullable callees under strictNullChecks.
-            //   null()      → TS2721 "Cannot invoke an object which is possibly 'null'."
-            //   undefined() → TS2722 "Cannot invoke an object which is possibly 'undefined'."
-            //   f() where f: null | undefined → TS2723 "Cannot invoke ... 'null' or 'undefined'."
-            // Span: full callee expression text.
-            if (!firedTs6234 && strictNullChecks) {
-                val isNullCallee = calleeType === nullType
-                val isUndefCallee = calleeType === undefinedType
-                val isUnionNullUndef = calleeType is Type.Union &&
-                    calleeType.types.size == 2 &&
-                    calleeType.types.all { it === nullType || it === undefinedType } &&
-                    calleeType.types.any { it === nullType } &&
-                    calleeType.types.any { it === undefinedType }
-                if (isNullCallee || isUndefCallee || isUnionNullUndef) {
-                    val (start, length) = if (calleeExpr is PropertyAccessExpression) {
-                        Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
-                    } else {
-                        val s = calleeExpr.pos
-                        Pair(s, expressionTrueEnd(calleeExpr) - s)
-                    }
-                    if (length > 0) {
-                        val (msg, code) = when {
-                            isNullCallee -> "Cannot invoke an object which is possibly 'null'." to 2721
-                            isUndefCallee -> "Cannot invoke an object which is possibly 'undefined'." to 2722
-                            else -> "Cannot invoke an object which is possibly 'null' or 'undefined'." to 2723
-                        }
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = msg,
-                            category = DiagnosticCategory.Error, code = code,
-                            fileName = fileName, line = line, character = character,
-                            start = start, length = length,
-                        ))
-                        return
-                    }
-                }
-            }
-            // B60.14: union callee — "No constituent ... is callable" or
-            // "Not all constituents ... are callable" depending on whether any
-            // constituent has call sigs.
-            if (!firedTs6234 && calleeType is Type.Union) {
-                val unionDisplay = typeToString(calleeType)
-                val constituents = calleeType.types
-                val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
-                if (nonCallable.isNotEmpty() && nonCallable.size == constituents.size) {
-                    // All constituents lack call sigs.
-                    val (start, length) = if (calleeExpr is PropertyAccessExpression) {
-                        Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
-                    } else {
-                        val s = calleeExpr.pos
-                        Pair(s, expressionTrueEnd(calleeExpr) - s)
-                    }
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "This expression is not callable.",
-                            category = DiagnosticCategory.Error, code = 2349,
-                            fileName = fileName, line = line, character = character,
-                            start = start, length = length,
-                            messageChain = listOf("  No constituent of type '$unionDisplay' is callable."),
-                        ))
-                        return
-                    }
-                } else if (nonCallable.isNotEmpty()) {
-                    // Some constituents lack call sigs.
-                    val firstMissing = nonCallable[0]
-                    val missingDisplay = typeToString(firstMissing)
-                    val (start, length) = if (calleeExpr is PropertyAccessExpression) {
-                        Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
-                    } else {
-                        val s = calleeExpr.pos
-                        Pair(s, expressionTrueEnd(calleeExpr) - s)
-                    }
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "This expression is not callable.",
-                            category = DiagnosticCategory.Error, code = 2349,
-                            fileName = fileName, line = line, character = character,
-                            start = start, length = length,
-                            messageChain = listOf(
-                                "  Not all constituents of type '$unionDisplay' are callable.",
-                                "    Type '$missingDisplay' has no call signatures.",
-                            ),
-                        ))
-                        return
-                    }
-                }
-            }
-            if (!firedTs6234 && calleeType is Type.Intrinsic && calleeType !== voidType &&
-                calleeType !== nullType && calleeType !== undefinedType &&
-                calleeType !== neverType && calleeType !== unknownType) {
-                val displayType = typeToString(getApparentType(calleeType))
-                // 17.84: When the callee is a PropertyAccessExpression, squiggle just
-                // the property name (matches TypeScript's per-segment elaboration for
-                // chained calls like `obj.method().notMethod()` — only `notMethod`
-                // is highlighted, not the whole chain).
-                val (start, length) = if (calleeExpr is PropertyAccessExpression) {
-                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
-                } else {
-                    val s = calleeExpr.pos
-                    Pair(s, expressionTrueEnd(calleeExpr) - s)
-                }
-                if (length > 0) {
-                    val (line, character) = getLineAndCharacterOfPosition(source, start)
-                    // B60.13: When the callee is a CallExpression whose end is on a
-                    // different (earlier) line than the outer call's first argument,
-                    // emit TS2734 "Are you missing a semicolon?" related info pointing
-                    // to the inner call's start. Covers the `foo()\n(1 as number)`
-                    // accidental-call pattern from `betterErrorForAccidentalCall_ts`.
-                    val related = mutableListOf<Diagnostic>()
-                    if (calleeExpr is CallExpression && expr.arguments.isNotEmpty()) {
-                        val innerEnd = expressionTrueEnd(calleeExpr)
-                        val firstArgPos = expr.arguments.first().pos
-                        val (innerEndLine, _) = getLineAndCharacterOfPosition(source, innerEnd)
-                        val (argLine, _) = getLineAndCharacterOfPosition(source, firstArgPos)
-                        if (innerEndLine < argLine) {
-                            val innerStart = calleeExpr.pos
-                            val (relLine, relChar) = getLineAndCharacterOfPosition(source, innerStart)
-                            related.add(Diagnostic(
-                                message = "Are you missing a semicolon?",
-                                category = DiagnosticCategory.Message, code = 2734,
-                                fileName = fileName, line = relLine, character = relChar,
-                                start = innerStart, length = length,
-                            ))
-                        }
-                    }
-                    diagnostics.add(Diagnostic(
-                        message = "This expression is not callable.",
-                        category = DiagnosticCategory.Error,
-                        code = 2349,
-                        fileName = fileName,
-                        line = line,
-                        character = character,
-                        start = start,
-                        length = length,
-                        messageChain = listOf("  Type '$displayType' has no call signatures."),
-                        relatedInformation = if (related.isEmpty()) emptyList() else related.toList(),
-                    ))
-                }
-            }
-            // TS2349: calling a class instance produced by `new X()` — `(new X())()`.
-            // The result of a `new` expression is always a (non-callable) object
-            // instance, so a callee that unwraps to a NewExpression with no call
-            // signatures is unambiguously not callable. Gated tightly to the
-            // NewExpression-callee shape so it never trips on the "empty Type.Object
-            // from incomplete resolution" trap (a real class instance genuinely has
-            // no call signatures regardless of how completely we resolved it).
-            if (!firedTs6234 && (calleeType is Type.Object || calleeType is Type.Interface)) {
-                var core: Expression = calleeExpr
-                while (core is ParenthesizedExpression) core = core.expression
-                // Round 479 (tsc isUntypedFunctionCall): a value of the global lib
-                // `Function` type IS callable — the call is untyped and returns any
-                // (`new Function("…")()`, fourslashImpl.ts verifyEval). A USER class
-                // named Function keeps firing (its decls are not lib decls).
-                val isGlobalFunctionType = calleeType.symbol?.let { sy ->
-                    sy.name == "Function" && sy.declarations.isNotEmpty() &&
-                        sy.declarations.all { it in builtinLibDecls }
-                } == true
-                if (core is NewExpression && !isGlobalFunctionType) {
-                    val displayType = typeToString(getApparentType(calleeType))
-                    val start = calleeExpr.pos
-                    val length = expressionTrueEnd(calleeExpr) - start
-                    if (length > 0) {
-                        val (line, character) = getLineAndCharacterOfPosition(source, start)
-                        diagnostics.add(Diagnostic(
-                            message = "This expression is not callable.",
-                            category = DiagnosticCategory.Error,
-                            code = 2349,
-                            fileName = fileName,
-                            line = line,
-                            character = character,
-                            start = start,
-                            length = length,
-                            messageChain = listOf("  Type '$displayType' has no call signatures."),
-                        ))
-                    }
-                }
-            }
+            ccetNoCallSignatureDiagnostics(expr, calleeExpr, calleeType, source, fileName)
             return
         }
         // 16.4: Instantiate signature when explicit type arguments are provided
         CallSections.at(CallSections.TYPE_ARGS)
         val typeArgs = expr.typeArguments
         if (typeArgs != null && typeArgs.isNotEmpty()) {
-            // B174: `f<typeof import("spec")>(null)` — getTypeFromTypeNode resolves an
-            // import-type to anyType (masking the instantiated param check), but under
-            // strictNullChecks a `null` arg against a bare-TP param mapped to the
-            // import-namespace type is TS2345 with the RESOLVED module path display
-            // (declarationEmitWithInvalidPackageJsonTypings: an ARRAY-valued package.json
-            // "types" is invalid → resolution falls back to "main" → lib/index.d.ts).
-            run {
-                if (!strictNullChecks || typeArgs.size != 1) return@run
-                // `typeof import("spec")` parses as TypeQuery(exprName = ImportType) (the
-                // Parser's Typeof branch); a bare import-type arg is an ImportType directly.
-                val imp = (typeArgs[0] as? ImportType)
-                    ?: ((typeArgs[0] as? TypeQuery)?.exprName as? ImportType)
-                    ?: return@run
-                if (imp.qualifier != null) return@run
-                val specLit = ((imp.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
-                    ?: return@run
-                val sig = signatures.firstOrNull { it.typeParameters?.size == 1 } ?: return@run
-                val tpName = sig.typeParameters!![0].symbol?.name ?: return@run
-                val sigParams = signatureDeclarationParameters(sig.declaration) ?: return@run
-                val argIdx = sigParams.indexOfFirst { p ->
-                    (p.type as? TypeReference)?.let {
-                        it.typeArguments == null && (it.typeName as? Identifier)?.text == tpName
-                    } == true
-                }
-                if (argIdx < 0) return@run
-                val arg = expr.arguments.getOrNull(argIdx) ?: return@run
-                if (!(arg is Identifier && arg.text == "null")) return@run
-                val g = resolveBareViaNodeModulesPkgJson(specLit, fileName)
-                    ?: resolveBareViaNodeModules(specLit, fileName)
-                    ?: resolveSpecifierAnywhere(specLit, fileName)
-                    ?: return@run
-                val baseDisplay = g.removeSuffix(".d.ts").removeSuffix(".tsx").removeSuffix(".ts")
-                val start = arg.pos
-                val length = expressionTrueEnd(arg) - start
-                val (l, c) = getLineAndCharacterOfPosition(source, start)
-                diagnostics.add(Diagnostic(
-                    message = "Argument of type 'null' is not assignable to parameter of type 'typeof import(\"$baseDisplay\")'.",
-                    category = DiagnosticCategory.Error, code = 2345,
-                    fileName = fileName, line = l, character = c,
-                    start = start, length = length,
-                ))
-                return
-            }
-            val resolvedTypeArgs = typeArgs.map { getTypeFromTypeNode(it) }
-            if (resolvedTypeArgs.none { it === errorType }) {
-                // Find a generic signature whose type-param count accommodates the supplied
-                // type args. Exact-arity matches; ADDITIONALLY accept FEWER args than params
-                // when the trailing params have defaults — the supplied count must be within
-                // [minTypeParams, size] where minTypeParams = count of params with NO default.
-                // Previously only exact-arity sigs matched, so `fn<MyObjA>` against
-                // `<A extends ObjA, B extends ObjB = ObjB>` skipped the constraint check for
-                // the supplied `A` entirely (TS2344/TS2559 never fired).
-                val genericCandidates = signatures.filter { sig ->
-                    val tp = sig.typeParameters ?: return@filter false
-                    resolvedTypeArgs.size in tp.count { it.default == null }..tp.size
-                }
-                // Round 436d: with MULTIPLE arity-accommodating generic overloads, tsc
-                // selects the first whose ARGUMENTS match under the supplied type args —
-                // parser.ts `createMissingNode<Identifier>(kind, /*reportAtCurrentPosition*/
-                // true, msg)` must select the 2nd overload (the 1st pins the param to the
-                // literal `false`). Blindly checking against the FIRST candidate FP'd
-                // 'true' ≁ 'false' ×5. tsc applicability filters by TYPE-ARG CONSTRAINT
-                // first (typeArgumentConstraintResolution1: `foo1<Date>("")` disqualifies
-                // the `T extends Number` overload, so the arg failure reports against the
-                // `T extends Date` one — the suite gate caught the unfiltered cut). Falls
-                // back to the first candidate when none match (the error-reporting target,
-                // as before) — an over-accepting match can only SUPPRESS (this path only
-                // checks args; return-type inference lives elsewhere).
-                val constraintOkCandidates = genericCandidates.filter {
-                    implTypeArgConstraintsSatisfied(it, resolvedTypeArgs)
-                }.ifEmpty { genericCandidates }
-                val genericSig = if (constraintOkCandidates.size <= 1) constraintOkCandidates.firstOrNull()
-                else constraintOkCandidates.firstOrNull { sig ->
-                    val tps = sig.typeParameters!!
-                    val padded = if (resolvedTypeArgs.size < tps.size)
-                        resolvedTypeArgs + (resolvedTypeArgs.size until tps.size).map { tps[it].default ?: errorType }
-                    else resolvedTypeArgs
-                    allArgumentsMatch(expr.arguments, instantiateContextualSignature(sig, createTypeMapper(tps, padded)))
-                } ?: constraintOkCandidates.first()
-                if (genericSig?.typeParameters != null) {
-                    val tps = genericSig.typeParameters
-                    // Pad the supplied args with the trailing params' resolved defaults so the
-                    // mapper + contextual instantiation see every param. The constraint check
-                    // still iterates only the SUPPLIED args (each has a typeArgNode).
-                    val paddedArgs = if (resolvedTypeArgs.size < tps.size) {
-                        resolvedTypeArgs + (resolvedTypeArgs.size until tps.size).map { tps[it].default ?: errorType }
-                    } else resolvedTypeArgs
-                    val mapper = createTypeMapper(tps, paddedArgs)
-                    // TS2344 / TS2559: Check supplied type arguments against their constraints.
-                    checkCallTypeArgConstraints(tps, resolvedTypeArgs, typeArgs, mapper, source, fileName)
-                    // B83.4f-a: use instantiateContextualSignature (not the plain
-                    // instantiateSignature) so a nested FUNCTION-typed param like
-                    // `f: (x: T) => Date` substitutes its inner `(x: T)` to `(x: <number>)`.
-                    // Plain instantiateType deliberately no-ops on function-shaped
-                    // Type.Object (CLAUDE.md gotcha); instantiateContextualSignature descends
-                    // into the call signatures, so explicit `<number>` reaches the callback
-                    // param and TS2345 (`(x:number)=>string` ≠ `(x:number)=>Date`) can fire.
-                    val instantiated = instantiateContextualSignature(genericSig, mapper)
-                    // TS2793: only attach "implementation would have succeeded" related info
-                    // when the implementation signature actually accepts these args under
-                    // the supplied type-args. For overloaded generic functions like
-                    // `foo<T extends Date>(test: T)` / `foo<T extends Number>(test: string)`
-                    // / `foo<T extends String>(test: any)` (impl), calling `foo<Date>("")`
-                    // doesn't satisfy the impl's `T extends String` constraint, so the impl
-                    // wouldn't have succeeded either — TS2793 should be suppressed.
-                    var implRelated: Diagnostic? = null
-                    val implRelatedCandidate = getOverloadImplementationRelated(genericSig, source, fileName)
-                    if (implRelatedCandidate != null) {
-                        val implSig = getImplementationSignature(genericSig, source, fileName)
-                        if (implSig != null && allArgumentsMatch(expr.arguments, implSig, bivariantFnParams = true) &&
-                            implTypeArgConstraintsSatisfied(implSig, resolvedTypeArgs)
-                        ) {
-                            implRelated = implRelatedCandidate
-                        }
-                    }
-                    checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
-                    val taArgsT = CallSections.t()
-                    checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true)
-                    CallSections.close(CallSections.N_TYPEARGS_ARGS, taArgsT)
-                    return
-                }
-            }
+            if (ccetExplicitTypeArguments(expr, typeArgs, signatures, source, fileName)) return
         }
         if (signatures.size == 1) {
             CallSections.at(CallSections.SINGLE_SIG)
@@ -140784,6 +140072,799 @@ interface DataView {
             checkArgumentsAgainstOverloads(expr.arguments, signatures, source, fileName, expr.expression)
             CallSections.close(CallSections.N_OVERLOAD_ARGS, ovlT)
         }
+    }
+
+    /**
+     * (JIT.1)(c) round 811 — the seven dedicated PROLOGUE walkers of
+     * [checkSingleCallExpressionTypesCore], moved out so the entry stays under
+     * HotSpot's 8,000-bytecode `HugeMethodLimit`.
+     *
+     * Reached only when round 793's [ccetPrologueMayFire] gate — which STAYS in
+     * the entry — admits the call; it refuses ~98% of call expressions, and the
+     * (CALL.1)(a) partition prices this run of sections at 253 ms with ZERO
+     * firings on the compiler profile. Returns `true` when a walker fired or
+     * otherwise handled the call, i.e. "the caller must return".
+     */
+    private fun ccetPrologueWalkers(
+        expr: CallExpression,
+        calleeExpr: Expression,
+        source: String,
+        fileName: String,
+        prologueT: Long,
+    ): Boolean {
+        val pgD0 = diagnostics.size
+        // B216: dependent indexed-access constraint (`V extends O[K1][K2]`) — per-call
+        // evaluation with the key TPs fixed to this call's string-literal args.
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitDependentIndexedConstraintTs2345(expr, source, fileName)) return true
+        // recursiveTypeRelations: `<arr>.reduce<U>((acc, key: keyof X) => …, init)` where the
+        // callback's currentValue param is annotated `keyof X` but the array elem is string/number.
+        CallSections.at(CallSections.REDUCE_KEYOF)
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitReduceCallbackKeyofMismatch(expr, source, fileName)) return true
+        // unionOfArraysFilterCall: `(... as [Fizz] | readonly [Buzz?]).filter(item => item?.id < 5)`
+        // — optional tuple element → callback param possibly-undefined → TS18048 (additive).
+        CallSections.at(CallSections.TUPLE_FILTER)
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitTupleUnionFilterOptionalElementUndefined(expr, source, fileName)) return true
+        // inferFromGenericFunctionReturnTypes1: `<SetOf>.transform(compose(filter(λ), map(λ)…))`
+        // — thread the element type; a last `map(x => x.method())` whose threaded type lacks the
+        // method → TS2339 (corpus-unique mini-inference, additive).
+        CallSections.at(CallSections.COMPOSE_CHAIN)
+        if (calleeExpr is PropertyAccessExpression &&
+            tryEmitComposeChainMapMemberAccess(expr, source, fileName)) return true
+        // B232: `Object.create(<primitive/undefined>)` — the real lib types the first
+        // param `object | null`; our embedded lib has `any`, so the standard arg check
+        // never fires. tsc display quirk: a non-nullish failing primitive reports
+        // against 'object' (the union member it relates to), `undefined` against the
+        // full 'object | null' (and only under strictNullChecks — nullish args are
+        // legal with SNC off). `Object.create(null/objExpr)` and shadowed `Object`
+        // never enter.
+        CallSections.at(CallSections.OBJECT_CREATE)
+        run {
+            if (calleeExpr !is PropertyAccessExpression || calleeExpr.name.text != "create") return@run
+            if ((calleeExpr.expression as? Identifier)?.text != "Object") return@run
+            if (currentFileLocals?.get("Object") != null) return@run
+            // Explicit type args already error TS2558 ("Expected 0 type arguments") and
+            // tsc then SKIPS the argument checks (assigningFromObjectToAnythingElse).
+            if (!expr.typeArguments.isNullOrEmpty()) return@run
+            if (expr.arguments.isEmpty() || expr.arguments.size > 2) return@run
+            val arg = expr.arguments[0]
+            val argType = getWidenedLiteralType(getTypeOfExpression(arg))
+            val display: String? = when {
+                argType is Type.Intrinsic && argType.intrinsicName in
+                    setOf("number", "string", "boolean", "bigint", "symbol") -> "object"
+                strictNullChecks && argType.flags.hasAny(TypeFlags.Undefined) -> "object | null"
+                else -> null
+            }
+            if (display != null) {
+                val start = arg.pos
+                val length = (expressionTrueEnd(arg) - start).coerceAtLeast(1)
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Argument of type '${typeToString(argType)}' is not assignable to parameter of type '$display'.",
+                    category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
+                    line = line, character = character, start = start, length = length,
+                ))
+            }
+        }
+        // B154: calling the `default` of a CJS `export default` module from an ESM file
+        // under nodenext is TS2349 — that default IS the CJS namespace `typeof import("mod")`
+        // (no call signatures), not the inner value. Covers default/named-default imports
+        // and namespace-member-of-re-export. Early (before the anyType bail). FP-safe:
+        // tightly gated (nodenext + ESM importer + CJS target + `export default`).
+        CallSections.at(CallSections.CJS_DEFAULT_NS)
+        run {
+            val (direct, nsMembers) = cjsDefaultNsShapes(fileName)
+            if (direct.isEmpty() && nsMembers.isEmpty()) return@run
+            val base: String? = when (calleeExpr) {
+                is Identifier -> direct[calleeExpr.text]
+                is PropertyAccessExpression -> (calleeExpr.expression as? Identifier)?.let {
+                    nsMembers[it.text]?.get(calleeExpr.name.text)
+                }
+                else -> null
+            }
+            if (base != null) {
+                val (start, length) = if (calleeExpr is PropertyAccessExpression)
+                    calleeExpr.name.pos to calleeExpr.name.text.length
+                else calleeExpr.pos to (expressionTrueEnd(calleeExpr) - calleeExpr.pos)
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf("  Type 'typeof import(\"$base\")' has no call signatures."),
+                    ))
+                    return true
+                }
+            }
+        }
+        CallSections.at(CallSections.SUPER)
+        if (calleeExpr is Identifier && calleeExpr.text == "super" && !expr.typeArguments.isNullOrEmpty()) {
+            val typeArgs = expr.typeArguments
+            val start = typeArgs.first().pos - 1
+            val end = typeArgs.last().end
+            val length = end - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "'super' may not use type arguments.",
+                    category = DiagnosticCategory.Error,
+                    code = 2754,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
+        // 17.19: `super(...)` arg checking via the base ctor signature stashed by the
+        // ClassDeclaration handler. `getCalleeType("super")` returns anyType (no global
+        // entry), so the standard path early-returns at the anyType bail below. Handle
+        // here, then return.
+        if (calleeExpr is Identifier && calleeExpr.text == "super") {
+            currentSuperBaseSig?.let { sig ->
+                checkArgumentsAgainstSignature(expr.arguments, sig, source, fileName)
+            }
+            return true
+        }
+        // 17.20: `super.method(...)` arg checking. Resolves the method on the base
+        // instance type stashed by the ClassDeclaration handler. The standard path
+        // would treat `super` as anyType and bail before reaching arg checking.
+        if (calleeExpr is PropertyAccessExpression && calleeExpr.expression is Identifier &&
+            (calleeExpr.expression).text == "super") {
+            val baseType = currentSuperBaseType
+            if (baseType != null) {
+                if (handleSuperMethodCall(expr, calleeExpr, baseType, source, fileName)) return true
+            }
+        }
+        CallSections.close(CallSections.N_PROLOGUE, prologueT)
+        CallSections.closePreGate(fired = diagnostics.size > pgD0)
+        return false
+    }
+
+    /**
+     * (JIT.1)(c) round 811 — B60.14's UNION-callee branch
+     * ([CallSections.UNION_CALLEE]) of [checkSingleCallExpressionTypesCore].
+     *
+     * 31 of 52,413 invocations leave the function here on the compiler profile,
+     * so the whole branch is cold; `true` means "emitted or decided — the caller
+     * must return".
+     */
+    private fun ccetUnionCalleeChecks(
+        expr: CallExpression,
+        calleeExpr: Expression,
+        calleeType: Type.Union,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        // (M3.4 slice, round 408) Two FP suppressions before the "not callable"
+        // verdict — BOTH only REMOVE constituents, so they can suppress a false
+        // positive but never add one (the corpus suite is the regression gate):
+        //   1. An OPTIONAL-CALL `f?.(...)` short-circuits on a nullish callee, so a
+        //      `null`/`undefined` constituent is legal (tsc drops nullish from the
+        //      apparent callee type). getCalleeType keeps them.
+        //   2. A narrowable-reference callee (Identifier / property path) may have had
+        //      its `undefined` (non-callable) member removed by a truthiness / typeof /
+        //      `??=` / `||`-assign / assert guard — but getCalleeType resolves an
+        //      Identifier callee via currentLocalTypes (the DECLARED type) WITHOUT
+        //      applying flow narrowing (getTypeOfIdentifier deliberately does not; see
+        //      the flow-narrowing gotcha). Re-narrow the callee reference here.
+        // Gated to the case that WOULD have errored (a non-callable constituent), so
+        // the case-(c) all-callable structural-mismatch path below is untouched.
+        if ((calleeExpr is Identifier || calleeExpr is PropertyAccessExpression) &&
+            calleeType.types.any { getCallSignaturesOfType(it).isEmpty() }) {
+            var eff: Type = calleeType
+            if (expr.questionDotToken) {
+                // `calleeType` is smart-cast to Type.Union above (its `.types` was read).
+                val kept = calleeType.types.filter { !isNullishConstituent(it) }
+                eff = when {
+                    kept.isEmpty() -> calleeType
+                    kept.size == 1 -> kept[0]
+                    else -> getUnionType(kept)
+                }
+            }
+            if (eff is Type.Union) eff = getNarrowedTypeForReference(eff, calleeExpr)
+            fun allCallable(t: Type): Boolean = when {
+                t === anyType || t === errorType -> true
+                t is Type.Union -> t.types.all { allCallable(it) }
+                else -> getCallSignaturesOfType(t).isNotEmpty()
+            }
+            if (allCallable(eff)) return true
+        }
+        val constituents = calleeType.types
+        val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
+        val unionDisplay = typeToString(calleeType)
+        val computeSpan = {
+            if (calleeExpr is PropertyAccessExpression) {
+                Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+            } else {
+                val s = calleeExpr.pos
+                Pair(s, expressionTrueEnd(calleeExpr) - s)
+            }
+        }
+        if (nonCallable.isNotEmpty() && nonCallable.size != constituents.size) {
+            // Case (b): mixed callable / non-callable.
+            val firstMissing = nonCallable[0]
+            val missingDisplay = typeToString(firstMissing)
+            val (start, length) = computeSpan()
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "This expression is not callable.",
+                    category = DiagnosticCategory.Error, code = 2349,
+                    fileName = fileName, line = line, character = character,
+                    start = start, length = length,
+                    messageChain = listOf(
+                        "  Not all constituents of type '$unionDisplay' are callable.",
+                        "    Type '$missingDisplay' has no call signatures.",
+                    ),
+                ))
+            }
+            return true
+        }
+        if (nonCallable.isEmpty() && constituents.size >= 2) {
+            // Case (c): all callable; check if sigs differ structurally (different
+            // TypeParam counts, different first-param types).
+            val sigsList = constituents.map { getCallSignaturesOfType(it).firstOrNull() }
+            val hasNullSig = sigsList.any { it == null }
+            if (!hasNullSig) {
+                val sigs = sigsList.map { it!! }
+                // B516: union-of-callables combined signature (tsc getUnionSignatures).
+                // When every member call signature is type-parameter-free, has the SAME
+                // (non-zero) required-only arity, no `this`/optional/rest params, AND at
+                // least one parameter position has DIFFERING types across members, tsc
+                // synthesizes ONE signature whose parameter at position i is the
+                // INTERSECTION of the members' types there (e.g.
+                // `((x:number)=>string) | ((x:boolean)=>string)` → `(x: number & boolean)`
+                // = `(x: never)`). Calling it then checks the args against the combined
+                // (often `never`) parameters — yielding TS2345 / TS2554 instead of the
+                // (incorrect) "none of those signatures are compatible" TS2349. The
+                // type-param gate keeps `fnUnion2`/`F3|F4`-style genuinely-incompatible
+                // unions on the TS2349 path; the `this`-param gate (params drop `this`
+                // at build, so a this-only sig has arity 0) excludes `unionTypeCallSignatures6`.
+                // Round 728: tsc's `combineSignaturesOfUnionMembers` does NOT demand equal
+                // arity or all-required parameters — it takes the LONGEST parameter list,
+                // intersects position-wise (a position the shorter signature lacks contributes
+                // `unknown`, i.e. nothing) and sets the combined minArgumentCount to the MAX.
+                // Our gate demanded `minArgumentCount == pc`, so EVERY lib method carrying a
+                // trailing optional — `forEach(cb, thisArg?)` above all — fell through to the
+                // (incorrect) TS2349 "none of those signatures are compatible" path. REST
+                // parameters stay excluded: the rest-tuple union below owns them.
+                val combinedParamCount = sigs.maxOf { it.parameters.size }
+                val combinable = run {
+                    if (combinedParamCount == 0) return@run false
+                    for (s in sigs) {
+                        if (!s.typeParameters.isNullOrEmpty()) return@run false
+                        if (s.parameters.any {
+                                (it.valueDeclaration as? Parameter)?.dotDotDotToken == true
+                            }) return@run false
+                    }
+                    // require at least one position where the param types differ
+                    (0 until combinedParamCount).any { i ->
+                        val t0 = sigs[0].parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
+                        sigs.any { s -> s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) } !== t0 }
+                    }
+                }
+                if (combinable) {
+                    val pc = combinedParamCount
+                    val args = expr.arguments
+                    if (args.size > pc) {
+                        emitTS2554TooMany(sigs.maxOf { it.minArgumentCount }, pc, args.size, args, pc, source, fileName)
+                        return true
+                    }
+                    for (i in 0 until minOf(args.size, pc)) {
+                        val combinedParamType =
+                            getIntersectionType(sigs.mapNotNull { s ->
+                                s.parameters.getOrNull(i)?.let { getTypeOfSymbol(it) }
+                            })
+                        val arg = args[i]
+                        if (arg is SpreadElement) continue
+                        val argType = getTypeOfExpression(arg)
+                        if (argType === anyType || argType === errorType) continue
+                        if (!checkTypeRelatedTo(argType, combinedParamType, assignableRelation)) {
+                            val paramIsLiteral = getWidenedLiteralType(combinedParamType) !== combinedParamType
+                            val showLiteral = paramIsLiteral || combinedParamType === neverType
+                            val argDisplay = if (showLiteral)
+                                typeToString(literalTypeOfExpression(arg) ?: argType)
+                            else typeToString(getWidenedLiteralType(argType))
+                            val start = arg.pos
+                            val length = expressionTrueEnd(arg) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Argument of type '$argDisplay' is not assignable to parameter of type '${typeToString(combinedParamType)}'.",
+                                    category = DiagnosticCategory.Error, code = 2345,
+                                    fileName = fileName, line = line, character = character,
+                                    start = start, length = length,
+                                ))
+                            }
+                        }
+                    }
+                    return true
+                }
+                // signatureCombiningRestParameters5 (part 1): a union of fn types whose SOLE
+                // param is a REST param typed as a fixed-length TUPLE (`(...args: [a, b]) =>
+                // void`). tsc combines by element-wise intersecting the tuples (`[string|number,
+                // number|boolean] & [number|boolean, string|boolean]` → positional `(number,
+                // boolean)`); a bad arg then fails TS2345. The `combinable` gate above excludes
+                // rest params (minArgumentCount 0 != pc), so handle the rest-tuple case here.
+                run {
+                    val tuples = mutableListOf<List<Type>>()
+                    for (s in sigs) {
+                        if (s.parameters.size != 1 || s.minArgumentCount != 0) return@run
+                        val pt = getTypeOfSymbol(s.parameters[0]) as? Type.Object ?: return@run
+                        tuples.add(pt.tupleElementTypes ?: return@run)
+                    }
+                    val len = tuples[0].size
+                    if (len == 0 || tuples.any { it.size != len }) return@run
+                    val args = expr.arguments
+                    if (args.size > len) {
+                        emitTS2554TooMany(len, len, args.size, args, len, source, fileName); return true
+                    }
+                    for (i in 0 until minOf(args.size, len)) {
+                        val combined = reduceIntersectionForWriteType(tuples.map { it[i] })
+                        val arg = args[i]
+                        if (arg is SpreadElement) continue
+                        val argType = getTypeOfExpression(arg)
+                        if (argType === anyType || argType === errorType) continue
+                        if (!checkTypeRelatedTo(argType, combined, assignableRelation)) {
+                            val start = arg.pos
+                            val length = expressionTrueEnd(arg) - start
+                            if (length > 0) {
+                                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                                diagnostics.add(Diagnostic(
+                                    message = "Argument of type '${typeToString(widenType(argType))}' is not assignable to parameter of type '${typeToString(combined)}'.",
+                                    category = DiagnosticCategory.Error, code = 2345,
+                                    fileName = fileName, line = line, character = character,
+                                    start = start, length = length,
+                                ))
+                            }
+                        }
+                    }
+                    return true
+                }
+                // unionOfArraysFilterCall: a union with an OVERLOADED member — at least one
+                // constituent has ≥2 call signatures (e.g. `(Fizz[] | readonly Buzz[]).filter`,
+                // where Array.filter has 2 overloads but ReadonlyArray.filter has 1). tsc combines
+                // the parallel overload sets and reports nothing; our `differ` check below compares
+                // only the FIRST sig of each member → spurious TS2349. Suppress. FP-safe: the only
+                // corpus TS2349 baselines use all-single-sig members (`any{≥2}` is false for them).
+                if (constituents.any { getCallSignaturesOfType(it).size >= 2 }) return true
+                val differ = run {
+                    for (i in sigs.indices) for (j in i + 1 until sigs.size) {
+                        val s1 = sigs[i]; val s2 = sigs[j]
+                        if ((s1.typeParameters?.size ?: 0) != (s2.typeParameters?.size ?: 0)) return@run true
+                        if (s1.parameters.size != s2.parameters.size) return@run true
+                        for (k in s1.parameters.indices) {
+                            val t1 = getTypeOfSymbol(s1.parameters[k])
+                            val t2 = getTypeOfSymbol(s2.parameters[k])
+                            if (t1 !== t2) return@run true
+                        }
+                    }
+                    false
+                }
+                if (differ) {
+                    val (start, length) = computeSpan()
+                    if (length > 0) {
+                        val (line, character) = getLineAndCharacterOfPosition(source, start)
+                        diagnostics.add(Diagnostic(
+                            message = "This expression is not callable.",
+                            category = DiagnosticCategory.Error, code = 2349,
+                            fileName = fileName, line = line, character = character,
+                            start = start, length = length,
+                            messageChain = listOf(
+                                "  Each member of the union type '$unionDisplay' has signatures, but none of those signatures are compatible with each other.",
+                            ),
+                        ))
+                    }
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
+    /**
+     * (JIT.1)(c) round 811 — the `signatures.isEmpty()` branch
+     * ([CallSections.NO_SIGS]) of [checkSingleCallExpressionTypesCore]: TS2348 /
+     * TS6234 / TS2721 / TS2722 / TS2723 / TS2349 x3.
+     *
+     * The branch returned UNCONDITIONALLY, so every `return` in it is a return
+     * from this helper and the caller returns straight after the call. It is
+     * entered ZERO times on the compiler profile (round 734's exit census).
+     */
+    private fun ccetNoCallSignatureDiagnostics(
+        expr: CallExpression,
+        calleeExpr: Expression,
+        calleeType: Type,
+        source: String,
+        fileName: String,
+    ) {
+        // 17.166: TS2348 — `var c = C();` where C is a class. The class
+        // value's type is `typeof C` with construct signatures only; calling
+        // it without `new` is a user error. Squiggle covers the full call
+        // expression (matches TypeScript's `C()` span in the baseline) —
+        // computed locally so the shared expressionTrueEnd helper stays
+        // unchanged (an earlier attempt to widen its empty-args fallback
+        // regressed -2 unrelated tests).
+        if (calleeExpr is Identifier) {
+            val sym = globals[calleeExpr.text]
+            // 17.166: gate TS2348 to symbols that are PURE classes — i.e. no
+            // FunctionDeclaration anywhere in any binderResult's source file with
+            // the same name (the binder's `canMerge` rejects Class+Function so the
+            // function decl lives in a separate slot or is overwritten — check the
+            // AST directly). Without this gate, `callOverloads3/4/5_ts` and
+            // `callOnInstance_ts` (which merge `function Foo(): Foo` /
+            // `declare function D()` with classes named the same) FP-fire TS2348.
+            val name = calleeExpr.text
+            val ts2348ScanT = CallSections.t()
+            val hasFunctionWithSameName = binderResults.any { br ->
+                br.sourceFile.statements.any { st ->
+                    st is FunctionDeclaration && st.name?.text == name
+                }
+            }
+            CallSections.close(CallSections.N_TS2348_SCAN, ts2348ScanT)
+            if (sym != null && sym.flags.hasAny(SymbolFlags.Class) && !hasFunctionWithSameName) {
+                val start = expr.pos
+                val end = if (expr.arguments.isNotEmpty()) {
+                    expressionTrueEnd(expr.arguments.last()) + 1
+                } else {
+                    // empty `()` past the callee identifier
+                    calleeExpr.pos + calleeExpr.text.length + 2
+                }
+                val length = end - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "Value of type 'typeof ${calleeExpr.text}' is not callable. Did you mean to include 'new'?",
+                        category = DiagnosticCategory.Error,
+                        code = 2348,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                    ))
+                }
+                return
+            }
+        }
+        // 16.4cs: TS6234 — calling a property whose only declarations are
+        // `get`/`set` accessors. The property resolves to its return type
+        // (e.g. `number`), which has no call signatures, so an attempted
+        // `obj.prop()` is a user error — they likely meant `obj.prop`.
+        val firedTs6234 = checkTs6234GetAccessorCall(expr, calleeType, source, fileName)
+        // 16.4gk: TS2349 "This expression is not callable." Narrow gate on
+        // primitives: when the callee resolves to a Type.Intrinsic (number,
+        // string, boolean, etc.), the call is definitively invalid. Display
+        // uses the wrapper interface name (e.g. 'Number' for number).
+        // Skip when TS6234 already fired (get-accessor calls share the same
+        // primitive return-type pattern).
+        // B62.2: TS2721/TS2722/TS2723 for nullable callees under strictNullChecks.
+        //   null()      → TS2721 "Cannot invoke an object which is possibly 'null'."
+        //   undefined() → TS2722 "Cannot invoke an object which is possibly 'undefined'."
+        //   f() where f: null | undefined → TS2723 "Cannot invoke ... 'null' or 'undefined'."
+        // Span: full callee expression text.
+        if (!firedTs6234 && strictNullChecks) {
+            val isNullCallee = calleeType === nullType
+            val isUndefCallee = calleeType === undefinedType
+            val isUnionNullUndef = calleeType is Type.Union &&
+                calleeType.types.size == 2 &&
+                calleeType.types.all { it === nullType || it === undefinedType } &&
+                calleeType.types.any { it === nullType } &&
+                calleeType.types.any { it === undefinedType }
+            if (isNullCallee || isUndefCallee || isUnionNullUndef) {
+                val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                } else {
+                    val s = calleeExpr.pos
+                    Pair(s, expressionTrueEnd(calleeExpr) - s)
+                }
+                if (length > 0) {
+                    val (msg, code) = when {
+                        isNullCallee -> "Cannot invoke an object which is possibly 'null'." to 2721
+                        isUndefCallee -> "Cannot invoke an object which is possibly 'undefined'." to 2722
+                        else -> "Cannot invoke an object which is possibly 'null' or 'undefined'." to 2723
+                    }
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = msg,
+                        category = DiagnosticCategory.Error, code = code,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                    ))
+                    return
+                }
+            }
+        }
+        // B60.14: union callee — "No constituent ... is callable" or
+        // "Not all constituents ... are callable" depending on whether any
+        // constituent has call sigs.
+        if (!firedTs6234 && calleeType is Type.Union) {
+            val unionDisplay = typeToString(calleeType)
+            val constituents = calleeType.types
+            val nonCallable = constituents.filter { getCallSignaturesOfType(it).isEmpty() }
+            if (nonCallable.isNotEmpty() && nonCallable.size == constituents.size) {
+                // All constituents lack call sigs.
+                val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                } else {
+                    val s = calleeExpr.pos
+                    Pair(s, expressionTrueEnd(calleeExpr) - s)
+                }
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf("  No constituent of type '$unionDisplay' is callable."),
+                    ))
+                    return
+                }
+            } else if (nonCallable.isNotEmpty()) {
+                // Some constituents lack call sigs.
+                val firstMissing = nonCallable[0]
+                val missingDisplay = typeToString(firstMissing)
+                val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                    Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+                } else {
+                    val s = calleeExpr.pos
+                    Pair(s, expressionTrueEnd(calleeExpr) - s)
+                }
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error, code = 2349,
+                        fileName = fileName, line = line, character = character,
+                        start = start, length = length,
+                        messageChain = listOf(
+                            "  Not all constituents of type '$unionDisplay' are callable.",
+                            "    Type '$missingDisplay' has no call signatures.",
+                        ),
+                    ))
+                    return
+                }
+            }
+        }
+        if (!firedTs6234 && calleeType is Type.Intrinsic && calleeType !== voidType &&
+            calleeType !== nullType && calleeType !== undefinedType &&
+            calleeType !== neverType && calleeType !== unknownType) {
+            val displayType = typeToString(getApparentType(calleeType))
+            // 17.84: When the callee is a PropertyAccessExpression, squiggle just
+            // the property name (matches TypeScript's per-segment elaboration for
+            // chained calls like `obj.method().notMethod()` — only `notMethod`
+            // is highlighted, not the whole chain).
+            val (start, length) = if (calleeExpr is PropertyAccessExpression) {
+                Pair(calleeExpr.name.pos, calleeExpr.name.text.length)
+            } else {
+                val s = calleeExpr.pos
+                Pair(s, expressionTrueEnd(calleeExpr) - s)
+            }
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                // B60.13: When the callee is a CallExpression whose end is on a
+                // different (earlier) line than the outer call's first argument,
+                // emit TS2734 "Are you missing a semicolon?" related info pointing
+                // to the inner call's start. Covers the `foo()\n(1 as number)`
+                // accidental-call pattern from `betterErrorForAccidentalCall_ts`.
+                val related = mutableListOf<Diagnostic>()
+                if (calleeExpr is CallExpression && expr.arguments.isNotEmpty()) {
+                    val innerEnd = expressionTrueEnd(calleeExpr)
+                    val firstArgPos = expr.arguments.first().pos
+                    val (innerEndLine, _) = getLineAndCharacterOfPosition(source, innerEnd)
+                    val (argLine, _) = getLineAndCharacterOfPosition(source, firstArgPos)
+                    if (innerEndLine < argLine) {
+                        val innerStart = calleeExpr.pos
+                        val (relLine, relChar) = getLineAndCharacterOfPosition(source, innerStart)
+                        related.add(Diagnostic(
+                            message = "Are you missing a semicolon?",
+                            category = DiagnosticCategory.Message, code = 2734,
+                            fileName = fileName, line = relLine, character = relChar,
+                            start = innerStart, length = length,
+                        ))
+                    }
+                }
+                diagnostics.add(Diagnostic(
+                    message = "This expression is not callable.",
+                    category = DiagnosticCategory.Error,
+                    code = 2349,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                    messageChain = listOf("  Type '$displayType' has no call signatures."),
+                    relatedInformation = if (related.isEmpty()) emptyList() else related.toList(),
+                ))
+            }
+        }
+        // TS2349: calling a class instance produced by `new X()` — `(new X())()`.
+        // The result of a `new` expression is always a (non-callable) object
+        // instance, so a callee that unwraps to a NewExpression with no call
+        // signatures is unambiguously not callable. Gated tightly to the
+        // NewExpression-callee shape so it never trips on the "empty Type.Object
+        // from incomplete resolution" trap (a real class instance genuinely has
+        // no call signatures regardless of how completely we resolved it).
+        if (!firedTs6234 && (calleeType is Type.Object || calleeType is Type.Interface)) {
+            var core: Expression = calleeExpr
+            while (core is ParenthesizedExpression) core = core.expression
+            // Round 479 (tsc isUntypedFunctionCall): a value of the global lib
+            // `Function` type IS callable — the call is untyped and returns any
+            // (`new Function("…")()`, fourslashImpl.ts verifyEval). A USER class
+            // named Function keeps firing (its decls are not lib decls).
+            val isGlobalFunctionType = calleeType.symbol?.let { sy ->
+                sy.name == "Function" && sy.declarations.isNotEmpty() &&
+                    sy.declarations.all { it in builtinLibDecls }
+            } == true
+            if (core is NewExpression && !isGlobalFunctionType) {
+                val displayType = typeToString(getApparentType(calleeType))
+                val start = calleeExpr.pos
+                val length = expressionTrueEnd(calleeExpr) - start
+                if (length > 0) {
+                    val (line, character) = getLineAndCharacterOfPosition(source, start)
+                    diagnostics.add(Diagnostic(
+                        message = "This expression is not callable.",
+                        category = DiagnosticCategory.Error,
+                        code = 2349,
+                        fileName = fileName,
+                        line = line,
+                        character = character,
+                        start = start,
+                        length = length,
+                        messageChain = listOf("  Type '$displayType' has no call signatures."),
+                    ))
+                }
+            }
+        }
+        return
+    }
+
+    /**
+     * (JIT.1)(c) round 811 — the EXPLICIT-type-argument branch
+     * ([CallSections.TYPE_ARGS]) of [checkSingleCallExpressionTypesCore].
+     *
+     * 101 of 52,413 invocations leave the function here on the compiler profile.
+     * `true` means "checked under the instantiated signature — the caller must
+     * return"; falling through means no generic signature accommodated the
+     * supplied type arguments and the ordinary paths below still apply.
+     */
+    private fun ccetExplicitTypeArguments(
+        expr: CallExpression,
+        typeArgs: List<TypeNode>,
+        signatures: List<Signature>,
+        source: String,
+        fileName: String,
+    ): Boolean {
+        // B174: `f<typeof import("spec")>(null)` — getTypeFromTypeNode resolves an
+        // import-type to anyType (masking the instantiated param check), but under
+        // strictNullChecks a `null` arg against a bare-TP param mapped to the
+        // import-namespace type is TS2345 with the RESOLVED module path display
+        // (declarationEmitWithInvalidPackageJsonTypings: an ARRAY-valued package.json
+        // "types" is invalid → resolution falls back to "main" → lib/index.d.ts).
+        run {
+            if (!strictNullChecks || typeArgs.size != 1) return@run
+            // `typeof import("spec")` parses as TypeQuery(exprName = ImportType) (the
+            // Parser's Typeof branch); a bare import-type arg is an ImportType directly.
+            val imp = (typeArgs[0] as? ImportType)
+                ?: ((typeArgs[0] as? TypeQuery)?.exprName as? ImportType)
+                ?: return@run
+            if (imp.qualifier != null) return@run
+            val specLit = ((imp.argument as? LiteralType)?.literal as? StringLiteralNode)?.text
+                ?: return@run
+            val sig = signatures.firstOrNull { it.typeParameters?.size == 1 } ?: return@run
+            val tpName = sig.typeParameters!![0].symbol?.name ?: return@run
+            val sigParams = signatureDeclarationParameters(sig.declaration) ?: return@run
+            val argIdx = sigParams.indexOfFirst { p ->
+                (p.type as? TypeReference)?.let {
+                    it.typeArguments == null && (it.typeName as? Identifier)?.text == tpName
+                } == true
+            }
+            if (argIdx < 0) return@run
+            val arg = expr.arguments.getOrNull(argIdx) ?: return@run
+            if (!(arg is Identifier && arg.text == "null")) return@run
+            val g = resolveBareViaNodeModulesPkgJson(specLit, fileName)
+                ?: resolveBareViaNodeModules(specLit, fileName)
+                ?: resolveSpecifierAnywhere(specLit, fileName)
+                ?: return@run
+            val baseDisplay = g.removeSuffix(".d.ts").removeSuffix(".tsx").removeSuffix(".ts")
+            val start = arg.pos
+            val length = expressionTrueEnd(arg) - start
+            val (l, c) = getLineAndCharacterOfPosition(source, start)
+            diagnostics.add(Diagnostic(
+                message = "Argument of type 'null' is not assignable to parameter of type 'typeof import(\"$baseDisplay\")'.",
+                category = DiagnosticCategory.Error, code = 2345,
+                fileName = fileName, line = l, character = c,
+                start = start, length = length,
+            ))
+            return true
+        }
+        val resolvedTypeArgs = typeArgs.map { getTypeFromTypeNode(it) }
+        if (resolvedTypeArgs.none { it === errorType }) {
+            // Find a generic signature whose type-param count accommodates the supplied
+            // type args. Exact-arity matches; ADDITIONALLY accept FEWER args than params
+            // when the trailing params have defaults — the supplied count must be within
+            // [minTypeParams, size] where minTypeParams = count of params with NO default.
+            // Previously only exact-arity sigs matched, so `fn<MyObjA>` against
+            // `<A extends ObjA, B extends ObjB = ObjB>` skipped the constraint check for
+            // the supplied `A` entirely (TS2344/TS2559 never fired).
+            val genericCandidates = signatures.filter { sig ->
+                val tp = sig.typeParameters ?: return@filter false
+                resolvedTypeArgs.size in tp.count { it.default == null }..tp.size
+            }
+            // Round 436d: with MULTIPLE arity-accommodating generic overloads, tsc
+            // selects the first whose ARGUMENTS match under the supplied type args —
+            // parser.ts `createMissingNode<Identifier>(kind, /*reportAtCurrentPosition*/
+            // true, msg)` must select the 2nd overload (the 1st pins the param to the
+            // literal `false`). Blindly checking against the FIRST candidate FP'd
+            // 'true' ≁ 'false' ×5. tsc applicability filters by TYPE-ARG CONSTRAINT
+            // first (typeArgumentConstraintResolution1: `foo1<Date>("")` disqualifies
+            // the `T extends Number` overload, so the arg failure reports against the
+            // `T extends Date` one — the suite gate caught the unfiltered cut). Falls
+            // back to the first candidate when none match (the error-reporting target,
+            // as before) — an over-accepting match can only SUPPRESS (this path only
+            // checks args; return-type inference lives elsewhere).
+            val constraintOkCandidates = genericCandidates.filter {
+                implTypeArgConstraintsSatisfied(it, resolvedTypeArgs)
+            }.ifEmpty { genericCandidates }
+            val genericSig = if (constraintOkCandidates.size <= 1) constraintOkCandidates.firstOrNull()
+            else constraintOkCandidates.firstOrNull { sig ->
+                val tps = sig.typeParameters!!
+                val padded = if (resolvedTypeArgs.size < tps.size)
+                    resolvedTypeArgs + (resolvedTypeArgs.size until tps.size).map { tps[it].default ?: errorType }
+                else resolvedTypeArgs
+                allArgumentsMatch(expr.arguments, instantiateContextualSignature(sig, createTypeMapper(tps, padded)))
+            } ?: constraintOkCandidates.first()
+            if (genericSig?.typeParameters != null) {
+                val tps = genericSig.typeParameters
+                // Pad the supplied args with the trailing params' resolved defaults so the
+                // mapper + contextual instantiation see every param. The constraint check
+                // still iterates only the SUPPLIED args (each has a typeArgNode).
+                val paddedArgs = if (resolvedTypeArgs.size < tps.size) {
+                    resolvedTypeArgs + (resolvedTypeArgs.size until tps.size).map { tps[it].default ?: errorType }
+                } else resolvedTypeArgs
+                val mapper = createTypeMapper(tps, paddedArgs)
+                // TS2344 / TS2559: Check supplied type arguments against their constraints.
+                checkCallTypeArgConstraints(tps, resolvedTypeArgs, typeArgs, mapper, source, fileName)
+                // B83.4f-a: use instantiateContextualSignature (not the plain
+                // instantiateSignature) so a nested FUNCTION-typed param like
+                // `f: (x: T) => Date` substitutes its inner `(x: T)` to `(x: <number>)`.
+                // Plain instantiateType deliberately no-ops on function-shaped
+                // Type.Object (CLAUDE.md gotcha); instantiateContextualSignature descends
+                // into the call signatures, so explicit `<number>` reaches the callback
+                // param and TS2345 (`(x:number)=>string` ≠ `(x:number)=>Date`) can fire.
+                val instantiated = instantiateContextualSignature(genericSig, mapper)
+                // TS2793: only attach "implementation would have succeeded" related info
+                // when the implementation signature actually accepts these args under
+                // the supplied type-args. For overloaded generic functions like
+                // `foo<T extends Date>(test: T)` / `foo<T extends Number>(test: string)`
+                // / `foo<T extends String>(test: any)` (impl), calling `foo<Date>("")`
+                // doesn't satisfy the impl's `T extends String` constraint, so the impl
+                // wouldn't have succeeded either — TS2793 should be suppressed.
+                var implRelated: Diagnostic? = null
+                val implRelatedCandidate = getOverloadImplementationRelated(genericSig, source, fileName)
+                if (implRelatedCandidate != null) {
+                    val implSig = getImplementationSignature(genericSig, source, fileName)
+                    if (implSig != null && allArgumentsMatch(expr.arguments, implSig, bivariantFnParams = true) &&
+                        implTypeArgConstraintsSatisfied(implSig, resolvedTypeArgs)
+                    ) {
+                        implRelated = implRelatedCandidate
+                    }
+                }
+                checkTs2554ForPropertyAccessCall(expr, instantiated, source, fileName)
+                val taArgsT = CallSections.t()
+                checkArgumentsAgainstSignature(expr.arguments, instantiated, source, fileName, implRelated, calleeGenericInstantiation = true)
+                CallSections.close(CallSections.N_TYPEARGS_ARGS, taArgsT)
+                return true
+            }
+        }
+        return false
     }
 
     /**
