@@ -70,17 +70,63 @@ actual fun <T> runWithDeepStack(block: () -> T): T {
 private const val WORKER_ID_BASE = 1_000_000_000
 private const val WORKER_SCOPE_ID_BASE = -1_000_000_000
 
+/**
+ * (PERF.HW.a) round 825: the width of ONE worker's id slice. Worker `i` allocates
+ * from `WORKER_ID_BASE + i * WORKER_ID_STRIDE`, so no two workers can ever mint the
+ * same Symbol/Type id — which is what makes a shared singleton whose class happens
+ * to initialize INSIDE a worker harmless (it lands in exactly that worker's slice,
+ * above that worker's own counter, and outside everybody else's).
+ *
+ * Headroom: the compiler profile's busiest worker mints ~40 k types and ~105 k
+ * symbols, so 10 M is ~100x the observed peak; [MAX_PARALLEL_WORKERS] keeps the
+ * top of the last slice inside `Int.MAX_VALUE`.
+ */
+private const val WORKER_ID_STRIDE = 10_000_000
+private const val MAX_PARALLEL_WORKERS = 100
+
 internal actual fun <T> runInDeepStackWorkers(tasks: List<() -> T>): List<T> {
     if (tasks.size <= 1) return tasks.map { it() }
+    require(tasks.size <= MAX_PARALLEL_WORKERS) {
+        "at most $MAX_PARALLEL_WORKERS parallel workers (id slices must fit in Int)"
+    }
+    // (PERF.HW.a) round 825 — THE PARALLEL-MODE RACE. Nothing on the sequential
+    // prefix of a `--workers` compile (crawl, parse, Binder) touches an intrinsic
+    // type, so `TypeKt`'s static initializer — which allocates `anyType` & co from
+    // the CURRENT thread's sequence — used to run inside whichever worker reached
+    // it first, i.e. AFTER that worker had rebased to WORKER_ID_BASE. Measured:
+    // `anyType.id == 1_000_000_005`, sitting inside every other worker's id range,
+    // so the id-keyed relation caches confused a shared singleton with a
+    // worker-local type and invented diagnostics. Forcing the class here allocates
+    // the singletons from the CALLER's ordinary low sequence, which is the
+    // invariant WORKER_ID_BASE was chosen to express in the first place.
+    forceIntrinsicTypeInit()
+    val probe = System.getenv("XTSC_WORKER_PROBE") != null
     val outcomes = MutableList<Result<T>?>(tasks.size) { null }
     val threads = tasks.mapIndexed { i, task ->
         Thread(null, {
-            Symbol.rebaseThreadIds(WORKER_ID_BASE, WORKER_SCOPE_ID_BASE)
-            Type.rebaseThreadIds(WORKER_ID_BASE)
+            Symbol.rebaseThreadIds(WORKER_ID_BASE + i * WORKER_ID_STRIDE,
+                WORKER_SCOPE_ID_BASE - i * WORKER_ID_STRIDE)
+            Type.rebaseThreadIds(WORKER_ID_BASE + i * WORKER_ID_STRIDE)
+            val t0 = Type.captureThreadId()
+            val s0 = Symbol.captureThreadIds().first
             outcomes[i] = runCatching(task)
+            if (probe) System.err.println(
+                "WORKERPROBE w$i type[$t0,${Type.captureThreadId()}) " +
+                    "sym[$s0,${Symbol.captureThreadIds().first}) " +
+                    "anyType=${anyType.id} stringType=${stringType.id} neverType=${neverType.id}"
+            )
         }, DEEP_STACK_THREAD_NAME, DEEP_STACK_SIZE_BYTES)
     }
     threads.forEach { it.start() }
     threads.forEach { it.join() }
+    if (probe) System.err.println("WORKERPROBE main anyType=${anyType.id} stringType=${stringType.id}")
     return outcomes.map { it!!.getOrThrow() }
+}
+
+/**
+ * Reads one intrinsic so the JVM runs `TypeKt`'s static initializer — which mints
+ * EVERY singleton intrinsic type — on THIS thread, before any worker rebases.
+ */
+private fun forceIntrinsicTypeInit() {
+    if (anyType.id < 0) error("unreachable: intrinsic type ids are positive")
 }
