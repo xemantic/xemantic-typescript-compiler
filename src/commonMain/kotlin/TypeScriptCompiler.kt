@@ -1924,6 +1924,11 @@ class TypeScriptCompiler {
             // deduplicated by key. Worker 0's checker (a full program over its
             // own fresh bind) serves the downstream Transformer queries.
             val workers = ParallelCheckMode.workers
+            // (PERF.HW.a) round 825: the real-lib parse cache is a plain HashMap and
+            // every worker's Checker builds its lib set from its own thread — warm it
+            // here so the workers only read it (and parse each lib file ONCE, not N
+            // times).
+            RealLibSnapshots.prewarmParsedLibFiles(options)
             val sourceList = parsedSourceFiles.values.toList()
             val fileNames = sourceList.map { it.fileName }
             val tasks = (0 until workers).map { w ->

@@ -323,8 +323,10 @@ object RealLibResolver {
  * program's user-declaration merges into the next program's lib. Revisit
  * bind-sharing with M5.4/M5.5 once symbol merging stops mutating its inputs.
  *
- * Not thread-safe (plain cache map): today all checking is single-threaded
- * (CheckerPool is unused); M5.4 parallel checking must add synchronization here.
+ * Not thread-safe (plain cache map). Under `--workers N` every partition checker
+ * builds its lib set from its OWN thread, so the parallel driver must call
+ * [prewarmParsedLibFiles] before spawning workers — after which the map is
+ * read-only for the rest of the compile and the workers never touch a bucket.
  */
 object RealLibSnapshots {
 
@@ -359,4 +361,18 @@ object RealLibSnapshots {
      */
     fun bindLibFiles(libNames: List<String>?, target: ScriptTarget, options: CompilerOptions): List<BinderResult> =
         parsedLibFiles(libNames, target).map { Binder(options).bind(it) }
+
+    /**
+     * (PERF.HW.a) round 825: materialise [parseCache] for [options]'s lib set on the
+     * CALLING thread, so the `--workers N` partition checkers that follow only ever
+     * READ it. Resolves through exactly the inputs [Checker.bindRealLibs] uses, so a
+     * warmed key set is by construction the key set the workers will ask for.
+     *
+     * Two things it buys: the plain-HashMap data race N concurrent [parsedLibFile]
+     * calls would otherwise be, and the N-1 duplicate parses of every lib file.
+     */
+    fun prewarmParsedLibFiles(options: CompilerOptions) {
+        if (!options.useRealLibs) return
+        parsedLibFiles(options.lib.ifEmpty { null }, options.target)
+    }
 }
