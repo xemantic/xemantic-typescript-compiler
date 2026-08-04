@@ -1227,9 +1227,11 @@ keeps § 0.1's own endgame as (ENGINE.3)/(SCOPE.1) behind the price § 0.1 itsel
 ("do not put the scope question to the owner until the two remaining sites are in").
 Three standing facts a reader of § 0.1 must hold alongside it: **the budget in § 0.1 is a
 COLD single-process budget**, and this arc already owns a warm artifact at **11.9 s**
-(`--serve`, round 773) and a native one at **13.4 s** (round 775) against the cold JVM's
+(`--serve`, round 773) and an AOT one at **13.4 s** against the cold JVM's
 26.5 s — so *parity is artifact-scoped*, and which artifact ships is the standing
-(AOT.1) owner decision, not an engineering one.
+(AOT.1) owner decision, not an engineering one. **CORRECTED round 823: that 13.4 s is the
+GraalVM native-image (round 771), NOT Kotlin/Native — K/N release measures 20.0 s, 1.26×
+a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all four points.**
 
 - [x] **(JIT.1) COMPLETE at round 821 — the census is ZERO.** Split every method above
   HotSpot's `HugeMethodLimit` so it can be JIT-compiled at all. **Rounds 802–821: 19
@@ -1640,7 +1642,9 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
   (the cache is trained on the user's own machine). Measuring is approved outright;
   SHIPPING it is a packaging decision and comes back to the owner. Note the framing this
   arc already owns: parity is ARTIFACT-scoped — cold JVM 26.5 s, warm `--serve` 11.9 s,
-  native 13.4 s — so the AOT cache is a fourth artifact point, and the number that
+  GraalVM native-image 13.4 s, Kotlin/Native release 20.0 s (round 823; the "native
+  13.4 s" this line used to say was the GraalVM number, not K/N) — so the AOT cache is a
+  FIFTH artifact point, and the number that
   matters is COLD start on a real profile, not a microbenchmark.
   Original proposal follows.
   Add `-XX:-DontCompileHugeMethods` to
@@ -7123,12 +7127,23 @@ interrupt the arc).
   - [x] **(INV.7a) linuxX64 re-enabled** — DONE round 610: compiles/links/runs
     byte-correct (compiler profile = the exact 46-error floor, 196s debug
     binary; smoke 82ms). EpochMap/Set now composition (K/N HashMap is final).
-  - [ ] **(INV.7b) Release binary + native bench row.** PARKED-BY-OWNER
-    (round 617, 2026-07-19: "we can switch it off for now"). History:
-    BLOCKED-ON-RESOURCES at round 610b — the optimizing link OOM-kills the
-    daemon on the 7.7GB box (twice, incl. -Xmx5g + daemons stopped). If ever
-    revived: re-attempt on a ≥16GB builder; the debug binary carries
-    correctness meanwhile.
+  - [x] **(INV.7b) Release binary + native bench row** — DONE round 823 on the
+    8-core / 15.6 GB box, full write-up `docs/perf/aot-native-image.md` § 2c.
+    `linkReleaseExecutableLinuxX64` at the committed 4g: BUILD SUCCESSFUL in
+    8m53s, 26.2 MiB binary, peak system used 6,083 MB against 9,530 MB still
+    available — never near the OOM-killer, so round 610b's BLOCKED-ON-RESOURCES
+    is retired on evidence. Output **byte-identical to the JVM** at the exact
+    46-error floor (sorted `--listAll` diff empty). Bench, 5 interleaved cold
+    pairs, all 10 runs at 46 errors: JVM **25,299 ms** median (sd 867, 9.2%
+    spread) vs native **20,045 ms** (sd 783, 11.3%) = **1.26×**, reproducing
+    round 772's 1.21×. **NOTE the queue's own misquote, corrected in § 2c: the
+    "native 13.4 s" artifact point cited above and at (JIT.2a) is the GraalVM
+    native-image number, NOT Kotlin/Native** — K/N release has only ever
+    measured 21.8 s (round 772) and 20.0 s (round 823). Verdict unchanged:
+    K/N is a REACH artifact (no JVM anywhere, corpus runs natively), never a
+    speed one; GraalVM stays the speed path and (AOT.1) stays owner-gated.
+    Also NOT reproduced: round 772's "0.2% spread" AOT-determinism claim,
+    which was n=3.
 
 Numeric targets (proposed, doc § 6): post INV.4/5 single-threaded compiler profile
 ≤ 10 s (≈ JS tsc) + harness RSS ≤ 1 GB; post INV.6 compiler ≤ 5 s on 4 cores;

@@ -74,6 +74,68 @@ reach — a 27 MB binary with no JVM anywhere, on platforms Graal would need its
 toolchain for — and `linuxX64Test`, which would run the corpus natively. Neither is a
 performance argument.
 
+## 2c. (INV.7b) closed — re-measured round 823 on the 8-core box
+
+*Round 823, HEAD `8c8f5511`, on the upgraded host (8 cores / 15.6 GB, swap still ZERO).
+The queue item had stood BLOCKED-ON-RESOURCES since round 610b and PARKED-BY-OWNER since
+617; the owner unparked it. Note that round 772 had in fact already linked and measured a
+release binary — the item was simply never checked off.*
+
+**THE ONE CORRECTION A READER NEEDS FIRST.** The queue quotes "a native one at **13.4 s**
+(round 775)" as this arc's native artifact point. **That is the GraalVM native-image number
+(§ 1), not a Kotlin/Native one, and round 775 is not where it came from — it is § 2's `tsc`
+row from round 771.** Kotlin/Native release has never been near 13 s: round 772 measured
+21.8 s and round 823 measures 20.0 s. Three AOT artifacts exist (JVM warm `--serve`,
+GraalVM image, K/N binary) and only one of them is 13 s.
+
+### The link
+
+`linkReleaseExecutableLinuxX64` at the committed `org.gradle.jvmargs=-Xmx4g`, daemons
+stopped first, nothing else running: **BUILD SUCCESSFUL in 8m53s** (round 772 saw 8m05s on
+the old box — the optimizing link is LLVM-bound, not core-bound, so eight cores buy it
+nothing). Binary **27,493,088 bytes (26.2 MiB)**, against the debug binary's 62,058,232.
+
+Sampled every 5 s across 107 samples: **peak system used 6,083 MB, lowest available
+9,530 MB**, peak single-process RSS **4.40 GB** (the Gradle daemon, at its 4g ceiling —
+so unlike the *test* link of round 822, which reached 8.5 GB RSS outside its heap, the
+release link of the main executable stays roughly inside `-Xmx`). **This link had ~9.5 GB
+of headroom and was never close to the OOM-killer**, which retires round 610b's
+BLOCKED-ON-RESOURCES verdict on the evidence rather than by assertion.
+
+### Correctness — byte-identical at the 46-error floor
+
+`--noEmit --listAll` on the compiler profile, JVM vs native release, `time:` line stripped,
+sorted full-text diff: **EMPTY**. Both `FAILED — 46 error(s)`, 55 output lines each, and
+neither capture contains `more error(s)` (round 811's truncation tell). RSS for the single
+verification run: JVM 855 MB at `-Xmx4g`, native **1,102 MB**.
+
+### The bench row
+
+Five interleaved COLD pairs, compiler profile, `--noEmit`, box otherwise idle, every one of
+the ten runs reporting 46 errors:
+
+| arm | n | wall median | min | max | sd | spread |
+|---|---:|---:|---:|---:|---:|---:|
+| JVM cold single-shot | 5 | **25,299 ms** | 24,884 | 27,201 | 867 | 9.2% |
+| Kotlin/Native release | 5 | **20,045 ms** | 19,239 | 21,510 | 783 | 11.3% |
+
+**Native is 1.26× a cold JVM — a 5.25 s saving — and remains ~1.5× SLOWER than the GraalVM
+image and ~1.7× slower than the JVM warm steady state.** Round 772's ratio (1.21×)
+reproduces; both absolute numbers came down ~4–8%, which the box change and 50 rounds of
+compiler work cannot be separated into.
+
+**One round-772 claim does NOT reproduce: "its timings are extremely stable — a 0.2%
+spread".** Round 823 measures an 11.3% spread over five runs (19.2–21.5 s), *wider* than
+the JVM's 9.2% in the same interleave. Three runs are not a spread; do not quote AOT
+determinism from n=3, and note that the argument built on it — "which is what an AOT binary
+with no warm-up should look like" — has no support here.
+
+### Verdict
+
+(INV.7b) is **DONE and its conclusion is unchanged**: K/N remains a *reach* artifact
+(26 MiB, no JVM, corpus runs natively per round 822), never a speed one. Nothing here
+disturbs § 2b's ranking, and the shipping-artifact question stays the owner's (AOT.1).
+
 ## 3. `-O3 -march=native` buys nothing — and that is informative
 
 | build | median of 3 |
