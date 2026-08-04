@@ -20,6 +20,68 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 827 (2026-08-04) — (NATIVE.1) THE P0 IS FIXED: THE NATIVE PIPELINE RAN ON THE
+DEFAULT 8 MB MAIN STACK AGAINST THE JVM'S 256 MB, AND NOW RUNS ON A 256 MB pthread. THE
+ID HANDOFF IS EVIDENCED BY OBSERVED IDS, NOT BY A GREEN SUITE.**
+
+`src/nativeMain/kotlin/DeepStack.native.kt` was literally `= block()`. It now goes
+`pthread_attr_init` -> `pthread_attr_setstacksize(256 MB)` -> `pthread_create` (a
+`staticCFunction` over a `StableRef`) -> `pthread_join`, with the block under
+`runCatching` because **a Kotlin exception must never unwind out of a `staticCFunction`
+into C**, re-thrown on the caller; if thread creation fails it degrades to the old inline
+pass-through.
+
+**256 MB COSTS NOTHING, AND THAT WAS VERIFIED RATHER THAN ASSUMED — the orchestrator's
+mid-round guess that it would be EAGERLY committed on a zero-swap box is FALSIFIED.** A
+glibc pthread stack is a plain anonymous `mmap` with no `MAP_POPULATE`: reserved virtual,
+committed page-by-page on first touch, the same shape as the JVM's. `/usr/bin/time -v`
+max RSS: native test binary **110,856 KB**, native CLI on a real project **107,320 KB** —
+both far below 256 MB. Two build traps on the way: `asCPointer` is a `StableRef` MEMBER,
+not an import, and unsigned arithmetic is not const-evaluable (`private val`, not
+`const val`).
+
+**THE ID HANDOFF IS SHOWN, NOT ASSERTED.** From a temporary probe on a REAL native run
+(then removed): `typeIds before=191 insideStart=191 insideEnd=196 after=196`, and
+`intrinsics outer=[1,4,10] inside=[1,4,10] sameIdentity=true callerTypeCounter=211`. The
+compile thread was **SEEDED at the caller's 191** (a dropped seed gives 1), advanced to
+196, and **the caller's counter came back at 196**; the intrinsics keep object identity
+across the boundary and sit far below the compile counter — **the exact invariant round
+825's bug violated from the other side** (`anyType=1000000005` inside a worker's slice).
+The permanent pin is `DeepStackHandoffTest` (commonTest, 4 pins), and **it is a SEAM pin
+because it failed against the mistakes it names, one at a time, on the JVM actual**:
+write-back removed -> 4/4 fail; seeding removed -> 4/4 fail. Kotlin/Native's new memory
+model makes those cells SHARED, so the handoff is a no-op there — it is written anyway,
+with the KDoc saying why: **the actual must not depend on which global-state regime is in
+force.**
+
+**TESTS RETURNED, WITH THE RUN COUNTS THAT PROVE THEY RAN:** `CfaTooLargeBailTest` ->
+commonTest (native **8 tests, all pass**, 41.0 s) and `Inv4SpineAccessorModifierDeepChainTest`
+-> commonTest (native **1 test, passes**, 31.0 s), the latter beyond the stated scope.
+**`DeepExpressionChainTest` stays JVM-only, as specified** — and the returned deep chain
+pin's KDoc now records that `none { 2589 }` is **VACUOUS on native**, where it pins only
+that the walk completes. Suites: **native 13,707 / 0 / 3** (822's 13,689 + 825's 5 +13
+here = exactly 13,707, so the run count itself proves nothing was masked) and
+**JVM 13,812 / 0 / 3**. `cost_gate.py`/`huge_methods.py` do not apply — the three commits
+touch only `src/nativeMain` and tests.
+
+**THE HONEST LIMIT, and why the CLAUDE.md fourth-axis entry was CORRECTED IN PLACE RATHER
+THAN DELETED: this makes an overflow ~32x RARER, NOT CATCHABLE.** `StackOverflowError` is
+still a never-thrown stub natively and the `init` boundary guard is still inert there, so
+a deep enough shape still kills the process.
+
+**WHAT DID NOT WORK:** the native suite took **30m25s** against round 822's 21m01s
+reference; the returned deep pins account for **73 s** and **the rest is UNATTRIBUTED** —
+different test set, different box state, no controlled A/B — so per-compile thread
+creation (~13,700 compiles) is named only as the plausible candidate, NOT claimed. It is
+irrelevant to a CLI run, which does one compile per process; if it ever matters, the fix
+is reusing one deep-stack thread instead of one per compile. Also: the handoff pins'
+warm-up threshold was set at `> 100` against an observed native margin of **191** — a
+1.9x margin, too thin for a pin that must not flake, lowered to `> 20` (still fully
+discriminating the `1` a dropped seed produces). And `println` is the only channel that
+gets numbers out of a native test (they land in the XML `<system-out>`); there is no
+in-process probe idiom here equivalent to `XTSC_WORKER_PROBE`. Commits `f7ebc4cf`,
+`21e21091`, `5417ae20`.
+
 **Round 826 (2026-08-04) — THE LADDER RE-TAKEN ON THE FIXED BINARY: THE RACE WAS
 *DEFLATING* THE PARALLEL ARMS, w4 IS 1.361x, AND (M2) STEP (b) PRICES SMALL ENOUGH TO
 DECLINE. PLUS THE METHODOLOGICAL FIND: THIS ARC'S CROSS-ROUND ABSOLUTE COMPARISONS ARE
@@ -1417,7 +1479,16 @@ GUARD RATHER THAN A PROBE, WHICH IS WEAKER AND IS SAID SO.**
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
-- [ ] **(NATIVE.1) P0 — NATIVE xtsc HARD-CRASHES ON DEEPLY-NESTED INPUT, BECAUSE
+- [x] **(NATIVE.1) FIXED ROUND 827 — the native `runWithDeepStack` actual now runs the
+  pipeline on a 256 MB pthread instead of the default 8 MB main stack (a 32x margin), with
+  the thread-local id handoff EVIDENCED by observed ids (seed 191 -> 196 -> write-back 196,
+  intrinsics identical across the boundary) and pinned by `DeepStackHandoffTest`, verified
+  discriminating by one-at-a-time ablation. 256 MB is lazily committed (max RSS ~108 MB),
+  so it costs nothing on a zero-swap box. `CfaTooLargeBailTest` returned to commonTest.
+  REMAINING AND DELIBERATE: an overflow is now ~32x RARER, NOT CATCHABLE — `StackOverflowError`
+  is still a never-thrown stub natively and the `init` boundary guard is still inert, so
+  `DeepExpressionChainTest` can never return and a deep enough shape still kills the process.**
+  Original framing follows. P0 — NATIVE xtsc HARD-CRASHES ON DEEPLY-NESTED INPUT, BECAUSE
   `runWithDeepStack` HAS NO NATIVE ACTUAL.** Found round 822 as a TEST problem and it is
   not one: `DeepStack.kt`'s native actual is a PASS-THROUGH, so the 256 MB deep-stack
   thread that the JVM pipeline runs on does not exist there, and `StackOverflowError` is a
