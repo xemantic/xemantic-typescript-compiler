@@ -20,6 +20,51 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 823 (2026-08-04) — (INV.7b) IS DONE: THE RELEASE BINARY LINKS, IS BYTE-CORRECT
+AND IS 1.26x. THE ROUND'S REAL PRODUCT IS THREE CORRECTIONS TO THE RECORD, ONE OF WHICH
+WOULD HAVE PRICED A SHIPPING DECISION OFF THE WRONG BACKEND.**
+
+`linkReleaseExecutableLinuxX64` at the committed 4g, daemons stopped, nothing else
+running: **BUILD SUCCESSFUL in 8m53s**, binary **27,493,088 bytes (26.2 MiB)** against
+62 MB debug. Memory sampled every 5 s over 107 samples: **peak system used 6,083 MB,
+lowest available 9,530 MB, peak process RSS 4.40 GB** — nowhere near the OOM killer, and
+unlike round 822's TEST link (8.5 GB RSS, far outside its heap) this one stays roughly
+inside `-Xmx`. **Round 610b's BLOCKED-ON-RESOURCES is retired on evidence, with no
+retries.** Correctness: `--noEmit --listAll` on the compiler profile, JVM vs native
+release, sorted full-text diff **EMPTY** — both `FAILED — 46 error(s)`, 55 lines, and
+neither capture carries round 811's `more error(s)` truncation tell. Bench, 5 interleaved
+cold pairs, all 10 runs at 46 errors: **JVM cold median 25,299 ms (sd 867, spread 9.2%)
+vs K/N release 20,045 ms (sd 783, spread 11.3%) = 1.26x, a 5.25 s saving**, reproducing
+round 772's 1.21x.
+
+**CORRECTION 1, AND THE EXPENSIVE ONE: THE 13.4 s NATIVE FIGURE IS THE GRAALVM
+NATIVE-IMAGE, NOT KOTLIN/NATIVE.** It is § 2's `tsc` row from round 771, and round 775 is
+not its provenance. **K/N release has only ever measured 21.8 s (round 772) and 20.0 s
+(now).** So there are **FOUR artifact points, not three**: cold JVM ~25-26 s, warm
+`--serve` 11.9 s, **GraalVM 13.4 s**, **K/N 20.0 s**. The § 0.1 framing block and this
+item both carried the conflation, i.e. a shipping decision was one paste away from being
+priced off a backend nobody had built. Both lines corrected in place.
+
+**CORRECTION 2: ROUND 772 HAD ALREADY DONE THIS ITEM'S WORK AND NOBODY CHECKED IT OFF.**
+Commit `9946edf5` linked a release binary at `-Xmx4g` on the OLD box and measured
+21,787 ms. **The item then sat BLOCKED-ON-RESOURCES for 50 rounds against a blocker its
+own arc had already cleared** — the queue was quoting round 610b's OOM while a later
+round's commit contained the refutation. Grep the arc's own commits before inheriting a
+blocker.
+
+**CORRECTION 3: ROUND 772's "0.2% SPREAD" AOT-DETERMINISM CLAIM DOES NOT REPRODUCE.**
+Five runs span 19.2-21.5 s = **11.3%, WIDER than the JVM's 9.2% in the same interleave**.
+It was **n=3**, and the argument built on it — "what an AOT binary with no warm-up should
+look like" — has no support. **An AOT binary's spread is not automatically tight, and
+n=3 cannot show that it is.**
+
+**ALSO MEASURED:** round 772's 8m05s link vs this round's 8m53s on twice the cores says
+**the optimizing link is LLVM-bound, not core-bound — eight cores bought it nothing**.
+And the 21.8 -> 20.0 s move could NOT be separated into "the box" vs "50 rounds of
+compiler work"; it is not attributed. Gates: docs-only change, no source touched, so
+`jvmTest` was deliberately not run and the 13,803 / 0 / 3 baseline is untouched by
+construction. Commit `c5b12296`.
+
 **Round 822 (2026-08-04) — THE BOX CHANGED, AND THE KOTLIN/NATIVE GATE IS LIVE AGAIN
 AFTER 10 DAYS DARK. A FOURTH DRIFT AXIS EXISTS, IT IS THE ONLY ONE THAT IS NOT
 SELF-ANNOUNCING, AND ONE TEST OF IT COST 4,414 OTHER TESTS.**
