@@ -311,7 +311,7 @@ Two caveats stated rather than buried:
   engine work. That is a property of the architecture, not of a function — and it
   is also why measuring a fourth site is very unlikely to change the answer.
 
-## 8. Status
+## 8. Status *(round-786 close; superseded on the aggregate by § 9–§ 11)*
 
 **(ENGINE.1) IS CLOSED (round 786).** All three sites are measured by the same
 method. E1 holds at all three, E4 holds at all three, **E2 fails at both sites
@@ -344,3 +344,202 @@ level D `walkFunctionBodiesInExpr`, level E `checkAssignmentExpression` (site 3)
 Take THREE runs per mode and print both spreads before quoting a differential —
 level E's Δ is only 1.4× the COARSE spread, which is why its boundary cost is a
 144–472 ns bound rather than a number.
+
+---
+
+## 9. Round 830 — (ENGINE.3): all FOUR sites re-measured on ONE binary
+
+*(ENGINE.3)'s item body says "measured at site 1 of 3". **It was stale.** Sites 2
+and 3 were measured at rounds 755 and 786 (§ 5, § 5b) and a fourth site — the
+property-access path, the one that holds the mass — at round 787. What the item
+asked for was already done; what no round had done, and what it actually exists to
+produce, is the **aggregate and the recommendation**. This section supplies both,
+and re-measures all four sites in ONE round on ONE binary first, because the
+published total was assembled from three different rounds and three different
+binaries and* **CLAUDE.md forbids comparing absolute ms across rounds** *(the
+sequential self-compile anchor has a 12.8% cross-round spread with identical code).*
+
+### 9a. Method
+
+Thirteen runs on the compiler profile, rotated interleave, three reps per arm,
+no source change of any kind:
+
+```
+--ctaSections / --ctaSectionsCoarse   levels B, C, E   (sites 1, 2, 3)
+--cpaSections / --cpaSectionsCoarse   level  Q         (site 4)
+--passTiming                          the structural denominators
+```
+
+The per-row **classification is transcribed unchanged** from § 1 / § 5 / § 5b and
+from `property-access-attribution.md`'s level Q — this round re-measures, it does
+not re-classify, which is what makes it a replication rather than a new opinion.
+
+**All 13 runs report `46 error(s), 0 warning(s)`, identical to production.** No
+`src/` file was touched this round, so the probe-off byte-identity question is
+answered by construction and by the invariance of the diagnostic set across ON,
+COARSE and probe-free modes.
+
+### 9b. The boundary differentials — and three of the four DID NOT RESOLVE
+
+| level | ON (ms) | COARSE (ms) | Δ | extra boundaries | ns/boundary | Δ / larger spread | verdict |
+|---|---|---|---:|---:|---:|---:|---|
+| B (site 1) | 822 / 799 / 923 | 841 / 886 / 959 | **−64** | 84,772 | — | 0.52× | **UNRESOLVED — negative** |
+| C (site 2) | 655 / 673 / 697 | 672 / 634 / 683 | +1 | 143,360 | 7 | 0.02× | **UNRESOLVED** |
+| E (site 3) | 450 / 496 / 484 | 465 / 428 / 447 | +37 | 103,899 | 356 | 0.80× | WEAK |
+| **Q (site 4)** | 1167 / 1152 / 1178 | 1015 / 929 / 982 | **+185** | 600,723 | **308** | **2.15×** | **usable** |
+
+Stated rather than buried, per CLAUDE.md's rule: **only level Q's differential is
+usable this round.** Levels B and C came back with Δ *below their own within-mode
+spread* — level B's is negative, which is arithmetically impossible as a boundary
+cost and simply means the box's run-to-run noise (124 ms of spread on an 822 ms
+partition) swamped a real effect of at most a few tens of ms. Level E reproduces
+round 786's figure (356 ns here, 347 ns then) at a weaker Δ/spread.
+
+So the boundary is carried as a **sensitivity parameter**, charged per row against
+that row's own reach, and the answer is reported across the whole plausible
+bracket. That is the honest treatment, and it turns out not to matter: the verdict
+is the same at every point in it.
+
+### 9c. The four sites, netted at 308 ns/boundary
+
+| site | function | engine ms | **walker ms** | walker share of the function | walker/engine | **walker as % of the compile** |
+|---|---|---:|---:|---:|---:|---:|
+| 1 | `checkVarDeclAssignability` (level B) | 436 | **286** | 37.6% | 0.66× | 1.18% |
+| 2 | `checkReturnAssignability` (level C) | 447 | **168** | 27.2% | 0.37× | 0.69% |
+| 3 | `checkAssignmentExpression` (level E) | 306 | **94** | 23.5% | 0.31× | 0.39% |
+| 4 | `checkSinglePropertyAccess` (level Q) | 830 | **209** | 20.1% | 0.25× | 0.86% |
+| | **FOUR-SITE TOTAL** | **2,021** | **757** | | | **3.13%** |
+
+Compile: 24,065 / 24,205 / 26,047 ms, median **24,205 ms**, `--noEmit`.
+
+**Sensitivity across the whole boundary bracket** — the four-site layer total:
+
+| boundary charged | 0 ns (raw) | 200 ns | 308 ns | 450 ns |
+|---|---:|---:|---:|---:|
+| four-site walker layer | 924 ms | 800 ms | **757 ms** | 703 ms |
+| as % of a 24,205 ms compile | 3.82% | 3.31% | **3.13%** | 2.90% |
+
+**The three published sites replicate.** Site 1 reads 37.6% against a published
+37.4%; site 2, 27.2% against 28.4%; site 3, 23.5% against 27.9% (inside the
+26.4–30.3% band round 786 itself printed for its calibration bracket). Three
+functions of 1,466 / 802 / 1,449 lines, re-partitioned on a binary ~45 rounds
+newer, land within about a point of where they landed before.
+
+### 9d. Site 4 moved — and the reason is the most decision-relevant fact here
+
+Round 787 measured site 4 at **engine 2,364 ms / firewall 207 ms = 8.0%**. Today
+it is **engine 830 ms / firewall 209 ms = 20.1%**.
+
+**The layer did not grow. The firewall is 209 ms against 207 ms — the same number.
+What moved is the denominator: the engine fell by 1,534 ms, because rounds 788–795
+((ENGINE.2b)/(2d)/(2e)/(2f)) landed levers inside `checkMemberAccessMissing`.**
+
+That gives the arc a law it did not have:
+
+> **Every millisecond taken OUT of the engine raises the dedicated-walker layer's
+> percentage share without changing by one millisecond what deleting the layer
+> would buy.** A rising layer share is therefore evidence that the engine is
+> getting faster, not that the layer is getting more expensive — and any future
+> reading of "the walker layer is now N% of this function" must be checked against
+> the layer's own **ms** before it is read as a reason to act.
+
+Site 4's netted layer is also still **ONE walker**: B464 (`emitTs18048`
+closure-captured receiver) is **168 of the 209 ms**; three of the eight probes net
+to **zero** (their entire raw cost is probe boundary), and the remaining four sum
+to 41 ms.
+
+### 9e. Scoring round 739's predictions, on this round's numbers
+
+| | prediction | outcome on the round-830 measurement |
+|---|---|---|
+| **E1** | every site shows a walker layer of **25–50%** of its own function | **HOLDS at 2 of 4, and the band is now too high.** 37.6% / 27.2% / 23.5% / 20.1%. Sites 3 and 4 fall *below* 25%. The prediction was directionally right and biased high — and site 4 is below the band for the § 9d reason, not because its firewall shrank. |
+| **E2** | every site shows a firewall/relation ratio **≥ 10×** | **FAILS again, harder.** 19.1× (site 1) / 6.2× (site 2) / 3.8× (site 3). The 14× survives only at the one site whose relation call is 2% of its function. It was the wrong statistic and it does not survive in its own terms. |
+| **E3** | the layers **sum to < 900 ms = < 3.5%** | **HOLDS at every netting, fails only at zero netting.** 757 ms = 3.13% at 308 ns; 703–800 ms = 2.90–3.31% across 200–450 ns; 924 ms = 3.82% raw, which charges the probe's own boundaries to the code being measured and is not a reading anyone should take. |
+| **E4** | at least one site's largest firewall group is a rule tsc also has | **HOLDS at ALL FOUR.** Site 1: the weak-type rule, **160 ms — 56% of that site's whole layer**. Site 2: excess-property checking. Site 3: `strictFunctionTypes`/declared variance/freshness. Site 4: all eight probes emit diagnostics tsc emits. tsc holds every one of these inside `checkTypeRelatedTo` or its property-access path, so all four **MOVE** into any replacement engine rather than vanishing. |
+
+### 9f. What is plainly DELETABLE, as opposed to moved
+
+Across all four sites, netted: site 2's legacy string checker (**11 ms**), site 3's
+legacy `varTypes` string fallback (**9 ms**) and the literal-RHS exit that exists
+only to stop it re-widening a literal (**2 ms**).
+
+**Total plainly deletable: 22 ms = 0.09% of the compile.**
+
+Everything else in the 757 ms is either a rule tsc also implements (so it moves) or
+a firewall over *our* relation — and a firewall over our own relation cannot be
+deleted until the relation stops needing it, which is the same scope trade stated
+one level down.
+
+## 10. THE RECOMMENDATION — do NOT put § 0.1's scope question to the owner
+
+(ENGINE.3) named its own falsifier: *"if sites 2 and 3 come in at the same order,
+the whole § 0.1 endgame is worth ~2–4%, which is LESS than (JIT.1) already
+measured, and the scope question should NOT be put to the owner at all."*
+
+**The falsifier fired.** Four sites, one binary, one round:
+
+* the dedicated-walker layer on the four largest checking sites in the compiler is
+  **757 ms = 3.13%** of a check-only compile (bracket **2.90–3.82%**);
+* **~22 ms (0.09%)** of that is plainly deletable; the largest group at **every one
+  of the four sites** is a rule tsc also implements and would move into the
+  replacement engine;
+* the cold A/B drift band on this box is **±2.0%**, so the entire measured prize is
+  between one and two noise bands, and its *deletable* part is 1/20th of one band;
+* **(JIT.1), already landed and already banked, measured −3.93% (5/5 pairs) from
+  splitting `forEachChild` alone** — one mechanical method split beat the upper
+  bound of the whole four-site endgame, with no scope trade at all.
+
+Against that, the scope change trades the property that made a byte-identical
+13,816-test corpus reachable (narrow verifiable walkers; **every** broad engine
+attempt in this codebase regressed — global variance analysis alone cost ~263
+regressions, round 336).
+
+**Recommendation: (SCOPE.1) should be CLOSED without being raised.** Putting it to
+the owner as a cost/benefit would be putting a ≤3.1%-with-0.09%-deletable proposal
+against a known-large correctness risk, and the honest cost/benefit is a
+recommendation not to do it. The § 0.1 endgame paragraph's precondition — "do not
+put the scope question to the owner until the two remaining sites are in" — is now
+discharged, and the answer it was waiting for is *no*.
+
+### The two caveats, stated rather than buried
+
+* **This is four sites, not the architecture.** The static census counts 1,046
+  `check*`/`emit*`/`tryEmit*` functions. These four are the largest *assignability*
+  sites plus the largest *property-access* site — they are 2.78 s of a 24.2 s
+  compile between them (11.5%), chosen because they are where the mass is. The
+  layer in the other ~1,040 functions is unmeasured and there is no basis here for
+  extrapolating a per-function share to it.
+* **But the direction of the evidence is against extrapolating upward.** The
+  measured shares are 37.6 / 27.2 / 23.5 / 20.1%, and they fall **monotonically as
+  the site gets bigger**: the biggest site has the smallest layer share, and the
+  ~400 tail passes — the other large population of dedicated walkers — were measured
+  FLAT at 2,962 ms with a largest pass of 75 ms (0.26%) and were found **not
+  removable** (round 620: 3 of 23 census-silent passes deletable; round 659's
+  migration A/B measured +0.24%). Nothing in this compiler has yet produced a
+  dedicated-walker layer whose *deletion* was worth a noise band.
+
+## 11. Status
+
+**(ENGINE.3) IS CLOSED (round 830), and it closes as a NEGATIVE recommendation,
+which is the outcome it was written to be able to produce.** Its item body was
+stale — sites 2, 3 and 4 had been measured at rounds 755, 786 and 787 — so the
+round's work was the aggregate that no round had stated, taken within one round on
+one binary: **four-site walker layer 757 ms = 3.13% of a check-only compile, ~22 ms
+(0.09%) plainly deletable, largest group at every site a rule that MOVES.**
+E1 holds at 2 of 4 (biased high), E2 fails again, E3 holds, E4 holds at all four.
+**(SCOPE.1) should be closed unraised.**
+
+### Reproducing
+
+```bash
+CP=$(cat build/bench/cp-cache.txt)
+for m in ctaSections ctaSectionsCoarse cpaSections cpaSectionsCoarse; do
+  java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+       --noEmit --$m build/bench/tsc-project-*
+done
+```
+
+Three reps per arm, rotated, on a quiet box (`./gradlew --stop` plus a graceful
+bracket-pattern Kotlin-daemon kill first — round 800's 270× inflation trap). Print
+BOTH modes' spreads before quoting any differential; this round three of the four
+did not resolve, and saying so is part of the result.

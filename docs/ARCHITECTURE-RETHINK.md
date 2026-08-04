@@ -658,8 +658,21 @@ and the layer is **1.21% of a check-only compile** on the largest of the three
 assignability sites. Deletable is less still: **165 ms of the 326 is the weak-type
 rule**, real TypeScript semantics that tsc holds inside `checkTypeRelatedTo`, so it
 MOVES into any replacement engine rather than vanishing → **0.6–1.2% for this site.**
-Two sites remain unmeasured, with scored predictions written down; do not put the
-scope question to the owner until they are in.
+~~Two sites remain unmeasured, with scored predictions written down; do not put the
+scope question to the owner until they are in.~~ **THE PRECONDITION IS DISCHARGED AND
+THE ANSWER IS NO (round 830, `docs/perf/engine-rule-price.md` §§ 9–11).** Sites 2 and 3
+were measured at rounds 755/786 and a FOURTH — the property-access path, the one that
+holds the mass — at round 787; round 830 re-measured all four **on one binary in one
+round** so the total is a within-round sum. **The dedicated-walker layer on the four
+largest checking sites is 757 ms = 3.13% of a check-only compile (bracket 2.90–3.82%),
+of which ~22 ms (0.09%) is plainly deletable** — the largest group at *every* site is a
+rule tsc also implements and would MOVE. Per-site shares **fall as the site gets
+bigger**: 37.6 / 27.2 / 23.5 / 20.1%. Against a ±2.0% drift band, and against
+**(JIT.1)'s already-banked −3.93% from one mechanical method split**, this endgame is
+not worth the scope trade. **(SCOPE.1) is CLOSED UNRAISED; do not put it to the owner.**
+One caution this measurement itself produced: site 4's share rose 8.0% → 20.1% while its
+firewall stayed at 209 ms, because the ENGINE fell 2,364 → 830 ms — **a rising layer
+share means the engine got faster, not that the layer got more expensive.**
 
 **PROCESS — the cost gate this arc lacked.** Round 713 added ~72k
 `getTypeOfExpression` calls (624,961 → 696,953, +11.5%) for one conformance
