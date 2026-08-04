@@ -20,6 +20,78 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 825 (2026-08-04) — (PERF.HW.a) IS DIAGNOSED AND FIXED, FOR REAL THIS TIME: THE
+RACE IS A SINGLETON ID-SPACE COLLISION. EVERY WORKER GOT THE *SAME* ID BASE, AND THE 19
+INTRINSIC SINGLETONS WERE MINTED FROM WHICHEVER WORKER WON A CLASS-INIT RACE — *AFTER*
+IT HAD REBASED.**
+
+**PROVED, not inferred.** `runInDeepStackWorkers` handed every worker
+`Symbol.rebaseThreadIds(WORKER_ID_BASE)` / `Type.rebaseThreadIds(WORKER_ID_BASE)` — the
+SAME base. That is sound only if nothing SHARED is ever minted from a worker's own
+sequence, and it is: **nothing in the sequential prefix of a parallel compile** (crawl,
+parse, `Binder`, `ProjectCompiler`, `TypeScriptCompiler`, `Flow`, `ModuleResolver`)
+**reads an intrinsic type**, so `TypeKt`'s static initializer first ran INSIDE a worker,
+after that worker had rebased. Measured directly with a probe (kept as
+`XTSC_WORKER_PROBE=1`), w4 on the HEAD binary: worker ranges all began at 1,000,000,000
+and **`anyType=1000000005`, `stringType=1000000008`, `neverType=1000000014` — the shared
+singletons sat INSIDE three of the four workers' id ranges.** Type ids are the keys of
+`relationComparisonStack`, `relationResultCache`, `referenceCacheLong`,
+`resolvedPropertyTypes`, so those workers' caches confused `anyType`/`stringType`/
+`neverType` with their own 6th/9th/15th type. **Which worker wins the class-init race,
+and how far its counter had advanced, is scheduler-dependent — that is the
+nondeterminism.** Post-fix the same probe reads `anyType=1` and slices
+1.00e9 / 1.01e9 / 1.02e9 / 1.03e9.
+
+**This is INV.6(6c0)'s hazard arriving from a direction its own entry does not name.**
+That entry says "ids must never cross a worker boundary"; here no id crossed anything —
+a SHARED value was minted from a worker-local counter, which is the same collision
+reached from the opposite side.
+
+**ONE MECHANISM, NOT TWO.** Round 824's disjoint FP families — the w2/w4 single line and
+the w8 ten lines — are the same bug at different blast radii: more workers means more
+slices overlapping the singletons and more colliding pairs. Both vanish under the same
+fix and neither survives it. Corroborating but INFERRED (the agent says so explicitly):
+every invented diagnostic in both families is a `Node`-vs-`Node` relation verdict and
+always additive, which is what a poisoned relation cache produces; no individual FP was
+traced to a specific colliding pair.
+
+**THE FIX.** (1) A **disjoint per-worker slice**, `WORKER_ID_BASE + i * WORKER_ID_STRIDE`
+(10 M, ~100x the observed 105 k-symbol peak; `MAX_PARALLEL_WORKERS` keeps the last slice
+inside `Int`) — **disjointness alone makes ANY lazily-initialized shared singleton
+harmless**, which is the property worth keeping — plus `forceIntrinsicTypeInit()` on the
+caller thread for determinism. (2) `RealLibSnapshots.prewarmParsedLibFiles`: `parseCache`
+is a plain `HashMap` whose own KDoc flagged the hazard and N workers were calling
+`getOrPut` on a cold map. **(2) is NOT credited with the flicker fix** — commit 1 alone
+measured clean; it closes a proven data race the count detector cannot see and removes
+N-1 duplicate lib parses.
+
+**VERIFICATION: 48 post-fix runs, every sorted capture byte-identical — a SINGLE md5 —
+and identical to the sequential baseline.** Per level: seq 46x3, w2 46x6, w4 46x6,
+w8 46x8 (against HEAD's w2 47x2 and w8 56x5). Contrast round 754, which closed this item
+on ONE run. Gates: suite **13,808 / 0 / 3** (+5 `ParallelWorkerIdSpaceTest` pins),
+`cost_gate.py` **+0.00% on every counter**, `huge_methods.py --fail-over 0` = 0.
+
+**HONEST LIMIT, stated by the agent:** the clinit-ORDER half cannot be pinned in-process
+— by the time any test runs `TypeKt` is initialized at a low id, so such a pin is
+vacuous. **The disjoint-slice half, which is what actually makes the bug class harmless,
+IS pinned.** `XTSC_WORKER_PROBE` is the instrument that re-checks the order invariant on
+a real parallel compile.
+
+**WHAT DID NOT WORK:** two failed repro attempts that both look EXACTLY like "the race
+does not reproduce" — one pointed at `src/compiler` instead of the project root (267
+errors), one ran the w8 script WITHOUT `--workers 8` (46x3, "clean"). `pkill -f
+'com.xemantic.typescript.compiler.MainKt'` killed its own shell (CLAUDE.md's documented
+trap, exit 144). Theories checked and KILLED: `typeParamFileSalt` racing (it is
+`fileName.hashCode()`, deterministic); global mutable state in
+`Parser`/`Scanner`/`Binder`/`Vfs`/`RealLibResolver` (none); `RealLibFiles.files` (object
+`<clinit>`, JVM-locked); AST mutation during check (`nodeId`/`parent`/`kindId` are
+stamped at index time only).
+
+**CARRIED FORWARD FOR (M2) STEP (b): ROUND 824's TIMING LADDER IS NOT QUOTABLE AS IT
+STANDS** — it compared a correct sequential run against a sometimes-diverging parallel
+one, so the 1.343x measurement and the ~1.5x re-fit must be re-taken on this binary
+before either is used as a claim. Commits `9c69eaff`, `42d8f48c`.
+
 **Round 824 (2026-08-04) — `--workers N` IS A *RACE*, ROUND 754 NEVER CLOSED
 (PERF.HW.a), AND THE 1.25x AMDAHL CAP IS REFUTED BY COUNTEREXAMPLE. THE PERFORMANCE CASE
 FOR (M2) UNPARKS; THE CORRECTNESS GATE DOES NOT.**
@@ -4529,7 +4601,14 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Predictions **5 of 6** (P5 falsified: w8 peak RSS 2,240 MB fits -Xmx4g easily, GC
   1.1 s of the 5.4 s regression — **no level was skipped for want of RAM**).
 
-- [ ] **(PERF.HW.a) RE-OPENED ROUND 824 ON EVIDENCE — `--workers N` IS A RACE, AND ROUND
+- [x] **(PERF.HW.a) CLOSED ROUND 825 ON 48 RUNS — the race was a SINGLETON ID-SPACE
+  COLLISION: every worker received the SAME id base, so `TypeKt`'s static initializer
+  minted the 19 shared intrinsics from whichever worker won the class-init race, AFTER
+  that worker had rebased — measured `anyType=1000000005` INSIDE three of four workers'
+  ranges. Fixed with a DISJOINT per-worker slice (`base + i*stride`), which makes any
+  lazily-initialized shared singleton harmless, plus `forceIntrinsicTypeInit()` on the
+  caller thread. 48 post-fix runs, one md5, identical to sequential; suite 13,808/0/3.
+  Round 824's framing follows.** RE-OPENED ROUND 824 ON EVIDENCE — `--workers N` IS A RACE, AND ROUND
   754's BYTE-IDENTITY WAS UNDER-SAMPLED.** Artifact: `docs/perf/worker-scaling-round824.md`
   § 5. On the 8-core box, at a FIXED worker count, the diagnostic COUNT varies run to run:
   **w2 46/47 (5/5 split over 10 runs), w4 46/47 (3/3 over 6), w8 46/56 (1/6 over 7)**,
