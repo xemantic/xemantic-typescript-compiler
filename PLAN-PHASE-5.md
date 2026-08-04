@@ -20,6 +20,75 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 830 (2026-08-04) — (ENGINE.3) CLOSED, AND IT CLOSES AS A *NEGATIVE
+RECOMMENDATION*: THE FOUR-SITE DEDICATED-WALKER LAYER IS 757 ms = 3.13% OF A
+CHECK-ONLY COMPILE, ~22 ms (0.09%) OF IT PLAINLY DELETABLE — **(SCOPE.1) SHOULD BE
+CLOSED WITHOUT BEING RAISED WITH THE OWNER.** NO `src/` CHANGE.**
+
+- **The item body was STALE, and finding that out is most of the round.** (ENGINE.3) reads
+  "Measured at site 1 of 3" and asks for sites 2 and 3. **Both were measured — site 2 at
+  round 755, site 3 at round 786 — and a FOURTH site (the property-access path, the one
+  that holds the mass) at round 787.** (ENGINE.1) has been CLOSED since round 786. What no
+  round had ever done, and what the item exists to produce, is the **aggregate and the
+  recommendation**; § 0.1's endgame paragraph still said "two sites remain unmeasured".
+- **So the round did the one thing that made the aggregate defensible: re-measured ALL FOUR
+  SITES IN ONE ROUND ON ONE BINARY.** The published total (613 ms, then 820 ms with site 4)
+  was assembled from three different rounds and three different binaries, and CLAUDE.md
+  forbids comparing absolute ms across rounds — the sequential anchor has a 12.8%
+  cross-round spread with identical code. 13 runs, rotated interleave, 3 reps per arm
+  (`--ctaSections`/`Coarse` levels B/C/E, `--cpaSections`/`Coarse` level Q, one
+  `--passTiming`), classification transcribed unchanged from the published docs so this is
+  a REPLICATION, not a re-opinion. All 13 runs: `46 error(s)`, identical to production.
+- **THE NUMBERS, netted at 308 ns/boundary** (site / engine / **walker** / share / % of a
+  24,205 ms compile): 1 `checkVarDeclAssignability` 436 / **286** / 37.6% / 1.18% —
+  2 `checkReturnAssignability` 447 / **168** / 27.2% / 0.69% —
+  3 `checkAssignmentExpression` 306 / **94** / 23.5% / 0.39% —
+  4 `checkSinglePropertyAccess` 830 / **209** / 20.1% / 0.86%.
+  **FOUR-SITE TOTAL 757 ms = 3.13%**, bracket **703–924 ms = 2.90–3.82%** across
+  0–450 ns. **The three published sites replicate to about a point** (37.6 vs 37.4,
+  27.2 vs 28.4, 23.5 vs 27.9) on a binary ~45 rounds newer.
+- **SITE 4 MOVED FROM 8.0% TO 20.1%, AND THE REASON IS THE ROUND'S BEST FINDING: the
+  firewall is 209 ms against round 787's 207 ms — the SAME number. What moved is the
+  DENOMINATOR.** The engine row fell 2,364 -> 830 ms because rounds 788-795
+  ((ENGINE.2b)/(2d)/(2e)/(2f)) landed levers inside `checkMemberAccessMissing`. **Every ms
+  taken out of the engine raises the layer's percentage share without changing by one ms
+  what deleting the layer would buy** — a rising share is evidence the engine got faster.
+  Site 4's layer is still ONE walker: B464 is 168 of the 209 ms, and three of its eight
+  probes net to ZERO (their whole raw cost is probe boundary).
+- **PREDICTIONS SCORED.** **E1 (25-50% band) HOLDS AT ONLY 2 OF 4 and is biased high** —
+  sites 3 and 4 are below 25%. **E2 (firewall/relation >= 10x) FAILS AGAIN, HARDER**:
+  19.1x / 6.2x / 3.8x; the 14x survives only where the relation is 2% of its function.
+  **E3 (< 900 ms = < 3.5%) HOLDS at every netting**, failing only at zero netting (924 ms
+  = 3.82%), which charges the probe's own boundaries to the code. **E4 HOLDS AT ALL FOUR**
+  — weak-type rule (160 ms = 56% of site 1's layer), excess-property checking,
+  `strictFunctionTypes`/variance/freshness, and all eight of site 4's probes: tsc holds
+  every one inside its own relation/property path, so all four **MOVE**.
+- **PLAINLY DELETABLE, all four sites: 22 ms = 0.09%** (site 2's legacy string checker 11,
+  site 3's `varTypes` fallback 9, the literal-RHS exit 2).
+- **THE RECOMMENDATION, which is what the item was written to be able to produce: do NOT
+  put § 0.1's scope question to the owner.** The whole prize is 3.13% against a ±2.0% cold
+  A/B band; the deletable part is 1/20th of one band; and **(JIT.1), already landed and
+  banked, measured -3.93% (5/5 pairs) from splitting `forEachChild` alone** — one
+  mechanical method split beat the upper bound of the entire endgame with no scope trade.
+  Against that the change trades the property that made a byte-identical 13,816-test
+  corpus reachable (every broad engine attempt regressed; global variance analysis alone
+  cost ~263, round 336). **(SCOPE.1) is marked CLOSED-UNRAISED.**
+- **WHAT DID NOT WORK.** (1) **Three of the four ON-vs-COARSE differentials DID NOT
+  RESOLVE.** Level B came back **negative** (Δ −64 ms against a 124 ms within-mode spread
+  — arithmetically impossible as a boundary cost, so noise swamped it); level C read
+  Δ = +1 ms (Δ/spread 0.02x); level E reproduced round 786's figure (356 vs 347 ns) at
+  Δ/spread 0.80x. Only level Q was usable (308 ns, Δ/spread 2.15x). The escape was to
+  carry the boundary as a **sensitivity parameter** charged per row by its own reach and
+  report the answer across the whole bracket — the verdict is identical at every point in
+  it, which is why the round survives a calibration that mostly failed. (2) A first
+  aggregate taken from RAW rows read 924 ms = 3.82% and would have **failed E3**; level
+  Q's nine rows all carry identical 66,747-close counts, so the untaxed reading inflates
+  the small firewall rows by ~20.6 ms EACH and three of them are pure boundary.
+- **NO `src/` CHANGE**, so no suite/cost-gate/JIT-gate run was owed; probe-off behaviour
+  is answered by construction, and by the diagnostic set being identical across ON,
+  COARSE and probe-free modes in all 13 runs.
+  Full derivation: `docs/perf/engine-rule-price.md` §§ 9-11.
+
 **Round 829 (2026-08-04) — (SETUP.2) CLOSED ON THE CENSUS: `buildFileLocalTypeMaps` MAKES
 **8.5 RESOLUTIONS PER MAP ENTRY ANYBODY READS**, AND THE DEFERRAL IS WORTH UNDER 1%.
 NO LEVER LANDED, BY MEASUREMENT — THE INSTRUMENT IS THE DELIVERABLE.**
@@ -2148,9 +2217,32 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   Answer needed on: add it to `check` (costs ~2 min per build), or leave it as a
   round-protocol step the agent runs by hand.
 
-- [ ] **(ENGINE.3) Finish round 739's engine-rule price at the TWO remaining assignability
-  sites — this is § 0.1's OWN precondition, in its own words: "do not put the scope
-  question to the owner until they are in".** PRIZE: not a saving — a DECISION INPUT.
+- [x] **(ENGINE.3) CLOSED round 830 — AND IT CLOSES AS A *NEGATIVE RECOMMENDATION*.
+  THE ITEM BODY WAS STALE: sites 2 and 3 were measured at rounds 755 and 786, and a
+  FOURTH site (property access, the one holding the mass) at round 787. What no round
+  had produced is the AGGREGATE, and round 830 took it WITHIN ONE ROUND ON ONE BINARY
+  (13 runs, rotated, 3 reps/arm) because the published total was assembled across three
+  binaries and CLAUDE.md forbids comparing absolute ms across rounds.**
+  **FOUR-SITE DEDICATED-WALKER LAYER = 757 ms = 3.13% of a 24,205 ms check-only compile**
+  (bracket 703–924 ms = 2.90–3.82%): site 1 **286 ms / 37.6%**, site 2 **168 / 27.2%**,
+  site 3 **94 / 23.5%**, site 4 **209 / 20.1%**. The three published sites REPLICATE to
+  about a point. **Site 4 moved 8.0% -> 20.1% with its firewall UNCHANGED (209 vs 207 ms)
+  — the ENGINE fell 2,364 -> 830 ms because (ENGINE.2b/2d/2e/2f) landed; every ms taken
+  out of the engine raises the layer's SHARE without changing what deleting it buys.**
+  **Plainly deletable, all four sites: 22 ms = 0.09%**; E4 holds at ALL FOUR (the largest
+  group at every site is a rule tsc also implements, so it MOVES). E1 holds at only 2 of 4
+  (biased high), E2 fails again (19.1x / 6.2x / 3.8x), E3 holds at every netting.
+  **VERDICT: do NOT put § 0.1's scope question to the owner — see (SCOPE.1) below.**
+  What did NOT work: **three of the four ON-vs-COARSE differentials did not resolve**
+  (level B NEGATIVE, Δ −64 ms against a 124 ms spread; level C Δ = +1 ms; level E
+  Δ/spread 0.80x; only level Q usable at 308 ns, 2.15x) — the escape was to carry the
+  boundary as a SENSITIVITY PARAMETER and show the verdict is identical across it; and a
+  first aggregate taken from RAW rows read 3.82% and would have failed E3, because level
+  Q's nine rows carry identical close counts so the untaxed reading inflates each small
+  firewall row by ~20.6 ms. **No `src/` change.** `docs/perf/engine-rule-price.md` §§ 9-11.
+  ORIGINAL: **(ENGINE.3) Finish round 739's engine-rule price at the TWO remaining
+  assignability sites — this is § 0.1's OWN precondition, in its own words: "do not put
+  the scope question to the owner until they are in".** PRIZE: not a saving — a DECISION INPUT.
   Measured at site 1 of 3 (`docs/perf/engine-rule-price.md`): engine 483 ms (55.4%) vs
   dedicated-walker layer 326 ms (37.4%) = **0.67×, not the 14× the arc nearly quoted**,
   and **165 of the 326 is the weak-type rule, which MOVES into any replacement engine
@@ -2160,16 +2252,30 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   same order, the whole § 0.1 endgame is worth ~2–4%, which is LESS than (JIT.1) already
   measured, and the scope question should NOT be put to the owner at all.**
 
-- [ ] **BLOCKED-PENDING-USER (SCOPE.1): the § 0.1 endgame proper — replace the ~1,046
+- [x] **(SCOPE.1) CLOSED UNRAISED (round 830) — DO NOT RE-RAISE THIS WITH THE OWNER.**
+  (ENGINE.3) was its gate and its gate answered NO. Measured on one binary in one round,
+  the dedicated-walker layer on the four largest checking sites in the compiler is
+  **757 ms = 3.13%** of a check-only compile (bracket 2.90–3.82%), of which **~22 ms
+  (0.09%) is plainly deletable** — the largest group at *every one of the four sites* is a
+  rule tsc also implements and would MOVE into the replacement engine rather than vanish.
+  Against a **±2.0% cold A/B drift band** the entire prize is one to two noise bands and
+  the deletable part is 1/20th of one; **(JIT.1), already landed, measured −3.93% (5/5)
+  from splitting `forEachChild` alone**, i.e. one mechanical method split beat the upper
+  bound of the whole endgame with no scope trade at all. The change would trade the
+  property that made a byte-identical 13,816-test corpus reachable (every broad engine
+  attempt in this codebase regressed — global variance analysis alone cost ~263, round
+  336). **A future agent proposing this must first read `docs/perf/engine-rule-price.md`
+  §§ 9-11 and produce a NEW measurement that contradicts it; the "1,046 walkers" figure is
+  a line count, not a price, and the measured shares FALL as the site gets bigger
+  (37.6 / 27.2 / 23.5 / 20.1%).** Residue stated explicitly: the layer in the other ~1,040
+  functions is unmeasured — but the other large dedicated-walker population, the ~400 tail
+  passes, was measured FLAT (2,962 ms, largest 75 ms = 0.26%) and NOT removable
+  (round 620: 3 of 23 census-silent passes deletable; round 659's migration A/B +0.24%).
+  ORIGINAL: **BLOCKED-PENDING-USER (SCOPE.1): the § 0.1 endgame proper — replace the ~1,046
   dedicated `check*`/`emit*`/`tryEmit*` walkers with general engine rules.** Guardrail —
   § 0.1 states plainly that this "is a SCOPE decision, not a perf task, and it trades the
   property that made the corpus reachable" (narrow verifiable walkers are what got the
   corpus to 100%; every broad engine attempt in this codebase regressed).
-  **DO NOT RAISE THIS UNTIL (ENGINE.3) IS IN** — § 0.1 says so itself, and round 802's
-  measurement makes the case weaker, not stronger: the largest concrete reason the
-  checking work is slow turned out to be that it is not compiled, which is fixable without
-  any scope trade. **Proposal, when the time comes:** put it to the owner as a
-  cost/benefit with the three site prices attached, not as an architecture pitch.
 
 ---
 
