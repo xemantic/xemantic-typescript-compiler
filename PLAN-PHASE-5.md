@@ -20,6 +20,76 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 828 (2026-08-04) — (JIT.2a) THE JDK 25 AOT CACHE IS WORTH 1.638× ON THE COMPILER
+PROFILE, 6/6 WINS, DIAGNOSTICS BYTE-IDENTICAL — AND IT IS NOT A START-UP LEVER, WHICH IS
+WHY A THIRD ARM HAD TO EXIST.**
+
+No `src/` change, so **`jvmTest` is not applicable and was not run** (as rounds 823/826
+did); `cost_gate.py` and `huge_methods.py` likewise — no compiled code changed. Full
+write-up: `docs/perf/aot-cache-round828.md`; the artifact-point table in
+`docs/perf/aot-native-image.md` is now a FIVE-point index (§ 0) instead of four scattered
+figures.
+
+**THE NUMBER.** 6-rep rotated 3-arm interleave, 18 cold runs, box idle and untouched, every
+run reporting 46 errors. Plain jar **22,223 ms** self (sd 287, spread 3.2%) → AOT cache
+trained on the compiler profile **13,565 ms** (sd 310, spread 7.3%) = **−8,658 ms,
+−38.96%, 1.638×, B wins 6/6**, per-pair delta spread **924 ms** against a **8,388 ms**
+median per-pair delta. Not noise by any margin this repo uses. On the unrelated 1-file
+scratch project the same cache reads 1,324 → 560 ms = **2.36×, 5/5, 53 ms delta spread** —
+so the cache is a property of the COMPILER, not of the trained project, and only the
+training project's SIZE matters.
+
+**IT IS NOT START-UP, AND THE CONTROL ARM IS WHAT SAYS SO.** The queue filed this as a
+start-up lever. `wall − self` (everything before the compiler's own clock) is 143 ms plain
+vs **115 ms** cached: the cache buys **~28 ms of start-up and ~8,630 ms inside the
+compile**. The third arm — a cache trained on a 1-FILE project, which loads and links
+essentially the same classes and so carries the whole JEP-483 half — reads **−5.92%
+(1.063×, 6/6, but magnitude soft: 1,260 ms spread against a 1,303 ms median delta)**
+against the real-trained arm's −38.96%. **The prize is JEP 515's recorded METHOD PROFILES
+handed to C2 at start-up, not class loading**, and that decomposition cost six runs and is
+the round's most reusable piece of mechanism.
+
+**WHAT DID NOT WORK — AND IT IS THE HEADLINE. The AOT cache cannot be dumped from this
+repo's normal classpath**: `-cp build/classes/kotlin/jvm/main:…` dies with
+`Error: non-empty directory … Cannot have non-empty directory in paths / Error occurred
+during CDS dumping` after burning a 47-second compile first. CDS/AOT requires a JAR-ONLY
+classpath at dump time — so **`scripts/ab-interleaved.sh`, `scripts/ab-warm.sh` and
+`scripts/bench-compile-tsc.sh` are all structurally unable to carry an AOT arm**, and the
+arc's published cold anchors (exploded-dir runs) are not a valid baseline for one. This
+round therefore ran a purpose-built 3-arm driver with **every** arm on the jar, which is
+also what round 811's same-command-shape law demands. The asymmetry to remember: only
+DUMPING refuses a directory; at RUNTIME the cache is served happily to an exploded-dir
+classpath.
+
+**THE SHIPPING RISK, MEASURED RATHER THAN ASSUMED: the JVM NEVER invalidates a stale
+cache.** Probed with `-Xlog:class+load=info` (the only way to tell "opened" from "used" —
+`-Xlog:aot=info` says `Opened AOT cache` in every scenario including the broken ones):
+921/926 `com.xemantic` classes load from the cache with a mismatched classpath, with the
+jar's content changed, with a fresh mtime, and with both — `-XX:AOTMode=on` changes
+nothing. The decisive experiment: `Checker.class` REMOVED from the jar gives
+`NoClassDefFoundError` without the cache and **exit 0, `OK — 0 errors`, with it**. A stale
+cache silently runs the old bytecode, with no warning and no exit code to notice it by.
+
+**CORRECTNESS (gate A, run before any timing was quoted).** `--noEmit --listAll`, identical
+command shape, `time:` and JVM `[…]` lines stripped, sorted diff **EMPTY** — 54 lines each,
+md5 `4caacf248ce417899c2972c16a82f1ed`, both `FAILED — 46 error(s)`, 46 `error TS` each,
+neither containing round 811's `more error(s)` truncation tell. Cosmetic defect: a cached
+run prints four `Failed to link AdapterHandlerEntry … AOT code cache` warnings to stderr,
+so any raw-output differ must strip `[`-prefixed lines and a shipped launcher must silence
+them.
+
+**Training cost:** compiler profile **28.06 s / 48.8 MiB** (one ordinary compile + ~2.9 s of
+assembly), 1-file project **3.36 s / 35.1 MiB** — most of the file is the archived
+JDK+Kotlin class graph, not our profiles. One-command `-XX:AOTCacheOutput` internally spawns
+the `-XX:AOTMode=create` child and prints its command line, so the two-step form needed no
+separate experiment.
+
+**RECOMMENDATION: ship, gated on ONE condition** — invalidation is ours to build, because
+the JVM has none. Queued as **(JIT.2b) BLOCKED-PENDING-USER**. **Residue stated rather than
+implied:** emit mode, the other 7 profiles, the corpus suite under a cache, cross-JDK/
+cross-machine cache portability, and a cache trained under `--workers 4` were all NOT
+measured.
+
 **Round 827 (2026-08-04) — (NATIVE.1) THE P0 IS FIXED: THE NATIVE PIPELINE RAN ON THE
 DEFAULT 8 MB MAIN STACK AGAINST THE JVM'S 256 MB, AND NOW RUNS ON A 256 MB pthread. THE
 ID HANDOFF IS EVIDENCED BY OBSERVED IDS, NOT BY A GREEN SUITE.**
@@ -1944,7 +2014,38 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
     § 21. *Wiring it into Gradle's `check` is a build-system change and stays owner-gated
     → (JIT.3); this round deliberately did not decide that.*
 
-- [ ] **(JIT.2) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work is a round
+- [x] **(JIT.2) DONE round 828 — (JIT.2a) MEASURED: the JDK 25 AOT cache is worth
+  **1.638×** on the compiler profile (22,223 → 13,565 ms self, 6/6 wins, per-pair spread
+  924 ms against an 8,388 ms median delta) and **2.36×** on a small project, with
+  diagnostics byte-identical (54 lines, one md5, 46 errors on all 20 runs).**
+  `docs/perf/aot-cache-round828.md` is the write-up. Three findings that change the framing:
+  (1) **it is not a START-UP lever** — `wall − self` moves only ~28 ms, the other 8.6 s is
+  inside the compile, because JEP 515 hands C2 the recorded profiles at start-up; the
+  tiny-trained third arm is the control that proves it (5.9% with the class-loading half
+  alone, 39.0% with profiles). (2) **The dump refuses an exploded class directory**, so
+  every A/B script in `scripts/` is structurally unable to carry an AOT arm — see the
+  CLAUDE.md entry. (3) **The JVM never invalidates a stale cache**: a class deleted from the
+  jar still runs from the cache (`NoClassDefFoundError` without it), so invalidation is
+  ours to build. **Residue, explicitly not measured:** emit mode, the other 7 profiles, the
+  corpus suite under a cache, cross-JDK/cross-machine cache portability, and a cache trained
+  under `--workers 4`. The launcher-flag half of this item stays DECLINED. The shipping
+  decision is queued below as (JIT.2b).
+
+- [ ] **BLOCKED-PENDING-USER: (JIT.2b) ship the JDK 25 AOT cache?** Round 828 measured it
+  (above) and recommends **yes, gated on one condition**: the JVM provides NO invalidation,
+  so the packaging must bind the cache to the exact artifact — regenerate at install time,
+  validate by the jar's checksum, delete on upgrade — or a user who upgrades silently keeps
+  running the previous release's bytecode. Other costs: ~49 MB per install, a ~28 s training
+  run against a representative project (a 1-file training run is 3.4 s but buys only 5.9% on
+  a large compile), four JVM stderr warnings the launcher must silence, and the distribution
+  must be a jar. No cross-OS artifact grid is needed (the cache is generated on the user's
+  machine) — but cross-JDK-build portability was not tested, so the proposal is
+  generate-locally, never ship-a-cache-binary. **Answer needed on:** (a) add AOT-cache
+  generation to the distribution's install/first-run path, yes/no; (b) if yes, who owns the
+  checksum-binding logic — it is a build-system/packaging change and therefore Guardrails.
+
+- [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
+  live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round
   spent MEASURING the JDK 25 AOT cache.** The owner declined
   `-XX:-DontCompileHugeMethods` in the launcher defaults — (JIT.1)'s split already took
   the win with no flag, the census is 0, and forcing C2 to compile a 46,000-byte method
