@@ -5,6 +5,29 @@ queue item. Nothing in the build system was changed: the image is built from the
 existing `build/classes/kotlin/jvm/main` + `build/bench/cp.txt` classpath by a
 standalone `native-image` invocation.*
 
+## 0. The artifact points — all FIVE, and how to read them (index, round 828)
+
+This document is the arc's artifact-point index. There are **five** ways to run the
+compiler; each was measured in a different round, so **the absolutes below are NOT
+comparable to each other** — only a within-round paired delta ever is (round 826 measured
+the same sequential path 12.8% apart from round 824's with identical code). Read the column
+as "what this artifact was worth *in its own round*".
+
+| artifact point | figure | round / box | authority |
+|---|---:|---|---|
+| JVM, cold single-shot | 26.3 s (r771) / 25.3 s (r823) / 22.2 s (r828, from the jar) | 771 / 823 / 828 | § 1, § 2c, `aot-cache-round828.md` § 1 |
+| JVM, warm steady state (`--serve`) | 11.6 s | 771, 4-core box | § 1, § 4 |
+| GraalVM CE native-image | 13.4 s | 771, 4-core box | § 1, § 2 |
+| Kotlin/Native release | 21.8 s (r772) / 20.0 s (r823) | 772 / 823 | § 2b, § 2c |
+| **JDK 25 AOT cache** | **13.6 s — 1.638× its own round's plain arm, 6/6 wins** | 828, 8-core box | **`docs/perf/aot-cache-round828.md`** |
+
+**The AOT cache is the newest point and the cheapest one to obtain**: no second toolchain,
+no separate binary, byte-identical diagnostics, trained by one ordinary compile plus ~2.9 s.
+Two things a reader must carry away from its file rather than this table: **the win is not
+start-up** (~28 ms of it is; the other 8.6 s is C2 compiling early from recorded profiles),
+and **the JVM never invalidates a stale cache** — a jar whose classes have changed is
+silently ignored in favour of the cached bytecode, which is why shipping it is conditional.
+
 ## 1. The result
 
 Compiler profile, `--noEmit` (check-only), this box (4 cores, 7.7 GB), daemons stopped.
