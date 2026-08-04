@@ -4462,7 +4462,27 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   Predictions **5 of 6** (P5 falsified: w8 peak RSS 2,240 MB fits -Xmx4g easily, GC
   1.1 s of the 5.4 s regression — **no level was skipped for want of RAM**).
 
-- [x] **(PERF.HW.a) DONE round 754 — `--workers 2` and `--workers 4` both reach 46 and are
+- [ ] **(PERF.HW.a) RE-OPENED ROUND 824 ON EVIDENCE — `--workers N` IS A RACE, AND ROUND
+  754's BYTE-IDENTITY WAS UNDER-SAMPLED.** Artifact: `docs/perf/worker-scaling-round824.md`
+  § 5. On the 8-core box, at a FIXED worker count, the diagnostic COUNT varies run to run:
+  **w2 46/47 (5/5 split over 10 runs), w4 46/47 (3/3 over 6), w8 46/56 (1/6 over 7)**,
+  against sequential **46 in 8 of 8**. Divergences are strictly ADDITIVE (added N, removed
+  0 in every capture) and each outcome is byte-reproducible — the w8 56-set matches by
+  `md5sum` across two captures — but which outcome you get is not. The w2/w4 extra is one
+  line (`debug.ts:601:46` TS2345); the **w8 extras are a DIFFERENT family of 10 that does
+  not contain it** (7x TS2322 in `transformers/declarations/diagnostics.ts`, plus
+  `utilities.ts:10384` TS2344 and `11808`/`11859` TS2322). **`--partitionCheck` cannot
+  diagnose this** — a static partition model cannot produce two answers for one worker
+  count. **Why 754 read clean: with ~0.85 free cores the old box effectively serialized
+  the workers, and one `--listAll` capture is one draw of a 50/50 coin — round 824's own
+  stage-A w2 run came out at 46 and diffed byte-identically, reproducing the false green.**
+  The upgrade did not introduce the race, it made it observable. **Detector: the error
+  count over >= 5 runs per level (~110 s), never a single capture.** This blocks (M2)(b)
+  and any `--workers` wall-time claim: you cannot tell a correctness regression from a
+  coin flip. Round 754's fix (`defaultedInstantiationOfOpenGeneric`) stands on its own
+  merits — it closed a real, deterministic, single-threaded bug; it just was not this one.
+  Round 754's text follows.
+  **(PERF.HW.a) round 754 — `--workers 2` and `--workers 4` both reach 46 and are
   byte-identical to sequential; `--partitionCheck 2` is EQUIVALENT on all eight profiles
   (`cac22abd`). THE ITEM'S OWN CLASSIFICATION WAS WRONG AND THAT IS THE FINDING: it is NOT
   the round-609 partition-collector class.** `--partitionCheck 2` did reproduce the
@@ -5206,6 +5226,26 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   shrink R — the full per-worker re-bind is still the single biggest identified
   duplication; (c) only then re-probe, on a ≥12-core host.** The prize is capped at
   **1.25x** by the w1/w2 Amdahl fit regardless.
+  **ROUND 824 RE-PROBED ON THE 8-CORE BOX AND FALSIFIED THREE OF THIS ITEM'S CLAIMS —
+  the PERFORMANCE case unparks, the CORRECTNESS gate does not.** Artifact:
+  `docs/perf/worker-scaling-round824.md`. (1) **The 1.25x cap is refuted by
+  counterexample: w4 MEASURES 1.343x** (−23.84%, **5/5 wins**, per-rep deltas
+  sign-consistent), and the seq/w2 and seq/w4 Amdahl fits now AGREE (36.9% / 34.0%
+  divisible, floor **~1.52–1.58x**) where on 4 cores they disagreed 3.5x — the 1.25x was
+  an artifact of a box with 0.85 free cores, not a property of the design. The model
+  breaks at w8 (19.8%, floor 1.248x); that near-match to the old cap is a coincidence,
+  not a confirmation. (2) **"w4 is flat" is gone — w4 is now the BEST level** and even w8
+  (+19.4% regression on 4 cores) is a −17.0% win; nothing is saturated (cores used
+  4.17 / 5.02 / 5.91 / 6.44 of 8). (3) **The ">= 12 cores" unpark condition was
+  MISCALIBRATED because its unit is not a constant**: the JVM's own tax SCALES with
+  `nproc` (`CICompilerCountPerCPU` is true — `CICompilerCount` 3 → 4, `ParallelGCThreads`
+  4 → 8, JIT CPU ~21.7 s → ~43.8 s), so a sequential run takes **4.17 of 8 cores, not the
+  extrapolated 3.2**; free cores went 0.85 → 3.83, and 3.83 sufficed. The answer arrived
+  at 8, not 12. **What still blocks (M2): step (a) — `--workers N` is a RACE
+  (see (PERF.HW.a), re-opened round 824), so no wall-time figure here is a claim and
+  step (b) has no trustworthy baseline to measure against.** Step (b) is now worth
+  ~1.5x rather than ~1.25x, which materially changes whether it is worth attempting —
+  once (a) closes.
 
 **EP — Emit parity (owner-authorized 2026-07-12: "output parity, including reported errors").**
 The offline v1 DoD checked emit COMPLETENESS (all files emitted, exit 0) but not
