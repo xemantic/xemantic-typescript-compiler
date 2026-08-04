@@ -31,7 +31,6 @@ import kotlinx.cinterop.COpaquePointer
 import kotlinx.cinterop.ExperimentalForeignApi
 import kotlinx.cinterop.StableRef
 import kotlinx.cinterop.alloc
-import kotlinx.cinterop.asCPointer
 import kotlinx.cinterop.asStableRef
 import kotlinx.cinterop.memScoped
 import kotlinx.cinterop.ptr
@@ -56,7 +55,7 @@ import platform.posix.pthread_tVar
  * actually walks. That matters on a zero-swap host, where an eagerly-committed
  * quarter-gigabyte per compile would be a real cost.
  */
-private const val DEEP_STACK_SIZE_BYTES = 256uL * 1024uL * 1024uL
+private val DEEP_STACK_SIZE_BYTES: ULong = 256uL * 1024uL * 1024uL
 
 /**
  * Re-entrancy flag, mirroring the JVM actual's thread-name test: a nested

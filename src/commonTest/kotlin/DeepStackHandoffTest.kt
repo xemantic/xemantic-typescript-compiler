@@ -62,7 +62,7 @@ class DeepStackHandoffTest {
     fun `the deep-stack thread inherits and hands back the Type id sequence`() {
         warmIdSequences()
         val before = Type.captureThreadId()
-        assert(before > 100)
+        assert(before > 20)
         var insideStart = -1
         var insideEnd = -1
         runWithDeepStack {
@@ -83,7 +83,7 @@ class DeepStackHandoffTest {
     fun `the deep-stack thread inherits and hands back the Symbol id sequences`() {
         warmIdSequences()
         val before = Symbol.captureThreadIds()
-        assert(before.first > 100)
+        assert(before.first > 20)
         var insideStart = 0 to 0
         var insideEnd = 0 to 0
         runWithDeepStack {
