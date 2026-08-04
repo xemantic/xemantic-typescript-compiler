@@ -173,13 +173,8 @@ class Inv4SpineAccessorModifierTest {
         }
     }
 
-    @Test
-    fun `iterative walk survives a 10k-term binary chain without masking the diagnostic`() {
-        val chain = (1..10_000).joinToString(" + ") { "1" }
-        val source = "class C {\n    accessor x = 1;\n}\nconst big = $chain;\n"
-        diagnose(source, directives = es5) should {
-            have(any { it.code == 18045 })
-            have(none { it.code == 2589 })
-        }
-    }
+    // The 10k-term binary-chain pin lives in src/jvmTest
+    // (Inv4SpineAccessorModifierDeepChainTest): that depth hard-crashes the
+    // Kotlin/Native test process, which has no deep stack and cannot catch an
+    // overflow. See that class for the full reasoning.
 }
