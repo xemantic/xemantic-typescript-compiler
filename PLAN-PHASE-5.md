@@ -20,6 +20,64 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 826 (2026-08-04) — THE LADDER RE-TAKEN ON THE FIXED BINARY: THE RACE WAS
+*DEFLATING* THE PARALLEL ARMS, w4 IS 1.361x, AND (M2) STEP (b) PRICES SMALL ENOUGH TO
+DECLINE. PLUS THE METHODOLOGICAL FIND: THIS ARC'S CROSS-ROUND ABSOLUTE COMPARISONS ARE
+NOT QUOTABLE.**
+
+**LADDER** (HEAD `8e5bf9de`, n=6, rotated interleave, `--noEmit`, paired per-rep, every
+level sign-consistent): seq **23,183** (sd 861) | w2 **17,770** (**-22.54%**, 6/6,
+1.305x) | **w4 17,039 (-27.10%, 6/6, 1.361x [1.289,1.414])** | w8 **18,663** (-17.67%,
+6/6, 1.242x). Cores 4.20 / 5.11 / 5.97 / 6.63 of 8; user CPU 97 / 91 / 102 / 124 s; peak
+RSS 808 MB / 1,133 / 1,389 / **2,234**.
+
+**CORRECTNESS: 24 of 24 runs at 46 errors, ONE md5 across all 24 sorted captures**,
+identical to sequential and to round 825's post-fix capture; sorted seq-vs-w8 diff empty;
+no truncation tell. **Post-fix evidence now totals 72 runs** (825's 48 + these 24).
+
+**THE ROUND'S QUESTION ANSWERED: THE RACE WAS DEFLATING THE PARALLEL ARMS.** Every paired
+delta improved (w2 -19.05 -> -22.54, w4 -23.84 -> **-27.10**, w8 -17.02 -> -17.67), so
+**round 824's ladder was CONSERVATIVE and the 1.25x refutation strengthens** (1.361x
+measured, now in two rounds). Honest caveat the agent flagged itself: two confounded
+causes — the id-slice fix and round 825's `prewarmParsedLibFiles`, which is a genuine
+parallel-only saving — were not A/B'd; the argument against crediting the prewarm is that
+w8 removes SEVEN duplicate lib parses and improved LEAST (+0.65 pp), which is inference,
+not measurement.
+
+**AMDAHL RE-FIT, AND A RETRACTION OF ROUND 824's OWN READING.** seq/w2 P=46.7% ->
+1.876x; seq/w4 P=**35.3%** -> **1.546x**; seq/w8 P=22.3% -> 1.287x. **Only seq/w4
+reproduces; seq/w2 does not, and the fitted divisible share falls MONOTONICALLY with N —
+an N-growing overhead that no 2-parameter model expresses. Round 824's "the w2/w4 fits
+agree within 8%, the model is coherent through w4" is RETRACTED.** Realistic ceiling:
+**1.361x at w4, and worker count is EXHAUSTED there** — w8 regresses.
+
+**(M2) STEP (b) IS PRICED, AND THE FRAMING WAS WRONG IN A LOAD-BEARING WAY.** The
+per-worker re-bind and the ~318 collectors run CONCURRENTLY, so they cost CPU (+27.6% at
+w8) and RSS (2.8x) but only ~1x WALL, and cores never saturate (6.63 of 8). So (b) buys
+1.361x -> **1.448x realistic / 1.546x unreachable limit = 1.0-2.0 s of a 23.2 s compile
+(4-8.8%)**. Beating ~1.55x needs the collectors made DIVISIBLE, not de-duplicated — a
+different and larger item. **RECOMMENDATION: do NOT attempt (b) for wall time** — 4-7%
+against work that makes the binder/checker share state across threads, i.e. exactly the
+area that just produced a race latent since round 754; 1.361x is already banked at
+`--workers 4`, and warm `--serve` (11.9 s) and K/N (20.0 s) are bigger already-measured
+wins. **Re-queued as a MEMORY item**: RSS is the binding constraint if parallel ever
+becomes default.
+
+**THE METHODOLOGICAL FIND, which reaches beyond this item: THE SEQUENTIAL ANCHOR IS
+UNSTABLE ACROSS ROUNDS AT ~13% WITH BYTE-IDENTICAL CODE AND WORKLOAD** — 23,183 / 25,299 /
+26,145 / 26,518 ms across rounds 826/823/824/(824's own seq) = **12.8% spread**. Round
+824's "3.3% from the anchor, well inside either band" reconciliation was LUCK. **Only
+WITHIN-round paired deltas are quotable in this arc.**
+
+**WHAT DID NOT WORK:** the 3-parameter `R + P/N + C*N` fit is exactly determined on three
+points and came out unidentifiable — per-rep R ranged **1,569-14,929 ms (10x)**; it needs
+w3/w5/w6. And cross-round absolute comparison, per above. Corrected in place: the
+CLAUDE.md race entry (it contradicted the round-825 fix entry six lines above it), the
+scaling entry, a new entry on cross-round instability; the (M2) item's "step (b) is worth
+~1.5x" (it read the ASYMPTOTE as the delta); and a superseded-in-part header on
+`docs/perf/worker-scaling-round824.md`. Artifacts:
+`docs/perf/worker-scaling-round826.md` + 24-row TSV. Commit `b7021c41`.
+
 **Round 825 (2026-08-04) — (PERF.HW.a) IS DIAGNOSED AND FIXED, FOR REAL THIS TIME: THE
 RACE IS A SINGLETON ID-SPACE COLLISION. EVERY WORKER GOT THE *SAME* ID BASE, AND THE 19
 INTRINSIC SINGLETONS WERE MINTED FROM WHICHEVER WORKER WON A CLASS-INIT RACE — *AFTER*
