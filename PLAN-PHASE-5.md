@@ -20,6 +20,74 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 822 (2026-08-04) — THE BOX CHANGED, AND THE KOTLIN/NATIVE GATE IS LIVE AGAIN
+AFTER 10 DAYS DARK. A FOURTH DRIFT AXIS EXISTS, IT IS THE ONLY ONE THAT IS NOT
+SELF-ANNOUNCING, AND ONE TEST OF IT COST 4,414 OTHER TESTS.**
+
+The owner upgraded the host 4 cores / 7.7 GB -> **8 cores / 15.6 GB** (swap still ZERO)
+and re-authorized native builds, superseding the round-775 ban. Three owner decisions
+were taken first and recorded at `9d0694b9`: **(JIT.2) no launcher flag** — the -3.1%
+that motivated `-XX:-DontCompileHugeMethods` was measured when 19 methods sat over the
+limit, and round 821 took that census to 0, so the flag now buys nothing and would only
+make C2 compile a 46,000-byte method; what IS approved is **(JIT.2a), a round spent
+MEASURING the JDK 25 AOT cache**. **(JIT.3) WON'T DO** — `HugeMethodLimitTest` already
+runs the identical whole-program census inside `jvmTest`, so `check` is covered
+transitively and wiring the script in too would run it twice for ~2 min a build.
+
+**THE HEAP FLOOR IS 4g, AND IT WAS FOUND BY PROBING DOWN RATHER THAN INHERITING.**
+Round 772 measured 6g on the old box and that number has been the stated requirement
+since. K/N compiles inside the GRADLE daemon, so the binding setting is
+`org.gradle.jvmargs`, which (BUILD.1) had cut to **1g** to make room for the 5g Kotlin
+daemon on a 7.7 GB box — that 1g, not the hardware, is what had been starving native.
+4g was tried first and succeeded, so **6g was never the floor**. Honest caveat carried
+into the commit: 4g is *observed to succeed*, NOT proven minimal — 3g was never probed.
+**What made round 772's link blocker dissolve is heap going DOWN, not up.** The margin
+that matters is not the heap at all: the daemon reached **8.5 GB RSS against a 4g heap**,
+because konan/LLVM allocates outside it.
+
+**THE DRIFT WAS 17, NOT THE ~169 OF ROUND 682 — AND THE REASON GENERALIZES.** Axis 1
+(illegal backtick characters) **17 violations in 7 files, every one the SAME character,
+a comma**; zero `(`, `)`, `&`, `@`. Axis 2 (`kotlin.assert`) **0**. Axis 3 (JVM-only
+stdlib) **0**. Axes 2 and 3 are structurally closed because agents copy the idiom of
+neighbouring code; `,` survives because it is the one illegal character that occurs
+naturally in English prose, and CLAUDE.md's actionable advice named *parentheses*. The
+rule was ablation-confirmed still live (`Name contains illegal characters: ","`).
+
+**THE FIND — A FOURTH AXIS, AND IT INVERTS THE GATE'S RISK PROFILE.** The three
+documented axes are all COMPILE-TIME, so each announces itself as a build error. The
+fourth compiles clean and **kills the test PROCESS at runtime**: a `commonTest` driving
+multi-thousand-frame recursion overflows a native stack that cannot be caught —
+`runWithDeepStack` is a pass-through on native and `StackOverflowError` is a never-thrown
+stub, so the checker's `init` boundary guard (which on the JVM converts the overflow into
+TS2589, the very invariant these tests pin) is INERT. Gradle reports
+`Test running process exited unexpectedly` and **every alphabetically-later class
+silently never runs — the first full run lost 4,414 of 13,689 tests to ONE test.**
+Three pins moved to `src/jvmTest`, nothing weakened or deleted: `CfaTooLargeBailTest`,
+`DeepExpressionChainTest` (whole classes — each deep pin is paired with its control),
+and the 10k-chain pin extracted out of `Inv4SpineAccessorModifierTest`. **DEPTH IS NOT
+THE PREDICATE**: 30,000-term chains, a 3,000-statement flow chain, a 60k-entry
+`IntKeyMapTest` and the corpus's own 6,452-term `binderBinaryExpressionStress` all PASS
+— the iterative walkers hold. What crashes is specifically what recurses.
+
+**MEASURED:** `compileKotlinLinuxX64` 2m06s, `compileTestKotlinLinuxX64` 1m39s,
+**`linuxX64Test` 25m33s then 21m01s at 13,689 / 0 / 3**. Peak system 12.5 GB, floor
+available 3.14 GB — never near the 2 GB stop line. **JVM gate 13,803 / 0 / 3, exactly
+baseline.** Commits `52c94887` (renames), `fdc0c84c` (the four-axis moves), `6e448818`
+(heap), `a2ed6e41` (CLAUDE.md re-grade).
+
+**WHAT DID NOT WORK, which is the reusable part.** (1) **A static sweep cannot find the
+runtime crashers** — `repeat(N)`/`List(N)` greps miss `(1..10_000).joinToString` and
+`repeat(terms - 1)`, and a plain "numeric literal >= 1000" scan is swamped because every
+diagnostic code (2339, 18045, …) is >= 1000; what worked was a literal scan EXCLUDING
+`code ==` lines, then running each candidate class natively. (2) **Finding runtime
+crashers is inherently iterative — one crash hides all the later ones**, so two 20-25 min
+full runs were burned before switching to targeted `--tests` runs at 4-36s each. (3) **A
+`--tests` run can print `BUILD SUCCESSFUL in 1s` while UP-TO-DATE and prove NOTHING** —
+grep for `Task :linuxX64Test UP-TO-DATE`; the final verification needed `--rerun`.
+(4) `@Language` in commonTest is NOT a violation (JetBrains annotations ship a native
+klib). (5) The run harness wrote its logs to the repo root because `dirname $0` resolves
+to `.` after a `cd`, dirtying the tree mid-round.
+
 **Round 821 (2026-08-03) — (JIT.1) IS COMPLETE. `tryInferSingleTypeParamFromArgs`
 11,930 BYTECODES -> AN ENTRY AT 1,869 PLUS THREE `tisp*` HELPERS. CENSUS 1 -> 0. THE ONE
 TARGET IN THE ARC THAT NEEDED A DATA-FLOW ANSWER RATHER THAN A CONTIGUITY ONE.**
@@ -1106,6 +1174,35 @@ GUARD RATHER THAN A PROBE, WHICH IS WEAKER AND IS SAID SO.**
 
 
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
+
+- [ ] **(NATIVE.1) P0 — NATIVE xtsc HARD-CRASHES ON DEEPLY-NESTED INPUT, BECAUSE
+  `runWithDeepStack` HAS NO NATIVE ACTUAL.** Found round 822 as a TEST problem and it is
+  not one: `DeepStack.kt`'s native actual is a PASS-THROUGH, so the 256 MB deep-stack
+  thread that the JVM pipeline runs on does not exist there, and `StackOverflowError` is a
+  never-thrown stub — which makes the `init` boundary guard (the thing that converts an
+  overflow into TS2589 instead of a crash) INERT on native. On the JVM a pathological
+  input yields a diagnostic; on native the PROCESS DIES. This is a P0 by CLAUDE.md's own
+  rule ("any crash/hang/OOM on any input is a P0"), and it is a PRODUCTION defect, not a
+  test-harness one — it is only invisible today because the native artifact is not
+  shipped.
+  **THE FIX: a native `actual` for `runWithDeepStack` that runs the pipeline on a pthread
+  created with an explicit large stack** (`pthread_attr_setstacksize`), mirroring what the
+  JVM actual gets from `Thread(group, target, name, stackSize)`. Note the thread-handoff
+  invariant that already applies on the JVM and will apply here: **Symbol/Type id sequences
+  are THREAD-LOCAL (INV.6(6c0))** — the JVM actual captures the caller's counters, seeds
+  the compile thread, and WRITES THE ADVANCED VALUES BACK on join; a native actual that
+  skips the write-back restarts ids at 1 and collides with the singleton intrinsics'
+  class-load-thread ids, which round 607 measured as 51 corpus failures whose `--listAll`
+  output stays IDENTICAL. Do not implement this without reading that entry.
+  **PRIZE:** correctness on native, plus it RETURNS `CfaTooLargeBailTest` to `commonTest`
+  (round 822 moved it to `jvmTest` only because the process dies). **`DeepExpressionChainTest`
+  can NEVER return** — it pins TS2589, which is unproducible on native by construction, so
+  a green native suite is not evidence this is fixed.
+  **VERIFY:** the deep pins run green natively from `commonTest`; and note round 822's
+  measurement that **depth alone is not the predicate** — 30,000-term chains, a
+  3,000-statement flow chain and the corpus's 6,452-term `binderBinaryExpressionStress`
+  all pass natively TODAY because those walkers iterate. Build the repro from what
+  actually RECURSES, not from what is merely large.
 
 ---
 
