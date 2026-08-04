@@ -20,6 +20,62 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 829 (2026-08-04) — (SETUP.2) CLOSED ON THE CENSUS: `buildFileLocalTypeMaps` MAKES
+**8.5 RESOLUTIONS PER MAP ENTRY ANYBODY READS**, AND THE DEFERRAL IS WORTH UNDER 1%.
+NO LEVER LANDED, BY MEASUREMENT — THE INSTRUMENT IS THE DELIVERABLE.**
+
+- **The census FIRST, as the item demanded.** New `--fltmCensus` (`FltmCensus.kt`, implies
+  `--passTiming`, a static-boolean read at every hook when off): the pass's two call sites
+  bracketed and tagged by BRANCH, every store, the single `fileLocalTypeMaps` read in
+  `getTypeOfIdentifier`, and every `getTypeOfSymbol` entry — hooked **above** the
+  `symbolTypes` memo, because a later ask served from the memo is exactly what round 788
+  calls a MOVE. All six census runs produced **bit-identical counts**; probe cost (~12.7k
+  timestamp pairs) is inside the row's own ±15% spread (632–794 ms with the probe,
+  585–727 ms probe-free).
+- **THE FUNNEL (compiler profile).** direct `getTypeOfSymbol` calls **12,738** ->
+  entries stored **4,161** (so **8,577 = 67.3% resolve to `any`/`errorType` and store
+  NOTHING**) -> entries ever read **1,499** = **36.1%**. The read site serves
+  **calls=16,043 / distinct=1,499 (10.7x)** and **MISSES 278,355 times = 94.6%** of its
+  294,398 lookups. **8.5 resolutions per entry any reader wants.**
+- **ROUND 788'S LAW, MEASURED BOTH WAYS.** Of the 2,662 never-read entries, **47.4% have
+  their symbol asked again later anyway** (they MOVE). Over the whole direct population,
+  **6,009 of 12,738 = 47.1% are never read AND never asked again** — the only set a
+  deferral DELETES — worth **235.6 / 251.1 / 303.6 ms across runs = 38–40% of the
+  direct-resolve wall**. Of the 168 symbols those resolutions first MINT, **166 (98.8%)
+  are asked later anyway**, so they are shallow. This is **not** round 801's
+  `created 1143, materialized 1143`: about half really does evaporate.
+- **WHY IT CLOSES ANYWAY — PRICE, NOT MECHANISM.** Per branch: `typealias` 381 resolves /
+  33–50 ms, `var` 189 / 3–5 ms, `decl` (fn/class/iface/enum/import-alias) **12,168 /
+  563–705 ms with 199–252 ms deletable**. So the recoverable slice is **0.8–1.0% of a
+  ~25 s compile — below `ab-interleaved.sh`'s ±2.0% cold band and at the floor of
+  `ab-warm.sh`'s ±1.0%**, i.e. unmeasurable by this repo's own protocols, against the
+  **largest blast radius in the codebase** (`getTypeOfIdentifier` reads this map in every
+  pass, and a lazy design changes WHICH pass first resolves each symbol = the
+  round-754/776/778 program-order class, invisible in every output diff).
+- **AND THE BIGGEST-LOOKING SLICE IS A TRAP.** The `typealias` branch reads **99.7%
+  "never needed"** by the map criterion and is fully load-bearing: **it is not a table
+  build, it is the TS2589/TS2615 depth-bail DETECTOR** (both emissions are gated on
+  `taDecl != null` / `annotation != null`, and the bail is only observable *while*
+  `getTypeOfSymbol` runs). Not resolving those symbols does not defer a diagnostic, it
+  deletes one — and the corpus pins for that family (B57.1/B57.2/B57.3) are exactly
+  file-level aliases nothing later reads.
+- **WHAT DID NOT WORK — the first census was wrong by 4x, and its own arithmetic said so.**
+  Keying the deletable population on entries that were STORED reported **1,399 symbols /
+  49–59 ms (10.9% of direct resolves)** while 67.3% of the resolves stored nothing at all
+  and were structurally invisible to it. Re-keyed on what was PRODUCED (the calls), the
+  answer is 6,009 / 235–304 ms. **A produced-vs-consumed census must be keyed on the
+  calls, never on the survivors** — and a classified population that does not sum to its
+  own denominator is incomplete by construction.
+- **Residue, stated so it is not re-derived:** ~200–250 ms in the `decl` branch is
+  recoverable in principle by resolving a file-level fn/class/interface/enum/import-alias
+  symbol only when `getTypeOfIdentifier` asks. Left unclaimed **on price, not on
+  possibility**; re-run `--fltmCensus` before reviving it (the funnel is a property of the
+  profile) and expect to defend it with `cost_gate.py` counters, because no wall A/B here
+  can see it.
+- Gate: full suite (instrument only — behaviour-free by construction and pinned as such),
+  `cost_gate.py`, `huge_methods.py --fail-over 0`. `docs/perf/setup-phase-and-huge-methods.md`
+  § 27. Suite 13,812 -> **13,816 / 0 / 3** (+4 `FltmCensusTest` pins).
+
 **Round 828 (2026-08-04) — (JIT.2a) THE JDK 25 AOT CACHE IS WORTH 1.638× ON THE COMPILER
 PROFILE, 6/6 WINS, DIAGNOSTICS BYTE-IDENTICAL — AND IT IS NOT A START-UP LEVER, WHICH IS
 WHY A THIRD ARM HAD TO EXIST.**
@@ -2092,23 +2148,6 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   Answer needed on: add it to `check` (costs ~2 min per build), or leave it as a
   round-protocol step the agent runs by hand.
 
-- [ ] **(SETUP.2) `buildFileLocalTypeMaps` is 636 ms (2.2% of the compile) — MEASURE THE
-  NEVER-READ SHARE BEFORE DESIGNING ANYTHING.** Round 802's partition of `outside-pass`
-  found the whole 975 ms row is ~15 setup statements of which THIS ONE is 65%; it eagerly
-  `getTypeOfSymbol`s every file-level function / class / interface / enum / type alias /
-  import alias and every annotated variable in the program.
-  **PRIZE: unmeasured, and deliberately so.** It is bounded above by 636 ms and bounded
-  much lower by **round 788's law: `getTypeOfSymbol` MEMOISES into `symbolTypes`, so
-  deferring it MOVES the work to whichever pass asks first.** The recoverable part is only
-  the symbols nothing ever asks for. Round 801 lost a lever to exactly this shape (the
-  suffix set: row 53.5 → 0.9 ms, then `created 1143, materialized 1143`).
-  **THE FIRST SUB-STEP IS A CENSUS, NOT A CHANGE**: count reads of `fileLocalTypes` per
-  symbol and report `calls` vs `distinct`. **FALSIFIER: if `distinct` does not fall faster
-  than `calls` under a deferral, the work moved and this item CLOSES** (round 800's test).
-  **BLAST RADIUS: name resolution program-wide** — `getTypeOfIdentifier` reads this map in
-  every pass — plus the TS2589/TS2615 emissions this function owns, which are position-
-  sensitive. Gate: suite + 8-profile grid BOTH directions + `--partitionCheck 2`.
-
 - [ ] **(ENGINE.3) Finish round 739's engine-rule price at the TWO remaining assignability
   sites — this is § 0.1's OWN precondition, in its own words: "do not put the scope
   question to the owner until they are in".** PRIZE: not a saving — a DECISION INPUT.
@@ -2133,6 +2172,30 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   cost/benefit with the three site prices attached, not as an architecture pitch.
 
 ---
+
+- [x] **(SETUP.2) DONE round 829 — CENSUSED AND CLOSED ON PRICE. The pass makes 8.5
+  `getTypeOfSymbol` calls per map entry anybody reads, and the recoverable slice is
+  under 1% of the compile.** `--fltmCensus` (new, behaviour-free when off) measured the
+  funnel on the compiler profile: **12,738 direct resolves -> 4,161 entries stored
+  (8,577 = 67.3% resolve to `any`/`errorType` and store nothing) -> 1,499 ever read**,
+  with the single read site at **calls=16,043 / distinct=1,499 (10.7x)** and **278,355
+  misses (94.6%)**. Round 788's law measured both ways: **47.4%** of the never-read
+  entries have their symbol asked again anyway (MOVE), and over the whole population
+  **6,009 of 12,738 = 47.1% are never read AND never asked again** = **235–304 ms,
+  38–40% of the row**. So this is NOT round 801's "created 1143, materialized 1143" —
+  about half really evaporates. **It closes on PRICE:** per branch the deferrable part is
+  `decl` alone, **199–252 ms = 0.8–1.0% of a ~25 s compile — below the ±2.0% cold A/B
+  band and at the floor of the ±1.0% warm one**, against name resolution program-wide
+  plus a WHICH-pass-resolves-first program-order dependency (rounds 754/776/778).
+  **And the biggest-looking slice is a trap: the `typealias` branch is 99.7% "never
+  needed" by the map criterion and is the TS2589/TS2615 depth-bail DETECTOR** — the bail
+  is observable only while `getTypeOfSymbol` runs, so skipping it deletes a diagnostic
+  rather than deferring one. **What did not work: the first census keyed the deletable
+  population on entries that were STORED and was wrong by 4× (1,399 / 49–59 ms), because
+  the 67.3% that store nothing were invisible to it.** Residue: the ~200–250 ms `decl`
+  slice is left unclaimed on price, not on possibility.
+  Suite 13,812 -> **13,816 / 0 / 3** (+4 `FltmCensusTest` pins).
+  `docs/perf/setup-phase-and-huge-methods.md` § 27.
 
 - [x] **(SETUP.1) DONE round 802 — `outside-pass`, the last unnamed region in the
   compile, is ONE FUNCTION.** The 975 ms of checker-init inside no `pass()` wrapper is the

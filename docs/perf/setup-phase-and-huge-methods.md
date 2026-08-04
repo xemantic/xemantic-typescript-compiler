@@ -3022,3 +3022,150 @@ partially-split binary (**+0.08%, B wins 3/5, driver verdict NOISE-DOMINATED**),
 i.e. the instrument that returned 4/4-all-negative on the monolith no longer
 returns a signal. Re-running it now would be measuring a flag that can no longer
 change which methods are compiled, because none is over the limit.
+
+---
+
+## 27. (SETUP.2) — `buildFileLocalTypeMaps` censused: 8.5 resolutions per entry anybody reads, and the deferral is worth under 1%
+
+*Round 829. The measurement § 2 refused to skip: the produced-vs-consumed census
+of the 636 ms pass, taken before any change was designed.*
+
+> **HEADLINE.** The pass makes **12,738** direct `getTypeOfSymbol` calls to
+> produce **4,161** map entries, of which **1,499** are ever read — **8.5
+> resolutions per entry any reader wants**. Its single read site serves
+> `calls=16,043` against `distinct=1,499` and **misses 278,355 times** (94.6% of
+> all 294,398 lookups). **47.1% of the resolutions (6,009) are never read AND
+> never asked again by any other path** — those, and only those, a deferral
+> DELETES rather than moves (round 788's law), and they are worth **~200–250 ms
+> = under 1% of a ~25 s compile**, i.e. **below the cold A/B band (±2.0%)** and
+> at the floor of the warm one. **The item CLOSES on price, with the residue
+> stated.** A second, structural finding decides the largest-looking slice on
+> its own: the `typealias` branch is 99.7% "never needed" by the map criterion
+> and is nonetheless **load-bearing**, because it is not a table build at all —
+> it is the **TS2589/TS2615 depth-bail detector**, and the detector IS the
+> resolution.
+
+### 27.1 The instrument
+
+`--fltmCensus` (`FltmCensus.kt`, implies `--passTiming`; off it is a static
+boolean read and a not-taken branch at every hook). Four hooks:
+
+* the pass's **two call sites**, each bracketed by a timestamp pair and tagged
+  with the BRANCH that reached it (`typealias` / `decl` / `var`), so a
+  population can be turned into a price — CLAUDE.md's rule that *a count of
+  avoidable work is not a measure of it*;
+* every **store** into a file's map, keyed `file|name` -> symbol id;
+* the **single read** of `fileLocalTypeMaps`, in `getTypeOfIdentifier` — hit and
+  miss;
+* every **`getTypeOfSymbol` entry**, placed BEFORE the `symbolTypes` memo fast
+  path, because a later ask served from the memo is exactly what round 788 calls
+  a MOVE.
+
+Cost: ~12.7k timestamp pairs ≈ 1 ms against a 636 ms row. Measured, the row
+reads **632–794 ms with the census on** and **585–727 ms probe-free** across the
+runs of this round — the probe is inside the row's own run-to-run spread, which
+is itself ±15% and is the reason every count below is quoted instead of a time
+wherever a count will do. **All six census runs produced bit-identical counts**;
+only the nanos moved.
+
+### 27.2 The funnel (compiler profile, `build/bench/tsc-project-*`, `--noEmit`)
+
+| stage | count | share |
+|---|---:|---:|
+| direct `getTypeOfSymbol` calls made by the pass | **12,738** | |
+| … of which store NO entry (resolve to `any`/`errorType`) | **8,577** | **67.3%** |
+| entries stored into `fileLocalTypeMaps` | **4,161** | 32.7% of the calls |
+| … entries some read ever serves (`distinct`) | **1,499** | **36.1% of stored** |
+| … entries NEVER read | **2,662** | **63.9% of stored** |
+| read-site lookups | 294,398 | |
+| … hits (`calls`) | **16,043** | 5.4% |
+| … misses | **278,355** | **94.6%** |
+
+`calls / distinct = **10.7**` — the map is a genuine repeat-serve cache for the
+1,499 keys it does serve. **But the pass resolves 12,738 symbols to populate
+them: 8.5 resolutions per entry that anybody reads.**
+
+### 27.3 Round 788's law applied — what a deferral would DELETE and what it MOVES
+
+`getTypeOfSymbol` memoises into `symbolTypes`, so a deferral deletes a
+resolution only if **nothing else in the compile ever asks for that symbol**.
+The census answers that directly (the ask hook sits above the memo):
+
+* of the **2,662** never-read stored entries, **1,263 (47.4%)** have their
+  symbol asked again later anyway → those **MOVE**;
+* over the whole direct population, **6,009 of 12,738 (47.1%)** are never read
+  AND never asked again — the **deletable** set, **235.6 / 251.1 / 303.6 ms**
+  across runs, i.e. **38–40% of the direct-resolve wall**;
+* of the symbols those deletable resolutions **first minted** (168 in total),
+  **166 = 98.8%** are asked later anyway — so the transitive correction is real
+  but tiny in absolute terms; the deletable resolutions are shallow.
+* whole-pass context: **51.1%** of the 13,172 symbols the pass touches are asked
+  again after it.
+
+So this is **not** round 801's shape, where the census read `created 1143,
+materialized 1143` and the row's whole cost simply relocated. Roughly half of
+it genuinely evaporates — and that is exactly why the item needs a *price*
+rather than a verdict.
+
+### 27.4 Per branch — and the finding that kills the biggest-looking slice
+
+| branch | resolves | ms | "deletable" | ms |
+|---|---:|---:|---:|---:|
+| `typealias` | 381 | 33–50 | **380 (99.7%)** | 33–50 |
+| `decl` (function / class / interface / enum / import alias) | **12,168** | 563–705 | 5,580 (45.8%) | **199–252** |
+| `var` (annotated variable/property) | 189 | 3–5 | 49 (25.9%) | ~1–3 |
+
+**The `typealias` row is a trap, and reading it as a prize is the mistake this
+section exists to prevent.** Both emission sites in the pass — `emitTs2589AtTypeNode`
+and `emitTs2615AtTypeNode` — are gated on `taDecl != null` (a concrete, non-generic
+type alias) or on `annotation != null` (the `var` branch). Those resolutions exist
+to make `deepInstantiationBailed` *trip*; the map entry is a by-product. **Not
+resolving them does not defer a diagnostic, it deletes one** — and by the census's
+own criterion 380 of the 381 alias resolutions are "never needed", which is
+precisely the population whose bail nothing else would detect. The corpus pins for
+that family (B57.1 / B57.2 / B57.3) are file-level recursive aliases that no later
+pass reads.
+
+That leaves the `decl` branch: **199–252 ms** on a ~25 s compile = **0.8–1.0%**.
+
+### 27.5 Verdict — the item CLOSES, and why
+
+1. **The prize is under 1% and below the cold A/B band.** `ab-interleaved.sh` is
+   ±2.0% and `ab-warm.sh` ±1.0% (`ARCHITECTURE-RETHINK` § 6); a 0.8–1.0% cold
+   saving is **not measurable by this repo's own protocols** — it would land as
+   `NOISE-DOMINATED` and be defended only by counters.
+2. **The blast radius is the largest in the codebase.** `getTypeOfIdentifier`
+   reads this map in every pass, so a lazy rewrite is a change to name
+   resolution program-wide, and it changes WHICH pass first resolves each
+   symbol — a program-order dependency of exactly the round-754/776/778 class,
+   invisible in every output diff.
+3. **A lazy map is not the small change it looks like.** The map is keyed by
+   `currentCheckFileName` while the fallback immediately below it consults
+   `currentFileLocals` — two different tables — so an equivalent lazy path has
+   to reproduce the per-file keying, the `any`/`errorType` filter and the
+   bail save/restore per key, at the read site, 294,398 times.
+4. **And the pass is only nominally a table build.** Two of its three branches
+   are the depth-bail detector.
+
+Residue, stated so it is not re-derived: **~200–250 ms (0.8–1.0%) sits in the
+`decl` branch and is genuinely recoverable in principle**, by a design that
+resolves a file-level function/class/interface/enum/import-alias symbol only
+when `getTypeOfIdentifier` asks for it. It is left unclaimed on price, not on
+possibility. Anyone reviving it should re-run `--fltmCensus` first (the funnel is
+a property of the profile, not of the compiler) and should expect to defend the
+result with `cost_gate.py` counters, because no wall A/B in this repo can see it.
+
+### 27.6 What did NOT work
+
+* **The stored-entry view alone gets the answer wrong by 4×.** The first census
+  reported the deletable population as **1,399 symbols / 49–59 ms**, because it
+  ranged only over entries that were STORED. It missed the largest population in
+  the pass: **8,577 direct resolves (67.3%) store nothing at all** — they resolve
+  to `any`/`errorType`, so they can never be "read" and were invisible to a
+  read-keyed census. The full population is **6,009 / 235–304 ms**. *A
+  produced-vs-consumed census must be keyed on what was PRODUCED (the calls),
+  never on what was STORED (the survivors).*
+* **`--fltmCensus` on the first build could not have closed the item honestly**,
+  and the tell was arithmetic: the deletable set was 10.9% of the direct
+  resolves while 67.3% of them stored nothing. A census whose classified
+  population does not sum to its own denominator is incomplete by construction.
