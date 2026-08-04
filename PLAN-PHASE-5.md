@@ -1532,9 +1532,21 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
     § 21. *Wiring it into Gradle's `check` is a build-system change and stays owner-gated
     → (JIT.3); this round deliberately did not decide that.*
 
-- [ ] **BLOCKED-PENDING-USER (JIT.2): ship the JIT/AOT launcher flags.** Guardrail —
-  changing how the CLI is launched is a packaging decision.
-  **Proposal to react to, so a yes/no is enough.** Add `-XX:-DontCompileHugeMethods` to
+- [ ] **(JIT.2) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work is a round
+  spent MEASURING the JDK 25 AOT cache.** The owner declined
+  `-XX:-DontCompileHugeMethods` in the launcher defaults — (JIT.1)'s split already took
+  the win with no flag, the census is 0, and forcing C2 to compile a 46,000-byte method
+  costs compile time and code cache for a trade measured only on a 25-second compile.
+  **So the live sub-item is (JIT.2a): measure the AOT cache (JEP 483 class loading +
+  linking, JEP 515 method profiling) as a START-UP lever, orthogonal to everything this
+  arc has measured.** It has never been measured here; it needs no per-OS build matrix
+  (the cache is trained on the user's own machine). Measuring is approved outright;
+  SHIPPING it is a packaging decision and comes back to the owner. Note the framing this
+  arc already owns: parity is ARTIFACT-scoped — cold JVM 26.5 s, warm `--serve` 11.9 s,
+  native 13.4 s — so the AOT cache is a fourth artifact point, and the number that
+  matters is COLD start on a real profile, not a microbenchmark.
+  Original proposal follows.
+  Add `-XX:-DontCompileHugeMethods` to
   the application's default JVM arguments, and evaluate a JDK 24/25 **AOT cache**
   (JEP 483 class loading + linking, JEP 515 method profiling) as a second, orthogonal
   start-up lever — the cache is generated from a training run on the user's own machine,
@@ -1548,8 +1560,16 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
   launcher defaults, yes/no; (2) approve a round spent MEASURING the AOT cache (measuring
   costs nothing but time; shipping it would come back here).
 
-- [ ] **(JIT.3) BLOCKED-PENDING-USER: wire `scripts/huge_methods.py --fail-over 0` into
-  the Gradle `check` task.** Guardrail — build-system change. **Proposal:** a method
+- [x] **(JIT.3) OWNER-DECIDED 2026-08-04: WON'T DO — leave the census out of Gradle
+  `check`.** The reason it is not needed: `HugeMethodLimitTest` (round 817) runs the SAME
+  whole-program `Code`-attribute census INSIDE `jvmTest`, and fails both on a new offender
+  and on a stale `KNOWN_OVER_LIMIT` entry — so `check`, which depends on `jvmTest`, is
+  already covered transitively. Wiring the script in as well would run the census twice
+  and cost ~2 min of `javap` per build for no new signal. The standing arrangement:
+  the suite test is the automatic gate, and `python3 scripts/huge_methods.py --fail-over 0`
+  stays a round-protocol step the agent runs beside `cost_gate.py` when a round touches
+  compiled code (it is the faster instrument when you want the census WITHOUT a suite run).
+  Original proposal follows, for the record. **Proposal:** a method
   crossing 8,000 bytecodes is a silent, permanent, whole-run performance cliff that no
   existing gate can see (the corpus does not measure cost, `cost_gate.py`'s counters do
   not move, and `-XX:+PrintCompilation` prints nothing — round 802 grepped an 11,796-line
