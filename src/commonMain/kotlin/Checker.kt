@@ -10947,6 +10947,7 @@ class Checker(
      * checker passes, not just during the TS2322 walk.
      */
     private fun buildFileLocalTypeMaps() {
+        if (FltmCensus.on) FltmCensus.beginSetup()
         for (result in binderResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
@@ -10972,7 +10973,16 @@ class Checker(
                     val savedMappedInfo = mappedTypeCircularInfo
                     deepInstantiationBailed = false
                     mappedTypeCircularInfo = null
+                    // (SETUP.2) census bracket — off by default, see FltmCensus.
+                    val cPrev = if (FltmCensus.on) FltmCensus.enterDirect(
+                        symbol.id,
+                        if (symbol.flags.hasAny(SymbolFlags.TypeAlias)) "typealias" else "decl",
+                    ) else -1
+                    val cT0 = if (FltmCensus.on) PassTiming.nowNanos() else 0L
                     val type = getTypeOfSymbol(symbol)
+                    if (FltmCensus.on) {
+                        FltmCensus.leaveDirect(symbol.id, cPrev, PassTiming.nowNanos() - cT0)
+                    }
                     val taDecl = if (symbol.flags.hasAny(SymbolFlags.TypeAlias))
                         symbol.declarations.firstOrNull { it is TypeAliasDeclaration } as? TypeAliasDeclaration
                         else null
@@ -10990,6 +11000,7 @@ class Checker(
                     deepInstantiationBailed = savedBail
                     if (type !== anyType && type !== errorType) {
                         typeMap[name] = type
+                        if (FltmCensus.on) FltmCensus.noteStored(fileName, name, symbol.id)
                     }
                 } else if (symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Property)) {
                     // For variables, only resolve if they have a type annotation (cheap)
@@ -11008,7 +11019,13 @@ class Checker(
                         val savedMappedInfo = mappedTypeCircularInfo
                         deepInstantiationBailed = false
                         mappedTypeCircularInfo = null
+                        // (SETUP.2) census bracket — off by default, see FltmCensus.
+                        val cPrev = if (FltmCensus.on) FltmCensus.enterDirect(symbol.id, "var") else -1
+                        val cT0 = if (FltmCensus.on) PassTiming.nowNanos() else 0L
                         val type = getTypeOfSymbol(symbol)
+                        if (FltmCensus.on) {
+                            FltmCensus.leaveDirect(symbol.id, cPrev, PassTiming.nowNanos() - cT0)
+                        }
                         if (deepInstantiationBailed) {
                             emitTs2589AtTypeNode(annotation, source, fileName)
                             // B57.3c: pair TS2615 alongside TS2589 when the bail
@@ -11022,6 +11039,7 @@ class Checker(
                         deepInstantiationBailed = savedBail
                         if (type !== anyType && type !== errorType) {
                             typeMap[name] = type
+                            if (FltmCensus.on) FltmCensus.noteStored(fileName, name, symbol.id)
                         }
                     }
                 }
@@ -11030,6 +11048,7 @@ class Checker(
                 fileLocalTypeMaps[fileName] = typeMap
             }
         }
+        if (FltmCensus.on) FltmCensus.endSetup()
     }
 
     private fun trackReferencesInStatements(statements: List<Statement>, result: BinderResult) {
@@ -104835,6 +104854,9 @@ interface DataView {
      * Cached in [symbolTypes].
      */
     private fun getTypeOfSymbol(symbol: Symbol): Type {
+        // (SETUP.2) census hook — BEFORE the memo fast path, because a later ask
+        // served from `symbolTypes` is exactly what round 788's law calls a MOVE.
+        if (FltmCensus.on) FltmCensus.noteAsk(symbol.id)
         symbolTypes[symbol.id]?.let { return it }
         // B202.1: in-progress sentinel — a re-entrant resolution of the SAME symbol
         // (initializer/annotation cycle, e.g. `var x = cond ? y : 0; var y = x`)
@@ -106884,7 +106906,10 @@ interface DataView {
                 if (id.text in currentParamBindingNames) return anyType
                 // Check pre-built file-level type map (covers annotated file-level declarations)
                 currentCheckFileName?.let { fn ->
-                    fileLocalTypeMaps[fn]?.get(id.text)?.let { return it }
+                    val fltm = fileLocalTypeMaps[fn]?.get(id.text)
+                    // (SETUP.2) the ONLY read of fileLocalTypeMaps — census hook.
+                    if (FltmCensus.on) FltmCensus.noteRead(fn, id.text, fltm != null)
+                    if (fltm != null) return fltm
                 }
                 // Check file-level locals symbol table (for symbols not in type map)
                 currentFileLocals?.get(id.text)?.let { symbol ->

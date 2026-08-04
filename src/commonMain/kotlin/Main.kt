@@ -70,6 +70,14 @@ fun main(args: Array<String>) {
             "--verifyMappedCache", "--verifymappedcache" -> {
                 passTiming = true; PassTiming.verifyMappedCache = true
             }
+            // (SETUP.2): the produced-vs-consumed census of buildFileLocalTypeMaps
+            // — `calls` vs `distinct` at its single read site, plus the share of
+            // entries nothing ever asks for (the only part a deferral DELETES
+            // rather than moves). Implies --passTiming so the row it prices is on
+            // the same run.
+            "--fltmCensus", "--fltmcensus" -> {
+                passTiming = true; FltmCensus.reset(); FltmCensus.on = true
+            }
             // (TYPE.1)(a): attribute the getTypeOfExpression calls BY CALLER —
             // the only measurement that can test ARCHITECTURE-RETHINK § 0.1
             // stage 3's claim that "several handlers independently type the
@@ -363,6 +371,7 @@ fun main(args: Array<String>) {
     PartitionCheck.reportLines.forEach { println(it) }
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
+    if (FltmCensus.on) print(FltmCensus.report())
     if (SpineDispatch.mode == SpineDispatch.PROBE) {
         println(SpineDispatch.report())
         println("== (DISPATCH.1) csv ==")
@@ -621,6 +630,7 @@ private fun printUsage() {
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
           --workers N        parallel share-nothing partition check on N threads (INV.6(6c); line order may differ)
           --globalsAmp N     (AUDIT.3) price one globals[name] probe: N reads under one timestamp pair (implies --passTiming)
+          --fltmCensus       (SETUP.2) produced-vs-consumed census of buildFileLocalTypeMaps (implies --passTiming)
                              + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help
         """.trimIndent()
