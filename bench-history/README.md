@@ -33,6 +33,8 @@ whose real change over that span was much smaller.
 
 | Date | xtsc rev | Mode | xtsc | tsc | tsgo | xtsc/tsc | xtsc/tsgo | xtsc err | Run | xtsc-nat | nat/tsc | nat/tsgo |
 |---|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|
+| 2026-08-04 | [`b7021c41af01`](https://github.com/xemantic/xemantic-typescript-compiler/commit/b7021c41af0191c279d1a0f9ec4a8c87f78fe3d0) | check-only | 26.25s | 11.16s | 1.76s | 2.35× | 14.89× | 46 | [report](runs/20260804T182609Z-b7021c41af01.md) | 10.74s | 0.96× | 6.09× |
+| 2026-08-04 | [`b7021c41af01`](https://github.com/xemantic/xemantic-typescript-compiler/commit/b7021c41af0191c279d1a0f9ec4a8c87f78fe3d0) | emit | 29.08s | 13.64s | 2.47s | 2.13× | 11.77× | 46 | [report](runs/20260804T182609Z-b7021c41af01.md) | 13.30s | 0.98× | 5.38× |
 | 2026-08-04 | [`42d8f48cfaf8`](https://github.com/xemantic/xemantic-typescript-compiler/commit/42d8f48cfaf80c466f9e051da5c8bc2c155de822) | check-only | 25.54s | 11.39s | 1.78s | 2.24× | 14.38× | 46 | [report](runs/20260804T180231Z-42d8f48cfaf8.md) | 12.83s | 1.13× | 7.23× |
 | 2026-08-04 | [`42d8f48cfaf8`](https://github.com/xemantic/xemantic-typescript-compiler/commit/42d8f48cfaf80c466f9e051da5c8bc2c155de822) | emit | 29.96s | 14.09s | 2.69s | 2.13× | 11.14× | 46 | [report](runs/20260804T180231Z-42d8f48cfaf8.md) | 13.84s | 0.98× | 5.14× |
 | 2026-08-04 | [`c925848600d0`](https://github.com/xemantic/xemantic-typescript-compiler/commit/c925848600d03e7e6fe4eece52fb6e6977f3eb0f) | check-only | 26.23s | 10.48s | 1.67s | 2.50× | 15.74× | 46 | [report](runs/20260804T165925Z-c925848600d0.md) | 9.89s | 0.94× | 5.94× |
