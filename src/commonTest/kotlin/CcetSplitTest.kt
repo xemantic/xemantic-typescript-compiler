@@ -218,7 +218,7 @@ class CcetSplitTest {
     }
 
     @Test
-    fun `type-argument seam - the call is argument-checked ONCE, not again un-instantiated`() {
+    fun `type-argument seam - the call is argument-checked ONCE and not again un-instantiated`() {
         // ccetExplicitTypeArguments ends by checking the arguments against the
         // instantiated signature and returning; the single-signature path below
         // would check the same arguments again against the UN-instantiated one,

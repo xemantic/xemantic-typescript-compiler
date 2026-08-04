@@ -112,7 +112,7 @@ class CaasSplitTest {
     }
 
     @Test
-    fun `walker seam - the intersection excess-property check BREAKS, so only the first bad argument reports`() {
+    fun `walker seam - the intersection excess-property check BREAKS so only the first bad argument reports`() {
         val d = diagnose(
             """
             interface A1 { a: number }
@@ -129,7 +129,7 @@ class CaasSplitTest {
     }
 
     @Test
-    fun `walker seam - the arrow-return drill CONTINUES, so no whole-argument TS2345 joins its TS2322`() {
+    fun `walker seam - the arrow-return drill CONTINUES so no whole-argument TS2345 joins its TS2322`() {
         val d = diagnose(
             """
             interface Data { value: number }
@@ -146,7 +146,7 @@ class CaasSplitTest {
     // ------------------------------------- caasObjectLiteralVsObjectParam
 
     @Test
-    fun `objlit arm and seam - the excess-property check BREAKS, so the second bad argument is silent`() {
+    fun `objlit arm and seam - the excess-property check BREAKS so the second bad argument is silent`() {
         val d = diagnose(
             """
             interface P { a: number }
@@ -183,7 +183,7 @@ class CaasSplitTest {
     // --------------------------------------------- caasObjLitMissingRequired
 
     @Test
-    fun `missing-required arm and seam - the check BREAKS, so the second bad argument is silent`() {
+    fun `missing-required arm and seam - the check BREAKS so the second bad argument is silent`() {
         val d = diagnose(
             """
             interface Q { id: number; name?: string }
@@ -218,7 +218,7 @@ class CaasSplitTest {
     // -------------------------------------------------- caasNullishArgGates
 
     @Test
-    fun `nullish arm and seam - the optional-type-parameter null gate CONTINUES, so BOTH bad arguments report`() {
+    fun `nullish arm and seam - the optional-type-parameter null gate CONTINUES so BOTH bad arguments report`() {
         val d = diagnose(
             """
             declare function t2<T extends { a: number }>(x?: T, y?: T): void
@@ -252,7 +252,7 @@ class CaasSplitTest {
     // ------------------------------------------- caasTypeParamConstraintArg
 
     @Test
-    fun `type-parameter path - a constraint violation is reported ONCE, naming the constraint`() {
+    fun `type-parameter path - a constraint violation is reported ONCE naming the constraint`() {
         // NOT a seam pin for `caasTypeParamConstraintArg` alone, and that is a
         // MEASUREMENT, not a caveat. Dropping this helper's trailing
         // CAAS_CONTINUE by itself changes NOTHING on any fixture tried: the

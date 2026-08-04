@@ -206,7 +206,7 @@ class CpcSplitTest {
     }
 
     @Test
-    fun `scan run - every input file is echoed, in input order`() {
+    fun `scan run - every input file is echoed in input order`() {
         // ARGUMENT-IDENTITY seam: `sourceEchoes` and `jsonOutputs` are both
         // `MutableList<Pair<String, String>>` parameters of `cpcScanFiles`, so a
         // positional call site could swap them and still compile.

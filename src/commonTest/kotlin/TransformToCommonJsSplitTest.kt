@@ -201,7 +201,7 @@ class TransformToCommonJsSplitTest {
      * (a hoisted `var _a;` plus a bare `_a = expr`).
      */
     @Test
-    fun `variable arm - direct, keep-declaration and side-effect destructuring paths`() {
+    fun `variable arm - direct and keep-declaration and side-effect destructuring paths`() {
         val out = js(
             """
             // @Filename: main.ts
@@ -339,7 +339,7 @@ class TransformToCommonJsSplitTest {
     // ── tcjsTransformExportDeclaration ──────────────────────────────────────
 
     @Test
-    fun `export-declaration arm - star, star-as-namespace and aliased re-export forms`() {
+    fun `export-declaration arm - star and star-as-namespace and aliased re-export forms`() {
         val out = js(
             dep +
             """

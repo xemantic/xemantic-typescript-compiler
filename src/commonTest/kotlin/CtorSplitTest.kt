@@ -75,7 +75,7 @@ class CtorSplitTest {
     }
 
     @Test
-    fun `setup run - the lib merge happened, so a lib global still resolves`() {
+    fun `setup run - the lib merge happened so a lib global still resolves`() {
         // Not a sharp pin, but the only instrument for the twelve setup passes
         // that emit NOTHING: without the merge every lib name is TS2304.
         val d = diagnose(

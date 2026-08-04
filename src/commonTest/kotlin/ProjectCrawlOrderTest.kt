@@ -78,7 +78,7 @@ class ProjectCrawlOrderTest {
         ProjectCompiler(vfs).build("/proj", noEmit = true).rootFiles
 
     @Test
-    fun `root file order is depth-first alphabetical, not the filesystem's listing order`() {
+    fun `root file order is depth-first alphabetical and not the filesystem's listing order`() {
         val order = rootFilesOf(InMemoryVfs(sources))
         assert(
             order == listOf(

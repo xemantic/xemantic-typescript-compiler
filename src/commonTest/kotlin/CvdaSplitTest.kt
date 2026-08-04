@@ -105,7 +105,7 @@ class CvdaSplitTest {
     }
 
     @Test
-    fun `prologue seam - the did-you-mean walker ENDS the check, so the coarse TS2322 never joins it`() {
+    fun `prologue seam - the did-you-mean walker ENDS the check so the coarse TS2322 never joins it`() {
         val d = diagnose(
             """
             type T2 = "string" | "number" | "boolean"
@@ -123,7 +123,7 @@ class CvdaSplitTest {
     // ---------------------------------------- cvdaRecordInferredLocalType
 
     @Test
-    fun `unannotated arm - a const records its initializer's LITERAL type, so a literal-union target accepts it`() {
+    fun `unannotated arm - a const records its initializer's LITERAL type so a literal-union target accepts it`() {
         val d = diagnose(
             """
             const c1 = "hello"
@@ -137,7 +137,7 @@ class CvdaSplitTest {
     }
 
     @Test
-    fun `unannotated arm - a let widens to the base primitive, which the same target rejects`() {
+    fun `unannotated arm - a let widens to the base primitive which the same target rejects`() {
         val d = diagnose(
             """
             let v1 = "hello"
@@ -237,7 +237,7 @@ class CvdaSplitTest {
     }
 
     @Test
-    fun `mid arm - that walker reports once, and the relation's own elaboration does not join it`() {
+    fun `mid arm - that walker reports once and the relation's own elaboration does not join it`() {
         val d = diagnose(
             """
             declare const fnv2: () => void
@@ -268,7 +268,7 @@ class CvdaSplitTest {
     }
 
     @Test
-    fun `post arm - the excess-property check reports once, with no second diagnostic after it`() {
+    fun `post arm - the excess-property check reports once with no second diagnostic after it`() {
         val d = diagnose(
             """
             interface E1 { b: number }
