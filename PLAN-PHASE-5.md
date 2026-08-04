@@ -20,6 +20,73 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 824 (2026-08-04) — `--workers N` IS A *RACE*, ROUND 754 NEVER CLOSED
+(PERF.HW.a), AND THE 1.25x AMDAHL CAP IS REFUTED BY COUNTEREXAMPLE. THE PERFORMANCE CASE
+FOR (M2) UNPARKS; THE CORRECTNESS GATE DOES NOT.**
+
+**THE HEADLINE IS CORRECTNESS AND IT OUTRANKS THE SCALING TABLE.** At a FIXED worker
+count the diagnostic count varies run to run: **seq 46x8; w2 46x5 / 47x5; w4 46x3 / 47x3;
+w8 46x1 / 56x6.** Divergences are strictly ADDITIVE (`added=N, removed=0` in every
+capture — the mode never loses a true diagnostic, it invents false ones) and each
+OUTCOME is byte-reproducible (the w8 56-set matches by `md5sum` across captures), but
+**which outcome you get is not**. Two DISTINCT FP families: the w2/w4 extra is
+`debug.ts:601:46` TS2345; the w8 extras are 10 lines that do NOT include it (7x TS2322 in
+`transformers/declarations/diagnostics.ts`, plus `utilities.ts:10384` TS2344 and
+`11808`/`11859` TS2322).
+
+**ROUND 754 DID NOT CLOSE (PERF.HW.a) — ITS BYTE-IDENTITY WAS ONE DRAW OF A 50/50 COIN,
+AND THIS ROUND REPRODUCED THE FALSE GREEN** (its own stage-A w2 `--listAll` came out at
+46 and diffed byte-identically). On the old box, with ~0.85 free cores, workers were
+effectively SERIALIZED, so the interleaving almost never occurred: **the upgrade did not
+introduce the race, it made it OBSERVABLE.** `--partitionCheck` cannot diagnose it — a
+static partition model cannot produce two answers for one worker count. The detector that
+does: a COUNT DISTRIBUTION over >=5 runs (~110 s). (PERF.HW.a) is re-opened; round 754's
+fix stands on its own merits, it just closed a different, real, deterministic bug.
+
+**THE JVM CORE TAX IS NOT A CONSTANT — IT SCALES WITH `nproc`, WHICH REWRITES THE GATE
+ITSELF. 4.17 of 8 cores** (per-rep +-1%), against 3.15 of 4 before, because
+`CICompilerCountPerCPU` defaults TRUE: `CICompilerCount` 3->4, `ParallelGCThreads` 4->8,
+JIT CPU ~21.7 -> **~43.8 s** (`-XX:CICompilerCount=2` drops the run 4.20 -> 2.55 cores
+with self time FLAT, so round 618/740's "not a single-thread lever" reproduces). Round
+740 wrote the unpark condition as ">=8 cores NET of the ~3.2 the JVM takes, i.e. >=12"
+and justified it with "that tax is fixed per JVM — a larger host simply out-sizes it". It
+does not grow with WORKER count (that part holds) but it grows with the HOST, so free
+cores went 0.85 -> **3.83, not -> 4.85**. **And 3.83 SUFFICED: the answer arrived at 8,
+not 12.** The condition was miscalibrated conservatively by extrapolating a constant from
+one host.
+
+**THE LADDER (self ms, n=5, rotated interleave, paired per-rep):** seq **26,145**
+(sd 439, 3.6%) | w2 **21,324** (5.5%, **-19.05%**, 5/5) | **w4 19,472** (8.5%,
+**-23.84%**, 5/5) | w8 **21,605** (8.2%, **-17.02%**, 5/5). Every level's five deltas are
+SIGN-CONSISTENT — none straddles zero, which is exactly what round 740's w4 did. Seq is
+3.3% from round 823's 25,299 ms anchor. Box verified clean: 8 real cores, no SMT, no
+cgroup cap, **steal 0.000 mean / 0 max over 113 samples**. **THE SHAPE CHANGED, NOT JUST
+THE MAGNITUDE: w4 is now the BEST level, and w8 — a +19.4% REGRESSION on 4 cores — is a
+17% WIN.** Nothing saturates (cores peak 6.44 of 8), so w8's loss to w4 is the
+per-worker duplication, not a core ceiling; user CPU 110 -> 106 -> 117 -> 143 s
+reproduces round 740's duplication shape qualitatively.
+
+**THE 1.25x CAP IS DEAD — REFUTED BY COUNTEREXAMPLE, NOT MERELY RE-FITTED: w4 MEASURED
+1.343x.** Amdahl re-fits: seq/w2 P=36.9% -> floor **1.584x**; seq/w4 P=34.0% ->
+**1.516x**; seq/w8 P=19.8% -> 1.248x. The w2 and w4 fits now AGREE within 8% where on 4
+cores they disagreed **3.5x** — the model is coherent through w4 and breaks at w8. The w8
+fit landing at 1.248x is a COINCIDENCE, not a confirmation of the old cap.
+
+**VERDICT: two of round 740's three reasons for not attempting (M2) have failed** — the
+ceiling more than doubled and there is now a machine to spend it on — **but the third is
+still true and WORSE than believed: the mode is a RACE, not a fixed bug.** So (M2) stays
+blocked on (PERF.HW.a): you cannot tell a correctness regression from a coin flip, and
+step (b) has no trustworthy baseline until it closes. Step (b) is now worth ~1.5x rather
+than ~1.25x, which materially changes whether it is worth attempting at all.
+
+**WHAT DID NOT WORK:** an UNSORTED flicker diff manufactured three phantom `tracing.ts`
+TS2591 "extras" that were pure line ORDERING (the sorted `comm` re-run: added=1,
+removed=0); and a `vmstat` steal parse read a repeated HEADER row as data. **Stage C — 8
+extra runs, ~3 min — is what turned "w8 is deterministically 56" into "w8 flickers
+46/56"; the single stage-A capture per level would have shipped the wrong
+classification, which is the SAME under-sampling error round 754 made.** Artifact:
+`docs/perf/worker-scaling-round824.md` + the raw 24-run TSV. Commit `c9258486`.
+
 **Round 823 (2026-08-04) — (INV.7b) IS DONE: THE RELEASE BINARY LINKS, IS BYTE-CORRECT
 AND IS 1.26x. THE ROUND'S REAL PRODUCT IS THREE CORRECTIONS TO THE RECORD, ONE OF WHICH
 WOULD HAVE PRICED A SHIPPING DECISION OFF THE WRONG BACKEND.**
