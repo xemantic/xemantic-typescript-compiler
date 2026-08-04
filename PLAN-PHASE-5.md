@@ -5392,6 +5392,24 @@ opportunistic — run it only with spare budget; it must not preempt DISPATCH.1.
   step (b) has no trustworthy baseline to measure against.** Step (b) is now worth
   ~1.5x rather than ~1.25x, which materially changes whether it is worth attempting —
   once (a) closes.
+  **ROUND 826 CORRECTS THE TWO SENTENCES ABOVE, on the ladder re-taken against the
+  FIXED binary (`docs/perf/worker-scaling-round826.md`, n=6 rotated, 24/24 runs at 46
+  errors, one md5).** (a) closed at round 825, so nothing blocks (M2) any more — and
+  **the race was DEFLATING the parallel arms**, so round 824's figures were
+  conservative: w2 1.305x / **w4 1.361x** / w8 1.242x, 6/6 sign-consistent wins per
+  level (paired deltas w4 −23.84% → **−27.10%**). **But "step (b) is worth ~1.5x" is
+  WRONG and is retracted.** The ~1.55x is the seq/w4 Amdahl *asymptote*, i.e. what
+  infinite workers would give if the per-worker duplication were free; **w4 at 1.361x
+  is already the measured optimum and w8 REGRESSES to 1.242x**, so the delta step (b)
+  can address is 1.361x → **at most 1.546x** (unreachable, N→∞) and **realistically
+  ~1.448x** — ≈1.0–1.6 s of a 23.2 s compile, 4–7%. The structural reason: the
+  per-worker re-bind and the ~318 collectors run CONCURRENTLY, so they cost CPU
+  (+27.6% at w8) and RSS (2,234 vs 808 MB) but only ~1x WALL, and cores never saturate
+  (6.63 of 8). **Recommendation: do NOT attempt (b) for wall time** — re-queue it as a
+  MEMORY item if parallel mode is ever to become the default. Also retracted from the
+  block above: "the seq/w2 and seq/w4 fits agree, the model is coherent through w4" —
+  the re-take gives 46.7% vs 35.3%, and the fitted divisible share falls monotonically
+  with N, which is an N-growing overhead no 2-parameter fit can express at any level.
 
 **EP — Emit parity (owner-authorized 2026-07-12: "output parity, including reported errors").**
 The offline v1 DoD checked emit COMPLETENESS (all files emitted, exit 0) but not

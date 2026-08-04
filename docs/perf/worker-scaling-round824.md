@@ -4,6 +4,20 @@
 run, daemons stopped, nothing else on the box. No `src/` change: measurement only,
 on the committed binary at `8306fe44`.*
 
+> **SUPERSEDED IN PART BY ROUND 826 — read `worker-scaling-round826.md` for any
+> current number.** Round 825 fixed the race this document discovered, and round 826
+> re-took the ladder on the fixed binary. Three claims below are corrected there:
+> **(1)** § 5's open question — the race was **DEFLATING** the parallel arms, so § 2's
+> table is *conservative*, not flattering (w4 −23.84% → −27.10%, 1.343× → 1.361×);
+> **(2)** § 4's "the w2 and w4 fits now agree within 8% … the model is coherent
+> through w4" does **not** reproduce (46.7% vs 35.3%; the fitted divisible share falls
+> monotonically with N at every level, so the model was never coherent — this round
+> caught a tighter draw); **(3)** § 2's "sanity anchor" reconciliation of this seq arm
+> with round 823's is luck — a fourth anchor at 23,183 ms makes the cross-round spread
+> **12.8%** on byte-identical sequential code and an identical profile, so **no
+> absolute ms figure here is comparable to another round's**. § 5's race findings and
+> § 3's core-tax finding stand.
+
 Three results, in descending order of importance:
 
 1. **`--workers N` IS A RACE.** Every parallel level produces a *different number of
