@@ -20,6 +20,95 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 835 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE `object` KEYWORD'S
+APPARENT TYPE — `getApparentType(object)` is tsc's `emptyObjectType`, which is why a
+failing `object -> { foo: string }` is a MISSING-PROPERTY report against `{}` and not a
+coarse TS2322. **`nonPrimitiveAssignError` is GREEN; `nonPrimitive` 7 -> 6 failing cases.**
+Suite **13,855 / 0 / 3** (13,847 + 8 pins, 0 regressions); all 8 profiles `added=0
+removed=0` against a REBUILT before-arm, md5-for-md5.**
+
+- **WHICH GAP, AND THE COSTING RE-VERIFIED RATHER THAN INHERITED.** Round 834 handed down
+  `nonPrimitiveAssignError` as "1 diff, message-shape only, cheapest by a wide margin". I
+  re-measured it and the four other residual cases by extracting each fixture's source from
+  its `.js` BASELINE (`//// [name.ts]` carries the original verbatim; the `tests/cases`
+  tree is not in the sparse checkout) and running the project CLI against the
+  `.errors.txt` summary. **The costing holds exactly**: 6 of the case's 7 diagnostics
+  already match, and the one diff is line 5, `y = a`, where tsc says
+  `TS2741: Property 'foo' is missing in type '{}' but required in type '{ foo: string; }'`
+  plus a `TS2728` related info and we said
+  `TS2322: Type 'object' is not assignable to type '{ foo: string; }'`. I took it. The
+  louder alternatives were re-measured and left: `nonPrimitiveConstraintOfIndexAccessType`
+  (10 diffs) is one uniform rule — nothing concrete is assignable to a generic `T[P]` — but
+  our engine accepts everything into such targets and tightening it is the direction the
+  standing foreign-TP gate exists to *avoid*; `nonPrimitiveAccessProperty` (2) needs TS2339
+  on an `object` receiver, and the compiler profile alone holds 21 `: object` annotations
+  including `lookupTable: object` and `readJson(): object`, i.e. real exposure in the
+  repo's most FP-sensitive walker.
+- **THE DEFECT.** tsc has no `object`-specific elaboration at all. `structuredTypeRelatedTo`
+  compares `getApparentType(source)`, which for `TypeFlags.NonPrimitive` is
+  `emptyObjectType`, so `propertiesRelatedTo` sees a member-LESS object and
+  `reportUnmatchedProperty` fires — TS2741 for one missing property, TS2739/TS2740 for
+  several, with the source displayed as **`{}`, never as `object`**. We keep `object` as a
+  `Type.Intrinsic`, and `collectMissingProperties` requires a `Type.Object` on BOTH sides,
+  so the missing set was empty **by construction** and both assignability emitters degraded
+  to the coarse TS2322.
+- **WHAT LANDED — one predicate, two call sites.** `nonPrimitiveMissingPropSource(source)`
+  returns an interned empty `Type.Object` iff the SOURCE carries `NonPrimitive`, and null
+  otherwise; it is applied in `cvdaElaborateMismatch` (var-decl) and the assignment path's
+  elaboration, where it feeds `collectMissingProperties` and supplies `{}` as the displayed
+  source for the TS2741 / TS2739 / TS2740 / TS2696 shapes. The coarse TS2322 below keeps
+  saying `object`, which is also tsc (that one is reported from the original type). **The
+  relation VERDICT is untouched in both directions** — this decides only which shape an
+  already-failing assignment is reported in, which is why the change cannot add or remove a
+  diagnostic on any profile.
+- **DELIBERATELY NOT `getApparentType`.** Adding a NonPrimitive arm there is the obvious
+  "proper" fix and would reach ~40 consumers at once — round 834 measured exactly what
+  widening a shared predicate costs when `isSimpleCheckableType` grew a duplicate TS2345.
+  Same reason the var-decl twin was included and nothing else was: a rule applied at one of
+  two sibling emitters is an inconsistency the next agent trips on, but a rule applied
+  everywhere is an unmeasured blast radius.
+- **PIN DISCRIMINATION, VERIFIED IN BOTH DIRECTIONS ON REAL BINARIES.** 8 pins,
+  `NonPrimitiveApparentTypeTest`. Against the **rebuilt pre-change binary** (the grid's own
+  before-arm, so no extra build was spent) exactly the **4 positive pins fail** and the 4
+  controls stay green. Against a **naive ablation** — `nonPrimitiveMissingPropSource`
+  returning the apparent type for EVERY source — exactly the **2 controls written for it
+  fail** (`a primitive source keeps its own coarse message`, i.e. keying on `Type.Intrinsic`
+  rather than the flag; `a named interface source keeps its name`, i.e. substituting `{}`
+  for every source) and the 4 positives stay green. The remaining 2 controls
+  (`an object source still assigns to an empty object target`,
+  `primitive mismatches on either side of object stay coarse`) are **not ablated** — they
+  guard a TARGET-keyed mistake and an over-eager emission, and no ablation this round
+  produces either; recorded as arm pins, not claimed as coverage.
+- **A DETAIL THE PIN PAID FOR TWICE:** `Diagnostic.character` is **1-based** and `line` is
+  not directive-stripped, so a pin that reads a related-info position must assert the column
+  verbatim against the baseline (tsc's `2:10` is `character == 10`) and the LINE relatively.
+  Two build cycles went to discovering that; the pin now reads tsc's column literally.
+- **RE-COSTING — `nonPrimitive` is 6 cases, and the cheap end is gone.** What remains:
+  `nonPrimitiveConstraintOfIndexAccessType` (10 diffs, we emit nothing — generic
+  indexed-access assignability); `nonPrimitiveStrictNull` (12) and `nonPrimitiveNarrow` (3)
+  — flow narrowing on `object`, `typeof x === 'number'` to `never` plus 8 TS18047/18048/18049;
+  `nonPrimitiveUnionIntersection` (4) — `getIntersectionType` REDUCTION (`object & string`
+  to `never`, `object & {}` to `object`) plus excess-property checking through it, which
+  changes intersection identity and display; `nonPrimitiveAccessProperty` (2) — TS2339 on an
+  `object` receiver, with the `var { destructuring } = a` half wanting the SAME apparent-type
+  substitution this round introduced (tsc prints `'{}'` there and `'object'` at the property
+  access — the two positions genuinely disagree); `nonPrimitiveAndTypeVariables` (1) —
+  the general `TypeParam -> TypeParam` lenience PLUS a union display-order divergence
+  (`object | U` vs our source-order `U | object`), so even a correct relation fix leaves it
+  red. **No remaining case is a message shape.** The next-cheapest is
+  `nonPrimitiveAccessProperty`, and it is a walker change, not an elaboration change.
+- **GATES.** Suite **13,855 / 0 / 3** from a wiped results dir, `xml.etree` (13,847 + 8
+  pins, **0 regressions**). `cost_gate.py` **PASS — every counter +0.00%**, `output.errors`
+  46 unchanged, no rebaseline needed or taken. `huge_methods.py --fail-over 0` exit 0,
+  **0 over the limit** (largest 6,353, unchanged). **8-PROFILE GRID AGAINST A REBUILT
+  BEFORE-ARM** (`Checker.kt` saved, reverted, rebuilt, 8 captured; restored, rebuilt, 8
+  captured): every capture non-empty with no `more error(s)` tell, counts 46x7 + harness 94,
+  **`added=0 removed=0` on all eight and the sorted-capture md5 IDENTICAL on all eight** —
+  compiler `4caacf248ce417899c2972c16a82f1ed` (the digest rounds 828/832/833/834 recorded),
+  tsc-cli `a46fcc87…`, jsTyping `e040dfbb…`, deprecatedCompat `78349ce3…`,
+  typingsInstallerCore `c2c3ce67…`, services `295300f6…`, server `16f97bd9…`,
+  harness `0929cd11…`.
+
 **Round 834 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE `object` KEYWORD GETS
 A REAL RELATION RULE — the single rule the compiler held about it was tsc's written as its
 NEGATION, which is a different predicate. `nonPrimitive` **9 -> 7 failing cases**
@@ -8398,6 +8487,30 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   an intersection — bounded but it moves intersection identity and display;
   **`nonPrimitiveAssignError` (1) is the only cheap one left**, a message shape (TS2741
   with the source displayed as its apparent `{}` + TS2728, where we print TS2322).
+  **ROUND-835 UPDATE — `nonPrimitiveAssignError` IS GREEN; `nonPrimitive` 7 -> 6, AND THE
+  CHEAP END OF THE CATEGORY IS NOW EXHAUSTED.** The cause was not a message-formatting
+  choice: tsc has NO `object`-specific elaboration, it compares
+  `getApparentType(source)` = `emptyObjectType`, so `propertiesRelatedTo` runs against an
+  empty member table and reports the missing property with the source shown as `{}`. Ours
+  kept `object` as a `Type.Intrinsic` and `collectMissingProperties` requires a
+  `Type.Object` on both sides, so the missing set was empty BY CONSTRUCTION. Landed as one
+  source-flag-keyed predicate (`nonPrimitiveMissingPropSource`) at the var-decl and
+  assignment elaborations only — deliberately NOT inside `getApparentType`, whose ~40
+  consumers ask a different question. The relation VERDICT is unchanged, so the change can
+  neither add nor remove a diagnostic; all 8 profiles are `added=0 removed=0` md5-for-md5.
+  **THE STANDING WORKLIST IS NOW 6 CASES AND NONE OF THEM IS A MESSAGE SHAPE**, in the
+  round-835 judgement of cheapest-first: (1) `nonPrimitiveAccessProperty` (2 diffs) — TS2339
+  on an `object` receiver; its `var { destructuring } = a` half wants the SAME apparent-type
+  substitution round 835 introduced (tsc prints `'{}'` at the destructure and `'object'` at
+  the property access, which is not an inconsistency but two different report sites), while
+  the property-access half is a `checkMemberAccessMissing` change with real exposure — 21
+  `: object` annotations in the compiler profile alone, incl. `lookupTable: object` and
+  `readJson(): object`. (2) `nonPrimitiveUnionIntersection` (4) — intersection REDUCTION.
+  (3) `nonPrimitiveNarrow` (3) + `nonPrimitiveStrictNull` (12) — flow narrowing on `object`.
+  (4) `nonPrimitiveConstraintOfIndexAccessType` (10) — generic indexed-access assignability,
+  i.e. tightening exactly what the foreign-TP gate exists to keep loose. (5)
+  `nonPrimitiveAndTypeVariables` (1) — `TypeParam -> TypeParam` lenience PLUS a union
+  display-order divergence, so a correct relation fix alone still leaves it red.
   **THE GENERAL LESSON NOW HOLDS FOR TWO CATEGORIES IN A ROW: the 0-emit-failure count
   overstates tractability, because a category's name describes its FIXTURES, not its gaps
   — price a category by its per-CASE diffs before committing a round to it.**
