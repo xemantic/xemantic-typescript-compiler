@@ -23295,6 +23295,7 @@ class Checker(
             }
             NodeKind.TAGGED_TEMPLATE_EXPRESSION -> { node as TaggedTemplateExpression; if (spineArgActive) spineArgTaggedEnter(node) }
             NodeKind.AWAIT_EXPRESSION -> { node as AwaitExpression; spineCheckAwaitExpr(node) }
+            NodeKind.SATISFIES_EXPRESSION -> { node as SatisfiesExpression; spineCheckSatisfies(node) }
             NodeKind.WITH_STATEMENT -> { node as WithStatement; spineCheckWithStatement(node) }
             NodeKind.BREAK_STATEMENT -> { node as BreakStatement; spineCheckJumpTarget(node, node.label?.text, isBreak = true) }
             NodeKind.CONTINUE_STATEMENT -> { node as ContinueStatement; spineCheckJumpTarget(node, node.label?.text, isBreak = false) }
@@ -27276,6 +27277,142 @@ class Checker(
      * [spineWithStrictActive] (alwaysStrict not explicitly false); TS2410's
      * balanced-paren span scan is preserved exactly.
      */
+    /**
+     * (M3.0, round 833) The general `satisfies` check: TS1360 plus the fresh
+     * object-literal excess-property check. Before this landed a `SatisfiesExpression`
+     * was type-transparent and verified NOWHERE — the operator's whole point (check the
+     * operand against a type without changing its type) was unimplemented, and the only
+     * TS1360 in the tree was one corpus-unique walker.
+     *
+     * DELIBERATELY CONSERVATIVE about which failures it reports. A `satisfies` operand is
+     * FRESH, so its type depends on contextual typing that this site does not install;
+     * only the two verdicts that are contextual-typing-INDEPENDENT are emitted:
+     *  - which property NAMES an object literal carries — excess ⇒ TS2353/TS2561 (reusing
+     *    [checkExcessProperties], which bails on an index-signature target), and a
+     *    required target property absent from the literal ⇒ TS1360; and
+     *  - a non-fresh operand where source AND target are both primitive intrinsics.
+     * A property VALUE mismatch, a function/array operand and a generic target are left
+     * alone ON PURPOSE: contextual typing changes the source type there, so a verdict
+     * taken now is a false positive — `{ a: "a" } satisfies { a: "a" | "b" }` is the
+     * canonical one, legal in tsc and rejected by a naive relation call.
+     */
+    private fun spineCheckSatisfies(node: SatisfiesExpression) {
+        if (spineIsDts) return
+        val typeNode = node.type
+        val targetType = getTypeFromTypeNode(typeNode)
+        if (targetType === anyType || targetType === errorType) return
+        if (targetType.flags.hasAny(TypeFlags.Any or TypeFlags.Unknown or TypeFlags.Never)) return
+        val operand = unwrapParens(node.expression)
+        if (operand is ObjectLiteralExpression) {
+            // A spread makes the literal's own property set incomplete — neither verdict
+            // is decidable from the AST then.
+            if (operand.properties.any { it is SpreadAssignment }) return
+            val sourceType = getTypeOfExpression(operand)
+            if (sourceType !is Type.Object) return
+            // A named target's member table is LAZY: without this,
+            // [collectTargetPropertyNames] reads a null `members` and answers "bail",
+            // so the excess verdict depends on whether some earlier line in the file
+            // happened to resolve the same type first. `SatisfiesOperatorCheckTest`'s
+            // excess pin is what sees it — the corpus case masks it, because the line
+            // above it is another `satisfies I1` that resolves I1 on the way through.
+            if (targetType is Type.Object) resolveStructuredTypeMembers(targetType)
+            val display = excessPropDisplayTarget(targetType, typeNode)
+            if (checkExcessProperties(operand, sourceType, targetType, display, spineSource, spineFileName)) return
+            satisfiesMissingProperty(node, sourceType, targetType, display)
+            return
+        }
+        if (!satisfiesPrimitiveDecidable(targetType)) return
+        val sourceType = getTypeOfExpression(operand)
+        if (!satisfiesPrimitiveDecidable(sourceType)) return
+        if (checkTypeRelatedTo(sourceType, targetType, assignableRelation)) return
+        emitSatisfiesTS1360(
+            node, typeToString(sourceType), excessPropDisplayTarget(targetType, typeNode),
+            emptyList(), emptyList(),
+        )
+    }
+
+    /**
+     * The primitive intrinsics whose mutual assignability our relation decides completely,
+     * so a `satisfies` rejection over them cannot be an artifact of a modeling gap. `void`,
+     * `null`, `undefined`, `object` and every structured type are deliberately absent.
+     */
+    private fun satisfiesPrimitiveDecidable(type: Type): Boolean =
+        type is Type.Intrinsic && when (type.intrinsicName) {
+            "string", "number", "boolean", "bigint", "symbol" -> true
+            else -> false
+        }
+
+    /**
+     * TS1360 for an object literal missing a REQUIRED property of the target — the one
+     * relation verdict on a fresh literal that contextual typing cannot overturn, since
+     * contextual typing changes property VALUES and never adds a property.
+     */
+    private fun satisfiesMissingProperty(
+        node: SatisfiesExpression, sourceType: Type.Object, targetType: Type, display: String,
+    ) {
+        if (targetType !is Type.Object) return
+        resolveStructuredTypeMembers(targetType)
+        val targetProps = targetType.properties ?: return
+        val sourceMembers = sourceType.members ?: return
+        var missing: Symbol? = null
+        for (prop in targetProps) {
+            if (isOptionalProperty(prop)) continue
+            if (prop.name in OBJECT_PROTOTYPE_PROPERTIES) continue
+            if (prop.name !in sourceMembers) { missing = prop; break }
+        }
+        if (missing == null) return
+        val sourceDisplay = typeToString(sourceType)
+        val related = mutableListOf<Diagnostic>()
+        val firstDecl = missing.declarations.firstOrNull()
+        if (firstDecl != null) {
+            val declPos = when (firstDecl) {
+                is PropertyDeclaration -> firstDecl.name.pos
+                is MethodDeclaration -> (firstDecl.name as? Identifier)?.pos ?: firstDecl.pos
+                else -> firstDecl.pos
+            }
+            val (resolvedFile, resolvedSource) = resolveDeclarationSourceFile(declPos)
+            val declFile = resolvedFile ?: spineFileName
+            val declSource = resolvedSource ?: spineSource
+            val (dline, dchar) = if (isLibFileName(declFile)) {
+                Pair(null as Int?, null as Int?)
+            } else {
+                val p = getLineAndCharacterOfPosition(declSource, declPos)
+                Pair(p.first, p.second)
+            }
+            related.add(Diagnostic(
+                message = "'${missing.name}' is declared here.",
+                category = DiagnosticCategory.Message, code = 2728, fileName = declFile,
+                line = dline, character = dchar, start = declPos, length = missing.name.length,
+            ))
+        }
+        emitSatisfiesTS1360(
+            node, sourceDisplay, display,
+            listOf("  Property '${missing.name}' is missing in type '$sourceDisplay' but required in type '$display'."),
+            related,
+        )
+    }
+
+    /**
+     * The TS1360 emitter. tsc anchors the diagnostic at the `satisfies` KEYWORD (length 9),
+     * not at the operand and not at the type node — verified against
+     * `typeSatisfaction.errors.txt` (13,16) and `typeSatisfaction_errorLocations1` (25,20).
+     */
+    private fun emitSatisfiesTS1360(
+        node: SatisfiesExpression, sourceDisplay: String, targetDisplay: String,
+        chain: List<String>, related: List<Diagnostic>,
+    ) {
+        val kw = spineSource.lastIndexOf("satisfies", node.type.pos)
+        if (kw < 0) return
+        val (line, character) = getLineAndCharacterOfPosition(spineSource, kw)
+        diagnostics.add(Diagnostic(
+            message = "Type '$sourceDisplay' does not satisfy the expected type '$targetDisplay'.",
+            messageChain = chain,
+            category = DiagnosticCategory.Error, code = 1360, fileName = spineFileName,
+            line = line, character = character, start = kw, length = 9,
+            relatedInformation = related,
+        ))
+    }
+
     private fun spineCheckWithStatement(node: WithStatement) {
         if (spineIsDts) return
         var isInWith = false
