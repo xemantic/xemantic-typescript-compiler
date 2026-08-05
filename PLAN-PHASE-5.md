@@ -20,6 +20,104 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 836 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE ROUND IS A SURVEY AND
+A FIX: all nine categories are now priced PER CASE including EMIT
+(`docs/conformance-worklist.md`), and tsc's OPTIONAL-CHAIN leg of
+`checkReferenceExpression` — five codes that existed NOWHERE — lands, taking
+`propertyAccessChain.3` and `elementAccessChain.3` from 22 missing diagnostics each to an
+exact match. Suite 13,855 -> **13,870 / 0 / 3** (+15 pins, 0 regressions).**
+
+- **WHY A SURVEY FIRST, AND WHY IT IS NOT A SUITE RUN.** Three rounds in a row adopted a
+  category on its failure COUNT and had to re-cost it upward, because a category's name
+  describes its FIXTURES, not its gaps. The measurement that answers the real question —
+  what does each CASE cost — is per-case, and a suite arm cannot produce it. So: `git
+  archive` the nine categories out of the blobless clone (the conformance tree is not in
+  the sparse checkout but the blobs are local), replicate the generator's own subtest
+  algebra in a throwaway `main` under `src/jvmMain` — `parseDirectives` /
+  `computeVariations` / `tsgoSkippedTests` / `usesUnsupportedOption` /
+  `tsconfigInTestUsesRemovedFeature`, verbatim from `build.gradle.kts` — and diff both the
+  `.errors.txt` SUMMARY and each `//// [name.js]` section of the `.js` baseline. **~40 s for
+  all 124 cases in one JVM against ~12 minutes for a suite arm**, and it yields the diff a
+  suite arm does not. The harness was deleted before the first commit; recreate it from
+  `docs/conformance-worklist.md` rather than reviving a copy.
+- **THE SURVEY'S FIRST PASS WAS WRONG AND ITS OWN OUTPUT SAID SO — 13 of 125 cases came
+  back "skipped".** `usesUnsupportedOption` is a per-CONFIG skip, not a per-FILE one: a
+  fixture declaring `@target: es5, es2015` loses its BARE subtests and keeps the
+  `(target=es2015)` variation. Reading it as a file skip silently hides every
+  `labeledStatements` `NoCrash` fixture and six `optionalChaining` cases, and reports them
+  as absent rather than failing. Now a CLAUDE.md entry, because the same mistake is
+  available to anything that replicates the generator offline.
+- **THE HEADLINE: 124 cases, 79 error subtests, 65 with a diagnostic diff, 12 with a
+  JS-emit diff — and the emit column is what decides adoptability**, since
+  `conformanceDeferredErrorBaselines` defers only `.errors.txt`. Four categories
+  (`asOperator`, `optionalChaining`, `conditional`, `labeledStatements`) carry an emit-red
+  case and are vetoed outright no matter what the checker learns. Bucketed by MECHANISM
+  rather than by category, which is the framing the queue has been missing: **~20 subtests
+  are M3.1/M3.2 inference-and-relation, ~7 parser/ASI/error-recovery, 12 JS emit, 4
+  EMBEDDED-LIB gaps (`Record`/`Partial` — not checker work at all), ~9 flow narrowing, and
+  ~12 bounded single-purpose checks.** Only the last bucket buys whole cases in a round.
+- **WHAT I TOOK, AND WHAT I PASSED OVER.** The largest bounded gap in that last bucket is
+  tsc's `checkReferenceExpression(expr, invalidReferenceMessage,
+  invalidOptionalChainMessage)`: we implemented the first leg (TS2357 / TS2364) and NONE of
+  the second, so `obj?.a = 1`, `obj?.a++`, `for (obj?.a in {})`, `for (obj?.a of [])` and
+  every destructuring-assignment element compiled in complete silence. 44 diagnostics across
+  two cases, one predicate at five sites, and **exposure that is bounded by construction —
+  every one of these codes says "you wrote an optional chain in a write position", which is
+  code tsc itself rejects, so tsc's own sources cannot contain one.** Passed over on
+  measurement, not taste: `typeAliasesForObjectTypes` (TS2300) + `typeAliasesDoNotMerge`
+  (TS2395) would turn two CASES green rather than two subtests, but they mean teaching
+  `checkDuplicateDeclarations` about type aliases, and tsc's sources are full of type
+  aliases — a bigger blast radius for a smaller diagnostic count.
+- **WHAT LANDED.** `isOptionalChainReferenceTarget` plus `emitOptionalChainTarget`, feeding
+  TS2777 (`++`/`--` operand), TS2778 (object REST target), TS2779 (assignment LHS plain and
+  compound, array/object destructuring element, AND an array rest target — tsc reserves
+  TS2778 for the object one), TS2780 (`for..in` LHS), TS2781 (`for..of` LHS). We carry no
+  `NodeFlags.OptionalChain` bit, so the predicate is a descent through the chain's own
+  links: a `?.` anywhere BELOW the target makes the whole target a chain (`a?.b.c` is one),
+  a PARENTHESIS terminates it (`(a?.b).c` is not), and the value-preserving outer wrappers
+  are skipped first exactly as `skipOuterExpressions(expr, Assertions | Parentheses)` does.
+  `checkDestructuringPrivateIds` already enumerated precisely the positions tsc hands to
+  `checkReferenceExpression`, so it carries the new leg and is renamed
+  `checkDestructuringAssignmentTargets`; its `checkChain` parameter is false only for the
+  node whose enclosing call already reported it, so no position reports twice.
+- **THE RESULT IS TWO ERROR SUBTESTS, NOT TWO CASES, AND THAT DISTINCTION IS THE SURVEY'S
+  WHOLE POINT.** `propertyAccessChain.3` and `elementAccessChain.3` now match their
+  baselines exactly, ORDER included — and both stay red on their own `?.`-downlevel EMIT
+  subtest, which no error-baseline deferral can carry. The survey re-run confirms no other
+  case moved in either direction.
+- **PIN DISCRIMINATION, BOTH DIRECTIONS, ON REAL BINARIES.** 15 pins,
+  `OptionalChainReferenceTargetTest`. Against the **rebuilt pre-change binary** (the grid's
+  own before-arm, so no extra build was spent) exactly the **10 positive pins fail** and all
+  5 remaining pins stay green. Then ONE MISTAKE AT A TIME, each its own build: skipping
+  PARENTHESES inside the chain descent as the outer-wrapper loop does fails exactly
+  `negative control - a parenthesis terminates the chain` and nothing else; answering "the
+  target's subtree contains a `?.` somewhere" (the element-access arm also reading its
+  INDEX) fails exactly `negative control - an optional chain inside the index is not a
+  chained target` and nothing else. **The remaining 3 pins are NOT ablated and are recorded
+  as ARM pins, not claimed as coverage** — `a for-of over a declaration is silent`,
+  `negative control - an optional chain in a read position is silent`, and `negative
+  control - a plain reference target is silent everywhere` guard over-emission in positions
+  no mistake this round produced.
+- **WHAT I DID NOT DO.** No `LogicalParityDivergence` and no `@Ignore` — every case here is
+  unimplemented behaviour, which is a MEANING gap and explicitly not what that mechanism is
+  for. No category was adopted, because none is green.
+- **GATES.** Suite **13,870 / 0 / 3** from a wiped results dir, `xml.etree` (13,855 + 15
+  pins, **0 regressions**). `cost_gate.py` **PASS — every one of the 20 counters +0.00%**,
+  `output.errors` 46 unchanged, so no rebaseline was needed or taken.
+  `huge_methods.py --fail-over 0` exit 0, **0 over the limit** (largest 5,149). **8-PROFILE
+  GRID AGAINST A GENUINELY REBUILT BEFORE-ARM** (`Checker.kt` reverted to `HEAD~1`, rebuilt,
+  8 captured, restored, rebuilt, 8 captured): every capture non-empty with no
+  `more error(s)` truncation tell, counts **46x7 + harness 94** on both arms, and the sorted
+  capture **md5 IDENTICAL on all eight** — compiler `59d930db849399aea5e03e25fedb8e4e`,
+  tsc-cli `e938e3d4…`, jsTyping `ea13cfd4…`, deprecatedCompat `b73522be…`,
+  typingsInstallerCore `5925fcd1…`, services `79659a93…`, server `1f7597d3…`,
+  harness `67382271…`. Plus a check specific to this change: **ZERO sightings of
+  TS2777/2778/2779/2780/2781 across all eight profiles**, which is the expected result —
+  every one of those codes reports code tsc itself rejects, so tsc's own sources cannot
+  contain one. (The digests differ from round 835's because this round's capture normalises
+  to `grep 'error TS' | sort` rather than sorting the whole `--listAll` output; both arms
+  here were produced by the same command, which is what the comparison needs.)
+
 **Round 835 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE `object` KEYWORD'S
 APPARENT TYPE — `getApparentType(object)` is tsc's `emptyObjectType`, which is why a
 failing `object -> { foo: string }` is a MISSING-PROPERTY report against `{}` and not a
@@ -8487,6 +8585,30 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   an intersection — bounded but it moves intersection identity and display;
   **`nonPrimitiveAssignError` (1) is the only cheap one left**, a message shape (TS2741
   with the source displayed as its apparent `{}` + TS2728, where we print TS2322).
+  **ROUND-836 UPDATE — THE WORKLIST IS NOW PRICED PER CASE, INCLUDING EMIT, IN
+  `docs/conformance-worklist.md`; STOP PRICING CATEGORIES BY THEIR FAILURE COUNT.** Round 836
+  measured all nine categories case by case, off the suite: `git archive` the category out of
+  the blobless clone, replicate the generator's own subtest algebra in a throwaway `main`, and
+  diff both the `.errors.txt` SUMMARY and each `//// [name.js]` section. 40 seconds for 124
+  cases against ~12 minutes for a suite arm, and it yields the per-case diff a suite arm does
+  not. **The headline: 124 cases, 79 error subtests, 65 with a diagnostic diff, 12 with a
+  JS-emit diff — and the emit column is the thing that decides adoptability.** Four categories
+  (`asOperator`, `optionalChaining`, `conditional`, `labeledStatements`) carry an emit-red case
+  and are vetoed outright no matter what the checker learns. By MECHANISM rather than category:
+  ~20 subtests are M3.1/M3.2 inference-and-relation, ~7 are parser/ASI/error-recovery, 12 are
+  JS emit, 4 are EMBEDDED-LIB gaps (`Record`/`Partial`), ~9 are flow narrowing, and ~12 are
+  bounded single-purpose checks — the last bucket being the only one where a round buys whole
+  cases. **`types/any` is now the best-shaped target and `types/typeAliases` the flattest:**
+  `any` is six small cases with no emit veto, three of which are ONE mechanism (narrowing FROM
+  `any` through `instanceof` / a type predicate, observable only as a `did you mean` TS2551);
+  `typeAliases` is nine cases of 2-7 diffs each with no emit veto, but spread over six
+  unrelated mechanisms, of which `typeAliasesForObjectTypes` (TS2300) + `typeAliasesDoNotMerge`
+  (TS2395) are one pair (a type alias participating in the duplicate/merged-declaration checks).
+  **WHAT ROUND 836 LANDED: tsc's OPTIONAL-CHAIN leg of `checkReferenceExpression`** — TS2777 /
+  TS2778 / TS2779 / TS2780 / TS2781, none of which existed. `propertyAccessChain.3` and
+  `elementAccessChain.3` (22 diagnostics each) now match their baselines exactly, order
+  included; both cases remain blocked by their own `?.`-downlevel EMIT subtest, which is the
+  survey's whole point — the errors half of a case can go green while the case does not.
   **ROUND-835 UPDATE — `nonPrimitiveAssignError` IS GREEN; `nonPrimitive` 7 -> 6, AND THE
   CHEAP END OF THE CATEGORY IS NOW EXHAUSTED.** The cause was not a message-formatting
   choice: tsc has NO `object`-specific elaboration, it compares
