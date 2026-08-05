@@ -3463,6 +3463,18 @@ class Checker(
     private var lastMissingPropertyName: String? = null
     private var lastMissingPropertySymbol: Symbol? = null
 
+    /** tsc's `emptyObjectType` — the APPARENT type of the `object` keyword. tsc's
+     *  `getApparentType` maps `TypeFlags.NonPrimitive` to it, so a failing
+     *  `object -> { foo: string }` assignment is decided by `propertiesRelatedTo`
+     *  against an EMPTY member table and reports the missing property rather than a
+     *  bare TS2322. Reached only through [nonPrimitiveMissingPropSource]; deliberately
+     *  NOT wired into [getApparentType], whose ~40 call sites are a different question.
+     *  Declared here (before `init`) per the field-order rule. */
+    private val nonPrimitiveApparentType: Type.Object = Type.Object().also {
+        it.members = HashMap()
+        it.properties = emptyList()
+    }
+
     /** Tracks when structural comparison fails due to target having an index signature
      *  that the source (a named class/interface) lacks. Consumed by TS2322 elaboration
      *  to produce "Index signature for type 'string|number' is missing in type 'X'." */
@@ -97073,7 +97085,11 @@ interface DataView {
         // TS2739/TS2740 on `allMissing.isNotEmpty()` and let the chain path
         // handle inner-level missing-property elaboration via the elaboration
         // chain.
-        val allMissing = collectMissingProperties(sourceType, targetType)
+        // (M3.0/NONPRIM.2) `object` source → its APPARENT type `{}`; the assignment
+        // path's twin. See [nonPrimitiveMissingPropSource].
+        val nonPrimApparent = nonPrimitiveMissingPropSource(sourceType)
+        val allMissing = collectMissingProperties(nonPrimApparent ?: sourceType, targetType)
+        val missingDisplaySource = if (nonPrimApparent != null) "{}" else displaySource
         val missingPropSym = if (allMissing.isNotEmpty() && targetType is Type.Object) {
             lastMissingPropertySymbol ?: targetType.properties?.find { it.name == allMissing[0] }
         } else null
@@ -97081,7 +97097,7 @@ interface DataView {
             // B50.10: TS2696 when source is the lib `Object` interface and target
             // is some specific named class/interface (with missing properties).
             if (shouldEmitTs2696ForObject(sourceType, targetType)) {
-                val chainLine = "  " + formatTs2740Message(displaySource, displayTarget, allMissing)
+                val chainLine = "  " + formatTs2740Message(missingDisplaySource, displayTarget, allMissing)
                 diagnostics.add(Diagnostic(
                     message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
                     category = DiagnosticCategory.Error,
@@ -97096,7 +97112,7 @@ interface DataView {
             } else if (allMissing.size >= 2) {
                 // TS2739 for 2-4 missing, TS2740 for 5+
                 diagnostics.add(Diagnostic(
-                    message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                    message = formatTs2740Message(missingDisplaySource, displayTarget, allMissing),
                     category = DiagnosticCategory.Error,
                     code = if (allMissing.size <= 4) 2739 else 2740,
                     fileName = fileName,
@@ -97111,7 +97127,7 @@ interface DataView {
                 // QUOTED with its source quote char ('"3n"').
                 val missingProp = missingPropSym?.let { formatPropertyDisplayName(it) } ?: allMissing[0]
                 val declaringDisplay = getDeclaringTypeDisplay(missingPropSym, targetType, displayTarget)
-                val message = "Property '$missingProp' is missing in type '$displaySource' but required in type '$declaringDisplay'."
+                val message = "Property '$missingProp' is missing in type '$missingDisplaySource' but required in type '$declaringDisplay'."
                 val relatedInfo = missingPropSym?.let { createPropertyDeclaredHereRelatedInfo(it) }
                 diagnostics.add(Diagnostic(
                     message = message,
@@ -100639,16 +100655,27 @@ interface DataView {
             // `lastMissingPropertyName` side-effect — a cached Ternary.False result
             // from `checkTypeRelatedTo` skips setting it, causing second+ occurrences
             // of the same comparison to fall through to TS2322 instead of TS2741.
-            val allMissing = if (sourceType is Type.Object && tt is Type.Object) {
+            // (M3.0/NONPRIM.2) An `object`-typed SOURCE is compared against its APPARENT
+            // type (`{}`) — see [nonPrimitiveMissingPropSource]. `object` is a
+            // `Type.Intrinsic`, so without this the missing-property set is empty by
+            // construction and the emission degrades to the coarse TS2322.
+            val nonPrimApparent = nonPrimitiveMissingPropSource(sourceType)
+            val allMissing = if (nonPrimApparent != null && tt is Type.Object) {
+                collectMissingProperties(nonPrimApparent, tt)
+            } else if (sourceType is Type.Object && tt is Type.Object) {
                 collectMissingProperties(sourceType, tt)
             } else emptyList()
+            // The displayed source for the missing-property shapes is the APPARENT type
+            // (`{}`), matching what `propertiesRelatedTo` actually compared. The coarse
+            // TS2322 below keeps saying `object` — tsc reports that one from the original.
+            val missingDisplaySource = if (nonPrimApparent != null) "{}" else displaySource
             val missingPropSym = lastMissingPropertySymbol
                 ?: if (allMissing.isNotEmpty() && tt is Type.Object) {
                     tt.properties?.find { it.name == allMissing[0] }
                 } else null
             if (allMissing.isNotEmpty()) {
                 if (shouldEmitTs2696ForObject(sourceType, tt)) {
-                    val chainLine = "  " + formatTs2740Message(displaySource, displayTarget, allMissing)
+                    val chainLine = "  " + formatTs2740Message(missingDisplaySource, displayTarget, allMissing)
                     diagnostics.add(Diagnostic(
                         message = "The 'Object' type is assignable to very few other types. Did you mean to use the 'any' type instead?",
                         category = DiagnosticCategory.Error,
@@ -100662,7 +100689,7 @@ interface DataView {
                     ))
                 } else if (allMissing.size >= 2) {
                     diagnostics.add(Diagnostic(
-                        message = formatTs2740Message(displaySource, displayTarget, allMissing),
+                        message = formatTs2740Message(missingDisplaySource, displayTarget, allMissing),
                         category = DiagnosticCategory.Error,
                         code = if (allMissing.size <= 4) 2739 else 2740,
                         fileName = fileName,
@@ -100680,7 +100707,7 @@ interface DataView {
                     // in different files, render `import("<basename>").<name>` so the
                     // diagnostic is unambiguous. Matches TypeScript's behavior for
                     // `import * as A from './a'` / `B from './b'` with same-named types.
-                    var qualSource = displaySource
+                    var qualSource = missingDisplaySource
                     var qualDeclaring = declaringDisplay
                     if (qualSource == qualDeclaring) {
                         val srcSym = (sourceType as? Type.Interface)?.symbol
@@ -149464,6 +149491,29 @@ interface DataView {
         }
         return phantom != null && propName in phantom
     }
+
+    /**
+     * The `object` keyword's APPARENT type for the missing-property elaboration, or null
+     * for every other source.
+     *
+     * tsc has no `object`-specific elaboration: `structuredTypeRelatedTo` compares
+     * `getApparentType(source)`, which for `TypeFlags.NonPrimitive` is `emptyObjectType`,
+     * so `propertiesRelatedTo` sees a member-LESS object and `reportUnmatchedProperty`
+     * fires — TS2741 (one missing) / TS2739 / TS2740, with the source displayed as `{}`,
+     * NOT as `object`. We keep `object` as a `Type.Intrinsic`, so `collectMissingProperties`
+     * (which requires a `Type.Object` on both sides) answers "nothing missing" and the
+     * emission falls through to the coarse TS2322.
+     *
+     * Keyed on the SOURCE's `NonPrimitive` flag, so nothing that does not write the
+     * `object` keyword can reach it, and it is applied at the missing-property EMISSION
+     * sites only — never in [getApparentType], whose ~40 consumers ask a different
+     * question (round 834 measured what widening a shared predicate costs).
+     *
+     * The relation verdict is unchanged either way: this only decides which SHAPE the
+     * already-failing assignment is reported in.
+     */
+    private fun nonPrimitiveMissingPropSource(sourceType: Type): Type.Object? =
+        if (sourceType.flags.hasAny(TypeFlags.NonPrimitive)) nonPrimitiveApparentType else null
 
     private fun collectMissingProperties(sourceType: Type, targetType: Type): List<String> {
         if (sourceType !is Type.Object || targetType !is Type.Object) return emptyList()
