@@ -141,33 +141,45 @@ declare `@target: es5, es2015`, so their BARE config is tsgo-skipped and only th
 Round 837 closed the three BOUNDED cases; the category is **3 failing of 9**, all three the
 narrowing family, and its emit column is still all-green.
 
-**Round 836's costing of those three was wrong, and round 837 measured why.** The
-recommendation read "ONE mechanism — narrowing FROM `any`, exempt `Function`/`Object`".
-Probing the compiler directly (a deliberate `const p: number = x` after each guard, which
-prints the flow type in a TS2322) shows it is **three separate gaps, only one of which is
-the `any` rule**:
+**Round 836's costing of those three was wrong, round 837 measured why, and round 838 then
+re-diagnosed two of round 837's own four gaps.** The chain matters, because both corrections
+came from probing the compiler rather than from reading the diff count. The state after
+round 838:
 
 1. **A type-predicate guard ALREADY narrows an `any` subject** — a file-level `declare var`,
    a catch parameter and a function-body local all narrow correctly today. Missing is only
    tsc's exemption (`isTypeAny(type) && (predicate.type === globalObjectType ||
-   globalFunctionType)`), which is a two-line rule.
-2. **`instanceof` narrowing reaches nothing** — there is no `instanceof` arm in
-   `extractNullNarrowing` at all, so `if (r instanceof Error)` leaves even an
-   `Error | string` body-local un-narrowed (measured: `Type 'string | Error' is not
-   assignable to type 'number'` INSIDE the then-branch). That is a missing arm, not an
-   `any` gap.
+   globalFunctionType)`), which is a two-line rule. **OPEN**, and part of (c) below.
+2. **`instanceof` against a CONSTRUCTOR VALUE narrowed nothing — CLOSED, round 838.**
+   Round 837 read this as "there is no `instanceof` arm in `extractNullNarrowing` at all".
+   **That is retracted**: a user-declared `class C` narrows correctly through the flow
+   walker at every consumer probed (assignment, argument, property access), and the whole
+   defect was `resolveInstanceOfRhsType` requiring `SymbolFlags.Class`. Every ambient
+   constructor in the lib is `interface Error { … }` + `declare var Error: ErrorConstructor`,
+   so the entire `Error`/`Date`/`RegExp`/`Map`/`Set`/`Promise` family narrowed nothing in
+   either branch. Fixed with tsc's `getInstanceType` (the `prototype` property, then a lone
+   construct signature's return type).
 3. **The narrow does not reach the property-access walker when the declared type is `any`** —
-   and this is why the three cases stay red. Every diagnostic these fixtures assert is a
+   and this is why the three cases stay red, confirmed by re-measurement AFTER round 838's
+   two fixes: all three still emit nothing. Every diagnostic these fixtures assert is a
    TS2551/TS2339/TS2349 on the narrowed receiver, and `checkMemberAccessMissing` is silent
    for an `any` receiver by construction. Making it read the narrowed type WIDENS the most
    FP-sensitive walker in the compiler over exactly the shape tsc's own sources use
-   constantly, i.e. a grid risk of a different order from anything rounds 834–837 ran.
+   constantly, i.e. a grid risk of a different order from anything rounds 834–838 ran.
+   **OPEN — this is (NARROW.2)(c), and it is the sole remaining blocker for the category.**
+4. **A guard's narrow appeared to LEAK out of its `if` into the next sibling `if` — CLOSED,
+   round 838, and it was not a leak.** The `if` scoping is correct and a UNION subject
+   behaves perfectly. Both single-type NEGATIVE branches decided "the subject IS the target,
+   so the false branch is impossible" with the ASSIGNABLE relation, and `any` is assignable
+   to everything — so the else branch of a guard on an `any` subject was `never`, the flow
+   join of (`Foo` from then, `never` from else) produced `Foo`, and it ACCUMULATED across
+   sibling guards. Nothing in the output ever names `never`, which is precisely why it
+   presented as a scope leak.
 
-A fourth defect found on the way and deliberately NOT fixed: a guard's narrow **leaks out of
-its `if` block into the next sibling `if`** of the same body — `function a(y: any) { if
-(isF(y)) {…} if (isO(y)) {…} }` reports `Function` in the second — which is precisely the
-five-sequential-`if` shape `narrowFromAnyWithTypePredicate` is built from. Gaps 1+2 cannot be
-validated against that fixture until the leak is closed.
+**Re-measured after round 838** (each fixture as a single-file project through the CLI,
+against its `.errors.txt` summary — an approximation of the full harness in that it uses the
+real libs where the corpus uses the embedded one): all three cases unchanged, 0 diagnostics
+emitted, all gated on gap 3.
 
 ### types/conditional
 
@@ -245,8 +257,11 @@ So no category can be adopted by more rounds of this kind. The three axes that w
 actually finish one are, in ascending order of blast radius:
 
 * **flow narrowing** (`types/any` x3, `nonPrimitiveNarrow`, `nonPrimitiveStrictNull`) — the
-  three gaps enumerated under `types/any` above; gap 3 is a widening of
-  `checkMemberAccessMissing`;
+  gaps enumerated under `types/any` above. **Round 838 closed gaps 2 and 4 and moved NO
+  case**, which is the useful measurement: the `types/any` three are gated on gap 3 ALONE,
+  a widening of `checkMemberAccessMissing`, and nothing short of it moves them. Both closed
+  gaps were core-correctness defects that the corpus, the cost gate and all eight profiles
+  were blind to — so this axis buys correctness readily and conformance CASES only at (c);
 * **M3.1/M3.2 inference and relation** (~20 subtests) — `conditionalTypes1`, the
   tagged-template family, `parenthesizedContexualTyping2`, `errorLocations1`,
   `nonPrimitiveConstraintOfIndexAccessType`;
