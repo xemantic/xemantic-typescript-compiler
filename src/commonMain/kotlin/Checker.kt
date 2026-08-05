@@ -91350,6 +91350,21 @@ interface DataView {
         val sourceIsNullish = sourceType.flags.hasAny(TypeFlags.Null or TypeFlags.Undefined)
         // null/undefined → anything non-error (strictNullChecks handling in relation engine)
         if (sourceIsNullish) return true
+        // The `object` keyword (round 834, (NONPRIM.1)). `object` is a `Type.Intrinsic`,
+        // so it reads as `targetIsPrimitive` to every classifier below, and the B60.8
+        // rule at the bottom then admits a `Type.TypeParam` source only when it carries
+        // a constraint — which is precisely the case that is NOT an error. The verdict
+        // for an UNCONSTRAINED one is decidable against a NonPrimitive target (it
+        // accepts exactly the Object-flagged types), so open it here, keyed on the
+        // target's flag.
+        //
+        // The sibling opening for a UNION source was tried and REVERTED in the same
+        // round: `object | null → object` is a correct rejection, but the same gate
+        // then fires for a union the flow HAS narrowed and we have not (`var e: object
+        // | null; e = a; a = e` — legal in tsc, an FP for us), which is the standing
+        // reason that Union rule refuses nullish sources at all. It bought three
+        // diagnostics in a case that stays red for twelve other reasons.
+        if (targetType.flags.hasAny(TypeFlags.NonPrimitive) && sourceType is Type.TypeParam) return true
         // Primitive ↔ Primitive (intrinsic↔intrinsic, literal↔literal, literal↔intrinsic, etc.)
         if (sourceIsPrimitive && targetIsPrimitive) return true
         // Object/Interface/Reference → Primitive target (never assignable)
@@ -146980,7 +146995,11 @@ interface DataView {
         if (paramType is Type.TypeParam) {
             val constraint = paramType.constraint
             if (constraint != null &&
-                isSimpleCheckableType(constraint) &&
+                // Round 834, (NONPRIM.1): a `T extends object` parameter. This is the
+                // site that owns `bound(123)` where `function bound<T extends object>`
+                // — the parameter is a bare `T`, so the gate above never sees `object`
+                // and only the CONSTRAINT does.
+                isArgCheckableType(constraint) &&
                 isSimpleCheckableType(argType) &&
                 !checkTypeRelatedTo(argType, constraint, assignableRelation)
             ) {
@@ -147183,7 +147202,9 @@ interface DataView {
         // brand check with no FP risk (same-class private props pass trivially).
         ArgSections.at(ArgSections.L_NOTSIMPLE)
         val isT = ArgSections.t()
-        val paramNotSimple = !isSimpleCheckableType(paramType)
+        // Round 834, (NONPRIM.1): [isArgCheckableType] adds the `object` keyword — an
+        // `object` PARAMETER is decidable here for the same reason `string` is.
+        val paramNotSimple = !isArgCheckableType(paramType)
         ArgSections.close(ArgSections.N_ISSIMPLE, isT)
         if (paramNotSimple) {
             val argIsPrimitive = isSimpleCheckableType(argType)
@@ -147932,6 +147953,8 @@ interface DataView {
             TypeFlags.BooleanLiteral or TypeFlags.BigIntLiteral or
             TypeFlags.UniqueESSymbol or TypeFlags.EnumLiteral
         )) return true
+        // NOTE: `object` (TypeFlags.NonPrimitive) is deliberately NOT here — see
+        // [isArgCheckableType], which adds it for the two ARGUMENT-position gates only.
         // Allow union types where all members are checkable (e.g., string | number)
         if (type is Type.Union) {
             if (type.types.any { it === anyType || it === errorType }) return false
@@ -147939,6 +147962,25 @@ interface DataView {
         }
         return false
     }
+
+    /**
+     * (NONPRIM.1) round 834: [isSimpleCheckableType] PLUS the `object` keyword, for the
+     * two ARGUMENT-position gates only.
+     *
+     * `object` earns the same treatment as `string` here: since this round its relation
+     * rule answers exactly tsc's — an Object-flagged source and nothing else — so there
+     * is no incomplete structural comparison left for an argument verdict to get wrong.
+     *
+     * It is a SEPARATE predicate rather than an extra flag inside
+     * [isSimpleCheckableType] because that one has 45 consumers, several of which are
+     * dedicated walkers whose whole FP firewall it is. Widening it in place was tried
+     * and measured: B498's `f<object>(123)` walker ([checkGenericDefaultParamCall])
+     * immediately co-emitted with the general path, producing a duplicate TS2345 at one
+     * position on `nonPrimitiveInGeneric`. Add a call site here only after checking that
+     * the site is not itself a walker's gate.
+     */
+    private fun isArgCheckableType(type: Type): Boolean =
+        isSimpleCheckableType(type) || type.flags.hasAny(TypeFlags.NonPrimitive)
 
     // -----------------------------------------------------------------------
     // Structural typing engine (Phase 4 items 4a-4e)
@@ -148060,9 +148102,24 @@ interface DataView {
                 ) return true
             }
         }
-        // object type (non-primitive) — primitives are NOT assignable to object
+        // The `object` keyword (round 834, (NONPRIM.1)). tsc's rule is POSITIVE —
+        // `s & TypeFlags.Object && t & TypeFlags.NonPrimitive` — i.e. the ONLY sources
+        // that satisfy `object` are the ones carrying the Object flag. This used to be
+        // written as its NEGATION ("not flagged primitive"), which is not the same
+        // predicate, because [TypeFlags.Primitive] omits every LITERAL bit: a
+        // `Type.StringLiteral`/`NumberLiteral`/boolean-literal source, a bare
+        // `Type.TypeParam`, `unknown`, and `keyof`/indexed-access types all read as
+        // "not primitive" and were silently accepted. That is what made
+        // `{ foo: "bar" }` satisfy `{ foo: object }`'s value position and — one level
+        // out — made the conditional `T[P] extends V | object` answer TRUE for a
+        // numeric-literal `T[P]`, inventing a whole FP one type away from any `object`.
+        //
+        // A `false` here is NOT a rejection: [checkTypeRelatedToCore] falls through to
+        // the structural engine, where the Union/Intersection source branches decompose
+        // and [structuredTypeRelatedTo]'s TypeParam leg consults a constraint. Only
+        // shapes that reach neither end up rejected.
         if (tf.hasAny(TypeFlags.NonPrimitive)) {
-            return !sf.hasAny(TypeFlags.Primitive or TypeFlags.Null or TypeFlags.Undefined or TypeFlags.Void)
+            return sf.hasAny(TypeFlags.Object or TypeFlags.NonPrimitive)
         }
         return false
     }
@@ -148572,6 +148629,18 @@ interface DataView {
             val tgtConstraint = target.constraint
             if (srcConstraint == null || tgtConstraint == null) return true
             return checkTypeRelatedTo(srcConstraint, tgtConstraint, relation)
+        }
+        // A TYPE PARAMETER against `object` is decided by its CONSTRAINT (round 834,
+        // (NONPRIM.1)). An UNCONSTRAINED `T` can be instantiated with a primitive, so
+        // it is not assignable — the verdict `nonPrimitiveInGeneric`'s `function
+        // generic<T>(t: T) { var o: object = t }` wants — while `T extends object` and
+        // `T extends {}` both are. Deliberately NOT the general "TypeParam source via
+        // apparent type" rule: this is keyed on a NonPrimitive target, so nothing that
+        // does not write the `object` keyword can reach it.
+        if (source is Type.TypeParam && target.flags.hasAny(TypeFlags.NonPrimitive)) {
+            val constraint = source.constraint ?: return false
+            if (constraint === errorType) return false
+            return checkTypeRelatedTo(constraint, target, relation)
         }
         return false
     }
@@ -166402,6 +166471,8 @@ interface DataView {
      *  `.get`, `new WeakRef`, `FinalizationRegistry.register`/`.unregister`) → TS2345 `'symbol'` vs
      *  `'object'`. We don't model the es2022-vs-esnext lib diff (same embedded lib for both) AND the
      *  conservative method-arg check skips `object`-typed params → emit nothing → purely ADDITIVE.
+     *  ROUND 834 ((NONPRIM.1)) ENDED THAT: the general gate now judges an `object` parameter, so the
+     *  TS2345 half CO-EMITS and [swtEmit2345] dedups. The TS2769 halves stay uniquely this walker's.
      *  FP firewall: `@lib es2022` gate (excludes the esnext accept sibling) + the FinalizationRegistry
      *  source shape (corpus-unique) + only fires when the arg is a tracked `symbol` var. */
     private fun checkSymbolAsWeakTypeArg() {
@@ -166480,8 +166551,21 @@ interface DataView {
 
     private fun swtEmit2345(arg: Identifier, source: String, fileName: String) {
         val (ln, ch) = getLineAndCharacterOfPosition(source, arg.pos)
+        val message = "Argument of type 'symbol' is not assignable to parameter of type 'object'."
+        // Round 834, (NONPRIM.1): the general argument gate now judges an `object`
+        // PARAMETER, so it reaches the same verdict at the same position for the
+        // `.add`/`.has`/`.delete`/`.set`/`.get` key arguments — 8 of this case's 12
+        // diagnostics doubled. The two messages are byte-identical, so this is the
+        // co-emission dedup CLAUDE.md prescribes, keyed on (code, fileName, start,
+        // message) rather than the position alone. The walker is NOT retired: it still
+        // uniquely owns the two TS2769 constructor overloads and the
+        // `FinalizationRegistry` positions the general path does not reach.
+        if (diagnostics.any {
+                it.code == 2345 && it.fileName == fileName &&
+                    it.start == arg.pos && it.message == message
+            }) return
         diagnostics.add(Diagnostic(
-            message = "Argument of type 'symbol' is not assignable to parameter of type 'object'.",
+            message = message,
             category = DiagnosticCategory.Error, code = 2345, fileName = fileName,
             line = ln, character = ch, start = arg.pos, length = arg.text.length))
     }
