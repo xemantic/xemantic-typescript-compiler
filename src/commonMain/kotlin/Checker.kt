@@ -4430,7 +4430,7 @@ class Checker(
     // targets, the destructuring private-identifier check) — the legacy
     // driver + checkInvalidAssignInStatement(s)/-InExpr(Core) recursion are
     // deleted; [emitInvalidAssignAtBinary] (+ isValidAssignmentTarget /
-    // checkDestructuringPrivateIds) survives as the anchor-called leaf.
+    // checkDestructuringAssignmentTargets) survives as the anchor-called leaf.
     // Reach is the memoized DEPTH classifier [spineIaDepth] over
     // [spineIaEdge] — the legacy SHARED `checkDepth` counter reproduced per
     // node (the round-535 spineArgDepth shape): every checkInvalidAssignInExpr
@@ -23281,6 +23281,10 @@ class Checker(
                 spineCheckForOfNonIterable(node)
                 spineCheckStrictForInOfDecls(node.initializer)
                 spineCheckForAwait(node)
+                spineCheckForInOfOptionalChainLhs(
+                    node.initializer, 2781,
+                    "The left-hand side of a 'for...of' statement may not be an optional property access.",
+                )
             }
             NodeKind.IF_STATEMENT -> { node as IfStatement; spineUncalledDispatch(node) }
             NodeKind.WHILE_STATEMENT -> { node as WhileStatement; spineUncalledDispatch(node) }
@@ -23291,6 +23295,10 @@ class Checker(
                 node as ForInStatement
                 spineCheckForInLhsType(node)
                 spineCheckStrictForInOfDecls(node.initializer)
+                spineCheckForInOfOptionalChainLhs(
+                    node.initializer, 2780,
+                    "The left-hand side of a 'for...in' statement may not be an optional property access.",
+                )
             }
             NodeKind.SPREAD_ELEMENT -> { node as SpreadElement; spineNoteIterationPosition(node.expression) }
             NodeKind.YIELD_EXPRESSION -> { node as YieldExpression; spineNoteYieldStar(node) }
@@ -26282,6 +26290,18 @@ class Checker(
             }
             checkLetInLetOrConst(d.name, init.flags, spineSource, spineFileName)
         }
+    }
+
+    /**
+     * TS2780 / TS2781 — the `for..in` / `for..of` LHS is a reference position, so
+     * tsc runs `checkReferenceExpression` on it; an EXPRESSION initializer that is
+     * an optional chain is the error. A `VariableDeclarationList` initializer is a
+     * declaration, never a chain, so it is not a candidate.
+     */
+    private fun spineCheckForInOfOptionalChainLhs(initializer: Node?, code: Int, message: String) {
+        if (spineIsDts) return
+        val expr = initializer as? Expression ?: return
+        emitOptionalChainTarget(expr, code, message, spineSource, spineFileName)
     }
 
     private fun spineCheckStrictFunctionDecl(node: FunctionDeclaration) {
@@ -49752,6 +49772,12 @@ class Checker(
          *  maximum on tsc's own sources is `HasModifiers & HasDecorators` at 24 x 7 = 168. */
         private const val DISTRIBUTE_MAX_COMBINATIONS = 4096
 
+        /** TS2779 / TS2778 — tsc's optional-chain leg of `checkReferenceExpression`. */
+        private const val OPTIONAL_CHAIN_ASSIGNMENT_LHS =
+            "The left-hand side of an assignment expression may not be an optional property access."
+        private const val OPTIONAL_CHAIN_OBJECT_REST =
+            "The target of an object rest assignment may not be an optional property access."
+
         // INV.4(c)(iii) batch 4: edge verdicts for the spine expression-
         // territory classification (see [spineUResExprEdge]).
         private const val URES_EDGE_NONE = 0
@@ -70550,7 +70576,16 @@ interface DataView {
                 else -> break
             }
         }
-        if (core is Identifier || core is PropertyAccessExpression || core is ElementAccessExpression) return
+        if (core is Identifier || core is PropertyAccessExpression || core is ElementAccessExpression) {
+            // tsc's checkReferenceExpression reports the OPTIONAL-CHAIN leg only
+            // once the target is otherwise a valid reference.
+            emitOptionalChainTarget(
+                operand, 2777,
+                "The operand of an increment or decrement operator may not be an optional property access.",
+                source, fileName,
+            )
+            return
+        }
         val (line, character) = getLineAndCharacterOfPosition(source, operand.pos)
         diagnostics.add(Diagnostic(
             message = "The operand of an increment or decrement operator must be a variable or a property access.",
@@ -169228,7 +169263,7 @@ interface DataView {
     // spineIaDepth / spineIaEdge; the legacy driver +
     // checkInvalidAssignInStatement(s)/-InExpr(Core) recursion are deleted.
     // [emitInvalidAssignAtBinary] below is the anchor-called leaf;
-    // isValidAssignmentTarget + checkDestructuringPrivateIds survive
+    // isValidAssignmentTarget + checkDestructuringAssignmentTargets survive
     // unchanged.
 
     /** Per-file spine setup: the legacy dts skip; depth-memo allocation. */
@@ -169486,6 +169521,10 @@ interface DataView {
                     fileName = fileName, line = line, character = character,
                     start = start, length = length,
                 ))
+            } else {
+                // tsc runs the whole checkReferenceExpression for a compound
+                // assignment too, so a valid-but-optional-chain LHS is TS2779.
+                emitOptionalChainTarget(left, 2779, OPTIONAL_CHAIN_ASSIGNMENT_LHS, source, fileName)
             }
         }
         if (expr.operator == SyntaxKind.Equals) {
@@ -169504,9 +169543,76 @@ interface DataView {
                     length = length,
                 ))
             } else {
-                checkDestructuringPrivateIds(expr.left, source, fileName)
+                checkDestructuringAssignmentTargets(
+                    expr.left, source, fileName, 2779, OPTIONAL_CHAIN_ASSIGNMENT_LHS, checkChain = true,
+                )
             }
         }
+    }
+
+    /**
+     * The OPTIONAL-CHAIN leg of tsc's `checkReferenceExpression`: a reference
+     * TARGET (assignment LHS, `++`/`--` operand, `for..in`/`for..of` LHS, a
+     * destructuring-assignment element) may not be an optional chain.
+     *
+     * tsc decides this with `node.flags & NodeFlags.OptionalChain`, a bit the
+     * parser propagates along the chain. We carry no such flag, so the
+     * equivalent test is a descent through the chain's own links: `?.` anywhere
+     * BELOW the target makes the whole target a chain (`a?.b.c` is one), while a
+     * PARENTHESIS terminates it (`(a?.b).c` is not). The outer value-preserving
+     * wrappers are skipped first, exactly as tsc's
+     * `skipOuterExpressions(expr, Assertions | Parentheses)` does.
+     */
+    private fun isOptionalChainReferenceTarget(expr: Expression): Boolean {
+        var core: Expression = expr
+        while (true) {
+            core = when (core) {
+                is ParenthesizedExpression -> core.expression
+                is NonNullExpression -> core.expression
+                is AsExpression -> core.expression
+                is TypeAssertionExpression -> core.expression
+                is SatisfiesExpression -> core.expression
+                else -> break
+            }
+        }
+        var cur: Expression = core
+        while (true) {
+            cur = when (cur) {
+                is PropertyAccessExpression -> if (cur.questionDotToken) return true else cur.expression
+                is ElementAccessExpression -> if (cur.questionDotToken) return true else cur.expression
+                is CallExpression -> if (cur.questionDotToken) return true else cur.expression
+                // `a?.b!.c` — a non-null assertion INSIDE a chain is tsc's
+                // NonNullChain and does not terminate it.
+                is NonNullExpression -> cur.expression
+                else -> return false
+            }
+        }
+    }
+
+    /**
+     * Emits one of TS2777 / TS2778 / TS2779 / TS2780 / TS2781 when [target] is
+     * an optional chain in a reference position. The squiggle is the target's
+     * own span, matching tsc (which reports at the node handed to
+     * `checkReferenceExpression`, wrappers included).
+     */
+    private fun emitOptionalChainTarget(
+        target: Expression,
+        code: Int,
+        message: String,
+        source: String,
+        fileName: String,
+    ) {
+        if (!isOptionalChainReferenceTarget(target)) return
+        val start = target.pos
+        val length = (expressionTrueEnd(target) - start).coerceAtLeast(1)
+        val (line, character) = getLineAndCharacterOfPosition(source, start)
+        diagnostics.add(Diagnostic(
+            message = message,
+            category = DiagnosticCategory.Error,
+            code = code,
+            fileName = fileName, line = line, character = character,
+            start = start, length = length,
+        ))
     }
 
     /** Check if an expression is a valid assignment target (LHS of =). */
@@ -169542,8 +169648,24 @@ interface DataView {
      * the LHS of an assignment and emit TS2364 at any private-identifier element. A bare
      * `#abc` (Identifier scanned as a single token with leading `#`) is never a valid
      * assignment target — private fields require `this.#abc` or `obj.#abc` syntax.
+     *
+     * The same walk carries tsc's OPTIONAL-CHAIN leg, because it already enumerates
+     * exactly the positions `checkArrayLiteralDestructuringElementAssignment` /
+     * `checkObjectLiteralDestructuringPropertyAssignment` hand to
+     * `checkReferenceExpression`: [chainCode]/[chainMessage] is TS2779 everywhere
+     * except an object REST target, which tsc reports as TS2778. [checkChain] is false
+     * only for the node whose enclosing call already reported it (a parenthesised
+     * target), so no position is reported twice.
      */
-    private fun checkDestructuringPrivateIds(expr: Expression, source: String, fileName: String) {
+    private fun checkDestructuringAssignmentTargets(
+        expr: Expression,
+        source: String,
+        fileName: String,
+        chainCode: Int,
+        chainMessage: String,
+        checkChain: Boolean,
+    ) {
+        if (checkChain) emitOptionalChainTarget(expr, chainCode, chainMessage, source, fileName)
         when (expr) {
             is Identifier -> {
                 if (expr.text.startsWith("#")) {
@@ -169562,13 +169684,18 @@ interface DataView {
             is ArrayLiteralExpression -> {
                 for (el in expr.elements) {
                     val target = if (el is SpreadElement) el.expression else el
-                    checkDestructuringPrivateIds(target, source, fileName)
+                    checkDestructuringAssignmentTargets(
+                        target, source, fileName, 2779, OPTIONAL_CHAIN_ASSIGNMENT_LHS, checkChain = true,
+                    )
                 }
             }
             is ObjectLiteralExpression -> {
                 for (prop in expr.properties) {
                     when (prop) {
-                        is PropertyAssignment -> checkDestructuringPrivateIds(prop.initializer, source, fileName)
+                        is PropertyAssignment -> checkDestructuringAssignmentTargets(
+                            prop.initializer, source, fileName, 2779, OPTIONAL_CHAIN_ASSIGNMENT_LHS,
+                            checkChain = true,
+                        )
                         is ShorthandPropertyAssignment -> {
                             if (prop.name.text.startsWith("#")) {
                                 val start = prop.name.pos
@@ -169583,16 +169710,26 @@ interface DataView {
                                 ))
                             }
                         }
-                        is SpreadAssignment -> checkDestructuringPrivateIds(prop.expression, source, fileName)
+                        is SpreadAssignment -> checkDestructuringAssignmentTargets(
+                            prop.expression, source, fileName, 2778, OPTIONAL_CHAIN_OBJECT_REST,
+                            checkChain = true,
+                        )
                         else -> {}
                     }
                 }
             }
-            is ParenthesizedExpression -> checkDestructuringPrivateIds(expr.expression, source, fileName)
+            // The enclosing call already reported the chain at the PARENTHESISED
+            // node (tsc's skipOuterExpressions sees through it), so the inner one
+            // must not report it again.
+            is ParenthesizedExpression -> checkDestructuringAssignmentTargets(
+                expr.expression, source, fileName, chainCode, chainMessage, checkChain = false,
+            )
             is BinaryExpression -> {
                 // Default value: `[x = 1] = ...` — recurse into LHS only.
                 if (expr.operator == SyntaxKind.Equals) {
-                    checkDestructuringPrivateIds(expr.left, source, fileName)
+                    checkDestructuringAssignmentTargets(
+                        expr.left, source, fileName, chainCode, chainMessage, checkChain = true,
+                    )
                 }
             }
             else -> {}
