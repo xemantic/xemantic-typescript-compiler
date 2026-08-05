@@ -111895,9 +111895,33 @@ interface DataView {
             val targets = if (targetType is Type.Union) targetType.types else listOf(targetType)
             enumMinusMembers(t, targets)?.let { if (it !== t) return it }
         }
+        // (NARROW.2)(b) round 838 — see [anyNegativeBranchSurvives].
+        if (anyNegativeBranchSurvives(t)) return t
         return if (checkTypeRelatedTo(t, targetType, assignableRelation) &&
             !missingVsOptionalProvesNotSubtype(t, targetType)) neverType else t
     }
+
+    /**
+     * (NARROW.2)(b), round 838 — true when [t] must survive a NEGATIVE narrowing
+     * branch unchanged because it is `any`-flavoured (`any`, and the `error` /
+     * `unresolved` sentinels, all of which carry [TypeFlags.Any]).
+     *
+     * Both single-type negative branches — a type-predicate guard's, and
+     * [narrowByInstanceOf]'s — decide "the subject IS the target, so the false
+     * branch is impossible" with the ASSIGNABLE relation, and `any` is assignable
+     * to everything. So `if (isFoo(x)) { … }` on an `any` subject left `never`
+     * behind in the else branch, and the flow join of (`Foo` from then, `never`
+     * from else) then produced `Foo` where tsc produces `any` — which reads at the
+     * next statement exactly like a narrow LEAKING out of its `if` block, and
+     * ACCUMULATES across sibling guards (`Error | Function` after two of them).
+     *
+     * tsc reaches its assumeFalse filter through `isTypeSubsetOf`, which for a
+     * non-union candidate is plain identity, so `any` survives there by
+     * construction. The positive branch is deliberately untouched: making `any`
+     * narrow TO the guard target at every consumer is (NARROW.2)(c), a far larger
+     * blast radius.
+     */
+    private fun anyNegativeBranchSurvives(t: Type): Boolean = t.flags.hasAny(TypeFlags.Any)
 
     /**
      * Round 762: the type of [prop] AS CARRIED BY [carrier] — substituted through the
@@ -112112,6 +112136,13 @@ interface DataView {
             }
             return getUnionType(filtered)
         }
+        // (NARROW.2)(b) round 838: `any` is assignable to EVERYTHING, so
+        // [isInstanceOfClass]'s relation fallback answers `true` for it and the
+        // negative arm below washed an `any` subject to `never`. tsc's
+        // `getNarrowedTypeWorker` reaches its assumeFalse filter through
+        // `isTypeSubsetOf`, which for a non-union candidate is identity — so `any`
+        // survives its own negative branch. See [anyNegativeBranchSurvives].
+        if (!isMatch && anyNegativeBranchSurvives(t)) return t
         val matches = isInstanceOfClass(t, classType)
         return when {
             matches == isMatch -> t
