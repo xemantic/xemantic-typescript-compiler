@@ -20,6 +20,89 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 834 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE `object` KEYWORD GETS
+A REAL RELATION RULE — the single rule the compiler held about it was tsc's written as its
+NEGATION, which is a different predicate. `nonPrimitive` **9 -> 7 failing cases**
+(`nonPrimitiveInFunction` and `nonPrimitiveInGeneric` GREEN); **the category still cannot
+be adopted, so it was not.** Suite **13,847 / 0 / 3** (13,833 + 14 pins, 0 regressions);
+all 8 profiles byte-identical against a REBUILT before-arm.**
+
+- **THE CENSUS, RE-DERIVED NOT INHERITED (round 833's lesson, applied).** 16 files, one
+  whole-file-skipped by tsgo's `tsgoSkippedTests`, **25 subtests, 9 failing, 0 emit
+  failures** — round 831's counts confirmed exactly. What no prior round captured is the
+  per-CASE DIFF, and it is what decides everything: the 9 are **six unrelated gaps wearing
+  an `object` costume**, and only three concern `object` at all.
+- **THE DEFECT, AND IT REACHES FURTHER THAN THE KEYWORD.** `isSimpleTypeRelatedTo`'s
+  NonPrimitive leg read `!sf.hasAny(TypeFlags.Primitive or Null or Undefined or Void)`;
+  tsc's rule is the POSITIVE `s & TypeFlags.Object && t & TypeFlags.NonPrimitive`. They
+  differ because **`TypeFlags.Primitive` omits every LITERAL bit** — so a
+  `Type.StringLiteral` / `NumberLiteral` / boolean-literal source, a bare `Type.TypeParam`,
+  `unknown`, and the instantiable `keyof`/indexed-access types all satisfied `object`
+  silently. Its furthest consequence was a **false positive one type away from any
+  `object`**: `T[P] extends V | object ? 1 : 0` answered TRUE for a numeric-literal `T[P]`,
+  so a mapped type computed `1 | 1` where tsc computes `1 | 0`
+  (`nonPrimitiveAndTypeVariables`, TypeScript issue #23800).
+- **WHAT LANDED — four changes, every one keyed on the TARGET's `NonPrimitive` flag**, so
+  nothing that does not write the `object` keyword can reach any of them. (1) the relation
+  leg inverted to tsc's positive form; (2) a `structuredTypeRelatedTo` arm deciding a
+  `Type.TypeParam` source by its CONSTRAINT — unconstrained `T` rejects, `T extends object`
+  and `T extends {}` accept; (3) `canUseTypeEngine` opened for a `Type.TypeParam` source
+  against a NonPrimitive target (the B60.8 rule below it admits only a CONSTRAINED one,
+  i.e. exactly the case that is not an error); (4) a new `isArgCheckableType` =
+  `isSimpleCheckableType` + NonPrimitive, used at **exactly two** argument-position gates —
+  the parameter-side firewall in `checkArgumentsAgainstSignatureCore` and
+  `caasTypeParamConstraintArg`'s constraint test.
+- **WHAT DID NOT WORK — three things, all found by measurement.** (a) **Widening
+  `isSimpleCheckableType` ITSELF was the first cut and is wrong**: it has 45 consumers,
+  several of them dedicated walkers whose entire FP firewall it is, and B498's
+  `checkGenericDefaultParamCall` (`f<object>(123)`) immediately co-emitted a DUPLICATE
+  TS2345 at one position. Hence the separate predicate, its two named call sites, and a pin
+  (`an explicitly instantiated object parameter is reported exactly once`) that only an
+  EXPLICIT type argument can discriminate — the inferred-`T` call cannot. (b) **Opening
+  `canUseTypeEngine` for a UNION source as well was landed, measured and REVERTED**:
+  `object | null -> object` is a correct rejection, but the same gate then FPs for a union
+  the flow HAS narrowed and we have not (`var e: object | null; e = a; a = e` is legal in
+  tsc and we would reject it) — which is the standing reason that Union rule refuses
+  nullish sources at all. It bought 3 diagnostics in a case that stays red for 12 other
+  reasons. The gap is recorded in the code comment and in a pin's KDoc, not hidden.
+  (c) **The one whole-suite regression was the co-emission CLAUDE.md predicts**:
+  `checkSymbolAsWeakTypeArg`'s KDoc asserted "purely ADDITIVE" *because* the general
+  argument check skipped `object`-typed params — no longer true, so 8 of
+  `dissallowSymbolAsWeakType`'s 12 diagnostics doubled. Fixed with the prescribed
+  retraction keyed on (code, fileName, start, MESSAGE) and the stale KDoc corrected; the
+  walker keeps its two uniquely-owned TS2769 chains.
+- **THE RE-COSTING — `nonPrimitive` NEEDS SIX MORE SUB-STEPS AND TWO ARE NOT `object` WORK
+  AT ALL.** Residual 7 cases with their diff counts: **`nonPrimitiveConstraintOfIndexAccessType`
+  (10, we emit NOTHING)** wants `string -> T[P]` INDEXED-ACCESS assignability — `object`
+  appears in 1 of its 10 constraints and is irrelevant to the gap;
+  **`nonPrimitiveAndTypeVariables` (1)** is blocked by the GENERAL `TypeParam -> TypeParam`
+  lenience (`srcConstraint == null || tgtConstraint == null -> return true` in
+  `structuredTypeRelatedTo`) *plus* a union DISPLAY-ORDER divergence (tsc sorts by type id
+  and prints `object | U`; we preserve source order and print `U | object`);
+  **`nonPrimitiveNarrow` (3)** and **`nonPrimitiveStrictNull` (12)** want flow narrowing on
+  `object` — `typeof x === 'number'` collapsing to `never`, and 8 TS18047/18048/18049
+  nullish-access diagnostics on an `object | null | undefined` receiver;
+  **`nonPrimitiveAccessProperty` (2)** wants TS2339 on an `object` receiver, i.e. work
+  inside `checkMemberAccessMissing`, the repo's largest and most FP-sensitive walker;
+  **`nonPrimitiveUnionIntersection` (4)** wants `getIntersectionType` to REDUCE
+  (`object & string` -> `never` by disjoint domains, `object & {}` -> `object`) plus
+  excess-property checking through such an intersection — bounded, but it changes
+  intersection IDENTITY and DISPLAY, which CLAUDE.md flags as high blast radius;
+  **`nonPrimitiveAssignError` (1)** is the only cheap one left — a MESSAGE SHAPE, TS2741
+  with the source displayed as its apparent type `{}` plus TS2728, where we print TS2322.
+  **So the 0-emit-failure count overstated tractability here for the same reason it did for
+  `typeSatisfaction` last round: a category's name describes its FIXTURES, not its gaps.**
+- **GATES.** Suite **13,847 / 0 / 3** from a wiped results dir, `xml.etree` (13,833 + 14
+  `NonPrimitiveObjectTypeTest` pins, **0 regressions**). `cost_gate.py` **PASS — every
+  counter +0.00%**, `output.errors` 46 unchanged, so no rebaseline was needed or taken.
+  `huge_methods.py --fail-over 0` exit 0, **0 over the limit** (largest 6,353). **THE
+  8-PROFILE GRID WAS RUN AGAINST A GENUINELY REBUILT BEFORE-ARM** — `Checker.kt` backed up,
+  reverted, rebuilt, all 8 captured, restored, rebuilt — because a count match is not a
+  diff (round 811). Every capture non-empty with no `more error(s)` tell; counts 46x7 +
+  harness 94; **`added=0 removed=0` and the sorted-capture md5 IDENTICAL on all eight**,
+  the compiler profile at `4caacf248ce417899c2972c16a82f1ed`, the digest rounds 828, 832
+  and 833 recorded.
+
 **Round 833 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH (the perf arc is closed).
 THE GENERAL `satisfies` CHECK LANDS — TS1360 plus the fresh object-literal excess check —
 closing a gap where the operator was verified NOWHERE. **NO CATEGORY WENT GREEN**, so none
@@ -8290,6 +8373,34 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   a bare type parameter is wrongly assignable to it, `object`-as-source is undecided, and
   property access on it is unchecked; exposure is bounded to code that writes the `object`
   keyword.
+  **ROUND-834 UPDATE — THE `object` RELATION RULE LANDED; `nonPrimitive` 9 -> 7 FAILING
+  CASES (`nonPrimitiveInFunction` + `nonPrimitiveInGeneric` GREEN), STILL NOT ADOPTABLE,
+  AND THE CATEGORY IS RE-COSTED UPWARD — THE SAME SHAPE AS 833's `typeSatisfaction`
+  RESULT.** The one rule was tsc's rule written as its NEGATION: `!hasAny(Primitive|Null|
+  Undefined|Void)` versus tsc's positive `s & Object && t & NonPrimitive`, and they differ
+  because **`TypeFlags.Primitive` omits every LITERAL bit** — literal types, a bare
+  `Type.TypeParam`, `unknown` and the instantiable types all satisfied `object` silently,
+  which even produced an FP one type away from any `object` (a conditional
+  `T[P] extends V | object` answering TRUE for a numeric literal). Landed: the inverted
+  leg, a `TypeParam`-source-by-CONSTRAINT arm, a `canUseTypeEngine` opening for a
+  `TypeParam` source, and `isArgCheckableType` at two argument gates — all keyed on the
+  target's `NonPrimitive` flag. **The 7 residual cases need SIX more sub-steps, and TWO OF
+  THEM ARE NOT `object` WORK:** `nonPrimitiveConstraintOfIndexAccessType` (10 diffs, we
+  emit nothing) is pure `string -> T[P]` INDEXED-ACCESS assignability;
+  `nonPrimitiveAndTypeVariables` (1) is blocked by the GENERAL `TypeParam -> TypeParam`
+  lenience plus a union display-ORDER divergence (tsc sorts by type id, we keep source
+  order). The rest are `object`-keyed but each its own sub-step: `nonPrimitiveNarrow` (3)
+  and `nonPrimitiveStrictNull` (12) want flow narrowing on `object` (`typeof x ===
+  'number'` to `never`, plus 8 TS1804x nullish-access); `nonPrimitiveAccessProperty` (2)
+  wants TS2339 on an `object` receiver, inside the repo's most FP-sensitive walker;
+  `nonPrimitiveUnionIntersection` (4) wants `getIntersectionType` REDUCTION (`object &
+  string` -> `never`, `object & {}` -> `object`) plus excess-property checking through such
+  an intersection — bounded but it moves intersection identity and display;
+  **`nonPrimitiveAssignError` (1) is the only cheap one left**, a message shape (TS2741
+  with the source displayed as its apparent `{}` + TS2728, where we print TS2322).
+  **THE GENERAL LESSON NOW HOLDS FOR TWO CATEGORIES IN A ROW: the 0-emit-failure count
+  overstates tractability, because a category's name describes its FIXTURES, not its gaps
+  — price a category by its per-CASE diffs before committing a round to it.**
   **ROUND 831's ORIGINAL PRICING OF `asOperator` (4 cases), kept for the record:** `asOperator2` (`23 as string`) and `asOperatorContextualType`
   (`(v => v) as (x: number) => string`) both need a **general TS2352 comparability rule**,
   and today TS2352 is a family of ~10 dedicated narrow walkers (`emitTS2352IfNullCast`,
