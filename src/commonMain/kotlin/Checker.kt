@@ -112229,8 +112229,45 @@ interface DataView {
             is PropertyAccessExpression -> resolveNamespaceQualifiedSymbol(e)
             else -> null
         } ?: return null
-        if (!symbol.flags.hasAny(SymbolFlags.Class)) return null
+        if (!symbol.flags.hasAny(SymbolFlags.Class)) return instanceTypeOfConstructorValue(symbol)
         return getDeclaredTypeOfSymbol(symbol).takeIf { it !== anyType && it !== errorType }
+    }
+
+    /**
+     * (NARROW.2)(a), round 838 — tsc's `getInstanceType`, for the case the
+     * `SymbolFlags.Class` test above cannot answer: an `instanceof` whose RHS is a
+     * CONSTRUCTOR VALUE rather than a class DECLARATION. Every ambient constructor
+     * in the lib is written that way (`interface Error { … }` +
+     * `declare var Error: ErrorConstructor`), so before this the whole family —
+     * `Error`, `Date`, `RegExp`, `Map`, `Set`, `Promise`, … — narrowed NOTHING,
+     * in either branch and at every consumer of [narrowByInstanceOf], while a
+     * user-written `class C` narrowed correctly. The instance type is the
+     * constructor type's `prototype` property (tsc prefers it), falling back to a
+     * single construct signature's return type.
+     *
+     * Deliberately BOUNDED against tsc's full rule: no `[Symbol.hasInstance]`
+     * leg, no `mapType` over a union-typed RHS, no signature erasure, and — the
+     * one that matters for false positives — where tsc falls back to
+     * `emptyObjectType` we return null, i.e. NO narrowing. A `{}` narrow would
+     * be a new, wrong type at every consumer; null keeps the pre-838 behaviour
+     * for anything this cannot resolve.
+     */
+    private fun instanceTypeOfConstructorValue(symbol: Symbol): Type? {
+        // Value-position only: a pure type symbol (interface/alias) has no
+        // constructor value and must keep narrowing nothing.
+        if (!symbol.flags.hasAny(SymbolFlags.Variable or SymbolFlags.Function or SymbolFlags.Property)) return null
+        val ctorType = getTypeOfSymbol(symbol)
+        if (ctorType !is Type.Object) return null
+        getPropertyOfType(ctorType, "prototype")?.let { proto ->
+            val protoType = getTypeOfSymbol(proto)
+            if (protoType is Type.Object && protoType !== ctorType) return protoType
+        }
+        val ctors = getConstructSignaturesOfType(ctorType)
+        if (ctors.size == 1) {
+            val ret = ctors[0].resolvedReturnType
+            if (ret is Type.Object && ret !== ctorType) return ret
+        }
+        return null
     }
 
     /**
