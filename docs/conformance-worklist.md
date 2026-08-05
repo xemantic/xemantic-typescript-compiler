@@ -1,6 +1,7 @@
 # M3.0 — the conformance worklist, priced PER CASE
 
-Measured **round 836 (2026-08-05)**, on the nine candidate categories that M3.0 still
+Measured **round 836 (2026-08-05)**, re-measured for `types/any` in **round 837**, on the
+nine candidate categories that M3.0 still
 holds back. This file replaces the per-CATEGORY failure counts that rounds 695, 831, 833
 and 834 kept re-deriving: a category's failure count says nothing about how tractable it
 is, because a category's name describes its FIXTURES, not its gaps. Three rounds in a row
@@ -26,6 +27,11 @@ A throwaway `main` in `src/jvmMain` then replicates the generator's own subtest 
 
 That is ~40 s for all 124 cases in one JVM, against ~12 minutes for a suite arm, and it
 yields the per-case diff a suite arm does not. Two caveats it cannot see, both recorded
+**Round 837 re-created the harness from this paragraph alone and reproduced round 836's
+`types/any` row exactly**, so the description is load-bearing and sufficient — keep it in
+step with any change to the generator's algebra. (One counting note the re-creation exposed:
+round 836's `narrowFromAnyWithTypePredicate` row said `miss 4` where the stated
+one-line-per-chain-continuation convention gives 5.) Two caveats it cannot see, both recorded
 rather than hidden: the annotated (squiggle) half of an `.errors.txt` baseline is not
 compared — it is derived deterministically from the same `start`/`length`, so a matching
 summary plus matching spans implies it — and the `.js` comparison ignores the source-echo
@@ -125,17 +131,43 @@ declare `@target: es5, es2015`, so their BARE config is tsgo-skipped and only th
 
 | case | miss | extra | emit | codes |
 | --- | --- | --- | --- | --- |
-| anyAsConstructor | 1 | 0 | ok | TS2347 on `new x<any>(x)` |
-| assignAnyToEveryType | 1 | 1 | ok | TS2631 vs TS2708 |
-| assignEveryTypeToAny | 0 | 2 | ok | over-emits TS2454 x2 |
+| anyAsConstructor | 0 | 0 | ok | **CLOSED round 837** — TS2347 through `new` |
+| assignAnyToEveryType | 0 | 0 | ok | **CLOSED round 837** — TS2631, not TS2708 |
+| assignEveryTypeToAny | 0 | 0 | ok | **CLOSED round 837** — `void` / `typeof undefined` |
 | narrowExceptionVariableInCatchClause | 2 | 0 | ok | TS2551 |
 | narrowFromAnyWithInstanceof | 2 | 0 | ok | TS2551 |
-| narrowFromAnyWithTypePredicate | 4 | 0 | ok | TS2551 x2, TS2339, TS2349 |
+| narrowFromAnyWithTypePredicate | 5 | 0 | ok | TS2551 x2, TS2339, TS2349 (+1 chain line) |
 
-**The best-shaped remaining target.** Zero emit gaps, six small cases, and three of them are
-ONE mechanism: narrowing FROM `any` (`instanceof` and a type predicate both narrow `any` to
-the guarded type in tsc, except to `Function`/`Object`), whose whole observable consequence
-is a `did you mean` TS2551 on the narrowed type. `anyAsConstructor` is a single TS2347.
+Round 837 closed the three BOUNDED cases; the category is **3 failing of 9**, all three the
+narrowing family, and its emit column is still all-green.
+
+**Round 836's costing of those three was wrong, and round 837 measured why.** The
+recommendation read "ONE mechanism — narrowing FROM `any`, exempt `Function`/`Object`".
+Probing the compiler directly (a deliberate `const p: number = x` after each guard, which
+prints the flow type in a TS2322) shows it is **three separate gaps, only one of which is
+the `any` rule**:
+
+1. **A type-predicate guard ALREADY narrows an `any` subject** — a file-level `declare var`,
+   a catch parameter and a function-body local all narrow correctly today. Missing is only
+   tsc's exemption (`isTypeAny(type) && (predicate.type === globalObjectType ||
+   globalFunctionType)`), which is a two-line rule.
+2. **`instanceof` narrowing reaches nothing** — there is no `instanceof` arm in
+   `extractNullNarrowing` at all, so `if (r instanceof Error)` leaves even an
+   `Error | string` body-local un-narrowed (measured: `Type 'string | Error' is not
+   assignable to type 'number'` INSIDE the then-branch). That is a missing arm, not an
+   `any` gap.
+3. **The narrow does not reach the property-access walker when the declared type is `any`** —
+   and this is why the three cases stay red. Every diagnostic these fixtures assert is a
+   TS2551/TS2339/TS2349 on the narrowed receiver, and `checkMemberAccessMissing` is silent
+   for an `any` receiver by construction. Making it read the narrowed type WIDENS the most
+   FP-sensitive walker in the compiler over exactly the shape tsc's own sources use
+   constantly, i.e. a grid risk of a different order from anything rounds 834–837 ran.
+
+A fourth defect found on the way and deliberately NOT fixed: a guard's narrow **leaks out of
+its `if` block into the next sibling `if`** of the same body — `function a(y: any) { if
+(isF(y)) {…} if (isO(y)) {…} }` reports `Function` in the second — which is precisely the
+five-sequential-`if` shape `narrowFromAnyWithTypePredicate` is built from. Gaps 1+2 cannot be
+validated against that fixture until the leak is closed.
 
 ### types/conditional
 
@@ -200,7 +232,25 @@ would go green together — the cheapest pair here, at the cost of touching
 | flow narrowing (`any`, `object`) | ~9 | `types/any` x3, `nonPrimitiveNarrow`, `nonPrimitiveStrictNull` |
 | bounded single-purpose checks | ~12 | TS2347, TS2790, TS2373, TS18030, TS2795, TS2456, TS2300/TS2395, TS2542 |
 
-**Recommendation carried forward:** the last bucket is where a round buys whole cases, and
-`types/any` is the only category where a single mechanism (narrowing FROM `any`) closes
-three cases at once with no emit veto in the way. Everything else is either an M3.1-depth
-engine change or blocked by an emit gap that no error-baseline deferral can carry.
+**Recommendation as of round 837 — conformance breadth has run out of cheap work.** The
+"bounded single-purpose checks" bucket was the only one that buys whole cases in a round,
+and round 837 spent the three that `types/any` held (TS2347 through `new`, TS2631 in an
+assignment target, `void`/`typeof undefined` definite-assignment). What remains in that
+bucket across all nine categories is roughly nine subtests — TS2790 x8 in an emit-VETOED
+category, TS2373 x4, TS18030 x3, TS2795 x2, TS2456 x4, TS2300/TS2395, TS2542 x2 — and
+**none of those completes a category either**, because every category that still has a
+bounded item also has an M3.1 item or an emit-red case beside it.
+
+So no category can be adopted by more rounds of this kind. The three axes that would
+actually finish one are, in ascending order of blast radius:
+
+* **flow narrowing** (`types/any` x3, `nonPrimitiveNarrow`, `nonPrimitiveStrictNull`) — the
+  three gaps enumerated under `types/any` above; gap 3 is a widening of
+  `checkMemberAccessMissing`;
+* **M3.1/M3.2 inference and relation** (~20 subtests) — `conditionalTypes1`, the
+  tagged-template family, `parenthesizedContexualTyping2`, `errorLocations1`,
+  `nonPrimitiveConstraintOfIndexAccessType`;
+* **JS emit** (12 subtests, 4 categories vetoed) — `?.` downlevel and labelled declarations.
+
+The embedded-lib gap (`Record`/`Partial`, 4 subtests) is the one cheap item left and it is
+not checker work at all.

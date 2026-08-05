@@ -20,6 +20,118 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 837 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE HANDED-DOWN TARGET WAS
+RE-COSTED AND OVERRULED ON EVIDENCE: `types/any`'s three NARROWING cases are not one
+mechanism but three gaps, the blocking one being a widening of `checkMemberAccessMissing`.
+Took the three BOUNDED cases in the same category instead — `types/any` **6 -> 3 failing**,
+and all three closed cases are green on errors AND emit. Suite 13,870 -> **13,886 / 0 / 3**
+(+16 pins, 0 regressions); all 8 profiles md5-identical against a REBUILT before-arm. AND
+THE ROUND'S SECOND DELIVERABLE: conformance breadth is now measured to be OUT of cheap work
+— see the recommendation at the end.**
+
+- **THE HARNESS WAS RE-CREATED FROM ITS OWN DESCRIPTION AND THAT WORKED.** Round 836 deleted
+  the survey harness and left a paragraph in `docs/conformance-worklist.md` saying to rebuild
+  it from the description. Done: ~110 lines under `src/jvmMain`, `git archive` the category
+  out of the blobless clone, replicate the generator's subtest algebra, diff the `.errors.txt`
+  SUMMARY and each `//// [name.js]` section. It reproduced round 836's `types/any` row
+  exactly (one counting nit: that row said `miss 4` for `narrowFromAnyWithTypePredicate`
+  where the stated one-line-per-chain-continuation convention gives 5). **40 seconds per
+  measurement against ~14 minutes for a suite arm** — this round re-measured the category
+  four times. Deleted again before the first commit.
+- **THE RE-COSTING, AND WHY IT OVERTURNED THE HANDED-DOWN TARGET.** Round 836 priced the three
+  narrowing cases as "ONE mechanism: narrowing FROM `any`, exempting `Function`/`Object`".
+  Probing the compiler with deliberate mis-assignments (`const p: number = x` after each
+  guard, which prints the flow type in the TS2322) shows **three separate gaps**: (1) a
+  type-predicate guard ALREADY narrows an `any` subject — file-level `declare var`, catch
+  parameter and body local all work; only tsc's `Function`/`Object` exemption is missing, and
+  that is two lines; (2) `instanceof` narrowing reaches NOTHING — there is no `instanceof` arm
+  in `extractNullNarrowing` at all, so `if (r instanceof Error)` leaves even an
+  `Error | string` body-local un-narrowed INSIDE the then-branch; (3) **the narrow does not
+  reach the PROPERTY-ACCESS walker when the declared type is `any`** — and every diagnostic
+  these three fixtures assert is a TS2551/TS2339/TS2349 on the narrowed receiver, so (3) is
+  what blocks all three cases. (3) is a widening of `checkMemberAccessMissing` over exactly
+  the shape tsc's own sources use constantly. A fourth defect found on the way and NOT fixed:
+  **a guard's narrow LEAKS out of its `if` block into the next sibling `if`** of the same
+  body, which is precisely the five-sequential-`if` shape `narrowFromAnyWithTypePredicate` is
+  built from — so (1)+(2) cannot even be validated against that fixture until the leak is
+  closed. All four are written up in `docs/conformance-worklist.md`.
+- **WHAT LANDED — three bounded checks, three whole cases.** (a) **TS2347 through `new`**:
+  tsc reaches `resolveUntypedCall` from `resolveNewExpression` as well as
+  `resolveCallExpression`, so `new x<any>(x)` is as much an error as `x<any>(x)`; same gate as
+  the existing call leg (`isImplicitAnyVarChain` / `isImplicitAnyThisMember`), deliberately
+  not the broad `calleeType === anyType` (`anyAsConstructor`). (b) **`void` and
+  `typeof undefined` are assumed initialized**: tsc's TS2454 guard is
+  `type.flags & (AnyOrUnknown | Void)` OR the type's facts carrying `IsUndefined`, and we
+  covered `any`/`unknown`/a syntactic `undefined` constituent and neither of the other two;
+  new `varTypeAssumedInitialized`, applied ONLY in the TS2454 candidate collector
+  (`assignEveryTypeToAny`). (c) **TS2631 in an assignment target** (`assignAnyToEveryType`).
+- **THE CORPUS CAUGHT (c) BEING WRONG, AND IT IS THE ROUND'S BEST GOTCHA.** The first attempt
+  keyed the namespace arm on `SymbolFlags.Module` and the suite came back **13,885 / 5**: two
+  corpus baselines (`assignToModule`, `assignmentToReferenceTypes`) plus three pins.
+  `SymbolFlags.Module` is the **UNION** of `ValueModule` and `NamespaceModule`, and tsc gives
+  the two DIFFERENT diagnostics at the same syntax — an INSTANTIATED namespace resolves as a
+  value so the write itself is the error (TS2631), a NON-instantiated one has no value meaning
+  so the value-position TS2708 fires first and the write is never judged. Gated on
+  `ValueModule` and both halves are now pinned in both directions. Now a CLAUDE.md entry.
+- **TWO DELIBERATE NON-GENERALISATIONS.** `varTypeAssumedInitialized` is NOT folded into the
+  shared `typeIncludesUndefined`, whose other two callers are TS2564 property sites where tsc
+  uses `containsUndefinedType` instead and a `void` property genuinely DOES want the
+  diagnostic (`negative control - a void property still reports TS2564` is the control for
+  exactly that mistake). And it is SYNTACTIC on purpose: resolving an annotation inside a
+  candidate COLLECTOR would make the candidate set a function of resolution order — the
+  round-778 class of bug, with no output diff to find it by.
+- **PIN DISCRIMINATION, BOTH DIRECTIONS, ON REAL BINARIES.** 16 pins,
+  `AnyUntypedNewAndVoidDefiniteAssignmentTest`, plus two pre-existing pins corrected.
+  Against the **rebuilt pre-change binary** (the grid's own before-arm, so no extra build was
+  spent) **exactly the 8 positive pins fail and all 8 controls stay green** — plus
+  `Inv4SpineBatch29Test`'s namespace assertion, which is also a positive; `Inv4SpineBatch20Test`
+  (the non-instantiated case, whose behaviour is unchanged) stays green. The `ValueModule`
+  ablation is the round's own first attempt, whose binary was fully built and suite-run: it
+  fails `Inv4SpineBatch20Test`'s TS2708-exactly-once pin and the two corpus baselines, and the
+  new control's fixture (`namespace A { } A = undefined;`) is BYTE-IDENTICAL to
+  `assignToModule.ts`, so that ablation's failure is direct rather than inferred.
+  **Un-ablated and recorded as ARM pins, not claimed as coverage:** the four remaining
+  TS2347/TS2454 controls (`an untyped new without type arguments is silent`,
+  `type arguments on a real generic class are silent`, the two `still reports TS2454`) and
+  `a void property still reports TS2564` — each names a mistake this round did not make, and
+  each would need its own build.
+- **WHAT DID NOT WORK.** (i) The handed-down costing, above — the mechanism is real, the
+  observability is the expense, and a per-case DIFF count cannot see that: round 836's survey
+  measures what is MISSING, never what it would take to emit it. (ii) Keying the namespace
+  arm on `SymbolFlags.Module`, which cost a full suite cycle. (iii) A control asserting
+  TS2708 for `var y = M` on a namespace with value members — that is legal, and the pin was
+  written before checking; the shape that fires TS2708 needs a namespace with NO value
+  members. (iv) Nothing was attempted on the narrowing three: after the probes, taking any of
+  gaps (1)-(3) would have been a same-round guess at a grid-scale risk.
+- **GATES.** Suite **13,886 / 0 / 3** from a wiped results dir, `xml.etree` (13,870 + 16 pins,
+  **0 regressions**). `cost_gate.py` **PASS**, `output.errors` 46 unchanged, every counter
+  +0.00% except `globals.lookups` **+198 (+0.03%)** — the new `new`-site
+  `isImplicitAnyVarChain` resolution, rebaselined with `--update` in the same commit.
+  `huge_methods.py --fail-over 0` exit 0, **0 over the limit** (largest 5,149).
+  **8-PROFILE GRID AGAINST A GENUINELY REBUILT BEFORE-ARM** (`Checker.kt` reverted to `HEAD~1`,
+  rebuilt, 8 captured, restored, rebuilt, 8 captured): every capture non-empty with no
+  `more error(s)` truncation tell, counts **46x7 + harness 94** on both arms, and the
+  before-arm reproduced round 836's eight digests exactly — compiler
+  `59d930db849399aea5e03e25fedb8e4e`, tsc-cli `e938e3d4…`, jsTyping `ea13cfd4…`,
+  deprecatedCompat `b73522be…`, typingsInstallerCore `5925fcd1…`, services `79659a93…`,
+  server `1f7597d3…`, harness `67382271…`.
+- **THE RECOMMENDATION THE OWNER ASKED FOR: LEAVE CONFORMANCE BREADTH AS A TARGET.** The
+  bounded-single-purpose-check bucket is the only one that buys whole CASES in a round, and
+  this round spent the three `types/any` held. What is left in that bucket across all nine
+  categories is ~9 subtests, and **none of them completes a category** — every category with a
+  bounded item also carries an M3.1 item or an emit-red case. Rounds 833-837 landed five
+  features and turned **seven cases** green while adopting **zero** categories; the two
+  closest categories (`types/any` at 3, `nonPrimitive` at 6) are now gated on the SAME thing.
+  So the concrete alternative is not "M3.1" in the abstract but **(NARROW.2) — make flow
+  narrowing observable at the diagnostic walkers**, in three measured steps: (a) an
+  `instanceof` arm in `extractNullNarrowing`; (b) scope a guard's narrow to its own `if`
+  block; (c) let `checkMemberAccessMissing` read a narrowed receiver whose declared type is
+  `any`, plus tsc's `Function`/`Object` exemption. **(a) and (b) are correctness gaps in the
+  compiler's core, not fixture-chasing** — an `instanceof` that narrows no union at all is a
+  real defect the corpus does not catch — and the three of them together move `types/any` and
+  `nonPrimitive` at once. (c) is the highest-FP-risk change in the queue and wants the
+  8-profile grid at every step. The honest third option is to leave M3.0 and return to M5.
+
 **Round 836 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE ROUND IS A SURVEY AND
 A FIX: all nine categories are now priced PER CASE including EMIT
 (`docs/conformance-worklist.md`), and tsc's OPTIONAL-CHAIN leg of
