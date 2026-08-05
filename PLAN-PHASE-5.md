@@ -20,6 +20,81 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 832 (2026-08-05) — (JIT.2b), OWNER-DECIDED "BUILD THE INVALIDATION, THEN SHIP".
+THE JDK 25 AOT CACHE NOW SHIPS BEHIND A FAIL-SAFE GUARD: round 828's silent-wrong-answer
+mode is CLOSED, the 1.638× survives as **1.68× (3/3 pairs)**, and the load-bearing pin
+FAILS under its own one-mistake ablation. Suite 13,824 / 0 / 3 (+8 pins, 0 regressions).**
+
+- **The hazard, restated because it is the whole item.** The JVM has no invalidation: with
+  `Checker.class` removed from the jar and a fresh mtime, the plain run dies with
+  `NoClassDefFoundError` and **the cached run exits 0 printing `OK — 0 errors`**.
+  `-XX:AOTMode=on` does not help. A stale cache type-checks against bytecode that no longer
+  exists — worse than a slow compiler.
+- **THE CONTRACT: fail safe, with no way to opt out of it.** `scripts/xtsc` passes
+  `-XX:AOTCache=` only when a recomputed manifest matches the stored one **byte for byte**:
+  sha-256 of every classpath entry *in order*, the JDK build (`$JAVA_HOME/release`'s
+  digest), OS/arch, main class, a launcher-version constant, and the cache file's own size
+  and digest. Missing, mismatched, corrupt, no sha256 tool, an exploded-directory
+  classpath → **run without the cache**. A false refusal costs seconds, a false acceptance
+  costs a wrong answer, so every ambiguity resolves toward refusal — and there is
+  deliberately no flag that makes an unverified cache usable (the ablation is an edited
+  copy of the script, not a supported mode).
+- **NOTHING CONSULTS AN mtime, AND THAT IS THE DESIGN, NOT AN OVERSIGHT.** Round 828's
+  decisive experiment gave the mutated jar a *fresh* mtime; a rewrite that *preserves* one
+  is exactly what a stat-based check waves through. The pin
+  `a touched but unchanged artifact keeps its cache` holds the other direction — a guard
+  that invalidated on `touch` would be safe and would throw the 1.68× away on every
+  checkout.
+- **THE COST WAS THE DESIGN CONSTRAINT AND IT WAS MEASURED FIRST: ~80 ms**, 0.8% of the
+  ~10,000 ms delta. It is affordable only because the digests and the `stat`s are **batched
+  into one process each** — the per-entry loop cost 80 ms *by itself*, purely in `fork`,
+  which is what would have forced a stat-based fast path and with it the one hole that
+  matters. The JDK identity comes from the `release` file (a read), not `java -version`
+  (a 30 ms JVM start).
+- **VERIFICATION.** (a) Round 828's stale-jar scenario: unguarded + cache → **exit 0,
+  `OK — 0 errors`**; unguarded, no cache → exit 1 `NoClassDefFoundError`; **guarded → exit
+  1, decision `SKIP no-cache-file`**. And with the stale pair *planted under the new
+  fingerprint's filename* — defeating the name layer so only the content check can act —
+  **`SKIP manifest-mismatch`**, with `xtsc-aot status` naming the differing line.
+  (b) **The pin discriminates**: with the manifest comparison removed from
+  `xtsc_aot_decide`, **exactly one** of the 8 pins fails, reading
+  `USE /tmp/…/xtsc-….aot` — the wrong-answer mode itself — and the other seven stay green.
+  (c) `--noEmit --listAll`, same command shape: **diff EMPTY**, both md5
+  `4caacf248ce417899c2972c16a82f1ed` — *round 828's own digest*, 55 lines each, 46 errors,
+  no truncation tell. (d) 3 rotated pairs through the launcher: 27,396/17,398 ·
+  24,853/14,708 · 24,813/14,780 → **median 1.68×, 3/3, 147 ms spread on a ~10,000 ms
+  delta**. Absolutes are inflated and NOT quotable across rounds — another project's build
+  shared the box for the whole round.
+- **A CORRECTION TO ROUND 828, AND IT MATTERED.** The four `AdapterHandlerEntry` warnings
+  are **not on stderr** — they are on **stdout**, interleaved with the diagnostics, so
+  anything parsing xtsc's output sees them. Two narrower flags failed before the shipped
+  pair: `-Xlog:aot+codecache+stubs=error` misses the plain-`aot`-tagged line, and
+  `-Xlog:aot*=error:stderr` **adds a stderr sink without reconfiguring the default stdout
+  one**, so every warning still printed — unified logging is configured per OUTPUT, not
+  globally. The shipped pair is `-Xlog:aot*=off:stdout` + `-Xlog:aot*=error:stderr`,
+  verified both ways against a deliberately truncated cache: stdout clean, all three
+  `[error][aot]` lines still printed, compile still correct.
+- **AN UNPROMPTED REAL-WORLD CONFIRMATION.** A Gradle run mid-round rebuilt the jar; the
+  next `status` reported the fingerprint moving `358cef8a…` → `aafecab2…` and
+  `SKIP no-cache-file`, and the retrain reported `pruned 1 stale cache(s)`. The upgrade
+  path was exercised by an accident, not a fixture.
+- **WHAT DID NOT WORK / WHAT I DID NOT DO.** The warnings **could not be reproduced on
+  demand** (two on one cache, none on another, four in round 828) — so the silencer is
+  verified by construction rather than by before/after, and that is said in the doc instead
+  of claimed. `zip -d` is not installed here, so the stale jar was rewritten with Python's
+  `zipfile`, which re-deflates and shrinks it — a *larger* perturbation than round 828's,
+  in the same direction. **Auto-training on first use was considered and rejected**: it
+  would cost an unlucky user ~28 s and, decisively, a launcher cannot pick a
+  *representative* project, which is the only thing separating a 39% cache from a 5.9% one.
+  **The corpus suite was NOT run through a cached JVM** — the evidence for a cached run is
+  the `--listAll` diff plus round 828's 20 same-error runs, and that gap is recorded as
+  residue, not closed.
+- **GATES.** Suite **13,824 / 0 / 3** from a wiped results dir, counted with `xml.etree` —
+  baseline 13,816 plus the 8 new pins, **0 regressions**.
+  `python3 scripts/huge_methods.py --fail-over 0` → exit 0 (largest 5,149).
+  `cost_gate.py` not run: no checker code was touched, and the round's only `src/` change
+  is a jvmTest file.
+
 **Round 831 (2026-08-05) — FIRST ROUND ON THE POST-v1 BACKLOG. M3.0's REDNESS TABLE
 RE-MEASURED AFTER 135 ROUNDS AND IT IS *UNCHANGED* — ALL NINE REMAINING CONFORMANCE
 CATEGORIES ARE RED, THE FLOOR IS 4 FAILING CASES, SO **NO CATEGORY WAS ADOPTED**. The
@@ -2257,18 +2332,25 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   under `--workers 4`. The launcher-flag half of this item stays DECLINED. The shipping
   decision is queued below as (JIT.2b).
 
-- [ ] **BLOCKED-PENDING-USER: (JIT.2b) ship the JDK 25 AOT cache?** Round 828 measured it
-  (above) and recommends **yes, gated on one condition**: the JVM provides NO invalidation,
-  so the packaging must bind the cache to the exact artifact — regenerate at install time,
-  validate by the jar's checksum, delete on upgrade — or a user who upgrades silently keeps
-  running the previous release's bytecode. Other costs: ~49 MB per install, a ~28 s training
-  run against a representative project (a 1-file training run is 3.4 s but buys only 5.9% on
-  a large compile), four JVM stderr warnings the launcher must silence, and the distribution
-  must be a jar. No cross-OS artifact grid is needed (the cache is generated on the user's
-  machine) — but cross-JDK-build portability was not tested, so the proposal is
-  generate-locally, never ship-a-cache-binary. **Answer needed on:** (a) add AOT-cache
-  generation to the distribution's install/first-run path, yes/no; (b) if yes, who owns the
-  checksum-binding logic — it is a build-system/packaging change and therefore Guardrails.
+- [x] **(JIT.2b) DONE round 832 — OWNER-DECIDED 2026-08-05: BUILD THE INVALIDATION, THEN
+  SHIP.** The owner approved the packaging work Guardrails would otherwise gate, in the
+  shape round 828 recommended: bind the cache to the artifact's checksum, regenerate at
+  install, delete on upgrade. **Landed: `scripts/xtsc` (guarded launcher), `scripts/xtsc-aot`
+  (`train`/`status`/`manifest`/`clean`), `scripts/xtsc-aot-lib.sh` (the fingerprint and the
+  decision), `AotCacheGuardTest` (8 pins).** The contract is FAIL SAFE with no opt-out: a
+  `-XX:AOTCache=` is passed only when a recomputed manifest — sha-256 of every classpath
+  entry in order, the JDK build, OS/arch, main class, a launcher-version constant, plus the
+  cache file's own size and digest — matches the stored one byte for byte; anything else
+  runs uncached. Nothing consults an mtime. **Verified:** round 828's stale-jar scenario now
+  exits 1 with `NoClassDefFoundError` where the unguarded run exits 0 printing
+  `OK — 0 errors`; the pin discriminates under a one-mistake ablation (1 of 8 fails, reading
+  `USE …`); `--listAll` diff EMPTY at round 828's own md5; **1.68× survives the guard**
+  (3/3 pairs) at a measured ~80 ms check. Round 828's stderr claim is corrected — the JVM
+  warnings are on **stdout** and are silenced by `-Xlog:aot*=off:stdout` +
+  `-Xlog:aot*=error:stderr` (genuine AOT errors verified to survive). Design, contract and
+  residual risks: `docs/perf/aot-cache.md`. **Residue: the corpus suite has never been run
+  THROUGH a cached JVM; emit mode, `--serve`, `--workers N` and a `--workers 4`-trained
+  cache are untested; and no distribution exists yet to call `train` from an installer.**
 
 - [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
   live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round

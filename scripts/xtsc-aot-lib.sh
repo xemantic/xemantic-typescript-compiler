@@ -27,9 +27,9 @@
 #   <fingerprint block>        recomputed on every run; must match exactly
 #   cache <size> <sha256>      the cache file's own size and digest
 #
-# Measured cost of the whole check on the reference box: ~55 ms (10 ms for the 8
-# classpath jars, 40 ms for the 49 MiB cache, the rest stat calls) against the
-# 8,658 ms the cache saves.
+# Measured cost of the whole check on the reference box: ~80 ms (~30 ms for the 8
+# classpath jars, ~50 ms for the 49 MiB cache) against the ~10,000 ms the cache
+# saves - 0.8%. The guarded launcher still measures 1.68x, 3/3 pairs.
 
 XTSC_AOT_MANIFEST_VERSION=1
 

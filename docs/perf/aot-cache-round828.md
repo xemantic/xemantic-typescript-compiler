@@ -1,5 +1,12 @@
 # The JDK 25 AOT cache, measured — (JIT.2a), round 828
 
+> **SUPERSEDED IN PART.** The owner decided (JIT.2b) on 2026-08-05 — *build the
+> invalidation, then ship* — and round 832 did: **`docs/perf/aot-cache.md` is the shipped
+> design**, and § 7's hazard below is now closed by `scripts/xtsc`. Two corrections this
+> file's readers need: the `AdapterHandlerEntry` warnings in § 4 are on **stdout**, not
+> stderr (so they land in the diagnostics stream), and they are **nondeterministic** —
+> round 832 saw two on one cache and none on another.
+
 *Owner-approved measurement round. Nothing in the build system, the launcher defaults or
 `src/` was changed: every arm is a plain `java` invocation over the already-built
 `build/libs/xemantic-typescript-compiler-jvm-0.1.0-SNAPSHOT.jar`. Shipping is a packaging
