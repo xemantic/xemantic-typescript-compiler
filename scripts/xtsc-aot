@@ -1,0 +1,145 @@
+#!/usr/bin/env bash
+#
+# xtsc-aot - AOT cache administration for the guarded launcher.
+#
+#   scripts/xtsc-aot train <project-dir>   train a cache for the current classpath
+#   scripts/xtsc-aot status                what the launcher would decide, and why
+#   scripts/xtsc-aot manifest              print the fingerprint block (debugging)
+#   scripts/xtsc-aot clean                 remove caches for OTHER classpaths
+#   scripts/xtsc-aot clean --all           remove every cache in the cache dir
+#
+# `train` is the "regenerate at install" step: a packager runs it once, after the
+# jars are in place, against a representative project. It is deliberately NOT run
+# automatically on first use - training costs one full compile (~28 s on the 78-file
+# tsc compiler profile) and needs a project big enough to exercise the checker,
+# which a launcher cannot choose for the user. A machine with no cache simply runs
+# at normal speed.
+#
+# `train` also prunes every cache in the directory whose fingerprint is not the
+# current one, which is the "delete on upgrade" half: the new build trains into a
+# new fingerprint-named file and the previous build's cache is removed in the same
+# step. Correctness never depends on that pruning - a leftover cache from another
+# build can never be selected, because selection is by fingerprint.
+set -euo pipefail
+
+XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/xtsc-aot-lib.sh
+. "$XTSC_SCRIPT_DIR/xtsc-aot-lib.sh"
+
+XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.MainKt"
+
+usage() {
+  sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  exit "${1:-0}"
+}
+
+cmd="${1:-}"
+[ -n "$cmd" ] || usage 2
+shift || true
+
+xtsc_resolve_classpath || xtsc_die "cannot resolve a classpath - set XTSC_CP or XTSC_HOME, or build this repo first"
+
+block="$(xtsc_fingerprint_block "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS")"
+id="$(xtsc_fingerprint_id "$block")"
+dir="$(xtsc_cache_dir)"
+cache="$dir/xtsc-$id.aot"
+manifest="$cache.manifest"
+
+case "$cmd" in
+
+  manifest)
+    printf '%s\n' "$block"
+    ;;
+
+  status)
+    decision="$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS")"
+    printf 'classpath   %s\n' "$XTSC_RESOLVED_CP"
+    printf 'fingerprint %s\n' "$id"
+    printf 'cache dir   %s\n' "$dir"
+    printf 'cache file  %s%s\n' "$cache" "$([ -f "$cache" ] && printf ' (%s bytes)' "$(xtsc_file_size "$cache")" || printf ' (absent)')"
+    printf 'decision    %s\n' "$decision"
+    case "$decision" in
+      USE\ *) ;;
+      SKIP\ manifest-mismatch)
+        printf '\nThe cache was trained from a DIFFERENT classpath, JDK or launcher\n'
+        printf 'version. The launcher is running without it. Re-train with:\n'
+        printf '  %s train <project-dir>\n' "$0"
+        printf '\nfield-by-field difference (stored vs current):\n'
+        diff <(sed -n '/^cache /q;p' -- "$manifest" 2>/dev/null) <(printf '%s\n' "$block") || true
+        ;;
+      *) printf '\nRunning without a cache. Create one with:\n  %s train <project-dir>\n' "$0" ;;
+    esac
+    ;;
+
+  train)
+    project="${1:-}"
+    [ -n "$project" ] || xtsc_die "usage: $0 train <project-dir>"
+    [ -d "$project" ] || xtsc_die "not a directory: $project"
+    case "$block" in
+      *NO-SHA256-TOOL*)
+        xtsc_die "no sha256sum/shasum on PATH - the cache cannot be bound to the artifact, refusing to train" ;;
+      *NOT-A-FILE*)
+        xtsc_die "the classpath contains a directory; the JVM refuses to dump an AOT cache from a non-jar classpath (\"Cannot have non-empty directory in paths\"). Point XTSC_CP at jars only." ;;
+    esac
+
+    mkdir -p "$dir"
+    tmp="$cache.tmp.$$"
+    trap 'rm -f "$tmp" "$tmp.config"' EXIT
+
+    # Order matters. The manifest is written only after the dump succeeds AND the
+    # cache is in place under its final name, so a training run killed halfway
+    # leaves at most an orphan .tmp file - never a cache that the launcher would
+    # accept. rm the old pair first for the same reason: an old manifest beside a
+    # new cache must never be observable.
+    rm -f "$manifest"
+    printf 'xtsc: training an AOT cache from %s\n' "$project" >&2
+    # shellcheck disable=SC2206
+    extra=(${XTSC_JAVA_OPTS:--Xmx4g})
+    "${XTSC_JAVA:-java}" "-XX:AOTCacheOutput=$tmp" "${extra[@]}" \
+      -cp "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS" --noEmit "$project" >&2 || true
+    [ -s "$tmp" ] || xtsc_die "training produced no cache (see the JVM output above)"
+    mv -f "$tmp" "$cache"
+    trap - EXIT
+
+    size="$(xtsc_file_size "$cache")"
+    sha="$(xtsc_sha256 "$cache")"
+    [ -n "$sha" ] || { rm -f "$cache"; xtsc_die "cannot hash the produced cache"; }
+    { printf '%s\n' "$block"; printf 'cache %s %s\n' "$size" "$sha"; } > "$manifest.tmp.$$"
+    mv -f "$manifest.tmp.$$" "$manifest"
+
+    # "delete on upgrade": nothing under a different fingerprint can ever be used,
+    # so removing it is hygiene, not correctness.
+    pruned=0
+    for f in "$dir"/xtsc-*.aot; do
+      [ -e "$f" ] || continue
+      [ "$f" = "$cache" ] && continue
+      rm -f "$f" "$f.manifest"
+      pruned=$((pruned + 1))
+    done
+
+    printf 'xtsc: cache %s (%s bytes), manifest %s, pruned %s stale cache(s)\n' \
+      "$cache" "$size" "$manifest" "$pruned" >&2
+    decision="$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS")"
+    case "$decision" in
+      USE\ *) printf 'xtsc: verified - the launcher will use it\n' >&2 ;;
+      *) xtsc_die "the freshly trained cache does not verify ($decision) - this is a bug" ;;
+    esac
+    ;;
+
+  clean)
+    if [ "${1:-}" = "--all" ]; then
+      rm -f "$dir"/xtsc-*.aot "$dir"/xtsc-*.aot.manifest
+      printf 'xtsc: removed every cache in %s\n' "$dir" >&2
+    else
+      for f in "$dir"/xtsc-*.aot; do
+        [ -e "$f" ] || continue
+        [ "$f" = "$cache" ] && continue
+        rm -f "$f" "$f.manifest"
+      done
+      printf 'xtsc: removed caches in %s other than %s\n' "$dir" "$(basename -- "$cache")" >&2
+    fi
+    ;;
+
+  -h|--help|help) usage 0 ;;
+  *) xtsc_die "unknown command: $cmd (try: train, status, manifest, clean)" ;;
+esac

@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# xtsc - the guarded launcher.
+#
+# Runs the TypeScript compiler on the JVM, using the JDK 25 AOT cache when - and
+# ONLY when - that cache's provenance is fully verified against the classpath it
+# was trained from. See scripts/xtsc-aot-lib.sh for the contract and
+# docs/perf/aot-cache.md for the measurements and the residual risks.
+#
+#   scripts/xtsc --noEmit /path/to/project        # normal use
+#   scripts/xtsc-aot train /path/to/project       # create the cache
+#   XTSC_AOT=off scripts/xtsc ...                 # never use a cache
+#   XTSC_AOT_VERBOSE=1 scripts/xtsc ...           # print the decision to stderr
+#
+# Environment: XTSC_CP (explicit classpath), XTSC_HOME (a distribution root with
+# lib/*.jar), XTSC_AOT_DIR (cache location, default $XDG_CACHE_HOME/xtsc),
+# XTSC_JAVA (java binary), XTSC_JAVA_OPTS (extra JVM flags, default -Xmx4g).
+set -euo pipefail
+
+XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/xtsc-aot-lib.sh
+. "$XTSC_SCRIPT_DIR/xtsc-aot-lib.sh"
+
+XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.MainKt"
+
+xtsc_resolve_classpath || xtsc_die "cannot resolve a classpath - set XTSC_CP or XTSC_HOME, or build this repo first"
+
+decision="$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS")"
+[ -n "${XTSC_AOT_VERBOSE:-}" ] && printf 'xtsc: aot %s\n' "$decision" >&2
+
+# A hook for the seam pins: report the decision and launch nothing.
+if [ -n "${XTSC_AOT_DECIDE_ONLY:-}" ]; then
+  printf '%s\n' "$decision"
+  exit 0
+fi
+
+jvm_flags=()
+case "$decision" in
+  USE\ *)
+    while IFS= read -r flag; do jvm_flags+=("$flag"); done < <(xtsc_aot_jvm_flags "${decision#USE }")
+    ;;
+esac
+
+# shellcheck disable=SC2206
+extra=(${XTSC_JAVA_OPTS:--Xmx4g})
+
+exec "${XTSC_JAVA:-java}" ${jvm_flags[@]+"${jvm_flags[@]}"} "${extra[@]}" \
+  -cp "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS" "$@"
