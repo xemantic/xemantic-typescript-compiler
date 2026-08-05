@@ -82,7 +82,8 @@ class Inv4SpineBatch29Test {
         d should { have(any { it.code == 2629 }) }
         d should { have(any { it.code == 2628 }) }
         d should { have(any { it.code == 2630 }) }
-        d should { have(any { it.code == 2708 }) }
+        // Round 837: the namespace arm reports TS2631 in a write position, not TS2708.
+        d should { have(any { it.code == 2631 }) }
     }
 
     @Test

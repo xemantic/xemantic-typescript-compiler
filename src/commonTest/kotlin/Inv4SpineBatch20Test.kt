@@ -136,14 +136,19 @@ class Inv4SpineBatch20Test {
     }
 
     @Test
-    fun `negative control - plain assignment LHS namespace fires TS2708 exactly once`() {
-        // checkConstAssignment owns the assignment-target TS2708; the family
+    fun `negative control - plain assignment LHS non-instantiated namespace fires TS2708 exactly once`() {
+        // checkConstAssignment owns the assignment-target diagnostic; the family
         // suppresses its own emission on a plain `=` LHS (no double-emit).
+        // Round 837: N3 is TYPE-ONLY, so it has no value meaning and tsc's value-position
+        // TS2708 fires — the INSTANTIATED case is TS2631 instead
+        // (AnyUntypedNewAndVoidDefiniteAssignmentTest). `SymbolFlags.Module` is the union of
+        // both bits and cannot tell them apart; the gate must read `ValueModule`.
         val d = diagnose("""
             namespace N3 { export interface I {} }
             N3 = 5;
         """)
         assert(d.count { it.code == 2708 } == 1)
+        assert(d.count { it.code == 2631 } == 0)
     }
 
     @Test

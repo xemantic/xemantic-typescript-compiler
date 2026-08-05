@@ -4673,7 +4673,7 @@ class Checker(
     private var spineIrRestingParams: List<Parameter> = emptyList()
 
     // ── INV.4(d) walker 9 (round 538): checkConstAssignment on the spine ──
-    // The const-assignment pass (TS2588/TS2628/TS2629/TS2630/TS2708 + the
+    // The const-assignment pass (TS2588/TS2628/TS2629/TS2630/TS2631 + the
     // TS2540 readonly-write checks, TS2357 inc/dec targets, and the
     // scanRegExpFull regex family) — the recursion walkers are deleted;
     // reach is [spineCaStatus] over [spineCaEdge]; the statement-ordered
@@ -18355,6 +18355,12 @@ class Checker(
                         if (typeContainsImportType(decl.type)) continue
                         // Skip types that include undefined — variable is implicitly initialized to undefined
                         if (typeIncludesUndefined(decl.type)) continue
+                        // (M3.0/ANY.1) round 837: tsc's `assumeInitialized` ALSO covers a `void`
+                        // annotation and a `typeof undefined` query — see [varTypeAssumedInitialized].
+                        // Deliberately NOT folded into [typeIncludesUndefined], whose other two
+                        // callers are TS2564 sites where tsc uses `containsUndefinedType` instead
+                        // and a `void` property DOES want the diagnostic.
+                        if (varTypeAssumedInitialized(decl.type)) continue
                         // Skip if the type annotation is a reference to a namespace symbol.
                         // Namespace-typed vars (var a: A where A is a namespace) get TS2709 but NOT TS2454.
                         if (fileLocals != null && isNamespaceTypeRef(decl.type, fileLocals)) continue
@@ -18428,6 +18434,29 @@ class Checker(
             }
             else -> type.kind == SyntaxKind.UndefinedKeyword
         }
+    }
+
+    /**
+     * (M3.0/ANY.1) round 837 — the rest of tsc's `assumeInitialized` disjunction for a
+     * variable READ, as far as it is decidable from the annotation alone:
+     *
+     *  * `void` — tsc tests `type.flags & (TypeFlags.AnyOrUnknown | TypeFlags.Void)`, so a
+     *    `void`-annotated variable never reports TS2454 (`assignEveryTypeToAny`'s `var d: void`).
+     *  * `typeof undefined` — the query resolves to `undefinedType`, whose type facts carry
+     *    `IsUndefined`, which is the OTHER half of tsc's guard (`var e2: typeof undefined`).
+     *
+     * Syntactic on purpose: this runs inside the TS2454 candidate COLLECTOR, and resolving an
+     * annotation there would make the set a function of resolution order (the round-778 class).
+     * Kept separate from [typeIncludesUndefined] because that predicate's other callers are
+     * TS2564 property sites, where tsc uses `containsUndefinedType` — under which a `void`
+     * property DOES want the diagnostic.
+     */
+    private fun varTypeAssumedInitialized(type: TypeNode?): Boolean {
+        if (type == null) return false
+        if (type.kind == SyntaxKind.VoidKeyword) return true
+        if (type is TypeQuery) return (type.exprName as? Identifier)?.text == "undefined"
+        if (type is UnionType) return type.types.any { varTypeAssumedInitialized(it) }
+        return false
     }
 
     /**
@@ -70034,7 +70063,7 @@ interface DataView {
      * const declarations record 2588 (a `let`/`var` of the same name SHADOWS
      * an enclosing const within this list, so it is REMOVED — otherwise
      * reassigning the inner `let c` FP's TS2588); class 2629; enum 2628;
-     * function 2630; namespace 2708. Runs at a DIRECT statement of the top
+     * function 2630; namespace 2708 (a FALLBACK — see the arm). Runs at a DIRECT statement of the top
      * LIST frame's owner, BEFORE the statement's subtree walks (legacy
      * collect-then-check order).
      */
@@ -70058,6 +70087,10 @@ interface DataView {
             constNames[stmt.name.text] = 2630
         }
         if (stmt is ModuleDeclaration && stmt.name is Identifier) {
+            // The FALLBACK code, used only when [emitReadonlyAssignment] cannot resolve the
+            // name to a symbol; with a symbol in hand the ValueModule/NamespaceModule split
+            // decides TS2631 vs TS2708 there. Left at the pre-round-837 value because the
+            // declaration alone does not say whether the namespace is instantiated.
             constNames[(stmt.name).text] = 2708
         }
     }
@@ -72636,6 +72669,18 @@ interface DataView {
             symbol = searchExports(binderResult.locals)
         }
         val (message, code) = when {
+            // (M3.0/ANY.1) round 837: WHICH namespace diagnostic an assignment target gets
+            // depends on whether the namespace is INSTANTIATED, and the corpus pins both
+            // halves. An INSTANTIATED namespace (`SymbolFlags.ValueModule`) resolves fine as a
+            // value, so the write itself is the error and tsc reports TS2631 — the sibling of
+            // the TS2628/2629/2630 arms below (`assignAnyToEveryType`'s
+            // `namespace M { export var foo = 1 } M = x`). A NON-instantiated one
+            // (`NamespaceModule` without `ValueModule`) has no value meaning at all, so the
+            // value-position TS2708 fires first and the write is never reached
+            // (`assignToModule`'s `namespace A {} A = undefined`). Reading only
+            // `SymbolFlags.Module` cannot tell them apart — it is the union of the two bits.
+            symbol?.flags?.hasAny(SymbolFlags.ValueModule) == true ->
+                "Cannot assign to '${id.text}' because it is a namespace." to 2631
             symbol?.flags?.hasAny(SymbolFlags.Module) == true ->
                 "Cannot use namespace '${id.text}' as a value." to 2708
             symbol?.flags?.hasAny(SymbolFlags.Function) == true ->
@@ -72650,6 +72695,7 @@ interface DataView {
                 // Symbol not found in binder locals — use fallback code from constNames map
                 val msg = when (fallbackCode) {
                     2708 -> "Cannot use namespace '${id.text}' as a value."
+                    2631 -> "Cannot assign to '${id.text}' because it is a namespace."
                     2630 -> "Cannot assign to '${id.text}' because it is a function."
                     2629 -> "Cannot assign to '${id.text}' because it is a class."
                     2628 -> "Cannot assign to '${id.text}' because it is an enum."
@@ -141772,6 +141818,32 @@ interface DataView {
      * Check argument types for a NewExpression against the construct signature.
      */
     private fun checkSingleNewExpressionTypes(expr: NewExpression, source: String, fileName: String) {
+        // (M3.0/ANY.1) round 837 — TS2347 "Untyped function calls may not accept type
+        // arguments." tsc's `resolveUntypedCall` is reached from `resolveNewExpression` as
+        // well as `resolveCallExpression`, so `new x<any>(x)` on an `any` callee is exactly
+        // as much an error as `x<any>(x)` is (`anyAsConstructor`). The gate is the SAME pair
+        // of predicates the CallExpression emitter uses — a definitively implicit/explicit
+        // `any` var chain, or a `this.<any-member>` access — deliberately NOT the broad
+        // `calleeType === anyType`, which our incomplete inference reaches far too often.
+        if (!expr.typeArguments.isNullOrEmpty() &&
+            (isImplicitAnyVarChain(expr.expression) || isImplicitAnyThisMember(expr.expression))
+        ) {
+            val start = expr.pos
+            val length = expressionTrueEnd(expr) - start
+            if (length > 0) {
+                val (line, character) = getLineAndCharacterOfPosition(source, start)
+                diagnostics.add(Diagnostic(
+                    message = "Untyped function calls may not accept type arguments.",
+                    category = DiagnosticCategory.Error,
+                    code = 2347,
+                    fileName = fileName,
+                    line = line,
+                    character = character,
+                    start = start,
+                    length = length,
+                ))
+            }
+        }
         // 16.4fd: `new []` — empty array literal is not constructable.
         // Narrow to empty array literal — non-empty would need element-type
         // resolution for the chain display.
