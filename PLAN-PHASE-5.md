@@ -20,6 +20,70 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 839 (2026-08-05) — (JIT.2b) RESIDUE CLOSED: THE SHIPPED AOT CACHE IS VALIDATED IN
+EVERY MODE WE SHIP, AND THERE IS NO CACHED-vs-UNCACHED DIVERGENCE ANYWHERE.** Owner redirect
+recorded first: **leave M3.0 conformance, return to M5 / performance** — the conformance
+items stay queued and unchecked. Rounds 828/832 measured and shipped the cache on ONE mode
+of ONE profile (`--noEmit`, compiler profile) and left four things explicitly unvalidated;
+this round ran them. Full write-up and every number: `docs/perf/aot-cache.md` § 7.
+
+*The headline.* 33 whole-project compiles, 8 server requests, 4 emitted output trees and 2
+full corpus-suite runs, cached against uncached: **no divergence in any of them**. All 29
+`--noEmit --listAll` one-shot compiles and all 8 server requests share one sorted-diagnostics
+md5 (`59d930db…`, 46 errors) across cached/uncached × sequential/w2/w4/w8 × one-shot/server.
+
+*(a) EMIT — the one that mattered, because `--noEmit` never runs the Transformer or Emitter
+and `xtsc-aot train` trains with `--noEmit`.* `dist/` wiped before each run and the whole
+tree re-hashed after it: **78 emitted files, sha256-identical file-for-file across all four
+runs** (plain ×2, cached ×2), diagnostics diff empty. **1.49× with emit** (26,109 → 17,448
+ms) against **1.66×** check-only on the same binary. The interesting part: the emit TAIL
+costs **more** under the cache (3,134 ms vs 2,310 ms) — the cache carries no emitter
+profile, and a cached run reaches the emitter after 14 s of warm-up instead of 24 s. That
+prices a follow-up (train with emit) at ~800 ms, ~5% of a cached emit run.
+
+*(b) THE CORPUS SUITE THROUGH A CACHED JVM.* Gradle's test worker cannot carry an AOT arm
+(the cache binds to a classpath whose dump-time form must be a PREFIX of the runtime one),
+so the suite runs in one plain `java` process over the trained jar + its 7 deps in that
+exact order — `scripts/aot-corpus-suite.sh`, landed this round. **638 classes, 13,897 run +
+3 ignored = the gate's 13,900, and the per-class result files diff EMPTY between the arms,
+failure lines included.** The cache was in USE, not merely opened: `-Xlog:class+load=info`
+shows **922** `com.xemantic` classes from `source: shared objects file` — round 828's
+921/926 population. The 10 failures present *identically in both arms* are harness artifacts
+of running from a jar (8 `AotCacheGuardTest` "URI is not hierarchical", 2
+`HugeMethodLimitTest` "main classes are not a directory"); both classes read the classpath
+LAYOUT and are green under Gradle. No corpus baseline failed on either arm.
+
+*(c) `--workers` — with a DISTRIBUTION, per the standing rule (rounds 754/824 each shipped a
+false green from one draw).* 20 cached runs (5 each at seq/w2/w4/w8) + 9 uncached: 46 errors
+and the same md5 in all 29. Medians, cached: seq 14,514 / w2 12,779 / **w4 12,343** / w8
+16,368 ms; uncached: seq 22,975 / w4 18,966 / w8 20,342. Blocked, not interleaved →
+directional only, but two things they do say: **the two levers OVERLAP** (workers buy 1.18×
+on top of the cache where they buy 1.21× without it; cached-w4 vs plain-seq is **1.86×**,
+not the 2.26× the headline ratios would multiply to), and **`--workers 8` under a cache is
+worse than cached SEQUENTIAL** — a reversal of the uncached order.
+
+*(d) `--serve` — the answer is "nothing, once warm".* Plain server 23,536 / 10,060 / 7,419 /
+7,268 ms; cached server 13,987 / 8,067 / 7,633 / 7,310. **The cache halves the FIRST request
+(the same ~9.5 s it saves a one-shot run) and is worth nothing warm.** They are the same
+lever twice — both remove interpreter warm-up. Gap found on the way: **`scripts/xtsc` cannot
+reach `--serve` at all** (its main class is `MainKt`; the dispatcher is
+`server.XtscMainKt`), so this arm was run by invoking `java` directly.
+
+*What did NOT work.* (i) Driving the suite through Gradle: `JAVA_TOOL_OPTIONS` reaches the
+worker only via the daemon's environment and the worker's classpath is Gradle's, not the
+trained one — the cache would have been silently unused and the run would have looked
+exactly like a green one. That is why the class-load count is quoted above. (ii) The first
+standalone suite attempt read **4,998 failed in BOTH arms** —
+`NoClassDefFoundError: kotlin/powerassert/CallExplanation`; the power-assert runtime is a
+separate artifact from the stdlib and is not in `build/bench/cp.txt`. A same-in-both-arms
+result is not automatically a valid one.
+
+*Not reached (named, not implied):* a cache trained under emit or under `--workers 4`;
+`--watch`/`--incremental` under a cache; the other seven dashboard profiles; and the
+`--serve` gap in the launcher. Gates: **no `src/` change this round** (docs + two new
+scripts only), so the suite/cost/JIT gates were not required — though the corpus suite was
+in fact run twice, standalone, with zero non-artifact failures on either arm.
+
 **Round 838 (2026-08-05) — (NARROW.2)(a)+(b). TWO CORE NARROWING DEFECTS LAND, AND THE
 ROUND'S MAIN RESULT IS THAT *BOTH* OF ROUND 837'S DIAGNOSES WERE WRONG IN THE SAME WAY:
 each named a mechanism that sounded right and was one function away from the real one.
@@ -1422,9 +1486,17 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   (3/3 pairs) at a measured ~80 ms check. Round 828's stderr claim is corrected — the JVM
   warnings are on **stdout** and are silenced by `-Xlog:aot*=off:stdout` +
   `-Xlog:aot*=error:stderr` (genuine AOT errors verified to survive). Design, contract and
-  residual risks: `docs/perf/aot-cache.md`. **Residue: the corpus suite has never been run
-  THROUGH a cached JVM; emit mode, `--serve`, `--workers N` and a `--workers 4`-trained
-  cache are untested; and no distribution exists yet to call `train` from an installer.**
+  residual risks: `docs/perf/aot-cache.md`. ~~**Residue: the corpus suite has never been run
+  THROUGH a cached JVM; emit mode, `--serve`, `--workers N` … are untested**~~ — **CLOSED
+  round 839 (`docs/perf/aot-cache.md` § 7): emit (78 output files sha256-identical, 1.49×),
+  the whole 13,900-test suite through a cached JVM (per-class results diff EMPTY, 922
+  classes proven served from the cache), `--workers 2/4/8` (20 cached + 9 uncached runs, one
+  md5 for all 29) and `--serve` (halves the FIRST request, worth nothing warm). NO
+  cached-vs-uncached divergence anywhere.** **Residue that REMAINS: a cache trained under
+  emit (~800 ms, ~5% of a cached emit run) or under `--workers 4`; `--watch`/`--incremental`;
+  the other seven profiles; `scripts/xtsc` cannot reach `--serve` at all (its main class is
+  `MainKt`, the dispatcher is `server.XtscMainKt`); and no distribution exists yet to call
+  `train` from an installer.**
 
 - [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
   live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round
