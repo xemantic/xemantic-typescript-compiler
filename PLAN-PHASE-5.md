@@ -20,6 +20,107 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 831 (2026-08-05) — FIRST ROUND ON THE POST-v1 BACKLOG. M3.0's REDNESS TABLE
+RE-MEASURED AFTER 135 ROUNDS AND IT IS *UNCHANGED* — ALL NINE REMAINING CONFORMANCE
+CATEGORIES ARE RED, THE FLOOR IS 4 FAILING CASES, SO **NO CATEGORY WAS ADOPTED**. The
+round's product is a per-CASE census with the emit-vs-errors split — the fact that
+decides tractability and that round 695 never recorded. NO `src/` CHANGE.**
+
+- **Why M3.0 and not something else.** The live QUEUE's two unchecked items are both
+  non-actionable — (JIT.2b) is `BLOCKED-PENDING-USER` (a Guardrail: shipping the AOT cache
+  is an owner packaging decision) and (WIDEN.1)'s remaining sub-steps carry their own
+  standing instruction *"do not widen this speculatively"* with zero measured sites on all
+  8 profiles as of round 796. So the loop continues into the Post-v1 backlog, where **M3.0
+  is the only item that is both pre-approved (owner, 2026-07-02, conformance-category
+  adoption in the generator) and shaped as an incremental, per-category commit.**
+  (M3.0-gap-2) is PARKED; (M3.0-gap-3)'s remainder is an M3.1 relation change with a known
+  3-FP-on-8-profiles blocker (round 699, attempt 4) — not a first-round-on-a-new-arc target.
+- **THE MEASUREMENT.** All nine remaining candidate categories added to
+  `conformanceCategories` in ONE arm, per the item's own protocol (one ~7-minute run beats
+  adopting a category and discovering it is red): **14,015 tests / 87 failed / 3 skipped**
+  against the 13,816 / 0 / 3 baseline, i.e. **+199 tests, 87 red**. Then reverted.
+- **CLASSIFICATION FIRST, BECAUSE IT IS THE WHOLE DECISION: 0 of the pre-existing 13,816
+  regressed.** Verified by mapping every failing test name back to its source corpus
+  (`git ls-tree` of `tests/cases/conformance` vs `tests/cases/compiler`, `xml.etree` over
+  the 630 result XMLs): **74 of 74 failing cases are newly-adopted conformance cases, 0 are
+  compiler-corpus, 0 unmapped.** The 87 are pre-existing gaps newly made visible, not
+  breakage.
+- **THE TABLE IS UNCHANGED AFTER 135 ROUNDS.** Failing subtests per category, round 695 →
+  round 831: `asOperator` 5 → **4** · `any` 6 → **6** · `conditional` 8 → **8** ·
+  `nonPrimitive` 9 → **9** · `labeledStatements` 9 → **9** · `typeAliases` 9 → **9** ·
+  `contextualTyping` 9 → **9** · `typeSatisfaction` 12 → **12** · `optionalChaining`
+  21 → **21**. **Exactly one subtest moved in 135 rounds** — the expected result of an arc
+  that was entirely perf work, and the reason a future round should treat the table as
+  current instead of spending a suite run re-deriving it.
+- **WHAT THIS ROUND ADDS AND 695 DID NOT: the failing-CASE count and the EMIT-vs-ERRORS
+  split, which is what decides whether a category is adoptable at all.** 87 subtests come
+  from **74 distinct cases**, and `conformanceDeferredErrorBaselines` defers only
+  `.errors.txt` — so **one failing JS-emit subtest blocks its whole category**, deferral or
+  not. `category: failing cases / total files (cases with an emit failure)` —
+  `asOperator` 4/9 (**1**) · `any` 6/9 (**0**) · `conditional` 7/10 (**2**) ·
+  `labeledStatements` 5/8 (**4**) · `nonPrimitive` 9/16 (**0**) · `typeAliases` 9/15
+  (**0**) · `contextualTyping` 9/17 (**0**) · `typeSatisfaction` 10/16 (**0**) ·
+  `optionalChaining` 15/25 (**12**).
+- **THE 87, BUCKETED BY FAILURE SHAPE** — the worklist a future round wants. **(i) "expected
+  diagnostics … but none produced" / diagnostic-set mismatch, 62 subtests, 0 emit
+  involvement** — the five categories `any` (6), `nonPrimitive` (9), `typeAliases` (9),
+  `contextualTyping` (9), `typeSatisfaction` (12), plus the errors half of `asOperator` (3),
+  `conditional` (6), `labeledStatements` (5), `optionalChaining` (3). These are missing
+  CHECKS. **(ii) JS-emit baseline diffs, 25 subtests across 19 cases** — concentrated in
+  `optionalChaining` (12 cases: `callChain_3`, `deleteChain`, `elementAccessChain_3`,
+  `parentheses`, `propertyAccessChain`, `propertyAccessChain_3`, `superMethodCall`,
+  `taggedTemplateChain`, `optionalChainingInLoop`, `…InParameterBindingPattern`,
+  `…InParameterInitializer`, `…InTypeAssertions`) and `labeledStatements` (4 cases:
+  `labeledStatementWithLabel_strict`, `…DeclarationListInLoopNoCrash3`/`4`,
+  `…ExportDeclarationNoCrash1`), plus `conditional` (`inferTypes1`,
+  `inferTypesWithExtends1`) and `asOperator` (`asOperatorASI`). These are DOWNLEVEL/emit
+  gaps and are the ones no deferral mechanism can carry.
+- **WHAT I DID NOT LAND, AND WHY — both obvious routes are closed, and that is a result,
+  not an excuse.** (1) **"Narrow the adoption to the categories that pass" lands nothing:
+  no category is green**, the floor being `asOperator` at 4 failing cases. (2) **"Adopt and
+  defer" is available for five categories** (`any`, `nonPrimitive`, `typeAliases`,
+  `contextualTyping`, `typeSatisfaction` — 43 cases, zero emit failures) **and is exactly
+  the mass-parking this item's own rule forbids**: *"not a place to park a fresh failure —
+  triage first, queue it, then add"*, with the live deferred set holding **2** entries,
+  each carrying a triaged paragraph. Deferring 43 fresh failures would convert a hard gate
+  into a wish. **Landing 87 red was never on the table** (the corpus is a permanent
+  zero-regression gate), and `LogicalParityDivergence` is explicitly NOT the mechanism —
+  it is for form-vs-meaning divergence on an individual baseline, not for hiding
+  unimplemented behaviour.
+- **THE CHEAPEST NEXT TARGET IS PRICED, NOT GUESSED.** `asOperator` (4 cases) is the floor,
+  and it is still not surgical: `asOperator2` (`23 as string`) and `asOperatorContextualType`
+  (`(v => v) as (x: number) => string`) both want a **general TS2352 comparability rule**,
+  where today TS2352 is ~10 dedicated narrow walkers (`emitTS2352IfNullCast`,
+  `IfSameTargetMismatch`, `IfFunctionReturnMismatch`, `IfArrayToClassMismatch`,
+  `IfTypeParamStrictSubtypeCast`, `IfEmptyObjectCastToTypeParam`, …) and **no general rule
+  exists** — M3.1-depth, wanting the corpus plus `--listAll` ×8. `asOperatorAmbiguity` wants
+  TS2339 through `y[0].m` with `y: A<B>[]`; `asOperatorASI` is a **parser/ASI** gap (tsc
+  restarts the statement at a newline-leading `as`, emitting `var x = 10;` /
+  ``as `Hello world`;``, where we swallow the `as` into an assertion).
+- **WHAT LANDED IN CODE: one line, and it is declared honestly as NOT a demonstrated bug
+  fix.** `cloneTypeScriptRepo` derives its sparse checkout from `conformanceCategories` but
+  did not declare it as an input (`generateTypeScriptTests` already does, for the same
+  reason). The failure it would cause is nasty — an adopted category reported UP-TO-DATE,
+  sources never materialized, zero tests generated for it, suite green and gating nothing.
+  **I tried to demonstrate it and could not: removing an input property is ITSELF a Gradle
+  invalidation, so the task re-ran and the experiment is uninterpretable.** The property is
+  declared because it is true, with a comment saying exactly that.
+- **WHAT WENT WRONG IN THE ROUND, recorded because it cost ~40 minutes and is a repeatable
+  trap.** The measurement suite was launched as `nohup ./gradlew jvmTest &` *inside* a
+  `run_in_background` Bash call. That double-detaches: the tool returns exit 0 immediately
+  while the run survives. The next command's `rm -rf build/test-results/jvmTest` then
+  deleted the results directory out from under the still-live run, which died with
+  `NoSuchFileException: …/binary/in-progress-results-generic.bin` **after the tests had
+  actually completed** — so from outside it looked exactly like a build that never produced
+  results, while the log in fact carried the full `14015 tests completed, 87 failed`. The
+  rule is the one CLAUDE.md already gives and I did not follow: **use the Bash tool's
+  `run_in_background` alone; never also `nohup … &` inside it.**
+- **GATES.** Corpus at the reverted allowlist re-verified from a wiped results dir:
+  **13,816 / 0 / 3**, identical to round 829, with the generated corpus confirmed back to
+  the four adopted conformance categories (6,453 cases / 8,837 functions). `cost_gate.py`
+  and `huge_methods.py` **not applicable** — no `src/` change (`git diff --stat` touches
+  `build.gradle.kts` only, +9 lines of input declaration and comment).
+
 **Round 830 (2026-08-04) — (ENGINE.3) CLOSED, AND IT CLOSES AS A *NEGATIVE
 RECOMMENDATION*: THE FOUR-SITE DEDICATED-WALKER LAYER IS 757 ms = 3.13% OF A
 CHECK-ONLY COMPILE, ~22 ms (0.09%) OF IT PLAINLY DELETABLE — **(SCOPE.1) SHOULD BE
@@ -7965,6 +8066,45 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   **JS-emit** subtests, which `conformanceDeferredErrorBaselines` cannot defer — an emit
   gap must be FIXED before that category can land. Measuring a batch this way costs one
   ~7-minute run and is much cheaper than adopting a category and discovering it is red.
+  **ROUND-831 RE-MEASUREMENT — THE TABLE IS UNCHANGED AFTER 135 ROUNDS, SO STOP
+  RE-MEASURING IT AND TREAT IT AS CURRENT.** All nine remaining categories were adopted
+  at once (+199 tests → 14,015 / **87** failed / 3 skipped; **0 of the pre-existing 13,816
+  regressed**, verified by mapping every failure name back to its source corpus), then
+  reverted. Per-category failing SUBTESTS: `asOperator` **4** · `any` **6** ·
+  `conditional` **8** · `nonPrimitive` **9** · `labeledStatements` **9** ·
+  `typeAliases` **9** · `contextualTyping` **9** · `typeSatisfaction` **12** ·
+  `optionalChaining` **21**. **Every number is identical to round 695's except
+  `asOperator` 5 → 4** — i.e. rounds 696-830 (the perf arc) moved exactly one conformance
+  subtest, which is the expected result of a perf arc and is also why a future round
+  should NOT spend a suite run re-measuring this.
+  **WHAT ROUND 831 ADDS THAT 695 DID NOT RECORD, AND IT IS THE PART THAT DECIDES
+  TRACTABILITY: the failing-CASE count and the EMIT-vs-ERRORS split.** 87 subtests come
+  from **74 distinct cases**, and `conformanceDeferredErrorBaselines` defers only
+  `.errors.txt`, so a case with a failing **JS-emit** subtest blocks its category outright.
+  Format is `category: failing cases / total files (cases with an emit failure)` —
+  `asOperator` 4/9 (**1**) · `any` 6/9 (**0**) · `conditional` 7/10 (**2**) ·
+  `labeledStatements` 5/8 (**4**) · `nonPrimitive` 9/16 (**0**) · `typeAliases` 9/15
+  (**0**) · `contextualTyping` 9/17 (**0**) · `typeSatisfaction` 10/16 (**0**) ·
+  `optionalChaining` 15/25 (**12**).
+  **CONSEQUENCE — the two obvious routes are both closed, which is why round 831 adopted
+  nothing.** (1) **No category is green**, so there is no "narrow the adoption to what
+  passes" increment: the floor is `asOperator` at 4 failing cases. (2) **Five categories
+  (`any`, `nonPrimitive`, `typeAliases`, `contextualTyping`, `typeSatisfaction` — 43
+  cases) have ZERO emit failures**, so they are deferrable in principle — but deferring
+  43 cases is exactly the mass-parking this item's own rule forbids ("not a place to park
+  a fresh failure — triage first, queue it, then add"; the live deferred set holds **2**
+  entries, each with a triaged paragraph). A category lands by FIXING its gaps.
+  **THE CHEAPEST NEXT TARGET IS `asOperator` (4 cases), AND ITS COST WAS PRICED, NOT
+  GUESSED:** `asOperator2` (`23 as string`) and `asOperatorContextualType`
+  (`(v => v) as (x: number) => string`) both need a **general TS2352 comparability rule**,
+  and today TS2352 is a family of ~10 dedicated narrow walkers (`emitTS2352IfNullCast`,
+  `IfSameTargetMismatch`, `IfFunctionReturnMismatch`, `IfArrayToClassMismatch`,
+  `IfTypeParamStrictSubtypeCast`, `IfEmptyObjectCastToTypeParam`, …) with **no general
+  rule at all** — an M3.1-depth relation change wanting the corpus plus `--listAll` ×8, not
+  a surgical fix. `asOperatorAmbiguity` needs TS2339 through `y[0].m` where `y: A<B>[]`
+  (element access + generic member resolution), and `asOperatorASI` is a **parser/ASI**
+  gap: tsc restarts the statement at a newline-leading `as`, emitting
+  `var x = 10;` / ``as `Hello world`;`` where we swallow the `as` into an assertion.
   Extend `generateTypeScriptTests` with a
   per-category allowlist for `tests/cases/conformance/` (keep all tsgo set-B
   filters). Each category lands only when its failures are triaged into queue

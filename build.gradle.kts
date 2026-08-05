@@ -458,6 +458,15 @@ val cloneTypeScriptRepo by tasks.registering {
     group = "typescript"
     description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo's submodule commit."
     inputs.property("typeScriptCommit", typeScriptCommit) // re-run when the pin changes
+    // M3.0: the sparse checkout is DERIVED from the allowlist (see `sparsePaths`
+    // below), so the allowlist is an input of this task and is declared as one.
+    // `generateTypeScriptTests` already declares the same property for the same
+    // reason. NOT a demonstrated bug fix — round 831 tried to show that adopting a
+    // category leaves this task UP-TO-DATE (which would silently generate zero tests
+    // for it) and could NOT: removing an input property is itself an invalidation, so
+    // the experiment is uninterpretable. Declared because it is true, not because a
+    // failure was observed.
+    inputs.property("conformanceCategories", conformanceCategories)
     outputs.dir(typeScriptRepoDir)
 
     doLast {
