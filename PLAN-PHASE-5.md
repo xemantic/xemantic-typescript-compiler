@@ -20,6 +20,92 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 833 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH (the perf arc is closed).
+THE GENERAL `satisfies` CHECK LANDS — TS1360 plus the fresh object-literal excess check —
+closing a gap where the operator was verified NOWHERE. **NO CATEGORY WENT GREEN**, so none
+was adopted. Suite **13,833 / 0 / 3** (13,824 + 9 pins, 0 regressions); compiler profile
+byte-identical at the RECORDED md5.**
+
+- **WHICH FAMILY, AND WHY NOT ROUND 831'S RECOMMENDATION.** 831 priced `asOperator` as the
+  cheapest category and recommended a **general TS2352 comparability rule**. I took
+  `satisfies` instead, for two reasons that only the per-subtest census shows. (1)
+  **`asOperator` cannot go green whatever TS2352 does** — `asOperatorASI` is a parser/ASI
+  emit failure, and one emit failure blocks a category outright; so its "cheapest category"
+  status is illusory and the TS2352 rule would buy **one** subtest. (2) TS2352 is the
+  repo's most crowded walker family (~10 emitters) and `as` appears thousands of times in
+  tsc's sources, so a general rule there is the exact shape CLAUDE.md records as regressing.
+  `satisfies` is the opposite on every axis: **the largest single category (12 subtests)**,
+  a genuinely UNIMPLEMENTED feature rather than a message chase, and **structurally bounded
+  — the entire tsc source tree contains 6 `satisfies` operators, of which only 3 are inside
+  any of the 8 dashboard profiles** (2 in `src/compiler/transformers/declarations/
+  diagnostics.ts`, 1 in `src/server/editorServices.ts`).
+- **THE CENSUS THIS ROUND ADDS TO 831'S: the per-subtest DIFF, mined with `xml.etree` from
+  the nine-category arm** (re-run to get the failure texts 831 did not keep: **14,023 /
+  87 / 3** — 831's 87 exactly, on +199 adopted tests). Missing-code histogram over the 62
+  error-subtests: **TS2322 ×59 · TS2345 ×55 · TS2344 ×18 · TS7031 ×16 · TS2790 ×16 ·
+  TS2339 ×12 · TS2353 ×10 · TS2456 ×8 · TS18047 ×7 · TS1360 ×6**; over-emitted:
+  **TS2322 ×33 · TS2352 ×8 · TS1005 ×8 · TS2304 ×6 · TS1123 ×6 · TS2403 ×4**.
+- **WHAT LANDED.** A `NodeKind.SATISFIES_EXPRESSION` arm on the spine's per-kind dispatch
+  (`spineCheckSatisfies`), so it costs one tableswitch case and nothing at any other kind.
+  It is **deliberately partial, and that is the design, not the budget**: a `satisfies`
+  operand is FRESH, so a property-VALUE verdict depends on contextual typing this site does
+  not install, and taking one now would REJECT legal code (`{ a: "a" } satisfies
+  { a: "a" | "b" }`). Only the two contextual-typing-INDEPENDENT verdicts are emitted —
+  property NAMES on an object literal (excess ⇒ TS2353/TS2561 via the existing
+  `checkExcessProperties`, which already bails on an index-signature target; a required
+  target property absent from the literal ⇒ TS1360 with the missing-property chain and its
+  TS2728 related info) and a **primitive-intrinsic operand against a primitive-intrinsic
+  target**. Function/array operands, generic targets and spread-carrying literals are
+  refused on purpose. TS1360 anchors at the `satisfies` KEYWORD (length 9), verified against
+  two baselines' columns.
+- **THE PIN CAUGHT A REAL DEFECT THE CORPUS MASKED, which is the round's best argument for
+  writing pins that can fail.** The excess check was **ORDER-DEPENDENT**: a named target's
+  member table is lazy, so `collectTargetPropertyNames` read a null `members` and answered
+  "bail" unless some earlier line in the file had already resolved that type. The corpus
+  case hides it exactly — `typeSatisfaction.ts` line 12's excess literal is preceded by
+  line 11's `satisfies I1`, which resolves `I1` on the way through. The whole-suite run
+  came back **13,833 / 1**, and the one failure was my own excess pin. Fixed by
+  `resolveStructuredTypeMembers(targetType)` before the check.
+- **MOVEMENT: `typeSatisfaction` 12 → 11 failing subtests; `typeSatisfactionWithDefaultExport`
+  is GREEN**, and inside `typeSatisfaction.ts` the two TS2353 and the TS1360 now match the
+  baseline (its only remaining diff is one pre-existing FP). **The category did NOT go
+  green, so it was NOT adopted** — the nine categories were reverted before the gates.
+- **THE CORRECTED WORKLIST FOR `typeSatisfaction`, and it re-costs the category UPWARD.**
+  The 11 residual subtests are **not** more `satisfies` checking; they are three other
+  gaps wearing a `satisfies` costume. (a) **FOUR subtests need `Record`/`Partial`, which
+  the EMBEDDED lib does not declare at all** (`propertyNameFulfillment`,
+  `propNameConstraining`, `propertyValueConformance3`, `contextualTyping2`) — the target
+  degrades to `any` and every check correctly declines. This is a LIB gap, not a checker
+  gap, and no amount of `satisfies` work touches it. (b) **FIVE subtests need
+  property-VALUE conformance against an index signature** (`propertyValueConformance1`/`2`,
+  ×2 config variants each: `{ m: true, s: "false" } satisfies { [k: string]: boolean }` ⇒
+  TS2322 at the value). (c) **TWO need contextual typing to flow THROUGH the operator**
+  (`typeSatisfaction` line 15's FP, and `vacuousIntersection`'s `{ xyz: string }` where tsc
+  prints `{ xyz: "foo" }`) — the latter additionally wants an OBJECT-LITERAL arm in
+  `literalTypeOfExpression`, which is a broad change touching every var-decl/return/arg
+  literal-preservation site and was deliberately not attempted. `errorLocations1` is deeper
+  still. **So `typeSatisfaction` is NOT a one-round category, and the 0-emit-failure count
+  overstated its tractability.**
+- **WHAT DID NOT WORK / WAS NOT ATTEMPTED, said plainly.** The contextual-type-through-
+  `satisfies` fix (c) was designed and **not landed**: I could not verify it without another
+  build cycle, it is speculative (I cannot show from the source alone that installing
+  `contextualType` at the var-decl site fixes that FP), and landing an unverified broad
+  change to hit one subtest is the trade this repo's history says to refuse. The
+  `nonPrimitive` family was the runner-up and is re-costed below.
+- **GATES.** Suite **13,833 / 0 / 3** from a wiped results dir, `xml.etree` (13,824 + 9
+  `SatisfiesOperatorCheckTest` pins, **0 regressions**). `huge_methods.py --fail-over 0`
+  → exit 0, **0 over the limit** (largest 7,702). `cost_gate.py` → **PASS**, `output.errors`
+  46 unchanged, every counter +0.00% except `typeNode.cacheable` +10 (**+0.01%**),
+  `typeNode.bypassed` +10, `typeNode.cacheHits` +2, `globals.lookups` +4 — exactly the two
+  compiler-profile `satisfies` type nodes now being resolved; rebaselined with `--update`
+  in this commit per the accounting rule. **THE 8-PROFILE GRID, both directions:** all eight
+  `--noEmit --listAll` captures non-empty, no `more error(s)` truncation tell, counts
+  46/46/46/46/46/46/46 and harness 94 — identical to the recorded `bench/*.tsv` rows — and
+  **ZERO sightings of TS1360 / TS2353 / TS2561** (the only codes this change can add)
+  across all eight. The **compiler profile hashes to `4caacf248ce417899c2972c16a82f1ed`,
+  byte-for-byte the digest rounds 828 and 832 recorded**, so that profile's before-arm
+  needed no rebuild and the diff is empty by construction.
+
 **Round 832 (2026-08-05) — (JIT.2b), OWNER-DECIDED "BUILD THE INVALIDATION, THEN SHIP".
 THE JDK 25 AOT CACHE NOW SHIPS BEHIND A FAIL-SAFE GUARD: round 828's silent-wrong-answer
 mode is CLOSED, the 1.638× survives as **1.68× (3/3 pairs)**, and the load-bearing pin
@@ -8176,8 +8262,35 @@ condition. Worth remembering as a queue-hygiene failure mode in its own right.)
   43 cases is exactly the mass-parking this item's own rule forbids ("not a place to park
   a fresh failure — triage first, queue it, then add"; the live deferred set holds **2**
   entries, each with a triaged paragraph). A category lands by FIXING its gaps.
-  **THE CHEAPEST NEXT TARGET IS `asOperator` (4 cases), AND ITS COST WAS PRICED, NOT
-  GUESSED:** `asOperator2` (`23 as string`) and `asOperatorContextualType`
+  **ROUND-833 UPDATE — `satisfies` CHECKING LANDED; `typeSatisfaction` 12 -> 11 SUBTESTS
+  (`typeSatisfactionWithDefaultExport` GREEN), STILL NOT ADOPTABLE, AND THE CATEGORY IS
+  RE-COSTED UPWARD.** The general `satisfies` check (TS1360 + object-literal
+  excess) is in. The 11 residual `typeSatisfaction` subtests are **three OTHER gaps in a
+  `satisfies` costume**, so the 0-emit-failure count overstated tractability: **(i) 4
+  subtests need `Record`/`Partial`, which the EMBEDDED lib does not declare at all**
+  (`propertyNameFulfillment`, `propNameConstraining`, `propertyValueConformance3`,
+  `contextualTyping2` — the target degrades to `any` and every check correctly declines;
+  a LIB gap, not a checker gap); **(ii) 5 need property-VALUE conformance against an index
+  signature** (`propertyValueConformance1`/`2`, two config variants each); **(iii) 2 need
+  contextual typing to flow THROUGH the operator** (`typeSatisfaction` line 15's FP and
+  `vacuousIntersection`'s display), the second additionally wanting an OBJECT-LITERAL arm
+  in `literalTypeOfExpression` — a broad change touching every var-decl/return/arg
+  literal-preservation site, designed this round and deliberately NOT landed.
+  `errorLocations1` is deeper still. **ALSO RE-COSTED: round 831's "cheapest target"
+  reading of `asOperator` is misleading** — it can never go green on TS2352 work alone,
+  because `asOperatorASI` is a parser/ASI EMIT failure and one emit failure blocks a
+  category outright; the general TS2352 rule buys exactly ONE subtest for an M3.1-depth
+  change in the repo's most crowded walker family. **The per-subtest missing-code histogram
+  over the 62 error-subtests (round 833, `xml.etree` over the nine-category arm):**
+  TS2322 x59 · TS2345 x55 · TS2344 x18 · TS7031 x16 · TS2790 x16 · TS2339 x12 · TS2353 x10 ·
+  TS2456 x8 · TS18047 x7 · TS1360 x6; over-emitted: TS2322 x33 · TS2352 x8 · TS1005 x8 ·
+  TS2304 x6 · TS1123 x6 · TS2403 x4. **The `nonPrimitive` family (9 cases, 0 emit) is the
+  best-shaped remaining target: `object` is a `Type.Intrinsic` with exactly ONE relation
+  rule** (`isSimpleTypeRelatedTo`'s NonPrimitive target leg) **and no others anywhere** —
+  a bare type parameter is wrongly assignable to it, `object`-as-source is undecided, and
+  property access on it is unchecked; exposure is bounded to code that writes the `object`
+  keyword.
+  **ROUND 831's ORIGINAL PRICING OF `asOperator` (4 cases), kept for the record:** `asOperator2` (`23 as string`) and `asOperatorContextualType`
   (`(v => v) as (x: number) => string`) both need a **general TS2352 comparability rule**,
   and today TS2352 is a family of ~10 dedicated narrow walkers (`emitTS2352IfNullCast`,
   `IfSameTargetMismatch`, `IfFunctionReturnMismatch`, `IfArrayToClassMismatch`,
