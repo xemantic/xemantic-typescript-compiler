@@ -8,6 +8,8 @@
 # docs/perf/aot-cache.md for the measurements and the residual risks.
 #
 #   scripts/xtsc --noEmit /path/to/project        # normal use
+#   scripts/xtsc --serve --socket /tmp/x.sock     # run the compile server
+#   scripts/xtsc --daemon --socket /tmp/x.sock …  # send a request to one
 #   scripts/xtsc-aot train /path/to/project       # create the cache
 #   XTSC_AOT=off scripts/xtsc ...                 # never use a cache
 #   XTSC_AOT_VERBOSE=1 scripts/xtsc ...           # print the decision to stderr
@@ -21,7 +23,18 @@ XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/xtsc-aot-lib.sh
 . "$XTSC_SCRIPT_DIR/xtsc-aot-lib.sh"
 
-XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.MainKt"
+# The DISPATCHING entry point, not the plain one-shot `…compiler.MainKt`: its
+# `main` is a strict superset that adds `--serve` (run the compile server) and
+# `--daemon` (send the request to one, falling back to compiling in-process) and
+# otherwise delegates to `…compiler.main(args)` verbatim. Round 839 found the
+# launcher could not reach either mode; its `--serve` arm had to be run by
+# invoking `java` by hand.
+#
+# This constant is inside the AOT fingerprint (`mainclass` in
+# xtsc_fingerprint_block), so it MUST stay identical to scripts/xtsc-aot's —
+# a half-swap makes every launch read `SKIP no-cache-file` and silently run
+# uncached forever. AotCacheGuardTest pins the two against each other.
+XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.server.XtscMainKt"
 
 xtsc_resolve_classpath || xtsc_die "cannot resolve a classpath - set XTSC_CP or XTSC_HOME, or build this repo first"
 

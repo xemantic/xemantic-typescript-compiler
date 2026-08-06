@@ -334,9 +334,7 @@ way to a warm server (14.3 s vs 7.3 s) without needing one.
 **A gap this exposed: `scripts/xtsc` cannot reach `--serve` at all.** The launcher's main
 class is `…compiler.MainKt`, while the server/daemon dispatcher is
 `…compiler.server.XtscMainKt`; the arms above were run by invoking `java` directly. Not a
-correctness hazard — the launcher simply has no server mode — but the fix (point the
-launcher at the dispatcher) changes `mainclass` in the fingerprint and so invalidates every
-existing cache, which is exactly what `XTSC_AOT_LAUNCHER_VERSION` is for.
+correctness hazard — the launcher simply has no server mode. **CLOSED round 840, § 8.**
 
 ### 7.5 What did NOT work
 
@@ -355,4 +353,38 @@ existing cache, which is exactly what `XTSC_AOT_LAUNCHER_VERSION` is for.
 - **A cache trained under emit** (~800 ms, ~5% of a cached emit run — § 7.1) and one trained
   under `--workers 4`. `scripts/xtsc-aot train` hard-codes `--noEmit` and sequential.
 - **`--watch` / `--incremental` under a cache**, and the other seven dashboard profiles.
-- **The `--serve` gap in the launcher** (§ 7.4).
+- ~~**The `--serve` gap in the launcher** (§ 7.4)~~ — CLOSED round 840, § 8.
+
+## 8. Round 840 — (AOT.4)(a), the launcher reaches the dispatcher
+
+`scripts/xtsc` and `scripts/xtsc-aot` now both name
+`com.xemantic.typescript.compiler.server.XtscMainKt`, whose `main` is a strict superset of
+`com.xemantic.typescript.compiler.main` (it handles `--serve` / `--daemon` and otherwise
+delegates verbatim; `defaultSocketPath()` is a pure `java.io.tmpdir` read, so a one-shot run
+gains nothing but two class loads).
+
+**Both scripts had to swap together**, because the main class is the `mainclass` field of
+the fingerprint block: a half-swap trains under a fingerprint the launcher never looks up,
+so every launch would read `SKIP no-cache-file` — silently, forever, with the lost 1.638×
+as the only symptom. `AotCacheGuardTest` now pins the two against each other.
+`XTSC_AOT_LAUNCHER_VERSION` was **not** bumped: `mainclass` is its own field, so the swap
+invalidates by itself, and the constant is for command-line changes no other field records.
+
+**The invalidation behaved as the contract says.** With round 839's cache
+(`ffb9eed14dcc6396`, manifest line `mainclass …compiler.MainKt`) still in
+`~/.cache/xtsc`, `xtsc-aot status` reported fingerprint `76c8ecdc710ee12e`, decision
+`SKIP no-cache-file`, exit 0 and the retrain hint — an uncached run, not an error.
+
+**Verified end to end** (small 2-file scratch project, 2 × TS2322):
+
+| arm | evidence |
+|---|---|
+| one-shot `scripts/xtsc --noEmit --listAll` | 2 errors, 1,553 ms |
+| `scripts/xtsc --serve --socket …` | `xtsc compile server listening on …`, then `request 1 served in 1541 ms`, `request 2 served in 218 ms` |
+| `scripts/xtsc --daemon --socket …` ×2 | output **diff-identical** to the one-shot run (`time:` stripped); 1,523 ms cold, 217 ms warm, 0.25 s of client CPU |
+| retrained cache | `train` → 37,457,920 B, self-verified; `status` → `USE …`; a cached run diffs identical to the plain one at 487 ms |
+| cache genuinely used | `-Xlog:class+load=info`: **795 of 795** `com.xemantic` classes `source: shared objects file`, `XtscMainKt` and `CompileServer` among them |
+
+Unix domain socket paths are capped near 100 bytes, so a `--socket` under a deep scratch
+directory is refused by name (`CompileServer.socketPathProblem`) — which is itself proof the
+dispatcher was reached, and the reason the round's socket lived at `/tmp/xtsc-r840.sock`.

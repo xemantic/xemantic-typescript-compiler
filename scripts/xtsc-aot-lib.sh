@@ -34,7 +34,13 @@
 XTSC_AOT_MANIFEST_VERSION=1
 
 # Bumped whenever the java command line the launcher builds changes in a way that
-# could affect what the cache contains. A bump invalidates every existing cache.
+# could affect what the cache contains AND that no other field of the fingerprint
+# block already records - a new -XX flag, say. A bump invalidates every existing
+# cache. The MAIN CLASS is deliberately NOT such a change: it has its own
+# `mainclass` field below, so round 840's swap of the launcher onto the
+# server/daemon dispatcher invalidates by itself (an existing cache is no longer
+# even reachable by name, so the decision is `SKIP no-cache-file` and the run is
+# simply uncached). Bumping here as well would add nothing.
 XTSC_AOT_LAUNCHER_VERSION=1
 
 xtsc_die() {

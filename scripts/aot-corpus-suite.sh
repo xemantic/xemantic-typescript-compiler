@@ -31,7 +31,8 @@ TESTJARS="$TESTJARS:$(find $G/org.jetbrains.kotlin/kotlin-stdlib/2.4.10 -name 'k
 # with NoClassDefFoundError - 4,998 of the 13,897.
 TESTJARS="$TESTJARS:$(find $G/org.jetbrains.kotlin/kotlin-power-assert-runtime-jvm/2.4.10 -name '*.jar' | grep -v sources | head -1)"
 # Appended last so the jar still wins for class loading and the AOT prefix is
-# untouched. EXPECT 10 FAILURES IN BOTH ARMS, and only these: 8 in
+# untouched. EXPECT 12 FAILURES IN BOTH ARMS (10 before round 840 added two more
+# launcher pins), and only these: 10 in
 # AotCacheGuardTest ("URI is not hierarchical") and 2 in HugeMethodLimitTest
 # ("main classes are not a directory on the classpath"). Both read the classpath
 # LAYOUT and need Gradle's exploded dir; this harness runs from the jar by

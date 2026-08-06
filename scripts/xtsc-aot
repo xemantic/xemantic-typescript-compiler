@@ -26,7 +26,11 @@ XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=scripts/xtsc-aot-lib.sh
 . "$XTSC_SCRIPT_DIR/xtsc-aot-lib.sh"
 
-XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.MainKt"
+# MUST be identical to scripts/xtsc's — it is the `mainclass` field of the
+# fingerprint block, so a trainer disagreeing with the launcher trains a cache
+# the launcher can never look up. AotCacheGuardTest pins the two against each
+# other. See scripts/xtsc for why this is the dispatcher.
+XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.server.XtscMainKt"
 
 usage() {
   sed -n '3,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'

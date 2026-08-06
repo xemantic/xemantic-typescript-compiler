@@ -27,6 +27,7 @@ package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
 import java.io.File
+import java.net.URLClassLoader
 import java.security.MessageDigest
 import kotlin.test.Test
 import kotlin.test.fail
@@ -53,6 +54,13 @@ import kotlin.test.fail
  * 828's hazard reduced to one changed byte. It discriminates: with the manifest
  * comparison removed from `xtsc_aot_decide`, it reads `USE …` and fails, while
  * every other pin here stays green (verified by ablation, round 832).
+ *
+ * (AOT.4)(a), round 840 adds two pins for the launcher's **main class**, which
+ * is a field of that same fingerprint (`mainclass`). The launcher was pointed at
+ * the server/daemon dispatcher, so that `--serve` and `--daemon` can be reached
+ * at all; [theLauncherReachesTheServerDispatcher] is the discriminating pin for
+ * that, and [theLauncherAndTheTrainerNameTheSameMainClass] names the half-swap
+ * the fixture would otherwise report only as "did not start from USE".
  *
  * Set `XTSC_TEST_LAUNCHER` to point the pins at a different `scripts/`
  * directory — that is how the ablation is run.
@@ -145,6 +153,83 @@ class AotCacheGuardTest {
         assert(f.decide() == "USE ${f.cacheFile.absolutePath}")
     }
 
+    // -------------------------------------------- (AOT.4)(a) the main class
+
+    /**
+     * THE HALF-SWAP. `XTSC_MAIN_CLASS` is the `mainclass` field of the
+     * fingerprint block, so the trainer and the launcher must name the same
+     * class or the cache is trained under a fingerprint the launcher never looks
+     * up: every launch reads `SKIP no-cache-file`, silently and forever, and the
+     * only symptom is that the 1.638x quietly stops happening.
+     *
+     * **HONEST ABOUT ITS OWN COVERAGE (round 840 ablation):** this is NOT a
+     * uniquely-discriminating signal. Ablating one script alone fails **nine** of
+     * the ten pins here, because the fixture builds its manifest with `xtsc-aot`
+     * and then decides with `xtsc`, so *any* disagreement already breaks its
+     * `USE` precondition. What this pin adds is the diagnosis: the other eight
+     * fail saying the fixture did not start from `USE`, and only this one names
+     * the two classes that differ.
+     */
+    @Test
+    fun `the launcher and the trainer name the same main class`() {
+        val scripts = launcherDir() ?: return
+        val launcher = mainClassOf(File(scripts, "xtsc"))
+        val trainer = mainClassOf(File(scripts, "xtsc-aot"))
+        assert(launcher == trainer)
+    }
+
+    /**
+     * THE LAUNCHER MUST REACH THE DISPATCHER. Round 839 found `scripts/xtsc`
+     * could not run `--serve` or `--daemon` at all: its main class was the
+     * one-shot `…compiler.MainKt`, while the mode-dispatching `main` is
+     * `…compiler.server.XtscMainKt`. The failure is silent — `MainKt` treats
+     * `--daemon` and `--socket` as unknown flags and simply compiles — so the
+     * pin has to read a signal only the dispatcher can produce.
+     *
+     * That signal is the client's fallback line: pointed at a socket no server
+     * is listening on, the dispatcher announces the fallback on stderr and then
+     * compiles in-process. Both halves are asserted, so a launcher that reached
+     * the dispatcher but stopped delegating would fail too.
+     *
+     * Costs one ~1.3 s JVM start against an empty project (no sources to check).
+     * `XTSC_AOT=off` keeps the user's real cache out of it.
+     *
+     * **It discriminates, and uniquely (round 840 ablation).** With BOTH scripts
+     * put back on `…compiler.MainKt` — round 839's state — this is the only pin
+     * of the ten that fails; the same is true of a typo'd class name, which
+     * nothing else in the repo would notice until a user ran the launcher.
+     */
+    @Test
+    fun `the launcher reaches the server dispatcher`() {
+        val scripts = launcherDir() ?: return
+        val javaBin = File(File(System.getProperty("java.home"), "bin"), "java")
+        if (!javaBin.canExecute()) return
+        val tmp = File.createTempFile("xtsc-dispatch-", "").let { it.delete(); it.mkdirs(); it }
+        tmp.deleteOnExit()
+        val project = File(tmp, "proj").apply { mkdirs() }
+        val absentSocket = File(tmp, "absent.sock")
+        val pb = ProcessBuilder(
+            File(scripts, "xtsc").absolutePath,
+            "--daemon", "--socket", absentSocket.absolutePath,
+            "--noEmit", project.absolutePath
+        ).directory(tmp)
+        pb.environment() += mapOf(
+            "XTSC_CP" to testClasspath(),
+            "XTSC_JAVA" to javaBin.absolutePath,
+            "XTSC_JAVA_OPTS" to "-Xmx1g",
+            "XTSC_AOT" to "off",
+            "XTSC_AOT_DIR" to File(tmp, "cache").absolutePath
+        )
+        val p = pb.start()
+        val out = p.inputStream.readBytes().decodeToString()
+        val err = p.errorStream.readBytes().decodeToString()
+        p.waitFor()
+        // Only …server.XtscMainKt prints this; …compiler.MainKt ignores the flag.
+        assert("no compile server on" in err)
+        // …and it must still have delegated to the ordinary compiler.
+        assert("whole-project build" in out)
+    }
+
     // ---------------------------------------------------------------- fixture
 
     private class Fixture(
@@ -218,6 +303,30 @@ class AotCacheGuardTest {
     }
 
     private companion object {
+
+        /** The `XTSC_MAIN_CLASS=…` assignment of a launcher script, unquoted. */
+        fun mainClassOf(script: File): String {
+            val line = script.readLines().firstOrNull { it.startsWith("XTSC_MAIN_CLASS=") }
+                ?: fail("no XTSC_MAIN_CLASS assignment in ${script.absolutePath}")
+            return line.substringAfter('=').trim().trim('"')
+        }
+
+        /**
+         * The classpath to hand a child JVM. A Gradle test worker's
+         * `java.class.path` is not necessarily the test classpath (the worker jar
+         * may be all of it), so the loader chain is asked first and the property
+         * is the fallback — the union, deduplicated, so neither source can leave
+         * a hole.
+         */
+        fun testClasspath(): String {
+            val fromLoaders = generateSequence(AotCacheGuardTest::class.java.classLoader) { it.parent }
+                .filterIsInstance<URLClassLoader>()
+                .flatMap { it.urLs.asSequence() }
+                .mapNotNull { runCatching { File(it.toURI()).absolutePath }.getOrNull() }
+            val fromProperty = (System.getProperty("java.class.path") ?: "").split(':')
+            return (fromLoaders.toList() + fromProperty).filter { it.isNotEmpty() }
+                .distinct().joinToString(":")
+        }
 
         fun sha256(file: File): String =
             MessageDigest.getInstance("SHA-256").digest(file.readBytes())
