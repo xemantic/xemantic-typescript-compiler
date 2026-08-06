@@ -20,6 +20,35 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 840(b) (2026-08-06) — (AOT.4)(b), OWNER-APPROVED: THE GRAALVM NATIVE IMAGE HAD THE
+SAME GAP, AND ON THE SHIPPED BINARY IT WAS A SILENT WRONG SUCCESS THAT *WROTE FILES*.** The
+owner lifted the Guardrails block for this one `build.gradle.kts` property (2026-08-06); every
+other build-system change stays gated. **Provenance, recorded because Guardrails turn on it:**
+that approval reached the implementing session RELAYED THROUGH the orchestrating session, not
+as a message this session witnessed directly — worth one clause so the owner can confirm it on
+review rather than find it assumed. The change is one string and is trivially revertible. Full detail in the (AOT.4)(b) queue entry below — only
+the three things worth reading twice are repeated here.
+
+- **The gap was measured on the artifact, not inferred from the source.** The stale
+  2026-07-30 `build/native/xtsc` run as `--serve --socket /tmp/r840b.sock` bound **no socket**,
+  took the socket path as the PROJECT, compiled 174 files, **emitted 173 output files** and
+  exited **0**; `--daemon` identically. A mode that "is unreachable" turns out to be a mode
+  that silently does something else and writes to disk.
+- **The one GraalVM risk settleable without a build, was settled.** `javap -c CompileServer`
+  shows all four kotlinx-serialization resolutions are the compiler-plugin intrinsic
+  (`invokevirtual …$Companion.serializer()`) with no reflective `serializer(KType)` — and
+  serialization was already reachable from the old entry point via `TsConfigLoader`. So the
+  swap adds no new reflection. What is NOT settled is the socket path
+  (`UnixDomainSocketAddress`), and no metadata was invented for it.
+- **NOTHING NATIVE WAS BUILT OR RUN.** GraalVM is not installed on this box, so
+  `./gradlew nativeImage` has never run against the dispatcher, `--serve` has never run on a
+  native image at all, and the 13,350 ms native figure in the docs is still a `MainKt`
+  measurement. The pin (`AotCacheGuardTest`, now 11) asserts the build script and
+  `scripts/xtsc` name the SAME class — composing with (a)'s executing pin, which is what
+  proves that class actually dispatches — and its KDoc says plainly that it cannot see whether
+  the image builds or serves. Ablation: reverting the constant fails that pin and only it.
+  `scripts/aot-corpus-suite.sh` both-arms baseline 12 → 13.
+
 **Round 840 (2026-08-06) — (AOT.4)(a): THE SHIPPED LAUNCHER COULD NOT REACH THE WARM SERVER
 IT SHIPS. `scripts/xtsc` RAN `MainKt`, SO `--serve` AND `--daemon` — ROUND 839's 7.3 s WARM
 REQUEST AGAINST A 13.6 s CACHED ONE-SHOT — WERE UNREACHABLE THROUGH THE COMMAND USERS ARE
@@ -1552,23 +1581,64 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   says so in its KDoc. `scripts/aot-corpus-suite.sh`'s both-arms failure baseline moves
   10 → 12 (the new pins read the classpath LAYOUT). `docs/perf/aot-cache.md` § 8.
 
-- [ ] **(AOT.4)(b) BLOCKED-PENDING-USER — the GraalVM native image has the SAME gap
-  (AOT.4)(a) just closed, and fixing it is a build-system change.** `build.gradle.kts` sets
-  `nativeImageMainClass = "com.xemantic.typescript.compiler.MainKt"`, while `XtscMain`'s own
-  KDoc states the native image is meant to *be* the thin client — "a native start costs
-  milliseconds, which is the point of pairing it with a warm JVM server". As it stands the
-  native image cannot reach `--serve` or `--daemon` at all, so the artifact designed to be
-  the client of a warm server is the one artifact that cannot talk to one.
-  **PROPOSAL for the owner:** change that single property to
-  `com.xemantic.typescript.compiler.server.XtscMainKt`. The risk is bounded the same way
-  (AOT.4)(a)'s was — the dispatcher's `main` is a strict superset that delegates verbatim, so
-  every existing invocation behaves identically — but two native-specific unknowns are worth
-  naming before it lands: the image must now reachability-analyze the server/socket path
-  (image size and build time move, direction unmeasured), and `--serve` on a native image has
-  never been run at all, so it should be verified end to end exactly as (a) was rather than
-  assumed to follow. Build-system changes are owner-gated by CLAUDE.md's Guardrails, so this
-  is NOT taken as a side effect of anything else. (`compileTsProject`, a dev `JavaExec`, is
-  correctly left on `MainKt` and needs no change.)
+- [x] **(AOT.4)(b) DONE round 840(b) — OWNER-APPROVED 2026-08-06; the native image is built
+  from the server dispatcher. THE SOURCE CHANGE IS LANDED AND PINNED; THE IMAGE ITSELF HAS
+  NEVER BEEN BUILT FROM IT (no GraalVM on this box), so read the "still unverified" list as
+  the live part of this entry.** The owner lifted the Guardrails block for exactly this
+  property; every other `build.gradle.kts` change stays gated.
+  The approval was RELAYED through the orchestrating session rather than witnessed directly
+  here; recorded because Guardrails turn on exactly that, and the change is one revertible
+  string.
+  **THE GAP, MEASURED RATHER THAN ARGUED.** The stale 2026-07-30 binary at `build/native/xtsc`
+  (built from `…compiler.MainKt`) was run before the swap:
+  `xtsc --serve --socket /tmp/r840b.sock` bound **no socket**, silently took the socket path
+  as the PROJECT (`project: /tmp/r840b.sock`, `TS5083 Cannot read file`), compiled 174 files,
+  **emitted 173 output files** and exited **0**. `--daemon` behaved identically. So the gap
+  was not merely "the mode is unreachable": it is a silent wrong success that also WRITES.
+  **WHAT LANDED.** `nativeImageMainClass` → `com.xemantic.typescript.compiler.server.XtscMainKt`
+  (a strict superset — `--serve`, `--daemon`, else `com.xemantic.typescript.compiler.main(args)`
+  verbatim), plus two comment fixes in the same block: the tracing-agent example now names the
+  real entry point, and the "ZERO application reflection" claim is re-justified for the server
+  path instead of being left to stand on the old one. `compileTsProject` (a dev `JavaExec`)
+  is deliberately still `MainKt`.
+  **WHAT WAS READ, NOT GUESSED, ABOUT THE REST OF THE TASK.** `inputs.property("mainClass",
+  nativeImageMainClass)` is already declared, so the swap *is* an input change and Gradle will
+  rebuild rather than call the stale binary up to date. The `native-image` invocation passes
+  only `-cp`, `-o`, `--no-fallback` and `-J-Xmx` — no `-H:` options, no
+  `--initialize-at-build-time`, no `--enable-native-access` — so nothing else in the task is
+  entry-point-coupled. The reachability metadata is 18 kotlinx-coroutines entries and is
+  classpath-picked-up, independent of the main class.
+  **THE ONE GraalVM RISK THAT COULD BE SETTLED WITHOUT A BUILD, WAS.** `CompileServer` uses
+  kotlinx-serialization, the obvious closed-world hazard. It is not one:
+  `javap -c CompileServer.class` shows all four serializer resolutions are the compiler-plugin
+  intrinsic (`invokevirtual …$Companion.serializer()`), with **no** reflective
+  `SerializersKt.serializer(KType)` anywhere — and serialization was ALREADY reachable from
+  the old entry point regardless (`TsConfigLoader`/`TsBuildInfo`/`ModuleResolver` parse JSON),
+  so the swap adds two generated serializers of a shape already in the image, not a framework.
+  **PIN: +1 in `AotCacheGuardTest` (now 11)** — `the native image is built from the server
+  dispatcher`, reading the `val nativeImageMainClass` line of `build.gradle.kts` (anchored on
+  that name so `compileTsProject`'s own `MainKt` cannot fool it) and asserting it EQUALS
+  `scripts/xtsc`'s `XTSC_MAIN_CLASS`. Agreement, not a hardcoded literal, because the two pins
+  then compose: `the launcher reaches the server dispatcher` EXECUTES the launcher and so
+  proves that class really dispatches, and this one propagates the property to the image.
+  **Ablated on a clean tree after committing** (round 789's rule): reverting the constant to
+  `…compiler.MainKt` fails this pin and **only** this pin of the 11.
+  `scripts/aot-corpus-suite.sh`'s both-arms baseline moves **12 → 13** (it reads a FILE, so it
+  needs Gradle's exploded dir exactly as the other main-class pins do).
+  **STILL UNVERIFIED — the honest list, and the reason this is not a closed subject.**
+  (1) `./gradlew nativeImage` has **never been run** against the dispatcher: GraalVM is not
+  installed here (`native-image` absent from PATH, `GRAALVM_HOME` unset, no `/opt/graalvm*`),
+  so the image may not even BUILD. (2) `--serve`/`--daemon` have **never run on a native image
+  at all**, before or after. (3) Whether native-image's closed-world analysis needs help with
+  `UnixDomainSocketAddress` / `ServerSocketChannel.open(StandardProtocolFamily.UNIX)` — no
+  metadata was added for it, because adding config that cannot be tested is worse than naming
+  the gap. If the image builds and `--serve` fails at run time, that is the first place to
+  look. (4) Image SIZE and BUILD TIME move by an unmeasured amount and direction. (5) The
+  13,350 ms figure quoted for the native image throughout the docs was measured on a
+  `MainKt` image and has not been re-taken. **Whoever next has a GraalVM box should run
+  (AOT.4)(a)'s end-to-end verification against the native binary** — `--serve` serving two
+  requests, `--daemon` output diff-identical to the one-shot run — and only then treat the
+  native thin-client story as real.
 
 - [ ] **(AOT.4)(c) — the AOT residue that (a) did NOT close.** Carried forward from round
   839's list plus what round 840 added, queued here so it stops living only in prose:

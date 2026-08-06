@@ -62,6 +62,14 @@ import kotlin.test.fail
  * that, and [theLauncherAndTheTrainerNameTheSameMainClass] names the half-swap
  * the fixture would otherwise report only as "did not start from USE".
  *
+ * (AOT.4)(b), round 840(b) adds a third: the same gap existed in the GraalVM
+ * native image, whose entry point is set in `build.gradle.kts`. So the three
+ * shipped entry points — launcher, AOT trainer, native image — are now pinned to
+ * agree, by [theNativeImageIsBuiltFromTheServerDispatcher]. Note the whole
+ * main-class family reads FILES (shell scripts, the build script) rather than
+ * the running program, which is why it fails by construction when the suite is
+ * driven from a jar (`scripts/aot-corpus-suite.sh`, both arms alike).
+ *
  * Set `XTSC_TEST_LAUNCHER` to point the pins at a different `scripts/`
  * directory — that is how the ablation is run.
  */
@@ -230,6 +238,53 @@ class AotCacheGuardTest {
         assert("whole-project build" in out)
     }
 
+    /**
+     * (AOT.4)(b), round 840. THE THIRD SHIPPED ENTRY POINT. The GraalVM native
+     * image carried the same gap [theLauncherReachesTheServerDispatcher] closed
+     * for the shell launcher: `build.gradle.kts` built it from
+     * `…compiler.MainKt`, so the one artifact whose KDoc says it exists to *be*
+     * the thin client of a warm server ("a native start costs milliseconds") was
+     * the one artifact that could not talk to one.
+     *
+     * Measured on the stale 2026-07-30 binary before the swap:
+     * `xtsc --serve --socket /tmp/x.sock` bound no socket, took the socket path
+     * as the project, emitted 173 files and exited **0** — a silent wrong
+     * success, identical for `--daemon`.
+     *
+     * **WHAT IT ASSERTS AND WHY THAT SHAPE.** Agreement with `scripts/xtsc`,
+     * not a hardcoded class name. The two pins then COMPOSE:
+     * [theLauncherReachesTheServerDispatcher] *executes* the launcher and so
+     * proves its class is a real dispatcher, and this one propagates that
+     * property to the image. A hardcoded literal here would instead have to be
+     * hand-edited on any package rename, and would still not prove the named
+     * class dispatches anything.
+     *
+     * **WHAT IT DOES NOT DISCRIMINATE, stated rather than implied.** It cannot
+     * see whether the image *builds* or whether `--serve` works once built:
+     * GraalVM is not installed on the development box, so `./gradlew nativeImage`
+     * has never been run against the dispatcher and `--serve` has never run on a
+     * native image at all. This pin catches the constant regressing or a new
+     * entry point being added and forgotten — nothing about native-image's
+     * closed-world analysis of the socket path.
+     *
+     * **Ablation (round 840):** reverting the constant to `…compiler.MainKt`
+     * fails this pin and only this pin, of all 11 here.
+     *
+     * The `val nativeImageMainClass =` anchor is deliberate — `build.gradle.kts`
+     * also names `…MainKt` in `compileTsProject`, a dev `JavaExec` that is
+     * correctly left alone, and this must neither match it nor break when it is
+     * edited.
+     */
+    @Test
+    fun `the native image is built from the server dispatcher`() {
+        val root = projectRoot()
+        val line = File(root, "build.gradle.kts").readLines()
+            .firstOrNull { it.trimStart().startsWith("val nativeImageMainClass") }
+            ?: fail("no `val nativeImageMainClass` assignment in build.gradle.kts")
+        val nativeImageMainClass = line.substringAfter('=').trim().trim('"')
+        assert(nativeImageMainClass == mainClassOf(File(root, "scripts/xtsc")))
+    }
+
     // ---------------------------------------------------------------- fixture
 
     private class Fixture(
@@ -338,6 +393,24 @@ class AotCacheGuardTest {
          * [HugeMethodLimitTest] locates that root. Returns null — skipping the
          * class — only where a POSIX shell cannot run it at all.
          */
+        /**
+         * The repository root, located the same way as [launcherDir] but
+         * DELIBERATELY ignoring `XTSC_TEST_LAUNCHER`: that override exists to
+         * point the cache-decision pins at a copied `scripts/` dir, and a copy
+         * has no `build.gradle.kts`. The build-file pin is about the real tree.
+         */
+        fun projectRoot(): File {
+            val marker = "com/xemantic/typescript/compiler/Checker.class"
+            val url = AotCacheGuardTest::class.java.classLoader.getResource(marker)
+                ?: fail("$marker is not on the test classpath")
+            var dir: File? = File(url.toURI())
+            while (dir != null) {
+                if (File(dir, "build.gradle.kts").isFile) return dir
+                dir = dir.parentFile
+            }
+            fail("could not locate build.gradle.kts upward from $url")
+        }
+
         fun launcherDir(): File? {
             if (!File("/bin/sh").canExecute()) return null
             val override = System.getenv("XTSC_TEST_LAUNCHER")

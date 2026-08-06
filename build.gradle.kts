@@ -250,14 +250,35 @@ tasks.register<JavaExec>("compileTsProject") {
 // kotlinx-coroutines atomic field updaters. There is ZERO application
 // reflection (the TypeScript libs are embedded as Kotlin string constants
 // rather than resources), which is why `--no-fallback` succeeds unassisted.
-// Regenerate it with the tracing agent only if a dependency starts reflecting:
-//   java -agentlib:native-image-agent=config-output-dir=<dir> -cp ... MainKt ...
+// That survives round 840's entry-point swap: the server path's only candidate
+// was kotlinx-serialization, and `javap -c CompileServer` shows all four
+// serializer resolutions are the compiler-plugin intrinsic — direct
+// `invokevirtual …$Companion.serializer()`, no reflective
+// `SerializersKt.serializer(KType)` lookup — while serialization was ALREADY
+// reachable from the old entry point anyway (TsConfigLoader parses tsconfig).
+// UNVERIFIED on this box (no GraalVM installed, so `nativeImage` cannot run
+// here): whether native-image's closed-world analysis needs help with
+// `UnixDomainSocketAddress` / `ServerSocketChannel.open(StandardProtocolFamily
+// .UNIX)`. If the image builds but `--serve` fails at run time, that is the
+// first place to look. Regenerate metadata with the tracing agent only if a
+// dependency starts reflecting (trace the ACTUAL entry point, the dispatcher):
+//   java -agentlib:native-image-agent=config-output-dir=<dir> -cp ... server.XtscMainKt ...
 //
 // `-O3 -march=native` was measured and is worth NOTHING here (13,325 vs
 // 13,335 ms) — the residual 15% against JVM peak is the absence of PGO, which
 // GraalVM CE cannot do. Do not add codegen flags expecting a win.
 
-val nativeImageMainClass = "com.xemantic.typescript.compiler.MainKt"
+// (AOT.4)(b), round 840, owner-approved 2026-08-06. The image's entry point is
+// the MODE DISPATCHER, not the one-shot compiler, so the native binary can BE
+// the thin client its own KDoc says it is for: `--serve` runs the compile
+// server, `--daemon` forwards to a running one, and anything else delegates
+// verbatim to `com.xemantic.typescript.compiler.main(args)` — a strict
+// superset, so every existing invocation behaves exactly as before. Pointed at
+// `MainKt` (as it was until round 840) the image silently treated `--serve` and
+// `--daemon` as project arguments and compiled instead, exit 0: measured on the
+// stale 2026-07-30 binary, `--serve --socket /tmp/x.sock` bound no socket, took
+// the socket path as the project, and emitted 173 files.
+val nativeImageMainClass = "com.xemantic.typescript.compiler.server.XtscMainKt"
 
 val nativeImage by tasks.registering {
     group = "build"
