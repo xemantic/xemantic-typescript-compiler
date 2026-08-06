@@ -20,6 +20,94 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 840 (2026-08-06) — (AOT.4)(a): THE SHIPPED LAUNCHER COULD NOT REACH THE WARM SERVER
+IT SHIPS. `scripts/xtsc` RAN `MainKt`, SO `--serve` AND `--daemon` — ROUND 839's 7.3 s WARM
+REQUEST AGAINST A 13.6 s CACHED ONE-SHOT — WERE UNREACHABLE THROUGH THE COMMAND USERS ARE
+TOLD TO RUN.** Round 839 found the gap while measuring the server arm (it had to invoke
+`java` by hand) and recorded it in (JIT.2b)'s residue rather than fixing it. Commit
+`454bcd12`; full write-up `docs/perf/aot-cache.md` § 8.
+
+- **The cause is one constant in two files.** `scripts/xtsc` and `scripts/xtsc-aot` both set
+  `XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.MainKt"`, while the mode dispatcher is
+  `com.xemantic.typescript.compiler.server.XtscMainKt` (`src/jvmMain/kotlin/server/XtscMain.kt`).
+  That dispatcher is a strict SUPERSET of the plain main — `--serve`, `--daemon`, else
+  `com.xemantic.typescript.compiler.main(args)` verbatim — so the swap costs a one-shot run
+  two class loads and nothing else, and the whole shipped warm-server path was simply
+  unreachable.
+- **BOTH scripts had to swap TOGETHER, and that is the mistake the new pins exist to catch.**
+  The main class is the `mainclass` field of the AOT fingerprint block
+  (`xtsc_fingerprint_block`, `scripts/xtsc-aot-lib.sh`), so a HALF-swap trains a cache under
+  a fingerprint the launcher can never look up — and the failure is **silent**: every launch
+  reads `SKIP manifest-mismatch` and runs uncached forever, with the lost 1.638× as the only
+  symptom.
+- **The fingerprint change is a deliberate, designed cache invalidation, and it behaved as
+  the contract says.** Round 839's shipped cache now reads `SKIP no-cache-file`, **exit 0**,
+  plus the retrain hint — fail-safe, not an error. `XTSC_AOT_LAUNCHER_VERSION` was
+  deliberately **not** bumped: `mainclass` is already its own fingerprint field, so the swap
+  invalidates by itself; that constant is reserved for command-line changes no other field
+  records, and the reasoning is now a comment in the lib rather than folklore.
+- **Verified end to end through the launcher** on a 2-file scratch project: `--serve` listens
+  and logs `request 1 served in 1541 ms` / `request 2 served in 218 ms`; two `--daemon` runs
+  produce output **diff-identical** to the one-shot `--noEmit --listAll` (with `time:`
+  stripped) at 1,523 ms cold / 217 ms warm and 0.25 s of client CPU.
+- **And the AOT path still works.** A fresh `xtsc-aot train` produced a 37,457,920-byte
+  cache, self-verified, `status` → `USE …`, a cached run diff-identical to plain at 487 ms
+  against 1,553 ms, and `-Xlog:class+load=info` showed **795 of 795** `com.xemantic` classes
+  from `source: shared objects file` — `XtscMainKt` and `CompileServer` among them, i.e.
+  SERVED, not merely opened.
+- **PINS: +2 in `AotCacheGuardTest` (now 10), ablated ONE MISTAKE AT A TIME** over a copied
+  `scripts/` dir via `XTSC_TEST_LAUNCHER` (the tree itself was never ablated, per round 789's
+  rule that a revert also destroys the round's own uncommitted work). (A) half-swap → **9 of
+  10** fail, including `the launcher and the trainer name the same main class`; (B) both back
+  on `MainKt`, i.e. round 839's actual state → **exactly 1** fails,
+  `the launcher reaches the server dispatcher`; (C) a typo'd class in both → the same 1.
+- **HONESTY ABOUT WHICH PIN DISCRIMINATES.** `the launcher and the trainer name the same main
+  class` is **NOT** uniquely discriminating: the fixture builds its manifest with `xtsc-aot`
+  and decides with `xtsc`, so any disagreement already breaks its `USE` precondition and 8
+  other pins fail too. It is the pin that *names* the two differing classes, and that is
+  stated in its KDoc rather than claimed as coverage. `the launcher reaches the server
+  dispatcher` IS uniquely discriminating — it spawns the launcher with `--daemon` at a socket
+  nobody serves and asserts the dispatcher-only fallback line on stderr AND that it still
+  compiled (~1.26 s).
+- **Side effect recorded, not discovered later:** `scripts/aot-corpus-suite.sh`'s
+  "EXPECT N FAILURES IN BOTH ARMS" baseline moves **10 → 12**, because the two new pins also
+  read the classpath LAYOUT and so fail by construction when the suite is driven from a jar —
+  the same reason as the existing 8.
+- **An aside worth one clause:** the first socket attempt failed because the scratchpad path
+  is 117 bytes, over the ~100-byte `sockaddr_un` limit, and the dispatcher refused it BY NAME
+  — which was itself the first proof the dispatcher was being reached.
+- **GATES.** Suite **13,900 → 13,902 / 0 failures / 3 skipped** from a wiped results dir,
+  counted with `xml.etree`; the +2 are exactly the new pins, **0 regressions**.
+  `cost_gate.py` and `huge_methods.py` were **not run and not required** — the change touches
+  shell scripts, `src/jvmTest` and docs only, with no `src/commonMain` or `src/jvmMain`
+  source changed. Stated rather than omitted, because a missing gate line reads as a skipped
+  gate.
+- **WHAT WAS NOT VERIFIED, named rather than implied.** `--serve`/`--daemon` **under a
+  cache** through the launcher — only the one-shot cached run was verified; training with
+  `--serve` in the workload; whether the two extra dispatcher class loads shift any timing
+  (they were argued away by inspection, not measured); and the shipped `~/.cache` cache was
+  **not** retrained on the 78-file compiler profile (28 s + ~51 MB), so the next agent's
+  first `xtsc` run there will be an uncached one until `xtsc-aot train` is called. Still open
+  from round 839's residue and untouched here: a cache trained under emit (~800 ms, ~5% of a
+  cached emit run) or under `--workers 4`; `--watch`/`--incremental`; the other seven
+  profiles. All queued below as (AOT.4)(c).
+- **A NEW OWNER-GATED FINDING, QUEUED AND NOT ACTED ON.** `build.gradle.kts` sets
+  `nativeImageMainClass = …MainKt`, while `XtscMain`'s own KDoc says the native image is
+  meant to *be* the thin client ("a native start costs milliseconds, which is the point of
+  pairing it with a warm JVM server") — **a SECOND, still-open instance of exactly the gap
+  just closed**: the GraalVM native image cannot reach `--serve`/`--daemon` either.
+  build.gradle.kts changes are owner-gated by CLAUDE.md's Guardrails, so it is queued as
+  (AOT.4)(b) `BLOCKED-PENDING-USER`. (A second, minor site — `compileTsProject`, a dev
+  `JavaExec` — is correctly left on `MainKt`.)
+- **WHY THIS ITEM AND NOT THE QUEUE'S TOP UNCHECKED ONE.** The top unchecked item is
+  **(NARROW.2)(c)**, under the "TOP OF QUEUE … work this before PERF" header from round 684.
+  Round 839 — the most recent owner instruction — records: *"leave M3.0 conformance, return
+  to M5 / performance — the conformance items stay queued and unchecked."* (NARROW.2)(c)'s
+  stated and only motivation is the three `types/any` cases in
+  `docs/conformance-worklist.md`, so it IS one of those conformance items and it stays
+  unchecked. Recorded here so the next agent reads the skip as the standing owner
+  instruction, not as protocol drift.
+
 **Round 839 (2026-08-05) — (JIT.2b) RESIDUE CLOSED: THE SHIPPED AOT CACHE IS VALIDATED IN
 EVERY MODE WE SHIP, AND THERE IS NO CACHED-vs-UNCACHED DIVERGENCE ANYWHERE.** Owner redirect
 recorded first: **leave M3.0 conformance, return to M5 / performance** — the conformance
@@ -892,62 +980,6 @@ CLOSED WITHOUT BEING RAISED WITH THE OWNER.** NO `src/` CHANGE.**
   COARSE and probe-free modes in all 13 runs.
   Full derivation: `docs/perf/engine-rule-price.md` §§ 9-11.
 
-**Round 829 (2026-08-04) — (SETUP.2) CLOSED ON THE CENSUS: `buildFileLocalTypeMaps` MAKES
-**8.5 RESOLUTIONS PER MAP ENTRY ANYBODY READS**, AND THE DEFERRAL IS WORTH UNDER 1%.
-NO LEVER LANDED, BY MEASUREMENT — THE INSTRUMENT IS THE DELIVERABLE.**
-
-- **The census FIRST, as the item demanded.** New `--fltmCensus` (`FltmCensus.kt`, implies
-  `--passTiming`, a static-boolean read at every hook when off): the pass's two call sites
-  bracketed and tagged by BRANCH, every store, the single `fileLocalTypeMaps` read in
-  `getTypeOfIdentifier`, and every `getTypeOfSymbol` entry — hooked **above** the
-  `symbolTypes` memo, because a later ask served from the memo is exactly what round 788
-  calls a MOVE. All six census runs produced **bit-identical counts**; probe cost (~12.7k
-  timestamp pairs) is inside the row's own ±15% spread (632–794 ms with the probe,
-  585–727 ms probe-free).
-- **THE FUNNEL (compiler profile).** direct `getTypeOfSymbol` calls **12,738** ->
-  entries stored **4,161** (so **8,577 = 67.3% resolve to `any`/`errorType` and store
-  NOTHING**) -> entries ever read **1,499** = **36.1%**. The read site serves
-  **calls=16,043 / distinct=1,499 (10.7x)** and **MISSES 278,355 times = 94.6%** of its
-  294,398 lookups. **8.5 resolutions per entry any reader wants.**
-- **ROUND 788'S LAW, MEASURED BOTH WAYS.** Of the 2,662 never-read entries, **47.4% have
-  their symbol asked again later anyway** (they MOVE). Over the whole direct population,
-  **6,009 of 12,738 = 47.1% are never read AND never asked again** — the only set a
-  deferral DELETES — worth **235.6 / 251.1 / 303.6 ms across runs = 38–40% of the
-  direct-resolve wall**. Of the 168 symbols those resolutions first MINT, **166 (98.8%)
-  are asked later anyway**, so they are shallow. This is **not** round 801's
-  `created 1143, materialized 1143`: about half really does evaporate.
-- **WHY IT CLOSES ANYWAY — PRICE, NOT MECHANISM.** Per branch: `typealias` 381 resolves /
-  33–50 ms, `var` 189 / 3–5 ms, `decl` (fn/class/iface/enum/import-alias) **12,168 /
-  563–705 ms with 199–252 ms deletable**. So the recoverable slice is **0.8–1.0% of a
-  ~25 s compile — below `ab-interleaved.sh`'s ±2.0% cold band and at the floor of
-  `ab-warm.sh`'s ±1.0%**, i.e. unmeasurable by this repo's own protocols, against the
-  **largest blast radius in the codebase** (`getTypeOfIdentifier` reads this map in every
-  pass, and a lazy design changes WHICH pass first resolves each symbol = the
-  round-754/776/778 program-order class, invisible in every output diff).
-- **AND THE BIGGEST-LOOKING SLICE IS A TRAP.** The `typealias` branch reads **99.7%
-  "never needed"** by the map criterion and is fully load-bearing: **it is not a table
-  build, it is the TS2589/TS2615 depth-bail DETECTOR** (both emissions are gated on
-  `taDecl != null` / `annotation != null`, and the bail is only observable *while*
-  `getTypeOfSymbol` runs). Not resolving those symbols does not defer a diagnostic, it
-  deletes one — and the corpus pins for that family (B57.1/B57.2/B57.3) are exactly
-  file-level aliases nothing later reads.
-- **WHAT DID NOT WORK — the first census was wrong by 4x, and its own arithmetic said so.**
-  Keying the deletable population on entries that were STORED reported **1,399 symbols /
-  49–59 ms (10.9% of direct resolves)** while 67.3% of the resolves stored nothing at all
-  and were structurally invisible to it. Re-keyed on what was PRODUCED (the calls), the
-  answer is 6,009 / 235–304 ms. **A produced-vs-consumed census must be keyed on the
-  calls, never on the survivors** — and a classified population that does not sum to its
-  own denominator is incomplete by construction.
-- **Residue, stated so it is not re-derived:** ~200–250 ms in the `decl` branch is
-  recoverable in principle by resolving a file-level fn/class/interface/enum/import-alias
-  symbol only when `getTypeOfIdentifier` asks. Left unclaimed **on price, not on
-  possibility**; re-run `--fltmCensus` before reviving it (the funnel is a property of the
-  profile) and expect to defend it with `cost_gate.py` counters, because no wall A/B here
-  can see it.
-- Gate: full suite (instrument only — behaviour-free by construction and pinned as such),
-  `cost_gate.py`, `huge_methods.py --fail-over 0`. `docs/perf/setup-phase-and-huge-methods.md`
-  § 27. Suite 13,812 -> **13,816 / 0 / 3** (+4 `FltmCensusTest` pins).
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 - [x] **(NARROW.2)(a) — CLOSED round 838. An `instanceof` whose RHS is a CONSTRUCTOR VALUE
@@ -1494,9 +1526,62 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   md5 for all 29) and `--serve` (halves the FIRST request, worth nothing warm). NO
   cached-vs-uncached divergence anywhere.** **Residue that REMAINS: a cache trained under
   emit (~800 ms, ~5% of a cached emit run) or under `--workers 4`; `--watch`/`--incremental`;
-  the other seven profiles; `scripts/xtsc` cannot reach `--serve` at all (its main class is
-  `MainKt`, the dispatcher is `server.XtscMainKt`); and no distribution exists yet to call
-  `train` from an installer.**
+  the other seven profiles; ~~`scripts/xtsc` cannot reach `--serve` at all (its main class is
+  `MainKt`, the dispatcher is `server.XtscMainKt`)~~ — **CLOSED round 840 as (AOT.4)(a)**;
+  and no distribution exists yet to call `train` from an installer.**
+
+- [x] **(AOT.4)(a) DONE round 840 — the launcher reaches the server/daemon dispatcher.**
+  `scripts/xtsc` and `scripts/xtsc-aot` ran `…compiler.MainKt`, so `--serve` and `--daemon`
+  were unreachable through the command users are told to run — round 839 had to invoke `java`
+  by hand to measure the server arm, and the warm request it measured (~7.3 s against ~13.6 s
+  for a cached one-shot) was a path the shipped launcher could not take. Both scripts now name
+  `…compiler.server.XtscMainKt`, whose `main` is a strict superset (it dispatches the two
+  modes and otherwise delegates to `…compiler.main(args)` verbatim, so a one-shot run gains
+  only two class loads). **BOTH had to swap together**: the main class is the `mainclass`
+  field of the AOT fingerprint, so a half-swap trains under a fingerprint the launcher never
+  looks up and every launch then silently runs uncached — which is what the two new
+  `AotCacheGuardTest` pins (now 10) exist to catch. `XTSC_AOT_LAUNCHER_VERSION` deliberately
+  NOT bumped (`mainclass` is its own field; the constant is for command-line changes no other
+  field records). The fingerprint change is a designed invalidation and is fail-safe: round
+  839's shipped cache reads `SKIP no-cache-file`, exit 0, plus the retrain hint. Verified end
+  to end through the launcher (`--serve` served two requests in 1,541 / 218 ms; `--daemon`
+  output diff-identical to the one-shot run; a retrained 37,457,920-byte cache runs at 487 ms
+  with 795 of 795 `com.xemantic` classes served from the shared objects file). Ablated one
+  mistake at a time over a copied `scripts/` dir via `XTSC_TEST_LAUNCHER`; only
+  `the launcher reaches the server dispatcher` is uniquely discriminating and the other pin
+  says so in its KDoc. `scripts/aot-corpus-suite.sh`'s both-arms failure baseline moves
+  10 → 12 (the new pins read the classpath LAYOUT). `docs/perf/aot-cache.md` § 8.
+
+- [ ] **(AOT.4)(b) BLOCKED-PENDING-USER — the GraalVM native image has the SAME gap
+  (AOT.4)(a) just closed, and fixing it is a build-system change.** `build.gradle.kts` sets
+  `nativeImageMainClass = "com.xemantic.typescript.compiler.MainKt"`, while `XtscMain`'s own
+  KDoc states the native image is meant to *be* the thin client — "a native start costs
+  milliseconds, which is the point of pairing it with a warm JVM server". As it stands the
+  native image cannot reach `--serve` or `--daemon` at all, so the artifact designed to be
+  the client of a warm server is the one artifact that cannot talk to one.
+  **PROPOSAL for the owner:** change that single property to
+  `com.xemantic.typescript.compiler.server.XtscMainKt`. The risk is bounded the same way
+  (AOT.4)(a)'s was — the dispatcher's `main` is a strict superset that delegates verbatim, so
+  every existing invocation behaves identically — but two native-specific unknowns are worth
+  naming before it lands: the image must now reachability-analyze the server/socket path
+  (image size and build time move, direction unmeasured), and `--serve` on a native image has
+  never been run at all, so it should be verified end to end exactly as (a) was rather than
+  assumed to follow. Build-system changes are owner-gated by CLAUDE.md's Guardrails, so this
+  is NOT taken as a side effect of anything else. (`compileTsProject`, a dev `JavaExec`, is
+  correctly left on `MainKt` and needs no change.)
+
+- [ ] **(AOT.4)(c) — the AOT residue that (a) did NOT close.** Carried forward from round
+  839's list plus what round 840 added, queued here so it stops living only in prose:
+  (1) `--serve`/`--daemon` **under a cache** through the launcher — round 840 verified only
+  the one-shot cached run; (2) a cache **trained with `--serve`** in the workload, and
+  whether the two extra dispatcher class loads shift any timing (argued away by inspection,
+  not measured); (3) a cache trained under **emit** (~800 ms, ~5% of a cached emit run) or
+  under **`--workers 4`** — `scripts/xtsc-aot train` hard-codes `--noEmit` and sequential;
+  (4) **`--watch`/`--incremental`** under a cache; (5) the **other seven dashboard profiles**;
+  (6) the shipped `~/.cache` cache was NOT retrained on the 78-file compiler profile after
+  round 840's fingerprint change (28 s + ~51 MB), so the first `xtsc` run there is an
+  uncached one until `xtsc-aot train` is called. None of these is a correctness hazard — the
+  contract fails safe — so this is a measurement/packaging item, not a defect.
 
 - [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
   live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round
