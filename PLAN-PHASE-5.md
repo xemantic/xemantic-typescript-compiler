@@ -93,6 +93,34 @@ order moved. Retrain and re-verify `AotCacheGuardTest` on the VPS before compari
 to `bench-history/`. `scripts/cost_gate.py` has not been run since the move (this box has no
 `build/bench` profile; the harness lives on the VPS).
 
+**Round MOD.4 (2026-08-07) — THE DAEMON IS ITS OWN MODULE AND SPEAKS KTOR.** Landed in two
+commits so a failure would be attributable: **4a** moved the server with the transport
+UNCHANGED, **4b** ported it. 13,940 green (core 13,889 + daemon 24 + api 27); totals were
+conserved exactly across 4a (13,936 = 13,909 + 27, with 20 tests changing module).
+
+- **The invariant the port risks, and why it needs a dedicated pin.** Coroutines migrate
+  work between carrier threads; this server must not allow it. Symbol/Type ids are
+  thread-local and `runWithDeepStack` hands them off from the CALLER's counters, so a
+  request served from another carrier thread restarts ids at 1 and collides with the
+  intrinsics — **leaving every byte of output identical**, so corpus, `--listAll` and
+  `cost_gate.py` are all blind to it. Hence a single-thread executor behind
+  `CompileServer.onCompileThread`, and `CompileThreadInvariantTest`. Its load-bearing case
+  is the CONCURRENT one: a pooled dispatcher passes every same-caller assertion and fails
+  only that.
+- **`AotCacheGuardTest` moved to the daemon, and the failure that forced it is the useful
+  part**: its round-839 pin hands the child JVM its own test classpath, which from the
+  compiler module cannot contain `server.XtscMainKt` — the compiler does not depend on the
+  daemon. Its anchor also had to become a class of ITS OWN module: a class arriving through
+  a project dependency is a JAR, and `File(url.toURI())` on a `jar:` URL throws.
+- **The launcher broke at RUN time with a green build.** 4b gave the daemon dependencies of
+  its own and the dev fallback pasted known jar names plus `cp.txt` (the COMPILER's tail),
+  so it omitted them silently. Fixed by DELETING the hand-maintained list: `xtscLib` stages
+  `build/install/lib` in the shape of an installed `XTSC_HOME/lib`, and the launcher globs it
+  through the same branch as a real installation. (CLAUDE.md entries added for both.)
+
+Measured while verifying: 685 ms cold, then **78 ms** and 0 ms warm over the socket — the
+daemon's whole reason for existing, visible on a toy project.
+
 - [x] **(MOD.3) Move the compiler to `xemantic-typescript-compiler-core`.** The expensive
   step, and the reason MOD.1/MOD.2 were kept additive: **20 files carry 64 hard-coded
   single-module paths**, of which **32 are genuine Gradle outputs** —
@@ -117,7 +145,7 @@ to `bench-history/`. `scripts/cost_gate.py` has not been run since the move (thi
   to an uncached run, round 828) but it means the ladder must be retrained and
   `AotCacheGuardTest` re-verified against the new layout before ANY `bench-history/` number
   is comparable across the split. `HugeMethodLimitTest` reads the classpath layout too.
-- [ ] **(MOD.4) `-daemon`**, porting `CompileServer` from JDK NIO to ktor CIO. Its two
+- [x] **(MOD.4) `-daemon`**, porting `CompileServer` from JDK NIO to ktor CIO. Its two
   documented invariants must survive the port VERBATIM: requests served **sequentially on
   one thread** (Symbol/Type id sequences are thread-local per INV.6(6c0), and `--workers` has
   produced 62 diagnostics where sequential produces 46), and the request running the
