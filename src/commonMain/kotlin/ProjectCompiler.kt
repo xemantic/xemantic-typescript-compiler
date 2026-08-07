@@ -88,8 +88,18 @@ class ProjectCompiler(private val vfs: Vfs) {
     /**
      * @param projectPath a directory containing `tsconfig.json`, or a path to a tsconfig file.
      * @param noEmit when true, type-check only — do not write outputs.
+     * @param outDir when non-null, OVERRIDES the config's `outDir` (resolved against the
+     *   process CWD, like tsc's `--outDir`), so a caller can send the emitted tree
+     *   somewhere throwaway without touching the project. (AOT.4)(c), round 840(c): the
+     *   AOT trainer emits — an emit-trained cache is worth ~1.26 s on an emitting compile —
+     *   and a training run must never write into the user's project. Inert under `noEmit`.
      */
-    fun build(projectPath: String, noEmit: Boolean = false, recheckOnly: Set<String>? = null): Result {
+    fun build(
+        projectPath: String,
+        noEmit: Boolean = false,
+        recheckOnly: Set<String>? = null,
+        outDir: String? = null,
+    ): Result {
         // Absolutize first: glob regexes, module resolution, and output mapping all
         // assume absolute paths (a relative `.` would produce `./src/**` patterns that
         // never match the absolute paths the Vfs walk yields).
@@ -103,7 +113,7 @@ class ProjectCompiler(private val vfs: Vfs) {
         val isBareSourceFile = !vfs.isDirectory(absPath) &&
             !absPath.endsWith(".json") && vfs.exists(absPath)
         val configPath = if (isBareSourceFile) absPath else resolveConfigPath(absPath)
-        val config = if (isBareSourceFile) {
+        val loadedConfig = if (isBareSourceFile) {
             LoadedTsConfig(
                 options = projectDefaults(),
                 configDir = PathUtil.dirname(absPath),
@@ -115,6 +125,17 @@ class ProjectCompiler(private val vfs: Vfs) {
         } else {
             TsConfigLoader(vfs).load(configPath)
         }
+        // The `outDir` override is applied HERE, on the loaded config, and nowhere else:
+        // [writeOutputs] and the TS5055 filter are the only readers of `options.outDir`
+        // (the core is handed `outDir = null` deliberately — see `emitOptions` below), so
+        // one substitution moves the whole emitted tree. Absolutized like every other path
+        // in this function, and against the CWD rather than the config dir, which is what
+        // `tsc --outDir` does for a command-line value.
+        val config =
+            if (outDir == null) loadedConfig
+            else loadedConfig.copy(
+                options = loadedConfig.options.copy(outDir = vfs.resolveAbsolute(outDir)),
+            )
         val resolver = ModuleResolver(vfs, config.customConditions)
 
         val allowJs = config.options.allowJs

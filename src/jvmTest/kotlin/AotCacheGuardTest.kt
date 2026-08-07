@@ -70,6 +70,11 @@ import kotlin.test.fail
  * the running program, which is why it fails by construction when the suite is
  * driven from a jar (`scripts/aot-corpus-suite.sh`, both arms alike).
  *
+ * (AOT.4)(c), round 840(c) adds a fourth file-reading pin,
+ * [theTrainerTrainsWithEmitIntoAThrowawayDirectory]: the training run now emits
+ * (worth −6.9% on an emitting compile) and must send that output to a temp
+ * directory rather than the user's project.
+ *
  * Set `XTSC_TEST_LAUNCHER` to point the pins at a different `scripts/`
  * directory — that is how the ablation is run.
  */
@@ -184,6 +189,43 @@ class AotCacheGuardTest {
         val launcher = mainClassOf(File(scripts, "xtsc"))
         val trainer = mainClassOf(File(scripts, "xtsc-aot"))
         assert(launcher == trainer)
+    }
+
+    // ------------------------------------- (AOT.4)(c) what the trainer runs
+
+    /**
+     * THE TRAINING RUN EMITS, AND EMITS SOMEWHERE THROWAWAY. Round 840(c)
+     * measured a cache trained under `--noEmit` as **−1,258 ms (−6.9%)** worse
+     * than an emit-trained one on an emitting compile (10 of 11 paired runs;
+     * `docs/perf/aot-cache.md` § 9) — the profile for the Transformer and the
+     * Emitter is simply absent from it. So `train` emits.
+     *
+     * The half of that which needs a pin is not the speed, it is the
+     * **blast radius**: the trainer runs against the *user's own project*, so an
+     * emitting training run that used the project's `outDir` would drop JS into
+     * their `dist/` (or fail on a read-only tree). `--outDir <mktemp -d>` is the
+     * whole guard, and `ProjectOutDirTest` pins the compiler side of it.
+     *
+     * Reading the script text is deliberate and is the same technique as the
+     * main-class pins above: the alternative is a ~30 s, 51 MB training run.
+     */
+    @Test
+    fun `the trainer trains with emit into a throwaway directory`() {
+        val scripts = launcherDir() ?: return
+        val text = File(scripts, "xtsc-aot").readText()
+        val invocation = text.lines()
+            .dropWhile { !it.contains("AOTCacheOutput=\$tmp") }
+            .take(2)
+            .joinToString(" ")
+        assert(invocation.contains("\$XTSC_MAIN_CLASS"))
+        // It must EMIT: --noEmit is exactly what round 840(c) measured as the loss.
+        assert(!invocation.contains("--noEmit"))
+        // …into a throwaway directory, never the project's own outDir.
+        assert(invocation.contains("--outDir \"\$emitdir\""))
+        assert(text.contains("emitdir=\"\$(mktemp -d"))
+        // …which is removed on every exit path, killed runs included.
+        assert(text.contains("trap 'rm -f \"\$tmp\" \"\$tmp.config\"; rm -rf \"\$emitdir\"' EXIT"))
+        assert(text.contains("rm -rf \"\$emitdir\""))
     }
 
     /**

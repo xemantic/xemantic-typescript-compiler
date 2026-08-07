@@ -20,6 +20,38 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 840(c) (2026-08-07) — (AOT.4)(c) item (3): THE AOT CACHE IS NOW TRAINED WITH EMIT,
+WORTH −1,132 ms (−5.4%, 14/15 PAIRED RUNS) ON AN EMITTING COMPILE AND EXACTLY NOTHING ON THE
+CHECK-ONLY PATH — AND THE HALF THAT NEEDED DESIGN WAS NOT THE SPEED BUT WHERE A TRAINING RUN'S
+OUTPUT GOES.** 54 whole-project compiles in three batches; full table in
+`docs/perf/aot-cache.md` § 9. Four things worth reading twice:
+
+- **Round 839's diagnosis was right and its price was slightly low.** Differencing each rep's
+  emit run against its own `--noEmit` run puts the whole win in the emit tail: **3,148 →
+  2,216 ms** (−932 ms, predicted ~800 ms), i.e. an emit-trained cache restores the tail to
+  what an *uncached* run pays (2,139 ms). The check-only arms are indistinguishable (medians
+  16,687 vs 16,738 ms over 15 runs each), which also rules out "a longer training run warms
+  the checker too".
+- **ONE BATCH OF FIVE ROTATED, SIGN-CONSISTENT PAIRS WAS STILL WRONG.** Batch 1 read the
+  check-only path as 5/5 wins, median −1,161 ms (−6.6%) — textbook-looking — and batch 2
+  refuted it (3/6, +192 ms), verification agreeing (2/4). Per-arm sd is ~5%, so the arms
+  overlap entirely and only pairing resolves anything; the emit effect replicated in all
+  three batches (−1,258 / −1,216 / −930 ms medians) and the check-only one did not.
+  **A second batch is the cheapest instrument that separates the two.**
+- **The packaging question decided the shape of the change.** `train` runs against the user's
+  own project, so an emitting training run would have written JS into their `dist/` (or died
+  on a read-only tree) — unacceptable at any speed. Hence a new `--outDir` override
+  (`ProjectCompiler.build(outDir = …)`, CWD-relative like tsc's, inert under `--noEmit`, not
+  threaded through `--incremental`/`--watch`), and `train` emits into a `mktemp -d` removed on
+  every exit path. Verified with the shipped command on the rebuilt jar: no `dist/` in the
+  profile, no leftover `/tmp/xtsc-train.*`, cache self-verifies `USE`, 4/4 on emit.
+- **The fail-safe contract is untouched, deliberately.** The training *workload* is not in the
+  fingerprint and must not be — the manifest binds a cache to the code it was trained from,
+  not to how that code was exercised — so every existing `--noEmit`-trained cache stays valid,
+  merely ~5% slower on an emitting compile until the next `train`. Gates: suite
+  **13,908 / 0 / 3** (+5 = the new pins), `cost_gate.py` every counter **+0.00%**,
+  `huge_methods.py --fail-over 0` clean.
+
 **Round 840(b) (2026-08-06) — (AOT.4)(b), OWNER-APPROVED: THE GRAALVM NATIVE IMAGE HAD THE
 SAME GAP, AND ON THE SHIPPED BINARY IT WAS A SILENT WRONG SUCCESS THAT *WROTE FILES*.** The
 owner lifted the Guardrails block for this one `build.gradle.kts` property (2026-08-06); every
@@ -1645,13 +1677,28 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   (1) `--serve`/`--daemon` **under a cache** through the launcher — round 840 verified only
   the one-shot cached run; (2) a cache **trained with `--serve`** in the workload, and
   whether the two extra dispatcher class loads shift any timing (argued away by inspection,
-  not measured); (3) a cache trained under **emit** (~800 ms, ~5% of a cached emit run) or
-  under **`--workers 4`** — `scripts/xtsc-aot train` hard-codes `--noEmit` and sequential;
+  not measured); ~~(3) a cache trained under **emit**~~ — **DONE round 840(c)**, see below;
+  the `--workers 4` half of (3) is still open (`train` is still sequential);
   (4) **`--watch`/`--incremental`** under a cache; (5) the **other seven dashboard profiles**;
   (6) the shipped `~/.cache` cache was NOT retrained on the 78-file compiler profile after
-  round 840's fingerprint change (28 s + ~51 MB), so the first `xtsc` run there is an
+  round 840's fingerprint change (~30 s + ~54 MB), so the first `xtsc` run there is an
   uncached one until `xtsc-aot train` is called. None of these is a correctness hazard — the
   contract fails safe — so this is a measurement/packaging item, not a defect.
+
+  **(3) EMIT — DONE round 840(c), `docs/perf/aot-cache.md` § 9. `train` now emits.** Measured
+  over 54 whole-project compiles in three batches (paired, within-rep, rotated, box quiet and
+  unwatched): an emit-trained cache is **−1,132 ms / −5.4% on an emitting compile, 14/15
+  paired runs**, and **a wash on `--noEmit`** (10/15 wins, median −150 ms = −0.8%, per-arm
+  medians 16,687 vs 16,738 ms). The whole win is the emit tail — **3,148 → 2,216 ms**, against
+  round 839's predicted ~800 ms — so the missing Transformer/Emitter profile was exactly the
+  cause it named. Correctness: all 54 runs one diagnostics md5 (46 errors), all 30 emitting
+  runs one whole-tree sha256 over 78 files. **The enabling change is a new `--outDir`
+  override** (a training run must never write into the user's project); the cache is 54.1 vs
+  51.2 MB and training costs +1.5 s. The fingerprint deliberately does NOT record the training
+  workload, so existing caches stay valid — merely ~5% slower on emit until retrained.
+  Pins: `ProjectOutDirTest` (4), `AotCacheGuardTest.the trainer trains with emit into a
+  throwaway directory`. **NOT measured: a project whose emit is a larger share than the tsc
+  profile's ~13%, and `--outDir` under `--incremental`/`--watch` (not threaded there).**
 
 - [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
   live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round

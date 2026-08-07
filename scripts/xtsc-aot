@@ -10,10 +10,15 @@
 #
 # `train` is the "regenerate at install" step: a packager runs it once, after the
 # jars are in place, against a representative project. It is deliberately NOT run
-# automatically on first use - training costs one full compile (~28 s on the 78-file
+# automatically on first use - training costs one full compile (~30 s on the 78-file
 # tsc compiler profile) and needs a project big enough to exercise the checker,
 # which a launcher cannot choose for the user. A machine with no cache simply runs
 # at normal speed.
+#
+# The training compile EMITS (round 840(c)): a --noEmit-trained cache carries no
+# profile for the Transformer or the Emitter and is -6.9% on an emitting compile.
+# The output goes to a throwaway directory via --outDir and is deleted with it -
+# the project directory is never written to. See docs/perf/aot-cache.md section 9.
 #
 # `train` also prunes every cache in the directory whose fingerprint is not the
 # current one, which is the "delete on upgrade" half: the new build trains into a
@@ -88,7 +93,20 @@ case "$cmd" in
 
     mkdir -p "$dir"
     tmp="$cache.tmp.$$"
-    trap 'rm -f "$tmp" "$tmp.config"' EXIT
+    # (AOT.4)(c), round 840(c): the training run EMITS. A cache trained under
+    # --noEmit carries no profile for the Transformer/Emitter, and round 840(c)
+    # measured that gap at -1,258 ms (-6.9%, 10/11 paired runs) on an emitting
+    # compile, with the check-only path unaffected (a wash: 8/11 wins, median
+    # -2.2%, batch-inconsistent). docs/perf/aot-cache.md § 9.
+    #
+    # The emitted tree goes to a throwaway directory and is deleted with it: a
+    # trainer that wrote JS into the user's project - clobbering a dist/, or
+    # failing outright on a read-only tree - would be unacceptable however fast
+    # the cache it produced. That is what --outDir is for; the project directory
+    # is never written to. A project whose tsconfig sets `noEmit` simply emits
+    # nothing, and trains exactly as it did before.
+    emitdir="$(mktemp -d "${TMPDIR:-/tmp}/xtsc-train.XXXXXX")"
+    trap 'rm -f "$tmp" "$tmp.config"; rm -rf "$emitdir"' EXIT
 
     # Order matters. The manifest is written only after the dump succeeds AND the
     # cache is in place under its final name, so a training run killed halfway
@@ -100,9 +118,10 @@ case "$cmd" in
     # shellcheck disable=SC2206
     extra=(${XTSC_JAVA_OPTS:--Xmx4g})
     "${XTSC_JAVA:-java}" "-XX:AOTCacheOutput=$tmp" "${extra[@]}" \
-      -cp "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS" --noEmit "$project" >&2 || true
+      -cp "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS" --outDir "$emitdir" "$project" >&2 || true
     [ -s "$tmp" ] || xtsc_die "training produced no cache (see the JVM output above)"
     mv -f "$tmp" "$cache"
+    rm -rf "$emitdir"
     trap - EXIT
 
     size="$(xtsc_file_size "$cache")"

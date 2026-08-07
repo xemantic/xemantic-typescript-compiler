@@ -48,6 +48,7 @@ import kotlin.time.Duration.Companion.milliseconds
  */
 fun main(args: Array<String>) {
     var project = "."
+    var outDir: String? = null
     var noEmit = false
     var listAll = false
     var watch = false
@@ -335,6 +336,12 @@ fun main(args: Array<String>) {
                     GlobalsAmp.reads = args[i].toIntOrNull() ?: 0
                 }
             }
+            // (AOT.4)(c) round 840(c): send the emitted tree somewhere other than the
+            // config's outDir. The AOT trainer needs it — training WITH emit is worth
+            // ~1.26 s on an emitting compile (docs/perf/aot-cache.md § 9) and a training
+            // run must never write into the user's project. Ignored under --noEmit, and
+            // (deliberately) not threaded through the --incremental/--watch paths.
+            "--outDir", "--outdir" -> { i++; if (i < args.size) outDir = args[i] }
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
             "--help", "-h" -> { printUsage(); return }
             else -> if (!a.startsWith("-")) project = a
@@ -343,7 +350,10 @@ fun main(args: Array<String>) {
     }
 
     println("xemantic-typescript-compiler — whole-project build")
-    println("project: $project${if (noEmit) "  (noEmit)" else ""}")
+    println(
+        "project: $project${if (noEmit) "  (noEmit)" else ""}" +
+            if (outDir != null && !noEmit) "  (outDir: $outDir)" else "",
+    )
 
     if (passTiming) {
         PassTiming.reset()
@@ -355,7 +365,7 @@ fun main(args: Array<String>) {
         // changed files' reverse-dependency closure; anything non-local, or any
         // validation failure, is a plain full build.
         if (incremental) TsBuildInfo.build(SystemVfs, project, noEmit, XTSC_BUILD_ID, log = ::println)
-        else ProjectCompiler(SystemVfs).build(project, noEmit)
+        else ProjectCompiler(SystemVfs).build(project, noEmit, outDir = outDir)
     }
 
     println("config:  ${result.configPath}")
@@ -571,6 +581,8 @@ private fun printUsage() {
 
           path / --project   directory containing tsconfig.json, or a tsconfig path (default: .)
           --noEmit           type-check only; do not write outputs
+          --outDir <dir>     write the emitted tree here instead of the config's outDir
+                             (relative to the CWD; inert under --noEmit/--incremental)
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
           --dispatchProbe    (DISPATCH.1) per-handler/per-kind spine attribution

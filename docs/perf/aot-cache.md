@@ -388,3 +388,94 @@ invalidates by itself, and the constant is for command-line changes no other fie
 Unix domain socket paths are capped near 100 bytes, so a `--socket` under a deep scratch
 directory is refused by name (`CompileServer.socketPathProblem`) — which is itself proof the
 dispatcher was reached, and the reason the round's socket lived at `/tmp/xtsc-r840.sock`.
+
+## 9. Round 840(c) — (AOT.4)(c), a cache trained WITH emit
+
+Round 839 § 7.1 left one priced, unclaimed residue: `scripts/xtsc-aot train` ran `--noEmit`,
+so the shipped cache carried **no profile for the Transformer or the Emitter at all**, and
+the emit tail measured *worse* under a cache than without one. It priced training-with-emit
+at ~800 ms and did not test it. This round tested it, on both workloads, because the cache
+is shared: a gain on the emit path could have been a loss on the check-only path.
+
+### 9.1 The 2×3 grid
+
+Jar rebuilt from the tree, JDK 25.0.3, Gradle and Kotlin daemons stopped (13.7 GB
+available), the box otherwise idle and **not watched** while running (round 774). Two
+caches trained back to back on `build/bench/tsc-project-637d5746`: **A** = `--noEmit`
+(today's behaviour, 51,240,960 B), **B** = emitting (54,108,160 B, **+5.6%**, +1.5 s to
+train). 54 whole-project compiles in three batches — a 6-config rotation (5 reps), an
+A-vs-B rotation (6 reps), and the shipped-trainer verification (4 reps).
+
+**Paired, within-rep deltas — the only quotable comparison** (B − A, `time:` self ms):
+
+| workload | n | B faster in | median Δ | median % | range |
+|---|---:|---:|---:|---:|---|
+| **emit** | 15 | **14/15** | **−1,132 ms** | **−5.4%** | −2,428 … +60 |
+| `--noEmit` | 15 | 10/15 | −150 ms | −0.8% | −1,373 … +650 |
+
+Per-arm medians (all 15 runs each): `An` 16,687 / `Bn` 16,738 ms — **identical** — against
+`Ae` 19,953 / `Be` 18,792 ms. Per-arm sd is 4.9–5.5%, so the arms overlap completely and
+only the pairing resolves the effect; that is also why the batch-1 check-only reading
+(5/5 wins, median −1,161 ms) must be **discarded** — batch 2 read 3/6 wins, median +192 ms,
+and the verification batch 2/4. **The check-only path is a wash, in both directions.**
+
+### 9.2 Where the emit win is, and that round 839's mechanism was right
+
+Differencing each rep's emit run against its own `--noEmit` run isolates the emit tail:
+
+| arm | emit tail (median of 15) |
+|---|---:|
+| cache A (`--noEmit`-trained) | 3,148 ms |
+| **cache B (emit-trained)** | **2,216 ms** |
+| plain, no cache (n=5) | 2,139 ms |
+
+**−932 ms of tail, against round 839's predicted ~800 ms.** The emitter profile is the whole
+story: an emit-trained cache restores the tail to roughly what an *uncached* run pays, which
+is exactly the anomaly round 839 spotted (a cached run reaches the emitter after ~14 s of
+warm-up instead of ~24 s, so it had less compiled emitter code, not more). Nothing here
+supports a "longer training run warms the checker too" reading — if that were the mechanism
+the check-only path would have moved, and it did not.
+
+### 9.3 Correctness
+
+All 54 compiles produced **46 errors** and one sorted-diagnostics md5
+(`59d930db849399aea5e03e25fedb8e4e`, the same digest rounds 828/832/839 recorded), and every
+one of the 30 emitting runs produced **78 files** and one whole-tree sha256
+(`a3ccd863f3523f5aefe4215576e920a7531c4ccd0be550b9b1362593f8ca280e`), `dist/` being deleted
+before each run and re-hashed after it. Emit-training changes nothing about the answer.
+
+### 9.4 The packaging problem, and `--outDir`
+
+The measurement is the easy half. `train` runs against **the user's own project**, so an
+emitting training run that used the project's `outDir` would write JS into their `dist/` —
+clobbering a real build, or failing outright on a read-only tree. That would be
+unacceptable at any speed, so the win only exists if the output can go elsewhere.
+
+It now does: `ProjectCompiler.build` takes an `outDir` override, exposed as **`--outDir`**
+(resolved against the CWD, like tsc's; inert under `--noEmit`; deliberately not threaded
+through `--incremental`/`--watch`), and `train` emits into a `mktemp -d` it deletes on every
+exit path, killed runs included. `ProjectOutDirTest` pins the compiler half — *the project
+tree is untouched*, the rootDir-relative shape survives, and the bytes do not depend on
+where they are written — and `AotCacheGuardTest.the trainer trains with emit into a
+throwaway directory` pins the script half.
+
+Verified end to end with the shipped command on the rebuilt jar: `xtsc-aot train` produced a
+54,009,856 B cache, self-verified `USE`, left **no `dist/` in the profile** and **no leftover
+`/tmp/xtsc-train.*`**, and beat a `--noEmit`-trained cache **4/4** on emit (−2,428, −727,
+−1,132, −272 ms) while reading 2/4 and +92 ms median on `--noEmit`.
+
+**Nothing about the fail-safe contract changes.** The training *workload* is not part of the
+fingerprint and must not be: the manifest binds the cache to the code it was trained from,
+not to how it was exercised. An existing `--noEmit`-trained cache therefore stays valid and
+usable — it is merely ~5% slower on an emitting compile until the next `train`.
+
+### 9.5 What this round did NOT measure
+
+- A cache trained under `--workers 4`, and `--serve`/`--daemon` **under** a cache through the
+  launcher — (AOT.4)(c) items (1) and (2), still open.
+- `--watch`/`--incremental` under a cache, and the other seven dashboard profiles.
+- Whether the emit win holds on a project whose emit is a larger share of the compile than
+  the tsc profile's ~13%. The direction should be the same and the *share* larger, but that
+  is an argument, not a measurement.
+- Any interaction between `--outDir` and `--incremental`/`--watch`: the override is simply
+  not passed on those paths, and the usage text says so.
