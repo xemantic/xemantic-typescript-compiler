@@ -23,8 +23,39 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+plugins {
+    `kotlin-dsl`
 }
 
-rootProject.name = "xemantic-typescript-compiler"
+val javaTarget = libs.versions.javaTarget.get()
+
+java {
+    val version = JavaVersion.toVersion(javaTarget)
+    sourceCompatibility = version
+    targetCompatibility = version
+}
+
+tasks.compileJava {
+    options.release = javaTarget.toInt()
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.fromTarget(javaTarget)
+    }
+}
+
+dependencies {
+    implementation(libs.kotlin.gradle.plugin)
+    implementation(libs.kotlin.power.assert)
+}
+
+gradlePlugin {
+    plugins {
+        register("XtscConventionPlugin") {
+            id = "xemantic-typescript-compiler.convention"
+            implementationClass =
+                "com.xemantic.typescript.compiler.buildlogic.XtscConventionPlugin"
+        }
+    }
+}

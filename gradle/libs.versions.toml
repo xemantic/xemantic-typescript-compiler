@@ -9,6 +9,11 @@ xemanticKotlinTest = "1.17.5"
 kotlinxCoroutines = "1.11.0"
 kotlinxIo = "0.9.1"
 kotlinxSerialization = "1.11.0"
+# ktor-network carries the Unix-domain-socket transport shared by the daemon and
+# the client. Unix sockets are CIO-engine only, and on mingwX64 they are guarded
+# by a runtime AF_UNIX probe (Windows 10 1803+); on JVM `UnixSocketAddress`
+# reflects onto `java.net.UnixDomainSocketAddress`, so it needs Java 16+.
+ktor = "3.5.2"
 
 versionsPlugin = "0.54.0"
 dokkaPlugin = "2.2.0"
@@ -22,6 +27,14 @@ xemantic-kotlin-test = { module = "com.xemantic.kotlin:xemantic-kotlin-test", ve
 kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinxCoroutines" }
 kotlinx-io-core = { module = "org.jetbrains.kotlinx:kotlinx-io-core", version.ref = "kotlinxIo" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinxSerialization" }
+ktor-network = { module = "io.ktor:ktor-network", version.ref = "ktor" }
+
+# Consumed by the `build-logic` included build only — a Gradle convention plugin
+# must put the plugins it applies on its own compile classpath, and it cannot do
+# that through the [plugins] block below (that one is for `alias(...)` in a
+# build script's `plugins { }`).
+kotlin-gradle-plugin = { module = "org.jetbrains.kotlin:kotlin-gradle-plugin", version.ref = "kotlin" }
+kotlin-power-assert = { module = "org.jetbrains.kotlin:kotlin-power-assert", version.ref = "kotlin" }
 
 [plugins]
 kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref = "kotlin" }

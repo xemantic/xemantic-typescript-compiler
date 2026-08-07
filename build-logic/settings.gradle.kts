@@ -23,8 +23,17 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+// The included build has its own settings, so it needs its own view of the
+// version catalog — `libs` is not inherited across a build boundary.
+dependencyResolutionManagement {
+    repositories {
+        mavenCentral()
+    }
+    versionCatalogs {
+        create("libs") {
+            from(files("../gradle/libs.versions.toml"))
+        }
+    }
 }
 
-rootProject.name = "xemantic-typescript-compiler"
+rootProject.name = "build-logic"
