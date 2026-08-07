@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.server
 
+import com.xemantic.typescript.compiler.protocol.XTSC_REFUSED
 import java.io.File
 
 /**
@@ -79,12 +80,10 @@ private fun runAsClient(args: Array<String>, socket: String) {
     }
     print(response.output)
     System.out.flush()
-    if (response.exitCode == REQUEST_REFUSED) {
-        kotlin.system.exitProcess(REQUEST_REFUSED)
+    if (response.exitCode == XTSC_REFUSED) {
+        kotlin.system.exitProcess(XTSC_REFUSED)
     }
 }
-
-private const val REQUEST_REFUSED = 2
 
 /** Drops the options that steer the client itself; everything else is the compiler's. */
 private fun stripClientOptions(args: Array<String>): List<String> {

@@ -49,7 +49,12 @@ kotlin {
                 // `api`: the dispatcher delegates to the compiler's own `main`,
                 // so a consumer of this module compiles against both.
                 api(project(":xemantic-typescript-compiler-core"))
+                // `api`: CompileServer.request returns a CompileResponse, and
+                // the transport types appear in its signatures.
                 api(project(":xemantic-typescript-compiler-api"))
+                // The single-threaded compile dispatcher — see invariant 1 in
+                // CompileServer's KDoc; this is not an optional convenience.
+                implementation(libs.kotlinx.coroutines.core)
             }
         }
 
@@ -63,6 +68,31 @@ kotlin {
     }
 
 }
+
+/**
+ * Materializes `build/install/lib` — this module's jar plus its whole runtime
+ * classpath, the exact shape a distribution's `XTSC_HOME/lib` has.
+ *
+ * `scripts/xtsc` globs it as its development fallback, so the launcher takes
+ * the SAME code path in the tree as it does when installed, and its classpath
+ * cannot drift from the build's. It replaces an earlier fallback that pasted
+ * together known jar names and a cached `cp.txt` holding the COMPILER's
+ * dependency tail — which silently omitted this module's own dependencies
+ * (`-api`, ktor, coroutines) the moment the transport gained them, and
+ * presented as ClassNotFoundException at run time rather than as a build error.
+ *
+ * Wired into `assemble` because a launcher that works only after an extra,
+ * undocumented task is a launcher that appears broken.
+ */
+val xtscLib by tasks.registering(Sync::class) {
+    group = "build"
+    description = "Stages the daemon jar and its runtime classpath as a distribution-shaped lib dir."
+    from(tasks.named("jvmJar"))
+    from(kotlin.targets.getByName("jvm").compilations.getByName("main").runtimeDependencyFiles)
+    into(layout.buildDirectory.dir("install/lib"))
+}
+
+tasks.named("assemble") { dependsOn(xtscLib) }
 
 /**
  * Runs a shell command, streaming its output to the Gradle console.

@@ -88,25 +88,24 @@ xtsc_resolve_classpath() {
     XTSC_RESOLVED_CP="${jars%:}"
     [ -n "$XTSC_RESOLVED_CP" ] && return 0
   fi
-  # Development fallback: this repo's own build outputs.
+  # Development fallback: the staged lib dir, which has exactly the shape of an
+  # installed XTSC_HOME/lib and is produced by `./gradlew assemble` (the daemon
+  # module's `xtscLib` task).
   #
-  # TWO jars since the module split, and the DAEMON one must come first because
-  # it holds XTSC_MAIN_CLASS (the mode dispatcher). Its absence is the failure to
-  # expect after a `clean`: the compiler jar alone resolves, the launcher starts,
-  # and then dies with NoClassDefFoundError on the entry point — so both are
-  # required here rather than one being optional.
-  #
-  # `cp.txt` stays the COMPILER module's dependency tail, which is also the
-  # daemon's: the daemon adds no dependency of its own beyond the two project
-  # jars named here.
-  local root jar daemon_jar deps
+  # Deliberately the SAME glob-a-directory logic as the XTSC_HOME branch above,
+  # rather than pasting together known jar names plus a cached dependency list.
+  # That older form hard-coded which modules exist and reused `cp.txt` — the
+  # COMPILER's dependency tail — so the day the daemon gained dependencies of
+  # its own (`-api`, ktor, coroutines) the launcher silently omitted them and
+  # died with ClassNotFoundException at run time instead of failing the build.
+  # Letting Gradle decide the contents means the classpath cannot drift again.
+  local root lib jars
   root="$XTSC_SCRIPT_DIR/.."
-  jar="$(find "$root/xemantic-typescript-compiler-core/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' 2>/dev/null | LC_ALL=C sort | head -1)"
-  daemon_jar="$(find "$root/xemantic-typescript-compiler-daemon/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-daemon-jvm-*.jar' 2>/dev/null | LC_ALL=C sort | head -1)"
-  if [ -n "$jar" ] && [ -n "$daemon_jar" ] && [ -f "$root/build/bench/cp.txt" ]; then
-    deps="$(cat "$root/build/bench/cp.txt")"
-    XTSC_RESOLVED_CP="$daemon_jar:$jar:$deps"
-    return 0
+  lib="$root/xemantic-typescript-compiler-daemon/build/install/lib"
+  if [ -d "$lib" ]; then
+    jars="$(find "$lib" -maxdepth 1 -name '*.jar' | LC_ALL=C sort | tr '\n' ':')"
+    XTSC_RESOLVED_CP="${jars%:}"
+    [ -n "$XTSC_RESOLVED_CP" ] && return 0
   fi
   XTSC_RESOLVED_CP=""
   return 1

@@ -26,6 +26,8 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
+import com.xemantic.typescript.compiler.protocol.CompileRequest
+import com.xemantic.typescript.compiler.protocol.XTSC_REFUSED
 import com.xemantic.typescript.compiler.server.CompileServer
 import java.io.File
 import kotlin.test.Test
@@ -65,7 +67,7 @@ class CompileServerTest {
         val dir = tinyProject()
         File(dir, "a.ts").writeText("export const n: number = 1\n")
         val response = CompileServer.respondTo(
-            CompileServer.CompileRequest(listOf("--noEmit", dir.absolutePath)),
+            CompileRequest(listOf("--noEmit", dir.absolutePath)),
         )
         assert("OK — 0 errors" in response.output)
         assert(response.exitCode == 0)
@@ -77,7 +79,7 @@ class CompileServerTest {
         val dir = tinyProject()
         File(dir, "a.ts").writeText("export const n: number = 'not a number'\n")
         val response = CompileServer.respondTo(
-            CompileServer.CompileRequest(listOf("--noEmit", dir.absolutePath)),
+            CompileRequest(listOf("--noEmit", dir.absolutePath)),
         )
         assert("FAILED —" in response.output)
         assert(response.exitCode == 1)
@@ -87,9 +89,9 @@ class CompileServerTest {
     @Test
     fun `--watch is refused rather than wedging the single request thread`() {
         val response = CompileServer.respondTo(
-            CompileServer.CompileRequest(listOf("--noEmit", "--watch", ".")),
+            CompileRequest(listOf("--noEmit", "--watch", ".")),
         )
-        assert(response.exitCode == CompileServer.REFUSED)
+        assert(response.exitCode == XTSC_REFUSED)
         assert("--watch is not supported" in response.output)
         // Refusal must be immediate — the point is that it never ran.
         assert(response.elapsedMs == 0L)
@@ -98,9 +100,9 @@ class CompileServerTest {
     @Test
     fun `the short -w spelling of watch is refused too`() {
         val response = CompileServer.respondTo(
-            CompileServer.CompileRequest(listOf("-w", ".")),
+            CompileRequest(listOf("-w", ".")),
         )
-        assert(response.exitCode == CompileServer.REFUSED)
+        assert(response.exitCode == XTSC_REFUSED)
     }
 
     @Test

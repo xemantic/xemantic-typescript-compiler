@@ -25,20 +25,32 @@
 
 package com.xemantic.typescript.compiler.server
 
-import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.Json
+import com.xemantic.typescript.compiler.protocol.CompileRequest
+import com.xemantic.typescript.compiler.protocol.CompileResponse
+import com.xemantic.typescript.compiler.protocol.XTSC_PROTOCOL_VERSION
+import com.xemantic.typescript.compiler.protocol.XTSC_REFUSED
+import com.xemantic.typescript.compiler.protocol.protocolProblem
+import com.xemantic.typescript.compiler.protocol.readFrame
+import com.xemantic.typescript.compiler.protocol.socketPathProblem
+import com.xemantic.typescript.compiler.protocol.writeFrame
+import com.xemantic.typescript.compiler.protocol.xtscProtocolJson
+import com.xemantic.typescript.compiler.protocol.xtscSocketPath
+import io.ktor.network.selector.SelectorManager
+import io.ktor.network.sockets.UnixSocketAddress
+import io.ktor.network.sockets.aSocket
+import io.ktor.network.sockets.openReadChannel
+import io.ktor.network.sockets.openWriteChannel
+import io.ktor.utils.io.ByteReadChannel
+import io.ktor.utils.io.ByteWriteChannel
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.asCoroutineDispatcher
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
-import java.io.DataInputStream
-import java.io.DataOutputStream
 import java.io.File
 import java.io.PrintStream
-import java.net.StandardProtocolFamily
-import java.net.UnixDomainSocketAddress
-import java.nio.channels.Channels
-import java.nio.channels.ServerSocketChannel
-import java.nio.channels.SocketChannel
 import java.nio.charset.StandardCharsets
-import java.nio.file.Path
+import java.util.concurrent.Executors
 import kotlin.time.TimeSource
 
 /**
@@ -60,105 +72,82 @@ import kotlin.time.TimeSource
  * request therefore builds a **fresh program**, which is also what makes this
  * safe — see below.
  *
- * ## Two invariants a change here must preserve
+ * ## Three invariants a change here must preserve
  *
- * 1. **Requests are served SEQUENTIALLY, on one thread.** Symbol/Type id
- *    sequences are thread-local and handed off by `runWithDeepStack`
- *    (INV.6(6c0)), and `--workers` has already been measured producing 62
- *    diagnostics where the sequential path produces 46. A thread-per-connection
- *    server would re-open that whole class of bug for a latency win of zero —
- *    the compile is the cost, not the accept.
+ * 1. **Requests are served SEQUENTIALLY, on ONE thread — and it is the SAME
+ *    thread for every request.** This is stronger than "one at a time" and the
+ *    difference is the whole reason [compileDispatcher] exists rather than a
+ *    plain `Dispatchers.IO`. Symbol/Type id sequences are THREAD-LOCAL
+ *    (INV.6(6c0)) and `runWithDeepStack` hands them off by capturing the
+ *    caller's counters, seeding the compile thread, and writing the advanced
+ *    values back on join. A coroutine that migrated to a different carrier
+ *    thread between requests would hand off from a thread whose counters are
+ *    still at zero, restarting ids at 1 and colliding with the singleton
+ *    intrinsics — a failure that leaves **every byte of output identical** and
+ *    is therefore invisible to any diff. `--workers` has separately been
+ *    measured producing 62 diagnostics where the sequential path produces 46.
  * 2. **The request runs the ORDINARY [com.xemantic.typescript.compiler.main]**,
  *    with stdout captured. Nothing about argument parsing, diagnostic
  *    formatting or exit semantics is reimplemented here, so server output is
  *    identical to CLI output *by construction* rather than by testing — the
- *    tests then check that the construction holds.
+ *    tests then check that the construction holds. `System.setOut` is
+ *    process-global, which is a second, independent reason serving cannot be
+ *    concurrent.
+ * 3. **The wire format lives in the `-api` module**, not here. The client is a
+ *    separately-built binary, so a framing or schema change that reaches only
+ *    one side presents as a HANG rather than as a type error.
  *
  * Reusing one JVM across compiles is not speculative: `BenchMain` runs twelve
  * in-process rebuilds and every one reports the same 78 files and 46 errors.
  *
  * ## Transport
  *
- * A Unix domain socket, not a TCP port. It costs less code than a loopback
- * socket plus the shared-secret token it would need, and it inherits
- * filesystem permissions instead of being reachable by every local process.
- * Framing is a 4-byte big-endian length followed by UTF-8 JSON.
+ * A Unix domain socket over ktor-network's CIO engine, not a TCP port. It costs
+ * less code than a loopback socket plus the shared-secret token it would need,
+ * and it inherits filesystem permissions instead of being reachable by every
+ * local process. Ktor rather than the JDK's own `UnixDomainSocketAddress`
+ * because the thin client is Kotlin/Native, where the JDK does not exist and
+ * ktor already carries an AF_UNIX implementation for linux, macOS and mingw —
+ * so both peers share one transport as well as one codec.
  */
 object CompileServer {
 
     /** Default socket path; per-user, so two users on one host do not collide. */
-    fun defaultSocketPath(): String {
-        val tmp = System.getProperty("java.io.tmpdir") ?: "/tmp"
-        val user = System.getProperty("user.name") ?: "unknown"
-        return "$tmp/xtsc-$user.sock"
-    }
-
-    /**
-     * The kernel's `sockaddr_un.sun_path` is 108 bytes on Linux (104 on macOS)
-     * INCLUDING the terminating NUL, and exceeding it surfaces as a bare
-     * `SocketException: Unix domain path too long` from deep inside the bind,
-     * naming neither the path nor the limit. Checked here so the message says
-     * what to do about it.
-     */
-    private const val MAX_SOCKET_PATH = 100
-
-    /**
-     * Returns a human message when [socketPath] cannot work, else null.
-     *
-     * Non-throwing on purpose: this is fatal for [serve] (nothing can be bound)
-     * but must NOT be for [request], whose documented contract is to fall back
-     * to compiling in-process when no server is reachable. An unusable path is
-     * "not reachable", so it degrades rather than crashing the client — with
-     * the reason on stderr, so it degrades loudly.
-     */
-    private fun socketPathProblem(socketPath: String): String? {
-        val bytes = socketPath.toByteArray(StandardCharsets.UTF_8).size
-        return if (bytes > MAX_SOCKET_PATH) {
-            "socket path is $bytes bytes, over the ~$MAX_SOCKET_PATH-byte OS limit for Unix " +
-                "domain sockets: $socketPath — pass a shorter --socket, e.g. /tmp/xtsc.sock"
-        } else null
-    }
-
-    private val json = Json { ignoreUnknownKeys = true }
-
-    @Serializable
-    data class CompileRequest(val args: List<String>)
-
-    @Serializable
-    data class CompileResponse(
-        val output: String,
-        val exitCode: Int,
-        val elapsedMs: Long,
+    fun defaultSocketPath(): String = xtscSocketPath(
+        tempDir = System.getProperty("java.io.tmpdir") ?: "/tmp",
+        user = System.getProperty("user.name") ?: "unknown",
     )
 
-    private fun writeFrame(channel: SocketChannel, payload: String) {
-        val bytes = payload.toByteArray(StandardCharsets.UTF_8)
-        DataOutputStream(Channels.newOutputStream(channel)).apply {
-            writeInt(bytes.size)
-            write(bytes)
-            flush()
-        }
+    /**
+     * The one thread every compile runs on — see invariant 1. Single-threaded is
+     * load-bearing, not a throughput choice: the id handoff is only coherent
+     * while the same thread hands off each time.
+     */
+    private val compileDispatcher by lazy {
+        Executors.newSingleThreadExecutor { runnable ->
+            Thread(runnable, COMPILE_THREAD_NAME).apply { isDaemon = true }
+        }.asCoroutineDispatcher()
     }
 
-    private fun readFrame(channel: SocketChannel): String {
-        val input = DataInputStream(Channels.newInputStream(channel))
-        val size = input.readInt()
-        require(size in 0..MAX_FRAME_BYTES) { "implausible frame size: $size" }
-        val bytes = ByteArray(size)
-        input.readFully(bytes)
-        return String(bytes, StandardCharsets.UTF_8)
-    }
+    /** The name [onCompileThread] runs under; asserted by the invariant pin. */
+    internal const val COMPILE_THREAD_NAME = "xtsc-compile"
 
-    private const val MAX_FRAME_BYTES = 64 * 1024 * 1024
+    /**
+     * Runs [block] on the one compile thread — the whole of invariant 1.
+     *
+     * A named function rather than an inline `withContext` so the invariant is
+     * testable: nothing else can observe which carrier thread a coroutine
+     * happened to land on, and the failure it guards against leaves every byte
+     * of output identical.
+     */
+    internal suspend fun <T> onCompileThread(block: () -> T): T =
+        withContext(compileDispatcher) { block() }
 
     /**
      * Runs one compile with stdout captured, on the calling thread.
      *
-     * `System.setOut` is process-global, which is precisely why requests are
-     * serialized: with a thread-per-connection server this capture would
-     * interleave two clients' output. The exit code is derived from the
-     * compiler's own summary line rather than recomputed, so it cannot drift
-     * from what the CLI reports.
+     * The exit code is derived from the compiler's own summary line rather than
+     * recomputed, so it cannot drift from what the CLI reports.
      */
     private fun compileCapturing(args: List<String>): CompileResponse {
         val buffer = ByteArrayOutputStream()
@@ -180,7 +169,12 @@ object CompileServer {
         // `main` returns normally either way — so the server mirrors that
         // rather than inventing a second source of truth.
         val exit = if (failed != null || "FAILED —" in text) 1 else 0
-        return CompileResponse(output = text, exitCode = exit, elapsedMs = elapsed)
+        return CompileResponse(
+            output = text,
+            exitCode = exit,
+            elapsedMs = elapsed,
+            protocolVersion = XTSC_PROTOCOL_VERSION,
+        )
     }
 
     /**
@@ -188,7 +182,7 @@ object CompileServer {
      * the socket.
      *
      * Extracted so it is testable without binding anything or parking a thread
-     * in `accept()`: a hanging server thread inside a 13,000-test suite is a
+     * in `accept()`: a hanging server coroutine inside a 13,000-test suite is a
      * flakiness source, and the socket plumbing is the part least likely to
      * break silently.
      */
@@ -199,15 +193,13 @@ object CompileServer {
             CompileResponse(
                 output = "xtsc: --watch is not supported over the compile server " +
                     "(it would hold the single request thread open forever)\n",
-                exitCode = REFUSED,
+                exitCode = XTSC_REFUSED,
                 elapsedMs = 0,
+                protocolVersion = XTSC_PROTOCOL_VERSION,
             )
         } else {
             compileCapturing(request.args)
         }
-
-    /** Exit code for a request the server declined to run at all. */
-    internal const val REFUSED = 2
 
     /**
      * Binds [socketPath] and serves requests until the process is killed.
@@ -218,38 +210,68 @@ object CompileServer {
      */
     fun serve(socketPath: String = defaultSocketPath()) {
         socketPathProblem(socketPath)?.let { System.err.println("xtsc: $it"); return }
-        val path = Path.of(socketPath)
-        val address = UnixDomainSocketAddress.of(path)
-        if (File(socketPath).exists()) {
-            if (probe(address)) {
-                System.err.println("xtsc: a server is already listening on $socketPath")
-                return
-            }
-            println("xtsc: reclaiming stale socket $socketPath")
-            File(socketPath).delete()
+        if (!UnixSocketAddress.isSupported()) {
+            System.err.println(
+                "xtsc: Unix domain sockets are not available on this JVM/OS " +
+                    "(they need Java 16+, and Windows 10 1803+)"
+            )
+            return
         }
-        ServerSocketChannel.open(StandardProtocolFamily.UNIX).use { server ->
-            server.bind(address)
-            Runtime.getRuntime().addShutdownHook(Thread { File(socketPath).delete() })
-            println("xtsc compile server listening on $socketPath")
-            println("  requests are served sequentially; the first is cold (~26 s), later ones warm (~12 s)")
-            var served = 0
-            while (true) {
-                val client = try {
-                    server.accept()
-                } catch (e: Exception) {
-                    System.err.println("xtsc: accept failed: ${e.message}")
-                    continue
+        val address = UnixSocketAddress(socketPath)
+        val socketFile = File(socketPath)
+        runBlocking {
+            SelectorManager(Dispatchers.IO).use { selector ->
+                if (socketFile.exists()) {
+                    if (probe(selector, address)) {
+                        System.err.println("xtsc: a server is already listening on $socketPath")
+                        return@runBlocking
+                    }
+                    println("xtsc: reclaiming stale socket $socketPath")
+                    socketFile.delete()
                 }
-                client.use { channel ->
-                    try {
-                        val request = json.decodeFromString<CompileRequest>(readFrame(channel))
-                        val response = respondTo(request)
-                        writeFrame(channel, json.encodeToString(response))
-                        served++
-                        System.err.println("xtsc: request $served served in ${response.elapsedMs} ms")
-                    } catch (e: Exception) {
-                        System.err.println("xtsc: request failed: ${e.message}")
+                val server = try {
+                    aSocket(selector).tcp().bind(address)
+                } catch (e: Exception) {
+                    System.err.println("xtsc: cannot bind $socketPath: ${e.message}")
+                    return@runBlocking
+                }
+                server.use {
+                    Runtime.getRuntime().addShutdownHook(Thread { socketFile.delete() })
+                    println("xtsc compile server listening on $socketPath")
+                    println(
+                        "  requests are served sequentially; the first is cold (~26 s), " +
+                            "later ones warm (~12 s)"
+                    )
+                    var served = 0
+                    while (true) {
+                        val client = try {
+                            server.accept()
+                        } catch (e: Exception) {
+                            System.err.println("xtsc: accept failed: ${e.message}")
+                            continue
+                        }
+                        // NOT `launch { }` — see invariant 1. One connection is
+                        // handled to completion before the next is accepted.
+                        client.use { socket ->
+                            try {
+                                val text = socket.openReadChannel().readFrame()
+                                val request = xtscProtocolJson
+                                    .decodeFromString<CompileRequest>(text)
+                                protocolProblem(request.protocolVersion)?.let {
+                                    System.err.println("xtsc: client mismatch — $it")
+                                }
+                                val response = onCompileThread { respondTo(request) }
+                                val out = socket.openWriteChannel(autoFlush = false)
+                                out.writeFrame(xtscProtocolJson.encodeToString(response))
+                                out.flushAndClose()
+                                served++
+                                System.err.println(
+                                    "xtsc: request $served served in ${response.elapsedMs} ms"
+                                )
+                            } catch (e: Exception) {
+                                System.err.println("xtsc: request failed: ${e.message}")
+                            }
+                        }
                     }
                 }
             }
@@ -257,8 +279,8 @@ object CompileServer {
     }
 
     /** True iff something is accepting connections on [address]. */
-    private fun probe(address: UnixDomainSocketAddress): Boolean = try {
-        SocketChannel.open(address).use { true }
+    private suspend fun probe(selector: SelectorManager, address: UnixSocketAddress): Boolean = try {
+        aSocket(selector).tcp().connect(address).use { true }
     } catch (_: Exception) {
         false
     }
@@ -266,17 +288,42 @@ object CompileServer {
     /**
      * Sends [args] to a running server. Returns null when none is reachable,
      * so the caller can fall back to compiling in-process rather than failing.
+     *
+     * A PROTOCOL MISMATCH also returns null. A daemon outlives the client that
+     * started it by days, so the two are routinely different builds; answering
+     * from a peer that may not understand this request is worse than doing the
+     * work here, and the message says which way to fix it.
      */
     fun request(args: List<String>, socketPath: String = defaultSocketPath()): CompileResponse? {
         socketPathProblem(socketPath)?.let { System.err.println("xtsc: $it"); return null }
-        val address = UnixDomainSocketAddress.of(Path.of(socketPath))
-        return try {
-            SocketChannel.open(address).use { channel ->
-                writeFrame(channel, json.encodeToString(CompileRequest(args)))
-                json.decodeFromString<CompileResponse>(readFrame(channel))
+        if (!UnixSocketAddress.isSupported()) return null
+        val address = UnixSocketAddress(socketPath)
+        val response = try {
+            runBlocking {
+                SelectorManager(Dispatchers.IO).use { selector ->
+                    aSocket(selector).tcp().connect(address).use { socket ->
+                        val out: ByteWriteChannel = socket.openWriteChannel(autoFlush = false)
+                        out.writeFrame(
+                            xtscProtocolJson.encodeToString(
+                                CompileRequest(
+                                    args = args,
+                                    protocolVersion = XTSC_PROTOCOL_VERSION,
+                                )
+                            )
+                        )
+                        out.flush()
+                        val input: ByteReadChannel = socket.openReadChannel()
+                        xtscProtocolJson.decodeFromString<CompileResponse>(input.readFrame())
+                    }
+                }
             }
         } catch (_: Exception) {
-            null
+            return null
         }
+        protocolProblem(response.protocolVersion)?.let {
+            System.err.println("xtsc: $it — compiling in-process instead")
+            return null
+        }
+        return response
     }
 }
