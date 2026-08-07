@@ -55,12 +55,12 @@ jobs:
           cache: 'gradle'
 
       - name: Build native image
-        run: ./gradlew nativeImage --no-configuration-cache
+        run: ./gradlew :xemantic-typescript-compiler-daemon:nativeImage --no-configuration-cache
 
       - name: Report binary
         run: |
-          ls -la build/native/xtsc
-          ./build/native/xtsc --help | head -5 || true
+          ls -la xemantic-typescript-compiler-daemon/build/native/xtsc
+          ./xemantic-typescript-compiler-daemon/build/native/xtsc --help | head -5 || true
 
       # The gate is byte-identity against the JVM, never a diagnostic COUNT: two
       # runs can agree on 46 and disagree on which 46.
@@ -73,13 +73,13 @@ jobs:
           CP="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)"
           java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
             --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > jvm.txt
-          ./build/native/xtsc --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > native.txt
+          ./xemantic-typescript-compiler-daemon/build/native/xtsc --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > native.txt
           diff jvm.txt native.txt && echo "native output is byte-identical to the JVM"
 
       - uses: actions/upload-artifact@v4
         with:
           name: xtsc-linux-x64
-          path: build/native/xtsc
+          path: xemantic-typescript-compiler-daemon/build/native/xtsc
           if-no-files-found: error
 
   # Kotlin/Native (linuxX64) — compile, link, and run the WHOLE corpus suite
