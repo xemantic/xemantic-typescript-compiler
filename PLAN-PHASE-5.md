@@ -107,6 +107,22 @@ the three things worth reading twice are repeated here.
   proves that class actually dispatches — and its KDoc says plainly that it cannot see whether
   the image builds or serves. Ablation: reverting the constant fails that pin and only it.
   `scripts/aot-corpus-suite.sh` both-arms baseline 12 → 13.
+- **ROUND-841 CORRECTION — "the image may not even build" WAS ALREADY ANSWERED BY CI AT THIS
+  VERY COMMIT, AND NOBODY LOOKED.** `.github/workflows/bench.yml` runs
+  `./gradlew nativeImage` from source on **every push** and benches the binary as a fourth
+  arm, and it is `continue-on-error`, so a failed build publishes a 3-way row with `—`.
+  `bench-history/runs/20260806T234303Z-e7d933d24a48.md` — the row at commit `e7d933d2`,
+  *this* change — carries a full native arm: **check-only 14.38 s (1.06× tsc), emit 16.08 s
+  (0.99× tsc), 46 errors in both modes, matching the JVM arm.** So the image **BUILDS from
+  `server.XtscMainKt` and type-checks correctly through it**; unverified items (1) and (4)
+  of the entry below are settled, and the `13,350 ms` figure is superseded by 75 CI rows
+  regardless of entry point (`docs/perf/aot-native-image.md` § 0a). **STILL GENUINELY OPEN,
+  and unchanged: `--serve`/`--daemon` on a native image, i.e. the
+  `UnixDomainSocketAddress` / `ServerSocketChannel(UNIX)` closed-world question** — CI
+  exercises a one-shot compile only, and it checks the error COUNT, not an output diff.
+  *The generalisable lesson: this repo has a CI instrument that answers "does X still build
+  and run" on every push, and a round that names a build-or-run unknown should read the
+  bench row at its own commit before writing the unknown down.*
 
 **Round 840 (2026-08-06) — (AOT.4)(a): THE SHIPPED LAUNCHER COULD NOT REACH THE WARM SERVER
 IT SHIPS. `scripts/xtsc` RAN `MainKt`, SO `--serve` AND `--daemon` — ROUND 839's 7.3 s WARM
@@ -844,6 +860,18 @@ COLD single-process budget**, and this arc already owns a warm artifact at **11.
 (AOT.1) owner decision, not an engineering one. **CORRECTED round 823: that 13.4 s is the
 GraalVM native-image (round 771), NOT Kotlin/Native — K/N release measures 20.0 s, 1.26×
 a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all four points.**
+**CORRECTED AGAIN round 841 — and this one changes the SIZE of the gap this whole section
+is organised around.** The `13.4 s` is a 3-run measurement on the RETIRED 4-core box, and
+it stopped being the best evidence on 2026-07-30, when commit `a1ff6033` made CI build the
+GraalVM image on every push and run it as a fourth arm in BOTH modes. **75 CI rows × 2
+modes = 150 native/tsc ratios: median `1.02×` tsc** (check-only 1.04×, emit 1.01×; 110/150
+within 1.10×; latest row `e355a990bfaa` reads 1.00× check-only and **0.97× — faster than
+tsc — on emit**). So "we are ~2.4× off parity" is true of the **JVM cold arm only** (CI
+check-only median 2.51×, latest 2.41×); *the same compiler as a native image is already at
+parity*. Nothing in § 0.1's COLD-JVM budget model changes — but any sentence that reads the
+2.4× as a property of the compiler rather than of the artifact is now wrong, and this
+section, (JIT.2a) and (ENGINE.3)/(SCOPE.1) all contain such sentences.
+`docs/perf/aot-native-image.md` **§ 0a** is the authority for the native arm from here.
 
 - [x] **(JIT.1) COMPLETE at round 821 — the census is ZERO.** Split every method above
   HotSpot's `HugeMethodLimit` so it can be JIT-compiled at all. **Rounds 802–821: 19
@@ -1355,33 +1383,56 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   `scripts/aot-corpus-suite.sh`'s both-arms baseline moves **12 → 13** (it reads a FILE, so it
   needs Gradle's exploded dir exactly as the other main-class pins do).
   **STILL UNVERIFIED — the honest list, and the reason this is not a closed subject.**
-  (1) `./gradlew nativeImage` has **never been run** against the dispatcher: GraalVM is not
+  **RE-ADJUDICATED round 841 against the CI bench row at this very commit
+  (`bench-history/runs/20260806T234303Z-e7d933d24a48.md`): three of the five are SETTLED,
+  and the ones that are not are the socket ones. The list is annotated in place rather than
+  rewritten.**
+  ~~(1) `./gradlew nativeImage` has **never been run** against the dispatcher: GraalVM is not
   installed here (`native-image` absent from PATH, `GRAALVM_HOME` unset, no `/opt/graalvm*`),
-  so the image may not even BUILD. (2) `--serve`/`--daemon` have **never run on a native image
-  at all**, before or after. (3) Whether native-image's closed-world analysis needs help with
+  so the image may not even BUILD.~~ **SETTLED — IT BUILDS AND RUNS.** `bench.yml` builds the
+  image from source on every push (GraalVM CE for JDK 25, `continue-on-error`, so a failure
+  publishes `—`), and the row AT `e7d933d2` has a full native arm: **check-only 14.38 s
+  (1.06× tsc) / emit 16.08 s (0.99× tsc), 46 errors in both**, matching the JVM arm's count.
+  Closed-world analysis therefore accepts `server.XtscMainKt`, and the one-shot path through
+  the dispatcher is correct. *This was answerable the same day at zero cost; the round wrote
+  the unknown down without reading its own bench row.*
+  (2) `--serve`/`--daemon` have **never run on a native image at all**, before or after.
+  **STILL OPEN — CI exercises a one-shot compile only.**
+  (3) Whether native-image's closed-world analysis needs help with
   `UnixDomainSocketAddress` / `ServerSocketChannel.open(StandardProtocolFamily.UNIX)` — no
   metadata was added for it, because adding config that cannot be tested is worse than naming
   the gap. If the image builds and `--serve` fails at run time, that is the first place to
-  look. (4) Image SIZE and BUILD TIME move by an unmeasured amount and direction. (5) The
-  13,350 ms figure quoted for the native image throughout the docs was measured on a
-  `MainKt` image and has not been re-taken. **Whoever next has a GraalVM box should run
+  look. **STILL OPEN, and now the SHARPEST remaining item: (1) proved the image builds, so a
+  socket failure could only be a RUN-time one, exactly where this bullet predicted.**
+  ~~(4) Image SIZE and BUILD TIME move by an unmeasured amount and direction.~~ **Effectively
+  settled for BUILD TIME — CI's ~2 min budget still covers it, on every push. SIZE is still
+  unrecorded (the workflow does not publish it).**
+  ~~(5) The 13,350 ms figure quoted for the native image throughout the docs was measured on a
+  `MainKt` image and has not been re-taken.~~ **SUPERSEDED round 841 for a bigger reason than
+  the entry point: the figure is a retired 4-core box's 3 runs, and CI has published 75 rows
+  × 2 modes since 2026-07-30 — native/tsc median `1.02×`. `docs/perf/aot-native-image.md`
+  § 0a is the authority.**
+  **Whoever next has a GraalVM box should run
   (AOT.4)(a)'s end-to-end verification against the native binary** — `--serve` serving two
   requests, `--daemon` output diff-identical to the one-shot run — and only then treat the
-  native thin-client story as real.
+  native thin-client story as real. **That remains exactly right, and is now the WHOLE of
+  what is open here.**
 
-- [ ] **(AOT.4)(c) — the AOT residue that (a) did NOT close.** Carried forward from round
-  839's list plus what round 840 added, queued here so it stops living only in prose:
-  (1) `--serve`/`--daemon` **under a cache** through the launcher — round 840 verified only
-  the one-shot cached run; (2) a cache **trained with `--serve`** in the workload, and
-  whether the two extra dispatcher class loads shift any timing (argued away by inspection,
-  not measured); ~~(3) a cache trained under **emit**~~ — **DONE round 840(c)**, see below;
-  ~~the `--workers 4` half of (3)~~ — **DONE round 840(d): MEASURED AND NOT SHIPPED**, see
-  below; `train` stays sequential, pinned;
-  (4) **`--watch`/`--incremental`** under a cache; (5) the **other seven dashboard profiles**;
-  (6) the shipped `~/.cache` cache was NOT retrained on the 78-file compiler profile after
-  round 840's fingerprint change (~30 s + ~54 MB), so the first `xtsc` run there is an
-  uncached one until `xtsc-aot train` is called. None of these is a correctness hazard — the
-  contract fails safe — so this is a measurement/packaging item, not a defect.
+- [x] **(AOT.4)(c) — CLOSED round 841 as a queue item; its two substantive halves are
+  DONE and its remainder is re-queued as (AOT.5) below.** *Checkbox reconciled round 841
+  (2026-08-07): this item stood `- [ ]` while both of the things it was actually queued to
+  decide had landed — (3) emit at round 840(c) (SHIPPED, `train` now emits) and (3)'s
+  `--workers` half at round 840(d) (MEASURED AND REJECTED, `train` stays sequential,
+  pinned). What was left under this checkbox was a list of unmeasured MODES, which is not
+  the same work and should not be read as live.* Both write-ups are kept immediately below
+  because they are the item's result; the residue is (AOT.5).
+  Original framing follows: "the AOT residue that (a) did NOT close", carried forward from
+  round 839's list plus what round 840 added — ~~(1) `--serve`/`--daemon` under a cache;
+  (2) a cache trained with `--serve`~~ (moved to (AOT.5)); ~~(3) a cache trained under
+  **emit**~~ — **DONE round 840(c)**, see below; ~~the `--workers 4` half of (3)~~ —
+  **DONE round 840(d): MEASURED AND NOT SHIPPED**, see below; ~~(4) `--watch`/`--incremental`;
+  (5) the other seven dashboard profiles; (6) the shipped `~/.cache` cache not retrained~~
+  (all moved to (AOT.5)). None of these is a correctness hazard — the contract fails safe.
 
   **(3) EMIT — DONE round 840(c), `docs/perf/aot-cache.md` § 9. `train` now emits.** Measured
   over 54 whole-project compiles in three batches (paired, within-rep, rotated, box quiet and
@@ -1418,6 +1469,31 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   training, training-run variance (one training run per arm; batch 2 reused both caches), an
   emitting workload under either cache, and the other seven profiles.**
 
+- [ ] **(AOT.5) — the AOT cache's UNMEASURED MODES. LOW PRIORITY; measurement/packaging,
+  not a defect.** *Split out of (AOT.4)(c) at round 841 so that a closed item stops
+  carrying live work and this list stops being read as urgent.* Nothing here is a
+  correctness hazard: the manifest contract fails SAFE (a mismatched fingerprint degrades
+  to a normal uncached run), so the worst outcome in every line below is "slower than it
+  could be". Ordered by what a user would notice first:
+  - (a) **the shipped `~/.cache` cache has not been retrained** since round 840's
+    fingerprint change, so the first `xtsc` run on this box is an uncached one until
+    `xtsc-aot train` is called (~30 s, ~54 MB). This is the only line with a *present-tense*
+    cost to anybody, and it is one command.
+  - (b) **`--serve`/`--daemon` UNDER a cache, through the launcher** — round 840 verified
+    only the one-shot cached run, and round 839 measured `--serve` uncached (cache halves
+    the first request, worth nothing warm).
+  - (c) a cache **trained with `--serve`** in the workload, and whether the two extra
+    dispatcher class loads shift any timing (argued away by inspection, never measured).
+  - (d) **`--watch`/`--incremental`** under a cache — note `--outDir` is deliberately NOT
+    threaded through either, so (c)'s training change does not reach them.
+  - (e) the **other seven dashboard profiles** (everything measured is the 78-file compiler
+    profile), and an **emitting workload under a `--workers`-trained cache**.
+  - (f) **training-run VARIANCE** — every result so far uses ONE training run per arm
+    (round 840(d)'s second batch replicated the measurement, not the draw). Round 840(c)
+    caught a 5/5 sign-consistent FALSE POSITIVE in its own first batch, so this is the
+    line most likely to overturn something already recorded, and it is the one to do first
+    if any of these is done at all.
+
 - [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
   live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round
   spent MEASURING the JDK 25 AOT cache.** The owner declined
@@ -1434,6 +1510,11 @@ a cold JVM. `docs/perf/aot-native-image.md` § 2b/§ 2c is the authority for all
   13.4 s" this line used to say was the GraalVM number, not K/N) — so the AOT cache is a
   FIFTH artifact point, and the number that
   matters is COLD start on a real profile, not a microbenchmark.
+  **ROUND-841 CORRECTION to the GraalVM figure in that list: `13.4 s` is the retired
+  4-core box's 3-run number. CI has measured the image on every push since 2026-07-30 —
+  75 rows × 2 modes, native/tsc median `1.02×` (check-only 11.20 s, emit 13.43 s). The
+  artifact-scoped framing this bullet states is not just true, it is stronger than it
+  reads: the native artifact is at tsc PARITY. `docs/perf/aot-native-image.md` § 0a.**
   Original proposal follows.
   Add `-XX:-DontCompileHugeMethods` to
   the application's default JVM arguments, and evaluate a JDK 24/25 **AOT cache**
@@ -6976,7 +7057,7 @@ interrupt the arc).
     false negative now fires — Inv5GenericGateTest). Remaining: the
     pin-walker deletion sweep.**
 
-- [x] **INV.6 Parallelism — Phase 0 CLOSED round 609** (6a-6d1: --workers 2 = −17% wall, output sorted-identical, all-8-profile partition equivalence; w4 flat at the per-worker redundancy ceiling — Phase 1 shared frozen collectors is the reopener, gated on an immutability audit; (6e) parallel emit deferred: emit workers would race the shared checker's lazy caches, and benches are --noEmit). Share-nothing checker workers per
+- [x] **INV.6 Parallelism — Phase 0 CLOSED round 609** (6a-6d1: --workers 2 = −17% wall, output sorted-identical, all-8-profile partition equivalence; w4 flat at the per-worker redundancy ceiling — Phase 1 shared frozen collectors is the reopener, gated on an immutability audit; (6e) parallel emit deferred: emit workers would race the shared checker's lazy caches, and ~~benches are --noEmit~~ *[round 841: the benches have run BOTH modes since 2026-07-30; the deferral now rests on the race plus a ~1.6 s ceiling — see (6e)]*). Share-nothing checker workers per
   `docs/parallel-caching.md` (trivially partitionable once INV.4 gives a per-file
   check entry); parallel emit on Default + IO write sink; deterministic partition +
   merge via the existing diagnostic sort. Structured concurrency from INV.1.
@@ -6997,7 +7078,24 @@ interrupt the arc).
     widening = Phase-1 shared frozen collectors (immutability audit) —
     queue that only after INV.5 canonical types or on a >4-core box.
   - [ ] **(6e) Parallel emit** on Default + IO write sink (INV.1's Flow
-    foundation; no dashboard delta expected — benches are --noEmit).
+    foundation; ~~no dashboard delta expected — benches are --noEmit~~).
+    **RE-COSTED round 841 — the stale half of that rationale and the priced
+    half.** The premise is gone: the bench has published an **emit arm on every
+    row since (BENCH.1)/round 739** (CI since 2026-07-30, commit `a1ff6033`),
+    and the latest row measures emit at **2.30× tsc** (75-row median 2.25×), so
+    a dashboard delta IS now observable in principle. The *price*, however, is
+    what actually keeps this low: round 840(c) measured the emit tail on the
+    78-file compiler profile at **2,139 ms uncached / 2,216 ms cached** of a
+    ~30 s emitting compile, so **perfect 4-way emit parallelism is worth
+    ~1.6 s of emit mode and exactly 0% of check-only** — the mode the whole
+    perf arc profiles, and the mode `ab-interleaved.sh` / `cost_gate.py` run.
+    Against that, the hazard INV.6's own header names is unchanged and is not
+    endorsed here: **emit workers would race the shared checker's lazy caches**
+    (`getTypeOfSymbol`'s `symbolTypes`, the interning tables — the same class of
+    problem as the round-825 `--workers` id-space race, which was silent in
+    every output). So: rationale corrected, priority unchanged, and the reason
+    for the priority is now the ~1.6 s ceiling rather than a bench that no
+    longer works the way the note said.
 - [x] **INV.7 Productization — CLOSED for queue purposes (checkbox reconciled
   round 687): 7a/7c1/7d1/7d2/7d3 all landed and the only remaining child, (7b)
   release binary + native bench row, is PARKED-BY-OWNER.** (absorbs M5.5/M5.6). Native re-enable (the big-input
@@ -7036,7 +7134,10 @@ interrupt the arc).
     round 772's 1.21×. **NOTE the queue's own misquote, corrected in § 2c: the
     "native 13.4 s" artifact point cited above and at (JIT.2a) is the GraalVM
     native-image number, NOT Kotlin/Native** — K/N release has only ever
-    measured 21.8 s (round 772) and 20.0 s (round 823). Verdict unchanged:
+    measured 21.8 s (round 772) and 20.0 s (round 823). *(Round 841: that
+    GraalVM number is itself now superseded as an authority — CI has measured
+    the image on every push since 2026-07-30, median 11.20 s check-only /
+    13.43 s emit, `1.02×` tsc. `aot-native-image.md` § 0a.)* Verdict unchanged:
     K/N is a REACH artifact (no JVM anywhere, corpus runs natively), never a
     speed one; GraalVM stays the speed path and (AOT.1) stays owner-gated.
     Also NOT reproduced: round 772's "0.2% spread" AOT-determinism claim,
@@ -7062,12 +7163,36 @@ directive: "do anything needed … to increase the performance", followed by "ho
 should we proceed to match the tsc performance on a single thread". The PERF
 section above is the live queue again, and **(DISPATCH.1) is the top unchecked
 item**; work it before anything here. This section stays OPEN and unparked — it
-is not cancelled, and it holds the only known SILENT-WRONG-ANSWER defect in the
+is not cancelled, and it holds ~~the only known SILENT-WRONG-ANSWER defect in the
 codebase (M2.4: with `"lib": ["dom"]` a browser project's DOM code compiles
-CLEAN and entirely unchecked) plus the "real project" gaps (declaration emit,
+CLEAN and entirely unchecked) plus~~ the "real project" gaps (declaration emit,
 sourcemaps, JSX, nodenext). **The trade being made is explicit: matching tsc's
 speed is being prioritised over making the compiler usable on non-tsc projects.**
 Revisit when the perf arc reaches its staged target or stalls.
+
+**CORRECTED round 841 (2026-08-07) — THE STRUCK CLAUSE HAS BEEN FALSE SINCE ROUND
+731, i.e. for 110 rounds, AND IT IS ONE OF THE STANDING ARGUMENTS FOR UNPARKING
+THIS SECTION, SO IT MATTERED.** The M2.4 defect was closed by **(LIB.1)(a) at
+round 730 and (LIB.1)(b) at round 731** — the queue item in the PERF section
+above reads `- [x] **(LIB.1) — DONE. (a) round 730, (b) round 731, (c) round
+756.**`. The struck text was TRUE when written (round 716) and went stale 14
+rounds later; nothing re-read it, which is the same queue-hygiene failure mode
+this section's own closing parenthesis already records about itself. Verified at
+HEAD by
+reading the artifacts, not the notes: `CompilerOptions.kt:644` is
+`internal fun projectDefaults(): CompilerOptions = CompilerOptions(useRealLibs = true)`,
+so both project entry points start with the real libs (the CONSTRUCTOR default
+stays `false`, which is what keeps the corpus on the embedded lib); and
+`generateRealLibSources` embeds **every** `src/lib/*.d.ts` at the pinned commit —
+`dom.generated`, `dom.iterable.generated`, `dom.asynciterable.generated` are all
+present in `libNames`. So `"lib": ["dom"]` now resolves to real declarations, and
+(LIB.1)(c) additionally made a lib name that resolves to *nothing* raise TS6046
+instead of silently checking against no lib at all. **This section no longer
+contains any known silent-wrong-answer defect** — its remaining content is the
+"real project" feature gaps listed above, which is a materially weaker reason to
+unpark it. Whoever next weighs unparking should weigh it on those gaps alone.
+*(M2.4's own line further down already reads `SUPERSEDED round 716 by (LIB.1)`;
+only this header went unreconciled.)*
 
 (Historical note: the loop was to skip this section until v1 landed. It landed
 at 481; the section stayed parked ~200 rounds because nothing re-read the

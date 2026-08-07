@@ -192,14 +192,33 @@ remain, and only the first can change the constant:
    it trades the property (narrow, verifiable walkers) that made the byte-identical
    corpus reachable in the first place.
 2. **Parallelism**, which is now cheaper than M2 measured: a worker's duplicated
-   term includes the bind, and the bind is 5.2%. Still needs ≥8 real cores —
-   see (PERF.HW), still unmeasured on this box.
+   term includes the bind, and the bind is 5.2%. ~~Still needs ≥8 real cores —
+   see (PERF.HW), still unmeasured on this box.~~ **MEASURED round 824 and
+   re-taken round 826 on the 8-core box** (`docs/perf/worker-scaling-round826.md`):
+   **w2 1.305× / w4 1.361× / w8 1.242×**, every level 6/6 sign-consistent, so
+   **w4 is the optimum and worker count ALONE is exhausted there.** Note the
+   `--workers` race that deflated round 824's arms was fixed at round 825; and
+   the duplicated per-worker term costs CPU and RSS, not WALL (cores peak at
+   6.63 of 8), so shrinking it is priced small — ~1.36× today against at most
+   1.55× in an unreachable limit.
 3. **Accept the gap.** ~~~2.15×.~~ Corrected round 739: the published (emit-mode,
    like-for-like) ratio is **2.28× over 340 CI runs, 2.40× over the last 30**, and
-   the check-only ratio this arc's numbers belong to is **unmeasured, bounded below
-   by 2.21×, and probably higher** (§ 0.2 of `docs/ARCHITECTURE-RETHINK.md`). Which,
+   ~~the check-only ratio this arc's numbers belong to is **unmeasured, bounded below
+   by 2.21×, and probably higher**~~ (§ 0.2 of `docs/ARCHITECTURE-RETHINK.md`). Which,
    stated plainly, is ~2.3× a mature compiler that has had a decade of tuning, on a
    JVM, with a byte-identical corpus gate.
+   **CORRECTED round 841: the check-only ratio has been PUBLISHED since 2026-07-30**
+   (commit `a1ff6033` made CI run every arm in both modes) — **75 rows, median
+   `2.51×`, last 30 `2.36×`, latest row `2.41×`**; emit over the same 75 rows is
+   `2.25×` (latest `2.30×`). So round 739's `≥ 2.21×` lower bound held and its "and
+   probably higher" was right. **Two things this bullet should now say and did not.**
+   First, check-only is the *worse* mode for us, not the better one — the arc profiles
+   the mode in which the gap is widest. Second, and larger: this is the **JVM cold
+   arm's** gap. CI has also measured the **GraalVM native image** on every push since
+   the same commit, and that arm is at **1.02× tsc over 150 ratios** — same compiler,
+   same sources, no compiler change. "Accept the gap" is therefore a question about
+   which ARTIFACT ships (the standing (AOT.1) owner decision), not about the checker.
+   `docs/perf/aot-native-image.md` § 0a.
 
 ## 6. What did NOT work / was not attempted
 

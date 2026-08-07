@@ -17,7 +17,7 @@ as "what this artifact was worth *in its own round*".
 |---|---:|---|---|
 | JVM, cold single-shot | 26.3 s (r771) / 25.3 s (r823) / 22.2 s (r828, from the jar) | 771 / 823 / 828 | § 1, § 2c, `aot-cache-round828.md` § 1 |
 | JVM, warm steady state (`--serve`) | 11.6 s | 771, 4-core box | § 1, § 4 |
-| GraalVM CE native-image | 13.4 s | 771, 4-core box | § 1, § 2 |
+| GraalVM CE native-image | ~~13.4 s~~ — **SUPERSEDED as the authority, see § 0a: CI median 11.2 s check-only / 13.4 s emit over 75 rows** | 771, RETIRED 4-core box / CI ubuntu-latest since 2026-07-30 | **§ 0a**, then § 1, § 2 |
 | Kotlin/Native release | 21.8 s (r772) / 20.0 s (r823) | 772 / 823 | § 2b, § 2c |
 | **JDK 25 AOT cache** | **13.6 s — 1.638× its own round's plain arm, 6/6 wins** | 828, 8-core box | **`docs/perf/aot-cache-round828.md`** |
 
@@ -28,9 +28,61 @@ start-up** (~28 ms of it is; the other 8.6 s is C2 compiling early from recorded
 and **the JVM never invalidates a stale cache** — a jar whose classes have changed is
 silently ignored in favour of the cached bytecode, which is why shipping it is conditional.
 
+## 0a. The native arm is measured CONTINUOUSLY now, and it is at tsc PARITY (round 841)
+
+*Added round 841 (2026-08-07) during a documentation-drift audit. Nothing below contradicts
+a measurement in this file; what it corrects is which measurement is the AUTHORITY, and it
+adds the one number this file never stated.*
+
+**Since commit `a1ff6033` (2026-07-30) the CI bench builds the GraalVM image from source on
+every push and runs it as a FOURTH arm, in BOTH modes** (`.github/workflows/bench.yml`
+"Build the AOT binary" + `--xtsc-native`; `continue-on-error`, so a failed image publishes
+a 3-way row with `—` instead of silently substituting something else). So the 4-core box's
+three runs are no longer the best evidence about this artifact — **75 rows × 2 modes = 150
+native/tsc ratios** are, on ubuntu-latest, GraalVM CE for JDK 25.
+
+| mode | native median | tsc median | **native ÷ tsc** | ≤1.05× | ≤1.10× | >1.20× |
+|---|---:|---:|---:|---:|---:|---:|
+| check-only (`--noEmit`) | **11.20 s** | 10.68 s | **1.04×** | 41/75 | 49/75 | 4/75 |
+| emit | **13.43 s** | 13.10 s | **1.01×** | 47/75 | 61/75 | 2/75 |
+| **both pooled** | — | — | **1.02×** (min 0.89, max 1.32) | 88/150 | 110/150 | 6/150 |
+
+Latest row at the time of writing (`e355a990bfaa`, 2026-08-07): check-only native **10.54 s
+vs tsc 10.57 s = 1.00×**; emit native **12.84 s vs tsc 13.23 s = 0.97×** — i.e. *faster than
+tsc*, in the mode that does the most work.
+
+**THE FRAMING CORRECTION, AND IT IS THE POINT OF THIS SECTION.** "xtsc is ~2.4× tsc" is a
+statement about the **JVM cold single-shot arm** and it remains true (CI check-only median
+**2.51×**, latest row 2.41×; emit median 2.25×, latest 2.30×). It is **not** a statement
+about the compiler, because the *same compiler* shipped as a native image measures **1.02×
+tsc**. Parity is artifact-scoped — this file has said so since round 771 — but the arc has
+been quoting the JVM ratio as *the* gap while a parity-level artifact was being measured
+continuously in CI and never entered this index. Whenever a ratio is quoted, name the ARM
+as well as the MODE.
+
+Three caveats a reader must carry, so this table is not over-read in the other direction:
+
+- **It is one row per push, xtsc median-of-1 against tsc median-of-3, on a shared GitHub
+  runner.** The spread is real (native/tsc ranges 0.89–1.32) and the *medians* are the
+  claim, never a row. The ±13% box-noise rule applies here exactly as everywhere else.
+- **`13.4 s` was never wrong and is not retracted** — it is a 2026-07 measurement of three
+  runs on a 4-core box that no longer exists, and it happens to sit close to the CI *emit*
+  median. What is corrected is its status as the authority, and § 2's speedup RATIOS (1.71–
+  1.98× the cold JVM) are likewise that box's; CI's native-vs-JVM ratio medians are 2.41×
+  check-only / 2.18× emit, because the JVM arm on a shared runner is slower, not because the
+  image got faster.
+- **CI exercises a ONE-SHOT compile only.** It does not run `--serve`/`--daemon` on the
+  image, does not diff the native output against the JVM's (that is `native.yml`'s job, and
+  it is `workflow_dispatch`-gated), and reports only the error COUNT — 46, matching the JVM
+  arm on every row. Round 771's § 2 byte-identity grid is still the only output-identity
+  evidence, and it was taken on the retired box from a `MainKt` image.
+
 ## 1. The result
 
 Compiler profile, `--noEmit` (check-only), this box (4 cores, 7.7 GB), daemons stopped.
+**Round-841 note: "this box" is the RETIRED 4-core host, and these three runs are no longer
+the authority for the native arm — see § 0a for the 75-row CI series. The numbers below
+stand as taken; only their standing changed.**
 
 | mode | wall | vs cold JVM |
 |---|---:|---:|
@@ -72,6 +124,9 @@ A per-node or per-file cost would not behave that way.
 *Round 772. Both are AOT; they are different backends (SubstrateVM vs LLVM), and the
 question "should we also ship a Kotlin/Native binary" needed a number rather than a
 preference.* Compiler profile, `--noEmit`, same box, `linkReleaseExecutableLinuxX64`.
+**Round-841 note: this is a WITHIN-round paired comparison and is unaffected by § 0a — the
+Graal-vs-K/N verdict (1.63×) stands. Only the GraalVM row's ABSOLUTE is superseded as an
+artifact-point authority; do not carry `13,350 ms` out of this table as a current figure.**
 
 | runtime | wall | vs JVM cold | vs Graal | RSS | binary |
 |---|---:|---:|---:|---:|---:|
@@ -247,12 +302,24 @@ free**, since it would be the same JVM one-shot process.
 
 ## 7. Caveats
 
-- **CE has no PGO.** The 15% shortfall against JVM peak is the pessimistic case.
-- One box, three runs per configuration. The grid is single-run per profile.
-- Emit mode not measured natively; all figures are `--noEmit`.
-- **Build integration is a Guardrails decision** and was deliberately NOT taken.
+*Round-841 audit: two of these five were overtaken by CI and are struck below; three stand.*
+
+- **CE has no PGO.** The 15% shortfall against JVM peak is the pessimistic case. **(STANDS.)**
+- ~~One box, three runs per configuration. The grid is single-run per profile.~~
+  **SUPERSEDED round 841 for the timing claim only** — 75 CI rows × 2 modes since
+  2026-07-30 (§ 0a). The *grid* caveat stands: § 2 is still single-run per profile, on the
+  retired box, and CI does not re-run it.
+- ~~Emit mode not measured natively; all figures are `--noEmit`.~~ **SUPERSEDED round 841**
+  — CI has published a native EMIT arm on every row since 2026-07-30 (median 13.43 s,
+  **1.01× tsc**, § 0a). This was § 9's "what to do next" item 2, and it is done.
+- **Build integration is a Guardrails decision** and was deliberately NOT taken. **(STANDS
+  as a shipping decision — (AOT.1) — though the bench workflow does build the image on
+  every push, so the `nativeImage` Gradle task itself is long since integrated.)**
 - The corpus suite has NOT been run against a native binary (it is a JVM test harness);
   the 8-profile byte-identity grid is the evidence, and it is weaker than the suite.
+  **(STANDS. Note the corpus HAS since been run against the JDK 25 AOT cache — round 839's
+  `scripts/aot-corpus-suite.sh` — but that is a different artifact, and CI's native arm
+  checks only that the error COUNT is 46.)**
 
 ## 8. Reproduction
 
@@ -308,10 +375,22 @@ either. `--no-fallback` succeeds first try.
 
 ## 9. What to do next
 
+*Round-841 status pass over the round-771 list.*
+
 1. **Adopt the warm protocol for compiler-level A/B** (`BenchMain`, ≥6 iterations after
    2 warmups, medians across processes). ±1.0% instead of ±2.0%, and faster per sample.
-2. **Emit-mode native measurement**, so the published CI ratio can be restated in the
-   mode it is actually measured in.
-3. **PGO** — needs Oracle GraalVM; the only remaining source of the 15%.
+   **DONE — `scripts/ab-warm.sh`; the band is calibrated in § 4/§ 4a.**
+2. ~~**Emit-mode native measurement**, so the published CI ratio can be restated in the
+   mode it is actually measured in.~~ **DONE 2026-07-30 (commit `a1ff6033`) — CI publishes
+   BOTH modes on all four arms; § 0a has the series.** It answered more than it was asked:
+   the native arm is at **tsc parity in both modes** (1.04× / 1.01×).
+3. **PGO** — needs Oracle GraalVM; the only remaining source of the 15%. **STILL OPEN.**
 4. **Build integration**, which is the owner's decision, and with it the question of
-   whether the shipped artifact is a native binary, a JVM jar, or both.
+   whether the shipped artifact is a native binary, a JVM jar, or both. **STILL OPEN as
+   the SHIPPING decision ((AOT.1)); the Gradle `nativeImage` task exists and CI runs it on
+   every push, so only the packaging/owner half remains.**
+5. **NEW, round 841 — the native arm's remaining evidence gaps**, all of them things CI
+   deliberately does not do: no output DIFF against the JVM per row (only the error count),
+   `--serve`/`--daemon` never run on a native image at all (the `UnixDomainSocketAddress`
+   closed-world question from round 840(b) is still open), and § 2's byte-identity grid has
+   not been re-taken since the entry point moved to `server.XtscMainKt`.
