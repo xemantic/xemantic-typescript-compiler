@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 # round-838 scratch: capture all 8 dashboard profiles with --noEmit --listAll.
 # Usage: scripts/grid838.sh <outdir>
+#
+# ROUND-841 WARNING — THE md5 THIS PRINTS MATCHES NOTHING IN THE ROUND NOTES.
+# A digest is a property of (output x RECIPE). This script's recipe strips the
+# absolute project prefix (the `sed` below), which no round has ever recorded a
+# digest under: on an identical capture it prints 84bbe7f0... where the value
+# written all over PLAN-PHASE-5.md (`59d930db...`, rounds 826/836-840) is the
+# SAME 46 lines WITHOUT the strip, and rounds 828-835's `4caacf24...` is the
+# whole 54-line stdout minus `[`/`time:` lines. Comparing across recipes reads
+# as a regression that is not there. Use added/removed against a rebuilt
+# before-arm for cross-round work; the md5 is for the within-run, many-runs
+# check. Full derivation: docs/perf/aot-cache.md section 11.
+# (The strip is the BEST of the three recipes - the only portable one - so
+# re-baseline onto it deliberately rather than deleting the sed.)
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$1"

@@ -154,7 +154,10 @@ A pin that survives its own ablation is a redundant guard, not coverage — see 
 identical command shape both arms, `[`-prefixed and `time:` lines stripped, sorted:
 
 - **diff EMPTY**, both md5 `4caacf248ce417899c2972c16a82f1ed` — *the same digest round 828
-  recorded*, so the output is stable across rounds as well as across arms.
+  recorded*, so the output is stable across rounds as well as across arms. **(Round-841
+  note: this cross-round claim is SOUND — 828 and 832 used the same capture recipe. It is
+  the LATER claims, in § 9.3 and § 10.5, that were not. Read § 11 before comparing any
+  digest in this file with any digest in another.)**
 - 46 `error TS` lines and `FAILED — 46 error(s)` on both; neither capture empty (round 804)
   nor containing `more error(s)` (round 811).
 - The cached arm's stdout now has **zero** `[` lines, so the two captures agree line-count
@@ -440,7 +443,10 @@ the check-only path would have moved, and it did not.
 ### 9.3 Correctness
 
 All 54 compiles produced **46 errors** and one sorted-diagnostics md5
-(`59d930db849399aea5e03e25fedb8e4e`, the same digest rounds 828/832/839 recorded), and every
+(`59d930db849399aea5e03e25fedb8e4e`, ~~the same digest rounds 828/832/839 recorded~~ —
+**CORRECTED round 841: the same digest ROUND 839 recorded. Rounds 828 and 832 recorded
+`4caacf24…`, which is a DIFFERENT RECIPE over the same output, not a different output.
+See § 11.** The within-round claim — 54 compiles, one digest — is untouched), and every
 one of the 30 emitting runs produced **78 files** and one whole-tree sha256
 (`a3ccd863f3523f5aefe4215576e920a7531c4ccd0be550b9b1362593f8ca280e`), `dist/` being deleted
 before each run and re-hashed after it. Emit-training changes nothing about the answer.
@@ -579,7 +585,10 @@ Within cache S (the shipped trainer), paired within-rep across levels, n=10:
 ### 10.5 Correctness
 
 **All 60 compiles: 46 `error TS` lines and ONE sorted-diagnostics md5,
-`59d930db849399aea5e03e25fedb8e4e`** — the digest rounds 828/832/839/840(c) recorded — across
+`59d930db849399aea5e03e25fedb8e4e`** — ~~the digest rounds 828/832/839/840(c) recorded~~
+**CORRECTED round 841: the digest rounds 839 and 840(c) recorded (and, on a different
+harness, rounds 826 and 836–838). Rounds 828/832 recorded `4caacf24…` under a DIFFERENT
+capture recipe — § 11.** The within-round claim is untouched — across
 both caches and all three worker levels, i.e. 20 runs per level and 30 per cache. No capture
 was empty (round 804) and none contained `more error(s)` (round 811). That is also the
 ≥5-runs-per-level distribution the standing `--workers` rule demands, at 10 per level rather
@@ -597,3 +606,92 @@ per arm); an **emitting** compile under either cache (this round's workload is `
 throughout, so the round-840(c) emit win is neither re-confirmed nor at risk); the
 interaction with `--serve`; and the other seven dashboard profiles. Nothing here touched
 `src/commonMain` or `src/jvmMain`, so `cost_gate.py` and `huge_methods.py` were not run.
+
+## 11. Round 841 — the TWO diagnostics-digest lineages, and why "the same digest" was false
+
+*Round 841 (2026-08-07), documentation-drift audit. No measurement was re-run and no
+compiler was built; this section is `grep` plus one arithmetic reproduction over a capture
+already on disk. It corrects a claim that was being used as CORRECTNESS EVIDENCE, which is
+why it gets a section rather than a footnote.*
+
+### 11.1 The contradiction
+
+This file asserted, in three places, that the compiler profile's sorted-diagnostics md5 is
+stable across rounds. But it named **two different values** for it:
+
+| digest | recorded by |
+|---|---|
+| `4caacf248ce417899c2972c16a82f1ed` | rounds **828, 832, 833, 834, 835** |
+| `59d930db849399aea5e03e25fedb8e4e` | rounds **826, 836, 837, 838, 839, 840(c), 840(d)** |
+
+§ 4(c) said `4caacf24…` was "the same digest round 828 recorded"; § 9.3 and § 10.5 said
+`59d930db…` was "the same digest rounds 828/832/839 recorded". Both cannot be true, and the
+value was load-bearing: it is the correctness half of every AOT round, and the 8-profile
+grid quotes it to argue a change is output-neutral.
+
+### 11.2 The answer: two capture RECIPES, one output
+
+**It is not two outputs. It is two normalisations of the same output**, and the tell is the
+line count — 46 versus 54.
+
+- **`59d930db849399aea5e03e25fedb8e4e` = `grep -a 'error TS' <raw --listAll stdout> | sort`
+  — 46 lines, ABSOLUTE paths, nothing stripped.** *Reproduced exactly*, round 841, from an
+  independent capture already committed to the tree
+  (`build/r817/grid-tsc-project-post.txt`, a round-817 8-profile-grid capture that predates
+  every round in the table above). That is the decisive fact: the digest is a property of
+  the recipe, not of a particular round's binary.
+- **`4caacf248ce417899c2972c16a82f1ed` = the WHOLE `--listAll` stdout with `[`-prefixed and
+  `time:` lines removed, then sorted — 54 lines** (§ 4 of this file and
+  `aot-cache-round828.md` § 4 both state the recipe, and both report the 54). Those 8 extra
+  lines are the run banner, `project:`, `config:`, `files:`, `unresolved imports:`,
+  `diagnostics:`, `by code:` and `FAILED — N error(s)`. A 54-line digest can never equal a
+  46-line one, so no amount of stability in the compiler could have made those two values
+  agree.
+
+**The repo already knew this and one round said so.** Round 836's session note
+(`PLAN-PHASE-5.md`) records: *"The digests differ from round 835's because this round's
+capture normalises to `grep 'error TS' | sort` rather than sorting the whole `--listAll`
+output."* The 8-profile grid switched recipes at round 836; the AOT rounds switched with it
+at 839. What went wrong is that § 9.3 and § 10.5 then reached back past the switch and
+claimed identity with 828/832 anyway.
+
+`4caacf24…` was **not** reproducible from the on-disk round-817 capture under four
+variants of its stated recipe (locale, `time:`-line handling). The most likely reason is
+that rounds 828–835 ran through `scripts/xtsc` from the jar with a differently-spelled
+project path, and the recipe hashes the banner and `project:`/`config:` lines that carry it.
+Settling that would need one `--listAll` capture from a jar run — worth ~2 minutes to
+whoever next has the binary warm, and worth nothing otherwise, because § 11.3 makes the
+question moot.
+
+### 11.3 What this does and does not invalidate
+
+**Does not invalidate any measurement.** Every round's *within-round* claim — "all N runs
+of this round produced ONE digest, cached and uncached" — is untouched: both arms of every
+comparison were captured by the same command, which is the only property those claims need.
+No correctness result in this file, in `aot-cache-round828.md`, or in any round note is
+weakened.
+
+**Does invalidate the cross-round identity argument as stated.** "The output is stable
+across rounds because the digest matches round 828's" is only an argument between rounds
+using the *same* recipe. Both struck sentences have been corrected in place.
+
+### 11.4 The rule, and a live trap it exposes
+
+**A digest is a property of (output × recipe). Quote the recipe with the digest, or do not
+quote the digest across rounds.** Two consequences:
+
+1. **There is a THIRD lineage in the tree, and it matches nothing recorded.**
+   `scripts/grid838.sh` — the committed 8-profile capture harness, and the natural thing
+   for the next round to reach for — pipes through
+   `sed "s#${DIRS[$P]}/##g"`, stripping the absolute project prefix from every error line.
+   On the same round-817 capture that reproduces `59d930db…` exactly, that recipe yields
+   **`84bbe7f0a60d81c40349527a068b8647`**. So a round that runs `grid838.sh`, compares its
+   compiler-profile digest against the `59d930db…` written all over `PLAN-PHASE-5.md`, and
+   reads the mismatch as a regression, will be chasing a `sed`. The path strip is the
+   *better* recipe — it is the only one of the three that is portable across boxes and
+   checkouts — so the fix is to re-baseline onto it deliberately and say so, not to remove
+   the `sed`.
+2. **Prefer the count-plus-diff over the digest for cross-round work.** "46 errors,
+   `added=0 removed=0` against a rebuilt before-arm" survives a recipe change; a bare md5
+   does not. The digest's real job is the *within-round, many-runs* check (30 runs, one
+   value), and at that job it is excellent.
