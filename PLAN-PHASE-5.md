@@ -20,6 +20,84 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 843 (2026-08-07) — (WARM.1)(a): THE FIRST WARM-JVM ATTRIBUTION THIS REPO HAS EVER TAKEN,
+AND IT CORRECTS THE ARC'S HEADLINE ARTIFACT NUMBER BY 40%.** Owner directive this session:
+*"we have a new client-server architecture; prioritize profiling-based performance improvements on
+the warmed-up JVM."* Recon established the premise: **every per-pass table in `docs/perf` was
+produced by a COLD one-shot `MainKt` JVM** — four independent strands (each table's own "median of
+3 probe-free runs" protocol line, the literal command in `setup-phase-and-huge-methods.md` § 644,
+`cost_gate.py`'s recipe, and `BenchMain`'s inability to take a flag) — so the cost map every queue
+decision rests on describes an artifact we no longer ship. Full tables:
+`docs/perf/warm-jvm-attribution.md`. Five things worth carrying forward:
+
+- **THE ARTIFACT LADDER MOVED AND NOBODY MEASURED IT.** Probe-free cold **22,971 ms** (n=3);
+  warm `BenchMain` median **6,917 / 7,143 ms**; the real `--serve` client-server ladder
+  **22,753 → 10,898 → 7,754 → 7,606 → 7,447 → 7,410 → 7,447 → 7,100 ms**, i.e. two INDEPENDENT
+  warm harnesses agreeing at ~7.0-7.4 s. The record — `CompileServer.kt`'s own KDoc,
+  `aot-native-image.md` § 1 and § 4, § 0.1's endgame framing — says **11,580 ms**. Over the same
+  interval **cold improved 12.6% and warm improved 39.5%**. The leading HYPOTHESIS (labelled as
+  one, in the doc and here) is the **(JIT.1) huge-method arc**: a method over `HugeMethodLimit` is
+  never JIT-compiled, so its removal pays in STEADY STATE — and rounds 802-821 were measured only
+  with the COLD instrument, where round 803's own falsifier read `NOISE-DOMINATED` after (a).
+  **What would confirm it is a WARM A/B of a pre-802 binary against HEAD; it was NOT run.**
+- **THE INSTRUMENT PRICES ITSELF, AND THAT IS THE DOCUMENT'S CENTRAL WARNING.** `--passTiming`
+  costs **~2,840 ms cold (+12.4%)** and **3,450-3,945 ms warm (~+50%)**. So every absolute ms in
+  every `docs/perf` table is probe-inflated, harmlessly cold and dominatingly warm — **a cold-table
+  SHARE and a warm-table share are not comparable, only the RATIOS are.** One deduction survives
+  without assumption: the warm instrumented front end is 907.9 ms in TOTAL and so cannot hold a
+  3,945 ms probe, i.e. **>=77% of the probe is inside checker-init**. Where inside is UNMEASURED —
+  the doc brackets `checkSpine`'s warm share two ways (72% vs 83%) and refuses to pick.
+- **THREE FINDINGS THAT SURVIVE THE INFLATION** (ratios, both arms probe-inflated): the **front end
+  warms ~4.0× against the checker's ~2.2×**, so the checker's share RISES warm (86.2% → 91.8% of
+  the instrumented wall) — the opposite direction from what § 0.1's cold budget suggests; the
+  **narrowing tail flattens**, `>=1ms` walks 134 → 37 and their share of narrowing ~47-50% → ~32-34%
+  over IDENTICAL 17,851 walks and 583,779 visits (the buckets are TIME-keyed), so round 735's
+  "extreme tail" replicates exactly as a **COLD** property and is scope-qualified, not retracted;
+  and per-kind warm-up is **not ordered by cost** — my first reading ("cheap kinds warm faster")
+  was corrected by the writing agent, since `FUNCTION_DECLARATION` at 64.9 µs warms 2.86× while
+  `BINARY_EXPRESSION` at 30.8 µs warms 2.08×. What IS sign-consistent across both processes:
+  IDENTIFIER's share of the top-12 falls 9.1% → ~7.1% while the five statement anchors rise
+  48.4% → ~50.4%.
+- **A REAL DEFECT THE CLIENT-SERVER ARCHITECTURE EXPOSED, FOUND WHILE BUILDING THE INSTRUMENT.**
+  `Main.kt` enabled `PassTiming` and NEVER disabled it, and `CompileServer.compileCapturing` calls
+  that same `main()` per request in one long-lived JVM — so **one `--daemon --passTiming` request
+  permanently instrumented every later request on that server**. Worse than a perf leak:
+  `--globalsAmp N` leaks a mode that makes every globals lookup re-read its key N times forever,
+  and `--verifyMappedCache` leaks one that recomputes every served cache hit. Fixed by mirroring
+  what `SpineDispatch`/`SpineSections` already do a few lines below. `CompileServerPassTimingTest`,
+  2 pins, reading the FLAG OBJECTS and not the response text — the text cannot discriminate,
+  because the dump is gated on the request's own argument and is absent either way.
+- **THE INSTRUMENT ITSELF.** `BenchMain` gains an opt-in 4th argument that runs ONE extra
+  instrumented rebuild strictly AFTER the measured loop, so `medianMs` stays probe-free and the
+  probe's own cost is readable as the difference; it aborts non-zero if that rebuild's files/errors
+  disagree with the measured iterations (BenchMain's existing self-falsification rule). Default
+  off; a 3-arg invocation is byte-identical to before.
+- **GATES.** Suite **13,911 / 0 / 3** from a wiped results dir (`xml.etree`), 13,909 → 13,911, the
+  **+2 exactly the two new pins**, 0 regressions. `cost_gate.py` **every counter +0.00%**.
+  `huge_methods.py --fail-over 0` exit 0, 0 over the limit. Both were required and run because
+  `commonMain/Main.kt` changed. **NOT measured, named rather than implied:** no warm A/B was run
+  and nothing was optimized this round; the probe's landing site inside checker-init; one profile
+  only; and **no tsc number** — node is not installed on this box, so every parity statement in the
+  new doc is DERIVED from a CI ratio and labelled as such.
+- **PROVENANCE, and it matters for every absolute above: this round ran on a STALE local `main`
+  and every number was measured on commit `778faf2c`, BEFORE the MOD.1-MOD.6 module split landed
+  upstream in parallel.** So the ladder was taken on the pre-split JDK-NIO server, not on the ktor
+  one this note now sits above; the SHAPE (steady from request 3, agreeing with the in-process
+  harness) should survive the move, but it has not been re-measured. **A parallel session on a
+  DIFFERENT, faster box independently settled the parity question this round could only derive**
+  (commit `eb42b853`): four-way interleaved, warm daemon **3,322 ms** against **tsc 6.0.3 at
+  4,489 ms** — **1.35× faster, the first configuration on record in which this compiler beats the
+  reference implementation on a real project** — with tsgo at 903 ms still 3.7× ahead of both.
+  Their box is ~2× faster than this one (their cold 13,883 ms vs this box's 22,971), so **the two
+  sets of absolutes must never be mixed**; what agrees is the RATIO, their 4.2× cold-to-warm
+  against this round's 3.26×.
+- **A HAZARD FOUND AND DELIBERATELY NOT FIXED, queued as (SERVE.1) below:** the same argument loop
+  leaves `CpaSections.verify*`, `FlowScan.legacy/eagerSet`, `IanySections.*GateOff`,
+  `ArgNarrowGate.mode`, `ParallelCheckMode.workers` and `PartitionCheck.workers` unrestored.
+  Several of those CHANGE COMPILER BEHAVIOUR, so leaking them across server requests is a
+  correctness hazard rather than a perf one — `--workers N` in one request silently reconfigures
+  every later request on that server. Each needs its own read-site check; that is a separate unit.
+
 **Round MOD.1–MOD.2 (2026-08-07) — THE MODULE SPLIT, STEPS 1 AND 2 OF 5.** Owner directive
 (this session): split the project into modules, taking `../markanywhere` as the pattern —
 full split rather than a thin slice, **Ktor on both sides** of the client/daemon transport,
@@ -1154,6 +1232,47 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
 
 ---
 
+**WARM-JVM ARC (round 843, owner directive: "prioritize profiling-based performance improvements
+on the warmed-up JVM"). The premise is measured, not assumed: no warm attribution existed before
+round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribution.md`.**
+
+- [ ] **(WARM.1)(b) — CONFIRM OR KILL THE (JIT.1) HYPOTHESIS WITH A WARM A/B OF A PRE-802 BINARY
+  AGAINST HEAD.** Round 843 measured warm improving 39.5% against cold's 12.6% over the same
+  interval and named the huge-method split arc as the leading cause, explicitly as a HYPOTHESIS.
+  It is cheap to settle and it decides how the whole (JIT) family is valued from here: if
+  confirmed, **rounds 802-821 bought roughly three times what they were credited with**, and the
+  `huge_methods.py --fail-over 0` ratchet is protecting the SERVER artifact far more than the CLI.
+  **Protocol:** two class dirs (build `git show <pre-802 sha>` into one), `scripts/ab-warm.sh`,
+  ±1.0% band, box untouched — and note round 843's own finding that the warm band in ms is now
+  **±70 ms, not ±114**, because the denominator shrank. **Trap to avoid:** the pre-802 binary must
+  be measured with the SAME probe setting as HEAD, and the probe now costs ~50% of a warm run.
+
+- [ ] **(WARM.1)(c) — RE-TAKE THE ATTRIBUTION WITHOUT THE INSTRUMENT DOMINATING IT.** The warm
+  table's absolutes are inflated ~1.55× by `--passTiming` itself and only >=77% of that is even
+  localized (to checker-init; the split inside is unmeasured, and the two bracketings disagree on
+  whether `checkSpine`'s warm share falls to 72% or rises to 83%). Until that is resolved **no warm
+  lever can be sized**, which is the blocker on every item in this arc. Cheapest route first:
+  price the probe's own sub-costs by ABLATION (the `getTypeOfExpressionDistinct` set is the prime
+  suspect — 574,620 calls into a distinct-keyed set — but round 801's law applies, an allocation
+  count is not a cost), or add a probe MODE that keeps the pass rows and drops the per-call
+  counters, calibrated DIFFERENTIALLY per round 734, never by an empty-span loop.
+
+- [ ] **(SERVE.1) — THE ARGUMENT LOOP LEAKS BEHAVIOUR-CHANGING MODES ACROSS SERVER REQUESTS.**
+  Round 843 closed the `PassTiming`/`FltmCensus`/`GlobalsAmp` half; **`CpaSections.verify*`,
+  `FlowScan.legacy`/`eagerSet`, `IanySections.*GateOff`, `ArgNarrowGate.mode`,
+  `ParallelCheckMode.workers` and `PartitionCheck.workers` are still unrestored**, and unlike the
+  timing flags several of these CHANGE WHAT THE COMPILER DECIDES. In the one-shot CLI that is
+  invisible (the process exits); under `--serve` a single `--workers 4` or `--flowScanLegacy`
+  request silently reconfigures every later request on that server — which is a correctness
+  hazard, and `--workers` specifically was a race until round 825. **Each flag needs its own
+  read-site check before restoring it** (a mode whose default is not the field's initial value
+  must be restored to the value it had, not to a guessed default — round 619's lesson, where
+  assigning a default back re-enabled the lab's disables for every alphabetically-later test).
+  Pin the invariant the way round 843 did: read the flag OBJECTS after a request, not the
+  response text.
+
+---
+
 **THE § 0.1 ENDGAME, DECOMPOSED (round 802). READ THIS FRAMING BEFORE PICKING (JIT.1).**
 
 § 0.1 names ONE endgame — *"does the checking work itself get cheaper?"* — and prices it
@@ -1192,6 +1311,19 @@ parity*. Nothing in § 0.1's COLD-JVM budget model changes — but any sentence 
 2.4× as a property of the compiler rather than of the artifact is now wrong, and this
 section, (JIT.2a) and (ENGINE.3)/(SCOPE.1) all contain such sentences.
 `docs/perf/aot-native-image.md` **§ 0a** is the authority for the native arm from here.
+**ROUND-843 POINTER (2026-08-07), and it touches two sentences of this block.** The
+warm artifact quoted above as **11.9 s** is now **~7.0 s** — BenchMain medians 7.14 /
+6.92 s and a real `--serve` ladder at 7.10–7.45 s, against a re-measured cold anchor of
+22,971 ms; the cause is **unattributed**, with the (JIT.1) arc the leading hypothesis
+precisely because its benefit is a STEADY-STATE one that only a cold instrument ever
+measured (round 803's own falsifier read NOISE-DOMINATED after (a)). The confirming warm
+A/B of a pre-802 binary against HEAD was **not run**. And the standing fact this block
+states — *"the budget in § 0.1 is a COLD single-process budget"* — now has a measured
+counterpart: warm, the checker's share of the wall RISES (86.2% → 91.8%) because the
+front end warms ~3.8× against the checker's ~2.27×. `docs/perf/warm-jvm-attribution.md`
+is the authority for the warm arm from here, and its § 3 is the methodological warning
+that every absolute ms in `docs/perf` is `--passTiming`-inflated by ~3 s — 12% of a cold
+run, ~50% of a warm one — so only RATIOS travel between the two regimes.
 
 - [x] **(JIT.1) COMPLETE at round 821 — the census is ZERO.** Split every method above
   HotSpot's `HugeMethodLimit` so it can be JIT-compiled at all. **Rounds 802–821: 19

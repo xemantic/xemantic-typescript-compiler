@@ -407,6 +407,32 @@ fun runCli(args: Array<String>): Int {
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
     if (FltmCensus.on) print(FltmCensus.report())
+    if (passTiming) {
+        // (SERVER.1): RESTORE the instrumentation, exactly as the section probes
+        // below already clear their own `mode` after reporting. `main` is no
+        // longer a process's single act — `CompileServer.compileCapturing` calls
+        // it once per request inside ONE long-lived JVM — so a flag this block
+        // sets and never clears instruments every LATER request on that server,
+        // silently and with no second dump to make it visible. The probe is not
+        // free (round 733 measured it moving `checkSpine` by +29 ms on its own),
+        // so a leaked `enabled` is a permanent, invisible tax on a warm server;
+        // `GlobalsAmp.reads` is worse still (it re-reads every globals lookup N
+        // times), and `verifyMappedCache` recomputes every served cache hit.
+        // Nothing here changes what a one-shot CLI prints: every reader of these
+        // flags has already run by this line.
+        PassTiming.enabled = false
+        PassTiming.verifyMappedCache = false
+        PassTiming.callerAttr = false
+        // `--fltmCensus` / `--globalsAmp` imply `--passTiming` at the parse site
+        // above, so this block is where both of them are cleared too.
+        FltmCensus.on = false
+        GlobalsAmp.reads = 0
+        // Drops the counters and the multi-million-entry distinct-node set the
+        // dump has just consumed; `reset()` deliberately does NOT touch
+        // `enabled`/`censusMode`/`disabledPasses`, which is why the flag above is
+        // cleared explicitly rather than by this call.
+        PassTiming.reset()
+    }
     if (SpineDispatch.mode == SpineDispatch.PROBE) {
         println(SpineDispatch.report())
         println("== (DISPATCH.1) csv ==")

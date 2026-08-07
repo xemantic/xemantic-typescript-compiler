@@ -16,7 +16,7 @@ as "what this artifact was worth *in its own round*".
 | artifact point | figure | round / box | authority |
 |---|---:|---|---|
 | JVM, cold single-shot | 26.3 s (r771) / 25.3 s (r823) / 22.2 s (r828, from the jar) | 771 / 823 / 828 | § 1, § 2c, `aot-cache-round828.md` § 1 |
-| JVM, warm steady state (`--serve`) | 11.6 s | 771, 4-core box | § 1, § 4 |
+| JVM, warm steady state (`--serve`) | ~~11.6 s~~ — **SUPERSEDED, round 843 (2026-08-07): ~7.0 s** (BenchMain medians 7.14/6.92 s; `--serve` ladder 7.10–7.45 s) | 771, 4-core box / 843, 8-core box | **`docs/perf/warm-jvm-attribution.md`**, then § 1, § 4 |
 | GraalVM CE native-image | ~~13.4 s~~ — **SUPERSEDED as the authority, see § 0a: CI median 11.2 s check-only / 13.4 s emit over 75 rows** | 771, RETIRED 4-core box / CI ubuntu-latest since 2026-07-30 | **§ 0a**, then § 1, § 2 |
 | Kotlin/Native release | 21.8 s (r772) / 20.0 s (r823) | 772 / 823 | § 2b, § 2c |
 | **JDK 25 AOT cache** | **13.6 s — 1.638× its own round's plain arm, 6/6 wins** | 828, 8-core box | **`docs/perf/aot-cache-round828.md`** |
@@ -88,7 +88,22 @@ stand as taken; only their standing changed.**
 |---|---:|---:|
 | JVM cold single-shot | **26,272 ms** | 1.00× |
 | GraalVM CE native-image, cold | **13,350 ms** | **1.97×** |
-| JVM warm steady state | **11,580 ms** | 2.27× |
+| ~~JVM warm steady state~~ | ~~**11,580 ms**~~ | 2.27× |
+
+**Round-843 note (2026-08-07), warm row only.** The warm ABSOLUTE is
+**superseded**: re-measured on the current 8-core box the warm steady state is
+**~7,030 ms** (two BenchMain process-medians, 7,143.2 / 6,916.7 ms;
+independently reproduced at 7.1–7.45 s by a real `--serve` socket ladder), while
+the cold anchor re-measures at 22,971 ms. **The `2.27×` column is left exactly
+as taken and is NOT recomputed**: it is a WITHIN-round paired ratio
+(26,272 / 11,580) from round 771's own BenchMain run on the retired 4-core box,
+and CLAUDE.md's rule is that only within-round pairs are quotable — mixing a
+2026-07 numerator with a 2026-08 denominator would manufacture a number neither
+round measured. Today's within-round equivalent, both arms taken in round 843,
+is **22,971 / 7,030 = 3.27×**. The cause of the warm movement is **unattributed**
+— see `docs/perf/warm-jvm-attribution.md` § 2.1, which names the (JIT.1)
+huge-method arc as the leading hypothesis and states plainly that the confirming
+warm A/B was not run.
 
 **The AOT binary captures ~85% of the available warmup prize and gives up 15% against
 JVM peak** — on a COLD one-shot run, which is how a CLI compiler is actually used.
@@ -131,7 +146,7 @@ artifact-point authority; do not carry `13,350 ms` out of this table as a curren
 | runtime | wall | vs JVM cold | vs Graal | RSS | binary |
 |---|---:|---:|---:|---:|---:|
 | JVM, cold single-shot | 26,272 ms | 1.00× | 0.51× | — | — |
-| JVM, warm steady state | 11,580 ms | 2.27× | 1.15× | — | — |
+| ~~JVM, warm steady state~~ | ~~11,580 ms~~ | 2.27× | 1.15× | — | — |
 | **GraalVM native-image** | **13,350 ms** | **1.97×** | 1.00× | **392 MB** | 55 MB |
 | **Kotlin/Native release** | **21,787 ms** | 1.21× | **0.61×** | 1,190 MB | **27 MB** |
 
@@ -145,7 +160,9 @@ like.
 checker is allocation-heavy (AST nodes, interned types), and K/N's optimizer and GC trail
 Graal's on exactly that profile — the 3× RSS is the same finding seen from the memory side.
 Note also that K/N barely beats the JVM *cold* (1.21×) and is well behind the JVM *warm*
-(11.6 s): it removes warm-up, then gives most of the gain back in weaker codegen.
+(~~11.6 s~~ — **round 843, 2026-08-07: ~7.0 s**, see § 1's warm-row note and
+`docs/perf/warm-jvm-attribution.md`; the point this sentence makes gets *stronger*, not
+weaker): it removes warm-up, then gives most of the gain back in weaker codegen.
 
 **So GraalVM is the shipping path for speed.** Kotlin/Native's remaining argument is
 reach — a 27 MB binary with no JVM anywhere, on platforms Graal would need its own
@@ -239,6 +256,19 @@ A/A pair deltas: +0.93%   -0.98%   +0.41%
 **Warm band ≈ ±1.0% = ±114 ms**, against the cold protocol's ±2.0% = ±536 ms — the warm
 protocol is **4.7× more sensitive in absolute terms**, and ten warm iterations fit in
 the time of four cold runs.
+
+> **Round-843 note (2026-08-07) — the DENOMINATOR of this whole section moved.** Every
+> percentage below is against an 11,580 ms warm run; the warm run is now **~7,030 ms**
+> (`docs/perf/warm-jvm-attribution.md` § 2). The band as a PERCENTAGE (±1.0%, calibrated
+> from a spread) is unaffected and re-calibration is not required; what changes is its
+> absolute width — **±1.0% is now ±70 ms, not ±114 ms** — and the "warm" column of the
+> rejected-items table below, whose entries all grow by a factor of **1.65**
+> (e.g. (CALL.4)'s 441 ms reads **6.3%**, not 3.8%; the `getTypeOfExpression` ceiling
+> **11.7%**, not 7.1%). **The table is left as taken rather than rewritten**, because its
+> ms column is a set of COLD measurements and re-basing them on a warm denominator that
+> was never paired with them would be exactly the cross-round arithmetic this file warns
+> against in § 0 — but a reader re-opening one of these items must apply the 1.65 and
+> re-measure warm, not quote the printed percentage.
 
 ### 4a. Reproduced round 774 — and the band is a property of a QUIET box
 

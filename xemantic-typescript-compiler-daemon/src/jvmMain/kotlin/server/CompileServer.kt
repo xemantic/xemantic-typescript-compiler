@@ -58,10 +58,29 @@ import kotlin.time.TimeSource
  *
  * ## Why this exists
  *
- * The warm JVM is the fastest artifact this project has: **11,580 ms** on the
- * compiler profile against the AOT binary's 13,350 ms and a **26,272 ms** cold
+ * The warm JVM is the fastest artifact this project has: ~~11,580 ms~~ on the
+ * compiler profile against the AOT binary's 13,350 ms and a ~~26,272 ms~~ cold
  * CLI. All of that gap is JVM warm-up, which a one-shot CLI process can never
  * amortize. Holding one hot JVM and feeding it requests captures it.
+ *
+ * **Both absolutes superseded, round 843 (2026-08-07); the CLAIM is unchanged
+ * and if anything stronger.** The 11,580/26,272 pair is round 771's, on the
+ * retired 4-core box. Two independent later measurements, each self-consistent
+ * and NOT comparable to the other (different boxes, different rounds — only
+ * within-round pairs are quotable):
+ *  - this box, round 843: cold **22,971 ms**, warm steady state **~7,030 ms**,
+ *    and an eight-request ladder through this server reading 22,753 / 10,898 /
+ *    7,754 / 7,606 / 7,447 / 7,410 / 7,447 / 7,100 ms of client wall — steady
+ *    from request 3, reproducing the in-process harness to within ~3%.
+ *  - the four-way run in commit `eb42b853`: warm daemon **3,322 ms** against
+ *    **tsc 6.0.3 at 4,489 ms**, i.e. the first configuration on record in which
+ *    this compiler BEATS the reference implementation on a real project.
+ * The cause of the warm improvement over round 771 is unattributed; the leading
+ * hypothesis is the (JIT.1) huge-method arc. See
+ * `docs/perf/warm-jvm-attribution.md`. Note round 843's ladder was measured on
+ * the PRE-MODULE-SPLIT server (commit `778faf2c`), before this file moved into
+ * the daemon module and onto ktor sockets — the ladder SHAPE should survive
+ * that, but it has not been re-measured here.
  *
  * ## What this deliberately does NOT do
  *

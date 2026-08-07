@@ -540,6 +540,21 @@ left.** Derivation: `docs/perf/claim-audit-round758.md` § 11.
 
 ### 0.1 What single-thread parity with tsc actually costs
 
+> **ROUND-843 POINTER (2026-08-07) — THIS BUDGET IS A *COLD-JVM* BUDGET, AND THE
+> WARM ONE IS SHAPED DIFFERENTLY.** `docs/perf/warm-jvm-attribution.md` is the
+> first per-pass attribution taken on a fully JIT-compiled compiler. Two things
+> a reader of the units below must carry: **(a)** the front end warms ~3.8× while
+> the checker warms ~2.27×, so checker-init goes **86.2% → 91.8%** of the wall
+> and the front-end row of this budget is ~8 units warm, not 11 or 20 — the
+> compile becomes MORE checker-bound, the opposite of the natural assumption;
+> **(b)** every absolute ms in this section and in the eleven `docs/perf`
+> documents behind it was measured with `--passTiming`, which costs ~2,840 ms
+> cold (+12.4%) and 3,450–3,945 ms warm (+50–55%) — roughly the same
+> MILLISECONDS in both regimes, so a cold SHARE and a warm SHARE are not
+> comparable. **No line item below changes; the weighting does.** Also note the
+> warm artifact itself moved: `--serve` steady state is ~7.0 s, not the 11.6 s
+> this section's "parity is artifact-scoped" argument was priced against.
+
 The budget, from the attribution above. Take the whole compile as 100 units
 (checker-init is 80 of them; the front end — read/parse/bind/crawl — is the other
 20, never yet profiled because the checker always dominated):

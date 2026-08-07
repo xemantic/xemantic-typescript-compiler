@@ -44,8 +44,10 @@ import java.io.File
  * The three modes are one binary so that the AOT image built by
  * `./gradlew nativeImage` *is* the thin client: a native start costs
  * milliseconds, which is the point of pairing it with a warm JVM server that
- * holds C2-compiled code (11,580 ms warm against 13,350 ms for the AOT binary
- * doing the whole compile itself).
+ * holds C2-compiled code (~~11,580 ms~~ warm against 13,350 ms for the AOT
+ * binary doing the whole compile itself; **round 843, 2026-08-07: the warm
+ * figure is now ~7,030 ms** — see `docs/perf/warm-jvm-attribution.md`, and note
+ * the two absolutes come from different rounds and boxes).
  *
  * **Exit codes match the CLI, and since 2026-08-08 both follow `tsc`**: 0 when
  * the compile found no errors, 1 when it found some. They used to return 0
