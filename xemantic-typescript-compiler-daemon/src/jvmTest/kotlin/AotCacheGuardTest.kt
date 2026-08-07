@@ -347,10 +347,13 @@ class AotCacheGuardTest {
      */
     @Test
     fun `the native image is built from the server dispatcher`() {
-        val root = projectRoot()
-        val line = File(root, "build.gradle.kts").readLines()
+        // `projectRoot()` is THIS module — which is where the nativeImage task
+        // lives, because the image's entry point is the dispatcher this module
+        // holds. The compiler module's build file no longer names it at all.
+        val buildFile = File(projectRoot(), "build.gradle.kts")
+        val line = buildFile.readLines()
             .firstOrNull { it.trimStart().startsWith("val nativeImageMainClass") }
-            ?: fail("no `val nativeImageMainClass` assignment in build.gradle.kts")
+            ?: fail("no `val nativeImageMainClass` assignment in ${buildFile.absolutePath}")
         val nativeImageMainClass = line.substringAfter('=').trim().trim('"')
         // The build file is the MODULE's; scripts/ is the REPO root's.
         assert(nativeImageMainClass == mainClassOf(File(repoRoot(), "scripts/xtsc")))
@@ -484,9 +487,17 @@ class AotCacheGuardTest {
          */
         fun repoRoot(): File = ancestorContaining("settings.gradle.kts")
 
-        /** The nearest ancestor of the compiled classes that holds [marker]. */
+        /**
+         * The nearest ancestor of the compiled classes that holds [marker].
+         *
+         * The anchor is deliberately a class of THIS module. A class from the
+         * compiler module reaches this test through a project dependency, which
+         * Gradle puts on the runtime classpath as a JAR — and `File(url.toURI())`
+         * on a `jar:` URL throws "URI is not hierarchical", so the walk would not
+         * merely find the wrong directory, it would fail outright.
+         */
         private fun ancestorContaining(marker: String): File {
-            val anchor = "com/xemantic/typescript/compiler/Checker.class"
+            val anchor = "com/xemantic/typescript/compiler/server/CompileServer.class"
             val url = AotCacheGuardTest::class.java.classLoader.getResource(anchor)
                 ?: fail("$anchor is not on the test classpath")
             var dir: File? = File(url.toURI())
@@ -501,7 +512,7 @@ class AotCacheGuardTest {
             if (!File("/bin/sh").canExecute()) return null
             val override = System.getenv("XTSC_TEST_LAUNCHER")
             if (override != null) return File(override)
-            val marker = "com/xemantic/typescript/compiler/Checker.class"
+            val marker = "com/xemantic/typescript/compiler/server/CompileServer.class"
             val url = AotCacheGuardTest::class.java.classLoader.getResource(marker)
                 ?: fail("$marker is not on the test classpath")
             var dir: File? = File(url.toURI())

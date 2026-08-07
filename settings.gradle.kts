@@ -31,5 +31,6 @@ rootProject.name = "xemantic-typescript-compiler"
 
 include(
     "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core"
+    "xemantic-typescript-compiler-core",
+    "xemantic-typescript-compiler-daemon"
 )

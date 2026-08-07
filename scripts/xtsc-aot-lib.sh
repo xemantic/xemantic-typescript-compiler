@@ -89,12 +89,23 @@ xtsc_resolve_classpath() {
     [ -n "$XTSC_RESOLVED_CP" ] && return 0
   fi
   # Development fallback: this repo's own build outputs.
-  local root jar deps
+  #
+  # TWO jars since the module split, and the DAEMON one must come first because
+  # it holds XTSC_MAIN_CLASS (the mode dispatcher). Its absence is the failure to
+  # expect after a `clean`: the compiler jar alone resolves, the launcher starts,
+  # and then dies with NoClassDefFoundError on the entry point — so both are
+  # required here rather than one being optional.
+  #
+  # `cp.txt` stays the COMPILER module's dependency tail, which is also the
+  # daemon's: the daemon adds no dependency of its own beyond the two project
+  # jars named here.
+  local root jar daemon_jar deps
   root="$XTSC_SCRIPT_DIR/.."
   jar="$(find "$root/xemantic-typescript-compiler-core/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' 2>/dev/null | LC_ALL=C sort | head -1)"
-  if [ -n "$jar" ] && [ -f "$root/build/bench/cp.txt" ]; then
+  daemon_jar="$(find "$root/xemantic-typescript-compiler-daemon/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-daemon-jvm-*.jar' 2>/dev/null | LC_ALL=C sort | head -1)"
+  if [ -n "$jar" ] && [ -n "$daemon_jar" ] && [ -f "$root/build/bench/cp.txt" ]; then
     deps="$(cat "$root/build/bench/cp.txt")"
-    XTSC_RESOLVED_CP="$jar:$deps"
+    XTSC_RESOLVED_CP="$daemon_jar:$jar:$deps"
     return 0
   fi
   XTSC_RESOLVED_CP=""
