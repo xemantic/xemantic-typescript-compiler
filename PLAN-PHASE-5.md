@@ -57,6 +57,18 @@ as `scripts/aot-draw-variance.sh`. Four things worth carrying forward:
   un-retrained since round 840's fingerprint change, was retrained (54,079,488 B, verifies
   `USE`) and **pruned 1 stale cache**, i.e. § 2's "delete on upgrade" observed on a real
   fingerprint change.
+- **(AOT.5)(b) ALSO CLOSED, and its first run was an A/A that looked exactly like an A/B.**
+  `--serve`/`--daemon` under a cache, through the launcher: 32 requests, all 46 errors / one
+  md5 / **zero in-process fallbacks**; paired over three rotated server pairs, **request 1
+  1.66× (3/3), request 2 still 1.32× (3/3), requests 3-4 a wash** — round 839's "halves the
+  first, nothing warm" reproduced through the shipped launcher and refined, because the cache
+  shortens the warm-up RAMP by about one request. **The trap: `build/libs/*.jar` is NOT
+  byte-reproducible** — `./gradlew jvmJar --rerun` with no source change yields a different
+  sha256 and SIZE — so this session's own suite run invalidated the cache trained 8 minutes
+  earlier, and the first serve experiment ran BOTH arms uncached at a plausible-looking
+  ladder. The only thing that caught it was printing the launcher's decision
+  (`XTSC_AOT_VERBOSE=1` -> `aot SKIP no-cache-file`). **Two rules: train AFTER the last
+  build, and never measure a cached arm without printing the decision line.** § 13.3.
 - **Correctness and gates.** All 168 compiles: **46 errors and one diagnostics md5**
   (`59d930db…`, the § 11 `grep 'error TS' | sort` recipe), no empty capture (round 804), no
   `more error(s)` tell (round 811); the 36 emitting runs additionally share **78 files and
@@ -1528,12 +1540,23 @@ section, (JIT.2a) and (ENGINE.3)/(SCOPE.1) all contain such sentences.
   to a normal uncached run), so the worst outcome in every line below is "slower than it
   could be". Ordered by what a user would notice first:
   - (a) ~~**the shipped `~/.cache` cache has not been retrained** since round 840's
-    fingerprint change~~ — **DONE round 842**: retrained (54,079,488 B), self-verifies
-    `USE`, and it **pruned 1 stale cache** — the § 2 "delete on upgrade" path observed
-    working on a real fingerprint change rather than in a fixture.
-  - (b) **`--serve`/`--daemon` UNDER a cache, through the launcher** — round 840 verified
-    only the one-shot cached run, and round 839 measured `--serve` uncached (cache halves
-    the first request, worth nothing warm).
+    fingerprint change~~ — **DONE round 842**: retrained, self-verifies `USE`, and it
+    **pruned 1 stale cache** — the § 2 "delete on upgrade" path observed working on a real
+    fingerprint change rather than in a fixture. **AND IT IS NOT A DURABLE STATE, which
+    round 842 found the hard way (§ 13.3): `build/libs/*.jar` is NOT byte-reproducible** —
+    `./gradlew jvmJar --rerun` with no source change at all yields a different sha256 and a
+    different SIZE (5,639,210 -> 5,639,200 B) — so every build, including the session's own
+    suite run, invalidates the cache by fingerprint. Fail-safe, never wrong, but **train
+    AFTER the last build** and expect to retrain on a dev box constantly.
+  - (b) ~~**`--serve`/`--daemon` UNDER a cache, through the launcher**~~ — **DONE round 842,
+    § 13.** 32 server requests, all 46 errors / one md5 / **zero in-process fallbacks** (the
+    column that matters: `--daemon` compiles in-process when no server answers, so a request
+    that never reached the server still prints correct diagnostics). Three rotated server
+    pairs, paired: **request 1 is 1.66× (3/3), request 2 is still 1.32× (3/3), requests 3-4
+    are a wash.** So round 839's "halves the first request, worth nothing warm" reproduces
+    through the shipped launcher AND is refined — the cache shortens the C2 warm-up RAMP by
+    about one whole request, which its first/warm-only sampling could not see. The levers
+    overlap: a server serving more than two requests gets nothing from the cache.
   - (c) a cache **trained with `--serve`** in the workload, and whether the two extra
     dispatcher class loads shift any timing (argued away by inspection, never measured).
   - (d) **`--watch`/`--incremental`** under a cache — note `--outDir` is deliberately NOT

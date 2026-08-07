@@ -843,3 +843,92 @@ real fingerprint change rather than in a fixture.
   batches an hour apart.
 - Whether re-training the same draw index reproduces its rank (each of the five caches was
   trained exactly once — the round samples the draw, it does not repeat it).
+
+## 13. Round 842 — (AOT.5)(b): `--serve`/`--daemon` UNDER a cache, through the launcher
+
+*Round 839 measured `--serve` uncached, by invoking `java` by hand — the launcher could not
+reach the mode at all until round 840 fixed it. Round 840 then verified `--serve`/`--daemon`
+through the launcher but only WITHOUT a cache. This is the combination, and it is the last
+mode we ship that had never been run as shipped.*
+
+### 13.1 Correctness first
+
+**32 server requests** (four per server, two arms, one unreplicated pair plus three rotated
+ones), every one of them: **46 errors, one diagnostics md5 (`59d930db…`), and ZERO
+in-process fallbacks.** That last column is not decoration — `--daemon` compiles in-process
+when no server answers (`XtscMain.runAsClient`), so a request that silently failed to reach
+the server would still print correct diagnostics and would otherwise be indistinguishable
+from a served one. The harness greps the client's stderr for that fallback line on every
+request. *That harness was ad-hoc (a scratch script, not committed): unlike § 12's draw
+experiment it needs no state beyond a server and a socket, and the method is one loop —
+start `scripts/xtsc --serve --socket <short path>` with `XTSC_AOT_VERBOSE=1`, wait for the
+`listening on` line, send N `--daemon` requests, assert no fallback line, kill the server.
+Note the socket path must be under ~100 bytes (`sockaddr_un`), which round 840 found the
+hard way.*
+
+### 13.2 The cache buys the first TWO requests, not just the first
+
+Paired within-rep, three rotated server pairs (server-reported ms; each pair is a fresh
+server per arm):
+
+| request | rep 1 | rep 2 | rep 3 | median | cached faster in |
+|---|---:|---:|---:|---:|:---:|
+| **1 (cold)** | −8,013 | −9,322 | −8,375 | **−8,375 ms (1.66×)** | **3/3** |
+| **2** | −1,993 | −2,528 | −3,070 | **−2,528 ms (1.32×)** | **3/3** |
+| 3 | +297 | −755 | +211 | −211 ms | 1/3 |
+| 4 | −626 | −196 | +396 | −196 ms | 2/3 |
+
+Per-arm medians: cold **14,116** vs **23,375** ms; by the fourth request **7,272** vs
+**7,313** ms — identical.
+
+**Round 839's reading is reproduced through the shipped launcher and refined.** Its
+statement was "the cache halves the first request and is worth nothing warm" (13,987 →
+23,536 cold, 7,268 vs 7,310 warm). Both ends replicate. What it did not report, because it
+sampled only "first" and "warm", is the **middle**: request 2 is still **1.32× faster under
+the cache, 3/3**, so the cache does not merely remove the first request's class-loading and
+interpreter cost — it shortens the C2 warm-up RAMP by about one whole request. From the
+third request on the two servers are the same machine, which is the expected end state: the
+JIT has re-derived everything the cache was carrying.
+
+**Consequence for anyone choosing between the two levers:** they overlap almost entirely.
+A server that will serve more than two requests gets nothing from the cache; a server that
+serves one or two gets 1.66×/1.32×. The cache's real constituency remains the ONE-SHOT
+compile, which is what `scripts/xtsc` does by default.
+
+### 13.3 A trap this round walked into, and the instrument that caught it
+
+**The first run of this experiment was an A/A and looked exactly like an A/B.** Both arms
+compiled correctly, at 46 errors and the right digest, with the "cached" arm reading 21,801 /
+10,376 / 8,081 / 7,021 ms — a perfectly plausible ladder. The launcher had in fact decided
+**`SKIP no-cache-file`** for both.
+
+The cause is that **`build/libs/*.jar` is not byte-reproducible**, and every classpath entry
+is content-hashed into the fingerprint (§ 1, deliberately — mtime is not consulted). Measured
+this round: `./gradlew jvmJar --rerun` **with no source change whatsoever** produced a
+different sha256 *and* a different size (5,639,210 → 5,639,200 B). The suite run earlier in
+the session had rebuilt the jar at 09:32; the cache trained at 09:24 became unreachable at
+that moment, exactly as designed.
+
+Three things follow, and the third is the one that costs rounds:
+
+1. **This is the fail-safe direction working.** A stale cache is never used; the run is
+   merely slower. Nothing about § 1 changes.
+2. **"Retrain the shipped cache" is not a durable state on a development box.** (AOT.5)(a)
+   was closed earlier this round and was invalid ~15 minutes later. The cache must be
+   trained **after the last build**, which is what `xtsc-aot`'s "a packager runs it once,
+   after the jars are in place" already says — but the docs nowhere said that a *no-op*
+   rebuild suffices to invalidate it.
+3. **A cached-arm measurement must PRINT THE DECISION.** `XTSC_AOT_VERBOSE=1` makes the
+   launcher say `aot USE …` or `aot SKIP …` on stderr, and that line is the only thing
+   separating a real cached arm from a silently-uncached one. A ratio near 1.0 would have
+   been read as "the cache does nothing for `--serve`" and written down.
+
+### 13.4 What this round did NOT measure
+
+- A cache trained **with `--serve` in the workload** — (AOT.5)(c), untouched; this round
+  trains as shipped (sequential, emitting) and only *runs* under the server.
+- More than four requests per server, and any request other than the same project repeatedly
+  — the warm floor here is one project's re-check, not a watch-style edit/recheck cycle.
+- `--watch`/`--incremental` under a cache, and the other seven profiles ((AOT.5)(d)/(e)).
+- Whether the ramp effect survives on a project small enough that request 1 is dominated by
+  JVM start rather than by checking.
