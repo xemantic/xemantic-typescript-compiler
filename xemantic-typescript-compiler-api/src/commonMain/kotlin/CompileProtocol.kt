@@ -1,0 +1,108 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+package com.xemantic.typescript.compiler.protocol
+
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+
+/**
+ * The wire contract between the `xtsc` client and the compile daemon.
+ *
+ * The two are separately-built binaries with independent lifetimes — a daemon
+ * started days ago keeps answering a client rebuilt this minute — so everything
+ * here is versioned and tolerant by construction.
+ */
+public const val XTSC_PROTOCOL_VERSION: Int = 1
+
+/**
+ * The version reported by a peer that predates protocol versioning.
+ *
+ * Absent-means-old is why the version fields below default to this rather than
+ * to [XTSC_PROTOCOL_VERSION]: defaulting to the current version would make an
+ * older daemon's response indistinguishable from a current one, which is the
+ * single case the field exists to detect.
+ */
+public const val XTSC_PROTOCOL_UNVERSIONED: Int = 0
+
+/** One compile, expressed exactly as the command line that requested it. */
+@Serializable
+public data class CompileRequest(
+    val args: List<String>,
+    val protocolVersion: Int = XTSC_PROTOCOL_UNVERSIONED,
+)
+
+/**
+ * The daemon's answer.
+ *
+ * [output] is the compiler's captured stdout, reproduced verbatim by the client,
+ * so that what a user sees is identical whether the compile ran in the daemon or
+ * in-process — identical by construction rather than by being kept in sync.
+ */
+@Serializable
+public data class CompileResponse(
+    val output: String,
+    val exitCode: Int,
+    val elapsedMs: Long,
+    val protocolVersion: Int = XTSC_PROTOCOL_UNVERSIONED,
+)
+
+/**
+ * Exit code for a request the daemon declined to run at all.
+ *
+ * Distinct from a failed compile: the CLI reports compile failure in its summary
+ * line and still exits 0, because scripts here treat a non-zero exit as an
+ * infrastructure failure and abort. So a non-zero code always means the request
+ * never ran, never that it ran and found errors.
+ */
+public const val XTSC_REFUSED: Int = 2
+
+/**
+ * Why a client should not trust a daemon it just reached, or null when it should.
+ *
+ * A version mismatch is a *restart* condition, not a hard failure: the client's
+ * documented behaviour is to fall back to compiling in-process, so the caller
+ * uses this for the message, not for the decision to abort.
+ */
+public fun protocolProblem(peerVersion: Int): String? = when {
+    peerVersion == XTSC_PROTOCOL_VERSION -> null
+    peerVersion == XTSC_PROTOCOL_UNVERSIONED ->
+        "the daemon predates protocol versioning and cannot be trusted to " +
+            "understand this client — restart it"
+    else ->
+        "the daemon speaks protocol $peerVersion, this client speaks " +
+            "$XTSC_PROTOCOL_VERSION — restart it"
+}
+
+/**
+ * The codec both peers use.
+ *
+ * `ignoreUnknownKeys` is what lets a field be added to either message without
+ * breaking the older peer that receives it — the version fields above then say
+ * whether the newer peer should care.
+ */
+public val xtscProtocolJson: Json = Json {
+    ignoreUnknownKeys = true
+}

@@ -46,7 +46,50 @@ group = "com.xemantic.typescript"
 xemantic {
     description = "a conformant TypeScript compiler and type checker that runs on JVM, native, and WebAssembly"
     inceptionYear = "2026"
-    applyAllConventions()
+    // NOT applyAllConventions() — its applyJarManifests() cannot work in a
+    // multi-module build, in two independent ways. It installs an `allprojects`
+    // callback that (a) calls `archiveBaseName.get()` while the Jar task is being
+    // created, which for a subproject runs BEFORE the Kotlin plugin has set that
+    // property (callbacks fire in registration order, and the root is always
+    // evaluated first), and (b) reads `project.xemantic`, an extension that only
+    // exists on the project applying this plugin — the root. The equivalent
+    // manifest population is reinstated below, ordering-safe, so the artifacts
+    // keep their Implementation-* attributes and META-INF/LICENSE.
+    applySignBeforePublishing()
+    applyAxTestReporting()
+    applyJReleaserConventions()
+    applyReportOnlyStableDependencyUpdates()
+}
+
+// Captured here because the `xemantic` extension exists only on this project,
+// while the manifest has to be written for every module's jars.
+val organizationName = xemantic.organization
+
+allprojects {
+    // Registered from `afterEvaluate` deliberately: a Jar task runs its
+    // configuration callbacks in the order they were registered, so registering
+    // after the module has been evaluated is what guarantees the Kotlin plugin
+    // has already given `archiveBaseName` its value.
+    afterEvaluate {
+        tasks.withType<Jar>().configureEach {
+            manifest {
+                attributes(
+                    mapOf(
+                        "Implementation-Title" to archiveBaseName.get(),
+                        "Implementation-Version" to archiveVersion.get(),
+                        "Implementation-Vendor" to organizationName,
+                        "Implementation-Vendor-Id" to rootProject.name,
+                        "Created-By" to "gradle",
+                    )
+                )
+            }
+            metaInf {
+                from(rootProject.rootDir) {
+                    include("LICENSE")
+                }
+            }
+        }
+    }
 }
 
 fun MavenPomDeveloperSpec.projectDevs() {

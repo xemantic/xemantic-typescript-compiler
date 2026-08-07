@@ -28,3 +28,9 @@ pluginManagement {
 }
 
 rootProject.name = "xemantic-typescript-compiler"
+
+// The module split is staged: the compiler itself is still the ROOT project and
+// moves into `-core` in a later step, so nothing here yet depends on `-api`.
+include(
+    "xemantic-typescript-compiler-api"
+)
