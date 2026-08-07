@@ -553,10 +553,13 @@ count is not a disjoint population: it is the **same** checking code reached thr
 different thread structure, and a JEP 515 profile is a finite, shared record of how each
 method was actually called. A w4 training run records receiver types and branch counts
 gathered from four worker threads; a sequential run then executes those same methods with
-a different call/inlining shape and gets a profile that fits it slightly worse. The +82 KB
+a different call/inlining shape and gets a profile that fits it slightly worse. ~~The +82 KB
 and the direction of both effects (helps w4 and w8, hurts seq, monotone in worker count)
-are consistent with that reading. **It is a reading, not a measurement** — nothing here
-inspects the recorded profiles.
+are consistent with that reading.~~ **It is a reading, not a measurement** — nothing here
+inspects the recorded profiles. **STRUCK IN PART, round 842 (§ 12.4): five caches trained by
+an IDENTICAL command span 212,992 B, 2.6× the +82 KB cited here, and cache size does not
+order speed (the largest of the five is second-slowest). The size argument carries no
+information; only the direction-of-effect half of this reading survives.**
 
 The transferable lesson is the sharper half: **"train under the mode you run" is not a
 general law, it is a claim about one dimension at a time.** In a dimension where the modes
@@ -600,9 +603,11 @@ than 5, and it is 132 post-fix `--workers` runs in total across rounds 825/826/8
 a 3.5% loss on the default path. `AotCacheGuardTest.the trainer trains sequentially` pins
 it so a future round does not "just add `--workers 4`" on the strength of round 839 § 7.3.
 
-Not measured: a cache trained under `--workers 2` or `8`; whether re-training changes the
+Not measured: a cache trained under `--workers 2` or `8`; ~~whether re-training changes the
 draw (batch 2 reused both caches, so training-run variance is unsampled — one training run
-per arm); an **emitting** compile under either cache (this round's workload is `--noEmit`
+per arm)~~ — **MEASURED round 842, § 12: the draw is worth up to 2.4% between two
+identically-trained caches, so this round's +3.5% is ~1.5× a term it did not model. The
+DECISION stands (a null cannot become a win); the number should not be quoted precisely.** an **emitting** compile under either cache (this round's workload is `--noEmit`
 throughout, so the round-840(c) emit win is neither re-confirmed nor at risk); the
 interaction with `--serve`; and the other seven dashboard profiles. Nothing here touched
 `src/commonMain` or `src/jvmMain`, so `cost_gate.py` and `huge_methods.py` were not run.
@@ -695,3 +700,146 @@ quote the digest across rounds.** Two consequences:
    `added=0 removed=0` against a rebuilt before-arm" survives a recipe change; a bare md5
    does not. The digest's real job is the *within-round, many-runs* check (30 runs, one
    value), and at that job it is excellent.
+
+## 12. Round 842 — (AOT.5)(f): the TRAINING DRAW is worth up to 2.4%, and nobody had sampled it
+
+*Every AOT number in this file before this section was measured with **one trained cache per
+arm**. Rounds 840(c) and 840(d) both ran two independent batches, and both said so as
+evidence — but a second batch re-uses the same cache files, so it replicates the*
+measurement *draw and cannot touch the* training *one. (AOT.5)(f) named this "the line most
+likely to overturn something already recorded". It does not overturn either decision, but it
+does put a number on a term both of them treated as zero.*
+
+### 12.1 The grid
+
+Same box and hygiene as §§ 9–10: HEAD's jar (5,639,208 B), JDK 25.0.3, no Gradle or Kotlin
+daemon resident (13.9 GB free), the box unwatched while runs were in flight (round 774).
+**Five caches trained by an identical command** — `scripts/xtsc-aot train
+build/bench/tsc-project-637d5746`, i.e. the shipped trainer, emitting and sequential, run
+five times in a row with nothing changed between runs:
+
+| draw | size | sha256 (16) | training wall |
+|---|---:|---|---:|
+| 1 | 54,124,544 B | `db39dfb60aa115c1` | 28,273 ms |
+| 2 | 54,099,968 B | `f0074a64fcf0999b` | 27,522 ms |
+| 3 | 54,185,984 B | `d4cca6c1b45c3144` | 27,419 ms |
+| 4 | 54,206,464 B | `f581ffb0ee14333c` | 27,533 ms |
+| 5 | 53,993,472 B | `3ebf2506019a14d6` | 27,545 ms |
+
+All five carry the **same fingerprint** (`ebeb9d0f…`) and are therefore interchangeable to
+the launcher — the caches differ, the provenance does not. **168 whole-project compiles**:
+132 `--noEmit --listAll` across five rotated batches (A/B 4 arms × 6 reps including an
+uncached anchor, C 3 × 8, D/E 5 × 6) and 36 emitting ones (F/G 3 × 6). Harness:
+`scripts/aot-draw-variance.sh`, landed this round.
+
+### 12.2 Check-only — a real effect, mostly persistent, ≤2.4%
+
+Paired within-rep, the only quotable comparison (n = 32 where both arms ran in all five
+batches, n = 12 for the draw-4/5 pairs):
+
+| contrast | n | median | % | faster in |
+|---|---:|---:|---:|:---:|
+| **c5 − c3** (worst vs best) | 12 | **+322 ms** | **+2.4%** | c5 in 2/12 |
+| c4 − c3 | 12 | +245 ms | +1.8% | c4 in 1/12 |
+| c5 − c1 | 12 | +234 ms | +1.7% | c5 in 3/12 |
+| c3 − c2 | 32 | −176 ms | −1.3% | c3 in 26/32 |
+| c2 − c1 | 32 | +147 ms | +1.1% | c2 in 11/32 |
+| c4 − c1 | 12 | +126 ms | +0.9% | c4 in 4/12 |
+| **c3 − c1** (the two fast draws) | 32 | −72 ms | −0.5% | c3 in 21/32 |
+
+Ranking, fast to slow: **c3 ≈ c1 < c2 ≈ c4 < c5**, and the ordering **replicates**: batches
+D and E, run separately with different rotations, put the same three draws in the same first
+three places (`c3 < c1 < c2`) and only swapped c4 and c5, which are 106 ms apart. So this is
+a persistent property of a cache file, not run-to-run noise — one training run in five
+produced a cache that is 2.4% slower than the best, permanently, for as long as it is
+installed.
+
+**The anchor, unchanged from earlier rounds:** cached vs uncached is **1.592×** (+8,440 ms
+paired, 12/12), consistent with the 1.64–1.68× recorded in §§ 4/7 on other batches.
+
+**And batch A was a false positive, exactly as round 840(c) warned.** Its medians spread
+483 ms (3.5%) with c3 fastest and c2 slowest, which looks like a much larger effect than the
+one that survived; batch B put c1 first and spread 194 ms. Had this round stopped at one
+batch it would have reported the draw effect as ~3.5% instead of ≤2.4%. **The instrument
+that separates them is replication, and it is the same lesson for the third round running.**
+
+### 12.3 The emit half — same size, but the fine ordering does not carry
+
+Three draws (1, 3, 5) re-run on the workload round 840(c)'s **shipped** win lives on
+(`--listAll --outDir <throwaway>`), two batches of 6:
+
+| contrast | n | median | % | faster in |
+|---|---:|---:|---:|:---:|
+| c5 − c3 | 12 | +253 ms | +1.6% | c5 in 5/12 |
+| c3 − c1 | 12 | +216 ms | +1.4% | c3 in 4/12 |
+| c5 − c1 | 12 | +186 ms | +1.2% | c5 in 2/12 |
+
+Per-batch spread of medians 316 ms (2.1%) and 180 ms (1.2%) — the same magnitude as
+check-only. What carries across workloads is only the **extremes**: c1 is fast in both and
+c5 is slow in both (c5 − c1 is +234 ms check-only and +186 ms emitting, with c5 winning 3/12
+and 2/12). What does **not** carry is the fine ordering — c3 is the fastest draw on
+check-only and mid-pack on emit, and batches F and G disagree on the ordering outright. So
+a draw is not simply "good" or "bad"; part of the effect is workload-specific.
+
+**Correctness across all 36 emitting runs: 46 errors, one diagnostics md5 (`59d930db…`,
+the § 11 recipe), 78 emitted files and ONE whole-tree digest, `0b59764c…`.** Across all 168
+compiles of the round, one diagnostics digest, no empty capture (round 804) and no
+`more error(s)` tell (round 811).
+
+### 12.4 What this does to §§ 9 and 10
+
+**§ 9 (emit training, SHIPPED) is safe.** Its win is −1,132 ms (−5.4%) on the emit path,
+against a draw term measured here at ~1.2–1.6% on that same path — the effect is over three
+times the noise it was competing with, and its companion "check-only is a wash" reading
+(−0.8%) sits inside the draw band, which is consistent rather than contradictory.
+
+**§ 10 (`--workers 4` training, REJECTED) keeps its decision and loses the precision of its
+number.** Its headline is +545 ms (+3.5%) charged to the sequential path, from **one**
+sequential-trained cache versus **one** w4-trained cache. The largest contrast between two
+identically-trained caches here is +322 ms (2.4%). The recorded effect is therefore only
+~1.5× the draw term it never modelled, and the two arms could have differed partly by draw.
+**The decision does not move**: nothing was shipped, and the case against training under
+`--workers 4` was a *null* on the w4 path plus a cost on the default path — the draw term
+cannot turn a null into a win. **The number should not be quoted to three digits**, and
+§ 10.2's per-level figures now carry that caveat.
+
+**One supporting argument in § 10.3 is struck.** It read the w4-trained cache's **+82 KB**
+as consistent with a materially different recorded profile. Five caches trained by an
+*identical* command span **212,992 B (~208 KB)** here — 2.6× that difference — so a size
+delta of that order carries no information at all. Worse for the reading: **size does not
+order speed.** Draw 4 is the *largest* cache and second-slowest; draw 5 is the *smallest*
+and slowest; draw 3 is mid-large and fastest. There is no usable predictor of a draw's speed
+short of running it.
+
+### 12.5 The rule, and what ships
+
+**An A/B on a TRAINING configuration needs at least two independently trained caches per
+arm.** Two batches of runs is the standing rule for a measurement and it is *not sufficient
+here*, because both batches read the same two cache files: the training draw is a
+between-arm confound that no amount of re-running can average out. This is the AOT-specific
+form of round 776's law that a recorded baseline is a claim about a *build*, not a commit —
+here it is a claim about a *draw*, not a configuration.
+
+**Nothing ships.** "Train twice and keep the faster" is arithmetically self-defeating on this
+box: identifying the faster of two draws takes ~10 paired compiles (~4 minutes) to resolve a
+2.4% difference worth ~0.3 s per run, so it pays back only after ~800 compiles, and it makes
+the installed cache non-reproducible by the documented command. `scripts/xtsc-aot train`
+stays a single run.
+
+**(AOT.5)(a) is closed in passing:** the shipped `~/.cache/xtsc` cache, un-retrained since
+round 840's fingerprint change, was retrained (54,079,488 B, self-verifies `USE`) and
+**pruned 1 stale cache** — the "delete on upgrade" half of § 2, observed doing its job on a
+real fingerprint change rather than in a fixture.
+
+### 12.6 What this round did NOT measure
+
+- **Why** a draw is slow. Nothing here inspects the JEP 515 profiles; the mechanism is
+  unexamined, and § 10.3's story about *what* differs between caches is now unsupported
+  rather than disproved.
+- Whether five draws is enough to characterise the distribution — the worst draw appeared
+  once in five, which bounds nothing about how often a *worse* one appears.
+- Draw variance under `--workers`, under `--serve`, or on any of the other seven dashboard
+  profiles; and whether a cache's rank is stable across *box states* rather than just across
+  batches an hour apart.
+- Whether re-training the same draw index reproduces its rank (each of the five caches was
+  trained exactly once — the round samples the draw, it does not repeat it).

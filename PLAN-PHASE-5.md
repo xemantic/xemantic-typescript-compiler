@@ -20,6 +20,57 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 842 (2026-08-07) — (AOT.5)(f): THE TRAINING DRAW IS WORTH UP TO **2.4%**, AND EVERY
+AOT RESULT ON RECORD WAS MEASURED WITH ONE TRAINED CACHE PER ARM.** Five caches trained by an
+IDENTICAL command (`scripts/xtsc-aot train`, unchanged between runs), 168 whole-project
+compiles in seven rotated batches. Full tables `docs/perf/aot-cache.md` § 12; harness landed
+as `scripts/aot-draw-variance.sh`. Four things worth carrying forward:
+
+- **"Two batches" is the standing rule for a MEASUREMENT and it does not cover a TRAINING
+  claim.** Rounds 840(c) and 840(d) both ran two independent batches and both cited that as
+  evidence — but a second batch re-uses the same cache FILES, so it replicates the
+  measurement draw and cannot touch the training one. Paired best-vs-worst draw here is
+  **+322 ms (+2.4%), 10/12**, and the ordering REPLICATES (batches D and E put the same
+  three draws in the same first three places, hours apart), so it is a persistent property
+  of a cache file, not run noise. **New rule: an A/B on a training configuration needs ≥2
+  independently trained caches per arm.**
+- **It overturns no DECISION, and costs one recorded NUMBER its precision.** § 9's shipped
+  emit-training win is −1,132 ms (−5.4%) against a draw term of ~1.2–1.6% on that same
+  workload — over 3× — so `train` emitting stays right. § 10's rejected `--workers 4` arm
+  was a *null* on the path it was meant to help plus a cost on the default path, and a draw
+  term cannot turn a null into a win — but its **+3.5%** is only ~1.5× a term it modelled as
+  zero, so it must stop being quoted to three digits. **Struck outright: § 10.3's reading of
+  the w4 cache's "+82 KB" as evidence of a different recorded profile** — five
+  identical-command draws span **212,992 B**, 2.6× that, and size does NOT order speed (the
+  largest of the five is second-slowest, the smallest is slowest). There is no cheap
+  predictor of a draw's quality.
+- **Batch A was a textbook false positive, for the third round running.** Its medians spread
+  483 ms (3.5%) — bigger than the effect that survived — and batch B put a different draw
+  first. Reporting after one batch would have overstated the draw effect by ~1.5×. The emit
+  half adds the finer point: the EXTREMES carry across workloads (draw 1 fast and draw 5 slow
+  on both) while the fine ordering does not (draw 3 is fastest on check-only, mid-pack on
+  emit, and the two emit batches disagree outright).
+- **Nothing ships, and that is the arithmetic, not caution.** "Train twice, keep the faster"
+  needs ~10 paired compiles (~4 min) to resolve a 2.4% difference worth ~0.3 s per run — it
+  pays back after ~800 compiles and makes the installed cache non-reproducible by the
+  documented command. **(AOT.5)(a) closed in passing:** the shipped `~/.cache/xtsc` cache,
+  un-retrained since round 840's fingerprint change, was retrained (54,079,488 B, verifies
+  `USE`) and **pruned 1 stale cache**, i.e. § 2's "delete on upgrade" observed on a real
+  fingerprint change.
+- **Correctness and gates.** All 168 compiles: **46 errors and one diagnostics md5**
+  (`59d930db…`, the § 11 `grep 'error TS' | sort` recipe), no empty capture (round 804), no
+  `more error(s)` tell (round 811); the 36 emitting runs additionally share **78 files and
+  ONE whole-tree digest** (`0b59764c…`). Suite **13,909 / 0 / 3**, unchanged — and
+  **NO PIN WAS ADDED, stated rather than omitted**: nothing under `src/` changed, the round's
+  claim is a measurement, and the repeatability it needs is the committed harness. For the
+  same reason `cost_gate.py` and `huge_methods.py` were not run and do not apply.
+- **WHY THIS ITEM.** The top unchecked queue item is still **(NARROW.2)(c)**, whose sole
+  motivation is the three `types/any` conformance cases — round 839's standing owner
+  instruction (*"leave M3.0 conformance, return to M5 / performance"*) keeps it unchecked,
+  as round 840 recorded. (WIDEN.1)'s open sub-steps instruct in their own text not to be
+  taken speculatively. That leaves (AOT.5), whose own body names (f) as "the line most
+  likely to overturn something already recorded, and the one to do first".
+
 **Round 840(d) (2026-08-07) — (AOT.4)(c) item (3), `--workers` half: TRAINING THE AOT CACHE
 UNDER `--workers 4` IS A MEASURED **NO** — IT BUYS THE w4 PATH 0.9% (INSIDE THE BAND) AND
 CHARGES THE SEQUENTIAL PATH 3.5%, SO `train` STAYS SEQUENTIAL.** 60 whole-project compiles,
@@ -1470,15 +1521,16 @@ section, (JIT.2a) and (ENGINE.3)/(SCOPE.1) all contain such sentences.
   emitting workload under either cache, and the other seven profiles.**
 
 - [ ] **(AOT.5) — the AOT cache's UNMEASURED MODES. LOW PRIORITY; measurement/packaging,
-  not a defect.** *Split out of (AOT.4)(c) at round 841 so that a closed item stops
+  not a defect.** *(a) and (f) DONE round 842 — see the session note and
+  `docs/perf/aot-cache.md` § 12; (b)–(e) remain open and are listed below unchanged.* *Split out of (AOT.4)(c) at round 841 so that a closed item stops
   carrying live work and this list stops being read as urgent.* Nothing here is a
   correctness hazard: the manifest contract fails SAFE (a mismatched fingerprint degrades
   to a normal uncached run), so the worst outcome in every line below is "slower than it
   could be". Ordered by what a user would notice first:
-  - (a) **the shipped `~/.cache` cache has not been retrained** since round 840's
-    fingerprint change, so the first `xtsc` run on this box is an uncached one until
-    `xtsc-aot train` is called (~30 s, ~54 MB). This is the only line with a *present-tense*
-    cost to anybody, and it is one command.
+  - (a) ~~**the shipped `~/.cache` cache has not been retrained** since round 840's
+    fingerprint change~~ — **DONE round 842**: retrained (54,079,488 B), self-verifies
+    `USE`, and it **pruned 1 stale cache** — the § 2 "delete on upgrade" path observed
+    working on a real fingerprint change rather than in a fixture.
   - (b) **`--serve`/`--daemon` UNDER a cache, through the launcher** — round 840 verified
     only the one-shot cached run, and round 839 measured `--serve` uncached (cache halves
     the first request, worth nothing warm).
@@ -1488,11 +1540,17 @@ section, (JIT.2a) and (ENGINE.3)/(SCOPE.1) all contain such sentences.
     threaded through either, so (c)'s training change does not reach them.
   - (e) the **other seven dashboard profiles** (everything measured is the 78-file compiler
     profile), and an **emitting workload under a `--workers`-trained cache**.
-  - (f) **training-run VARIANCE** — every result so far uses ONE training run per arm
-    (round 840(d)'s second batch replicated the measurement, not the draw). Round 840(c)
-    caught a 5/5 sign-consistent FALSE POSITIVE in its own first batch, so this is the
-    line most likely to overturn something already recorded, and it is the one to do first
-    if any of these is done at all.
+  - (f) ~~**training-run VARIANCE** — every result so far uses ONE training run per arm~~
+    — **DONE round 842, and it was right to be called out: the draw is worth up to 2.4%
+    (+322 ms paired, 10/12) between two caches trained by an IDENTICAL command**, the
+    ordering replicates across batches, and cache SIZE does not predict it. 168 compiles,
+    five draws, `docs/perf/aot-cache.md` § 12. It overturns no DECISION — § 9's shipped
+    emit win (−5.4%) is >3× the term and § 10's rejected `--workers 4` arm was a null on
+    the path it was supposed to help — but it costs § 10's **+3.5%** its precision, and it
+    strikes § 10.3's "+82 KB" supporting argument outright (five identical-command draws
+    span 208 KB). **New standing rule: an A/B on a TRAINING configuration needs ≥2
+    independently trained caches per arm — two batches of runs replicate the measurement
+    draw and cannot touch the training one.**
 
 - [x] **(JIT.2-ORIGINAL, superseded by the two entries above — kept for the record, NOT
   live work) OWNER-DECIDED 2026-08-04: NO LAUNCHER FLAG; the APPROVED work was a round
