@@ -20,6 +20,14 @@
 # The output goes to a throwaway directory via --outDir and is deleted with it -
 # the project directory is never written to. See docs/perf/aot-cache.md section 9.
 #
+# It is also deliberately SEQUENTIAL, and that is a MEASURED decision, not an
+# omission (round 840(d), section 10): a cache trained under --workers 4 is worth
+# -0.9% on a --workers 4 compile - inside the noise band - and costs +3.5% on the
+# SEQUENTIAL one, which is what a user gets with no flags. Two independent batches,
+# 60 compiles. Do not "just add --workers 4" here on the strength of the fact that
+# cached --workers 4 is the fastest way to RUN: how you train and how you run are
+# different questions, and this dimension trades where the emit one did not.
+#
 # `train` also prunes every cache in the directory whose fingerprint is not the
 # current one, which is the "delete on upgrade" half: the new build trains into a
 # new fingerprint-named file and the previous build's cache is removed in the same

@@ -229,6 +229,34 @@ class AotCacheGuardTest {
     }
 
     /**
+     * THE TRAINING RUN IS SEQUENTIAL, AND THAT IS A MEASUREMENT (round 840(d),
+     * `docs/perf/aot-cache.md` § 10). Round 839 § 7.3 makes the opposite look
+     * obvious — cached `--workers 4` is the fastest configuration this project
+     * has — but training and running are different questions. A cache trained
+     * under `--workers 4` measured **−0.9% on a `--workers 4` compile** (inside
+     * the band) and **+3.5% on the sequential one**, which is the path a user
+     * gets with no flags: 60 compiles, two independent batches agreeing at every
+     * level. Unlike emit — where the Transformer/Emitter profile was simply
+     * *absent*, so adding it took nothing away — worker count is the same code
+     * reached through a different thread structure, so the shared profile is a
+     * **trade**, and the default sits on the losing side of it.
+     *
+     * This pin exists because the change it forbids is a one-word edit that
+     * would look like an improvement in review.
+     */
+    @Test
+    fun `the trainer trains sequentially`() {
+        val scripts = launcherDir() ?: return
+        val text = File(scripts, "xtsc-aot").readText()
+        val invocation = text.lines()
+            .dropWhile { !it.contains("AOTCacheOutput=\$tmp") }
+            .take(2)
+            .joinToString(" ")
+        assert(invocation.contains("\$XTSC_MAIN_CLASS"))
+        assert(!invocation.contains("--workers"))
+    }
+
+    /**
      * THE LAUNCHER MUST REACH THE DISPATCHER. Round 839 found `scripts/xtsc`
      * could not run `--serve` or `--daemon` at all: its main class was the
      * one-shot `…compiler.MainKt`, while the mode-dispatching `main` is

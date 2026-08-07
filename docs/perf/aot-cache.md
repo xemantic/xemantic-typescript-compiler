@@ -197,9 +197,9 @@ only on a synthetic one.
 5. ~~**Untested interactions:** emit mode, `--serve`, `--workers N`…~~ — **CLOSED round 839,
    § 7.** Emit, `--workers 2/4/8`, `--serve` and the whole 13,900-test corpus suite were all
    run through a cached JVM against an uncached arm, with **no divergence anywhere**. What
-   is still untested: a cache trained under emit or under `--workers 4` (a different
-   code-path population — § 7.6 prices it), `--watch`/`--incremental`, and the other seven
-   dashboard profiles.
+   is still untested: `--watch`/`--incremental` and the other seven dashboard profiles. (A
+   cache trained under emit is § 9 — shipped; one trained under `--workers 4` is § 10 —
+   measured, a net loss, not shipped.)
 6. **The `AdapterHandlerEntry` warnings are nondeterministic.** Round 828 saw four, this
    round saw two on one cache and none on another. Their absence is not evidence the
    silencer works; § 3's verification is.
@@ -350,8 +350,9 @@ correctness hazard — the launcher simply has no server mode. **CLOSED round 84
 
 ### 7.6 Residue after this round
 
-- **A cache trained under emit** (~800 ms, ~5% of a cached emit run — § 7.1) and one trained
-  under `--workers 4`. `scripts/xtsc-aot train` hard-codes `--noEmit` and sequential.
+- ~~**A cache trained under emit** (~800 ms, ~5% of a cached emit run — § 7.1)~~ — DONE,
+  § 9. ~~One trained under `--workers 4`~~ — **measured round 840(d), § 10: +3.5% on the
+  sequential path for −0.9% on w4, so `train` stays sequential.**
 - **`--watch` / `--incremental` under a cache**, and the other seven dashboard profiles.
 - ~~**The `--serve` gap in the launcher** (§ 7.4)~~ — CLOSED round 840, § 8.
 
@@ -471,11 +472,128 @@ usable — it is merely ~5% slower on an emitting compile until the next `train`
 
 ### 9.5 What this round did NOT measure
 
-- A cache trained under `--workers 4`, and `--serve`/`--daemon` **under** a cache through the
-  launcher — (AOT.4)(c) items (1) and (2), still open.
+- ~~A cache trained under `--workers 4`~~ — **measured round 840(d), § 10: a NULL, and a
+  small net LOSS.** `--serve`/`--daemon` **under** a cache through the launcher — (AOT.4)(c)
+  item (1) — is still open.
 - `--watch`/`--incremental` under a cache, and the other seven dashboard profiles.
 - Whether the emit win holds on a project whose emit is a larger share of the compile than
   the tsc profile's ~13%. The direction should be the same and the *share* larger, but that
   is an argument, not a measurement.
 - Any interaction between `--outDir` and `--incremental`/`--watch`: the override is simply
   not passed on those paths, and the usage text says so.
+
+## 10. Round 840(d) — a cache trained under `--workers 4`: MEASURED, and NOT SHIPPED
+
+*Round 840(c) established "train the cache under the mode you actually run" and got
+−1,132 ms on emit for nothing on the check-only path. The obvious next dimension is the
+one `train` still fixes: it runs **sequentially**. Round 839 § 7.3 had already made this
+worth asking, because cached `--workers 4` (12,343 ms) is **the fastest configuration this
+project has**. This round trained a second cache under `--workers 4` and measured both
+directions. **The answer is no.***
+
+### 10.1 The grid
+
+Same box, same hygiene: HEAD's jar (5,639,211 B), JDK 25.0.3, Gradle and Kotlin daemons
+stopped before training (8.8 GB free), the agent not touching the box while runs were in
+flight (round 774). Both arms run `java` directly with the launcher's own flag set
+(`-XX:AOTCache=…`, `-Xlog:aot*=off:stdout`, `-Xlog:aot*=error:stderr`, `-Xmx4g`), from the
+jar + its 7 dependency jars, main class `…server.XtscMainKt` — the guard's ~80 ms is
+identical in both arms and is excluded deliberately.
+
+Two caches, trained back to back on `build/bench/tsc-project-637d5746`, **differing only in
+worker count** (both emit, i.e. both are today's shipped trainer):
+
+| cache | training run | size | training wall |
+|---|---|---:|---:|
+| **S** | sequential (shipped) | 54,063,104 B | 29,127 ms |
+| **P** | `--workers 4` | 54,145,024 B (+82 KB) | 22,077 ms |
+
+Workload: `--noEmit --listAll` on the compiler profile at **seq / w4 / w8**, so 6 configs.
+**Two independent batches of 5 reps each, rotated interleave** (batch 2 offset by 3), 60
+whole-project compiles. Batch 2 reused the same two caches, so it replicates the
+*measurement*, not the training draw.
+
+### 10.2 The result — the two batches agree at every level
+
+Paired, within-rep **P − S** (the only quotable comparison):
+
+| level | batch 1 | batch 2 | **both (n=10)** | P faster in | verdict |
+|---|---:|---:|---:|:---:|---|
+| **sequential** | +501 ms | +679 ms | **+545 ms (+3.5%)** | **2/10** | **a COST** |
+| **`--workers 4`** | −110 ms | −114 ms | **−112 ms (−0.9%)** | 8/10 | inside the band |
+| **`--workers 8`** | −854 ms | −610 ms | **−732 ms (−4.7%)** | 8/10 | a gain, on a level nobody should use |
+
+Per-arm medians over all 10 runs each, with per-arm sd:
+
+| level | cache S (sequential-trained) | cache P (w4-trained) |
+|---|---:|---:|
+| sequential | **15,761 ms** (sd 2.6%) | 16,093 ms (sd 3.8%) |
+| `--workers 4` | **12,214 ms** (sd 4.0%) | 12,181 ms (sd 7.1%) |
+| `--workers 8` | 15,483 ms (sd 3.3%) | 14,861 ms (sd 4.2%) |
+
+**So the trade is real and it runs the wrong way.** Training under `--workers 4` buys the
+w4 path **0.9%** — below the ±1.0% warm band and ±2.0% cold band, i.e. nothing — and
+charges the **sequential** path **3.5%**, which is the path `scripts/xtsc` takes when the
+user passes no flags. Both effects reproduced in two independent batches at the same sign
+and within ~180 ms of each other. Under round 840(c)'s own headline lesson — *one batch of
+five rotated sign-consistent pairs was still wrong* — replication is what makes this
+quotable, and here it is what makes the **null** quotable rather than the win.
+
+### 10.3 Why this dimension has a trade and the emit one did not
+
+Round 840(c)'s change was free because emit code and check code are **disjoint** — the
+Transformer/Emitter profile was simply *absent*, and adding it took nothing away. Worker
+count is not a disjoint population: it is the **same** checking code reached through a
+different thread structure, and a JEP 515 profile is a finite, shared record of how each
+method was actually called. A w4 training run records receiver types and branch counts
+gathered from four worker threads; a sequential run then executes those same methods with
+a different call/inlining shape and gets a profile that fits it slightly worse. The +82 KB
+and the direction of both effects (helps w4 and w8, hurts seq, monotone in worker count)
+are consistent with that reading. **It is a reading, not a measurement** — nothing here
+inspects the recorded profiles.
+
+The transferable lesson is the sharper half: **"train under the mode you run" is not a
+general law, it is a claim about one dimension at a time.** In a dimension where the modes
+share code, training under one mode is a *trade*, and the question is which side the
+default sits on. Here the default is sequential, and it loses.
+
+### 10.4 The other two questions round 839 left, re-measured
+
+Within cache S (the shipped trainer), paired within-rep across levels, n=10:
+
+| comparison | paired median | faster in | ratio of medians |
+|---|---:|:---:|---:|
+| cached seq → cached **w4** | **−3,550 ms (−22.5%)** | **10/10** | **1.290×** |
+| cached seq → cached w8 | −120 ms (−0.8%) | 6/10 | 1.018× |
+
+- **Cached `--workers 4` remains the fastest configuration this project has**, by a wide
+  and perfectly sign-consistent margin (10/10 at both caches; 1.29× on S, 1.32× on P).
+- **Round 839's "`--workers 8` under a cache is WORSE than cached sequential" does NOT
+  reproduce.** It read 16,368 vs 14,514 ms there; here the two are indistinguishable
+  (15,483 vs 15,761 ms, paired 6/10, −0.8%). Round 839's ladder was *blocked runs, not a
+  rotated interleave*, and said so; this one is rotated and paired. What survives is the
+  weaker and still-useful statement: **w8 buys nothing over sequential under a cache**,
+  where uncached it bought 1.13× — the cache does erode the top of the worker ladder, it
+  just does not invert it.
+
+### 10.5 Correctness
+
+**All 60 compiles: 46 `error TS` lines and ONE sorted-diagnostics md5,
+`59d930db849399aea5e03e25fedb8e4e`** — the digest rounds 828/832/839/840(c) recorded — across
+both caches and all three worker levels, i.e. 20 runs per level and 30 per cache. No capture
+was empty (round 804) and none contained `more error(s)` (round 811). That is also the
+≥5-runs-per-level distribution the standing `--workers` rule demands, at 10 per level rather
+than 5, and it is 132 post-fix `--workers` runs in total across rounds 825/826/839/840(d).
+
+### 10.6 The decision, and what was NOT measured
+
+**`scripts/xtsc-aot train` stays sequential.** A ~0.9% gain on an opt-in flag does not buy
+a 3.5% loss on the default path. `AotCacheGuardTest.the trainer trains sequentially` pins
+it so a future round does not "just add `--workers 4`" on the strength of round 839 § 7.3.
+
+Not measured: a cache trained under `--workers 2` or `8`; whether re-training changes the
+draw (batch 2 reused both caches, so training-run variance is unsampled — one training run
+per arm); an **emitting** compile under either cache (this round's workload is `--noEmit`
+throughout, so the round-840(c) emit win is neither re-confirmed nor at risk); the
+interaction with `--serve`; and the other seven dashboard profiles. Nothing here touched
+`src/commonMain` or `src/jvmMain`, so `cost_gate.py` and `huge_methods.py` were not run.

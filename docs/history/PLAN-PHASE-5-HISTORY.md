@@ -1,3 +1,334 @@
+**Round 833 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH (the perf arc is closed).
+THE GENERAL `satisfies` CHECK LANDS — TS1360 plus the fresh object-literal excess check —
+closing a gap where the operator was verified NOWHERE. **NO CATEGORY WENT GREEN**, so none
+was adopted. Suite **13,833 / 0 / 3** (13,824 + 9 pins, 0 regressions); compiler profile
+byte-identical at the RECORDED md5.**
+
+- **WHICH FAMILY, AND WHY NOT ROUND 831'S RECOMMENDATION.** 831 priced `asOperator` as the
+  cheapest category and recommended a **general TS2352 comparability rule**. I took
+  `satisfies` instead, for two reasons that only the per-subtest census shows. (1)
+  **`asOperator` cannot go green whatever TS2352 does** — `asOperatorASI` is a parser/ASI
+  emit failure, and one emit failure blocks a category outright; so its "cheapest category"
+  status is illusory and the TS2352 rule would buy **one** subtest. (2) TS2352 is the
+  repo's most crowded walker family (~10 emitters) and `as` appears thousands of times in
+  tsc's sources, so a general rule there is the exact shape CLAUDE.md records as regressing.
+  `satisfies` is the opposite on every axis: **the largest single category (12 subtests)**,
+  a genuinely UNIMPLEMENTED feature rather than a message chase, and **structurally bounded
+  — the entire tsc source tree contains 6 `satisfies` operators, of which only 3 are inside
+  any of the 8 dashboard profiles** (2 in `src/compiler/transformers/declarations/
+  diagnostics.ts`, 1 in `src/server/editorServices.ts`).
+- **THE CENSUS THIS ROUND ADDS TO 831'S: the per-subtest DIFF, mined with `xml.etree` from
+  the nine-category arm** (re-run to get the failure texts 831 did not keep: **14,023 /
+  87 / 3** — 831's 87 exactly, on +199 adopted tests). Missing-code histogram over the 62
+  error-subtests: **TS2322 ×59 · TS2345 ×55 · TS2344 ×18 · TS7031 ×16 · TS2790 ×16 ·
+  TS2339 ×12 · TS2353 ×10 · TS2456 ×8 · TS18047 ×7 · TS1360 ×6**; over-emitted:
+  **TS2322 ×33 · TS2352 ×8 · TS1005 ×8 · TS2304 ×6 · TS1123 ×6 · TS2403 ×4**.
+- **WHAT LANDED.** A `NodeKind.SATISFIES_EXPRESSION` arm on the spine's per-kind dispatch
+  (`spineCheckSatisfies`), so it costs one tableswitch case and nothing at any other kind.
+  It is **deliberately partial, and that is the design, not the budget**: a `satisfies`
+  operand is FRESH, so a property-VALUE verdict depends on contextual typing this site does
+  not install, and taking one now would REJECT legal code (`{ a: "a" } satisfies
+  { a: "a" | "b" }`). Only the two contextual-typing-INDEPENDENT verdicts are emitted —
+  property NAMES on an object literal (excess ⇒ TS2353/TS2561 via the existing
+  `checkExcessProperties`, which already bails on an index-signature target; a required
+  target property absent from the literal ⇒ TS1360 with the missing-property chain and its
+  TS2728 related info) and a **primitive-intrinsic operand against a primitive-intrinsic
+  target**. Function/array operands, generic targets and spread-carrying literals are
+  refused on purpose. TS1360 anchors at the `satisfies` KEYWORD (length 9), verified against
+  two baselines' columns.
+- **THE PIN CAUGHT A REAL DEFECT THE CORPUS MASKED, which is the round's best argument for
+  writing pins that can fail.** The excess check was **ORDER-DEPENDENT**: a named target's
+  member table is lazy, so `collectTargetPropertyNames` read a null `members` and answered
+  "bail" unless some earlier line in the file had already resolved that type. The corpus
+  case hides it exactly — `typeSatisfaction.ts` line 12's excess literal is preceded by
+  line 11's `satisfies I1`, which resolves `I1` on the way through. The whole-suite run
+  came back **13,833 / 1**, and the one failure was my own excess pin. Fixed by
+  `resolveStructuredTypeMembers(targetType)` before the check.
+- **MOVEMENT: `typeSatisfaction` 12 → 11 failing subtests; `typeSatisfactionWithDefaultExport`
+  is GREEN**, and inside `typeSatisfaction.ts` the two TS2353 and the TS1360 now match the
+  baseline (its only remaining diff is one pre-existing FP). **The category did NOT go
+  green, so it was NOT adopted** — the nine categories were reverted before the gates.
+- **THE CORRECTED WORKLIST FOR `typeSatisfaction`, and it re-costs the category UPWARD.**
+  The 11 residual subtests are **not** more `satisfies` checking; they are three other
+  gaps wearing a `satisfies` costume. (a) **FOUR subtests need `Record`/`Partial`, which
+  the EMBEDDED lib does not declare at all** (`propertyNameFulfillment`,
+  `propNameConstraining`, `propertyValueConformance3`, `contextualTyping2`) — the target
+  degrades to `any` and every check correctly declines. This is a LIB gap, not a checker
+  gap, and no amount of `satisfies` work touches it. (b) **FIVE subtests need
+  property-VALUE conformance against an index signature** (`propertyValueConformance1`/`2`,
+  ×2 config variants each: `{ m: true, s: "false" } satisfies { [k: string]: boolean }` ⇒
+  TS2322 at the value). (c) **TWO need contextual typing to flow THROUGH the operator**
+  (`typeSatisfaction` line 15's FP, and `vacuousIntersection`'s `{ xyz: string }` where tsc
+  prints `{ xyz: "foo" }`) — the latter additionally wants an OBJECT-LITERAL arm in
+  `literalTypeOfExpression`, which is a broad change touching every var-decl/return/arg
+  literal-preservation site and was deliberately not attempted. `errorLocations1` is deeper
+  still. **So `typeSatisfaction` is NOT a one-round category, and the 0-emit-failure count
+  overstated its tractability.**
+- **WHAT DID NOT WORK / WAS NOT ATTEMPTED, said plainly.** The contextual-type-through-
+  `satisfies` fix (c) was designed and **not landed**: I could not verify it without another
+  build cycle, it is speculative (I cannot show from the source alone that installing
+  `contextualType` at the var-decl site fixes that FP), and landing an unverified broad
+  change to hit one subtest is the trade this repo's history says to refuse. The
+  `nonPrimitive` family was the runner-up and is re-costed below.
+- **GATES.** Suite **13,833 / 0 / 3** from a wiped results dir, `xml.etree` (13,824 + 9
+  `SatisfiesOperatorCheckTest` pins, **0 regressions**). `huge_methods.py --fail-over 0`
+  → exit 0, **0 over the limit** (largest 7,702). `cost_gate.py` → **PASS**, `output.errors`
+  46 unchanged, every counter +0.00% except `typeNode.cacheable` +10 (**+0.01%**),
+  `typeNode.bypassed` +10, `typeNode.cacheHits` +2, `globals.lookups` +4 — exactly the two
+  compiler-profile `satisfies` type nodes now being resolved; rebaselined with `--update`
+  in this commit per the accounting rule. **THE 8-PROFILE GRID, both directions:** all eight
+  `--noEmit --listAll` captures non-empty, no `more error(s)` truncation tell, counts
+  46/46/46/46/46/46/46 and harness 94 — identical to the recorded `bench/*.tsv` rows — and
+  **ZERO sightings of TS1360 / TS2353 / TS2561** (the only codes this change can add)
+  across all eight. The **compiler profile hashes to `4caacf248ce417899c2972c16a82f1ed`,
+  byte-for-byte the digest rounds 828 and 832 recorded**, so that profile's before-arm
+  needed no rebuild and the diff is empty by construction.
+
+**Round 832 (2026-08-05) — (JIT.2b), OWNER-DECIDED "BUILD THE INVALIDATION, THEN SHIP".
+THE JDK 25 AOT CACHE NOW SHIPS BEHIND A FAIL-SAFE GUARD: round 828's silent-wrong-answer
+mode is CLOSED, the 1.638× survives as **1.68× (3/3 pairs)**, and the load-bearing pin
+FAILS under its own one-mistake ablation. Suite 13,824 / 0 / 3 (+8 pins, 0 regressions).**
+
+- **The hazard, restated because it is the whole item.** The JVM has no invalidation: with
+  `Checker.class` removed from the jar and a fresh mtime, the plain run dies with
+  `NoClassDefFoundError` and **the cached run exits 0 printing `OK — 0 errors`**.
+  `-XX:AOTMode=on` does not help. A stale cache type-checks against bytecode that no longer
+  exists — worse than a slow compiler.
+- **THE CONTRACT: fail safe, with no way to opt out of it.** `scripts/xtsc` passes
+  `-XX:AOTCache=` only when a recomputed manifest matches the stored one **byte for byte**:
+  sha-256 of every classpath entry *in order*, the JDK build (`$JAVA_HOME/release`'s
+  digest), OS/arch, main class, a launcher-version constant, and the cache file's own size
+  and digest. Missing, mismatched, corrupt, no sha256 tool, an exploded-directory
+  classpath → **run without the cache**. A false refusal costs seconds, a false acceptance
+  costs a wrong answer, so every ambiguity resolves toward refusal — and there is
+  deliberately no flag that makes an unverified cache usable (the ablation is an edited
+  copy of the script, not a supported mode).
+- **NOTHING CONSULTS AN mtime, AND THAT IS THE DESIGN, NOT AN OVERSIGHT.** Round 828's
+  decisive experiment gave the mutated jar a *fresh* mtime; a rewrite that *preserves* one
+  is exactly what a stat-based check waves through. The pin
+  `a touched but unchanged artifact keeps its cache` holds the other direction — a guard
+  that invalidated on `touch` would be safe and would throw the 1.68× away on every
+  checkout.
+- **THE COST WAS THE DESIGN CONSTRAINT AND IT WAS MEASURED FIRST: ~80 ms**, 0.8% of the
+  ~10,000 ms delta. It is affordable only because the digests and the `stat`s are **batched
+  into one process each** — the per-entry loop cost 80 ms *by itself*, purely in `fork`,
+  which is what would have forced a stat-based fast path and with it the one hole that
+  matters. The JDK identity comes from the `release` file (a read), not `java -version`
+  (a 30 ms JVM start).
+- **VERIFICATION.** (a) Round 828's stale-jar scenario: unguarded + cache → **exit 0,
+  `OK — 0 errors`**; unguarded, no cache → exit 1 `NoClassDefFoundError`; **guarded → exit
+  1, decision `SKIP no-cache-file`**. And with the stale pair *planted under the new
+  fingerprint's filename* — defeating the name layer so only the content check can act —
+  **`SKIP manifest-mismatch`**, with `xtsc-aot status` naming the differing line.
+  (b) **The pin discriminates**: with the manifest comparison removed from
+  `xtsc_aot_decide`, **exactly one** of the 8 pins fails, reading
+  `USE /tmp/…/xtsc-….aot` — the wrong-answer mode itself — and the other seven stay green.
+  (c) `--noEmit --listAll`, same command shape: **diff EMPTY**, both md5
+  `4caacf248ce417899c2972c16a82f1ed` — *round 828's own digest*, 55 lines each, 46 errors,
+  no truncation tell. (d) 3 rotated pairs through the launcher: 27,396/17,398 ·
+  24,853/14,708 · 24,813/14,780 → **median 1.68×, 3/3, 147 ms spread on a ~10,000 ms
+  delta**. Absolutes are inflated and NOT quotable across rounds — another project's build
+  shared the box for the whole round.
+- **A CORRECTION TO ROUND 828, AND IT MATTERED.** The four `AdapterHandlerEntry` warnings
+  are **not on stderr** — they are on **stdout**, interleaved with the diagnostics, so
+  anything parsing xtsc's output sees them. Two narrower flags failed before the shipped
+  pair: `-Xlog:aot+codecache+stubs=error` misses the plain-`aot`-tagged line, and
+  `-Xlog:aot*=error:stderr` **adds a stderr sink without reconfiguring the default stdout
+  one**, so every warning still printed — unified logging is configured per OUTPUT, not
+  globally. The shipped pair is `-Xlog:aot*=off:stdout` + `-Xlog:aot*=error:stderr`,
+  verified both ways against a deliberately truncated cache: stdout clean, all three
+  `[error][aot]` lines still printed, compile still correct.
+- **AN UNPROMPTED REAL-WORLD CONFIRMATION.** A Gradle run mid-round rebuilt the jar; the
+  next `status` reported the fingerprint moving `358cef8a…` → `aafecab2…` and
+  `SKIP no-cache-file`, and the retrain reported `pruned 1 stale cache(s)`. The upgrade
+  path was exercised by an accident, not a fixture.
+- **WHAT DID NOT WORK / WHAT I DID NOT DO.** The warnings **could not be reproduced on
+  demand** (two on one cache, none on another, four in round 828) — so the silencer is
+  verified by construction rather than by before/after, and that is said in the doc instead
+  of claimed. `zip -d` is not installed here, so the stale jar was rewritten with Python's
+  `zipfile`, which re-deflates and shrinks it — a *larger* perturbation than round 828's,
+  in the same direction. **Auto-training on first use was considered and rejected**: it
+  would cost an unlucky user ~28 s and, decisively, a launcher cannot pick a
+  *representative* project, which is the only thing separating a 39% cache from a 5.9% one.
+  **The corpus suite was NOT run through a cached JVM** — the evidence for a cached run is
+  the `--listAll` diff plus round 828's 20 same-error runs, and that gap is recorded as
+  residue, not closed.
+- **GATES.** Suite **13,824 / 0 / 3** from a wiped results dir, counted with `xml.etree` —
+  baseline 13,816 plus the 8 new pins, **0 regressions**.
+  `python3 scripts/huge_methods.py --fail-over 0` → exit 0 (largest 5,149).
+  `cost_gate.py` not run: no checker code was touched, and the round's only `src/` change
+  is a jvmTest file.
+
+**Round 831 (2026-08-05) — FIRST ROUND ON THE POST-v1 BACKLOG. M3.0's REDNESS TABLE
+RE-MEASURED AFTER 135 ROUNDS AND IT IS *UNCHANGED* — ALL NINE REMAINING CONFORMANCE
+CATEGORIES ARE RED, THE FLOOR IS 4 FAILING CASES, SO **NO CATEGORY WAS ADOPTED**. The
+round's product is a per-CASE census with the emit-vs-errors split — the fact that
+decides tractability and that round 695 never recorded. NO `src/` CHANGE.**
+
+- **Why M3.0 and not something else.** The live QUEUE's two unchecked items are both
+  non-actionable — (JIT.2b) is `BLOCKED-PENDING-USER` (a Guardrail: shipping the AOT cache
+  is an owner packaging decision) and (WIDEN.1)'s remaining sub-steps carry their own
+  standing instruction *"do not widen this speculatively"* with zero measured sites on all
+  8 profiles as of round 796. So the loop continues into the Post-v1 backlog, where **M3.0
+  is the only item that is both pre-approved (owner, 2026-07-02, conformance-category
+  adoption in the generator) and shaped as an incremental, per-category commit.**
+  (M3.0-gap-2) is PARKED; (M3.0-gap-3)'s remainder is an M3.1 relation change with a known
+  3-FP-on-8-profiles blocker (round 699, attempt 4) — not a first-round-on-a-new-arc target.
+- **THE MEASUREMENT.** All nine remaining candidate categories added to
+  `conformanceCategories` in ONE arm, per the item's own protocol (one ~7-minute run beats
+  adopting a category and discovering it is red): **14,015 tests / 87 failed / 3 skipped**
+  against the 13,816 / 0 / 3 baseline, i.e. **+199 tests, 87 red**. Then reverted.
+- **CLASSIFICATION FIRST, BECAUSE IT IS THE WHOLE DECISION: 0 of the pre-existing 13,816
+  regressed.** Verified by mapping every failing test name back to its source corpus
+  (`git ls-tree` of `tests/cases/conformance` vs `tests/cases/compiler`, `xml.etree` over
+  the 630 result XMLs): **74 of 74 failing cases are newly-adopted conformance cases, 0 are
+  compiler-corpus, 0 unmapped.** The 87 are pre-existing gaps newly made visible, not
+  breakage.
+- **THE TABLE IS UNCHANGED AFTER 135 ROUNDS.** Failing subtests per category, round 695 →
+  round 831: `asOperator` 5 → **4** · `any` 6 → **6** · `conditional` 8 → **8** ·
+  `nonPrimitive` 9 → **9** · `labeledStatements` 9 → **9** · `typeAliases` 9 → **9** ·
+  `contextualTyping` 9 → **9** · `typeSatisfaction` 12 → **12** · `optionalChaining`
+  21 → **21**. **Exactly one subtest moved in 135 rounds** — the expected result of an arc
+  that was entirely perf work, and the reason a future round should treat the table as
+  current instead of spending a suite run re-deriving it.
+- **WHAT THIS ROUND ADDS AND 695 DID NOT: the failing-CASE count and the EMIT-vs-ERRORS
+  split, which is what decides whether a category is adoptable at all.** 87 subtests come
+  from **74 distinct cases**, and `conformanceDeferredErrorBaselines` defers only
+  `.errors.txt` — so **one failing JS-emit subtest blocks its whole category**, deferral or
+  not. `category: failing cases / total files (cases with an emit failure)` —
+  `asOperator` 4/9 (**1**) · `any` 6/9 (**0**) · `conditional` 7/10 (**2**) ·
+  `labeledStatements` 5/8 (**4**) · `nonPrimitive` 9/16 (**0**) · `typeAliases` 9/15
+  (**0**) · `contextualTyping` 9/17 (**0**) · `typeSatisfaction` 10/16 (**0**) ·
+  `optionalChaining` 15/25 (**12**).
+- **THE 87, BUCKETED BY FAILURE SHAPE** — the worklist a future round wants. **(i) "expected
+  diagnostics … but none produced" / diagnostic-set mismatch, 62 subtests, 0 emit
+  involvement** — the five categories `any` (6), `nonPrimitive` (9), `typeAliases` (9),
+  `contextualTyping` (9), `typeSatisfaction` (12), plus the errors half of `asOperator` (3),
+  `conditional` (6), `labeledStatements` (5), `optionalChaining` (3). These are missing
+  CHECKS. **(ii) JS-emit baseline diffs, 25 subtests across 19 cases** — concentrated in
+  `optionalChaining` (12 cases: `callChain_3`, `deleteChain`, `elementAccessChain_3`,
+  `parentheses`, `propertyAccessChain`, `propertyAccessChain_3`, `superMethodCall`,
+  `taggedTemplateChain`, `optionalChainingInLoop`, `…InParameterBindingPattern`,
+  `…InParameterInitializer`, `…InTypeAssertions`) and `labeledStatements` (4 cases:
+  `labeledStatementWithLabel_strict`, `…DeclarationListInLoopNoCrash3`/`4`,
+  `…ExportDeclarationNoCrash1`), plus `conditional` (`inferTypes1`,
+  `inferTypesWithExtends1`) and `asOperator` (`asOperatorASI`). These are DOWNLEVEL/emit
+  gaps and are the ones no deferral mechanism can carry.
+- **WHAT I DID NOT LAND, AND WHY — both obvious routes are closed, and that is a result,
+  not an excuse.** (1) **"Narrow the adoption to the categories that pass" lands nothing:
+  no category is green**, the floor being `asOperator` at 4 failing cases. (2) **"Adopt and
+  defer" is available for five categories** (`any`, `nonPrimitive`, `typeAliases`,
+  `contextualTyping`, `typeSatisfaction` — 43 cases, zero emit failures) **and is exactly
+  the mass-parking this item's own rule forbids**: *"not a place to park a fresh failure —
+  triage first, queue it, then add"*, with the live deferred set holding **2** entries,
+  each carrying a triaged paragraph. Deferring 43 fresh failures would convert a hard gate
+  into a wish. **Landing 87 red was never on the table** (the corpus is a permanent
+  zero-regression gate), and `LogicalParityDivergence` is explicitly NOT the mechanism —
+  it is for form-vs-meaning divergence on an individual baseline, not for hiding
+  unimplemented behaviour.
+- **THE CHEAPEST NEXT TARGET IS PRICED, NOT GUESSED.** `asOperator` (4 cases) is the floor,
+  and it is still not surgical: `asOperator2` (`23 as string`) and `asOperatorContextualType`
+  (`(v => v) as (x: number) => string`) both want a **general TS2352 comparability rule**,
+  where today TS2352 is ~10 dedicated narrow walkers (`emitTS2352IfNullCast`,
+  `IfSameTargetMismatch`, `IfFunctionReturnMismatch`, `IfArrayToClassMismatch`,
+  `IfTypeParamStrictSubtypeCast`, `IfEmptyObjectCastToTypeParam`, …) and **no general rule
+  exists** — M3.1-depth, wanting the corpus plus `--listAll` ×8. `asOperatorAmbiguity` wants
+  TS2339 through `y[0].m` with `y: A<B>[]`; `asOperatorASI` is a **parser/ASI** gap (tsc
+  restarts the statement at a newline-leading `as`, emitting `var x = 10;` /
+  ``as `Hello world`;``, where we swallow the `as` into an assertion).
+- **WHAT LANDED IN CODE: one line, and it is declared honestly as NOT a demonstrated bug
+  fix.** `cloneTypeScriptRepo` derives its sparse checkout from `conformanceCategories` but
+  did not declare it as an input (`generateTypeScriptTests` already does, for the same
+  reason). The failure it would cause is nasty — an adopted category reported UP-TO-DATE,
+  sources never materialized, zero tests generated for it, suite green and gating nothing.
+  **I tried to demonstrate it and could not: removing an input property is ITSELF a Gradle
+  invalidation, so the task re-ran and the experiment is uninterpretable.** The property is
+  declared because it is true, with a comment saying exactly that.
+- **WHAT WENT WRONG IN THE ROUND, recorded because it cost ~40 minutes and is a repeatable
+  trap.** The measurement suite was launched as `nohup ./gradlew jvmTest &` *inside* a
+  `run_in_background` Bash call. That double-detaches: the tool returns exit 0 immediately
+  while the run survives. The next command's `rm -rf build/test-results/jvmTest` then
+  deleted the results directory out from under the still-live run, which died with
+  `NoSuchFileException: …/binary/in-progress-results-generic.bin` **after the tests had
+  actually completed** — so from outside it looked exactly like a build that never produced
+  results, while the log in fact carried the full `14015 tests completed, 87 failed`. The
+  rule is the one CLAUDE.md already gives and I did not follow: **use the Bash tool's
+  `run_in_background` alone; never also `nohup … &` inside it.**
+- **GATES.** Corpus at the reverted allowlist re-verified from a wiped results dir:
+  **13,816 / 0 / 3**, identical to round 829, with the generated corpus confirmed back to
+  the four adopted conformance categories (6,453 cases / 8,837 functions). `cost_gate.py`
+  and `huge_methods.py` **not applicable** — no `src/` change (`git diff --stat` touches
+  `build.gradle.kts` only, +9 lines of input declaration and comment).
+
+**Round 830 (2026-08-04) — (ENGINE.3) CLOSED, AND IT CLOSES AS A *NEGATIVE
+RECOMMENDATION*: THE FOUR-SITE DEDICATED-WALKER LAYER IS 757 ms = 3.13% OF A
+CHECK-ONLY COMPILE, ~22 ms (0.09%) OF IT PLAINLY DELETABLE — **(SCOPE.1) SHOULD BE
+CLOSED WITHOUT BEING RAISED WITH THE OWNER.** NO `src/` CHANGE.**
+
+- **The item body was STALE, and finding that out is most of the round.** (ENGINE.3) reads
+  "Measured at site 1 of 3" and asks for sites 2 and 3. **Both were measured — site 2 at
+  round 755, site 3 at round 786 — and a FOURTH site (the property-access path, the one
+  that holds the mass) at round 787.** (ENGINE.1) has been CLOSED since round 786. What no
+  round had ever done, and what the item exists to produce, is the **aggregate and the
+  recommendation**; § 0.1's endgame paragraph still said "two sites remain unmeasured".
+- **So the round did the one thing that made the aggregate defensible: re-measured ALL FOUR
+  SITES IN ONE ROUND ON ONE BINARY.** The published total (613 ms, then 820 ms with site 4)
+  was assembled from three different rounds and three different binaries, and CLAUDE.md
+  forbids comparing absolute ms across rounds — the sequential anchor has a 12.8%
+  cross-round spread with identical code. 13 runs, rotated interleave, 3 reps per arm
+  (`--ctaSections`/`Coarse` levels B/C/E, `--cpaSections`/`Coarse` level Q, one
+  `--passTiming`), classification transcribed unchanged from the published docs so this is
+  a REPLICATION, not a re-opinion. All 13 runs: `46 error(s)`, identical to production.
+- **THE NUMBERS, netted at 308 ns/boundary** (site / engine / **walker** / share / % of a
+  24,205 ms compile): 1 `checkVarDeclAssignability` 436 / **286** / 37.6% / 1.18% —
+  2 `checkReturnAssignability` 447 / **168** / 27.2% / 0.69% —
+  3 `checkAssignmentExpression` 306 / **94** / 23.5% / 0.39% —
+  4 `checkSinglePropertyAccess` 830 / **209** / 20.1% / 0.86%.
+  **FOUR-SITE TOTAL 757 ms = 3.13%**, bracket **703–924 ms = 2.90–3.82%** across
+  0–450 ns. **The three published sites replicate to about a point** (37.6 vs 37.4,
+  27.2 vs 28.4, 23.5 vs 27.9) on a binary ~45 rounds newer.
+- **SITE 4 MOVED FROM 8.0% TO 20.1%, AND THE REASON IS THE ROUND'S BEST FINDING: the
+  firewall is 209 ms against round 787's 207 ms — the SAME number. What moved is the
+  DENOMINATOR.** The engine row fell 2,364 -> 830 ms because rounds 788-795
+  ((ENGINE.2b)/(2d)/(2e)/(2f)) landed levers inside `checkMemberAccessMissing`. **Every ms
+  taken out of the engine raises the layer's percentage share without changing by one ms
+  what deleting the layer would buy** — a rising share is evidence the engine got faster.
+  Site 4's layer is still ONE walker: B464 is 168 of the 209 ms, and three of its eight
+  probes net to ZERO (their whole raw cost is probe boundary).
+- **PREDICTIONS SCORED.** **E1 (25-50% band) HOLDS AT ONLY 2 OF 4 and is biased high** —
+  sites 3 and 4 are below 25%. **E2 (firewall/relation >= 10x) FAILS AGAIN, HARDER**:
+  19.1x / 6.2x / 3.8x; the 14x survives only where the relation is 2% of its function.
+  **E3 (< 900 ms = < 3.5%) HOLDS at every netting**, failing only at zero netting (924 ms
+  = 3.82%), which charges the probe's own boundaries to the code. **E4 HOLDS AT ALL FOUR**
+  — weak-type rule (160 ms = 56% of site 1's layer), excess-property checking,
+  `strictFunctionTypes`/variance/freshness, and all eight of site 4's probes: tsc holds
+  every one inside its own relation/property path, so all four **MOVE**.
+- **PLAINLY DELETABLE, all four sites: 22 ms = 0.09%** (site 2's legacy string checker 11,
+  site 3's `varTypes` fallback 9, the literal-RHS exit 2).
+- **THE RECOMMENDATION, which is what the item was written to be able to produce: do NOT
+  put § 0.1's scope question to the owner.** The whole prize is 3.13% against a ±2.0% cold
+  A/B band; the deletable part is 1/20th of one band; and **(JIT.1), already landed and
+  banked, measured -3.93% (5/5 pairs) from splitting `forEachChild` alone** — one
+  mechanical method split beat the upper bound of the entire endgame with no scope trade.
+  Against that the change trades the property that made a byte-identical 13,816-test
+  corpus reachable (every broad engine attempt regressed; global variance analysis alone
+  cost ~263, round 336). **(SCOPE.1) is marked CLOSED-UNRAISED.**
+- **WHAT DID NOT WORK.** (1) **Three of the four ON-vs-COARSE differentials DID NOT
+  RESOLVE.** Level B came back **negative** (Δ −64 ms against a 124 ms within-mode spread
+  — arithmetically impossible as a boundary cost, so noise swamped it); level C read
+  Δ = +1 ms (Δ/spread 0.02x); level E reproduced round 786's figure (356 vs 347 ns) at
+  Δ/spread 0.80x. Only level Q was usable (308 ns, Δ/spread 2.15x). The escape was to
+  carry the boundary as a **sensitivity parameter** charged per row by its own reach and
+  report the answer across the whole bracket — the verdict is identical at every point in
+  it, which is why the round survives a calibration that mostly failed. (2) A first
+  aggregate taken from RAW rows read 924 ms = 3.82% and would have **failed E3**; level
+  Q's nine rows all carry identical 66,747-close counts, so the untaxed reading inflates
+  the small firewall rows by ~20.6 ms EACH and three of them are pure boundary.
+- **NO `src/` CHANGE**, so no suite/cost-gate/JIT-gate run was owed; probe-off behaviour
+  is answered by construction, and by the diagnostic set being identical across ON,
+  COARSE and probe-free modes in all 13 runs.
+  Full derivation: `docs/perf/engine-rule-price.md` §§ 9-11.
+
 **Round 829 (2026-08-04) — (SETUP.2) CLOSED ON THE CENSUS: `buildFileLocalTypeMaps` MAKES
 **8.5 RESOLUTIONS PER MAP ENTRY ANYBODY READS**, AND THE DEFERRAL IS WORTH UNDER 1%.
 NO LEVER LANDED, BY MEASUREMENT — THE INSTRUMENT IS THE DELIVERABLE.**
