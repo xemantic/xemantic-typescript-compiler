@@ -20,6 +20,84 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round MOD.1–MOD.2 (2026-08-07) — THE MODULE SPLIT, STEPS 1 AND 2 OF 5.** Owner directive
+(this session): split the project into modules, taking `../markanywhere` as the pattern —
+full split rather than a thin slice, **Ktor on both sides** of the client/daemon transport,
+and module directories prefixed with `rootProject.name`. Landed green, suite re-verified at
+**13,909 / 0 failed** (unchanged), root jar manifest verified byte-identical.
+
+- **The daemon already existed** — `src/jvmMain/kotlin/server/CompileServer.kt` (JDK NIO
+  `UnixDomainSocketAddress`, 4-byte BE length + UTF-8 JSON frames, sequential single-thread
+  serving) plus `XtscMain`'s `--serve` / `--daemon` / plain dispatch. So this arc is NOT
+  "build a daemon"; it is **stop shipping the compiler inside the client**. Today the thin
+  client is a GraalVM image of `XtscMainKt`, i.e. the whole 230k-line compiler AOT-compiled
+  in order to write ~200 bytes to a socket.
+- **MOD.1** `build-logic/` included build + the `xemantic-typescript-compiler.convention`
+  plugin (shared Kotlin config only: `extraWarnings`/`progressiveMode`, the two power-assert
+  functions, api/language version, jvm target + `-Xjdk-release`; it deliberately selects NO
+  test framework — switching that changes how the generated corpus is discovered). ktor
+  **3.5.2** into the catalog.
+- **MOD.2** `xemantic-typescript-compiler-api` — `CompileRequest`/`CompileResponse`,
+  `XTSC_REFUSED`, the shared `Json`, the socket-path policy, and the frame codec. 27 pins.
+  Three decisions worth re-reading before extending it: the frame codec lives in `-api`
+  rather than in each peer (with ktor on both sides the old asymmetry argument is gone, and
+  two hand-written copies in separately-built binaries drift into a HANG, not a type error);
+  `protocolVersion` defaults to `XTSC_PROTOCOL_UNVERSIONED` (0) and NOT to the current
+  version, because defaulting to current makes a pre-versioning daemon indistinguishable
+  from a current one — the single case the field exists to detect; and the socket path is a
+  PURE FUNCTION of `(tempDir, user)` because the JVM daemon and the native client discover
+  those through different APIs while having to agree exactly, and a disagreement does not
+  fail — it silently starts a second daemon.
+- **Windows, since it decides whether the client can ship at all**: both stacks do AF_UNIX
+  on Windows 10 1803+. `ktor-network-mingwx64` implements it behind a runtime probe
+  (`isAFUnixSupported` — `SocketUtilsWindows.kt`), and the JVM `UnixSocketAddress` actual
+  reflects onto `java.net.UnixDomainSocketAddress`, so it needs Java 16+ (we target 17).
+  Unix sockets are **CIO-engine only**.
+- **A build trap that cost a cycle** is now a CLAUDE.md entry: `applyAllConventions()` cannot
+  be used in a multi-module build.
+
+- [ ] **(MOD.3) Move the compiler to `xemantic-typescript-compiler-core`.** The expensive
+  step, and the reason MOD.1/MOD.2 were kept additive: **20 files carry 64 hard-coded
+  single-module paths**, of which **32 are genuine Gradle outputs** —
+  `build/classes/kotlin/jvm/main` (10), `build/classes/kotlin/jvm/test` (7),
+  `build/test-results` (11), `build/libs` (4) — across `xtsc-aot-lib.sh`,
+  `ab-interleaved.sh`, `ab-warm.sh`, `aot-corpus-suite.sh`, `aot-draw-variance.sh`,
+  `bench-3way.sh`, `bench-compile-tsc.sh`, `emit-diff-tsc.sh`, `grid838.sh`,
+  `find_candidates.py`, `method_bytes_by_line.py`, `clinit_split_analyze.py`,
+  `tisp_split_analyze.py`, `over_emit.py`, `pure_fp.py`, `pure_missing.py`,
+  `mine_small_diffs.py`, `triage_rank.py`, `tsgo_relevance.py`, and
+  `.github/workflows/native.yml`. The remaining 32 (`build/bench`) are harness DATA that the
+  scripts `mkdir -p` themselves, so they can stay at the repo root untouched.
+  **Do NOT sed these blind**: this repo's recurring failure mode is a harness that reads a
+  stale path and reports a false green (the `--listAll` truncation, the stale-XML count), and
+  a perf script that silently measures the wrong classpath is exactly that shape. Each
+  rewired script needs an existence check that FAILS LOUDLY, in the style of round 804's
+  non-empty check. Also decide deliberately, and record the choice: `typescript-repo/` is
+  resolved as `projectDir.resolve(...)` and would move under the module — prefer
+  `rootProject.projectDir` so the checkout stays at the repo root.
+  **AND: the AOT cache fingerprint hashes every classpath entry IN ORDER, so splitting one
+  jar into several invalidates every trained cache.** That is fail-safe (the guard degrades
+  to an uncached run, round 828) but it means the ladder must be retrained and
+  `AotCacheGuardTest` re-verified against the new layout before ANY `bench-history/` number
+  is comparable across the split. `HugeMethodLimitTest` reads the classpath layout too.
+- [ ] **(MOD.4) `-daemon`**, porting `CompileServer` from JDK NIO to ktor CIO. Its two
+  documented invariants must survive the port VERBATIM: requests served **sequentially on
+  one thread** (Symbol/Type id sequences are thread-local per INV.6(6c0), and `--workers` has
+  produced 62 diagnostics where sequential produces 46), and the request running the
+  **ordinary `main`** with stdout captured, so daemon output matches CLI output by
+  construction rather than by testing. `--watch` stays refused (it would wedge the single
+  request thread forever).
+- [ ] **(MOD.5) `-client`**, Kotlin/Native + JVM, depending on `-api` only — NOT on the
+  compiler. That edge is the whole point of the arc: it turns a ~100 MB GraalVM image into a
+  few-hundred-KB K/N binary, and it lets native targets return for the one module that can
+  afford them (CLAUDE.md keeps them off because Checker.kt costs ~7 min per link; a client
+  links in seconds). **The socket is the easy half — spawning the daemon is the hard half**:
+  K/N has no `ProcessBuilder`, so it needs `posix_spawn`/`fork+exec` vs `CreateProcess`,
+  detachment so the daemon outlives the client, and a start-race guard so two concurrent
+  clients do not both bind. Budget more for that than for the transport. The JRE-download
+  idea belongs in a SEPARATE later module — an HTTPS client plus archive extraction plus
+  signature verification would dominate the binary the fast path exists to keep small.
+
 **Round 842 (2026-08-07) — (AOT.5)(f): THE TRAINING DRAW IS WORTH UP TO **2.4%**, AND EVERY
 AOT RESULT ON RECORD WAS MEASURED WITH ONE TRAINED CACHE PER ARM.** Five caches trained by an
 IDENTICAL command (`scripts/xtsc-aot train`, unchanged between runs), 168 whole-project
