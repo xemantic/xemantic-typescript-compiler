@@ -290,7 +290,7 @@ def main():
         per, size, synth = per_line_bytes(
             "com.xemantic.typescript.compiler.Checker",
             "tryInferSingleTypeParamFromArgs",
-            "build/classes/kotlin/jvm/main", FN_START, FN_END)
+            "xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main", FN_START, FN_END)
         print(f"tryInferSingleTypeParamFromArgs  {size} bytecodes, "
               f"{synth} ({100.0 * synth / size:.1f}%) INLINED stdlib")
         spans = [("gate loop", 115106, 115158), ("orderedTps", 115159, 115193),

@@ -37,7 +37,7 @@ for a in sys.argv[1:]:
     if not a.isdigit():
         substr = a
 rows = []
-for f in glob.glob('build/test-results/jvmTest/*.xml'):
+for f in glob.glob('xemantic-typescript-compiler-core/build/test-results/jvmTest/*.xml'):
     data = open(f, encoding='utf-8', errors='replace').read()
     for part in data.split('<testcase ')[1:]:
         nm = re.match(r'name="([^"]+)"', part)

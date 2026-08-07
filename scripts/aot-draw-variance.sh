@@ -53,8 +53,8 @@ die() { printf 'aot-draw-variance: %s\n' "$*" >&2; exit 2; }
 
 resolve_cp() {
   local jar deps
-  jar="$(find "$ROOT/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' | LC_ALL=C sort | head -1)"
-  [ -n "$jar" ] || die "no jar in build/libs - build first"
+  jar="$(find "$ROOT/xemantic-typescript-compiler-core/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' | LC_ALL=C sort | head -1)"
+  [ -n "$jar" ] || die "no jar in xemantic-typescript-compiler-core/build/libs - build first"
   [ -f "$ROOT/build/bench/cp.txt" ] || die "no build/bench/cp.txt"
   deps="$(cat "$ROOT/build/bench/cp.txt")"
   printf '%s:%s' "$jar" "$deps"

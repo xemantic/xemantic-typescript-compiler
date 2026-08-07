@@ -95,7 +95,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("cls")
     ap.add_argument("method")
-    ap.add_argument("--cp", default="build/classes/kotlin/jvm/main")
+    ap.add_argument("--cp", default="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main")
     ap.add_argument("--src", default=None)
     ap.add_argument("--range", nargs="*", default=[])
     ap.add_argument("--top", type=int, default=0)

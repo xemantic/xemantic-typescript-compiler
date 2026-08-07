@@ -91,7 +91,7 @@ xtsc_resolve_classpath() {
   # Development fallback: this repo's own build outputs.
   local root jar deps
   root="$XTSC_SCRIPT_DIR/.."
-  jar="$(find "$root/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' 2>/dev/null | LC_ALL=C sort | head -1)"
+  jar="$(find "$root/xemantic-typescript-compiler-core/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' 2>/dev/null | LC_ALL=C sort | head -1)"
   if [ -n "$jar" ] && [ -f "$root/build/bench/cp.txt" ]; then
     deps="$(cat "$root/build/bench/cp.txt")"
     XTSC_RESOLVED_CP="$jar:$deps"

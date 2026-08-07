@@ -18,7 +18,7 @@ set -uo pipefail
 cd "$(dirname -- "${BASH_SOURCE[0]}")/.."
 O=build/aot-suite-check
 mkdir -p "$O"
-JAR=build/libs/xemantic-typescript-compiler-jvm-0.1.0-SNAPSHOT.jar
+JAR=xemantic-typescript-compiler-core/build/libs/xemantic-typescript-compiler-jvm-0.1.0-SNAPSHOT.jar
 G=~/.gradle/caches/modules-2/files-2.1
 TESTJARS="$(find $G/org.jetbrains.kotlin/kotlin-test-junit/2.4.10 -name '*.jar' | head -1)"
 TESTJARS="$TESTJARS:$(find $G/org.jetbrains.kotlin/kotlin-test/2.4.10 -name '*.jar' | grep -v sources | head -1)"
@@ -41,7 +41,16 @@ TESTJARS="$TESTJARS:$(find $G/org.jetbrains.kotlin/kotlin-power-assert-runtime-j
 # construction, because a jar is what an AOT cache can be trained from at all.
 # They are green under `./gradlew jvmTest`. What matters here is that the two
 # arms agree, not that the count is zero.
-CP="$JAR:$(cat build/bench/cp.txt):build/classes/kotlin/jvm/test:$TESTJARS:$O/classes:build/classes/kotlin/jvm/main"
+MAIN_CLASSES=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main
+TEST_CLASSES=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test
+# A missing entry here does NOT fail the run — it produces two arms that agree
+# because both are equally broken, which is exactly the shape this harness is
+# supposed to detect. Note `build/bench/cp.txt` stays at the repo root: it is
+# harness data this tree's bench scripts write, not a Gradle output.
+for d in "$JAR" "$MAIN_CLASSES" "$TEST_CLASSES" build/bench/cp.txt; do
+  [ -e "$d" ] || { echo "error: missing classpath entry $d — build first" >&2; exit 1; }
+done
+CP="$JAR:$(cat build/bench/cp.txt):$TEST_CLASSES:$TESTJARS:$O/classes:$MAIN_CLASSES"
 CACHE="$(ls ~/.cache/xtsc/xtsc-*.aot 2>/dev/null | head -1)"
 echo "cache = $CACHE"
 
@@ -50,18 +59,18 @@ mkdir -p "$O/classes"
 javac -cp "$(find $G/junit/junit/4.13.2 -name '*.jar' | head -1)" -d "$O/classes" scripts/CorpusRunner.java || exit 1
 
 echo "=== $(date -u +%T) smoke: one class, uncached then cached"
-java -Xmx4g -cp "$CP" CorpusRunner build/classes/kotlin/jvm/test "$O/smoke.plain.txt" DeepStackHandoffTest 2>&1 | tail -3
-java -XX:AOTCache="$CACHE" -Xlog:aot*=off:stdout -Xmx4g -cp "$CP" CorpusRunner build/classes/kotlin/jvm/test "$O/smoke.cached.txt" DeepStackHandoffTest 2>&1 | tail -3
+java -Xmx4g -cp "$CP" CorpusRunner "$TEST_CLASSES" "$O/smoke.plain.txt" DeepStackHandoffTest 2>&1 | tail -3
+java -XX:AOTCache="$CACHE" -Xlog:aot*=off:stdout -Xmx4g -cp "$CP" CorpusRunner "$TEST_CLASSES" "$O/smoke.cached.txt" DeepStackHandoffTest 2>&1 | tail -3
 if ! grep -aq 'run=[1-9]' "$O/smoke.plain.txt"; then echo "SMOKE FAILED - classpath wrong, aborting"; cat "$O/smoke.plain.txt"; exit 1; fi
 
 echo "=== $(date -u +%T) suite, UNCACHED"
-/usr/bin/time -v java -Xmx4g -cp "$CP" CorpusRunner build/classes/kotlin/jvm/test "$O/suite.plain.txt" \
+/usr/bin/time -v java -Xmx4g -cp "$CP" CorpusRunner "$TEST_CLASSES" "$O/suite.plain.txt" \
   > "$O/suite.plain.log" 2>&1
 tail -3 "$O/suite.plain.log"; grep -a '^TOTAL' "$O/suite.plain.txt"
 
 echo "=== $(date -u +%T) suite, CACHED (with a class-load log, to prove the cache is USED)"
 /usr/bin/time -v java -XX:AOTCache="$CACHE" -Xlog:aot*=off:stdout -Xlog:class+load=info:file="$O/classload.txt" \
-  -Xmx4g -cp "$CP" CorpusRunner build/classes/kotlin/jvm/test "$O/suite.cached.txt" \
+  -Xmx4g -cp "$CP" CorpusRunner "$TEST_CLASSES" "$O/suite.cached.txt" \
   > "$O/suite.cached.log" 2>&1
 tail -3 "$O/suite.cached.log"; grep -a '^TOTAL' "$O/suite.cached.txt"
 

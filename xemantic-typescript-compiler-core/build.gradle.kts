@@ -1,0 +1,1348 @@
+/*
+ * SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
+ * SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
+ *
+ * xemantic-typescript-compiler - a conformant TypeScript compiler and type
+ * checker that runs on JVM, native, and WebAssembly
+ * Copyright (C) 2026 Kazimierz Pogoda / Xemantic
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU Affero General Public License as
+ * published by the Free Software Foundation, version 3 of the License.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU Affero General Public License for more details.
+ *
+ * You should have received a copy of the GNU Affero General Public
+ * License along with this program.  If not, see <https://www.gnu.org/licenses/>.
+ *
+ * As a special exception, this file contains Helper Code covered by the
+ * xemantic-typescript-compiler Output Exception; additional permissions
+ * are granted as described in the file LICENSE-EXCEPTION.
+ */
+
+@file:OptIn(ExperimentalKotlinGradlePluginApi::class)
+
+import org.jetbrains.kotlin.gradle.ExperimentalKotlinGradlePluginApi
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.dsl.KotlinVersion
+
+plugins {
+    alias(libs.plugins.kotlin.multiplatform)
+    alias(libs.plugins.kotlin.plugin.serialization)
+    alias(libs.plugins.dokka)
+    alias(libs.plugins.maven.publish)
+    // Brings power-assert with the project's two sanctioned assertion functions,
+    // the warning settings, and the jvm/language targets. The `powerAssert { }`
+    // block that used to live here is gone WITH its plugin alias — declaring the
+    // functions in two places is how they drift apart.
+    id("xemantic-typescript-compiler.convention")
+}
+
+// The root applies the xemantic conventions, which reach into every project and
+// leave `archivesName` unset here; without this, configuring `jvmJar` fails with
+// "archiveBaseName has no value available".
+//
+// DELIBERATELY the product name and NOT `project.name`: the jar keeps the name
+// it has always had, `xemantic-typescript-compiler-jvm-<version>.jar`. That name
+// is a contract — `scripts/xtsc-aot-lib.sh` globs for it in both the development
+// tree and an installed `XTSC_HOME/lib`, and `-core` is an internal module
+// boundary that the shipped distribution has no reason to learn about.
+base {
+    archivesName = "xemantic-typescript-compiler"
+}
+
+
+/**
+ * Runs a shell command, streaming its output to the Gradle console.
+ * Throws an [IllegalStateException] if the process exits with a non-zero code.
+ */
+fun runCommand(vararg cmd: String, workingDir: File = projectDir) {
+    val exitCode = ProcessBuilder(*cmd)
+        .directory(workingDir)
+        .inheritIO()
+        .start()
+        .waitFor()
+    check(exitCode == 0) { "Command failed (exit $exitCode): ${cmd.joinToString(" ")}" }
+}
+
+/**
+ * Runs a shell command and returns its captured stdout as a UTF-8 string.
+ * Throws an [IllegalStateException] if the process exits with a non-zero code.
+ */
+fun captureCommand(vararg cmd: String, workingDir: File = projectDir): String {
+    val process = ProcessBuilder(*cmd)
+        .directory(workingDir)
+        .redirectError(ProcessBuilder.Redirect.INHERIT)
+        .start()
+    // Drain stdout fully BEFORE waitFor to avoid pipe-buffer deadlock.
+    val output = process.inputStream.readBytes().toString(Charsets.UTF_8)
+    val exitCode = process.waitFor()
+    check(exitCode == 0) { "Command failed (exit $exitCode): ${cmd.joinToString(" ")}" }
+    return output
+}
+
+val javaTarget = libs.versions.javaTarget.get()
+val kotlinTarget = KotlinVersion.fromVersion(libs.versions.kotlinTarget.get())
+
+kotlin {
+
+    compilerOptions {
+        apiVersion = kotlinTarget
+        languageVersion = kotlinTarget
+        freeCompilerArgs.addAll(
+            "-Xcontext-sensitive-resolution",
+            // StackOverflowError is expect/actual (JVM typealias interop) — the
+            // sanctioned use case for expect/actual classes.
+            "-Xexpect-actual-classes"
+        )
+        extraWarnings = true
+        progressiveMode = true
+        //optIn.addAll("add opt ins here")
+    }
+
+    jvm {
+        // set up according to https://jakewharton.com/gradle-toolchains-are-rarely-a-good-idea/
+        compilerOptions {
+            apiVersion = kotlinTarget
+            languageVersion = kotlinTarget
+            jvmTarget = JvmTarget.fromTarget(javaTarget)
+            freeCompilerArgs.add("-Xjdk-release=$javaTarget")
+            progressiveMode = true
+        }
+    }
+
+    // ALL NATIVE TARGETS ARE OFF (2026-07-25, owner: keep the Claude Code loop
+    // fast — the native test compile + optimizing link add ~7 min to `build`).
+    //
+    // CONSEQUENCE — READ BEFORE ADDING TO src/commonTest: with native off, the
+    // ONLY compiler that sees commonTest is the JVM one, which is LOOSER than
+    // Kotlin/Native. Nothing here will flag native-only violations any more, so
+    // they accumulate silently and cost a cleanup session whenever a native
+    // target comes back (round 672 removed 169 such errors accrued since round
+    // 610). The three rules, and how to check them, are in CLAUDE.md § "Known
+    // gotchas" — search "must compile for Kotlin/Native". In short:
+    //   1. backtick test names: letters/digits/spaces/`-`/`_`/`'` only — NO
+    //      `(`, `)`, `,`, `&`, `@` (the JVM accepts all of these; native does not)
+    //   2. no `kotlin.assert` — use `com.xemantic.kotlin.test.assert(cond)`
+    //   3. no JVM-only stdlib (e.g. `String.format`)
+    // To verify: run the `kotlin-native` job of .github/workflows/native.yml (it
+    // passes `-PenableNativeTargets=true`; `jvmTest` cannot see any of this).
+    // NOT locally — a local K/N build froze the dev box for ~2 h (round 775).
+    //
+    // native, see https://kotlinlang.org/docs/native-target-support.html
+    // tier 1
+//    macosX64 {
+//        binaries.executable {
+//            entryPoint = "com.xemantic.typescript.compiler.main"
+//        }
+//    }
+//    macosArm64 {
+//        binaries.executable {
+//            entryPoint = "com.xemantic.typescript.compiler.main"
+//        }
+//    }
+
+    // tier 2
+    // INV.7 native re-enable (pre-approved M5 exception; round 610): host-buildable
+    // target only — Apple targets stay commented until a macOS builder exists.
+    //
+    // OPT-IN ONLY (round 775, owner directive). The target registers ONLY under
+    // `-PenableNativeTargets=true`, so a plain `./gradlew build` never sees it and
+    // is unchanged. Native builds belong in CI (.github/workflows/native.yml,
+    // 16 GB runners): a local Kotlin/Native test link froze the 7.7 GB dev box for
+    // ~2 hours — see the CLAUDE.md rule, and note that `-Xmx` cannot bound it
+    // because the konan/LLVM backend and the linked test executable are separate
+    // processes outside any JVM heap.
+    if (project.findProperty("enableNativeTargets") == "true") {
+        linuxX64 {
+            binaries.executable {
+                entryPoint = "com.xemantic.typescript.compiler.main"
+            }
+        }
+    }
+//    linuxArm64 {
+//        binaries.executable {
+//            entryPoint = "com.xemantic.typescript.compiler.main"
+//        }
+//    }
+
+    sourceSets {
+
+        commonMain {
+            // RealLibFiles.kt — the real TypeScript lib .d.ts sources, generated by
+            // generateRealLibSources (all Kotlin compile tasks depend on it, see below).
+            kotlin.srcDir(layout.buildDirectory.dir("generated/real-lib"))
+            // BuildInfo.kt — the compiler build identity (git sha), generated by
+            // generateBuildInfo (user-approved 2026-07-19 for INV.7(d3) buildinfo validation).
+            kotlin.srcDir(layout.buildDirectory.dir("generated/buildinfo"))
+            dependencies {
+                implementation(libs.kotlinx.coroutines.core)
+                // Filesystem access for the whole-project build driver (CLI + tsconfig
+                // loading + module resolution). kotlinx-io is multiplatform (JVM/Native/WASI),
+                // so the project driver stays in commonMain rather than a jvm-only source set.
+                implementation(libs.kotlinx.io.core)
+                // tsconfig.json / package.json parsing (JSONC: comments + trailing commas).
+                implementation(libs.kotlinx.serialization.json)
+            }
+        }
+
+        commonTest {
+            kotlin.srcDir(layout.buildDirectory.dir("generated/typescript-tests"))
+            dependencies {
+                implementation(libs.kotlin.test)
+                implementation(libs.xemantic.kotlin.test)
+                implementation(libs.kotlinx.io.core)
+            }
+        }
+
+    }
+
+}
+
+// ---------------------------------------------------------------------------
+// Whole-project build CLI runner
+// ---------------------------------------------------------------------------
+//
+// Runs the filesystem-based project compiler (com.xemantic.typescript.compiler.main)
+// against a real directory containing a tsconfig.json. Usage:
+//
+//   ./gradlew compileTsProject -Pargs="/path/to/project"
+//   ./gradlew compileTsProject -Pargs="--project zod --noEmit"
+//
+tasks.register<JavaExec>("compileTsProject") {
+    group = "application"
+    description = "Compile a real on-disk TypeScript project (tsconfig + globs + module resolution)."
+    val jvmMain = kotlin.targets.getByName("jvm").compilations.getByName("main")
+    dependsOn(jvmMain.compileTaskProvider)
+    classpath = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    mainClass.set("com.xemantic.typescript.compiler.MainKt")
+    (project.findProperty("args") as String?)?.let { setArgs(it.split(" ").filter { a -> a.isNotEmpty() }) }
+}
+
+// ---------------------------------------------------------------------------
+// AOT — GraalVM native-image
+// ---------------------------------------------------------------------------
+//
+// Ahead-of-time compiles the JVM target into a standalone native executable.
+// Measured round 771 on the compiler profile: 13,350 ms against the JVM's
+// 26,272 ms (1.97x), with `--listAll` output BYTE-IDENTICAL to the JVM's on all
+// eight bench profiles, 392 MB RSS against a 4 GB heap allowance. The win is
+// not faster code — it is the ~14.7 s of JVM warm-up a one-shot CLI run never
+// amortizes. Full derivation and caveats: docs/perf/aot-native-image.md.
+//
+//   ./gradlew nativeImage                         # uses GRAALVM_HOME
+//   ./gradlew nativeImage -PgraalvmHome=/opt/graalvm
+//   ./gradlew nativeImage -PnativeImageHeap=6g    # builder heap, default 5g
+//
+// DELIBERATELY NOT wired into `build`/`check`: it needs a GraalVM JDK *and* a
+// working C toolchain (gcc + binutils + libc headers + zlib), which a plain
+// JVM CI runner does not have, and it adds ~2 min. Nothing about the normal
+// build changes if GraalVM is absent — the task simply fails with the message
+// below when explicitly asked for.
+//
+// Reflection metadata lives in src/jvmMain/resources/META-INF/native-image/...
+// and is picked up from the classpath automatically; it is 18 entries, all
+// kotlinx-coroutines atomic field updaters. There is ZERO application
+// reflection (the TypeScript libs are embedded as Kotlin string constants
+// rather than resources), which is why `--no-fallback` succeeds unassisted.
+// That survives round 840's entry-point swap: the server path's only candidate
+// was kotlinx-serialization, and `javap -c CompileServer` shows all four
+// serializer resolutions are the compiler-plugin intrinsic — direct
+// `invokevirtual …$Companion.serializer()`, no reflective
+// `SerializersKt.serializer(KType)` lookup — while serialization was ALREADY
+// reachable from the old entry point anyway (TsConfigLoader parses tsconfig).
+// UNVERIFIED on this box (no GraalVM installed, so `nativeImage` cannot run
+// here): whether native-image's closed-world analysis needs help with
+// `UnixDomainSocketAddress` / `ServerSocketChannel.open(StandardProtocolFamily
+// .UNIX)`. If the image builds but `--serve` fails at run time, that is the
+// first place to look. Regenerate metadata with the tracing agent only if a
+// dependency starts reflecting (trace the ACTUAL entry point, the dispatcher):
+//   java -agentlib:native-image-agent=config-output-dir=<dir> -cp ... server.XtscMainKt ...
+//
+// `-O3 -march=native` was measured and is worth NOTHING here (13,325 vs
+// 13,335 ms) — the residual 15% against JVM peak is the absence of PGO, which
+// GraalVM CE cannot do. Do not add codegen flags expecting a win.
+
+// (AOT.4)(b), round 840, owner-approved 2026-08-06. The image's entry point is
+// the MODE DISPATCHER, not the one-shot compiler, so the native binary can BE
+// the thin client its own KDoc says it is for: `--serve` runs the compile
+// server, `--daemon` forwards to a running one, and anything else delegates
+// verbatim to `com.xemantic.typescript.compiler.main(args)` — a strict
+// superset, so every existing invocation behaves exactly as before. Pointed at
+// `MainKt` (as it was until round 840) the image silently treated `--serve` and
+// `--daemon` as project arguments and compiled instead, exit 0: measured on the
+// stale 2026-07-30 binary, `--serve --socket /tmp/x.sock` bound no socket, took
+// the socket path as the project, and emitted 173 files.
+val nativeImageMainClass = "com.xemantic.typescript.compiler.server.XtscMainKt"
+
+val nativeImage by tasks.registering {
+    group = "build"
+    description = "Ahead-of-time compiles the JVM target into a native executable (needs GraalVM + a C toolchain)."
+
+    val jvmMain = kotlin.targets.getByName("jvm").compilations.getByName("main")
+    dependsOn(jvmMain.compileTaskProvider)
+
+    val classpathFiles = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    inputs.files(classpathFiles)
+    inputs.property("mainClass", nativeImageMainClass)
+
+    val outputDir = layout.buildDirectory.dir("native")
+    val binaryFile = outputDir.map { it.file("xtsc") }
+    outputs.file(binaryFile)
+
+    // Resolved at CONFIGURATION time so the task's inputs are honest.
+    val graalHome = (project.findProperty("graalvmHome") as String?)
+        ?: System.getenv("GRAALVM_HOME")
+    val builderHeap = (project.findProperty("nativeImageHeap") as String?) ?: "5g"
+
+    doLast {
+        // Prefer an explicit GraalVM home; fall back to whatever is on PATH so a
+        // GraalVM-provisioned CI runner works with no extra configuration.
+        val fromHome = graalHome?.let { File(it).resolve("bin/native-image") }
+        val onPath = System.getenv("PATH")
+            ?.split(File.pathSeparator)
+            ?.map { File(it).resolve("native-image") }
+            ?.firstOrNull { it.canExecute() }
+        val tool = when {
+            fromHome != null && fromHome.canExecute() -> fromHome.absolutePath
+            fromHome != null -> error(
+                "native-image not found at $fromHome — is '$graalHome' a GraalVM JDK?"
+            )
+            onPath != null -> onPath.absolutePath
+            // Checked explicitly rather than left to ProcessBuilder, which reports
+            // this as a bare `IOException: Cannot run program "native-image"` that
+            // says nothing about what to install or which flag to pass.
+            else -> error(
+                "native-image not found. Install a GraalVM JDK and either put its " +
+                    "bin/ on PATH, set GRAALVM_HOME, or pass -PgraalvmHome=/path/to/graalvm. " +
+                    "A C toolchain (gcc, binutils, libc headers, zlib) is also required."
+            )
+        }
+
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        val binary = out.resolve("xtsc")
+
+        // A missing C toolchain is the most likely failure and its message is
+        // opaque (it aborts inside CCompilerInvoker), so say so up front.
+        logger.lifecycle(
+            "Building native image via $tool (needs gcc + binutils + libc headers + zlib on PATH) ..."
+        )
+        runCommand(
+            tool,
+            "-cp", classpathFiles.joinToString(File.pathSeparator) { it.absolutePath },
+            "-o", binary.absolutePath,
+            "--no-fallback",
+            "-J-Xmx$builderHeap",
+            nativeImageMainClass
+        )
+        logger.lifecycle("Native executable: $binary")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// TypeScript compiler test harness
+// ---------------------------------------------------------------------------
+
+/**
+ * The local directory where the TypeScript repository is sparse-cloned.
+ * Listed in .gitignore — persists across `./gradlew clean` runs.
+ */
+// Deliberately the ROOT directory, not this module's: the checkout is shared
+// tooling, .gitignored at the repo root, and referenced as `typescript-repo/`
+// by the scripts and by the tests (which resolve it against their working
+// directory). Moving it under the module would silently re-clone it and leave
+// every one of those references pointing at nothing.
+val typeScriptRepoDir = rootProject.projectDir.resolve("typescript-repo")
+
+/**
+ * The exact mainline TypeScript commit our test corpus is PINNED to. This is the
+ * PRISTINE tsc commit that tsgo's `_submodules/TypeScript` submodule MERGES IN — the
+ * `main`-side parent of tsgo's current `tsgo-port` merge — NOT the tsgo-port branch
+ * tip itself.
+ *
+ * That distinction is LOAD-BEARING: the tsgo-port branch REGENERATES its reference
+ * baselines to the Go compiler's output (e.g. a different, type-id-based union-member
+ * display ordering: `'boolean' | 'number'` where tsc emits `'number' | 'boolean'`),
+ * which are tsgo DIVERGENCES. We deliberately diff char-by-char against ORIGINAL tsc
+ * (project owner's directive), so we pin to the pristine `main` commit tsgo tracks —
+ * giving tsgo's exact test-case set (set A) with real tsc baselines.
+ *
+ * To follow tsgo forward, read tsgo's submodule sha, then take its `main`-side parent:
+ *   S=$(curl -s https://api.github.com/repos/microsoft/typescript-go/contents/_submodules/TypeScript | grep '"sha"')
+ *   # that sha is a "Merge branch 'main' into tsgo-port" commit; the pristine target
+ *   # is its 2nd parent:
+ *   curl -s https://api.github.com/repos/microsoft/TypeScript/commits/<sha>   # -> parents[1].sha
+ */
+val typeScriptCommit = "637d5746b70257028fb95aad32ddec6b26ab0a14" // pristine tsc @ 2026-06-25 (main-parent of tsgo pin 4d4f005c)
+
+/**
+ * Performs a sparse, PINNED, partial clone of the Microsoft TypeScript repository,
+ * fetching only the compiler test cases and their expected baselines.
+ *
+ * The clone is PINNED to [typeScriptCommit] (tsgo's submodule commit) and the task
+ * is idempotent: if `typescript-repo/.git` already exists it fetches + checks out
+ * the pin in place (a no-op if already there); otherwise it does a fresh
+ * partial+sparse clone and checks out the pin. [typeScriptCommit] is declared as a
+ * task input, so bumping it re-runs the task and the corpus follows the pin.
+ *
+ * Run explicitly before the first test run, or simply invoke any test task
+ * (which depends on this task transitively via `generateTypeScriptTests`):
+ * ```
+ * ./gradlew cloneTypeScriptRepo
+ * ./gradlew jvmTest
+ * ```
+ */
+/**
+ * M3.0: the conformance-category ALLOWLIST, as paths under
+ * `tests/cases/conformance`. Adopting the whole conformance tree at once would
+ * bury real regressions under a red wave, so categories land one at a time and
+ * only when their failures are triaged into queue items.
+ *
+ * Each entry widens the sparse checkout AND the generated corpus. The category's
+ * files are walked RECURSIVELY (conformance categories nest, unlike the flat
+ * `tests/cases/compiler`), and their basenames are known not to collide with the
+ * compiler corpus, so the generated backtick function names need no
+ * disambiguation. Baselines need nothing: the sparse checkout already takes the
+ * whole flat `tests/baselines/reference`, and the generator's existing
+ * `paramBaselineName` already produces conformance's `name(target=es5).ext` form.
+ */
+val conformanceCategories = listOf(
+    "expressions/functions",
+    // Round 695. Adopted after measuring twelve candidate categories in one suite
+    // run (see the M3.0 queue item for the full redness table) — these three were
+    // the only ones under three failures; the other nine are 5-21 each and stay
+    // unadopted until their gaps are worked.
+    "es6/defaultParameters",
+    "es6/restParameters",
+    "expressions/commaOperator",
+)
+
+/**
+ * M3.0: conformance cases whose ERROR baseline exposes a known, QUEUED compiler
+ * gap. Their JS-emit subtests still run — only the `.errors.txt` comparison is
+ * deferred, so the category is adopted rather than withheld while the gap is
+ * open.
+ *
+ * The corpus is a hard zero-failure gate that every round's verification depends
+ * on, so a known-red test would degrade that gate for everyone. Each entry MUST
+ * have a queue item naming the missing behaviour; delete the entry when it lands.
+ * This is not a place to park a fresh failure — triage first, queue it, then add.
+ */
+val conformanceDeferredErrorBaselines = setOf<String>(
+    // PARKED (round 714), not in progress: the case's TS18048 x3 and the over-emitted
+    // TS7019/TS7006 are FIXED (rounds 693/704/706/707). What is left is its TS7006 x2 on
+    // argument arrows in a file whose only directive is @strictNullChecks, i.e.
+    // PURE-DEFAULT mode, where the full implicit-any walker is deliberately off and the
+    // narrow default-mode one covers a single shape on purpose. Closing it means
+    // broadening that walker — the change recorded as having regressed ~19 tests — which
+    // is not worth it for one case. See the M3.0-gap-2 queue item.
+    "contextuallyTypedIifeStrict",
+    // The comma operator's result type is not the RIGHT operand's type, so an
+    // inferred `return x, y` return and a `var r: T1 = (x, y)` assignment miss
+    // TS2322 x2. See the M3.0-gap-3 queue item.
+    "commaOperatorOtherInvalidOperation",
+)
+
+/**
+ * PARITY.1: one corpus baseline switched off because our output diverges from
+ * pristine tsc's in FORM but not in MEANING (owner directive 2026-07-26 — see
+ * `docs/logical-parity.md` for the form-vs-meaning decision procedure).
+ *
+ * This list is the single source of truth: the generator emits the matching test
+ * `@Ignore`d (so it stays VISIBLE as skipped rather than vanishing from the total),
+ * regenerates the ledger in `docs/logical-parity.md`, and FAILS the build on a stale
+ * entry or a missing [pinnedBy] class. An unlogged disable is indistinguishable from
+ * a hidden regression, which is why the declaration — not the ledger — is the input.
+ *
+ * NOT the same thing as [conformanceDeferredErrorBaselines], which defers a case
+ * where we are genuinely WRONG. Do not move an entry between the two.
+ */
+data class LogicalParityDivergence(
+    /** Exact baseline file name under `tests/baselines/reference` (e.g. `foo.errors.txt`). */
+    val baseline: String,
+    /** The round that switched it off. */
+    val round: Int,
+    /** Test class pinning the LOGIC the baseline used to pin; must exist in src/commonTest. */
+    val pinnedBy: String,
+    /** Which form axis differs, and why the meaning is preserved. Per case, no boilerplate. */
+    val reason: String,
+)
+
+/**
+ * The live set. Empty is the healthy state — an entry is a deliberate, argued
+ * divergence, added only via the procedure in `docs/logical-parity.md`.
+ */
+val logicalParityDivergences = listOf<LogicalParityDivergence>()
+
+val cloneTypeScriptRepo by tasks.registering {
+    group = "typescript"
+    description = "Sparse-clones the TypeScript repository (tests only), pinned to tsgo's submodule commit."
+    inputs.property("typeScriptCommit", typeScriptCommit) // re-run when the pin changes
+    // M3.0: the sparse checkout is DERIVED from the allowlist (see `sparsePaths`
+    // below), so the allowlist is an input of this task and is declared as one.
+    // `generateTypeScriptTests` already declares the same property for the same
+    // reason. NOT a demonstrated bug fix — round 831 tried to show that adopting a
+    // category leaves this task UP-TO-DATE (which would silently generate zero tests
+    // for it) and could NOT: removing an input property is itself an invalidation, so
+    // the experiment is uninterpretable. Declared because it is true, not because a
+    // failure was observed.
+    inputs.property("conformanceCategories", conformanceCategories)
+    outputs.dir(typeScriptRepoDir)
+
+    doLast {
+        val sparsePaths = arrayOf("tests/cases/compiler", "tests/baselines/reference") +
+            conformanceCategories.map { "tests/cases/conformance/$it" }
+
+        if (typeScriptRepoDir.resolve(".git").exists()) {
+            // Re-pin an existing clone. `fetch --depth=1 <sha>` grabs just the pinned
+            // commit (GitHub serves a reachable SHA); checkout is a no-op if already there.
+            logger.lifecycle("Re-pinning TypeScript repository to $typeScriptCommit ...")
+            runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptRepoDir)
+            runCommand("git", "fetch", "--depth=1", "origin", typeScriptCommit, workingDir = typeScriptRepoDir)
+            runCommand("git", "checkout", "--force", typeScriptCommit, workingDir = typeScriptRepoDir)
+            logger.lifecycle("TypeScript repository re-pinned successfully.")
+            return@doLast
+        }
+
+        logger.lifecycle("Cloning TypeScript repository (pinned $typeScriptCommit, partial+sparse) into: $typeScriptRepoDir ...")
+
+        // Step 1: depth-1 partial (blob:none) + sparse + no-checkout clone — fetch only
+        //         tree/commit objects (blobs lazy-loaded) and don't materialize a working
+        //         tree until we pin the commit.
+        runCommand(
+            "git", "clone",
+            "--depth=1",
+            "--filter=blob:none",
+            "--sparse",
+            "--no-checkout",
+            "https://github.com/microsoft/TypeScript.git",
+            typeScriptRepoDir.absolutePath,
+        )
+        // Step 2: restrict the working tree to only the paths we need (blobs fetched
+        //         exclusively for these two directories).
+        runCommand("git", "sparse-checkout", "set", *sparsePaths, workingDir = typeScriptRepoDir)
+        // Step 3: fetch and check out exactly the pinned commit (depth=1 — no history).
+        runCommand("git", "fetch", "--depth=1", "origin", typeScriptCommit, workingDir = typeScriptRepoDir)
+        runCommand("git", "checkout", typeScriptCommit, workingDir = typeScriptRepoDir)
+
+        logger.lifecycle("TypeScript repository cloned + pinned successfully.")
+    }
+}
+
+/**
+ * Embeds EVERY real TypeScript `.d.ts` lib source from `src/lib` as generated Kotlin
+ * (`RealLibFiles.kt` in commonMain), read straight from the pinned commit's object DB —
+ * the sparse working tree does not materialize `src/lib`, but the depth-1 fetch of
+ * [typeScriptCommit] brought all of its blobs down, so extraction works offline.
+ *
+ * (LIB.1)(b), round 731: the DOM / webworker / scripthost sets used to be filtered OUT
+ * here. That filter was a SILENT WRONG ANSWER, not a missing feature: an unshipped lib
+ * lands in `RealLibResolver.Resolution.unavailable`, which nothing consumes, so a
+ * browser project's DOM types degraded to `any` and compiled clean. Do NOT reintroduce
+ * a name filter — an unshipped lib must be an absent lib, and (c) makes a REQUESTED
+ * absent lib a diagnostic.
+ *
+ * SIZE, because it is the reason the filter existed: the host set is 3.14 MB of the
+ * 3.71 MB total (dom.generated alone is 2.35 MB — mostly MDN doc comments), so this
+ * task emits ~4 MB of Kotlin. Measured cost of adding it: see the round-731 note.
+ *
+ * TWO TRAPS this generator exists to dodge, both measured, neither optional:
+ *
+ *  1. A JVM class-file string constant caps at 65,535 bytes of modified UTF-8
+ *     (es5.d.ts is 218 KB, dom.generated 2.35 MB) — the text is emitted as
+ *     `StringBuilder.append(...)` chunks of ≤ 60,000 value bytes, split at line
+ *     boundaries, concatenated at runtime. Never fold the chunks back into a single
+ *     literal (or a `const val` concatenation, which constant-folds at compile time).
+ *  2. The KOTLIN COMPILER runs out of heap on one big generated file. Emitting all
+ *     3.71 MB as a single `RealLibFiles.kt` with one `buildMap { }` lambda failed with
+ *     "Not enough memory to run compilation" after 7m34s at the 5 GB the BUILD.1 pin
+ *     gives the Kotlin daemon. So the chunks are spread over `RealLibFilesPart*.kt`
+ *     files of ~250 KB each, and `RealLibFiles` concatenates and re-cuts them by
+ *     recorded lengths. Do NOT merge the parts back together.
+ */
+val generateRealLibSources by tasks.registering {
+    group = "typescript"
+    description = "Generates RealLibFiles.kt embedding the real TypeScript lib .d.ts sources (all libs, DOM included)."
+
+    dependsOn(cloneTypeScriptRepo)
+    inputs.property("typeScriptCommit", typeScriptCommit)
+    val outputDir = layout.buildDirectory.dir("generated/real-lib")
+    outputs.dir(outputDir)
+
+    doLast {
+        // Wipe first: the emission is split into a VARIABLE number of part files, so a
+        // shrinking pin would otherwise leave a stale RealLibFilesPartN.kt behind and it
+        // would still compile into the module.
+        outputDir.get().asFile.deleteRecursively()
+        val packageDir = outputDir.get().asFile.resolve("com/xemantic/typescript/compiler")
+        packageDir.mkdirs()
+
+        val names = captureCommand(
+            "git", "ls-tree", "--name-only", typeScriptCommit, "src/lib/",
+            workingDir = typeScriptRepoDir,
+        ).lines()
+            .map { it.removePrefix("src/lib/") }
+            .filter { it.endsWith(".d.ts") }
+            .sorted()
+        check(names.isNotEmpty()) { "No lib .d.ts files found at $typeScriptCommit:src/lib/" }
+
+        // Modified-UTF-8 byte length of one char in a class-file string constant.
+        fun mutf8Len(ch: Char): Int = when {
+            ch == '\u0000' -> 2 // NUL uses the 2-byte form in modified UTF-8
+            ch.code < 0x80 -> 1
+            ch.code < 0x800 -> 2
+            else -> 3
+        }
+
+        fun escape(s: String): String = buildString(s.length + 16) {
+            for (ch in s) when (ch) {
+                '\\' -> append("\\\\")
+                '"' -> append("\\\"")
+                '$' -> append("\\\$")
+                '\n' -> append("\\n")
+                '\r' -> append("\\r")
+                '\t' -> append("\\t")
+                else -> if (ch.code < 0x20) {
+                    append("\\u").append(ch.code.toString(16).padStart(4, '0'))
+                } else append(ch)
+            }
+        }
+
+        /** Splits [content] into chunks of ≤ [maxBytes] modified-UTF-8 value bytes, at line boundaries. */
+        fun chunk(content: String, maxBytes: Int = 60_000): List<String> {
+            val chunks = mutableListOf<String>()
+            var chunkStart = 0
+            var chunkBytes = 0
+            var lineStart = 0
+            var i = 0
+            fun flushAt(pos: Int) {
+                if (pos > chunkStart) chunks.add(content.substring(chunkStart, pos))
+                chunkStart = pos
+                chunkBytes = 0
+            }
+            while (i < content.length) {
+                var lineBytes = 0
+                var j = lineStart
+                while (j < content.length && content[j] != '\n') { lineBytes += mutf8Len(content[j]); j++ }
+                if (j < content.length) { lineBytes += 1; j++ } // the '\n'
+                if (chunkBytes + lineBytes > maxBytes) {
+                    flushAt(lineStart)
+                    // Degenerate single line longer than maxBytes: hard-split by chars
+                    // (safe — modified UTF-8 encodes each char independently, so even a
+                    // surrogate pair split across two constants reassembles at runtime).
+                    while (lineBytes > maxBytes) {
+                        var bytes = 0
+                        var k = chunkStart
+                        while (k < j && bytes + mutf8Len(content[k]) <= maxBytes) { bytes += mutf8Len(content[k]); k++ }
+                        flushAt(k)
+                        lineBytes -= bytes
+                    }
+                    chunkBytes = lineBytes
+                } else {
+                    chunkBytes += lineBytes
+                }
+                lineStart = j
+                i = j
+            }
+            flushAt(content.length)
+            return chunks
+        }
+
+        val header = "// Auto-generated by ./gradlew generateRealLibSources. Do not edit.\n" +
+            "// Real TypeScript lib sources pinned to commit $typeScriptCommit.\n" +
+            "package com.xemantic.typescript.compiler\n\n"
+
+        // One flat chunk stream in lib-name order, plus each lib's CHAR length so the
+        // facade can cut the concatenation back apart. Chars, not bytes: the chunker
+        // splits on mutf8 byte budget but always at char boundaries, and `substring` is
+        // char-indexed. Two parallel lists rather than a local data class — the Gradle
+        // Kotlin-DSL script compiler fails codegen on a local class declared inside a
+        // task-configuration lambda ("Script compilation error", no further detail).
+        val libKeys = mutableListOf<String>()
+        val libChars = mutableListOf<Int>()
+        val allChunks = mutableListOf<String>()
+        var totalBytes = 0L
+        for (name in names) {
+            val content = captureCommand(
+                "git", "show", "$typeScriptCommit:src/lib/$name",
+                workingDir = typeScriptRepoDir,
+            )
+            totalBytes += content.sumOf { mutf8Len(it) }
+            libKeys.add(name.removeSuffix(".d.ts"))
+            libChars.add(content.length)
+            allChunks.addAll(chunk(content))
+        }
+
+        // Group the chunk stream into PART FILES of ~250 KB. Round 731: emitting all
+        // 3.71 MB as one file with one giant `buildMap` lambda exhausted the 5 GB Kotlin
+        // daemon heap ("Not enough memory to run compilation") after 7.5 minutes; the
+        // split is what makes the DOM set compilable at the pinned heap. Do NOT merge the
+        // parts back into one file.
+        val partBudget = 250_000
+        val parts = mutableListOf<MutableList<String>>()
+        var partBytes = 0
+        for (c in allChunks) {
+            val cBytes = c.sumOf { mutf8Len(it) }
+            if (parts.isEmpty() || partBytes + cBytes > partBudget) {
+                parts.add(mutableListOf())
+                partBytes = 0
+            }
+            parts.last().add(c)
+            partBytes += cBytes
+        }
+
+        for ((i, part) in parts.withIndex()) {
+            val pb = StringBuilder(partBudget * 2)
+            pb.append(header)
+            pb.appendLine("/** Chunk group $i of the embedded lib sources — see [RealLibFiles]. */")
+            pb.appendLine("internal object RealLibFilesPart$i {")
+            pb.appendLine("    fun append(sb: StringBuilder) {")
+            for (c in part) pb.appendLine("        sb.append(\"${escape(c)}\")")
+            pb.appendLine("    }")
+            pb.appendLine("}")
+            packageDir.resolve("RealLibFilesPart$i.kt").writeText(pb.toString())
+        }
+
+        val sb = StringBuilder(64 * 1024)
+        sb.append(header)
+        sb.appendLine("/**")
+        sb.appendLine(" * The real TypeScript `.d.ts` lib sources from `src/lib` — ALL of them, the DOM /")
+        sb.appendLine(" * webworker / scripthost host sets included — keyed by bare lib name (`es5`,")
+        sb.appendLine(" * `es2015.core`, `dom.generated`, `decorators`, ...). Content is byte-identical")
+        sb.appendLine(" * to the pinned tsc commit's files (CRLF line endings preserved).")
+        sb.appendLine(" *")
+        sb.appendLine(" * The text lives in `RealLibFilesPart*.kt` as one flat stream of string chunks")
+        sb.appendLine(" * (each under the 65,535-byte JVM class-file constant cap); this object")
+        sb.appendLine(" * concatenates them once and cuts the result back into per-lib strings by the")
+        sb.appendLine(" * recorded char lengths.")
+        sb.appendLine(" */")
+        sb.appendLine("object RealLibFiles {")
+        sb.appendLine()
+        sb.appendLine("    // Declared BEFORE `files`: an object's properties initialize in source order,")
+        sb.appendLine("    // so these would still be null if they came after it.")
+        sb.appendLine("    private val libNames: Array<String> = arrayOf(")
+        for (key in libKeys) sb.appendLine("        \"$key\",")
+        sb.appendLine("    )")
+        sb.appendLine()
+        sb.appendLine("    private val libLengths: IntArray = intArrayOf(")
+        libChars.chunked(12).forEach { row ->
+            sb.appendLine("        " + row.joinToString(", ") + ",")
+        }
+        sb.appendLine("    )")
+        sb.appendLine()
+        sb.appendLine("    val files: Map<String, String> = run {")
+        sb.appendLine("        val sb = StringBuilder(${libChars.sum()})")
+        for (i in parts.indices) sb.appendLine("        RealLibFilesPart$i.append(sb)")
+        sb.appendLine("        val text = sb.toString()")
+        sb.appendLine("        val map = LinkedHashMap<String, String>(libNames.size * 2)")
+        sb.appendLine("        var pos = 0")
+        sb.appendLine("        for (i in libNames.indices) {")
+        sb.appendLine("            val end = pos + libLengths[i]")
+        sb.appendLine("            map[libNames[i]] = text.substring(pos, end)")
+        sb.appendLine("            pos = end")
+        sb.appendLine("        }")
+        sb.appendLine("        map")
+        sb.appendLine("    }")
+        sb.appendLine("}")
+
+        packageDir.resolve("RealLibFiles.kt").writeText(sb.toString())
+        logger.lifecycle(
+            "Generated RealLibFiles.kt + ${parts.size} part file(s): " +
+                "${names.size} lib files, $totalBytes bytes of lib source, ${allChunks.size} chunks."
+        )
+    }
+}
+
+// RealLibFiles.kt is commonMain source — every Kotlin compilation needs it generated first.
+tasks.matching { it.name.startsWith("compile") && "Kotlin" in it.name }
+    .configureEach { dependsOn(generateRealLibSources) }
+
+/**
+ * Generates BuildInfo.kt (commonMain) carrying the compiler's build identity —
+ * the git sha at build time, with a `.dirty` suffix when the working tree has
+ * local changes, or `unknown` when git is unavailable. Consumed by the
+ * INV.7(d3) `.xtsbuildinfo` validation: a persisted buildinfo is reusable only
+ * when it was written by the SAME compiler build (a stale-compiler reuse of
+ * kept diagnostics is otherwise silent — tsc embeds its version for the same
+ * reason). Approved as a build-system change by the owner 2026-07-19.
+ */
+val xtscBuildId: String = try {
+    val sha = captureCommand("git", "rev-parse", "HEAD").trim()
+    val dirty = captureCommand("git", "status", "--porcelain").isNotBlank()
+    if (dirty) "$sha.dirty" else sha
+} catch (_: Exception) {
+    "unknown"
+}
+
+val generateBuildInfo by tasks.registering {
+    group = "typescript"
+    description = "Generates BuildInfo.kt with the compiler build identity (git sha)."
+
+    inputs.property("xtscBuildId", xtscBuildId)
+    val outputDir = layout.buildDirectory.dir("generated/buildinfo")
+    outputs.dir(outputDir)
+
+    doLast {
+        val packageDir = outputDir.get().asFile.resolve("com/xemantic/typescript/compiler")
+        packageDir.mkdirs()
+        packageDir.resolve("BuildInfo.kt").writeText(
+            """
+            // Generated by the generateBuildInfo Gradle task — do not edit.
+            package com.xemantic.typescript.compiler
+
+            /**
+             * Compiler build identity: the git sha at build time (`.dirty`-suffixed for a
+             * tree with local changes; `unknown` when git was unavailable). The INV.7(d3)
+             * `.xtsbuildinfo` validation refuses cross-process reuse for `unknown`/dirty
+             * ids — only a clean, identical build may reuse persisted diagnostics.
+             */
+            internal const val XTSC_BUILD_ID: String = "$xtscBuildId"
+
+            """.trimIndent()
+        )
+        logger.lifecycle("Generated BuildInfo.kt: XTSC_BUILD_ID=$xtscBuildId")
+    }
+}
+
+// BuildInfo.kt is commonMain source — every Kotlin compilation needs it generated first.
+tasks.matching { it.name.startsWith("compile") && "Kotlin" in it.name }
+    .configureEach { dependsOn(generateBuildInfo) }
+
+/**
+ * Generates Kotlin multiplatform `@Test` functions from the official TypeScript compiler
+ * test suite. Each TypeScript test case and its baseline reference files become one or more
+ * standard `kotlin.test.@Test` functions with descriptive backtick names.
+ *
+ * Generated tests live in `build/generated/typescript-tests/` which is wired into the
+ * `commonTest` source set. Run this task (or any test task, which depends on it) to
+ * regenerate after the TypeScript repo is updated:
+ * ```
+ * ./gradlew generateTypeScriptTests
+ * ./gradlew jvmTest
+ * ```
+ *
+ * ### Test naming
+ * Test names use Kotlin backtick syntax so they read as sentences, e.g.:
+ * - `` `2dArrays.ts compiles to JavaScript matching 2dArrays.js` ``
+ * - `` `2dArrays.ts has expected compilation errors matching 2dArrays.errors.txt` ``
+ *
+ * This allows an LLM running `./gradlew jvmTest` to immediately understand which
+ * TypeScript file failed and what baseline was expected.
+ *
+ * ### Assertions
+ * JavaScript output tests use [String?.sameAs(Path)][com.xemantic.typescript.compiler.sameAs]
+ * which produces a unified diff on failure — giving the LLM a precise, token-efficient
+ * signal about what changed.
+ */
+val generateTypeScriptTests by tasks.registering {
+    group = "typescript"
+    description = "Generates Kotlin test cases from the TypeScript compiler test suite."
+
+    dependsOn(cloneTypeScriptRepo)
+
+    val testsDir = typeScriptRepoDir.resolve("tests/cases/compiler")
+    val conformanceRootDir = typeScriptRepoDir.resolve("tests/cases/conformance")
+    val baselinesDir = typeScriptRepoDir.resolve("tests/baselines/reference")
+    val outputDir = layout.buildDirectory.dir("generated/typescript-tests")
+    // PARITY.1: the ledger doc is rewritten from `logicalParityDivergences` (see
+    // below), and the declared `pinnedBy` classes are looked up here. Deliberately
+    // NOT declared as a task output — it carries hand-written prose that Gradle's
+    // stale-output handling has no business touching.
+    // docs/ stayed at the repo root when the compiler moved into this module.
+    val logicalParityDoc = rootProject.layout.projectDirectory.file("docs/logical-parity.md").asFile
+    val commonTestDir = layout.projectDirectory.dir("src/commonTest/kotlin").asFile
+    val divergences = logicalParityDivergences
+
+    inputs.dir(testsDir).optional()
+    // M3.0: re-generate when the allowlist changes, or when an allowlisted
+    // category's sources do.
+    inputs.property("conformanceCategories", conformanceCategories)
+    for (category in conformanceCategories) {
+        inputs.dir(conformanceRootDir.resolve(category)).optional()
+    }
+    // PARITY.1: re-generate (and re-validate, and rewrite the ledger) when a
+    // divergence is declared, edited, or removed.
+    inputs.property("logicalParityDivergences", divergences.map { it.toString() })
+    outputs.dir(outputDir)
+
+    doLast {
+        val packageDir = outputDir.get().asFile
+            .resolve("com/xemantic/typescript/compiler")
+        packageDir.mkdirs()
+
+        if (!testsDir.exists()) {
+            logger.lifecycle("TypeScript test cases not found — skipping test generation.")
+            logger.lifecycle("Run: ./gradlew cloneTypeScriptRepo generateTypeScriptTests")
+            return@doLast
+        }
+
+        // M3.0: the flat compiler corpus PLUS every allowlisted conformance category,
+        // walked recursively because conformance categories nest. Sorted by basename so
+        // the alphabetical class grouping below is unaffected by which corpus a case
+        // came from; basenames are collision-free across the two, so the generated
+        // function names stay unique.
+        val compilerFiles = testsDir.listFiles { f -> f.isFile && f.extension == "ts" }
+            ?.toList() ?: emptyList()
+        val conformanceFiles = conformanceCategories.flatMap { category ->
+            conformanceRootDir.resolve(category).walkTopDown()
+                .filter { it.isFile && it.extension == "ts" }
+                .toList()
+        }
+        val testFiles = (compilerFiles + conformanceFiles).sortedBy { it.name }
+
+        logger.lifecycle("Generating Kotlin tests for ${testFiles.size} TypeScript test cases...")
+
+        // $ sign for use in generated Kotlin string templates
+        val D = "\$"
+
+        // Directives that use commas as list separators, NOT multi-value variation
+        val nonVaryDirectives = setOf("lib", "types", "paths", "rootdirs", "typeroots")
+
+        // Regex to extract // @option: value directives from test source
+        val directiveRegex = Regex("""^//\s*@(\w+)\s*:\s*(.+)""", RegexOption.MULTILINE)
+
+        /**
+         * Parse directives from a test source file, returning a map of
+         * lowercase option name to raw value string.
+         */
+        fun parseDirectives(source: String): Map<String, String> {
+            val directives = mutableMapOf<String, String>()
+            for (match in directiveRegex.findAll(source)) {
+                val key = match.groupValues[1].trim().lowercase()
+                val value = match.groupValues[2].trim()
+                if (key != "filename") { // @Filename is structural, not an option
+                    directives[key] = value
+                }
+            }
+            return directives
+        }
+
+        /**
+         * Compute parameterized test variations from multi-value directives.
+         * Returns empty list if no multi-value directives are found.
+         * Each variation is a map of option name to single value.
+         */
+        fun computeVariations(directives: Map<String, String>): List<Map<String, String>> {
+            val varyBy = mutableListOf<Pair<String, List<String>>>()
+            for ((key, value) in directives) {
+                if (key in nonVaryDirectives) continue
+                if (',' !in value) continue
+                val values = value.split(',').map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+                if (values.size > 1) {
+                    varyBy.add(key to values)
+                }
+            }
+            if (varyBy.isEmpty()) return emptyList()
+
+            // Compute Cartesian product (keys sorted alphabetically)
+            var result = listOf(emptyMap<String, String>())
+            for ((key, values) in varyBy.sortedBy { it.first }) {
+                result = result.flatMap { existing ->
+                    values.map { v -> existing + (key to v) }
+                }
+                if (result.size > 25) {
+                    // Safety limit exceeded — skip parameterized tests for this file
+                    return emptyList()
+                }
+            }
+            return result
+        }
+
+        /**
+         * Construct parameterized baseline filename:
+         * name(key1=value1,key2=value2).ext
+         */
+        fun paramBaselineName(baseName: String, config: Map<String, String>, ext: String): String {
+            val configStr = config.entries.sortedBy { it.key }
+                .joinToString(",") { "${it.key}=${it.value}" }
+            return "$baseName($configStr).$ext"
+        }
+
+        // tsgo set-B — the EXACT two mechanisms tsgo's harness uses to reduce the tsc corpus
+        // (verbatim from microsoft/typescript-go, see TSGO-RELEVANCE.md):
+        //
+        // 1. `skippedTests` (internal/testrunner/compiler_runner.go) — files tsgo drops ENTIRELY.
+        //    Two groups: tests that depend on `typescript.d.ts` (the TS public API — we don't
+        //    implement it), and tests using options tsgo removed so completely they no longer PARSE
+        //    (verbatimModuleSyntax compat shims, preserveValueImports, importsNotUsedAsValues,
+        //    keyofStringsOnly, noStrictGenericChecks, module:none emit, noImplicitUseStrict, …).
+        //    (tsgo's `skippedEmitTests` — 8 files skipped only because Go's PARALLEL emit is
+        //    nondeterministic — is deliberately NOT mirrored: it is a Go-runtime artifact, not a
+        //    removed feature, and our single-threaded harness is deterministic.)
+        val tsgoSkippedTests = setOf(
+            // depend on typescript.d.ts (TS public-API self-hosting tests)
+            "APILibCheck", "APISample_Watch", "APISample_WatchWithDefaults",
+            "APISample_WatchWithOwnWatchHost", "APISample_compile", "APISample_jsdoc",
+            "APISample_linter", "APISample_parseConfig", "APISample_transform", "APISample_watcher",
+            // options removed in tsgo → fail to parse there
+            "preserveUnusedImports", "noCrashWithVerbatimModuleSyntaxAndImportsNotUsedAsValues",
+            "verbatimModuleSyntaxCompat", "verbatimModuleSyntaxCompat2", "verbatimModuleSyntaxCompat3",
+            "verbatimModuleSyntaxCompat4", "preserveValueImports",
+            "preserveValueImports_importsNotUsedAsValues", "preserveValueImports_errors",
+            "preserveValueImports_mixedImports", "preserveValueImports_module",
+            "importsNotUsedAsValues_error", "alwaysStrictNoImplicitUseStrict",
+            "nonPrimitiveIndexingWithForInSupressError", "parameterInitializerBeforeDestructuringEmit",
+            "mappedTypeUnionConstraintInferences", "lateBoundConstraintTypeChecksCorrectly",
+            "keyofDoesntContainSymbols", "isolatedModulesOut", "noStrictGenericChecks",
+            "noImplicitUseStrict_umd", "noImplicitUseStrict_system", "noImplicitUseStrict_es6",
+            "noImplicitUseStrict_commonjs", "noImplicitUseStrict_amd", "noImplicitAnyIndexingSuppressed",
+            "excessPropertyErrorsSuppressed", "moduleNoneDynamicImport", "moduleNoneErrors",
+            "moduleNoneOutFile", "noErrorUsingImportExportModuleAugmentationInDeclarationFile1",
+            "noErrorUsingImportExportModuleAugmentationInDeclarationFile2",
+            "noErrorUsingImportExportModuleAugmentationInDeclarationFile3",
+            "requireOfJsonFileWithModuleEmitNone", "requireOfJsonFileWithModuleNodeResolutionEmitNone",
+        )
+
+        // 2. `SkipUnsupportedCompilerOptions` (internal/testutil/harnessutil/harnessutil.go) — skip a
+        //    whole test CONFIG (BOTH its .errors.txt AND its .js/.d.ts subtests) when its resolved
+        //    options include a tsgo-removed feature. Verbatim port of that function's switch/if chain.
+        //    tsgo applies it to the harness-PARSED options (explicit directives only — unset options
+        //    stay at their zero value and never match), so matching on source directives here is
+        //    faithful: it fires only on an EXPLICIT directive. (es3 is included alongside es5 — es3 was
+        //    removed one release earlier; both are dead emit targets. "node" is the legacy alias for
+        //    the removed node10 resolution.)
+        fun usesUnsupportedOption(directives: Map<String, String>, config: Map<String, String>): Boolean {
+            fun getVal(key: String): String? = config[key] ?: directives[key]
+            fun anyOf(key: String, bad: Set<String>): Boolean =
+                getVal(key)?.split(',')?.any { it.trim().lowercase() in bad } == true
+            fun isFalse(key: String): Boolean =
+                getVal(key)?.split(',')?.any { it.trim().lowercase() == "false" } == true
+            return anyOf("target", setOf("es3", "es5")) ||
+                anyOf("module", setOf("amd", "umd", "system")) ||
+                anyOf("moduleresolution", setOf("node", "node10", "classic")) ||
+                getVal("outfile")?.isNotBlank() == true ||
+                getVal("baseurl")?.isNotBlank() == true ||
+                isFalse("esmoduleinterop") ||
+                isFalse("allowsyntheticdefaultimports") ||
+                isFalse("alwaysstrict")
+        }
+
+        // 2b. tsgo's SkipUnsupportedCompilerOptions runs on the harness-PARSED options, so a
+        //     tsconfig.json EMBEDDED in the test (`@filename: .../tsconfig.json`) BYPASSES the
+        //     directive-based filter above — tsgo itself still runs such tests (its compiler then
+        //     rejects the option at config-load), but our baselines are pinned to PRISTINE tsc,
+        //     so keeping them would pin removed-feature behavior.
+        //     DELIBERATELY NARROWER than usesUnsupportedOption (2026-07-02, user-approved): only
+        //     the options whose implementation was physically REMOVED from this compiler are
+        //     checked — `module: amd/umd/system` (the UMD/System/AMD transforms are deleted) and
+        //     `outFile` (the bundling concat is deleted). tsconfig-in-test `target: es5`,
+        //     `moduleResolution: node10`, and `baseUrl` are NOT checked: ~55 active tests use them
+        //     INCIDENTALLY while pinning still-relevant behavior (paths mapping, suffix
+        //     resolution, declaration emit) that this compiler handles gracefully.
+        //     Only a file NAMED exactly tsconfig.json counts (the harness loads it as project
+        //     config); tsconfig1.json etc. are plain source-echo files.
+        fun tsconfigInTestUsesRemovedFeature(source: String): Boolean {
+            val sections = Regex("""(?im)^\s*//\s*@filename:\s*(\S+)\s*$""").findAll(source).toList()
+            for ((i, m) in sections.withIndex()) {
+                if (!m.groupValues[1].substringAfterLast('/').equals("tsconfig.json", ignoreCase = true)) continue
+                val start = m.range.last + 1
+                val end = if (i + 1 < sections.size) sections[i + 1].range.first else source.length
+                val body = source.substring(start, end)
+                if (Regex("""(?i)"module"\s*:\s*"(amd|umd|system)"""").containsMatchIn(body)) return true
+                if (Regex("""(?i)"outFile"\s*:\s*"[^"]+"""").containsMatchIn(body)) return true
+            }
+            return false
+        }
+
+        // PARITY.1 — a baseline whose divergence from pristine tsc is FORM, not
+        // MEANING, is switched off HERE and nowhere else: the emission stays, carrying
+        // `@Ignore` plus the reason, so the case remains visible as SKIPPED instead of
+        // disappearing from the total. Keyed by baseline FILE name because that is
+        // exactly one generated subtest — bare or parameterized, errors or emit.
+        val divergenceByBaseline = divergences.associateBy { it.baseline }
+        check(divergenceByBaseline.size == divergences.size) {
+            "logicalParityDivergences declares the same baseline twice: " +
+                divergences.groupingBy { it.baseline }.eachCount().filterValues { it > 1 }.keys
+        }
+        val usedDivergences = mutableSetOf<String>()
+
+        /**
+         * Emits the divergence preamble when [baseline] is declared, and records the
+         * declaration as used (an unused one fails the build below — a rotted ledger
+         * is indistinguishable from a hidden regression).
+         */
+        fun StringBuilder.appendDivergence(baseline: String) {
+            val d = divergenceByBaseline[baseline] ?: return
+            usedDivergences += baseline
+            appendLine("    // LOGICAL-PARITY DIVERGENCE (round ${d.round}): switched off deliberately —")
+            appendLine("    // our output differs from tsc's in FORM, not in MEANING, and the LOGIC is")
+            appendLine("    // pinned by ${d.pinnedBy}. Declared in build.gradle.kts")
+            appendLine("    // `logicalParityDivergences`; procedure + ledger in docs/logical-parity.md.")
+            // Line comments, not KDoc: a reason quoting TypeScript or JSDoc could carry
+            // `/*` or `*/` and silently swallow the rest of the file (see CLAUDE.md).
+            var line = StringBuilder()
+            for (word in d.reason.split(Regex("\\s+")).filter { it.isNotEmpty() }) {
+                if (line.isNotEmpty() && line.length + 1 + word.length > 84) {
+                    appendLine("    // $line"); line = StringBuilder()
+                }
+                if (line.isNotEmpty()) line.append(' ')
+                line.append(word)
+            }
+            if (line.isNotEmpty()) appendLine("    // $line")
+            appendLine("    @kotlin.test.Ignore")
+        }
+
+        // Group by first character to keep individual files manageable
+        val groups = testFiles.groupBy { file ->
+            val ch = file.nameWithoutExtension.first()
+            if (ch.isLetter()) ch.uppercaseChar() else '#'
+        }
+
+        var totalBareTests = 0
+        var totalParamTests = 0
+        var totalErrorTests = 0
+
+        for ((groupChar, files) in groups.entries.sortedBy { it.key }) {
+            val suffix = if (groupChar == '#') "Numeric" else groupChar.toString()
+            val className = "TypeScriptCompilerTests_$suffix"
+            val sb = StringBuilder()
+
+            sb.appendLine("// Auto-generated by ./gradlew generateTypeScriptTests. Do not edit.")
+            sb.appendLine("package com.xemantic.typescript.compiler")
+            sb.appendLine()
+            sb.appendLine("import kotlinx.io.files.Path")
+            sb.appendLine("import kotlin.test.Test")
+            sb.appendLine("import kotlin.test.assertTrue")
+            sb.appendLine()
+            sb.appendLine("class $className {")
+
+            for (file in files) {
+                val name = file.nameWithoutExtension
+                // M3.0: a conformance case lives in a nested directory, so it cannot use
+                // the flat `typeScriptCasesDir`. Emit its path relative to the conformance
+                // root instead; compiler cases keep their existing expression verbatim, so
+                // their generated bodies are unchanged.
+                val isConformance = file.absolutePath.startsWith(conformanceRootDir.absolutePath)
+                val casePathExpr = if (isConformance) {
+                    "${D}typeScriptConformanceDir/" +
+                        file.relativeTo(conformanceRootDir).invariantSeparatorsPath
+                } else {
+                    "${D}typeScriptCasesDir/$name.ts"
+                }
+                // The reference baseline's provenance header echoes the case's REAL
+                // corpus path, so a conformance case must tell the formatter its
+                // category; compiler cases keep the default and emit unchanged.
+                val baselineArgs = if (isConformance) {
+                    val rel = file.parentFile.relativeTo(conformanceRootDir).invariantSeparatorsPath
+                    "\"tests/cases/conformance/$rel\""
+                } else ""
+                // Kotlin 2.x does not allow dots in JVM method names, even in backtick-quoted identifiers.
+                // Replace every dot in the base name with an underscore for the function identifier.
+                val id = name.replace('.', '_')
+                val source = file.readText()
+                val directives = parseDirectives(source)
+
+                // tsgo set-B (see the tsgoSkippedTests / usesUnsupportedOption definitions above):
+                // (1) whole-file skip for tsgo's hardcoded skippedTests list.
+                if (name in tsgoSkippedTests) continue
+                // (1b) whole-file skip when a tsconfig.json EMBEDDED in the test sets a
+                //      removed-module/outFile option (bypasses the directive-based filter — see
+                //      tsconfigInTestUsesRemovedFeature above). Drops exactly 4 tests as of
+                //      2026-07-02: deprecatedCompilerOptions2/6, tsconfigMapOptionsAreCaseInsensitive,
+                //      outFileIsDeprecated.
+                if (tsconfigInTestUsesRemovedFeature(source)) continue
+                // (2) whole-CONFIG skip (errors AND emit) when the bare config's fixed directives
+                //     resolve to a tsgo-removed option. Unlike the previous heuristic (which dropped
+                //     only the JS-emit subtest and KEPT the error baseline for ES3/ES5/AMD/System/UMD),
+                //     tsgo's SkipUnsupportedCompilerOptions skips the whole config, so the error
+                //     baseline is dropped too.
+                val bareUnsupported = usesUnsupportedOption(directives, emptyMap())
+
+                val jsBaseline = baselinesDir.resolve("$name.js")
+                // .d.ts sections in baselines are stripped by TypeScriptTestSupport.stripDtsSection()
+                // so tests with declaration output can be included safely.
+                if (jsBaseline.exists() && !bareUnsupported) {
+                    totalBareTests++
+                    sb.appendLine()
+                    sb.appendDivergence("$name.js")
+                    sb.appendLine("    @Test")
+                    sb.appendLine("    fun `${id}_ts compiles to JavaScript matching ${id}_js`() {")
+                    sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
+                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\").toBaseline($baselineArgs)")
+                    sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$name.js\"))")
+                    sb.appendLine("    }")
+                }
+
+                // Parameterized test variations
+                val variations = computeVariations(directives)
+
+                for (config in variations) {
+                    val paramName = paramBaselineName(name, config, "js")
+                    val paramBaseline = baselinesDir.resolve(paramName)
+                    if (paramBaseline.exists()) {
+                        // Skip this whole config if its resolved options include a tsgo-removed
+                        // feature (the varying config value overrides the fixed directive of the
+                        // same key; a fixed unsupported directive is caught via `directives`).
+                        if (usesUnsupportedOption(directives, config)) continue
+                        totalParamTests++
+                        // Build config suffix for test function name (e.g., target_es5 or alwaysstrict_true_target_es2015)
+                        val configId = config.entries.sortedBy { it.key }
+                            .joinToString("_") { "${it.key}_${it.value}" }
+                            .replace('.', '_')
+                        // Build overrides map literal for generated code
+                        val overridesStr = config.entries.sortedBy { it.key }
+                            .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
+                        sb.appendLine()
+                        sb.appendDivergence(paramName)
+                        sb.appendLine("    @Test")
+                        sb.appendLine("    fun `${id}_ts__${configId}__compiles to JavaScript matching baseline`() {")
+                        sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
+                        sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr)).toBaseline($baselineArgs)")
+                        sb.appendLine("            .sameAs(Path(\"${D}typeScriptBaselineDir/$paramName\"))")
+                        sb.appendLine("    }")
+                    }
+                }
+
+                // .errors.txt baseline test (bare-name). tsgo skips the WHOLE config (the error
+                // baseline too, not just emit) for a removed-feature option, so gate on bareUnsupported.
+                val errorsBaseline = baselinesDir.resolve("$name.errors.txt")
+                val errorBaselineDeferred = isConformance && name in conformanceDeferredErrorBaselines
+                if (errorsBaseline.exists() && !bareUnsupported && !errorBaselineDeferred) {
+                    totalErrorTests++
+                    sb.appendLine()
+                    sb.appendDivergence("$name.errors.txt")
+                    sb.appendLine("    @Test")
+                    sb.appendLine("    fun `${id}_ts has expected errors matching ${id}_errors_txt`() {")
+                    sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
+                    sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\")")
+                    sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$name.errors.txt\"))")
+                    sb.appendLine("    }")
+                }
+
+                // .errors.txt parameterized baseline tests
+                for (config in variations) {
+                    val paramErrorName = paramBaselineName(name, config, "errors.txt")
+                    val paramErrorBaseline = baselinesDir.resolve(paramErrorName)
+                    if (paramErrorBaseline.exists() && !usesUnsupportedOption(directives, config) &&
+                        !errorBaselineDeferred
+                    ) {
+                        totalErrorTests++
+                        val configId = config.entries.sortedBy { it.key }
+                            .joinToString("_") { "${it.key}_${it.value}" }
+                            .replace('.', '_')
+                        val overridesStr = config.entries.sortedBy { it.key }
+                            .joinToString(", ") { "\"${it.key}\" to \"${it.value}\"" }
+                        sb.appendLine()
+                        sb.appendDivergence(paramErrorName)
+                        sb.appendLine("    @Test")
+                        sb.appendLine("    fun `${id}_ts__${configId}__has expected errors matching baseline`() {")
+                        sb.appendLine("        val source = Path(\"$casePathExpr\").readText()")
+                        sb.appendLine("        TypeScriptCompiler().compile(source, \"$name.ts\", mapOf($overridesStr))")
+                        sb.appendLine("            .errorsMatchBaseline(Path(\"${D}typeScriptBaselineDir/$paramErrorName\"))")
+                        sb.appendLine("    }")
+                    }
+                }
+            }
+
+            sb.appendLine()
+            sb.appendLine("}")
+
+            packageDir.resolve("$className.kt").writeText(sb.toString())
+        }
+
+        // PARITY.1 validation — the two controls that keep the ledger honest.
+        val stale = divergences.filter { it.baseline !in usedDivergences }
+        check(stale.isEmpty()) {
+            "logicalParityDivergences has ${stale.size} entr(y|ies) matching no generated test:\n" +
+                stale.joinToString("\n") { "  - ${it.baseline} (round ${it.round}, ${it.pinnedBy})" } +
+                "\nEither the baseline was renamed/removed, or its test is already skipped for " +
+                "another reason (tsgo-removed option, deferred error baseline). A ledger entry " +
+                "that switches nothing off is indistinguishable from a hidden regression — " +
+                "delete it or fix the baseline name. See docs/logical-parity.md."
+        }
+        if (divergences.isNotEmpty()) {
+            val testSources = commonTestDir.walkTopDown()
+                .filter { it.isFile && it.extension == "kt" }
+                .map { it.readText() }
+                .toList()
+            val unpinned = divergences.filter { d ->
+                val decl = Regex("\\bclass\\s+${Regex.escape(d.pinnedBy)}\\b")
+                testSources.none { decl.containsMatchIn(it) }
+            }
+            check(unpinned.isEmpty()) {
+                "logicalParityDivergences names ${unpinned.size} pinnedBy class(es) that do not " +
+                    "exist under src/commonTest/kotlin:\n" +
+                    unpinned.joinToString("\n") { "  - ${it.pinnedBy} (for ${it.baseline})" } +
+                    "\nSwitching a baseline off REQUIRES a test pinning the logic it used to " +
+                    "pin — that is the whole policy. See docs/logical-parity.md § 2 step 2."
+            }
+        }
+
+        // PARITY.1 — rewrite the ledger from the declarations so the doc cannot drift.
+        val ledger = if (divergences.isEmpty()) {
+            "_No baseline is currently switched off under the logical-parity policy._"
+        } else {
+            buildString {
+                appendLine("| baseline | round | logic pinned by | why this is FORM, not MEANING |")
+                appendLine("|---|---:|---|---|")
+                for (d in divergences.sortedWith(compareBy({ it.round }, { it.baseline }))) {
+                    val reason = d.reason.split(Regex("\\s+")).filter { it.isNotEmpty() }
+                        .joinToString(" ").replace("|", "\\|")
+                    appendLine("| `${d.baseline}` | ${d.round} | `${d.pinnedBy}` | $reason |")
+                }
+                append("\n**${divergences.size} baseline(s) switched off.**")
+            }
+        }
+        val beginMarker = "<!-- BEGIN GENERATED LEDGER -->"
+        val endMarker = "<!-- END GENERATED LEDGER -->"
+        check(logicalParityDoc.isFile) {
+            "docs/logical-parity.md is missing — it is part of the PARITY.1 mechanism, " +
+                "not decoration; restore it before generating."
+        }
+        val docText = logicalParityDoc.readText()
+        val begin = docText.indexOf(beginMarker)
+        val end = docText.indexOf(endMarker)
+        check(begin >= 0 && end > begin) {
+            "docs/logical-parity.md lost its $beginMarker / $endMarker region — the ledger " +
+                "is generated into it and cannot be hand-maintained."
+        }
+        val updated = docText.substring(0, begin + beginMarker.length) +
+            "\n" + ledger + "\n" + docText.substring(end)
+        if (updated != docText) {
+            logicalParityDoc.writeText(updated)
+            logger.lifecycle("Rewrote the logical-parity ledger in ${logicalParityDoc.name}.")
+        }
+
+        logger.lifecycle("Generated $totalBareTests bare-name JS + $totalParamTests parameterized JS + $totalErrorTests error baseline = ${totalBareTests + totalParamTests + totalErrorTests} test functions across ${groups.size} files in: $packageDir (${divergences.size} logical-parity divergence(s) switched off)")
+    }
+}
+
+// Make every Kotlin test compilation task depend on the generator so that
+// `./gradlew jvmTest` (or any platform test) is all that's needed.
+tasks.matching { it.name.startsWith("compile") && "Test" in it.name && "Kotlin" in it.name }
+    .configureEach { dependsOn(generateTypeScriptTests) }
+
+// Ensure tests run with the REPO root as working directory so that kotlinx.io's
+// Path("typescript-repo") resolves correctly on all platforms. This overrides the
+// convention plugin's per-module default, and it is the repo root rather than
+// this module because the checkout is shared — see typeScriptRepoDir above.
+tasks.withType<org.gradle.api.tasks.testing.Test>().configureEach {
+    workingDir = rootProject.projectDir
+}
+
+// ---------------------------------------------------------------------------
+
+repositories {
+    mavenCentral()
+}
+
+configurations.all {
+    resolutionStrategy.eachDependency {
+        if (requested.group == "org.ow2.asm") {
+            useVersion(libs.versions.asm.get())
+        }
+    }
+}
+
+// https://kotlinlang.org/docs/dokka-migration.html#adjust-configuration-options
+dokka {
+    pluginsConfiguration.html {
+        // Derived from the `xemantic` extension, which exists only on the root.
+        footerMessage = rootProject.extra["projectCopyright"] as String
+    }
+}
+

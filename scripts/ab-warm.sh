@@ -77,18 +77,18 @@
 #
 # Usage:
 #   # 1. keep BOTH main class dirs — never recompile between measurements
-#   cp -r build/classes/kotlin/jvm/main /tmp/xtsc_A     # baseline
+#   cp -r xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main /tmp/xtsc_A     # baseline
 #   ...change code...  ./gradlew compileKotlinJvm       # B = build/classes/...
 #
 #   # 2. measure (3 pairs = 6 processes = round 771's calibration shape, ~14 min)
-#   scripts/ab-warm.sh /tmp/xtsc_A build/classes/kotlin/jvm/main 3
+#   scripts/ab-warm.sh /tmp/xtsc_A xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main 3
 #
 #   # knobs (env): WARMUP=2 ITERS=8 HEAP=4g PROJ_DIR=... KEEP_DAEMONS=1 XTSC_CP=...
 #
 # CLASSPATH CONTRACT — read this before wondering why A and B share anything.
 # `BenchMain` lives in `commonTest`, so the run needs the TEST classes too, while
 # the point of an A/B is to swap only the MAIN classes. The classpath is therefore
-#     <the A-or-B main class dir> : build/classes/kotlin/jvm/test : <deps>
+#     <the A-or-B main class dir> : xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test : <deps>
 # with the swapped dir FIRST. Two consequences:
 #   * the test class dir is SHARED by both arms and comes from the CURRENT build —
 #     which is fine because `BenchMainKt` touches only `ProjectCompiler`/`SystemVfs`,
@@ -123,7 +123,13 @@ DIR_A="$1"; DIR_B="$2"; PAIRS="$3"
 WARMUP="${WARMUP:-2}"
 ITERS="${ITERS:-8}"
 HEAP="${HEAP:-4g}"
-TEST_CLASSES="$REPO_ROOT/build/classes/kotlin/jvm/test"
+TEST_CLASSES="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"
+# The path moved with the module split; without this the driver would run with a
+# classpath entry that does not exist and report a verdict anyway.
+[[ -d "$TEST_CLASSES" ]] || {
+    echo "error: test classes not found at $TEST_CLASSES — run ./gradlew jvmTest first" >&2
+    exit 1
+}
 
 PROJ_DIR="${PROJ_DIR:-$(ls -d "$REPO_ROOT"/build/bench/tsc-project-* 2>/dev/null | head -1)}"
 [[ -n "$PROJ_DIR" && -d "$PROJ_DIR" ]] || {
@@ -145,11 +151,17 @@ done
 CP_CACHE="$REPO_ROOT/build/bench/cp-warm.txt"
 if [[ -n "${XTSC_CP:-}" ]]; then
     CP_TAIL="$XTSC_CP"
-elif [[ -f "$CP_CACHE" && "$CP_CACHE" -nt "$REPO_ROOT/build.gradle.kts" ]]; then
+elif [[ -f "$CP_CACHE" && "$CP_CACHE" -nt "$REPO_ROOT/xemantic-typescript-compiler-core/build.gradle.kts" ]]; then
     CP_TAIL="$(cat "$CP_CACHE")"
 else
     INIT="$REPO_ROOT/build/bench/print-classpath.init.gradle.kts"
     [[ -f "$INIT" ]] || { echo "error: $INIT missing — run bench-compile-tsc.sh once" >&2; exit 1; }
+# A PRE-SPLIT init script registers the task in `allprojects`, so -api answers
+# too and `head -1` silently picks whichever line Gradle emitted first. Refuse it.
+grep -q 'xemantic-typescript-compiler-core' "$INIT" || {
+    echo "error: $INIT predates the module split — re-run bench-compile-tsc.sh" >&2
+    exit 1
+}
     echo "resolving jvmRuntimeClasspath (gradle) ..." >&2
     CP_TAIL="$("$REPO_ROOT/gradlew" -q --console=plain -I "$INIT" xtscPrintJvmRuntimeClasspath 2>/dev/null \
         | sed -n 's/^XTSC_CLASSPATH=//p' | head -1)"

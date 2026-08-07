@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Find surgical-fix candidates from build/test-results/jvmTest/*.xml.
+Find surgical-fix candidates from xemantic-typescript-compiler-core/build/test-results/jvmTest/*.xml.
 
 Parses junit XMLs, extracts failing baseline-mismatch tests, and classifies
 each by diff shape:
@@ -292,7 +292,7 @@ def main(argv):
     xmls = glob.glob(XML_GLOB)
     if not xmls:
         print(f"No test XMLs matched {XML_GLOB}", file=sys.stderr)
-        print("Run: rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest", file=sys.stderr)
+        print("Run: rm -rf xemantic-typescript-compiler-core/build/test-results/jvmTest/binary && ./gradlew jvmTest", file=sys.stderr)
         return 2
     if len(xmls) < 20:
         print(
@@ -302,7 +302,7 @@ def main(argv):
             file=sys.stderr,
         )
         print(
-            "  rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest",
+            "  rm -rf xemantic-typescript-compiler-core/build/test-results/jvmTest/binary && ./gradlew jvmTest",
             file=sys.stderr,
         )
         print(file=sys.stderr)

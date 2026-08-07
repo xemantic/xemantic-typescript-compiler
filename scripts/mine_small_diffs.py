@@ -8,7 +8,7 @@ consulted; check the plan/history before re-investigating a shown candidate anyw
 variant suffixes can slip the filter).
 
 Usage: python3 scripts/mine_small_diffs.py [N]   (N = how many to show, default 25)
-Run AFTER a clean full suite (needs fresh build/test-results/jvmTest/*.xml).
+Run AFTER a clean full suite (needs fresh xemantic-typescript-compiler-core/build/test-results/jvmTest/*.xml).
 """
 #  SPDX-FileCopyrightText: 2026 Kazimierz Pogoda / Xemantic
 #  SPDX-License-Identifier: AGPL-3.0-only WITH LicenseRef-xtsc-output-exception
@@ -42,7 +42,7 @@ try:
 except OSError:
     pass
 rows = []
-for f in glob.glob('build/test-results/jvmTest/*.xml'):
+for f in glob.glob('xemantic-typescript-compiler-core/build/test-results/jvmTest/*.xml'):
     data = open(f, encoding='utf-8', errors='replace').read()
     for part in data.split('<testcase ')[1:]:
         nm = re.match(r'name="([^"]+)"', part)

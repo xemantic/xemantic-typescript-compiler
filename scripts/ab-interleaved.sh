@@ -35,11 +35,11 @@
 #
 # Usage:
 #   # 1. keep BOTH class dirs — never recompile between measurements
-#   cp -r build/classes/kotlin/jvm/main /tmp/xtsc_A     # baseline
+#   cp -r xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main /tmp/xtsc_A     # baseline
 #   ...change code...  ./gradlew compileKotlinJvm       # B = build/classes/...
 #
 #   # 2. measure (5-6 pairs is usually enough; more on a noisy box)
-#   scripts/ab-interleaved.sh /tmp/xtsc_A build/classes/kotlin/jvm/main 6
+#   scripts/ab-interleaved.sh /tmp/xtsc_A xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main 6
 #
 #   # same-binary flag comparison (A gets no extra args, B gets them):
 #   scripts/ab-interleaved.sh DIR DIR 4 --someExperimentFlag
@@ -75,6 +75,12 @@ PROJ_DIR="$(ls -d "$REPO_ROOT"/build/bench/tsc-project-* 2>/dev/null | head -1)"
 # Resolve the runtime classpath once (the class DIR is prepended per side).
 INIT="$REPO_ROOT/build/bench/print-classpath.init.gradle.kts"
 [[ -f "$INIT" ]] || { echo "error: $INIT missing — run bench-compile-tsc.sh once" >&2; exit 1; }
+# A PRE-SPLIT init script registers the task in `allprojects`, so -api answers
+# too and `head -1` silently picks whichever line Gradle emitted first. Refuse it.
+grep -q 'xemantic-typescript-compiler-core' "$INIT" || {
+    echo "error: $INIT predates the module split — re-run bench-compile-tsc.sh" >&2
+    exit 1
+}
 CP_TAIL="$("$REPO_ROOT/gradlew" -q --console=plain -I "$INIT" xtscPrintJvmRuntimeClasspath 2>/dev/null \
     | sed -n 's/^XTSC_CLASSPATH=//p' | head -1)"
 [[ -n "$CP_TAIL" ]] || { echo "error: could not resolve jvmRuntimeClasspath" >&2; exit 1; }

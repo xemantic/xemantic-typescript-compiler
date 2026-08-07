@@ -56,7 +56,44 @@ and module directories prefixed with `rootProject.name`. Landed green, suite re-
 - **A build trap that cost a cycle** is now a CLAUDE.md entry: `applyAllConventions()` cannot
   be used in a multi-module build.
 
-- [ ] **(MOD.3) Move the compiler to `xemantic-typescript-compiler-core`.** The expensive
+**Round MOD.3 (2026-08-07) — THE COMPILER MOVED TO `xemantic-typescript-compiler-core`.**
+Suite **13,909 / 0 failed** in the new layout, `-api` 27/0. Root is now a pure aggregator
+(identity, the cross-module jar manifest, publication metadata, the release announcement);
+everything compiler-shaped is in the module. `typescript-repo/`, `docs/`, `scripts/` and
+`build/bench/` all stayed at the repo root DELIBERATELY — the checkout is shared tooling and
+the bench dir is harness data the scripts create themselves.
+
+Four things bit, and all four were silent rather than loud:
+
+- **`AotCacheGuardTest.projectRoot()` walked up for `build.gradle.kts`** and now stops at
+  the first MODULE, so `scripts/xtsc` disappeared. Split into `projectRoot()` (module) and
+  `repoRoot()` (keyed on `settings.gradle.kts`, of which the tree has exactly one). That pin
+  compares core's `nativeImageMainClass` against the ROOT's launcher, so it needs both.
+- **A `-I` init script applies to EVERY build in the invocation**, and its task was
+  registered under `allprojects` — post-split the root throws and `-api` emits a second,
+  wrong `XTSC_CLASSPATH=` line that `head -1` can pick. Now `findProject` + qualified
+  invocation + an exactly-one-line assertion. This one would have produced a wrong
+  BENCHMARK, not an error. (CLAUDE.md entry added.)
+- **The jar name is a contract** — pinned to the product name, not `project.name`, or
+  `xtsc-aot-lib.sh`'s glob silently matches nothing. (CLAUDE.md entry added.)
+- **`extra` inside `allprojects { }`** resolves to the SCRIPT's extension, not the block's
+  receiver, so every module would have read the root's value from the root's own map.
+
+32 script path substitutions (the exact count predicted), with loud existence guards added
+to `bench-compile-tsc.sh`, `ab-warm.sh` and `aot-corpus-suite.sh` — the three drivers where
+a missing path yields two equally-broken arms that AGREE and read as a clean result.
+Verified end to end rather than by inspection: classpath resolution returns exactly one
+answer, `scripts/xtsc` compiles a scratch project and reports the expected TS2322, and
+`--serve`/`--daemon` round-trips (`request 1 served in 595 ms`, so the daemon answered
+rather than the client falling back in-process).
+
+**STILL OWED (do before quoting any perf number):** every trained AOT cache is stale — the
+fingerprint hashes each classpath entry in order and both the jar's PATH and the dependency
+order moved. Retrain and re-verify `AotCacheGuardTest` on the VPS before comparing anything
+to `bench-history/`. `scripts/cost_gate.py` has not been run since the move (this box has no
+`build/bench` profile; the harness lives on the VPS).
+
+- [x] **(MOD.3) Move the compiler to `xemantic-typescript-compiler-core`.** The expensive
   step, and the reason MOD.1/MOD.2 were kept additive: **20 files carry 64 hard-coded
   single-module paths**, of which **32 are genuine Gradle outputs** —
   `build/classes/kotlin/jvm/main` (10), `build/classes/kotlin/jvm/test` (7),

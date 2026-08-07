@@ -352,7 +352,8 @@ class AotCacheGuardTest {
             .firstOrNull { it.trimStart().startsWith("val nativeImageMainClass") }
             ?: fail("no `val nativeImageMainClass` assignment in build.gradle.kts")
         val nativeImageMainClass = line.substringAfter('=').trim().trim('"')
-        assert(nativeImageMainClass == mainClassOf(File(root, "scripts/xtsc")))
+        // The build file is the MODULE's; scripts/ is the REPO root's.
+        assert(nativeImageMainClass == mainClassOf(File(repoRoot(), "scripts/xtsc")))
     }
 
     // ---------------------------------------------------------------- fixture
@@ -469,16 +470,31 @@ class AotCacheGuardTest {
          * point the cache-decision pins at a copied `scripts/` dir, and a copy
          * has no `build.gradle.kts`. The build-file pin is about the real tree.
          */
-        fun projectRoot(): File {
-            val marker = "com/xemantic/typescript/compiler/Checker.class"
-            val url = AotCacheGuardTest::class.java.classLoader.getResource(marker)
-                ?: fail("$marker is not on the test classpath")
+        fun projectRoot(): File = ancestorContaining("build.gradle.kts")
+
+        /**
+         * The REPOSITORY root — the directory holding `settings.gradle.kts`.
+         *
+         * Distinct from [projectRoot] since the module split, and the two must
+         * not be conflated: `build.gradle.kts` is now this MODULE's, while
+         * `scripts/` stayed at the repo root. Keyed on `settings.gradle.kts`
+         * because exactly one directory in the tree has one, whereas every
+         * module has a `build.gradle.kts` — so an upward walk for the latter
+         * stops at the first module it meets, which is what broke this pin.
+         */
+        fun repoRoot(): File = ancestorContaining("settings.gradle.kts")
+
+        /** The nearest ancestor of the compiled classes that holds [marker]. */
+        private fun ancestorContaining(marker: String): File {
+            val anchor = "com/xemantic/typescript/compiler/Checker.class"
+            val url = AotCacheGuardTest::class.java.classLoader.getResource(anchor)
+                ?: fail("$anchor is not on the test classpath")
             var dir: File? = File(url.toURI())
             while (dir != null) {
-                if (File(dir, "build.gradle.kts").isFile) return dir
+                if (File(dir, marker).isFile) return dir
                 dir = dir.parentFile
             }
-            fail("could not locate build.gradle.kts upward from $url")
+            fail("could not locate $marker upward from $url")
         }
 
         fun launcherDir(): File? {

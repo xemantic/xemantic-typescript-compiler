@@ -217,7 +217,7 @@ def irrelevant_bases():
 def main(argv):
     if not glob.glob(XML_GLOB):
         print("No test XMLs. Run the full suite first:", file=sys.stderr)
-        print("  rm -rf build/test-results/jvmTest/binary && ./gradlew jvmTest", file=sys.stderr)
+        print("  rm -rf xemantic-typescript-compiler-core/build/test-results/jvmTest/binary && ./gradlew jvmTest", file=sys.stderr)
         return 2
     curated_irr, curated_div = load_curated()
     subs = failing_subtests()
