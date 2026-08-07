@@ -154,9 +154,17 @@ object CompileServer {
         val previous = System.out
         val mark = TimeSource.Monotonic.markNow()
         var failed: Throwable? = null
+        var code = 0
         try {
             System.setOut(PrintStream(buffer, true, StandardCharsets.UTF_8))
-            com.xemantic.typescript.compiler.main(args.toTypedArray())
+            // `runCli`, NOT `main`: main ends the process, which inside the
+            // daemon would take the server down with the first project that has
+            // an error. runCli returns the same code instead — so the server
+            // reports the compiler's OWN verdict rather than deducing one by
+            // searching the captured stdout for the word "FAILED", which is what
+            // it used to do and which made the exit code depend on message
+            // wording.
+            code = com.xemantic.typescript.compiler.runCli(args.toTypedArray())
         } catch (e: Exception) {
             failed = e
         } finally {
@@ -165,10 +173,7 @@ object CompileServer {
         val elapsed = mark.elapsedNow().inWholeMilliseconds
         val text = buffer.toString(StandardCharsets.UTF_8) +
             (failed?.let { "\nserver: compile threw ${it::class.simpleName}: ${it.message}\n" } ?: "")
-        // The CLI signals failure in its summary line, not via an exit code —
-        // `main` returns normally either way — so the server mirrors that
-        // rather than inventing a second source of truth.
-        val exit = if (failed != null || "FAILED —" in text) 1 else 0
+        val exit = if (failed != null) 1 else code
         return CompileResponse(
             output = text,
             exitCode = exit,

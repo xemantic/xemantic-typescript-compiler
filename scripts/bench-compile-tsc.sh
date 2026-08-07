@@ -480,16 +480,22 @@ run_once() { # $1 = log file; uses PROJ_DIR; sets WALL_MS, RSS_KB
     start=$(date +%s%N)
     local cmd=(java "-Xmx$HEAP" -cp "$CLASSPATH" \
         com.xemantic.typescript.compiler.MainKt "${NOEMIT_ARGS[@]}" "$PROJ_DIR")
+    # SINCE 2026-08-08 the compiler exits 1 when it finds errors (tsc semantics),
+    # and EVERY bench profile has errors — so a non-zero exit no longer means the
+    # run failed. Infrastructure failure is detected by the ABSENCE of the
+    # compiler's own summary line, which is printed only if the compile ran to
+    # completion; keying on the exit code here would abort every single bench.
+    local rc=0
     if [[ -n "$TIME_BIN" ]]; then
-        "$TIME_BIN" -v -o "$log.time" "${cmd[@]}" >"$log" 2>&1 || {
-            echo "error: compiler run failed — tail of $log:" >&2
-            tail -20 "$log" >&2; exit 1; }
+        "$TIME_BIN" -v -o "$log.time" "${cmd[@]}" >"$log" 2>&1 || rc=$?
         RSS_KB=$(grep -oP 'Maximum resident set size \(kbytes\): \K[0-9]+' "$log.time" || echo 0)
     else
-        "${cmd[@]}" >"$log" 2>&1 || {
-            echo "error: compiler run failed — tail of $log:" >&2
-            tail -20 "$log" >&2; exit 1; }
+        "${cmd[@]}" >"$log" 2>&1 || rc=$?
         RSS_KB=0
+    fi
+    if ! grep -aqE '^(OK|FAILED) — ' "$log"; then
+        echo "error: compiler run failed (exit $rc, no summary line) — tail of $log:" >&2
+        tail -20 "$log" >&2; exit 1
     fi
     end=$(date +%s%N)
     WALL_MS=$(( (end - start) / 1000000 ))

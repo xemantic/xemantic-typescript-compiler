@@ -47,12 +47,19 @@ import java.io.File
  * holds C2-compiled code (11,580 ms warm against 13,350 ms for the AOT binary
  * doing the whole compile itself).
  *
- * **Exit codes deliberately match the existing CLI**, which returns 0 whether
- * or not the compile found errors and reports the outcome in its summary line
- * instead. Scripts rely on that — `bench-compile-tsc.sh` treats any non-zero
- * exit as an infrastructure failure and aborts — so a completed compile exits
- * 0 here too, however many diagnostics it produced. Non-zero is reserved for
- * the request never running.
+ * **Exit codes match the CLI, and since 2026-08-08 both follow `tsc`**: 0 when
+ * the compile found no errors, 1 when it found some. They used to return 0
+ * unconditionally and report the outcome only in the summary line, which made
+ * `xtsc` unusable as a build-failure signal in CI or a shell `&&` chain — and,
+ * once the daemon existed, made the answer depend on whether one happened to be
+ * running, since the server derived its own code by searching stdout for
+ * "FAILED". The single source of truth is now
+ * [com.xemantic.typescript.compiler.runCli]'s return value.
+ *
+ * The scripts that USED to read a non-zero exit as infrastructure failure were
+ * updated with this change: `bench-compile-tsc.sh` now detects a failed run by
+ * the absence of the compiler's summary line, which is the property that
+ * actually distinguishes "did not run" from "ran and found errors".
  */
 fun main(args: Array<String>) {
     val socket = optionValue(args, "--socket") ?: CompileServer.defaultSocketPath()

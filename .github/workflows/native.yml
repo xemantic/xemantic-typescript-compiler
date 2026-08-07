@@ -71,9 +71,16 @@ jobs:
           scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
           PROFILE=$(ls -d build/bench/tsc-project-* | head -1)
           CP="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)"
+          # The compiler exits 1 when it finds errors (tsc semantics, 2026-08-08)
+          # and this profile has 46. Under `set -euo pipefail` that would fail the
+          # PIPELINE, so each run is captured first and filtered afterwards; the
+          # byte-identity gate below is unchanged.
           java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
-            --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > jvm.txt
-          ./xemantic-typescript-compiler-daemon/build/native/xtsc --noEmit --listAll "$PROFILE" | grep -v '^time:' | sort > native.txt
+            --noEmit --listAll "$PROFILE" > jvm.raw 2>&1 || true
+          grep -v '^time:' jvm.raw | sort > jvm.txt
+          ./xemantic-typescript-compiler-daemon/build/native/xtsc \
+            --noEmit --listAll "$PROFILE" > native.raw 2>&1 || true
+          grep -v '^time:' native.raw | sort > native.txt
           diff jvm.txt native.txt && echo "native output is byte-identical to the JVM"
 
       - uses: actions/upload-artifact@v4

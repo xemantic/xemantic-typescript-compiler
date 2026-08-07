@@ -32,6 +32,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.time.Duration.Companion.milliseconds
+import kotlin.system.exitProcess
 
 /**
  * CLI entry point for the xemantic TypeScript compiler — whole-project build.
@@ -47,6 +48,30 @@ import kotlin.time.Duration.Companion.milliseconds
  * the program, and (unless `--noEmit`) writes JS/declaration outputs to `outDir`.
  */
 fun main(args: Array<String>) {
+    val code = runCli(args)
+    // Only on failure: exiting explicitly with 0 is the same as returning, and
+    // `exitProcess` from a NORMAL completion would cut short anything the
+    // runtime still wants to do on the way out.
+    if (code != 0) exitProcess(code)
+}
+
+/**
+ * Runs the CLI and RETURNS its exit code instead of ending the process.
+ *
+ * The split exists because the compile server calls this in-process: an
+ * `exitProcess` inside the compile would take the DAEMON down with the first
+ * project that has an error. It also lets the server report the real exit code
+ * rather than deducing one by looking for "FAILED" in the captured stdout.
+ *
+ * **0 means the compile found no errors, 1 means it found some** — matching
+ * `tsc`, which CI pipelines and shell `&&` chains both assume. This changed on
+ * 2026-08-08: it used to return 0 unconditionally and report the outcome only in
+ * the summary line, which made `xtsc` silently unusable as a build-failure
+ * signal, and made the answer depend on whether a daemon happened to be running.
+ * Non-zero from the CLIENT, by contrast, can also mean the request never ran
+ * (see XTSC_CLIENT_UNAVAILABLE).
+ */
+fun runCli(args: Array<String>): Int {
     var project = "."
     var outDir: String? = null
     var noEmit = false
@@ -343,7 +368,7 @@ fun main(args: Array<String>) {
             // (deliberately) not threaded through the --incremental/--watch paths.
             "--outDir", "--outdir" -> { i++; if (i < args.size) outDir = args[i] }
             "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
-            "--help", "-h" -> { printUsage(); return }
+            "--help", "-h" -> { printUsage(); return 0 }
             else -> if (!a.startsWith("-")) project = a
         }
         i++
@@ -458,6 +483,7 @@ fun main(args: Array<String>) {
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
+    return if (result.errorCount == 0) 0 else 1
 }
 
 /**
