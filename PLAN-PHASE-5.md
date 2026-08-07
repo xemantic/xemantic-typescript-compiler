@@ -93,6 +93,45 @@ order moved. Retrain and re-verify `AotCacheGuardTest` on the VPS before compari
 to `bench-history/`. `scripts/cost_gate.py` has not been run since the move (this box has no
 `build/bench` profile; the harness lives on the VPS).
 
+**Round MOD.8 (2026-08-08) — FIRST CONFIGURATION IN WHICH xtsc BEATS tsc, AND THE EXIT-CODE
+DEFECT THE MEASUREMENT EXPOSED.** Owner asked how the client/daemon compares end to end, and
+then how the warm result compares to tsc and tsgo. Four-way, check-only, compiler profile
+(78 files, ~195k LOC), 5 interleaved rounds on this macOS box:
+
+| arm | median | min-max | vs xtsc-warm |
+|---|---|---|---|
+| tsgo 7.0.0-dev | **903 ms** | 845-934 | 3.7x faster |
+| **xtsc warm daemon** | **3,322 ms** | 3,268-4,583 | - |
+| tsc 6.0.3 | 4,489 ms | 4,439-4,963 | 1.35x slower |
+| xtsc cold one-shot | 13,883 ms | 13,574-14,246 | 4.2x slower |
+
+Same job verified, not assumed: tsc and tsgo both report 65 errors over the same 5 files, xtsc
+46 (the documented env-modelling difference); 78-file program throughout. `--pretty false`
+makes no difference to tsc (4,653 vs 4,659 ms), so the win is not tsc doing formatting work.
+
+- **WARM xtsc is 1.35x FASTER than one-shot tsc.** Cold, the same compiler is 3.1x SLOWER.
+  The daemon is the entire difference, and this is the first configuration on record where
+  this compiler beats the reference implementation on a real project.
+- **tsgo is 3.7x ahead of warm xtsc and ~5x ahead of tsc.** A cold-start native binary beats a
+  warm JVM, which is the honest framing of why the daemon exists: xtsc needs one to be
+  competitive, tsgo does not.
+- **The architecture costs ~20 ms (0.6%)** — client wall 3,286 vs daemon-served 3,266 vs
+  compiler self-time 3,265, of which ~6 ms is the client process starting. So essentially all
+  of the 4.2x cold-to-warm gain reaches the user.
+- **THE COLD RATIO HERE (3.09x tsc) IS OUTSIDE THE 1.87-2.72x BAND CI HAS RECORDED** — this box
+  runs node/tsc fast relative to JVM warm-up. Only the WITHIN-run comparisons above are
+  quotable; do not mix these with `bench-history/` rows.
+- **Operationally: the daemon needs ~4 requests to reach steady state**, not 1 (6,894 ->
+  6,210 -> 3,650 -> 3,506 -> 3,351 -> 3,266 ms). A benchmark that warms once measures warm-up.
+- **What the measurement caught:** the cold CLI exited 0 on 46 errors while the daemon exited
+  1 — the answer depended on whether a daemon was running. Fixed in the same session (owner
+  chose tsc semantics for both); see the commit for the blast radius.
+
+**Still true and worth repeating before anyone reads 1.35x as a general claim:** it is a
+warm-vs-cold comparison by construction, `tsc --incremental`/`tsserver` amortize too, and the
+daemon buys a CONSTANT FACTOR rather than incrementality — every request re-checks all 78
+files, because on `export *` barrels one edit's closure is the whole program.
+
 **Round MOD.6a (2026-08-07) — A SECOND AOT CLIENT VIA GraalVM, AND IT LIKELY ANSWERS THE
 WINDOWS GAP.** Owner question: can the client also be built with GraalVM native-image? Yes,
 built and verified on this box (GraalVM 25.0.3 IS installed here — the "UNVERIFIED, no GraalVM"
