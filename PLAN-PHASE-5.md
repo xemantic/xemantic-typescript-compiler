@@ -93,6 +93,46 @@ order moved. Retrain and re-verify `AotCacheGuardTest` on the VPS before compari
 to `bench-history/`. `scripts/cost_gate.py` has not been run since the move (this box has no
 `build/bench` profile; the harness lives on the VPS).
 
+**Round MOD.5 (2026-08-07) — THE THIN CLIENT IS REAL, NATIVE, AND 2.9 MB.** The arc's point,
+delivered: `-client` depends on `-api` and NOTHING ELSE, so the shipped binary stops carrying
+a 230k-line compiler it only ever asks to run elsewhere. 13,958 green (core 13,889 + api 27 +
+daemon 24 + client 18). Measured on macosArm64, release: **2.9 MB**, cold 1.88 s (spawns the
+daemon), **warm 0.110 s wall** with the client's own CPU at 0.00s/0.00s.
+
+- **The bug worth remembering was found by RUNNING IT THROUGH A PIPE.** The native
+  `spawnDetached` inherited fds 0/1/2, so the daemon held the client's stdout open and
+  `xtsc … | tail` never returned — client exited, compile finished, shell waited forever.
+  The JVM twin had `Redirect.DISCARD` from the start with a comment explaining exactly this;
+  the POSIX path needs `dup2` of /dev/null by hand and I had omitted it. `--serve` works, the
+  output is right, and a unit test on `spawnDetached` passes. (CLAUDE.md entry added.)
+- **The daemon logged every reachability probe as a failed request** — `isDaemonReachable`
+  connects and closes without a frame, and the client polls it every 25-500 ms while waiting.
+  A frameless connection is now recognised and passed over in silence.
+- **The client refuses to guess how to start the daemon**: `XTSC_DAEMON_CMD`, else
+  `XTSC_HOME/bin/xtsc-daemon`, else an error naming both. No PATH search and no constructed
+  `java -cp`: the client knows nothing about Java (that IS the dependency edge), and a wrong
+  guess starts a DIFFERENT build's daemon, which answers happily with diagnostics from the
+  wrong compiler — the one failure here that is plausible rather than loud.
+- **The start race needs no lock.** Both clients spawn; the daemon exits rather than stealing
+  a live socket, so the loser dies and both connect to the winner. Hence the client polls
+  REACHABILITY, not the process it spawned — the daemon that serves may be someone else's.
+- **Only 3 `expect`s** (`readEnv`, `writeStderr`, `spawnDetached`). The clock is
+  `kotlin.time`, the filesystem kotlinx-io (which covers mingw too), and temp dir + user name
+  are derived in COMMON code precisely because both peers must agree on the socket path
+  exactly — a disagreement silently starts a second daemon.
+
+- [ ] **(MOD.6) Windows: `CreateProcess` with `DETACHED_PROCESS` for the client spawn.**
+  `mingwX64` is deliberately NOT enabled on `-client`. The TRANSPORT is fine — ktor implements
+  AF_UNIX on Windows 10 1803+ behind a runtime probe, so a Windows client could talk to a
+  RUNNING daemon today — but `spawnDetached` is fork/setsid/execvp, which Windows has no
+  equivalent of. Enabling the target would not fail the build; it would ship a client that
+  cannot start the thing it depends on.
+- [ ] **(MOD.7) Retrain the AOT cache and re-verify against the new layout.** Still owed from
+  MOD.3 and now more so: the fingerprint hashes every classpath entry IN ORDER, and the jar
+  path, the dependency order AND the entry point's module have all moved. Fail-safe (the guard
+  degrades to an uncached run) but every `bench-history/` comparison is stale until this runs.
+  `cost_gate.py` has also not run since the split — this box has no `build/bench` profile.
+
 **Round MOD.4 (2026-08-07) — THE DAEMON IS ITS OWN MODULE AND SPEAKS KTOR.** Landed in two
 commits so a failure would be attributable: **4a** moved the server with the transport
 UNCHANGED, **4b** ported it. 13,940 green (core 13,889 + daemon 24 + api 27); totals were
@@ -152,7 +192,7 @@ daemon's whole reason for existing, visible on a toy project.
   **ordinary `main`** with stdout captured, so daemon output matches CLI output by
   construction rather than by testing. `--watch` stays refused (it would wedge the single
   request thread forever).
-- [ ] **(MOD.5) `-client`**, Kotlin/Native + JVM, depending on `-api` only — NOT on the
+- [x] **(MOD.5) `-client`**, Kotlin/Native + JVM, depending on `-api` only — NOT on the
   compiler. That edge is the whole point of the arc: it turns a ~100 MB GraalVM image into a
   few-hundred-KB K/N binary, and it lets native targets return for the one module that can
   afford them (CLAUDE.md keeps them off because Checker.kt costs ~7 min per link; a client

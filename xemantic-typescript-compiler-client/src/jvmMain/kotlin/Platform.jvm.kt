@@ -23,15 +23,27 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
-pluginManagement {
-    includeBuild("build-logic")
+package com.xemantic.typescript.compiler.client
+
+public actual fun readEnv(name: String): String? = System.getenv(name)
+
+public actual fun writeStderr(text: String) {
+    System.err.print(text)
+    System.err.flush()
 }
 
-rootProject.name = "xemantic-typescript-compiler"
-
-include(
-    "xemantic-typescript-compiler-api",
-    "xemantic-typescript-compiler-core",
-    "xemantic-typescript-compiler-daemon",
-    "xemantic-typescript-compiler-client"
-)
+/**
+ * The daemon must outlive this process, so its output goes to DISCARD rather
+ * than being inherited: a child holding an inherited pipe keeps the parent's
+ * stdout open, and a shell waiting on that pipe would hang after `xtsc` has
+ * already exited.
+ */
+public actual fun spawnDetached(command: List<String>): Boolean = try {
+    ProcessBuilder(command)
+        .redirectOutput(ProcessBuilder.Redirect.DISCARD)
+        .redirectError(ProcessBuilder.Redirect.DISCARD)
+        .start()
+    true
+} catch (_: Exception) {
+    false
+}

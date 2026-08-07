@@ -253,8 +253,21 @@ object CompileServer {
                         // NOT `launch { }` — see invariant 1. One connection is
                         // handled to completion before the next is accepted.
                         client.use { socket ->
+                            // A connection that delivers NO frame is a
+                            // reachability probe, not a failed request: that is
+                            // exactly what `isDaemonReachable` does, and the
+                            // client polls it every 25-500 ms while waiting for a
+                            // daemon it just spawned. Logging those as failures
+                            // fills the daemon's log with alarming lines
+                            // describing its own health check, so a probe is
+                            // recognised here and passed over in silence.
+                            val text = try {
+                                socket.openReadChannel().readFrame()
+                            } catch (_: Exception) {
+                                null
+                            }
+                            if (text == null) return@use
                             try {
-                                val text = socket.openReadChannel().readFrame()
                                 val request = xtscProtocolJson
                                     .decodeFromString<CompileRequest>(text)
                                 protocolProblem(request.protocolVersion)?.let {
