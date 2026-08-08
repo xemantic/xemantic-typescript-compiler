@@ -85,8 +85,20 @@ class NarrowableRootsPreTestTest {
         }
     }
 
+    /**
+     * ROUND 856 ABLATION: this pin is a REDUNDANT GUARD, and it is kept under a
+     * name that says so. Its subject `cond` is a `declare const`, i.e. a
+     * `VariableDeclaration`, which mints a `FlowAssignment` whose subtree
+     * contains the name — so `cond` is in the set through the ASSIGNMENT arm
+     * whether or not the condition arm exists, and arm A1 (drop
+     * `is FlowCondition ->`) left it GREEN. The pin that actually discriminates
+     * the condition arm is the imported-name one below, whose subject has no
+     * declaration in the file for the assignment arm to supply. This
+     * over-determination is not a defect in the pin — it is the round-855
+     * finding restated at the set level.
+     */
     @Test
-    fun `a name occurring in a condition is in the narrowable set`() {
+    fun `a condition subject is in the narrowable set - over-determined so it does NOT discriminate the FlowCondition arm`() {
         val roots = rootsOf(
             """
             declare const cond: unknown;
@@ -99,6 +111,14 @@ class NarrowableRootsPreTestTest {
         assert("cond" in roots)
     }
 
+    /**
+     * ROUND 856 ABLATION: green under all four arms, because none of them
+     * ablates the `FlowSwitchClause` / `FlowCall` arms this pin is about — its
+     * discrimination is UNTESTED rather than disproven. Arm A2 is indirect
+     * evidence in its favour: `sw` and `ac` are parameters, so with the
+     * assignment arm deleted the only remaining route into the set is the
+     * switch/call arms, and the pin held.
+     */
     @Test
     fun `a name occurring only in a switch expression or an assert call is in the set too`() {
         val roots = rootsOf(
@@ -226,6 +246,14 @@ class NarrowableRootsPreTestTest {
         assert(refused == 0L)
     }
 
+    /**
+     * ROUND 856 ABLATION: green under all four arms — a genuine soundness
+     * assertion that these arms cannot exhibit. Its subject `x` reaches the set
+     * through BOTH the assignment arm (`declare var x: any`) and the condition
+     * arm (`if (isError(x))`), so only dropping both at once could make it
+     * refuse — and a combined ablation cannot attribute (round 807). Recorded as
+     * undiscriminated rather than claimed as coverage.
+     */
     @Test
     fun `SOUNDNESS - an opening the flow DID narrow is never refused`() {
         val diagnostics = census(
@@ -250,8 +278,15 @@ class NarrowableRootsPreTestTest {
         assert(refusedAccepted == 0L)
     }
 
+    /**
+     * ROUND 856 ABLATION: reddened uniquely by arm A3 (`preNanos = 0L`) — but
+     * through its `preNanos > 0L` assertion, not through the honours-nothing
+     * half its old name advertised, so the name now states the span too. The
+     * walk-still-runs half is over-determined by the same-file pins above; the
+     * span half is this pin's own.
+     */
     @Test
-    fun `the probe HONOURS NOTHING - the walk still runs and the narrow still emits`() {
+    fun `the probe HONOURS NOTHING and TIMES ITSELF - the walk runs the narrow emits and the pre-test span is recorded`() {
         // A gate would have skipped the walk. The probe may only RECORD, which is
         // what makes the yield comparable to round 854's population — and what
         // makes the profile's 46 diagnostics identical to a production run's.
@@ -274,6 +309,12 @@ class NarrowableRootsPreTestTest {
         assert(preNanos > 0L)
     }
 
+    /**
+     * ROUND 856 ABLATION: green under all four arms by construction — none of
+     * them touches the `PassTiming.enabled` gate on the consumer's counters,
+     * which is what this control watches. Untested by this harness; its twin
+     * above (the graph carrying no inventory) is the one arm A4 reddens.
+     */
     @Test
     fun `negative control - a disabled run records no pre-test at all`() {
         PassTiming.reset()
