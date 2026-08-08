@@ -136323,12 +136323,26 @@ interface DataView {
     private fun cmamNarrowedAnyReceiverType(objectExpr: Expression, rawType: Type): Type? {
         if (rawType !== anyType) return null
         if (currentFlowGraph == null) return null
+        // (NARROW.2)(e) round 854 — the opening's own price, taken here rather
+        // than by differencing two builds' `narrowWalks` row (that column swings
+        // 6-9% between runs of ONE binary, which is larger than the object).
+        // Inert off `--passTiming`; see [PassTiming.cmamAnyOpenings].
+        val probeT0 = if (PassTiming.detailed) PassTiming.nowNanos() else 0L
+        val probeW0 = if (PassTiming.detailed) PassTiming.narrowWalkNanos else 0L
         val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
+        if (PassTiming.detailed) {
+            PassTiming.noteCmamAnyOpening(
+                PassTiming.nowNanos() - probeT0,
+                PassTiming.narrowWalkNanos - probeW0,
+                narrowed !== rawType,
+            )
+        }
         if (narrowed === rawType) return null
         if (narrowed !is Type.Object) return null
         if (narrowed is Type.Reference) return null
         if (isGlobalObjectOrFunctionType(narrowed)) return null
         if (isEnumFlavoredObjectType(narrowed)) return null
+        if (PassTiming.detailed) PassTiming.cmamAnyAccepted++
         return narrowed
     }
 

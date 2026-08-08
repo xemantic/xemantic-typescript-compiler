@@ -20,6 +20,73 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 854 (2026-08-08) — (NARROW.2)(e) CLOSED AS OUTCOME (c): ROUND 852's +79% NARROWING WALKS
+ARE **1.91% OF A WARM REBUILD** AND **A QUARTER OF ALL NARROWING WORK IN THE COMPILER**, AND
+**85.6% OF IT IS SPENT ON `any` RECEIVERS THE FLOW NEVER NARROWS.** The first priced POSITIVE
+after six consecutive priced negatives — and the round deliberately stops at the measurement, with
+the implementation queued as (NARROW.2)(f) carrying a CEILING rather than a promise.**
+
+**WHY THE OBVIOUS INSTRUMENT WAS ABANDONED IN THE FIRST TEN MINUTES.** The queue said to difference
+`--passTiming`'s `narrowWalk` row between an ablated build and HEAD. That row reads **1,423 /
+1,460 / 1,602 ms across three runs of the SAME binary** (±6–9%, i.e. ±90–150 ms), which is the same
+order as the object being weighed — so an arm difference would have been noise dressed as an
+answer, and one rebuild per arm would have been spent finding that out. The span was taken **where
+the cost is incurred** instead: one timestamp pair around `cmamNarrowedAnyReceiverType`'s call to
+`getNarrowedTypeForReference`, plus the delta of `narrowWalkNanos` across the same call (the walk
+body ALONE, excluding the tier-3 shadow bookkeeping that exists only under the probe), plus the
+produced-vs-consumed counts round 801 demands *before* any timing is read as a prize.
+
+**THE POPULATION — deterministic, bit-identical across all six instrumented runs:**
+`openings=14117  narrowed=1345 (9.5%)  accepted=1051 (7.4%)`. **`openings` matches round 853's
+`+14,110` walk delta**, so the ablation-attributed counter and this census are one population
+measured two ways — the cross-check that makes the rest of the round quotable. On this profile
+those 1,051 accepted receivers emit **nothing** (round 852's grid is 0/0, byte-verified by 853);
+what they buy is the conformance result, which this profile does not contain.
+
+**THE PRICE.** Cold (3 reps): `span` **435 ms**, `walkOnly` **381 ms**, against a whole
+`narrowWalks` row of **1,451 ms** — the opening is **26.3% of every narrowing walk the compiler
+performs**, and that RATIO (26.3 / 26.7 / 25.9%) is far steadier than either absolute, which is how
+it should be quoted. Warm, the shipping artifact's regime (round 843), `BenchMain <proj> 2 5 full`,
+probe-free median rebuild **7,664 ms**, every iteration 78 files / 46 errors: `walkOnly` **146 ms =
+1.91%**, `span` 185 ms = 2.41%, and the opening is **24.5% of warm narrowing** against 26.3% cold.
+Two regimes, one answer — including the wasted share, **85.6% warm vs 85.4% cold**.
+
+**THE VERDICT IS (c), AND THE TWO STANDING LAWS BOTH HAD TO BE CHECKED RATHER THAN CITED.**
+(1) **Round 788 does not rescue it:** `narrow.memoServed` moved **42,766 → 42,867, i.e. +101**, for
++14,110 launched walks — nobody else was going to ask, so the work is ADDED and deleting it deletes
+it rather than deferring it to the next asker. (2) **Round 759's law runs the OTHER way here.**
+"What you could skip cheaply is what was already cheap" holds only when the exit predicate and the
+cost share a cause; here the predicate is *did the flow narrow* and the cost is *how far the walk
+traversed*, and the **90.5% that answer `any` carry 85.4% of the cost**. Count share and cost share
+coincide for once — that is exactly the assumption that cost rounds 758 and 759 their predictions,
+in the opposite direction, so it was measured.
+
+**WHAT WAS DELIBERATELY NOT DONE, AND WHY IT IS NOT THE RECON-ONLY FAILURE.** No pre-test was
+built. The prize is a **CEILING of 1.63% warm** — what a *perfect* oracle returns — while the
+concrete design (a per-file set of root names reachable by any narrowing flow node) is **coarser**:
+a root narrowed *somewhere* in the file but not on *this* path still walks, and nothing measured
+today says what fraction of the 12,772 it would actually refuse. Against a ±1.0% warm band that
+gap decides the whole item, and it is answerable by a probe that HONOURS NOTHING (the round-792/793
+`--cmamPreGate` shape) for one build. Landing a real gate on this function without that number
+would also be walking into round 792's law head-first: a whole-function pre-gate on
+`checkMemberAccessMissing` measured **0 emitting calls in a 22,187-call skip set on this very
+profile** and still killed **7 corpus baselines**. (f) carries the census instruction, the
+soundness argument, the ~70% go/no-go threshold and the memo re-check.
+
+**WHAT LANDED:** `PassTiming.cmamAny*` (a `detailed`-gated span + walk-only sub-span + the three
+counts, printed by `--passTiming`), `scripts/round854-narrow-price.sh` (committed BEFORE anything
+else, round 789), `NarrowedAnyCensusTest` (4 pins: the accepted population, the REFUSED population
+— which is invisible in the compiler's output and is the whole point — the span's partition
+checks, and a disabled-run negative control), and
+`docs/perf/narrowed-any-opening-price.md`.
+
+**GATES.** Suite **14,020 / 0 failures / 3 skipped** (14,016 + the 4 new pins). `cost_gate.py`
+**all 20 counters +0.00%** — and this is now a FALSIFIABLE zero, since round 853 wired the gate to
+the real binary; the census is counter-neutral by construction (`detailed`-gated). `huge_methods.py
+--fail-over 0` **exit 0**, census 649 classes / 14,547 methods / **0 over the limit**. No 8-profile
+grid: nothing in this round can change a diagnostic, and manufacturing captures to "check" that
+would be the recon-only failure in a different costume (round 853's own rule).
+
 **Round 853 (2026-08-08) — RECORD INTEGRITY. THE GRID's BLAST RADIUS IS *ONE* CLAIM AND IT STANDS;
 THE DIGEST THAT LOOKED LIKE THE SMOKING GUN IS A FOURTH RECIPE LINEAGE — BUT AUDITING THE *OTHER*
 INSTRUMENTS FOUND THE SAME STALE BINARY INSIDE `cost_gate.py`, WHICH MEANS THE COST GATE HAS BEEN
@@ -2051,7 +2118,23 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   of magnitude larger, on the same "launch the walk to find out whether a narrow happened"
   mechanism. Run `cost_gate.py` on the PROTOTYPE, before the pins and before the grid.
 
-- [ ] **(NARROW.2)(e) — PRICE (NARROW.2)(c)'s +79% NARROWING WALKS IN WALL TIME, AND DECIDE
+- [x] **(NARROW.2)(e) — CLOSED ROUND 854 AS OUTCOME (c), REAL AND AVOIDABLE, WITH THE PRIZE
+  MEASURED AND CAPPED: the opening costs `walkOnly` **146 ms = 1.91% of a 7,664 ms warm rebuild**
+  (cold 381 ms) and is **26.3% of every narrowing walk the compiler performs** — and **85.6% of
+  that is spent on `any` receivers the flow never narrows** (12,772 of 14,117 openings, **125 ms
+  warm = 1.63%**), which by construction cannot produce a diagnostic.** Census (deterministic,
+  bit-identical over six runs): `openings=14117 narrowed=1345 (9.5%) accepted=1051 (7.4%)` —
+  and `openings` matches round 853's `+14,110` walk delta, so the two instruments measure one
+  population. **Round 788's law does NOT rescue it**: `narrow.memoServed` moved only
+  42,766 → 42,867 (+101) for +14,110 walks, so the work is ADDED, not moved, and deleting it
+  deletes it. **Round 759's law runs the OTHER way here and had to be measured, not assumed**:
+  the 90.5% that answer `any` carry 85.4% of the cost, because the predicate reads *did the flow
+  narrow* while the cost is *how far the walk traversed*. The instrument is
+  `PassTiming.cmamAny*` (a `detailed`-gated span + the produced-vs-consumed counts, printed by
+  `--passTiming`), pinned by `NarrowedAnyCensusTest`; full tables in
+  `docs/perf/narrowed-any-opening-price.md`. Implementation queued as **(NARROW.2)(f)** — and
+  note the ceiling caveat there before building anything. Original framing follows.
+  **PRICE (NARROW.2)(c)'s +79% NARROWING WALKS IN WALL TIME, AND DECIDE
   WHETHER THE OPENING CAN BE CHEAPENED. Round 853 opened this; nobody has yet spent a wall-clock
   measurement on it.** The counters (round 853, correctly-wired gate, ablation-attributed to
   round 852's `Checker.kt` hunk alone): `narrow.walks` **17,851 → 31,961 (+79.04%)**,
@@ -2064,6 +2147,34 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   anything further is warranted; only then consider narrowing the opening (e.g. a cheaper
   pre-test than launching a walk to discover a narrow happened). **Do not revert (c) for this** —
   it closed two conformance cases with a 0/0 grid and a clean corpus.
+
+- [ ] **(NARROW.2)(f) — REFUSE THE `any` RECEIVERS THE FLOW WAS NEVER GOING TO NARROW, WITHOUT
+  LAUNCHING A WALK TO FIND OUT. Round 854 measured the prize and it is a CEILING of 1.63% of a
+  warm rebuild — census the pre-test BEFORE implementing it, or this is a noise-band change with
+  FP risk attached.** The object: `cmamNarrowedAnyReceiverType` calls
+  `getNarrowedTypeForReference` **14,117** times per compiler-profile compile; **12,772 (90.5%)**
+  come back with the declared `any` and carry **85.4% of the cost** (325 ms cold / 125 ms warm).
+  **THE CANDIDATE PREDICATE:** a per-FILE set of the identifier texts occurring in every narrowing
+  flow node's expression — `FlowCondition.expression`, `FlowAssignment.node`, `FlowCall.node`,
+  `FlowSwitchClause.switchStatement.expression`, `FlowArrayMutation.node` — computed once in
+  `FlowGraph`'s `init` (which already walks the tree for `flowById`) and consulted as
+  `flowPathRoot(path) in currentFlowGraph.narrowableRoots` before the walk.
+  **SOUNDNESS:** `narrowTypeFromFlow` matches a dotted PATH against those expressions and the
+  path's ROOT is an `Identifier` that must occur in one of them, so a name in none of them cannot
+  be narrowed by any of them; collecting every identifier text is a conservative superset, and a
+  per-FILE set also covers `FlowStart.outerFlow` (a closure reading its enclosing scope's narrow).
+  **THE THING THAT DECIDES WHETHER TO BUILD IT, AND IT IS CHEAP:** the predicate is COARSER than
+  the oracle — a root narrowed *somewhere* in the file but not on *this* path still walks — so
+  land it FIRST as a probe that HONOURS NOTHING (the `--cmamPreGate` / `--ccetPreGate` shape,
+  rounds 792/793) and count how many of the 12,772 it refuses and how much of the 325/125 ms sits
+  behind them. **Half of them lands at ~0.8% warm, i.e. inside the ±1.0% band — do not build the
+  real gate on a probe reading below ~70%.** Round 792's law applies to the gate itself when it
+  does land: a whole-function pre-gate on THIS function measured 0 emitting calls in a 22,187-call
+  skip set on this very profile and still killed 7 corpus baselines, so the corpus is the
+  instrument, not the grid. **And re-check `narrow.memoServed` after the gate**: it moved only
+  +101 for +14,110 walks today (so the work is genuinely deletable), but a gate that skips a walk
+  whose memo entry a LATER asker would have been served by converts a deletion into a move
+  (round 788).
 
 - [x] **(NATIVE.1) FIXED ROUND 827 — the native `runWithDeepStack` actual now runs the
   pipeline on a 256 MB pthread instead of the default 8 MB main stack (a 32x margin), with

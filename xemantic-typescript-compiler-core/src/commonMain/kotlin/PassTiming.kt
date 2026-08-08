@@ -393,6 +393,13 @@ object PassTiming {
         narrowWalkHugeVisits = 0
         narrowWalkHugeVisitsMax = 0
         narrowWalkAllVisits = 0
+        cmamAnyOpenings = 0
+        cmamAnyNanos = 0
+        cmamAnyNarrowed = 0
+        cmamAnyAccepted = 0
+        cmamAnyNanosNarrowed = 0
+        cmamAnyWalkNanos = 0
+        cmamAnyWalkNanosNarrowed = 0
         diagnosticsSize = null
         diagsByPass.clear()
         nodeKindHistogram.clear()
@@ -497,6 +504,84 @@ object PassTiming {
         if (b == 3) {
             val k = "k$kind${if (tripped) "-TRIP" else ""}"
             narrowWalkHugeByKind[k] = (narrowWalkHugeByKind[k] ?: 0L) + 1
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // (NARROW.2)(e) round 854 — the price of round 852's narrowed-`any`
+    // receiver opening, measured IN SITU.
+    //
+    // Round 853 attributed `narrow.walks` 17,851 -> 31,961 (+79.04%) to that one
+    // opening by ablation, and a COUNT is not a COST (round 801). The obvious
+    // instrument — difference `narrowWalks=<ms>` between an ablated build and
+    // HEAD — cannot answer it: that column reads 1,423 / 1,460 / 1,602 ms across
+    // three runs of the SAME binary (+-6-9%), which is larger than the object.
+    // So the span is taken where the cost is incurred instead: one timestamp
+    // pair around `cmamNarrowedAnyReceiverType`'s call to
+    // `getNarrowedTypeForReference`, which is the whole of what the opening
+    // added. That is ~14 k pairs at ~86 ns (round 734's differential figure),
+    // i.e. ~1 ms of self-cost against the hundreds it is measuring.
+    //
+    // The three counters are the produced-vs-consumed ratio round 801 demands
+    // BEFORE any timing is read as a prize: how often the opening runs, how
+    // often the flow answered something different from `any`, and how often the
+    // result survived every refusal and became a receiver type.
+    // -----------------------------------------------------------------------
+
+    /** Calls to `cmamNarrowedAnyReceiverType` that reached the flow read — i.e.
+     *  an `any`-typed receiver in a file with a flow graph. The population the
+     *  opening pays for. */
+    var cmamAnyOpenings: Long = 0
+
+    /** Nanos spent inside those `getNarrowedTypeForReference` calls, INCLUSIVE
+     *  of the memo consult and of any walk they launched. This is the number a
+     *  perfect pre-test would return. */
+    var cmamAnyNanos: Long = 0
+
+    /** Of [cmamAnyOpenings], those where the flow answered something OTHER than
+     *  the declared `any` — the PRODUCED side. */
+    var cmamAnyNarrowed: Long = 0
+
+    /** Of [cmamAnyNarrowed], those that survived every refusal below it and
+     *  became the receiver type — the CONSUMED side. A wide gap between this
+     *  and [cmamAnyOpenings] is what makes a cheaper pre-test worth designing. */
+    var cmamAnyAccepted: Long = 0
+
+    /**
+     * [cmamAnyNanos] restricted to the openings that DID narrow.
+     *
+     * The split, not the total, is what a pre-test is worth: a gate that refuses
+     * the receivers the flow was never going to narrow can only ever return
+     * `cmamAnyNanos - cmamAnyNanosNarrowed`, and a population being 92% of the
+     * COUNT says nothing about its share of the COST (round 759 — the cheap-tail
+     * law runs BOTH ways, and assuming the direction cost two rounds their
+     * predictions).
+     */
+    var cmamAnyNanosNarrowed: Long = 0
+
+    /**
+     * The same span measured as the delta of [narrowWalkNanos] — i.e. the WALK
+     * ONLY, excluding the tier-3 shadow-memo bookkeeping (`walkShadow.put`, the
+     * union-id sort, `depKeyedShadowClassify`, the bucket hooks) that sits
+     * inside [cmamAnyNanos] but does not exist in a production run.
+     *
+     * [cmamAnyNanos] is therefore an UPPER bound on the production cost and this
+     * is the representative one; quoting the first as the price would repeat
+     * round 734's over-read of a probe boundary in a new costume.
+     */
+    var cmamAnyWalkNanos: Long = 0
+
+    /** [cmamAnyWalkNanos] restricted to the openings that DID narrow. */
+    var cmamAnyWalkNanosNarrowed: Long = 0
+
+    fun noteCmamAnyOpening(nanos: Long, walkNanos: Long, narrowed: Boolean) {
+        cmamAnyOpenings++
+        cmamAnyNanos += nanos
+        cmamAnyWalkNanos += walkNanos
+        if (narrowed) {
+            cmamAnyNarrowed++
+            cmamAnyNanosNarrowed += nanos
+            cmamAnyWalkNanosNarrowed += walkNanos
         }
     }
 
@@ -988,6 +1073,12 @@ object PassTiming {
                 "max=$narrowWalkHugeVisitsMax\n" +
             "narrowWalk tripped: $narrowWalkTripped walks, ${narrowWalkTrippedNanos / 1_000_000}ms; " +
                 ">=1ms by kind: ${topCounts(narrowWalkHugeByKind, 10)}\n" +
+            "cmamNarrowedAny (NARROW.2)(e): openings=$cmamAnyOpenings " +
+                "narrowed=$cmamAnyNarrowed accepted=$cmamAnyAccepted " +
+                "span=${cmamAnyNanos / 1_000_000}ms (of which narrowed " +
+                "${cmamAnyNanosNarrowed / 1_000_000}ms) walkOnly=" +
+                "${cmamAnyWalkNanos / 1_000_000}ms (of which narrowed " +
+                "${cmamAnyWalkNanosNarrowed / 1_000_000}ms)\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "exprMemo would-save: ${exprSavableNanos / 1_000_000}ms over $exprSavableCalls outermost served calls\n" +
