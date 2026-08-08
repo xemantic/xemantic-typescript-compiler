@@ -38,6 +38,7 @@ import com.xemantic.typescript.compiler.ArgSections
 import com.xemantic.typescript.compiler.CallSections
 import com.xemantic.typescript.compiler.CpaSections
 import com.xemantic.typescript.compiler.CtaSections
+import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
@@ -135,6 +136,16 @@ internal val TIERS = listOf(
     // `arg` does not reach (callee resolution, overload selection, the round-793
     // prologue).
     "call", "callcoarse",
+    // (WARM.6) round 859 — the FRONT END, which is 11.1% of the warm artifact
+    // and whose only attribution (`docs/perf/front-end-attribution.md`, round
+    // 738; its bind level, round 801) was taken COLD. The `rows` tier prices the
+    // front end only as a RESIDUAL (wall - checker-init); `FrontEnd` is the
+    // instrument that splits it into config / crawl / parse / imports / bind and
+    // bind into its three components. It has no `*coarse` twin and needs none:
+    // its spans are per-FILE (78 files, ~20 pairs each) rather than per-node, so
+    // its boundary cost is microseconds against a ~900 ms region — round 738
+    // stated that and it is regime-independent.
+    "frontend",
 )
 
 /**
@@ -160,6 +171,7 @@ internal fun tierBegin(tier: String) {
         "call" -> { CallSections.reset(); CallSections.mode = CallSections.ON }
         "callcoarse" -> { CallSections.reset(); CallSections.mode = CallSections.COARSE }
         "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
+        "frontend" -> { FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON }
         else -> {
             PassTiming.detail = tier == "full"
             PassTiming.spineDetail = tier != "rows"
@@ -183,6 +195,8 @@ internal fun tierReport(tier: String): String = when (tier) {
     "call", "callcoarse" ->
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
+    "frontend" ->
+        FrontEnd.report() + "\n== (FRONT.1) csv ==\n" + FrontEnd.csv() + "== (FRONT.1) csv end =="
     // The pass probe is disarmed BEFORE its dump, exactly as it was pre-851 —
     // only the section probes need to stay armed through their report, and only
     // because each labels its arm from its own `mode`.
@@ -216,6 +230,8 @@ internal fun tierStop() {
     ArgSections.mode = ArgSections.OFF
     CallSections.mode = CallSections.OFF
     LibTypeCensus.enabled = false
+    FrontEnd.mode = FrontEnd.OFF
+    FrontEnd.reset()
     SpineDispatch.reset()
     CtaSections.reset()
     CpaSections.reset()
