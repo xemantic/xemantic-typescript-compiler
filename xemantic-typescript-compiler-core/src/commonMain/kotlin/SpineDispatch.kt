@@ -4083,7 +4083,20 @@ object FrontEnd {
     /** The emit-order sort, orphan detection and output/source-echo assembly. INSIDE [POST]. */
     const val POST_OUTPUTS = 23
 
-    const val N = 24
+    // ---- (WARM.8) level 2 — [POST_OUTPUTS] carries 98% of the region, so it is
+    // split again. These four abut across it, same construction, same partition
+    // check.
+
+    /** `hasCycle` + the companion-`.d.ts` filter that build the sort's dep map. INSIDE [POST_OUTPUTS]. */
+    const val POST_DEPS = 24
+    /** `topologicalSort` over the program's files. INSIDE [POST_OUTPUTS]. */
+    const val POST_TOPO = 25
+    /** `cpcRequireOnlyOrphans`. INSIDE [POST_OUTPUTS]. */
+    const val POST_ORPHANS = 26
+    /** JS-output selection, outFile concatenation and source-echo ordering. INSIDE [POST_OUTPUTS]. */
+    const val POST_ASSEMBLE = 27
+
+    const val N = 28
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4110,6 +4123,10 @@ object FrontEnd {
         "  of which collectCrossFileNamespaceExports",
         "  of which emit prep + transform/emit call",
         "  of which output assembly + sorting",
+        "    of which hasCycle + companion-dts deps",
+        "    of which topologicalSort",
+        "    of which cpcRequireOnlyOrphans",
+        "    of which output selection + echo order",
     )
 
     /**
@@ -4121,6 +4138,7 @@ object FrontEnd {
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         TRANSFORM, EMIT, DECL_EMIT,
     )
 
@@ -4280,6 +4298,13 @@ object FrontEnd {
             appendLine(
                 "  post-checker residue (post - its four blocks): " +
                     "${(nanos[POST] - sub) / 1_000_000} ms of ${nanos[POST] / 1_000_000} ms"
+            )
+            val sub2 = nanos[POST_DEPS] + nanos[POST_TOPO] +
+                nanos[POST_ORPHANS] + nanos[POST_ASSEMBLE]
+            appendLine(
+                "  output-block residue (outputs - its four): " +
+                    "${(nanos[POST_OUTPUTS] - sub2) / 1_000_000} ms of " +
+                    "${nanos[POST_OUTPUTS] / 1_000_000} ms"
             )
         }
         val frontEnd = nanos[CONFIG] + nanos[CRAWL] + nanos[PARSE] + nanos[IMPORTS] + nanos[BIND]

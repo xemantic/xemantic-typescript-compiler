@@ -1480,6 +1480,9 @@ class TypeScriptCompiler {
         )
         FrontEnd.close(FrontEnd.POST_EMITPREP, fePostBlockT0)
         fePostBlockT0 = FrontEnd.t()
+        // (WARM.8) level 2 — the same abutting construction one level down; this
+        // block carries 98% of [FrontEnd.POST].
+        var feOutBlockT0 = FrontEnd.t()
 
         // Sort JS outputs by dependency order (dependencies first)
         // Skip sorting when noResolve is set (TypeScript doesn't resolve imports in that mode)
@@ -1514,13 +1517,19 @@ class TypeScriptCompiler {
         } else emptySet()
         val depsForSort = if (companionDtsJsFiles.isEmpty()) depsForSortRaw
             else depsForSortRaw.mapValues { (_, v) -> v.filter { it !in companionDtsJsFiles } }
+        FrontEnd.close(FrontEnd.POST_DEPS, feOutBlockT0)
+        feOutBlockT0 = FrontEnd.t()
         val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
+        FrontEnd.close(FrontEnd.POST_TOPO, feOutBlockT0)
+        feOutBlockT0 = FrontEnd.t()
         val requireOnlyOrphans = cpcRequireOnlyOrphans(
             parsed = parsed,
             tsFileNames = tsFileNames,
             importDeps = importDeps,
             parsedSourceFiles = parsedSourceFiles,
         )
+        FrontEnd.close(FrontEnd.POST_ORPHANS, feOutBlockT0)
+        feOutBlockT0 = FrontEnd.t()
         val jsOutputs = sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }
 
         val finalJsOutputs = run {
@@ -1587,6 +1596,7 @@ class TypeScriptCompiler {
             }
             outside + nodeModulesFiles + inTreeProjectJson + inTreeProjectNonJson
         } else sourceEchoes
+        FrontEnd.close(FrontEnd.POST_ASSEMBLE, feOutBlockT0)
         FrontEnd.close(FrontEnd.POST_OUTPUTS, fePostBlockT0)
         FrontEnd.close(FrontEnd.POST, fePostT0)
         return CompilationResult(

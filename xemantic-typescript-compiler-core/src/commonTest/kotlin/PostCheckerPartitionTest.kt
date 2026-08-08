@@ -141,6 +141,29 @@ class PostCheckerPartitionTest {
     }
 
     /**
+     * LEVEL 2 — [FrontEnd.POST_OUTPUTS] carries 98% of the region, so it is
+     * split again, and its four blocks abut across it exactly as level 1's do
+     * across [FrontEnd.POST]. Same failure mode, same instrument, one level
+     * down.
+     */
+    @Test
+    fun `the output block is itself partitioned into four`() = withProbe {
+        build()
+        val outputs = FrontEnd.nanos[FrontEnd.POST_OUTPUTS]
+        val sum = FrontEnd.nanos[FrontEnd.POST_DEPS] + FrontEnd.nanos[FrontEnd.POST_TOPO] +
+            FrontEnd.nanos[FrontEnd.POST_ORPHANS] + FrontEnd.nanos[FrontEnd.POST_ASSEMBLE]
+        assert(FrontEnd.calls[FrontEnd.POST_DEPS] == 1L)
+        assert(FrontEnd.calls[FrontEnd.POST_TOPO] == 1L)
+        assert(FrontEnd.calls[FrontEnd.POST_ORPHANS] == 1L)
+        assert(FrontEnd.calls[FrontEnd.POST_ASSEMBLE] == 1L)
+        assert(outputs > 0L)
+        assert(sum > 0L)
+        assert(sum <= outputs)
+        val residue = outputs - sum
+        assert(residue * 4 < outputs)
+    }
+
+    /**
      * NEGATIVE CONTROL — the probe is behaviour-free, so the same project must
      * answer identically with it off. Round 859's `frontend` tier and every row
      * above depend on this and nothing else asserts it for [FrontEnd.POST].
