@@ -26,13 +26,13 @@ ALL.** The first optimizing round of the warm arc, executing round 859's own rec
 `docs/perf/warm-tail-attribution.md` § 10 is the permanent record, appended to the document that
 priced the candidate so that predicted and actual sit together.
 
-- **WHAT LANDED, IN TWO INDEPENDENTLY GATED COMMITS.** **(a) `2b92bcaf`** — both
+- **WHAT LANDED, IN TWO INDEPENDENTLY GATED COMMITS.** **(a) `5462fa75`** — both
   `checkUmdGlobalVsDeclareGlobalConst` and `checkCrossFileModuleAugmentationDuplicates` read one
   per-FILE memo (`Checker.umdExportAsNamespaceOccurrences`) instead of each compiling and running
   its own `(?m)^[ \t]*export[ \t]+as[ \t]+namespace…` over the full text of every checked file.
   The shared value is the NARROWEST thing both consume — the group-1 identifier and its offset —
   and it is a pure function of the file text, consulting no ambient state, so it cannot be the
-  program-ORDER dependency of rounds 754/776/778. **(b) `a05aa412`** — the matcher itself is
+  program-ORDER dependency of rounds 754/776/778. **(b) `c9b693cd`** — the matcher itself is
   replaced by a hand-written EXACT equivalent, anchored on the literal `namespace` via
   `String.indexOf` (494 occurrences in 9,977,097 characters, so one linear sweep plus 494
   constant-time rejections).
@@ -1121,7 +1121,7 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   arm sds are 1.55-1.85%, i.e. above CLAUDE.md's ~1% discard threshold; the ROWS are the evidence.
   Gates per sub-step: suite 14,049 then 14,051 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on all
   20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit, 8-profile grid
-  added=0 removed=0 on every profile both times. Commits `2b92bcaf`, `a05aa412`.
+  added=0 removed=0 on every profile both times. Commits `5462fa75`, `c9b693cd`.
   `docs/perf/warm-tail-attribution.md` § 10.
 
 - [ ] **(WARM.8) — THE POST-CHECKER TAILS: 143.2 ms = 1.90% of the warm artifact, warming 1.27× —

@@ -511,11 +511,11 @@ the second half needed no gate at all.*
 
 ### 10.1 What landed
 
-* **(a) the dedup** (`2b92bcaf`). Both passes read
+* **(a) the dedup** (`5462fa75`). Both passes read
   `scanUmdExportAsNamespace` through `Checker.umdExportAsNamespaceOccurrences`,
   a per-FILE memo whose value is a pure function of the file text — no ambient
   state, so it cannot be the program-ORDER dependency of rounds 754/776/778.
-* **(b) the matcher** (`a05aa412`). The `java.util.regex` scan is replaced by a
+* **(b) the matcher** (`c9b693cd`). The `java.util.regex` scan is replaced by a
   hand-written EXACT equivalent anchored on the literal `namespace` via
   `String.indexOf`. **No gate was added, and § 7's `.d.ts` gate was declined on
   its own terms**: it is a claim about where the construct may legally appear,
