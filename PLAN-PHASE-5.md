@@ -20,6 +20,93 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 848 (2026-08-08) — (SERVE.1) CLOSED: THE ARGUMENT LOOP NO LONGER LEAKS MODES ACROSS
+SERVER REQUESTS — AND THE QUEUE ENTRY'S "SEVERAL OF THESE CHANGE WHAT THE COMPILER DECIDES" IS
+NOW MEASURED RATHER THAN ASSERTED, WITH A DIFFERENT ANSWER THAN EXPECTED.**
+
+**What landed.** `runCli` now wraps its whole body in `try { … } finally { modes.restore() }`, where
+`modes` is a `ModeLedger` (`DebugModes.kt`): `modes.set(Obj::field, value)` records the value the
+field HELD and restores exactly that. The argument loop is extracted as `parseCliArgs` (drivable
+without compiling — which is what makes the mechanism pin possible), `printUsage` as `usageText`
+(the flag registry the pin sweeps), and the ad-hoc round-843 restore block plus the ten
+per-report `mode = OFF` clears are DELETED, subsumed by the ledger. `PartitionCheck.reportLines`
+is an accumulating `val` list, so the ledger cannot own it; it is cleared explicitly right after
+being printed.
+
+**A ledger, not a checklist, and that was the point.** The queue named six unrestored flags.
+Auditing the read sites found **eight more**, two of which nobody had ever listed:
+`SpineDispatch.mode == GATED` (only `PROBE` was cleared — `GATED` replaces the spine walk with the
+derived per-kind handler table) and `CallSections.preGateProbe`/`preGateBogus` (forces the call
+prologue to run for EVERY call, i.e. skips the round-793 pre-gate's refusal). Also unrestored:
+`CpaSections.preGateProbe`/`preGateBogus`, which skips the round-792 suppression `return` outright.
+That is the whole argument for a mechanism: a hand-kept restore list had already gone stale twice,
+and `CliModeRestoreTest` covers the fifteenth flag by construction.
+
+**THE MEASUREMENT, and it does NOT confirm the queue entry.** 14 arms run against the compiler
+profile (`--noEmit --listAll`, `grep 'error TS' | sort`, project prefix `sed`-stripped): every one
+is **byte-identical to baseline at 46 lines, md5 `4090b73e`, added=0 removed=0** —
+`--flowScanLegacy`, `--flowScanBogus`, `--flowEagerSet`, `--argNarrowGateOff`, `--dispatchGated`,
+`--ianyGateOff`, `--ianyArgGateOff`, `--cmamPreGate`, `--ccetPreGate`, `--verifyDeferSuppression`,
+`--verifyUnionRetry`, `--verifyLoopRetry`, `--verifyImplRelated`, `--workers 4`. **Including
+`--flowScanBogus`, which exists to CORRUPT the fast scanner** — so the profile is not an instrument
+for this question at all, and round 753's law applies in full. Escalating to the corpus:
+`FlowScan.bogus` defaulted TRUE, whole core suite, **13,902 tests → exactly 1 failure, and it is
+`FlowScanEquivalenceTest`** — the dedicated pin. Every one of the ~13,900 baselines is green with
+a deliberately corrupted scanner.
+
+**So the honest classification is three-way, not two-way:**
+- **Measured-visible leak (1):** `PartitionCheck.reportLines` — re-printed by every later request
+  on the daemon, the only one of the fifteen observable in the RESPONSE TEXT. Plus round 843's
+  instrumentation half, whose leak is a measured COST (round 733: `--passTiming` alone moves
+  `checkSpine` +29 ms; `--globalsAmp` re-reads every globals lookup N times).
+- **Provably decision-altering by CONSTRUCTION, with no discriminating shape known to either
+  instrument (11):** `FlowScan.legacy`/`bogus`, `ArgNarrowGate.mode`, `IanySections.gateOff`/
+  `armGateOff`/`argGateOff`, `SpineDispatch.mode == GATED`, `CpaSections.verifyLoopRetry`/
+  `verifyUnionRetry`/`verifyDeferSuppression`/`preGateProbe`, `CallSections.verifyImplRelated`/
+  `preGateProbe`. Reading the sites settles that they are not no-ops — `--cmamPreGate` skips a
+  `return`, `--verifyDeferSuppression` honours the eager verdict instead of the deferred one,
+  `--argNarrowGateOff` restores the pre-796 narrowing — but they were BUILT as equivalence
+  baselines ("this run reproduces the pre-change binary"), so agreeing on every measured shape is
+  what they were designed to do. Round 792's law is what keeps this from being a licence:
+  **a green corpus and a green profile bound a hazard's frequency, never its existence.**
+- **Resource / threading (3):** `ParallelCheckMode.workers` (round 826: peak RSS 808 → 2,234 MB,
+  CPU 98 → 103 s at w4, and output LINE ORDER may differ), `PartitionCheck.workers` (N extra
+  sequential checkers per request), `FlowScan.eagerSet`. The corpus cannot see any of these by
+  construction. **`--workers` was NOT re-validated here** — round 825 fixed the race and round 826
+  re-took the scaling on 72 runs; this round only ensures a request that sets it does not leave it
+  set, which is a strictly weaker and cheaper claim.
+
+**Pins, and the one-mistake-at-a-time ablation that decided each (harness committed FIRST, round
+789).** `ModeLedgerTest` (4, commonTest — the fixture's defaults are deliberately `true`/`7`/
+`"production"`, so a restore-to-default implementation fails its first case and nothing else
+would); `CliModeRestoreTest` (2, core jvmTest — drives every documented flag through
+`parseCliArgs`, then asserts by JVM reflection over every declared non-final field of all 16 mode
+objects that the restore put every one back; non-vacuous three ways: `ledger.pending > 20`, >20
+fields observably moved, and every name in `BEHAVIOUR_CHANGING` is among those that moved);
+`CompileServerModeLeakTest` (2, daemon jvmTest — end to end through `CompileServer.respondTo`,
+reading the flag OBJECTS, plus the `reportLines` text assertion).
+
+| ablation (one at a time) | result |
+| --- | --- |
+| A1 `FlowScan.legacy = true` written bare in the parse loop | `CliModeRestoreTest` FAILS, naming `FlowScan.legacy: false -> true`; `CompileServerModeLeakTest` FAILS; `ModeLedgerTest` and `CompileServerPassTimingTest` stay GREEN |
+| A2 drop `PartitionCheck.reportLines.clear()` | ONLY `CompileServerModeLeakTest`'s partition-check case fails — and on the OUTPUT text |
+| A3 `restore()` iterates forward instead of reversed | `ModeLedgerTest`'s LIFO case + the sweep fail; the other three ledger cases green |
+| A4 `restore()` stops calling `undo.clear()` | ONLY `ModeLedgerTest`'s "empties the ledger" case fails |
+| A5 `set` saves AFTER the write | 3 of 4 `ModeLedgerTest` cases + the sweep fail (the broad control) |
+
+**Gates.** `jvmTest` **13,979 / 0 failures / 3 skipped** (baseline 13,971 + the 8 new pins — counted
+per module with `xml.etree`, since the documented root glob prints `0 0 0` after the MOD split).
+`huge_methods.py --fail-over 0`: census **0**; the extraction leaves `parseCliArgs` at 4,306
+bytecodes and `runCliCore` at 1,252 (the pre-split `runCli` held both). `cost_gate.py`: every
+counter unchanged, `+0.00%` on all 18.
+
+**Not done, named rather than implied.** No warm A/B — this round changes nothing on the hot path
+(the ledger is ~30 `set` calls per process-request, not per node). The residual on the mechanism is
+stated in `usageText`'s KDoc: an UNDOCUMENTED flag is not swept, which is why `CliModeRestoreTest`
+also carries `ACCEPTED_FLAGS` as a second reading of the same list and asserts the usage text
+documents all of it — four flags the parser accepted and never documented (`--verifyMappedCache`,
+`--verifyLoopRetryAll`, `--ccetPreGate`, `--ccetPreGateBogus`) are now in the usage text.
+
 **Round 847 (2026-08-08) — (WARM.4): THE FIRST WARM PER-KIND / PER-HANDLER ATTRIBUTION OF
 `checkSpine`. THE KIND SHAPE IS REGIME-INVARIANT (statement anchors 39.9% warm vs 40.0% cold), THE
 HANDLER ORDER IS NOT (the top two SWAP), AND CLAUDE.md's STANDING SIX-HANDLER LIST IS STALE BY 53%
@@ -1534,7 +1621,15 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   ~400 KB of declarations whose expensive half is already cached, and round 716's is that the
   servable population in this compiler is reliably the CHEAP tail. If it is under ~1%, close it.
 
-- [ ] **(SERVE.1) — THE ARGUMENT LOOP LEAKS BEHAVIOUR-CHANGING MODES ACROSS SERVER REQUESTS.**
+- [x] **(SERVE.1) — CLOSED ROUND 848. THE ARGUMENT LOOP NO LONGER LEAKS MODES ACROSS SERVER
+  REQUESTS — a `ModeLedger` save/restore around the whole of `runCli`, covering FIFTEEN flags (the
+  six named below plus eight the audit found, among them `SpineDispatch.mode == GATED` and both
+  pre-gate probes). Measured aside that corrects this entry: on the compiler profile all 14 arms
+  are byte-identical INCLUDING the deliberately-corrupting `--flowScanBogus`, and with
+  `FlowScan.bogus` defaulted true the 13,902-test core suite reports exactly ONE failure — its own
+  equivalence pin. So "several of these change what the compiler decides" is true by CONSTRUCTION
+  and unconfirmed by either instrument; the leak with a measured, always-visible effect is
+  `PartitionCheck.reportLines`, re-printed by every later request. Original text follows.**
   Round 843 closed the `PassTiming`/`FltmCensus`/`GlobalsAmp` half; **`CpaSections.verify*`,
   `FlowScan.legacy`/`eagerSet`, `IanySections.*GateOff`, `ArgNarrowGate.mode`,
   `ParallelCheckMode.workers` and `PartitionCheck.workers` are still unrestored**, and unlike the
