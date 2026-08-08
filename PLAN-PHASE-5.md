@@ -20,9 +20,10 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
-**Round 853 (2026-08-08) — RECORD INTEGRITY. THE BLAST RADIUS OF ROUND 852's STALE-BINARY FINDING
-IS EXACTLY *ONE* RECORDED CLAIM, IT WAS RE-MEASURED AND IT STANDS, AND THE DIGEST THAT LOOKED LIKE
-THE SMOKING GUN TURNED OUT TO BE A FOURTH RECIPE LINEAGE. NO COMPILER CODE CHANGED.**
+**Round 853 (2026-08-08) — RECORD INTEGRITY. THE GRID's BLAST RADIUS IS *ONE* CLAIM AND IT STANDS;
+THE DIGEST THAT LOOKED LIKE THE SMOKING GUN IS A FOURTH RECIPE LINEAGE — BUT AUDITING THE *OTHER*
+INSTRUMENTS FOUND THE SAME STALE BINARY INSIDE `cost_gate.py`, WHICH MEANS THE COST GATE HAS BEEN
+BLIND SINCE MOD.3 AND ROUND 852 REALLY COST **+79% NARROWING WALKS**. No compiler code changed.**
 
 **THE QUESTION.** Round 852 found `scripts/grid838.sh` reading a `build/bench/xtsc-classpath.txt`
 whose only class dir was the ROOT project's pre-module-split leftover, and closed with *"any grid
@@ -76,10 +77,44 @@ is now **deleted** (nothing in the build produces it — the root has no `src/`,
 reference left is a comment in `grid838.sh`), so a future stale file fails loudly instead of
 silently compiling.
 
+**AND THEN RUNNING THE GATES FOUND THE SAME BUG IN BOTH OF THEM — WHICH IS THE ROUND'S REAL
+DELIVERABLE, BECAUSE ONE OF THEM IS THE INSTRUMENT THAT EXISTS TO NOTICE CHECKER DRIFT.** Deleting
+the root leftover made `huge_methods.py` die with `no class files` — it censused
+`REPO/build/classes/…`, the pre-split path. Worse, `cost_gate.py`'s `resolve_classpath()`
+**PREPENDS** that same root dir to the resolved classpath, and it has to prepend *something*
+because `jvmRuntimeClasspath` resolves DEPENDENCIES only — so the leftover, first on the classpath,
+**was the compiler every gate run has loaded since MOD.3**. That is why every round in the window
+reported `+0.00% on all 18 counters`: a frozen binary cannot drift. Both are fixed to resolve the
+`-core` module and both carry a positive control (`huge_methods.py` refuses the legacy path BY
+NAME; `cost_gate.py` requires `MainKt` under the module dir). A third drift fell out of the same
+stone: `exit 1 when the compile finds errors` (d5ed6276, tsc semantics) means a correctly-wired
+cost gate returns 1 on every dashboard profile — the frozen binary predated it, so the run is now
+judged by the presence of the counter block rather than by `rc`.
+
+**THE COUNTERS HAD NOT STOOD STILL, AND THE ABLATION SAYS WHOSE THEY ARE.** Correctly wired, HEAD
+against the round-838 baseline: **`narrow.walks` 17,851 → 31,961 (+79.04%)**, `globals.lookups`
++4.93%, `globals.misses` +4.99%, `typeNode.cacheHits` +4.10%, `typeNode.cacheable` +2.72%,
+`typeOfExpr.calls` +0.53% (reproduced exactly on a second run — these counters are deterministic).
+**One mistake at a time:** revert round 852's `Checker.kt` hunk alone, rebuild, re-run — **+0.00%
+on all 18**. So the whole delta is **(NARROW.2)(c)**, and rounds 839–851 genuinely moved nothing
+(their `+0.00%` claims are true, they were just unfalsifiable at the time). Mechanism, read off
+round 852's own design: `cmamNarrowedAnyReceiverType` is keyed on *a narrow HAPPENED*, so the walk
+is LAUNCHED to answer that, over the `any`-receiver population the walker used to bail on. Round
+852's diagnostic results are untouched; only "it was free" is retracted. Baseline `--update`d in
+the same commit as this justification, per COST.1, and the price is queued as **(NARROW.2)(e)** —
+this is the round-713 failure class (`+11.5% getTypeOfExpression for one diagnostic, no gate
+noticed`), caught this time only because the instrument was being audited.
+**The JIT half STANDS on the other instrument:** the fixed census reads 649 classes / 14,532
+methods / **0 over the limit**, and `HugeMethodLimitTest` — which locates the classes from a marker
+resource on the TEST classpath and so was never fooled — has been running the same whole-program
+census inside every green suite. CLAUDE.md's "the suite test is the SECOND instrument on purpose"
+paid for itself a second time.
+
 **WHAT THIS ROUND DELIBERATELY DID NOT DO.** No re-run of the 8-profile grid for rounds 843–851 —
 none of them quoted one, and manufacturing captures to "check" claims that were never made would be
-the recon-only failure in a different costume. No compiler change, so no `cost_gate.py`/
-`huge_methods.py` movement is possible; both were run anyway and are unchanged.
+the recon-only failure in a different costume. No attempt to REDUCE (NARROW.2)(c)'s narrowing-walk
+cost: pricing it in wall time and deciding whether the opening can be narrowed is a design round,
+and taking it as a side effect of an audit is exactly what the queue entry for (c) forbade for (d).
 
 **Round 852 (2026-08-08) — (NARROW.2)(c) CLOSED. THE HIGHEST-FP-RISK ITEM IN THE QUEUE MOVED THE
 EIGHT-PROFILE GRID BY *NOTHING* AT EVERY ONE OF ITS THREE STEPS AND COST THE CORPUS *NOTHING*, AND
@@ -186,6 +221,25 @@ pins), counted per module with `xml.etree` over a fully wiped results dir in all
 behind a symbol-NAME short-circuit, so only types actually named `Object`/`Function` ever pay it.
 `huge_methods.py --fail-over 0` **exit 0**, census still 0. Eight-profile grid 0/0 at all three
 steps.
+
+> **CORRECTION (round 853, 2026-08-08) — THE `+0.00% ON ALL 18 COUNTERS` IS RETRACTED. IT WAS
+> MEASURED ON A FROZEN BINARY, AND THIS ROUND'S TRUE PRICE IS `narrow.walks` +79.04%.** The stale
+> classpath this round found in `grid838.sh` is in `cost_gate.py` too, and there it is worse:
+> `jvmRuntimeClasspath` resolves DEPENDENCIES only, so the gate PREPENDS the compiler's class dir
+> itself — and it prepended the pre-split ROOT one, which won every load. So the gate has been
+> measuring a frozen pre-MOD.3 compiler, and `+0.00%` was the only answer it could give.
+> Correctly wired (round 853), against the round-838 baseline this round was gated on:
+> **`narrow.walks` 17,851 → 31,961 (+79.04%)**, `globals.lookups` +4.93%, `globals.misses` +4.99%,
+> `typeNode.cacheHits` +4.10%, `typeNode.cacheable` +2.72%, `typeOfExpr.calls` +0.53%.
+> **Attributed by ablation, not by argument:** reverting THIS commit's `Checker.kt` hunk alone and
+> re-running the fixed gate returns **+0.00% on all 18** — so every counter above is (NARROW.2)(c)'s,
+> and rounds 839–851 really did move nothing. The mechanism is the round's own design read
+> forward: `cmamNarrowedAnyReceiverType` is keyed on *a narrow HAPPENED*, which means the walk is
+> launched to find that out, on the `any`-receiver population the walker previously bailed on.
+> **The DIAGNOSTIC verdicts are untouched** — the 0/0 grid and the 14,016/0 corpus stand, and round
+> 853 confirms the compiler-profile output is byte-identical. What is retracted is only the claim
+> that this round was free. Baseline rebaselined at round 853 with this justification; the price is
+> queued as (NARROW.2)(e).
 
 **Round 851 (2026-08-08) — (WARM.5) CLOSED, AND WITH IT THE WARM ARC. THE CALL PATH IS THE FOURTH
 INDEPENDENT SITE TO READ 94% CHECKING WORK / 6% EVERYTHING ELSE, AND THE SIXTH CONSECUTIVE PRICED
@@ -1990,6 +2044,26 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   corpus is the expensive one, and round 792's law is still the reason to run both.
   **Prize: one conformance line, and `types/any` 1 failing of 9 → 0.** That is a SMALL prize
   against that population, so price the FP risk before building anything.
+  **ROUND-853 ADDITION, and it changes this item's shape: price the COUNTERS before building,
+  not only the FPs.** (c) cost **+79.04% `narrow.walks`** (17,851 → 31,961) — measured only at
+  round 853, because the gate that should have said so was loading a frozen binary. (d) opens a
+  population round 851 measured at **48.4% of every call-expression invocation**, i.e. an order
+  of magnitude larger, on the same "launch the walk to find out whether a narrow happened"
+  mechanism. Run `cost_gate.py` on the PROTOTYPE, before the pins and before the grid.
+
+- [ ] **(NARROW.2)(e) — PRICE (NARROW.2)(c)'s +79% NARROWING WALKS IN WALL TIME, AND DECIDE
+  WHETHER THE OPENING CAN BE CHEAPENED. Round 853 opened this; nobody has yet spent a wall-clock
+  measurement on it.** The counters (round 853, correctly-wired gate, ablation-attributed to
+  round 852's `Checker.kt` hunk alone): `narrow.walks` **17,851 → 31,961 (+79.04%)**,
+  `globals.lookups` +4.93%, `globals.misses` +4.99%, `typeNode.cacheHits` +4.10%,
+  `typeNode.cacheable` +2.72%, `typeOfExpr.calls` +0.53%. **A counter is not a cost** (round 801:
+  367,189 removed `String` allocations measured 0 ms) — and the counter that moved is the one
+  round 735 attributed at **1,485 ms = 4.9% of the compile for 394 tail walks**, so the honest
+  range here is "possibly free, possibly ~1%". **Do the cheap thing first:** `--passTiming`'s
+  `narrowWalk` row on HEAD vs the reverted hunk, which is one rebuild each and answers whether
+  anything further is warranted; only then consider narrowing the opening (e.g. a cheaper
+  pre-test than launching a walk to discover a narrow happened). **Do not revert (c) for this** —
+  it closed two conformance cases with a 0/0 grid and a clean corpus.
 
 - [x] **(NATIVE.1) FIXED ROUND 827 — the native `runWithDeepStack` actual now runs the
   pipeline on a 256 MB pthread instead of the default 8 MB main stack (a 32x margin), with
