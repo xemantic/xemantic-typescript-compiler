@@ -19,6 +19,24 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$1"
 mkdir -p "$OUT"
 CP="$(cat "$ROOT/build/bench/xtsc-classpath.txt")"
+# ROUND-852 GUARD (the round-MOD.3 trap, and it had already fired): the file
+# found in the tree was a PRE-SPLIT one — its only class directory was the root
+# project's `build/classes/kotlin/jvm/main`, a stale leftover with 582 classes
+# against the core module's 649, so every capture this script produced ran a
+# compiler from before the module split with NO error and NO tell. `ab-*.sh`
+# refuse such a file by grepping it for the module name; this one did not.
+# Regenerate with the `xtscPrintJvmRuntimeClasspath` init script (see
+# scripts/cost_gate.py `resolve_classpath`), prepending the CORE module's
+# classes dir.
+case "$CP" in
+  *xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main*) ;;
+  *) echo "error: build/bench/xtsc-classpath.txt is stale (pre-module-split) —" \
+          "it names no core classes dir; regenerate it" >&2; exit 1 ;;
+esac
+# A capture is only comparable if it is COMPLETE: a truncated one ("... and N
+# more error(s)") made round 811 read 0 added / 16 removed on all eight profiles
+# from a byte-identical compiler, and an empty one looks like a clean profile.
+FAIL=0
 declare -A DIRS=(
   [compiler]="$ROOT/build/bench/tsc-project-637d5746"
   [tsc-cli]="$ROOT/build/bench/tsc-tsc-637d5746"
@@ -36,4 +54,7 @@ for P in compiler tsc-cli jsTyping deprecatedCompat typingsInstallerCore service
   trunc=$(grep -ac 'more error(s)' "$OUT/$P.raw" || true)
   md5=$(md5sum "$OUT/$P.txt" | cut -d' ' -f1)
   echo "$P count=$n trunc=$trunc md5=$md5"
+  if [[ "$trunc" != "0" ]]; then echo "  REFUSED: capture truncated" >&2; FAIL=1; fi
+  if [[ "$n" == "0" ]]; then echo "  REFUSED: capture empty" >&2; FAIL=1; fi
 done
+exit "$FAIL"

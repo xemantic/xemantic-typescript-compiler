@@ -111884,6 +111884,13 @@ interface DataView {
         // type; the negative branch is unchanged (`t <: candidate` ⇒ guard always true ⇒
         // false branch is `never`).
         if (isMatch) {
+            // (NARROW.2)(c) round 852 — tsc's `narrowTypeByTypePredicate` exemption.
+            // Placed FIRST because the arms below decide it the other way: `any` is
+            // assignable to everything, so `checkTypeRelatedTo(targetType, any)`
+            // holds and the guard would hand back `Object`/`Function`, silencing
+            // the calls and property reads an `any` must keep permitting.
+            // See [anyPositiveBranchExempt].
+            if (anyPositiveBranchExempt(t, targetType)) return t
             // Round 744: a bare TYPE PARAMETER is a supertype of nothing, so in tsc's
             // `getNarrowedType` neither subtype arm can ever fire for one — it falls to
             // the INSTANTIABLE tail (`maybeTypeOfKind(t, Instantiable) &&
@@ -112020,6 +112027,35 @@ interface DataView {
      * blast radius.
      */
     private fun anyNegativeBranchSurvives(t: Type): Boolean = t.flags.hasAny(TypeFlags.Any)
+
+    /**
+     * (NARROW.2)(c), round 852 — tsc's `any` exemption, verbatim in intent:
+     * `isTypeAny(type) && (predicate.type === globalObjectType ||
+     * globalFunctionType)` in `narrowTypeByTypePredicate`, and the identical test
+     * in `narrowTypeByInstanceof`. A guard onto the global `Object` or `Function`
+     * leaves an `any` subject `any`, because neither target says anything an `any`
+     * did not already permit — `if (isFunction(x)) x(1, 2, 3)` and
+     * `if (x instanceof Object) x.method()` must both stay silent.
+     *
+     * The type is identified by its SYMBOL, not by an intrinsic: this checker has
+     * no `globalObjectType`/`globalFunctionType` cell. The `builtinLibDecls`
+     * clause is the same idiom the round-479 `isUntypedFunctionCall` gate uses —
+     * a USER-declared `class Object`/`interface Function` is not the global one
+     * and keeps narrowing.
+     */
+    private fun isGlobalObjectOrFunctionType(t: Type): Boolean {
+        val sym = (t as? Type.Object)?.symbol ?: return false
+        if (sym.name != "Object" && sym.name != "Function") return false
+        return sym.declarations.isNotEmpty() && sym.declarations.all { it in builtinLibDecls }
+    }
+
+    /**
+     * (NARROW.2)(c), round 852 — the exemption above, applied to a POSITIVE
+     * narrowing branch: true when [t] is `any`-flavoured and [target] is the
+     * global `Object`/`Function`, so the branch must hand [t] back unchanged.
+     */
+    private fun anyPositiveBranchExempt(t: Type, target: Type): Boolean =
+        t.flags.hasAny(TypeFlags.Any) && isGlobalObjectOrFunctionType(target)
 
     /**
      * Round 762: the type of [prop] AS CARRIED BY [carrier] — substituted through the
@@ -112241,6 +112277,21 @@ interface DataView {
         // `isTypeSubsetOf`, which for a non-union candidate is identity — so `any`
         // survives its own negative branch. See [anyNegativeBranchSurvives].
         if (!isMatch && anyNegativeBranchSurvives(t)) return t
+        // (NARROW.2)(c) round 852 — an `any` subject NARROWS on the positive branch.
+        // tsc's `getNarrowedTypeWorker` opens with `if (type.flags & AnyOrUnknown)
+        // return candidate;`, so `x instanceof Error` yields `Error`. Ours answered
+        // `t` unchanged, because [isInstanceOfClass] falls back to assignability for
+        // a non-Interface source and `any` is assignable to everything, so
+        // `matches == isMatch` and the subject came back wide — which is why the
+        // `narrowFromAnyWithInstanceof` / `narrowExceptionVariableInCatchClause`
+        // conformance cases emitted NOTHING even after (a) and (b) landed.
+        // `anyType` exactly, not [TypeFlags.Any]: the `error`/`unresolved` sentinels
+        // are error recovery and must not acquire a concrete type here.
+        // The `Object`/`Function` exemption is tsc's own — see
+        // [isGlobalObjectOrFunctionType].
+        if (isMatch && t === anyType) {
+            return if (isGlobalObjectOrFunctionType(classType)) t else classType
+        }
         val matches = isInstanceOfClass(t, classType)
         return when {
             matches == isMatch -> t
@@ -136233,6 +136284,54 @@ interface DataView {
      * would need round 791's save/restore dance to stay correct under a nested
      * invocation, and the pair costs at most one allocation per surviving call.
      */
+    /**
+     * (NARROW.2)(c) round 852 — THE NARROWED TYPE OF AN `any` RECEIVER, and the
+     * entire FP surface of this item.
+     *
+     * [checkMemberAccessMissing] is silent for an `any` receiver **by
+     * construction**: both receiver-typing branches of [cmamGeneralReceiverType]
+     * bail the moment `getTypeOfSymbol` / `getTypeOfIdentifier` answers `anyType`.
+     * That bail is also the walker's FP firewall, and tsc's own sources use a
+     * narrowed-`any` receiver constantly — so this helper is deliberately the
+     * narrowest possible opening of it, and every gate below is a REFUSAL, never
+     * an emission.
+     *
+     * What it admits: a bare reference whose DECLARED type is exactly `anyType`,
+     * whose flow-narrowed type is a concrete [Type.Object] — an interface, a
+     * class instance type or an anonymous type literal. What it refuses, and why:
+     *  - `error`/`unresolved`/`unknown` receivers (`rawType !== anyType`), which
+     *    are error recovery, not narrowing;
+     *  - a narrow that did not happen (`narrowed === rawType`), which is the
+     *    overwhelming majority of `any` receivers on every profile;
+     *  - anything that is not a `Type.Object` — a union (its elaboration is the
+     *    declared-union path's, which an `any` declared type never reaches), a
+     *    primitive, a type parameter, and `never`/`any` themselves, which are
+     *    [Type.Intrinsic];
+     *  - a [Type.Reference] (a generic instantiation), where property resolution
+     *    goes through `resolveGenericPropertyType` and the round-762 carrier rule;
+     *  - the global `Object`/`Function`, which tsc exempts at the narrowing site
+     *    (see [isGlobalObjectOrFunctionType]) and which is refused here too so a
+     *    narrow arriving by some OTHER route cannot re-open the same hole;
+     *  - an enum-flavoured member-less object, which would otherwise match the
+     *    "empty receiver" TS2339 gate downstream.
+     *
+     * NOT a suppression-only change, and the note says so: it can only ADD
+     * diagnostics. The instrument that decides it is the corpus, not the eight
+     * dashboard profiles — round 792's pre-gate on this very function measured 0
+     * emitting calls in a 22,187-call skip set and still killed 7 baselines.
+     */
+    private fun cmamNarrowedAnyReceiverType(objectExpr: Expression, rawType: Type): Type? {
+        if (rawType !== anyType) return null
+        if (currentFlowGraph == null) return null
+        val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
+        if (narrowed === rawType) return null
+        if (narrowed !is Type.Object) return null
+        if (narrowed is Type.Reference) return null
+        if (isGlobalObjectOrFunctionType(narrowed)) return null
+        if (isEnumFlavoredObjectType(narrowed)) return null
+        return narrowed
+    }
+
     private fun cmamGeneralReceiverType(
         objectExpr: Expression,
         propName: String,
@@ -136371,6 +136470,10 @@ interface DataView {
                     (lt === stringType || lt === numberType || lt === booleanType)) {
                     bindingElementPrimitive = lt
                 } else {
+                    // (NARROW.2)(c) round 852 — before the `any` bail, ask whether the
+                    // flow narrowed this reference to something concrete. See
+                    // [cmamNarrowedAnyReceiverType].
+                    cmamNarrowedAnyReceiverType(objectExpr, rawType)?.let { return Pair(it, null) }
                     tryEmitUtilityWrapperTs2339(identSymbol, propName, diagStart, diagLength, source, fileName)
                     return null
                 }
@@ -136465,7 +136568,13 @@ interface DataView {
         } else {
             // Fallback: try resolving from currentLocalTypes (function params, local vars)
             val rawType = getTypeOfIdentifier(objectExpr)
-            if (rawType === anyType || rawType === errorType || rawType === unknownType) return null
+            if (rawType === anyType || rawType === errorType || rawType === unknownType) {
+                // (NARROW.2)(c) round 852 — the function-local twin of the bail above
+                // (a catch parameter, an un-annotated local). See
+                // [cmamNarrowedAnyReceiverType].
+                cmamNarrowedAnyReceiverType(objectExpr, rawType)?.let { return Pair(it, null) }
+                return null
+            }
             // 16.0: For primitive types, use the apparent (wrapper) type so that
             // e.g. `s: string` can detect `s.hmm` as TS2339 via the String wrapper.
             val exprType = if (rawType !is Type.Object) {
