@@ -51,13 +51,27 @@ mkdir -p "$DV_DIR"
 
 die() { printf 'aot-draw-variance: %s\n' "$*" >&2; exit 2; }
 
+# ROUND 858. This used to be `<core jar>:$(cat build/bench/cp.txt)`, which the
+# module split made doubly wrong: cp.txt was a hand-frozen Jul-8 file naming
+# kotlin-stdlib 2.4.0 after the build had moved to 2.4.10, AND the main class
+# measured here (`XtscMainKt`) lives in the DAEMON module, which is not on that
+# classpath at all - verified, the script died `ClassNotFoundException`. It was
+# fail-safe (no number rather than a wrong one) but it had been dead since the
+# split, exactly like `scripts/xtsc` was until round 857 found it.
+#
+# The fix is round 857's: read the STAGED lib dir with the launcher's own
+# `find | LC_ALL=C sort`, never a hand-built list. That ordering is load-bearing
+# here beyond mere freshness - the classpath and its ORDER are hashed into the
+# AOT fingerprint, so a tail assembled any other way names a cache the launcher
+# can never look up, and every draw would silently measure an uncached run.
 resolve_cp() {
-  local jar deps
-  jar="$(find "$ROOT/xemantic-typescript-compiler-core/build/libs" -maxdepth 1 -name 'xemantic-typescript-compiler-jvm-*.jar' | LC_ALL=C sort | head -1)"
-  [ -n "$jar" ] || die "no jar in xemantic-typescript-compiler-core/build/libs - build first"
-  [ -f "$ROOT/build/bench/cp.txt" ] || die "no build/bench/cp.txt"
-  deps="$(cat "$ROOT/build/bench/cp.txt")"
-  printf '%s:%s' "$jar" "$deps"
+  local lib cp
+  lib="$ROOT/xemantic-typescript-compiler-daemon/build/install/lib"
+  [ -d "$lib" ] || die "no $lib - run ./gradlew assemble first"
+  cp="$(find "$lib" -maxdepth 1 -name '*.jar' | LC_ALL=C sort | tr '\n' ':')"
+  cp="${cp%:}"
+  [ -n "$cp" ] || die "no jars in $lib - run ./gradlew assemble first"
+  printf '%s' "$cp"
 }
 
 # The same main class the launcher and the trainer name - it is the `mainclass`

@@ -73,17 +73,13 @@ PROJ_DIR="$(ls -d "$REPO_ROOT"/build/bench/tsc-project-* 2>/dev/null | head -1)"
 }
 
 # Resolve the runtime classpath once (the class DIR is prepended per side).
-INIT="$REPO_ROOT/build/bench/print-classpath.init.gradle.kts"
-[[ -f "$INIT" ]] || { echo "error: $INIT missing — run bench-compile-tsc.sh once" >&2; exit 1; }
-# A PRE-SPLIT init script registers the task in `allprojects`, so -api answers
-# too and `head -1` silently picks whichever line Gradle emitted first. Refuse it.
-grep -q 'xemantic-typescript-compiler-core' "$INIT" || {
-    echo "error: $INIT predates the module split — re-run bench-compile-tsc.sh" >&2
-    exit 1
-}
-CP_TAIL="$("$REPO_ROOT/gradlew" -q --console=plain -I "$INIT" xtscPrintJvmRuntimeClasspath 2>/dev/null \
-    | sed -n 's/^XTSC_CLASSPATH=//p' | head -1)"
-[[ -n "$CP_TAIL" ]] || { echo "error: could not resolve jvmRuntimeClasspath" >&2; exit 1; }
+# ROUND 858: through the shared resolver, which keeps the pre-split init-script
+# refusal AND additionally asserts every jar it hands back exists. This driver
+# always resolved fresh and was never affected by the stale build/bench/cp.txt,
+# but it is the reference reader — it should not be the one that drifts next.
+. "$REPO_ROOT/scripts/lib/dep-classpath.sh"
+CP_TAIL="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-cold.txt")" || {
+    echo "error: could not resolve the dependency tail" >&2; exit 1; }
 
 now_ms() { python3 -c 'import time;print(int(time.time()*1000))'; }
 

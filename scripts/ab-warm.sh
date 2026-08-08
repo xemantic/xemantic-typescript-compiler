@@ -148,26 +148,16 @@ done
 (( ITERS >= 5 )) || echo "warning: ITERS=$ITERS — a per-process median over fewer than 5 iterations is thin" >&2
 
 # --- dependency tail -------------------------------------------------------
-CP_CACHE="$REPO_ROOT/build/bench/cp-warm.txt"
-if [[ -n "${XTSC_CP:-}" ]]; then
-    CP_TAIL="$XTSC_CP"
-elif [[ -f "$CP_CACHE" && "$CP_CACHE" -nt "$REPO_ROOT/xemantic-typescript-compiler-core/build.gradle.kts" ]]; then
-    CP_TAIL="$(cat "$CP_CACHE")"
-else
-    INIT="$REPO_ROOT/build/bench/print-classpath.init.gradle.kts"
-    [[ -f "$INIT" ]] || { echo "error: $INIT missing — run bench-compile-tsc.sh once" >&2; exit 1; }
-# A PRE-SPLIT init script registers the task in `allprojects`, so -api answers
-# too and `head -1` silently picks whichever line Gradle emitted first. Refuse it.
-grep -q 'xemantic-typescript-compiler-core' "$INIT" || {
-    echo "error: $INIT predates the module split — re-run bench-compile-tsc.sh" >&2
-    exit 1
-}
-    echo "resolving jvmRuntimeClasspath (gradle) ..." >&2
-    CP_TAIL="$("$REPO_ROOT/gradlew" -q --console=plain -I "$INIT" xtscPrintJvmRuntimeClasspath 2>/dev/null \
-        | sed -n 's/^XTSC_CLASSPATH=//p' | head -1)"
-    [[ -n "$CP_TAIL" ]] || { echo "error: could not resolve jvmRuntimeClasspath" >&2; exit 1; }
-    printf '%s' "$CP_TAIL" > "$CP_CACHE"
-fi
+# ROUND 858: this used to guard the cache with `cp-warm.txt -nt
+# core/build.gradle.kts`, which is blind to the bump that actually matters — the
+# VERSIONS live in gradle/libs.versions.toml, and a bump there leaves the module
+# build file untouched. That is precisely how build/bench/cp.txt came to name
+# kotlin-stdlib 2.4.0 a month after the build had moved to 2.4.10. The shared
+# resolver validates against every build-definition input and asserts each named
+# jar still exists; it refuses loudly rather than serving a stale tail.
+. "$REPO_ROOT/scripts/lib/dep-classpath.sh"
+CP_TAIL="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-warm.txt")" || {
+    echo "error: could not resolve the dependency tail" >&2; exit 1; }
 
 # A squatting daemon is GB of RAM on a zero-swap box; measuring beside one is how
 # round 721 recorded compiles that were really something else entirely.

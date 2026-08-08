@@ -45,8 +45,15 @@ sleep 10
 free -m > "$OUT/free.txt"
 
 PROJ=$(ls -d build/bench/tsc-project-* | head -1)
-CP=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)
-CPW=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test:$(tr '\n' ':' < build/bench/cp-warm.txt)
+# ROUND 858: this COLD arm used to read build/bench/cp.txt, a hand-frozen Jul-8
+# dependency tail (kotlin-stdlib 2.4.0 / kotlinx-io 0.9.0 / serialization 1.9.0)
+# while the WARM arm below read the CURRENT one - so every cold/warm ratio this
+# script produced compared two different dependency tails. Now both arms resolve
+# through the validating shared resolver.
+. scripts/lib/dep-classpath.sh
+DEPS="$(xtsc_dep_classpath build/bench/cp-warm.txt)" || exit 1
+CP=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$DEPS
+CPW=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test:$DEPS
 echo "PROJ=$PROJ" >> "$OUT/started-$PHASE"
 
 # ── PHASE 1 — (WARM.3). Two independent processes, two draws each: round 846
