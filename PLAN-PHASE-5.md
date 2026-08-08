@@ -94,7 +94,7 @@ replaced it with a measurement. `docs/perf/warm-tail-attribution.md` § 11.
   holds `BenchFltmTierTest.class`, a class that did not exist before this round. **The 8-profile grid
   was NOT run and is vacuous by construction — nothing under `commonMain` changed** (the only code
   added is a `commonTest` tier and its pin), which `cost_gate.py`'s 20 unchanged counters and the
-  unchanged 78 files / 46 errors independently confirm. Commit `855adc7c`.
+  unchanged 78 files / 46 errors independently confirm. Commit `3909ae55`.
 
 - **NEXT.** **(WARM.8)** — the post-checker tails, 143.2 ms = **1.90% of the warm artifact**, warming
   1.27x, still COMPLETELY UNATTRIBUTED and now the largest unmeasured region in the compiler. It
@@ -1240,7 +1240,7 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   the arm from `tierBegin` reddens 2 of 5, and they are the two naming that arm. Gates: suite
   14,056 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on all 20 counters, `huge_methods.py
   --fail-over 0` 0 over the limit. Nothing under `commonMain` changed, so the 8-profile grid is
-  vacuous by construction and was not run. Commit `855adc7c`.
+  vacuous by construction and was not run. Commit `3909ae55`.
   `docs/perf/warm-tail-attribution.md` § 11.
 
 - [ ] **(WARM.8) — THE POST-CHECKER TAILS: 143.2 ms = 1.90% of the warm artifact, warming 1.27× —
