@@ -5718,6 +5718,36 @@ class Checker(
      *  Declared before `init` per the init-order trap. */
     private val enumDomainCompleteCache = HashMap<Int, Boolean>()
 
+    /** (WARM.7) round 860: per-FILE memo for [scanUmdExportAsNamespace] — see
+     *  [umdExportAsNamespaceOccurrences]. Declared before `init` per the init-order trap. */
+    private val umdOccurrencesByFile = HashMap<String, List<UmdExportAsNamespaceOccurrence>>()
+
+    /**
+     * The `export as namespace X` occurrences of one file, scanned at most once.
+     *
+     * (WARM.7) round 860. [checkUmdGlobalVsDeclareGlobalConst] and
+     * [checkCrossFileModuleAugmentationDuplicates] each ran their own copy of the same
+     * pattern over the FULL text of every checked file — 1.30% of a warm rebuild, matching
+     * zero times on tsc's own sources (`docs/perf/warm-tail-attribution.md` § 4).
+     *
+     * The memo is keyed by FILE NAME and its value is a pure function of [text]: the scan
+     * consults no ambient checker state, resolves nothing and mints nothing, so it cannot
+     * become the program-ORDER dependency of rounds 754/776/778 — whichever pass asks first
+     * gets the same answer. File names are unique within `checkedResults` (the same
+     * assumption [checkCrossFileModuleAugmentationDuplicates]'s own `ownExports` map already
+     * makes), so one key is one text.
+     *
+     * NOT routed through here, deliberately: [checkExportAsNamespaceSelfCycle] and
+     * [collectUmdGlobalsAndModuleFiles] use DIFFERENT patterns (a trailing `;?` inside an
+     * outer capture, and `\s` in place of `[ \t]`), and both already measure 0.0 ms because
+     * cheap guards sit above their scans.
+     */
+    private fun umdExportAsNamespaceOccurrences(
+        fileName: String,
+        text: String,
+    ): List<UmdExportAsNamespaceOccurrence> =
+        umdOccurrencesByFile.getOrPut(fileName) { scanUmdExportAsNamespace(text) }
+
     /** (ENGINE.2g) round 793: the B154 leg of [ccetPrologueMayFire] asks "does THIS
      *  file have any CJS default-as-namespace shape at all", once per call expression
      *  in the program. [cjsDefaultNsShapes] already memoizes per file, but the lookup
@@ -173425,16 +173455,15 @@ interface DataView {
      */
     private fun checkUmdGlobalVsDeclareGlobalConst() {
         data class Occ(val fileName: String, val source: String, val pos: Int, val len: Int)
-        val umdRegex = Regex("""(?m)^[ \t]*export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)""")
         val umdByName = mutableMapOf<String, MutableList<Occ>>()
         val constByName = mutableMapOf<String, MutableList<Occ>>()
         for (result in checkedResults) {
             val fileName = result.sourceFile.fileName
             val source = result.sourceFile.text
-            for (m in umdRegex.findAll(source)) {
-                val g = m.groups[1] ?: continue
-                umdByName.getOrPut(g.value) { mutableListOf() }
-                    .add(Occ(fileName, source, g.range.first, g.value.length))
+            // (WARM.7) round 860: shared with checkCrossFileModuleAugmentationDuplicates.
+            for (occ in umdExportAsNamespaceOccurrences(fileName, source)) {
+                umdByName.getOrPut(occ.name) { mutableListOf() }
+                    .add(Occ(fileName, source, occ.pos, occ.name.length))
             }
             for (stmt in result.sourceFile.statements) {
                 if (stmt !is ModuleDeclaration) continue
@@ -173540,11 +173569,12 @@ interface DataView {
         // B555: a `declare global { namespace X { export const Y } }` member ALSO merges into the
         // module projected by `export as namespace X` (a UMD-global module), so project those onto
         // the module's (targetFile, name) conflict groups (exportAsNamespace_augment).
-        val umdRegex = Regex("""(?m)^[ \t]*export[ \t]+as[ \t]+namespace[ \t]+([A-Za-z_$][A-Za-z0-9_$]*)""")
         val umdToModuleFile = mutableMapOf<String, String>()
         for (result in checkedResults) {
-            for (m in umdRegex.findAll(result.sourceFile.text)) {
-                m.groups[1]?.value?.let { umdToModuleFile.getOrPut(it) { result.sourceFile.fileName } }
+            // (WARM.7) round 860: shared with checkUmdGlobalVsDeclareGlobalConst.
+            val umdFileName = result.sourceFile.fileName
+            for (occ in umdExportAsNamespaceOccurrences(umdFileName, result.sourceFile.text)) {
+                umdToModuleFile.getOrPut(occ.name) { umdFileName }
             }
         }
         if (umdToModuleFile.isNotEmpty()) {
