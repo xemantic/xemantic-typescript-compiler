@@ -109,7 +109,7 @@ replaced it with a measurement. `docs/perf/warm-tail-attribution.md` § 11.
   is the boundary PLACEMENT and a dropped `close` is invisible to every output, to `cost_gate.py` and
   to the corpus. Gates re-run per sub-step: suite **14,060** then **14,061 / 0 / 3**, `cost_gate.py`
   **+0.00% on all 20** both times, `huge_methods.py --fail-over 0` **0 over the limit** both times.
-  Commits `486c5569`, `7fa2d320`.
+  Commits `61194621`, `9eedc04b`.
 
 - **NEXT.** **(WARM.8)(c)**, queued with its equivalence already proved BY CONSTRUCTION rather than
   by census: `cpcRequireOnlyOrphans` has exactly ONE consumer, which under `--noEmit` reads a map
@@ -1278,7 +1278,7 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   invariant is the PLACEMENT — a dropped `close` is invisible to every output, to `cost_gate.py` and
   to the corpus. Gates: suite 14,060 then 14,061 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on
   all 20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit both times. Commits
-  `486c5569`, `7fa2d320`. `docs/perf/warm-tail-attribution.md` § 12.
+  `61194621`, `9eedc04b`. `docs/perf/warm-tail-attribution.md` § 12.
 
 - [ ] **(WARM.8)(c) — GATE `cpcRequireOnlyOrphans` OUT OF CHECK-ONLY COMPILES: 130.4 ms = 1.72% of a
   warm rebuild, and the equivalence is BY CONSTRUCTION rather than by census.** It has exactly ONE
