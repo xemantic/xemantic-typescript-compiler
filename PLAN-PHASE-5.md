@@ -20,6 +20,77 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 849 (2026-08-08) — (WARM.3) CLOSED AS A MEASURED NEGATIVE AT ~0.014%, AND THE CENSUS
+THAT MEASURED IT FIRST REPORTED A CONVINCING ZERO FOR THE WRONG REASON.**
+
+**The verdict, in one line: the entire per-request lib-TYPE re-derivation is 71 outermost mint
+spans costing 1–6 ms against a 7,139–7,316 ms warm rebuild = 0.01–0.08%** — an order of
+magnitude below even (WARM.2)'s 0.13% and two orders below the ~1% close threshold. Full table
+and method in `docs/perf/lib-type-rederivation.md`.
+
+**What the numbers say, and they are bit-identical across all four warm draws AND the cold run**
+(the census's own falsification — a deterministic counter that moved between regimes would mean
+the probe, not the compiler, was deciding what got minted): **119 lib mints** (63 `declaredTypes`
++ 56 member tables) against **14,766 non-lib** — the lib surface is **0.80% of all mints**. Those
+119 produce **15,932 consumptions, a ratio of 133.9 : 1**, so the derivation is already fully
+amortized WITHIN a single request; sharing across requests could only ever delete the production
+side, which is the 1–6 ms. A lib mint is genuinely expensive — **93,464 ns/span warm against
+4,606 for a non-lib one, 20×** — there are just 71 of them. Round 716's law in its purest measured
+form: what looks like a big shared surface is the cheap tail *by count*, not by unit cost.
+
+**THE STRONGER NEGATIVE, FREE FROM THE SAME RUN, AND IT RETIRES THE WHOLE DIRECTION RATHER THAN
+THE LIB SLICE: the entire mint boundary — lib and user code together — is 13,988 spans costing
+38–66 ms warm = 0.5–0.9% of the artifact.** So NO cache placed at `getDeclaredTypeOfSymbol` /
+`resolveStructuredTypeMembers` can clear the ±1.0% warm A/B band, whatever it is keyed on, even
+in the impossible limit where user types were shareable too. Type derivation is not where a warm
+rebuild's time is; round 847 already located that (`checkSpine` 66.0%, its top four handlers
+33.4%).
+
+**The hazard analysis is MOOT at this price and nobody should re-open it.** For the record, the
+three that would have had to be resolved: `getTypeOfSymbol` persists only when the caller's
+instantiation context is empty (round 778), so a shared entry can freeze a member as `T` or `any`
+by first-touch ORDER — a failure CLAUDE.md records as **byte-identical in every output** (round
+607: 51 corpus failures, `--listAll` unchanged); `Type` ids are thread-local sequences handed off
+by `runWithDeepStack` (INV.6(6c0)), so a type crossing the request boundary is indistinguishable
+from a request-local one to every id-keyed relation cache — the round-825 `--workers` mechanism;
+and round 844 already measured 175 merge collisions per compile, 20 mutating a lib symbol, for
+the state-sharing sibling. Three known-silent correctness hazards for ≤0.08% is not close.
+
+**THE ROUND'S BEST FINDING IS THE INSTRUMENT'S OWN DEFECT, CAUGHT BY ITS OWN PIN.** The
+consumed-side hook first went into `resolveStructuredTypeMembersCore` — whose `properties != null`
+guard is **duplicated one frame up** in `resolveStructuredTypeMembers`, so the wrapper absorbs
+every hit and the hooked branch is dead. The census reported `memHitLib = 0`, which would have
+been written up as *"nothing ever reads a derived lib type back, so the cache is pointless"* —
+the exact OPPOSITE of the truth (133.9 : 1), and a conclusion that happens to agree with the
+correct verdict for an entirely wrong reason. `LibTypeCensusTest`'s consumed-side pin failed
+because it had been built to fail if the probe were inert; moving the hook up one frame fixed it.
+**A produced-vs-consumed census keyed on a boundary the CALLER already short-circuits measures
+nothing at all, and reports it as a zero** — the counter-rather-than-timer form of round 786's
+"open on the WRAPPER" law. Note also that the two hooks share ONE depth counter because they
+recurse into each other; the evidence it works is that 119 lib mints produce only 71 timed spans.
+
+**WHAT DID NOT HAPPEN: Part B (the warm intra-handler tables) was NOT run — but it is wired,
+committed and one command away.** Round 847's finding is that a handler's warm SHARE is not its
+cold share (the top two spine handlers swap between regimes) and that a probe boundary is ~1.85×
+more expensive cold than warm — so every intra-handler section table on record, all of them cold
+one-shots, must be re-taken before it can be read as a warm attribution. `BenchMain` now accepts
+`cta` / `cpa` / `arg` tiers plus a `*coarse` twin each (the COARSE twin is what prices the
+boundary DIFFERENTIALLY inside one warm process — round 734, never an empty-span loop), covering
+handler #2 `spineCtaM3StatementAnchor` (17.7% of the warm artifact), #3 `cpaSpineLeave` (12.8%)
+and `checkArgumentsAgainstSignature` under #1 `ccetSpineLeave` (18.2%).
+**A NEXT ROUND STARTS AT `bash scripts/round849-warm-sections.sh 2`** — phase 1 already validated
+the whole build → cost-gate → JIT-gate → daemon-stop → measure path in that script, so phase 2
+needs no new infrastructure. Cross-regime warning it must carry: this round's own in-situ empty
+pair read 96–209 ns warm against 501 ns cold, so the cold section tables' `net` columns are
+calibrated with a boundary 2.4–5.2× too large for warm.
+
+**Gates.** Suite **13,984 / 0 failures / 3 skipped** (13,979 baseline + the 5 new pins), counted
+per module with `xml.etree` over a fully wiped results dir — note the count is only trustworthy
+after wiping ALL four modules' `build/test-results/jvmTest`, since a `--tests`-filtered run
+rewrites only the filtered XMLs and a directory sum then includes the previous run's files
+(rounds 638/690; it bit this round once). `cost_gate.py`: **all 18 counters +0.00%**, no cost
+movement. `huge_methods.py --fail-over 0`: **exit 0**, census still zero.
+
 **Round 848 (2026-08-08) — (SERVE.1) CLOSED: THE ARGUMENT LOOP NO LONGER LEAKS MODES ACROSS
 SERVER REQUESTS — AND THE QUEUE ENTRY'S "SEVERAL OF THESE CHANGE WHAT THE COMPILER DECIDES" IS
 NOW MEASURED RATHER THAN ASSERTED, WITH A DIFFERENT ANSWER THAN EXPECTED.**
@@ -1610,16 +1681,37 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   is byte-identical output (round 607). Do not re-open; `RealLibSnapshots`' "binding is
   deliberately per-consumer" KDoc is right and now costs a known 4.9 ms warm.
 
-- [ ] **(WARM.3) — PRICE THE PER-REQUEST RE-DERIVATION OF LIB *TYPES* (a PRIZE MEASUREMENT, NOT A
-  DESIGN).** What (WARM.2) rules in by elimination: the warm compile is 91.8% checker, and the
-  per-`Checker` `symbolTypes`/`declaredTypes` mean `resolveInterfaceMembers` re-runs over
-  `interface Array<T>` and friends on every request. Unmeasured, lives inside `checkSpine`, and
-  **strictly more hazardous than (WARM.2)** — `Type` ids, interning and instantiation contexts all
-  cross the boundary, and `getTypeOfSymbol` only persists when the caller's instantiation context
-  is empty, so a shared entry can freeze a member as `T` or `any` by first-touch order. **Measure
-  the prize first and expect it to be small too**: (WARM.2)'s lesson is that the lib surface is
-  ~400 KB of declarations whose expensive half is already cached, and round 716's is that the
-  servable population in this compiler is reliably the CHEAP tail. If it is under ~1%, close it.
+- [x] **(WARM.3) — CLOSED ROUND 849 AS A MEASURED NEGATIVE: the per-request re-derivation of lib
+  TYPES is 71 outermost mint spans costing 1–6 ms of a 7,139–7,316 ms warm rebuild = 0.01–0.08%**,
+  an order of magnitude below even (WARM.2)'s 0.13%. Priced before anything was designed, with the
+  round-801 produced-vs-consumed ratio taken FIRST: **119 lib mints produce 15,932 consumptions
+  (133.9 : 1)**, so the derivation is already fully amortized WITHIN one request and sharing across
+  requests could only ever delete the production side. Lib mints are 0.80% of all mints while being
+  20× more expensive each (93,464 vs 4,606 ns/span) — round 716's law by COUNT, not by unit cost.
+  **AND THE SAME RUN RETIRES THE WHOLE DIRECTION, not just the lib slice: the entire mint boundary,
+  lib plus user code, is 38–66 ms warm = 0.5–0.9%**, so no cache at `getDeclaredTypeOfSymbol` /
+  `resolveStructuredTypeMembers` can clear the ±1.0% warm band whatever it is keyed on. **The
+  hazard analysis this entry demanded (Type ids, interning, round 778's first-touch instantiation
+  context, whose failure mode is byte-identical output) is MOOT at this price — do not re-open it.**
+  Instrument: `LibTypeCensus` + `--libTypeCensus` + `BenchMain`'s `libtypes` tier, pinned by
+  `LibTypeCensusTest`. Full table and method: `docs/perf/lib-type-rederivation.md`.
+
+- [ ] **(WARM.4)(b) — TAKE THE WARM INTRA-HANDLER TABLES. WIRED AND ONE COMMAND AWAY (round 849
+  built the harness; phase 2 was not run).** Round 847 measured that a handler's warm SHARE is not
+  its cold share — the top two spine handlers SWAP between regimes — and that a probe boundary is
+  ~1.85× more expensive cold than warm. **Every intra-handler section table on record
+  (`CtaSections`, `CpaSections`, `ArgSections`) is a COLD one-shot**, so none can be read as a warm
+  attribution until re-taken. `BenchMain` now accepts `cta`/`cpa`/`arg` tiers plus a `*coarse` twin
+  each — the COARSE twin is what prices the boundary DIFFERENTIALLY inside one warm process (round
+  734: never an empty-span loop). Targets: handler #1 `ccetSpineLeave` **18.2%** (reached via
+  `arg`), #2 `spineCtaM3StatementAnchor` **17.7%**, #3 `cpaSpineLeave` **12.8%** — together 48.7%
+  of the warm artifact. **START AT `bash scripts/round849-warm-sections.sh 2`**; phase 1 already
+  validated that script's build → cost-gate → JIT-gate → daemon-stop → measure path. Carry this
+  calibration warning: round 849's in-situ empty pair read **96–209 ns warm against 501 ns cold**,
+  so every cold table's `net` column subtracts a boundary 2.4–5.2× too large for the warm regime.
+  Print the partition checks (sub-rows must sum to the independently measured parent row — round
+  847 got 99.3% and 102.6%), and add an EXIT CENSUS where the partition already crosses a boundary
+  (round 796: zero new boundaries, and strictly stronger than differencing adjacent call counts).
 
 - [x] **(SERVE.1) — CLOSED ROUND 848. THE ARGUMENT LOOP NO LONGER LEAKS MODES ACROSS SERVER
   REQUESTS — a `ModeLedger` save/restore around the whole of `runCli`, covering FIFTEEN flags (the
