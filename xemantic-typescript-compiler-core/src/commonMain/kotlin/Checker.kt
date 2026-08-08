@@ -136320,6 +136320,29 @@ interface DataView {
      * dashboard profiles — round 792's pre-gate on this very function measured 0
      * emitting calls in a 22,187-call skip set and still killed 7 baselines.
      */
+    /**
+     * (NARROW.2)(f) round 855: could the flow POSSIBLY narrow [objectExpr], without
+     * launching a walk to find out?
+     *
+     * A `false` is a proof, not a heuristic. [FlowGraph.narrowableRoots] over-
+     * approximates every root name any narrowing node in this file can narrow, and
+     * a receiver with no reference PATH cannot be narrowed at all — that is
+     * `getNarrowedTypeForReference`'s own first bail. A `true` means "unknown,
+     * walk"; a graph carrying no inventory (`narrowableRoots() == null`) refuses
+     * nothing.
+     *
+     * The one arm it does NOT cover is the name-INDEPENDENT collapse to `never`
+     * (`FlowUnreachable`, an empty `FlowBranchLabel`). That is sound HERE because
+     * `never` is a `Type.Intrinsic`, which [cmamNarrowedAnyReceiverType]'s
+     * `Type.Object` test refuses anyway — a refused `never` and a walked `never`
+     * both produce `null`. Any OTHER caller has to re-argue that.
+     */
+    private fun cmamPreTestMayNarrow(objectExpr: Expression): Boolean {
+        val roots = currentFlowGraph?.narrowableRoots() ?: return true
+        val path = getReferencePath(objectExpr) ?: return false
+        return flowPathRoot(path) in roots
+    }
+
     private fun cmamNarrowedAnyReceiverType(objectExpr: Expression, rawType: Type): Type? {
         if (rawType !== anyType) return null
         if (currentFlowGraph == null) return null
@@ -136327,6 +136350,18 @@ interface DataView {
         // than by differencing two builds' `narrowWalks` row (that column swings
         // 6-9% between runs of ONE binary, which is larger than the object).
         // Inert off `--passTiming`; see [PassTiming.cmamAnyOpenings].
+        // (NARROW.2)(f) round 855 — the candidate pre-test, run as a probe that
+        // HONOURS NOTHING: its verdict is recorded and the walk proceeds anyway, so
+        // this run's diagnostics are byte-identical to a production one while the
+        // yield and the soundness leak are measured against the very population
+        // round 854 priced. See [PassTiming.cmamAnyPreRefused].
+        var preRefused = false
+        var preNanos = 0L
+        if (PassTiming.detailed) {
+            val p0 = PassTiming.nowNanos()
+            preRefused = !cmamPreTestMayNarrow(objectExpr)
+            preNanos = PassTiming.nowNanos() - p0
+        }
         val probeT0 = if (PassTiming.detailed) PassTiming.nowNanos() else 0L
         val probeW0 = if (PassTiming.detailed) PassTiming.narrowWalkNanos else 0L
         val narrowed = getNarrowedTypeForReference(rawType, objectExpr)
@@ -136335,6 +136370,9 @@ interface DataView {
                 PassTiming.nowNanos() - probeT0,
                 PassTiming.narrowWalkNanos - probeW0,
                 narrowed !== rawType,
+                preRefused,
+                preRefused && getReferencePath(objectExpr) == null,
+                preNanos,
             )
         }
         if (narrowed === rawType) return null
@@ -136342,7 +136380,12 @@ interface DataView {
         if (narrowed is Type.Reference) return null
         if (isGlobalObjectOrFunctionType(narrowed)) return null
         if (isEnumFlavoredObjectType(narrowed)) return null
-        if (PassTiming.detailed) PassTiming.cmamAnyAccepted++
+        if (PassTiming.detailed) {
+            PassTiming.cmamAnyAccepted++
+            // The soundness number: a refusal here would DELETE a receiver type
+            // the compiler went on to use. Must stay 0.
+            if (preRefused) PassTiming.cmamAnyPreRefusedAccepted++
+        }
         return narrowed
     }
 

@@ -400,6 +400,13 @@ object PassTiming {
         cmamAnyNanosNarrowed = 0
         cmamAnyWalkNanos = 0
         cmamAnyWalkNanosNarrowed = 0
+        cmamAnyPreRefused = 0
+        cmamAnyPreRefusedNoPath = 0
+        cmamAnyPreRefusedNarrowed = 0
+        cmamAnyPreRefusedAccepted = 0
+        cmamAnyPreRefusedNanos = 0
+        cmamAnyPreRefusedWalkNanos = 0
+        cmamAnyPreNanos = 0
         diagnosticsSize = null
         diagsByPass.clear()
         nodeKindHistogram.clear()
@@ -574,14 +581,78 @@ object PassTiming {
     /** [cmamAnyWalkNanos] restricted to the openings that DID narrow. */
     var cmamAnyWalkNanosNarrowed: Long = 0
 
-    fun noteCmamAnyOpening(nanos: Long, walkNanos: Long, narrowed: Boolean) {
+    // -----------------------------------------------------------------------
+    // (NARROW.2)(f) round 855 — the PRE-TEST census, which HONOURS NOTHING.
+    //
+    // The candidate gate (`FlowGraph.narrowableRoots()`) is evaluated at every
+    // opening and its verdict is RECORDED; the walk then runs regardless, so a
+    // probe run's diagnostics are byte-identical to a production one and the
+    // yield is measured against the very population round 854 priced.
+    //
+    // What the numbers have to say before a gate may be built:
+    //  - YIELD:     [cmamAnyPreRefusedWalkNanos] against the never-narrowed
+    //               cost (`cmamAnyWalkNanos - cmamAnyWalkNanosNarrowed`). The
+    //               go/no-go is ~70% — below it the realisable saving lands
+    //               inside the +-1.0% warm A/B band.
+    //  - SOUNDNESS: [cmamAnyPreRefusedAccepted] must be ZERO — no opening that
+    //               produced a receiver type may be refused. This is a claim a
+    //               probe can check exhaustively; a design argument cannot.
+    //  - CONTROL:   round 790 — a verifier reading 0 proves nothing until its
+    //               COMPLEMENT population is shown to be non-empty, so the
+    //               kept openings' narrow count is printed beside the refused
+    //               ones', and [cmamAnyPreRefused] itself must be non-zero.
+    // -----------------------------------------------------------------------
+
+    /** Openings the candidate pre-test would refuse (walk skipped). */
+    var cmamAnyPreRefused: Long = 0
+
+    /** Of [cmamAnyPreRefused], those refused because the receiver has no
+     *  reference PATH at all — `getNarrowedTypeForReference` returns the declared
+     *  type immediately for those, so they are FREE refusals and must not be read
+     *  as yield. The discriminating population is the remainder. */
+    var cmamAnyPreRefusedNoPath: Long = 0
+
+    /** Of [cmamAnyPreRefused], those that nevertheless narrowed — the soundness
+     *  leak of a name-keyed superset (the name-INDEPENDENT `never` arms). */
+    var cmamAnyPreRefusedNarrowed: Long = 0
+
+    /** Of [cmamAnyPreRefused], those that were ACCEPTED as a receiver type. This
+     *  is the one that must be zero: it is the only refusal that changes what the
+     *  compiler emits. */
+    var cmamAnyPreRefusedAccepted: Long = 0
+
+    /** [cmamAnyNanos] / [cmamAnyWalkNanos] restricted to the refused openings —
+     *  what a gate would actually return. */
+    var cmamAnyPreRefusedNanos: Long = 0
+    var cmamAnyPreRefusedWalkNanos: Long = 0
+
+    /** The pre-test's OWN cost, measured at every opening: what the gate would
+     *  spend to earn [cmamAnyPreRefusedWalkNanos]. */
+    var cmamAnyPreNanos: Long = 0
+
+    fun noteCmamAnyOpening(
+        nanos: Long,
+        walkNanos: Long,
+        narrowed: Boolean,
+        preRefused: Boolean = false,
+        preRefusedNoPath: Boolean = false,
+        preNanos: Long = 0,
+    ) {
         cmamAnyOpenings++
         cmamAnyNanos += nanos
         cmamAnyWalkNanos += walkNanos
+        cmamAnyPreNanos += preNanos
         if (narrowed) {
             cmamAnyNarrowed++
             cmamAnyNanosNarrowed += nanos
             cmamAnyWalkNanosNarrowed += walkNanos
+        }
+        if (preRefused) {
+            cmamAnyPreRefused++
+            cmamAnyPreRefusedNanos += nanos
+            cmamAnyPreRefusedWalkNanos += walkNanos
+            if (preRefusedNoPath) cmamAnyPreRefusedNoPath++
+            if (narrowed) cmamAnyPreRefusedNarrowed++
         }
     }
 
@@ -1079,6 +1150,14 @@ object PassTiming {
                 "${cmamAnyNanosNarrowed / 1_000_000}ms) walkOnly=" +
                 "${cmamAnyWalkNanos / 1_000_000}ms (of which narrowed " +
                 "${cmamAnyWalkNanosNarrowed / 1_000_000}ms)\n" +
+            "cmamAnyPreTest (NARROW.2)(f): refused=$cmamAnyPreRefused " +
+                "(noPath=$cmamAnyPreRefusedNoPath) kept=${cmamAnyOpenings - cmamAnyPreRefused} " +
+                "refusedNarrowed=$cmamAnyPreRefusedNarrowed " +
+                "refusedAccepted=$cmamAnyPreRefusedAccepted " +
+                "keptNarrowed=${cmamAnyNarrowed - cmamAnyPreRefusedNarrowed} " +
+                "refusedSpan=${cmamAnyPreRefusedNanos / 1_000_000}ms " +
+                "refusedWalkOnly=${cmamAnyPreRefusedWalkNanos / 1_000_000}ms " +
+                "preTestCost=${cmamAnyPreNanos / 1_000_000}ms\n" +
             "time split: narrowWalks=${narrowWalkNanos / 1_000_000}ms typeOfExpr(total incl. nested)=${typeOfExprNanos / 1_000_000}ms " +
                 "relations(depth0)=${relationNanos / 1_000_000}ms typeNode(depth0)=${typeNodeNanos / 1_000_000}ms memberResolve(depth0)=${memberResolveNanos / 1_000_000}ms\n" +
             "exprMemo would-save: ${exprSavableNanos / 1_000_000}ms over $exprSavableCalls outermost served calls\n" +

@@ -169,6 +169,14 @@ class FlowGraph(
      *  reference position is tsc's `findAncestor(reference, isFunctionOrModuleBlock)`
      *  answer (the SourceFile when none contains it). */
     val containerStarts: List<FlowStart> = emptyList(),
+    /**
+     * (NARROW.2)(f) round 855: every NAME-CONSUMING flow node minted for this file —
+     * the [FlowCondition] / [FlowAssignment] / [FlowCall] / [FlowSwitchClause] nodes
+     * whose narrowers take the walked reference's `name` as an argument. Retained so
+     * [narrowableRoots] can be derived on demand; `null` means no inventory was
+     * supplied, which [narrowableRoots] reports as "unknown" rather than "empty".
+     */
+    private val narrowingNodes: List<FlowNode>? = null,
 ) {
     // INV.2(b): nodeId-indexed fast path for [flowAt] — the pilot array-indexed side
     // table. Pre-computed here from the FINISHED map by walking the tree, so an
@@ -233,6 +241,77 @@ class FlowGraph(
             while (sp > 0 && csEnd[open[sp - 1]] <= c.pos) sp--
             csOuter[i] = if (sp > 0) open[sp - 1] else -1
             open[sp++] = i
+        }
+    }
+
+    // (NARROW.2)(f) round 855 — the narrowable-root set, computed at most once per
+    // file and only if something asks. See [narrowableRoots].
+    private var rootsComputed = false
+    private var roots: Set<String>? = null
+
+    /**
+     * (NARROW.2)(f) round 855: the ROOT binding names that any narrowing node in
+     * this file could possibly narrow — a conservative SUPERSET, `null` when this
+     * graph was built without a narrowing-node inventory (then nothing may be
+     * refused).
+     *
+     * **Why a name that is absent cannot narrow.** `narrowTypeFromFlow` reaches a
+     * type different from the declared one only through four narrowers, and each
+     * one takes the walked reference's dotted `name` and matches it against a
+     * PATH occurring inside the flow node it belongs to:
+     * `applyConditionNarrowing` (over [FlowCondition.expression], including its
+     * aliased-condition arm, which resolves the alias to an initializer that is
+     * itself a [FlowAssignment] in this same file), `narrowByAssignmentRhs` (over
+     * [FlowAssignment.node]), `narrowByAssertCall` (over [FlowCall.node]'s
+     * arguments) and `narrowBySwitchClause` (over the switch expression and its
+     * case expressions). Every such path's ROOT is an `Identifier` — `this` is
+     * parsed as `Identifier("this")` — so collecting every identifier text in
+     * those subtrees over-approximates every name any of them can narrow.
+     *
+     * The set is per FILE, which also covers [FlowStart.outerFlow]: a closure
+     * reading a narrow established in its enclosing scope walks into flow nodes
+     * of the same file.
+     *
+     * **What it deliberately does NOT cover:** the two NAME-INDEPENDENT arms that
+     * answer `never` — [FlowUnreachable] and an empty [FlowBranchLabel]. A caller
+     * that must not miss those has to say so; `cmamNarrowedAnyReceiverType` may
+     * refuse them because `never` is a `Type.Intrinsic`, which its next test
+     * rejects anyway.
+     */
+    fun narrowableRoots(): Set<String>? {
+        if (!rootsComputed) {
+            rootsComputed = true
+            val nodes = narrowingNodes
+            if (nodes != null) {
+                val out = HashSet<String>()
+                for (fn in nodes) when (fn) {
+                    is FlowCondition -> collectIdentifierTexts(fn.expression, out)
+                    is FlowAssignment -> collectIdentifierTexts(fn.node, out)
+                    is FlowCall -> collectIdentifierTexts(fn.node, out)
+                    is FlowArrayMutation -> collectIdentifierTexts(fn.node, out)
+                    is FlowSwitchClause -> {
+                        collectIdentifierTexts(fn.switchStatement.expression, out)
+                        for (clause in fn.switchStatement.caseBlock) {
+                            if (clause is CaseClause) collectIdentifierTexts(clause.expression, out)
+                        }
+                    }
+                    else -> {}
+                }
+                roots = out
+            }
+        }
+        return roots
+    }
+
+    /** ITERATIVE by the checker-walker rule — a deep `a && b && …` condition chain
+     *  must not recurse (see CLAUDE.md's binary-expression walker gotcha). */
+    private fun collectIdentifierTexts(root: Node, out: MutableSet<String>) {
+        val stack = ArrayList<Node>(16)
+        stack.add(root)
+        while (stack.isNotEmpty()) {
+            val node = stack.removeAt(stack.size - 1)
+            if (node is Identifier) out.add(node.text)
+            forEachChild(node) { stack.add(it) }
         }
     }
 
@@ -470,14 +549,29 @@ class FlowGraphBuilder {
     fun build(sourceFile: SourceFile): FlowGraph {
         sourceText = sourceFile.text
         reassignScanCache.clear() // per-file text — a reused builder must not serve stale scans
+        narrowingNodes.clear() // ditto: a reused builder must not carry another file's nodes
         currentFlow = newStart(sourceFile)
         bindEachStatement(sourceFile.statements)
         // (FRONT.2) census — `nextId` IS the number of flow nodes minted for this
         // file; recorded so the BIND_FLOW row can be read per flow node instead
         // of per file. Behaviour-free when the probe is off.
         FrontEnd.addFlowCensus(nextId.toLong())
-        return FlowGraph(nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList())
+        return FlowGraph(
+            nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList(),
+            if (PassTiming.detailed) narrowingNodes.toList() else null,
+        )
     }
+
+    /** (NARROW.2)(f) round 855: the name-consuming flow nodes minted for this file,
+     *  accumulated at MINT time so the inventory is exhaustive by construction (a
+     *  node reachable by no walk is merely a harmless surplus). One `add` per mint;
+     *  the identifier collection itself is deferred to [FlowGraph.narrowableRoots].
+     *
+     *  PROBE-ONLY: filled and handed on only under `PassTiming.detailed`, so a
+     *  production compile pays a not-taken branch per mint and retains nothing.
+     *  Off the probe [FlowGraph.narrowableRoots] answers `null` = "unknown", which
+     *  every caller must read as "refuse nothing". */
+    private val narrowingNodes = ArrayList<FlowNode>()
 
     // ---- factories -------------------------------------------------------
 
@@ -486,17 +580,23 @@ class FlowGraphBuilder {
     private fun newBranchLabel(): FlowBranchLabel = FlowBranchLabel(nextId++)
     private fun newLoopLabel(): FlowLoopLabel = FlowLoopLabel(nextId++)
     private fun newAssignment(node: Node, antecedent: FlowNode): FlowAssignment =
-        FlowAssignment(nextId++, node, antecedent)
+        FlowAssignment(nextId++, node, antecedent).also { noteNarrowingNode(it) }
     private fun newCondition(isTrue: Boolean, expr: Expression, antecedent: FlowNode): FlowCondition =
-        FlowCondition(nextId++, isTrue, expr, antecedent)
+        FlowCondition(nextId++, isTrue, expr, antecedent).also { noteNarrowingNode(it) }
     private fun newSwitchClause(
         switchStmt: SwitchStatement,
         clauseStart: Int,
         clauseEnd: Int,
         antecedent: FlowNode,
-    ): FlowSwitchClause = FlowSwitchClause(nextId++, switchStmt, clauseStart, clauseEnd, antecedent)
+    ): FlowSwitchClause =
+        FlowSwitchClause(nextId++, switchStmt, clauseStart, clauseEnd, antecedent)
+            .also { noteNarrowingNode(it) }
     private fun newCall(call: CallExpression, antecedent: FlowNode): FlowCall =
-        FlowCall(nextId++, call, antecedent)
+        FlowCall(nextId++, call, antecedent).also { noteNarrowingNode(it) }
+
+    private fun noteNarrowingNode(node: FlowNode) {
+        if (PassTiming.detailed) narrowingNodes.add(node)
+    }
 
     // ---- helpers ---------------------------------------------------------
 

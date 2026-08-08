@@ -138,6 +138,79 @@ established in its enclosing scope).
 **Do not revert (c) for this.** It closed two conformance cases with a 0/0 grid
 on all eight profiles and a clean corpus.
 
+## 4b. (NARROW.2)(f), round 855 — the pre-test was censused and it refuses NOTHING
+
+§ 4 said the ceiling is not the yield and told the next round to census the
+predicate before building it. It was censused. **Yield: 0 of 14,117 openings.**
+
+```
+cmamNarrowedAny  (e): openings=14117 narrowed=1345 accepted=1051  walkOnly=385/406/360 ms
+cmamAnyPreTest   (f): refused=0  noPath=0  kept=14117
+                      refusedNarrowed=0  refusedAccepted=0  keptNarrowed=1345
+                      refusedSpan=0ms  refusedWalkOnly=0ms  preTestCost=211/162/150 ms
+```
+
+Three cold reps, compiler profile, 46 errors every run (the probe HONOURS
+NOTHING — it evaluates the predicate, records the verdict and walks anyway, so
+the population is bit-identical to round 854's and the run's output is
+production's).
+
+### The instrument is alive — the complement population refuses
+
+Round 790: a verifier reading 0 reads 0 when it is dead, too. Two scratch-project
+controls, run through the CLI on the same binary:
+
+| fixture | openings | refused |
+|---|---|---|
+| `declare const g: any; g.alpha` (+ a `let`-declared and a parameter root) | 3 | **0** |
+| the same, plus `import { imported } from "./dep"; imported.alpha` | 4 | **1** |
+| the same again, with one `if (imported)` added | 4 | **0** |
+
+So the predicate discriminates exactly on its intended axis, and the profile's
+zero is a fact about the profile, not about the probe.
+
+### Why no per-file name-keyed set can do better
+
+**Every `VariableDeclaration`, `Parameter` and `BindingElement` mints a
+`FlowAssignment`**, and that node's subtree contains the declared name. So every
+root *declared in a file* is in that file's narrowable set **by construction** —
+including `declare const g: any`, which is narrowed nowhere. The set can only
+ever refuse a root with no declaration in the file at all: an import, or an
+ambient global declared elsewhere. tsc's own sources reach
+`checkMemberAccessMissing` with `any` receivers that are locals and parameters,
+so it refuses none of them.
+
+This is not a tuning failure and there is no coarser/finer version to try: the
+declaration that makes a name exist is itself one of the narrowing nodes the set
+is built from.
+
+### And the predicate costs more than the walks it was meant to delete
+
+`preTestCost` — the pre-test's own wall, measured at every opening — is
+**150–211 ms cold**, against a `walkOnly` of **360–406 ms** for the whole
+population it was supposed to shrink. Most of that is the one-off
+`narrowableRoots()` construction per file (the identifier sweep over every
+narrowing node's subtree), which a shipped gate pays exactly as the probe does.
+Even at a hypothetical 100% yield the arithmetic would be marginal; at 0% it is
+a pure loss.
+
+### Verdict
+
+**NO-GO on the ~70% threshold — measured 0%.** (NARROW.2)(f) is closed as a
+measured negative. Round 852's opening stays: it is 1.91% of a warm rebuild and
+85.6% of that is waste, but **the waste is not addressable by asking whether the
+name is narrowable anywhere in the file**. A future attempt needs a
+*path-and-position* oracle (does any narrowing node lie on THIS reference's flow
+path), which is the walk itself — i.e. the cost is the answer, and the only
+remaining lever is not to ask the question at all, which is what round 852
+deliberately bought two conformance cases with.
+
+The probe stays in the tree, `PassTiming.detailed`-gated (a production compile
+keeps no inventory and `FlowGraph.narrowableRoots()` answers `null` = "unknown,
+refuse nothing"), so the next candidate predicate can be censused the same way
+for one build instead of a round. `NarrowableRootsPreTestTest` pins the finding,
+both controls and the soundness zeroes.
+
 ## 5. Reproducing
 
 ```bash
