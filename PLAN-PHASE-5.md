@@ -80,6 +80,16 @@ else, round 789), `NarrowedAnyCensusTest` (4 pins: the accepted population, the 
 checks, and a disabled-run negative control), and
 `docs/perf/narrowed-any-opening-price.md`.
 
+**ABLATION — THREE ARMS, ONE MISTAKE AT A TIME (round 807), harness committed before use (789),
+and all three DISCRIMINATE with disjoint-enough failing sets to be three seams rather than one.**
+`A1` drop the `accepted` increment → **1 red** (only the pin that asserts a receiver type was
+produced); `A2` drop the whole `noteCmamAnyOpening` → **3 red**, i.e. every counter-reading pin,
+with the disabled-run control correctly staying GREEN; `A3` invert the `narrowed` predicate →
+**2 red**, the two population pins, which assert `narrowed > 0` and `narrowed == 0` respectively
+and so can only both fail to an inversion. `scripts/round854-ablate.sh` restores the source from an
+EXIT trap and refuses an arm where no test ran (round 808's `GC overhead` arm, which reads exactly
+like "the mistake changed nothing").
+
 **GATES.** Suite **14,020 / 0 failures / 3 skipped** (14,016 + the 4 new pins). `cost_gate.py`
 **all 20 counters +0.00%** — and this is now a FALSIFIABLE zero, since round 853 wired the gate to
 the real binary; the census is counter-neutral by construction (`detailed`-gated). `huge_methods.py
