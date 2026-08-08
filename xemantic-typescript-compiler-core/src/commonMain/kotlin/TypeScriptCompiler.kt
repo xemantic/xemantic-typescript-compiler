@@ -1351,6 +1351,10 @@ class TypeScriptCompiler {
             diagnostics = diagnostics,
         )
         val fePostT0 = FrontEnd.t()
+        // (WARM.8) round 861 — the four blocks of [FrontEnd.POST] abut from here
+        // to its close, so their sum is a partition check on the region round 859
+        // measured at 1.90% of a warm rebuild with nothing below it.
+        var fePostBlockT0 = FrontEnd.t()
         // Parser-cascade PINS: for files whose full baseline is reemitted by a checker
         // walker (es6ImportNamedImportParsingError_1.ts; bigintArbirtraryIdentifier's
         // badImport*/badExport*.ts), remove the parser's own diagnostics by identity so
@@ -1428,7 +1432,11 @@ class TypeScriptCompiler {
         // When namespace blocks are split across files (e.g. `namespace ts { }` in A.ts and B.ts),
         // each file's transformer needs to know about exports declared in other files so it can
         // qualify references like `sys.version` → `ts.sys.version`.
+        FrontEnd.close(FrontEnd.POST_DIAGS, fePostBlockT0)
+        fePostBlockT0 = FrontEnd.t()
         val crossFileNamespaceExports = collectCrossFileNamespaceExports(parsedSourceFiles.values)
+        FrontEnd.close(FrontEnd.POST_NSEXPORTS, fePostBlockT0)
+        fePostBlockT0 = FrontEnd.t()
 
         // Compute commonSourceDirectory across tsFileNames (excluding .d.ts which are
         // never emitted) AND any `.d.ts` files under the tsconfig project directory.
@@ -1470,6 +1478,8 @@ class TypeScriptCompiler {
             resolvedOutDir = resolvedOutDir,
             jsOutputMap = jsOutputMap,
         )
+        FrontEnd.close(FrontEnd.POST_EMITPREP, fePostBlockT0)
+        fePostBlockT0 = FrontEnd.t()
 
         // Sort JS outputs by dependency order (dependencies first)
         // Skip sorting when noResolve is set (TypeScript doesn't resolve imports in that mode)
@@ -1577,6 +1587,7 @@ class TypeScriptCompiler {
             }
             outside + nodeModulesFiles + inTreeProjectJson + inTreeProjectNonJson
         } else sourceEchoes
+        FrontEnd.close(FrontEnd.POST_OUTPUTS, fePostBlockT0)
         FrontEnd.close(FrontEnd.POST, fePostT0)
         return CompilationResult(
             fileName = fileName,

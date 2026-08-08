@@ -4066,7 +4066,24 @@ object FrontEnd {
     /** The suffix-set construction INSIDE [FLOW_REASSIGN]. */
     const val FLOW_SETBUILD = 19
 
-    const val N = 20
+    // ---- (WARM.8) round 861 — the four blocks of [POST]. Round 859 measured
+    // the post-checker tails at 143.2 ms = 1.90% of a WARM rebuild, warming
+    // 1.27x — the worst ratio it found — with NO probe below them, because under
+    // `--noEmit` [TRANSFORM]/[EMIT]/[DECL_EMIT] have zero calls and nothing else
+    // in the region was named. These four are exhaustive over [POST] by
+    // construction (they abut, from its `t()` to its `close()`), and each costs
+    // ONE timestamp pair per compile.
+
+    /** Post-check diagnostic pins, the `removeAll` suppression chain, isolated-decl emit. INSIDE [POST]. */
+    const val POST_DIAGS = 20
+    /** `collectCrossFileNamespaceExports` — a walk over every program file. INSIDE [POST]. */
+    const val POST_NSEXPORTS = 21
+    /** commonSourceDir + the transform-order topological sort + `cpcTransformAndEmit`. INSIDE [POST]. */
+    const val POST_EMITPREP = 22
+    /** The emit-order sort, orphan detection and output/source-echo assembly. INSIDE [POST]. */
+    const val POST_OUTPUTS = 23
+
+    const val N = 24
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4089,6 +4106,10 @@ object FrontEnd {
         "    B467 collectEnclosingVarDecls",
         "      of which the text scan + cache",
         "      of which the suffix-set build",
+        "  of which post-check diagnostic filters",
+        "  of which collectCrossFileNamespaceExports",
+        "  of which emit prep + transform/emit call",
+        "  of which output assembly + sorting",
     )
 
     /**
@@ -4099,7 +4120,8 @@ object FrontEnd {
         CONFIG, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
-        CHECK, POST, TRANSFORM, EMIT, DECL_EMIT,
+        CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        TRANSFORM, EMIT, DECL_EMIT,
     )
 
     var nanos: LongArray = LongArray(N)
@@ -4247,6 +4269,17 @@ object FrontEnd {
                     "words $scanWords -> recorded $scanRecorded " +
                     "(${if (scanRecorded > 0) scanWords / scanRecorded else 0}x); " +
                     "walk residue ${walk / 1_000_000} ms"
+            )
+        }
+        // (WARM.8) — the four POST blocks abut, so their residue is a PARTITION
+        // CHECK on the sub-probe rather than an unattributed remainder: anything
+        // beyond a rounding error means a block boundary was misplaced.
+        if (calls[POST_DIAGS] > 0) {
+            val sub = nanos[POST_DIAGS] + nanos[POST_NSEXPORTS] +
+                nanos[POST_EMITPREP] + nanos[POST_OUTPUTS]
+            appendLine(
+                "  post-checker residue (post - its four blocks): " +
+                    "${(nanos[POST] - sub) / 1_000_000} ms of ${nanos[POST] / 1_000_000} ms"
             )
         }
         val frontEnd = nanos[CONFIG] + nanos[CRAWL] + nanos[PARSE] + nanos[IMPORTS] + nanos[BIND]
