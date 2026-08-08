@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 847 (2026-08-08) — (WARM.4): THE FIRST WARM PER-KIND / PER-HANDLER ATTRIBUTION OF
+`checkSpine`. THE KIND SHAPE IS REGIME-INVARIANT (statement anchors 39.9% warm vs 40.0% cold), THE
+HANDLER ORDER IS NOT (the top two SWAP), AND CLAUDE.md's STANDING SIX-HANDLER LIST IS STALE BY 53%
+ON ITS LARGEST ROW.** An instrument round: nothing optimized, no lever landed, and the deliverable
+is the table `checkSpine` — 66% of the warm artifact — has never had. Full tables in
+`docs/perf/warm-spine-attribution.md`. One binary, the 78-file compiler profile, daemons stopped
+inside the measuring script, box unwatched; all 11 instrumented rebuilds answered 78 files / 46
+errors and `BenchMain` aborts if one disagrees with its own measured loop. Warm probe-free medians
+**8,176.7 / 8,013.7 ms** (mean 8,095.2, a THIS-ROUND absolute).
+
+- **THE INSTRUMENT: a `dispatch` tier on `BenchMain`'s 4th argument**, which is NOT a `PassTiming`
+  tier — it leaves the pass probe off and runs round 732's `SpineDispatch.PROBE` for one rebuild.
+  `spine,dispatch,spine,dispatch` takes two draws of each inside ONE warm process, so the sub-row
+  partition check and the per-handler table are comparable with no second JVM between them.
+  **Nothing under `commonMain` changed** — the entire change is `src/commonTest/kotlin/BenchMain.kt`
+  plus two scripts, which is why this round could be spent on measurement rather than on gates.
+- **SUB-ROWS (spine tier, warm n=4 / cold n=1): enter 3,102 (58.5%), leave 1,586 (29.9%), ures 490
+  (9.2%), forEachChild 86, scope 42; SUM 5,307 ms.** enter:leave = **1.96** (round 846's
+  independent `rows`-tier reading: 2.01 — reproduced). cold/warm: enter **3.62×**, leave 3.28×,
+  ures 2.76×, and the two near-pure-traversal rows barely warm at all — **forEachChild 1.43×,
+  scope 1.31×** — which is a shape fact, not a lever (128 ms = 1.6% of the artifact combined).
+  **Partition: sub-rows 5,307 vs the tier's own `checkSpine` row 5,990 = 88.6%, the 683 ms gap
+  being the tier's boundaries at 797 ns/node — and COLD the same boundary costs 1,475 ns/node**,
+  i.e. **a probe boundary is ~1.85× more expensive cold**, which is the mechanism behind round
+  846's "a constant additive probe compresses the ratio of exactly the row it lands on".
+- **PER-KIND — THE SHAPE DOES NOT MOVE.** `CALL_EXPRESSION` 1,040 ms (23.8% of the spine, 19.8
+  µs/node over 52,509 nodes), `BLOCK` 654 (14.9%), `VARIABLE_STATEMENT` 515 (11.8%, **35.0 µs/node
+  — the most expensive kind**), `IDENTIFIER` 459 (10.5% over 381,670 nodes at 1.2 µs),
+  `EXPRESSION_STATEMENT` 386, `RETURN_STATEMENT` 366, `BINARY_EXPRESSION` 260. **The five statement
+  anchors are 9.9% of the nodes and 39.9% of the warm spine against 40.0% cold on the same binary**
+  — CLAUDE.md's cold record reproduces to 0.1 points, so it is a property of the compiler and not
+  of the cold JVM. The warning attached to it stands: that is a LOCATION, not a lever.
+- **WARM-UP IS NOT ORDERED BY COST — round 843 § 5(b) confirmed on a second instrument**, and more
+  sharply now the probe no longer dominates: the most expensive kind per node
+  (`VARIABLE_STATEMENT`) warms **4.02×**, the second most expensive (`BLOCK`) warms **2.67×, the
+  worst in the table**, the cheapest (`IDENTIFIER`) 3.60×, the best `BINARY_EXPRESSION` 4.15×.
+  **Scaling a cold per-kind cost by one factor is wrong by up to ±25%.**
+- **PER-HANDLER (dispatch tier, warm n=4 / cold n=2) — THE DELIVERABLE.** `ccetSpineLeave` **876 ms
+  = 18.2%**, `spineCtaM3StatementAnchor` 853 = 17.7%, `cpaSpineLeave` 617 = 12.8%, `ctaSpineEnter`
+  359 = 7.5%, `spineIanyEnterNode` 171, `spineArithEnterNode` 153. **Top four = 2,705 ms = 56.2% of
+  the probed spine and 33.4% of the whole warm artifact**; top six 63.0%. **Partition check, the
+  strongest available: the handler nets sum to 4,812 ms against the `spine` tier's independently
+  measured enter+leave of 4,688 = 102.6%** — two probes sharing no code, 2.6% apart.
+- **THE ORDER SWAPS BETWEEN REGIMES, and the mechanism is stated rather than implied:** cold #1 is
+  `spineCtaM3StatementAnchor` (19.1%), warm #1 is `ccetSpineLeave`, because the latter warms
+  **2.75×** against the spine's 3.38×; `ctaSpineEnter` rises 5.4% → 7.5% on the same mechanism
+  (2.28×, worst of the big four). **A handler's warm share is its cold share × (spine warm-up ÷ its
+  own), and those differ by up to 1.5× — so a cold handler table cannot be read as a warm one.**
+- **CLAUDE.md's SIX-HANDLER LIST IS STALE AND IS CORRECTED HERE.** It records `cpaSpineLeave
+  4,366 ms` as the largest and "six handlers hold 71%". On today's binary `cpaSpineLeave` is
+  **2,060 ms cold — down 53%** (rounds 788-795 landed levers in it, exactly as the round-830 entry
+  predicts) and is THIRD; the top six hold **60.9% cold / 63.0% warm**, not 71%; `ccetSpineEnter`
+  has dropped out of the six and `spineArithEnterNode` has entered it.
+- **WHERE THE COST ACTUALLY SITS (per handler × per kind, warm): `ccetSpineLeave` is 92.5%
+  `CALL_EXPRESSION` — 839 ms net = 10.4% of the warm artifact, the single largest object in it.**
+  `spineCtaM3StatementAnchor` is **93.0% in three kinds** (VARIABLE_STATEMENT 39.2%,
+  RETURN_STATEMENT 29.7%, EXPRESSION_STATEMENT 24.1%) = 821 ms = 10.1%. `ctaSpineEnter` is 62.7%
+  `BLOCK`. `cpaSpineLeave` alone is genuinely SPREAD (largest kind 20.0%). **What this does NOT
+  license:** round 733 already opened both `…SpineLeave` handlers cold and found **88.4% of their
+  time is the cpa/ccet passes' own checking work**, the ancestor climbs being 176 ms of 8,195 — so
+  ~776 of `ccetSpineLeave`'s 876 warm ms is type-system work and only ~100 ms is scaffolding.
+- **(DISPATCH.1) RE-PRICED WARM AND STAYS CLOSED.** The probe computes it directly: **340-362 ms
+  upper bound warm at 10-11 ns per skipped consultation, against 1,000-1,019 ms cold at 31 ns**,
+  over the same 32,006,965 skipped consultations. That is 6.6% of the warm spine vs 5.6% cold and
+  4.35% of the warm artifact — **a skipped consultation warms 2.95×, essentially the spine's own
+  3.38×, so the table's relative value is REGIME-INVARIANT and the warm artifact does not make it a
+  better idea than round 732 found it.** Applying round 732's own 11-34% realisation discount gives
+  **~40-120 ms = 0.5-1.5%**, straddling the ±1.0% warm band.
+- **WHAT WAS NOT MEASURED, named rather than implied. (WARM.3) IS NOT SIZED** — lib type
+  re-derivation lives *inside* these handlers and no row here separates it; the cheapest honest
+  instrument is a counter+timer around `resolveInterfaceMembers` keyed on whether the symbol's
+  declaration file is a lib file, read on the SECOND of two consecutive warm rebuilds (that is what
+  a daemon request re-pays). That is a `commonMain` change and a full gate cycle, and it was not
+  started. Also not measured: any A/B (nothing was optimized), the other seven profiles, emit mode,
+  and a cold `spine`-tier draw beyond n=1.
+- **GATES: suite 13,971 / 0 / 3, unchanged** (wiped per-module results dirs, `xml.etree`).
+  `cost_gate.py` and `huge_methods.py` **not run and not required** — nothing under `commonMain`
+  changed; the only `src/` file touched is `commonTest/kotlin/BenchMain.kt`, which carries no
+  `@Test` and cannot alter a corpus baseline. **No pin was added, and that is stated rather than
+  omitted:** the change is a measuring harness, its claim is a measurement, and its repeatability
+  is the committed `scripts/round847-warm-spine.sh` + `scripts/round847_analyze.py`.
+
 **Round 846 (2026-08-08) — (WARM.1)(c) CLOSED: `--passTiming` NOW HAS TIERS, AND THE `rows` TIER IS
 FREE (+0.25% COLD, 0.0% WARM). THE PROBE LANDS **99.5-99.8% IN CHECKER-INIT AND 101-109% IN
 `checkSpine`**, SO § 3.1's BRACKET (A) IS RIGHT AND (B) IS REFUTED — WARM `checkSpine` IS **74.3%**
