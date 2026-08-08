@@ -557,7 +557,7 @@ fun indexSourceFile(sourceFile: SourceFile) {
         (node as NodeBase).nodeId = nextId++
         // M0 census (inert off --passTiming): node-kind histogram for the
         // dispatch-order / kind-table design.
-        if (PassTiming.enabled) PassTiming.noteNodeKind(node)
+        if (PassTiming.detailed) PassTiming.noteNodeKind(node)
         buf.clear()
         forEachChild(node, collect)
         for (i in buf.indices.reversed()) {

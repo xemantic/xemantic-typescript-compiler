@@ -95,7 +95,7 @@ class Checker(
      * [installGlobalsLookupClassifier]); the default path keeps the plain
      * map — zero added code on the hottest map in the program. */
     private val globals: SymbolTable =
-        if (PassTiming.enabled) InstrumentedSymbolTable() else symbolTable()
+        if (PassTiming.detailed) InstrumentedSymbolTable() else symbolTable()
 
     /** Per-file binder results for lookup. */
     private val fileResults: Map<String, BinderResult> =
@@ -312,7 +312,7 @@ class Checker(
     // tag a constant-pool reference rather than an argument push.
     private inline fun bumpExprEpoch(src: String) {
         spineExprEpoch++
-        if (PassTiming.enabled) PassTiming.noteEpochBump(src)
+        if (PassTiming.detailed) PassTiming.noteEpochBump(src)
     }
 
     // (f2) round 598 probes: depth-0 reentrance guards for the time split.
@@ -391,7 +391,7 @@ class Checker(
     private val shadowConfirmed = HashSet<Int>()
 
     private var currentClassForThis: ClassDeclaration? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentClassForThis") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentClassForThis") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentClassForThis") }
 
     /** B-interfaceClassMerging: the enclosing class symbol whose method-body return type
      *  is currently being inferred. Set around method-return inference (both the lazy
@@ -560,7 +560,7 @@ class Checker(
     // iteration order is never consumed, and it is COPIED per function-body scope entry,
     // so LinkedHashMap's afterNodeInsertion + ordered-copy overhead is pure waste.
     private var currentLocalTypes: MutableMap<String, Type> = HashMap()
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentLocalTypes(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentLocalTypes(swap)") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentLocalTypes(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentLocalTypes(swap)") }
 
     /**
      * Round 459: annotation type NODES for function-body locals, populated alongside
@@ -584,7 +584,7 @@ class Checker(
      */
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
     private var currentShadowedNames: MutableSet<String> = HashSet()
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentShadowedNames(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentShadowedNames(swap)") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentShadowedNames(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentShadowedNames(swap)") }
 
     /**
      * Round 460 (program.ts findSourceFileWorker): names declared by TWO OR MORE
@@ -612,7 +612,7 @@ class Checker(
      * IfStatement arms.
      */
     private var narrowedDeclaredTypes: MutableMap<String, Type> = mutableMapOf()
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("narrowedDeclaredTypes(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("narrowedDeclaredTypes(swap)") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("narrowedDeclaredTypes(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("narrowedDeclaredTypes(swap)") }
 
     /** B263: names declared ONLY in typeRoot package files that did NOT resolve from the
      *  `types` compiler option — stripped from the unresolved-name scope so uses of them
@@ -663,7 +663,7 @@ class Checker(
      *  at function-body entry. NOT used for type resolution — membership-only. */
     // Perf: HashSet (order unused, copied per scope entry) — see [currentLocalTypes].
     private var currentParamBindingNames: MutableSet<String> = HashSet()
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentParamBindingNames(swap)") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentParamBindingNames(swap)") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentParamBindingNames(swap)") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentParamBindingNames(swap)") }
 
     /** Round 477: memo for [resolveNamespaceQualifiedTypeAlias], key `"file|ns|member"`
      *  (null = doesn't resolve). Declared before `init` — the discriminant-key readers
@@ -693,7 +693,7 @@ class Checker(
      *  lookup at function-body entry; consulted ONLY by [enumTypedReceiverDisplay] for the
      *  enumPropertyAccess TS2339 case. Saved/restored alongside `currentLocalTypes`. */
     private var currentEnumConstrainedParams: Map<String, String> = emptyMap()
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentEnumConstrainedParams") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentEnumConstrainedParams") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentEnumConstrainedParams") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentEnumConstrainedParams") }
 
     /** The enum declaration whose member-initializer expressions are currently being
      *  walked by the property-access pass, so a bare-Identifier receiver that names a
@@ -701,13 +701,13 @@ class Checker(
      *  the EnumDeclaration branch of [checkPropertyAccessInStatement]; consulted by
      *  [enumTypedReceiverDisplay]. */
     private var currentEnclosingEnum: EnumDeclaration? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentEnclosingEnum") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentEnclosingEnum") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentEnclosingEnum") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentEnclosingEnum") }
 
     /** File-level symbol table for the file currently being checked. Set by checker passes
      *  so that getTypeOfIdentifier can resolve file-level declarations (functions, classes,
      *  variables) without going through globals (which may have merge conflicts). */
     private var currentFileLocals: SymbolTable? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFileLocals") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentFileLocals") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFileLocals") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentFileLocals") }
 
     /** INV.2(d): the current file's lexical scope tables ([BinderResult.lexicalScopes]),
      *  set per file by [checkPropertyAccess]. Consulted by [lexicalScopeSymbol] to resolve
@@ -751,7 +751,7 @@ class Checker(
      *  [getFlowAt] during narrowing in [checkVarDeclAssignability]. Null in passes
      *  that don't initialize it (narrowing is opt-in per emission site). */
     private var currentFlowGraph: FlowGraph? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFlowGraph") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentFlowGraph") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentFlowGraph") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentFlowGraph") }
     /**
      * inKeywordAndUnknown: when true, [narrowByTruthiness] maps a bare truthy
      * `unknown` to the [truthyUnknownType] sentinel so [checkInOperatorRhs] can
@@ -839,14 +839,14 @@ class Checker(
      *  target has call signatures (e.g., `var f: (x: number) => void = (x) => { ... }`).
      *  Used by getTypeOfArrowFunction/getTypeOfFunctionExpression to infer parameter types. */
     private var contextualType: Type? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("contextualType") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("contextualType") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("contextualType") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("contextualType") }
 
     /** 16.0: Class/interface type parameter scope for member type resolution.
      *  Set by resolveReferenceMembers / getTypeOfVariableOrProperty when resolving member
      *  types that reference enclosing class type parameters (e.g. `get foo(): T` inside
      *  `class C<T>`). getTypeFromTypeReference consults this before falling back to globals. */
     private var currentTypeParamScope: Map<String, Type.TypeParam>? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentTypeParamScope") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentTypeParamScope") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentTypeParamScope") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentTypeParamScope") }
 
     /** (cpa-m2a): the cpa spine frame — most legacy state is AMBIENT with
      *  map COPIES only at function-like boundaries (the per-member-kind
@@ -3424,7 +3424,7 @@ class Checker(
      *  the heritage clause's type args. Consumed by [checkSingleCallExpressionTypes]
      *  when the callee is `Identifier("super")`. */
     private var currentSuperBaseSig: Signature? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentSuperBaseSig") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentSuperBaseSig") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentSuperBaseSig") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentSuperBaseSig") }
 
     /** 17.20: Base-class instance type for `super.method(...)` arg checking.
      *  Set by [checkCallTypesInStatement]'s ClassDeclaration branch around both
@@ -3433,7 +3433,7 @@ class Checker(
      *  Consumed by [checkSingleCallExpressionTypes] when callee is
      *  `PropertyAccess(super, methodName)`. */
     private var currentSuperBaseType: Type? = null
-        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentSuperBaseType") } else if (PassTiming.enabled) PassTiming.noteEpochNoop("currentSuperBaseType") }
+        set(v) { if (field !== v) { field = v; bumpExprEpoch("currentSuperBaseType") } else if (PassTiming.detailed) PassTiming.noteEpochNoop("currentSuperBaseType") }
 
     /** 17.221: Stack of enclosing class symbols for call/new walks.
      *  Pushed/popped by [checkCallTypesInStatement]'s ClassDeclaration branch
@@ -22806,7 +22806,7 @@ class Checker(
         // (DISPATCH.1); interleaving `if (prof)` timing into it risks perturbing
         // JIT inlining of the very code being measured, and the box noise (±13%)
         // cannot resolve a 3% question either way. Duplication is the honest trade.
-        if (PassTiming.enabled) { spineWalkFileProfiled(sf); return }
+        if (PassTiming.spineProfiled) { spineWalkFileProfiled(sf); return }
         val nodes = ArrayList<Node>(256)
         var phases = BooleanArray(256)
         nodes.add(sf)
@@ -103070,7 +103070,7 @@ interface DataView {
         withInstantiationContext(mapper) { getTypeFromTypeNode(node) }
 
     private fun getTypeFromTypeNode(node: TypeNode): Type {
-        if (PassTiming.enabled) {
+        if (PassTiming.detailed) {
             if (tnProbeDepth++ == 0) {
                 val t0 = PassTiming.nowNanos()
                 try { return getTypeFromTypeNodeCore(node) }
@@ -103090,12 +103090,12 @@ interface DataView {
         val cacheable = currentTypeParamScope == null && inferenceNamespaceStack.isEmpty() &&
             currentTypeAliasArgs == null && !isPerFileDependentRefNode(node)
         // INV.0 cacheable-vs-bypassed counters — inert unless --passTiming enabled it.
-        if (PassTiming.enabled) {
+        if (PassTiming.detailed) {
             if (cacheable) PassTiming.typeNodeCacheable++ else PassTiming.typeNodeBypassed++
         }
         if (cacheable) {
             nodeTypes[node]?.let {
-                if (PassTiming.enabled) PassTiming.typeNodeCacheHits++
+                if (PassTiming.detailed) PassTiming.typeNodeCacheHits++
                 return it
             }
             // B202.2: in-progress sentinel (cacheable context only — context-sensitive
@@ -103122,7 +103122,7 @@ interface DataView {
         // so this is exactly what a perfect zero-cost cache could remove. Reads
         // ONE static boolean on the production path (this is not the hot loop —
         // 88k calls, vs 857k nodes in spineWalkFile, which gets a separate twin).
-        if (PassTiming.enabled && !bypassTimingActive) {
+        if (PassTiming.detailed && !bypassTimingActive) {
             bypassTimingActive = true
             val t0 = PassTiming.nowNanos()
             try {
@@ -103142,7 +103142,7 @@ interface DataView {
         val cKey = mappedNodeTypeKey(node)
         if (cKey != null) {
             state.mappedNodeTypes[cKey]?.let {
-                if (PassTiming.enabled) {
+                if (PassTiming.detailed) {
                     PassTiming.mappedHits++
                     // INV.5(c2) VERIFY MODE: recompute and compare, so a missing
                     // key dimension names itself instead of being guessed at.
@@ -103176,7 +103176,7 @@ interface DataView {
                 }
                 return it
             }
-            if (PassTiming.enabled) PassTiming.mappedMisses++
+            if (PassTiming.detailed) PassTiming.mappedMisses++
             val type = getTypeFromTypeNodeWorker(node)
             state.mappedNodeTypes[cKey] = type
             return type
@@ -103200,16 +103200,16 @@ interface DataView {
     private fun mappedNodeTypeKey(node: TypeNode): Any? {
         val id = (node as NodeBase).nodeId
         if (id < 0) {
-            if (PassTiming.enabled) PassTiming.mappedRejectUnindexed++
+            if (PassTiming.detailed) PassTiming.mappedRejectUnindexed++
             return null
         }
         val owner = owningSourceFile(node)
         if (owner == null) {
-            if (PassTiming.enabled) PassTiming.mappedRejectNoOwner++
+            if (PassTiming.detailed) PassTiming.mappedRejectNoOwner++
             return null
         }
         if (fileResults[owner.fileName]?.locals !== currentFileLocals) {
-            if (PassTiming.enabled) PassTiming.mappedRejectForeignFile++
+            if (PassTiming.detailed) PassTiming.mappedRejectForeignFile++
             return null
         }
         val fp = StringBuilder()
@@ -105139,7 +105139,7 @@ interface DataView {
         // function of the symbol and stays cacheable; only the ambient context
         // that was already installed when the caller arrived disqualifies it.
         val cacheable = symbolTypeContextIsEmpty()
-        if (PassTiming.enabled) {
+        if (PassTiming.detailed) {
             if (cacheable) PassTiming.symbolTypeCached++ else PassTiming.symbolTypeContextBypassed++
         }
         try {
@@ -105767,7 +105767,7 @@ interface DataView {
      */
     private fun resolveStructuredTypeMembers(type: Type.Object) {
         if (type.properties != null) return // already resolved
-        if (PassTiming.enabled) {
+        if (PassTiming.detailed) {
             if (mrProbeDepth++ == 0) {
                 val t0 = PassTiming.nowNanos()
                 try { return resolveStructuredTypeMembersCore(type) }
@@ -106872,7 +106872,7 @@ interface DataView {
      */
     private fun getTypeOfExpression(expr: Expression): Type {
         // INV.0 recompute-factor counter — inert unless --passTiming enabled it.
-        if (PassTiming.enabled) {
+        if (PassTiming.detailed) {
             PassTiming.noteGetTypeOfExpression(expr.pos, expr.end)
             // (TYPE.1) round 737: attribute this call BY CALLER. Only an
             // OUTERMOST call walks the stack; a nested one inherits the origin,
@@ -107444,17 +107444,17 @@ interface DataView {
         // never stored (see below): trips may become rarer, never commoner.
         val memoKey = walkMemoKey(reference, kind, inputId)
         walkMemoServe(memoKey, rootName)?.let {
-            if (PassTiming.enabled) PassTiming.walkMemoServed++
+            if (PassTiming.detailed) PassTiming.walkMemoServed++
             return it.result as T
         }
         // INV.0 walks-launched counter — inert unless --passTiming enabled it.
-        if (PassTiming.enabled) PassTiming.noteNarrowWalk()
-        val probeStart = if (PassTiming.enabled) PassTiming.nowNanos() else 0L
+        if (PassTiming.detailed) PassTiming.noteNarrowWalk()
+        val probeStart = if (PassTiming.detailed) PassTiming.nowNanos() else 0L
         val saved = flowDepthTripped
         flowDepthTripped = false
         try {
             val result = walk()
-            if (PassTiming.enabled) {
+            if (PassTiming.detailed) {
                 PassTiming.narrowWalkNanos += PassTiming.nowNanos() - probeStart
                 // (f2): walk-result repeat classification.
                 val fh = (currentFlowGraph?.sourceFile?.fileName?.hashCode() ?: 0).toLong()
@@ -107504,7 +107504,7 @@ interface DataView {
             }
             // (CALL.2) round 735: the walk's own cost, bucketed, with the trip
             // correlation — a mean says nothing when 0.9% of walks carry 55%.
-            if (PassTiming.enabled) {
+            if (PassTiming.detailed) {
                 val took = PassTiming.nowNanos() - probeStart
                 PassTiming.noteNarrowWalkCost(took, flowDepthTripped, kind)
                 // Visits are only meaningful for the kinds that run
@@ -148335,7 +148335,7 @@ interface DataView {
         target: Type,
         relation: Relation,
     ): Boolean {
-        if (PassTiming.enabled) {
+        if (PassTiming.detailed) {
             if (relProbeDepth++ == 0) {
                 val t0 = PassTiming.nowNanos()
                 try { return checkTypeRelatedToCore(source, target, relation) }

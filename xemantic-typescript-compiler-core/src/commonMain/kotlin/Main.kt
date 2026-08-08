@@ -93,6 +93,18 @@ fun runCli(args: Array<String>): Int {
             "--watchVerify", "--watchverify" -> { watch = true; watchVerify = true }
             "--listAll", "--listall" -> listAll = true
             "--passTiming", "--passtiming" -> passTiming = true
+            // (WARM.1)(c) round 846 — the probe's cheaper TIERS. `--passTiming`
+            // costs ~50% of a WARM rebuild, which makes every warm absolute in
+            // its table untrustworthy; these keep the per-pass ROWS and drop the
+            // per-call bookkeeping that is the actual price. `rows` also runs
+            // the PRODUCTION spine walk, so `checkSpine`'s row is un-perturbed.
+            // Everything they drop reads 0 in the dump and the dump SAYS so.
+            "--passTimingRows", "--passtimingrows" -> {
+                passTiming = true; PassTiming.detail = false; PassTiming.spineDetail = false
+            }
+            "--passTimingSpine", "--passtimingspine" -> {
+                passTiming = true; PassTiming.detail = false; PassTiming.spineDetail = true
+            }
             "--verifyMappedCache", "--verifymappedcache" -> {
                 passTiming = true; PassTiming.verifyMappedCache = true
             }
@@ -423,6 +435,12 @@ fun runCli(args: Array<String>): Int {
         PassTiming.enabled = false
         PassTiming.verifyMappedCache = false
         PassTiming.callerAttr = false
+        // (WARM.1)(c): the tiers are MODES too — a `--passTimingRows` request on
+        // a warm server would otherwise silently downgrade every LATER
+        // `--passTiming` request's table to a tier it never asked for, and the
+        // only tell would be the dump's own header line.
+        PassTiming.detail = true
+        PassTiming.spineDetail = true
         // `--fltmCensus` / `--globalsAmp` imply `--passTiming` at the parse site
         // above, so this block is where both of them are cleared too.
         FltmCensus.on = false
@@ -637,6 +655,9 @@ private fun printUsage() {
                              (relative to the CWD; inert under --noEmit/--incremental)
           --listAll          print every error (default: first 30) — for run-to-run FP diffing
           --passTiming       print the INV.0 per-pass wall-time table + recompute counters
+          --passTimingRows   as --passTiming but ONLY the pass rows (no per-call counters, no
+                             profiled spine walk) — the cheap tier for a WARM table, (WARM.1)(c)
+          --passTimingSpine  as --passTimingRows plus the per-node SPINE sub-rows
           --dispatchProbe    (DISPATCH.1) per-handler/per-kind spine attribution
           --dispatchGated    (DISPATCH.1) run only the derived per-kind handler table
           --spineSections    (SPINE.1) intra-handler attribution of the two hot leaves

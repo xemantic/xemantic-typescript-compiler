@@ -56,8 +56,80 @@ import kotlin.time.TimeSource
  */
 object PassTiming {
 
-    /** Master switch — off by default. Every hook below is inert when false. */
+    /** Master switch — off by default. Every hook below is inert when false.
+     *
+     *  The setter MAINTAINS the two derived tier flags below; see them for why
+     *  they are fields rather than `get() = enabled && detail` getters. */
     var enabled: Boolean = false
+        set(v) {
+            field = v
+            detailed = v && detail
+            spineProfiled = v && spineDetail
+        }
+
+    // -----------------------------------------------------------------------
+    // (WARM.1)(c) round 846 — the probe's THREE TIERS.
+    //
+    // `--passTiming` costs ~2,840 ms on a COLD compile (+12.4%) and 3,450-3,945
+    // ms on a WARM one (+50-55%, docs/perf/warm-jvm-attribution.md § 3): roughly
+    // the same MILLISECONDS in both regimes, so warm it DOMINATES the table it
+    // produces and no warm row's absolute can size a lever. The cost is not in
+    // the ~513 `pass()` boundaries — it is in the per-CALL bookkeeping those two
+    // flags below gate: 574,620 `getTypeOfExpression` hooks (a distinct-keyed
+    // HashSet, a by-pass HashMap, a shadow-memo probe and a timestamp pair
+    // EACH), ~2 M classified `globals` lookups, every fenced-setter no-op, the
+    // narrowing-walk shadow, and a per-node profiled spine walk that keeps two
+    // BOXED `HashMap<Int, Long>` entries per node over 856,962 nodes.
+    //
+    // Turning them off leaves the pass ROWS — which is the whole per-pass table
+    // — measured at ~513 boundaries per compile. Both default to TRUE, so
+    // `--passTiming` and every gate that reads its counters (`cost_gate.py`,
+    // Inv0PassTimingTest, Inv3GlobalsLookupTest) are unchanged; the tiers are
+    // opt-OUT, via `--passTimingRows` / `--passTimingSpine`.
+    //
+    // They are MODES, not counters: [reset] must never clear them (same
+    // contract as [verifyMappedCache] / [callerAttr]).
+    // -----------------------------------------------------------------------
+
+    /** Tier 3 — the per-CALL counters, sets and shadow memos (type-system
+     *  hooks, classified globals lookups, epoch no-ops, narrowing shadow, node
+     *  kind histogram). Off ⇒ every such counter stays 0 and MUST NOT be read
+     *  as a measurement; [dump] says so in its header. */
+    var detail: Boolean = true
+        set(v) { field = v; detailed = enabled && v }
+
+    /** Tier 2 — the per-NODE profiled spine walk ([spineEnterNanos] & co and
+     *  the per-kind maps). Off ⇒ `checkSpine` runs the PRODUCTION walk and its
+     *  `pass()` row is un-perturbed; the SPINE sub-rows stay 0. */
+    var spineDetail: Boolean = true
+        set(v) { field = v; spineProfiled = enabled && v }
+
+    /** True iff the tier-3 per-call hooks should run — i.e. [enabled] AND
+     *  [detail].
+     *
+     *  A maintained FIELD, not `get() = enabled && detail`: this is read on the
+     *  PRODUCTION path a few million times per compile (every
+     *  `getTypeOfExpression`, every type-node resolution, every fenced setter),
+     *  and a conjunction getter would double the accessor calls a production
+     *  run pays for the probe it is not running. Maintenance lives in the three
+     *  setters above; nothing else may assign it, which is what keeps it from
+     *  going stale. */
+    var detailed: Boolean = false
+        private set
+
+    /** True iff the tier-2 profiled spine walk should run. Maintained exactly
+     *  as [detailed]. */
+    var spineProfiled: Boolean = false
+        private set
+
+    /** `full` / `spine` / `rows` — printed in [dump]'s header so a table can
+     *  never be mistaken for a tier that measured more than it did. */
+    fun tierName(): String = when {
+        detail && spineDetail -> "full"
+        detail -> "full-noSpine"
+        spineDetail -> "spine"
+        else -> "rows"
+    }
 
     /** M0.1 tail-triage lab: LIGHT census mode — [pass] records ONLY the
      *  per-pass emitted-diagnostic deltas ([diagsByPass], via [diagnosticsSize])
@@ -832,6 +904,21 @@ object PassTiming {
     /** Render the sorted pass-time table + counters through [appendLine]. */
     fun dump(appendLine: (String) -> Unit) {
         appendLine("== xtsc pass timing (INV.0) ==")
+        appendLine("tier: ${tierName()} (detail=$detail spineDetail=$spineDetail)")
+        if (!detail) {
+            appendLine(
+                "  !! TIER '${tierName()}' — the per-call counters below are NOT COLLECTED. " +
+                    "Every counter reading 0 is an ABSENT measurement, not a measured zero. " +
+                    "The pass ROWS (and checker-init total) ARE measured, at ~${passCalls.size} " +
+                    "boundaries; that is the point of this tier (WARM.1)(c)."
+            )
+        }
+        if (!spineDetail) {
+            appendLine(
+                "  !! the SPINE sub-rows (enter/leave/scope/ures/forEachChild and the per-kind " +
+                    "table) are NOT COLLECTED — `checkSpine` ran the PRODUCTION walk."
+            )
+        }
         val sumPassNanos = passNanos.values.sum()
         appendLine(
             "checker-init total: ${ms(checkerInitNanos)} ms; " +

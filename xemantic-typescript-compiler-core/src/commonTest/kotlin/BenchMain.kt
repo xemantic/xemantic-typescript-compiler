@@ -82,8 +82,16 @@ import kotlin.time.measureTimedValue
  * Usage:
  * ```
  * java -cp <test-classpath> com.xemantic.typescript.compiler.bench.BenchMainKt \
- *     <projectDir> <warmupIters> <measuredIters> [passTiming]
+ *     <projectDir> <warmupIters> <measuredIters> [passTiming|<tier>[,<tier>...]]
  * ```
+ *
+ * Since round 846 the 4th argument may instead be a comma-separated list of
+ * probe TIERS (`rows` | `spine` | `full`), one instrumented rebuild each, in
+ * the given order — `rows,full,rows,full` measures the SAME warm code at ~513
+ * probe boundaries and at ~2 M, twice each, in one process. `full − rows` is
+ * then the probe's own price, differentially, with nothing else varying; and
+ * the `rows` table's absolutes are the ones a warm lever can be sized against.
+ * `passTiming` remains an exact alias for `full`.
  * Prints one JSON object per measured iteration, then a `summary` line — and,
  * with the 4th argument present, an `instrumented` line followed by the INV.0
  * pass-timing table. The 4th argument is OFF unless it is `passTiming` / `true`
@@ -98,11 +106,28 @@ fun main(args: Array<String>) {
     val iters = args.getOrNull(2)?.toIntOrNull() ?: 10
     // Opt-in, and deliberately NOT a "any 4th argument means yes" test: a typo
     // would then silently buy a probe-contaminated extra rebuild.
-    val instrumented = when (val flag = args.getOrNull(3)?.lowercase()) {
-        null, "", "false", "0", "off" -> false
-        "passtiming", "true", "1", "on" -> true
-        else -> error("usage: 4th argument must be `passTiming` or omitted, not '$flag'")
+    //
+    // (WARM.1)(c) round 846: the argument is a COMMA-SEPARATED LIST of probe
+    // TIERS, each of which runs its own instrumented rebuild after the measured
+    // loop. `passTiming` is `full` (the pre-846 behaviour, exactly). A list such
+    // as `rows,full,rows,full` is the DIFFERENTIAL the tiers exist for: the SAME
+    // code measured at ~513 boundaries and at ~2 M, twice each, inside ONE warm
+    // process, so `full − rows` is the probe's own price with nothing else
+    // varying (round 734's law — never an empty-span loop).
+    val tiers: List<String> = when (val flag = args.getOrNull(3)?.lowercase()) {
+        null, "", "false", "0", "off" -> emptyList()
+        "passtiming", "true", "1", "on" -> listOf("full")
+        else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
+            val bad = list.filter { it !in setOf("rows", "spine", "full") }
+            if (list.isEmpty() || bad.isNotEmpty()) {
+                error(
+                    "usage: 4th argument must be `passTiming`, omitted, or a comma-separated " +
+                        "list of tiers (rows|spine|full) — not '$flag'"
+                )
+            }
+        }
     }
+    val instrumented = tiers.isNotEmpty()
 
     repeat(warmup) {
         ProjectCompiler(SystemVfs).build(project, noEmit = true)
@@ -154,41 +179,50 @@ fun main(args: Array<String>) {
     // NOT clear `enabled` (nor `censusMode`/`disabledPasses`), so clearing it
     // first is what guarantees the counters start from zero even if some
     // earlier code in this process had the instrumentation on.
-    PassTiming.enabled = false
-    PassTiming.reset()
-    PassTiming.enabled = true
-    val (probeResult, probeDuration) = measureTimedValue {
-        ProjectCompiler(SystemVfs).build(project, noEmit = true)
-    }
-    PassTiming.enabled = false
-    val probeMs = probeDuration.inWholeMicroseconds / 1000.0
-    val probeFiles = probeResult.programFiles.size
-    val probeErrors = probeResult.errorCount
-    // `overheadMs` is the whole point of printing this separately: it is the
-    // price of the instrumentation on an otherwise identical warm rebuild, so a
-    // reader can say how much of any per-pass row is the probe.
-    println(
-        """{"instrumented":true,"ms":$probeMs,"files":$probeFiles,"errors":$probeErrors,""" +
-            """"medianMs":$median,"overheadMs":${probeMs - median}}"""
-    )
-    if (measuredDrift || probeFiles != refFiles || probeErrors != refErrors) {
-        println(
-            """{"instrumentedFalsified":true,"expectedFiles":$refFiles,""" +
-                """"expectedErrors":$refErrors,"gotFiles":$probeFiles,""" +
-                """"gotErrors":$probeErrors,"measuredDrift":$measuredDrift}"""
-        )
+    for ((run, tier) in tiers.withIndex()) {
+        PassTiming.enabled = false
         PassTiming.reset()
-        error(
-            "!! ABORT — the instrumented rebuild answered a DIFFERENT program than the " +
-                "measured iterations (expected $refFiles files / $refErrors errors, got " +
-                "$probeFiles / $probeErrors; measured iterations themselves drifted: " +
-                "$measuredDrift). A per-pass table taken from a different compile " +
-                "attributes nothing about the one that was timed — the instrumentation " +
-                "is either changing behaviour, or in-process state is leaking across " +
-                "rebuilds. No table is printed."
+        PassTiming.detail = tier == "full"
+        PassTiming.spineDetail = tier != "rows"
+        PassTiming.enabled = true
+        val (probeResult, probeDuration) = measureTimedValue {
+            ProjectCompiler(SystemVfs).build(project, noEmit = true)
+        }
+        PassTiming.enabled = false
+        val probeMs = probeDuration.inWholeMicroseconds / 1000.0
+        val probeFiles = probeResult.programFiles.size
+        val probeErrors = probeResult.errorCount
+        // `overheadMs` is the whole point of printing this separately: it is the
+        // price of the instrumentation on an otherwise identical warm rebuild, so a
+        // reader can say how much of any per-pass row is the probe.
+        println(
+            """{"instrumented":true,"tier":"$tier","run":$run,"ms":$probeMs,""" +
+                """"files":$probeFiles,"errors":$probeErrors,""" +
+                """"medianMs":$median,"overheadMs":${probeMs - median}}"""
         )
+        if (measuredDrift || probeFiles != refFiles || probeErrors != refErrors) {
+            println(
+                """{"instrumentedFalsified":true,"tier":"$tier","expectedFiles":$refFiles,""" +
+                    """"expectedErrors":$refErrors,"gotFiles":$probeFiles,""" +
+                    """"gotErrors":$probeErrors,"measuredDrift":$measuredDrift}"""
+            )
+            PassTiming.reset()
+            PassTiming.detail = true
+            PassTiming.spineDetail = true
+            error(
+                "!! ABORT — the instrumented rebuild (tier $tier) answered a DIFFERENT program " +
+                    "than the measured iterations (expected $refFiles files / $refErrors errors, " +
+                    "got $probeFiles / $probeErrors; measured iterations themselves drifted: " +
+                    "$measuredDrift). A per-pass table taken from a different compile " +
+                    "attributes nothing about the one that was timed — the instrumentation " +
+                    "is either changing behaviour, or in-process state is leaking across " +
+                    "rebuilds. No table is printed."
+            )
+        }
+        PassTiming.dump(::println)
     }
-    PassTiming.dump(::println)
+    PassTiming.detail = true
+    PassTiming.spineDetail = true
     // Leave the process's instrumentation exactly as this harness found it: the
     // table is dumped, so the counters (and the multi-million-entry distinct-node
     // set behind them) have no further reader.
