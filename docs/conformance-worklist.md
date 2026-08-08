@@ -134,12 +134,31 @@ declare `@target: es5, es2015`, so their BARE config is tsgo-skipped and only th
 | anyAsConstructor | 0 | 0 | ok | **CLOSED round 837** — TS2347 through `new` |
 | assignAnyToEveryType | 0 | 0 | ok | **CLOSED round 837** — TS2631, not TS2708 |
 | assignEveryTypeToAny | 0 | 0 | ok | **CLOSED round 837** — `void` / `typeof undefined` |
-| narrowExceptionVariableInCatchClause | 2 | 0 | ok | TS2551 |
-| narrowFromAnyWithInstanceof | 2 | 0 | ok | TS2551 |
-| narrowFromAnyWithTypePredicate | 5 | 0 | ok | TS2551 x2, TS2339, TS2349 (+1 chain line) |
+| narrowExceptionVariableInCatchClause | 0 | 0 | ok | **CLOSED round 852** — TS2551 x2 |
+| narrowFromAnyWithInstanceof | 0 | 0 | ok | **CLOSED round 852** — TS2551 x2 |
+| narrowFromAnyWithTypePredicate | 2 | 0 | ok | TS2349 (+1 chain line) — TS2551 x2 and TS2339 land at 852 |
 
-Round 837 closed the three BOUNDED cases; the category is **3 failing of 9**, all three the
-narrowing family, and its emit column is still all-green.
+Round 837 closed the three BOUNDED cases; round 852 closed two of the three narrowing ones
+and took the third from 5 missing lines to 2, and the emit column is still all-green — so
+the category is **1 failing of 9**.
+
+**Round 852 landed (NARROW.2)(c) and the queue entry's claim that it was "the SOLE remaining
+blocker for all three cases" is CORRECTED: it is the sole blocker for two of them.** Three
+rules landed — tsc's `Object`/`Function` exemption, `instanceof` narrowing an `any` subject
+(`getNarrowedTypeWorker`'s `if (type.flags & AnyOrUnknown) return candidate;`), and
+`checkMemberAccessMissing` reading the narrowed receiver — and the first two cases now match
+their `.errors.txt` summary line for line, positions and messages included. The eight-profile
+grid moved **0 added / 0 removed at every one of the three steps**, and the corpus was clean
+too, which is not what round 792's precedent predicted.
+
+**The residual is one line and it is NOT the receiver path**: `narrowFromAnyWithTypePredicate`
+line 23 is `x()` where `x` has been narrowed to `{}`, i.e. TS2349 *"This expression is not
+callable."* + *"Type '{}' has no call signatures."* on the CALLEE. `getCalleeType` bails on an
+`any` callee exactly as `cmamGeneralReceiverType` bailed on an `any` receiver — round 851
+measured that bail as **48.4% of every call-expression invocation on the compiler profile** —
+so opening it is a second widening with its own FP surface, over a far larger population than
+the receiver one. It was NOT attempted in round 852, deliberately: the queue entry says not to
+take this item as a side effect of anything else, and the converse holds as well.
 
 **Round 836's costing of those three was wrong, round 837 measured why, and round 838 then
 re-diagnosed two of round 837's own four gaps.** The chain matters, because both corrections
@@ -149,7 +168,10 @@ round 838:
 1. **A type-predicate guard ALREADY narrows an `any` subject** — a file-level `declare var`,
    a catch parameter and a function-body local all narrow correctly today. Missing is only
    tsc's exemption (`isTypeAny(type) && (predicate.type === globalObjectType ||
-   globalFunctionType)`), which is a two-line rule. **OPEN**, and part of (c) below.
+   globalFunctionType)`), which is a two-line rule. **CLOSED round 852** (and it really was
+   two lines, in `narrowByCallPredicateWorker`'s positive branch — plus its `instanceof`
+   twin, which round 838 did not list because `instanceof` was not narrowing an `any`
+   subject at all, so nothing was there to exempt).
 2. **`instanceof` against a CONSTRUCTOR VALUE narrowed nothing — CLOSED, round 838.**
    Round 837 read this as "there is no `instanceof` arm in `extractNullNarrowing` at all".
    **That is retracted**: a user-declared `class C` narrows correctly through the flow
@@ -166,7 +188,16 @@ round 838:
    for an `any` receiver by construction. Making it read the narrowed type WIDENS the most
    FP-sensitive walker in the compiler over exactly the shape tsc's own sources use
    constantly, i.e. a grid risk of a different order from anything rounds 834–838 ran.
-   **OPEN — this is (NARROW.2)(c), and it is the sole remaining blocker for the category.**
+   **CLOSED round 852 — and the predicted grid risk did not materialise: 0 added / 0 removed
+   on all eight profiles at each of the three steps, and 0 corpus regressions.** Two things
+   made that possible and both are recorded because neither was obvious in advance. The
+   opening is keyed on "a narrow HAPPENED and produced a concrete `Type.Object`", which is a
+   far smaller population than "the receiver is `any`" — the overwhelming majority of `any`
+   receivers on every profile are never narrowed at all. And the walker's downstream gates
+   (base types non-empty, `Type.Reference` targets, `RUNTIME_PROPERTIES`, the lib-min-target
+   families) apply to the narrowed receiver exactly as to a declared one, so the new
+   population inherits the whole existing firewall rather than bypassing it. Round 838's
+   framing that this blocks "all three cases" was one case too generous — see above.
 4. **A guard's narrow appeared to LEAK out of its `if` into the next sibling `if` — CLOSED,
    round 838, and it was not a leak.** The `if` scoping is correct and a UNION subject
    behaves perfectly. Both single-type NEGATIVE branches decided "the subject IS the target,

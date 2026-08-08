@@ -20,6 +20,101 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 852 (2026-08-08) — (NARROW.2)(c) CLOSED. THE HIGHEST-FP-RISK ITEM IN THE QUEUE MOVED THE
+EIGHT-PROFILE GRID BY *NOTHING* AT EVERY ONE OF ITS THREE STEPS AND COST THE CORPUS *NOTHING*, AND
+THE ROUND'S MOST EXPENSIVE FINDING IS THAT THE COMMITTED GRID HARNESS HAD BEEN MEASURING A
+FIVE-ROUND-OLD COMPILER.**
+
+**WHAT LANDED.** Three separable rules, each built, gridded and diffed against ONE rebuilt
+before-arm before the next was enabled (the queue's own protocol for this item — "run the
+8-profile grid at EVERY step, not only at the end"):
+
+1. **THE EXEMPTION.** tsc's `isTypeAny(type) && (predicate.type === globalObjectType ||
+   globalFunctionType)`, in `narrowByCallPredicateWorker`'s positive branch and in
+   `narrowByInstanceOf`. There is no `globalObjectType` cell in this checker, so
+   `isGlobalObjectOrFunctionType` identifies the type by SYMBOL NAME plus the round-479
+   `builtinLibDecls` clause — a user-declared `Object`/`Function` keeps narrowing. It had to be
+   placed FIRST in the positive branch, because the relation arm below decides it the other way:
+   `any` is assignable to everything, so `checkTypeRelatedTo(targetType, any)` holds and the guard
+   was handing back `Function`. **GRID: 0 added / 0 removed on all eight.**
+2. **`instanceof` NARROWS AN `any` SUBJECT.** tsc's `getNarrowedTypeWorker` opens
+   `if (type.flags & AnyOrUnknown) return candidate;`. Ours returned the subject UNCHANGED, and the
+   mechanism is the mirror image of round 838's (b): `isInstanceOfClass` falls back to
+   assignability for a non-`Type.Interface` source, `any` is assignable to everything, so
+   `matches == isMatch` and the positive branch took the "nothing to do" arm. **`anyType` exactly,
+   not `TypeFlags.Any`** — the `error`/`unresolved` sentinels must not acquire a concrete type.
+   **GRID: 0 / 0.** *Round 838's item-1 note ("missing is only the exemption") is therefore
+   incomplete: `instanceof` was not narrowing an `any` subject at all, so there was nothing there
+   to exempt.*
+3. **`checkMemberAccessMissing` READS IT.** Both receiver-typing branches of
+   `cmamGeneralReceiverType` bail the moment `getTypeOfSymbol`/`getTypeOfIdentifier` answers
+   `anyType`, and that bail is also the walker's FP firewall. `cmamNarrowedAnyReceiverType` is the
+   narrowest opening of it: declared type exactly `anyType`, a narrow that actually happened, and a
+   result that is a concrete `Type.Object`. **GRID: 0 / 0.**
+
+**THE CONFORMANCE RESULT, AND A CORRECTION TO THE QUEUE ENTRY'S OWN PREMISE.** Each fixture run as
+a single-file project through the CLI, diffed against its `.errors.txt` summary INCLUDING
+positions: `narrowExceptionVariableInCatchClause` **2 of 2, CLOSED**;
+`narrowFromAnyWithInstanceof` **2 of 2, CLOSED**; `narrowFromAnyWithTypePredicate` **3 of 4** —
+every message byte-identical to the baseline, including `{ type: "foo"; dontPanic(): any; }` as a
+receiver display and the TS2551 spelling suggestions with their TS2728 related info. So **(c) is
+the sole remaining blocker for TWO of the three cases, not three**: the residual is
+`narrowFromAnyWithTypePredicate` line 23, `x()` on a `{}`-narrowed CALLEE — TS2349 "This expression
+is not callable" — which is the CALL path. `getCalleeType` bails on an `any` callee exactly as the
+receiver path bailed, and round 851 measured that bail at **48.4% of every call-expression
+invocation on the compiler profile**, so it is a second widening over a much larger population.
+Deliberately not attempted: the queue says do not take this item as a side effect of anything else,
+and the converse holds too. **`types/any` goes 3 failing of 9 → 1 of 9.**
+
+**WHY THE PREDICTED FP STORM DID NOT ARRIVE — the two mechanisms, because neither was obvious in
+advance and the next widening should be argued against them.** (a) The opening is keyed on *a
+narrow HAPPENED and produced a concrete `Type.Object`*, which is a far smaller population than *the
+receiver is `any`* — the overwhelming majority of `any` receivers in tsc's sources are never
+narrowed. (b) The new population inherits the walker's ENTIRE existing firewall rather than
+bypassing it: `cmamCheckResolvedObjectType`'s base-types bail, its `Type.Reference`-target bail,
+`RUNTIME_PROPERTIES`, `LIB_MIN_TARGET`/`_SOFT` and the enum-flavoured bail all apply to a narrowed
+receiver exactly as to a declared one. Round 792's law is not refuted — a dashboard zero still
+bounds only frequency — it is simply that here the corpus agreed with the dashboard.
+
+**ABLATION — ONE MISTAKE AT A TIME, NINE OF THEM, AND THREE CAME BACK UNDISCRIMINATED (said, not
+hidden).** Harness committed BEFORE ablating (round 789). Discriminating: `A1` drop the
+type-predicate exemption → 1 pin; `A2` drop the `instanceof` exemption → 2; `A3` drop the
+`instanceof` `any`-narrow → 3; `A4` drop the globals-branch read → 3; `A5` drop the function-local
+branch read → 2, and **A4's and A5's failing sets are disjoint**, which is what makes them two
+seams rather than one. Undiscriminated, each with its cause named:
+* **`A1`'s two property-read pins are shielded by a SECOND gate of my own** — `cmamNarrowedAnyReceiverType`
+  refuses a narrowed `Object`/`Function` as well — so they redden only under the COMBINED `A1A7`
+  (both gates removed, 3 pins). Round 807's redundant-guard mechanism exactly. They are ARM pins,
+  not seam pins, and defence in depth is why.
+* **`A6`, dropping the `narrowed === rawType` early-out, changes NOTHING** — an un-narrowed `any`
+  is a `Type.Intrinsic`, so the `narrowed !is Type.Object` test below already refuses it. It is a
+  perf early-out, not a guard.
+* **`A7` (admit a `Type.Reference` narrow) and `A9` (admit `error`/`unknown` receivers) are inert
+  on the WHOLE CORPUS — 14,016 / 0 with either refusal deleted.** They are conservatism with no
+  measured consumer. Kept, because round 792's law cuts this way too and they cost nothing, but
+  **recorded as unproven rather than claimed as firewall** — a future round that needs either
+  population can open it knowing no baseline defends it.
+
+**THE PROCESS FINDING, AND IT IS THE ROUND'S MOST EXPENSIVE ONE.** `scripts/grid838.sh` reads
+`build/bench/xtsc-classpath.txt`, and **the file in the tree was a PRE-MODULE-SPLIT one**: its only
+class directory was the ROOT project's `build/classes/kotlin/jvm/main`, which since the split is a
+stale leftover — 582 classes against the core module's 649, and missing `ModeLedger` (round 848),
+`LibTypeCensus` (849) and `CcetSections` (851), so it is a pre-848 compiler. Every capture that
+script produced ran the wrong binary, with **exit 0, a plausible error count and no tell**. This is
+the round-MOD.3 trap and `ab-interleaved.sh`/`ab-warm.sh` already refuse such a file by grepping it
+for the module name; `grid838.sh` did not. It now refuses it, and also refuses a TRUNCATED capture
+("... and N more error(s)", round 811) and an EMPTY one (round 804). **Any grid digest recorded
+between the module split and this round should be treated as unverified.** The digest this round
+records is `84bbe7f0…` for the 46-line compiler-profile capture under grid838.sh's own
+prefix-stripping recipe, and `eccc3408…` for harness's 94 — quoted with the recipe, per round 841.
+
+**GATES.** Suite **14,016 / 0 failures / 3 skipped** (14,001 + the 15 new `AnyReceiverNarrowingTest`
+pins), counted per module with `xml.etree` over a fully wiped results dir in all four modules.
+`cost_gate.py` **+0.00% on all 18 counters** — the exemption's `builtinLibDecls` membership test is
+behind a symbol-NAME short-circuit, so only types actually named `Object`/`Function` ever pay it.
+`huge_methods.py --fail-over 0` **exit 0**, census still 0. Eight-profile grid 0/0 at all three
+steps.
+
 **Round 851 (2026-08-08) — (WARM.5) CLOSED, AND WITH IT THE WARM ARC. THE CALL PATH IS THE FOURTH
 INDEPENDENT SITE TO READ 94% CHECKING WORK / 6% EVERYTHING ELSE, AND THE SIXTH CONSECUTIVE PRICED
 NEGATIVE. NOTHING WAS OPTIMIZED; THE VERDICT IS THE DELIVERABLE.**
@@ -1756,9 +1851,24 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   sibling guards. `anyNegativeBranchSurvives` (`TypeFlags.Any`, i.e. `any` plus the
   `error`/`unresolved` sentinels). `AnyNegativeNarrowingBranchTest`, 7 pins.
 
-- [ ] **(NARROW.2)(c) — let `checkMemberAccessMissing` read a NARROWED receiver whose
-  declared type is `any`, plus tsc's `Function`/`Object` exemption. THE HIGHEST-FP-RISK
-  ITEM IN THE QUEUE; do not take it as a side effect of anything else.** It is the SOLE
+- [x] **(NARROW.2)(c) — CLOSED round 852. `checkMemberAccessMissing` reads a NARROWED
+  receiver whose declared type is `any`; the `Object`/`Function` exemption landed; and
+  `instanceof` now narrows an `any` subject at all, which round 838 had not noticed was
+  missing.** THE PREDICTED FP STORM DID NOT ARRIVE: the eight-profile grid moved 0 added / 0
+  removed at each of the three steps, against one rebuilt before-arm, and the corpus was
+  clean too (14,016 / 0 / 3). Two mechanisms explain it and a next widening should be argued
+  against both — the opening is keyed on "a narrow HAPPENED and produced a concrete
+  `Type.Object`", a far smaller population than "the receiver is `any`"; and the new
+  population inherits `cmamCheckResolvedObjectType`'s whole existing firewall rather than
+  bypassing it. **The entry's premise is CORRECTED: (c) was the sole blocker for TWO of the
+  three `types/any` cases, not three.** `narrowExceptionVariableInCatchClause` and
+  `narrowFromAnyWithInstanceof` now match their baselines line for line;
+  `narrowFromAnyWithTypePredicate` is 3 of 4, its residual being TS2349 on a `{}`-narrowed
+  CALLEE — the CALL path, where `getCalleeType`'s `any` bail is 48.4% of every call-expression
+  invocation (round 851), i.e. a separate widening over a much larger population, queued as
+  (NARROW.2)(d) below. `AnyReceiverNarrowingTest`, 15 pins, nine one-at-a-time ablations of
+  which three came back undiscriminated and are recorded as such. Original framing follows.
+  It is the SOLE
   remaining blocker for all three `types/any` narrowing cases — re-measured after (a) and
   (b) landed, all three still emit nothing (`docs/conformance-worklist.md` § types/any).
   Every diagnostic those fixtures assert is a TS2551/TS2339/TS2349 on the narrowed
@@ -1773,6 +1883,24 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   regression.** tsc's exemption is `isTypeAny(type) && (predicate.type === globalObjectType
   || globalFunctionType)`, i.e. a guard onto `Object`/`Function` leaves an `any` subject
   `any`; `narrowFromAnyWithTypePredicate` pins both halves of that in one fixture.
+
+- [ ] **(NARROW.2)(d) — let the CALL path read a NARROWED `any` CALLEE (TS2349 / TS2351).
+  Round 852's residual, and a HIGHER-population widening than (c) was; do not take it as a
+  side effect either.** The one remaining line of `narrowFromAnyWithTypePredicate` is `x()`
+  where a `x is {}` guard has narrowed `x`: tsc emits TS2349 *"This expression is not
+  callable."* + the chain *"Type '{}' has no call signatures."* on the CALLEE. `getCalleeType`
+  bails on an `any` callee exactly as `cmamGeneralReceiverType` bailed on an `any` receiver,
+  and **round 851 measured that bail as 48.4% of every call-expression invocation on the
+  compiler profile** — against which (c)'s population (an `any` receiver that a guard actually
+  narrowed to a concrete `Type.Object`) was tiny. **What round 852 learned that transfers:**
+  key the opening on *a narrow HAPPENED and produced a concrete type*, never on *the callee is
+  `any`*; check whether the downstream emitter's own gates (here the round-479
+  `isGlobalFunctionType` escape and the `core is NewExpression` restriction at the general
+  TS2349 site) already firewall the new population, because in (c) they did all the work; and
+  run the grid at every step even though in (c) it never moved — it is the cheap arm, the
+  corpus is the expensive one, and round 792's law is still the reason to run both.
+  **Prize: one conformance line, and `types/any` 1 failing of 9 → 0.** That is a SMALL prize
+  against that population, so price the FP risk before building anything.
 
 - [x] **(NATIVE.1) FIXED ROUND 827 — the native `runWithDeepStack` actual now runs the
   pipeline on a 256 MB pthread instead of the default 8 MB main stack (a 32x margin), with
