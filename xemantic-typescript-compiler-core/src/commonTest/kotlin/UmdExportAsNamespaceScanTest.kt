@@ -96,6 +96,76 @@ class UmdExportAsNamespaceScanTest {
         assert(scanUmdExportAsNamespace("declare namespace Lib { }\n").isEmpty())
     }
 
+    // -------------------------------------------------------------- (WARM.7)(b)
+
+    /** The oracle: what [umdExportAsNamespaceRegex] itself reports for [text]. */
+    private fun referenceScan(text: String): List<Pair<String, Int>> =
+        umdExportAsNamespaceRegex.findAll(text)
+            .mapNotNull { m -> m.groups[1]?.let { it.value to it.range.first } }
+            .toList()
+
+    /**
+     * Every string the battery below can build, with the same line-terminator
+     * contexts a real file puts around a statement.
+     */
+    private fun battery(): List<String> {
+        val gaps = listOf("", " ", "\t", " \t ", "\u000C", "\n")
+        val leads = listOf("", " ", "\t", "x", "//")
+        val heads = listOf("export", "exports", "myexport")
+        val names = listOf("Lib", "_", "\$", "a9", "9a", "namespace", "", "\u00E9")
+        val lines = ArrayList<String>()
+        for (lead in leads) for (head in heads) for (g1 in gaps) for (g2 in gaps) for (g3 in gaps) {
+            for (name in names) lines.add("$lead$head${g1}as${g2}namespace$g3$name;")
+        }
+        val contexts = listOf(
+            { s: String -> s },
+            { s: String -> "const q = 1;\n$s\n" },
+            { s: String -> "const q = 1;\r\n$s\r\n" },
+            { s: String -> "const q = 1;\r$s\r" },
+            { s: String -> "const q = 1; $s " },
+            { s: String -> "const q = 1;$s" },
+            { s: String -> "$s$s" },
+            { s: String -> "\n$s" },
+        )
+        return lines.flatMap { line -> contexts.map { it(line) } }
+    }
+
+    /**
+     * (WARM.7)(b) replaced the matcher, not the semantics: the hand-written scan
+     * must agree with the pattern it replaced on every shape, including the ones
+     * a `.d.ts` gate or an `indexOf` pre-filter would have decided differently.
+     * This is the pin that FAILS if the rewrite changed any verdict — it compares
+     * names AND offsets, so a scan that found the right identifiers at the wrong
+     * positions reddens it.
+     */
+    @Test
+    fun `the hand-written scan agrees with the reference pattern on the whole battery`() {
+        val cases = battery()
+        assert(cases.size > 10000)
+        val mismatches = cases.mapNotNull { text ->
+            val mine = scanUmdExportAsNamespace(text).map { it.name to it.pos }
+            val reference = referenceScan(text)
+            if (mine == reference) null else "${text.replace("\n", "\\n")} -> $mine != $reference"
+        }
+        // take(5): the diagram renders every captured subexpression, and a broken
+        // scanner mismatches on thousands of cases at once.
+        val firstMismatches = mismatches.take(5)
+        assert(firstMismatches.isEmpty())
+    }
+
+    /**
+     * The battery is only evidence while it MATCHES sometimes — an all-empty
+     * oracle would make the agreement pin vacuous (round 753: an ablation that
+     * counts nothing tested nothing).
+     */
+    @Test
+    fun `the battery exercises both verdicts - it is not vacuously empty on either side`() {
+        val cases = battery()
+        val matching = cases.count { referenceScan(it).isNotEmpty() }
+        assert(matching > 100)
+        assert(matching < cases.size)
+    }
+
     // ------------------------------------------- checkUmdGlobalVsDeclareGlobalConst
 
     /** The UMD global and the `declare global` const collide: TS2451 at BOTH. */
