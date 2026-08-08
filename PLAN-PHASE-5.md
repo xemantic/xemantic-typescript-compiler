@@ -96,9 +96,27 @@ replaced it with a measurement. `docs/perf/warm-tail-attribution.md` § 11.
   added is a `commonTest` tier and its pin), which `cost_gate.py`'s 20 unchanged counters and the
   unchanged 78 files / 46 errors independently confirm. Commit `3909ae55`.
 
-- **NEXT.** **(WARM.8)** — the post-checker tails, 143.2 ms = **1.90% of the warm artifact**, warming
-  1.27x, still COMPLETELY UNATTRIBUTED and now the largest unmeasured region in the compiler. It
-  outranks every priced candidate the warm arc has produced since round 850.
+- **SECOND DELIVERABLE — (WARM.8) ATTRIBUTED, AND IT IS ONE FUNCTION.** Round 859's post-checker
+  tails (143.2 ms = 1.90%, warming 1.27x, no probe below them) are **97.6% `cpcRequireOnlyOrphans`**:
+  **130.4 ms = 1.72% of a warm rebuild** with a **4.1% draw spread**, the tightest number in the warm
+  arc, measured over 4 draws in 2 processes. Two levels of abutting `FrontEnd` blocks, **residue
+  0 ms at both levels in every draw**; everything else after the checker sums to **~3.1 ms**. **THE
+  PRIOR WAS WRONG BY 800x** — the obvious suspect was `topologicalSort` over 78 barrel-connected
+  files, which reads **0.17 ms** (and `hasCycle` + the dep map, 0.01 ms); the second partition level
+  exists precisely so that prior could not become a sentence in a document. The cost is a
+  whole-program AST walk added for a two-file corpus fixture (`moduleResolutionWithRequire`).
+  `PostCheckerPartitionTest` drives a real multi-file `ProjectCompiler` build, because the invariant
+  is the boundary PLACEMENT and a dropped `close` is invisible to every output, to `cost_gate.py` and
+  to the corpus. Gates re-run per sub-step: suite **14,060** then **14,061 / 0 / 3**, `cost_gate.py`
+  **+0.00% on all 20** both times, `huge_methods.py --fail-over 0` **0 over the limit** both times.
+  Commits `486c5569`, `7fa2d320`.
+
+- **NEXT.** **(WARM.8)(c)**, queued with its equivalence already proved BY CONSTRUCTION rather than
+  by census: `cpcRequireOnlyOrphans` has exactly ONE consumer, which under `--noEmit` reads a map
+  that round 738's emit gate leaves empty — so `if (options.skipEmitOutputs) emptySet() else ...`
+  deletes 1.72% of a warm check-only rebuild, needs no round-788 census and no round-793 boundary
+  subtraction, and is invisible to the corpus fixtures it exists for because they run WITH emit. It
+  is a check-only lever and moves the CI emit ratio by zero; say so when landing it.
 
 **Round 860 (2026-08-08) — (WARM.7) LANDED: THE DUPLICATED 10-MEGABYTE UMD SCAN IS GONE, 96.4 ms
 -> 4.7 ms = 1.17% OF A WARM REBUILD — AND THE HALF ROUND 859 SAID "NEEDS A GATE" NEEDED NO GATE AT
@@ -1243,13 +1261,42 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   vacuous by construction and was not run. Commit `3909ae55`.
   `docs/perf/warm-tail-attribution.md` § 11.
 
-- [ ] **(WARM.8) — THE POST-CHECKER TAILS: 143.2 ms = 1.90% of the warm artifact, warming 1.27× —
-  the worst ratio measured in round 859 — and COMPLETELY UNATTRIBUTED.** Under `--noEmit` the
-  `FrontEnd` probe's TRANSFORM / EMIT / DECL_EMIT sub-rows have **zero calls** (round 738's gate,
-  still holding), so this is not emit work; nothing below `FrontEnd.POST` has ever been asked what
-  it is. It ranks above every candidate the last four warm rounds produced. Sizing it needs one more
-  `FrontEnd` constant, not a round. **Not yet a candidate — an unmeasured region.**
-  `docs/perf/warm-tail-attribution.md` § 5.
+- [x] **(WARM.8) — DONE, ROUND 861. THE POST-CHECKER TAILS ARE ONE FUNCTION: `cpcRequireOnlyOrphans`
+  is **130.4 ms = 1.72% of a warm rebuild and 97.6% of the whole region**, with a **4.1% draw
+  spread** — the tightest number in the warm arc.** Round 859 sized the region at 143.2 ms = 1.90%
+  with the worst warm-up ratio it measured (1.27x) and NO probe below it. Two levels of abutting
+  `FrontEnd` blocks (residue **0 ms at both levels, in every draw**) put everything else after the
+  checker at **~3.1 ms total**: the post-check diagnostic/`removeAll` chain 1.9 ms,
+  `collectCrossFileNamespaceExports` 0.8, emit prep 0.2, `topologicalSort` **0.17**, `hasCycle` +
+  dep-map **0.01**, output selection 0.03. **THE PRIOR WAS WRONG BY 800x** — the obvious suspect was
+  the topological sort over 78 barrel-connected files, and the second level exists precisely to stop
+  that prior becoming a sentence. `cpcRequireOnlyOrphans` implements tsc's
+  `moduleResolutionWithRequire` rule (a `.ts` reached only by a bare untyped `require('./x')` is not
+  a program file), so it walks every statement of every program file; its gate
+  (`hasExplicitFilenames && tsFileNames.size > 1`) passes for any real multi-file project. Pinned by
+  `PostCheckerPartitionTest`, which drives a real multi-file `ProjectCompiler` build because the
+  invariant is the PLACEMENT — a dropped `close` is invisible to every output, to `cost_gate.py` and
+  to the corpus. Gates: suite 14,060 then 14,061 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on
+  all 20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit both times. Commits
+  `486c5569`, `7fa2d320`. `docs/perf/warm-tail-attribution.md` § 12.
+
+- [ ] **(WARM.8)(c) — GATE `cpcRequireOnlyOrphans` OUT OF CHECK-ONLY COMPILES: 130.4 ms = 1.72% of a
+  warm rebuild, and the equivalence is BY CONSTRUCTION rather than by census.** It has exactly ONE
+  consumer — `sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }` —
+  and under `--noEmit` `jsOutputMap` is EMPTY by construction, because round 738's gate makes
+  `cpcTransformAndEmit` iterate `if (options.skipEmitOutputs) emptyList()` and that loop is the map's
+  only writer; so `mapNotNull` yields the empty list whatever the filter holds. The change is
+  `if (options.skipEmitOutputs) emptySet() else cpcRequireOnlyOrphans(...)`. **Round 788 needs no
+  census** (nothing else reads the set; it is a pure syntactic scan whose result is discarded) and
+  **round 793 needs no subtraction** (the probe boundaries stay; the block reads ~0). **What must not
+  break:** the corpus fixtures it exists for (`moduleResolutionWithRequire`, `importInsideModule`)
+  run through the EMIT path where `skipEmitOutputs` is false — so the gate is invisible to them, and
+  the implementing round owes a pin that the orphan is still dropped WITH emit plus a check-only
+  control. **Honest bound: this is a CHECK-ONLY lever** — zero in emit mode, so it does not move the
+  CI `bench-3way.sh` ratio, but it moves `--noEmit`, the daemon, and every number this arc produces.
+  Making the walk itself cheap (a `require` substring pre-filter, or hoisting it into the crawl that
+  already reads every file) is a second, larger question this round did not price.
+  `docs/perf/warm-tail-attribution.md` § 12.5.
 
 - [x] **(WARM.6) — DONE, ROUND 859. THE TAIL IS FLAT WARM TOO — round 801's cold verdict survives
   the regime change, which was not known.** The ~416 tail passes are 1,530 ms = 20.3% of the warm

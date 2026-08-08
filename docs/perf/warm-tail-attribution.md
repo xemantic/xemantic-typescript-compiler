@@ -849,3 +849,126 @@ relocation. Neither is a round; together they are.
 * **The `decl` branch was not sub-partitioned** by symbol kind (function vs
   class vs interface vs enum vs import alias), so nothing here says whether the
   85.6 ms is concentrated in one of them.
+
+---
+
+## 12. § (WARM.8) — the post-checker tails are ONE FUNCTION: `cpcRequireOnlyOrphans`, 130.4 ms = 1.72% warm
+
+*Round 861's second deliverable, taken after § 11 was written up and committed.
+§ 5 measured the post-checker tails at 143.2 ms = 1.90% of a warm rebuild with
+the worst warm-up ratio of any region (1.27×) and **no probe below them**, and
+§ 7 called it "an unmeasured region that ranks above every candidate the last
+four warm rounds produced". It is now measured, and it is not a region at all.*
+
+> **HEADLINE. 97.6% of the post-checker tails is a single function —
+> `cpcRequireOnlyOrphans`, a corpus-fixture orphan detector — at **130.4 ms =
+> 1.72% of a warm rebuild**, with a draw spread of **4.1%**, the tightest number
+> in this document. Everything else after the checker sums to ~3.1 ms.** And it
+> has exactly ONE consumer, which under `--noEmit` reads an empty map.
+
+### 12.1 What was built
+
+Two levels of `FrontEnd` constants, each a set of blocks that **abut** from
+their parent's own `t()` to its `close()`, so the residue is a **partition
+check** rather than an unattributed remainder — and both residues read **0 ms**
+in every draw.
+
+`PostCheckerPartitionTest` pins the placement, and it drives a real multi-file
+`ProjectCompiler` build rather than asserting on the probe object, because the
+invariant is *where the boundaries are*: a dropped `close` takes a block's
+`calls` to zero and dumps its time into the residue, a misplaced one silently
+re-attributes work between blocks, and **neither is visible in any output, in
+`cost_gate.py`, or in the corpus** — the probe is OFF in production. It carries
+the behaviour-free negative control the `frontend` tier has always depended on
+and which nothing asserted for `POST`.
+
+### 12.2 The table (`BenchMain <proj> 3 8 frontend,frontend`, 2 processes × 2 draws)
+
+Process walls: 7,708.2 and 7,494.9 ms median.
+
+| block | draw 1 | draw 2 | draw 3 | draw 4 | mean | % warm wall |
+|---|---:|---:|---:|---:|---:|---:|
+| **post-checker (POST)** | 133.5 | 132.5 | 136.8 | 131.4 | **133.6** | **1.76%** |
+|  post-check diagnostic filters | 1.88 | 1.86 | — | — | ~1.9 | 0.02% |
+|  `collectCrossFileNamespaceExports` | 0.87 | 0.82 | — | — | ~0.8 | 0.01% |
+|  emit prep + transform/emit call | 0.16 | 0.21 | — | — | ~0.2 | 0.00% |
+|  **output assembly + sorting** | 130.6 | 129.6 | 133.7 | 128.4 | **130.6** | **1.72%** |
+|    `hasCycle` + companion-`.d.ts` deps | 0.007 | 0.011 | — | — | ~0.01 | 0.00% |
+|    `topologicalSort` | 0.159 | 0.171 | — | — | ~0.17 | 0.00% |
+|    **`cpcRequireOnlyOrphans`** | **130.4** | **129.4** | **133.5** | **128.1** | **130.4** | **1.72%** |
+|    output selection + echo order | 0.033 | 0.028 | — | — | ~0.03 | 0.00% |
+| residue (both levels) | 0 | 0 | 0 | 0 | **0** | |
+
+`cpcRequireOnlyOrphans` is **97.6% of `POST` in every one of the four draws**
+(97.6 / 97.6 / 97.6 / 97.5), and its own spread is **4.1%** — far tighter than
+the 10.5% wall spread, because it is one deterministic tree walk rather than a
+JIT-sensitive aggregate.
+
+§ 5's 143.2 ms / 1.90% reproduces here as 133.6 ms / 1.76%, on a different day
+and a different build; the difference is inside the cross-round rule.
+
+### 12.3 The prior that was WRONG, by 800×
+
+Before measuring, the obvious suspect was `topologicalSort` — 78 densely
+barrel-connected files, a sort called twice, with `hasCycle` above it. It reads
+**0.17 ms**, and `hasCycle` + the dep-map construction reads **0.01 ms**. The
+cost is none of the graph machinery; it is a walk added for a corpus fixture.
+The whole point of the second level was to stop that prior from becoming a
+sentence in a document.
+
+### 12.4 What `cpcRequireOnlyOrphans` is, and why it costs this
+
+It implements tsc's `moduleResolutionWithRequire` behaviour: a `.ts` input
+reached ONLY by a bare untyped `require('./x')` is not a program file, so it is
+never emitted. Detecting that means walking every statement of every program
+file looking for `require` call expressions and namespace-internal
+`import = require` declarations. Its gate is
+`parsed.hasExplicitFilenames && tsFileNames.size > 1` — which a real project of
+78 files passes, so **a whole-program AST walk runs on every multi-file compile
+to answer a question about a two-file corpus fixture.**
+
+### 12.5 (WARM.8)(c) — the candidate, priced and pre-verified. **130.4 ms = 1.72% warm.** RECOMMENDED.
+
+**It has exactly one consumer** (`grep` gives four hits: the declaration, the
+call, the `return`, and one use):
+
+```kotlin
+val jsOutputs = sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }
+```
+
+and under `--noEmit` `jsOutputMap` is **empty by construction** — round 738's
+gate makes `cpcTransformAndEmit` iterate `if (options.skipEmitOutputs)
+emptyList()`, and that loop is the map's only writer. So `mapNotNull` yields the
+empty list **whatever the filter contains**, and computing the filter is
+provably dead work in check-only mode.
+
+* **The change is `if (options.skipEmitOutputs) emptySet() else cpcRequireOnlyOrphans(…)`.**
+* **Round 788 is answered by construction, not by a census**: nothing else reads
+  the set, and no other caller resolves the symbols it touches — it is a pure
+  syntactic scan whose result is discarded.
+* **Round 793 needs no subtraction**: the probe boundaries stay where they are;
+  the block simply reads ~0.
+* **What must not break**: the corpus fixtures this exists for
+  (`moduleResolutionWithRequire`, `importInsideModule`) run through the EMIT
+  path, where `skipEmitOutputs` is false and the function still runs — so the
+  gate is invisible to them, which is exactly the property the implementing
+  round must pin (a fixture asserting the orphan is still dropped WITH emit, and
+  a check-only control).
+* **Honest caveat, and it bounds the claim**: this is a **check-only** lever. In
+  emit mode the function is load-bearing and the saving is zero, so it does not
+  move the CI `bench-3way.sh` ratio (`ARCHITECTURE-RETHINK` § 0.2). It does move
+  `--noEmit`, the daemon, and every number this whole arc has produced.
+* **Whether the walk itself can be made cheap** — a substring pre-filter for
+  `require` over the file text, or hoisting the scan into the crawl that already
+  reads every file — is a second, larger question this round did not price.
+
+### 12.6 What this does NOT show
+
+* **One profile**, `--noEmit`, sequential, 4 draws in 2 processes.
+* **The sub-blocks below 2 ms were measured in ONE process only** (2 draws);
+  they are reported to show where the cost is *not*, and none of them could
+  matter at 0.02%.
+* **`cpcRequireOnlyOrphans` was not sub-partitioned**, so nothing here says
+  which of its scans costs the 130 ms.
+* **No A/B and no change was made**; (WARM.8)(c) is a priced candidate, not a
+  result.
