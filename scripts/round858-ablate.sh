@@ -65,18 +65,24 @@ ablate() {  # ablate <tag> <python-patch>
   git checkout "$TARGET"
 }
 
-echo "=== BASELINE (committed, unablated) ==="
-run_pins baseline
+if [ -z "${SKIP_BASELINE:-}" ]; then
+  echo "=== BASELINE (committed, unablated) ==="
+  run_pins baseline
+fi
 
 echo
 echo "=== ABLATION A — drop libs.versions.toml from the watched inputs ==="
 echo "    (the ROUND-858 bug: this is what ab-warm.sh's old guard was blind to)"
+# Line-based, so the patch does not depend on how a line-continuation backslash
+# survives two levels of quoting.
 ablate ablationA '
 import pathlib
-p = pathlib.Path("scripts/lib/dep-classpath.sh"); t = p.read_text()
-old = "        \"$root/gradle/libs.versions.toml\" \\\\\n"
-assert old in t
-p.write_text(t.replace(old, ""))'
+p = pathlib.Path("scripts/lib/dep-classpath.sh")
+lines = p.read_text().splitlines(True)
+out = [l for l in lines
+       if not (l.strip().startswith("\"") and "gradle/libs.versions.toml" in l)]
+assert len(out) == len(lines) - 1, (len(out), len(lines))
+p.write_text("".join(out))'
 
 echo
 echo "=== ABLATION B — drop the entry-existence loop ==="
