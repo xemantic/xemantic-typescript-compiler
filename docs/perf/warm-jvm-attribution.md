@@ -604,3 +604,197 @@ of the five commands.
 * CLAUDE.md — one entry under *Measured dead-ends*, carrying the § 3 warning
   (the probe is ~3 s in absolute terms: 12% of a cold run, ~50% of a warm one,
   so only the RATIOS of a warm table are comparable to a cold one's).
+
+---
+
+## 10. § ROUND 846 — the probe was given TIERS, and both brackets in § 3.1 are now MEASURED
+
+*Round 846, 2026-08-08. This section CORRECTS §§ 3, 3.1, 4 and 5(a) of this
+document with a direct measurement in place of their deduction-plus-bracket.
+It changes no conclusion's direction except one — § 4's warm speed-up column —
+which it inverts.*
+
+> **HEADLINE.** `--passTiming` now has three tiers (`rows` / `spine` / `full`);
+> the `rows` tier keeps the whole per-pass table and costs **+0.25% cold and
+> 0.0% warm**. With it: **the probe lands 99.5–99.8% inside checker-init and
+> 101–109% inside `checkSpine`** (so § 3.1's bracket **(A)** is right and **(B)**
+> is refuted); **warm `checkSpine` is 74.3% of checker-init, not the 81.8% the
+> instrumented table reads**; **checker-init is 88.9% of the warm wall, not
+> 91.7%**; and **`checkSpine` warms 3.46× while the other 416 passes warm
+> 2.59× — the opposite order from § 4's table**, which the probe had compressed
+> because it adds roughly the same milliseconds to a row that shrinks 3.5×.
+> One new instrument fact: **the probe's OWN price is JIT-sensitive** — the
+> first instrumented rebuild in a process costs 3,457 ms and the second 1,856 ms
+> — so § 3's warm probe price (n=1 per process) is a first-draw figure and
+> over-reads the steady state by ~1.9×.
+
+### 10.1 The tiers
+
+| tier | flags | what it keeps | what it drops |
+|---|---|---|---|
+| `rows` | `detail=false spineDetail=false` | the ~417 `pass()` rows, `checkerInitNanos`, emissions-by-pass | everything per-call; `checkSpine` runs the **production** spine walk |
+| `spine` | `detail=false spineDetail=true` | + the SPINE sub-rows and the per-kind table | the per-call counters |
+| `full` | (defaults) | everything — the pre-846 behaviour, bit for bit | — |
+
+CLI: `--passTimingRows` / `--passTimingSpine`. `BenchMain`'s 4th argument takes
+a comma-separated tier LIST (`rows,spine,full,rows,spine,full`), one
+instrumented rebuild each, so the differential is taken on the SAME code inside
+ONE warm process — round 734's law, never an empty-span loop.
+
+### 10.2 What it cost to measure (the calibration)
+
+**WARM** — 2 processes × (3 warm-up + 8 measured probe-free + 6 instrumented),
+`overheadMs` against each process's own probe-free median (8 iterations):
+
+| tier | 1st draw | 2nd draw | all 4 |
+|---|---:|---:|---:|
+| `rows` | −5.5 | −221.3 | **−113.4 ms** |
+| `spine` | +231.6 | +440.5 | **+336.1 ms** |
+| `full` | +3,457.3 | +1,856.2 | **+2,656.7 ms** |
+
+**COLD** — 6 one-shot `MainKt` runs, `free/rows/full` × 2, interleaved:
+
+| arm | wall (n=2) | vs probe-free |
+|---|---:|---:|
+| probe-free | 26,843.0 | — |
+| `rows` | 26,910.5 | **+68 ms = +0.25%** |
+| `full` | 29,460.5 | +2,618 ms = +9.75% |
+
+**The `rows` tier is free in both regimes.** That is the whole point: the
+per-pass table never cost anything; the ~2.6 s is the per-CALL bookkeeping.
+
+**And the probe's own cost warms up.** In BOTH processes the `full` tier's
+second draw is far cheaper than its first (−1,383 and −1,820 ms) while `rows`
+and `spine` move ±220 ms in both directions. The probe's own code — the
+distinct-keyed `HashSet`, the by-pass `HashMap`s, the shadow memos — has never
+been JIT-compiled when the first instrumented rebuild runs. **§ 3's warm probe
+price (3,450–3,945 ms, n=1 per process) is therefore a first-draw figure and
+matches this round's first draw (3,457 ms) exactly; the steady-state price is
+~1,856 ms.** A round that wants the probe's price must take at least two
+instrumented rebuilds per process.
+
+### 10.3 WHERE the probe lands — measured, not deduced
+
+| | warm (full − rows) | cold (full − rows) |
+|---|---:|---:|
+| wall | +2,770.1 ms | +2,550 ms |
+| **checker-init** | **+2,765.1 (99.8%)** | **+2,536 (99.5%)** |
+| front end | +5.1 (0.2%) | +14 (0.5%) |
+| **`checkSpine` row** | **+2,803.2 (101.2%)** | **+2,770 (108.6%)** |
+
+§ 3.1's "≥ 77% is inside checker-init, and whether it is inside `checkSpine` is
+NOT measured" is closed: **it is all of it, and it is all inside `checkSpine`.**
+The >100% readings are the n=4/n=2 noise floor on a row of 5–21 s.
+
+Internal consistency, and it is the strongest check available here: applying
+bracket **(A)** (charge the whole probe to `checkSpine`) to this round's OWN
+full-tier numbers gives `checkSpine` = **74.80%** of checker-init; the directly
+measured `rows` tier says **74.27%**. Two independent instruments, 0.5 points
+apart.
+
+### 10.4 THE CORRECTED ATTRIBUTION (this is the deliverable)
+
+Same binary, same 78-file compiler profile, same box, same round. `rows` tier
+is n=4 warm / n=2 cold; `full` is the same runs' companion arm.
+
+| | **cold, `rows`** | cold, `full` | **warm, `rows`** | warm, `full` | **cold→warm** |
+|---|---:|---:|---:|---:|---:|
+| wall | **26,910.5** | 29,460.5 | **8,083.0** | 10,853.1 | **3.33×** |
+| checker-init | **23,246.6** | 25,782.7 | **7,184.9** | 9,950.0 | **3.24×** |
+| `checkSpine` | **18,459.5** | 21,229.3 | **5,335.9** | 8,139.2 | **3.46×** |
+| the other 416 passes | **4,787.1** | 4,553.4 | **1,849.0** | 1,810.8 | **2.59×** |
+| front end | **3,663.9** | 3,677.8 | **898.0** | 903.1 | **4.08×** |
+| checker-init / wall | **86.38%** | 87.52% | **88.89%** | 91.68% | |
+| `checkSpine` / checker-init | **79.41%** | 82.34% | **74.27%** | 81.80% | |
+| `checkSpine` / wall | **68.60%** | 72.06% | **66.01%** | 74.99% | |
+
+Read the bold columns; the `full` columns are there only to show the size of
+the distortion each corrected figure carries.
+
+**Three corrections to this document, stated as such:**
+
+1. **§ 3.1's disagreement is settled in favour of (A): warm `checkSpine`'s
+   share FALLS.** 79.41% cold → **74.27%** warm, −5.1 points. The uncorrected
+   reading (82.34 → 81.80%) says "flat" and § 3.1's raw cross-round reading said
+   "rises"; both are the instrument.
+2. **§ 5(a) SURVIVES but is smaller than raw.** checker-init's share of the wall
+   really does rise warm — **86.38% → 88.89%, +2.5 points** (raw says +4.2, the
+   § 3.1 "most adverse" bracket predicted +2.1). The front end is **11.1%** of a
+   warm compile, not 8.3%.
+3. **§ 4's warm speed-up column is INVERTED for its two biggest rows.** It reads
+   `checkSpine` 2.24× against the tail passes' 2.38×, i.e. the spine warming
+   *less* than the tail. Corrected: **`checkSpine` 3.46×, the tail 2.59×.**
+   Mechanism: the probe adds ~2.6–2.8 s to `checkSpine` in BOTH regimes, which
+   is ~15% of a cold row and ~52% of a warm one — so a constant additive term
+   compresses the ratio of exactly the row it lands on. Any warm-up ratio
+   quoted from a `full`-tier table is subject to this.
+
+### 10.5 The warm budget, sized
+
+The number a warm lever must be quoted against (rows tier, n=4, warm wall
+8,083 ms — an absolute for THIS round only, per CLAUDE.md's cross-round rule):
+
+| region | warm ms | % of warm wall |
+|---|---:|---:|
+| `checkSpine` | **5,335.9** | **66.0%** |
+| — `spineEnterNode` | 3,121 | 38.6% |
+| — `spineLeaveNode` | 1,553 | 19.2% |
+| — unresolved-names | 500 | 6.2% |
+| — `forEachChild` | 85 | 1.1% |
+| — scope | 41 | 0.5% |
+| the other 416 passes | 1,849.0 | 22.9% |
+| — largest: `init:buildFileLocalTypeMaps` | 317.5 | 3.9% |
+| — 2nd: `checkCrossFileModuleAugmentationDuplicates` | 90.7 | 1.1% |
+| — 3rd: `checkUmdGlobalVsDeclareGlobalConst` | 85.6 | 1.1% |
+| front end | 898.0 | 11.1% |
+
+The SPINE sub-rows come from the `spine` tier and carry a **partition check**:
+they sum to **5,299 ms against the `rows` tier's 5,335.9 ms `checkSpine` row —
+99.3%**. The tier's own boundaries (513 ms = **599 ns/node** over 856,962 nodes)
+sit on top of the enclosing row and outside the sub-rows, which is why the two
+instruments agree. At the `full` tier the same sub-rows sum to 7,475 ms and the
+enter:leave ratio moves from **2.01 to 1.55** — so § 4's "`spineEnterNode` warms
+2.56× and `spineLeaveNode` 2.00×, the leave handlers are less JIT-recoverable"
+is at least partly instrumental: the tier-3 bookkeeping lands harder on `leave`
+(+71%) than on `enter` (+32%).
+
+**Everything below `checkSpine` is probe-free.** Across the top-20 rows the
+`full`/`rows` ratio is 0.63–1.35 with no sign, i.e. noise — the probe is not
+spread over the 416 tail passes at all. Only `checkSpine` reads 1.53×.
+
+### 10.6 Validity
+
+* Every `full`-tier run in this round — 2 cold, 4 warm, across three JVMs —
+  reports the same deterministic counters: **574,620 `getTypeOfExpression`
+  calls, 224,853 distinct, 17,851 narrowing walks, 856,962 spine nodes**, the
+  `cost_gate.py` baseline values. Every run of every tier answered **78 files,
+  46 errors**; `BenchMain` aborts if an instrumented rebuild disagrees with the
+  measured loop, and none did.
+* Daemons were stopped inside the measuring script, between the build and the
+  first sample (round 800).
+* **What this does NOT show.** One profile (the 78-file compiler profile). No
+  A/B, nothing optimized. The absolutes are not comparable to § 2/§ 4's
+  (this round's warm probe-free median is 8.0–8.4 s against round 843's
+  6.9–7.1 s — a ~15% cross-round drift on the same code, exactly the instability
+  CLAUDE.md records); only the within-round shares and ratios above are quoted.
+  n=4 warm / n=2 cold per tier, so a per-row figure below ~100 ms is not
+  resolved.
+
+### 10.7 Reproducing
+
+```bash
+./gradlew compileKotlinJvm compileTestKotlinJvm
+./gradlew --stop; pkill -f 'KotlinCompile[D]aemon'; sleep 5; free -m
+PROJ=$(ls -d build/bench/tsc-project-* | head -1)
+CP=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)
+CPW=xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test:$(tr '\n' ':' < build/bench/cp-warm.txt)
+
+# WARM — run TWICE, in two processes. The tier list is the differential.
+java -Xmx4g -cp "$CPW" com.xemantic.typescript.compiler.bench.BenchMainKt \
+     "$PROJ" 3 8 rows,spine,full,rows,spine,full
+
+# COLD — interleave the arms, n>=2 each.
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit "$PROJ"
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --passTimingRows "$PROJ"
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --passTiming "$PROJ"
+```

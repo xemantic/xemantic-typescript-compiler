@@ -20,6 +20,75 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 846 (2026-08-08) — (WARM.1)(c) CLOSED: `--passTiming` NOW HAS TIERS, AND THE `rows` TIER IS
+FREE (+0.25% COLD, 0.0% WARM). THE PROBE LANDS **99.5-99.8% IN CHECKER-INIT AND 101-109% IN
+`checkSpine`**, SO § 3.1's BRACKET (A) IS RIGHT AND (B) IS REFUTED — WARM `checkSpine` IS **74.3%**
+OF CHECKER-INIT, NOT THE 81.8% THE INSTRUMENTED TABLE READS.** An instrument round: nothing was
+optimized, and the deliverable is a warm attribution whose absolutes a lever can be sized against.
+Full tables in `docs/perf/warm-jvm-attribution.md` § 10.
+
+- **THE CHEAP ROUTE THE QUEUE NAMED FIRST WAS THE RIGHT ONE, AND THE REASON IS STRUCTURAL: none of
+  the probe's cost is the ~417 `pass()` boundaries.** It is the per-CALL bookkeeping — 574,620
+  `getTypeOfExpression` hooks (a distinct-keyed `HashSet` add + a by-pass `HashMap` + a shadow-memo
+  probe + a timestamp pair EACH), the `InstrumentedSymbolTable` on the hottest map in the program,
+  every fenced-setter no-op, and a profiled spine walk keeping two BOXED `HashMap<Int,Long>` entries
+  per node over 856,962 nodes. So the tiers are `rows` (pass rows + checker-init, PRODUCTION spine
+  walk) / `spine` (+ the per-node SPINE sub-rows) / `full` (unchanged). Both flags default TRUE:
+  `--passTiming`, `cost_gate.py` and every existing pin are bit-for-bit unchanged.
+- **CALIBRATED DIFFERENTIALLY, IN ONE PROCESS.** `BenchMain`'s 4th argument now takes a tier LIST,
+  so `rows,spine,full,rows,spine,full` measures the SAME warm code at ~417 boundaries and at ~2 M,
+  twice each, with nothing else varying. `overheadMs` vs each process's own probe-free median
+  (n=4): **rows −113 ms, spine +336 ms, full +2,657 ms**. Cold, 6 interleaved one-shots:
+  **probe-free 26,843 / rows 26,910 (+0.25%) / full 29,461 (+9.75%)**.
+- **THE ANSWER, and it settles the blocker on this arc.** Warm (rows tier, n=4): wall 8,083 ms,
+  checker-init 7,184.9 (**88.89%** of wall), `checkSpine` 5,335.9 (**74.27%** of checker-init,
+  **66.0%** of wall), the other 416 passes 1,849.0 (22.9%), front end 898.0 (**11.1%**). Cold (rows
+  tier, n=2): 26,910.5 / 23,246.6 (86.38%) / 18,459.5 (**79.41%**) / 4,787.1 / 3,663.9 (13.62%).
+  **So warm `checkSpine`'s share FALLS 79.4% → 74.3%**; the raw full-tier reading (82.3 → 81.8%)
+  says "flat" and round 843's raw cross-round reading said "rises", and both are the instrument.
+- **CROSS-CHECK: bracket (A) applied to THIS round's own full-tier numbers gives 74.80%; the
+  directly measured `rows` tier says 74.27%.** Two independent instruments 0.5 points apart — which
+  is also what licenses re-reading every OTHER `full`-tier table by the same correction.
+- **§ 4's WARM SPEED-UP COLUMN IS INVERTED FOR ITS TWO BIGGEST ROWS, and this is the finding a
+  future round is most likely to trip over.** It reads `checkSpine` 2.24× against the tail passes'
+  2.38×. Corrected: **`checkSpine` 3.46×, the tail 2.59×.** The probe adds ~2.6-2.8 s to
+  `checkSpine` in BOTH regimes — ~15% of a cold row, ~52% of a warm one — so a constant additive
+  term compresses the warm-up ratio of exactly the row it lands on.
+- **WHAT DID NOT WORK / WHAT I GOT WRONG BEFORE MEASURING IT.** (1) I expected the probe to be
+  spread over the tail passes; it is not spread at all — across the top-20 rows the `full`/`rows`
+  ratio is 0.63-1.35 with no sign, i.e. noise, and only `checkSpine` reads 1.53×. (2) I expected the
+  probe's price to be a constant; **it warms up** — in BOTH processes the `full` tier's second draw
+  is 1,383 and 1,820 ms cheaper than its first, while `rows`/`spine` move ±220 ms in both
+  directions. The probe's own `HashSet`/`HashMap` code has never been JIT-compiled when the first
+  instrumented rebuild runs. **Round 843's warm probe price (3,450-3,945 ms) was n=1 per process =
+  a FIRST draw, and matches this round's first draw (3,457 ms) exactly; the steady state is
+  ~1,856 ms.** Anyone pricing the probe needs ≥2 instrumented rebuilds per process.
+- **THE SPINE SUB-ROWS NOW CARRY A PARTITION CHECK.** At the `spine` tier they sum to **5,299 ms
+  against the `rows` tier's 5,335.9 ms `checkSpine` row = 99.3%** — the tier's own boundaries
+  (513 ms = **599 ns/node**) sit on the enclosing row, outside the sub-rows, which is why the two
+  instruments agree. Warm, `spineEnterNode` is **3,121 ms = 38.6% of the whole warm artifact** and
+  `spineLeaveNode` 1,553 ms = 19.2% (enter:leave **2.01**). At the `full` tier the same rows sum to
+  7,475 ms at a ratio of 1.55, the bookkeeping landing harder on `leave` (+71%) than `enter`
+  (+32%) — so § 4's "the leave handlers are less JIT-recoverable" is at least partly instrumental.
+- **PINS.** `PassTimingTierTest` (7), each written to FAIL if the gate swap were inert: every tier
+  answers IDENTICAL diagnostics; `rows` records the SAME pass names and call counts as `full` with a
+  non-zero checker-init; at `rows` every per-call counter and every SPINE sub-row is ZERO **against
+  a full-tier positive control that is non-zero**; the tier flags survive `reset()` (they are MODES);
+  `detailed`/`spineProfiled` are the conjunction with `enabled`; and the dump names its tier and says
+  in the table that a dropped counter is an ABSENT measurement, not a measured zero.
+  `PassTiming.detailed`/`.spineProfiled` are MAINTAINED FIELDS, not `get() = enabled && detail`
+  getters — they are read a few million times on the PRODUCTION path and a conjunction getter would
+  double the accessor calls a production run pays for a probe it is not running.
+- **GATES.** Suite **13,971 / 0 failures / 3 skipped** (`xml.etree`, wiped results dirs; core
+  13,896, api 27, client 18, daemon 30 — **+7 exactly the new pins**). `cost_gate.py` **every
+  counter +0.00%**. `huge_methods.py --fail-over 0` exit 0, **0 over the limit**. All 6 `full`-tier
+  runs across three JVMs report identical deterministic counters (574,620 / 224,853 / 17,851 /
+  856,962) and every run of every tier answered 78 files / 46 errors.
+- **NOT MEASURED, named rather than implied.** One profile. No A/B and nothing optimized. The warm
+  absolutes are ~15% above round 843's on the same code (8.0-8.4 s vs 6.9-7.1 s) — the documented
+  cross-round instability, which is why only within-round shares are quoted. n=4 warm / n=2 cold
+  per tier, so a row below ~100 ms is not resolved. The 8-profile grid was not run.
+
 **Round 845 (2026-08-08) — (WARM.1)(b) CONFIRMED: THE (JIT.1) ARC BOUGHT **1.5× ON THE WARM
 ARTIFACT** WHILE ITS OWN COLD INSTRUMENT READ IT AS NOISE. A −33.6%, 4/4 RESULT AGAINST A
 RECORDED `+0.08%, NOISE-DOMINATED`.** Round 843 left this as an explicit hypothesis; it took one
@@ -1352,7 +1421,7 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   **±70 ms, not ±114**, because the denominator shrank. **Trap to avoid:** the pre-802 binary must
   be measured with the SAME probe setting as HEAD, and the probe now costs ~50% of a warm run.
 
-- [ ] **(WARM.1)(c) — RE-TAKE THE ATTRIBUTION WITHOUT THE INSTRUMENT DOMINATING IT.** The warm
+- [x] **(WARM.1)(c) — CLOSED ROUND 846: `--passTiming` now has three TIERS and the `rows` tier is FREE (+0.25% cold, 0.0% warm), so the warm per-pass table's absolutes are now trustworthy.** The probe lands **99.5-99.8% in checker-init and 101-109% in `checkSpine`** (measured, both regimes), so § 3.1's bracket **(A)** is right and **(B)** refuted: **warm `checkSpine` is 74.27% of checker-init (cold 79.41%) — its share FALLS**, checker-init is 88.89% of the warm wall and the front end 11.1%. Warm budget: `checkSpine` 5,336 ms = 66.0% (enter 3,121 / leave 1,553), the other 416 passes 1,849 = 22.9%, front end 898 = 11.1%. Two corrections a future round must carry: **§ 4's warm speed-up column is INVERTED** for its two biggest rows (`checkSpine` really warms 3.46× and the tail 2.59×, not 2.24× vs 2.38× — a constant additive probe compresses the ratio of the row it lands on), and **the probe's own price warms up** (first instrumented rebuild in a process 3,457 ms, second 1,856 ms), so round 843's n=1-per-process figure is a first draw. Superseded original text: ~~RE-TAKE THE ATTRIBUTION WITHOUT THE INSTRUMENT DOMINATING IT.~~ The warm
   table's absolutes are inflated ~1.55× by `--passTiming` itself and only >=77% of that is even
   localized (to checker-init; the split inside is unmeasured, and the two bracketings disagree on
   whether `checkSpine`'s warm share falls to 72% or rises to 83%). Until that is resolved **no warm
