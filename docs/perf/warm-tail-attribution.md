@@ -636,3 +636,216 @@ arm A's `checkerInitNanos` is 568 ms above arm B2's. Both are draw noise.
   ~99% of the rows it acts on; it would not resolve a 10% row change.
 * **The 4.7 ms residue was not sub-partitioned.** It is presumed to be the two
   passes' AST walks, but nothing measured that.
+
+---
+
+## 11. § (WARM.9) — `init:buildFileLocalTypeMaps` PRICED WARM: 85.6 ms = 1.09%, and § 7's projection was 1.54× too high
+
+*Round 861, appended for the same reason § 10 was: a priced candidate is only
+readable next to its price. § 7 wrote that 47.1% of 3.56% is "~1.68% — above the
+warm band", flagged it as an arithmetic projection rather than a measurement,
+and told the next round to replace it with one. This is that measurement, and it
+lands at **1.09%**, i.e. essentially where round 829's cold price left it. **The
+item stays CLOSED.** What is new is not the verdict but the two ways the
+projection went wrong, both of which are general.*
+
+### 11.1 What was BUILT — the `fltm` tier, and why it arms TWO probes
+
+`--fltmCensus` (`FltmCensus.kt`, round 829) had never been run inside a warm
+process, for the reason round 859 gave about `FrontEnd` and round 851 gave about
+the largest spine handler: **the instrument existed and had no tier name.**
+`BenchMain` now has `fltm`.
+
+It is the only tier that arms two probes — the census **and** `PassTiming`'s
+`rows` — and the pairing is load-bearing, not a convenience. The census prices a
+SUB-POPULATION of a pass whose own row it does not measure; taken from two
+rebuilds, prize-over-row would be a cross-draw ratio against a row whose warm
+draw spread § 3 recorded as **41%**, the widest in its top twelve. Paired, every
+ratio below is **within-rebuild**, and those ratios turn out to be four to six
+times tighter than either of their operands.
+
+`BenchFltmTierTest` pins it. Its discrimination problem is one
+`BenchFrontEndTierTest` does not have and is worth recording: `FrontEnd`'s
+recording entry points **self-gate** (`if (mode != ON) return`), so a fixture
+that records through them and finds its values in the report has proved the arm.
+`FltmCensus`'s do **not** — every hook in `Checker` is written
+`if (FltmCensus.on) FltmCensus.noteX(…)`, i.e. **the guard is at the CALL SITE**,
+and a fixture calling `noteX` directly records with the tier armed and with the
+arm deleted alike (round 807's blind-pin mechanism). The fixture therefore
+reproduces the call-site idiom verbatim, guard included. **Ablated** (the
+`FltmCensus.on = true` line deleted from `tierBegin`, on a clean tree after the
+harness was committed — round 789): 2 of the 5 pins redden, and they are the two
+that name that arm; the pass-rows pin stays green because it names the OTHER
+probe the tier arms, which is the correct per-arm attribution.
+
+### 11.2 Method
+
+One binary, one profile (`build/bench/tsc-project-637d5746`, 78 files,
+46 errors, 9,977,097 chars), `--noEmit`, this box. Round-851 order: build →
+suite → `cost_gate.py` → `huge_methods.py` → classpath through
+`scripts/lib/dep-classpath.sh` → **then** `./gradlew --stop` + a
+bracket-pattern kotlin-daemon kill → then the first sample, 9.8 GB free, box
+untouched while running (round 774). Round-853 positive control: the test class
+dir must hold `BenchFltmTierTest.class`, a class that did not exist before this
+round — 651 main classes, 708 test classes.
+
+Two processes, **tier order rotated** (`rows,fltm,rows,fltm` and
+`fltm,rows,fltm,rows`), two draws of each tier per process = **4 census draws
+and 8 row draws**. All 8 instrumented rebuilds answered 78 files / 46 errors;
+`BenchMain` aborts if one disagrees with its measured loop and none did.
+Process walls: P1 median 7,715.9 ms, P2 median 8,041.5 ms.
+
+### 11.3 The pass row, warm — and the first-draw effect the rotation exposes
+
+| process | tier | draw 1 | draw 2 |
+|---|---|---:|---:|
+| P1 | `rows` | **335.3** | 256.3 |
+| P1 | `fltm` | 242.1 | 227.7 |
+| P2 | `fltm` | **270.1** | 218.2 |
+| P2 | `rows` | 244.9 | 233.4 |
+
+n=8: mean **253.5 ms**, median 243.5, min 218.2, max 335.3 — a **48% spread**,
+worse than § 3's 41%. But **the maximum of each tier, in each process, is that
+tier's FIRST draw (2/2)**, which is round 846's law (the probe's own cost warms
+up on its first instrumented rebuild) showing up in a pass row rather than in a
+wall. Dropping each process's first instrumented rebuild leaves
+242.1 / 256.3 / 227.7 / 244.9 / 218.2 / 233.4 — mean **237.1 ms**, spread
+**16.0%**. Rotating the tier order is what makes that separable; a fixed order
+charges the effect to whichever tier is first.
+
+**The census costs the row nothing measurable.** `rows` draws mean 267.5 ms,
+`fltm` draws (which carry 12,738 extra timestamp pairs, ~1.2 ms at the warm
+~92 ns boundary) mean 239.5 ms — the census arm is *lower*, i.e. the difference
+is draw noise several times the probe's own arithmetic cost.
+
+### 11.4 The census, warm — and the counts replicate round 829 exactly
+
+Bit-identical across all four draws, and identical to round 829's COLD census on
+every population count: **12,738** direct resolves, **4,161** entries stored,
+**1,499** distinct entries ever read, **2,662** never read, **1,263** of those
+asked again anyway, **8,577 (67.3%)** storing nothing at all, **6,008 (47.1%)**
+never read AND never asked again, 13,172 distinct symbols touched. Only the read
+site moved (`calls` 16,043 → **16,183**, misses 278,355 → **280,408**), which is
+32 rounds of checker change and is not a regime effect. **A census whose
+population counts reproduce across 32 rounds and two JIT regimes is the strongest
+evidence available that it measures a property of the program.**
+
+The nanos, per draw:
+
+| draw | direct-resolve wall | FULL deletable | share of wall | `decl` resolves | `decl` deletable | `typealias` | `var` |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| P1 #1 | 222.9 | 93.3 | 41.8% | 216.2 | 87.1 | 5.9 | 0.7 |
+| P1 #3 | 219.5 | 87.9 | 40.0% | 213.5 | 82.5 | 5.3 | 0.6 |
+| P2 #0 | 249.2 | 98.3 | 39.4% | 242.6 | 92.4 | 5.7 | 0.7 |
+| P2 #2 | 210.1 | 85.5 | 40.7% | 204.4 | 80.3 | 5.0 | 0.6 |
+| **mean** | **225.4** | **91.25** | **40.5%** | **219.2** | **85.6** | **5.5** | **0.65** |
+
+Absolute spreads are 14–18%; **the SHARE's spread is 5.9%** — round 854's law
+(quote the instrument-internal ratio, not the absolute) reproducing on a third
+instrument.
+
+### 11.5 THE PRIZE, measured
+
+The `typealias` slice is **not** deletable and § 7 already said why: those
+resolutions exist to make `deepInstantiationBailed` trip, and the bail is
+observable only while `getTypeOfSymbol` runs, so not resolving them **deletes** a
+TS2589/TS2615 rather than deferring it. The claimable population is the `decl`
+branch's deletable set.
+
+Within-rebuild ratios (the reason the tier arms both probes):
+
+| ratio | P1 #1 | P1 #3 | P2 #0 | P2 #2 | mean |
+|---|---:|---:|---:|---:|---:|
+| direct-resolve wall / pass row | 92.1% | 96.4% | 92.3% | 96.3% | **94.3%** |
+| `decl` deletable / pass row | 36.0% | 36.2% | 34.2% | 36.8% | **35.8%** |
+| `decl` deletable / that process's warm wall | 1.129% | 1.069% | 1.149% | 0.999% | **1.086%** |
+
+> **THE WARM DELETABLE PRIZE IS 85.6 ms = 1.09% of a warm rebuild**
+> (per-draw range 80.3–92.4 ms, **1.00–1.15%**), against § 7's projected
+> **1.68%**.
+
+Warm-vs-cold for the sub-population, which is the question § 7 actually posed:
+round 829 measured the `decl` branch at 563–705 ms cold and its deletable slice
+at 199–252 ms; warm they are 204–243 and 80.3–92.4, i.e. **2.8–2.9× and
+2.5–2.7×**. The pass row warms 2.57× (§ 3). **The deletable sub-population does
+not warm differently from the pass it lives in** — which is the whole reason the
+warm regime does not turn round 829's negative into a positive.
+
+### 11.6 WHY the projection overshot by 1.54×, in three named deflations
+
+Any future round tempted to project a cold population share onto a warm row
+should read this as the general form.
+
+| deflation | factor |
+|---|---:|
+| **47.1% is a COUNT share of the resolves; the ms share of the direct-resolve wall is 40.5%** | ×0.860 |
+| **the direct-resolve wall is only 94.3% of the pass ROW** (the rest is the 78-file loop, the flags tests, the map writes, the bail save/restore) | ×0.943 |
+| **6.0% of the deletable ms is the `typealias` DETECTOR and is not deletable** | ×0.940 |
+| product | **×0.762** |
+
+1.68% × 0.762 = **1.28%**; the remaining gap to 1.086% is the row's own
+cross-round drift (3.56% of the wall in round 859, 3.01–3.22% here), which
+CLAUDE.md forbids reading as a change in either direction.
+
+### 11.7 THE DECISION — priced negative, and the reason is not the 1.09%
+
+Stated before anything was built, as the round required: **at 1.09% this is a
+priced negative, and it would still be one at 1.5%,** because the 85.6 ms is an
+**upper bound whose deduction this census is structurally unable to measure.**
+
+**The census's MOVE test is keyed on SYMBOLS; the pass's cost is not
+symbol-level.** Its own report says so in one line that round 829 printed and
+nobody read this way: `getTypeOfSymbol` entries during the pass are **14,580**
+against **12,738** direct ones, so the 12,738 resolutions make just **1,842**
+nested symbol asks between them and reach only **434** distinct symbols they did
+not start from. Their 225 ms therefore lives almost entirely in
+`getTypeFromTypeNode` / member resolution / type interning — **none of which is
+symbol-keyed, and none of which `askedLater` can see.** "Never asked again"
+consequently means *never re-asked at the one granularity that carries almost
+none of the work*: the census can prove a SYMBOL is not re-resolved, and cannot
+prove the TYPE-level work behind it is not re-done by the next asker. Round
+788's law is unanswered for this pass, in the direction that makes the prize
+smaller.
+
+Two supporting readings, both free from the same data:
+
+* **The deletable resolutions are the CHEAP ones**, exactly as CLAUDE.md's
+  round-758/759 law predicts when predicate and cost share a cause:
+  **15.2 µs** each against **19.9 µs** for the rest.
+* **No instrument in this repo could defend the change if it were made.** The
+  wall A/B band is ±1.0% warm and the effect is 1.09% (round 860's 1.17% produced
+  two batches that disagreed). The ROWS defended round 860 because a 50 ms row
+  went to 0.3 ms against a 14–19% draw spread; here the pass row would fall
+  253 → ~168 ms, **34% against a 16–48% draw spread**, and — because a lazy
+  rewrite MOVES cost to whichever pass asks first — the row is not even the right
+  denominator. The right one is `checkerInitNanos`, whose draw spread across
+  these 8 rebuilds is **11.0%**, i.e. **8.7× the effect.**
+
+And round 829's three structural objections are untouched by the warm price and
+are not re-derived here: the blast radius (`getTypeOfIdentifier` is the map's
+only reader and performs **296,591** lookups per compile, 94.6% of them misses,
+so a lazy path is a program-wide name-resolution change), the program-ORDER
+hazard of the round-754/776/778 class (invisible in every output diff), and the
+fact that a lazy read site must reproduce the per-file keying, the
+`any`/`errorType` filter and the bail save/restore **per key**.
+
+**Residue, stated so it is not re-derived a third time:** ~85 ms (1.09% warm,
+0.8–1.0% cold) sits in the `decl` branch and is recoverable *in principle* by a
+design that resolves a file-level function/class/interface/enum/import-alias
+symbol only when `getTypeOfIdentifier` asks for it. Reviving it requires, first,
+an instrument that can answer the TYPE-level move question — the symbol-keyed
+one provably cannot — and second, a replay ablation (record the deletable
+`file|name` keys in one rebuild, skip exactly those in the next, and check the
+output is byte-identical), because only that can separate deletion from
+relocation. Neither is a round; together they are.
+
+### 11.8 What this does NOT show
+
+* **One profile**, `--noEmit`, sequential, n=4 census draws / n=8 row draws.
+* **No ablation was run.** The 85.6 ms is the census's own upper bound; § 11.7
+  argues it is loose and does not measure by how much.
+* **Nothing was optimized and nothing under `commonMain` changed** — the only
+  code this round added is a `commonTest` tier and its pin.
+* **The `decl` branch was not sub-partitioned** by symbol kind (function vs
+  class vs interface vs enum vs import alias), so nothing here says whether the
+  85.6 ms is concentrated in one of them.

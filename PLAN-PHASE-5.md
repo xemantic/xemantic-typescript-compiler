@@ -20,6 +20,86 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 861 (2026-08-08) — (WARM.9): THE LAST TAIL PASS OVER 1% IS PRICED WARM AND IT IS A
+NEGATIVE — 85.6 ms = 1.09%, NOT THE ~1.68% PROJECTED, AND THE NUMBER IS AN UPPER BOUND THE
+INSTRUMENT CANNOT TIGHTEN.** Round 859 found exactly one tail pass over 1% warm
+(`init:buildFileLocalTypeMaps`, 3.56%) and priced its deletable half by projecting round 829's cold
+population share onto the warm row — explicitly labelling it arithmetic, not measurement. This round
+replaced it with a measurement. `docs/perf/warm-tail-attribution.md` § 11.
+
+- **BUILT: `BenchMain`'s `fltm` tier, and it is the only tier that arms TWO probes.** `--fltmCensus`
+  had existed since round 829 and had never been run in a warm process for the reason round 859 gave
+  about `FrontEnd` and round 851 gave about the largest spine handler — **the instrument had no tier
+  name.** The tier arms the census AND `PassTiming`'s `rows`, because the census prices a
+  SUB-population of a pass whose own row it does not measure: taken from two rebuilds, prize-over-row
+  would be a cross-draw ratio against a row whose warm draw spread round 859 recorded as 41%. Paired,
+  every ratio is within-rebuild, and they come out 4-6x tighter than either operand
+  (direct-wall/row 92.1/96.4/92.3/96.3%; deletable/row 36.0/36.2/34.2/36.8%).
+
+- **THE MEASUREMENT.** Two processes, tier order ROTATED, two draws per tier each = 4 census draws /
+  8 row draws; all 8 instrumented rebuilds answered 78 files / 46 errors. Row: mean **253.5 ms**,
+  median 243.5, spread 48% — but **the maximum of each tier in each process is that tier's FIRST
+  draw, 2/2**, which is round 846's "the probe's own cost warms up" appearing in a pass row rather
+  than a wall; dropping the first draws gives 237.1 ms at 16%. Census (bit-identical counts across
+  all four draws): direct-resolve wall **225.4 ms = 94.3% of the row**, FULL deletable **91.25 ms**,
+  `decl`-branch deletable **85.6 ms = 35.8% of the row = 1.086% of the warm wall** (per-draw
+  1.00-1.15%). The absolute spreads are 14-18% and **the SHARE's spread is 5.9%** — round 854's law
+  reproducing on a third instrument.
+
+- **WHY THE PROJECTION OVERSHOT 1.54x — three deflations, all general.** 47.1% is a COUNT share of
+  the resolves while the ms share of the direct-resolve wall is 40.5% (x0.860); that wall is only
+  94.3% of the pass ROW, the rest being the 78-file loop, the flags tests, the map writes and the
+  bail save/restore (x0.943); and 6.0% of the deletable ms is the `typealias` branch, which is the
+  TS2589/TS2615 depth-bail DETECTOR — not resolving it deletes a diagnostic rather than deferring one
+  (x0.940). Product x0.762: 1.68% -> 1.28%, and the rest is the row's own cross-round drift.
+
+- **WHAT DID NOT WORK, i.e. what the round was unable to settle and says so.** The plan allowed
+  implementing if the prize cleared ~1%. It clears it by 0.09%, and **the decision is still a
+  negative, for a reason that would hold at 1.5%: the census cannot bound its own upper bound.** Its
+  MOVE test (round 788) is keyed on SYMBOLS, and the pass's cost is not symbol-level — its own report
+  says `getTypeOfSymbol` entries during the pass are **14,580** against **12,738** direct ones, so
+  the 12,738 resolutions make **1,842** nested symbol asks between them and reach only **434**
+  symbols they did not start from. Their 225 ms is therefore `getTypeFromTypeNode` / member
+  resolution / type interning, **none of which is symbol-keyed**, so "never asked again" is tested at
+  the one granularity that carries almost none of the work. Round 829 printed that line and nobody
+  read it this way. **Settling it needs a REPLAY ablation** (record the deletable `file|name` keys in
+  one rebuild, skip exactly those in the next, demand byte-identical output) — which was scoped,
+  costed and deliberately NOT attempted here, because on its own it is a round.
+
+- **AND NO INSTRUMENT IN THIS REPO COULD DEFEND THE CHANGE.** `ab-warm.sh`'s band is +-1.0% and the
+  effect is 1.09% (round 860's 1.17% produced two batches that disagreed). Round 860 was defensible
+  on ROWS because a 50 ms row went to 0.3 ms against a 14-19% draw spread; here the row would fall
+  253 -> ~168 ms, 34% against a 16-48% spread, and since a lazy rewrite MOVES cost between rows the
+  row is the wrong denominator anyway — `checkerInitNanos`'s draw spread over these 8 rebuilds is
+  **11.0%, 8.7x the effect**. Two supporting readings, free from the same data: the deletable
+  resolutions are the CHEAP ones (**15.2 us** each against **19.9 us** for the rest — round
+  758/759's law, predicate and cost sharing a cause), and the census's population counts are
+  **identical to round 829's cold ones** across 32 rounds and two JIT regimes, only the read site
+  moving (16,043 -> 16,183 calls, 278,355 -> 280,408 misses).
+
+- **THE PIN WAS ABLATED, because it had a discrimination problem `BenchFrontEndTierTest` does not.**
+  `FrontEnd`'s recording entry points self-gate (`if (mode != ON) return`), so recording through them
+  proves the arm; `FltmCensus`'s do NOT — every hook in `Checker` reads
+  `if (FltmCensus.on) FltmCensus.noteX(...)`, i.e. **the guard is at the CALL SITE**, and a fixture
+  calling `noteX` directly would record with the arm deleted (round 807's blind-pin mechanism). The
+  fixture reproduces the call-site idiom verbatim. Ablated on a clean tree after the harness was
+  committed (round 789): deleting `FltmCensus.on = true` from `tierBegin` reddens **2 of 5** pins,
+  and they are the two naming that arm; the pass-rows pin correctly stays green because it names the
+  other probe the tier arms.
+
+- **GATES.** Suite **14,056 / 0 failures / 3 skipped** (counted with a real XML parser over all four
+  modules' `*/build/test-results/jvmTest/*.xml`); `cost_gate.py` **+0.00% on all 20 counters**;
+  `huge_methods.py --fail-over 0` **0 over the limit**, 651 classes. Round-851 order throughout:
+  every gradle-invoking step before the daemon stop. Round-853 positive control: the test class dir
+  holds `BenchFltmTierTest.class`, a class that did not exist before this round. **The 8-profile grid
+  was NOT run and is vacuous by construction — nothing under `commonMain` changed** (the only code
+  added is a `commonTest` tier and its pin), which `cost_gate.py`'s 20 unchanged counters and the
+  unchanged 78 files / 46 errors independently confirm. Commit `855adc7c`.
+
+- **NEXT.** **(WARM.8)** — the post-checker tails, 143.2 ms = **1.90% of the warm artifact**, warming
+  1.27x, still COMPLETELY UNATTRIBUTED and now the largest unmeasured region in the compiler. It
+  outranks every priced candidate the warm arc has produced since round 850.
+
 **Round 860 (2026-08-08) — (WARM.7) LANDED: THE DUPLICATED 10-MEGABYTE UMD SCAN IS GONE, 96.4 ms
 -> 4.7 ms = 1.17% OF A WARM REBUILD — AND THE HALF ROUND 859 SAID "NEEDS A GATE" NEEDED NO GATE AT
 ALL.** The first optimizing round of the warm arc, executing round 859's own recommendation.
@@ -1123,6 +1203,45 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit, 8-profile grid
   added=0 removed=0 on every profile both times. Commits `5462fa75`, `c9b693cd`.
   `docs/perf/warm-tail-attribution.md` § 10.
+
+- [x] **(WARM.9) — DONE, ROUND 861. `init:buildFileLocalTypeMaps` PRICED WARM: THE DELETABLE
+  POPULATION IS 85.6 ms = 1.09% OF A WARM REBUILD, NOT THE ~1.68% ROUND 859 PROJECTED — THE ITEM
+  STAYS CLOSED, AND THE REASON IS NOT THE 1.09%.** Round 859 left the only tail pass over 1% priced
+  by an ARITHMETIC PROJECTION (47.1% of 3.56%) and said so; this replaces it with a measurement.
+  Built: `BenchMain`'s `fltm` tier — round 829's `--fltmCensus` had never been run warm because, like
+  `FrontEnd` before round 859, **it had no tier name** — and it is the ONE tier that arms two probes
+  (the census AND `PassTiming`'s `rows`), because prize-over-row taken from two rebuilds would be a
+  cross-draw ratio against a row whose warm spread is 41%; paired, the ratios are 4-6x tighter than
+  their operands. Two processes, tier order ROTATED, 4 census draws / 8 row draws. **Measured: the
+  pass row is 253.5 ms mean (237.1 excluding each process's first instrumented rebuild, which is the
+  MAXIMUM of its tier in both processes — round 846's law showing up in a pass row); the
+  direct-resolve wall is 94.3% of it; the `decl` branch's deletable slice is 35.8% of it = 85.6 ms =
+  1.086% of the warm wall (per-draw 1.00-1.15%).** The projection overshot **1.54x** in three named
+  deflations: 47.1% is a COUNT share while the ms share of the direct-resolve wall is 40.5% (x0.860),
+  that wall is only 94.3% of the ROW (x0.943), and 6.0% of the deletable ms is the `typealias`
+  TS2589/TS2615 detector, which deletion would DELETE a diagnostic rather than defer one (x0.940).
+  **The census's population counts are bit-identical to round 829's COLD ones across 32 rounds and
+  two JIT regimes** (12,738 / 4,161 / 1,499 / 8,577 / 6,008), only the read site moving
+  (16,043 -> 16,183 calls, 278,355 -> 280,408 misses). **THE DECISION, and it would be the same at
+  1.5%: the 85.6 ms is an UPPER BOUND whose deduction this census is structurally unable to
+  measure** — its own report says the pass makes 12,738 direct `getTypeOfSymbol` calls and only
+  **1,842** nested symbol asks, reaching just 434 symbols it did not start from, so the 225 ms lives
+  in `getTypeFromTypeNode` / member resolution / interning, **none of it symbol-keyed and none of it
+  visible to `askedLater`**; "never asked again" is tested at the one granularity carrying almost
+  none of the work. Supporting: the deletable resolutions are the CHEAP ones (15.2 us vs 19.9 us,
+  round 758/759's law), and **no instrument here could defend the change** — the warm A/B band is
+  +-1.0%, and unlike round 860 the ROWS cannot substitute, because a lazy rewrite moves cost between
+  rows and `checkerInitNanos`'s own draw spread over these 8 rebuilds is 11.0%, **8.7x the effect**.
+  Round 829's three structural objections (296,591 read-site lookups, the round-754/776/778 program
+  ORDER hazard, the per-key bail save/restore a lazy read site must reproduce) are untouched.
+  Reviving it needs an instrument that can answer the TYPE-level move question plus a replay
+  ablation (record the deletable `file|name` keys, skip exactly those next rebuild, demand
+  byte-identical output) — together a round, separately neither. Ablation of the new pin: deleting
+  the arm from `tierBegin` reddens 2 of 5, and they are the two naming that arm. Gates: suite
+  14,056 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on all 20 counters, `huge_methods.py
+  --fail-over 0` 0 over the limit. Nothing under `commonMain` changed, so the 8-profile grid is
+  vacuous by construction and was not run. Commit `855adc7c`.
+  `docs/perf/warm-tail-attribution.md` § 11.
 
 - [ ] **(WARM.8) — THE POST-CHECKER TAILS: 143.2 ms = 1.90% of the warm artifact, warming 1.27× —
   the worst ratio measured in round 859 — and COMPLETELY UNATTRIBUTED.** Under `--noEmit` the
