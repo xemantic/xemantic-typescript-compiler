@@ -4096,7 +4096,22 @@ object FrontEnd {
     /** JS-output selection, outFile concatenation and source-echo ordering. INSIDE [POST_OUTPUTS]. */
     const val POST_ASSEMBLE = 27
 
-    const val N = 28
+    // ---- (WARM.8)(c) level 3 — [POST_ORPHANS] is 97.6% of [POST_OUTPUTS] and
+    // 1.72% of a warm rebuild (round 861 § 12), and § 12.6 says in as many words
+    // that it "was not sub-partitioned, so nothing here says which of its scans
+    // costs the 130 ms". These three blocks are the three per-FILE scans of its
+    // one loop; they cost three timestamp pairs per program file (78 files =
+    // 234 pairs, ~20 us against a ~130 ms block), and the residue is the two
+    // set constructions plus the final filter.
+
+    /** The `import("…")` text scan feeding `staticallyReferenced`. INSIDE [POST_ORPHANS]. */
+    const val ORPH_IMPORTTYPE = 28
+    /** The `declare … require` probe plus its `require("…")` scan. INSIDE [POST_ORPHANS]. */
+    const val ORPH_DECLREQ = 29
+    /** `collectNsInternalImportTargets` — the top-level/namespace statement walk. INSIDE [POST_ORPHANS]. */
+    const val ORPH_NSWALK = 30
+
+    const val N = 31
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4127,6 +4142,9 @@ object FrontEnd {
         "    of which topologicalSort",
         "    of which cpcRequireOnlyOrphans",
         "    of which output selection + echo order",
+        "      of which the import(\"…\") text scan",
+        "      of which the declare-require probe + require(\"…\") scan",
+        "      of which collectNsInternalImportTargets",
     )
 
     /**
@@ -4139,6 +4157,7 @@ object FrontEnd {
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
+        ORPH_IMPORTTYPE, ORPH_DECLREQ, ORPH_NSWALK,
         TRANSFORM, EMIT, DECL_EMIT,
     )
 
@@ -4176,6 +4195,19 @@ object FrontEnd {
     var scanWords: Long = 0
     var scanRecorded: Long = 0
 
+    /**
+     * (WARM.8)(c) census — the POPULATION behind [ORPH_IMPORTTYPE] /
+     * [ORPH_DECLREQ]: how many program files each per-file scan of
+     * `cpcRequireOnlyOrphans` visits, how many characters they re-read, and how
+     * many of them the `declare … require` probe actually ACCEPTS. The last one
+     * decides whether the scan can be made cheap in EMIT mode too, which a
+     * timing row alone cannot say (round 758: a count is not a cost, and a cost
+     * without its population cannot be compared to anything).
+     */
+    var orphanFiles: Long = 0
+    var orphanChars: Long = 0
+    var orphanDeclReqHits: Long = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -4184,6 +4216,15 @@ object FrontEnd {
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
         closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0
         scanWords = 0; scanRecorded = 0
+        orphanFiles = 0; orphanChars = 0; orphanDeclReqHits = 0
+    }
+
+    /** (WARM.8)(c) — one call per program file scanned by `cpcRequireOnlyOrphans`. */
+    fun addOrphanCensus(chars: Long, declRequireHit: Boolean) {
+        if (mode != ON) return
+        orphanFiles++
+        orphanChars += chars
+        if (declRequireHit) orphanDeclReqHits++
     }
 
     /** Start a span, or 0 when off. */
@@ -4305,6 +4346,21 @@ object FrontEnd {
                 "  output-block residue (outputs - its four): " +
                     "${(nanos[POST_OUTPUTS] - sub2) / 1_000_000} ms of " +
                     "${nanos[POST_OUTPUTS] / 1_000_000} ms"
+            )
+        }
+        // (WARM.8)(c) — the level-3 partition of `cpcRequireOnlyOrphans`, plus
+        // the population its two text scans visit. `declReq hits` is the number
+        // that decides whether the scan is skippable in EMIT mode.
+        if (calls[ORPH_IMPORTTYPE] > 0 || orphanFiles > 0) {
+            val sub3 = nanos[ORPH_IMPORTTYPE] + nanos[ORPH_DECLREQ] + nanos[ORPH_NSWALK]
+            appendLine(
+                "  orphan-block residue (orphans - its three): " +
+                    "${(nanos[POST_ORPHANS] - sub3) / 1000} us of " +
+                    "${nanos[POST_ORPHANS] / 1000} us"
+            )
+            appendLine(
+                "  orphan census: files $orphanFiles ($orphanChars chars), " +
+                    "declare-require hits $orphanDeclReqHits"
             )
         }
         val frontEnd = nanos[CONFIG] + nanos[CRAWL] + nanos[PARSE] + nanos[IMPORTS] + nanos[BIND]

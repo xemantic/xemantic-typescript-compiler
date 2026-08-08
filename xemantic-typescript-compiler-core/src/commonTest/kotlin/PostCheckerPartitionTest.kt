@@ -87,6 +87,16 @@ class PostCheckerPartitionTest {
     private fun build(): ProjectCompiler.Result =
         ProjectCompiler(InMemoryVfs(files)).build("/proj", noEmit = true)
 
+    /**
+     * (WARM.8)(c) — the same project compiled WITH emit. The level-3 blocks
+     * below are asserted on this build and not on [build], because the orphan
+     * census is gated out of a check-only compile (its only consumer reads an
+     * empty map there), so a check-only fixture would pin an empty population
+     * and stay green whatever the scans did.
+     */
+    private fun buildEmitting(): ProjectCompiler.Result =
+        ProjectCompiler(InMemoryVfs(files)).build("/proj", noEmit = false)
+
     /** The four constants must be distinct, inside [FrontEnd.N], and each named and ordered. */
     @Test
     fun `the four post-checker blocks are declared, named and ordered`() {
@@ -161,6 +171,38 @@ class PostCheckerPartitionTest {
         assert(sum <= outputs)
         val residue = outputs - sum
         assert(residue * 4 < outputs)
+    }
+
+    /**
+     * LEVEL 3 — [FrontEnd.POST_ORPHANS] is 97.6% of [FrontEnd.POST_OUTPUTS] and
+     * round 861 § 12.6 recorded in as many words that it "was not
+     * sub-partitioned, so nothing here says which of its scans costs the
+     * 130 ms". These three blocks are the three per-FILE scans of its one loop,
+     * so unlike every level above them they record once per PROGRAM FILE, and
+     * the census counts the same population independently.
+     */
+    @Test
+    fun `the orphan block is partitioned into its three per-file scans`() = withProbe {
+        buildEmitting()
+        val orphans = FrontEnd.nanos[FrontEnd.POST_ORPHANS]
+        val importType = FrontEnd.calls[FrontEnd.ORPH_IMPORTTYPE]
+        // The loop runs once per program file, and all three blocks are inside
+        // it — a boundary dropped from any one of them reads a different count.
+        assert(importType > 0L)
+        assert(FrontEnd.calls[FrontEnd.ORPH_DECLREQ] == importType)
+        assert(FrontEnd.calls[FrontEnd.ORPH_NSWALK] == importType)
+        // …and the census, which is the population, counts the same files.
+        assert(FrontEnd.orphanFiles == importType)
+        assert(FrontEnd.orphanChars > 0L)
+        // Neither fixture file declares `require`, so the probe accepts none of
+        // them — the reading that says the scan is skippable, and a non-vacuous
+        // assertion because the counter is bumped on every file either way.
+        assert(FrontEnd.orphanDeclReqHits == 0L)
+        val sum = FrontEnd.nanos[FrontEnd.ORPH_IMPORTTYPE] +
+            FrontEnd.nanos[FrontEnd.ORPH_DECLREQ] + FrontEnd.nanos[FrontEnd.ORPH_NSWALK]
+        assert(orphans > 0L)
+        assert(sum > 0L)
+        assert(sum <= orphans)
     }
 
     /**

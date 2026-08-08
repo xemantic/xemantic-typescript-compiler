@@ -2188,15 +2188,27 @@ class TypeScriptCompiler {
                 for (fileName in tsFileNames) {
                     val sf = parsedSourceFiles[fileName] ?: continue
                     val text = sf.text
+                    // (WARM.8)(c) level 3 — three abutting blocks over the three
+                    // per-file scans, so the 130 ms round 861 measured for this
+                    // function can be attributed to one of them rather than
+                    // guessed at (§ 12.6 says it was not sub-partitioned).
+                    var feOrphT0 = FrontEnd.t()
                     for (m in importTypeRegex.findAll(text)) {
                         resolveToInput(fileName, m.groupValues[1])?.let { staticallyReferenced.add(it) }
                     }
-                    if (declareRequireRegex.containsMatchIn(text)) {
+                    FrontEnd.close(FrontEnd.ORPH_IMPORTTYPE, feOrphT0)
+                    feOrphT0 = FrontEnd.t()
+                    val declRequireHit = declareRequireRegex.containsMatchIn(text)
+                    if (declRequireHit) {
                         for (m in requireCallRegex.findAll(text)) {
                             resolveToInput(fileName, m.groupValues[1])?.let { requireReached.add(it) }
                         }
                     }
+                    FrontEnd.close(FrontEnd.ORPH_DECLREQ, feOrphT0)
+                    feOrphT0 = FrontEnd.t()
                     collectNsInternalImportTargets(sf.statements, fileName, false, nsInternalImportTargets)
+                    FrontEnd.close(FrontEnd.ORPH_NSWALK, feOrphT0)
+                    FrontEnd.addOrphanCensus(text.length.toLong(), declRequireHit)
                 }
                 val lastFile = tsFileNames.last()
                 // Never drop the last @Filename unit (the harness sole-root) — only earlier,
