@@ -1,3 +1,1652 @@
+**Round 850 (2026-08-08) — (WARM.4)(b) CLOSED: THE WARM COST INSIDE THE BIG SPINE HANDLERS IS
+STRUCTURAL, NOT RESTRUCTURABLE — 94–98% OF IT IS THE PASSES' OWN CHECKING WORK, AND NOTHING IN THE
+18.75% OF THE ARTIFACT THESE THREE PROBES ATTRIBUTE CLEARS THE ±1.0% WARM BAND.**
+
+An instrument-and-verdict round. **Nothing under `src/` changed** (the whole change is
+`scripts/round850_analyze.py` + `docs/perf/warm-intra-handler.md` + these notes), so the suite,
+`cost_gate.py` and `huge_methods.py` were **not required** — but the harness ran all three gates
+itself before measuring anyway: `cost_gate exit=0`, `huge_methods exit=0`.
+
+**THE VERDICT THE ARC WAS OWED.** Opened warm, `spineCtaM3StatementAnchor` is **94% its four
+checking calls and 6% scaffolding** (44 ms of 649 = **0.62% of a warm rebuild**), and
+`checkPropertyAccessInExpr` is **98% / 2%** (7 ms of 369 = **0.10%**). Round 733's cold 88.4%
+reproduces warm and *tighter*. The whole (SPINE.1) "legacy-parity frame bookkeeping" thesis — frame
+installs, the eligibility gate, the dispatch `when`, the `finally` restores — is **~51 ms = 0.72%
+of the warm artifact**, and its two largest components are **below one probe boundary**: cta's
+eligibility gate at **88 ns over 915,543 consultations** and cpa's pass-through walk at **93 ns over
+801,892 arm closes**. Two independent probes, same answer: the traversal and the bookkeeping are at
+or under the measurement floor; the cost is the calls.
+
+**THE TABLES (mean probe-free warm rebuild 7,076.4 ms; 24 instrumented rebuilds, all 78 files / 46
+errors, every deterministic counter bit-identical across a tier's 4 draws).**
+`cta` level A = `spineCtaM3StatementAnchor` **649 ms = 9.17%**; `cpa` level P =
+`checkPropertyAccessInExpr` **369 ms = 5.21%** (Q = `checkSinglePropertyAccess` 4.38%, R =
+`checkMemberAccessMissing` 2.57%); `arg` = `checkArgumentsAgainstSignature` **309 ms = 4.37%**.
+**Combined and disjoint: 1,327 ms = 18.75% of the artifact.**
+
+**PARTITION CHECKS, STATED PLAINLY: 87% (`cta`) and 68% (`cpa`)** against round 847's per-handler
+dispatch probe, both sides as shares of their OWN round's warm rebuild (a cross-round absolute is
+forbidden). Weaker than round 847's 99.3%/102.6%, and three things are known about the gap: these
+probes cost **+100 to +900 ms** against round 847's **+4,482 to +5,670**, so where they disagree the
+cheaper instrument is the better artifact-share estimate; `arg` is a CONTAINMENT check, not a
+partition (`checkArgumentsAgainstSignature` is **40% of `ccetSpineLeave`**, so ~60% of the largest
+warm handler is still un-partitioned); and `cpa`'s 2.4-point gap is genuinely open.
+
+**THE BOUNDARY, AND THE ESTIMATOR MISTAKE IT EXPOSES.** Warm: **127 ns (`cta`), 97 ns (`cpa`),
+202 ns (`arg`)**, with `ArgSections`' own in-situ steady-state reading **134 ns** — against **501 ns
+cold** (round 849) and **1,475 ns/node cold vs 797 warm** for the spine tier (round 847). So a cold
+table's `net` column over-subtracts warm by **2.5–5×** and every row here was recomputed from raw
+nanos rather than inherited. **The non-obvious part: these partitions are LAYERED** (cta's B/C/D/E
+open inside level A's rows, cpa is a chain P ⊃ Q ⊃ R), so a deep boundary executes inside every
+level above it and the obvious estimator — Σ(level Δms) ÷ Σ(level Δboundaries) — **overstates the
+price by 1.7–2.2× (215 vs 97 ns for `cpa`)**. The estimator that counts each boundary once is the
+OUTERMOST level's Δ over ALL extra boundaries, and the evidence it is right is not circular for the
+inner levels: two arms whose boundary counts differ by **2.5×** then land within **0–5% on every
+level** (cta A 649 = 649, cpa P 369 = 369, exactly).
+
+**NO LEVER CLEARS THE BAND — the fifth consecutive priced negative in the warm arc, and the prize
+was measured FIRST in every case.** Ranked: the **nine pre-emission probes inside
+`checkSinglePropertyAccess`** — every one `exits 0`, every one paid at all 66,747 property accesses
+— **70 ms = 0.99%**, at the band edge, on a row whose own draw spread is 16%, and behind a
+`ccetPrologueMayFire`-shaped correspondence trap plus round 792's law (a "cannot fire" gate on this
+very function killed 7 corpus baselines while measuring 0 emitting calls on this very profile);
+`emitTs18048 closure-captured receiver` alone 0.83%; cta scaffolding 0.62%; `arg`'s narrowing walks
+on arguments that exit 0.69%; the (CALL.5) pre-gate relation 0.49%; `cpaComputeArgCtxTypes` 0.49%
+(**already measured as MOVED, not deleted, by round 788**). Everything at or above 1% is the type
+system doing its job.
+
+**THE SHARPEST SUB-OBJECT, from an exit census that cost no new boundary (round 796): 91% of the
+argument-typing cost is spent on arguments that never reach the assignability relation** — round
+759 measured 89% COLD, and it now has a warm price, **191 ms = 2.70% of a warm rebuild**. Inside
+it: **851 narrowing walks at 57 µs each = 0.69%**, and **357 of 953 narrowing calls return the INPUT
+type unchanged** (0.32%). Rounds 759 and 788 both say the realisable part is smaller than the row.
+
+**WHAT DID NOT WORK / WHAT WAS NOT DONE.** (a) The first reduction subtracted the naive Σ-estimator
+boundary and printed `cta`'s eligibility gate at **−123 ms** — a negative "cost" is the round-734
+tell of an over-read boundary, and here the cause was the layering, not the calibration method.
+(b) The `arg` cross-check from `BenchMain`'s `overheadMs` reads **684 ns/boundary** against the
+partition's 202 — whole-run overhead is far too noisy to calibrate with (its per-draw values range
+−201 to +680 ms), and it is quoted only as a sanity check; `cta`'s (223 vs 127) is the only one that
+lands close. (c) **A `*coarse` table prints `mode: ON`** because `BenchMain` clears each probe's
+mode before dumping — the data is unaffected and the arm is unambiguous from its row set and
+boundary count, but the label is always wrong for a COARSE arm; the fix is a `commonTest` reorder
+(dump, then clear) and is queued rather than taken, to keep this round's tree free of `src/`.
+(d) No A/B was run, because nothing reached the band to A/B.
+
+**A NUMBER THE QUEUE HAD BEEN QUOTING IS CORRECTED:** "these three probes cover 48.7% of the warm
+artifact" is 48.7% of the warm **SPINE** = **29.0%** of the artifact, and what they directly
+attribute is **18.75%**.
+
+**GATES: suite / `cost_gate.py` / `huge_methods.py` not required — no `src/` change** (stated
+rather than skipped silently); the harness ran `cost_gate.py` and `huge_methods.py --fail-over 0`
+before measuring regardless, both **exit 0**. `docs/perf/warm-intra-handler.md`.
+
+**Round 849 (2026-08-08) — (WARM.3) CLOSED AS A MEASURED NEGATIVE AT ~0.014%, AND THE CENSUS
+THAT MEASURED IT FIRST REPORTED A CONVINCING ZERO FOR THE WRONG REASON.**
+
+**The verdict, in one line: the entire per-request lib-TYPE re-derivation is 71 outermost mint
+spans costing 1–6 ms against a 7,139–7,316 ms warm rebuild = 0.01–0.08%** — an order of
+magnitude below even (WARM.2)'s 0.13% and two orders below the ~1% close threshold. Full table
+and method in `docs/perf/lib-type-rederivation.md`.
+
+**What the numbers say, and they are bit-identical across all four warm draws AND the cold run**
+(the census's own falsification — a deterministic counter that moved between regimes would mean
+the probe, not the compiler, was deciding what got minted): **119 lib mints** (63 `declaredTypes`
++ 56 member tables) against **14,766 non-lib** — the lib surface is **0.80% of all mints**. Those
+119 produce **15,932 consumptions, a ratio of 133.9 : 1**, so the derivation is already fully
+amortized WITHIN a single request; sharing across requests could only ever delete the production
+side, which is the 1–6 ms. A lib mint is genuinely expensive — **93,464 ns/span warm against
+4,606 for a non-lib one, 20×** — there are just 71 of them. Round 716's law in its purest measured
+form: what looks like a big shared surface is the cheap tail *by count*, not by unit cost.
+
+**THE STRONGER NEGATIVE, FREE FROM THE SAME RUN, AND IT RETIRES THE WHOLE DIRECTION RATHER THAN
+THE LIB SLICE: the entire mint boundary — lib and user code together — is 13,988 spans costing
+38–66 ms warm = 0.5–0.9% of the artifact.** So NO cache placed at `getDeclaredTypeOfSymbol` /
+`resolveStructuredTypeMembers` can clear the ±1.0% warm A/B band, whatever it is keyed on, even
+in the impossible limit where user types were shareable too. Type derivation is not where a warm
+rebuild's time is; round 847 already located that (`checkSpine` 66.0%, its top four handlers
+33.4%).
+
+**The hazard analysis is MOOT at this price and nobody should re-open it.** For the record, the
+three that would have had to be resolved: `getTypeOfSymbol` persists only when the caller's
+instantiation context is empty (round 778), so a shared entry can freeze a member as `T` or `any`
+by first-touch ORDER — a failure CLAUDE.md records as **byte-identical in every output** (round
+607: 51 corpus failures, `--listAll` unchanged); `Type` ids are thread-local sequences handed off
+by `runWithDeepStack` (INV.6(6c0)), so a type crossing the request boundary is indistinguishable
+from a request-local one to every id-keyed relation cache — the round-825 `--workers` mechanism;
+and round 844 already measured 175 merge collisions per compile, 20 mutating a lib symbol, for
+the state-sharing sibling. Three known-silent correctness hazards for ≤0.08% is not close.
+
+**THE ROUND'S BEST FINDING IS THE INSTRUMENT'S OWN DEFECT, CAUGHT BY ITS OWN PIN.** The
+consumed-side hook first went into `resolveStructuredTypeMembersCore` — whose `properties != null`
+guard is **duplicated one frame up** in `resolveStructuredTypeMembers`, so the wrapper absorbs
+every hit and the hooked branch is dead. The census reported `memHitLib = 0`, which would have
+been written up as *"nothing ever reads a derived lib type back, so the cache is pointless"* —
+the exact OPPOSITE of the truth (133.9 : 1), and a conclusion that happens to agree with the
+correct verdict for an entirely wrong reason. `LibTypeCensusTest`'s consumed-side pin failed
+because it had been built to fail if the probe were inert; moving the hook up one frame fixed it.
+**A produced-vs-consumed census keyed on a boundary the CALLER already short-circuits measures
+nothing at all, and reports it as a zero** — the counter-rather-than-timer form of round 786's
+"open on the WRAPPER" law. Note also that the two hooks share ONE depth counter because they
+recurse into each other; the evidence it works is that 119 lib mints produce only 71 timed spans.
+
+**WHAT DID NOT HAPPEN: Part B (the warm intra-handler tables) was NOT run — but it is wired,
+committed and one command away.** Round 847's finding is that a handler's warm SHARE is not its
+cold share (the top two spine handlers swap between regimes) and that a probe boundary is ~1.85×
+more expensive cold than warm — so every intra-handler section table on record, all of them cold
+one-shots, must be re-taken before it can be read as a warm attribution. `BenchMain` now accepts
+`cta` / `cpa` / `arg` tiers plus a `*coarse` twin each (the COARSE twin is what prices the
+boundary DIFFERENTIALLY inside one warm process — round 734, never an empty-span loop), covering
+handler #2 `spineCtaM3StatementAnchor` (17.7% of the warm artifact), #3 `cpaSpineLeave` (12.8%)
+and `checkArgumentsAgainstSignature` under #1 `ccetSpineLeave` (18.2%).
+**A NEXT ROUND STARTS AT `bash scripts/round849-warm-sections.sh 2`** — phase 1 already validated
+the whole build → cost-gate → JIT-gate → daemon-stop → measure path in that script, so phase 2
+needs no new infrastructure. Cross-regime warning it must carry: this round's own in-situ empty
+pair read 96–209 ns warm against 501 ns cold, so the cold section tables' `net` columns are
+calibrated with a boundary 2.4–5.2× too large for warm.
+
+**Gates.** Suite **13,984 / 0 failures / 3 skipped** (13,979 baseline + the 5 new pins), counted
+per module with `xml.etree` over a fully wiped results dir — note the count is only trustworthy
+after wiping ALL four modules' `build/test-results/jvmTest`, since a `--tests`-filtered run
+rewrites only the filtered XMLs and a directory sum then includes the previous run's files
+(rounds 638/690; it bit this round once). `cost_gate.py`: **all 18 counters +0.00%**, no cost
+movement. `huge_methods.py --fail-over 0`: **exit 0**, census still zero.
+
+**Round 848 (2026-08-08) — (SERVE.1) CLOSED: THE ARGUMENT LOOP NO LONGER LEAKS MODES ACROSS
+SERVER REQUESTS — AND THE QUEUE ENTRY'S "SEVERAL OF THESE CHANGE WHAT THE COMPILER DECIDES" IS
+NOW MEASURED RATHER THAN ASSERTED, WITH A DIFFERENT ANSWER THAN EXPECTED.**
+
+**What landed.** `runCli` now wraps its whole body in `try { … } finally { modes.restore() }`, where
+`modes` is a `ModeLedger` (`DebugModes.kt`): `modes.set(Obj::field, value)` records the value the
+field HELD and restores exactly that. The argument loop is extracted as `parseCliArgs` (drivable
+without compiling — which is what makes the mechanism pin possible), `printUsage` as `usageText`
+(the flag registry the pin sweeps), and the ad-hoc round-843 restore block plus the ten
+per-report `mode = OFF` clears are DELETED, subsumed by the ledger. `PartitionCheck.reportLines`
+is an accumulating `val` list, so the ledger cannot own it; it is cleared explicitly right after
+being printed.
+
+**A ledger, not a checklist, and that was the point.** The queue named six unrestored flags.
+Auditing the read sites found **eight more**, two of which nobody had ever listed:
+`SpineDispatch.mode == GATED` (only `PROBE` was cleared — `GATED` replaces the spine walk with the
+derived per-kind handler table) and `CallSections.preGateProbe`/`preGateBogus` (forces the call
+prologue to run for EVERY call, i.e. skips the round-793 pre-gate's refusal). Also unrestored:
+`CpaSections.preGateProbe`/`preGateBogus`, which skips the round-792 suppression `return` outright.
+That is the whole argument for a mechanism: a hand-kept restore list had already gone stale twice,
+and `CliModeRestoreTest` covers the fifteenth flag by construction.
+
+**THE MEASUREMENT, and it does NOT confirm the queue entry.** 14 arms run against the compiler
+profile (`--noEmit --listAll`, `grep 'error TS' | sort`, project prefix `sed`-stripped): every one
+is **byte-identical to baseline at 46 lines, md5 `4090b73e`, added=0 removed=0** —
+`--flowScanLegacy`, `--flowScanBogus`, `--flowEagerSet`, `--argNarrowGateOff`, `--dispatchGated`,
+`--ianyGateOff`, `--ianyArgGateOff`, `--cmamPreGate`, `--ccetPreGate`, `--verifyDeferSuppression`,
+`--verifyUnionRetry`, `--verifyLoopRetry`, `--verifyImplRelated`, `--workers 4`. **Including
+`--flowScanBogus`, which exists to CORRUPT the fast scanner** — so the profile is not an instrument
+for this question at all, and round 753's law applies in full. Escalating to the corpus:
+`FlowScan.bogus` defaulted TRUE, whole core suite, **13,902 tests → exactly 1 failure, and it is
+`FlowScanEquivalenceTest`** — the dedicated pin. Every one of the ~13,900 baselines is green with
+a deliberately corrupted scanner.
+
+> **CORRECTION (round 853, 2026-08-08) — RE-MEASURED ON A VERIFIED BINARY; THE FINDING STANDS.**
+> This capture was taken through `build/bench/xtsc-classpath.txt`, which round 852 found naming the
+> ROOT project's pre-module-split class dir — a compiler built 2026-08-07 23:39 UTC, i.e. before
+> this round's own code existed. "Every arm byte-identical" is exactly what a binary ignoring all
+> 14 flags would print, so the classification could not stand on this capture. Round 853 re-ran all
+> 14 arms plus a replicate baseline through `scripts/round853-serve1-arms.sh`, which asserts both
+> the module-name guard on the classpath and a POSITIVE control that `ModeLedger` — this round's
+> own class — is in the class dir under test: **every arm 46 lines, `added=0 removed=0`, md5
+> `84bbe7f0…`** under grid838.sh's prefix-stripping recipe, `--flowScanBogus` included. The
+> three-way classification below is therefore a finding, not an artifact.
+> **Two corrections to the NUMBER, neither of them a retraction.** (a) `4090b73e…` is a FOURTH
+> digest lineage — a basename-style `s#.*/src/#src/#` strip — and it reproduces *exactly* on round
+> 853's verified capture (`docs/perf/aot-cache.md` § 11.5). (b) The staleness could not have
+> corrupted this arm table in any case: the stale pre-848 binary and today's produce **byte-identical**
+> compiler-profile output (both 46 lines, `84bbe7f0…`), which is independent corroboration that
+> rounds 848–852 moved nothing this profile can see.
+
+**So the honest classification is three-way, not two-way:**
+- **Measured-visible leak (1):** `PartitionCheck.reportLines` — re-printed by every later request
+  on the daemon, the only one of the fifteen observable in the RESPONSE TEXT. Plus round 843's
+  instrumentation half, whose leak is a measured COST (round 733: `--passTiming` alone moves
+  `checkSpine` +29 ms; `--globalsAmp` re-reads every globals lookup N times).
+- **Provably decision-altering by CONSTRUCTION, with no discriminating shape known to either
+  instrument (11):** `FlowScan.legacy`/`bogus`, `ArgNarrowGate.mode`, `IanySections.gateOff`/
+  `armGateOff`/`argGateOff`, `SpineDispatch.mode == GATED`, `CpaSections.verifyLoopRetry`/
+  `verifyUnionRetry`/`verifyDeferSuppression`/`preGateProbe`, `CallSections.verifyImplRelated`/
+  `preGateProbe`. Reading the sites settles that they are not no-ops — `--cmamPreGate` skips a
+  `return`, `--verifyDeferSuppression` honours the eager verdict instead of the deferred one,
+  `--argNarrowGateOff` restores the pre-796 narrowing — but they were BUILT as equivalence
+  baselines ("this run reproduces the pre-change binary"), so agreeing on every measured shape is
+  what they were designed to do. Round 792's law is what keeps this from being a licence:
+  **a green corpus and a green profile bound a hazard's frequency, never its existence.**
+- **Resource / threading (3):** `ParallelCheckMode.workers` (round 826: peak RSS 808 → 2,234 MB,
+  CPU 98 → 103 s at w4, and output LINE ORDER may differ), `PartitionCheck.workers` (N extra
+  sequential checkers per request), `FlowScan.eagerSet`. The corpus cannot see any of these by
+  construction. **`--workers` was NOT re-validated here** — round 825 fixed the race and round 826
+  re-took the scaling on 72 runs; this round only ensures a request that sets it does not leave it
+  set, which is a strictly weaker and cheaper claim.
+
+**Pins, and the one-mistake-at-a-time ablation that decided each (harness committed FIRST, round
+789).** `ModeLedgerTest` (4, commonTest — the fixture's defaults are deliberately `true`/`7`/
+`"production"`, so a restore-to-default implementation fails its first case and nothing else
+would); `CliModeRestoreTest` (2, core jvmTest — drives every documented flag through
+`parseCliArgs`, then asserts by JVM reflection over every declared non-final field of all 16 mode
+objects that the restore put every one back; non-vacuous three ways: `ledger.pending > 20`, >20
+fields observably moved, and every name in `BEHAVIOUR_CHANGING` is among those that moved);
+`CompileServerModeLeakTest` (2, daemon jvmTest — end to end through `CompileServer.respondTo`,
+reading the flag OBJECTS, plus the `reportLines` text assertion).
+
+| ablation (one at a time) | result |
+| --- | --- |
+| A1 `FlowScan.legacy = true` written bare in the parse loop | `CliModeRestoreTest` FAILS, naming `FlowScan.legacy: false -> true`; `CompileServerModeLeakTest` FAILS; `ModeLedgerTest` and `CompileServerPassTimingTest` stay GREEN |
+| A2 drop `PartitionCheck.reportLines.clear()` | ONLY `CompileServerModeLeakTest`'s partition-check case fails — and on the OUTPUT text |
+| A3 `restore()` iterates forward instead of reversed | `ModeLedgerTest`'s LIFO case + the sweep fail; the other three ledger cases green |
+| A4 `restore()` stops calling `undo.clear()` | ONLY `ModeLedgerTest`'s "empties the ledger" case fails |
+| A5 `set` saves AFTER the write | 3 of 4 `ModeLedgerTest` cases + the sweep fail (the broad control) |
+
+**Gates.** `jvmTest` **13,979 / 0 failures / 3 skipped** (baseline 13,971 + the 8 new pins — counted
+per module with `xml.etree`, since the documented root glob prints `0 0 0` after the MOD split).
+`huge_methods.py --fail-over 0`: census **0**; the extraction leaves `parseCliArgs` at 4,306
+bytecodes and `runCliCore` at 1,252 (the pre-split `runCli` held both). `cost_gate.py`: every
+counter unchanged, `+0.00%` on all 18.
+
+**Not done, named rather than implied.** No warm A/B — this round changes nothing on the hot path
+(the ledger is ~30 `set` calls per process-request, not per node). The residual on the mechanism is
+stated in `usageText`'s KDoc: an UNDOCUMENTED flag is not swept, which is why `CliModeRestoreTest`
+also carries `ACCEPTED_FLAGS` as a second reading of the same list and asserts the usage text
+documents all of it — four flags the parser accepted and never documented (`--verifyMappedCache`,
+`--verifyLoopRetryAll`, `--ccetPreGate`, `--ccetPreGateBogus`) are now in the usage text.
+
+**Round 847 (2026-08-08) — (WARM.4): THE FIRST WARM PER-KIND / PER-HANDLER ATTRIBUTION OF
+`checkSpine`. THE KIND SHAPE IS REGIME-INVARIANT (statement anchors 39.9% warm vs 40.0% cold), THE
+HANDLER ORDER IS NOT (the top two SWAP), AND CLAUDE.md's STANDING SIX-HANDLER LIST IS STALE BY 53%
+ON ITS LARGEST ROW.** An instrument round: nothing optimized, no lever landed, and the deliverable
+is the table `checkSpine` — 66% of the warm artifact — has never had. Full tables in
+`docs/perf/warm-spine-attribution.md`. One binary, the 78-file compiler profile, daemons stopped
+inside the measuring script, box unwatched; all 11 instrumented rebuilds answered 78 files / 46
+errors and `BenchMain` aborts if one disagrees with its own measured loop. Warm probe-free medians
+**8,176.7 / 8,013.7 ms** (mean 8,095.2, a THIS-ROUND absolute).
+
+- **THE INSTRUMENT: a `dispatch` tier on `BenchMain`'s 4th argument**, which is NOT a `PassTiming`
+  tier — it leaves the pass probe off and runs round 732's `SpineDispatch.PROBE` for one rebuild.
+  `spine,dispatch,spine,dispatch` takes two draws of each inside ONE warm process, so the sub-row
+  partition check and the per-handler table are comparable with no second JVM between them.
+  **Nothing under `commonMain` changed** — the entire change is `src/commonTest/kotlin/BenchMain.kt`
+  plus two scripts, which is why this round could be spent on measurement rather than on gates.
+- **SUB-ROWS (spine tier, warm n=4 / cold n=1): enter 3,102 (58.5%), leave 1,586 (29.9%), ures 490
+  (9.2%), forEachChild 86, scope 42; SUM 5,307 ms.** enter:leave = **1.96** (round 846's
+  independent `rows`-tier reading: 2.01 — reproduced). cold/warm: enter **3.62×**, leave 3.28×,
+  ures 2.76×, and the two near-pure-traversal rows barely warm at all — **forEachChild 1.43×,
+  scope 1.31×** — which is a shape fact, not a lever (128 ms = 1.6% of the artifact combined).
+  **Partition: sub-rows 5,307 vs the tier's own `checkSpine` row 5,990 = 88.6%, the 683 ms gap
+  being the tier's boundaries at 797 ns/node — and COLD the same boundary costs 1,475 ns/node**,
+  i.e. **a probe boundary is ~1.85× more expensive cold**, which is the mechanism behind round
+  846's "a constant additive probe compresses the ratio of exactly the row it lands on".
+- **PER-KIND — THE SHAPE DOES NOT MOVE.** `CALL_EXPRESSION` 1,040 ms (23.8% of the spine, 19.8
+  µs/node over 52,509 nodes), `BLOCK` 654 (14.9%), `VARIABLE_STATEMENT` 515 (11.8%, **35.0 µs/node
+  — the most expensive kind**), `IDENTIFIER` 459 (10.5% over 381,670 nodes at 1.2 µs),
+  `EXPRESSION_STATEMENT` 386, `RETURN_STATEMENT` 366, `BINARY_EXPRESSION` 260. **The five statement
+  anchors are 9.9% of the nodes and 39.9% of the warm spine against 40.0% cold on the same binary**
+  — CLAUDE.md's cold record reproduces to 0.1 points, so it is a property of the compiler and not
+  of the cold JVM. The warning attached to it stands: that is a LOCATION, not a lever.
+- **WARM-UP IS NOT ORDERED BY COST — round 843 § 5(b) confirmed on a second instrument**, and more
+  sharply now the probe no longer dominates: the most expensive kind per node
+  (`VARIABLE_STATEMENT`) warms **4.02×**, the second most expensive (`BLOCK`) warms **2.67×, the
+  worst in the table**, the cheapest (`IDENTIFIER`) 3.60×, the best `BINARY_EXPRESSION` 4.15×.
+  **Scaling a cold per-kind cost by one factor is wrong by up to ±25%.**
+- **PER-HANDLER (dispatch tier, warm n=4 / cold n=2) — THE DELIVERABLE.** `ccetSpineLeave` **876 ms
+  = 18.2%**, `spineCtaM3StatementAnchor` 853 = 17.7%, `cpaSpineLeave` 617 = 12.8%, `ctaSpineEnter`
+  359 = 7.5%, `spineIanyEnterNode` 171, `spineArithEnterNode` 153. **Top four = 2,705 ms = 56.2% of
+  the probed spine and 33.4% of the whole warm artifact**; top six 63.0%. **Partition check, the
+  strongest available: the handler nets sum to 4,812 ms against the `spine` tier's independently
+  measured enter+leave of 4,688 = 102.6%** — two probes sharing no code, 2.6% apart.
+- **THE ORDER SWAPS BETWEEN REGIMES, and the mechanism is stated rather than implied:** cold #1 is
+  `spineCtaM3StatementAnchor` (19.1%), warm #1 is `ccetSpineLeave`, because the latter warms
+  **2.75×** against the spine's 3.38×; `ctaSpineEnter` rises 5.4% → 7.5% on the same mechanism
+  (2.28×, worst of the big four). **A handler's warm share is its cold share × (spine warm-up ÷ its
+  own), and those differ by up to 1.5× — so a cold handler table cannot be read as a warm one.**
+- **CLAUDE.md's SIX-HANDLER LIST IS STALE AND IS CORRECTED HERE.** It records `cpaSpineLeave
+  4,366 ms` as the largest and "six handlers hold 71%". On today's binary `cpaSpineLeave` is
+  **2,060 ms cold — down 53%** (rounds 788-795 landed levers in it, exactly as the round-830 entry
+  predicts) and is THIRD; the top six hold **60.9% cold / 63.0% warm**, not 71%; `ccetSpineEnter`
+  has dropped out of the six and `spineArithEnterNode` has entered it.
+- **WHERE THE COST ACTUALLY SITS (per handler × per kind, warm): `ccetSpineLeave` is 92.5%
+  `CALL_EXPRESSION` — 839 ms net = 10.4% of the warm artifact, the single largest object in it.**
+  `spineCtaM3StatementAnchor` is **93.0% in three kinds** (VARIABLE_STATEMENT 39.2%,
+  RETURN_STATEMENT 29.7%, EXPRESSION_STATEMENT 24.1%) = 821 ms = 10.1%. `ctaSpineEnter` is 62.7%
+  `BLOCK`. `cpaSpineLeave` alone is genuinely SPREAD (largest kind 20.0%). **What this does NOT
+  license:** round 733 already opened both `…SpineLeave` handlers cold and found **88.4% of their
+  time is the cpa/ccet passes' own checking work**, the ancestor climbs being 176 ms of 8,195 — so
+  ~776 of `ccetSpineLeave`'s 876 warm ms is type-system work and only ~100 ms is scaffolding.
+- **(DISPATCH.1) RE-PRICED WARM AND STAYS CLOSED.** The probe computes it directly: **340-362 ms
+  upper bound warm at 10-11 ns per skipped consultation, against 1,000-1,019 ms cold at 31 ns**,
+  over the same 32,006,965 skipped consultations. That is 6.6% of the warm spine vs 5.6% cold and
+  4.35% of the warm artifact — **a skipped consultation warms 2.95×, essentially the spine's own
+  3.38×, so the table's relative value is REGIME-INVARIANT and the warm artifact does not make it a
+  better idea than round 732 found it.** Applying round 732's own 11-34% realisation discount gives
+  **~40-120 ms = 0.5-1.5%**, straddling the ±1.0% warm band.
+- **WHAT WAS NOT MEASURED, named rather than implied. (WARM.3) IS NOT SIZED** — lib type
+  re-derivation lives *inside* these handlers and no row here separates it; the cheapest honest
+  instrument is a counter+timer around `resolveInterfaceMembers` keyed on whether the symbol's
+  declaration file is a lib file, read on the SECOND of two consecutive warm rebuilds (that is what
+  a daemon request re-pays). That is a `commonMain` change and a full gate cycle, and it was not
+  started. Also not measured: any A/B (nothing was optimized), the other seven profiles, emit mode,
+  and a cold `spine`-tier draw beyond n=1.
+- **GATES: suite 13,971 / 0 / 3, unchanged** (wiped per-module results dirs, `xml.etree`).
+  `cost_gate.py` and `huge_methods.py` **not run and not required** — nothing under `commonMain`
+  changed; the only `src/` file touched is `commonTest/kotlin/BenchMain.kt`, which carries no
+  `@Test` and cannot alter a corpus baseline. **No pin was added, and that is stated rather than
+  omitted:** the change is a measuring harness, its claim is a measurement, and its repeatability
+  is the committed `scripts/round847-warm-spine.sh` + `scripts/round847_analyze.py`.
+
+**Round 846 (2026-08-08) — (WARM.1)(c) CLOSED: `--passTiming` NOW HAS TIERS, AND THE `rows` TIER IS
+FREE (+0.25% COLD, 0.0% WARM). THE PROBE LANDS **99.5-99.8% IN CHECKER-INIT AND 101-109% IN
+`checkSpine`**, SO § 3.1's BRACKET (A) IS RIGHT AND (B) IS REFUTED — WARM `checkSpine` IS **74.3%**
+OF CHECKER-INIT, NOT THE 81.8% THE INSTRUMENTED TABLE READS.** An instrument round: nothing was
+optimized, and the deliverable is a warm attribution whose absolutes a lever can be sized against.
+Full tables in `docs/perf/warm-jvm-attribution.md` § 10.
+
+- **THE CHEAP ROUTE THE QUEUE NAMED FIRST WAS THE RIGHT ONE, AND THE REASON IS STRUCTURAL: none of
+  the probe's cost is the ~417 `pass()` boundaries.** It is the per-CALL bookkeeping — 574,620
+  `getTypeOfExpression` hooks (a distinct-keyed `HashSet` add + a by-pass `HashMap` + a shadow-memo
+  probe + a timestamp pair EACH), the `InstrumentedSymbolTable` on the hottest map in the program,
+  every fenced-setter no-op, and a profiled spine walk keeping two BOXED `HashMap<Int,Long>` entries
+  per node over 856,962 nodes. So the tiers are `rows` (pass rows + checker-init, PRODUCTION spine
+  walk) / `spine` (+ the per-node SPINE sub-rows) / `full` (unchanged). Both flags default TRUE:
+  `--passTiming`, `cost_gate.py` and every existing pin are bit-for-bit unchanged.
+- **CALIBRATED DIFFERENTIALLY, IN ONE PROCESS.** `BenchMain`'s 4th argument now takes a tier LIST,
+  so `rows,spine,full,rows,spine,full` measures the SAME warm code at ~417 boundaries and at ~2 M,
+  twice each, with nothing else varying. `overheadMs` vs each process's own probe-free median
+  (n=4): **rows −113 ms, spine +336 ms, full +2,657 ms**. Cold, 6 interleaved one-shots:
+  **probe-free 26,843 / rows 26,910 (+0.25%) / full 29,461 (+9.75%)**.
+- **THE ANSWER, and it settles the blocker on this arc.** Warm (rows tier, n=4): wall 8,083 ms,
+  checker-init 7,184.9 (**88.89%** of wall), `checkSpine` 5,335.9 (**74.27%** of checker-init,
+  **66.0%** of wall), the other 416 passes 1,849.0 (22.9%), front end 898.0 (**11.1%**). Cold (rows
+  tier, n=2): 26,910.5 / 23,246.6 (86.38%) / 18,459.5 (**79.41%**) / 4,787.1 / 3,663.9 (13.62%).
+  **So warm `checkSpine`'s share FALLS 79.4% → 74.3%**; the raw full-tier reading (82.3 → 81.8%)
+  says "flat" and round 843's raw cross-round reading said "rises", and both are the instrument.
+- **CROSS-CHECK: bracket (A) applied to THIS round's own full-tier numbers gives 74.80%; the
+  directly measured `rows` tier says 74.27%.** Two independent instruments 0.5 points apart — which
+  is also what licenses re-reading every OTHER `full`-tier table by the same correction.
+- **§ 4's WARM SPEED-UP COLUMN IS INVERTED FOR ITS TWO BIGGEST ROWS, and this is the finding a
+  future round is most likely to trip over.** It reads `checkSpine` 2.24× against the tail passes'
+  2.38×. Corrected: **`checkSpine` 3.46×, the tail 2.59×.** The probe adds ~2.6-2.8 s to
+  `checkSpine` in BOTH regimes — ~15% of a cold row, ~52% of a warm one — so a constant additive
+  term compresses the warm-up ratio of exactly the row it lands on.
+- **WHAT DID NOT WORK / WHAT I GOT WRONG BEFORE MEASURING IT.** (1) I expected the probe to be
+  spread over the tail passes; it is not spread at all — across the top-20 rows the `full`/`rows`
+  ratio is 0.63-1.35 with no sign, i.e. noise, and only `checkSpine` reads 1.53×. (2) I expected the
+  probe's price to be a constant; **it warms up** — in BOTH processes the `full` tier's second draw
+  is 1,383 and 1,820 ms cheaper than its first, while `rows`/`spine` move ±220 ms in both
+  directions. The probe's own `HashSet`/`HashMap` code has never been JIT-compiled when the first
+  instrumented rebuild runs. **Round 843's warm probe price (3,450-3,945 ms) was n=1 per process =
+  a FIRST draw, and matches this round's first draw (3,457 ms) exactly; the steady state is
+  ~1,856 ms.** Anyone pricing the probe needs ≥2 instrumented rebuilds per process.
+- **THE SPINE SUB-ROWS NOW CARRY A PARTITION CHECK.** At the `spine` tier they sum to **5,299 ms
+  against the `rows` tier's 5,335.9 ms `checkSpine` row = 99.3%** — the tier's own boundaries
+  (513 ms = **599 ns/node**) sit on the enclosing row, outside the sub-rows, which is why the two
+  instruments agree. Warm, `spineEnterNode` is **3,121 ms = 38.6% of the whole warm artifact** and
+  `spineLeaveNode` 1,553 ms = 19.2% (enter:leave **2.01**). At the `full` tier the same rows sum to
+  7,475 ms at a ratio of 1.55, the bookkeeping landing harder on `leave` (+71%) than `enter`
+  (+32%) — so § 4's "the leave handlers are less JIT-recoverable" is at least partly instrumental.
+- **PINS.** `PassTimingTierTest` (7), each written to FAIL if the gate swap were inert: every tier
+  answers IDENTICAL diagnostics; `rows` records the SAME pass names and call counts as `full` with a
+  non-zero checker-init; at `rows` every per-call counter and every SPINE sub-row is ZERO **against
+  a full-tier positive control that is non-zero**; the tier flags survive `reset()` (they are MODES);
+  `detailed`/`spineProfiled` are the conjunction with `enabled`; and the dump names its tier and says
+  in the table that a dropped counter is an ABSENT measurement, not a measured zero.
+  `PassTiming.detailed`/`.spineProfiled` are MAINTAINED FIELDS, not `get() = enabled && detail`
+  getters — they are read a few million times on the PRODUCTION path and a conjunction getter would
+  double the accessor calls a production run pays for a probe it is not running.
+- **GATES.** Suite **13,971 / 0 failures / 3 skipped** (`xml.etree`, wiped results dirs; core
+  13,896, api 27, client 18, daemon 30 — **+7 exactly the new pins**). `cost_gate.py` **every
+  counter +0.00%**. `huge_methods.py --fail-over 0` exit 0, **0 over the limit**. All 6 `full`-tier
+  runs across three JVMs report identical deterministic counters (574,620 / 224,853 / 17,851 /
+  856,962) and every run of every tier answered 78 files / 46 errors.
+- **NOT MEASURED, named rather than implied.** One profile. No A/B and nothing optimized. The warm
+  absolutes are ~15% above round 843's on the same code (8.0-8.4 s vs 6.9-7.1 s) — the documented
+  cross-round instability, which is why only within-round shares are quoted. n=4 warm / n=2 cold
+  per tier, so a row below ~100 ms is not resolved. The 8-profile grid was not run.
+
+**Round 845 (2026-08-08) — (WARM.1)(b) CONFIRMED: THE (JIT.1) ARC BOUGHT **1.5× ON THE WARM
+ARTIFACT** WHILE ITS OWN COLD INSTRUMENT READ IT AS NOISE. A −33.6%, 4/4 RESULT AGAINST A
+RECORDED `+0.08%, NOISE-DOMINATED`.** Round 843 left this as an explicit hypothesis; it took one
+isolated warm A/B to settle, and the answer changes how a whole gate is valued.
+
+- **THE INTERVAL WAS ISOLATED, WHICH IS WHAT MAKES THIS AN ATTRIBUTION AND NOT A "SINCE ROUND 802"
+  FIGURE.** Arm A is `93ff3195`, the immediate **parent** of the first split `d194baca` (census
+  landed, zero splits applied); arm B is `d8ff69b5`, the arc's close. Every `perf(…)` commit in
+  `93ff3195..d8ff69b5` is a `(JIT.1)` split — the rest are docs, split pins and bench chores —
+  `git diff --name-only` across the interval shows **zero** build/gradle/toml/properties changes,
+  and both arms predate the MOD module split, so layout and dependencies are identical. **The arms
+  were verified in the BYTECODE before being measured: A = exactly 19 methods over 8,000, matching
+  round 802's census; B = 0.**
+- **THE NUMBER.** 4 interleaved pairs, 3 warm-up + 8 measured, per-process medians: **A 10,088.0 ms
+  (sd 0.58%) → B 6,702.9 ms (sd 1.31%), −3,385.1 ms = −33.56%, B wins 4/4, 1.505×.** All 64
+  measured iterations in both arms answered `files=78, errors=46`, and both per-iteration series are
+  flat 1→8, so neither arm is under-warmed. **The ~1% quiet-box sd rule was OVERRIDDEN EXPLICITLY,
+  not ignored:** arm B is 1.31%, but the effect is **38× the larger arm sd**, every pair clears it
+  by ~35×, and dropping B's one low outlier gives sd 0.38% and −33.46%. That rule is calibrated for
+  the ±1% regime; this is not that regime, and saying so beats quietly quoting a clean median.
+- **THE RESIDUAL, and it is the part that keeps round 843 honest.** Batch 2, r821 vs HEAD, 3 pairs:
+  6,481.7 → 6,620.9 ms, **+2.15%, HEAD wins 0/3** — at 1.9× the arm sd not a demonstrated
+  regression, so the reading is **zero warm compute movement between round 821 and today**. So
+  843's −39.5% decomposes as **~10% r771→r802 (NOT attributable to code — it spans the 4-core →
+  8-core box change), −33.6% r802→r821 ((JIT.1)), ~0% r821→HEAD.** The same r821 binary read
+  6,702.9 in batch 1 and 6,481.7 in batch 2 — a cross-batch drift 3× the within-batch band, which
+  is exactly why only within-batch paired deltas are quoted.
+- **WHAT IT LICENSES, and it is a standing change to how a gate is read.** `huge_methods.py
+  --fail-over 0` is a **WARM-PATH gate**: it protects the daemon / `--serve` / AOT artifact far
+  more than the CLI, because a method over 8,000 is never JIT-compiled and its cost therefore
+  cannot improve with warm-up — which is precisely why the COLD protocol is structurally blind to
+  the whole class. **Any future change that grows a hot method past 8,000 must be A/B'd with
+  `ab-warm.sh`, never `ab-interleaved.sh`.** CLAUDE.md entry added. Incidental and NOT quotable
+  (n=1 smoke samples): cold read A 24.7 s vs B 21.7 s, so the arc likely has a real but much
+  smaller cold component too.
+- **THE REUSABLE ARTIFACT that made a 40-round-apart warm A/B expressible at all:** `WarmBench.java`,
+  a reflection clone of `BenchMain` that links against ANY arm's `ProjectCompiler` regardless of its
+  `build(…)` arity. `BenchMain` itself cannot do this — it is compiled against one arm's signature —
+  and that, not the build, was the real obstacle to ever running this comparison.
+- **GATES: none run and none required** — nothing under `src/` changed; the work was two builds in a
+  throwaway worktree and a measurement. `docs/perf/warm-jvm-attribution.md` § 2.2 has the tables.
+
+**Round 844 (2026-08-08) — (WARM.2): SHARING THE BOUND LIB STATE ACROSS DAEMON REQUESTS IS WORTH
+**8.65 ms = 0.13%** OF A WARM REBUILD. MEASURED, NOT ESTIMATED; NOTHING BUILT; STOP.** The
+candidate was warm-only and therefore invisible to every attribution table this repo has (all
+cold): the daemon rebuilds a fresh program per request, `RealLibSnapshots.parseCache` reuses the
+PARSED lib files process-wide, but BINDING them is per-program — a one-time unavoidable cost cold,
+paid on EVERY request warm. Round 772's "retained program state is worthless here" verdict is
+about the USER's files (`export *` barrels ⇒ 77-of-78 closures) and says nothing about the libs.
+Priced before anything was designed, per the round-716 rule that killed three caches in one round.
+
+- **THE PRIZE.** Warm in-process rebuilds, 3 warm-up + 8 measured, two processes: whole real-lib
+  region **8.65 / 9.86 ms** against a **6,846 / 6,663 ms** rebuild = **0.126% / 0.148%**. Breakdown
+  (medians): `RealLibResolver.resolve` 2.0 (a pure function of `(libNames, target)`, and it runs
+  **twice** per program), `bindLibFiles` **4.9**, identity-set stamping 1.5, `mergeSymbolTable`
+  0.09. Census: 45 lib files, 379 top-level statements, 1,784 stamped decl nodes, 185 merged
+  symbols. Cross-checked by an independent in-process microbench of `bindLibFiles` alone: median
+  **4.53 ms** over 10 runs, agreeing with the in-situ row. The lib-derived setup passes add at most
+  4.7 ms, so the **absolute ceiling on everything lib-shaped is ~13.4 ms = 0.20%**.
+- **WHY IT IS SMALL: THE PRIZE WAS ALREADY HARVESTED.** `parseCache` shares the *parse*, and
+  parsing is the expensive half; what remains per request is a top-level bind over ~400 KB of
+  body-less `.d.ts` yielding 185 global names. This is the round-843 front-end finding in
+  miniature — the warm front end is **807.9 ms** in total, so the lib region is 1.1% of it, and
+  the front end is where a reader would have gone looking.
+- **IT DOES *NOT* MOVE — round 788 does not apply, which is what makes the number quotable.**
+  `symbolTypes`/`declaredTypes`/`referenceCache` are `CheckerState` fields, i.e. per-`Checker`, so
+  the lazy type derivation runs identically whether the symbols were freshly bound or shared, and
+  all 185 symbols are consumed. The 8.65 ms is genuinely deletable in principle — which is exactly
+  why it is worth saying that 8.65 ms is the whole of it.
+- **THE HAZARDS WERE MEASURED, NOT ENUMERATED FROM THEORY, and one is worse than predicted.**
+  Instrumenting `mergeSingleSymbol` against the merged lib symbol ids: **175 merge collisions per
+  compile, 20 of which MUTATE a lib symbol, across 2 names — `Symbol` and `ImportAttributes`.** So
+  sharing bound lib symbols means request 2 inherits request 1's `flags |=` and 20 accumulated
+  `declarations` entries, growing without bound — and `Symbol` is precisely the SHARED-class merge
+  INV.3(d) says importers free-ride on. That is a LOWER bound (the census keys only on top-level
+  ids; nested `exports`/`members` writes and `mergeModuleAugmentations`' `globals[exportName] =`
+  are uncounted). The id hazard is **ORDER, not collision** — the daemon serves every request on
+  one thread, so ids never interleave, but skipping the bind shifts every later program's user
+  symbol ids by ~185, and round 607's sibling failure was **51 corpus failures whose `--listAll`
+  output stays IDENTICAL**. A safe version is barely expressible: the merge target set is
+  discovered dynamically, so safety means copy-on-write over every lib symbol's
+  `flags`/`declarations`/`valueDeclaration`/`exports` — re-doing the allocation the bind was doing.
+  Only `resolve` and the stamping sets are safely shareable: **3.5 ms**.
+- **VERDICT: NOT WORTH A ROUND, and the reason generalizes.** 0.13-0.20% is an order of magnitude
+  inside BOTH A/B bands (cold ±2.0%, warm ±1.0%), so the effect is unmeasurable by the instruments
+  that would have to confirm it, while carrying a hazard class that produces byte-identical output
+  while being wrong. `RealLibSnapshots`' existing KDoc decision ("binding is deliberately
+  per-consumer") is correct and now has a price attached: **it costs 4.9 ms warm.**
+- **WHAT THIS RULES IN BY ELIMINATION, queued as (WARM.3):** the compile is 91.8% checker warm, so
+  the only lib-shaped candidate with a plausible prize is the per-request re-derivation of lib
+  **TYPES** (`resolveInterfaceMembers` over `interface Array<T>` and friends, in per-`Checker`
+  `symbolTypes`/`declaredTypes`). It is unmeasured, it lives inside `checkSpine`, and it is
+  strictly MORE hazardous than this one (`Type` ids, interning, instantiation contexts) — so it
+  gets its own prize measurement before anyone designs it, not a design.
+- **GATES: none run and none required.** Nothing under `src/` changed; the temporary probe was
+  reverted and the tree verified clean, the binary rebuilt from HEAD. The probe itself was 3
+  timestamp pairs per PROGRAM (~0.3 µs against 6.8 s), the one shape in this arc where round 734's
+  boundary-cost calibration is structurally irrelevant — and its measured walls sat at or below
+  round 843's probe-free medians, confirming nothing was inflated. Re-appliable patch and harness
+  in the round's scratchpad (`r844-probe.patch`), not committed.
+
+**Round 843 (2026-08-07) — (WARM.1)(a): THE FIRST WARM-JVM ATTRIBUTION THIS REPO HAS EVER TAKEN,
+AND IT CORRECTS THE ARC'S HEADLINE ARTIFACT NUMBER BY 40%.** Owner directive this session:
+*"we have a new client-server architecture; prioritize profiling-based performance improvements on
+the warmed-up JVM."* Recon established the premise: **every per-pass table in `docs/perf` was
+produced by a COLD one-shot `MainKt` JVM** — four independent strands (each table's own "median of
+3 probe-free runs" protocol line, the literal command in `setup-phase-and-huge-methods.md` § 644,
+`cost_gate.py`'s recipe, and `BenchMain`'s inability to take a flag) — so the cost map every queue
+decision rests on describes an artifact we no longer ship. Full tables:
+`docs/perf/warm-jvm-attribution.md`. Five things worth carrying forward:
+
+- **THE ARTIFACT LADDER MOVED AND NOBODY MEASURED IT.** Probe-free cold **22,971 ms** (n=3);
+  warm `BenchMain` median **6,917 / 7,143 ms**; the real `--serve` client-server ladder
+  **22,753 → 10,898 → 7,754 → 7,606 → 7,447 → 7,410 → 7,447 → 7,100 ms**, i.e. two INDEPENDENT
+  warm harnesses agreeing at ~7.0-7.4 s. The record — `CompileServer.kt`'s own KDoc,
+  `aot-native-image.md` § 1 and § 4, § 0.1's endgame framing — says **11,580 ms**. Over the same
+  interval **cold improved 12.6% and warm improved 39.5%**. The leading HYPOTHESIS (labelled as
+  one, in the doc and here) is the **(JIT.1) huge-method arc**: a method over `HugeMethodLimit` is
+  never JIT-compiled, so its removal pays in STEADY STATE — and rounds 802-821 were measured only
+  with the COLD instrument, where round 803's own falsifier read `NOISE-DOMINATED` after (a).
+  **What would confirm it is a WARM A/B of a pre-802 binary against HEAD; it was NOT run.**
+- **THE INSTRUMENT PRICES ITSELF, AND THAT IS THE DOCUMENT'S CENTRAL WARNING.** `--passTiming`
+  costs **~2,840 ms cold (+12.4%)** and **3,450-3,945 ms warm (~+50%)**. So every absolute ms in
+  every `docs/perf` table is probe-inflated, harmlessly cold and dominatingly warm — **a cold-table
+  SHARE and a warm-table share are not comparable, only the RATIOS are.** One deduction survives
+  without assumption: the warm instrumented front end is 907.9 ms in TOTAL and so cannot hold a
+  3,945 ms probe, i.e. **>=77% of the probe is inside checker-init**. Where inside is UNMEASURED —
+  the doc brackets `checkSpine`'s warm share two ways (72% vs 83%) and refuses to pick.
+- **THREE FINDINGS THAT SURVIVE THE INFLATION** (ratios, both arms probe-inflated): the **front end
+  warms ~4.0× against the checker's ~2.2×**, so the checker's share RISES warm (86.2% → 91.8% of
+  the instrumented wall) — the opposite direction from what § 0.1's cold budget suggests; the
+  **narrowing tail flattens**, `>=1ms` walks 134 → 37 and their share of narrowing ~47-50% → ~32-34%
+  over IDENTICAL 17,851 walks and 583,779 visits (the buckets are TIME-keyed), so round 735's
+  "extreme tail" replicates exactly as a **COLD** property and is scope-qualified, not retracted;
+  and per-kind warm-up is **not ordered by cost** — my first reading ("cheap kinds warm faster")
+  was corrected by the writing agent, since `FUNCTION_DECLARATION` at 64.9 µs warms 2.86× while
+  `BINARY_EXPRESSION` at 30.8 µs warms 2.08×. What IS sign-consistent across both processes:
+  IDENTIFIER's share of the top-12 falls 9.1% → ~7.1% while the five statement anchors rise
+  48.4% → ~50.4%.
+- **A REAL DEFECT THE CLIENT-SERVER ARCHITECTURE EXPOSED, FOUND WHILE BUILDING THE INSTRUMENT.**
+  `Main.kt` enabled `PassTiming` and NEVER disabled it, and `CompileServer.compileCapturing` calls
+  that same `main()` per request in one long-lived JVM — so **one `--daemon --passTiming` request
+  permanently instrumented every later request on that server**. Worse than a perf leak:
+  `--globalsAmp N` leaks a mode that makes every globals lookup re-read its key N times forever,
+  and `--verifyMappedCache` leaks one that recomputes every served cache hit. Fixed by mirroring
+  what `SpineDispatch`/`SpineSections` already do a few lines below. `CompileServerPassTimingTest`,
+  2 pins, reading the FLAG OBJECTS and not the response text — the text cannot discriminate,
+  because the dump is gated on the request's own argument and is absent either way.
+- **THE INSTRUMENT ITSELF.** `BenchMain` gains an opt-in 4th argument that runs ONE extra
+  instrumented rebuild strictly AFTER the measured loop, so `medianMs` stays probe-free and the
+  probe's own cost is readable as the difference; it aborts non-zero if that rebuild's files/errors
+  disagree with the measured iterations (BenchMain's existing self-falsification rule). Default
+  off; a 3-arg invocation is byte-identical to before.
+- **GATES.** Suite **13,911 / 0 / 3** from a wiped results dir (`xml.etree`), 13,909 → 13,911, the
+  **+2 exactly the two new pins**, 0 regressions. `cost_gate.py` **every counter +0.00%**.
+  `huge_methods.py --fail-over 0` exit 0, 0 over the limit. Both were required and run because
+  `commonMain/Main.kt` changed. **NOT measured, named rather than implied:** no warm A/B was run
+  and nothing was optimized this round; the probe's landing site inside checker-init; one profile
+  only; and **no tsc number** — node is not installed on this box, so every parity statement in the
+  new doc is DERIVED from a CI ratio and labelled as such.
+- **PROVENANCE, and it matters for every absolute above: this round ran on a STALE local `main`
+  and every number was measured on commit `778faf2c`, BEFORE the MOD.1-MOD.6 module split landed
+  upstream in parallel.** So the ladder was taken on the pre-split JDK-NIO server, not on the ktor
+  one this note now sits above; the SHAPE (steady from request 3, agreeing with the in-process
+  harness) should survive the move, but it has not been re-measured. **A parallel session on a
+  DIFFERENT, faster box independently settled the parity question this round could only derive**
+  (commit `eb42b853`): four-way interleaved, warm daemon **3,322 ms** against **tsc 6.0.3 at
+  4,489 ms** — **1.35× faster, the first configuration on record in which this compiler beats the
+  reference implementation on a real project** — with tsgo at 903 ms still 3.7× ahead of both.
+  Their box is ~2× faster than this one (their cold 13,883 ms vs this box's 22,971), so **the two
+  sets of absolutes must never be mixed**; what agrees is the RATIO, their 4.2× cold-to-warm
+  against this round's 3.26×.
+- **A HAZARD FOUND AND DELIBERATELY NOT FIXED, queued as (SERVE.1) below:** the same argument loop
+  leaves `CpaSections.verify*`, `FlowScan.legacy/eagerSet`, `IanySections.*GateOff`,
+  `ArgNarrowGate.mode`, `ParallelCheckMode.workers` and `PartitionCheck.workers` unrestored.
+  Several of those CHANGE COMPILER BEHAVIOUR, so leaking them across server requests is a
+  correctness hazard rather than a perf one — `--workers N` in one request silently reconfigures
+  every later request on that server. Each needs its own read-site check; that is a separate unit.
+
+**Round MOD.1–MOD.2 (2026-08-07) — THE MODULE SPLIT, STEPS 1 AND 2 OF 5.** Owner directive
+(this session): split the project into modules, taking `../markanywhere` as the pattern —
+full split rather than a thin slice, **Ktor on both sides** of the client/daemon transport,
+and module directories prefixed with `rootProject.name`. Landed green, suite re-verified at
+**13,909 / 0 failed** (unchanged), root jar manifest verified byte-identical.
+
+- **The daemon already existed** — `src/jvmMain/kotlin/server/CompileServer.kt` (JDK NIO
+  `UnixDomainSocketAddress`, 4-byte BE length + UTF-8 JSON frames, sequential single-thread
+  serving) plus `XtscMain`'s `--serve` / `--daemon` / plain dispatch. So this arc is NOT
+  "build a daemon"; it is **stop shipping the compiler inside the client**. Today the thin
+  client is a GraalVM image of `XtscMainKt`, i.e. the whole 230k-line compiler AOT-compiled
+  in order to write ~200 bytes to a socket.
+- **MOD.1** `build-logic/` included build + the `xemantic-typescript-compiler.convention`
+  plugin (shared Kotlin config only: `extraWarnings`/`progressiveMode`, the two power-assert
+  functions, api/language version, jvm target + `-Xjdk-release`; it deliberately selects NO
+  test framework — switching that changes how the generated corpus is discovered). ktor
+  **3.5.2** into the catalog.
+- **MOD.2** `xemantic-typescript-compiler-api` — `CompileRequest`/`CompileResponse`,
+  `XTSC_REFUSED`, the shared `Json`, the socket-path policy, and the frame codec. 27 pins.
+  Three decisions worth re-reading before extending it: the frame codec lives in `-api`
+  rather than in each peer (with ktor on both sides the old asymmetry argument is gone, and
+  two hand-written copies in separately-built binaries drift into a HANG, not a type error);
+  `protocolVersion` defaults to `XTSC_PROTOCOL_UNVERSIONED` (0) and NOT to the current
+  version, because defaulting to current makes a pre-versioning daemon indistinguishable
+  from a current one — the single case the field exists to detect; and the socket path is a
+  PURE FUNCTION of `(tempDir, user)` because the JVM daemon and the native client discover
+  those through different APIs while having to agree exactly, and a disagreement does not
+  fail — it silently starts a second daemon.
+- **Windows, since it decides whether the client can ship at all**: both stacks do AF_UNIX
+  on Windows 10 1803+. `ktor-network-mingwx64` implements it behind a runtime probe
+  (`isAFUnixSupported` — `SocketUtilsWindows.kt`), and the JVM `UnixSocketAddress` actual
+  reflects onto `java.net.UnixDomainSocketAddress`, so it needs Java 16+ (we target 17).
+  Unix sockets are **CIO-engine only**.
+- **A build trap that cost a cycle** is now a CLAUDE.md entry: `applyAllConventions()` cannot
+  be used in a multi-module build.
+
+**Round MOD.3 (2026-08-07) — THE COMPILER MOVED TO `xemantic-typescript-compiler-core`.**
+Suite **13,909 / 0 failed** in the new layout, `-api` 27/0. Root is now a pure aggregator
+(identity, the cross-module jar manifest, publication metadata, the release announcement);
+everything compiler-shaped is in the module. `typescript-repo/`, `docs/`, `scripts/` and
+`build/bench/` all stayed at the repo root DELIBERATELY — the checkout is shared tooling and
+the bench dir is harness data the scripts create themselves.
+
+Four things bit, and all four were silent rather than loud:
+
+- **`AotCacheGuardTest.projectRoot()` walked up for `build.gradle.kts`** and now stops at
+  the first MODULE, so `scripts/xtsc` disappeared. Split into `projectRoot()` (module) and
+  `repoRoot()` (keyed on `settings.gradle.kts`, of which the tree has exactly one). That pin
+  compares core's `nativeImageMainClass` against the ROOT's launcher, so it needs both.
+- **A `-I` init script applies to EVERY build in the invocation**, and its task was
+  registered under `allprojects` — post-split the root throws and `-api` emits a second,
+  wrong `XTSC_CLASSPATH=` line that `head -1` can pick. Now `findProject` + qualified
+  invocation + an exactly-one-line assertion. This one would have produced a wrong
+  BENCHMARK, not an error. (CLAUDE.md entry added.)
+- **The jar name is a contract** — pinned to the product name, not `project.name`, or
+  `xtsc-aot-lib.sh`'s glob silently matches nothing. (CLAUDE.md entry added.)
+- **`extra` inside `allprojects { }`** resolves to the SCRIPT's extension, not the block's
+  receiver, so every module would have read the root's value from the root's own map.
+
+32 script path substitutions (the exact count predicted), with loud existence guards added
+to `bench-compile-tsc.sh`, `ab-warm.sh` and `aot-corpus-suite.sh` — the three drivers where
+a missing path yields two equally-broken arms that AGREE and read as a clean result.
+Verified end to end rather than by inspection: classpath resolution returns exactly one
+answer, `scripts/xtsc` compiles a scratch project and reports the expected TS2322, and
+`--serve`/`--daemon` round-trips (`request 1 served in 595 ms`, so the daemon answered
+rather than the client falling back in-process).
+
+**STILL OWED (do before quoting any perf number):** every trained AOT cache is stale — the
+fingerprint hashes each classpath entry in order and both the jar's PATH and the dependency
+order moved. Retrain and re-verify `AotCacheGuardTest` on the VPS before comparing anything
+to `bench-history/`. `scripts/cost_gate.py` has not been run since the move (this box has no
+`build/bench` profile; the harness lives on the VPS).
+
+**Round MOD.8 (2026-08-08) — FIRST CONFIGURATION IN WHICH xtsc BEATS tsc, AND THE EXIT-CODE
+DEFECT THE MEASUREMENT EXPOSED.** Owner asked how the client/daemon compares end to end, and
+then how the warm result compares to tsc and tsgo. Four-way, check-only, compiler profile
+(78 files, ~195k LOC), 5 interleaved rounds on this macOS box:
+
+| arm | median | min-max | vs xtsc-warm |
+|---|---|---|---|
+| tsgo 7.0.0-dev | **903 ms** | 845-934 | 3.7x faster |
+| **xtsc warm daemon** | **3,322 ms** | 3,268-4,583 | - |
+| tsc 6.0.3 | 4,489 ms | 4,439-4,963 | 1.35x slower |
+| xtsc cold one-shot | 13,883 ms | 13,574-14,246 | 4.2x slower |
+
+Same job verified, not assumed: tsc and tsgo both report 65 errors over the same 5 files, xtsc
+46 (the documented env-modelling difference); 78-file program throughout. `--pretty false`
+makes no difference to tsc (4,653 vs 4,659 ms), so the win is not tsc doing formatting work.
+
+- **WARM xtsc is 1.35x FASTER than one-shot tsc.** Cold, the same compiler is 3.1x SLOWER.
+  The daemon is the entire difference, and this is the first configuration on record where
+  this compiler beats the reference implementation on a real project.
+- **tsgo is 3.7x ahead of warm xtsc and ~5x ahead of tsc.** A cold-start native binary beats a
+  warm JVM, which is the honest framing of why the daemon exists: xtsc needs one to be
+  competitive, tsgo does not.
+- **The architecture costs ~20 ms (0.6%)** — client wall 3,286 vs daemon-served 3,266 vs
+  compiler self-time 3,265, of which ~6 ms is the client process starting. So essentially all
+  of the 4.2x cold-to-warm gain reaches the user.
+- **THE COLD RATIO HERE (3.09x tsc) IS OUTSIDE THE 1.87-2.72x BAND CI HAS RECORDED** — this box
+  runs node/tsc fast relative to JVM warm-up. Only the WITHIN-run comparisons above are
+  quotable; do not mix these with `bench-history/` rows.
+- **Operationally: the daemon needs ~4 requests to reach steady state**, not 1 (6,894 ->
+  6,210 -> 3,650 -> 3,506 -> 3,351 -> 3,266 ms). A benchmark that warms once measures warm-up.
+- **What the measurement caught:** the cold CLI exited 0 on 46 errors while the daemon exited
+  1 — the answer depended on whether a daemon was running. Fixed in the same session (owner
+  chose tsc semantics for both); see the commit for the blast radius.
+
+**Still true and worth repeating before anyone reads 1.35x as a general claim:** it is a
+warm-vs-cold comparison by construction, `tsc --incremental`/`tsserver` amortize too, and the
+daemon buys a CONSTANT FACTOR rather than incrementality — every request re-checks all 78
+files, because on `export *` barrels one edit's closure is the whole program.
+
+**Round MOD.6a (2026-08-07) — A SECOND AOT CLIENT VIA GraalVM, AND IT LIKELY ANSWERS THE
+WINDOWS GAP.** Owner question: can the client also be built with GraalVM native-image? Yes,
+built and verified on this box (GraalVM 25.0.3 IS installed here — the "UNVERIFIED, no GraalVM"
+note in the daemon's nativeImage comment is stale for this machine).
+
+Measured, macosArm64, both against the same daemon:
+
+| | K/N | GraalVM |
+|---|---|---|
+| binary | **2.9 MB** | 23.7 MB (8.2x) |
+| pure client startup, median of 15 | **6.1 ms** | 7.6 ms |
+| end-to-end warm request | 47.3 ms | 48.7 ms |
+| output + exit code | byte-IDENTICAL to the other arm | |
+
+- **They are complements, not rivals, and the reason is (MOD.6).** The GraalVM arm compiles
+  the `jvmMain` actuals, where `spawnDetached` is `ProcessBuilder` and the unix socket is
+  `java.net.UnixDomainSocketAddress` (JEP 380, Windows 10 1803+). So the Windows client may
+  need NO new code — whereas the K/N arm would need hand-written `CreateProcess`
+  cinterop. Unverified on Windows itself; that is what (MOD.6) should test first, before
+  anyone writes Win32 process code.
+- **The trap, confirmed empirically rather than predicted.** ktor's JVM `UnixSocketAddress`
+  reaches the JDK class REFLECTIVELY (`Class.forName` + `getMethod("of", String)`) because
+  ktor's baseline predates Java 16. Closed-world analysis cannot see it, so without metadata
+  the image builds CLEANLY and fails at RUN time with "Unix domain sockets are unsupported
+  before Java 16" — on a JDK 25. The traced metadata contains exactly that entry, plus 26
+  ktor selector internals and a `SelectorProvider` service resource that would also have been
+  dropped. Generated by `nativeClientAgent` against a LIVE daemon; never hand-write it.
+- Two Gradle traps worth remembering: `by tasks.registering(T::class)` is a hard ERROR on
+  Gradle 9.6 (use `tasks.register<T>(name)`), and `projectPath` is a built-in project property
+  of type `org.gradle.util.Path`, so reading it as a String fails at task creation.
+
+**Round MOD.5 (2026-08-07) — THE THIN CLIENT IS REAL, NATIVE, AND 2.9 MB.** The arc's point,
+delivered: `-client` depends on `-api` and NOTHING ELSE, so the shipped binary stops carrying
+a 230k-line compiler it only ever asks to run elsewhere. 13,958 green (core 13,889 + api 27 +
+daemon 24 + client 18). Measured on macosArm64, release: **2.9 MB**, cold 1.88 s (spawns the
+daemon), **warm 0.110 s wall** with the client's own CPU at 0.00s/0.00s.
+
+- **The bug worth remembering was found by RUNNING IT THROUGH A PIPE.** The native
+  `spawnDetached` inherited fds 0/1/2, so the daemon held the client's stdout open and
+  `xtsc … | tail` never returned — client exited, compile finished, shell waited forever.
+  The JVM twin had `Redirect.DISCARD` from the start with a comment explaining exactly this;
+  the POSIX path needs `dup2` of /dev/null by hand and I had omitted it. `--serve` works, the
+  output is right, and a unit test on `spawnDetached` passes. (CLAUDE.md entry added.)
+- **The daemon logged every reachability probe as a failed request** — `isDaemonReachable`
+  connects and closes without a frame, and the client polls it every 25-500 ms while waiting.
+  A frameless connection is now recognised and passed over in silence.
+- **The client refuses to guess how to start the daemon**: `XTSC_DAEMON_CMD`, else
+  `XTSC_HOME/bin/xtsc-daemon`, else an error naming both. No PATH search and no constructed
+  `java -cp`: the client knows nothing about Java (that IS the dependency edge), and a wrong
+  guess starts a DIFFERENT build's daemon, which answers happily with diagnostics from the
+  wrong compiler — the one failure here that is plausible rather than loud.
+- **The start race needs no lock.** Both clients spawn; the daemon exits rather than stealing
+  a live socket, so the loser dies and both connect to the winner. Hence the client polls
+  REACHABILITY, not the process it spawned — the daemon that serves may be someone else's.
+- **Only 3 `expect`s** (`readEnv`, `writeStderr`, `spawnDetached`). The clock is
+  `kotlin.time`, the filesystem kotlinx-io (which covers mingw too), and temp dir + user name
+  are derived in COMMON code precisely because both peers must agree on the socket path
+  exactly — a disagreement silently starts a second daemon.
+
+- [ ] **(MOD.6) Windows — TRY THE GraalVM ARM FIRST, it may need no new code.** The
+  GraalVM client compiles the jvmMain actuals, where the spawn is `ProcessBuilder` and the
+  socket is `java.net.UnixDomainSocketAddress` — both work on Windows 10 1803+. Verify that
+  on an actual Windows host BEFORE writing `CreateProcess` cinterop for the K/N arm.
+  Original framing: `CreateProcess` with `DETACHED_PROCESS` for the client spawn.
+  `mingwX64` is deliberately NOT enabled on `-client`. The TRANSPORT is fine — ktor implements
+  AF_UNIX on Windows 10 1803+ behind a runtime probe, so a Windows client could talk to a
+  RUNNING daemon today — but `spawnDetached` is fork/setsid/execvp, which Windows has no
+  equivalent of. Enabling the target would not fail the build; it would ship a client that
+  cannot start the thing it depends on.
+- [x] **(MOD.7) DONE round 857 — the AOT cache is retrained against the post-split layout,
+  proved USED, and the guard re-verified end to end.** Classpath 8 → **14 jars** with the
+  order changed too, fingerprint `73c2f5fe…` → **`086a6cb1…`**, and the dev launcher could
+  not start at all until `./gradlew assemble` staged `…-daemon/build/install/lib`. Trained
+  54,816,768 B, self-verified; **955 of 960 `com.xemantic` classes from `shared objects
+  file`**; ladder **1.600×, 4/4 pairs, −9,035 ms paired median** (JVM launcher arm,
+  check-only mode); all 8 runs one digest `84bbe7f0…` = the round-841/853 lineage.
+  `AotCacheGuardTest` 13/13, one-mistake ablation fails exactly one pin. Also FIXED a
+  harness the split had broken (`aot-corpus-suite.sh`'s AOT prefix) and gave it an A/A
+  detector; corpus suite through the cache: 13,950 run, 2 failed, **per-class diff EMPTY**
+  in both arms. `docs/perf/aot-cache.md` § 14. **NOT closed by this item:**
+  `build/bench/cp.txt` is still the pre-split dependency list, and `cost_gate.py` has not
+  run since the split.
+
+**Round MOD.4 (2026-08-07) — THE DAEMON IS ITS OWN MODULE AND SPEAKS KTOR.** Landed in two
+commits so a failure would be attributable: **4a** moved the server with the transport
+UNCHANGED, **4b** ported it. 13,940 green (core 13,889 + daemon 24 + api 27); totals were
+conserved exactly across 4a (13,936 = 13,909 + 27, with 20 tests changing module).
+
+- **The invariant the port risks, and why it needs a dedicated pin.** Coroutines migrate
+  work between carrier threads; this server must not allow it. Symbol/Type ids are
+  thread-local and `runWithDeepStack` hands them off from the CALLER's counters, so a
+  request served from another carrier thread restarts ids at 1 and collides with the
+  intrinsics — **leaving every byte of output identical**, so corpus, `--listAll` and
+  `cost_gate.py` are all blind to it. Hence a single-thread executor behind
+  `CompileServer.onCompileThread`, and `CompileThreadInvariantTest`. Its load-bearing case
+  is the CONCURRENT one: a pooled dispatcher passes every same-caller assertion and fails
+  only that.
+- **`AotCacheGuardTest` moved to the daemon, and the failure that forced it is the useful
+  part**: its round-839 pin hands the child JVM its own test classpath, which from the
+  compiler module cannot contain `server.XtscMainKt` — the compiler does not depend on the
+  daemon. Its anchor also had to become a class of ITS OWN module: a class arriving through
+  a project dependency is a JAR, and `File(url.toURI())` on a `jar:` URL throws.
+- **The launcher broke at RUN time with a green build.** 4b gave the daemon dependencies of
+  its own and the dev fallback pasted known jar names plus `cp.txt` (the COMPILER's tail),
+  so it omitted them silently. Fixed by DELETING the hand-maintained list: `xtscLib` stages
+  `build/install/lib` in the shape of an installed `XTSC_HOME/lib`, and the launcher globs it
+  through the same branch as a real installation. (CLAUDE.md entries added for both.)
+
+Measured while verifying: 685 ms cold, then **78 ms** and 0 ms warm over the socket — the
+daemon's whole reason for existing, visible on a toy project.
+
+- [x] **(MOD.3) Move the compiler to `xemantic-typescript-compiler-core`.** The expensive
+  step, and the reason MOD.1/MOD.2 were kept additive: **20 files carry 64 hard-coded
+  single-module paths**, of which **32 are genuine Gradle outputs** —
+  `build/classes/kotlin/jvm/main` (10), `build/classes/kotlin/jvm/test` (7),
+  `build/test-results` (11), `build/libs` (4) — across `xtsc-aot-lib.sh`,
+  `ab-interleaved.sh`, `ab-warm.sh`, `aot-corpus-suite.sh`, `aot-draw-variance.sh`,
+  `bench-3way.sh`, `bench-compile-tsc.sh`, `emit-diff-tsc.sh`, `grid838.sh`,
+  `find_candidates.py`, `method_bytes_by_line.py`, `clinit_split_analyze.py`,
+  `tisp_split_analyze.py`, `over_emit.py`, `pure_fp.py`, `pure_missing.py`,
+  `mine_small_diffs.py`, `triage_rank.py`, `tsgo_relevance.py`, and
+  `.github/workflows/native.yml`. The remaining 32 (`build/bench`) are harness DATA that the
+  scripts `mkdir -p` themselves, so they can stay at the repo root untouched.
+  **Do NOT sed these blind**: this repo's recurring failure mode is a harness that reads a
+  stale path and reports a false green (the `--listAll` truncation, the stale-XML count), and
+  a perf script that silently measures the wrong classpath is exactly that shape. Each
+  rewired script needs an existence check that FAILS LOUDLY, in the style of round 804's
+  non-empty check. Also decide deliberately, and record the choice: `typescript-repo/` is
+  resolved as `projectDir.resolve(...)` and would move under the module — prefer
+  `rootProject.projectDir` so the checkout stays at the repo root.
+  **AND: the AOT cache fingerprint hashes every classpath entry IN ORDER, so splitting one
+  jar into several invalidates every trained cache.** That is fail-safe (the guard degrades
+  to an uncached run, round 828) but it means the ladder must be retrained and
+  `AotCacheGuardTest` re-verified against the new layout before ANY `bench-history/` number
+  is comparable across the split. `HugeMethodLimitTest` reads the classpath layout too.
+- [x] **(MOD.4) `-daemon`**, porting `CompileServer` from JDK NIO to ktor CIO. Its two
+  documented invariants must survive the port VERBATIM: requests served **sequentially on
+  one thread** (Symbol/Type id sequences are thread-local per INV.6(6c0), and `--workers` has
+  produced 62 diagnostics where sequential produces 46), and the request running the
+  **ordinary `main`** with stdout captured, so daemon output matches CLI output by
+  construction rather than by testing. `--watch` stays refused (it would wedge the single
+  request thread forever).
+- [x] **(MOD.5) `-client`**, Kotlin/Native + JVM, depending on `-api` only — NOT on the
+  compiler. That edge is the whole point of the arc: it turns a ~100 MB GraalVM image into a
+  few-hundred-KB K/N binary, and it lets native targets return for the one module that can
+  afford them (CLAUDE.md keeps them off because Checker.kt costs ~7 min per link; a client
+  links in seconds). **The socket is the easy half — spawning the daemon is the hard half**:
+  K/N has no `ProcessBuilder`, so it needs `posix_spawn`/`fork+exec` vs `CreateProcess`,
+  detachment so the daemon outlives the client, and a start-race guard so two concurrent
+  clients do not both bind. Budget more for that than for the transport. The JRE-download
+  idea belongs in a SEPARATE later module — an HTTPS client plus archive extraction plus
+  signature verification would dominate the binary the fast path exists to keep small.
+
+**Round 842 (2026-08-07) — (AOT.5)(f): THE TRAINING DRAW IS WORTH UP TO **2.4%**, AND EVERY
+AOT RESULT ON RECORD WAS MEASURED WITH ONE TRAINED CACHE PER ARM.** Five caches trained by an
+IDENTICAL command (`scripts/xtsc-aot train`, unchanged between runs), 168 whole-project
+compiles in seven rotated batches. Full tables `docs/perf/aot-cache.md` § 12; harness landed
+as `scripts/aot-draw-variance.sh`. Four things worth carrying forward:
+
+- **"Two batches" is the standing rule for a MEASUREMENT and it does not cover a TRAINING
+  claim.** Rounds 840(c) and 840(d) both ran two independent batches and both cited that as
+  evidence — but a second batch re-uses the same cache FILES, so it replicates the
+  measurement draw and cannot touch the training one. Paired best-vs-worst draw here is
+  **+322 ms (+2.4%), 10/12**, and the ordering REPLICATES (batches D and E put the same
+  three draws in the same first three places, hours apart), so it is a persistent property
+  of a cache file, not run noise. **New rule: an A/B on a training configuration needs ≥2
+  independently trained caches per arm.**
+- **It overturns no DECISION, and costs one recorded NUMBER its precision.** § 9's shipped
+  emit-training win is −1,132 ms (−5.4%) against a draw term of ~1.2–1.6% on that same
+  workload — over 3× — so `train` emitting stays right. § 10's rejected `--workers 4` arm
+  was a *null* on the path it was meant to help plus a cost on the default path, and a draw
+  term cannot turn a null into a win — but its **+3.5%** is only ~1.5× a term it modelled as
+  zero, so it must stop being quoted to three digits. **Struck outright: § 10.3's reading of
+  the w4 cache's "+82 KB" as evidence of a different recorded profile** — five
+  identical-command draws span **212,992 B**, 2.6× that, and size does NOT order speed (the
+  largest of the five is second-slowest, the smallest is slowest). There is no cheap
+  predictor of a draw's quality.
+- **Batch A was a textbook false positive, for the third round running.** Its medians spread
+  483 ms (3.5%) — bigger than the effect that survived — and batch B put a different draw
+  first. Reporting after one batch would have overstated the draw effect by ~1.5×. The emit
+  half adds the finer point: the EXTREMES carry across workloads (draw 1 fast and draw 5 slow
+  on both) while the fine ordering does not (draw 3 is fastest on check-only, mid-pack on
+  emit, and the two emit batches disagree outright).
+- **Nothing ships, and that is the arithmetic, not caution.** "Train twice, keep the faster"
+  needs ~10 paired compiles (~4 min) to resolve a 2.4% difference worth ~0.3 s per run — it
+  pays back after ~800 compiles and makes the installed cache non-reproducible by the
+  documented command. **(AOT.5)(a) closed in passing:** the shipped `~/.cache/xtsc` cache,
+  un-retrained since round 840's fingerprint change, was retrained (54,079,488 B, verifies
+  `USE`) and **pruned 1 stale cache**, i.e. § 2's "delete on upgrade" observed on a real
+  fingerprint change.
+- **(AOT.5)(b) ALSO CLOSED, and its first run was an A/A that looked exactly like an A/B.**
+  `--serve`/`--daemon` under a cache, through the launcher: 32 requests, all 46 errors / one
+  md5 / **zero in-process fallbacks**; paired over three rotated server pairs, **request 1
+  1.66× (3/3), request 2 still 1.32× (3/3), requests 3-4 a wash** — round 839's "halves the
+  first, nothing warm" reproduced through the shipped launcher and refined, because the cache
+  shortens the warm-up RAMP by about one request. **The trap: `build/libs/*.jar` is NOT
+  byte-reproducible** — `./gradlew jvmJar --rerun` with no source change yields a different
+  sha256 and SIZE — so this session's own suite run invalidated the cache trained 8 minutes
+  earlier, and the first serve experiment ran BOTH arms uncached at a plausible-looking
+  ladder. The only thing that caught it was printing the launcher's decision
+  (`XTSC_AOT_VERBOSE=1` -> `aot SKIP no-cache-file`). **Two rules: train AFTER the last
+  build, and never measure a cached arm without printing the decision line.** § 13.3.
+- **Correctness and gates.** All 168 compiles: **46 errors and one diagnostics md5**
+  (`59d930db…`, the § 11 `grep 'error TS' | sort` recipe), no empty capture (round 804), no
+  `more error(s)` tell (round 811); the 36 emitting runs additionally share **78 files and
+  ONE whole-tree digest** (`0b59764c…`). Suite **13,909 / 0 / 3**, unchanged — and
+  **NO PIN WAS ADDED, stated rather than omitted**: nothing under `src/` changed, the round's
+  claim is a measurement, and the repeatability it needs is the committed harness. For the
+  same reason `cost_gate.py` and `huge_methods.py` were not run and do not apply.
+- **WHY THIS ITEM.** The top unchecked queue item is still **(NARROW.2)(c)**, whose sole
+  motivation is the three `types/any` conformance cases — round 839's standing owner
+  instruction (*"leave M3.0 conformance, return to M5 / performance"*) keeps it unchecked,
+  as round 840 recorded. (WIDEN.1)'s open sub-steps instruct in their own text not to be
+  taken speculatively. That leaves (AOT.5), whose own body names (f) as "the line most
+  likely to overturn something already recorded, and the one to do first".
+
+**Round 840(d) (2026-08-07) — (AOT.4)(c) item (3), `--workers` half: TRAINING THE AOT CACHE
+UNDER `--workers 4` IS A MEASURED **NO** — IT BUYS THE w4 PATH 0.9% (INSIDE THE BAND) AND
+CHARGES THE SEQUENTIAL PATH 3.5%, SO `train` STAYS SEQUENTIAL.** 60 whole-project compiles,
+two independent rotated batches, full table in `docs/perf/aot-cache.md` § 10. Three things
+worth carrying forward:
+
+- **The two batches agreed at every level, which is the only reason any of it is quotable.**
+  Paired within-rep (P−S): seq **+501 / +679 ms**, w4 **−110 / −114 ms**, w8 **−854 / −610
+  ms**. Round 840(c)'s lesson was that one batch of five rotated sign-consistent pairs was
+  still wrong; here replication is what makes the *null* trustworthy rather than the win.
+- **"Train under the mode you actually run" is a claim about one DIMENSION at a time, not a
+  law.** (c)'s emit change was free because the Transformer/Emitter profile was simply
+  *absent* — adding it took nothing away. Worker count is the *same* checking code reached
+  through a different thread structure, so a JEP 515 profile is a **shared, finite** record
+  and training under one mode is a trade. The default (`scripts/xtsc` with no flags) is
+  sequential, and it is the side that loses.
+- **Two round-839 § 7.3 readings re-measured under rotation.** Cached `--workers 4` is still
+  the fastest configuration this project has — **1.290×, 10/10 paired**. But **"`--workers 8`
+  under a cache is WORSE than cached sequential" does NOT reproduce**: 15,483 vs 15,761 ms,
+  6/10, −0.8%. 839's ladder was blocked runs, not an interleave, and said so; what survives
+  is that w8 buys *nothing* over sequential under a cache where uncached it bought 1.13×.
+- Correctness: **all 60 runs at 46 errors and one sorted-diagnostics md5 (`59d930db…`)**, 10
+  per worker level — the standing ≥5-per-level `--workers` distribution, doubled. Gates:
+  suite **13,909 / 0 / 3** (+1 = the new pin); `cost_gate.py` and `huge_methods.py` NOT run
+  and not applicable — nothing outside `docs/`, `scripts/xtsc-aot` and one `src/jvmTest` pin
+  was touched.
+
+**Round 840(c) (2026-08-07) — (AOT.4)(c) item (3): THE AOT CACHE IS NOW TRAINED WITH EMIT,
+WORTH −1,132 ms (−5.4%, 14/15 PAIRED RUNS) ON AN EMITTING COMPILE AND EXACTLY NOTHING ON THE
+CHECK-ONLY PATH — AND THE HALF THAT NEEDED DESIGN WAS NOT THE SPEED BUT WHERE A TRAINING RUN'S
+OUTPUT GOES.** 54 whole-project compiles in three batches; full table in
+`docs/perf/aot-cache.md` § 9. Four things worth reading twice:
+
+- **Round 839's diagnosis was right and its price was slightly low.** Differencing each rep's
+  emit run against its own `--noEmit` run puts the whole win in the emit tail: **3,148 →
+  2,216 ms** (−932 ms, predicted ~800 ms), i.e. an emit-trained cache restores the tail to
+  what an *uncached* run pays (2,139 ms). The check-only arms are indistinguishable (medians
+  16,687 vs 16,738 ms over 15 runs each), which also rules out "a longer training run warms
+  the checker too".
+- **ONE BATCH OF FIVE ROTATED, SIGN-CONSISTENT PAIRS WAS STILL WRONG.** Batch 1 read the
+  check-only path as 5/5 wins, median −1,161 ms (−6.6%) — textbook-looking — and batch 2
+  refuted it (3/6, +192 ms), verification agreeing (2/4). Per-arm sd is ~5%, so the arms
+  overlap entirely and only pairing resolves anything; the emit effect replicated in all
+  three batches (−1,258 / −1,216 / −930 ms medians) and the check-only one did not.
+  **A second batch is the cheapest instrument that separates the two.**
+- **The packaging question decided the shape of the change.** `train` runs against the user's
+  own project, so an emitting training run would have written JS into their `dist/` (or died
+  on a read-only tree) — unacceptable at any speed. Hence a new `--outDir` override
+  (`ProjectCompiler.build(outDir = …)`, CWD-relative like tsc's, inert under `--noEmit`, not
+  threaded through `--incremental`/`--watch`), and `train` emits into a `mktemp -d` removed on
+  every exit path. Verified with the shipped command on the rebuilt jar: no `dist/` in the
+  profile, no leftover `/tmp/xtsc-train.*`, cache self-verifies `USE`, 4/4 on emit.
+- **The fail-safe contract is untouched, deliberately.** The training *workload* is not in the
+  fingerprint and must not be — the manifest binds a cache to the code it was trained from,
+  not to how that code was exercised — so every existing `--noEmit`-trained cache stays valid,
+  merely ~5% slower on an emitting compile until the next `train`. Gates: suite
+  **13,908 / 0 / 3** (+5 = the new pins), `cost_gate.py` every counter **+0.00%**,
+  `huge_methods.py --fail-over 0` clean.
+
+**Round 840(b) (2026-08-06) — (AOT.4)(b), OWNER-APPROVED: THE GRAALVM NATIVE IMAGE HAD THE
+SAME GAP, AND ON THE SHIPPED BINARY IT WAS A SILENT WRONG SUCCESS THAT *WROTE FILES*.** The
+owner lifted the Guardrails block for this one `build.gradle.kts` property (2026-08-06); every
+other build-system change stays gated. **Provenance, recorded because Guardrails turn on it:**
+that approval reached the implementing session RELAYED THROUGH the orchestrating session, not
+as a message this session witnessed directly — worth one clause so the owner can confirm it on
+review rather than find it assumed. The change is one string and is trivially revertible. Full detail in the (AOT.4)(b) queue entry below — only
+the three things worth reading twice are repeated here.
+
+- **The gap was measured on the artifact, not inferred from the source.** The stale
+  2026-07-30 `build/native/xtsc` run as `--serve --socket /tmp/r840b.sock` bound **no socket**,
+  took the socket path as the PROJECT, compiled 174 files, **emitted 173 output files** and
+  exited **0**; `--daemon` identically. A mode that "is unreachable" turns out to be a mode
+  that silently does something else and writes to disk.
+- **The one GraalVM risk settleable without a build, was settled.** `javap -c CompileServer`
+  shows all four kotlinx-serialization resolutions are the compiler-plugin intrinsic
+  (`invokevirtual …$Companion.serializer()`) with no reflective `serializer(KType)` — and
+  serialization was already reachable from the old entry point via `TsConfigLoader`. So the
+  swap adds no new reflection. What is NOT settled is the socket path
+  (`UnixDomainSocketAddress`), and no metadata was invented for it.
+- **NOTHING NATIVE WAS BUILT OR RUN.** GraalVM is not installed on this box, so
+  `./gradlew nativeImage` has never run against the dispatcher, `--serve` has never run on a
+  native image at all, and the 13,350 ms native figure in the docs is still a `MainKt`
+  measurement. The pin (`AotCacheGuardTest`, now 11) asserts the build script and
+  `scripts/xtsc` name the SAME class — composing with (a)'s executing pin, which is what
+  proves that class actually dispatches — and its KDoc says plainly that it cannot see whether
+  the image builds or serves. Ablation: reverting the constant fails that pin and only it.
+  `scripts/aot-corpus-suite.sh` both-arms baseline 12 → 13.
+- **ROUND-841 CORRECTION — "the image may not even build" WAS ALREADY ANSWERED BY CI AT THIS
+  VERY COMMIT, AND NOBODY LOOKED.** `.github/workflows/bench.yml` runs
+  `./gradlew nativeImage` from source on **every push** and benches the binary as a fourth
+  arm, and it is `continue-on-error`, so a failed build publishes a 3-way row with `—`.
+  `bench-history/runs/20260806T234303Z-e7d933d24a48.md` — the row at commit `e7d933d2`,
+  *this* change — carries a full native arm: **check-only 14.38 s (1.06× tsc), emit 16.08 s
+  (0.99× tsc), 46 errors in both modes, matching the JVM arm.** So the image **BUILDS from
+  `server.XtscMainKt` and type-checks correctly through it**; unverified items (1) and (4)
+  of the entry below are settled, and the `13,350 ms` figure is superseded by 75 CI rows
+  regardless of entry point (`docs/perf/aot-native-image.md` § 0a). **STILL GENUINELY OPEN,
+  and unchanged: `--serve`/`--daemon` on a native image, i.e. the
+  `UnixDomainSocketAddress` / `ServerSocketChannel(UNIX)` closed-world question** — CI
+  exercises a one-shot compile only, and it checks the error COUNT, not an output diff.
+  *The generalisable lesson: this repo has a CI instrument that answers "does X still build
+  and run" on every push, and a round that names a build-or-run unknown should read the
+  bench row at its own commit before writing the unknown down.*
+
+**Round 840 (2026-08-06) — (AOT.4)(a): THE SHIPPED LAUNCHER COULD NOT REACH THE WARM SERVER
+IT SHIPS. `scripts/xtsc` RAN `MainKt`, SO `--serve` AND `--daemon` — ROUND 839's 7.3 s WARM
+REQUEST AGAINST A 13.6 s CACHED ONE-SHOT — WERE UNREACHABLE THROUGH THE COMMAND USERS ARE
+TOLD TO RUN.** Round 839 found the gap while measuring the server arm (it had to invoke
+`java` by hand) and recorded it in (JIT.2b)'s residue rather than fixing it. Commit
+`454bcd12`; full write-up `docs/perf/aot-cache.md` § 8.
+
+- **The cause is one constant in two files.** `scripts/xtsc` and `scripts/xtsc-aot` both set
+  `XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.MainKt"`, while the mode dispatcher is
+  `com.xemantic.typescript.compiler.server.XtscMainKt` (`src/jvmMain/kotlin/server/XtscMain.kt`).
+  That dispatcher is a strict SUPERSET of the plain main — `--serve`, `--daemon`, else
+  `com.xemantic.typescript.compiler.main(args)` verbatim — so the swap costs a one-shot run
+  two class loads and nothing else, and the whole shipped warm-server path was simply
+  unreachable.
+- **BOTH scripts had to swap TOGETHER, and that is the mistake the new pins exist to catch.**
+  The main class is the `mainclass` field of the AOT fingerprint block
+  (`xtsc_fingerprint_block`, `scripts/xtsc-aot-lib.sh`), so a HALF-swap trains a cache under
+  a fingerprint the launcher can never look up — and the failure is **silent**: every launch
+  reads `SKIP manifest-mismatch` and runs uncached forever, with the lost 1.638× as the only
+  symptom.
+- **The fingerprint change is a deliberate, designed cache invalidation, and it behaved as
+  the contract says.** Round 839's shipped cache now reads `SKIP no-cache-file`, **exit 0**,
+  plus the retrain hint — fail-safe, not an error. `XTSC_AOT_LAUNCHER_VERSION` was
+  deliberately **not** bumped: `mainclass` is already its own fingerprint field, so the swap
+  invalidates by itself; that constant is reserved for command-line changes no other field
+  records, and the reasoning is now a comment in the lib rather than folklore.
+- **Verified end to end through the launcher** on a 2-file scratch project: `--serve` listens
+  and logs `request 1 served in 1541 ms` / `request 2 served in 218 ms`; two `--daemon` runs
+  produce output **diff-identical** to the one-shot `--noEmit --listAll` (with `time:`
+  stripped) at 1,523 ms cold / 217 ms warm and 0.25 s of client CPU.
+- **And the AOT path still works.** A fresh `xtsc-aot train` produced a 37,457,920-byte
+  cache, self-verified, `status` → `USE …`, a cached run diff-identical to plain at 487 ms
+  against 1,553 ms, and `-Xlog:class+load=info` showed **795 of 795** `com.xemantic` classes
+  from `source: shared objects file` — `XtscMainKt` and `CompileServer` among them, i.e.
+  SERVED, not merely opened.
+- **PINS: +2 in `AotCacheGuardTest` (now 10), ablated ONE MISTAKE AT A TIME** over a copied
+  `scripts/` dir via `XTSC_TEST_LAUNCHER` (the tree itself was never ablated, per round 789's
+  rule that a revert also destroys the round's own uncommitted work). (A) half-swap → **9 of
+  10** fail, including `the launcher and the trainer name the same main class`; (B) both back
+  on `MainKt`, i.e. round 839's actual state → **exactly 1** fails,
+  `the launcher reaches the server dispatcher`; (C) a typo'd class in both → the same 1.
+- **HONESTY ABOUT WHICH PIN DISCRIMINATES.** `the launcher and the trainer name the same main
+  class` is **NOT** uniquely discriminating: the fixture builds its manifest with `xtsc-aot`
+  and decides with `xtsc`, so any disagreement already breaks its `USE` precondition and 8
+  other pins fail too. It is the pin that *names* the two differing classes, and that is
+  stated in its KDoc rather than claimed as coverage. `the launcher reaches the server
+  dispatcher` IS uniquely discriminating — it spawns the launcher with `--daemon` at a socket
+  nobody serves and asserts the dispatcher-only fallback line on stderr AND that it still
+  compiled (~1.26 s).
+- **Side effect recorded, not discovered later:** `scripts/aot-corpus-suite.sh`'s
+  "EXPECT N FAILURES IN BOTH ARMS" baseline moves **10 → 12**, because the two new pins also
+  read the classpath LAYOUT and so fail by construction when the suite is driven from a jar —
+  the same reason as the existing 8.
+- **An aside worth one clause:** the first socket attempt failed because the scratchpad path
+  is 117 bytes, over the ~100-byte `sockaddr_un` limit, and the dispatcher refused it BY NAME
+  — which was itself the first proof the dispatcher was being reached.
+- **GATES.** Suite **13,900 → 13,902 / 0 failures / 3 skipped** from a wiped results dir,
+  counted with `xml.etree`; the +2 are exactly the new pins, **0 regressions**.
+  `cost_gate.py` and `huge_methods.py` were **not run and not required** — the change touches
+  shell scripts, `src/jvmTest` and docs only, with no `src/commonMain` or `src/jvmMain`
+  source changed. Stated rather than omitted, because a missing gate line reads as a skipped
+  gate.
+- **WHAT WAS NOT VERIFIED, named rather than implied.** `--serve`/`--daemon` **under a
+  cache** through the launcher — only the one-shot cached run was verified; training with
+  `--serve` in the workload; whether the two extra dispatcher class loads shift any timing
+  (they were argued away by inspection, not measured); and the shipped `~/.cache` cache was
+  **not** retrained on the 78-file compiler profile (28 s + ~51 MB), so the next agent's
+  first `xtsc` run there will be an uncached one until `xtsc-aot train` is called. Still open
+  from round 839's residue and untouched here: a cache trained under emit (~800 ms, ~5% of a
+  cached emit run) or under `--workers 4`; `--watch`/`--incremental`; the other seven
+  profiles. All queued below as (AOT.4)(c).
+- **A NEW OWNER-GATED FINDING, QUEUED AND NOT ACTED ON.** `build.gradle.kts` sets
+  `nativeImageMainClass = …MainKt`, while `XtscMain`'s own KDoc says the native image is
+  meant to *be* the thin client ("a native start costs milliseconds, which is the point of
+  pairing it with a warm JVM server") — **a SECOND, still-open instance of exactly the gap
+  just closed**: the GraalVM native image cannot reach `--serve`/`--daemon` either.
+  build.gradle.kts changes are owner-gated by CLAUDE.md's Guardrails, so it is queued as
+  (AOT.4)(b) `BLOCKED-PENDING-USER`. (A second, minor site — `compileTsProject`, a dev
+  `JavaExec` — is correctly left on `MainKt`.)
+- **WHY THIS ITEM AND NOT THE QUEUE'S TOP UNCHECKED ONE.** The top unchecked item is
+  **(NARROW.2)(c)**, under the "TOP OF QUEUE … work this before PERF" header from round 684.
+  Round 839 — the most recent owner instruction — records: *"leave M3.0 conformance, return
+  to M5 / performance — the conformance items stay queued and unchecked."* (NARROW.2)(c)'s
+  stated and only motivation is the three `types/any` cases in
+  `docs/conformance-worklist.md`, so it IS one of those conformance items and it stays
+  unchecked. Recorded here so the next agent reads the skip as the standing owner
+  instruction, not as protocol drift.
+
+**Round 839 (2026-08-05) — (JIT.2b) RESIDUE CLOSED: THE SHIPPED AOT CACHE IS VALIDATED IN
+EVERY MODE WE SHIP, AND THERE IS NO CACHED-vs-UNCACHED DIVERGENCE ANYWHERE.** Owner redirect
+recorded first: **leave M3.0 conformance, return to M5 / performance** — the conformance
+items stay queued and unchecked. Rounds 828/832 measured and shipped the cache on ONE mode
+of ONE profile (`--noEmit`, compiler profile) and left four things explicitly unvalidated;
+this round ran them. Full write-up and every number: `docs/perf/aot-cache.md` § 7.
+
+*The headline.* 33 whole-project compiles, 8 server requests, 4 emitted output trees and 2
+full corpus-suite runs, cached against uncached: **no divergence in any of them**. All 29
+`--noEmit --listAll` one-shot compiles and all 8 server requests share one sorted-diagnostics
+md5 (`59d930db…`, 46 errors) across cached/uncached × sequential/w2/w4/w8 × one-shot/server.
+
+*(a) EMIT — the one that mattered, because `--noEmit` never runs the Transformer or Emitter
+and `xtsc-aot train` trains with `--noEmit`.* `dist/` wiped before each run and the whole
+tree re-hashed after it: **78 emitted files, sha256-identical file-for-file across all four
+runs** (plain ×2, cached ×2), diagnostics diff empty. **1.49× with emit** (26,109 → 17,448
+ms) against **1.66×** check-only on the same binary. The interesting part: the emit TAIL
+costs **more** under the cache (3,134 ms vs 2,310 ms) — the cache carries no emitter
+profile, and a cached run reaches the emitter after 14 s of warm-up instead of 24 s. That
+prices a follow-up (train with emit) at ~800 ms, ~5% of a cached emit run.
+
+*(b) THE CORPUS SUITE THROUGH A CACHED JVM.* Gradle's test worker cannot carry an AOT arm
+(the cache binds to a classpath whose dump-time form must be a PREFIX of the runtime one),
+so the suite runs in one plain `java` process over the trained jar + its 7 deps in that
+exact order — `scripts/aot-corpus-suite.sh`, landed this round. **638 classes, 13,897 run +
+3 ignored = the gate's 13,900, and the per-class result files diff EMPTY between the arms,
+failure lines included.** The cache was in USE, not merely opened: `-Xlog:class+load=info`
+shows **922** `com.xemantic` classes from `source: shared objects file` — round 828's
+921/926 population. The 10 failures present *identically in both arms* are harness artifacts
+of running from a jar (8 `AotCacheGuardTest` "URI is not hierarchical", 2
+`HugeMethodLimitTest` "main classes are not a directory"); both classes read the classpath
+LAYOUT and are green under Gradle. No corpus baseline failed on either arm.
+
+*(c) `--workers` — with a DISTRIBUTION, per the standing rule (rounds 754/824 each shipped a
+false green from one draw).* 20 cached runs (5 each at seq/w2/w4/w8) + 9 uncached: 46 errors
+and the same md5 in all 29. Medians, cached: seq 14,514 / w2 12,779 / **w4 12,343** / w8
+16,368 ms; uncached: seq 22,975 / w4 18,966 / w8 20,342. Blocked, not interleaved →
+directional only, but two things they do say: **the two levers OVERLAP** (workers buy 1.18×
+on top of the cache where they buy 1.21× without it; cached-w4 vs plain-seq is **1.86×**,
+not the 2.26× the headline ratios would multiply to), and **`--workers 8` under a cache is
+worse than cached SEQUENTIAL** — a reversal of the uncached order.
+
+*(d) `--serve` — the answer is "nothing, once warm".* Plain server 23,536 / 10,060 / 7,419 /
+7,268 ms; cached server 13,987 / 8,067 / 7,633 / 7,310. **The cache halves the FIRST request
+(the same ~9.5 s it saves a one-shot run) and is worth nothing warm.** They are the same
+lever twice — both remove interpreter warm-up. Gap found on the way: **`scripts/xtsc` cannot
+reach `--serve` at all** (its main class is `MainKt`; the dispatcher is
+`server.XtscMainKt`), so this arm was run by invoking `java` directly.
+
+*What did NOT work.* (i) Driving the suite through Gradle: `JAVA_TOOL_OPTIONS` reaches the
+worker only via the daemon's environment and the worker's classpath is Gradle's, not the
+trained one — the cache would have been silently unused and the run would have looked
+exactly like a green one. That is why the class-load count is quoted above. (ii) The first
+standalone suite attempt read **4,998 failed in BOTH arms** —
+`NoClassDefFoundError: kotlin/powerassert/CallExplanation`; the power-assert runtime is a
+separate artifact from the stdlib and is not in `build/bench/cp.txt`. A same-in-both-arms
+result is not automatically a valid one.
+
+*Not reached (named, not implied):* a cache trained under emit or under `--workers 4`;
+`--watch`/`--incremental` under a cache; the other seven dashboard profiles; and the
+`--serve` gap in the launcher. Gates: **no `src/` change this round** (docs + two new
+scripts only), so the suite/cost/JIT gates were not required — though the corpus suite was
+in fact run twice, standalone, with zero non-artifact failures on either arm.
+
+**Round 838 (2026-08-05) — (NARROW.2)(a)+(b). TWO CORE NARROWING DEFECTS LAND, AND THE
+ROUND'S MAIN RESULT IS THAT *BOTH* OF ROUND 837'S DIAGNOSES WERE WRONG IN THE SAME WAY:
+each named a mechanism that sounded right and was one function away from the real one.
+Suite 13,886 -> 13,900 / 0 / 3 (+14 pins, 0 regressions); the 8-profile grid was run TWICE
+against a rebuilt before-arm — after (a), then after (b) — md5-identical on all eight both
+times. NO CONFORMANCE CASE MOVED, which was predicted and is itself the useful
+measurement.**
+
+- **(a) WAS NOT A MISSING `extractNullNarrowing` ARM.** Round 837 measured
+  `Type 'string | Error' is not assignable to type 'number'` INSIDE an
+  `if (r instanceof Error)` then-branch and concluded "there is no `instanceof` arm in
+  `extractNullNarrowing` at all". The measurement is right; the diagnosis is not. A
+  **user-declared** `declare class Err` narrows correctly today, through the flow walker,
+  at every consumer probed — a var-decl assignment, a call argument, and a property access
+  (`r.nope` after the guard already reported TS2339 on `Err`). Only `Error` failed. The
+  whole defect was `resolveInstanceOfRhsType`'s `if (!symbol.flags.hasAny(SymbolFlags.Class))
+  return null`: **every ambient constructor in the lib is written `interface Error { … }` +
+  `declare var Error: ErrorConstructor`**, so `Error`, `Date`, `RegExp`, `Map`, `Set`,
+  `Promise` — the constructors every TypeScript program uses — resolved to no class symbol
+  and narrowed NOTHING, in either branch, at every consumer of `narrowByInstanceOf`. The
+  fix is tsc's `getInstanceType`: the constructor type's `prototype` property, then a lone
+  construct signature's return type. **DELIBERATELY BOUNDED, and the bound that matters is
+  the last one:** no `[Symbol.hasInstance]` leg, no `mapType` over a union-typed RHS, no
+  signature erasure, and where tsc falls back to `emptyObjectType` **we return null, i.e. no
+  narrowing** — a `{}` narrow would be a new and wrong type at every consumer, while null is
+  exactly the pre-838 answer. That bound is what the `a value that is not a constructor does
+  not narrow` control ablates.
+- **(b) WAS NOT A SCOPE LEAK, AND THE REASON IT LOOKED LIKE ONE IS WORTH THE ENTRY.** Round
+  837 reported "a guard's narrow LEAKS out of its `if` block into the next sibling `if`".
+  The `if` scoping is correct: a UNION subject (`Err | string`) is perfect in every shape
+  probed, at module scope and in a function body. Only an **`any`** subject leaks, and it
+  ACCUMULATES — `Error | Function` after two sibling guards. The mechanism: both single-type
+  NEGATIVE branches — `narrowByCallPredicateWorker`'s tail and `narrowByInstanceOf`'s
+  `else -> neverType` — decide "the subject IS the target, so the false branch is
+  impossible" with the ASSIGNABLE relation, and **`any` is assignable to everything**. So
+  the else branch was `never`, and the flow join of (`Foo` from then, `never` from else)
+  produced `Foo`. **Nothing in any output ever names `never`** — it is assignable to every
+  probe target — so the symptom surfaces only at the NEXT statement, as a type that should
+  not be there. tsc survives it by construction: its assumeFalse filter goes through
+  `isTypeSubsetOf`, plain identity for a non-union candidate. Fixed with
+  `anyNegativeBranchSurvives` (`TypeFlags.Any` — `any` plus the `error`/`unresolved`
+  sentinels, none of which may wash to `never`) at both sites. The isolation that found it
+  was a nested guard in the else branch (`if (isError(x)) {} else { if (isDate(x)) { … } }`):
+  on the broken binary it is SILENT, because narrowing `never` by a second guard is still
+  `never`.
+- **WHAT DID NOT WORK, and what it cost.** (i) Both handed-down diagnoses, above — ~25
+  minutes of probing to overturn, and in each case the tell was the same: the reported
+  symptom was reproducible and the named cause was not the only thing that could produce it.
+  The general lesson is round 797's, one level up: **a defect report names a PREDICATE, and
+  the population behind it has to be classified before the fix is designed.** (ii) A control
+  for (b) asserting "a subject the guard subsumes still collapses to `never`" — written,
+  probed, and **impossible**: `never` is assignable to every probe target, a `never`
+  receiver's property access is silent, and the argument position I tried reads the
+  DECLARED type (`take(y)` reported `Err` on both a narrowed and an un-narrowed build, and
+  the un-guarded control line reported the same thing). Recorded in the test's KDoc rather
+  than faked. (iii) A pin written as a positive — `the second of two sequential guards sees
+  the declared any` — was MEASURED green on the pre-change binary (narrowing the leaked
+  `Function` by `is Error` happened to answer `Error` anyway) and is **renamed** to what it
+  actually tests, per the standing rule.
+- **PIN DISCRIMINATION, BOTH DIRECTIONS, ON REAL BINARIES, ONE MISTAKE AT A TIME.** 14 pins
+  in two classes, four ablation builds. (a) `InstanceOfConstructorValueNarrowingTest` (7):
+  against the **rebuilt pre-change binary** exactly the **4 positives fail, 3 controls
+  green**; against a single-mistake ablation returning the CONSTRUCTOR type where the
+  resolution has no answer, exactly **1 control fails** (`a value that is not a constructor
+  does not narrow`) and the other 6 stay green. (b) `AnyNegativeNarrowingBranchTest` (7):
+  against the rebuilt pre-change binary exactly **3 positives fail**; against a
+  both-branches ablation (the survival bail moved above `if (isMatch)`), the control `the
+  positive branch on an any subject still narrows` fails. **Un-ablated and recorded as ARM
+  pins, not claimed as coverage:** (a)'s `a name with no value meaning does not narrow` and
+  `a user-declared class still narrows`, and (b)'s `an unknown subject is unaffected`,
+  `a union subject still subtracts` and the renamed later-guard pin.
+- **NO CONFORMANCE MOVEMENT, MEASURED RATHER THAN ASSUMED.** All three `types/any` narrowing
+  cases re-measured after both fixes (each fixture extracted with `git -C typescript-repo
+  archive` and run as a single-file project through the CLI against its `.errors.txt`
+  summary): **0 diagnostics emitted, unchanged.** They are gated on gap 3 ALONE —
+  `checkMemberAccessMissing` reading a narrowed `any` receiver — now queued as
+  **(NARROW.2)(c)** with its FP risk stated. `nonPrimitiveNarrow`/`nonPrimitiveStrictNull`
+  are `object`, not `any`, and are untouched. The honest reading: **this axis buys
+  CORRECTNESS readily and conformance CASES only at (c)** — both defects closed here were
+  invisible to the corpus, to `cost_gate.py` and to all eight profiles simultaneously.
+- **GATES.** Suite **13,900 / 0 / 3** from a wiped results dir, `xml.etree` (13,886 + 14
+  pins, **0 regressions**), run once per commit. `cost_gate.py` **PASS on both**;
+  `output.errors` 46 unchanged; after (a) every counter +0.00% with `typeNode.cacheable` +3
+  and `globals.lookups` +1 in absolute terms (the `prototype` resolutions the fix adds on
+  the compiler profile — so the new leg DOES fire there); after (b) the largest movement is
+  **-0.01%** (`narrow.walks` -2, `typeNode.bypassed` -9, `globals.lookups` -27 — the sites
+  where a negative branch no longer washes a subject to `never` and the walk below it stops
+  early). Rebaselined with `--update` in each commit. `huge_methods.py --fail-over 0` exit
+  0, **0 over the limit**. **8-PROFILE GRID AGAINST A GENUINELY REBUILT BEFORE-ARM, RUN
+  TWICE** (before-arm captured at HEAD after a full `compileKotlinJvm`; then again after
+  (a), then after (b)): every capture non-empty with no `more error(s)` truncation tell,
+  counts **46x7 + harness 94** on all three arms, and the sorted-capture md5 IDENTICAL on
+  all eight profiles both times. `scripts/grid838.sh` is the 20-line capture harness and is
+  committed — every round since 828 has rebuilt it from scratch.
+
+**Round 837 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE HANDED-DOWN TARGET WAS
+RE-COSTED AND OVERRULED ON EVIDENCE: `types/any`'s three NARROWING cases are not one
+mechanism but three gaps, the blocking one being a widening of `checkMemberAccessMissing`.
+Took the three BOUNDED cases in the same category instead — `types/any` **6 -> 3 failing**,
+and all three closed cases are green on errors AND emit. Suite 13,870 -> **13,886 / 0 / 3**
+(+16 pins, 0 regressions); all 8 profiles md5-identical against a REBUILT before-arm. AND
+THE ROUND'S SECOND DELIVERABLE: conformance breadth is now measured to be OUT of cheap work
+— see the recommendation at the end.**
+
+- **THE HARNESS WAS RE-CREATED FROM ITS OWN DESCRIPTION AND THAT WORKED.** Round 836 deleted
+  the survey harness and left a paragraph in `docs/conformance-worklist.md` saying to rebuild
+  it from the description. Done: ~110 lines under `src/jvmMain`, `git archive` the category
+  out of the blobless clone, replicate the generator's subtest algebra, diff the `.errors.txt`
+  SUMMARY and each `//// [name.js]` section. It reproduced round 836's `types/any` row
+  exactly (one counting nit: that row said `miss 4` for `narrowFromAnyWithTypePredicate`
+  where the stated one-line-per-chain-continuation convention gives 5). **40 seconds per
+  measurement against ~14 minutes for a suite arm** — this round re-measured the category
+  four times. Deleted again before the first commit.
+- **THE RE-COSTING, AND WHY IT OVERTURNED THE HANDED-DOWN TARGET.** Round 836 priced the three
+  narrowing cases as "ONE mechanism: narrowing FROM `any`, exempting `Function`/`Object`".
+  Probing the compiler with deliberate mis-assignments (`const p: number = x` after each
+  guard, which prints the flow type in the TS2322) shows **three separate gaps**: (1) a
+  type-predicate guard ALREADY narrows an `any` subject — file-level `declare var`, catch
+  parameter and body local all work; only tsc's `Function`/`Object` exemption is missing, and
+  that is two lines; (2) `instanceof` narrowing reaches NOTHING — there is no `instanceof` arm
+  in `extractNullNarrowing` at all, so `if (r instanceof Error)` leaves even an
+  `Error | string` body-local un-narrowed INSIDE the then-branch; (3) **the narrow does not
+  reach the PROPERTY-ACCESS walker when the declared type is `any`** — and every diagnostic
+  these three fixtures assert is a TS2551/TS2339/TS2349 on the narrowed receiver, so (3) is
+  what blocks all three cases. (3) is a widening of `checkMemberAccessMissing` over exactly
+  the shape tsc's own sources use constantly. A fourth defect found on the way and NOT fixed:
+  **a guard's narrow LEAKS out of its `if` block into the next sibling `if`** of the same
+  body, which is precisely the five-sequential-`if` shape `narrowFromAnyWithTypePredicate` is
+  built from — so (1)+(2) cannot even be validated against that fixture until the leak is
+  closed. All four are written up in `docs/conformance-worklist.md`.
+- **WHAT LANDED — three bounded checks, three whole cases.** (a) **TS2347 through `new`**:
+  tsc reaches `resolveUntypedCall` from `resolveNewExpression` as well as
+  `resolveCallExpression`, so `new x<any>(x)` is as much an error as `x<any>(x)`; same gate as
+  the existing call leg (`isImplicitAnyVarChain` / `isImplicitAnyThisMember`), deliberately
+  not the broad `calleeType === anyType` (`anyAsConstructor`). (b) **`void` and
+  `typeof undefined` are assumed initialized**: tsc's TS2454 guard is
+  `type.flags & (AnyOrUnknown | Void)` OR the type's facts carrying `IsUndefined`, and we
+  covered `any`/`unknown`/a syntactic `undefined` constituent and neither of the other two;
+  new `varTypeAssumedInitialized`, applied ONLY in the TS2454 candidate collector
+  (`assignEveryTypeToAny`). (c) **TS2631 in an assignment target** (`assignAnyToEveryType`).
+- **THE CORPUS CAUGHT (c) BEING WRONG, AND IT IS THE ROUND'S BEST GOTCHA.** The first attempt
+  keyed the namespace arm on `SymbolFlags.Module` and the suite came back **13,885 / 5**: two
+  corpus baselines (`assignToModule`, `assignmentToReferenceTypes`) plus three pins.
+  `SymbolFlags.Module` is the **UNION** of `ValueModule` and `NamespaceModule`, and tsc gives
+  the two DIFFERENT diagnostics at the same syntax — an INSTANTIATED namespace resolves as a
+  value so the write itself is the error (TS2631), a NON-instantiated one has no value meaning
+  so the value-position TS2708 fires first and the write is never judged. Gated on
+  `ValueModule` and both halves are now pinned in both directions. Now a CLAUDE.md entry.
+- **TWO DELIBERATE NON-GENERALISATIONS.** `varTypeAssumedInitialized` is NOT folded into the
+  shared `typeIncludesUndefined`, whose other two callers are TS2564 property sites where tsc
+  uses `containsUndefinedType` instead and a `void` property genuinely DOES want the
+  diagnostic (`negative control - a void property still reports TS2564` is the control for
+  exactly that mistake). And it is SYNTACTIC on purpose: resolving an annotation inside a
+  candidate COLLECTOR would make the candidate set a function of resolution order — the
+  round-778 class of bug, with no output diff to find it by.
+- **PIN DISCRIMINATION, BOTH DIRECTIONS, ON REAL BINARIES.** 16 pins,
+  `AnyUntypedNewAndVoidDefiniteAssignmentTest`, plus two pre-existing pins corrected.
+  Against the **rebuilt pre-change binary** (the grid's own before-arm, so no extra build was
+  spent) **exactly the 8 positive pins fail and all 8 controls stay green** — plus
+  `Inv4SpineBatch29Test`'s namespace assertion, which is also a positive; `Inv4SpineBatch20Test`
+  (the non-instantiated case, whose behaviour is unchanged) stays green. The `ValueModule`
+  ablation is the round's own first attempt, whose binary was fully built and suite-run: it
+  fails `Inv4SpineBatch20Test`'s TS2708-exactly-once pin and the two corpus baselines, and the
+  new control's fixture (`namespace A { } A = undefined;`) is BYTE-IDENTICAL to
+  `assignToModule.ts`, so that ablation's failure is direct rather than inferred.
+  **Un-ablated and recorded as ARM pins, not claimed as coverage:** the four remaining
+  TS2347/TS2454 controls (`an untyped new without type arguments is silent`,
+  `type arguments on a real generic class are silent`, the two `still reports TS2454`) and
+  `a void property still reports TS2564` — each names a mistake this round did not make, and
+  each would need its own build.
+- **WHAT DID NOT WORK.** (i) The handed-down costing, above — the mechanism is real, the
+  observability is the expense, and a per-case DIFF count cannot see that: round 836's survey
+  measures what is MISSING, never what it would take to emit it. (ii) Keying the namespace
+  arm on `SymbolFlags.Module`, which cost a full suite cycle. (iii) A control asserting
+  TS2708 for `var y = M` on a namespace with value members — that is legal, and the pin was
+  written before checking; the shape that fires TS2708 needs a namespace with NO value
+  members. (iv) Nothing was attempted on the narrowing three: after the probes, taking any of
+  gaps (1)-(3) would have been a same-round guess at a grid-scale risk.
+- **GATES.** Suite **13,886 / 0 / 3** from a wiped results dir, `xml.etree` (13,870 + 16 pins,
+  **0 regressions**). `cost_gate.py` **PASS**, `output.errors` 46 unchanged, every counter
+  +0.00% except `globals.lookups` **+198 (+0.03%)** — the new `new`-site
+  `isImplicitAnyVarChain` resolution, rebaselined with `--update` in the same commit.
+  `huge_methods.py --fail-over 0` exit 0, **0 over the limit** (largest 5,149).
+  **8-PROFILE GRID AGAINST A GENUINELY REBUILT BEFORE-ARM** (`Checker.kt` reverted to `HEAD~1`,
+  rebuilt, 8 captured, restored, rebuilt, 8 captured): every capture non-empty with no
+  `more error(s)` truncation tell, counts **46x7 + harness 94** on both arms, and the
+  before-arm reproduced round 836's eight digests exactly — compiler
+  `59d930db849399aea5e03e25fedb8e4e`, tsc-cli `e938e3d4…`, jsTyping `ea13cfd4…`,
+  deprecatedCompat `b73522be…`, typingsInstallerCore `5925fcd1…`, services `79659a93…`,
+  server `1f7597d3…`, harness `67382271…`.
+- **THE RECOMMENDATION THE OWNER ASKED FOR: LEAVE CONFORMANCE BREADTH AS A TARGET.** The
+  bounded-single-purpose-check bucket is the only one that buys whole CASES in a round, and
+  this round spent the three `types/any` held. What is left in that bucket across all nine
+  categories is ~9 subtests, and **none of them completes a category** — every category with a
+  bounded item also carries an M3.1 item or an emit-red case. Rounds 833-837 landed five
+  features and turned **seven cases** green while adopting **zero** categories; the two
+  closest categories (`types/any` at 3, `nonPrimitive` at 6) are now gated on the SAME thing.
+  So the concrete alternative is not "M3.1" in the abstract but **(NARROW.2) — make flow
+  narrowing observable at the diagnostic walkers**, in three measured steps: (a) an
+  `instanceof` arm in `extractNullNarrowing`; (b) scope a guard's narrow to its own `if`
+  block; (c) let `checkMemberAccessMissing` read a narrowed receiver whose declared type is
+  `any`, plus tsc's `Function`/`Object` exemption. **(a) and (b) are correctness gaps in the
+  compiler's core, not fixture-chasing** — an `instanceof` that narrows no union at all is a
+  real defect the corpus does not catch — and the three of them together move `types/any` and
+  `nonPrimitive` at once. (c) is the highest-FP-risk change in the queue and wants the
+  8-profile grid at every step. The honest third option is to leave M3.0 and return to M5.
+
+**Round 836 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE ROUND IS A SURVEY AND
+A FIX: all nine categories are now priced PER CASE including EMIT
+(`docs/conformance-worklist.md`), and tsc's OPTIONAL-CHAIN leg of
+`checkReferenceExpression` — five codes that existed NOWHERE — lands, taking
+`propertyAccessChain.3` and `elementAccessChain.3` from 22 missing diagnostics each to an
+exact match. Suite 13,855 -> **13,870 / 0 / 3** (+15 pins, 0 regressions).**
+
+- **WHY A SURVEY FIRST, AND WHY IT IS NOT A SUITE RUN.** Three rounds in a row adopted a
+  category on its failure COUNT and had to re-cost it upward, because a category's name
+  describes its FIXTURES, not its gaps. The measurement that answers the real question —
+  what does each CASE cost — is per-case, and a suite arm cannot produce it. So: `git
+  archive` the nine categories out of the blobless clone (the conformance tree is not in
+  the sparse checkout but the blobs are local), replicate the generator's own subtest
+  algebra in a throwaway `main` under `src/jvmMain` — `parseDirectives` /
+  `computeVariations` / `tsgoSkippedTests` / `usesUnsupportedOption` /
+  `tsconfigInTestUsesRemovedFeature`, verbatim from `build.gradle.kts` — and diff both the
+  `.errors.txt` SUMMARY and each `//// [name.js]` section of the `.js` baseline. **~40 s for
+  all 124 cases in one JVM against ~12 minutes for a suite arm**, and it yields the diff a
+  suite arm does not. The harness was deleted before the first commit; recreate it from
+  `docs/conformance-worklist.md` rather than reviving a copy.
+- **THE SURVEY'S FIRST PASS WAS WRONG AND ITS OWN OUTPUT SAID SO — 13 of 125 cases came
+  back "skipped".** `usesUnsupportedOption` is a per-CONFIG skip, not a per-FILE one: a
+  fixture declaring `@target: es5, es2015` loses its BARE subtests and keeps the
+  `(target=es2015)` variation. Reading it as a file skip silently hides every
+  `labeledStatements` `NoCrash` fixture and six `optionalChaining` cases, and reports them
+  as absent rather than failing. Now a CLAUDE.md entry, because the same mistake is
+  available to anything that replicates the generator offline.
+- **THE HEADLINE: 124 cases, 79 error subtests, 65 with a diagnostic diff, 12 with a
+  JS-emit diff — and the emit column is what decides adoptability**, since
+  `conformanceDeferredErrorBaselines` defers only `.errors.txt`. Four categories
+  (`asOperator`, `optionalChaining`, `conditional`, `labeledStatements`) carry an emit-red
+  case and are vetoed outright no matter what the checker learns. Bucketed by MECHANISM
+  rather than by category, which is the framing the queue has been missing: **~20 subtests
+  are M3.1/M3.2 inference-and-relation, ~7 parser/ASI/error-recovery, 12 JS emit, 4
+  EMBEDDED-LIB gaps (`Record`/`Partial` — not checker work at all), ~9 flow narrowing, and
+  ~12 bounded single-purpose checks.** Only the last bucket buys whole cases in a round.
+- **WHAT I TOOK, AND WHAT I PASSED OVER.** The largest bounded gap in that last bucket is
+  tsc's `checkReferenceExpression(expr, invalidReferenceMessage,
+  invalidOptionalChainMessage)`: we implemented the first leg (TS2357 / TS2364) and NONE of
+  the second, so `obj?.a = 1`, `obj?.a++`, `for (obj?.a in {})`, `for (obj?.a of [])` and
+  every destructuring-assignment element compiled in complete silence. 44 diagnostics across
+  two cases, one predicate at five sites, and **exposure that is bounded by construction —
+  every one of these codes says "you wrote an optional chain in a write position", which is
+  code tsc itself rejects, so tsc's own sources cannot contain one.** Passed over on
+  measurement, not taste: `typeAliasesForObjectTypes` (TS2300) + `typeAliasesDoNotMerge`
+  (TS2395) would turn two CASES green rather than two subtests, but they mean teaching
+  `checkDuplicateDeclarations` about type aliases, and tsc's sources are full of type
+  aliases — a bigger blast radius for a smaller diagnostic count.
+- **WHAT LANDED.** `isOptionalChainReferenceTarget` plus `emitOptionalChainTarget`, feeding
+  TS2777 (`++`/`--` operand), TS2778 (object REST target), TS2779 (assignment LHS plain and
+  compound, array/object destructuring element, AND an array rest target — tsc reserves
+  TS2778 for the object one), TS2780 (`for..in` LHS), TS2781 (`for..of` LHS). We carry no
+  `NodeFlags.OptionalChain` bit, so the predicate is a descent through the chain's own
+  links: a `?.` anywhere BELOW the target makes the whole target a chain (`a?.b.c` is one),
+  a PARENTHESIS terminates it (`(a?.b).c` is not), and the value-preserving outer wrappers
+  are skipped first exactly as `skipOuterExpressions(expr, Assertions | Parentheses)` does.
+  `checkDestructuringPrivateIds` already enumerated precisely the positions tsc hands to
+  `checkReferenceExpression`, so it carries the new leg and is renamed
+  `checkDestructuringAssignmentTargets`; its `checkChain` parameter is false only for the
+  node whose enclosing call already reported it, so no position reports twice.
+- **THE RESULT IS TWO ERROR SUBTESTS, NOT TWO CASES, AND THAT DISTINCTION IS THE SURVEY'S
+  WHOLE POINT.** `propertyAccessChain.3` and `elementAccessChain.3` now match their
+  baselines exactly, ORDER included — and both stay red on their own `?.`-downlevel EMIT
+  subtest, which no error-baseline deferral can carry. The survey re-run confirms no other
+  case moved in either direction.
+- **PIN DISCRIMINATION, BOTH DIRECTIONS, ON REAL BINARIES.** 15 pins,
+  `OptionalChainReferenceTargetTest`. Against the **rebuilt pre-change binary** (the grid's
+  own before-arm, so no extra build was spent) exactly the **10 positive pins fail** and all
+  5 remaining pins stay green. Then ONE MISTAKE AT A TIME, each its own build: skipping
+  PARENTHESES inside the chain descent as the outer-wrapper loop does fails exactly
+  `negative control - a parenthesis terminates the chain` and nothing else; answering "the
+  target's subtree contains a `?.` somewhere" (the element-access arm also reading its
+  INDEX) fails exactly `negative control - an optional chain inside the index is not a
+  chained target` and nothing else. **The remaining 3 pins are NOT ablated and are recorded
+  as ARM pins, not claimed as coverage** — `a for-of over a declaration is silent`,
+  `negative control - an optional chain in a read position is silent`, and `negative
+  control - a plain reference target is silent everywhere` guard over-emission in positions
+  no mistake this round produced.
+- **WHAT I DID NOT DO.** No `LogicalParityDivergence` and no `@Ignore` — every case here is
+  unimplemented behaviour, which is a MEANING gap and explicitly not what that mechanism is
+  for. No category was adopted, because none is green.
+- **GATES.** Suite **13,870 / 0 / 3** from a wiped results dir, `xml.etree` (13,855 + 15
+  pins, **0 regressions**). `cost_gate.py` **PASS — every one of the 20 counters +0.00%**,
+  `output.errors` 46 unchanged, so no rebaseline was needed or taken.
+  `huge_methods.py --fail-over 0` exit 0, **0 over the limit** (largest 5,149). **8-PROFILE
+  GRID AGAINST A GENUINELY REBUILT BEFORE-ARM** (`Checker.kt` reverted to `HEAD~1`, rebuilt,
+  8 captured, restored, rebuilt, 8 captured): every capture non-empty with no
+  `more error(s)` truncation tell, counts **46x7 + harness 94** on both arms, and the sorted
+  capture **md5 IDENTICAL on all eight** — compiler `59d930db849399aea5e03e25fedb8e4e`,
+  tsc-cli `e938e3d4…`, jsTyping `ea13cfd4…`, deprecatedCompat `b73522be…`,
+  typingsInstallerCore `5925fcd1…`, services `79659a93…`, server `1f7597d3…`,
+  harness `67382271…`. Plus a check specific to this change: **ZERO sightings of
+  TS2777/2778/2779/2780/2781 across all eight profiles**, which is the expected result —
+  every one of those codes reports code tsc itself rejects, so tsc's own sources cannot
+  contain one. (The digests differ from round 835's because this round's capture normalises
+  to `grep 'error TS' | sort` rather than sorting the whole `--listAll` output; both arms
+  here were produced by the same command, which is what the comparison needs.)
+
+**Round 835 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE `object` KEYWORD'S
+APPARENT TYPE — `getApparentType(object)` is tsc's `emptyObjectType`, which is why a
+failing `object -> { foo: string }` is a MISSING-PROPERTY report against `{}` and not a
+coarse TS2322. **`nonPrimitiveAssignError` is GREEN; `nonPrimitive` 7 -> 6 failing cases.**
+Suite **13,855 / 0 / 3** (13,847 + 8 pins, 0 regressions); all 8 profiles `added=0
+removed=0` against a REBUILT before-arm, md5-for-md5.**
+
+- **WHICH GAP, AND THE COSTING RE-VERIFIED RATHER THAN INHERITED.** Round 834 handed down
+  `nonPrimitiveAssignError` as "1 diff, message-shape only, cheapest by a wide margin". I
+  re-measured it and the four other residual cases by extracting each fixture's source from
+  its `.js` BASELINE (`//// [name.ts]` carries the original verbatim; the `tests/cases`
+  tree is not in the sparse checkout) and running the project CLI against the
+  `.errors.txt` summary. **The costing holds exactly**: 6 of the case's 7 diagnostics
+  already match, and the one diff is line 5, `y = a`, where tsc says
+  `TS2741: Property 'foo' is missing in type '{}' but required in type '{ foo: string; }'`
+  plus a `TS2728` related info and we said
+  `TS2322: Type 'object' is not assignable to type '{ foo: string; }'`. I took it. The
+  louder alternatives were re-measured and left: `nonPrimitiveConstraintOfIndexAccessType`
+  (10 diffs) is one uniform rule — nothing concrete is assignable to a generic `T[P]` — but
+  our engine accepts everything into such targets and tightening it is the direction the
+  standing foreign-TP gate exists to *avoid*; `nonPrimitiveAccessProperty` (2) needs TS2339
+  on an `object` receiver, and the compiler profile alone holds 21 `: object` annotations
+  including `lookupTable: object` and `readJson(): object`, i.e. real exposure in the
+  repo's most FP-sensitive walker.
+- **THE DEFECT.** tsc has no `object`-specific elaboration at all. `structuredTypeRelatedTo`
+  compares `getApparentType(source)`, which for `TypeFlags.NonPrimitive` is
+  `emptyObjectType`, so `propertiesRelatedTo` sees a member-LESS object and
+  `reportUnmatchedProperty` fires — TS2741 for one missing property, TS2739/TS2740 for
+  several, with the source displayed as **`{}`, never as `object`**. We keep `object` as a
+  `Type.Intrinsic`, and `collectMissingProperties` requires a `Type.Object` on BOTH sides,
+  so the missing set was empty **by construction** and both assignability emitters degraded
+  to the coarse TS2322.
+- **WHAT LANDED — one predicate, two call sites.** `nonPrimitiveMissingPropSource(source)`
+  returns an interned empty `Type.Object` iff the SOURCE carries `NonPrimitive`, and null
+  otherwise; it is applied in `cvdaElaborateMismatch` (var-decl) and the assignment path's
+  elaboration, where it feeds `collectMissingProperties` and supplies `{}` as the displayed
+  source for the TS2741 / TS2739 / TS2740 / TS2696 shapes. The coarse TS2322 below keeps
+  saying `object`, which is also tsc (that one is reported from the original type). **The
+  relation VERDICT is untouched in both directions** — this decides only which shape an
+  already-failing assignment is reported in, which is why the change cannot add or remove a
+  diagnostic on any profile.
+- **DELIBERATELY NOT `getApparentType`.** Adding a NonPrimitive arm there is the obvious
+  "proper" fix and would reach ~40 consumers at once — round 834 measured exactly what
+  widening a shared predicate costs when `isSimpleCheckableType` grew a duplicate TS2345.
+  Same reason the var-decl twin was included and nothing else was: a rule applied at one of
+  two sibling emitters is an inconsistency the next agent trips on, but a rule applied
+  everywhere is an unmeasured blast radius.
+- **PIN DISCRIMINATION, VERIFIED IN BOTH DIRECTIONS ON REAL BINARIES.** 8 pins,
+  `NonPrimitiveApparentTypeTest`. Against the **rebuilt pre-change binary** (the grid's own
+  before-arm, so no extra build was spent) exactly the **4 positive pins fail** and the 4
+  controls stay green. Against a **naive ablation** — `nonPrimitiveMissingPropSource`
+  returning the apparent type for EVERY source — exactly the **2 controls written for it
+  fail** (`a primitive source keeps its own coarse message`, i.e. keying on `Type.Intrinsic`
+  rather than the flag; `a named interface source keeps its name`, i.e. substituting `{}`
+  for every source) and the 4 positives stay green. The remaining 2 controls
+  (`an object source still assigns to an empty object target`,
+  `primitive mismatches on either side of object stay coarse`) are **not ablated** — they
+  guard a TARGET-keyed mistake and an over-eager emission, and no ablation this round
+  produces either; recorded as arm pins, not claimed as coverage.
+- **A DETAIL THE PIN PAID FOR TWICE:** `Diagnostic.character` is **1-based** and `line` is
+  not directive-stripped, so a pin that reads a related-info position must assert the column
+  verbatim against the baseline (tsc's `2:10` is `character == 10`) and the LINE relatively.
+  Two build cycles went to discovering that; the pin now reads tsc's column literally.
+- **RE-COSTING — `nonPrimitive` is 6 cases, and the cheap end is gone.** What remains:
+  `nonPrimitiveConstraintOfIndexAccessType` (10 diffs, we emit nothing — generic
+  indexed-access assignability); `nonPrimitiveStrictNull` (12) and `nonPrimitiveNarrow` (3)
+  — flow narrowing on `object`, `typeof x === 'number'` to `never` plus 8 TS18047/18048/18049;
+  `nonPrimitiveUnionIntersection` (4) — `getIntersectionType` REDUCTION (`object & string`
+  to `never`, `object & {}` to `object`) plus excess-property checking through it, which
+  changes intersection identity and display; `nonPrimitiveAccessProperty` (2) — TS2339 on an
+  `object` receiver, with the `var { destructuring } = a` half wanting the SAME apparent-type
+  substitution this round introduced (tsc prints `'{}'` there and `'object'` at the property
+  access — the two positions genuinely disagree); `nonPrimitiveAndTypeVariables` (1) —
+  the general `TypeParam -> TypeParam` lenience PLUS a union display-order divergence
+  (`object | U` vs our source-order `U | object`), so even a correct relation fix leaves it
+  red. **No remaining case is a message shape.** The next-cheapest is
+  `nonPrimitiveAccessProperty`, and it is a walker change, not an elaboration change.
+- **GATES.** Suite **13,855 / 0 / 3** from a wiped results dir, `xml.etree` (13,847 + 8
+  pins, **0 regressions**). `cost_gate.py` **PASS — every counter +0.00%**, `output.errors`
+  46 unchanged, no rebaseline needed or taken. `huge_methods.py --fail-over 0` exit 0,
+  **0 over the limit** (largest 6,353, unchanged). **8-PROFILE GRID AGAINST A REBUILT
+  BEFORE-ARM** (`Checker.kt` saved, reverted, rebuilt, 8 captured; restored, rebuilt, 8
+  captured): every capture non-empty with no `more error(s)` tell, counts 46x7 + harness 94,
+  **`added=0 removed=0` on all eight and the sorted-capture md5 IDENTICAL on all eight** —
+  compiler `4caacf248ce417899c2972c16a82f1ed` (the digest rounds 828/832/833/834 recorded),
+  tsc-cli `a46fcc87…`, jsTyping `e040dfbb…`, deprecatedCompat `78349ce3…`,
+  typingsInstallerCore `c2c3ce67…`, services `295300f6…`, server `16f97bd9…`,
+  harness `0929cd11…`.
+
+**Round 834 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH. THE `object` KEYWORD GETS
+A REAL RELATION RULE — the single rule the compiler held about it was tsc's written as its
+NEGATION, which is a different predicate. `nonPrimitive` **9 -> 7 failing cases**
+(`nonPrimitiveInFunction` and `nonPrimitiveInGeneric` GREEN); **the category still cannot
+be adopted, so it was not.** Suite **13,847 / 0 / 3** (13,833 + 14 pins, 0 regressions);
+all 8 profiles byte-identical against a REBUILT before-arm.**
+
+- **THE CENSUS, RE-DERIVED NOT INHERITED (round 833's lesson, applied).** 16 files, one
+  whole-file-skipped by tsgo's `tsgoSkippedTests`, **25 subtests, 9 failing, 0 emit
+  failures** — round 831's counts confirmed exactly. What no prior round captured is the
+  per-CASE DIFF, and it is what decides everything: the 9 are **six unrelated gaps wearing
+  an `object` costume**, and only three concern `object` at all.
+- **THE DEFECT, AND IT REACHES FURTHER THAN THE KEYWORD.** `isSimpleTypeRelatedTo`'s
+  NonPrimitive leg read `!sf.hasAny(TypeFlags.Primitive or Null or Undefined or Void)`;
+  tsc's rule is the POSITIVE `s & TypeFlags.Object && t & TypeFlags.NonPrimitive`. They
+  differ because **`TypeFlags.Primitive` omits every LITERAL bit** — so a
+  `Type.StringLiteral` / `NumberLiteral` / boolean-literal source, a bare `Type.TypeParam`,
+  `unknown`, and the instantiable `keyof`/indexed-access types all satisfied `object`
+  silently. Its furthest consequence was a **false positive one type away from any
+  `object`**: `T[P] extends V | object ? 1 : 0` answered TRUE for a numeric-literal `T[P]`,
+  so a mapped type computed `1 | 1` where tsc computes `1 | 0`
+  (`nonPrimitiveAndTypeVariables`, TypeScript issue #23800).
+- **WHAT LANDED — four changes, every one keyed on the TARGET's `NonPrimitive` flag**, so
+  nothing that does not write the `object` keyword can reach any of them. (1) the relation
+  leg inverted to tsc's positive form; (2) a `structuredTypeRelatedTo` arm deciding a
+  `Type.TypeParam` source by its CONSTRAINT — unconstrained `T` rejects, `T extends object`
+  and `T extends {}` accept; (3) `canUseTypeEngine` opened for a `Type.TypeParam` source
+  against a NonPrimitive target (the B60.8 rule below it admits only a CONSTRAINED one,
+  i.e. exactly the case that is not an error); (4) a new `isArgCheckableType` =
+  `isSimpleCheckableType` + NonPrimitive, used at **exactly two** argument-position gates —
+  the parameter-side firewall in `checkArgumentsAgainstSignatureCore` and
+  `caasTypeParamConstraintArg`'s constraint test.
+- **WHAT DID NOT WORK — three things, all found by measurement.** (a) **Widening
+  `isSimpleCheckableType` ITSELF was the first cut and is wrong**: it has 45 consumers,
+  several of them dedicated walkers whose entire FP firewall it is, and B498's
+  `checkGenericDefaultParamCall` (`f<object>(123)`) immediately co-emitted a DUPLICATE
+  TS2345 at one position. Hence the separate predicate, its two named call sites, and a pin
+  (`an explicitly instantiated object parameter is reported exactly once`) that only an
+  EXPLICIT type argument can discriminate — the inferred-`T` call cannot. (b) **Opening
+  `canUseTypeEngine` for a UNION source as well was landed, measured and REVERTED**:
+  `object | null -> object` is a correct rejection, but the same gate then FPs for a union
+  the flow HAS narrowed and we have not (`var e: object | null; e = a; a = e` is legal in
+  tsc and we would reject it) — which is the standing reason that Union rule refuses
+  nullish sources at all. It bought 3 diagnostics in a case that stays red for 12 other
+  reasons. The gap is recorded in the code comment and in a pin's KDoc, not hidden.
+  (c) **The one whole-suite regression was the co-emission CLAUDE.md predicts**:
+  `checkSymbolAsWeakTypeArg`'s KDoc asserted "purely ADDITIVE" *because* the general
+  argument check skipped `object`-typed params — no longer true, so 8 of
+  `dissallowSymbolAsWeakType`'s 12 diagnostics doubled. Fixed with the prescribed
+  retraction keyed on (code, fileName, start, MESSAGE) and the stale KDoc corrected; the
+  walker keeps its two uniquely-owned TS2769 chains.
+- **THE RE-COSTING — `nonPrimitive` NEEDS SIX MORE SUB-STEPS AND TWO ARE NOT `object` WORK
+  AT ALL.** Residual 7 cases with their diff counts: **`nonPrimitiveConstraintOfIndexAccessType`
+  (10, we emit NOTHING)** wants `string -> T[P]` INDEXED-ACCESS assignability — `object`
+  appears in 1 of its 10 constraints and is irrelevant to the gap;
+  **`nonPrimitiveAndTypeVariables` (1)** is blocked by the GENERAL `TypeParam -> TypeParam`
+  lenience (`srcConstraint == null || tgtConstraint == null -> return true` in
+  `structuredTypeRelatedTo`) *plus* a union DISPLAY-ORDER divergence (tsc sorts by type id
+  and prints `object | U`; we preserve source order and print `U | object`);
+  **`nonPrimitiveNarrow` (3)** and **`nonPrimitiveStrictNull` (12)** want flow narrowing on
+  `object` — `typeof x === 'number'` collapsing to `never`, and 8 TS18047/18048/18049
+  nullish-access diagnostics on an `object | null | undefined` receiver;
+  **`nonPrimitiveAccessProperty` (2)** wants TS2339 on an `object` receiver, i.e. work
+  inside `checkMemberAccessMissing`, the repo's largest and most FP-sensitive walker;
+  **`nonPrimitiveUnionIntersection` (4)** wants `getIntersectionType` to REDUCE
+  (`object & string` -> `never` by disjoint domains, `object & {}` -> `object`) plus
+  excess-property checking through such an intersection — bounded, but it changes
+  intersection IDENTITY and DISPLAY, which CLAUDE.md flags as high blast radius;
+  **`nonPrimitiveAssignError` (1)** is the only cheap one left — a MESSAGE SHAPE, TS2741
+  with the source displayed as its apparent type `{}` plus TS2728, where we print TS2322.
+  **So the 0-emit-failure count overstated tractability here for the same reason it did for
+  `typeSatisfaction` last round: a category's name describes its FIXTURES, not its gaps.**
+- **GATES.** Suite **13,847 / 0 / 3** from a wiped results dir, `xml.etree` (13,833 + 14
+  `NonPrimitiveObjectTypeTest` pins, **0 regressions**). `cost_gate.py` **PASS — every
+  counter +0.00%**, `output.errors` 46 unchanged, so no rebaseline was needed or taken.
+  `huge_methods.py --fail-over 0` exit 0, **0 over the limit** (largest 6,353). **THE
+  8-PROFILE GRID WAS RUN AGAINST A GENUINELY REBUILT BEFORE-ARM** — `Checker.kt` backed up,
+  reverted, rebuilt, all 8 captured, restored, rebuilt — because a count match is not a
+  diff (round 811). Every capture non-empty with no `more error(s)` tell; counts 46x7 +
+  harness 94; **`added=0 removed=0` and the sorted-capture md5 IDENTICAL on all eight**,
+  the compiler profile at `4caacf248ce417899c2972c16a82f1ed`, the digest rounds 828, 832
+  and 833 recorded.
+
 **Round 833 (2026-08-05) — OWNER DIRECTION: CONFORMANCE BREADTH (the perf arc is closed).
 THE GENERAL `satisfies` CHECK LANDS — TS1360 plus the fresh object-literal excess check —
 closing a gap where the operator was verified NOWHERE. **NO CATEGORY WENT GREEN**, so none

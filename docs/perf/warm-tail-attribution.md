@@ -498,3 +498,141 @@ Raw logs (`cold-{free,rows,frontend}-{1,2}.txt`, `warm-{1,2}.txt`, the standalon
 `UmdScan` microbenchmark and `analyze859.py`) were kept in the session
 scratchpad and are not committed; every figure above is derivable from a re-run
 of the block.
+
+---
+
+## 10. § (WARM.7) LANDED — round 860, and the predicted-vs-actual
+
+*Appended by round 860, which executed § 7's recommendation. Kept here rather
+than in a new document because the value of a priced candidate is only visible
+next to the price: § 7 predicted a **risk-free 0.65%** and called the other half
+gated and unsound-until-proven. Both halves landed, the total is **1.17%**, and
+the second half needed no gate at all.*
+
+### 10.1 What landed
+
+* **(a) the dedup** (`2b92bcaf`). Both passes read
+  `scanUmdExportAsNamespace` through `Checker.umdExportAsNamespaceOccurrences`,
+  a per-FILE memo whose value is a pure function of the file text — no ambient
+  state, so it cannot be the program-ORDER dependency of rounds 754/776/778.
+* **(b) the matcher** (`a05aa412`). The `java.util.regex` scan is replaced by a
+  hand-written EXACT equivalent anchored on the literal `namespace` via
+  `String.indexOf`. **No gate was added, and § 7's `.d.ts` gate was declined on
+  its own terms**: it is a claim about where the construct may legally appear,
+  and round 792's law is that a profile with 0 `.d.ts` files cannot falsify such
+  a claim. The sound substring filter (`namespace`) was already priced at zero by
+  § 7 — tsc's sources are full of `namespace` declarations. Replacing the matcher
+  makes no legality claim at all, and is differentially pinned against the
+  pattern it replaced (which stays live in the source as the oracle).
+
+### 10.2 The rows, measured the same way § 3 was
+
+`BenchMain <proj> 3 8 rows,rows`, one process per arm, two instrumented draws
+each, daemons stopped, box otherwise idle. Three arms from the SAME session and
+the same test-class build: **A** = HEAD `213292cb`, **B1** = after (a),
+**B2** = after (a)+(b). Round-853 positive control: `UmdExportAsNamespaceKt.class`
+is ABSENT from arm A's class dir and present in B1/B2, and B1/B2's copies differ
+by md5 — so no arm can be the wrong binary.
+
+| pass | A draws | A mean | B1 draws | B1 mean | B2 draws | B2 mean |
+|---|---|---:|---|---:|---|---:|
+| `checkCrossFileModuleAugmentationDuplicates` | 49.4, 50.8 | **50.1** | 52.1, 56.3 | **54.2** | 2.7, 5.9 | **4.3** |
+| `checkUmdGlobalVsDeclareGlobalConst` | 47.8, 44.8 | **46.3** | 0.7, 0.6 | **0.6** | 0.4, 0.3 | **0.3** |
+| **the two together** | | **96.4** | | **54.9** | | **4.7** |
+| `checkExportAsNamespaceSelfCycle` (control) | 0.0, 0.0 | 0.0 | 0.0, 0.0 | 0.0 | 0.1, 0.0 | 0.1 |
+| `init:collectUmdGlobalsAndModuleFiles` (control) | 0.3, 0.3 | 0.3 | 0.3, 0.2 | 0.2 | 0.3, 0.2 | 0.2 |
+
+Against arm A's own warm wall (median **7,821 ms** over its 8 measured
+iterations):
+
+| arm | the two passes | share | saving vs A |
+|---|---:|---:|---:|
+| A (HEAD) | 96.4 ms | 1.233% | — |
+| B1 (dedup) | 54.9 ms | 0.701% | **41.5 ms = 0.531%** |
+| B2 (+ hand-written scan) | 4.7 ms | 0.059% | **91.7 ms = 1.173%** |
+
+**§ 4.1's measurement replicates on a different day and a different build**:
+96.4 ms here against 98.2 there, with the two passes' individual rows 50.1/46.3
+against 48.3/50.0. The *order* of the two swaps between the rounds, which is
+inside the 14–19% draw spread § 4.1 reported and means nothing.
+
+**WHICH PASS PAYS, AFTER (a), IS THE PASS-ORDER ANSWER AND IT IS THE OTHER ONE.**
+`checkCrossFileModuleAugmentationDuplicates` is init step 73h and
+`checkUmdGlobalVsDeclareGlobalConst` is 73j, so B1's memo is FILLED by the
+former and SERVED to the latter: the second row collapses to 0.6 ms while the
+first is unchanged. § 7 wrote "run the scan once, ~49 ms" without saying which
+row would move; it is the later one, and that is worth knowing for anyone
+reading a future table.
+
+### 10.3 Is the work MOVED rather than deleted? (round 788)
+
+No, and the produced-vs-consumed argument is available without a new instrument.
+
+* **(a).** The scan is PRODUCED once per file and CONSUMED twice. Before: 78
+  productions × 2 = 156. After: 78 productions, 156 consumptions. There is no
+  third consumer to move it to — the only other two readers of an
+  `export as namespace` pattern use DIFFERENT patterns
+  (`checkExportAsNamespaceSelfCycle` has a trailing `;?` inside an outer capture,
+  `collectUmdGlobalsAndModuleFiles` uses `\s` for `[ \t]`), and **both rows are
+  flat across all three arms** (0.0–0.1 and 0.2–0.3 ms), which is the measured
+  form of that argument.
+* **(b).** The pattern is no longer executed in the compile path at all; its only
+  remaining reference is the test oracle. Its replacement's cost is IN the same
+  rows, and those rows read 4.7 ms — so the ~50 ms did not reappear anywhere; the
+  4.7 ms residue is the AST work each pass does besides scanning.
+
+### 10.4 Round 793 does not apply here, and the census says so
+
+Removing a section normally removes its probe boundaries, so a row delta
+overstates the prize. Not here: **both passes still exist and are still wrapped
+in `pass(...)`**, and the boundary census is IDENTICAL in all three arms —
+**834 pass-row lines across the two draws** (417 rows × 2) in A, B1 and B2 alike,
+with `calls = 1` on each of the four UMD rows in every arm. Nothing is subtracted
+from the 91.7 ms.
+
+The per-arm partition also holds: the pass rows sum to **99.71% / 99.68% /
+99.65%** of the directly measured `checkerInitNanos` in A / B1 / B2.
+
+### 10.5 The A/B, quoted rather than believed — and it decides nothing
+
+Two `scripts/ab-warm.sh` batches, arm A vs arm B2. Verbatim:
+
+```
+VERDICT: NOISE-DOMINATED — the per-pair spread dwarfs the effect. This run decides NOTHING in either direction.
+  arm A: n=2 median=7620ms sd=132ms (1.74%)   arm B: n=2 median=7564ms sd=122ms (1.62%)   delta=-57ms (-0.75%)  B wins 1/2
+```
+
+```
+VERDICT: WIN of 3.0% (B wins 3/3) — outside the +/-1.0% warm band. Warm-only: it is a steady-state COMPUTE claim, not a cold-CLI claim.
+  arm A: n=3 median=7852ms sd=122ms (1.55%)   arm B: n=3 median=7614ms sd=141ms (1.85%)   delta=-238ms (-3.03%)
+```
+
+**NEITHER IS QUOTABLE, and the second one least of all.** CLAUDE.md's rule is
+that a warm run whose printed per-arm sd exceeds ~1% was not measured on a quiet
+box and its verdict must be discarded however clean the median looks; **all four
+arm sds here are 1.55–1.85%**. Batch 2's `3/3, −3.03%` is 2.6× the effect the
+rows measure and is the exact shape round 840(c) warns about — and batch 1, on
+the same two binaries, read `1/2, −0.75%` with one pair at **+1.63%**. Two
+batches that disagree are the correct outcome for an effect of 1.17% measured by
+an instrument whose band is ±1.0% on a box that was not quiet.
+
+**So the primary evidence is the ROWS, which is what the driver itself
+recommends** ("decide on an IN-PROCESS counter … deterministic and immune to
+load"): a 50 ms row going to 0.3 ms is a 99% change against a 14–19% draw
+spread, while the same 91.7 ms is 1.17% of a wall whose draw-to-draw spread is
+~10%. The arm-level wall and `checkerInitNanos` totals must NOT be read as the
+saving in either direction — arm B1's wall median is *higher* than arm A's, and
+arm A's `checkerInitNanos` is 568 ms above arm B2's. Both are draw noise.
+
+### 10.6 What this does NOT show
+
+* **One profile**, `--noEmit`, sequential. A project that actually CONTAINS
+  `export as namespace` makes these passes emit rather than scan-and-return; the
+  scan is then still cheaper, but the residue is no longer near zero.
+* **No cold A/B was taken.** Cold, the two passes were 0.38% (§ 4.1), so the
+  saving is a fraction of that and is below the cold band by construction. This
+  is a warm-regime lever, exactly as (WARM.7) was written.
+* **n=2 instrumented draws per arm.** Sufficient here only because the effect is
+  ~99% of the rows it acts on; it would not resolve a 10% row change.
+* **The 4.7 ms residue was not sub-partitioned.** It is presumed to be the two
+  passes' AST walks, but nothing measured that.
