@@ -233,6 +233,12 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--ianySections", "--ianysections" -> {
                 IanySections.reset(); modes.set(IanySections::mode, IanySections.ON)
             }
+            // (WARM.3) round 849: the PRIZE MEASUREMENT for a process-global lib
+            // TYPE cache — a produced-vs-consumed census plus the outermost-mint
+            // nanos at the two mint boundaries, split lib vs non-lib.
+            "--libTypeCensus", "--libtypecensus" -> {
+                LibTypeCensus.reset(); modes.set(LibTypeCensus::enabled, true)
+            }
             // (IANY.1) the gate as a switch: restores the pre-798 behaviour
             // exactly, so ONE binary carries both arms — this run reproduces the
             // pre-change binary and is a legitimate grid baseline.
@@ -552,6 +558,9 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
         print(IanySections.csv())
         println("== (IANY.1) csv end ==")
     }
+    if (LibTypeCensus.enabled) {
+        println(LibTypeCensus.report())
+    }
     if (CtaSections.mode != CtaSections.OFF) {
         println(CtaSections.report())
         println("== (TYPE.2) csv ==")
@@ -741,6 +750,9 @@ internal fun usageText(): String =
           --cpaSections      (ENGINE.2) attribution of checkPropertyAccessInExpr + checkSinglePropertyAccess
           --cpaSectionsCoarse  the same, entry anchors only — the differential calibration counterpart
           --cpaSectionsCensus  counters and distinct-node sets only; reads no timestamps
+          --libTypeCensus    (WARM.3) prize measurement for a process-global LIB TYPE cache:
+                             produced-vs-consumed at the declaredTypes / member-table mint
+                             boundaries, plus outermost-mint nanos split lib vs non-lib
           --verifyLoopRetry  (ENGINE.2d)(a) keep the round-425 loop-entry retry and COUNT
                              every call where skipping it would change the answer
           --verifyLoopRetryAll  the same over EVERY retry call, including the loop-crossing

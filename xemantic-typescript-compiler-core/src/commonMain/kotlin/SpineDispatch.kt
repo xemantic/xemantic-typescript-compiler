@@ -5551,3 +5551,137 @@ object IanySections {
         for (i in 0 until N) appendLine("$i,\"${names[i]}\",${calls[i]},${nanos[i]}")
     }
 }
+
+/**
+ * (WARM.3) round 849 — the PRIZE MEASUREMENT for sharing derived LIB TYPES across
+ * daemon requests.
+ *
+ * The queue item asks one question and nothing more: **how much of a WARM rebuild
+ * is spent re-deriving the types of declarations that came out of a `lib.*.d.ts`
+ * file?** Those are the derivations a process-global cache could serve, because
+ * the lib surface is byte-identical from one `--serve` request to the next, while
+ * `symbolTypes` / `declaredTypes` / `Type.Interface.properties` are all
+ * per-[com.xemantic.typescript.compiler.Checker] and therefore re-minted per
+ * request.
+ *
+ * ## The two mint boundaries this hooks, and why exactly these
+ *
+ * Both are places where the checker's own code already asks "have I got this
+ * yet?", so the probe gets the **produced-vs-consumed ratio for free** — which
+ * round 801 makes a precondition, not a nicety (`1.000` means the work MOVES
+ * rather than disappears; here it cannot move, because the consumer is a
+ * *different process request*, but the ratio still says whether a shared entry
+ * would ever be read).
+ *
+ *  1. `getDeclaredTypeOfSymbol` — `declaredTypes[symbol.id]` hit vs miss. The
+ *     miss is the mint of a NAMED type (interface / class / alias / enum).
+ *  2. `resolveStructuredTypeMembersCore` — `type.properties != null` early
+ *     return vs the member resolution. The miss is the mint of a MEMBER TABLE.
+ *
+ * ## Two properties a change here must keep
+ *
+ *  * **Only the OUTERMOST mint is timed**, through a depth counter SHARED by both
+ *    hooks — the two recurse into each other freely (`resolveInterfaceMembers`
+ *    resolves member annotations, which resolve declared types, which resolve
+ *    members…), so per-hook depth counters would double-count the same nanos.
+ *    An outermost mint is therefore INCLUSIVE of everything it caused, which is
+ *    the right shape for a prize: it is what a served entry would delete.
+ *  * **The lib/non-lib classification runs with the clock STOPPED.** It is a
+ *    `builtinLibDecls` membership test, i.e. a hash of an AST node — cheap only
+ *    because [libVerdict] memoizes it per `Symbol.id`, and never inside a timed
+ *    span regardless. Any future classifier must stay on the far side of the
+ *    second `nowNanos()`.
+ *
+ * Behaviour-free when [enabled] is false: every hook site is a single static
+ * boolean read, and nothing here is consulted by the compiler.
+ */
+object LibTypeCensus {
+
+    /** Opt-in; false in production. Set by `--libTypeCensus` / BenchMain's `libtypes` tier. */
+    var enabled: Boolean = false
+
+    /** Depth SHARED by both hooks — see the class doc. */
+    var depth: Int = 0
+
+    // ── hook 1: getDeclaredTypeOfSymbol ──────────────────────────────────────
+    /** `declaredTypes` MISS (a mint), by lib-ness of the symbol's declarations. */
+    var declMintLib: Long = 0
+    var declMintOther: Long = 0
+    /** `declaredTypes` HIT — the consumed side of the ratio. */
+    var declHitLib: Long = 0
+    var declHitOther: Long = 0
+
+    // ── hook 2: resolveStructuredTypeMembersCore ─────────────────────────────
+    /** `properties == null` (a member-table mint), by lib-ness. */
+    var memMintLib: Long = 0
+    var memMintOther: Long = 0
+    /** `properties != null` early return — the consumed side. */
+    var memHitLib: Long = 0
+    var memHitOther: Long = 0
+
+    // ── the prize: OUTERMOST mint nanos, inclusive, by lib-ness ──────────────
+    var libNanos: Long = 0
+    var otherNanos: Long = 0
+    /** Outermost mints, i.e. the number of timed spans (one boundary pair each). */
+    var libOutermost: Long = 0
+    var otherOutermost: Long = 0
+
+    /** In-situ empty-boundary calibration: one `nowNanos()` pair, no work between. */
+    var boundaryNanos: Long = 0
+    var boundaryCalls: Long = 0
+
+    /** Memoized `Symbol.id -> declared in a lib file` verdict. Probe-only. */
+    val libVerdict: HashMap<Int, Boolean> = HashMap()
+
+    fun reset() {
+        depth = 0
+        declMintLib = 0; declMintOther = 0; declHitLib = 0; declHitOther = 0
+        memMintLib = 0; memMintOther = 0; memHitLib = 0; memHitOther = 0
+        libNanos = 0; otherNanos = 0; libOutermost = 0; otherOutermost = 0
+        boundaryNanos = 0; boundaryCalls = 0
+        libVerdict.clear()
+    }
+
+    /** Record one outermost mint of [nanos] ns. */
+    fun recordOutermost(lib: Boolean, nanos: Long) {
+        if (lib) { libNanos += nanos; libOutermost++ } else { otherNanos += nanos; otherOutermost++ }
+    }
+
+    fun report(): String = buildString {
+        val ovh = if (boundaryCalls > 0) boundaryNanos / boundaryCalls else 0L
+        val spans = libOutermost + otherOutermost
+        val libNet = libNanos - ovh * libOutermost
+        val otherNet = otherNanos - ovh * otherOutermost
+        appendLine("== (WARM.3) lib TYPE re-derivation census ==")
+        appendLine(
+            "probe boundary: $ovh ns in situ over $boundaryCalls empty pairs " +
+                "(rounds 734/735: an in-situ empty pair OVER-reads by 3.5-4.4x, so the net " +
+                "columns below are a LOWER bound on the prize by that construction)"
+        )
+        appendLine("declaredTypes:  mint lib=$declMintLib other=$declMintOther   hit lib=$declHitLib other=$declHitOther")
+        appendLine("member tables:  mint lib=$memMintLib other=$memMintOther   hit lib=$memHitLib other=$memHitOther")
+        val libMints = declMintLib + memMintLib
+        val libHits = declHitLib + memHitLib
+        appendLine(
+            "produced-vs-consumed (LIB only): produced=$libMints consumed=$libHits " +
+                "ratio=${if (libMints == 0L) "n/a" else (libHits * 1000 / libMints).let { "${it / 1000}.${(it % 1000).toString().padStart(3, '0')}" }}"
+        )
+        appendLine(
+            "OUTERMOST mint spans: lib=$libOutermost other=$otherOutermost (total $spans boundary pairs)"
+        )
+        appendLine(
+            "  LIB   inclusive: ${libNanos / 1_000_000} ms raw, ${libNet / 1_000_000} ms net" +
+                " (${if (libOutermost == 0L) 0 else libNanos / libOutermost} ns/span)"
+        )
+        appendLine(
+            "  OTHER inclusive: ${otherNanos / 1_000_000} ms raw, ${otherNet / 1_000_000} ms net" +
+                " (${if (otherOutermost == 0L) 0 else otherNanos / otherOutermost} ns/span)"
+        )
+        appendLine(
+            "THE PRIZE = the LIB row: what a process-global type cache could delete from a " +
+                "second daemon request. It is a LOWER bound — signature and " +
+                "type-node derivations reached only from OUTSIDE these two mint boundaries " +
+                "are not counted."
+        )
+    }
+}

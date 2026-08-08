@@ -34,6 +34,10 @@
 // entry point out of the compiler's own package.
 package com.xemantic.typescript.compiler.bench
 
+import com.xemantic.typescript.compiler.ArgSections
+import com.xemantic.typescript.compiler.CpaSections
+import com.xemantic.typescript.compiler.CtaSections
+import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SpineDispatch
@@ -107,6 +111,26 @@ import kotlin.time.measureTimedValue
  * argument existed (this is what `scripts/ab-warm.sh` invokes, and its parser
  * reads only the `iter` lines).
  */
+/**
+ * The probe tiers this harness understands as its 4th argument.
+ *
+ * `rows` / `spine` / `full` are [PassTiming]'s three tiers (round 846) and
+ * `dispatch` is round 847's per-handler [SpineDispatch] probe. Round 849 adds
+ * the four INTRA-HANDLER probes that until now had only ever been run in a COLD
+ * one-shot JVM — `cta` (`spineCtaM3StatementAnchor`, 17.7% of the warm artifact),
+ * `cpa` (`cpaSpineLeave`, 12.8%) and `arg` (`checkArgumentsAgainstSignature`,
+ * reached from the largest handler `ccetSpineLeave`) — each with its `*coarse`
+ * counterpart, because round 734's law is that a probe boundary may only be
+ * priced by an ON-vs-COARSE DIFFERENTIAL and never by an empty-span loop. Round
+ * 847 measured that a probe boundary is ~1.85x more expensive cold than warm, so
+ * every cold section table on record needs its own warm calibration before its
+ * rows can be read as warm shares. `libtypes` is round 849's (WARM.3) census.
+ */
+private val TIERS = listOf(
+    "rows", "spine", "full", "dispatch",
+    "cta", "ctacoarse", "cpa", "cpacoarse", "arg", "argcoarse", "libtypes",
+)
+
 fun main(args: Array<String>) {
     val project = args.getOrNull(0)
         ?: error("usage: BenchMainKt <projectDir> <warmup> <iters> [passTiming]")
@@ -126,11 +150,11 @@ fun main(args: Array<String>) {
         null, "", "false", "0", "off" -> emptyList()
         "passtiming", "true", "1", "on" -> listOf("full")
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
-            val bad = list.filter { it !in setOf("rows", "spine", "full", "dispatch") }
+            val bad = list.filter { it !in TIERS }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(
                     "usage: 4th argument must be `passTiming`, omitted, or a comma-separated " +
-                        "list of tiers (rows|spine|full|dispatch) — not '$flag'"
+                        "list of tiers (${TIERS.joinToString("|")}) — not '$flag'"
                 )
             }
         }
@@ -199,19 +223,37 @@ fun main(args: Array<String>) {
         // the probe's own code is cold on its first instrumented rebuild exactly
         // as round 846 measured for tier 3 — a tier LIST must give it at least
         // two draws per process before a number is quoted.
-        if (tier == "dispatch") {
-            SpineDispatch.reset()
-            SpineDispatch.mode = SpineDispatch.PROBE
-        } else {
-            PassTiming.detail = tier == "full"
-            PassTiming.spineDetail = tier != "rows"
-            PassTiming.enabled = true
+        when (tier) {
+            "dispatch" -> {
+                SpineDispatch.reset()
+                SpineDispatch.mode = SpineDispatch.PROBE
+            }
+            // (WARM.4)(b) round 849 — the INTRA-handler probes, warm. Each is
+            // its own object with its own `mode`, and each `*coarse` twin keeps
+            // ONLY that probe's partition anchors, so the ON-minus-COARSE
+            // difference prices its boundary differentially inside one process.
+            "cta" -> { CtaSections.reset(); CtaSections.mode = CtaSections.ON }
+            "ctacoarse" -> { CtaSections.reset(); CtaSections.mode = CtaSections.COARSE }
+            "cpa" -> { CpaSections.reset(); CpaSections.mode = CpaSections.ON }
+            "cpacoarse" -> { CpaSections.reset(); CpaSections.mode = CpaSections.COARSE }
+            "arg" -> { ArgSections.reset(); ArgSections.mode = ArgSections.ON }
+            "argcoarse" -> { ArgSections.reset(); ArgSections.mode = ArgSections.COARSE }
+            "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
+            else -> {
+                PassTiming.detail = tier == "full"
+                PassTiming.spineDetail = tier != "rows"
+                PassTiming.enabled = true
+            }
         }
         val (probeResult, probeDuration) = measureTimedValue {
             ProjectCompiler(SystemVfs).build(project, noEmit = true)
         }
         PassTiming.enabled = false
         SpineDispatch.mode = SpineDispatch.OFF
+        CtaSections.mode = CtaSections.OFF
+        CpaSections.mode = CpaSections.OFF
+        ArgSections.mode = ArgSections.OFF
+        LibTypeCensus.enabled = false
         val probeMs = probeDuration.inWholeMicroseconds / 1000.0
         val probeFiles = probeResult.programFiles.size
         val probeErrors = probeResult.errorCount
@@ -242,13 +284,39 @@ fun main(args: Array<String>) {
                     "rebuilds. No table is printed."
             )
         }
-        if (tier == "dispatch") {
-            println(SpineDispatch.report())
-            println("== (DISPATCH.1) csv ==")
-            println(SpineDispatch.csv())
-            SpineDispatch.reset()
-        } else {
-            PassTiming.dump(::println)
+        when (tier) {
+            "dispatch" -> {
+                println(SpineDispatch.report())
+                println("== (DISPATCH.1) csv ==")
+                println(SpineDispatch.csv())
+                SpineDispatch.reset()
+            }
+            "cta", "ctacoarse" -> {
+                println(CtaSections.report())
+                println("== (TYPE.2) csv ==")
+                print(CtaSections.csv())
+                println("== (TYPE.2) csv end ==")
+                CtaSections.reset()
+            }
+            "cpa", "cpacoarse" -> {
+                println(CpaSections.report())
+                println("== (ENGINE.2) csv ==")
+                print(CpaSections.csv())
+                println("== (ENGINE.2) csv end ==")
+                CpaSections.reset()
+            }
+            "arg", "argcoarse" -> {
+                println(ArgSections.report())
+                println("== (CALL.2) csv ==")
+                print(ArgSections.csv())
+                println("== (CALL.2) csv end ==")
+                ArgSections.reset()
+            }
+            "libtypes" -> {
+                println(LibTypeCensus.report())
+                LibTypeCensus.reset()
+            }
+            else -> PassTiming.dump(::println)
         }
     }
     PassTiming.detail = true

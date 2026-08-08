@@ -104039,10 +104039,63 @@ interface DataView {
 
     /** Get the declared type of a symbol (class, interface, enum, type alias, etc.). */
     private fun getDeclaredTypeOfSymbol(symbol: Symbol): Type {
-        declaredTypes[symbol.id]?.let { return it }
+        declaredTypes[symbol.id]?.let {
+            // (WARM.3) the CONSUMED side of the produced-vs-consumed ratio.
+            if (LibTypeCensus.enabled) {
+                if (isLibSymbolForCensus(symbol)) LibTypeCensus.declHitLib++
+                else LibTypeCensus.declHitOther++
+            }
+            return it
+        }
+        if (LibTypeCensus.enabled) return getDeclaredTypeOfSymbolCensused(symbol)
         val type = getDeclaredTypeOfSymbolWorker(symbol)
         declaredTypes[symbol.id] = type
         return type
+    }
+
+    /**
+     * (WARM.3) round 849 — the timed twin of [getDeclaredTypeOfSymbol]'s miss path.
+     * Reached only while [LibTypeCensus.enabled]; the lib classification runs with
+     * the clock already stopped (see [LibTypeCensus]).
+     */
+    private fun getDeclaredTypeOfSymbolCensused(symbol: Symbol): Type {
+        val outermost = LibTypeCensus.depth == 0
+        LibTypeCensus.depth++
+        var t0 = 0L
+        if (outermost) {
+            val e0 = PassTiming.nowNanos()
+            LibTypeCensus.boundaryNanos += PassTiming.nowNanos() - e0
+            LibTypeCensus.boundaryCalls++
+            t0 = PassTiming.nowNanos()
+        }
+        try {
+            val type = getDeclaredTypeOfSymbolWorker(symbol)
+            declaredTypes[symbol.id] = type
+            return type
+        } finally {
+            LibTypeCensus.depth--
+            val dt = if (outermost) PassTiming.nowNanos() - t0 else 0L
+            val lib = isLibSymbolForCensus(symbol)
+            if (lib) LibTypeCensus.declMintLib++ else LibTypeCensus.declMintOther++
+            if (outermost) LibTypeCensus.recordOutermost(lib, dt)
+        }
+    }
+
+    /**
+     * (WARM.3) true when [symbol] is declared in one of the `lib.*.d.ts` files —
+     * i.e. when a process-global type cache could legitimately serve its derived
+     * type to a later daemon request. Probe-only, memoized per `Symbol.id`, and
+     * NEVER called from inside a timed span (the membership tests hash an AST
+     * node — see CLAUDE.md's node-keyed-map rule).
+     */
+    private fun isLibSymbolForCensus(symbol: Symbol?): Boolean {
+        if (symbol == null) return false
+        LibTypeCensus.libVerdict[symbol.id]?.let { return it }
+        val v = symbol.declarations.any {
+            it in builtinLibDecls || it in builtinLibMemberDecls || it in realLibDeclFile
+        }
+        LibTypeCensus.libVerdict[symbol.id] = v
+        return v
     }
 
     private fun getDeclaredTypeOfSymbolWorker(symbol: Symbol): Type {
@@ -105766,7 +105819,18 @@ interface DataView {
      * After this call, type.members/properties/callSignatures are populated.
      */
     private fun resolveStructuredTypeMembers(type: Type.Object) {
-        if (type.properties != null) return // already resolved
+        if (type.properties != null) {
+            // (WARM.3) the CONSUMED side for MEMBER TABLES, and it must live HERE
+            // rather than in `…Core` below: the two guards are identical, so the
+            // wrapper absorbs EVERY hit and `…Core`'s copy of the branch is dead
+            // for this purpose (round 849 — `LibTypeCensusTest`'s consumed-side
+            // pin read exactly 0 until the hook moved up one frame).
+            if (LibTypeCensus.enabled) {
+                if (isLibSymbolForCensus(type.symbol)) LibTypeCensus.memHitLib++
+                else LibTypeCensus.memHitOther++
+            }
+            return // already resolved
+        }
         if (PassTiming.detailed) {
             if (mrProbeDepth++ == 0) {
                 val t0 = PassTiming.nowNanos()
@@ -105779,6 +105843,9 @@ interface DataView {
     }
 
     private fun resolveStructuredTypeMembersCore(type: Type.Object) {
+        // NOTE (WARM.3): this guard is NOT the consumed-side census point — the
+        // wrapper above carries an identical one and absorbs every hit. Reached
+        // here only on the re-entrant heritage path described below.
         if (type.properties != null) return // already resolved
         // Cycle guard: mutually-recursive heritage (`interface A extends B`,
         // `interface B extends A`) re-enters here for a type whose member table is
@@ -105792,13 +105859,44 @@ interface DataView {
         // error inputs that produce these cycles.
         if (!memberResolutionInProgress.add(type.id)) return
         try {
-            when (type) {
-                is Type.Interface -> resolveInterfaceMembers(type)
-                is Type.Reference -> resolveReferenceMembers(type)
-                else -> resolveAnonymousTypeMembers(type)
-            }
+            if (LibTypeCensus.enabled) resolveStructuredTypeMembersCensused(type)
+            else resolveStructuredTypeMembersDispatch(type)
         } finally {
             memberResolutionInProgress.remove(type.id)
+        }
+    }
+
+    private fun resolveStructuredTypeMembersDispatch(type: Type.Object) {
+        when (type) {
+            is Type.Interface -> resolveInterfaceMembers(type)
+            is Type.Reference -> resolveReferenceMembers(type)
+            else -> resolveAnonymousTypeMembers(type)
+        }
+    }
+
+    /**
+     * (WARM.3) round 849 — the timed twin of the member-table MINT. Reached only
+     * while [LibTypeCensus.enabled]; shares [LibTypeCensus.depth] with
+     * [getDeclaredTypeOfSymbolCensused] so a nested mint is never timed twice.
+     */
+    private fun resolveStructuredTypeMembersCensused(type: Type.Object) {
+        val outermost = LibTypeCensus.depth == 0
+        LibTypeCensus.depth++
+        var t0 = 0L
+        if (outermost) {
+            val e0 = PassTiming.nowNanos()
+            LibTypeCensus.boundaryNanos += PassTiming.nowNanos() - e0
+            LibTypeCensus.boundaryCalls++
+            t0 = PassTiming.nowNanos()
+        }
+        try {
+            resolveStructuredTypeMembersDispatch(type)
+        } finally {
+            LibTypeCensus.depth--
+            val dt = if (outermost) PassTiming.nowNanos() - t0 else 0L
+            val lib = isLibSymbolForCensus(type.symbol)
+            if (lib) LibTypeCensus.memMintLib++ else LibTypeCensus.memMintOther++
+            if (outermost) LibTypeCensus.recordOutermost(lib, dt)
         }
     }
 
