@@ -108,6 +108,26 @@ class BenchTierReportTest {
     }
 
     /**
+     * THE DISCRIMINATING PIN for the round-850 defect. The two above pin
+     * [tierReport] and [tierStop] in isolation, and the round-851 ablation
+     * showed both green against a binary with the disarm-before-dump order
+     * restored — the fault lived in the harness's own loop, which no test can
+     * run. [measureTier] is that loop's order, extracted, so a stub build is
+     * enough: swap its two lines and this fails and nothing else does.
+     */
+    @Test
+    fun `measureTier takes the report while the probe is still armed`() = withSavedModes {
+        for (base in listOf("cta", "cpa", "arg", "call")) {
+            var ran = false
+            val (value, text) = measureTier(base + "coarse") { ran = true; 7 }
+            assert(ran)
+            assert(value == 7)
+            assert(labelOf(text) == "COARSE")
+            assert(CallSections.mode == CallSections.OFF)
+        }
+    }
+
+    /**
      * Round 849's `call`/`callcoarse` omission is what (WARM.5) had to add, so
      * the tier table is pinned as a whole: a probe with no tier name cannot be
      * taken warm at all, which is precisely why the largest warm handler went

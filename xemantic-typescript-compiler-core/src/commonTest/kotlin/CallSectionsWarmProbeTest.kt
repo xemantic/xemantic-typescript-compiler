@@ -102,6 +102,20 @@ class CallSectionsWarmProbeTest {
 
     private fun closes(): Long = CallSections.calls.sum()
 
+    /**
+     * Closes of the PARTITION rows only — the population
+     * [CallSections.coarseAnchor] alone controls.
+     *
+     * The first draft of the pin below counted EVERY close, and the round-851
+     * ablation showed it green against a binary with the anchor test deleted:
+     * the nested sub-measures are ON-only for an independent reason, so a
+     * COARSE arm has fewer closes whether or not it is coarse. That is round
+     * 807's mechanism exactly — a different guard making the same distinction —
+     * and the fix is to count the population the guard under test owns.
+     */
+    private fun partitionCloses(): Long =
+        (0 until CallSections.FIRST_NESTED).sumOf { CallSections.calls[it] }
+
     @Test
     fun `the probe is behaviour-free - OFF and ON and COARSE agree on every diagnostic`() {
         val source = """
@@ -120,19 +134,23 @@ class CallSectionsWarmProbeTest {
     }
 
     @Test
-    fun `a COARSE arm crosses far fewer boundaries than an ON arm on the same source`() {
+    fun `a COARSE arm crosses under half the PARTITION boundaries of an ON arm`() {
         withProbe(CallSections.ON, singleSigSource)
+        val onPartition = partitionCloses()
         val onCloses = closes()
         val onInvocations = CallSections.invocations
         withProbe(CallSections.COARSE, singleSigSource)
+        val coarsePartition = partitionCloses()
         val coarseCloses = closes()
         val coarseInvocations = CallSections.invocations
         // Non-vacuous: both arms compiled the same program and saw the same calls.
         assert(onInvocations > 0)
         assert(coarseInvocations == onInvocations)
-        // The differential exists at all — this is what an unenforced anchor
-        // test would destroy.
         assert(coarseCloses < onCloses)
+        // THE DISCRIMINATING ASSERTION. A COARSE invocation crosses its four
+        // anchors; an ON one crosses ten or more. Deleting the anchor test makes
+        // these EQUAL, which the whole-closes comparison above cannot see.
+        assert(coarsePartition * 2 < onPartition)
     }
 
     @Test

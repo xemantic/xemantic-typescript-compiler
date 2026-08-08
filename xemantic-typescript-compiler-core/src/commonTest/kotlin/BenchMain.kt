@@ -189,6 +189,24 @@ internal fun tierReport(tier: String): String = when (tier) {
     else -> buildString { PassTiming.enabled = false; PassTiming.dump { appendLine(it) } }
 }
 
+/**
+ * Arm [tier], run [build], take its report **while still armed**, disarm.
+ *
+ * This exists so the ORDER is a seam a test can hold. Round 850's label defect
+ * lived in `main`'s loop, which no test can run (it compiles a whole project),
+ * so a pin on [tierReport] alone stayed green against a binary with the
+ * disarm-before-dump fault restored — round 807's blind-pin mechanism, measured
+ * by round 851's ablation and then FIXED rather than claimed as coverage. With
+ * the order behind this function a stub `build` is enough to see it.
+ */
+internal fun <T> measureTier(tier: String, build: () -> T): Pair<T, String> {
+    tierBegin(tier)
+    val value = build()
+    val text = tierReport(tier)
+    tierStop()
+    return value to text
+}
+
 /** Disarm every probe and release its counters. Safe to call for any tier. */
 internal fun tierStop() {
     PassTiming.enabled = false
@@ -300,10 +318,10 @@ fun main(args: Array<String>) {
         // own object with its own `mode`, and each `*coarse` twin keeps ONLY
         // that probe's partition anchors, so the ON-minus-COARSE difference
         // prices its boundary differentially inside one process.
-        tierBegin(tier)
-        val (probeResult, probeDuration) = measureTimedValue {
-            ProjectCompiler(SystemVfs).build(project, noEmit = true)
+        val (measured, report) = measureTier(tier) {
+            measureTimedValue { ProjectCompiler(SystemVfs).build(project, noEmit = true) }
         }
+        val (probeResult, probeDuration) = measured
         val probeMs = probeDuration.inWholeMicroseconds / 1000.0
         val probeFiles = probeResult.programFiles.size
         val probeErrors = probeResult.errorCount
@@ -316,7 +334,6 @@ fun main(args: Array<String>) {
                 """"medianMs":$median,"overheadMs":${probeMs - median}}"""
         )
         if (measuredDrift || probeFiles != refFiles || probeErrors != refErrors) {
-            tierStop()
             println(
                 """{"instrumentedFalsified":true,"tier":"$tier","expectedFiles":$refFiles,""" +
                     """"expectedErrors":$refErrors,"gotFiles":$probeFiles,""" +
@@ -335,12 +352,11 @@ fun main(args: Array<String>) {
                     "rebuilds. No table is printed."
             )
         }
-        // REPORT FIRST, THEN DISARM — round 850's label defect. `report()` reads
-        // its own `mode` to label the arm, so clearing the mode before dumping
-        // made every `*coarse` table print `mode: ON`. Pinned by
-        // `BenchTierReportTest`.
-        println(tierReport(tier))
-        tierStop()
+        // Taken by `measureTier` WHILE THE PROBE WAS STILL ARMED — round 850's
+        // label defect. Every one of these reports labels its arm from its own
+        // `mode`, so a disarm before the dump printed `mode: ON` on every
+        // `*coarse` table. Pinned by `BenchTierReportTest`.
+        println(report)
     }
     PassTiming.detail = true
     PassTiming.spineDetail = true

@@ -20,6 +20,95 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 851 (2026-08-08) — (WARM.5) CLOSED, AND WITH IT THE WARM ARC. THE CALL PATH IS THE FOURTH
+INDEPENDENT SITE TO READ 94% CHECKING WORK / 6% EVERYTHING ELSE, AND THE SIXTH CONSECUTIVE PRICED
+NEGATIVE. NOTHING WAS OPTIMIZED; THE VERDICT IS THE DELIVERABLE.**
+
+**THE OBJECT.** Round 850 attributed `checkArgumentsAgainstSignature` at 4.37% of the warm artifact
+against `ccetSpineLeave`'s 10.8% (round 847), leaving ~60% of the single largest object in a warm
+rebuild — callee resolution, overload selection, the round-793 prologue — unprobed in either
+regime. It turned out **the probe already existed**: `CallSections` (CALL.1, round 758) partitions
+`checkSingleCallExpressionTypes` into 16 rows plus 16 nested sub-measures and already opens on the
+WRAPPER (round 786). What it lacked was what makes a table readable WARM, so this round added
+exactly that: a `COARSE` anchors-only twin (ENTRY / B216 / CALLEE_TYPE / CALL_SIGS, with the nested
+sub-measures made ON-only), an EXIT CENSUS, `--callSectionsCoarse`, and `BenchMain`'s
+`call`/`callcoarse` tiers.
+
+**THE HEADLINE: `checkSingleCallExpressionTypes` = ~618 ms = 8.4% of a warm rebuild** (COARSE arm,
+net; mean probe-free warm 7,368.8 ms, 8 instrumented rebuilds, all 78 files / 46 errors, every
+deterministic counter bit-identical across a tier's 4 draws). Two rows hold 94% of it: **the single
+signature branch 299.5 ms = 4.06%** (of which `checkArgumentsAgainstSignature` 274.5 = 3.72%) and
+**`getCalleeType` 262.4 ms = 3.55%**. Classified by callee, **CHECKING 603 ms = 94%** and the entire
+dedicated-walker layer — the seven-walker prologue, the TS2722 optional-member walker, the TS2347
+walker — **37.7 ms = 0.51% of the artifact = 6%**. Round 850 read 94%/6% for
+`spineCtaM3StatementAnchor` and 98%/2% for `checkPropertyAccessInExpr`; round 733 read 88.4% cold.
+**Four sites, two regimes, one answer.**
+
+**THE PARTITION CHECKS, AND ONE IS THE STRONGEST IN THE ARC.** (1) Against round 847's per-handler
+probe: 8.4% against `ccetSpineLeave`'s 10.82%, i.e. **78%** of the handler — a CONTAINMENT check, so
+≤100% is expected, and the same caveat as round 850's 87%/68% applies (847's probe costs +4,482 to
++5,670 ms; this one +32 to +258). (2) **Against round 850's independent `arg` probe: it measured
+`checkArgumentsAgainstSignature` at 309 ms = 4.37%; this probe reaches it as three nested rows at
+296 ms = 4.02%. Different round, different denominator, no shared code — 92% agreement.** (3)
+Internal: `getCalleeType` closes 52,413 = invocations exactly, and 52,413 − 25,370 = 27,043 = the
+next row's reach.
+
+**THE EXIT CENSUS — zero new boundaries (round 796), partition check 52,413 of 52,413 EXACT.**
+48.4% of invocations leave at the `any`/error callee bail, 44.3% at the single-signature branch,
+7.0% at the overload branch. **The emit column is 0 EVERYWHERE: not one of 52,413 invocations
+emits a diagnostic on this profile** — the whole 8.4% is verification, which is exactly what a
+clean program should cost. **That is not a deletion argument and must not be read as one** (round
+792: a whole-function pre-gate on `checkMemberAccessMissing` read 0 emitting calls in a
+22,187-call skip set on THIS profile and killed 7 corpus baselines). What it does say is that no
+reordering which merely defers emission-side work can win here — there is none to defer.
+
+**A STANDING CLAIM REFUTED BY 12×.** Round 734 recorded "50.6% of `getCalleeType`'s invocations
+bail" beside "`getCalleeType` costs 474 ms" and inferred half of it was wasted. Warm: **48.4% bail
+and they are 4.1% of the row** — 10.8 ms of 262.4 — because a bailing resolution costs **425 ns
+against 9,004 ns** for a usable one, **21× less**. CLAUDE.md's population-vs-frequency law, fresh
+warm instance; the round-758 claim audit had it at 8–10% and the warm figure is 4.1%.
+
+**NO LEVER CLEARS THE BAND.** Ranked by what deleting it would return: the whole round-793
+seven-walker prologue **0.23%**, the five single-sig dedicated walkers 0.22%, `getCalleeType`'s
+discarded half 0.15% (and round 788 says a memoized skip MOVES), the TS2347 row 0.14%, the TS2722
+walker 0.12%. Everything at or above 1% is the type system: the argument check 3.72% (round 850
+already opened it — 91% of its argument typing serves arguments that never reach the relation) and
+callee resolution 3.30%.
+
+**THE BOUNDARY, HONESTLY.** The partition is FLAT, so round 850's nesting correction does not
+apply; Δ(ON−COARSE) = 14 ms against a ±5% per-arm spread bounds it to **17–82 ns** and no better
+(17 ns counting every extra timestamp pair, 63 ns counting only partition closes, 82 ns from the
+probe's own in-situ steady state — consistent with each other under round 734's measured 3.5–4.4×
+in-situ over-read). That is why the total is quoted from the **COARSE** arm, which crosses 184,251
+boundaries against ON's 976,944 and so spans only 612–624 ms across that whole range.
+
+**ABLATION — SIX SEAMS, ONE MISTAKE AT A TIME (round 807), HARNESS COMMITTED FIRST (round 789).**
+Four discriminated on the first batch (`census-on-only`, `census-row` → 3 pins, `emitted`,
+`nested-on-only`). **Two came back UNDISCRIMINATED and were diagnosed and FIXED rather than
+recorded as coverage**: `coarse-anchor` was blind because the nested sub-measures are ON-only for
+an independent reason, so a COARSE arm has fewer closes whether or not it is coarse (round 807's
+mechanism exactly) — the pin now counts only the PARTITION rows, the population the anchor test
+owns; and `report-order` was blind because the fault lived in `BenchMain`'s own loop, which no test
+can run, so the order was extracted into `measureTier` and a stub build now sees it. Both repaired
+pins fail against their own fault and nothing else.
+
+**WHAT COST THIS ROUND A FULL MEASUREMENT CYCLE — two sequencing traps, both now in CLAUDE.md.**
+(1) The daemon stop must come BEFORE any gradle-invoking gate: `cost_gate.py`'s classpath dump
+re-triggered a test compile that the script's own `./gradlew --stop` + `pkill` then killed
+mid-flight, leaving a WIPED `jvm/test` output dir behind an earlier `BUILD SUCCESSFUL` — both java
+runs died with `ClassNotFoundException` for a class the build log said it compiled. (2) Round 789's
+trap has a second form: committing the harness ONCE is not enough. The `report-order` ablation's
+`git checkout --` on `BenchMain.kt` deleted the `measureTier` extraction, which had been written
+AFTER that commit, and the next build failed on an unresolved reference from a test file the
+ablation did not touch.
+
+**GATES.** Suite **14,000 / 0 failures / 3 skipped** over a fully wiped per-module results dir
+(core 643 XMLs + api 3 + client 2 + daemon 6), against a 13,984 baseline = **+16**, exactly the new
+pins. `cost_gate.py` **every one of 18 counters +0.00%**. `huge_methods.py --fail-over 0` **exit 0,
+census still 0 over the limit** (largest method 7,702 bytecodes) — checked because a new section
+probe grows a hot function. Full table, method and the arc's closing statement:
+`docs/perf/warm-call-attribution.md`.
+
 **Round 850 (2026-08-08) — (WARM.4)(b) CLOSED: THE WARM COST INSIDE THE BIG SPINE HANDLERS IS
 STRUCTURAL, NOT RESTRUCTURABLE — 94–98% OF IT IS THE PASSES' OWN CHECKING WORK, AND NOTHING IN THE
 18.75% OF THE ARTIFACT THESE THREE PROBES ATTRIBUTE CLEARS THE ±1.0% WARM BAND.**
@@ -1779,7 +1868,21 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   Instrument: `LibTypeCensus` + `--libTypeCensus` + `BenchMain`'s `libtypes` tier, pinned by
   `LibTypeCensusTest`. Full table and method: `docs/perf/lib-type-rederivation.md`.
 
-- [ ] **(WARM.5) — PARTITION THE OTHER ~60% OF `ccetSpineLeave`, THE LARGEST WARM HANDLER.**
+- [x] **(WARM.5) — DONE, ROUND 851, AND IT CLOSES THE WARM ARC. The call path is
+  `checkSingleCallExpressionTypes` = ~618 ms = 8.4% of a warm rebuild, and it reads
+  94% CHECKING / 6% dedicated-walker layer — the fourth independent site to give that
+  answer (round 850: cta 94/6, cpa 98/2; round 733: 88.4% cold). The largest
+  non-checking object in it is the round-793 seven-walker prologue at 0.23%. SIXTH
+  consecutive priced negative; `docs/perf/warm-call-attribution.md` § 6 is the arc's
+  closing statement. Three findings a later round should not re-derive: the exit
+  census reads 0 EMISSIONS of 52,413 invocations on this profile (all 8.4% is
+  verification — NOT a deletion argument, round 792); round 734's "half of
+  getCalleeType is wasted" is refuted by 12× (the 48.4% that bail cost 425 ns each
+  against 9,004, i.e. 4.1% of the row); and this probe reaches
+  `checkArgumentsAgainstSignature` at 4.02% against round 850's independent 4.37% —
+  92% agreement between two instruments sharing no code. The probe already existed
+  (`CallSections`, CALL.1); what it needed was a COARSE twin, an exit census, and
+  `BenchMain` tiers. Original text follows.** Original: partition the other ~60% of `ccetSpineLeave`, the largest warm handler.
   Round 850 measured `checkArgumentsAgainstSignature` at 4.37% of the warm artifact against the
   handler's 10.8% (round 847), so **~60% of the single biggest object in a warm rebuild — callee
   resolution, overload selection, the round-793 call prologue — has no section probe in either
