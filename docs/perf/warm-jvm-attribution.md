@@ -136,6 +136,68 @@ the two measurements.
 Until that A/B runs, the honest statement is: **the warm artifact is ~7.0 s and
 the reason is unattributed.**
 
+### 2.2 CONFIRMED, round 845 — and the arc bought 1.5× on the warm artifact
+
+**The A/B ran the next day and the hypothesis is CONFIRMED.** It was run on the
+ISOLATED interval rather than against HEAD, which is what makes it an
+attribution rather than a "everything since round 802" figure: arm A is
+`93ff3195`, the immediate **parent** of the first split (`d194baca`) — census
+landed, zero splits applied — and arm B is `d8ff69b5`, the arc's close. Every
+`perf(…)` commit in `93ff3195..d8ff69b5` is a `(JIT.1)` split; the rest are
+docs, split pins and bench chores; `git diff --name-only` across the interval
+shows **zero** build/gradle/toml/properties changes; and both arms predate the
+MOD module split, so layout and dependency set are identical. The arms were
+verified in the BYTECODE before being measured: **A = exactly 19 methods over
+8,000** (matching round 802's census), **B = 0**.
+
+| pair | A (r802) | B (r821) | delta | pct |
+|---:|---:|---:|---:|---:|
+| 1 | 10,109.4 | 6,693.6 | −3,415.7 | −33.79% |
+| 2 | 10,062.0 | 6,744.5 | −3,317.5 | −32.97% |
+| 3 | 10,187.6 | 6,545.6 | −3,642.0 | −35.75% |
+| 4 | 10,066.6 | 6,712.1 | −3,354.5 | −33.32% |
+
+**A 10,088.0 ms (sd 0.58%) → B 6,702.9 ms (sd 1.31%); −3,385.1 ms = −33.56%,
+B wins 4/4, speed-up 1.505×.** All 64 measured iterations in both arms answered
+`files=78, errors=46` — the same program § 1 measured — and both per-iteration
+series are flat 1→8, so neither arm is under-warmed.
+
+**One caveat stated rather than buried:** arm B's sd of 1.31% exceeds this
+repo's ~1% quiet-box threshold, and that rule says to discard the verdict.
+It is overridden here explicitly, not ignored: the effect is **38× the larger
+arm sd**, every pair independently clears it by ~35×, and dropping B's single
+low outlier gives sd 0.38% and −33.46%. The threshold is calibrated for the
+±1% regime; this is not that regime.
+
+**The residual, batch 2 — r821 vs HEAD (3 pairs): 6,481.7 → 6,620.9 ms,
++2.15%, HEAD wins 0/3.** At 1.9× the arm sd that is not a demonstrated
+regression; the correct reading is **zero warm compute movement between round
+821 and today**. The same r821 binary read 6,702.9 in batch 1 and 6,481.7 in
+batch 2 — a cross-batch drift 3× the within-batch band, which is precisely why
+only within-batch paired deltas are quoted.
+
+So § 2's −39.5% decomposes:
+
+| segment | warm | attribution |
+|---|---:|---|
+| r771 → r802 | 11,580 → 10,088 ms | **~10%, NOT attributable to code** — spans the 4-core → 8-core box change |
+| r802 → r821 | 10,088 → 6,703 ms | **−33.6%, (JIT.1), measured and 4/4 sign-consistent** |
+| r821 → HEAD | 6,703 → 6,621 ms | ~0% |
+
+**What this licenses the project to say, and it is not small:** rounds 802–821
+bought **1.5× on the steady-state artifact** while their own cold instrument
+read them as noise. Two standing consequences: the
+`huge_methods.py --fail-over 0` ratchet is protecting the **daemon / `--serve` /
+AOT** artifact far more than the CLI, so it is a **warm-path gate**; and any
+future change that grows a hot method past 8,000 must be A/B'd **WARM**, because
+the cold protocol demonstrably cannot see this class of effect at all.
+Incidental and not quotable (n=1 smoke samples): cold read A 24.7 s vs B 21.7 s,
+so the arc likely has a real but much smaller cold component too.
+
+The reusable artifact is `WarmBench.java` — a reflection clone of `BenchMain`
+that links against ANY arm's `ProjectCompiler` regardless of its `build(…)`
+arity, which is what made a 40-round-apart warm A/B expressible at all.
+
 ---
 
 ## 3. § The instrument prices ITSELF — the central methodological warning

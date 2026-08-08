@@ -20,6 +20,48 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 845 (2026-08-08) — (WARM.1)(b) CONFIRMED: THE (JIT.1) ARC BOUGHT **1.5× ON THE WARM
+ARTIFACT** WHILE ITS OWN COLD INSTRUMENT READ IT AS NOISE. A −33.6%, 4/4 RESULT AGAINST A
+RECORDED `+0.08%, NOISE-DOMINATED`.** Round 843 left this as an explicit hypothesis; it took one
+isolated warm A/B to settle, and the answer changes how a whole gate is valued.
+
+- **THE INTERVAL WAS ISOLATED, WHICH IS WHAT MAKES THIS AN ATTRIBUTION AND NOT A "SINCE ROUND 802"
+  FIGURE.** Arm A is `93ff3195`, the immediate **parent** of the first split `d194baca` (census
+  landed, zero splits applied); arm B is `d8ff69b5`, the arc's close. Every `perf(…)` commit in
+  `93ff3195..d8ff69b5` is a `(JIT.1)` split — the rest are docs, split pins and bench chores —
+  `git diff --name-only` across the interval shows **zero** build/gradle/toml/properties changes,
+  and both arms predate the MOD module split, so layout and dependencies are identical. **The arms
+  were verified in the BYTECODE before being measured: A = exactly 19 methods over 8,000, matching
+  round 802's census; B = 0.**
+- **THE NUMBER.** 4 interleaved pairs, 3 warm-up + 8 measured, per-process medians: **A 10,088.0 ms
+  (sd 0.58%) → B 6,702.9 ms (sd 1.31%), −3,385.1 ms = −33.56%, B wins 4/4, 1.505×.** All 64
+  measured iterations in both arms answered `files=78, errors=46`, and both per-iteration series are
+  flat 1→8, so neither arm is under-warmed. **The ~1% quiet-box sd rule was OVERRIDDEN EXPLICITLY,
+  not ignored:** arm B is 1.31%, but the effect is **38× the larger arm sd**, every pair clears it
+  by ~35×, and dropping B's one low outlier gives sd 0.38% and −33.46%. That rule is calibrated for
+  the ±1% regime; this is not that regime, and saying so beats quietly quoting a clean median.
+- **THE RESIDUAL, and it is the part that keeps round 843 honest.** Batch 2, r821 vs HEAD, 3 pairs:
+  6,481.7 → 6,620.9 ms, **+2.15%, HEAD wins 0/3** — at 1.9× the arm sd not a demonstrated
+  regression, so the reading is **zero warm compute movement between round 821 and today**. So
+  843's −39.5% decomposes as **~10% r771→r802 (NOT attributable to code — it spans the 4-core →
+  8-core box change), −33.6% r802→r821 ((JIT.1)), ~0% r821→HEAD.** The same r821 binary read
+  6,702.9 in batch 1 and 6,481.7 in batch 2 — a cross-batch drift 3× the within-batch band, which
+  is exactly why only within-batch paired deltas are quoted.
+- **WHAT IT LICENSES, and it is a standing change to how a gate is read.** `huge_methods.py
+  --fail-over 0` is a **WARM-PATH gate**: it protects the daemon / `--serve` / AOT artifact far
+  more than the CLI, because a method over 8,000 is never JIT-compiled and its cost therefore
+  cannot improve with warm-up — which is precisely why the COLD protocol is structurally blind to
+  the whole class. **Any future change that grows a hot method past 8,000 must be A/B'd with
+  `ab-warm.sh`, never `ab-interleaved.sh`.** CLAUDE.md entry added. Incidental and NOT quotable
+  (n=1 smoke samples): cold read A 24.7 s vs B 21.7 s, so the arc likely has a real but much
+  smaller cold component too.
+- **THE REUSABLE ARTIFACT that made a 40-round-apart warm A/B expressible at all:** `WarmBench.java`,
+  a reflection clone of `BenchMain` that links against ANY arm's `ProjectCompiler` regardless of its
+  `build(…)` arity. `BenchMain` itself cannot do this — it is compiled against one arm's signature —
+  and that, not the build, was the real obstacle to ever running this comparison.
+- **GATES: none run and none required** — nothing under `src/` changed; the work was two builds in a
+  throwaway worktree and a measurement. `docs/perf/warm-jvm-attribution.md` § 2.2 has the tables.
+
 **Round 844 (2026-08-08) — (WARM.2): SHARING THE BOUND LIB STATE ACROSS DAEMON REQUESTS IS WORTH
 **8.65 ms = 0.13%** OF A WARM REBUILD. MEASURED, NOT ESTIMATED; NOTHING BUILT; STOP.** The
 candidate was warm-only and therefore invisible to every attribution table this repo has (all
@@ -1295,8 +1337,12 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
 on the warmed-up JVM"). The premise is measured, not assumed: no warm attribution existed before
 round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribution.md`.**
 
-- [ ] **(WARM.1)(b) — CONFIRM OR KILL THE (JIT.1) HYPOTHESIS WITH A WARM A/B OF A PRE-802 BINARY
-  AGAINST HEAD.** Round 843 measured warm improving 39.5% against cold's 12.6% over the same
+- [x] **(WARM.1)(b) — CONFIRMED round 845: −33.6%, 4/4, 1.505× on the warm artifact, measured on
+  the ISOLATED r802-parent → r821-close interval (arms verified at 19-over-limit vs 0 in the
+  bytecode). `huge_methods.py --fail-over 0` is a WARM-PATH gate; grow a hot method past 8,000 and
+  you must A/B it with `ab-warm.sh`, because the cold protocol is structurally blind to the class.
+  Original framing follows.** (b) — CONFIRM OR KILL THE (JIT.1) HYPOTHESIS WITH A WARM A/B OF A
+  PRE-802 BINARY AGAINST HEAD.** Round 843 measured warm improving 39.5% against cold's 12.6% over the same
   interval and named the huge-method split arc as the leading cause, explicitly as a HYPOTHESIS.
   It is cheap to settle and it decides how the whole (JIT) family is valued from here: if
   confirmed, **rounds 802-821 bought roughly three times what they were credited with**, and the
