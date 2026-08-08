@@ -769,7 +769,23 @@ object CallSections {
     const val OFF = 0
     const val ON = 1
 
-    /** Opt-in; [OFF] in production. Set by `--callSections`. */
+    /**
+     * (WARM.5) round 851 — anchors only, the calibration counterpart of [ON],
+     * exactly as [ArgSections.COARSE]. Keeps [coarseAnchor]'s four boundaries so
+     * the partition TOTAL stays comparable with [ON]'s while ~10 boundaries per
+     * invocation (including the nine-span in-situ calibration block) cost a
+     * static read and a not-taken branch instead of a timestamp pair. Round
+     * 734's law: a probe boundary may be priced only by an ON-vs-COARSE
+     * DIFFERENTIAL, never by an empty-span loop — and round 850 measured that
+     * differential WARM at 97-202 ns against 501 ns cold, so a cold table's
+     * `net` column over-subtracts a warm row by 2.5-5x.
+     *
+     * The nested sub-measures ([t] / [close]) are [ON]-only, which is what keeps
+     * the COARSE arm's boundary count genuinely low.
+     */
+    const val COARSE = 2
+
+    /** Opt-in; [OFF] in production. Set by `--callSections` / `--callSectionsCoarse`. */
     var mode: Int = OFF
 
     // ── the disjoint sections of checkSingleCallExpressionTypes, in source order
@@ -921,11 +937,57 @@ object CallSections {
         "  (2g) B216 getTypeOfExpression(recv)",
     )
 
+    /**
+     * [COARSE]'s active boundaries. The four anchors still PARTITION the
+     * function — entry / prologue / callee resolution / the signature tail — so
+     * the partition total stays comparable with [ON]'s; every other boundary is
+     * skipped before its timestamp read.
+     */
+    val coarseAnchor: BooleanArray = BooleanArray(N).also {
+        it[ENTRY] = true; it[B216] = true; it[CALLEE_TYPE] = true; it[CALL_SIGS] = true
+    }
+
     var nanos: LongArray = LongArray(N)
     var calls: LongArray = LongArray(N)
 
     /** Invocations of the instrumented function (nested ones excluded). */
     var invocations: Long = 0
+
+    // ── (WARM.5) round 851: the EXIT CENSUS ──────────────────────────────────
+    //
+    // Round 789's instrument, in the shape this function needs. [returnedIn]
+    // already derives an exit profile by DIFFERENCING adjacent rows' `calls`,
+    // which is sound only while every invocation crosses every boundary in
+    // order — it cannot see a `return` that skips a section, it needs bespoke
+    // arithmetic at the two rows the round-793 pre-gate straddles, and it can
+    // say WHERE an invocation left but never WHAT that invocation had already
+    // paid for. The census answers both, and it adds NO boundary (round 796):
+    // every count is taken at [end], a boundary the partition already crossed,
+    // from the row that is already open. That property is load-bearing (round
+    // 793) — an ON run's boundary COUNT is unchanged by it, so a before/after
+    // row comparison stays valid.
+
+    /** INVOCATIONS that left the function from each row. */
+    var exitInvRow: LongArray = LongArray(N)
+
+    /** Of those, the ones that emitted (or whose nested calls emitted). */
+    var exitEmitRow: LongArray = LongArray(N)
+
+    /** [N_PROLOGUE] nanos charged to the row the paying invocation LEFT from. */
+    var exitPrologueNanos: LongArray = LongArray(N)
+
+    /** The `getCalleeType` span, charged the same way. */
+    var exitCalleeNanos: LongArray = LongArray(N)
+
+    /** Of those exits, the ones whose callee resolution answered `any`/`error`. */
+    var exitCalleeBail: LongArray = LongArray(N)
+
+    /** The running invocation's parked [N_PROLOGUE] span. */
+    var pendingPrologue: Long = 0
+
+    /** The running invocation's parked `getCalleeType` span, and its outcome. */
+    var pendingCallee: Long = 0
+    var pendingCalleeBail: Boolean = false
 
     // ── (ENGINE.2h) round 795: the deferred TS2793 `implRelated` probe ───────
     /**
@@ -1068,6 +1130,12 @@ object CallSections {
         implRelatedImplSigs = 0; implRelatedApplied = 0
         implRelatedVerified = 0; implRelatedVerifyDiff = 0
         implRelatedVerifiedAll = 0; implRelatedVerifyAllDiff = 0
+        exitInvRow = LongArray(N)
+        exitEmitRow = LongArray(N)
+        exitPrologueNanos = LongArray(N)
+        exitCalleeNanos = LongArray(N)
+        exitCalleeBail = LongArray(N)
+        pendingPrologue = 0; pendingCallee = 0; pendingCalleeBail = false
     }
 
     /** (ENGINE.2g) open the prologue span for one depth-1 invocation. */
@@ -1108,6 +1176,9 @@ object CallSections {
         depth++
         if (depth != 1) return
         invocations++
+        pendingPrologue = 0
+        pendingCallee = 0
+        pendingCalleeBail = false
         cur = ENTRY
         curT = PassTiming.nowNanos()
     }
@@ -1116,6 +1187,7 @@ object CallSections {
     @Suppress("NOTHING_TO_INLINE")
     inline fun at(sec: Int) {
         if (mode == OFF || depth != 1) return
+        if (mode == COARSE && !coarseAnchor[sec]) return
         val now = PassTiming.nowNanos()
         nanos[cur] += now - curT
         calls[cur]++
@@ -1123,32 +1195,54 @@ object CallSections {
         curT = now
     }
 
-    /** Close whatever section is still open (the invocation may have returned). */
+    /**
+     * Close whatever section is still open (the invocation may have returned)
+     * and record the (WARM.5) exit census against it. [emitted] is whether the
+     * invocation — or anything it called — appended a diagnostic, which is what
+     * turns "where the time goes" into "did it buy anything" (round 789).
+     */
     @Suppress("NOTHING_TO_INLINE")
-    inline fun end() {
+    inline fun end(emitted: Boolean) {
         if (mode == OFF) return
         if (depth == 1 && cur >= 0) {
             nanos[cur] += PassTiming.nowNanos() - curT
             calls[cur]++
+            if (mode == ON) {
+                exitInvRow[cur]++
+                if (emitted) exitEmitRow[cur]++
+                exitPrologueNanos[cur] += pendingPrologue
+                exitCalleeNanos[cur] += pendingCallee
+                if (pendingCalleeBail) exitCalleeBail[cur]++
+            }
             cur = -1
         }
         depth--
     }
 
-    /** Start a NESTED sub-measure, or 0 when off. */
+    /** Start a NESTED sub-measure, or 0 when off. Never active under [COARSE]. */
     @Suppress("NOTHING_TO_INLINE")
-    inline fun t(): Long = if (mode == OFF) 0L else PassTiming.nowNanos()
+    inline fun t(): Long = if (mode == ON) PassTiming.nowNanos() else 0L
 
     /** Close a NESTED sub-measure opened at [t0]. */
     @Suppress("NOTHING_TO_INLINE")
     inline fun close(sec: Int, t0: Long) {
-        if (mode == OFF) return
-        nanos[sec] += PassTiming.nowNanos() - t0
+        if (mode != ON) return
+        val d = PassTiming.nowNanos() - t0
+        nanos[sec] += d
         calls[sec]++
+        // (WARM.5) park the two spans whose exit class is not known until the
+        // invocation returns, up to nine sections later.
+        if (sec == N_PROLOGUE) {
+            pendingPrologue = d
+        } else if (sec == N_CALLEE_BAIL || sec == N_CALLEE_LIVE) {
+            pendingCallee = d
+            pendingCalleeBail = sec == N_CALLEE_BAIL
+        }
     }
 
     fun report(): String = buildString {
         appendLine("== (CALL.1) intra-function attribution: checkSingleCallExpressionTypes ==")
+        appendLine("mode: ${if (mode == COARSE) "COARSE (anchors only)" else "ON"}")
         appendLine("invocations: $invocations")
         val ovhCalls = calls[OVERHEAD]
         val ovh = if (ovhCalls > 0) nanos[OVERHEAD] / ovhCalls else 0L
@@ -1190,7 +1284,37 @@ object CallSections {
                     "skip-set B216 reads past the receiver type: $pgB216Deep"
             )
         }
+        append(exitCensusReport())
         appendLine(implRelatedReport())
+    }
+
+    /**
+     * (WARM.5) round 851 — the exit census, and its partition check.
+     *
+     * The check is EXACT by construction: every invocation that [begin]s closes
+     * exactly one row at [end], so `Σ exitInvRow` must equal [invocations].
+     * Anything less means a path leaves without reaching the wrapper's
+     * `finally`, and the table below would be a sample rather than a partition.
+     */
+    fun exitCensusReport(): String = buildString {
+        if (mode != ON) return@buildString
+        val exits = exitInvRow.sum()
+        appendLine(
+            "-- (WARM.5) EXIT CENSUS: invocations by the row they RETURNED from --" +
+                "  [partition check: $exits of $invocations invocations = " +
+                (if (exits == invocations) "EXACT" else "!! MISSING ${invocations - exits}") + "]"
+        )
+        for (s in 0 until FIRST_NESTED) {
+            if (exitInvRow[s] == 0L) continue
+            appendLine(
+                "  ${names[s].padEnd(46)} left ${exitInvRow[s].toString().padStart(7)}" +
+                    " (differencing said ${returnedIn(s)})" +
+                    ", EMITTED ${exitEmitRow[s].toString().padStart(6)}" +
+                    ", had paid: prologue ${(exitPrologueNanos[s] / 1_000_000).toString().padStart(4)} ms" +
+                    ", getCalleeType ${(exitCalleeNanos[s] / 1_000_000).toString().padStart(4)} ms" +
+                    " (of which any/error ${exitCalleeBail[s]})"
+            )
+        }
     }
 
     /** (ENGINE.2h) the deferred TS2793 probe's census + verifier columns. */
@@ -1225,12 +1349,24 @@ object CallSections {
     /** (ENGINE.2g) invocations the prologue pre-gate refuted, in production. */
     fun prologueRefused(): Long = calls[CALLEE_TYPE] - calls[N_PROLOGUE]
 
-    /** Machine-readable dump: one line per section. */
+    /**
+     * Machine-readable dump: one line per section, then one per non-empty EXIT
+     * CENSUS row. The census rows carry an `exit*: ` name prefix precisely so a
+     * reducer summing the partition cannot mistake them for sections — they
+     * RE-ATTRIBUTE time already counted in the rows above.
+     */
     fun csv(): String = buildString {
         appendLine("section,reached,nanos")
         for (s in 0 until N) {
             if (calls[s] == 0L) continue
             appendLine("\"${names[s].trim()}\",${calls[s]},${nanos[s]}")
+        }
+        for (s in 0 until FIRST_NESTED) {
+            if (exitInvRow[s] == 0L) continue
+            val nm = names[s].trim()
+            appendLine("\"exitPro: $nm\",${exitInvRow[s]},${exitPrologueNanos[s]}")
+            appendLine("\"exitCallee: $nm\",${exitCalleeBail[s]},${exitCalleeNanos[s]}")
+            appendLine("\"exitEmit: $nm\",${exitEmitRow[s]},0")
         }
     }
 }

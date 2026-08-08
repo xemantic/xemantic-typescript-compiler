@@ -173,6 +173,11 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--callSections", "--callsections" -> {
                 CallSections.reset(); modes.set(CallSections::mode, CallSections.ON)
             }
+            // (WARM.5) round 851: the anchors-only twin, so the probe's own
+            // boundary is priced by an ON-vs-COARSE differential (round 734).
+            "--callSectionsCoarse", "--callsectionscoarse" -> {
+                CallSections.reset(); modes.set(CallSections::mode, CallSections.COARSE)
+            }
             // (CALL.2)(a): the opt-in intra-function attribution of
             // checkArgumentsAgainstSignature. The `Coarse` variant keeps only the
             // anchors, so an ON-vs-COARSE pair gives the per-boundary cost
@@ -520,7 +525,7 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
         print(SpineSections.csv())
         println("== (SPINE.1) csv end ==")
     }
-    if (CallSections.mode == CallSections.ON) {
+    if (CallSections.mode != CallSections.OFF) {
         println(CallSections.report())
         println("== (CALL.1) csv ==")
         print(CallSections.csv())
@@ -734,6 +739,7 @@ internal fun usageText(): String =
           --ianyArgGateOff   (IANY.1) restore the pre-800 CALL/NEW argument edge (resolve
                              the callee for every argument, reader or not)
           --callSections     (CALL.1) intra-function attribution of checkSingleCallExpressionTypes
+          --callSectionsCoarse the same, anchors only — the differential calibration counterpart
           --argSections      (CALL.2) intra-function attribution of checkArgumentsAgainstSignature
           --argSectionsCoarse  the same, anchors only — the differential calibration counterpart
           --argNarrowCensus  (CALL.5)(b) evaluate the argument-narrowing already-relates

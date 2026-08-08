@@ -140283,6 +140283,11 @@ interface DataView {
             checkSingleCallExpressionTypesCore(expr, source, fileName)
             return
         }
+        // (WARM.5) round 851: the exit census's "did it buy anything" column.
+        // Read here rather than inside the probe because `diagnostics` is the
+        // checker's, and taken on the WRAPPER (round 786) so an invocation that
+        // returns from the core's first guard is still counted.
+        val diag0 = diagnostics.size
         CallSections.begin()
         try {
             checkSingleCallExpressionTypesCore(expr, source, fileName)
@@ -140290,7 +140295,7 @@ interface DataView {
             // (ENGINE.2g): a prologue span still open here means the core left
             // through one of the prologue's `return`s — a firing.
             CallSections.closePreGateIfOpen()
-            CallSections.end()
+            CallSections.end(emitted = diagnostics.size > diag0)
         }
     }
 

@@ -35,6 +35,7 @@
 package com.xemantic.typescript.compiler.bench
 
 import com.xemantic.typescript.compiler.ArgSections
+import com.xemantic.typescript.compiler.CallSections
 import com.xemantic.typescript.compiler.CpaSections
 import com.xemantic.typescript.compiler.CtaSections
 import com.xemantic.typescript.compiler.LibTypeCensus
@@ -126,10 +127,84 @@ import kotlin.time.measureTimedValue
  * every cold section table on record needs its own warm calibration before its
  * rows can be read as warm shares. `libtypes` is round 849's (WARM.3) census.
  */
-private val TIERS = listOf(
+internal val TIERS = listOf(
     "rows", "spine", "full", "dispatch",
     "cta", "ctacoarse", "cpa", "cpacoarse", "arg", "argcoarse", "libtypes",
+    // (WARM.5) round 851 — the LAST unprobed region of the warm top four:
+    // `checkSingleCallExpressionTypes`, i.e. the ~60% of `ccetSpineLeave` that
+    // `arg` does not reach (callee resolution, overload selection, the round-793
+    // prologue).
+    "call", "callcoarse",
 )
+
+/**
+ * Arm the probe a tier names, and zero its counters.
+ *
+ * Split out of [main] so the ORDER of arm → measure → **report** → disarm is a
+ * property a test can pin. Round 850 found the pre-851 code disarming before
+ * dumping, which made every `*coarse` report print `mode: ON` — the data was
+ * unaffected but the label was always wrong, and a label is what a reader
+ * classifies an arm by.
+ */
+internal fun tierBegin(tier: String) {
+    PassTiming.enabled = false
+    PassTiming.reset()
+    when (tier) {
+        "dispatch" -> { SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.PROBE }
+        "cta" -> { CtaSections.reset(); CtaSections.mode = CtaSections.ON }
+        "ctacoarse" -> { CtaSections.reset(); CtaSections.mode = CtaSections.COARSE }
+        "cpa" -> { CpaSections.reset(); CpaSections.mode = CpaSections.ON }
+        "cpacoarse" -> { CpaSections.reset(); CpaSections.mode = CpaSections.COARSE }
+        "arg" -> { ArgSections.reset(); ArgSections.mode = ArgSections.ON }
+        "argcoarse" -> { ArgSections.reset(); ArgSections.mode = ArgSections.COARSE }
+        "call" -> { CallSections.reset(); CallSections.mode = CallSections.ON }
+        "callcoarse" -> { CallSections.reset(); CallSections.mode = CallSections.COARSE }
+        "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
+        else -> {
+            PassTiming.detail = tier == "full"
+            PassTiming.spineDetail = tier != "rows"
+            PassTiming.enabled = true
+        }
+    }
+}
+
+/**
+ * The tier's report text — produced while the probe is still armed, so a
+ * `report()` that labels itself from its own `mode` labels itself correctly.
+ */
+internal fun tierReport(tier: String): String = when (tier) {
+    "dispatch" -> SpineDispatch.report() + "\n== (DISPATCH.1) csv ==\n" + SpineDispatch.csv()
+    "cta", "ctacoarse" ->
+        CtaSections.report() + "\n== (TYPE.2) csv ==\n" + CtaSections.csv() + "== (TYPE.2) csv end =="
+    "cpa", "cpacoarse" ->
+        CpaSections.report() + "\n== (ENGINE.2) csv ==\n" + CpaSections.csv() + "== (ENGINE.2) csv end =="
+    "arg", "argcoarse" ->
+        ArgSections.report() + "\n== (CALL.2) csv ==\n" + ArgSections.csv() + "== (CALL.2) csv end =="
+    "call", "callcoarse" ->
+        CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
+    "libtypes" -> LibTypeCensus.report()
+    // The pass probe is disarmed BEFORE its dump, exactly as it was pre-851 —
+    // only the section probes need to stay armed through their report, and only
+    // because each labels its arm from its own `mode`.
+    else -> buildString { PassTiming.enabled = false; PassTiming.dump { appendLine(it) } }
+}
+
+/** Disarm every probe and release its counters. Safe to call for any tier. */
+internal fun tierStop() {
+    PassTiming.enabled = false
+    SpineDispatch.mode = SpineDispatch.OFF
+    CtaSections.mode = CtaSections.OFF
+    CpaSections.mode = CpaSections.OFF
+    ArgSections.mode = ArgSections.OFF
+    CallSections.mode = CallSections.OFF
+    LibTypeCensus.enabled = false
+    SpineDispatch.reset()
+    CtaSections.reset()
+    CpaSections.reset()
+    ArgSections.reset()
+    CallSections.reset()
+    LibTypeCensus.reset()
+}
 
 fun main(args: Array<String>) {
     val project = args.getOrNull(0)
@@ -212,8 +287,6 @@ fun main(args: Array<String>) {
     // first is what guarantees the counters start from zero even if some
     // earlier code in this process had the instrumentation on.
     for ((run, tier) in tiers.withIndex()) {
-        PassTiming.enabled = false
-        PassTiming.reset()
         // (WARM.4) round 847 — the `dispatch` tier is NOT a PassTiming tier: it
         // leaves the pass probe entirely OFF and runs the round-732
         // `SpineDispatch` PROBE instead, which is the only instrument that
@@ -223,37 +296,14 @@ fun main(args: Array<String>) {
         // the probe's own code is cold on its first instrumented rebuild exactly
         // as round 846 measured for tier 3 — a tier LIST must give it at least
         // two draws per process before a number is quoted.
-        when (tier) {
-            "dispatch" -> {
-                SpineDispatch.reset()
-                SpineDispatch.mode = SpineDispatch.PROBE
-            }
-            // (WARM.4)(b) round 849 — the INTRA-handler probes, warm. Each is
-            // its own object with its own `mode`, and each `*coarse` twin keeps
-            // ONLY that probe's partition anchors, so the ON-minus-COARSE
-            // difference prices its boundary differentially inside one process.
-            "cta" -> { CtaSections.reset(); CtaSections.mode = CtaSections.ON }
-            "ctacoarse" -> { CtaSections.reset(); CtaSections.mode = CtaSections.COARSE }
-            "cpa" -> { CpaSections.reset(); CpaSections.mode = CpaSections.ON }
-            "cpacoarse" -> { CpaSections.reset(); CpaSections.mode = CpaSections.COARSE }
-            "arg" -> { ArgSections.reset(); ArgSections.mode = ArgSections.ON }
-            "argcoarse" -> { ArgSections.reset(); ArgSections.mode = ArgSections.COARSE }
-            "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
-            else -> {
-                PassTiming.detail = tier == "full"
-                PassTiming.spineDetail = tier != "rows"
-                PassTiming.enabled = true
-            }
-        }
+        // (WARM.4)(b) round 849 — the INTRA-handler probes, warm. Each is its
+        // own object with its own `mode`, and each `*coarse` twin keeps ONLY
+        // that probe's partition anchors, so the ON-minus-COARSE difference
+        // prices its boundary differentially inside one process.
+        tierBegin(tier)
         val (probeResult, probeDuration) = measureTimedValue {
             ProjectCompiler(SystemVfs).build(project, noEmit = true)
         }
-        PassTiming.enabled = false
-        SpineDispatch.mode = SpineDispatch.OFF
-        CtaSections.mode = CtaSections.OFF
-        CpaSections.mode = CpaSections.OFF
-        ArgSections.mode = ArgSections.OFF
-        LibTypeCensus.enabled = false
         val probeMs = probeDuration.inWholeMicroseconds / 1000.0
         val probeFiles = probeResult.programFiles.size
         val probeErrors = probeResult.errorCount
@@ -266,6 +316,7 @@ fun main(args: Array<String>) {
                 """"medianMs":$median,"overheadMs":${probeMs - median}}"""
         )
         if (measuredDrift || probeFiles != refFiles || probeErrors != refErrors) {
+            tierStop()
             println(
                 """{"instrumentedFalsified":true,"tier":"$tier","expectedFiles":$refFiles,""" +
                     """"expectedErrors":$refErrors,"gotFiles":$probeFiles,""" +
@@ -284,40 +335,12 @@ fun main(args: Array<String>) {
                     "rebuilds. No table is printed."
             )
         }
-        when (tier) {
-            "dispatch" -> {
-                println(SpineDispatch.report())
-                println("== (DISPATCH.1) csv ==")
-                println(SpineDispatch.csv())
-                SpineDispatch.reset()
-            }
-            "cta", "ctacoarse" -> {
-                println(CtaSections.report())
-                println("== (TYPE.2) csv ==")
-                print(CtaSections.csv())
-                println("== (TYPE.2) csv end ==")
-                CtaSections.reset()
-            }
-            "cpa", "cpacoarse" -> {
-                println(CpaSections.report())
-                println("== (ENGINE.2) csv ==")
-                print(CpaSections.csv())
-                println("== (ENGINE.2) csv end ==")
-                CpaSections.reset()
-            }
-            "arg", "argcoarse" -> {
-                println(ArgSections.report())
-                println("== (CALL.2) csv ==")
-                print(ArgSections.csv())
-                println("== (CALL.2) csv end ==")
-                ArgSections.reset()
-            }
-            "libtypes" -> {
-                println(LibTypeCensus.report())
-                LibTypeCensus.reset()
-            }
-            else -> PassTiming.dump(::println)
-        }
+        // REPORT FIRST, THEN DISARM — round 850's label defect. `report()` reads
+        // its own `mode` to label the arm, so clearing the mode before dumping
+        // made every `*coarse` table print `mode: ON`. Pinned by
+        // `BenchTierReportTest`.
+        println(tierReport(tier))
+        tierStop()
     }
     PassTiming.detail = true
     PassTiming.spineDetail = true
