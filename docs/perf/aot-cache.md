@@ -967,3 +967,145 @@ Three things follow, and the third is the one that costs rounds:
 - `--watch`/`--incremental` under a cache, and the other seven profiles ((AOT.5)(d)/(e)).
 - Whether the ramp effect survives on a project small enough that request 1 is dominated by
   JVM start rather than by checking.
+
+## 14. Round 857 — (MOD.7): the cache RETRAINED against the post-split layout
+
+*The module split (MOD.3/MOD.4) moved the jar path, the dependency set, the dependency
+ORDER and the entry point's module. The fingerprint hashes every classpath entry in order,
+so the shipped cache became unreachable the moment the split landed — fail-safe, and
+therefore silent. MOD.7 was the debt that left. This section is its discharge; nothing in
+the contract of §§ 1–2 changes.*
+
+### 14.1 The state the split left, measured rather than assumed
+
+| | pre-split (round 842) | post-split (this round) |
+|---|---|---|
+| classpath | 8 jars | **14 jars** (+ ktor-io/-network/-utils, slf4j, `-api`, `-daemon`; stdlib 2.4.0 → 2.4.10, kotlinx-io 0.9.0 → 0.9.1, serialization 1.9.0 → 1.11.0) |
+| first entry | the core jar | `annotations-23.0.0.jar` — the ORDER moved too, not just the set |
+| fingerprint | `73c2f5feb9c0f857` | **`086a6cb1ae5b4203`** |
+| decision | `USE` | `SKIP no-cache-file` |
+
+**And the dev launcher could not start at all.** `xtsc_resolve_classpath`'s development
+fallback is the staged `…-daemon/build/install/lib` (MOD.4b deleted the hand-listed jar
+names in favour of Gradle's `xtscLib` Sync), and **nothing had run `assemble` since the
+split**, so `scripts/xtsc` died with `cannot resolve a classpath … or build this repo
+first`. That is the fail-safe direction — a loud refusal, not a wrong answer — but it means
+**a fresh checkout or a `clean` leaves the launcher inoperable until `./gradlew assemble`**,
+which no earlier section said.
+
+After `assemble`: trained in 30.0 s, **54,816,768 B**, self-verified `USE`, and
+`pruned 1 stale cache(s)` — the pre-split cache, removed by the same step that replaced it.
+
+### 14.2 USED, not merely present
+
+The discriminator is round 832's, and it is the only thing separating a cached arm from a
+silently-uncached one: `-Xlog:class+load=info` on a run through the launcher shows
+**955 of 960 `com.xemantic` classes with `source: shared objects file`**, `Checker` among
+them, with the launcher printing `aot USE …` under `XTSC_AOT_VERBOSE=1`. Every timed run
+below prints its own decision line for the same reason.
+
+### 14.3 The guard still refuses a stale cache — re-run end to end on the new classpath
+
+Round 828's experiment, repeated against the 14-jar layout with `Checker.class` removed
+from a *copy* of the core jar:
+
+| arm | outcome |
+|---|---|
+| unguarded `java -XX:AOTCache=…` | **compiled and reported `FAILED — 2 error(s)`** — i.e. type-checked against a class the jar no longer contains |
+| unguarded `java`, no cache (the truth) | `NoClassDefFoundError` / `ClassNotFoundException` |
+| **`scripts/xtsc` (guarded)** | **`aot SKIP no-cache-file`, then `NoClassDefFoundError`** |
+
+`xtsc-aot status` on the mutated classpath names a new fingerprint (`c6eff5834a48b43b`) and
+the absent cache. The hazard is exactly as live post-split as it was at round 828, and the
+guard is exactly as effective.
+
+**A property the copy step proves in passing, and which no section stated:** the fingerprint
+records each entry's **basename**, never its path (`${entry##*/}` in
+`xtsc_fingerprint_block`). A byte-identical copy of the lib dir at another path therefore
+verifies `USE` against the same cache — the guard binds the ARTIFACT, not the install
+location. That is what makes the experiment above a valid arm, and it is what lets a
+distribution be relocated without retraining.
+
+**Pins:** `AotCacheGuardTest` is **13/13 green** on the post-split tree. Ablated — the
+manifest comparison deleted from `xtsc_aot_decide`, one mistake, on a COPY of `scripts/`
+reached through `XTSC_TEST_LAUNCHER` — **exactly one pin fails, `a mutated classpath entry
+is refused`**, reproducing round 832's ablation on the module the class now lives in.
+
+### 14.4 The ladder, ARM and MODE named
+
+**ARM: the shipped JVM launcher `scripts/xtsc`, from the staged 14-jar lib dir, main class
+`…server.XtscMainKt`. MODE: check-only (`--noEmit --listAll`), sequential, compiler
+profile.** Both arms are the same script and differ only in the decision, so the cached arm
+pays the guard's full ~80 ms verification on every run. Four rotated pairs, box idle and
+unwatched.
+
+| pair | plain (`XTSC_AOT=off`) | cached | delta | ratio |
+|---|---:|---:|---:|---:|
+| 1 | 24,214 | 15,277 | −8,937 | 1.585× |
+| 2 | 23,085 | 15,656 | −7,429 | 1.475× |
+| 3 | 23,951 | 14,818 | −9,133 | 1.616× |
+| 4 | 24,297 | 15,043 | −9,254 | 1.615× |
+
+**Median 24,082 → 15,160 ms; paired median −9,035 ms, ratio 1.600×, cached faster 4/4.**
+Consistent with the 1.59–1.68× of §§ 4/7/12 — and per the standing rule, only the paired
+within-round delta is quotable; the absolutes are not comparable to any other round's.
+
+### 14.5 Correctness: all 8 runs, and a fifth witness for § 11
+
+All 8 compiles: **46 `error TS` lines**, no empty capture (round 804), no `more error(s)`
+(round 811), and under the `grid838.sh` recipe **one digest across both arms:
+`84bbe7f0a60d81c40349527a068b8647`** — *the same value round 841 derived from a round-817
+capture and round 853 reproduced live*. So the compiler profile's diagnostics are byte-stable
+from round 817 to round 857, now witnessed for the first time **through the shipped jar
+launcher on the post-split classpath**, cached and uncached alike.
+
+**§ 11 gains a fifth and sixth lineage, and the cause is new: the SORT.** This round's own
+harness first reported `4b9635d6…` and `bcb1512a…` for what turned out to be the *same*
+46 lines — it sorted in Python (`sorted()`, code-point order) where every recorded lineage
+sorts in the shell (`sort`, locale collation). Applying the `grid838.sh` recipe verbatim to
+the same capture yields `84bbe7f0…` exactly. **So the recipe includes the COLLATION, not
+just the `grep` and the `sed`** — one more reason § 11.4's rule is "quote the recipe with the
+digest", and to prefer `added=0 removed=0` against a rebuilt before-arm for anything
+cross-round.
+
+### 14.6 The corpus suite through the cache — and a harness the split had broken
+
+`scripts/aot-corpus-suite.sh` built its AOT prefix as `<core jar>:$(cat build/bench/cp.txt)`
+— the COMPILER's 7-entry dependency tail, in the compiler's order, and itself stale
+(kotlinx-io 0.9.0, serialization 1.9.0). Post-split that is **not a prefix of the trained
+classpath**, so the JVM would have declined the cache in `AOTMode=auto` and **both arms would
+have run uncached, agreed perfectly, and proved nothing** — round 842 § 13.3's trap, in a
+committed harness. It is the same mistake MOD.4b deleted from the launcher: a hand-assembled
+classpath that cannot track a module change.
+
+Fixed the same way: the prefix is now READ from the staged lib dir with the launcher's own
+`find -maxdepth 1 -name '*.jar' | LC_ALL=C sort`, so it cannot drift again. And the
+class-load count, previously a printed number, is now a **hard failure at zero** — the A/A
+detector the round-842 trap argues for.
+
+Re-run on the retrained cache:
+
+| arm | classes | run | failed | ignored | wall | peak RSS |
+|---|---:|---:|---:|---:|---:|---:|
+| plain | 646 | 13,950 | 2 | 3 | 2:31.10 | 1,186 MB |
+| cached | 646 | 13,950 | 2 | 3 | 2:18.33 | 2,021 MB |
+
+**Per-class result diff EMPTY, failure lines included**, and **955 of 5,313 `com.xemantic`
+classes served from the cache** (the remainder are test classes, which no cache contains).
+The 2 failures are identical in both arms and are `HugeMethodLimitTest`'s two classpath-layout
+pins (`main classes are not a directory on the classpath`) — green under Gradle, failing here
+by construction because a jar is what a cache can be trained from. Round 839's other 11 are
+gone from this count because `AotCacheGuardTest` moved to the daemon module at MOD.4 and this
+harness runs the CORE module's test classes.
+
+### 14.7 What (MOD.7) does NOT close
+
+- **`build/bench/cp.txt` is still the pre-split, pre-bump dependency list**, and
+  `ab-interleaved.sh` / `ab-warm.sh` / `cost_gate.py` / `aot-draw-variance.sh` all read it.
+  Nothing here fixes those; they run from the exploded class dir and so can never carry an
+  AOT arm anyway (§ 5.4), but a perf A/B taken against stale dependency jars is its own
+  question and is left where it was found.
+- `--watch`/`--incremental` under a cache, and the other seven dashboard profiles — the
+  (AOT.5)(d)/(e) residue, untouched.
+- The retrained cache is ONE draw (§ 12): its rank within the ±2.4% draw band is unsampled,
+  and deliberately so — this round re-trains a layout, it does not compare configurations.

@@ -19,7 +19,7 @@ as "what this artifact was worth *in its own round*".
 | JVM, warm steady state (`--serve`) | ~~11.6 s~~ — **SUPERSEDED, round 843 (2026-08-07): ~7.0 s** (BenchMain medians 7.14/6.92 s; `--serve` ladder 7.10–7.45 s) | 771, 4-core box / 843, 8-core box | **`docs/perf/warm-jvm-attribution.md`**, then § 1, § 4 |
 | GraalVM CE native-image | ~~13.4 s~~ — **SUPERSEDED as the authority, see § 0a: CI median 11.2 s check-only / 13.4 s emit over 75 rows** | 771, RETIRED 4-core box / CI ubuntu-latest since 2026-07-30 | **§ 0a**, then § 1, § 2 |
 | Kotlin/Native release | 21.8 s (r772) / 20.0 s (r823) | 772 / 823 | § 2b, § 2c |
-| **JDK 25 AOT cache** | **13.6 s — 1.638× its own round's plain arm, 6/6 wins** | 828, 8-core box | **`docs/perf/aot-cache-round828.md`** |
+| **JDK 25 AOT cache** | **13.6 s — 1.638× its own round's plain arm, 6/6 wins**; **re-measured on the POST-SPLIT layout, round 857: 15.2 s = 1.600×, 4/4 pairs** | 828 / 857, 8-core box | **`docs/perf/aot-cache-round828.md`**, then `aot-cache.md` § 14 |
 
 **The AOT cache is the newest point and the cheapest one to obtain**: no second toolchain,
 no separate binary, byte-identical diagnostics, trained by one ordinary compile plus ~2.9 s.

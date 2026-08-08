@@ -20,6 +20,57 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 857 (2026-08-08) — (MOD.7) CLOSED: THE SHIPPED AOT CACHE IS RETRAINED AGAINST THE
+POST-SPLIT LAYOUT, AND THE DEV LAUNCHER HAD BEEN INOPERABLE SINCE THE SPLIT.** The module
+split moved everything the fingerprint binds: the classpath went **8 → 14 jars** (ktor ×3,
+slf4j, `-api`, `-daemon`, plus stdlib 2.4.0 → 2.4.10, kotlinx-io 0.9.0 → 0.9.1,
+serialization 1.9.0 → 1.11.0), the ORDER changed (first entry is now `annotations-23.0.0`,
+not the core jar), and the fingerprint went `73c2f5feb9c0f857` → **`086a6cb1ae5b4203`**, so
+the shipped cache read `SKIP no-cache-file` — fail-safe, and therefore silent, for as long
+as the debt stood.
+
+- **The launcher could not run AT ALL, and that is the finding a retrain would have hidden.**
+  MOD.4b replaced the hand-listed dev classpath with the staged
+  `…-daemon/build/install/lib` (`xtscLib` Sync), and **nothing had run `assemble` since the
+  split** — `scripts/xtsc` died with `cannot resolve a classpath … or build this repo first`.
+  Correct behaviour (a loud refusal, not a wrong answer), but it means a fresh checkout or a
+  `clean` leaves the launcher inoperable until `./gradlew assemble`, which no doc said.
+- **Trained after the last build** (round 842's rule): 30.0 s, 54,816,768 B, self-verified,
+  `pruned 1 stale cache(s)`. **Proved USED, not present**: `-Xlog:class+load=info` shows
+  **955 of 960 `com.xemantic` classes with `source: shared objects file`**, `Checker` among
+  them, with `XTSC_AOT_VERBOSE=1` printing `aot USE …` on every timed run.
+- **The guard re-verified END TO END on the new classpath**, not just by pins: with
+  `Checker.class` removed from a copy of the core jar, unguarded-cached **compiled and
+  reported `FAILED — 2 error(s)`** (type-checking against a class the jar no longer holds),
+  unguarded-plain died `NoClassDefFoundError`, and **guarded `scripts/xtsc` read
+  `SKIP no-cache-file` and died the same honest death**. `AotCacheGuardTest` **13/13**; the
+  one-mistake ablation (manifest comparison deleted, on a COPY of `scripts/` via
+  `XTSC_TEST_LAUNCHER`) fails **exactly one** pin, `a mutated classpath entry is refused`.
+- **THE LADDER, ARM AND MODE NAMED** — shipped JVM launcher arm, check-only mode, sequential,
+  compiler profile, 4 rotated pairs: **median 24,082 → 15,160 ms, paired median −9,035 ms,
+  ratio 1.600×, cached faster 4/4.** All 8 runs 46 errors and ONE digest,
+  `84bbe7f0a60d81c40349527a068b8647` — the round-841/853 `grid838.sh` lineage, so the
+  compiler profile is byte-stable r817 → r857 and is now witnessed through the shipped jar
+  launcher for the first time.
+- **A COMMITTED HARNESS THE SPLIT HAD BROKEN, FIXED AND GIVEN A DETECTOR.**
+  `scripts/aot-corpus-suite.sh` built its AOT prefix as `<core jar>:$(cat build/bench/cp.txt)`
+  — post-split not a prefix of the trained classpath, so the JVM would have declined the
+  cache and **both arms would have run uncached, agreed, and proved nothing** (round 842
+  § 13.3's trap, in committed code; it is also the exact hand-assembled-classpath mistake
+  MOD.4b deleted from the launcher). It now reads the staged lib dir with the launcher's own
+  `find | LC_ALL=C sort`, and a served-class count of **zero is now a hard failure**. Re-run:
+  646 classes, **13,950 run / 2 failed / 3 ignored in BOTH arms, per-class diff EMPTY**,
+  955 of 5,313 classes from the cache, 2:31 → 2:18. The 2 failures are `HugeMethodLimitTest`'s
+  classpath-layout pins, green under Gradle.
+- **A SIXTH DIGEST LINEAGE, AND ITS CAUSE IS THE SORT.** This round's harness first reported
+  `4b9635d6…`/`bcb1512a…` for the *same* 46 lines: it sorted in Python (code-point order)
+  where every recorded lineage sorts in the shell (locale collation). The recipe includes the
+  COLLATION, not just the `grep` and the `sed` — `docs/perf/aot-cache.md` § 11/§ 14.5.
+- **Left where it was found:** `build/bench/cp.txt` is still the pre-split, pre-bump
+  dependency list that `ab-*.sh` / `cost_gate.py` / `aot-draw-variance.sh` all read, and
+  `cost_gate.py` has still not run since the split. Neither is an AOT question and neither
+  was touched. Full detail: `docs/perf/aot-cache.md` § 14.
+
 **Round 856 (2026-08-08) — (NARROW.2)(f2) CLOSED: ROUND 855's THREE UNRUN GATES ARE GREEN, AND
 ITS TEN PINS ARE NOW ABLATION-VERIFIED — ALL FOUR ARMS LOAD-BEARING, BUT ONLY **6 OF 10** PINS
 HAVE A UNIQUELY-THEIR-OWN FAILURE.** A pure verification round; no design work, no compiler code
@@ -1330,11 +1381,19 @@ daemon), **warm 0.110 s wall** with the client's own CPU at 0.00s/0.00s.
   RUNNING daemon today — but `spawnDetached` is fork/setsid/execvp, which Windows has no
   equivalent of. Enabling the target would not fail the build; it would ship a client that
   cannot start the thing it depends on.
-- [ ] **(MOD.7) Retrain the AOT cache and re-verify against the new layout.** Still owed from
-  MOD.3 and now more so: the fingerprint hashes every classpath entry IN ORDER, and the jar
-  path, the dependency order AND the entry point's module have all moved. Fail-safe (the guard
-  degrades to an uncached run) but every `bench-history/` comparison is stale until this runs.
-  `cost_gate.py` has also not run since the split — this box has no `build/bench` profile.
+- [x] **(MOD.7) DONE round 857 — the AOT cache is retrained against the post-split layout,
+  proved USED, and the guard re-verified end to end.** Classpath 8 → **14 jars** with the
+  order changed too, fingerprint `73c2f5fe…` → **`086a6cb1…`**, and the dev launcher could
+  not start at all until `./gradlew assemble` staged `…-daemon/build/install/lib`. Trained
+  54,816,768 B, self-verified; **955 of 960 `com.xemantic` classes from `shared objects
+  file`**; ladder **1.600×, 4/4 pairs, −9,035 ms paired median** (JVM launcher arm,
+  check-only mode); all 8 runs one digest `84bbe7f0…` = the round-841/853 lineage.
+  `AotCacheGuardTest` 13/13, one-mistake ablation fails exactly one pin. Also FIXED a
+  harness the split had broken (`aot-corpus-suite.sh`'s AOT prefix) and gave it an A/A
+  detector; corpus suite through the cache: 13,950 run, 2 failed, **per-class diff EMPTY**
+  in both arms. `docs/perf/aot-cache.md` § 14. **NOT closed by this item:**
+  `build/bench/cp.txt` is still the pre-split dependency list, and `cost_gate.py` has not
+  run since the split.
 
 **Round MOD.4 (2026-08-07) — THE DAEMON IS ITS OWN MODULE AND SPEAKS KTOR.** Landed in two
 commits so a failure would be attributable: **4a** moved the server with the transport
