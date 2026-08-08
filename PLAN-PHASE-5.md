@@ -20,6 +20,71 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 856 (2026-08-08) — (NARROW.2)(f2) CLOSED: ROUND 855's THREE UNRUN GATES ARE GREEN, AND
+ITS TEN PINS ARE NOW ABLATION-VERIFIED — ALL FOUR ARMS LOAD-BEARING, BUT ONLY **6 OF 10** PINS
+HAVE A UNIQUELY-THEIR-OWN FAILURE.** A pure verification round; no design work, no compiler code
+changed. Round 855 landed a probe-only change and stated plainly that it had run neither the
+suite, nor `cost_gate.py`, nor `huge_methods.py`, nor its own ablation — this round is that
+paperwork, and it found one thing worth keeping.
+
+**THE THREE GATES, one at a time, never beside each other.**
+
+```
+suite          14,030 / 0 failures / 3 skipped   (core 13,953 + api 27 + client 18 + daemon 32)
+cost_gate.py   all 20 counters +0.00%            exit 0
+huge_methods   649 classes / 14,567 methods      0 OVER THE LIMIT, exit 0
+```
+
+The suite count is exactly the queue's prediction (14,020 + 10 new pins), so no reconciliation was
+needed. **The cost gate's zero is the load-bearing reading and it is a FALSIFIABLE one**: round
+855's inventory is `PassTiming.detailed`-gated, and the queue's instruction was that a NON-zero
+delta here would mean the gate LEAKS — probe machinery executing in a production compile — i.e. a
+real regression rather than a rebaseline. It reads +0.00% on all 20, and the run is against the
+round-855 binary rather than a round-853-style frozen one: the gate's own log prints
+`XTSC_BUILD_ID=ae9779db…` = HEAD with `compileKotlinJvm UP-TO-DATE` off the suite's compile. Largest
+method is `walkFunctionBodiesInExpr` at 7,702 bytecodes — 298 of headroom under HotSpot's limit.
+
+**THE ABLATION RAN, AND THE FIRST THING VERIFIED WAS THAT IT DISPATCHES.** Round 855's harness
+printed `complete; tree restored` while doing nothing, so a clean sweep from it proves nothing
+until an arm is seen to apply and redden something. Both halves were checked before any arm was
+trusted: the bug form `"${@:-A1 A2 A3 A4}"` expands to the single word `[A1 A2 A3 A4]` (hence
+`unknown arm` four times), the committed array default expands to four; and each arm's `apply` was
+dry-run against the tree, each producing a real distinct one- or two-line edit that reverted clean.
+
+| arm | the one mistake | red | uniquely its own |
+|-----|-----------------|-----|------------------|
+| A1 | drop `is FlowCondition ->` from `narrowableRoots` | 1 of 14 | `POSITIVE CONTROL - the same imported name JOINS the set once a condition mentions it` |
+| A2 | drop `is FlowAssignment ->` | 3 of 14 | `POSITIVE CONTROL - an IMPORTED name is NOT in the set`; `THE FINDING - a name that is merely DECLARED is in the set`; `a locally declared any root is never refused` |
+| A3 | stop recording the pre-test span (`preNanos = 0L`) | 1 of 14 | `the probe HONOURS NOTHING …` |
+| A4 | remove the `detailed` gate — collect the inventory unconditionally | 1 of 14 | `negative control - off the probe the graph carries no inventory at all` |
+
+**So all four ablated guards are load-bearing and each is discriminated by a pin no other arm
+moves.** A2 is the round-855 finding restated as a failure: deleting the assignment arm is what
+takes a merely-DECLARED name out of the set, and it simultaneously breaks the imported-name
+control's own control (`"param" in roots`) and the consumer census — three pins, one mechanism.
+
+**THE PART WORTH KEEPING: 4 OF THE 10 NEW PINS HAVE NO UNIQUELY-THEIR-OWN FAILURE, AND ONE OF THEM
+IS A REDUNDANT GUARD WHOSE NAME CLAIMED OTHERWISE (round 807).** `a name occurring in a condition
+is in the narrowable set` uses `declare const cond` as its subject — a `VariableDeclaration`, which
+mints a `FlowAssignment` whose subtree contains the name — so `cond` is in the set through the
+ASSIGNMENT arm and arm A1 leaves the pin GREEN. It never tested the condition arm. **That is the
+round-855 structural finding biting its own pin**, which is the neatest possible confirmation of it:
+the declaration that makes a name exist is itself one of the narrowing nodes the set is built from,
+so a pin whose subject is declared in its own fixture cannot isolate any single arm. Renamed to say
+so. The other three are recorded rather than renamed, because their names are true statements of
+what they assert: the switch/assert pin targets the `FlowSwitchClause`/`FlowCall` arms, for which
+this harness has no arm (A2 is indirect evidence for them — it deletes the parameter route and the
+pin holds); `SOUNDNESS - an opening the flow DID narrow is never refused` has a subject reaching the
+set through BOTH ablated arms, so only a combined ablation could move it and that cannot attribute;
+and the disabled-counters control watches a `PassTiming.enabled` gate no arm touches. A fifth
+rename went the other way: `the probe HONOURS NOTHING` is reddened by A3 through its `preNanos > 0L`
+assertion, not through the honours-nothing half its name advertised, so the name now states the span.
+
+**LANDED:** ablation-status KDoc on all five affected pins plus two renames (no assertion changed;
+14 of 14 green after), commit `362bc791`. `scripts/round855-ablate.sh` needed no fix — round 855
+had already corrected its own bug; this round only proved the correction dispatches.
+
+
 **Round 855 (2026-08-08) — (NARROW.2)(f) CLOSED AS A MEASURED NEGATIVE: THE PRE-TEST REFUSES
 **0 OF 14,117** OPENINGS, THE REASON IS STRUCTURAL RATHER THAN A TUNING FAILURE, AND THE
 PREDICATE COSTS **150–211 ms** TO BUY NOTHING.** Round 854 priced round 852's narrowed-`any`
@@ -2247,7 +2312,21 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   pre-test than launching a walk to discover a narrow happened). **Do not revert (c) for this** —
   it closed two conformance cases with a 0/0 grid and a clean corpus.
 
-- [ ] **(NARROW.2)(f2) — FINISH ROUND 855's PAPERWORK: the gates and the ablation it did not run.
+- [x] **(NARROW.2)(f2) — CLOSED ROUND 856. Suite **14,030 / 0 / 3** (exactly the predicted
+  14,020 + 10 pins), `cost_gate.py` **all 20 counters +0.00%** on a binary verified to be HEAD
+  (`XTSC_BUILD_ID=ae9779db…`, not a round-853-style frozen one) — so the `detailed` gate does NOT
+  leak — and `huge_methods.py --fail-over 0` **0 over the limit** (649 classes / 14,567 methods;
+  largest `walkFunctionBodiesInExpr` 7,702, 298 of headroom). **The ablation ran: all four arms
+  load-bearing, each discriminated by a pin no other arm moves** (A1 → 1 red, A2 → 3, A3 → 1,
+  A4 → 1), after first proving the harness dispatches (the round-855 bug form expands to the one
+  word `[A1 A2 A3 A4]`; the committed array default to four, and every arm's edit was dry-run and
+  reverted). **6 of the 10 new pins have a uniquely-their-own failure; the other 4 are recorded as
+  undiscriminated rather than claimed** — and one of them, `a name occurring in a condition is in
+  the narrowable set`, is a REDUNDANT GUARD (round 807) for the round-855 reason itself: its
+  `declare const` subject mints a `FlowAssignment`, so A1 leaves it green and it never tested the
+  condition arm. Renamed, along with the A3 pin whose name omitted the span it actually pins.
+  Commit `362bc791`. Original framing follows.**
+  ORIGINAL: FINISH ROUND 855's PAPERWORK: the gates and the ablation it did not run.
   DO THIS FIRST; it is ~30 minutes of wall time and no design work.** Round 855 landed a
   probe-only, `PassTiming.detailed`-gated change (`bc2495a7`, `d7461d4c`) and then ran out of
   round before its gates. (a) **`rm -rf` all four modules' `build/test-results/jvmTest` then
