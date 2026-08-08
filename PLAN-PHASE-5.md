@@ -20,6 +20,89 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 850 (2026-08-08) — (WARM.4)(b) CLOSED: THE WARM COST INSIDE THE BIG SPINE HANDLERS IS
+STRUCTURAL, NOT RESTRUCTURABLE — 94–98% OF IT IS THE PASSES' OWN CHECKING WORK, AND NOTHING IN THE
+18.75% OF THE ARTIFACT THESE THREE PROBES ATTRIBUTE CLEARS THE ±1.0% WARM BAND.**
+
+An instrument-and-verdict round. **Nothing under `src/` changed** (the whole change is
+`scripts/round850_analyze.py` + `docs/perf/warm-intra-handler.md` + these notes), so the suite,
+`cost_gate.py` and `huge_methods.py` were **not required** — but the harness ran all three gates
+itself before measuring anyway: `cost_gate exit=0`, `huge_methods exit=0`.
+
+**THE VERDICT THE ARC WAS OWED.** Opened warm, `spineCtaM3StatementAnchor` is **94% its four
+checking calls and 6% scaffolding** (44 ms of 649 = **0.62% of a warm rebuild**), and
+`checkPropertyAccessInExpr` is **98% / 2%** (7 ms of 369 = **0.10%**). Round 733's cold 88.4%
+reproduces warm and *tighter*. The whole (SPINE.1) "legacy-parity frame bookkeeping" thesis — frame
+installs, the eligibility gate, the dispatch `when`, the `finally` restores — is **~51 ms = 0.72%
+of the warm artifact**, and its two largest components are **below one probe boundary**: cta's
+eligibility gate at **88 ns over 915,543 consultations** and cpa's pass-through walk at **93 ns over
+801,892 arm closes**. Two independent probes, same answer: the traversal and the bookkeeping are at
+or under the measurement floor; the cost is the calls.
+
+**THE TABLES (mean probe-free warm rebuild 7,076.4 ms; 24 instrumented rebuilds, all 78 files / 46
+errors, every deterministic counter bit-identical across a tier's 4 draws).**
+`cta` level A = `spineCtaM3StatementAnchor` **649 ms = 9.17%**; `cpa` level P =
+`checkPropertyAccessInExpr` **369 ms = 5.21%** (Q = `checkSinglePropertyAccess` 4.38%, R =
+`checkMemberAccessMissing` 2.57%); `arg` = `checkArgumentsAgainstSignature` **309 ms = 4.37%**.
+**Combined and disjoint: 1,327 ms = 18.75% of the artifact.**
+
+**PARTITION CHECKS, STATED PLAINLY: 87% (`cta`) and 68% (`cpa`)** against round 847's per-handler
+dispatch probe, both sides as shares of their OWN round's warm rebuild (a cross-round absolute is
+forbidden). Weaker than round 847's 99.3%/102.6%, and three things are known about the gap: these
+probes cost **+100 to +900 ms** against round 847's **+4,482 to +5,670**, so where they disagree the
+cheaper instrument is the better artifact-share estimate; `arg` is a CONTAINMENT check, not a
+partition (`checkArgumentsAgainstSignature` is **40% of `ccetSpineLeave`**, so ~60% of the largest
+warm handler is still un-partitioned); and `cpa`'s 2.4-point gap is genuinely open.
+
+**THE BOUNDARY, AND THE ESTIMATOR MISTAKE IT EXPOSES.** Warm: **127 ns (`cta`), 97 ns (`cpa`),
+202 ns (`arg`)**, with `ArgSections`' own in-situ steady-state reading **134 ns** — against **501 ns
+cold** (round 849) and **1,475 ns/node cold vs 797 warm** for the spine tier (round 847). So a cold
+table's `net` column over-subtracts warm by **2.5–5×** and every row here was recomputed from raw
+nanos rather than inherited. **The non-obvious part: these partitions are LAYERED** (cta's B/C/D/E
+open inside level A's rows, cpa is a chain P ⊃ Q ⊃ R), so a deep boundary executes inside every
+level above it and the obvious estimator — Σ(level Δms) ÷ Σ(level Δboundaries) — **overstates the
+price by 1.7–2.2× (215 vs 97 ns for `cpa`)**. The estimator that counts each boundary once is the
+OUTERMOST level's Δ over ALL extra boundaries, and the evidence it is right is not circular for the
+inner levels: two arms whose boundary counts differ by **2.5×** then land within **0–5% on every
+level** (cta A 649 = 649, cpa P 369 = 369, exactly).
+
+**NO LEVER CLEARS THE BAND — the fifth consecutive priced negative in the warm arc, and the prize
+was measured FIRST in every case.** Ranked: the **nine pre-emission probes inside
+`checkSinglePropertyAccess`** — every one `exits 0`, every one paid at all 66,747 property accesses
+— **70 ms = 0.99%**, at the band edge, on a row whose own draw spread is 16%, and behind a
+`ccetPrologueMayFire`-shaped correspondence trap plus round 792's law (a "cannot fire" gate on this
+very function killed 7 corpus baselines while measuring 0 emitting calls on this very profile);
+`emitTs18048 closure-captured receiver` alone 0.83%; cta scaffolding 0.62%; `arg`'s narrowing walks
+on arguments that exit 0.69%; the (CALL.5) pre-gate relation 0.49%; `cpaComputeArgCtxTypes` 0.49%
+(**already measured as MOVED, not deleted, by round 788**). Everything at or above 1% is the type
+system doing its job.
+
+**THE SHARPEST SUB-OBJECT, from an exit census that cost no new boundary (round 796): 91% of the
+argument-typing cost is spent on arguments that never reach the assignability relation** — round
+759 measured 89% COLD, and it now has a warm price, **191 ms = 2.70% of a warm rebuild**. Inside
+it: **851 narrowing walks at 57 µs each = 0.69%**, and **357 of 953 narrowing calls return the INPUT
+type unchanged** (0.32%). Rounds 759 and 788 both say the realisable part is smaller than the row.
+
+**WHAT DID NOT WORK / WHAT WAS NOT DONE.** (a) The first reduction subtracted the naive Σ-estimator
+boundary and printed `cta`'s eligibility gate at **−123 ms** — a negative "cost" is the round-734
+tell of an over-read boundary, and here the cause was the layering, not the calibration method.
+(b) The `arg` cross-check from `BenchMain`'s `overheadMs` reads **684 ns/boundary** against the
+partition's 202 — whole-run overhead is far too noisy to calibrate with (its per-draw values range
+−201 to +680 ms), and it is quoted only as a sanity check; `cta`'s (223 vs 127) is the only one that
+lands close. (c) **A `*coarse` table prints `mode: ON`** because `BenchMain` clears each probe's
+mode before dumping — the data is unaffected and the arm is unambiguous from its row set and
+boundary count, but the label is always wrong for a COARSE arm; the fix is a `commonTest` reorder
+(dump, then clear) and is queued rather than taken, to keep this round's tree free of `src/`.
+(d) No A/B was run, because nothing reached the band to A/B.
+
+**A NUMBER THE QUEUE HAD BEEN QUOTING IS CORRECTED:** "these three probes cover 48.7% of the warm
+artifact" is 48.7% of the warm **SPINE** = **29.0%** of the artifact, and what they directly
+attribute is **18.75%**.
+
+**GATES: suite / `cost_gate.py` / `huge_methods.py` not required — no `src/` change** (stated
+rather than skipped silently); the harness ran `cost_gate.py` and `huge_methods.py --fail-over 0`
+before measuring regardless, both **exit 0**. `docs/perf/warm-intra-handler.md`.
+
 **Round 849 (2026-08-08) — (WARM.3) CLOSED AS A MEASURED NEGATIVE AT ~0.014%, AND THE CENSUS
 THAT MEASURED IT FIRST REPORTED A CONVINCING ZERO FOR THE WRONG REASON.**
 
@@ -1696,8 +1779,31 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   Instrument: `LibTypeCensus` + `--libTypeCensus` + `BenchMain`'s `libtypes` tier, pinned by
   `LibTypeCensusTest`. Full table and method: `docs/perf/lib-type-rederivation.md`.
 
-- [ ] **(WARM.4)(b) — TAKE THE WARM INTRA-HANDLER TABLES. WIRED AND ONE COMMAND AWAY (round 849
-  built the harness; phase 2 was not run).** Round 847 measured that a handler's warm SHARE is not
+- [ ] **(WARM.5) — PARTITION THE OTHER ~60% OF `ccetSpineLeave`, THE LARGEST WARM HANDLER.**
+  Round 850 measured `checkArgumentsAgainstSignature` at 4.37% of the warm artifact against the
+  handler's 10.8% (round 847), so **~60% of the single biggest object in a warm rebuild — callee
+  resolution, overload selection, the round-793 call prologue — has no section probe in either
+  regime.** It is the only place in the top four where a warm table can still show something new;
+  everything else in the top four is now attributed and priced (`docs/perf/warm-intra-handler.md`).
+  Build it as a `CcetSections` with a `*coarse` twin (same shape as the three existing probes, so
+  `BenchMain` needs only two more tier names), open it on the WRAPPER (round 786), and carry round
+  850's two calibration rules: the boundary is **97–202 ns warm, not the cold 501 ns**, and if the
+  partition is LAYERED the differential must divide the OUTERMOST level's Δ by ALL extra
+  boundaries. Add the exit census in the same pass — it costs no new boundary (round 796) and it is
+  what round 850's `arg` table shows is worth having (91% of argument typing serves arguments that
+  never reach the relation). **Prize is unknown and may well be another priced negative; say so up
+  front.** While in `BenchMain`, fix the round-850 label defect: dump the report BEFORE clearing
+  each probe's `mode`, so a `*coarse` arm stops printing `mode: ON`.
+
+- [x] **(WARM.4)(b) — DONE, ROUND 850. The three warm tables are in
+  `docs/perf/warm-intra-handler.md`; the verdict is STRUCTURAL (`spineCtaM3StatementAnchor` is 94%
+  its four checking calls / 6% scaffolding, `checkPropertyAccessInExpr` 98% / 2%, reproducing round
+  733's cold 88.4% and tighter), and NO candidate clears the ±1.0% warm band — the best is the nine
+  pre-emission probes in `checkSinglePropertyAccess` at 0.99%, handed on as a measured candidate.
+  Two corrections this entry needs read back into it: the "48.7% of the warm artifact" below is
+  48.7% of the warm SPINE = 29.0% of the artifact, and since `arg` is only 40% of `ccetSpineLeave`
+  what the three probes directly attribute is 18.75%. The warm boundary is 97–202 ns — and the
+  NESTED partitions make the obvious estimator overstate it by 1.7–2.2×. Original text follows.** Round 847 measured that a handler's warm SHARE is not
   its cold share — the top two spine handlers SWAP between regimes — and that a probe boundary is
   ~1.85× more expensive cold than warm. **Every intra-handler section table on record
   (`CtaSections`, `CpaSections`, `ArgSections`) is a COLD one-shot**, so none can be read as a warm
