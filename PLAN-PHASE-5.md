@@ -20,6 +20,62 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 858 (2026-08-08) — THE THIRD "HARNESS LOADS THE WRONG ARTIFACT" AUDIT, AND THIS TIME THE
+ANSWER IS THAT THE MEASUREMENTS SURVIVE. THE WARM ARC STANDS; `build/bench/cp.txt` NOW HAS ZERO
+READERS; AND BATCH 2 KILLED THIS ROUND'S OWN HEADLINE NUMBER.** Round 857 left an explicit
+loose end — `cp.txt` is the pre-split, pre-bump dependency list and four instruments were said to
+read it. Full audit, then the decisive experiment, then a guard whose every check has a uniquely
+its-own ablation failure. `docs/perf/classpath-readers-audit.md` is the permanent record.
+
+- **THE PER-READER AUDIT (the five-minute answer that decides everything after it).**
+  `ab-interleaved.sh` **SOUND** — always resolved FRESH through the gradle init script, never read
+  `cp.txt`. `cost_gate.py` **SOUND** — resolves fresh (round 853's fix). `ab-warm.sh` **SOUND
+  TODAY, GUARD INCOMPLETE** — its `cp-warm.txt` cache content is CURRENT (2.4.10 / 0.9.1 / 1.11.0)
+  and its guard currently fails anyway (cache Aug 1, build files Aug 7), so it has been resolving
+  fresh; but the guard compared the cache only against the **module's** `build.gradle.kts`, and the
+  versions live in `gradle/libs.versions.toml` — **it was blind to exactly the change that produces
+  a stale tail.** `aot-draw-variance.sh` **BROKEN** — `<core jar>:$(cat cp.txt)`, and it measures
+  `XtscMainKt`, a **daemon** class absent from that classpath: verified `ClassNotFoundException`,
+  dead since the split like `scripts/xtsc` was until round 857. **It fails LOUDLY, so it could
+  never have produced a wrong number — only no number.**
+- **THE DOCUMENTED "PRE-SPLIT REFUSAL" DOES NOT GUARD `cp.txt` AND NEVER DID.** It greps the INIT
+  SCRIPT, not the cache, and in `ab-warm.sh` it sits inside the resolve branch — so a cache hit
+  skips it entirely. Round 857's parenthetical credited it with protection it does not provide;
+  checking whether a refusal FIRES, rather than that it exists, is the whole lesson.
+- **ALSO FOUND, and it is the only thing that touched a published number:** the committed
+  `round847-warm-spine.sh` / `round849-warm-sections.sh` ran their **WARM** arms on the current tail
+  and their **COLD** arms on the stale one, so every cold/warm RATIO those rounds published compared
+  two different dependency tails.
+- **THE DECISIVE EXPERIMENT, and the part that matters most: BEHAVIOUR IS IDENTICAL.** Same binary,
+  same profile, only the tail swapped, rotated interleave. All 12 timed compiles answered `46
+  errors`, and **all four `--listAll` digests are `59d930db…`** (the round-841 lineage), 46 lines.
+  Both tails also LINK — verified by running the compiler on each — so this was never a crash risk.
+- **AND THE TIMING CLAIM DIED IN BATCH 2, WHICH IS THE ROUND'S BEST RESULT.** Batch 1: stale 23,633
+  → fresh 24,420 ms, **+3.63%, fresh slower 3/3**, both arm sds under 1% — a textbook sign-consistent
+  sweep, and I was one batch away from writing it up as a real 3.6% and "correcting" two rounds with
+  it. Batch 2: **+0.33%, 2/3**, deltas +79 / −184 / +317 straddling zero. The mechanism is in the
+  table — the **fresh** arm moved 24,420 → 23,754 ms between batches, **−2.7% on a byte-identical
+  configuration** — so batch 1's drift simply landed on one arm. **Round 840(c)'s rule, second
+  confirmation this session and the first where following it REVERSED the conclusion.**
+- **SO, PLAINLY: the warm arc STANDS and nothing needs re-taking.** 845/846/848/850/851 never
+  touched the stale tail; 847/849's cold arms did, but the difference is behaviourally nil and not a
+  demonstrated timing effect. **Round 845's `(JIT.1)` −33.6%, 4/4, 1.505× is untouched by
+  construction** — it built both arms in a throwaway worktree from pre-split commits, so its
+  dependencies were identical and neither cp file was involved. A per-kind/per-handler SHARE is a
+  ratio inside one arm and is immune regardless; only cross-regime multipliers were ever exposed.
+- **THE GUARD.** `scripts/lib/dep-classpath.sh` — one shared resolver, refusing a cache unless it is
+  non-empty, newer than **every** build-definition input (`libs.versions.toml` first), and names only
+  entries that still exist; every refusal prints why. All readers rewired; `aot-draw-variance.sh`
+  additionally gets round 857's staged-lib-dir treatment (its classpath ORDER is hashed into the AOT
+  fingerprint). **`build/bench/cp.txt` now has ZERO readers**, pinned source-level.
+- **ABLATION — three arms, each failing EXACTLY ONE uniquely-its-own pin** (baseline 6/6 green;
+  harness committed first, round 789). Drop `libs.versions.toml` from the inputs → only the
+  libs-versions pin fails **while the module-build-file pin stays GREEN**, which is precisely the
+  state `ab-warm.sh` was in: a guard that passes and cannot see the real change. Drop the
+  existence loop → only the missing-jar pin. Drop the non-empty test → only the empty-cache pin.
+- **GATES: full suite green (see STATUS.md).** `cost_gate.py` / `huge_methods.py` not required —
+  nothing under `commonMain` changed; the round is scripts plus one jvmTest class.
+
 **Round 857 (2026-08-08) — (MOD.7) CLOSED: THE SHIPPED AOT CACHE IS RETRAINED AGAINST THE
 POST-SPLIT LAYOUT, AND THE DEV LAUNCHER HAD BEEN INOPERABLE SINCE THE SPLIT.** The module
 split moved everything the fingerprint binds: the classpath went **8 → 14 jars** (ktor ×3,

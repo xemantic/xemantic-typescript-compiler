@@ -19,7 +19,7 @@
 set -uo pipefail
 cd /home/claude/git/xemantic-typescript-compiler
 
-OUT=build/bench/round858
+OUT="${OUT:-build/bench/round858}"
 mkdir -p "$OUT"
 date > "$OUT/started"
 
