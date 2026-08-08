@@ -38,6 +38,7 @@ import com.xemantic.typescript.compiler.ArgSections
 import com.xemantic.typescript.compiler.CallSections
 import com.xemantic.typescript.compiler.CpaSections
 import com.xemantic.typescript.compiler.CtaSections
+import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.PassTiming
@@ -146,6 +147,16 @@ internal val TIERS = listOf(
     // its boundary cost is microseconds against a ~900 ms region — round 738
     // stated that and it is regime-independent.
     "frontend",
+    // (WARM.9) round 861 — `init:buildFileLocalTypeMaps`, the ONLY tail pass over
+    // 1% warm (268.4 ms = 3.56%, `warm-tail-attribution.md` § 3). Round 829
+    // censused it COLD with `--fltmCensus` and closed it at 0.8-1.0%; warm it is
+    // 1.28x more important, and projecting a cold population share onto a warm ms
+    // row is arithmetic, not measurement. This tier arms that census — and,
+    // deliberately, the `rows` pass probe alongside it, so the census's ms and the
+    // pass row it must be read against come from the SAME rebuild. They cannot be
+    // taken from two: the row's warm draw spread is 41%, the widest in § 3's top
+    // twelve.
+    "fltm",
 )
 
 /**
@@ -172,6 +183,19 @@ internal fun tierBegin(tier: String) {
         "callcoarse" -> { CallSections.reset(); CallSections.mode = CallSections.COARSE }
         "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
         "frontend" -> { FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON }
+        // (WARM.9) the ONE tier that arms two probes, and the pairing is the
+        // point: the census prices a SUB-POPULATION of a pass whose own row it
+        // does not measure, so without the `rows` table from the same rebuild the
+        // two numbers would be a cross-draw ratio against a 41% spread. `rows` is
+        // the tier round 846 measured as probe-FREE for the tail rows (+0.0%
+        // warm), so pairing costs the row nothing that the census does not.
+        "fltm" -> {
+            FltmCensus.reset()
+            FltmCensus.on = true
+            PassTiming.detail = false
+            PassTiming.spineDetail = false
+            PassTiming.enabled = true
+        }
         else -> {
             PassTiming.detail = tier == "full"
             PassTiming.spineDetail = tier != "rows"
@@ -197,6 +221,11 @@ internal fun tierReport(tier: String): String = when (tier) {
     "libtypes" -> LibTypeCensus.report()
     "frontend" ->
         FrontEnd.report() + "\n== (FRONT.1) csv ==\n" + FrontEnd.csv() + "== (FRONT.1) csv end =="
+    // Census FIRST, then the pass table — the census must be read while
+    // `FltmCensus` still holds its counters, i.e. before `tierStop` releases
+    // them, and the pass row it is read against is in the same string.
+    "fltm" -> FltmCensus.report() +
+        buildString { PassTiming.enabled = false; PassTiming.dump { appendLine(it) } }
     // The pass probe is disarmed BEFORE its dump, exactly as it was pre-851 —
     // only the section probes need to stay armed through their report, and only
     // because each labels its arm from its own `mode`.
@@ -232,6 +261,8 @@ internal fun tierStop() {
     LibTypeCensus.enabled = false
     FrontEnd.mode = FrontEnd.OFF
     FrontEnd.reset()
+    FltmCensus.on = false
+    FltmCensus.reset()
     SpineDispatch.reset()
     CtaSections.reset()
     CpaSections.reset()
