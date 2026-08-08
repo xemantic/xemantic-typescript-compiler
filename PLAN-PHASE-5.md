@@ -20,6 +20,65 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 844 (2026-08-08) — (WARM.2): SHARING THE BOUND LIB STATE ACROSS DAEMON REQUESTS IS WORTH
+**8.65 ms = 0.13%** OF A WARM REBUILD. MEASURED, NOT ESTIMATED; NOTHING BUILT; STOP.** The
+candidate was warm-only and therefore invisible to every attribution table this repo has (all
+cold): the daemon rebuilds a fresh program per request, `RealLibSnapshots.parseCache` reuses the
+PARSED lib files process-wide, but BINDING them is per-program — a one-time unavoidable cost cold,
+paid on EVERY request warm. Round 772's "retained program state is worthless here" verdict is
+about the USER's files (`export *` barrels ⇒ 77-of-78 closures) and says nothing about the libs.
+Priced before anything was designed, per the round-716 rule that killed three caches in one round.
+
+- **THE PRIZE.** Warm in-process rebuilds, 3 warm-up + 8 measured, two processes: whole real-lib
+  region **8.65 / 9.86 ms** against a **6,846 / 6,663 ms** rebuild = **0.126% / 0.148%**. Breakdown
+  (medians): `RealLibResolver.resolve` 2.0 (a pure function of `(libNames, target)`, and it runs
+  **twice** per program), `bindLibFiles` **4.9**, identity-set stamping 1.5, `mergeSymbolTable`
+  0.09. Census: 45 lib files, 379 top-level statements, 1,784 stamped decl nodes, 185 merged
+  symbols. Cross-checked by an independent in-process microbench of `bindLibFiles` alone: median
+  **4.53 ms** over 10 runs, agreeing with the in-situ row. The lib-derived setup passes add at most
+  4.7 ms, so the **absolute ceiling on everything lib-shaped is ~13.4 ms = 0.20%**.
+- **WHY IT IS SMALL: THE PRIZE WAS ALREADY HARVESTED.** `parseCache` shares the *parse*, and
+  parsing is the expensive half; what remains per request is a top-level bind over ~400 KB of
+  body-less `.d.ts` yielding 185 global names. This is the round-843 front-end finding in
+  miniature — the warm front end is **807.9 ms** in total, so the lib region is 1.1% of it, and
+  the front end is where a reader would have gone looking.
+- **IT DOES *NOT* MOVE — round 788 does not apply, which is what makes the number quotable.**
+  `symbolTypes`/`declaredTypes`/`referenceCache` are `CheckerState` fields, i.e. per-`Checker`, so
+  the lazy type derivation runs identically whether the symbols were freshly bound or shared, and
+  all 185 symbols are consumed. The 8.65 ms is genuinely deletable in principle — which is exactly
+  why it is worth saying that 8.65 ms is the whole of it.
+- **THE HAZARDS WERE MEASURED, NOT ENUMERATED FROM THEORY, and one is worse than predicted.**
+  Instrumenting `mergeSingleSymbol` against the merged lib symbol ids: **175 merge collisions per
+  compile, 20 of which MUTATE a lib symbol, across 2 names — `Symbol` and `ImportAttributes`.** So
+  sharing bound lib symbols means request 2 inherits request 1's `flags |=` and 20 accumulated
+  `declarations` entries, growing without bound — and `Symbol` is precisely the SHARED-class merge
+  INV.3(d) says importers free-ride on. That is a LOWER bound (the census keys only on top-level
+  ids; nested `exports`/`members` writes and `mergeModuleAugmentations`' `globals[exportName] =`
+  are uncounted). The id hazard is **ORDER, not collision** — the daemon serves every request on
+  one thread, so ids never interleave, but skipping the bind shifts every later program's user
+  symbol ids by ~185, and round 607's sibling failure was **51 corpus failures whose `--listAll`
+  output stays IDENTICAL**. A safe version is barely expressible: the merge target set is
+  discovered dynamically, so safety means copy-on-write over every lib symbol's
+  `flags`/`declarations`/`valueDeclaration`/`exports` — re-doing the allocation the bind was doing.
+  Only `resolve` and the stamping sets are safely shareable: **3.5 ms**.
+- **VERDICT: NOT WORTH A ROUND, and the reason generalizes.** 0.13-0.20% is an order of magnitude
+  inside BOTH A/B bands (cold ±2.0%, warm ±1.0%), so the effect is unmeasurable by the instruments
+  that would have to confirm it, while carrying a hazard class that produces byte-identical output
+  while being wrong. `RealLibSnapshots`' existing KDoc decision ("binding is deliberately
+  per-consumer") is correct and now has a price attached: **it costs 4.9 ms warm.**
+- **WHAT THIS RULES IN BY ELIMINATION, queued as (WARM.3):** the compile is 91.8% checker warm, so
+  the only lib-shaped candidate with a plausible prize is the per-request re-derivation of lib
+  **TYPES** (`resolveInterfaceMembers` over `interface Array<T>` and friends, in per-`Checker`
+  `symbolTypes`/`declaredTypes`). It is unmeasured, it lives inside `checkSpine`, and it is
+  strictly MORE hazardous than this one (`Type` ids, interning, instantiation contexts) — so it
+  gets its own prize measurement before anyone designs it, not a design.
+- **GATES: none run and none required.** Nothing under `src/` changed; the temporary probe was
+  reverted and the tree verified clean, the binary rebuilt from HEAD. The probe itself was 3
+  timestamp pairs per PROGRAM (~0.3 µs against 6.8 s), the one shape in this arc where round 734's
+  boundary-cost calibration is structurally irrelevant — and its measured walls sat at or below
+  round 843's probe-free medians, confirming nothing was inflated. Re-appliable patch and harness
+  in the round's scratchpad (`r844-probe.patch`), not committed.
+
 **Round 843 (2026-08-07) — (WARM.1)(a): THE FIRST WARM-JVM ATTRIBUTION THIS REPO HAS EVER TAKEN,
 AND IT CORRECTS THE ARC'S HEADLINE ARTIFACT NUMBER BY 40%.** Owner directive this session:
 *"we have a new client-server architecture; prioritize profiling-based performance improvements on
@@ -1256,6 +1315,27 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   suspect — 574,620 calls into a distinct-keyed set — but round 801's law applies, an allocation
   count is not a cost), or add a probe MODE that keeps the pass rows and drops the per-call
   counters, calibrated DIFFERENTIALLY per round 734, never by an empty-span loop.
+
+- [x] **(WARM.2) — CLOSED ROUND 844 AS A MEASURED NEGATIVE: sharing the bound LIB state across
+  daemon requests is worth 8.65 ms = 0.13% of a warm rebuild, ceiling 0.20%.** Priced before
+  anything was designed. It does not merely MOVE (round 788 does not apply — the type caches are
+  per-`Checker`), so the number is real and it is simply small: `parseCache` already harvested the
+  expensive half, leaving a top-level bind over body-less `.d.ts` for 185 global names. Hazards
+  measured rather than theorized: **175 merge collisions per compile, 20 mutating a lib symbol**
+  (`Symbol`, `ImportAttributes`), a lower bound, plus an id-ORDER shift of ~185 whose failure mode
+  is byte-identical output (round 607). Do not re-open; `RealLibSnapshots`' "binding is
+  deliberately per-consumer" KDoc is right and now costs a known 4.9 ms warm.
+
+- [ ] **(WARM.3) — PRICE THE PER-REQUEST RE-DERIVATION OF LIB *TYPES* (a PRIZE MEASUREMENT, NOT A
+  DESIGN).** What (WARM.2) rules in by elimination: the warm compile is 91.8% checker, and the
+  per-`Checker` `symbolTypes`/`declaredTypes` mean `resolveInterfaceMembers` re-runs over
+  `interface Array<T>` and friends on every request. Unmeasured, lives inside `checkSpine`, and
+  **strictly more hazardous than (WARM.2)** — `Type` ids, interning and instantiation contexts all
+  cross the boundary, and `getTypeOfSymbol` only persists when the caller's instantiation context
+  is empty, so a shared entry can freeze a member as `T` or `any` by first-touch order. **Measure
+  the prize first and expect it to be small too**: (WARM.2)'s lesson is that the lib surface is
+  ~400 KB of declarations whose expensive half is already cached, and round 716's is that the
+  servable population in this compiler is reliably the CHEAP tail. If it is under ~1%, close it.
 
 - [ ] **(SERVE.1) — THE ARGUMENT LOOP LEAKS BEHAVIOUR-CHANGING MODES ACROSS SERVER REQUESTS.**
   Round 843 closed the `PassTiming`/`FltmCensus`/`GlobalsAmp` half; **`CpaSections.verify*`,
