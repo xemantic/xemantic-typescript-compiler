@@ -71,28 +71,56 @@ fun main(args: Array<String>) {
  * Non-zero from the CLIENT, by contrast, can also mean the request never ran
  * (see XTSC_CLIENT_UNAVAILABLE).
  */
-fun runCli(args: Array<String>): Int {
-    var project = "."
+/**
+ * The CLI's parsed arguments — everything the argument loop decides that is NOT
+ * a process-global debug mode.
+ *
+ * Split out of [runCli] for (SERVE.1): it makes the argument loop drivable on
+ * its own, which is what lets `CliModeRestoreTest` feed it every documented
+ * flag and then check — reflectively, over the mode objects' declared fields —
+ * that [ModeLedger.restore] puts every one of them back. Driving `runCli`
+ * instead would compile a project, and a compile legitimately moves counters.
+ */
+internal class CliArgs {
+    var project: String = "."
     var outDir: String? = null
-    var noEmit = false
-    var listAll = false
-    var watch = false
-    var watchVerify = false
-    var incremental = false
-    var passTiming = false
-    // (FRONT.2) round 801 — print the flow-scan census. Set by --frontEnd and
-    // --verifyFlowScan; a LOCAL rather than a read of `FrontEnd.mode`, which
-    // the FrontEnd report block clears before this one runs.
-    var flowScanReport = false
+    var noEmit: Boolean = false
+    var listAll: Boolean = false
+    var watch: Boolean = false
+    var watchVerify: Boolean = false
+    var incremental: Boolean = false
+    var passTiming: Boolean = false
+    /**
+     * (FRONT.2) round 801 — print the flow-scan census. Set by `--frontEnd` and
+     * `--verifyFlowScan`; held here rather than read back off `FrontEnd.mode`,
+     * which the FrontEnd report block clears before this one runs.
+     */
+    var flowScanReport: Boolean = false
+    /** `--help`/`-h` was seen; the caller prints usage and stops. */
+    var help: Boolean = false
+}
+
+/**
+ * Parses [args], recording every process-global debug MODE it turns on in
+ * [modes] so the caller can put them all back.
+ *
+ * **THE CALL CONVENTION IS THE GUARD (SERVE.1).** A `when` arm here writes a
+ * global mode field ONLY through `modes.set(Obj::field, value)`. A bare
+ * `Obj.field = value` compiles, works in the one-shot CLI, and silently
+ * reconfigures every later request on a `--serve` daemon; nothing in the type
+ * system can see the difference, so `CliModeRestoreTest` is what does.
+ */
+internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
+    val o = CliArgs()
     var i = 0
     while (i < args.size) {
         when (val a = args[i]) {
-            "--noEmit", "--noemit" -> noEmit = true
-            "--watch", "-w" -> watch = true
-            "--incremental" -> incremental = true
-            "--watchVerify", "--watchverify" -> { watch = true; watchVerify = true }
-            "--listAll", "--listall" -> listAll = true
-            "--passTiming", "--passtiming" -> passTiming = true
+            "--noEmit", "--noemit" -> o.noEmit = true
+            "--watch", "-w" -> o.watch = true
+            "--incremental" -> o.incremental = true
+            "--watchVerify", "--watchverify" -> { o.watch = true; o.watchVerify = true }
+            "--listAll", "--listall" -> o.listAll = true
+            "--passTiming", "--passtiming" -> o.passTiming = true
             // (WARM.1)(c) round 846 — the probe's cheaper TIERS. `--passTiming`
             // costs ~50% of a WARM rebuild, which makes every warm absolute in
             // its table untrustworthy; these keep the per-pass ROWS and drop the
@@ -100,13 +128,17 @@ fun runCli(args: Array<String>): Int {
             // the PRODUCTION spine walk, so `checkSpine`'s row is un-perturbed.
             // Everything they drop reads 0 in the dump and the dump SAYS so.
             "--passTimingRows", "--passtimingrows" -> {
-                passTiming = true; PassTiming.detail = false; PassTiming.spineDetail = false
+                o.passTiming = true
+                modes.set(PassTiming::detail, false)
+                modes.set(PassTiming::spineDetail, false)
             }
             "--passTimingSpine", "--passtimingspine" -> {
-                passTiming = true; PassTiming.detail = false; PassTiming.spineDetail = true
+                o.passTiming = true
+                modes.set(PassTiming::detail, false)
+                modes.set(PassTiming::spineDetail, true)
             }
             "--verifyMappedCache", "--verifymappedcache" -> {
-                passTiming = true; PassTiming.verifyMappedCache = true
+                o.passTiming = true; modes.set(PassTiming::verifyMappedCache, true)
             }
             // (SETUP.2): the produced-vs-consumed census of buildFileLocalTypeMaps
             // — `calls` vs `distinct` at its single read site, plus the share of
@@ -114,7 +146,7 @@ fun runCli(args: Array<String>): Int {
             // rather than moves). Implies --passTiming so the row it prices is on
             // the same run.
             "--fltmCensus", "--fltmcensus" -> {
-                passTiming = true; FltmCensus.reset(); FltmCensus.on = true
+                o.passTiming = true; FltmCensus.reset(); modes.set(FltmCensus::on, true)
             }
             // (TYPE.1)(a): attribute the getTypeOfExpression calls BY CALLER —
             // the only measurement that can test ARCHITECTURE-RETHINK § 0.1
@@ -122,76 +154,76 @@ fun runCli(args: Array<String>): Int {
             // same node". Costs a stack walk per OUTERMOST call, so it is an
             // offline attribution mode, never a production one.
             "--typeOfExprCallers", "--typeofexprcallers" -> {
-                passTiming = true; PassTiming.callerAttr = true
+                o.passTiming = true; modes.set(PassTiming::callerAttr, true)
             }
             // (DISPATCH.1)(a): the opt-in per-kind handler-table derivation.
             "--dispatchProbe", "--dispatchprobe" -> {
-                SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.PROBE
+                SpineDispatch.reset(); modes.set(SpineDispatch::mode, SpineDispatch.PROBE)
             }
             "--dispatchGated", "--dispatchgated" -> {
-                SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.GATED
+                SpineDispatch.reset(); modes.set(SpineDispatch::mode, SpineDispatch.GATED)
             }
             // (SPINE.1)(a): the opt-in intra-handler attribution.
             "--spineSections", "--spinesections" -> {
-                SpineSections.reset(); SpineSections.mode = SpineSections.ON
+                SpineSections.reset(); modes.set(SpineSections::mode, SpineSections.ON)
                 repeat(200) { SpineSections.calibrate() }
             }
             // (CALL.1)(a): the opt-in intra-function attribution of
             // checkSingleCallExpressionTypes.
             "--callSections", "--callsections" -> {
-                CallSections.reset(); CallSections.mode = CallSections.ON
+                CallSections.reset(); modes.set(CallSections::mode, CallSections.ON)
             }
             // (CALL.2)(a): the opt-in intra-function attribution of
             // checkArgumentsAgainstSignature. The `Coarse` variant keeps only the
             // anchors, so an ON-vs-COARSE pair gives the per-boundary cost
             // differentially — the only calibration round 734 found trustworthy.
             "--argSections", "--argsections" -> {
-                ArgSections.reset(); ArgSections.mode = ArgSections.ON
+                ArgSections.reset(); modes.set(ArgSections::mode, ArgSections.ON)
             }
             "--argSectionsCoarse", "--argsectionscoarse" -> {
-                ArgSections.reset(); ArgSections.mode = ArgSections.COARSE
+                ArgSections.reset(); modes.set(ArgSections::mode, ArgSections.COARSE)
             }
             // (CALL.5)(b): the already-relates pre-gate on the argument check's
             // two unconditional narrowing arms. CENSUS keeps the OLD behaviour
             // and only records the verdict, so it reproduces the pre-change
             // binary and is a legitimate grid baseline; ON acts on it.
             "--argNarrowCensus", "--argnarrowcensus" -> {
-                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.CENSUS
+                ArgNarrowGate.reset(); modes.set(ArgNarrowGate::mode, ArgNarrowGate.CENSUS)
             }
             "--verifyArgNarrowGate", "--verifyargnarrowgate" -> {
-                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.CENSUS
+                ArgNarrowGate.reset(); modes.set(ArgNarrowGate::mode, ArgNarrowGate.CENSUS)
             }
             "--argNarrowGate", "--argnarrowgate" -> {
-                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.ON
+                ArgNarrowGate.reset(); modes.set(ArgNarrowGate::mode, ArgNarrowGate.ON)
             }
             "--argNarrowGateOff", "--argnarrowgateoff" -> {
-                ArgNarrowGate.reset(); ArgNarrowGate.mode = ArgNarrowGate.OFF
+                ArgNarrowGate.reset(); modes.set(ArgNarrowGate::mode, ArgNarrowGate.OFF)
             }
             // (CALL.3)(a): the opt-in attribution INSIDE narrowTypeFromFlow — the
             // arrivals-vs-distinct census plus the per-arrival split. `Coarse`
             // keeps only the whole-walk anchor, so an ON-vs-COARSE pair prices
             // the probe boundary differentially.
             "--narrowSections", "--narrowsections" -> {
-                NarrowSections.reset(); NarrowSections.mode = NarrowSections.ON
+                NarrowSections.reset(); modes.set(NarrowSections::mode, NarrowSections.ON)
             }
             "--narrowSectionsCoarse", "--narrowsectionscoarse" -> {
-                NarrowSections.reset(); NarrowSections.mode = NarrowSections.COARSE
+                NarrowSections.reset(); modes.set(NarrowSections::mode, NarrowSections.COARSE)
             }
             // (CALL.4): ON plus the `getReferencePath` rows, which are an order
             // of magnitude more frequent than the `narrowBy*` leaves — an
             // ON-vs-DEEP pair is their own differential.
             "--narrowSectionsDeep", "--narrowsectionsdeep" -> {
-                NarrowSections.reset(); NarrowSections.mode = NarrowSections.DEEP
+                NarrowSections.reset(); modes.set(NarrowSections::mode, NarrowSections.DEEP)
             }
             // (TYPE.2)(a): the opt-in attribution INSIDE spineCtaM3StatementAnchor
             // (level A, by callee) and checkVarDeclAssignability (level B, by
             // section). `Coarse` keeps only the per-level anchors, so an
             // ON-vs-COARSE pair prices the probe boundary differentially.
             "--ctaSections", "--ctasections" -> {
-                CtaSections.reset(); CtaSections.mode = CtaSections.ON
+                CtaSections.reset(); modes.set(CtaSections::mode, CtaSections.ON)
             }
             "--ctaSectionsCoarse", "--ctasectionscoarse" -> {
-                CtaSections.reset(); CtaSections.mode = CtaSections.COARSE
+                CtaSections.reset(); modes.set(CtaSections::mode, CtaSections.COARSE)
             }
             // (IANY.1): the opt-in attribution of spineIanyEnterNode — the last
             // of round 732's six biggest spine handlers with no attribution
@@ -199,25 +231,25 @@ fun runCli(args: Array<String>): Int {
             // boundary count is a function of the node count alone, so a
             // before/after read of its rows carries no round-793 correction.
             "--ianySections", "--ianysections" -> {
-                IanySections.reset(); IanySections.mode = IanySections.ON
+                IanySections.reset(); modes.set(IanySections::mode, IanySections.ON)
             }
             // (IANY.1) the gate as a switch: restores the pre-798 behaviour
             // exactly, so ONE binary carries both arms — this run reproduces the
             // pre-change binary and is a legitimate grid baseline.
             "--ianyGateOff", "--ianygateoff" -> {
-                IanySections.gateOff = true
+                modes.set(IanySections::gateOff, true)
             }
             // (IANY.1) round 799: the arm pre-gate as a switch — restores the
             // pre-799 19-arm `is` chain for every parent kind, so one binary
             // carries both arms of the residue-row read.
             "--ianyArmGateOff", "--ianyarmgateoff" -> {
-                IanySections.armGateOff = true
+                modes.set(IanySections::armGateOff, true)
             }
             // (IANY.1) round 800: the CALL/NEW argument-edge gate as a switch —
             // restores the pre-800 arm (every argument resolves its callee), so
             // one binary carries both arms of the row read and the grid baseline.
             "--ianyArgGateOff", "--ianyarggateoff" -> {
-                IanySections.argGateOff = true
+                modes.set(IanySections::argGateOff, true)
             }
             // (ENGINE.2): the opt-in attribution INSIDE checkPropertyAccessInExpr
             // (level P, recursive) and checkSinglePropertyAccess (level Q). The
@@ -227,25 +259,26 @@ fun runCli(args: Array<String>): Int {
             // `Census` reads NO timestamps and answers G4 (does the walk visit a
             // node twice?) without polluting a timing run.
             "--cpaSections", "--cpasections" -> {
-                CpaSections.reset(); CpaSections.mode = CpaSections.ON
+                CpaSections.reset(); modes.set(CpaSections::mode, CpaSections.ON)
             }
             "--cpaSectionsCoarse", "--cpasectionscoarse" -> {
-                CpaSections.reset(); CpaSections.mode = CpaSections.COARSE
+                CpaSections.reset(); modes.set(CpaSections::mode, CpaSections.COARSE)
             }
             "--cpaSectionsCensus", "--cpasectionscensus" -> {
-                CpaSections.reset(); CpaSections.mode = CpaSections.CENSUS
+                CpaSections.reset(); modes.set(CpaSections::mode, CpaSections.CENSUS)
             }
             // (ENGINE.2d)(a): keep the PRE-gate behaviour of the round-425
             // loop-entry retry and COUNT the cases where skipping it would have
             // changed the answer. Reads no timestamp; independent of the mode.
             "--verifyLoopRetry", "--verifyloopretry" -> {
-                CpaSections.verifyLoopRetry = true
+                modes.set(CpaSections::verifyLoopRetry, true)
             }
             // ... and its control: verify over EVERY retry call, including the
             // loop-crossing ones the gate never skips. A non-zero type-diff here
             // is what makes the skippable population's zero non-vacuous.
             "--verifyLoopRetryAll", "--verifyloopretryall" -> {
-                CpaSections.verifyLoopRetry = true; CpaSections.verifyLoopRetryAll = true
+                modes.set(CpaSections::verifyLoopRetry, true)
+                modes.set(CpaSections::verifyLoopRetryAll, true)
             }
             // (ENGINE.2f) round 794: keep the round-424 UNION loop-entry retry
             // WALKING and honour its verdict — so the run reproduces the
@@ -253,28 +286,29 @@ fun runCli(args: Array<String>): Int {
             // the substituted candidate against the re-walked one at instance,
             // member-set and verdict granularity.
             "--verifyUnionRetry", "--verifyunionretry" -> {
-                CpaSections.verifyUnionRetry = true
+                modes.set(CpaSections::verifyUnionRetry, true)
             }
             // ... and its positive control: run the same comparison over the
             // COMPLEMENT (the loop-CROSSING calls the substitution never serves),
             // where round 424's reason for existing says the two walks must
             // disagree. A live instrument reports differences there.
             "--verifyUnionRetryAll", "--verifyunionretryall" -> {
-                CpaSections.verifyUnionRetry = true; CpaSections.verifyUnionRetryAll = true
+                modes.set(CpaSections::verifyUnionRetry, true)
+                modes.set(CpaSections::verifyUnionRetryAll, true)
             }
             // (ENGINE.2d)(b): evaluate checkMemberAccessMissing's flow-suppression
             // predicate BOTH eagerly (where the blocks used to run) and deferred
             // (after the body), honour the EAGER verdict — so the run reproduces
             // the pre-change binary's output — and count every disagreement.
             "--verifyDeferSuppression", "--verifydefersuppression" -> {
-                CpaSections.verifyDeferSuppression = true
+                modes.set(CpaSections::verifyDeferSuppression, true)
             }
             // ... and its positive control: the deferred evaluation is handed an
             // unresolvable property name, so a live comparator MUST report
             // differences. A zero here would mean the instrument is dead.
             "--verifyDeferSuppressionBogus", "--verifydefersuppressionbogus" -> {
-                CpaSections.verifyDeferSuppression = true
-                CpaSections.verifyDeferSuppressionBogus = true
+                modes.set(CpaSections::verifyDeferSuppression, true)
+                modes.set(CpaSections::verifyDeferSuppressionBogus, true)
             }
             // (ENGINE.2e) round 792: price a candidate WHOLE-FUNCTION pre-gate.
             // Computes "does the property already resolve on the receiver's own
@@ -283,15 +317,16 @@ fun runCli(args: Array<String>): Int {
             // never a count — while recording how many of the calls the gate
             // would skip actually emitted. That last number is the falsifier.
             "--cmamPreGate", "--cmampregate" -> {
-                CpaSections.reset(); CpaSections.mode = CpaSections.ON
-                CpaSections.preGateProbe = true
+                CpaSections.reset(); modes.set(CpaSections::mode, CpaSections.ON)
+                modes.set(CpaSections::preGateProbe, true)
             }
             // ... and its positive control: the gate answers yes for EVERY call,
             // so the "bodies that emitted" column must become non-zero. A dead
             // instrument would read 0 here too.
             "--cmamPreGateBogus", "--cmampregatebogus" -> {
-                CpaSections.reset(); CpaSections.mode = CpaSections.ON
-                CpaSections.preGateProbe = true; CpaSections.preGateBogus = true
+                CpaSections.reset(); modes.set(CpaSections::mode, CpaSections.ON)
+                modes.set(CpaSections::preGateProbe, true)
+                modes.set(CpaSections::preGateBogus, true)
             }
             // (ENGINE.2g) round 793: price the call-expression PROLOGUE pre-gate.
             // Computes the gate, HONOURS NOTHING (so the run reproduces the
@@ -305,60 +340,61 @@ fun runCli(args: Array<String>): Int {
             // run reproduces the pre-change binary and IS the grid's baseline —
             // and compares the two at `Diagnostic` granularity.
             "--verifyImplRelated", "--verifyimplrelated" -> {
-                CallSections.verifyImplRelated = true
+                modes.set(CallSections::verifyImplRelated, true)
             }
             // ... and the FREE complement control (round 790): the same
             // comparison over every single-signature call, not only the ones
             // that reach an emission.
             "--verifyImplRelatedAll", "--verifyimplrelatedall" -> {
-                CallSections.verifyImplRelated = true
-                CallSections.verifyImplRelatedAll = true
+                modes.set(CallSections::verifyImplRelated, true)
+                modes.set(CallSections::verifyImplRelatedAll, true)
             }
             // ... and the POSITIVE control: the deferred evaluation drops the
             // `allArgumentsMatch` gate, so the diff column must move.
             "--verifyImplRelatedBogus", "--verifyimplrelatedbogus" -> {
-                CallSections.verifyImplRelated = true
-                CallSections.verifyImplRelatedAll = true
-                CallSections.verifyImplRelatedBogus = true
+                modes.set(CallSections::verifyImplRelated, true)
+                modes.set(CallSections::verifyImplRelatedAll, true)
+                modes.set(CallSections::verifyImplRelatedBogus, true)
             }
             "--ccetPreGate", "--ccetpregate" -> {
-                CallSections.reset(); CallSections.mode = CallSections.ON
-                CallSections.preGateProbe = true
+                CallSections.reset(); modes.set(CallSections::mode, CallSections.ON)
+                modes.set(CallSections::preGateProbe, true)
             }
             // ... and its positive control: the gate refutes EVERY call, so the
             // "of those FIRED" column must report the profile's true prologue
             // firing count. A dead instrument would read 0 here too.
             "--ccetPreGateBogus", "--ccetpregatebogus" -> {
-                CallSections.reset(); CallSections.mode = CallSections.ON
-                CallSections.preGateProbe = true; CallSections.preGateBogus = true
+                CallSections.reset(); modes.set(CallSections::mode, CallSections.ON)
+                modes.set(CallSections::preGateProbe, true)
+                modes.set(CallSections::preGateBogus, true)
             }
             // (FRONT.1): the opt-in front-end attribution — section 0.1 stage 5,
             // ~20% of the compile and never profiled. Per-FILE spans, so no
             // calibration counterpart is needed.
             "--frontEnd", "--frontend" -> {
-                FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON
-                FlowScan.reset(); flowScanReport = true
+                FrontEnd.reset(); modes.set(FrontEnd::mode, FrontEnd.ON)
+                FlowScan.reset(); o.flowScanReport = true
             }
             // (FRONT.2) round 801 — the B464 reassignment-scan A/B and its
             // equivalence verifier. Both scanners are in the binary, so these
             // select an arm rather than needing a second build.
             "--flowScanLegacy", "--flowscanlegacy" -> {
-                FlowScan.reset(); FlowScan.legacy = true
+                FlowScan.reset(); modes.set(FlowScan::legacy, true)
             }
             "--verifyFlowScan", "--verifyflowscan" -> {
-                FlowScan.reset(); FlowScan.verify = true; flowScanReport = true
+                FlowScan.reset(); modes.set(FlowScan::verify, true); o.flowScanReport = true
             }
             "--flowScanBogus", "--flowscanbogus" -> {
-                FlowScan.bogus = true
+                modes.set(FlowScan::bogus, true)
             }
             "--flowEagerSet", "--floweagerset" -> {
-                FlowScan.eagerSet = true
+                modes.set(FlowScan::eagerSet, true)
             }
             "--partitionCheck", "--partitioncheck" -> {
-                i++; if (i < args.size) PartitionCheck.workers = args[i].toIntOrNull() ?: 0
+                i++; if (i < args.size) modes.set(PartitionCheck::workers, args[i].toIntOrNull() ?: 0)
             }
             "--workers" -> {
-                i++; if (i < args.size) ParallelCheckMode.workers = args[i].toIntOrNull() ?: 0
+                i++; if (i < args.size) modes.set(ParallelCheckMode::workers, args[i].toIntOrNull() ?: 0)
             }
             // (AUDIT.3): price the globals-lookup population by AMPLIFICATION —
             // N reads of the same key under ONE timestamp pair, so the ~89 ns
@@ -366,11 +402,11 @@ fun runCli(args: Array<String>): Int {
             // instrumented table, hence --passTiming. Two runs at different N
             // solve for the per-read cost with the pair cost cancelling.
             "--globalsAmp", "--globalsamp" -> {
-                passTiming = true
+                o.passTiming = true
                 i++
                 if (i < args.size) {
                     GlobalsAmp.reset()
-                    GlobalsAmp.reads = args[i].toIntOrNull() ?: 0
+                    modes.set(GlobalsAmp::reads, args[i].toIntOrNull() ?: 0)
                 }
             }
             // (AOT.4)(c) round 840(c): send the emitted tree somewhere other than the
@@ -378,13 +414,43 @@ fun runCli(args: Array<String>): Int {
             // ~1.26 s on an emitting compile (docs/perf/aot-cache.md § 9) and a training
             // run must never write into the user's project. Ignored under --noEmit, and
             // (deliberately) not threaded through the --incremental/--watch paths.
-            "--outDir", "--outdir" -> { i++; if (i < args.size) outDir = args[i] }
-            "--project", "-p" -> { i++; if (i < args.size) project = args[i] }
-            "--help", "-h" -> { printUsage(); return 0 }
-            else -> if (!a.startsWith("-")) project = a
+            "--outDir", "--outdir" -> { i++; if (i < args.size) o.outDir = args[i] }
+            "--project", "-p" -> { i++; if (i < args.size) o.project = args[i] }
+            "--help", "-h" -> { o.help = true; return o }
+            else -> if (!a.startsWith("-")) o.project = a
         }
         i++
     }
+    return o
+}
+
+fun runCli(args: Array<String>): Int {
+    // (SERVE.1): every debug mode an argument turns on is restored when this
+    // call returns, however it returns. `main` is no longer a process's single
+    // act — `CompileServer` calls this once per request inside ONE long-lived
+    // JVM — so a mode left set here is a permanent, invisible reconfiguration
+    // of every LATER request on that server, and several of these modes select
+    // a different code path rather than merely a probe.
+    val modes = ModeLedger()
+    return try {
+        runCliCore(args, modes)
+    } finally {
+        modes.restore()
+    }
+}
+
+private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
+    val o = parseCliArgs(args, modes)
+    if (o.help) { printUsage(); return 0 }
+    val project = o.project
+    val outDir = o.outDir
+    val noEmit = o.noEmit
+    val listAll = o.listAll
+    val watch = o.watch
+    val watchVerify = o.watchVerify
+    val incremental = o.incremental
+    val passTiming = o.passTiming
+    val flowScanReport = o.flowScanReport
 
     println("xemantic-typescript-compiler — whole-project build")
     println(
@@ -394,7 +460,7 @@ fun runCli(args: Array<String>): Int {
 
     if (passTiming) {
         PassTiming.reset()
-        PassTiming.enabled = true
+        modes.set(PassTiming::enabled, true)
     }
     val (result, duration) = measureTimedValue {
         // INV.7(d3): under --incremental, a persisted .xtsbuildinfo (same compiler
@@ -416,39 +482,24 @@ fun runCli(args: Array<String>): Int {
 
     printDiagnostics(result.diagnostics, listAll)
     PartitionCheck.reportLines.forEach { println(it) }
+    // (SERVE.1): the report is an ACCUMULATING list, not a mode, so the ledger
+    // cannot put it back — and left standing it is printed again by every later
+    // request on a warm server, which is the one leak in this function visible
+    // in the response TEXT rather than only in the flag.
+    PartitionCheck.reportLines.clear()
     println("time:    ${duration.inWholeMilliseconds} ms")
     if (passTiming) PassTiming.dump(::println)
     if (FltmCensus.on) print(FltmCensus.report())
     if (passTiming) {
-        // (SERVER.1): RESTORE the instrumentation, exactly as the section probes
-        // below already clear their own `mode` after reporting. `main` is no
-        // longer a process's single act — `CompileServer.compileCapturing` calls
-        // it once per request inside ONE long-lived JVM — so a flag this block
-        // sets and never clears instruments every LATER request on that server,
-        // silently and with no second dump to make it visible. The probe is not
-        // free (round 733 measured it moving `checkSpine` by +29 ms on its own),
-        // so a leaked `enabled` is a permanent, invisible tax on a warm server;
-        // `GlobalsAmp.reads` is worse still (it re-reads every globals lookup N
-        // times), and `verifyMappedCache` recomputes every served cache hit.
-        // Nothing here changes what a one-shot CLI prints: every reader of these
-        // flags has already run by this line.
-        PassTiming.enabled = false
-        PassTiming.verifyMappedCache = false
-        PassTiming.callerAttr = false
-        // (WARM.1)(c): the tiers are MODES too — a `--passTimingRows` request on
-        // a warm server would otherwise silently downgrade every LATER
-        // `--passTiming` request's table to a tier it never asked for, and the
-        // only tell would be the dump's own header line.
-        PassTiming.detail = true
-        PassTiming.spineDetail = true
-        // `--fltmCensus` / `--globalsAmp` imply `--passTiming` at the parse site
-        // above, so this block is where both of them are cleared too.
-        FltmCensus.on = false
-        GlobalsAmp.reads = 0
-        // Drops the counters and the multi-million-entry distinct-node set the
-        // dump has just consumed; `reset()` deliberately does NOT touch
-        // `enabled`/`censusMode`/`disabledPasses`, which is why the flag above is
-        // cleared explicitly rather than by this call.
+        // (SERVE.1): every instrumentation FLAG this request turned on —
+        // `enabled`, `verifyMappedCache`, `callerAttr`, the `--passTimingRows`
+        // tiers, `FltmCensus.on`, `GlobalsAmp.reads` — is put back by the
+        // ledger's `restore()` when this call returns, to the value it HELD
+        // rather than to a guessed default (round 619). What is left here is the
+        // one thing a ledger cannot do: DROP the counters and the
+        // multi-million-entry distinct-node set the dump has just consumed.
+        // `reset()` deliberately does not touch
+        // `enabled`/`censusMode`/`disabledPasses`.
         PassTiming.reset()
     }
     if (SpineDispatch.mode == SpineDispatch.PROBE) {
@@ -456,21 +507,18 @@ fun runCli(args: Array<String>): Int {
         println("== (DISPATCH.1) csv ==")
         print(SpineDispatch.csv())
         println("== (DISPATCH.1) csv end ==")
-        SpineDispatch.mode = SpineDispatch.OFF
     }
     if (SpineSections.mode == SpineSections.ON) {
         println(SpineSections.report())
         println("== (SPINE.1) csv ==")
         print(SpineSections.csv())
         println("== (SPINE.1) csv end ==")
-        SpineSections.mode = SpineSections.OFF
     }
     if (CallSections.mode == CallSections.ON) {
         println(CallSections.report())
         println("== (CALL.1) csv ==")
         print(CallSections.csv())
         println("== (CALL.1) csv end ==")
-        CallSections.mode = CallSections.OFF
     } else if (CallSections.verifyImplRelated) {
         println(CallSections.implRelatedReport())
     }
@@ -482,39 +530,33 @@ fun runCli(args: Array<String>): Int {
         println("== (CALL.2) csv ==")
         print(ArgSections.csv())
         println("== (CALL.2) csv end ==")
-        ArgSections.mode = ArgSections.OFF
     }
     if (NarrowSections.mode != NarrowSections.OFF) {
         println(NarrowSections.report())
         println("== (CALL.3) csv ==")
         print(NarrowSections.csv())
         println("== (CALL.3) csv end ==")
-        NarrowSections.mode = NarrowSections.OFF
     }
     if (FrontEnd.mode != FrontEnd.OFF) {
         println(FrontEnd.report())
         println("== (FRONT.1) csv ==")
         print(FrontEnd.csv())
         println("== (FRONT.1) csv end ==")
-        FrontEnd.mode = FrontEnd.OFF
     }
     if (flowScanReport) {
         print(FlowScan.report())
-        FlowScan.verify = false; FlowScan.bogus = false
     }
     if (IanySections.mode != IanySections.OFF) {
         println(IanySections.report())
         println("== (IANY.1) csv ==")
         print(IanySections.csv())
         println("== (IANY.1) csv end ==")
-        IanySections.mode = IanySections.OFF
     }
     if (CtaSections.mode != CtaSections.OFF) {
         println(CtaSections.report())
         println("== (TYPE.2) csv ==")
         print(CtaSections.csv())
         println("== (TYPE.2) csv end ==")
-        CtaSections.mode = CtaSections.OFF
     }
     if (CpaSections.mode != CpaSections.OFF || CpaSections.verifyLoopRetry ||
         CpaSections.verifyDeferSuppression || CpaSections.verifyUnionRetry
@@ -523,7 +565,6 @@ fun runCli(args: Array<String>): Int {
         println("== (ENGINE.2) csv ==")
         print(CpaSections.csv())
         println("== (ENGINE.2) csv end ==")
-        CpaSections.mode = CpaSections.OFF
     }
     println(if (result.errorCount == 0) "OK — 0 errors" else "FAILED — ${result.errorCount} error(s)")
     if (watch) runWatchLoop(project, result.configPath, noEmit, listAll, watchVerify, result)
@@ -645,7 +686,21 @@ private fun printDiagnostics(diagnostics: List<Diagnostic>, listAll: Boolean = f
 }
 
 private fun printUsage() {
-    println(
+    println(usageText())
+}
+
+/**
+ * The `--help` text.
+ *
+ * A function rather than an inline `println` because it is the CLI's own
+ * registry of what flags exist: `CliModeRestoreTest` reads every `--flag` token
+ * out of it and drives [parseCliArgs] with the lot, so a documented flag that
+ * leaks a mode fails the suite. The residual that leaves — an UNDOCUMENTED
+ * flag is not driven, and so not covered — is the reason the same test also
+ * asserts that a named list of the behaviour-changing modes was actually
+ * reached by that sweep.
+ */
+internal fun usageText(): String =
         """
         Usage: xemantic-typescript-compiler [--project|-p <dir-or-tsconfig>] [--noEmit] [path]
 
@@ -688,6 +743,8 @@ private fun printUsage() {
           --cpaSectionsCensus  counters and distinct-node sets only; reads no timestamps
           --verifyLoopRetry  (ENGINE.2d)(a) keep the round-425 loop-entry retry and COUNT
                              every call where skipping it would change the answer
+          --verifyLoopRetryAll  the same over EVERY retry call, including the loop-crossing
+                             ones the gate never skips — the control that makes the zero live
           --verifyUnionRetry  (ENGINE.2f) keep the round-424 UNION loop-entry retry walking
                              and honour it, while comparing the substituted candidate against
                              the re-walked one (--verifyUnionRetryAll = the complement control)
@@ -699,6 +756,9 @@ private fun printUsage() {
           --verifyDeferSuppression  (ENGINE.2d)(b) evaluate checkMemberAccessMissing's flow
                              suppression BOTH eagerly and deferred, honour the eager verdict,
                              and count every disagreement (--verifyDeferSuppressionBogus = control)
+          --ccetPreGate      (ENGINE.2g) compute the call-expression prologue pre-gate WITHOUT
+                             honouring it, and count how many skipped calls emit
+                             (--ccetPreGateBogus = control)
           --cmamPreGate      (ENGINE.2e) compute checkMemberAccessMissing's whole-function
                              pre-gate WITHOUT honouring it: prints the population it would
                              skip, the body time behind it, and how many of those calls
@@ -709,6 +769,8 @@ private fun printUsage() {
           --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
+          --verifyMappedCache  recompute every served INV.5(c) mapped-cache hit and split
+                             shape-different serves from id-only ones (implies --passTiming)
           --incremental      persist/reuse tsconfig.xtsbuildinfo across processes (recheck only changes under --noEmit)
           --watch, -w        stay running and rebuild on file changes (incremental recheck under --noEmit)
           --watchVerify      --watch + diff every incremental result against a full rebuild (INV.7(d1) gate)
@@ -719,5 +781,3 @@ private fun printUsage() {
                              + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help
         """.trimIndent()
-    )
-}
