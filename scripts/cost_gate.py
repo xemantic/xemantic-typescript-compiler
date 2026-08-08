@@ -220,7 +220,22 @@ def resolve_classpath():
         sys.exit("error: gradle compileKotlinJvm failed")
     if classpath is None:
         sys.exit("error: could not resolve jvmRuntimeClasspath")
-    return os.path.join(REPO, "build", "classes", "kotlin", "jvm", "main") + ":" + classpath
+    # ROUND-853 FIX — the round-MOD.3 trap, third instance (852 found it in
+    # `grid838.sh`, 853 in `huge_methods.py`). `jvmRuntimeClasspath` resolves the
+    # DEPENDENCIES only, so the compiler's own classes have to be prepended here —
+    # and until now this prepended the ROOT project's dir, which since the split is
+    # a stale leftover that still contains a whole (pre-split) compiler. Being FIRST
+    # on the classpath, it won every load: from MOD.3 until here the gate ran a
+    # frozen binary, which is why every round in that window read `+0.00% on all 18
+    # counters`. A `+0.00%` from a gate that cannot see the code under test is not
+    # evidence. The positive control below is the point: this file must fail loudly
+    # rather than measure the wrong thing.
+    classes = os.path.join(REPO, MODULE, "build", "classes", "kotlin", "jvm", "main")
+    if not os.path.isfile(os.path.join(classes, "com", "xemantic", "typescript",
+                                       "compiler", "MainKt.class")):
+        sys.exit("error: no MainKt under %s — the gate would measure whatever else is on "
+                 "the classpath. Run `./gradlew :%s:compileKotlinJvm`." % (classes, MODULE))
+    return classes + ":" + classpath
 
 
 def bench_project(profile):
@@ -274,9 +289,20 @@ def run_profile(profile, heap):
             cwd=REPO, stdout=f, stderr=subprocess.STDOUT,
         ).returncode
     text = open(log).read()
-    if rc != 0:
+    # ROUND-853: `exit 1 when the compile finds errors` (tsc semantics) landed at
+    # d5ed6276, and every dashboard profile HAS errors — so a correctly-wired gate
+    # returns 1 on every run. This did not surface for the whole window because the
+    # gate was loading a frozen pre-split binary that predates the change (see
+    # `resolve_classpath`). What distinguishes a run that answered from one that
+    # crashed is the counter block, not the exit code, so require the block; `rc`
+    # alone can no longer be the test.
+    answered = "== globals lookups (INV.3(a)) ==" in text
+    if not answered:
         sys.stderr.write(text[-2000:])
-        sys.exit("error: compiler run failed (exit %d) — see %s" % (rc, log))
+        sys.exit("error: compiler run failed (exit %d, no counter block) — see %s" % (rc, log))
+    if rc not in (0, 1):
+        sys.stderr.write(text[-2000:])
+        sys.exit("error: compiler run exited %d — see %s" % (rc, log))
     return text
 
 

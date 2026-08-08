@@ -76,7 +76,18 @@ import subprocess
 import sys
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CLASSES = os.path.join(REPO, "build", "classes", "kotlin", "jvm", "main")
+# ROUND-853 FIX, the round-MOD.3 trap for the SECOND time (round 852 found it in
+# `grid838.sh`). Until now this pointed at the ROOT project's class dir. Since the
+# module split the compiler lives in `-core`, and the root path is a stale leftover
+# — so from MOD.3 until here every `--fail-over 0` run censused a PRE-SPLIT binary
+# and printed a green `OVER THE LIMIT: 0` about code nobody was shipping. The claim
+# survived only because `HugeMethodLimitTest` runs the same whole-program census
+# INSIDE the suite, locating the classes from a marker resource on the test
+# classpath (which is exactly why CLAUDE.md insists on the second instrument).
+# Do not "simplify" this back to a bare REPO-relative path.
+MODULE = "xemantic-typescript-compiler-core"
+CLASSES = os.path.join(REPO, MODULE, "build", "classes", "kotlin", "jvm", "main")
+LEGACY_CLASSES = os.path.join(REPO, "build", "classes", "kotlin", "jvm", "main")
 
 SIG = re.compile(r"^  [a-zA-Z$<].*\(")
 # (JIT.1)(f) round 817 — javap renders the STATIC INITIALIZER as `  static {};`,
@@ -132,9 +143,18 @@ def main():
     ap.add_argument("--classes", default=CLASSES)
     args = ap.parse_args()
 
+    # The census is only evidence about the binary you ship. A path that resolves to
+    # the pre-split root leftover answers about a different compiler, with exit 0 and
+    # no tell — which is what happened between MOD.3 and round 853.
+    if os.path.abspath(args.classes) == os.path.abspath(LEGACY_CLASSES):
+        sys.exit("error: %s is the PRE-MODULE-SPLIT root class dir — the compiler lives in "
+                 "%s since MOD.3, and censusing the leftover reports a green 0 about a binary "
+                 "nobody ships. Pass --classes <core module dir> or delete the leftover."
+                 % (args.classes, MODULE))
     files = sorted(glob.glob(os.path.join(args.classes, "**", "*.class"), recursive=True))
     if not files:
-        sys.exit("error: no class files under %s — run `./gradlew compileKotlinJvm`" % args.classes)
+        sys.exit("error: no class files under %s — run "
+                 "`./gradlew :%s:compileKotlinJvm`" % (args.classes, MODULE))
     rows = census(files)
     over = [r for r in rows if r[0] > args.limit]
 
