@@ -36,6 +36,7 @@ package com.xemantic.typescript.compiler.bench
 
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
+import com.xemantic.typescript.compiler.SpineDispatch
 import com.xemantic.typescript.compiler.SystemVfs
 import kotlin.time.measureTimedValue
 
@@ -92,6 +93,13 @@ import kotlin.time.measureTimedValue
  * then the probe's own price, differentially, with nothing else varying; and
  * the `rows` table's absolutes are the ones a warm lever can be sized against.
  * `passTiming` remains an exact alias for `full`.
+ *
+ * Round 847 adds a fourth tier name, `dispatch`, which is NOT a `PassTiming`
+ * tier at all: it leaves the pass probe off and runs `SpineDispatch.PROBE`
+ * (round 732) for one rebuild, printing the per-handler x per-kind report and
+ * its CSV. That is the only instrument that can attribute `checkSpine` — 66% of
+ * the warm artifact — below the enter/leave split, and until now it had only
+ * ever been run in a COLD one-shot JVM.
  * Prints one JSON object per measured iteration, then a `summary` line — and,
  * with the 4th argument present, an `instrumented` line followed by the INV.0
  * pass-timing table. The 4th argument is OFF unless it is `passTiming` / `true`
@@ -118,11 +126,11 @@ fun main(args: Array<String>) {
         null, "", "false", "0", "off" -> emptyList()
         "passtiming", "true", "1", "on" -> listOf("full")
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
-            val bad = list.filter { it !in setOf("rows", "spine", "full") }
+            val bad = list.filter { it !in setOf("rows", "spine", "full", "dispatch") }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(
                     "usage: 4th argument must be `passTiming`, omitted, or a comma-separated " +
-                        "list of tiers (rows|spine|full) — not '$flag'"
+                        "list of tiers (rows|spine|full|dispatch) — not '$flag'"
                 )
             }
         }
@@ -182,13 +190,28 @@ fun main(args: Array<String>) {
     for ((run, tier) in tiers.withIndex()) {
         PassTiming.enabled = false
         PassTiming.reset()
-        PassTiming.detail = tier == "full"
-        PassTiming.spineDetail = tier != "rows"
-        PassTiming.enabled = true
+        // (WARM.4) round 847 — the `dispatch` tier is NOT a PassTiming tier: it
+        // leaves the pass probe entirely OFF and runs the round-732
+        // `SpineDispatch` PROBE instead, which is the only instrument that
+        // attributes `checkSpine` PER HANDLER x PER KIND. Every warm row in
+        // `docs/perf/dispatch-table.md` was a COLD one-shot `MainKt` run; this
+        // makes the same table takeable inside a JIT-warm process, and — because
+        // the probe's own code is cold on its first instrumented rebuild exactly
+        // as round 846 measured for tier 3 — a tier LIST must give it at least
+        // two draws per process before a number is quoted.
+        if (tier == "dispatch") {
+            SpineDispatch.reset()
+            SpineDispatch.mode = SpineDispatch.PROBE
+        } else {
+            PassTiming.detail = tier == "full"
+            PassTiming.spineDetail = tier != "rows"
+            PassTiming.enabled = true
+        }
         val (probeResult, probeDuration) = measureTimedValue {
             ProjectCompiler(SystemVfs).build(project, noEmit = true)
         }
         PassTiming.enabled = false
+        SpineDispatch.mode = SpineDispatch.OFF
         val probeMs = probeDuration.inWholeMicroseconds / 1000.0
         val probeFiles = probeResult.programFiles.size
         val probeErrors = probeResult.errorCount
@@ -219,7 +242,14 @@ fun main(args: Array<String>) {
                     "rebuilds. No table is printed."
             )
         }
-        PassTiming.dump(::println)
+        if (tier == "dispatch") {
+            println(SpineDispatch.report())
+            println("== (DISPATCH.1) csv ==")
+            println(SpineDispatch.csv())
+            SpineDispatch.reset()
+        } else {
+            PassTiming.dump(::println)
+        }
     }
     PassTiming.detail = true
     PassTiming.spineDetail = true
