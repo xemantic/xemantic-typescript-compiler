@@ -20,6 +20,95 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 855 (2026-08-08) — (NARROW.2)(f) CLOSED AS A MEASURED NEGATIVE: THE PRE-TEST REFUSES
+**0 OF 14,117** OPENINGS, THE REASON IS STRUCTURAL RATHER THAN A TUNING FAILURE, AND THE
+PREDICATE COSTS **150–211 ms** TO BUY NOTHING.** Round 854 priced round 852's narrowed-`any`
+opening at 1.91% of a warm rebuild with 85.6% of it spent on receivers the flow never narrows,
+and stopped — queueing (f) with the instruction to census the candidate pre-test BEFORE building
+it, because 1.63% is a CEILING (a perfect oracle) while the concrete design is coarser. That
+instruction is the whole value of this round: the design looked obviously worth ~1% and is worth
+exactly nothing, and one probe run said so for the price of one build.
+
+**THE CENSUS, cold, compiler profile, probe HONOURING NOTHING** (the predicate is evaluated, the
+verdict recorded, and the walk runs anyway — so the population is bit-identical to round 854's and
+every rep prints the profile's usual 46 diagnostics):
+
+```
+cmamNarrowedAny (e): openings=14117 narrowed=1345 accepted=1051  walkOnly=385/406/360 ms
+cmamAnyPreTest  (f): refused=0 (noPath=0) kept=14117
+                     refusedNarrowed=0 refusedAccepted=0 keptNarrowed=1345
+                     refusedSpan=0ms refusedWalkOnly=0ms  preTestCost=211/162/150 ms
+```
+
+Re-taken on the COMMITTED binary after the pins went green (2 reps): identical — `refused=0`,
+`openings=14117 narrowed=1345 accepted=1051`, `preTestCost=168/128 ms`, 46 diagnostics.
+
+**THE STRUCTURAL REASON, which is the part that must survive this round.** The candidate was a
+per-FILE set of the root names any narrowing node could narrow, consulted before the walk. But
+**every `VariableDeclaration`, `Parameter` and `BindingElement` mints a `FlowAssignment`**, and
+that node's subtree contains the declared name — so **every root DECLARED in a file is in that
+file's narrowable set BY CONSTRUCTION**, narrowed or not, including a `declare const g: any` that
+nothing ever tests. The set can only refuse a root with NO declaration in the file at all (an
+import, a cross-file ambient), and tsc's own `any` receivers are locals and parameters. **There is
+no coarser or finer variant to try: the declaration that makes a name exist is itself one of the
+narrowing nodes the set is built from.** Do not re-propose a name-keyed narrowability set here.
+
+**A NEGATIVE WITH A PRICE ATTACHED.** `preTestCost` — the pre-test's own wall, measured at every
+opening — is **150–211 ms cold against a `walkOnly` of 360–406 ms** for the entire population it
+was meant to shrink. Most of it is the one-off `narrowableRoots()` construction per file, which a
+shipped gate pays exactly as the probe does. Even at a hypothetical 100% yield the arithmetic
+would be marginal; at 0% it is a pure loss. **Go/no-go was ~70%; measured 0%.**
+
+**THE INSTRUMENT IS ALIVE — round 790's complement population refuses.** A zero reads the same
+from a sound skip and from a dead probe, so the refusing population had to be exhibited. Through
+the project CLI on a two-file project, on the same class dir that produced the profile reading:
+`refused=1` for an imported root, falling to `refused=0` when one `if (imported)` is added. In
+suite, this is pinned at the SET level.
+
+**WHAT THE THREE EARLY PIN FAILURES TURNED OUT TO MEAN — the diagnosis is worth as much as the
+verdict: THE PINS WERE WRONG, the implementation and the design reading were not.** The first
+`NarrowableRootsPreTestTest` draft tried to exhibit the refusing population through `diagnose()`,
+which is SINGLE-FILE. A single-file fixture's `import` does not resolve, so the receiver is not
+`anyType`, so **no opening runs at all** — the failing subexpression was `openings > 0`, reading
+`0`, in both positive controls, and the third pin failed downstream of the same cause. The
+refusing population is *inexpressible* through that harness. The fix was not to weaken the pins
+but to **split them by level**: the SET is now unit-pinned directly (`FlowGraphBuilder().build(…)
+.narrowableRoots()` — membership for a condition/switch/assert root, membership for a merely
+DECLARED root = the finding, NON-membership for an imported root = the positive control, and its
+disappearance when a condition mentions that root = the control's own control), while the CONSUMER
+is census-pinned on the populations `diagnose()` can reach. 10 pins, all green alongside round
+854's 4. **The general lesson, and it has bitten before (round 806, in the other direction): a
+fixture shape validated at one harness is not portable to another — `diagnose()` and the project
+CLI do not have the same expressive power, and "the pin failed" is a claim about the fixture until
+the failing subexpression is read.**
+
+**ROUND 854's 1.63% REMAINS A CEILING THIS DESIGN CANNOT REALISE.** (NARROW.2)(c)'s cost therefore
+stands as **measured and accepted**, not as an open regression: it is 1.91% of a warm rebuild, it
+bought two conformance cases (`types/any` 3 failing of 9 → 1) with a 0/0 eight-profile grid and a
+clean corpus, and the waste inside it is **not addressable by asking whether the name is narrowable
+anywhere in the file**. A future attempt needs a *path-and-position* oracle — does any narrowing
+node lie on THIS reference's flow path — which is the walk itself. That is the honest statement of
+where this ends.
+
+**LANDED:** `FlowGraph.narrowableRoots()` + the mint-time inventory in `FlowGraphBuilder`, both
+`PassTiming.detailed`-gated so a production compile keeps no inventory and the accessor answers
+`null` = "unknown, refuse nothing" (never an EMPTY set, which would mean "refuse everything");
+`PassTiming.cmamAnyPre*` (7 counters + a `--passTiming` row); `Checker.cmamPreTestMayNarrow` called
+as a probe only; `NarrowableRootsPreTestTest` (10 pins); `scripts/round855-ablate.sh`;
+`docs/perf/narrowed-any-opening-price.md` § 4b. Commits `bc2495a7`, `d7461d4c`.
+
+**WHAT THIS ROUND DID *NOT* RUN, stated rather than implied.** (1) **The ablation did not execute.**
+`scripts/round855-ablate.sh` was committed before use (round 789) and then lost its own run to a
+bash bug — `"${@:-A1 A2 A3 A4}"` expands the default as ONE word, so `apply` fell through to its
+`unknown arm` branch for every arm while the script still printed `complete; tree restored`. The
+tree was never corrupted and nothing was mis-recorded, but **the 10 new pins are NOT yet
+verified-discriminating** and must not be quoted as such. The bug is fixed (an array default) and
+the four arms are specified in the script: drop the `FlowCondition` arm, drop the `FlowAssignment`
+arm, stop recording the pre-test span, remove the `detailed` gate. (2) **The full suite, `cost_gate.py`
+and `huge_methods.py` were not run this round.** The change is probe-only and `PassTiming.detailed`-
+gated, so a production compile's behaviour and counters should be untouched — but "should" is not a
+gate reading. **Both are the next round's first task, before anything else**; see the queue entry.
+
 **Round 854 (2026-08-08) — (NARROW.2)(e) CLOSED AS OUTCOME (c): ROUND 852's +79% NARROWING WALKS
 ARE **1.91% OF A WARM REBUILD** AND **A QUARTER OF ALL NARROWING WORK IN THE COMPILER**, AND
 **85.6% OF IT IS SPENT ON `any` RECEIVERS THE FLOW NEVER NARROWS.** The first priced POSITIVE
@@ -2158,7 +2247,41 @@ all 8 profiles byte-identical against a REBUILT before-arm.**
   pre-test than launching a walk to discover a narrow happened). **Do not revert (c) for this** —
   it closed two conformance cases with a 0/0 grid and a clean corpus.
 
-- [ ] **(NARROW.2)(f) — REFUSE THE `any` RECEIVERS THE FLOW WAS NEVER GOING TO NARROW, WITHOUT
+- [ ] **(NARROW.2)(f2) — FINISH ROUND 855's PAPERWORK: the gates and the ablation it did not run.
+  DO THIS FIRST; it is ~30 minutes of wall time and no design work.** Round 855 landed a
+  probe-only, `PassTiming.detailed`-gated change (`bc2495a7`, `d7461d4c`) and then ran out of
+  round before its gates. (a) **`rm -rf` all four modules' `build/test-results/jvmTest` then
+  `./gradlew jvmTest`**, count per module with `xml.etree` — baseline **14,020 / 0 / 3** plus the
+  **10** new `NarrowableRootsPreTestTest` pins ⇒ expect **14,030 / 0 / 3**. (b) `python3
+  scripts/cost_gate.py` and `python3 scripts/huge_methods.py --fail-over 0` — both should be
+  unchanged (`+0.00%`, census 0), because a production compile keeps no inventory and pays a
+  not-taken branch per flow-node mint; **a non-zero counter delta here means the `detailed` gate
+  leaks and is a real regression, not a rebaseline**. (c) `scripts/round855-ablate.sh` (its
+  arg-default bug is fixed) — four arms, one mistake at a time: drop the `FlowCondition` arm, drop
+  the `FlowAssignment` arm, zero the pre-test span, remove the `detailed` gate. **Until (c) runs,
+  the 10 pins are unverified and must not be cited as discriminating**; any arm that comes back
+  green is a redundant guard to be RENAMED, not a pin to be claimed (round 807).
+
+- [x] **(NARROW.2)(f) — CLOSED ROUND 855 AS A MEASURED NEGATIVE. The candidate pre-test refuses
+  **0 of 14,117** openings on the compiler profile and COSTS 150–211 ms to do it.** Censused as a
+  probe honouring nothing, so the population stayed bit-identical to round 854's
+  (`openings=14117 narrowed=1345 accepted=1051`, 46 diagnostics) and the reading is directly
+  comparable: `refused=0 noPath=0 kept=14117 refusedNarrowed=0 refusedAccepted=0 keptNarrowed=1345
+  refusedWalkOnly=0ms preTestCost=211/162/150 ms`, re-taken on the committed binary as
+  `refused=0 … preTestCost=168/128 ms`. Go/no-go was ~70%. **THE REASON IS STRUCTURAL AND KILLS
+  THE WHOLE FAMILY: every `VariableDeclaration` / `Parameter` / `BindingElement` mints a
+  `FlowAssignment` whose subtree contains the declared name, so EVERY root declared in a file is
+  in that file's narrowable set BY CONSTRUCTION — the set can only refuse a root with no
+  declaration in the file (an import), and tsc's `any` receivers are locals and parameters. Do not
+  re-propose a name-keyed narrowability set.** The instrument was shown alive on the same binary
+  (two-file CLI: `refused=1`, → `0` on adding one `if (imported)`), and that control is pinned at
+  the SET level because `diagnose()` is single-file and structurally cannot express the refusing
+  population (an unresolved import is not `any`, so no opening runs — measured `openings=0`, which
+  is what three first-draft pins were really reporting). **Round 854's 1.63% stays a CEILING no
+  per-file name-keyed predicate can realise, so (NARROW.2)(c)'s 1.91% is accepted as measured, not
+  carried as an open regression**; a future attempt needs a path-and-position oracle, which is the
+  walk itself. `docs/perf/narrowed-any-opening-price.md` § 4b. Original framing follows.
+  **REFUSE THE `any` RECEIVERS THE FLOW WAS NEVER GOING TO NARROW, WITHOUT
   LAUNCHING A WALK TO FIND OUT. Round 854 measured the prize and it is a CEILING of 1.63% of a
   warm rebuild — census the pre-test BEFORE implementing it, or this is a noise-band change with
   FP risk attached.** The object: `cmamNarrowedAnyReceiverType` calls

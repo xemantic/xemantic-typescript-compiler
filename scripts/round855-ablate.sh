@@ -77,7 +77,13 @@ PY
     esac
 }
 
-for arm in "${@:-A1 A2 A3 A4}"; do
+# NOT `"${@:-A1 A2 A3 A4}"` — that expands the default as ONE word, `apply` falls
+# through to its `unknown arm` branch and the whole ablation silently does
+# nothing while the script still prints "complete; tree restored" (round 855 lost
+# a run to exactly this). An array default expands as four words.
+ARMS=("$@")
+[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4)
+for arm in "${ARMS[@]}"; do
     echo "===================== ARM $arm ====================="
     apply "$arm" || { echo "APPLY FAILED for $arm"; git checkout -- "$FLOW" "$CHECKER"; continue; }
     rm -rf "$RESULTS"
