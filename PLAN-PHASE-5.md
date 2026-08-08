@@ -20,6 +20,67 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 853 (2026-08-08) — RECORD INTEGRITY. THE BLAST RADIUS OF ROUND 852's STALE-BINARY FINDING
+IS EXACTLY *ONE* RECORDED CLAIM, IT WAS RE-MEASURED AND IT STANDS, AND THE DIGEST THAT LOOKED LIKE
+THE SMOKING GUN TURNED OUT TO BE A FOURTH RECIPE LINEAGE. NO COMPILER CODE CHANGED.**
+
+**THE QUESTION.** Round 852 found `scripts/grid838.sh` reading a `build/bench/xtsc-classpath.txt`
+whose only class dir was the ROOT project's pre-module-split leftover, and closed with *"any grid
+digest recorded between the module split and this round should be treated as unverified."* This
+round establishes which claims that actually touches and re-takes the ones that matter.
+
+**THE ENUMERATION (from the record, not from memory).** MOD.3 landed 2026-08-07 18:17 UTC; the
+stale root class dir was last written 2026-08-07 23:39 UTC — 589 classes against core's 649, no
+`ModeLedger`, no `LibTypeCensus`, so a **pre-848** compiler. Of the rounds since the split, exactly
+**one** quoted a profile capture: **round 848**. Rounds 843–847 and 849–851 gated on the suite,
+`cost_gate.py`, `huge_methods.py` and warm A/Bs, and `ab-warm.sh`/`ab-interleaved.sh` resolve their
+classpath freshly through the `xtscPrintJvmRuntimeClasspath` init script and already refuse a
+pre-split file (round MOD.3) — **`grid838.sh` is the only reader of that file in the tree**
+(`grep`ed across `scripts/`, `build.gradle.kts` and every module script). Round 845's own note
+already says "the 8-profile grid was not run". So: one affected claim, and it is the one the
+prompt suspected.
+
+**THE RE-MEASUREMENT — ROUND 848's 14 ARMS, AND THEY STAND.** `scripts/round853-serve1-arms.sh`
+(committed BEFORE any ablation, round 789) re-runs the sweep with two guards: the module-name check
+on the classpath, and a **positive control on the binary itself** — `ModeLedger`, round 848's own
+class, must be present in the class dir under test, which is precisely what the stale dir failed.
+Baseline ×2 plus all 14 arms on the compiler profile: **every one 46 lines, `trunc=0`,
+`added=0 removed=0`, md5 `84bbe7f0…`** — `--flowScanLegacy`, `--flowScanBogus`, `--flowEagerSet`,
+`--argNarrowGateOff`, `--dispatchGated`, `--ianyGateOff`, `--ianyArgGateOff`, `--cmamPreGate`,
+`--ccetPreGate`, `--verifyDeferSuppression`, `--verifyUnionRetry`, `--verifyLoopRetry`,
+`--verifyImplRelated`, `--workers 4`. **`--flowScanBogus`, whose job is to corrupt the scanner, is
+byte-identical on a binary that provably honours the flag.** Round 848's three-way classification
+is a finding, not an artifact, and its suite-level half (`FlowScan.bogus` defaulted true → 13,902
+tests, exactly 1 failure) was never in doubt — it is a different instrument that never touched the
+classpath file.
+
+**THE DIGEST WAS NOT THE SMOKING GUN — IT WAS A FOURTH LINEAGE.** Round 848 recorded `4090b73e…`
+where this round's verified capture prints `84bbe7f0…`, which reads exactly like two different
+binaries. Hashing the ONE verified capture six ways settles it: `s#.*/src/#src/#` + `sort`
+reproduces **`4090b73e…` exactly**. Round 841 named three live lineages; there are **four**
+(`docs/perf/aot-cache.md` § 11.5 is the table). Round 848's number is exonerated, not retracted.
+
+**AND THE STALENESS COULD NOT HAVE CHANGED THE ANSWER ANYWAY — measured, not argued.** Running the
+stale pre-848 root class dir against the compiler profile prints the **same 46 lines and the same
+`84bbe7f0…`** as today's binary. So rounds 848–852 moved nothing this profile can see, exactly as
+each of them claimed, and round 852's own "0/0 at all three steps" is corroborated from a direction
+it could not measure from. A bonus that costs nothing: the same capture reproduces
+**`59d930db…`**, the round-826/836–840 lineage — so the compiler profile's diagnostics are
+**byte-stable from round 817 to round 853**, ~36 rounds.
+
+**THE GUARD DISCRIMINATES (one mistake at a time, round 807).** Re-introducing exactly the stale
+path — the root class dir substituted for core's in `xtsc-classpath.txt` — makes `grid838.sh` exit
+**1** with `stale (pre-module-split)` **before launching any JVM**; restoring the good file lets it
+proceed to `java`. Positive and negative control in one pair. The stale root `build/classes` tree
+is now **deleted** (nothing in the build produces it — the root has no `src/`, and the only
+reference left is a comment in `grid838.sh`), so a future stale file fails loudly instead of
+silently compiling.
+
+**WHAT THIS ROUND DELIBERATELY DID NOT DO.** No re-run of the 8-profile grid for rounds 843–851 —
+none of them quoted one, and manufacturing captures to "check" claims that were never made would be
+the recon-only failure in a different costume. No compiler change, so no `cost_gate.py`/
+`huge_methods.py` movement is possible; both were run anyway and are unchanged.
+
 **Round 852 (2026-08-08) — (NARROW.2)(c) CLOSED. THE HIGHEST-FP-RISK ITEM IN THE QUEUE MOVED THE
 EIGHT-PROFILE GRID BY *NOTHING* AT EVERY ONE OF ITS THREE STEPS AND COST THE CORPUS *NOTHING*, AND
 THE ROUND'S MOST EXPENSIVE FINDING IS THAT THE COMMITTED GRID HARNESS HAD BEEN MEASURING A
@@ -107,6 +168,17 @@ for the module name; `grid838.sh` did not. It now refuses it, and also refuses a
 between the module split and this round should be treated as unverified.** The digest this round
 records is `84bbe7f0…` for the 46-line compiler-profile capture under grid838.sh's own
 prefix-stripping recipe, and `eccc3408…` for harness's 94 — quoted with the recipe, per round 841.
+
+> **ROUND-853 FOLLOW-UP (2026-08-08) — THE BLAST RADIUS IS ONE CLAIM, AND THIS ROUND'S OWN NUMBERS
+> ARE CORROBORATED.** Enumerating every round between the MOD.3 split and here: only round 848
+> quoted a profile capture, and it was re-measured and STANDS (see the correction on its note).
+> Rounds 843–847 and 849–851 gated on the suite, `cost_gate.py`, `huge_methods.py` and warm A/Bs —
+> `ab-warm.sh`/`ab-interleaved.sh` resolve their classpath freshly from the init script and already
+> refuse a pre-split file, so none of them ever read the stale one. This round's own "0/0 at all
+> three steps" is corroborated from a direction it could not measure from: round 853 ran the STALE
+> pre-848 binary against the fixed one and the compiler-profile output is **byte-identical**, so no
+> step could have been flattered by the stale path. `84bbe7f0…` is confirmed live, and the
+> `59d930db…` of the round-826/836–840 lineage reproduces from the very same capture.
 
 **GATES.** Suite **14,016 / 0 failures / 3 skipped** (14,001 + the 15 new `AnyReceiverNarrowingTest`
 pins), counted per module with `xml.etree` over a fully wiped results dir in all four modules.
@@ -391,6 +463,23 @@ for this question at all, and round 753's law applies in full. Escalating to the
 `FlowScan.bogus` defaulted TRUE, whole core suite, **13,902 tests → exactly 1 failure, and it is
 `FlowScanEquivalenceTest`** — the dedicated pin. Every one of the ~13,900 baselines is green with
 a deliberately corrupted scanner.
+
+> **CORRECTION (round 853, 2026-08-08) — RE-MEASURED ON A VERIFIED BINARY; THE FINDING STANDS.**
+> This capture was taken through `build/bench/xtsc-classpath.txt`, which round 852 found naming the
+> ROOT project's pre-module-split class dir — a compiler built 2026-08-07 23:39 UTC, i.e. before
+> this round's own code existed. "Every arm byte-identical" is exactly what a binary ignoring all
+> 14 flags would print, so the classification could not stand on this capture. Round 853 re-ran all
+> 14 arms plus a replicate baseline through `scripts/round853-serve1-arms.sh`, which asserts both
+> the module-name guard on the classpath and a POSITIVE control that `ModeLedger` — this round's
+> own class — is in the class dir under test: **every arm 46 lines, `added=0 removed=0`, md5
+> `84bbe7f0…`** under grid838.sh's prefix-stripping recipe, `--flowScanBogus` included. The
+> three-way classification below is therefore a finding, not an artifact.
+> **Two corrections to the NUMBER, neither of them a retraction.** (a) `4090b73e…` is a FOURTH
+> digest lineage — a basename-style `s#.*/src/#src/#` strip — and it reproduces *exactly* on round
+> 853's verified capture (`docs/perf/aot-cache.md` § 11.5). (b) The staleness could not have
+> corrupted this arm table in any case: the stale pre-848 binary and today's produce **byte-identical**
+> compiler-profile output (both 46 lines, `84bbe7f0…`), which is independent corroboration that
+> rounds 848–852 moved nothing this profile can see.
 
 **So the honest classification is three-way, not two-way:**
 - **Measured-visible leak (1):** `PartitionCheck.reportLines` — re-printed by every later request

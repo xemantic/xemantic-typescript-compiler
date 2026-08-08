@@ -701,6 +701,41 @@ quote the digest across rounds.** Two consequences:
    does not. The digest's real job is the *within-round, many-runs* check (30 runs, one
    value), and at that job it is excellent.
 
+### 11.5 Round 853 — a FOURTH lineage, and the first LIVE reproduction of all of them
+
+*Round 853 (2026-08-08), the record-integrity round that re-took round 848's flag sweep after
+round 852 found `grid838.sh` reading a pre-module-split classpath. One verified capture,
+six normalisations of it.*
+
+Round 841 derived `84bbe7f0…` arithmetically, from a round-817 capture already on disk.
+Round 853 ran the compiler profile on a **freshly built, guard-verified** binary
+(`--noEmit --listAll`, core module class dir asserted to contain `ModeLedger`) and hashed the
+one raw capture six ways:
+
+| recipe | digest | lineage |
+|---|---|---|
+| `grep 'error TS'` \| project-prefix `sed` \| `sort` — 46 lines | `84bbe7f0…` | **grid838.sh**, rounds 852, 853 |
+| `grep 'error TS'` \| `sort`, absolute paths — 46 lines | `59d930db…` | rounds 826, 836–840 |
+| whole stdout minus `[`/`time:` lines, sorted | `f0a07cb0…` | *not* `4caacf24…` — see § 11.2 |
+| `grep 'error TS'` \| `s#.*/src/#src/#` \| `sort` — 46 lines | **`4090b73e…`** | **round 848** |
+| `grep 'error TS'`, unsorted (emit order) | `1bfb40e0…` | — |
+| prefix-stripped, unsorted | `7b17ffe5…` | — |
+
+Two things follow, and the second is worth more than the first.
+
+1. **Round 848's `4090b73e…` is a fourth lineage, not a wrong output.** It is a
+   basename-style strip (`src/…` rather than the full project path), and it reproduces
+   *exactly* on round 853's verified capture. It was recorded during the window in which
+   `grid838.sh`'s classpath was stale, so it was the natural suspect; it is exonerated.
+2. **The compiler profile's diagnostics have been byte-stable from round 817 to round 853.**
+   `59d930db…` was reproduced by round 841 from a round-817 capture and is reproduced here
+   from a round-853 run of a freshly built binary — same 46 lines, same digest, ~36 rounds
+   apart. Every "0 added / 0 removed" in between is corroborated from a direction none of
+   those rounds could measure from.
+
+The rule of § 11.4 is unchanged and now has a fourth witness: **quote the recipe with the
+digest, and prefer `added=0 removed=0` against a rebuilt before-arm for anything cross-round.**
+
 ## 12. Round 842 — (AOT.5)(f): the TRAINING DRAW is worth up to 2.4%, and nobody had sampled it
 
 *Every AOT number in this file before this section was measured with **one trained cache per
