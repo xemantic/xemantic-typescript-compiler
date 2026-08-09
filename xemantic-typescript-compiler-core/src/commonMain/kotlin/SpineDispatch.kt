@@ -4129,7 +4129,33 @@ object FrontEnd {
     /** The jsxRuntime PRAGMA scan at the top of `Transformer.transform`. INSIDE [TRANSFORM]. */
     const val TR_JSXPRAGMA = 31
 
-    const val N = 32
+    // ---- (WARM.11) round 864 — level 2 of [BIND_FLOW]. Round 859 measured the
+    // "flow walk" as a RESIDUE (BIND_FLOW minus the three B464 collectors) worth
+    // 316.7 ms = 4.20% of a warm rebuild, the largest single region outside
+    // `checkSpine`, and round 801 closed the region COLD without ever asking
+    // what the residue is made of. It is made of TWO whole-tree walks, not one:
+    // `FlowGraphBuilder.build` recurses the statements to MINT the graph, and
+    // then `FlowGraph`'s constructor walks the same tree AGAIN to fill the
+    // INV.2(b) nodeId side table. These four rows say which.
+    //
+    // `build()` is four statements, so [FLOW_BIND] + [FLOW_INDEX] is exhaustive
+    // over [BIND_FLOW] by construction and its residue is a PARTITION CHECK, not
+    // an unattributed remainder; same for the two rows inside [FLOW_INDEX].
+    // Boundary cost is 4 timestamp pairs per FILE (123 files), i.e. microseconds
+    // against a ~420 ms row — no differential calibration is needed here and
+    // none is claimed (round 734 applies to per-NODE probes, which these are
+    // deliberately not).
+
+    /** `bindEachStatement` — the flow-graph MINTING walk. INSIDE [BIND_FLOW]. */
+    const val FLOW_BIND = 32
+    /** The `FlowGraph(...)` constructor — the INV.2(b) side table. INSIDE [BIND_FLOW]. */
+    const val FLOW_INDEX = 33
+    /** The whole-tree walk filling `nodeById`/`flowById`. INSIDE [FLOW_INDEX]. */
+    const val IDX_SIDETABLE = 34
+    /** The (ENGINE.2b) closure-interval arrays. INSIDE [FLOW_INDEX]. */
+    const val IDX_CLOSURES = 35
+
+    const val N = 36
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4164,6 +4190,10 @@ object FrontEnd {
         "      of which the declare-require probe + require(\"…\") scan",
         "      of which collectNsInternalImportTargets",
         "    of which the jsxRuntime pragma scan",
+        "    of which the flow-minting walk",
+        "    of which the FlowGraph side table",
+        "      of which the nodeId side-table walk",
+        "      of which the closure-interval arrays",
     )
 
     /**
@@ -4173,7 +4203,9 @@ object FrontEnd {
     private val order: IntArray = intArrayOf(
         CONFIG, CRAWL, READ, PREPARSE, PARSE, IMPORTS,
         BIND, BIND_DECL, BIND_LEX, BIND_FLOW,
+        FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
+        FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
         CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
@@ -4240,6 +4272,29 @@ object FrontEnd {
     var jsxPragmaChars: Long = 0
     var jsxPragmaHits: Long = 0
 
+    /**
+     * (WARM.11) census — the population behind [FLOW_BIND] and [IDX_SIDETABLE].
+     *
+     * [recordFlowCalls] is how often the minting walk writes `currentFlow` into
+     * the `(pos,end)`-keyed map and [flowMapEntries] how many DISTINCT keys
+     * survive: their difference is the extent-ALIASING rate, which no timing row
+     * can show and which decides whether the map is replaceable by a nodeId
+     * array at all.
+     *
+     * [idxNodes] is every node the side-table walk visits and [idxHits] the ones
+     * whose key the map actually answers. That ratio is the round-801
+     * produced-vs-consumed test applied to a LOOKUP rather than to a value: a
+     * walk that asks 876,201 questions to receive 200,000 answers is paying for
+     * the misses, and only a census can say so.
+     */
+    var recordFlowCalls: Long = 0
+    var flowMapEntries: Long = 0
+    var idxNodes: Long = 0
+    var idxHits: Long = 0
+    var flowAtCalls: Long = 0
+    var flowAtInTreeNull: Long = 0
+    var flowAtForeign: Long = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -4250,6 +4305,42 @@ object FrontEnd {
         scanWords = 0; scanRecorded = 0
         orphanFiles = 0; orphanChars = 0; orphanDeclReqHits = 0
         jsxPragmaFiles = 0; jsxPragmaChars = 0; jsxPragmaHits = 0
+        recordFlowCalls = 0; flowMapEntries = 0; idxNodes = 0; idxHits = 0
+        flowAtCalls = 0; flowAtInTreeNull = 0; flowAtForeign = 0
+    }
+
+    /** (WARM.11) — one call per file, from `FlowGraphBuilder.build`. */
+    fun addFlowMintCensus(recordCalls: Long, mapEntries: Long) {
+        if (mode != ON) return
+        recordFlowCalls += recordCalls
+        flowMapEntries += mapEntries
+    }
+
+    /** (WARM.11) — one call per file, from the `FlowGraph` constructor. */
+    fun addFlowIndexCensus(nodes: Long, hits: Long) {
+        if (mode != ON) return
+        idxNodes += nodes
+        idxHits += hits
+    }
+
+    /**
+     * (WARM.11) — one call per `FlowGraph.flowAt`, classified: 0 = answered
+     * from the array, 1 = answered from the array with a NULL, 2 = answered by
+     * the `(pos,end)` map fallback.
+     *
+     * Class 2 is the round-788 population and the only reason this census
+     * exists. Before round 864 it was the nodes this graph's tree does not own
+     * and read **0** on the compiler profile; after it, it is every query on a
+     * node `recordFlow` never wrote — i.e. exactly the work the recorded-node
+     * fill MOVES from build time to query time, measured rather than argued.
+     */
+    fun addFlowAt(kind: Int) {
+        if (mode != ON) return
+        flowAtCalls++
+        when (kind) {
+            1 -> flowAtInTreeNull++
+            2 -> flowAtForeign++
+        }
     }
 
     /** (WARM.10) — one call per file entering `Transformer.transform`. */
@@ -4369,6 +4460,33 @@ object FrontEnd {
                     "words $scanWords -> recorded $scanRecorded " +
                     "(${if (scanRecorded > 0) scanWords / scanRecorded else 0}x); " +
                     "walk residue ${walk / 1_000_000} ms"
+            )
+        }
+        // (WARM.11) — level 2 of BIND_FLOW. The two rows ABUT across `build()`,
+        // so the residue is a partition check: anything beyond timestamp noise
+        // means a span was misplaced. The census is what makes the side-table
+        // row readable — its cost is per NODE VISITED, not per file, and its
+        // hit rate says how much of its map traffic answers anything.
+        if (calls[FLOW_INDEX] > 0) {
+            val sub = nanos[FLOW_BIND] + nanos[FLOW_INDEX]
+            appendLine(
+                "  flow-build residue (BIND_FLOW - mint - index): " +
+                    "${(nanos[BIND_FLOW] - sub) / 1000} us of ${nanos[BIND_FLOW] / 1000} us"
+            )
+            val sub2 = nanos[IDX_SIDETABLE] + nanos[IDX_CLOSURES]
+            appendLine(
+                "  side-table residue (index - its two): " +
+                    "${(nanos[FLOW_INDEX] - sub2) / 1000} us of ${nanos[FLOW_INDEX] / 1000} us"
+            )
+            appendLine(
+                "  flow map census: recordFlow calls $recordFlowCalls -> $flowMapEntries distinct keys " +
+                    "(${recordFlowCalls - flowMapEntries} aliased/overwritten); " +
+                    "side-table walk visited $idxNodes nodes, $idxHits answered " +
+                    "(${if (idxNodes > 0) idxHits * 100 / idxNodes else 0}%)"
+            )
+            appendLine(
+                "  flowAt census: calls $flowAtCalls, of which in-tree-but-null " +
+                    "$flowAtInTreeNull and map-fallback $flowAtForeign"
             )
         }
         // (WARM.8) — the four POST blocks abut, so their residue is a PARTITION

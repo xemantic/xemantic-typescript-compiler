@@ -95,6 +95,7 @@ class CliModeRestoreTest {
             CpaSections::class.java,
             FrontEnd::class.java,
             FlowScan::class.java,
+            FlowIndex::class.java,
             PartitionCheck::class.java,
             ParallelCheckMode::class.java,
         )
@@ -111,6 +112,7 @@ class CliModeRestoreTest {
             "SpineDispatch.mode",
             "ArgNarrowGate.mode",
             "FlowScan.legacy",
+            "FlowIndex.legacy",
             "FlowScan.eagerSet",
             "IanySections.gateOff",
             "IanySections.armGateOff",
@@ -257,6 +259,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--verifyDeferSuppressionBogus", "--cmamPreGate", "--cmamPreGateBogus",
     "--verifyImplRelated", "--verifyImplRelatedAll", "--verifyImplRelatedBogus",
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--flowScanLegacy",
-    "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--partitionCheck",
+    "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
+    "--partitionCheck",
     "--workers", "--globalsAmp", "--outDir", "--project", "--help",
 )

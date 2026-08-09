@@ -398,6 +398,13 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--flowScanBogus", "--flowscanbogus" -> {
                 modes.set(FlowScan::bogus, true)
             }
+            // (WARM.11) round 864 — the INV.2(b) side-table A/B. Both fills are
+            // in the binary, so this selects an arm rather than needing a
+            // second build (round 795: a verify flag that restores the old
+            // computation is also the instrument that prices it).
+            "--flowIndexLegacy", "--flowindexlegacy" -> {
+                modes.set(FlowIndex::legacy, true)
+            }
             "--flowEagerSet", "--floweagerset" -> {
                 modes.set(FlowScan::eagerSet, true)
             }
@@ -786,6 +793,7 @@ internal fun usageText(): String =
           --verifyFlowScan   (FRONT.2) run BOTH scanners and report divergences
           --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
+          --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --verifyMappedCache  recompute every served INV.5(c) mapped-cache hit and split
                              shape-different serves from id-only ones (implies --passTiming)

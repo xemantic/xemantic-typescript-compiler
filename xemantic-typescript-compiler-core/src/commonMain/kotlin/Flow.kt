@@ -177,6 +177,14 @@ class FlowGraph(
      * supplied, which [narrowableRoots] reports as "unknown" rather than "empty".
      */
     private val narrowingNodes: List<FlowNode>? = null,
+    /**
+     * (WARM.11) round 864 — the nodes [FlowGraphBuilder.recordFlow] wrote, which
+     * is all the nodeId side table below needs. `null` means "no list supplied",
+     * and then the pre-864 whole-tree walk runs — the two fills are equivalent
+     * (see the `init` block), so a caller that has no list loses nothing but
+     * speed.
+     */
+    recordedNodes: List<Node>? = null,
 ) {
     // INV.2(b): nodeId-indexed fast path for [flowAt] — the pilot array-indexed side
     // table. Pre-computed here from the FINISHED map by walking the tree, so an
@@ -208,7 +216,48 @@ class FlowGraph(
         val count = sourceFile?.nodeCount ?: 0
         flowById = arrayOfNulls(count)
         nodeById = arrayOfNulls(count)
-        if (sourceFile != null && count > 0) {
+        // (WARM.11) round 864 — this walk and the interval build below abut
+        // across the whole constructor, so their two rows partition
+        // [FrontEnd.FLOW_INDEX] and the residue is a partition check. The census
+        // counts NODES, because the cost here is per node visited while the row
+        // is closed per file: without it the row cannot be compared to anything
+        // (round 758, in its converse direction).
+        val tWalk = FrontEnd.t()
+        var visited = 0L
+        var answered = 0L
+        // (WARM.11) round 864 — fill the side table from the RECORDED nodes.
+        //
+        // **Why this is exactly the whole-tree walk's answer, for every node.**
+        // The table has ONE reader, [flowAt], which uses it only when
+        // `nodeById[id] === node` and otherwise falls back to
+        // `nodeToFlow[nodeKey(node)]`. Take any node of this file:
+        //  * RECORDED — both fills put `nodeToFlow[nodeKey(node)]` in its slot
+        //    (this one reads the FINISHED map, so a key written twice lands on
+        //    the same final value the walk would have read);
+        //  * in the tree but NOT recorded — the walk stored
+        //    `nodeToFlow[nodeKey(node)]`, which is `null` unless some recorded
+        //    node shares its `(pos,end)` extent; here the slot stays empty and
+        //    `flowAt` performs that identical lookup itself;
+        //  * not in this tree at all — neither fill touches it, and `flowAt`
+        //    took the map path before and takes it now.
+        // So the fills differ only in WHERE the map lookup happens for the
+        // second class, and round 788's question — how much work that MOVES —
+        // is answered by `FrontEnd`'s `flowAt` census, not by argument.
+        if (recordedNodes != null && !FlowIndex.legacy) {
+            for (k in recordedNodes.indices) {
+                val node = recordedNodes[k]
+                val id = (node as NodeBase).nodeId
+                if (id in 0 until count) {
+                    nodeById[id] = node
+                    val f = nodeToFlow[nodeKey(node)]
+                    flowById[id] = f
+                    if (FrontEnd.mode == FrontEnd.ON) {
+                        visited++
+                        if (f != null) answered++
+                    }
+                }
+            }
+        } else if (sourceFile != null && count > 0) {
             val stack = ArrayList<Node>(64)
             val push: (Node) -> Unit = { stack.add(it) }
             stack.add(sourceFile)
@@ -217,11 +266,19 @@ class FlowGraph(
                 val id = (node as NodeBase).nodeId
                 if (id in 0 until count) {
                     nodeById[id] = node
-                    flowById[id] = nodeToFlow[nodeKey(node)]
+                    val f = nodeToFlow[nodeKey(node)]
+                    flowById[id] = f
+                    if (FrontEnd.mode == FrontEnd.ON) {
+                        visited++
+                        if (f != null) answered++
+                    }
                 }
                 forEachChild(node, push)
             }
         }
+        FrontEnd.close(FrontEnd.IDX_SIDETABLE, tWalk)
+        FrontEnd.addFlowIndexCensus(visited, answered)
+        val tClosures = FrontEnd.t()
         // Stable sort by container pos: entries sharing a pos keep their
         // `closureStarts` order, which is what the replaced scan's STRICT
         // `c.pos > bestPos` selected among them (see [innermostClosureAt]).
@@ -242,6 +299,7 @@ class FlowGraph(
             csOuter[i] = if (sp > 0) open[sp - 1] else -1
             open[sp++] = i
         }
+        FrontEnd.close(FrontEnd.IDX_CLOSURES, tClosures)
     }
 
     // (NARROW.2)(f) round 855 — the narrowable-root set, computed at most once per
@@ -319,7 +377,18 @@ class FlowGraph(
      *  the legacy [nodeToFlow] lookup for everything else. */
     fun flowAt(node: Node): FlowNode? {
         val id = (node as NodeBase).nodeId
-        if (id >= 0 && id < nodeById.size && nodeById[id] === node) return flowById[id]
+        if (id >= 0 && id < nodeById.size && nodeById[id] === node) {
+            val f = flowById[id]
+            // (WARM.11) round 864 — the round-788 census, taken BEFORE anything is
+            // built: an in-tree node whose slot is NULL is a query that a side
+            // table filled only from the RECORDED nodes would answer by the map
+            // fallback instead. Its count is therefore exactly the work such a
+            // rewrite would MOVE from build time to query time, and only a census
+            // can say whether that is 0 or 600,000.
+            if (FrontEnd.mode == FrontEnd.ON) FrontEnd.addFlowAt(if (f == null) 1 else 0)
+            return f
+        }
+        if (FrontEnd.mode == FrontEnd.ON) FrontEnd.addFlowAt(2)
         return nodeToFlow[nodeKey(node)]
     }
 
@@ -409,6 +478,24 @@ class FlowGraph(
  * Production reads [legacy] once per scan (1,220 times per compile) and
  * nothing else; all three flags are off by default.
  */
+/**
+ * (WARM.11) round 864 — how the INV.2(b) side table inside [FlowGraph] is built.
+ *
+ * The pre-864 constructor walked the WHOLE tree (876,324 nodes on the compiler
+ * profile) asking the `(pos,end)`-keyed map for each one, and 70% of those
+ * questions had no answer. The side table is filled instead from the nodes
+ * [FlowGraphBuilder.recordFlow] actually recorded (262,404), which is EXACTLY
+ * equivalent — see [FlowGraph]'s constructor for the argument, and note that it
+ * turns on `flowAt`'s own map fallback rather than on the two walks agreeing.
+ *
+ * [legacy] restores the whole-tree walk in the same binary: the A/B's other arm,
+ * the differential pin's oracle, and the ablation's target.
+ */
+object FlowIndex {
+    /** `--flowIndexLegacy` — build the side table by the pre-864 whole-tree walk. */
+    var legacy: Boolean = false
+}
+
 object FlowScan {
     /** `--flowScanLegacy` — run the pre-801 scanner. The A/B's other arm. */
     var legacy: Boolean = false
@@ -551,16 +638,44 @@ class FlowGraphBuilder {
         reassignScanCache.clear() // per-file text — a reused builder must not serve stale scans
         narrowingNodes.clear() // ditto: a reused builder must not carry another file's nodes
         currentFlow = newStart(sourceFile)
+        // (WARM.11) round 864 — the two spans below ABUT and cover everything
+        // `build` does beyond three field writes, so [FrontEnd.FLOW_BIND] +
+        // [FrontEnd.FLOW_INDEX] partitions [FrontEnd.BIND_FLOW] by construction
+        // and the reported residue is a partition CHECK.
+        val tMint = FrontEnd.t()
         bindEachStatement(sourceFile.statements)
+        FrontEnd.close(FrontEnd.FLOW_BIND, tMint)
         // (FRONT.2) census — `nextId` IS the number of flow nodes minted for this
         // file; recorded so the BIND_FLOW row can be read per flow node instead
         // of per file. Behaviour-free when the probe is off.
         FrontEnd.addFlowCensus(nextId.toLong())
-        return FlowGraph(
+        FrontEnd.addFlowMintCensus(recordFlowCalls.toLong(), nodeToFlow.size.toLong())
+        val tIndex = FrontEnd.t()
+        val graph = FlowGraph(
             nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList(),
             if (PassTiming.detailed) narrowingNodes.toList() else null,
+            recordedNodes,
         )
+        FrontEnd.close(FrontEnd.FLOW_INDEX, tIndex)
+        return graph
     }
+
+    /** (WARM.11) census — how often [recordFlow] wrote, against how many DISTINCT
+     *  `(pos,end)` keys survive in [nodeToFlow]. Probe-gated at the increment, so
+     *  a production compile pays one static read and a not-taken branch per
+     *  recorded node and retains nothing. */
+    private var recordFlowCalls = 0
+
+    /**
+     * (WARM.11) round 864 — every node [recordFlow] wrote, in write order.
+     *
+     * This is what lets [FlowGraph] fill its nodeId side table without walking
+     * the tree a second time. It is a LIST, not a set, and the duplicates are
+     * deliberate: the fill re-reads [nodeToFlow] per entry, so a key written
+     * twice lands on the same final value either way, and de-duplicating would
+     * cost a hash per record to save nothing.
+     */
+    private val recordedNodes: ArrayList<Node> = ArrayList()
 
     /** (NARROW.2)(f) round 855: the name-consuming flow nodes minted for this file,
      *  accumulated at MINT time so the inventory is exhaustive by construction (a
@@ -633,6 +748,8 @@ class FlowGraphBuilder {
     private fun recordFlow(node: Node) {
         // Skip synthetic / sentinel nodes (pos == -1).
         if (node.pos < 0) return
+        if (FrontEnd.mode == FrontEnd.ON) recordFlowCalls++
+        recordedNodes.add(node)
         nodeToFlow[nodeKey(node)] = currentFlow
     }
 
