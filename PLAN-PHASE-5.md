@@ -20,6 +20,87 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 871 (2026-08-09) — (WARM.19): THE FIRST MEASUREMENT IN THIS ARC TAKEN THROUGH THE ARTIFACT THAT
+SHIPS. A `--serve` REQUEST PAYS **2 ms** OVER AN IN-PROCESS REBUILD; THE **279 ms** A CLIENT SEES IS A FRESH
+CLIENT JVM; AND WHAT A REQUEST RE-DID ACROSS REQUESTS WAS **78 FILE READS + 78 PARSES**, IDENTICALLY FOR AN
+IDENTICAL REQUEST AND A ONE-FILE-CHANGED ONE. The parse half is now shared: **133 ms = 1.9%**, and the editor
+workload parses **one file per edit** instead of 78. `docs/perf/warm-serve-request-attribution.md`.
+
+- **(A) THE GAP, AND WHY ROUND 843 DID NOT CLOSE IT.** Every warm number rounds 843-870 produced came from
+  `BenchMain`, an IN-PROCESS repeated rebuild. Round 843 observed a real `--serve` ladder reading 7.10-7.45 s
+  against BenchMain's 7.14/6.92 s and concluded they agree — **a comparison of TOTALS, not an attribution**,
+  taken before this arc removed ~15% of the rebuild. Three NESTED brackets the shipping binary already prints
+  (client wall > server `elapsedMs` > the compiler's own `time:`) settle it: `server - compiler` — everything
+  `runCli` does around the build, i.e. argument parse, the round-848 mode ledger, diagnostic formatting,
+  stdout capture and the JSON encode — is **1-3 ms warm** on every request of three ladders.
+
+- **(B) THE 279 ms IS THE CLIENT, ISOLATED RATHER THAN DIFFERENCED.** `--watch` is refused by
+  `CompileServer.respondTo` in constant time, so a refused request's client wall IS the client-side cost with
+  the compile subtracted BY CONSTRUCTION: **279 ms median**, of which the bash launcher is **9 ms**. ~270 ms
+  is a fresh client JVM — **3.9% of the 7.15 s a user waits**, paid outside the server, and exactly what the
+  native thin client named in `XtscMain`'s KDoc exists to remove.
+
+- **(C) THE PER-REQUEST CENSUS, AND THE LINE THAT IS THE FINDING.** `--frontEnd` from inside a request, 8 warm
+  draws over 2 daemon processes: config **3 ms**, crawl WALL **153 ms (2.2%)**, bind **385 ms (5.5%)**, check
+  **6,450 ms (92%)**, post 3 ms. And on EVERY request: `files read: 78 (9977097 chars)   core parse loop: 78
+  reused / 0 fresh`. **`78 reused` is INV.1(e) working WITHIN the request; `files read: 78` is the crawl doing
+  all 78 parses again** — `preParsed` is a local of `build()`. The LIB parses have survived across requests
+  since M2.1(c) (`RealLibSnapshots`); the program's own never did. **The one-file-changed ladder produced
+  IDENTICAL counters**, which is the prize stated as a fact: the daemon workload is 77/78 unchanged and the
+  compiler was treating it as 0/78.
+
+- **(D) PRICED BY AMPLIFICATION, BECAUSE THE CENSUS CANNOT.** The crawl is a concurrent pipeline whose
+  read+parse CPU sums to **6-9x its wall** and it carries a fixed floor no parse elimination touches. New
+  `--parseAmp N` performs N extra parses per file inside the same span; two processes, rotations
+  `0,1,2,3,3,2,1,0` and `3,2,1,0,0,1,2,3`: **crawl(r) = 180 + 128.3r** and **171 + 137.7r** — one parse round
+  is **133 ms**, floor **33-52 ms**. Falsifier is ARITHMETIC and passed on every draw (sink = r x 4,530
+  statements exactly). **1.9% of a warm request, above the floor — which is what justified building anything.**
+
+- **(E) WHAT LANDED, AND WHY ITS INVALIDATION CANNOT GO STALE.** `CrawlParseCache` (commonMain, own file):
+  `path -> PreParsedFile`, served only when the CONTENT and the `ParserFlags` also match — INV.1(e)'s own gate
+  hoisted from a per-build local to a process-global map. The crawl reads every file every request anyway
+  (this removes none of that read CPU), so the bytes are in hand before the question is asked: **different
+  bytes are a different key; there is no mtime, size or stat anywhere in it.** Sharing a tree is sound on three
+  properties, none new: the parse is a pure function of `(source, fileName, flags)` (`internSalt` is
+  `fileName.hashCode()`), the AST is written only by `indexSourceFile`, and **`RealLibSnapshots` has relied on
+  exactly this since M2.1(c)** — the parse is shared, the BIND is not. Memory is bounded at one entry per path
+  and it was MEASURED, not argued: a 7-edit ladder reports **78 paths held** at every request. `lookup` is
+  read-only on the concurrent workers, `store` runs only in the single-threaded post-frontier fold (round 825).
+
+- **(F) THE CAPTURE, THREE INSTRUMENTS.** Controlled row with BLOCKED arms in one daemon (`--parseCacheOff`):
+  crawl **138 -> 14 ms**. Against the pre-change binary: **153 -> 24 ms**. The amplifier: **133 ms**. So
+  **122-133 ms = 1.8-1.9%**. **A trap worth the line: a single OFF request dropped into a run of ON ones reads
+  896 ms**, because the parser has not run for several requests and is no longer hot — interleave these two
+  arms request-by-request and the OFF arm is inflated by a factor of six. No whole-request A/B is quoted (the
+  wall's draw spread is +-5%; rounds 858 and 869 s 13 both measured that two batches cannot separate drift
+  from an effect this size). After: **77 hit / 1 miss per request** on the editor ladder.
+
+- **(G) THE GRID IS A DAEMON GRID, ON PURPOSE.** A one-shot CLI performs exactly ONE `build`, so it can never
+  register a cache hit and a two-class-dir grid of two CLI binaries would be evidence of nothing. Instead the
+  8 dashboard profiles were each compiled TWICE THROUGH ONE DAEMON — request 1 all-MISS (the pre-change
+  behaviour), request 2 all-HIT — **added=0 removed=0 on all eight**, crawl falling 1,084->96, 763->23,
+  274->11, 197->28, 113->28, 203->47, 278->38, 288->43 ms. Cross-PROJECT reuse fell out and was observed: the
+  profiles are nested subsets, so `tsc-cli`'s FIRST request already reports 78 hits and the daemon ends holding
+  1,249 paths.
+
+- **(H) PINS + ABLATION, WITH THE ROUND'S SHARPEST FINDING IN IT.** `CrawlParseCacheTest`, 15 pins; 7 ablations,
+  one arm per invocation, each reverted before the next, every arm dry-run first for a real diff. A1 (content
+  compare dropped) 4 red, A2 (flags) 1, A3 (content compare becomes a LENGTH compare) 2, A4 (path not in the
+  key) 3, A5 (OFF arm not off on READ) 1, A6 (on WRITE) 2, A7 (driver never stores) 4. **A1 and A3 initially
+  shared a red set** — the "byte difference" pin used a same-length edit — and were separated by making it a
+  different-length one. **And A1 reddened three COUNTER pins and NEITHER edit pin, which is a finding about the
+  compiler rather than a weak fixture: the core re-checks content at `ParsedSource` (INV.1(e)), so a mis-keyed
+  hit there degrades to a redundant parse and a CORRECT type-check. The place with no second gate is the
+  CRAWL, which has already used the stale tree's `moduleSpecifiers` to decide WHICH FILES EXIST** — an 11th
+  pin was cut for exactly that ("an edit that adds an import changes which files the crawl reaches", with an
+  explicit tsconfig file list so the program is decided by the crawl and not by the glob), and A1 now reddens
+  it. The wrong-answer path is a MISSING FILE, not a wrong type.
+
+- **(I) GATES.** Suite **14,165 / 0 / 3** over all four modules (`xml.etree`) = 14,150 + the 15 new pins.
+  `cost_gate.py` **+0.00% on all 20 counters**, twice. `huge_methods.py --fail-over 0` 0 over the limit.
+  8-profile daemon grid added=0 removed=0. 33 ladder requests over 3 daemon processes, every one 46 errors,
+  digest `84bbe7f0`. Commits `ccfb1bb7`, `bae03124`, `589b32fe`, `07eb9f9a`.
+
 **Round 870 (2026-08-09) — (WARM.17): THE WARM LEAF PROFILE RE-TAKEN ON THE POST-868/869 BINARY — THE TWO
 FIXED FAMILIES ARE **GONE FROM ITS OWN TABLE** (-410 ms and -113 ms, the second agreeing with round 869's
 amplifier to 13%), NOTHING NEW ROSE INTO THEIR PLACE, AND ITS TOP SURVIVING CANDIDATE IS TAKEN: the
@@ -1281,7 +1362,18 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   Captured **0.95%**; the 15 ms residue (0.21%) is below the floor and deliberately left.
   `docs/perf/warm-leaf-profile.md` §§ 14-20.
 
-- [ ] **(WARM.19, was (WARM.17) until round 870 took that label) — `CtaFrame.varTypes`: THE MOST WASTEFUL COPY RATIO OF THE SIX, AND TWO SEPARATE
+- [x] **(WARM.19) — ATTRIBUTE A REAL `--serve` DAEMON REQUEST.** DONE round 871. A request pays **2 ms**
+  over an in-process rebuild server-side; the **279 ms** a client additionally waits is a fresh client JVM
+  (launcher 9 ms), i.e. the native thin client's job. Per request the daemon re-did **78 reads + 78 parses**,
+  identically for an identical request and a one-file-changed one — INV.1(e)'s reuse is a `build()` local, and
+  only the LIB parses have crossed requests (since M2.1(c)). Priced by amplification (`--parseAmp`, new) at
+  **133 ms = 1.9%** and taken: `CrawlParseCache` keys on **content + ParserFlags**, so staleness is not
+  expressible; memory is bounded at one entry per path (**78 paths held** over a 7-edit ladder); `lookup` is
+  read-only on the crawl workers and `store` runs in the single-threaded post-frontier fold. Captured
+  **122-133 ms** by three instruments. The BIND (5.5%) stays per-consumer and the CHECK (92%) stays closed by
+  round 772. `docs/perf/warm-serve-request-attribution.md`.
+
+- [ ] **(WARM.20, was (WARM.19) until round 871 took that label, which was itself (WARM.17) until round 870) — `CtaFrame.varTypes`: THE MOST WASTEFUL COPY RATIO OF THE SIX, AND TWO SEPARATE
   IMPROVEMENTS SIT IN IT.** Round 869's census: **1,145,523 entries copied for 2,564 writes = 0.22%**,
   30,433 pushes, mean 37.6. (a) It is built with `toMutableMap()`, i.e. a **LinkedHashMap** (round 483's
   trap, still live), although a grep for `.keys/.values/.entries/.forEach/.map/.iterator/.sorted` over all
