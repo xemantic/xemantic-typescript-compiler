@@ -1373,7 +1373,26 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   **122-133 ms** by three instruments. The BIND (5.5%) stays per-consumer and the CHECK (92%) stays closed by
   round 772. `docs/perf/warm-serve-request-attribution.md`.
 
-- [ ] **(WARM.20, was (WARM.19) until round 871 took that label, which was itself (WARM.17) until round 870) — `CtaFrame.varTypes`: THE MOST WASTEFUL COPY RATIO OF THE SIX, AND TWO SEPARATE
+- [x] **(WARM.20) — THE 279 ms CLIENT JVM.** DONE round 872. Every client arm measured against ONE warm
+  daemon with round 871's constant-time refused request, so the compile cancels out: fork+exec floor
+  **0.9 ms**, **Kotlin/Native client 7.0 ms**, thin JVM + AOT **105 ms**, fat JVM + AOT **277 ms**, thin JVM
+  **278 ms**, JVM dispatcher **287 ms** (round 871's 279 ms reproduced). **The thin JVM client is NOT faster
+  than the fat one** — the cost is the JVM, not the compiler jar the module split removed, so the
+  `-client` module alone bought 3% and the NATIVE binary it enables bought the other 97%. Both native
+  clients were unbuilt and unrun here: the K/N one links in **1m23s** and nothing had ever invoked it, and
+  the GraalVM arm cannot be built on this box (no GraalVM; CI has it). `scripts/xtsc` now routes a
+  `--daemon` request through the native client with a FALLBACK to the JVM dispatcher on
+  `XTSC_CLIENT_UNAVAILABLE` (3) — the code that means "the request never ran", which is what makes re-running
+  it safe. End to end through the launcher: **369 -> 105 ms on a 3-file project** (74% of the wait) and
+  7,195 -> 6,881 ms on the compiler profile, same errors and same digest on both.
+  **Two defects fell out and are the round's real yield**: `--daemon` served by a daemon exited **0** on a
+  failing compile where the CLI and the in-process fallback both exit 1 (a CI false-green,
+  `ExitCodeParityTest` was one layer too low to see it), and the first build of the arm **auto-spawned a
+  daemon** — caught by `AotCacheGuardTest`, which found it left one running after the suite.
+  23 pins, 8-arm single-mistake ablation, every arm with its own failing set.
+  `docs/perf/warm-serve-request-attribution.md` § 10.
+
+- [ ] **(WARM.21, was (WARM.20) until round 872 took that label, itself (WARM.19) until round 871 and (WARM.17) until round 870) — `CtaFrame.varTypes`: THE MOST WASTEFUL COPY RATIO OF THE SIX, AND TWO SEPARATE
   IMPROVEMENTS SIT IN IT.** Round 869's census: **1,145,523 entries copied for 2,564 writes = 0.22%**,
   30,433 pushes, mean 37.6. (a) It is built with `toMutableMap()`, i.e. a **LinkedHashMap** (round 483's
   trap, still live), although a grep for `.keys/.values/.entries/.forEach/.map/.iterator/.sorted` over all

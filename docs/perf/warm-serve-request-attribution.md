@@ -381,3 +381,218 @@ scripts/round871-grid.sh
 # the ablation
 scripts/round871-ablate.sh --dry && scripts/round871-ablate.sh A1 A2
 ```
+
+---
+
+# § 10 — (WARM.20): the client arms, measured
+
+*Round 872, 2026-08-09. § 2.1 above located **279 ms** of a request outside the
+server and named the native thin client as its owner. This is that arm built,
+measured against every alternative, and shipped. Round 871's sections are
+untouched: they are the record.*
+
+> ## HEADLINE
+>
+> **The Kotlin/Native client answers in 7.0 ms where the JVM dispatcher takes
+> 287 ms** — a **40×** reduction of a cost that is FIXED, against a 0.9 ms
+> fork+exec floor. On the 78-file compiler profile that is 3.9% → 0.1%; on a
+> 3-file project it is **369 → 105 ms**, i.e. three quarters of the wait.
+>
+> **The thin JVM client is not faster than the fat one (278 vs 287 ms).** The
+> `-client` module's dependency edge — `-api` and nothing else, no 5.6 MB
+> compiler jar — is worth ~3%. What it is worth is that it makes a native
+> binary *affordable*, and the native binary is worth the other 97%.
+>
+> **Two defects fell out of swapping the arms, and they are the round's real
+> yield**: a daemon-served failing compile exited **0**, and the first build of
+> the arm **auto-spawned a daemon** from inside the test suite.
+
+## 10.1 What existed, before anything was measured
+
+Round 857's rule — check the artifact, do not assume it. Found:
+
+| | state on this box |
+|---|---|
+| `-client` module | builds `jvm` + (opt-in) `macosArm64`/`linuxX64` executables |
+| its `clientLib` staging | **never run** — unlike the daemon's `xtscLib` it is NOT wired into `assemble` |
+| its Kotlin/Native binary | **never built**; links in **1m23s**, 3.26 MB |
+| its GraalVM image | **cannot be built here** — no GraalVM; CI has it |
+| `scripts/xtsc` | operative, and reaches only `XtscMainKt` — the JVM dispatcher |
+
+So the thin client had existed since MOD.4 and **nothing had ever invoked it**.
+
+## 10.2 The fixed cost of every arm
+
+One warm daemon; the probe is round 871's `--watch`, refused with
+`elapsedMs = 0` before any compile, so the client wall **is** the client cost.
+Arms interleaved and rotated per rep (a fixed cost is exactly what a blocked run
+would misattribute to drift), 12 reps, `EPOCHREALTIME` rather than `date +%s%N`
+— the fast arms are single-digit ms and `date` is a fork and an exec per
+timestamp. Box quiet, load < 1.
+
+| arm | n | median | min | max | spread |
+|---|---:|---:|---:|---:|---:|
+| `/bin/true` (fork+exec+ld.so floor) | 12 | **0.9** | 0.7 | 1.2 | 53% |
+| **Kotlin/Native client** | 12 | **7.0** | 6.0 | 8.3 | 33% |
+| `python3 -c pass` (that floor's own startup) | 12 | 20.8 | 17.5 | 28.5 | 53% |
+| python3 raw socket round trip | 12 | 32.1 | 29.5 | 38.0 | 27% |
+| thin JVM client + AOT cache | 12 | **105.2** | 95.2 | 122.7 | 26% |
+| fat JVM dispatcher + AOT cache | 12 | 277.1 | 267.0 | 316.8 | 18% |
+| thin JVM client | 12 | 278.1 | 247.5 | 315.9 | 25% |
+| **JVM dispatcher** (round 871's arm) | 12 | **286.9** | 269.7 | 302.6 | 12% |
+
+Every arm produced the identical refusal, checked per arm — an arm not doing the
+round trip would otherwise report a meaningless number.
+
+**Reading it.**
+
+- **287 ms reproduces round 871's 279 ms.** The baseline is sound.
+- **The module split alone is worth 3%** (287 → 278). Class loading is lazy, so
+  the dispatcher never touches the compiler jar when the daemon answers; the
+  cost is the JVM, the coroutine machinery and ktor. **This is the round's
+  falsified prediction**: "thin client" named the dependency edge, and the edge
+  is not where the time was.
+- **AOT helps the thin client 2.6× and the fat one not at all** (278 → 105;
+  287 → 277). Both were verified loading from the cache (`-Xlog:class+load`:
+  1,702 and 2,657 classes from `shared objects file`), so the fat arm's ~0 is a
+  result, not a silently-uncached run (round 842). Caches trained *after* the
+  last build, 18.5 MB and 54.9 MB.
+- **7.0 ms is essentially the floor.** It is 6.1 ms above fork+exec and *below*
+  the python probe's marginal socket cost, which therefore bounds the round trip
+  rather than measuring it. There is no second 10× here: the remaining ~6 ms is
+  process start, connect, and a JSON round trip through the daemon.
+
+## 10.3 What it is worth on a real request — both ends of the range
+
+Both arms through the **launcher** (`XTSC_CLIENT=off` is the pre-872 path), one
+warm daemon, daemon pre-warmed on the project so round 871's crawl-parse cache
+does not land on whichever arm went first.
+
+| project | arm | n | median | min | max |
+|---|---|---:|---:|---:|---:|
+| 3 files, 1 error | JVM | 10 | **369.2** | 346.1 | 391.6 |
+| 3 files, 1 error | native | 10 | **105.3** | 91.0 | 172.3 |
+| 78 files, 46 errors | JVM | 4 | 7,195.0 | 6,949.7 | 7,469.4 |
+| 78 files, 46 errors | native | 4 | 6,880.6 | 6,403.1 | 7,075.1 |
+
+Same diagnostics both arms, both projects: 1 error / digest `8ccb2942`, and
+46 errors / digest `4090b73e` (round 841's fourth lineage).
+
+**The percentage is meaningless without naming the project, and that is the
+point.** The compiler-profile delta (−4.4%) is inside its own ±5% spread and is
+not claimed as a measured effect — the *fixed* cost is what was measured, in
+§ 10.2, and 279 ms of 7,150 is 3.9% by arithmetic. On the 3-file project the
+same 279 ms is **72% of the wait**, and that is the request an editor generates.
+
+## 10.4 What shipped
+
+`scripts/xtsc` routes a `--daemon` request through the native client when one
+resolves (`XTSC_CLIENT`, then `$XTSC_HOME/bin/xtsc-client`, then the dev build
+path; `XTSC_CLIENT=off` forces the JVM arm), and through the JVM dispatcher when
+none does.
+
+**The fallback is the load-bearing half.** The client cannot compile — that is
+the dependency edge, not an omission — so it exits `XTSC_CLIENT_UNAVAILABLE` (3)
+when no daemon can be reached. That code is documented to mean *the request
+never ran*, never *it ran and found errors*, which is exactly what makes
+re-running it on the JVM arm safe. A fresh checkout, a `clean`, a platform with
+no native binary: all still get a working `xtsc`. Round 857 is why this is
+stated as a requirement rather than a nicety.
+
+Two smaller decisions, both pinned:
+
+- **`--no-spawn` is passed** (see § 10.5).
+- **`XTSC_SOCKET` is named explicitly** when no `--socket` was given: the client
+  honours that variable and the JVM dispatcher does not, so without it the two
+  arms could address different daemons — which does not fail, it silently starts
+  a second one. Deriving the default path in bash would be a *third* derivation
+  of it, which is the thing the both-peers-agree invariant forbids.
+
+## 10.5 The two defects, which are the round's real yield
+
+**(a) A daemon-served failing compile exited 0.** Measured on one project with
+one error:
+
+| path | exit |
+|---|---:|
+| one-shot CLI | 1 |
+| `--daemon`, nothing listening (in-process fallback) | 1 |
+| `--daemon`, served by a daemon | **0** |
+
+`runAsClient` propagated `XTSC_REFUSED` and dropped every other non-zero code, so
+`xtsc`'s answer again depended on whether a daemon happened to be running — the
+property the 2026-08-08 exit-code change set out to end — and CI branching on it
+read a failing compile as a pass. Silent by construction: the diagnostics print
+either way, and nothing prints the code.
+
+**`ExitCodeParityTest` could not see it.** It pins the code the server puts *in
+the response*, which was always right; the defect was one layer up, on the
+response-to-exit-code edge. `runAsClient` now RETURNS the code as `runCli` does,
+and takes an injectable request function so the pin needs no socket — this
+module's suite never binds one on purpose, which is precisely how an edge just
+above the response object went unpinned.
+
+**(b) The arm's first build auto-spawned a daemon.** The client's own default is
+to start one when it finds none — right for a binary invoked as `xtsc`, wrong as
+a side effect of swapping an arm, since `--daemon` has always meant *use a
+server if one is up, else compile here and say so*. `AotCacheGuardTest` failed on
+the missing "no compile server on" message, and **a daemon was still running when
+the 14,000-test suite finished**. The launcher now passes `--no-spawn`, so the
+swap is a latency change and nothing else. Auto-spawn is a product decision and
+deserves its own round.
+
+## 10.6 Verification
+
+- **Suite 14,188 / 0 failures / 3 skipped** over all four modules (`xml.etree`)
+  = round 871's 14,165 + the 23 new pins, exactly.
+- `cost_gate.py` / `huge_methods.py` **not required and not run**: nothing in
+  core's `commonMain` changed — the diff is the daemon module's `jvmMain`, its
+  `jvmTest`, and shell scripts. `HugeMethodLimitTest` ran inside the suite and is
+  green regardless.
+- **Piped invocation returns** (MOD.5's `dup2` hazard) on the shipped path, and
+  also for the client's own spawn path, tested separately before `--no-spawn`
+  was adopted: client-spawns-daemon through `| tail` returned in 1,361 ms and a
+  second piped request in 179 ms. The hazard is real and the native
+  `spawnDetached` handles it.
+- **Exit codes on the shipped path**: 1 with errors, 0 clean, 1 through the
+  fallback, 2 for a refusal.
+- **20 requests through the new path** across the two projects, every one
+  matching the JVM arm's error count and sorted digest.
+
+### 10.6.1 The ablation
+
+`XtscClientExitCodeTest` (7) + `LauncherClientArmTest` (16), 8 arms, **one
+mistake per invocation**, each reverted before the next, on a committed tree,
+every arm dry-run first for a real diff that reverts clean:
+
+| arm | the mistake | red |
+|---|---|---:|
+| A1 | the served exit code is dropped (the defect, restated) | 3 |
+| A2 | fall back on ANY non-zero code, not only "never ran" | 2 |
+| A3 | the arm stops being restricted to `--daemon` requests | 3 |
+| A4 | `XTSC_SOCKET` is no longer named explicitly | 1 |
+| A5 | the client is allowed to auto-spawn | 1 |
+| A6 | `--daemon` is forwarded to the client | 1 |
+| A7 | the client's stderr is replayed even on a fallback | 1 |
+| A8 | the AOT probe is answered from the native arm | 1 |
+
+Every arm has its own failing set; A3's is a strict superset of A8's, which is
+the containment those two mistakes actually have. Two honest notes: **A2 reddens
+a second pin** ("stderr survives when it did not fall back") because falling back
+on exit 4 also suppresses that arm's stderr — one mistake, two visible
+consequences, not two mistakes. And **A5 is invisible to the real-client pin**,
+because that pin's environment names no daemon command, so the client could not
+spawn there anyway; the `--no-spawn` argument pin is what discriminates it.
+
+## 10.7 What this does NOT show
+
+- **Nothing about Windows.** MOD.6 stands: the native `spawnDetached` is
+  fork/setsid/execvp and `mingwX64` is deliberately absent. The GraalVM arm is
+  the intended answer there and could not be built on this box.
+- **No claim that the compiler-profile delta is a measured effect.** It is
+  inside the request's own spread; the fixed cost is what was measured.
+- **The remaining ~6 ms of the native client was not attributed.** It is within
+  a few ms of the fork+exec floor and there is no second 10× in it.
+- **The AOT-cached thin JVM client (105 ms) is not shipped as an arm.** It is
+  15× the native client and needs a cache trained per build; it is recorded
+  because it is the best answer available on a platform with no native binary.
