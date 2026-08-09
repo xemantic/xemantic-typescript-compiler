@@ -95,6 +95,7 @@ class CliModeRestoreTest {
             IanySections::class.java,
             CpaSections::class.java,
             FrontEnd::class.java,
+            CrawlParseCache::class.java,
             FlowScan::class.java,
             FlowIndex::class.java,
             PartitionCheck::class.java,
@@ -146,6 +147,7 @@ class CliModeRestoreTest {
         IanySections.reset()
         CpaSections.reset()
         FrontEnd.reset()
+        CrawlParseCache.reset()
         FlowScan.reset()
         FlowCensus.reset()
         PartitionCheck.reportLines.clear()
@@ -262,7 +264,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--verifyUnionRetry", "--verifyUnionRetryAll", "--verifyDeferSuppression",
     "--verifyDeferSuppressionBogus", "--cmamPreGate", "--cmamPreGateBogus",
     "--verifyImplRelated", "--verifyImplRelatedAll", "--verifyImplRelatedBogus",
-    "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--flowScanLegacy",
+    "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--parseAmp", "--parseCacheOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
     "--flowCensus", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",

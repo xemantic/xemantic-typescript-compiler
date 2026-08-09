@@ -276,6 +276,11 @@ class ProjectCompiler(private val vfs: Vfs) {
         /** (FRONT.1): this file's OWN read and pre-parse nanos, carried back so the
          *  SINGLE-THREADED collector can sum them without racing the workers. */
         val readNanos: Long = 0, val parseNanos: Long = 0,
+        /** (WARM.19): this file's amplifier receipts, carried back for the same
+         *  reason — `FrontEnd.parseAmpSink` is folded single-threaded. */
+        val ampBase: Long = 0, val ampSink: Long = 0,
+        /** (WARM.19): whether [preParsed] came from [CrawlParseCache] rather than a parse. */
+        val cacheHit: Boolean = false,
     ) {
         val specifiers: Set<String> = preParsed?.sourceFile?.moduleSpecifiers?.toSet() ?: emptySet()
 
@@ -386,17 +391,66 @@ class ProjectCompiler(private val vfs: Vfs) {
                     val t0 = FrontEnd.t()
                     val content = withContext(pipelineIoDispatcher) { vfs.readText(path) }
                     val t1 = FrontEnd.t()
+                    // (WARM.19) round 871 — the amplifier rides INSIDE this span
+                    // and on the same dispatcher, so `FrontEnd.CRAWL`'s wall is
+                    // `floor + (1 + r) * C` and two values of `r` cancel the
+                    // floor. Its receipts are carried back on the element and
+                    // folded single-threaded below: a `+=` from here races.
+                    var ampBase = 0L
+                    var ampSink = 0L
+                    var cacheHit = false
                     val preParsed =
                         if (content == null) null
-                        else withContext(Dispatchers.Default) { parseForCrawl(path, content, options) }
+                        else withContext(Dispatchers.Default) {
+                            // (WARM.19): the cross-request parse cache. `lookup`
+                            // is READ-ONLY, which is what makes it safe to call
+                            // from these concurrent workers; the matching
+                            // `store` runs in the single-threaded fold below.
+                            val flags = computeParserFlags(path, content, options)
+                            val cached =
+                                if (path.endsWith(".json")) null
+                                else CrawlParseCache.lookup(path, content, flags)
+                            val pp = if (cached != null) {
+                                cacheHit = true
+                                cached
+                            } else {
+                                parseForCrawl(path, content, options, flags)
+                            }
+                            if (pp != null) {
+                                ampBase = pp.sourceFile.statements.size.toLong()
+                                // The amplifier deliberately does NOT consult the
+                                // cache: it must price a real parse, on the
+                                // cached binary too, which is what makes the
+                                // before/after crawl row a controlled comparison.
+                                repeat(FrontEnd.parseAmp) {
+                                    ampSink += parseForCrawl(path, content, options, flags)
+                                        ?.sourceFile?.statements?.size?.toLong() ?: 0L
+                                }
+                            }
+                            pp
+                        }
                     val t2 = FrontEnd.t()
-                    emit(CrawledFile(path, content, preParsed, t1 - t0, t2 - t1))
+                    emit(CrawledFile(path, content, preParsed, t1 - t0, t2 - t1, ampBase, ampSink, cacheHit))
                 }
             }
             .toList()
+        // Single-threaded: the concurrent flow is fully drained by now, which is
+        // the ONLY point at which [CrawlParseCache] may be written (round 825 —
+        // a plain HashMap write from N workers is a race with no exception to
+        // find it by). Unconditional, unlike the census below it: the cache is
+        // production behaviour, not instrumentation.
+        for (f in byPath) {
+            val pp = f.preParsed
+            if (pp != null) CrawlParseCache.store(f.path, pp)
+            if (f.content != null && !f.path.endsWith(".json")) {
+                if (f.cacheHit) CrawlParseCache.hits++ else CrawlParseCache.misses++
+            }
+        }
         if (FrontEnd.mode == FrontEnd.ON) {
-            // Single-threaded: the concurrent flow is fully drained by now.
-            for (f in byPath) FrontEnd.addCrawlFile(f.readNanos, f.parseNanos, f.content?.length ?: 0)
+            for (f in byPath) {
+                FrontEnd.addCrawlFile(f.readNanos, f.parseNanos, f.content?.length ?: 0)
+                FrontEnd.addParseAmp(f.ampBase, f.ampSink)
+            }
         }
         val indexed = byPath.associateBy { it.path }
         return paths.map { indexed.getValue(it) }
@@ -622,9 +676,18 @@ class ProjectCompiler(private val vfs: Vfs) {
      * graph walk itself sees the option-faithful tree. `.json` files are not
      * parsed (the core never parses them either — JSON is re-emitted verbatim).
      */
-    private fun parseForCrawl(fileName: String, source: String, options: CompilerOptions): PreParsedFile? {
+    private fun parseForCrawl(
+        fileName: String,
+        source: String,
+        options: CompilerOptions,
+        // (WARM.19): the caller has usually computed these already, for the
+        // cache lookup. Recomputing them is pure and cheap, but passing them
+        // keeps the ONE definition of a file's flags at the call site, so the
+        // cache key and the parse can never be computed from different inputs.
+        precomputedFlags: ParserFlags? = null,
+    ): PreParsedFile? {
         if (fileName.endsWith(".json")) return null
-        val flags = computeParserFlags(fileName, source, options)
+        val flags = precomputedFlags ?: computeParserFlags(fileName, source, options)
         val parser = Parser(
             source, fileName, forceJsx = flags.forceJsx, topLevelAwait = flags.topLevelAwait,
             needsJsxFlag = flags.needsJsxFlag, noImplicitAny = flags.noImplicitAny,

@@ -4521,6 +4521,53 @@ object FrontEnd {
     /** The amplifier's arithmetic falsifier: must equal `copyAmp * sum(copyEntries[armed])`. */
     var copyAmpSink: Long = 0
 
+    // ---- (WARM.19) round 871 — the CRAWL PRE-PARSE amplifier.
+    //
+    // The question it exists for: a `--serve` daemon re-reads and re-PARSES all
+    // 78 program files on every request (`preParsed` is a per-`build()` local,
+    // so INV.1(e)'s reuse is within one request and never across two), and the
+    // census prices the whole crawl at ~2.2% of a warm request. How much of
+    // that 2.2% a cross-request parse cache could actually delete cannot be read
+    // off the census, because the crawl's WALL is a CONCURRENT pipeline: its
+    // read+parse CPU sums to ~6-9x its wall, and it also carries a fixed
+    // latency floor (breadth-first frontier waves, module resolution, coroutine
+    // dispatch) that no amount of parse elimination touches.
+    //
+    // So: with [parseAmp] set to `r`, every crawled file is parsed `r` EXTRA
+    // times on the same dispatcher, inside the same span, and the crawl WALL
+    // becomes `floor + (1 + r) * C` where `C` is the wall cost of ONE parse
+    // round over the program. Two values of `r` cancel `floor` algebraically
+    // and yield `C` — which is, by construction, the MOST a perfect
+    // cross-request parse cache could ever return.
+    //
+    // Falsification is ARITHMETIC, exactly as for [copyAmp]: [parseAmpSink]
+    // must be `r` times [parseAmpBase] on every rebuild, which is what rules out
+    // a JIT that hoisted the extra parses away. There is no timestamp pair
+    // anywhere in this instrument.
+
+    /** Extra crawl parses per file — 0 in production and in the plain census. */
+    var parseAmp: Int = 0
+
+    /** Sum of `statements.size` over the ONE production parse of each file. */
+    var parseAmpBase: Long = 0
+
+    /** The amplifier's arithmetic falsifier: must equal `parseAmp * parseAmpBase`. */
+    var parseAmpSink: Long = 0
+
+    /**
+     * One crawled file's amplifier receipt, folded SINGLE-THREADED.
+     *
+     * The crawl parses on `Dispatchers.Default` concurrently, so a `+=` from
+     * inside the flow would race exactly as `PassTiming.nodeKindHistogram` does.
+     * Each element carries its own numbers back and this is called from the
+     * drained-flow loop, which is the shape [addCrawlFile] already uses.
+     */
+    fun addParseAmp(base: Long, sink: Long) {
+        if (mode != ON) return
+        parseAmpBase += base
+        parseAmpSink += sink
+    }
+
     /** One censused whole-map copy of [n] entries, plus the amplifier's extras. */
     fun addCopy(kind: Int, n: Int) {
         if (mode != ON) return
@@ -4583,6 +4630,7 @@ object FrontEnd {
         copyMax = LongArray(CP_N); copyMuts = LongArray(CP_N)
         copyUndo = LongArray(CP_N)
         copyAmpSink = 0
+        parseAmpBase = 0; parseAmpSink = 0
     }
 
     /**
@@ -4756,6 +4804,26 @@ object FrontEnd {
             "files read: $filesRead ($charsRead chars)   core parse loop: " +
                 "$parsedReused reused / $parsedFresh fresh"
         )
+        // (WARM.19) — the CROSS-REQUEST parse cache's receipt. In a one-shot CLI
+        // this reads all-miss by construction; in a `--serve` daemon every
+        // request after the first should read all-hit but for the files that
+        // changed, which is the whole claim.
+        appendLine(
+            "crawl parse cache: ${CrawlParseCache.hits} hit / ${CrawlParseCache.misses} miss" +
+                " (cumulative for this process), ${CrawlParseCache.size} paths held" +
+                if (CrawlParseCache.enabled) "" else "  [DISABLED]"
+        )
+        // (WARM.19) — the crawl pre-parse amplifier's arithmetic falsifier. A
+        // MISMATCH means the extra parses did not all happen (a hoist, or a
+        // gate that stopped mirroring `parseForCrawl`'s own), so the slope
+        // taken from this run is not a measurement of anything.
+        if (parseAmp > 0) {
+            val expected = parseAmp.toLong() * parseAmpBase
+            appendLine(
+                "parse amp: r=$parseAmp base $parseAmpBase stmts, sink $parseAmpSink " +
+                    "(expected $expected)" + if (parseAmpSink == expected) "" else "  ** MISMATCH **"
+            )
+        }
         var total = 0L
         for (s in 0..POST) if (s != READ && s != PREPARSE) total += nanos[s]
         appendLine("phases (disjoint except the two crawl sub-sums): total ${total / 1_000_000} ms")

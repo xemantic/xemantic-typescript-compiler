@@ -56,15 +56,35 @@ FRONT=0
 PROJ="$ROOT/build/bench/tsc-project-637d5746"
 EDIT=""
 TAG="ladder"
+AMPSEQ=""
+CACHESEQ=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --front) FRONT=1; shift ;;
     --proj)  PROJ="$2"; shift 2 ;;
     --edit)  EDIT="$2"; shift 2 ;;
     --tag)   TAG="$2"; shift 2 ;;
+    # (WARM.19) the amplification ladder: one comma-separated `--parseAmp` value
+    # per request, IN ONE DAEMON PROCESS, so a rotation (0,1,2,3,3,2,1,0) puts
+    # every arm on both sides of any drift. `n` is ignored when this is given.
+    --ampseq) AMPSEQ="$2"; FRONT=1; shift 2 ;;
+    # (WARM.19) the CONTROLLED row for the cross-request parse cache: one
+    # `on`/`off` per request, in ONE daemon process, so an ABBA rotation puts
+    # both arms at the same warmth and on both sides of any drift. `off` sends
+    # `--parseCacheOff`, whose ledger entry is restored after the request, so
+    # the arms differ in nothing but whether the crawl consults the cache.
+    --cacheseq) CACHESEQ="$2"; FRONT=1; shift 2 ;;
     *) echo "unknown option: $1" >&2; exit 2 ;;
   esac
 done
+if [ -n "$AMPSEQ" ]; then
+  IFS=',' read -r -a AMPS <<< "$AMPSEQ"
+  N="${#AMPS[@]}"
+fi
+if [ -n "$CACHESEQ" ]; then
+  IFS=',' read -r -a CACHES <<< "$CACHESEQ"
+  N="${#CACHES[@]}"
+fi
 
 mkdir -p "$OUT"
 
@@ -121,14 +141,24 @@ ARGS=(--noEmit)
 
 TSV="$OUT/$TAG.tsv"
 : > "$TSV"
-printf 'req\tclient_ms\tserver_ms\tcompiler_ms\terrs\tdigest\n' >> "$TSV"
+printf 'req\tamp\tclient_ms\tserver_ms\tcompiler_ms\tcrawl_ms\terrs\tdigest\n' >> "$TSV"
 
 for i in $(seq 1 "$N"); do
   if [ -n "$EDIT" ] && [ "$i" -gt 1 ]; then
     printf '\n// xtsc round871 edit %s\n' "$i" >> "$PROJ/$EDIT"
   fi
+  REQARGS=("${ARGS[@]}")
+  amp=0
+  if [ -n "$AMPSEQ" ]; then
+    amp="${AMPS[$((i - 1))]}"
+    REQARGS+=(--parseAmp "$amp")
+  fi
+  if [ -n "$CACHESEQ" ]; then
+    amp="${CACHES[$((i - 1))]}"
+    [ "$amp" = "off" ] && REQARGS+=(--parseCacheOff)
+  fi
   t0=$(date +%s%N)
-  XTSC_AOT=off "$ROOT/scripts/xtsc" --daemon --socket "$SOCK" "${ARGS[@]}" --listAll "$PROJ" \
+  XTSC_AOT=off "$ROOT/scripts/xtsc" --daemon --socket "$SOCK" "${REQARGS[@]}" --listAll "$PROJ" \
       > "$OUT/$TAG.req$i.txt" 2>&1 || true
   t1=$(date +%s%N)
   client=$(( (t1 - t0) / 1000000 ))
@@ -136,9 +166,15 @@ for i in $(seq 1 "$N"); do
   compiler=$(grep -a '^time:' "$OUT/$TAG.req$i.txt" | tail -1 | sed 's/[^0-9]*\([0-9]*\) ms.*/\1/')
   errs=$(grep -ac 'error TS' "$OUT/$TAG.req$i.txt" || true)
   digest=$(grep -a 'error TS' "$OUT/$TAG.req$i.txt" | sed "s#${PROJ}/##g" | sort | md5sum | cut -c1-8)
-  printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$i" "$client" "${server:-NA}" "${compiler:-NA}" "$errs" "$digest" >> "$TSV"
-  printf 'req %-3s client %6s ms   server %6s ms   compiler %6s ms   errs %-4s %s\n' \
-      "$i" "$client" "${server:-NA}" "${compiler:-NA}" "$errs" "$digest"
+  crawl=$(grep -a '"import-graph crawl (WALL)"' "$OUT/$TAG.req$i.txt" | tail -1 | awk -F, '{printf "%.1f", $3/1000000}')
+  cache=$(grep -a 'crawl parse cache:' "$OUT/$TAG.req$i.txt" | tail -1 | sed 's/crawl parse cache: //')
+  mism=$(grep -ac 'MISMATCH' "$OUT/$TAG.req$i.txt" || true)
+  printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+      "$i" "$amp" "$client" "${server:-NA}" "${compiler:-NA}" "${crawl:-NA}" "$errs" "$digest" >> "$TSV"
+  printf 'req %-3s amp %-2s client %6s ms  server %6s ms  compiler %6s ms  crawl %7s ms  errs %-4s %s%s\n' \
+      "$i" "$amp" "$client" "${server:-NA}" "${compiler:-NA}" "${crawl:-NA}" "$errs" "$digest" \
+      "$([ "$mism" != "0" ] && echo '  ** AMP MISMATCH **' || true)"
+  [ -n "${cache:-}" ] && printf '        cache: %s\n' "$cache"
 done
 
 echo

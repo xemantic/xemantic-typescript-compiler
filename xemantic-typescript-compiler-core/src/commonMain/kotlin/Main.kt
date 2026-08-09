@@ -386,6 +386,27 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
                 FrontEnd.reset(); modes.set(FrontEnd::mode, FrontEnd.ON)
                 FlowScan.reset(); o.flowScanReport = true
             }
+            // (WARM.19) round 871 — price the CRAWL PRE-PARSE by amplification
+            // (round 759), because the crawl's WALL is a concurrent pipeline
+            // whose read+parse CPU sums to 6-9x it: `r` extra parses per file
+            // make the wall `floor + (1 + r) * C`, and two values of `r` cancel
+            // the floor. This is the upper bound on what a cross-request parse
+            // cache in a `--serve` daemon could ever return. Arms `--frontEnd`
+            // itself, since the arithmetic falsifier prints in its table.
+            // (WARM.19) — the cross-request parse cache's OFF arm, in the same
+            // binary, so the capture is a controlled row rather than a
+            // two-build difference (round 793).
+            "--parseCacheOff", "--parsecacheoff" -> {
+                modes.set(CrawlParseCache::enabled, false)
+            }
+            "--parseAmp", "--parseamp" -> {
+                i++
+                if (i < args.size) {
+                    FrontEnd.reset(); modes.set(FrontEnd::mode, FrontEnd.ON)
+                    FlowScan.reset(); o.flowScanReport = true
+                    modes.set(FrontEnd::parseAmp, args[i].toIntOrNull() ?: 0)
+                }
+            }
             // (FRONT.2) round 801 — the B464 reassignment-scan A/B and its
             // equivalence verifier. Both scanners are in the binary, so these
             // select an arm rather than needing a second build.
@@ -815,6 +836,13 @@ internal fun usageText(): String =
                              skip, the body time behind it, and how many of those calls
                              emit — the falsifier (--cmamPreGateBogus = control)
           --frontEnd         (FRONT.1) front-end attribution: config / crawl / parse / imports / bind
+          --parseCacheOff    (WARM.19) do not reuse a crawl parse across ProjectCompiler.build
+                             calls in this process — the in-binary OFF arm of the cross-request
+                             parse cache (inert for a one-shot CLI, which builds once)
+          --parseAmp N       (WARM.19) N EXTRA crawl pre-parses per file, inside the crawl span;
+                             arms --frontEnd. Two values of N cancel the crawl's fixed floor and
+                             give the wall cost of ONE parse round = the ceiling on a
+                             cross-request parse cache in the --serve daemon
           --flowScanLegacy   (FRONT.2) run the pre-801 B464 reassignment scanner (A/B arm)
           --verifyFlowScan   (FRONT.2) run BOTH scanners and report divergences
           --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner
