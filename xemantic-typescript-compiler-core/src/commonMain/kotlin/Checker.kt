@@ -364,11 +364,14 @@ class Checker(
         private val backing: HashMap<String, Type>,
     ) : MutableMap<String, Type> by backing {
         constructor() : this(HashMap())
-        constructor(m: Map<String, Type>) : this(HashMap(m))
-        override fun put(key: String, value: Type): Type? { bumpExprEpoch("EpochMap.put"); return backing.put(key, value) }
-        override fun remove(key: String): Type? { bumpExprEpoch("EpochMap.remove"); return backing.remove(key) }
-        override fun putAll(from: Map<out String, Type>) { bumpExprEpoch("EpochMap.putAll"); backing.putAll(from) }
-        override fun clear() { bumpExprEpoch("EpochMap.clear"); backing.clear() }
+        constructor(m: Map<String, Type>) : this(HashMap(m)) {
+            FrontEnd.addCopy(FrontEnd.CP_EPOCH_MAP, m.size)
+            FrontEnd.ampCopyMap(FrontEnd.CP_EPOCH_MAP, m)
+        }
+        override fun put(key: String, value: Type): Type? { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.put"); return backing.put(key, value) }
+        override fun remove(key: String): Type? { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.remove"); return backing.remove(key) }
+        override fun putAll(from: Map<out String, Type>) { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.putAll"); backing.putAll(from) }
+        override fun clear() { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.clear"); backing.clear() }
     }
 
     /** In-place-mutation-tracked set for the name-set family (composition — see [EpochMap]). */
@@ -376,11 +379,14 @@ class Checker(
         private val backing: HashSet<String>,
     ) : MutableSet<String> by backing {
         constructor() : this(HashSet())
-        constructor(c: Collection<String>) : this(HashSet(c))
-        override fun add(element: String): Boolean { bumpExprEpoch("EpochSet.add"); return backing.add(element) }
-        override fun remove(element: String): Boolean { bumpExprEpoch("EpochSet.remove"); return backing.remove(element) }
-        override fun addAll(elements: Collection<String>): Boolean { bumpExprEpoch("EpochSet.addAll"); return backing.addAll(elements) }
-        override fun clear() { bumpExprEpoch("EpochSet.clear"); backing.clear() }
+        constructor(c: Collection<String>) : this(HashSet(c)) {
+            FrontEnd.addCopy(FrontEnd.CP_EPOCH_SET, c.size)
+            FrontEnd.ampCopySet(FrontEnd.CP_EPOCH_SET, c)
+        }
+        override fun add(element: String): Boolean { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.add"); return backing.add(element) }
+        override fun remove(element: String): Boolean { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.remove"); return backing.remove(element) }
+        override fun addAll(elements: Collection<String>): Boolean { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.addAll"); return backing.addAll(elements) }
+        override fun clear() { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.clear"); backing.clear() }
     }
 
     /** (f1b-i): the SHADOW memo — under --passTiming only, getTypeOfExpression
@@ -2899,6 +2905,7 @@ class Checker(
         seedClass: ClassDeclaration? = null,
         paramTypeFallback: TypeNode? = null,
     ): CtaFrame {
+        FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, base.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, base.varTypes)
         val inner = base.varTypes.toMutableMap()
         extraVarTypes?.let { inner.putAll(it) }
         val tpNames = (outerTpNames ?: base.typeParams) + (tps?.map { it.name.text } ?: emptyList())
@@ -2910,6 +2917,9 @@ class Checker(
             inInstanceMember = inInstanceMember,
             classForThis = classForThis,
             narrowedDeclared = base.narrowedDeclared)
+        FrontEnd.addCopy(FrontEnd.CP_CTA_LOCAL, base.localTypes.size + base.localDeclNodes.size + base.shadowedNames.size)
+        FrontEnd.ampCopyMap(FrontEnd.CP_CTA_LOCAL, base.localTypes); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_LOCAL, base.localDeclNodes)
+        FrontEnd.ampCopySet(FrontEnd.CP_CTA_LOCAL, base.shadowedNames)
         frame.localTypes.putAll(base.localTypes)
         frame.localDeclNodes.putAll(base.localDeclNodes)
         frame.shadowedNames.addAll(base.shadowedNames)
@@ -3064,6 +3074,8 @@ class Checker(
                 ctaM3NarrowFramePushed = true
                 val top = ctaFrames.last()
                 val (varName, narrowedType) = narrowing
+                FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, if (node is Block) top.varTypes.size else 0)
+                if (node is Block) FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
                 val nd = top.narrowedDeclared.toMutableMap()
                 top.localTypes[varName]?.let { nd[varName] = it }
                 val lt = EpochMap(top.localTypes)
@@ -3185,6 +3197,7 @@ class Checker(
                     // audit's lt-digest experiment showed block/namespace/clause
                     // recordings LEAK into the enclosing scope).
                     val top = ctaFrames.last()
+                    FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, top.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
                     ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                         top.returnType, top.returnTypeNode, top.typeParams,
                         top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
@@ -3209,6 +3222,7 @@ class Checker(
                 currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
             } else null
             val pushSym = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) moduleSymbol else null
+            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, top.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 null, null, emptySet(),
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
@@ -3222,6 +3236,7 @@ class Checker(
         // threaded through unchanged).
         if (node is CaseClause || node is DefaultClause) {
             val top = ctaFrames.last()
+            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, top.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
             ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
                 top.returnType, top.returnTypeNode, top.typeParams,
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
@@ -3248,7 +3263,7 @@ class Checker(
                 val ann = node.type
                 if (nm != null && ann != null) {
                     val s = resolveSimpleTypeName(ann) ?: intersectionTypeNameForVarTypes(ann)
-                    if (s != null) ctaFrames.last().varTypes[nm.text] = s
+                    if (s != null) { FrontEnd.noteMut(FrontEnd.CP_CTA_VAR); ctaFrames.last().varTypes[nm.text] = s }
                 }
             }
         }
@@ -17684,7 +17699,9 @@ class Checker(
         spineOsFrames.lastOrNull()?.anns ?: HashMap()
 
     private fun spineOsPushCopy(owner: Node) {
-        spineOsFrames.add(SpineOsFrame(owner, HashMap(spineOsTopAnns())))
+        val src = spineOsTopAnns()
+        FrontEnd.addCopy(FrontEnd.CP_OS, src.size); FrontEnd.ampCopyMap(FrontEnd.CP_OS, src)
+        spineOsFrames.add(SpineOsFrame(owner, HashMap(src)))
     }
 
     /** A fn-like's Block body: copy of the fn-position map + its Identifier-named
@@ -17704,10 +17721,13 @@ class Checker(
     }
 
     private fun spineOsPushFnFrame(owner: Node, params: List<Parameter>) {
-        val anns = HashMap(spineOsTopAnns())
+        val src = spineOsTopAnns()
+        FrontEnd.addCopy(FrontEnd.CP_OS, src.size); FrontEnd.ampCopyMap(FrontEnd.CP_OS, src)
+        val anns = HashMap(src)
         for (p in params) {
             val id = p.name as? Identifier ?: continue
             val t = p.type ?: continue
+            FrontEnd.noteMut(FrontEnd.CP_OS)
             anns[id.text] = t
         }
         spineOsFrames.add(SpineOsFrame(owner, anns))
@@ -17719,7 +17739,7 @@ class Checker(
     private fun spineOsVarDecl(d: VariableDeclaration) {
         if (spineOsStatus(d) != OS_VD) return
         val anns = spineOsTopAnns()
-        (d.name as? Identifier)?.let { id -> d.type?.let { anns[id.text] = it } }
+        (d.name as? Identifier)?.let { id -> d.type?.let { FrontEnd.noteMut(FrontEnd.CP_OS); anns[id.text] = it } }
         val restEl = (d.name as? ObjectBindingPattern)?.elements?.firstOrNull { it.dotDotDotToken }
         val initE = d.initializer
         if (restEl != null && initE != null) {
@@ -17978,12 +17998,14 @@ class Checker(
         spinePdFrames.lastOrNull()?.anns ?: HashMap()
 
     private fun spinePdPushCopy(owner: Node, params: List<Parameter>?) {
-        val anns = HashMap(spinePdTopAnns())
+        val src = spinePdTopAnns()
+        FrontEnd.addCopy(FrontEnd.CP_PD, src.size); FrontEnd.ampCopyMap(FrontEnd.CP_PD, src)
+        val anns = HashMap(src)
         if (params != null) {
             for (p in params) {
                 val n = (p.name as? Identifier)?.text
                 val t = p.type
-                if (n != null && t != null) anns[n] = t
+                if (n != null && t != null) { FrontEnd.noteMut(FrontEnd.CP_PD); anns[n] = t }
             }
         }
         spinePdFrames.add(SpinePdFrame(owner, anns))
@@ -18015,7 +18037,7 @@ class Checker(
                     for (d in node.declarationList.declarations) {
                         val n = (d.name as? Identifier)?.text
                         val t = d.type
-                        if (n != null && t != null) anns[n] = t
+                        if (n != null && t != null) { FrontEnd.noteMut(FrontEnd.CP_PD); anns[n] = t }
                     }
                 }
                 for (d in node.declarationList.declarations) {
@@ -96041,6 +96063,7 @@ interface DataView {
         // Round 460: skip the block-UNAWARE string map too for ambiguous names (absent
         // entries behave permissively in every consumer).
         if (declaredTypeStr != null && name.text !in ambiguousBlockLocalNames) {
+            FrontEnd.noteMut(FrontEnd.CP_CTA_VAR)
             varTypes[name.text] = declaredTypeStr
         }
 

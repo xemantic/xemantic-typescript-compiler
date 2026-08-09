@@ -226,6 +226,39 @@ internal val TIERS = listOf(
  * still rejects a typo (`amp` with no number, `ampx8`, `amp0`) rather than
  * silently measuring nothing.
  */
+/**
+ * (WARM.16) round 869 — the SECOND parameterised tier family: `copyamp<N>` arms
+ * [FrontEnd] (so the copy CENSUS runs) and sets [FrontEnd.copyAmp] to `N`, i.e.
+ * `N` EXTRA whole-map copies at every censused per-scope copy site.
+ *
+ * `copyamp0` is the census with no amplification and is the arm every other one
+ * is differenced against, so it is deliberately ACCEPTED where [ampReps]
+ * rejects a zero: here the zero arm is the base of the slope, not a typo.
+ *
+ * No timestamp pair is taken anywhere in this family. At the sizes involved one
+ * probe boundary (97-202 ns warm, round 850) would exceed the quantity being
+ * measured, so the instrument is round 759's amplification read off the
+ * WHOLE-REBUILD wall: `wall(r) = base + r * C`, and two values of `r` cancel
+ * `base` algebraically. Its falsifier is arithmetic — [FrontEnd.copyAmpSink]
+ * must be exactly `r x` the censused entry count on every rebuild.
+ */
+internal fun copyAmpReps(tier: String): Int? {
+    if (!tier.startsWith("copyamp")) return null
+    val digits = tier.removePrefix("copyamp").removePrefix("os")
+    if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
+    return digits.toIntOrNull()
+}
+
+/**
+ * (WARM.16) — which copy families the `copyamp*` tier arms, as [FrontEnd]'s
+ * bitmask. `copyampos<r>` arms the two ANNOTATION-scope families and nothing
+ * else, so the prize of replacing exactly those two is measured on the binary
+ * that still has them, instead of as the difference of two whole-family slopes
+ * each carrying its own error.
+ */
+internal fun copyAmpKinds(tier: String): Int =
+    if (tier.startsWith("copyampos")) (1 shl FrontEnd.CP_OS) or (1 shl FrontEnd.CP_PD) else -1
+
 internal fun ampReps(tier: String): Int? {
     val control = tier.startsWith("ampc")
     if (!tier.startsWith("amp")) return null
@@ -287,6 +320,18 @@ internal fun tierBegin(tier: String) {
     if (amp != null) {
         SpineAmp.reset()
         SpineAmp.reps = amp
+        return
+    }
+    // (WARM.16) — the copy amplifier arms the FrontEnd census and nothing else:
+    // the census counters cost the same in every arm of the slope, so they
+    // cancel, while a pass or section probe would not (its boundaries are not
+    // proportional to `r`).
+    val copyAmp = copyAmpReps(tier)
+    if (copyAmp != null) {
+        FrontEnd.reset()
+        FrontEnd.copyAmp = copyAmp
+        FrontEnd.copyAmpKinds = copyAmpKinds(tier)
+        FrontEnd.mode = FrontEnd.ON
         return
     }
     when (tier) {
@@ -356,6 +401,11 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     // its own state (round 850) — a CONTROL row and a REAL row are otherwise
     // distinguishable only by a zero in the middle of the table.
     SpineAmp.report()
+} else if (copyAmpReps(tier) != null) {
+    // (WARM.16) — taken while the census still holds its counters, and it
+    // prints `amp=` from the live field, so an arm labels itself from its own
+    // state rather than from its tier name (round 850).
+    FrontEnd.report()
 } else when (tier) {
     "dispatch" -> SpineDispatch.report() + "\n== (DISPATCH.1) csv ==\n" + SpineDispatch.csv()
     // (WARM.13) — a GATED rebuild counts nothing, so `SpineDispatch.report()`
@@ -454,6 +504,12 @@ internal fun tierStop() {
     CallSections.mode = CallSections.OFF
     LibTypeCensus.enabled = false
     FrontEnd.mode = FrontEnd.OFF
+    // (WARM.16) — same hazard as `SpineAmp.reps` below: a `copyAmp` left set
+    // costs every LATER rebuild in this process `r` extra whole-map copies per
+    // scope push, which is silent and looks exactly like a regression in
+    // whatever tier follows.
+    FrontEnd.copyAmp = 0
+    FrontEnd.copyAmpKinds = -1
     FrontEnd.reset()
     FltmCensus.on = false
     FltmCensus.reset()
@@ -490,7 +546,7 @@ fun main(args: Array<String>) {
         null, "", "false", "0", "off" -> emptyList()
         "passtiming", "true", "1", "on" -> listOf("full")
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
-            val bad = list.filter { it !in TIERS && ampReps(it) == null }
+            val bad = list.filter { it !in TIERS && ampReps(it) == null && copyAmpReps(it) == null }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(
                     "usage: 4th argument must be `passTiming`, omitted, or a comma-separated " +

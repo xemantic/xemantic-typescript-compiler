@@ -4384,6 +4384,134 @@ object FrontEnd {
     private var starDepth: Int = 0
     private var starT0: Long = 0
 
+    // ---- (WARM.16) round 869 — the PER-SCOPE WHOLE-MAP COPY census.
+    //
+    // Round 868's leaf profile put `MapsKt.toMutableMap` at 1.52/1.56% SELF and
+    // `HashMap.putMapEntries` at 5.4% INCLUSIVE, with the spine's frame
+    // bookkeeping as its callers. The REGIONS are attributed (round 847's warm
+    // per-handler table); the MECHANISM — that a scope push copies a whole map —
+    // is not, and no section probe can say it because the copy is one statement
+    // inside a handler the probe already brackets.
+    //
+    // These counters answer the two questions that decide whether the copy can
+    // be replaced at all, and they are counters rather than spans because round
+    // 801's law is that the produced-versus-consumed ratio comes FIRST:
+    //
+    // - [copyCalls] / [copyEntries] / [copyMax] — the VOLUME. `entries` is what
+    //   a per-entry cost multiplies; `calls` alone cannot be read as a cost
+    //   (round 758), and a family with a huge `calls` and a tiny mean is a
+    //   different problem from one with the reverse.
+    // - [copyMuts] — how many times anything ever WROTE to a map of that family
+    //   while it was installed. An undo-log (record `(key, oldValue)` on first
+    //   write, restore at the pop) is exactly equivalent to a copy and costs
+    //   O(writes) instead of O(size), so `muts << entries` is the whole prize
+    //   and `muts ~ entries` says the copy is load-bearing. It is deliberately
+    //   a GLOBAL count per family, not per frame: the question is a ratio over
+    //   the family and a per-frame breakdown cannot change its answer.
+    //
+    // [copyAmp] is the PRICE instrument and is separate on purpose (round 759's
+    // amplification): with it set to `r`, every censused site performs `r`
+    // EXTRA copies of the same source and folds their sizes into [copyAmpSink],
+    // so the whole-rebuild wall becomes `base + r * (cost of one copy round)`
+    // and two values of `r` cancel the base algebraically — no timestamp pair
+    // is taken anywhere, which matters because at these sizes one boundary
+    // (97-202 ns warm, round 850) would exceed the thing being measured.
+    // Falsification is ARITHMETIC: [copyAmpSink] must be exactly `r` times
+    // [copyEntries] on every rebuild, which is what rules out a JIT that
+    // hoisted the extra copies out.
+
+    /** `EpochMap(m)` — the `currentLocalTypes` family (ccet/cpa/cta frames). */
+    const val CP_EPOCH_MAP = 0
+    /** `EpochSet(c)` — the `paramBindings` family. */
+    const val CP_EPOCH_SET = 1
+    /** `spineOs*` annotation frames — `HashMap<String, TypeNode>` per scope. */
+    const val CP_OS = 2
+    /** `spinePd*` annotation frames — `HashMap<String, TypeNode>` per scope. */
+    const val CP_PD = 3
+    /** `CtaFrame.varTypes` — `toMutableMap()`, i.e. a LinkedHashMap (round 483). */
+    const val CP_CTA_VAR = 4
+    /** `CtaFrame`'s localTypes / localDeclNodes / shadowedNames fn-body copies. */
+    const val CP_CTA_LOCAL = 5
+    const val CP_N = 6
+
+    val copyNames: Array<String> = arrayOf(
+        "EpochMap(localTypes)",
+        "EpochSet(paramBindings)",
+        "spineOs anns (HashMap)",
+        "spinePd anns (HashMap)",
+        "CtaFrame.varTypes (toMutableMap)",
+        "CtaFrame localTypes+declNodes+shadowed",
+    )
+
+    var copyCalls: LongArray = LongArray(CP_N)
+    var copyEntries: LongArray = LongArray(CP_N)
+    var copyMax: LongArray = LongArray(CP_N)
+    var copyMuts: LongArray = LongArray(CP_N)
+
+    /**
+     * Entries recorded by an UNDO LOG in place of a copy — the receipt of the
+     * replacement. A family that used to report `entries` and now reports
+     * `undo` has moved the same population from O(size) to O(writes).
+     */
+    var copyUndo: LongArray = LongArray(CP_N)
+
+    /** Extra copies performed per site — 0 in production and in the census. */
+    var copyAmp: Int = 0
+
+    /**
+     * Which families [copyAmp] applies to, as a bitmask over the `CP_*` indices;
+     * `-1` (every bit) is the default.
+     *
+     * It exists so the prize of replacing ONE family can be measured on the
+     * binary that still has it, rather than as the DIFFERENCE of two whole-family
+     * slopes each carrying its own ~10% error. `copyampos<r>` arms exactly the
+     * two annotation-scope families.
+     */
+    var copyAmpKinds: Int = -1
+
+    /** The amplifier's arithmetic falsifier: must equal `copyAmp * sum(copyEntries[armed])`. */
+    var copyAmpSink: Long = 0
+
+    /** One censused whole-map copy of [n] entries, plus the amplifier's extras. */
+    fun addCopy(kind: Int, n: Int) {
+        if (mode != ON) return
+        copyCalls[kind]++
+        copyEntries[kind] += n
+        if (n > copyMax[kind]) copyMax[kind] = n.toLong()
+    }
+
+    /** One write into a map of [kind] while it was installed. */
+    fun noteMut(kind: Int) {
+        if (mode != ON) return
+        copyMuts[kind]++
+    }
+
+    /** One entry recorded by an undo log instead of copied. */
+    fun addUndo(kind: Int, n: Int) {
+        if (mode != ON) return
+        copyUndo[kind] += n
+    }
+
+    /** (WARM.16) amplifier — `copyAmp` extra copies of [m], sunk arithmetically. */
+    fun ampCopyMap(kind: Int, m: Map<*, *>) {
+        val r = copyAmp
+        if (r == 0 || (copyAmpKinds shr kind) and 1 == 0) return
+        var i = 0
+        var s = 0L
+        while (i < r) { s += HashMap(m).size.toLong(); i++ }
+        copyAmpSink += s
+    }
+
+    /** (WARM.16) amplifier — `copyAmp` extra copies of [c], sunk arithmetically. */
+    fun ampCopySet(kind: Int, c: Collection<*>) {
+        val r = copyAmp
+        if (r == 0 || (copyAmpKinds shr kind) and 1 == 0) return
+        var i = 0
+        var s = 0L
+        while (i < r) { s += HashSet(c).size.toLong(); i++ }
+        copyAmpSink += s
+    }
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -4400,6 +4528,10 @@ object FrontEnd {
         flowAtCalls = 0; flowAtInTreeNull = 0; flowAtForeign = 0
         starWalks = 0; starVisits = 0; starStmts = 0; starFound = 0
         starDepth = 0; starT0 = 0
+        copyCalls = LongArray(CP_N); copyEntries = LongArray(CP_N)
+        copyMax = LongArray(CP_N); copyMuts = LongArray(CP_N)
+        copyUndo = LongArray(CP_N)
+        copyAmpSink = 0
     }
 
     /**
@@ -4626,6 +4758,36 @@ object FrontEnd {
                     "(${starVisits / starWalks}/walk), scan width $starStmts " +
                     "(${starStmts / starWalks}/walk); answered $starFound, " +
                     "null ${starWalks - starFound} (${(starWalks - starFound) * 100 / starWalks}%)"
+            )
+        }
+        // (WARM.16) — the per-scope whole-map copies. `entries` is the volume a
+        // per-entry cost multiplies; `muts` is the round-801 produced-versus-
+        // consumed test in its decisive form here, because an undo-log costs
+        // O(writes) where a copy costs O(size).
+        var cpCalls = 0L
+        for (k in 0 until CP_N) cpCalls += copyCalls[k]
+        if (cpCalls > 0) {
+            appendLine("  copy census (per-scope whole-map copies), amp=$copyAmp kinds=$copyAmpKinds:")
+            var tc = 0L; var te = 0L; var tm = 0L; var tu = 0L; var tae = 0L
+            for (k in 0 until CP_N) {
+                val c = copyCalls[k]
+                if (c == 0L) continue
+                tc += c; te += copyEntries[k]; tm += copyMuts[k]; tu += copyUndo[k]
+                if ((copyAmpKinds shr k) and 1 == 1) tae += copyEntries[k]
+                appendLine(
+                    "    ${copyNames[k].padEnd(40)} pushes ${c.toString().padStart(9)}" +
+                        "  entries ${copyEntries[k].toString().padStart(11)}" +
+                        "  mean ${(copyEntries[k] * 10 / c / 10).toString().padStart(4)}." +
+                        "${copyEntries[k] * 10 / c % 10}" +
+                        "  max ${copyMax[k].toString().padStart(5)}" +
+                        "  writes ${copyMuts[k].toString().padStart(10)}" +
+                        "  undo ${copyUndo[k].toString().padStart(9)}"
+                )
+            }
+            appendLine(
+                "    TOTAL pushes $tc, entries copied $te, writes $tm " +
+                    "(writes/entries = ${if (te > 0) tm * 1000 / te else 0}/1000), undo $tu; " +
+                    "ampSink $copyAmpSink (expected ${copyAmp * tae})"
             )
         }
         // (WARM.8) — the four POST blocks abut, so their residue is a PARTITION
