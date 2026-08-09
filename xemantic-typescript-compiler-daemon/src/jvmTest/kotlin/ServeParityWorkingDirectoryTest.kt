@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.server.CompileServer
 import java.io.File
 import kotlin.test.Test
@@ -35,7 +34,8 @@ import kotlin.test.Test
  * (SERVE.2) round 873 — a request means what it means in the CLIENT's directory.
  *
  * These are the pins for the defect the parity matrix found: a
- * [CompileRequest] used to carry the argument vector and nothing else, so every
+ * [com.xemantic.typescript.compiler.protocol.CompileRequest] used to carry the
+ * argument vector and nothing else, so every
  * relative path in it — above all the project path a user did not type, which
  * the CLI defaults to `"."` — was resolved against the DAEMON's directory.
  * Measured before the fix: `xtsc --daemon --noEmit` in a project full of errors
@@ -63,7 +63,7 @@ class ServeParityWorkingDirectoryTest {
         val dir = project("here", "export const wrongOnPurpose: number = 'a string'\n")
         try {
             val response = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
+                clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
             )
             // The file is only in THIS project, so naming it is proof the right
             // tree was crawled — an exit code alone could not tell that from a
@@ -85,7 +85,7 @@ class ServeParityWorkingDirectoryTest {
         File(dir, "inner.ts").writeText("export const alsoWrong: number = 'a string'\n")
         try {
             val response = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit", "inner"), workingDirectory = parent.absolutePath),
+                clientRequest(listOf("--noEmit", "inner"), workingDirectory = parent.absolutePath),
             )
             assert("inner.ts" in response.output)
             assert(response.exitCode == 1)
@@ -99,7 +99,7 @@ class ServeParityWorkingDirectoryTest {
         val dir = project("emitted", "export const n: number = 1\n")
         try {
             val response = CompileServer.respondTo(
-                CompileRequest(
+                clientRequest(
                     listOf(".", "--outDir", "does-not-exist-yet"),
                     workingDirectory = dir.absolutePath,
                 ),
@@ -120,7 +120,7 @@ class ServeParityWorkingDirectoryTest {
         val before = SystemVfs.workingDirectory
         try {
             CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
+                clientRequest(listOf("--noEmit"), workingDirectory = dir.absolutePath),
             )
             // Process-global state, one long-lived JVM: a request that left this
             // set would silently redirect every LATER request on the daemon —
@@ -139,7 +139,7 @@ class ServeParityWorkingDirectoryTest {
             // A path that cannot be a project at all; whatever the compile does
             // with it, the finally in `compileCapturing` is what is under test.
             CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit"), workingDirectory = "/xtsc-not-a-directory"),
+                clientRequest(listOf("--noEmit"), workingDirectory = "/xtsc-not-a-directory"),
             )
             assert(SystemVfs.workingDirectory == before)
         } finally {
@@ -158,7 +158,7 @@ class ServeParityWorkingDirectoryTest {
             // three tests above are measuring the INSTALL and not something the
             // compiler would have done anyway.
             val response = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit", dir.absolutePath), workingDirectory = ""),
+                clientRequest(listOf("--noEmit", dir.absolutePath), workingDirectory = ""),
             )
             assert(response.exitCode == 0)
             assert(SystemVfs.workingDirectory == null)

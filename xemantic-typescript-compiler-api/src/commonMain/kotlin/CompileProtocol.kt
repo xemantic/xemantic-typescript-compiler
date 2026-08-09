@@ -103,20 +103,27 @@ public data class CompileResponse(
 public const val XTSC_REFUSED: Int = 2
 
 /**
- * Why a client should not trust a daemon it just reached, or null when it should.
+ * Why one peer should not trust the other, or null when it should.
  *
- * A version mismatch is a *restart* condition, not a hard failure: the client's
- * documented behaviour is to fall back to compiling in-process, so the caller
- * uses this for the message, not for the decision to abort.
+ * A version mismatch is a *restart* condition, not a hard failure: a client's
+ * documented behaviour on reaching a mismatched daemon is to fall back to
+ * compiling in-process, and a daemon's is to refuse the request without running
+ * it ([XTSC_REFUSED]) so the client can do exactly that.
+ *
+ * **The wording is peer-neutral on purpose, and that is load-bearing: BOTH
+ * sides print this string.** It read `"the daemon speaks protocol N, this
+ * client speaks M"` until a daemon printed it about a *client* — where every
+ * noun is inverted, so the log said the freshly-built daemon was the old one
+ * and sent a reader looking in the wrong place.
  */
 public fun protocolProblem(peerVersion: Int): String? = when {
     peerVersion == XTSC_PROTOCOL_VERSION -> null
     peerVersion == XTSC_PROTOCOL_UNVERSIONED ->
-        "the daemon predates protocol versioning and cannot be trusted to " +
-            "understand this client — restart it"
+        "the peer predates protocol versioning and cannot be trusted to " +
+            "understand protocol $XTSC_PROTOCOL_VERSION — restart the older of the two"
     else ->
-        "the daemon speaks protocol $peerVersion, this client speaks " +
-            "$XTSC_PROTOCOL_VERSION — restart it"
+        "the peer speaks protocol $peerVersion, this build speaks " +
+            "$XTSC_PROTOCOL_VERSION — restart the older of the two"
 }
 
 /**

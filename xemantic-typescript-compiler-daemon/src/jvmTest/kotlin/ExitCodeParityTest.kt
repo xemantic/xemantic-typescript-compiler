@@ -26,7 +26,7 @@
 package com.xemantic.typescript.compiler.server
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.protocol.CompileRequest
+import com.xemantic.typescript.compiler.clientRequest
 import com.xemantic.typescript.compiler.runCli
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -79,7 +79,7 @@ class ExitCodeParityTest {
     }
 
     private fun daemonExitCode(dir: File): Int =
-        CompileServer.respondTo(CompileRequest(listOf("--noEmit", dir.absolutePath))).exitCode
+        CompileServer.respondTo(clientRequest(listOf("--noEmit", dir.absolutePath))).exitCode
 
     @Test
     fun `a clean compile exits zero on both paths`() {

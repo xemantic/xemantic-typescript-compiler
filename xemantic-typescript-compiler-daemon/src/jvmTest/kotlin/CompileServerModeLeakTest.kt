@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.server.CompileServer
 import java.io.File
 import kotlin.test.Test
@@ -89,7 +88,7 @@ class CompileServerModeLeakTest {
         )
         try {
             val armed = CompileServer.respondTo(
-                CompileRequest(
+                clientRequest(
                     listOf(
                         "--noEmit",
                         "--workers", "2",
@@ -120,7 +119,7 @@ class CompileServerModeLeakTest {
             assert(CpaSections.verifyUnionRetry == savedFlags[6])
 
             val plain = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit", dir.absolutePath)),
+                clientRequest(listOf("--noEmit", dir.absolutePath)),
             )
             assert(plain.exitCode == 0)
             // ... and a second request cannot re-arm them either.
@@ -148,14 +147,14 @@ class CompileServerModeLeakTest {
         val savedWorkers = PartitionCheck.workers
         try {
             val checked = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit", "--partitionCheck", "2", dir.absolutePath)),
+                clientRequest(listOf("--noEmit", "--partitionCheck", "2", dir.absolutePath)),
             )
             assert(checked.exitCode == 0)
             // Non-vacuity: the partition harness really ran and really reported.
             assert("partition" in checked.output.lowercase())
 
             val plain = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit", dir.absolutePath)),
+                clientRequest(listOf("--noEmit", dir.absolutePath)),
             )
             assert(plain.exitCode == 0)
             // The mode is a field the ledger restores ...

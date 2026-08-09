@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.server.CompileServer
 import java.io.File
 import kotlin.test.Test
@@ -86,7 +85,7 @@ class CompileServerPassTimingTest {
         val dir = tinyProject()
         try {
             val instrumented = CompileServer.respondTo(
-                CompileRequest(
+                clientRequest(
                     listOf("--noEmit", "--passTiming", dir.absolutePath),
                 ),
             )
@@ -98,7 +97,7 @@ class CompileServerPassTimingTest {
             assert(PassTiming.passNanos.isEmpty())
 
             val plain = CompileServer.respondTo(
-                CompileRequest(listOf("--noEmit", dir.absolutePath)),
+                clientRequest(listOf("--noEmit", dir.absolutePath)),
             )
             assert(plain.exitCode == 0)
             assert(tableHeader !in plain.output)
@@ -121,7 +120,7 @@ class CompileServerPassTimingTest {
             // Both of these set `passTiming = true` at the parse site AND their
             // own mode field; only the first was ever cleared before the fix.
             val response = CompileServer.respondTo(
-                CompileRequest(
+                clientRequest(
                     listOf(
                         "--noEmit", "--verifyMappedCache", "--globalsAmp", "3",
                         dir.absolutePath,

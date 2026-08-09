@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler
 
 import com.xemantic.kotlin.test.assert
-import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.protocol.XTSC_REFUSED
 import com.xemantic.typescript.compiler.server.CompileServer
 import java.io.File
@@ -67,7 +66,7 @@ class CompileServerTest {
         val dir = tinyProject()
         File(dir, "a.ts").writeText("export const n: number = 1\n")
         val response = CompileServer.respondTo(
-            CompileRequest(listOf("--noEmit", dir.absolutePath)),
+            clientRequest(listOf("--noEmit", dir.absolutePath)),
         )
         assert("OK — 0 errors" in response.output)
         assert(response.exitCode == 0)
@@ -79,7 +78,7 @@ class CompileServerTest {
         val dir = tinyProject()
         File(dir, "a.ts").writeText("export const n: number = 'not a number'\n")
         val response = CompileServer.respondTo(
-            CompileRequest(listOf("--noEmit", dir.absolutePath)),
+            clientRequest(listOf("--noEmit", dir.absolutePath)),
         )
         assert("FAILED —" in response.output)
         assert(response.exitCode == 1)
@@ -89,7 +88,7 @@ class CompileServerTest {
     @Test
     fun `--watch is refused rather than wedging the single request thread`() {
         val response = CompileServer.respondTo(
-            CompileRequest(listOf("--noEmit", "--watch", ".")),
+            clientRequest(listOf("--noEmit", "--watch", ".")),
         )
         assert(response.exitCode == XTSC_REFUSED)
         assert("--watch is not supported" in response.output)
@@ -100,7 +99,7 @@ class CompileServerTest {
     @Test
     fun `the short -w spelling of watch is refused too`() {
         val response = CompileServer.respondTo(
-            CompileRequest(listOf("-w", ".")),
+            clientRequest(listOf("-w", ".")),
         )
         assert(response.exitCode == XTSC_REFUSED)
     }

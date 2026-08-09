@@ -224,9 +224,37 @@ object CompileServer {
      * break silently.
      */
     internal fun respondTo(request: CompileRequest): CompileResponse =
+        // A PROTOCOL MISMATCH IS REFUSED WITHOUT COMPILING, and both halves of
+        // that matter.
+        //
+        // CORRECTNESS is the first half, and it is the whole reason version 2
+        // exists: a version-1 request carries NO `workingDirectory`, so serving
+        // it resolves every relative path — including the project path the CLI
+        // defaults to `"."` — against the DAEMON's directory. That is round
+        // 873's CI-grade bug, and until this guard the server merely LOGGED the
+        // mismatch and then compiled the wrong tree anyway.
+        //
+        // COST is the second half. The client's answer to a mismatch is to
+        // fall back and compile in-process, so the daemon's compile is thrown
+        // away by construction — and on the tsc-compiler profile a stale
+        // version-1 native client made every `xtsc --daemon` invocation cost
+        // TWO full compiles (one discarded here, one after the fallback):
+        // 14.6 s where the honest figure is 7.5 s.
+        //
+        // XTSC_REFUSED is the documented "the request never ran" code, which is
+        // exactly what the client needs in order to re-run it safely.
+        protocolProblem(request.protocolVersion)?.let { problem ->
+            CompileResponse(
+                output = "xtsc: refusing a request that speaks protocol " +
+                    "${request.protocolVersion} — $problem\n",
+                exitCode = XTSC_REFUSED,
+                elapsedMs = 0,
+                protocolVersion = XTSC_PROTOCOL_VERSION,
+            )
+        }
         // --watch never terminates, so it would wedge the single request thread
         // forever. Refuse it rather than hang.
-        if (request.args.any { it == "--watch" || it == "-w" }) {
+        ?: if (request.args.any { it == "--watch" || it == "-w" }) {
             CompileResponse(
                 output = "xtsc: --watch is not supported over the compile server " +
                     "(it would hold the single request thread open forever)\n",
@@ -308,7 +336,10 @@ object CompileServer {
                                 val request = xtscProtocolJson
                                     .decodeFromString<CompileRequest>(text)
                                 protocolProblem(request.protocolVersion)?.let {
-                                    System.err.println("xtsc: client mismatch — $it")
+                                    System.err.println(
+                                        "xtsc: refusing a client that speaks protocol " +
+                                            "${request.protocolVersion} — $it"
+                                    )
                                 }
                                 val response = onCompileThread { respondTo(request) }
                                 val out = socket.openWriteChannel(autoFlush = false)
