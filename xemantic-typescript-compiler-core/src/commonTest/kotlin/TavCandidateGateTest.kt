@@ -314,6 +314,10 @@ class TavCandidateGateTest {
                 "    const taken = Element\n    return input\n}\n",
             "namespace Inner {\n    interface Local { id: number }\n" +
                 "    export function grab() { const taken = Local; return taken }\n}\n",
+            "namespace Inner {\n    type Local = { id: number }\n" +
+                "    export function grab() { const taken = Local; return taken }\n}\n",
+            "namespace Outer {\n    namespace Inner { export interface Entry { id: number } }\n" +
+                "    export function grab() { const taken = Inner; return taken }\n}\n",
             "const taken = string\n",
             "const size = 1\nconst taken = size\n",
             "interface Shape { area: number }\nclass Square extends Shape { area = 1 }\n",
