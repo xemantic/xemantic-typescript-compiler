@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 868 (2026-08-09) — (WARM.15): THE FIRST **LEAF-LEVEL** WARM PROFILE OF THIS COMPILER, AND ITS
+BEST NEW CANDIDATE LANDED — THE `export *` BARREL WALKS GO **672 -> 91 ms** WARM (9.0% -> 1.2% of a warm
+rebuild). PLUS: THE FLAKY `PostCheckerPartitionTest` IS RE-CUT AS A DETERMINISTIC ORDERING.**
+`docs/perf/warm-leaf-profile.md`.
+
+- **(A) THE FLAKY PIN, FINISHED PROPERLY.** Round 867's suite read 14,120 / 1 / 3 and recorded the one
+  failure as flaky. It was `residue * 4 < post` — a wall-clock RATIO over a **272 us** region, i.e. not a
+  pin but a coin flip; one stop-the-world pause in the residue window is all it takes, and a pin that
+  cries wolf is worse than no pin because the day it is right it is already being ignored.
+  `FrontEnd.close` already holds both timestamps of the span it closes, so it now records
+  **`firstAt`/`lastAt` per section** (ON path only), and the partition is asserted STRUCTURALLY: each
+  block records exactly once, `nanos == lastAt - firstAt` to the nanosecond, every block NESTS inside the
+  region it decomposes, and the siblings are ORDERED and DISJOINT. Every comparison is a fact about a
+  monotonic clock. **Stated in both directions in the KDoc, because the swap is not free:** it protects
+  MORE on structure (the ratio could see neither a block OVERLAPPING its sibling nor one ESCAPING its
+  region, whenever the region was big enough to absorb the arithmetic) and LESS on one thing (an
+  unattributed GAP of real work opened between two blocks — bounding a gap means bounding time, which is
+  exactly what cannot be done here). `sum <= outer` survives: it is guaranteed by nesting, hence
+  structural rather than statistical. Pass count: **6/6 consecutive FULL-SUITE runs at 14,120 / 0 / 3**
+  (not isolation — the flake only ever showed under the full suite).
+
+- **(B) WHY A LEAF PROFILE, AND WHAT IT MAY NOT SAY.** Every instrument this arc owns is a PASS or
+  SECTION probe: it finds only cost somebody thought to bracket, which is why rounds 860-864's four wins
+  were all wrongly-shaped work INSIDE a named region, and why anything diffuse is invisible to all of
+  them. A JFR `ExecutionSample` profile is the complement and pays for it by being unable to price
+  anything: round 623 eliminated a 5.3%-of-samples leaf here and measured **-0.3%**. So the doc's
+  headline says it in as many words — **a leaf is a CANDIDATE; it becomes a finding only after an
+  independent instrument prices it** — and the round obeyed it.
+
+- **THE INSTRUMENT'S OWN TRAP, WHICH COST THE FIRST PASS: `jfr print` TRUNCATES EVERY STACK TO ITS TOP 5
+  FRAMES, SILENTLY, AND `scripts/aggregate_jfr.py` DOES NOT PASS `--stack-depth`.** Its "INCLUSIVE by
+  method" table is therefore inclusive-within-five-frames: `checkSpine` read **15.6%** against this arc's
+  74%, and ten minutes went into reconciling a number that was an artifact. With `--stack-depth 512` the
+  deepest compile-thread stack is 171 frames and the table is real. Second trap: ~3% of samples are the
+  JFR recorder thread and the crawl's coroutine workers — filter to `xtsc-deep-stack`. **Third, and the
+  reason every table in the doc is by OWNER and not by leaf: leaf attribution is NOT stable across
+  processes** — `HashMap.getNode` reads 9.66% in one and 3.70% in the other on the SAME binary, because
+  C2 inlined it in the second. Charging stdlib work to its nearest non-stdlib caller replicates to a few
+  tenths of a percent.
+
+- **WHAT THE PROFILE SAYS ABOUT THE SHAPE.** 26-27% of warm compile-thread samples are inside a hash
+  map/set, 6% string, 4% list — a bound on what any single map-shaped fix can be worth, not a lever.
+  **`java.util.regex` is 0.0% — not one sample in 16,036**, which confirms round 863's "the class is
+  exhausted on this profile" with an instrument that was not built to look for it. Two rows this file's
+  own history predicted did NOT appear: `computeLineStarts` (round 623's refuted lever) is not in the top
+  200, and `LinkedHashMap.afterNodeInsertion` (round 483's ~5%) is ONE sample in 16,036.
+
+- **THE CANDIDATE THAT WAS TAKEN, AND ITS INDEPENDENT PRICE.** After discarding every row that is
+  already-attributed checking work, the largest new one is a family of four mutually recursive `export *`
+  walks — **5.45%/4.80% self, 7.81%/7.60% inclusive** — entered from `getCalleeType`,
+  `importedTopLevelVarAnnotationType`, `checkCircularInferenceImplicitAny` and
+  `computeImportedSymbolGeneral`. A counter+span census (`FrontEnd.STAR`, re-entrancy-counted so a walk
+  of any depth costs one timestamp pair) priced it at **672 ms = 9.0% of a warm rebuild**: 8,754
+  outermost walks, 290,117 file visits, **25,291,521 top-level statements scanned — 2,889 per question
+  asked**, and 28% of the walks answer nothing after visiting 33 files each. The profile's inclusive
+  share over the same rebuild is 570-585 ms: two instruments, two mechanisms, agreeing within 15%.
+
+- **THE FIX IS AN INDEX, AND THE ROW COMPARISON IS CONTROLLED.** `StarExportIndex` computes per file,
+  once, the four immutable facts the walks re-derived per visit (exported functions by name, exported
+  variables first-wins, exported interface names, descendable re-export edges with targets resolved).
+  Because it changes no boundary and no population, the before/after row is valid under round 793's law:
+  **walks 8,754, visits 290,117, answered 6,298, null 2,456 are IDENTICAL on both arms** and only the
+  scan width moves, **25,291,521 -> 638,464 (39.6x)**. Row **672 -> 91 ms**. Whole-rebuild corroboration
+  `ab-warm.sh`, two batches x two rotated pairs: **-426 ms (-5.58%)** and **-304 ms (-4.15%)**, B wins
+  **4/4**, every pair sign-consistent — quoted as corroboration, not as the number, because the per-arm
+  sd is 1.2-1.9% on n=2 (above the quiet-box threshold; said out loud rather than silently, per (JIT.1)).
+
+- **PINS + ABLATION.** `buildStarExportIndex` was made a top-level `internal` function taking its
+  resolver as a PARAMETER specifically so every rule is pinned directly rather than through a compile
+  that would hide a wrong gate behind an unrelated diagnostic. `StarExportIndexTest` (8 pins, all over
+  scalars/strings — never an AST node, whose power-assert rendering is its whole subtree). Seven
+  single-mistake ablations, each reverted before the next, **seven discriminated**: A1 export gate on
+  functions, A2 variables last-wins, A3 `export * as ns` admitted, A4 edge list reversed, A5 export gate
+  on interfaces, A6 only the last overload kept, A7 binding patterns admitted. **One pin is recorded as
+  UN-ablated rather than claimed** — `an unresolvable specifier contributes no edge` cannot be broken
+  here because `ReExport.target` is non-null, so the invariant is type-enforced. **A3's first form was a
+  COMPILE ERROR and the driver printed `ran 0, failed 0`** — indistinguishable from "the mistake changed
+  nothing" (round 808); it was re-cut as a compiling mistake, and the driver prints a per-arm
+  `git diff --shortstat` plus the test count for exactly that reason.
+
+- **WHAT DID NOT WORK / WAS NOT DONE.** The first JFR pass was discarded whole (the `--stack-depth`
+  trap). **No per-line attribution is quoted**, although it is what shaped the fix: `Checker.kt` is
+  178,013 lines, so a `LineNumberTable` line needs +65,536 OR +131,072, and INLINED stdlib appears at
+  synthetic lines past EOF — the single largest line bucket in the raw data was one of those, and a
+  number that needs three guesses to decode is not reportable. `ObjectAllocationSample` was recorded and
+  NOT reported: round 801 already measured that an allocation count is not a cost here (367,189 `String`
+  allocations removed = 0 ms), so the table would have been a column nobody may act on. (C2) the
+  per-scope map copies and (C3) `ArrayList.clear` were left unpriced and queued as **(WARM.16)**, with
+  the instrument each needs named.
+
+- **GATES.** Suite **14,120 / 0 / 3** over all four modules (`xml.etree`), and 6/6 green runs for the
+  re-cut pin. `cost_gate.py` **+0.00% on all 20 counters** — twice, once per deliverable.
+  `huge_methods.py --fail-over 0` exit 0. **8-profile grid RUN BOTH DIRECTIONS with both arms rebuilt
+  from source: added=0 removed=0 on all eight** (deliverable (B) changes `commonMain` behaviour, so it is
+  not vacuous this time; deliverable (A)'s only edit sits after `close`'s `if (mode != ON) return` and
+  its grid would have been).
+
 **Round 867 (2026-08-09) — (WARM.14): `s_p` MEASURED, AND THE DISPATCH-TABLE QUESTION SETTLED AT ~1%.**
 The production cost of one handler consultation that is entered and immediately declines is
 **`s_p` = 2.286 ns [envelope 2.148-2.512]**, so **`R` = 32.0 M x `s_p` = 73.2 ms [68.7-80.4] = 1.06% of a
@@ -752,62 +849,6 @@ record; every figure below is a within-round share or ratio, never a cross-round
   test class dir holds `BenchFrontEndTierTest.class`, a class that did not exist before this round,
   so a stale directory cannot satisfy it.
 
-**Round 858 (2026-08-08) — THE THIRD "HARNESS LOADS THE WRONG ARTIFACT" AUDIT, AND THIS TIME THE
-ANSWER IS THAT THE MEASUREMENTS SURVIVE. THE WARM ARC STANDS; `build/bench/cp.txt` NOW HAS ZERO
-READERS; AND BATCH 2 KILLED THIS ROUND'S OWN HEADLINE NUMBER.** Round 857 left an explicit
-loose end — `cp.txt` is the pre-split, pre-bump dependency list and four instruments were said to
-read it. Full audit, then the decisive experiment, then a guard whose every check has a uniquely
-its-own ablation failure. `docs/perf/classpath-readers-audit.md` is the permanent record.
-
-- **THE PER-READER AUDIT (the five-minute answer that decides everything after it).**
-  `ab-interleaved.sh` **SOUND** — always resolved FRESH through the gradle init script, never read
-  `cp.txt`. `cost_gate.py` **SOUND** — resolves fresh (round 853's fix). `ab-warm.sh` **SOUND
-  TODAY, GUARD INCOMPLETE** — its `cp-warm.txt` cache content is CURRENT (2.4.10 / 0.9.1 / 1.11.0)
-  and its guard currently fails anyway (cache Aug 1, build files Aug 7), so it has been resolving
-  fresh; but the guard compared the cache only against the **module's** `build.gradle.kts`, and the
-  versions live in `gradle/libs.versions.toml` — **it was blind to exactly the change that produces
-  a stale tail.** `aot-draw-variance.sh` **BROKEN** — `<core jar>:$(cat cp.txt)`, and it measures
-  `XtscMainKt`, a **daemon** class absent from that classpath: verified `ClassNotFoundException`,
-  dead since the split like `scripts/xtsc` was until round 857. **It fails LOUDLY, so it could
-  never have produced a wrong number — only no number.**
-- **THE DOCUMENTED "PRE-SPLIT REFUSAL" DOES NOT GUARD `cp.txt` AND NEVER DID.** It greps the INIT
-  SCRIPT, not the cache, and in `ab-warm.sh` it sits inside the resolve branch — so a cache hit
-  skips it entirely. Round 857's parenthetical credited it with protection it does not provide;
-  checking whether a refusal FIRES, rather than that it exists, is the whole lesson.
-- **ALSO FOUND, and it is the only thing that touched a published number:** the committed
-  `round847-warm-spine.sh` / `round849-warm-sections.sh` ran their **WARM** arms on the current tail
-  and their **COLD** arms on the stale one, so every cold/warm RATIO those rounds published compared
-  two different dependency tails.
-- **THE DECISIVE EXPERIMENT, and the part that matters most: BEHAVIOUR IS IDENTICAL.** Same binary,
-  same profile, only the tail swapped, rotated interleave. All 12 timed compiles answered `46
-  errors`, and **all four `--listAll` digests are `59d930db…`** (the round-841 lineage), 46 lines.
-  Both tails also LINK — verified by running the compiler on each — so this was never a crash risk.
-- **AND THE TIMING CLAIM DIED IN BATCH 2, WHICH IS THE ROUND'S BEST RESULT.** Batch 1: stale 23,633
-  → fresh 24,420 ms, **+3.63%, fresh slower 3/3**, both arm sds under 1% — a textbook sign-consistent
-  sweep, and I was one batch away from writing it up as a real 3.6% and "correcting" two rounds with
-  it. Batch 2: **+0.33%, 2/3**, deltas +79 / −184 / +317 straddling zero. The mechanism is in the
-  table — the **fresh** arm moved 24,420 → 23,754 ms between batches, **−2.7% on a byte-identical
-  configuration** — so batch 1's drift simply landed on one arm. **Round 840(c)'s rule, second
-  confirmation this session and the first where following it REVERSED the conclusion.**
-- **SO, PLAINLY: the warm arc STANDS and nothing needs re-taking.** 845/846/848/850/851 never
-  touched the stale tail; 847/849's cold arms did, but the difference is behaviourally nil and not a
-  demonstrated timing effect. **Round 845's `(JIT.1)` −33.6%, 4/4, 1.505× is untouched by
-  construction** — it built both arms in a throwaway worktree from pre-split commits, so its
-  dependencies were identical and neither cp file was involved. A per-kind/per-handler SHARE is a
-  ratio inside one arm and is immune regardless; only cross-regime multipliers were ever exposed.
-- **THE GUARD.** `scripts/lib/dep-classpath.sh` — one shared resolver, refusing a cache unless it is
-  non-empty, newer than **every** build-definition input (`libs.versions.toml` first), and names only
-  entries that still exist; every refusal prints why. All readers rewired; `aot-draw-variance.sh`
-  additionally gets round 857's staged-lib-dir treatment (its classpath ORDER is hashed into the AOT
-  fingerprint). **`build/bench/cp.txt` now has ZERO readers**, pinned source-level.
-- **ABLATION — three arms, each failing EXACTLY ONE uniquely-its-own pin** (baseline 6/6 green;
-  harness committed first, round 789). Drop `libs.versions.toml` from the inputs → only the
-  libs-versions pin fails **while the module-build-file pin stays GREEN**, which is precisely the
-  state `ab-warm.sh` was in: a guard that passes and cannot see the real change. Drop the
-  existence loop → only the missing-jar pin. Drop the non-empty test → only the empty-cache pin.
-- **GATES: full suite green (see STATUS.md).** `cost_gate.py` / `huge_methods.py` not required —
-  nothing under `commonMain` changed; the round is scripts plus one jvmTest class.
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 - [x] **(NARROW.2)(a) — CLOSED round 838. An `instanceof` whose RHS is a CONSTRUCTOR VALUE
@@ -1169,6 +1210,37 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   to the corpus. Gates: suite 14,060 then 14,061 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on
   all 20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit both times. Commits
   `61194621`, `9eedc04b`. `docs/perf/warm-tail-attribution.md` § 12.
+
+- [x] **(WARM.15) — DONE, ROUND 868. THE FIRST LEAF-LEVEL WARM PROFILE, AND ITS BEST NEW CANDIDATE
+  LANDED: THE `export *` BARREL WALKS GO **672 -> 91 ms** WARM (9.0% -> 1.2% of a warm rebuild).**
+  `docs/perf/warm-leaf-profile.md`. Every other instrument in this arc is a PASS or SECTION probe and can
+  only find cost somebody thought to bracket; a JFR `ExecutionSample` profile of a steady-state
+  `BenchMain` window (two processes, 8,026 / 8,010 compile-thread samples) is the complement, and its
+  output is a CANDIDATE LIST — round 623's law, restated in the doc's headline. Three candidates survived
+  the "already-attributed checking work is not a finding" filter; **(C1)**, four mutually recursive
+  `export *` walks at 5.45% self / 7.8% inclusive, was priced INDEPENDENTLY by a counter+span census
+  (`FrontEnd.STAR`) at **672 ms = 9.0%**, over 8,754 walks that visited 290,117 files and scanned
+  **25.3 M top-level statements** — 2,889 per question, and 28% of the walks answer nothing.
+  `StarExportIndex` computes those four immutable per-file facts once; the row comparison is CONTROLLED
+  because walks, visits and answers are IDENTICAL on both arms and only the scan width moves
+  (25,291,521 -> 638,464). Corroborated by `ab-warm.sh` (-5.58% and -4.15%, B wins 4/4 over two batches).
+  8-profile grid both arms rebuilt: added=0 removed=0 on all eight. Pins `StarExportIndexTest` (8), seven
+  single-mistake ablations, seven discriminated. Left on the queue as (WARM.16): (C2) the per-scope
+  whole-map COPIES and (C3) `ArrayList.clear` on the memoized ancestor-walk buffers.
+
+- [ ] **(WARM.16) — THE TWO CANDIDATES ROUND 868's LEAF PROFILE LEFT UNPRICED.** Both are DIFFUSE, which
+  is why no section probe found them and why each needs its own instrument before a line of code is
+  written. **(a) The per-scope whole-map copy.** `HashMap.putMapEntries` is 5.4% of warm compile-thread
+  samples INCLUSIVE and its callers are the spine's frame bookkeeping — `spineOsPushCopy`,
+  `ctaFnBodyFrame`, `spineArgListOverlay`, `spinePdPushCopy`, `ctaSpineEnter`, `Checker$EpochMap.<init>`,
+  plus `MapsKt.toMutableMap` at 1.5% self. The REGIONS are attributed (round 847's warm per-handler
+  table); the MECHANISM is not, and the fix is a data-structure change (undo-log or persistent map), so
+  price the copy volume with a counter census (entries copied per push, and how many are ever read before
+  the pop) BEFORE proposing one — round 801's produced-versus-consumed test is the whole question.
+  **(b) `ArrayList.clear` on the ancestor-walk buffers**, 1.62%/1.49% as a LEAF across ~15
+  `spine*Status`/`spine*Reached` classifiers. A counted loop, i.e. round 623's exact bias class, so the
+  leaf share is NOT a price: amplify it (round 759 / round 867) or leave it alone. The candidate fix is
+  an index-reset array stack instead of `ArrayList.clear()`, mechanical across all ~15 sites.
 
 - [ ] **(WARM.13b) — RE-OPENED ROUND 867 AS AN *IMPLEMENTATION* ITEM, AND NOW WITH A PRICE ON BOTH
   SIDES. BUILD THE PER-KIND SPINE DISPATCH TABLE — AS A `Long` BITMASK, NOT A `when (kindId)`.** Round
