@@ -5351,6 +5351,24 @@ class Checker(
     /** M5 (round 481): top-level memo for [resolveExportedVarDeclThroughStars]. */
     private val starExportVarDeclCache = HashMap<String, VariableDeclaration?>()
 
+    /**
+     * (WARM.15) round 868: the per-file index the four `export *` barrel walks
+     * ([computeExportedFnDeclsThroughStars] and its three siblings) used to
+     * rebuild, from the file's whole top-level statement list, on EVERY visit.
+     *
+     * The first leaf-level warm profile of this compiler (round 868,
+     * `docs/perf/warm-leaf-profile.md`) put those four walks at **6.0% of the
+     * compile thread's samples** and the `FrontEnd.STAR` census priced them at
+     * **672 ms = 9.0% of a warm rebuild** over 8,754 outermost walks — which
+     * between them visited 290,117 files and scanned **25.3 million top-level
+     * statements**, i.e. ~2,889 per question asked. Nothing here is a resolution
+     * result: it is a re-derivation of four immutable facts about a parsed file.
+     *
+     * Declared before `init` per the init-order gotcha — the star walkers run
+     * during checker construction.
+     */
+    private val starExportIndexCache = HashMap<String, StarExportIndex>()
+
     /** M5 (round 481): memo for [getTypeParamInfo] (keyed by forTypePosition + name,
      *  a pure function of the frozen binder tables). Declared before `init` — it is
      *  consulted during init via isUnresolvedGenericType / checkTypeArgCount. */
@@ -48403,34 +48421,39 @@ class Checker(
     private fun computeExportedVarDeclThroughStars(
         file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
     ): VariableDeclaration? {
+        if (FrontEnd.mode != FrontEnd.ON) {
+            return computeExportedVarDeclThroughStarsCore(file, name, visited, depth)
+        }
+        FrontEnd.starEnter()
+        var r: VariableDeclaration? = null
+        try {
+            r = computeExportedVarDeclThroughStarsCore(file, name, visited, depth)
+            return r
+        } finally {
+            FrontEnd.starExit(r != null)
+        }
+    }
+
+    private fun computeExportedVarDeclThroughStarsCore(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): VariableDeclaration? {
         if (!visited.add(file.fileName)) return null
         if (depth > 64) return null
+        val idx = starExportIndexOf(file)
+        FrontEnd.addStarStmts(idx.reExports.size)
         if (name in moduleNamedExportsOf(file)) {
-            for (stmt in file.statements) {
-                if (stmt !is VariableStatement || ModifierFlag.Export !in stmt.modifiers) continue
-                for (d in stmt.declarationList.declarations) {
-                    if ((d.name as? Identifier)?.text == name) return d
-                }
-            }
             // Exported here but not as a variable — fn/class/enum targets keep their
-            // established resolution paths.
-            return null
+            // established resolution paths, so a miss is null, never a descent.
+            return idx.varDecls[name]
         }
-        for (stmt in file.statements) {
-            if (stmt !is ExportDeclaration) continue
-            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            when (val clause = stmt.exportClause) {
-                null -> {
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedVarDeclThroughStars(target, name, visited, depth + 1)?.let { return it }
-                }
-                is NamedExports -> {
-                    val match = clause.elements.find { it.name.text == name } ?: continue
-                    val orig = match.propertyName?.text ?: name
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedVarDeclThroughStars(target, orig, visited, depth + 1)?.let { return it }
-                }
-                else -> {}
+        for (re in idx.reExports) {
+            val named = re.named
+            if (named == null) {
+                computeExportedVarDeclThroughStars(re.target, name, visited, depth + 1)?.let { return it }
+            } else {
+                val match = named.elements.find { it.name.text == name } ?: continue
+                val orig = match.propertyName?.text ?: name
+                computeExportedVarDeclThroughStars(re.target, orig, visited, depth + 1)?.let { return it }
             }
         }
         return null
@@ -48439,8 +48462,26 @@ class Checker(
     private fun computeExportedSymbolThroughStars(
         file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
     ): Symbol? {
+        if (FrontEnd.mode != FrontEnd.ON) {
+            return computeExportedSymbolThroughStarsCore(file, name, visited, depth)
+        }
+        FrontEnd.starEnter()
+        var r: Symbol? = null
+        try {
+            r = computeExportedSymbolThroughStarsCore(file, name, visited, depth)
+            return r
+        } finally {
+            FrontEnd.starExit(r != null)
+        }
+    }
+
+    private fun computeExportedSymbolThroughStarsCore(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): Symbol? {
         if (!visited.add(file.fileName)) return null // cycle back-edge
         if (depth > 64) return null // defensive bound → unknowable
+        val idx = starExportIndexOf(file)
+        FrontEnd.addStarStmts(idx.reExports.size)
         // Direct declaration of the exported name in this file (the leaf of the chain).
         // M3.4 (round 413): the local must actually be EXPORTED — `export *` re-exports
         // only a module's exports, NEVER a non-re-exported IMPORT alias. Without this gate
@@ -48452,23 +48493,18 @@ class Checker(
         fileResults[file.fileName]?.locals?.get(name)?.let {
             if (name in moduleNamedExportsOf(file)) return it
         }
-        for (stmt in file.statements) {
-            if (stmt !is ExportDeclaration) continue
-            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            when (val clause = stmt.exportClause) {
-                null -> {
-                    // bare `export * from "..."` — search the starred target.
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedSymbolThroughStars(target, name, visited, depth + 1)?.let { return it }
-                }
-                is NamedExports -> {
-                    // `export { orig as name } from "..."` — [name] maps to [orig] in the target.
-                    val match = clause.elements.find { it.name.text == name } ?: continue
-                    val orig = match.propertyName?.text ?: name
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedSymbolThroughStars(target, orig, visited, depth + 1)?.let { return it }
-                }
-                else -> {} // `export * as ns from` exposes only `ns` (a direct local), not target names
+        // `export * as ns from` exposes only `ns` (a direct local), not target
+        // names, so the index leaves it out exactly as the walk's `else -> {}` did.
+        for (re in idx.reExports) {
+            val named = re.named
+            if (named == null) {
+                // bare `export * from "..."` — search the starred target.
+                computeExportedSymbolThroughStars(re.target, name, visited, depth + 1)?.let { return it }
+            } else {
+                // `export { orig as name } from "..."` — [name] maps to [orig] in the target.
+                val match = named.elements.find { it.name.text == name } ?: continue
+                val orig = match.propertyName?.text ?: name
+                computeExportedSymbolThroughStars(re.target, orig, visited, depth + 1)?.let { return it }
             }
         }
         return null
@@ -48481,6 +48517,34 @@ class Checker(
     /** M3.4 (round 413): memoized [getModuleNamedExports] for the star-chain leaf gate. */
     private fun moduleNamedExportsOf(file: SourceFile): Set<String> =
         moduleNamedExportsCache.getOrPut(file.fileName) { getModuleNamedExports(file) }
+
+    /**
+     * (WARM.15) round 868 — [StarExportIndex] for one file, built once.
+     *
+     * Every entry is a transcription of what the four barrel walks used to
+     * recompute per visit, in the same order and with the same first-wins rule,
+     * so the walks' answers are unchanged by construction:
+     *
+     * - [StarExportIndex.fnDecls] groups the file's own EXPORTED top-level
+     *   `FunctionDeclaration`s by name in statement order — the walk's
+     *   `filterIsInstance<FunctionDeclaration>().filter { … }`, whose two
+     *   intermediate lists were the single largest line in the round-868
+     *   profile.
+     * - [StarExportIndex.varDecls] is FIRST-WINS over (statement, declaration)
+     *   order, exactly like the walk's nested loop, and only for `Identifier`
+     *   names (a binding pattern was never matched).
+     * - [StarExportIndex.interfaceNames] is the `any { … }` predicate.
+     * - [StarExportIndex.reExports] pre-resolves each descendable re-export's
+     *   target through [resolveBarrelStarTarget], which is a pure function of
+     *   (fromFile, spec) over the frozen `fileResults` — so hoisting the call
+     *   out of the walk cannot change what it answers, only how often it is
+     *   asked.
+     */
+    private fun starExportIndexOf(file: SourceFile): StarExportIndex =
+        starExportIndexCache.getOrPut(file.fileName) {
+            buildStarExportIndex(file, ::resolveBarrelStarTarget)
+        }
+
 
     private fun getModuleNamedExports(file: SourceFile): Set<String> {
         val exports = mutableSetOf<String>()
@@ -105546,29 +105610,37 @@ interface DataView {
     private fun computeExportedFnDeclsThroughStars(
         file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
     ): List<FunctionDeclaration>? {
+        if (FrontEnd.mode != FrontEnd.ON) {
+            return computeExportedFnDeclsThroughStarsCore(file, name, visited, depth)
+        }
+        FrontEnd.starEnter()
+        var r: List<FunctionDeclaration>? = null
+        try {
+            r = computeExportedFnDeclsThroughStarsCore(file, name, visited, depth)
+            return r
+        } finally {
+            FrontEnd.starExit(r != null)
+        }
+    }
+
+    private fun computeExportedFnDeclsThroughStarsCore(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): List<FunctionDeclaration>? {
         if (!visited.add(file.fileName)) return null
         if (depth > 64) return null
+        val idx = starExportIndexOf(file)
+        FrontEnd.addStarStmts(idx.reExports.size)
         if (name in moduleNamedExportsOf(file)) {
-            val own = file.statements.filterIsInstance<FunctionDeclaration>().filter {
-                it.name?.text == name && ModifierFlag.Export in it.modifiers
-            }
-            return own.ifEmpty { null }
+            return idx.fnDecls[name]
         }
-        for (stmt in file.statements) {
-            if (stmt !is ExportDeclaration) continue
-            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            when (val clause = stmt.exportClause) {
-                null -> {
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedFnDeclsThroughStars(target, name, visited, depth + 1)?.let { return it }
-                }
-                is NamedExports -> {
-                    val match = clause.elements.find { it.name.text == name } ?: continue
-                    val orig = match.propertyName?.text ?: name
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedFnDeclsThroughStars(target, orig, visited, depth + 1)?.let { return it }
-                }
-                else -> {}
+        for (re in idx.reExports) {
+            val named = re.named
+            if (named == null) {
+                computeExportedFnDeclsThroughStars(re.target, name, visited, depth + 1)?.let { return it }
+            } else {
+                val match = named.elements.find { it.name.text == name } ?: continue
+                val orig = match.propertyName?.text ?: name
+                computeExportedFnDeclsThroughStars(re.target, orig, visited, depth + 1)?.let { return it }
             }
         }
         return null
@@ -105580,32 +105652,39 @@ interface DataView {
     private fun computeExportedInterfaceFileThroughStars(
         file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
     ): String? {
+        if (FrontEnd.mode != FrontEnd.ON) {
+            return computeExportedInterfaceFileThroughStarsCore(file, name, visited, depth)
+        }
+        FrontEnd.starEnter()
+        var r: String? = null
+        try {
+            r = computeExportedInterfaceFileThroughStarsCore(file, name, visited, depth)
+            return r
+        } finally {
+            FrontEnd.starExit(r != null)
+        }
+    }
+
+    private fun computeExportedInterfaceFileThroughStarsCore(
+        file: SourceFile, name: String, visited: MutableSet<String>, depth: Int,
+    ): String? {
         if (!visited.add(file.fileName)) return null
         if (depth > 64) return null
+        val idx = starExportIndexOf(file)
+        FrontEnd.addStarStmts(idx.reExports.size)
         if (name in moduleNamedExportsOf(file)) {
-            return if (file.statements.any {
-                    it is InterfaceDeclaration && it.name.text == name &&
-                        ModifierFlag.Export in it.modifiers
-                }
-            ) file.fileName else null
+            return if (name in idx.interfaceNames) file.fileName else null
         }
-        for (stmt in file.statements) {
-            if (stmt !is ExportDeclaration) continue
-            val spec = (stmt.moduleSpecifier as? StringLiteralNode)?.text ?: continue
-            when (val clause = stmt.exportClause) {
-                null -> {
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedInterfaceFileThroughStars(target, name, visited, depth + 1)
-                        ?.let { return it }
-                }
-                is NamedExports -> {
-                    val match = clause.elements.find { it.name.text == name } ?: continue
-                    val orig = match.propertyName?.text ?: name
-                    val target = resolveBarrelStarTarget(spec, file.fileName) ?: continue
-                    computeExportedInterfaceFileThroughStars(target, orig, visited, depth + 1)
-                        ?.let { return it }
-                }
-                else -> {}
+        for (re in idx.reExports) {
+            val named = re.named
+            if (named == null) {
+                computeExportedInterfaceFileThroughStars(re.target, name, visited, depth + 1)
+                    ?.let { return it }
+            } else {
+                val match = named.elements.find { it.name.text == name } ?: continue
+                val orig = match.propertyName?.text ?: name
+                computeExportedInterfaceFileThroughStars(re.target, orig, visited, depth + 1)
+                    ?.let { return it }
             }
         }
         return null

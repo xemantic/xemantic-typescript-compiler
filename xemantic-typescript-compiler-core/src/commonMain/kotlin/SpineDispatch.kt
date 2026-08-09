@@ -4180,7 +4180,26 @@ object FrontEnd {
     /** The (ENGINE.2b) closure-interval arrays. INSIDE [FLOW_INDEX]. */
     const val IDX_CLOSURES = 35
 
-    const val N = 36
+    // ---- (WARM.15) round 868 — the `export *` BARREL SEARCH, the largest NEW
+    // candidate the first leaf-level warm profile produced. Four mutually
+    // recursive AST walks (`computeExported{FnDecls,VarDecl,Symbol,
+    // InterfaceFile}ThroughStars`) answer "which file really exports this
+    // name?" by walking the star-export graph and scanning every visited file's
+    // top-level statement list. Their MEMOS are at the top-level wrappers only,
+    // so a cache MISS pays a whole-graph walk — and on a codebase whose files
+    // are `export *` barrels (round 772: in tsc's own sources every file
+    // transitively depends on every other) a NEGATIVE answer is the most
+    // expensive one there is.
+    //
+    // The bracket is RE-ENTRANCY COUNTED, so [STAR] is the OUTERMOST walk's
+    // wall time and nested recursion levels cost no boundary at all; the census
+    // beside it is what says whether the row is a population or a per-call
+    // price (round 758).
+
+    /** The outermost `export *` barrel walk — wall, nested levels excluded. */
+    const val STAR = 36
+
+    const val N = 37
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4219,6 +4238,7 @@ object FrontEnd {
         "    of which the FlowGraph side table",
         "      of which the nodeId side-table walk",
         "      of which the closure-interval arrays",
+        "  of which the export-star barrel search",
     )
 
     /**
@@ -4231,7 +4251,7 @@ object FrontEnd {
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
-        CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        CHECK, STAR, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
         TRANSFORM, TR_JSXPRAGMA, EMIT, DECL_EMIT,
@@ -4339,6 +4359,31 @@ object FrontEnd {
     var flowAtInTreeNull: Long = 0
     var flowAtForeign: Long = 0
 
+    /**
+     * (WARM.15) census — the population behind [STAR].
+     *
+     * [starWalks] is the OUTERMOST walks (what [STAR]'s `calls` counts too),
+     * [starVisits] every file the recursion enters — their ratio is the graph's
+     * effective fan-out, which is the whole question, since a name found in the
+     * first file costs one visit and a name found nowhere costs the closure.
+     * [starStmts] is the SCAN WIDTH those visits pay — before round 868's index
+     * it was the visited file's whole top-level statement list (25.3 M of them
+     * for 8,754 questions), after it the file's re-export edges alone, so the
+     * counter measures the same thing on both sides of that change and its
+     * collapse is the change's own receipt. [starFound] splits the outermost
+     * walks by ANSWER: a walk that
+     * answers null paid for the whole reachable graph to say nothing, and
+     * round 801's produced-versus-consumed test in this setting is exactly
+     * "how much of this row is negatives".
+     */
+    var starWalks: Long = 0
+    var starVisits: Long = 0
+    var starStmts: Long = 0
+    var starFound: Long = 0
+
+    private var starDepth: Int = 0
+    private var starT0: Long = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -4353,6 +4398,40 @@ object FrontEnd {
         jsxPragmaFiles = 0; jsxPragmaChars = 0; jsxPragmaHits = 0
         recordFlowCalls = 0; flowMapEntries = 0; idxNodes = 0; idxHits = 0
         flowAtCalls = 0; flowAtInTreeNull = 0; flowAtForeign = 0
+        starWalks = 0; starVisits = 0; starStmts = 0; starFound = 0
+        starDepth = 0; starT0 = 0
+    }
+
+    /**
+     * (WARM.15) — enter one level of the `export *` barrel recursion. Only the
+     * OUTERMOST level opens a span, so a walk of any depth costs one timestamp
+     * pair; every level is counted as a visit.
+     */
+    fun starEnter() {
+        if (mode != ON) return
+        starVisits++
+        if (starDepth == 0) {
+            starWalks++
+            starT0 = PassTiming.nowNanos()
+        }
+        starDepth++
+    }
+
+    /** (WARM.15) — leave one level; [found] is read only at the outermost one. */
+    fun starExit(found: Boolean) {
+        if (mode != ON) return
+        starDepth--
+        if (starDepth == 0) {
+            nanos[STAR] += PassTiming.nowNanos() - starT0
+            calls[STAR]++
+            if (found) starFound++
+        }
+    }
+
+    /** (WARM.15) — top-level statements scanned by one visited file. */
+    fun addStarStmts(n: Int) {
+        if (mode != ON) return
+        starStmts += n
     }
 
     /** (WARM.11) — one call per file, from `FlowGraphBuilder.build`. */
@@ -4536,6 +4615,17 @@ object FrontEnd {
             appendLine(
                 "  flowAt census: calls $flowAtCalls, of which in-tree-but-null " +
                     "$flowAtInTreeNull and map-fallback $flowAtForeign"
+            )
+        }
+        // (WARM.15) — the barrel search. `visits/walk` is the graph fan-out the
+        // memo does NOT amortise, and `found` versus `walks` says how much of
+        // the row is walks that answered nothing at all.
+        if (starWalks > 0) {
+            appendLine(
+                "  star census: walks $starWalks (${nanos[STAR] / 1_000_000} ms), visits $starVisits " +
+                    "(${starVisits / starWalks}/walk), scan width $starStmts " +
+                    "(${starStmts / starWalks}/walk); answered $starFound, " +
+                    "null ${starWalks - starFound} (${(starWalks - starFound) * 100 / starWalks}%)"
             )
         }
         // (WARM.8) — the four POST blocks abut, so their residue is a PARTITION
