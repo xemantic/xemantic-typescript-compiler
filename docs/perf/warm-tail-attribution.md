@@ -972,3 +972,174 @@ provably dead work in check-only mode.
   which of its scans costs the 130 ms.
 * **No A/B and no change was made**; (WARM.8)(c) is a priced candidate, not a
   result.
+
+---
+
+## 13. § (WARM.8)(c) LANDED — round 862, and the queue item was the SMALLER half
+
+*§ 12.5 priced a check-only gate at 130.4 ms = 1.72% and left one question
+open: "whether the walk itself can be made cheap … is a second, larger
+question this round did not price". Round 862 priced it, and it is not a
+second question at all — it is the SAME 1.7%, available in **both** modes,
+and the gate the queue item named turns out to be worth **0.03%** once it
+lands on top.*
+
+> **HEADLINE. `cpcRequireOnlyOrphans` goes 138.7 ms -> 0.0005 ms, and the whole
+> post-checker region 141.9 ms -> 2.84 ms — **139.1 ms = 1.82% of a warm
+> rebuild, 98.0% of the region**. Of that, **136.4 ms (1.79%) is an EXACT
+> rewrite that helps emit mode identically**, and only **2.3 ms (0.03%)** is
+> the check-only gate. § 12.5's "in emit mode the saving is zero" was right
+> about the gate and wrong about the round.**
+
+### 13.1 The sub-partition, which is where the round turned
+
+§ 12.6 recorded that the function "was not sub-partitioned, so nothing here
+says which of its scans costs the 130 ms". Three abutting level-3 `FrontEnd`
+blocks over the three per-FILE scans of its one loop, plus a census of the
+population they visit, answer it. Four draws, two processes, `frontend` tier:
+
+| block | mean | share of the function |
+|---|---:|---:|
+| the `declare … require` probe | **121.15 ms** | **87.36%** |
+| the `import("…")` text scan | 16.82 ms | 12.13% |
+| `collectNsInternalImportTargets` | 0.374 ms | 0.269% |
+| residue (regex construction, set ops, the filter) | 0.336 ms | 0.24% |
+| **`cpcRequireOnlyOrphans`** | **138.68 ms** | 100% |
+
+The four sum to the block **exactly** — this is a partition, not an
+attribution with a remainder. Census, bit-identical in all four draws: **78
+files, 9,977,097 characters, and the probe accepts 0 of them.**
+
+### 13.2 The mechanism, and it is a `java.util.regex` fact worth keeping
+
+`\bdeclare\s+(?:const|var|let|function)\s+require\b` begins with a **zero-width
+assertion**. `Pattern.compile` hands a pattern whose first node is a literal
+`Slice` to `BnM.optimize`, i.e. a Boyer-Moore search over the input; a pattern
+that begins with `\b` gets no such treatment and is *attempted at every one of
+the 9,977,097 positions*. The sibling pattern beside it in the same loop —
+`import\s*\(\s*["']…` — begins with the literal `import` and costs **a seventh
+as much over the same text**, which is the controlled comparison: same input,
+same engine, same loop, one has a literal prefix and the other does not.
+
+This is the second time in three rounds that the most expensive thing in a
+region is a regex over the whole program that matches nothing (round 860's UMD
+scan was the first), and both were invisible until a probe was put under them.
+
+### 13.3 What landed — two changes, both EQUIVALENCES, neither a gate
+
+**(a) `3373abc0` — `containsDeclareRequire`, an exact hand-written equivalent**
+anchored on the literal `require` (571 occurrences in those 9,977,097
+characters: one linear sweep plus 571 constant-time rejections). Round 860's law
+applies unchanged — a *gate* is a claim about where a construct may legally
+appear and round 792 says the dashboard profiles cannot falsify such a claim, so
+the matcher is replaced rather than guarded. `declareRequireRegex` stays LIVE as
+the specification the differential pin compares against, and the rewrite removes
+a regex-DIALECT hazard from `commonMain` (`java.util.regex` on the JVM, another
+engine on Native).
+
+**(a2), in the same commit — the `import("…")` pass is DEFERRED behind the
+candidate sets.** `staticallyReferenced` enters the final filter only as
+`it !in staticallyReferenced`, beside the conjunct
+`(it in requireReached || it in nsInternalImportTargets)`; with both candidate
+sets empty the filter yields nothing whatever the subtractive set holds. So the
+function now runs in two passes and pass 2 is skipped whenever no candidate
+exists — which on tsc's own sources is every compile.
+
+**(b) `e5db39c8` — the queue item, `if (options.skipEmitOutputs) emptySet()
+else …`.** Re-verified rather than inherited: `grep` gives four hits for the
+value (declaration, call, `return`, one use) and **one** write site for
+`jsOutputMap`, inside `cpcTransformAndEmit`, whose loop iterates `emptyList()`
+under `skipEmitOutputs`. The gate is `skipEmitOutputs`, never `options.noEmit`
+— the latter is also a corpus DIRECTIVE that 440 generated tests set (round
+738).
+
+### 13.4 The measurement (`BenchMain <proj> 3 8 frontend,frontend`, 2 processes x 2 draws per arm)
+
+| arm | `cpcRequireOnlyOrphans` | spread | `POST` | wall median |
+|---|---:|---:|---:|---:|
+| HEAD (`e83cbbf0`) | **138.68 ms** | 11.8% | 141.94 ms | 7,624 ms |
+| + (a) the rewrite and the deferral | **2.310 ms** | 4.8% | 5.59 ms | 7,091 ms |
+| + (b) the check-only gate | **0.0005 ms** | — | 2.84 ms | 6,898 ms |
+
+* **part (a) = 136.37 ms = 1.789%** of the before arm's warm wall, in **both**
+  modes — the code path is identical with emit on, the candidate sets are still
+  empty, and pass 2 is still skipped.
+* **part (b) = 2.31 ms = 0.030%**, check-only only.
+* **total 138.68 ms = 1.819%**; the post-checker region falls **98.0%**.
+
+**Round 793 (subtract the removed boundaries before quoting a row delta).**
+`POST_ORPHANS` opens and closes once in every arm, and the level-3 probe is
+present in the before arm too with the same 78 `ORPH_DECLREQ` / `ORPH_NSWALK`
+boundaries. The only boundaries that disappear are `ORPH_IMPORTTYPE`'s 78, worth
+**7.6–15.8 us** at round 850's warm 97–202 ns — five thousandths of one percent
+of the 136 ms, i.e. below the last digit quoted.
+
+**Round 801 (produced-vs-consumed BEFORE the timing).** Nothing MOVES here, and
+the ratio is not 1.000 but 0/1: the deferred `staticallyReferenced` is a local
+`val` with exactly one reader, the filter it is skipped along with; the gated
+census's set has exactly one reader, which under `--noEmit` reads an empty map;
+and the rewrite skips nothing at all — it computes the same boolean faster.
+
+**Round 846 (the first instrumented rebuild in a process is the slowest draw).**
+It reproduces **2/2 in the before arm**, exactly as round 861 found, and is
+invisible once the row is 2 ms (3/6 over all six process-pairs). Dropping each
+process's first draw moves the before mean 138.68 -> 136.26 ms and the saving to
+1.79% — inside the quoted figure.
+
+**The warm A/B is quoted and then SET ASIDE.** `scripts/ab-warm.sh
+/tmp/r862-before-main /tmp/r862-after-main 3` printed, verbatim:
+
+```
+VERDICT: WIN of 2.3% (B wins 3/3) — outside the +/-1.0% warm band. Warm-only: it is a steady-state COMPUTE claim, not a cold-CLI claim.
+```
+
+3/3 sign-consistent, median −158 ms (−2.32%), which brackets the rows' 138.7 ms
+— but **arm A's printed sd is 2.76%**, and this document's own rule (round 774)
+is that a warm arm whose sd exceeds ~1% was not measured on a quiet box and its
+verdict must be discarded however clean the median looks. Arm B's sd is 0.46%.
+It is confirming *direction* and nothing more; the rows are the evidence.
+
+### 13.5 What the gates saw, and what they structurally could not
+
+The 8-profile grid ran from **two class directories** (a rebuilt before-arm at
+651 classes, the after-arm at 652, the difference being a class this round
+added — round 853's positive control) and reads **`added=0 removed=0` on all
+eight profiles in both directions**, 46x7 / 94, no capture empty or truncated.
+**That gate is structurally blind to this change and is run as a control**:
+`cpcRequireOnlyOrphans`'s result reaches nothing but the list of emitted JS
+files, and a `--noEmit` capture has none. The gate that can see it is the EMIT
+one — the compiler profile emitted from both arms, **78 files each, `diff -r`
+identical** — together with the corpus's JS-emit subtests. Suite 14,061 ->
+**14,072 / 0 failures / 3 skipped**; `cost_gate.py` +0.00% on all 20 counters at
+every sub-step; `huge_methods.py --fail-over 0` 0 over the limit.
+
+### 13.6 The ablation — four mistakes, one at a time (round 807)
+
+| mistake | RED |
+|---|---|
+| **M1** the scanner drops its `require\b` test | 3, all in `DeclareRequireScanTest` (differential, cross-product, expectation table) |
+| **M2** the check-only gate made inert (`if (false)`) | 1 — `the orphan census is skipped in a check-only compile and runs in an emitting one` |
+| **M3** the gate widened to `options.noEmit \|\| …` | 1 — `negative control - the noEmit DIRECTIVE must not reach the orphan gate` |
+| **M4** pass 2 skipped ALWAYS | 2 — `a file also reached by a typeof-import is still emitted` and `pass 2 runs once per file when a candidate exists` |
+
+20 pins ran per arm. **Every mistake has at least one uniquely-its-own failure
+and the four failing sets are disjoint**, so no pin here is a redundant guard.
+M3 is the round-738 mistake and it is caught by the pin written for it; M4 is
+the one that matters most, because skipping pass 2 unconditionally is *silently
+wrong* rather than merely slow — it drops a live file from the emit — and the
+behaviour pin is what sees it, the partition pin only agreeing.
+
+### 13.7 What this does NOT show
+
+* **One profile**, and the warm regime only. The per-scan attribution is a
+  property of tsc's own sources: a program that DOES carry
+  `declare const require` runs pass 2 and pays for it, and there part (a)'s
+  deferral buys nothing while part (b)'s gate buys the whole of it. That
+  asymmetry is why both landed.
+* **No cold measurement.** Round 859 measured regexes as the worst-warming code
+  in the tail (0.85–1.05x), so the ~121 ms is expected to be roughly the same
+  absolute cost cold — but that is an inference, not a measurement here.
+* **The emit-mode saving was not TIMED**, only shown to be the same code path
+  with the same empty candidate sets and a byte-identical emitted tree.
+* `collectNsInternalImportTargets` (0.374 ms) and the `require("…")` call scan
+  behind the probe were left alone; neither could matter at this size.

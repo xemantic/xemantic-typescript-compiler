@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 862 (2026-08-09) — (WARM.8)(c) LANDED, AND THE QUEUE ITEM WAS THE SMALLER HALF OF ITS OWN
+PRIZE: `cpcRequireOnlyOrphans` GOES 138.7 ms -> 0.0005 ms AND THE WHOLE POST-CHECKER REGION
+141.9 -> 2.84 ms = 139.1 ms = 1.82% OF A WARM REBUILD, 98.0% OF THE REGION — OF WHICH 136.4 ms
+(1.79%) IS AN EXACT REWRITE THAT HELPS **EMIT** MODE IDENTICALLY AND ONLY 2.3 ms (0.03%) IS THE
+CHECK-ONLY GATE THE ITEM NAMED.** `docs/perf/warm-tail-attribution.md` § 13.
+
+- **THE ONE-CONSUMER CLAIM HELD, RE-ESTABLISHED RATHER THAN INHERITED.** Four `grep` hits for the
+  value (declaration, call, `return`, one use) and **one** write site for `jsOutputMap`, inside
+  `cpcTransformAndEmit`, whose loop iterates `emptyList()` under `skipEmitOutputs` — so the census is
+  provably dead work in a check-only compile. The gate is `CompilerOptions.skipEmitOutputs`, never
+  `options.noEmit`, and `SkipEmitOutputsTest` was read before writing it.
+
+- **BUT THE ROUND TURNED ON THE ITEM'S OWN OPEN QUESTION** ("whether the walk itself can be made
+  cheap … is a second, larger question this round did not price"). It is not a second question: it
+  is the SAME 1.7%, available in both modes. Sub-partitioned into its three per-FILE scans (three
+  abutting level-3 `FrontEnd` blocks that sum to the block EXACTLY), the function is **87.36% one
+  regex** — the `declare … require` probe, 121.15 ms — against 12.13% for the `import("…")` scan and
+  0.269% for the statement walk. Census, bit-identical in all four draws: **78 files, 9,977,097
+  characters, 0 accepted.**
+
+- **THE MECHANISM IS A `java.util.regex` FACT, AND IT COMES WITH ITS OWN CONTROLLED COMPARISON.**
+  `\bdeclare\s+…` begins with a ZERO-WIDTH ASSERTION, so `Pattern.compile` cannot hand it to
+  `BnM.optimize` (which needs a leading literal `Slice`) and it is attempted at every one of the
+  9,977,097 positions. The sibling pattern in the SAME loop over the SAME text, `import\s*\(…`,
+  begins with a literal and costs **a seventh as much**. Second time in three rounds that the most
+  expensive thing in a region is a whole-program regex matching nothing (round 860 was the first).
+
+- **WHAT LANDED — two equivalences and then the gate, three commits.** (a) `3373abc0`:
+  `containsDeclareRequire`, an exact hand-written scan anchored on the literal `require` (571
+  occurrences, one linear sweep plus 571 constant-time rejections), with `declareRequireRegex` kept
+  LIVE as the specification — round 860's law, an exact rewrite rather than a *gate*, since a gate is
+  a legality claim the profiles cannot falsify (round 792); the same commit DEFERS the `import("…")`
+  pass behind the candidate sets, which is sound because `staticallyReferenced` enters the final
+  filter only as `it !in staticallyReferenced`, beside `(it in requireReached || it in
+  nsInternalImportTargets)`. (b) `e5db39c8`: the gate itself.
+
+- **THE MEASUREMENT** (`BenchMain <proj> 3 8 frontend,frontend`, 2 processes x 2 draws per arm, all
+  12 instrumented rebuilds answering 78 files / 46 errors). HEAD **138.68 ms** (draws 136.53 /
+  129.32 / 145.66 / 143.20, spread 11.8%); after (a) **2.310 ms** (2.278 / 2.389 / 2.284 / 2.289,
+  spread 4.8%); after (b) **0.0005 ms**. `POST` 141.94 -> 5.59 -> 2.84 ms. **Round 793:** the only
+  boundaries that disappear are `ORPH_IMPORTTYPE`'s 78, worth 7.6-15.8 us at round 850's warm
+  97-202 ns — five thousandths of a percent of the saving. **Round 801:** nothing MOVES and the ratio
+  is 0/1, not 1.000 — the deferred set is a local `val` with one reader, the gated set's one reader
+  gets an empty map, and the rewrite skips nothing at all. **Round 846:** the first-draw-is-slowest
+  law reproduces **2/2 in the before arm** and is invisible once the row is 2 ms; dropping first
+  draws moves the before mean to 136.26 ms and the saving to 1.79%, inside the quoted figure.
+
+- **THE WARM A/B IS QUOTED AND SET ASIDE, which is the rule this arc wrote for itself.**
+  `scripts/ab-warm.sh /tmp/r862-before-main /tmp/r862-after-main 3` printed verbatim: `VERDICT: WIN
+  of 2.3% (B wins 3/3) — outside the +/-1.0% warm band. Warm-only: it is a steady-state COMPUTE
+  claim, not a cold-CLI claim.` Median -158 ms (-2.32%), 3/3 sign-consistent, bracketing the rows'
+  138.7 ms — but **arm A's printed sd is 2.76%** against arm B's 0.46%, and round 774's rule discards
+  an arm over ~1% however clean its median. Direction confirmed, magnitude not; the rows are the
+  evidence.
+
+- **WHAT DID NOT WORK / WHAT THE ROUND CANNOT SAY.** (1) The 8-profile grid, which the round plan
+  made mandatory, is **structurally blind to this change** and was run as a control: the value
+  reaches nothing but the list of emitted JS files and a `--noEmit --listAll` capture has none. It
+  is green (`added=0 removed=0`, both directions, 46x7 / 94, two class dirs at 651 vs 652 classes),
+  and the gate that can actually see the change is the EMIT one — 78 files from each arm, `diff -r`
+  identical. (2) **No cold measurement was taken**; round 859's finding that regexes warm worst in
+  the tail (0.85-1.05x) makes the ~121 ms likely to be roughly the same cost cold, but that is an
+  inference. (3) **The emit-mode saving was not TIMED**, only shown to be the same code path with the
+  same empty candidate sets. (4) The gate's own value collapsed from the queued 1.72% to 0.03% once
+  (a) landed under it; it was kept anyway because the two savings have DIFFERENT shapes — (a)'s
+  depends on the program carrying no `declare … require`, and on a program that does carry the shape
+  pass 2 runs over every file and the gate is what a `--noEmit` build saves.
+
+- **ABLATION, ONE MISTAKE AT A TIME (round 807), 20 pins per arm.** **M1** the scanner drops its
+  `require\b` test -> **3 RED**, all in `DeclareRequireScanTest`; **M2** the gate made inert -> **1**,
+  the census-skip pin; **M3** the gate widened to `options.noEmit` (round 738's mistake) -> **1**, its
+  own negative control; **M4** pass 2 skipped ALWAYS -> **2**, the behaviour pin (`a file also reached
+  by a typeof-import is still emitted`) and the partition pin. **Four disjoint failing sets, every
+  mistake with a uniquely-its-own failure, no redundant guard.** M4 is the one that matters: skipping
+  pass 2 unconditionally is silently WRONG, not merely slow — it drops a live file from the emit.
+
+- **GATES.** Suite 14,061 -> 14,062 -> 14,070 -> **14,072 / 0 failures / 3 skipped** (real XML parser
+  over all four modules); `cost_gate.py` **+0.00% on all 20 counters** at every sub-step;
+  `huge_methods.py --fail-over 0` **0 over the limit**, 652 classes. Round-851 order throughout, and
+  the before-arm was rebuilt IN THE FOREGROUND with `git status` checked before and after (round
+  805). Commits `e83cbbf0`, `3373abc0`, `e5db39c8`, `eb654437`.
+
 **Round 861 (2026-08-08) — (WARM.9): THE LAST TAIL PASS OVER 1% IS PRICED WARM AND IT IS A
 NEGATIVE — 85.6 ms = 1.09%, NOT THE ~1.68% PROJECTED, AND THE NUMBER IS AN UPPER BOUND THE
 INSTRUMENT CANNOT TIGHTEN.** Round 859 found exactly one tail pass over 1% warm
@@ -704,220 +786,6 @@ the recon-only failure in a different costume. No attempt to REDUCE (NARROW.2)(c
 cost: pricing it in wall time and deciding whether the opening can be narrowed is a design round,
 and taking it as a side effect of an audit is exactly what the queue entry for (c) forbade for (d).
 
-**Round 852 (2026-08-08) — (NARROW.2)(c) CLOSED. THE HIGHEST-FP-RISK ITEM IN THE QUEUE MOVED THE
-EIGHT-PROFILE GRID BY *NOTHING* AT EVERY ONE OF ITS THREE STEPS AND COST THE CORPUS *NOTHING*, AND
-THE ROUND'S MOST EXPENSIVE FINDING IS THAT THE COMMITTED GRID HARNESS HAD BEEN MEASURING A
-FIVE-ROUND-OLD COMPILER.**
-
-**WHAT LANDED.** Three separable rules, each built, gridded and diffed against ONE rebuilt
-before-arm before the next was enabled (the queue's own protocol for this item — "run the
-8-profile grid at EVERY step, not only at the end"):
-
-1. **THE EXEMPTION.** tsc's `isTypeAny(type) && (predicate.type === globalObjectType ||
-   globalFunctionType)`, in `narrowByCallPredicateWorker`'s positive branch and in
-   `narrowByInstanceOf`. There is no `globalObjectType` cell in this checker, so
-   `isGlobalObjectOrFunctionType` identifies the type by SYMBOL NAME plus the round-479
-   `builtinLibDecls` clause — a user-declared `Object`/`Function` keeps narrowing. It had to be
-   placed FIRST in the positive branch, because the relation arm below decides it the other way:
-   `any` is assignable to everything, so `checkTypeRelatedTo(targetType, any)` holds and the guard
-   was handing back `Function`. **GRID: 0 added / 0 removed on all eight.**
-2. **`instanceof` NARROWS AN `any` SUBJECT.** tsc's `getNarrowedTypeWorker` opens
-   `if (type.flags & AnyOrUnknown) return candidate;`. Ours returned the subject UNCHANGED, and the
-   mechanism is the mirror image of round 838's (b): `isInstanceOfClass` falls back to
-   assignability for a non-`Type.Interface` source, `any` is assignable to everything, so
-   `matches == isMatch` and the positive branch took the "nothing to do" arm. **`anyType` exactly,
-   not `TypeFlags.Any`** — the `error`/`unresolved` sentinels must not acquire a concrete type.
-   **GRID: 0 / 0.** *Round 838's item-1 note ("missing is only the exemption") is therefore
-   incomplete: `instanceof` was not narrowing an `any` subject at all, so there was nothing there
-   to exempt.*
-3. **`checkMemberAccessMissing` READS IT.** Both receiver-typing branches of
-   `cmamGeneralReceiverType` bail the moment `getTypeOfSymbol`/`getTypeOfIdentifier` answers
-   `anyType`, and that bail is also the walker's FP firewall. `cmamNarrowedAnyReceiverType` is the
-   narrowest opening of it: declared type exactly `anyType`, a narrow that actually happened, and a
-   result that is a concrete `Type.Object`. **GRID: 0 / 0.**
-
-**THE CONFORMANCE RESULT, AND A CORRECTION TO THE QUEUE ENTRY'S OWN PREMISE.** Each fixture run as
-a single-file project through the CLI, diffed against its `.errors.txt` summary INCLUDING
-positions: `narrowExceptionVariableInCatchClause` **2 of 2, CLOSED**;
-`narrowFromAnyWithInstanceof` **2 of 2, CLOSED**; `narrowFromAnyWithTypePredicate` **3 of 4** —
-every message byte-identical to the baseline, including `{ type: "foo"; dontPanic(): any; }` as a
-receiver display and the TS2551 spelling suggestions with their TS2728 related info. So **(c) is
-the sole remaining blocker for TWO of the three cases, not three**: the residual is
-`narrowFromAnyWithTypePredicate` line 23, `x()` on a `{}`-narrowed CALLEE — TS2349 "This expression
-is not callable" — which is the CALL path. `getCalleeType` bails on an `any` callee exactly as the
-receiver path bailed, and round 851 measured that bail at **48.4% of every call-expression
-invocation on the compiler profile**, so it is a second widening over a much larger population.
-Deliberately not attempted: the queue says do not take this item as a side effect of anything else,
-and the converse holds too. **`types/any` goes 3 failing of 9 → 1 of 9.**
-
-**WHY THE PREDICTED FP STORM DID NOT ARRIVE — the two mechanisms, because neither was obvious in
-advance and the next widening should be argued against them.** (a) The opening is keyed on *a
-narrow HAPPENED and produced a concrete `Type.Object`*, which is a far smaller population than *the
-receiver is `any`* — the overwhelming majority of `any` receivers in tsc's sources are never
-narrowed. (b) The new population inherits the walker's ENTIRE existing firewall rather than
-bypassing it: `cmamCheckResolvedObjectType`'s base-types bail, its `Type.Reference`-target bail,
-`RUNTIME_PROPERTIES`, `LIB_MIN_TARGET`/`_SOFT` and the enum-flavoured bail all apply to a narrowed
-receiver exactly as to a declared one. Round 792's law is not refuted — a dashboard zero still
-bounds only frequency — it is simply that here the corpus agreed with the dashboard.
-
-**ABLATION — ONE MISTAKE AT A TIME, NINE OF THEM, AND THREE CAME BACK UNDISCRIMINATED (said, not
-hidden).** Harness committed BEFORE ablating (round 789). Discriminating: `A1` drop the
-type-predicate exemption → 1 pin; `A2` drop the `instanceof` exemption → 2; `A3` drop the
-`instanceof` `any`-narrow → 3; `A4` drop the globals-branch read → 3; `A5` drop the function-local
-branch read → 2, and **A4's and A5's failing sets are disjoint**, which is what makes them two
-seams rather than one. Undiscriminated, each with its cause named:
-* **`A1`'s two property-read pins are shielded by a SECOND gate of my own** — `cmamNarrowedAnyReceiverType`
-  refuses a narrowed `Object`/`Function` as well — so they redden only under the COMBINED `A1A7`
-  (both gates removed, 3 pins). Round 807's redundant-guard mechanism exactly. They are ARM pins,
-  not seam pins, and defence in depth is why.
-* **`A6`, dropping the `narrowed === rawType` early-out, changes NOTHING** — an un-narrowed `any`
-  is a `Type.Intrinsic`, so the `narrowed !is Type.Object` test below already refuses it. It is a
-  perf early-out, not a guard.
-* **`A7` (admit a `Type.Reference` narrow) and `A9` (admit `error`/`unknown` receivers) are inert
-  on the WHOLE CORPUS — 14,016 / 0 with either refusal deleted.** They are conservatism with no
-  measured consumer. Kept, because round 792's law cuts this way too and they cost nothing, but
-  **recorded as unproven rather than claimed as firewall** — a future round that needs either
-  population can open it knowing no baseline defends it.
-
-**THE PROCESS FINDING, AND IT IS THE ROUND'S MOST EXPENSIVE ONE.** `scripts/grid838.sh` reads
-`build/bench/xtsc-classpath.txt`, and **the file in the tree was a PRE-MODULE-SPLIT one**: its only
-class directory was the ROOT project's `build/classes/kotlin/jvm/main`, which since the split is a
-stale leftover — 582 classes against the core module's 649, and missing `ModeLedger` (round 848),
-`LibTypeCensus` (849) and `CcetSections` (851), so it is a pre-848 compiler. Every capture that
-script produced ran the wrong binary, with **exit 0, a plausible error count and no tell**. This is
-the round-MOD.3 trap and `ab-interleaved.sh`/`ab-warm.sh` already refuse such a file by grepping it
-for the module name; `grid838.sh` did not. It now refuses it, and also refuses a TRUNCATED capture
-("... and N more error(s)", round 811) and an EMPTY one (round 804). **Any grid digest recorded
-between the module split and this round should be treated as unverified.** The digest this round
-records is `84bbe7f0…` for the 46-line compiler-profile capture under grid838.sh's own
-prefix-stripping recipe, and `eccc3408…` for harness's 94 — quoted with the recipe, per round 841.
-
-> **ROUND-853 FOLLOW-UP (2026-08-08) — THE BLAST RADIUS IS ONE CLAIM, AND THIS ROUND'S OWN NUMBERS
-> ARE CORROBORATED.** Enumerating every round between the MOD.3 split and here: only round 848
-> quoted a profile capture, and it was re-measured and STANDS (see the correction on its note).
-> Rounds 843–847 and 849–851 gated on the suite, `cost_gate.py`, `huge_methods.py` and warm A/Bs —
-> `ab-warm.sh`/`ab-interleaved.sh` resolve their classpath freshly from the init script and already
-> refuse a pre-split file, so none of them ever read the stale one. This round's own "0/0 at all
-> three steps" is corroborated from a direction it could not measure from: round 853 ran the STALE
-> pre-848 binary against the fixed one and the compiler-profile output is **byte-identical**, so no
-> step could have been flattered by the stale path. `84bbe7f0…` is confirmed live, and the
-> `59d930db…` of the round-826/836–840 lineage reproduces from the very same capture.
-
-**GATES.** Suite **14,016 / 0 failures / 3 skipped** (14,001 + the 15 new `AnyReceiverNarrowingTest`
-pins), counted per module with `xml.etree` over a fully wiped results dir in all four modules.
-`cost_gate.py` **+0.00% on all 18 counters** — the exemption's `builtinLibDecls` membership test is
-behind a symbol-NAME short-circuit, so only types actually named `Object`/`Function` ever pay it.
-`huge_methods.py --fail-over 0` **exit 0**, census still 0. Eight-profile grid 0/0 at all three
-steps.
-
-> **CORRECTION (round 853, 2026-08-08) — THE `+0.00% ON ALL 18 COUNTERS` IS RETRACTED. IT WAS
-> MEASURED ON A FROZEN BINARY, AND THIS ROUND'S TRUE PRICE IS `narrow.walks` +79.04%.** The stale
-> classpath this round found in `grid838.sh` is in `cost_gate.py` too, and there it is worse:
-> `jvmRuntimeClasspath` resolves DEPENDENCIES only, so the gate PREPENDS the compiler's class dir
-> itself — and it prepended the pre-split ROOT one, which won every load. So the gate has been
-> measuring a frozen pre-MOD.3 compiler, and `+0.00%` was the only answer it could give.
-> Correctly wired (round 853), against the round-838 baseline this round was gated on:
-> **`narrow.walks` 17,851 → 31,961 (+79.04%)**, `globals.lookups` +4.93%, `globals.misses` +4.99%,
-> `typeNode.cacheHits` +4.10%, `typeNode.cacheable` +2.72%, `typeOfExpr.calls` +0.53%.
-> **Attributed by ablation, not by argument:** reverting THIS commit's `Checker.kt` hunk alone and
-> re-running the fixed gate returns **+0.00% on all 18** — so every counter above is (NARROW.2)(c)'s,
-> and rounds 839–851 really did move nothing. The mechanism is the round's own design read
-> forward: `cmamNarrowedAnyReceiverType` is keyed on *a narrow HAPPENED*, which means the walk is
-> launched to find that out, on the `any`-receiver population the walker previously bailed on.
-> **The DIAGNOSTIC verdicts are untouched** — the 0/0 grid and the 14,016/0 corpus stand, and round
-> 853 confirms the compiler-profile output is byte-identical. What is retracted is only the claim
-> that this round was free. Baseline rebaselined at round 853 with this justification; the price is
-> queued as (NARROW.2)(e).
-
-**Round 851 (2026-08-08) — (WARM.5) CLOSED, AND WITH IT THE WARM ARC. THE CALL PATH IS THE FOURTH
-INDEPENDENT SITE TO READ 94% CHECKING WORK / 6% EVERYTHING ELSE, AND THE SIXTH CONSECUTIVE PRICED
-NEGATIVE. NOTHING WAS OPTIMIZED; THE VERDICT IS THE DELIVERABLE.**
-
-**THE OBJECT.** Round 850 attributed `checkArgumentsAgainstSignature` at 4.37% of the warm artifact
-against `ccetSpineLeave`'s 10.8% (round 847), leaving ~60% of the single largest object in a warm
-rebuild — callee resolution, overload selection, the round-793 prologue — unprobed in either
-regime. It turned out **the probe already existed**: `CallSections` (CALL.1, round 758) partitions
-`checkSingleCallExpressionTypes` into 16 rows plus 16 nested sub-measures and already opens on the
-WRAPPER (round 786). What it lacked was what makes a table readable WARM, so this round added
-exactly that: a `COARSE` anchors-only twin (ENTRY / B216 / CALLEE_TYPE / CALL_SIGS, with the nested
-sub-measures made ON-only), an EXIT CENSUS, `--callSectionsCoarse`, and `BenchMain`'s
-`call`/`callcoarse` tiers.
-
-**THE HEADLINE: `checkSingleCallExpressionTypes` = ~618 ms = 8.4% of a warm rebuild** (COARSE arm,
-net; mean probe-free warm 7,368.8 ms, 8 instrumented rebuilds, all 78 files / 46 errors, every
-deterministic counter bit-identical across a tier's 4 draws). Two rows hold 94% of it: **the single
-signature branch 299.5 ms = 4.06%** (of which `checkArgumentsAgainstSignature` 274.5 = 3.72%) and
-**`getCalleeType` 262.4 ms = 3.55%**. Classified by callee, **CHECKING 603 ms = 94%** and the entire
-dedicated-walker layer — the seven-walker prologue, the TS2722 optional-member walker, the TS2347
-walker — **37.7 ms = 0.51% of the artifact = 6%**. Round 850 read 94%/6% for
-`spineCtaM3StatementAnchor` and 98%/2% for `checkPropertyAccessInExpr`; round 733 read 88.4% cold.
-**Four sites, two regimes, one answer.**
-
-**THE PARTITION CHECKS, AND ONE IS THE STRONGEST IN THE ARC.** (1) Against round 847's per-handler
-probe: 8.4% against `ccetSpineLeave`'s 10.82%, i.e. **78%** of the handler — a CONTAINMENT check, so
-≤100% is expected, and the same caveat as round 850's 87%/68% applies (847's probe costs +4,482 to
-+5,670 ms; this one +32 to +258). (2) **Against round 850's independent `arg` probe: it measured
-`checkArgumentsAgainstSignature` at 309 ms = 4.37%; this probe reaches it as three nested rows at
-296 ms = 4.02%. Different round, different denominator, no shared code — 92% agreement.** (3)
-Internal: `getCalleeType` closes 52,413 = invocations exactly, and 52,413 − 25,370 = 27,043 = the
-next row's reach.
-
-**THE EXIT CENSUS — zero new boundaries (round 796), partition check 52,413 of 52,413 EXACT.**
-48.4% of invocations leave at the `any`/error callee bail, 44.3% at the single-signature branch,
-7.0% at the overload branch. **The emit column is 0 EVERYWHERE: not one of 52,413 invocations
-emits a diagnostic on this profile** — the whole 8.4% is verification, which is exactly what a
-clean program should cost. **That is not a deletion argument and must not be read as one** (round
-792: a whole-function pre-gate on `checkMemberAccessMissing` read 0 emitting calls in a
-22,187-call skip set on THIS profile and killed 7 corpus baselines). What it does say is that no
-reordering which merely defers emission-side work can win here — there is none to defer.
-
-**A STANDING CLAIM REFUTED BY 12×.** Round 734 recorded "50.6% of `getCalleeType`'s invocations
-bail" beside "`getCalleeType` costs 474 ms" and inferred half of it was wasted. Warm: **48.4% bail
-and they are 4.1% of the row** — 10.8 ms of 262.4 — because a bailing resolution costs **425 ns
-against 9,004 ns** for a usable one, **21× less**. CLAUDE.md's population-vs-frequency law, fresh
-warm instance; the round-758 claim audit had it at 8–10% and the warm figure is 4.1%.
-
-**NO LEVER CLEARS THE BAND.** Ranked by what deleting it would return: the whole round-793
-seven-walker prologue **0.23%**, the five single-sig dedicated walkers 0.22%, `getCalleeType`'s
-discarded half 0.15% (and round 788 says a memoized skip MOVES), the TS2347 row 0.14%, the TS2722
-walker 0.12%. Everything at or above 1% is the type system: the argument check 3.72% (round 850
-already opened it — 91% of its argument typing serves arguments that never reach the relation) and
-callee resolution 3.30%.
-
-**THE BOUNDARY, HONESTLY.** The partition is FLAT, so round 850's nesting correction does not
-apply; Δ(ON−COARSE) = 14 ms against a ±5% per-arm spread bounds it to **17–82 ns** and no better
-(17 ns counting every extra timestamp pair, 63 ns counting only partition closes, 82 ns from the
-probe's own in-situ steady state — consistent with each other under round 734's measured 3.5–4.4×
-in-situ over-read). That is why the total is quoted from the **COARSE** arm, which crosses 184,251
-boundaries against ON's 976,944 and so spans only 612–624 ms across that whole range.
-
-**ABLATION — SIX SEAMS, ONE MISTAKE AT A TIME (round 807), HARNESS COMMITTED FIRST (round 789).**
-Four discriminated on the first batch (`census-on-only`, `census-row` → 3 pins, `emitted`,
-`nested-on-only`). **Two came back UNDISCRIMINATED and were diagnosed and FIXED rather than
-recorded as coverage**: `coarse-anchor` was blind because the nested sub-measures are ON-only for
-an independent reason, so a COARSE arm has fewer closes whether or not it is coarse (round 807's
-mechanism exactly) — the pin now counts only the PARTITION rows, the population the anchor test
-owns; and `report-order` was blind because the fault lived in `BenchMain`'s own loop, which no test
-can run, so the order was extracted into `measureTier` and a stub build now sees it. Both repaired
-pins fail against their own fault and nothing else.
-
-**WHAT COST THIS ROUND A FULL MEASUREMENT CYCLE — two sequencing traps, both now in CLAUDE.md.**
-(1) The daemon stop must come BEFORE any gradle-invoking gate: `cost_gate.py`'s classpath dump
-re-triggered a test compile that the script's own `./gradlew --stop` + `pkill` then killed
-mid-flight, leaving a WIPED `jvm/test` output dir behind an earlier `BUILD SUCCESSFUL` — both java
-runs died with `ClassNotFoundException` for a class the build log said it compiled. (2) Round 789's
-trap has a second form: committing the harness ONCE is not enough. The `report-order` ablation's
-`git checkout --` on `BenchMain.kt` deleted the `measureTier` extraction, which had been written
-AFTER that commit, and the next build failed on an unresolved reference from a test file the
-ablation did not touch.
-
-**GATES.** Suite **14,000 / 0 failures / 3 skipped** over a fully wiped per-module results dir
-(core 643 XMLs + api 3 + client 2 + daemon 6), against a 13,984 baseline = **+16**, exactly the new
-pins. `cost_gate.py` **every one of 18 counters +0.00%**. `huge_methods.py --fail-over 0` **exit 0,
-census still 0 over the limit** (largest method 7,702 bytecodes) — checked because a new section
-probe grows a hot function. Full table, method and the arc's closing statement:
-`docs/perf/warm-call-attribution.md`.
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 - [x] **(NARROW.2)(a) — CLOSED round 838. An `instanceof` whose RHS is a CONSTRUCTOR VALUE
@@ -1280,23 +1148,28 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   all 20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit both times. Commits
   `61194621`, `9eedc04b`. `docs/perf/warm-tail-attribution.md` § 12.
 
-- [ ] **(WARM.8)(c) — GATE `cpcRequireOnlyOrphans` OUT OF CHECK-ONLY COMPILES: 130.4 ms = 1.72% of a
-  warm rebuild, and the equivalence is BY CONSTRUCTION rather than by census.** It has exactly ONE
-  consumer — `sortedTsFiles.filter { it !in requireOnlyOrphans }.mapNotNull { jsOutputMap[it] }` —
-  and under `--noEmit` `jsOutputMap` is EMPTY by construction, because round 738's gate makes
-  `cpcTransformAndEmit` iterate `if (options.skipEmitOutputs) emptyList()` and that loop is the map's
-  only writer; so `mapNotNull` yields the empty list whatever the filter holds. The change is
-  `if (options.skipEmitOutputs) emptySet() else cpcRequireOnlyOrphans(...)`. **Round 788 needs no
-  census** (nothing else reads the set; it is a pure syntactic scan whose result is discarded) and
-  **round 793 needs no subtraction** (the probe boundaries stay; the block reads ~0). **What must not
-  break:** the corpus fixtures it exists for (`moduleResolutionWithRequire`, `importInsideModule`)
-  run through the EMIT path where `skipEmitOutputs` is false — so the gate is invisible to them, and
-  the implementing round owes a pin that the orphan is still dropped WITH emit plus a check-only
-  control. **Honest bound: this is a CHECK-ONLY lever** — zero in emit mode, so it does not move the
-  CI `bench-3way.sh` ratio, but it moves `--noEmit`, the daemon, and every number this arc produces.
-  Making the walk itself cheap (a `require` substring pre-filter, or hoisting it into the crawl that
-  already reads every file) is a second, larger question this round did not price.
-  `docs/perf/warm-tail-attribution.md` § 12.5.
+- [x] **(WARM.8)(c) — DONE, ROUND 862, AND THE QUEUE ITEM WAS THE SMALLER HALF: `cpcRequireOnlyOrphans`
+  goes **138.7 ms -> 0.0005 ms** and the whole post-checker region **141.9 -> 2.84 ms = 98.0% of the
+  region, 139.1 ms = 1.82% of a warm rebuild** — of which **136.4 ms (1.79%) is an EXACT rewrite
+  that helps EMIT mode identically** and only **2.3 ms (0.03%)** is the check-only gate this item
+  named.** The one-consumer argument was re-established, not inherited, and held (four `grep` hits
+  for the value; ONE write site for `jsOutputMap`, in `cpcTransformAndEmit`, whose loop iterates
+  `emptyList()` under `skipEmitOutputs`). The round's turn came from answering the item's own open
+  question ("whether the walk itself can be made cheap … a second, larger question"): sub-partitioned
+  into its three per-file scans, the function is **87.36% one regex** —
+  `\bdeclare\s+(?:const|var|let|function)\s+require\b`, which begins with a zero-width assertion,
+  so `java.util.regex` gives it no Boyer-Moore prefix search and attempts it at **every one of
+  9,977,097 positions**, where it accepts **0 of 78 files** (the sibling `import\s*\(…` over the same
+  text, which HAS a literal prefix, costs a seventh as much). Landed as an exact hand-written scan
+  anchored on the literal `require` plus a deferral of the `import("…")` pass behind the candidate
+  sets, then the gate on top. Ablation, one mistake at a time: **M1** (drop `require\b`) 3 RED,
+  **M2** (gate inert) 1, **M3** (gate widened to `options.noEmit`) 1, **M4** (pass 2 always skipped)
+  2 — four disjoint failing sets, no redundant guard. Gates: suite **14,072 / 0 / 3**, `cost_gate.py`
+  +0.00% on all 20 at every sub-step, `huge_methods.py --fail-over 0` 0 over the limit, 8-profile
+  grid **added=0 removed=0 both directions** from two class dirs (651 vs 652 classes), and the EMIT
+  tree byte-identical at 78 files. `ab-warm.sh` printed `WIN of 2.3% (B wins 3/3)` and is set aside:
+  arm A's sd is 2.76%. Commits `e83cbbf0`, `3373abc0`, `e5db39c8`, `eb654437`.
+  `docs/perf/warm-tail-attribution.md` § 13.
 
 - [x] **(WARM.6) — DONE, ROUND 859. THE TAIL IS FLAT WARM TOO — round 801's cold verdict survives
   the regime change, which was not known.** The ~416 tail passes are 1,530 ms = 20.3% of the warm
