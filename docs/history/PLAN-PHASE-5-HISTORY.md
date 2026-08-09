@@ -36916,3 +36916,79 @@ warm rebuild, a 66.1% fall**.** `docs/perf/warm-flow-graph-attribution.md`.
   truncated or empty capture); compiler-profile **emit tree byte-identical, 78 files**. Round-851 order
   throughout; the tree was committed before the ablation (round 789) and is clean after it. Commits
   `ae84496e`, `035446ea`, `2cee9cf5`, `538aac53`.
+
+**Round 865 (2026-08-09) — (WARM.12): **52.3% OF EVERY FLOW NODE THIS COMPILER MINTS IS NEVER READ BY
+ANY CONSUMER — AND IT IS A PRICED NEGATIVE.** The implementable share is **22.0% of the minting walk =
+43 ms = 0.63% of a warm rebuild**, under the floor, and the failure direction there is inverted from
+round 864's. Nothing in the flow graph was changed; the census instrument landed.**
+`docs/perf/warm-flow-graph-attribution.md` § 9.
+
+- **COUNTERS, BECAUSE TIMING WAS ALREADY PRICED OUT.** Round 864 § 6 refused to partition the minting
+  walk with the arithmetic (~857,000 AST visits x round 850's warm 97-202 ns = **83-173 ms of boundary
+  against a 196 ms row** — the instrument would BE the measurement). `--flowCensus` registers every
+  `nextId++` against its FILE and its function-like CONTAINER and marks every node any of eight
+  consumer channels looks at. **The denominator is exact: 236,464 registered = 236,587 `flowNodesBuilt`
+  minus one placeholder `FlowStart` per graph**, and a pin asserts that identity so a mint site added
+  later without a registration reddens instead of shrinking the population silently (round 829).
+
+- **THE ANSWER, AND WHY IT IS NOT A PRIZE.** 123,880 of 236,464 nodes (52.3%) are never looked at.
+  But the never-read mass is not concentrated in anything a builder could decline to build:
+  **0.3%** sits in the 52 files whose graph is never read, **22.0%** in the 5,652 of 11,715
+  function-like containers nothing reads, and the remaining ~30% is interleaved with read nodes
+  inside containers that ARE read, where the antecedent chain makes it unskippable. **The perfect-
+  oracle bound is therefore 22.0% of the walk — measured as AST VISITS, not as nodes (round 758) —
+  = 43 ms = 0.63% warm.** Even that assumes the container set is known before the walk, which is the
+  one thing a single forward pass cannot know.
+
+- **WHAT IS LEFT OVER IS ALLOCATION, AND ALLOCATION IS NOT A COST HERE.** A never-read node inside a
+  read container costs exactly one object; round 801 measured 367,189 removed `String` allocations at
+  **0 ms** and round 864 § 6 measured a per-put field write on this same map at **-8.9/+10.5 ms, sign
+  undecided**. The 17,161 unread `FlowUnreachable`s and 24,131 unread `FlowBranchLabel`s (each with an
+  eagerly allocated antecedent list) are that same non-prize.
+
+- **AND THE FAILURE DIRECTION IS INVERTED FROM ROUND 864's M4.** There a MISSING side-table entry
+  degrades to `flowAt`'s map fallback — completeness was a SPEED property. For the flow GRAPH a
+  missing node makes `flowAt` answer `null`, the reference is not narrowed, and the compiler emits a
+  FALSE POSITIVE. So laziness here may not omit, it must defer-and-build, reconstructing
+  `FlowStart.outerFlow` first; and round 855's refutation kills the obvious shortcut (a name-keyed
+  "could this root ever be narrowed" pre-filter refuses 0 of 14,117 openings).
+
+- **THREE BY-PRODUCTS.** **`FlowArrayMutation` is minted NOWHERE** — the class exists and six walkers
+  carry a sealed `when` arm for it, and `grep` finds no constructor call outside its own declaration.
+  **`FlowUnreachable`: 17,161 minted, exactly 0 read** over 78 program files. **Declaration files mint
+  183 nodes in total and none is ever read** — the "we build flow graphs for `.d.ts` for nothing"
+  intuition is correct and worth 0.08%.
+
+- **THE PROBE'S OWN COST IS BELOW THE ROW'S MEASUREMENT FLOOR, AND THE TWO READINGS DISAGREE IN SIGN**
+  (rotated interleave before/after/after/before, 2 instrumented draws each): all-draw **234.94 vs
+  261.26 ms (+26)**, second draws **201.32 vs 188.14 (-13)**. The row's own spread is **187.9-335.9 ms,
+  a factor of 1.8** — more than an order of magnitude larger than ~1.5 M not-taken branches could cost.
+  Round 846's first-draw-is-slowest law holds 4/4, and the second draws bracket round 864's quoted
+  196.3 ms in BOTH arms, which is the cross-check that the row is where it was left.
+
+- **ABLATION, FIVE FAULTS ONE AT A TIME (round 807), 56 pins per arm — and the FIRST batch is the part
+  worth recording.** Final: **M1** (a mint site unregistered) 2 RED, uniquely the per-KIND pin; **M2**
+  (inventory opened after the first mint) 2, uniquely the foreign-node identity pin; **M3** (the main
+  walk stops reporting) 1; **M4** (the walk-volume axis container-blind) 1; **M5** (the touch gate
+  inert) 1 — every arm uniquely its own, no two failing sets coinciding. But as first written **M1 and
+  M2 reddened the SAME two pins** (no attribution) and **M3 and M5 were GREEN**: M3 because `flowAt`'s
+  hand-out observes the same ENTRY node through a different channel, so deleting the hook that walks
+  the whole CHAIN left every assertion satisfied — round 807's redundant-signal mechanism seen from the
+  pin side; **M5 because the `if (!on) return` inside `mint`/`visit`/`touch` is a REDUNDANT GUARD**,
+  every call site being `if (FlowCensus.on) …` already. Reported as such, and the arm re-cut to remove
+  one gate at both places that implement it.
+
+- **A FIXTURE LAW PAID FOR AGAIN.** The census read **`read 0`** on its first working run because the
+  fixture guarded with `if (x) { … }`: since round 785 that writes the narrow into `currentLocalTypes`
+  for the THEN branch and **no flow walk happens at all**. CLAUDE.md states this for enum and
+  argument-position fixtures (round 796); the flow census is its third consumer. Use an early return.
+
+- **GATES.** Suite 14,094 -> **14,100 / 0 failures / 3 skipped** (real XML parser, all four modules);
+  `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **0 over the limit**,
+  659 classes; 8-profile grid **`added=0 removed=0` in BOTH directions** (46x7 / 94, no truncated or
+  empty capture) from TWO class dirs with round 853's positive control asserted in both directions —
+  the after dir must contain `FlowCensus`, the before dir must not, so a mis-pointed dir cannot make
+  the arms agree by being one build twice. Round-851 order throughout; the harness was committed
+  before the ablation (round 789) and the tree is clean after it. Commits `6832bf20`, `01eb02d4`,
+  `80ab6723`, `e3241623`.
+

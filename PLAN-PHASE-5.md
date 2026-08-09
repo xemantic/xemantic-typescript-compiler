@@ -20,6 +20,88 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 875 (2026-08-09) — (WARM.22): THE INV.4 REACH MACHINERY, CENSUSED AS ONE POPULATION AND **PRICED
+NEGATIVE IN EVERY MECHANISM IT CONTAINS**. Round 874 § 29 handed this over as ONE DESIGN QUESTION rather than a
+candidate list — ~338 ms = 5.5% of a warm rebuild over 43 classifiers whose largest is 0.86%, so only a change
+to the SHARED mechanism could clear the bar. The three candidate answers are now measured rather than argued,
+and none of them survives. `docs/perf/reach-machinery.md`.
+
+- **(A) THE CENSUS FIRST (round 801's order) — the instrument § 29 commissioned.** `ReachCensus`
+  (`--reachCensus`, `BenchMain` tier `reach`) counts consults / memo hits / ascents / **EDGE EVALUATIONS** per
+  classifier, injected at the two anchors every classifier carries verbatim by `scripts/round875_instrument.py`,
+  **which also GENERATES the id table from the same scan** so the counters and the names cannot drift. Per warm
+  rebuild: **1,909,715 consultations** (2.23 classifiers per node), **1,740,677 ascents**, **3,324,977 edge
+  evaluations**, **memo hit rate 8%**. Deterministic on every rebuild of every process, which is its own
+  falsifier. `Tav` reads 15,887 against round 874's 381,670 — a free positive control that the census is
+  reading a live post-fix binary.
+
+- **(B) 23 OF THE 43 CLASSIFIERS HAVE A MEMO HIT RATE OF EXACTLY 0%, AND THAT IS NOT A DEFECT.** A classifier
+  is consulted **at most once per node** — its handler dispatches once — so a node's own status is never asked
+  twice and the memo can NEVER answer the query it was written for. Its only job is to TERMINATE AN ASCENT, and
+  it does that well: `folds/consult` is **1.74**, not the tree depth. Anyone reading "8% hit rate" as a cache to
+  fix should stop there.
+
+- **(C) THE INSTRUMENT WAS WRONG FIRST AND A PIN SAID SO.** The first injection put the fold counter at the tail
+  (`folds += chain.size`), which is right for the 36 classifiers whose ascent pushes every node and wrong for
+  the five whose ascent evaluates the edge and pushes only when it CONTINUES — there `chain.size` is one short
+  per ascent. `folds >= misses` failed on its first run; the counter moved to the edge call itself. **The wrong
+  instrument read 2,956,401 edge evaluations, the right one 3,324,977** — a 12% under-count, in the direction
+  that would have made this round's negative verdict look stronger than it is.
+
+- **(D) (a) PUSH-BASED STATUS MAINTAINED BY THE WALK — NEGATIVE BY ARITHMETIC, 11.1x.** The obvious answer (the
+  spine already knows the path, so keep each classifier's status on a per-depth stack) must compute a status for
+  EVERY classifier at EVERY node it descends through, because it cannot know which handler will ask: 43 x
+  856,962 = **36.9 M** edge evaluations against the pull scheme's **3.32 M**. Sixteen of the 43 are consulted
+  under 1,000 times a rebuild and one is consulted ONCE. At 13.3 ns that is **+447 ms on a family that costs
+  361**. The census also shows the pull scheme is already most of a push one: an ascent typically finds the
+  parent memoized, which is the state a push scheme would have kept.
+
+- **(E) (c) THE `kindId` TABLESWITCH CONVERSION IS WHAT A STATIC READING WOULD HAVE COMMITTED AN ARC TO, AND IT
+  IS DEAD.** Every edge predicate is a `when (parent) { is X -> }` LINEAR `instanceof` chain — `spineAiEdge` 119
+  arms, `spineNaEdge` 114, `spineSyEdge` 111, `spineFpEdge` 106, down to 41 — `NodeBase.kindId` exists for
+  exactly this dispatch (M0.2) and round 803 split `forEachChild` on that key for **-3.93%, 5/5 pairs**. Three
+  million evaluations a rebuild through chains of tens of type tests is a textbook prize. **`--reachAmp N`
+  measures 13.3 ns per evaluation** (`r` EXTRA evaluations of the SAME edge on the SAME (parent, child) under
+  ONE pair, two values of `r` cancelling the boundary — round 759), so the ENTIRE compute of every edge
+  predicate in the family is **3,324,977 x 13.3 ns = 44 ms = 0.67%** — and the decisive part is a RATIO:
+  **106 arms costs the SAME as 49** (Ce 11.5 / 13.3 / 14.7, Fp 10.6 / 13.5 / 13.9 / 13.2 ns across two
+  processes, ABBA-rotated). The slope in arms is indistinguishable from zero, so a tableswitch cannot take most
+  of even the 0.67%.
+
+- **(F) THE FIT'S OWN FALSIFIER DID ITS JOB, AND THE ARITHMETIC ONE TOO.** Seven of the eight r-pairs imply a
+  timestamp-pair boundary of **73-132 ns**, inside round 850's independently measured 97-202 ns; the eighth
+  implies **1.7 ns**, physically impossible, so that draw is discarded by a criterion that has nothing to do
+  with the answer it would have given. And `ampCalls == r * ampBrackets` with `ampSink % r == 0` (each bracket
+  contributes 0 or `r`, so a hoisted call breaks the identity) read OK in all eight.
+
+- **(G) (b) PACKING THE 43 PER-FILE nodeId-KEYED MEMOS IS THE ONLY SURVIVOR AND IS STILL <= ~0.8% — QUEUED WITH
+  THAT NUMBER ATTACHED.** At 2.23 classifiers per node a transposition (one row of 43 statuses per node) lets
+  that many consultations share a cache line instead of taking that many misses, and it removes **36.9 MB** of
+  `ByteArray` allocated and zeroed per rebuild. Ceiling is the ~200 ms of Status/ascent/fold/memo bookkeeping,
+  of which memo cache misses are at most half. Against that it rewrites the memo access of ALL 43 classifiers,
+  every one of which decides whether a diagnostic is CONSIDERED.
+
+- **(H) THE EQUIVALENCE PINS WERE BLIND, AND THE ABLATION IS WHAT FOUND IT (round 813, on schedule).** A5
+  forced the const-ENUM classifier to answer UNREACHED whenever the census is armed — the exact hazard this
+  family has — and reddened **NOTHING**, because that pass emits nothing on the fixture. The fixture now carries
+  one deliberate TS2588 and one TS2693, the equivalence pins assert both codes are PRESENT rather than only that
+  two lists agree (two empty lists agree), and the arm targets the classifiers that own them. Separately, A1 and
+  A2 first reddened the SAME single pin and a ninth pin was added to separate them rather than counting the
+  coincidence as coverage (round 869's rule).
+
+- **(I) A PROCESS NOTE WORTH THE GOTCHA IT EARNED.** The Bash tool caps a command at 10 minutes whatever
+  timeout is requested, so the first seven-arm ablation sweep was KILLED mid-arm and left the ablated
+  `Checker.kt` in the tree with no marker — round 805's hazard exactly, and the tell was `git status` showing a
+  file the round had already committed. Ablation sweeps now run a few arms per invocation.
+
+- **(J) GATES.** Suite **14,229 / 0 failures / 3 skipped** over all four modules (`xml.etree`) = round 874's
+  14,220 + the 9 new pins, exactly. `cost_gate.py` **+0.00% on all 20 counters** (46 errors / 78 files);
+  `huge_methods.py --fail-over 0` **0 over the limit**, 677 classes. **No 8-profile grid**, and the reason is
+  stated rather than assumed: every injected line is guarded by `ReachCensus.on`, which the negative-control pin
+  and its own ablation arm (A7) both police, and the two equivalence pins compare full diagnostic-code lists
+  with the census armed and disarmed, non-vacuously in both directions. Commits `a637c6eb`, `f4911304` and the
+  pin/doc commits.
+
 **Round 874 (2026-08-09) — (WARM.21): THE WARM LEAF PROFILE RE-TAKEN A THIRD TIME. BY ROWS THE VEIN IS
 EXHAUSTED — NOTHING NEW REPLICATES ABOVE 1% AND ROWS 21-60 ARE ALL 19-32 ms. BY **FAMILIES** IT IS NOT, AND
 THAT READING IS THE ROUND'S REAL INSTRUMENT: the largest thing in the warm compile is the INV.4 migration's
@@ -726,78 +808,3 @@ it is **+715 ms = +14.4% of the warm `checkSpine` row, 8/8 sign-consistent.**
   throughout: every gradle step ran before each daemon stop, and the measuring scripts refuse to start
   unless the class dir holds `BenchGatedTierTest.class`, a class that did not exist before this round
   (round 853's positive control). Commits `e36b9b1c`, and this round's follow-ups.
-
-**Round 865 (2026-08-09) — (WARM.12): **52.3% OF EVERY FLOW NODE THIS COMPILER MINTS IS NEVER READ BY
-ANY CONSUMER — AND IT IS A PRICED NEGATIVE.** The implementable share is **22.0% of the minting walk =
-43 ms = 0.63% of a warm rebuild**, under the floor, and the failure direction there is inverted from
-round 864's. Nothing in the flow graph was changed; the census instrument landed.**
-`docs/perf/warm-flow-graph-attribution.md` § 9.
-
-- **COUNTERS, BECAUSE TIMING WAS ALREADY PRICED OUT.** Round 864 § 6 refused to partition the minting
-  walk with the arithmetic (~857,000 AST visits x round 850's warm 97-202 ns = **83-173 ms of boundary
-  against a 196 ms row** — the instrument would BE the measurement). `--flowCensus` registers every
-  `nextId++` against its FILE and its function-like CONTAINER and marks every node any of eight
-  consumer channels looks at. **The denominator is exact: 236,464 registered = 236,587 `flowNodesBuilt`
-  minus one placeholder `FlowStart` per graph**, and a pin asserts that identity so a mint site added
-  later without a registration reddens instead of shrinking the population silently (round 829).
-
-- **THE ANSWER, AND WHY IT IS NOT A PRIZE.** 123,880 of 236,464 nodes (52.3%) are never looked at.
-  But the never-read mass is not concentrated in anything a builder could decline to build:
-  **0.3%** sits in the 52 files whose graph is never read, **22.0%** in the 5,652 of 11,715
-  function-like containers nothing reads, and the remaining ~30% is interleaved with read nodes
-  inside containers that ARE read, where the antecedent chain makes it unskippable. **The perfect-
-  oracle bound is therefore 22.0% of the walk — measured as AST VISITS, not as nodes (round 758) —
-  = 43 ms = 0.63% warm.** Even that assumes the container set is known before the walk, which is the
-  one thing a single forward pass cannot know.
-
-- **WHAT IS LEFT OVER IS ALLOCATION, AND ALLOCATION IS NOT A COST HERE.** A never-read node inside a
-  read container costs exactly one object; round 801 measured 367,189 removed `String` allocations at
-  **0 ms** and round 864 § 6 measured a per-put field write on this same map at **-8.9/+10.5 ms, sign
-  undecided**. The 17,161 unread `FlowUnreachable`s and 24,131 unread `FlowBranchLabel`s (each with an
-  eagerly allocated antecedent list) are that same non-prize.
-
-- **AND THE FAILURE DIRECTION IS INVERTED FROM ROUND 864's M4.** There a MISSING side-table entry
-  degrades to `flowAt`'s map fallback — completeness was a SPEED property. For the flow GRAPH a
-  missing node makes `flowAt` answer `null`, the reference is not narrowed, and the compiler emits a
-  FALSE POSITIVE. So laziness here may not omit, it must defer-and-build, reconstructing
-  `FlowStart.outerFlow` first; and round 855's refutation kills the obvious shortcut (a name-keyed
-  "could this root ever be narrowed" pre-filter refuses 0 of 14,117 openings).
-
-- **THREE BY-PRODUCTS.** **`FlowArrayMutation` is minted NOWHERE** — the class exists and six walkers
-  carry a sealed `when` arm for it, and `grep` finds no constructor call outside its own declaration.
-  **`FlowUnreachable`: 17,161 minted, exactly 0 read** over 78 program files. **Declaration files mint
-  183 nodes in total and none is ever read** — the "we build flow graphs for `.d.ts` for nothing"
-  intuition is correct and worth 0.08%.
-
-- **THE PROBE'S OWN COST IS BELOW THE ROW'S MEASUREMENT FLOOR, AND THE TWO READINGS DISAGREE IN SIGN**
-  (rotated interleave before/after/after/before, 2 instrumented draws each): all-draw **234.94 vs
-  261.26 ms (+26)**, second draws **201.32 vs 188.14 (-13)**. The row's own spread is **187.9-335.9 ms,
-  a factor of 1.8** — more than an order of magnitude larger than ~1.5 M not-taken branches could cost.
-  Round 846's first-draw-is-slowest law holds 4/4, and the second draws bracket round 864's quoted
-  196.3 ms in BOTH arms, which is the cross-check that the row is where it was left.
-
-- **ABLATION, FIVE FAULTS ONE AT A TIME (round 807), 56 pins per arm — and the FIRST batch is the part
-  worth recording.** Final: **M1** (a mint site unregistered) 2 RED, uniquely the per-KIND pin; **M2**
-  (inventory opened after the first mint) 2, uniquely the foreign-node identity pin; **M3** (the main
-  walk stops reporting) 1; **M4** (the walk-volume axis container-blind) 1; **M5** (the touch gate
-  inert) 1 — every arm uniquely its own, no two failing sets coinciding. But as first written **M1 and
-  M2 reddened the SAME two pins** (no attribution) and **M3 and M5 were GREEN**: M3 because `flowAt`'s
-  hand-out observes the same ENTRY node through a different channel, so deleting the hook that walks
-  the whole CHAIN left every assertion satisfied — round 807's redundant-signal mechanism seen from the
-  pin side; **M5 because the `if (!on) return` inside `mint`/`visit`/`touch` is a REDUNDANT GUARD**,
-  every call site being `if (FlowCensus.on) …` already. Reported as such, and the arm re-cut to remove
-  one gate at both places that implement it.
-
-- **A FIXTURE LAW PAID FOR AGAIN.** The census read **`read 0`** on its first working run because the
-  fixture guarded with `if (x) { … }`: since round 785 that writes the narrow into `currentLocalTypes`
-  for the THEN branch and **no flow walk happens at all**. CLAUDE.md states this for enum and
-  argument-position fixtures (round 796); the flow census is its third consumer. Use an early return.
-
-- **GATES.** Suite 14,094 -> **14,100 / 0 failures / 3 skipped** (real XML parser, all four modules);
-  `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **0 over the limit**,
-  659 classes; 8-profile grid **`added=0 removed=0` in BOTH directions** (46x7 / 94, no truncated or
-  empty capture) from TWO class dirs with round 853's positive control asserted in both directions —
-  the after dir must contain `FlowCensus`, the before dir must not, so a mis-pointed dir cannot make
-  the arms agree by being one build twice. Round-851 order throughout; the harness was committed
-  before the ablation (round 789) and the tree is clean after it. Commits `6832bf20`, `01eb02d4`,
-  `80ab6723`, `e3241623`.
