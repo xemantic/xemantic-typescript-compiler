@@ -79,6 +79,18 @@ class ReachCensusTest {
         }
         const c = new C()
         c.method({ kind: 1 }, { size: 2 })
+        // Two DELIBERATE errors, and they are what makes the equivalence pins
+        // able to fail at all. Round 813: a pin that stays green under its own
+        // ablation is as often BLIND as the thing it guards is redundant — and
+        // this fixture's first version was exactly that, because the classifier
+        // the ablation perturbed belongs to a pass that emits nothing here, so
+        // forcing it to answer UNREACHED changed no byte of the output. One
+        // error per classifier the ablation targets: TS2588 for the
+        // const-assignment pass and TS2693 for the type-as-value pass.
+        const frozen = 1
+        frozen = 2
+        interface OnlyAType { size: number }
+        const asValue = OnlyAType
     """.trimIndent()
 
     /**
@@ -195,10 +207,13 @@ class ReachCensusTest {
         val armed = runCensus()
         val plain = diagnose(source).map { it.code }
         assert(armed == plain)
-        // …and the comparison is not vacuous: the fixture really does compile
-        // to something the reach machinery had to walk.
+        // …and the comparison is not vacuous in EITHER direction: the fixture
+        // really does compile to something the reach machinery walked, and it
+        // really does emit the two diagnostics the ablation removes.
         val (calls, _, _) = totals()
         assert(calls > 0L)
+        assert(2588 in plain)
+        assert(2693 in plain)
     }
 
     @Test
@@ -224,6 +239,8 @@ class ReachCensusTest {
         val amplified = runCensus(amp = 8)
         val plain = diagnose(source).map { it.code }
         assert(amplified == plain)
+        assert(2588 in plain)
+        assert(2693 in plain)
     }
 
     @Test

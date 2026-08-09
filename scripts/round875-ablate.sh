@@ -96,16 +96,33 @@ new='''        val r = ReachCensus.amp
 open(p,'w').write(s.replace(old,new,1))
 EOF
        ;;
-    # A5 — the census PERTURBS the compile it measures: with it armed, one
-    # classifier answers UNREACHED. Only the equivalence pins can see it, and it
-    # is the mistake this whole family's hazard is made of (a reach classifier
-    # decides whether a diagnostic is considered at all).
+    # A5 — the census PERTURBS the compile it measures: with it armed, the
+    # const-assignment classifier answers NONE. Only the equivalence pins can
+    # see it, and it is the mistake this whole family's hazard is made of (a
+    # reach classifier decides whether a diagnostic is considered at all).
+    #
+    # It targets `Ca` and not `Ce` for the reason round 813 gives: the first
+    # version of this arm perturbed `Ce`, whose pass emits NOTHING on the
+    # fixture, so it reddened nothing and the equivalence pin read as covered
+    # while being blind. The fixture now carries one deliberate TS2588 for this
+    # arm and one TS2693 for A6.
     A5) python3 - <<'EOF'
 p='xemantic-typescript-compiler-core/src/commonMain/kotlin/Checker.kt'
 s=open(p,errors='replace').read()
-old='        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CE]++\n'
+old='        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CA]++\n'
 assert s.count(old)==1
-new=old+'        if (ReachCensus.on) return CE_NONE\n'
+new=old+'        if (ReachCensus.on) return CA_NONE\n'
+open(p,'w').write(s.replace(old,new,1))
+EOF
+       ;;
+    # A6 — the same mistake in a SECOND pass, because one equivalence failure
+    # could be a property of one classifier rather than of the pin.
+    A6) python3 - <<'EOF'
+p='xemantic-typescript-compiler-core/src/commonMain/kotlin/Checker.kt'
+s=open(p,errors='replace').read()
+old='        if (ReachCensus.on) ReachCensus.calls[ReachCensus.TAV]++\n'
+assert s.count(old)==1
+new=old+'        if (ReachCensus.on) return TAV_UNREACHED\n'
 open(p,'w').write(s.replace(old,new,1))
 EOF
        ;;
@@ -114,7 +131,7 @@ EOF
 }
 
 ARMS=("$@")
-[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5)
+[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5 A6)
 
 for arm in "${ARMS[@]}"; do
   echo "== $arm dry-run $(date)" | tee -a "$OUT/log"
