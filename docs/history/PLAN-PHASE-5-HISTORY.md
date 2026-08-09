@@ -1,4 +1,178 @@
 **Round 852 (2026-08-08) — (NARROW.2)(c) CLOSED. THE HIGHEST-FP-RISK ITEM IN THE QUEUE MOVED THE
+
+**Round 854 (2026-08-08) — (NARROW.2)(e) CLOSED AS OUTCOME (c): ROUND 852's +79% NARROWING WALKS
+ARE **1.91% OF A WARM REBUILD** AND **A QUARTER OF ALL NARROWING WORK IN THE COMPILER**, AND
+**85.6% OF IT IS SPENT ON `any` RECEIVERS THE FLOW NEVER NARROWS.** The first priced POSITIVE
+after six consecutive priced negatives — and the round deliberately stops at the measurement, with
+the implementation queued as (NARROW.2)(f) carrying a CEILING rather than a promise.**
+
+**WHY THE OBVIOUS INSTRUMENT WAS ABANDONED IN THE FIRST TEN MINUTES.** The queue said to difference
+`--passTiming`'s `narrowWalk` row between an ablated build and HEAD. That row reads **1,423 /
+1,460 / 1,602 ms across three runs of the SAME binary** (±6–9%, i.e. ±90–150 ms), which is the same
+order as the object being weighed — so an arm difference would have been noise dressed as an
+answer, and one rebuild per arm would have been spent finding that out. The span was taken **where
+the cost is incurred** instead: one timestamp pair around `cmamNarrowedAnyReceiverType`'s call to
+`getNarrowedTypeForReference`, plus the delta of `narrowWalkNanos` across the same call (the walk
+body ALONE, excluding the tier-3 shadow bookkeeping that exists only under the probe), plus the
+produced-vs-consumed counts round 801 demands *before* any timing is read as a prize.
+
+**THE POPULATION — deterministic, bit-identical across all six instrumented runs:**
+`openings=14117  narrowed=1345 (9.5%)  accepted=1051 (7.4%)`. **`openings` matches round 853's
+`+14,110` walk delta**, so the ablation-attributed counter and this census are one population
+measured two ways — the cross-check that makes the rest of the round quotable. On this profile
+those 1,051 accepted receivers emit **nothing** (round 852's grid is 0/0, byte-verified by 853);
+what they buy is the conformance result, which this profile does not contain.
+
+**THE PRICE.** Cold (3 reps): `span` **435 ms**, `walkOnly` **381 ms**, against a whole
+`narrowWalks` row of **1,451 ms** — the opening is **26.3% of every narrowing walk the compiler
+performs**, and that RATIO (26.3 / 26.7 / 25.9%) is far steadier than either absolute, which is how
+it should be quoted. Warm, the shipping artifact's regime (round 843), `BenchMain <proj> 2 5 full`,
+probe-free median rebuild **7,664 ms**, every iteration 78 files / 46 errors: `walkOnly` **146 ms =
+1.91%**, `span` 185 ms = 2.41%, and the opening is **24.5% of warm narrowing** against 26.3% cold.
+Two regimes, one answer — including the wasted share, **85.6% warm vs 85.4% cold**.
+
+**THE VERDICT IS (c), AND THE TWO STANDING LAWS BOTH HAD TO BE CHECKED RATHER THAN CITED.**
+(1) **Round 788 does not rescue it:** `narrow.memoServed` moved **42,766 → 42,867, i.e. +101**, for
++14,110 launched walks — nobody else was going to ask, so the work is ADDED and deleting it deletes
+it rather than deferring it to the next asker. (2) **Round 759's law runs the OTHER way here.**
+"What you could skip cheaply is what was already cheap" holds only when the exit predicate and the
+cost share a cause; here the predicate is *did the flow narrow* and the cost is *how far the walk
+traversed*, and the **90.5% that answer `any` carry 85.4% of the cost**. Count share and cost share
+coincide for once — that is exactly the assumption that cost rounds 758 and 759 their predictions,
+in the opposite direction, so it was measured.
+
+**WHAT WAS DELIBERATELY NOT DONE, AND WHY IT IS NOT THE RECON-ONLY FAILURE.** No pre-test was
+built. The prize is a **CEILING of 1.63% warm** — what a *perfect* oracle returns — while the
+concrete design (a per-file set of root names reachable by any narrowing flow node) is **coarser**:
+a root narrowed *somewhere* in the file but not on *this* path still walks, and nothing measured
+today says what fraction of the 12,772 it would actually refuse. Against a ±1.0% warm band that
+gap decides the whole item, and it is answerable by a probe that HONOURS NOTHING (the round-792/793
+`--cmamPreGate` shape) for one build. Landing a real gate on this function without that number
+would also be walking into round 792's law head-first: a whole-function pre-gate on
+`checkMemberAccessMissing` measured **0 emitting calls in a 22,187-call skip set on this very
+profile** and still killed **7 corpus baselines**. (f) carries the census instruction, the
+soundness argument, the ~70% go/no-go threshold and the memo re-check.
+
+**WHAT LANDED:** `PassTiming.cmamAny*` (a `detailed`-gated span + walk-only sub-span + the three
+counts, printed by `--passTiming`), `scripts/round854-narrow-price.sh` (committed BEFORE anything
+else, round 789), `NarrowedAnyCensusTest` (4 pins: the accepted population, the REFUSED population
+— which is invisible in the compiler's output and is the whole point — the span's partition
+checks, and a disabled-run negative control), and
+`docs/perf/narrowed-any-opening-price.md`.
+
+**ABLATION — THREE ARMS, ONE MISTAKE AT A TIME (round 807), harness committed before use (789),
+and all three DISCRIMINATE with disjoint-enough failing sets to be three seams rather than one.**
+`A1` drop the `accepted` increment → **1 red** (only the pin that asserts a receiver type was
+produced); `A2` drop the whole `noteCmamAnyOpening` → **3 red**, i.e. every counter-reading pin,
+with the disabled-run control correctly staying GREEN; `A3` invert the `narrowed` predicate →
+**2 red**, the two population pins, which assert `narrowed > 0` and `narrowed == 0` respectively
+and so can only both fail to an inversion. `scripts/round854-ablate.sh` restores the source from an
+EXIT trap and refuses an arm where no test ran (round 808's `GC overhead` arm, which reads exactly
+like "the mistake changed nothing").
+
+**GATES.** Suite **14,020 / 0 failures / 3 skipped** (14,016 + the 4 new pins). `cost_gate.py`
+**all 20 counters +0.00%** — and this is now a FALSIFIABLE zero, since round 853 wired the gate to
+the real binary; the census is counter-neutral by construction (`detailed`-gated). `huge_methods.py
+--fail-over 0` **exit 0**, census 649 classes / 14,547 methods / **0 over the limit**. No 8-profile
+grid: nothing in this round can change a diagnostic, and manufacturing captures to "check" that
+would be the recon-only failure in a different costume (round 853's own rule).
+
+**Round 853 (2026-08-08) — RECORD INTEGRITY. THE GRID's BLAST RADIUS IS *ONE* CLAIM AND IT STANDS;
+THE DIGEST THAT LOOKED LIKE THE SMOKING GUN IS A FOURTH RECIPE LINEAGE — BUT AUDITING THE *OTHER*
+INSTRUMENTS FOUND THE SAME STALE BINARY INSIDE `cost_gate.py`, WHICH MEANS THE COST GATE HAS BEEN
+BLIND SINCE MOD.3 AND ROUND 852 REALLY COST **+79% NARROWING WALKS**. No compiler code changed.**
+
+**THE QUESTION.** Round 852 found `scripts/grid838.sh` reading a `build/bench/xtsc-classpath.txt`
+whose only class dir was the ROOT project's pre-module-split leftover, and closed with *"any grid
+digest recorded between the module split and this round should be treated as unverified."* This
+round establishes which claims that actually touches and re-takes the ones that matter.
+
+**THE ENUMERATION (from the record, not from memory).** MOD.3 landed 2026-08-07 18:17 UTC; the
+stale root class dir was last written 2026-08-07 23:39 UTC — 589 classes against core's 649, no
+`ModeLedger`, no `LibTypeCensus`, so a **pre-848** compiler. Of the rounds since the split, exactly
+**one** quoted a profile capture: **round 848**. Rounds 843–847 and 849–851 gated on the suite,
+`cost_gate.py`, `huge_methods.py` and warm A/Bs, and `ab-warm.sh`/`ab-interleaved.sh` resolve their
+classpath freshly through the `xtscPrintJvmRuntimeClasspath` init script and already refuse a
+pre-split file (round MOD.3) — **`grid838.sh` is the only reader of that file in the tree**
+(`grep`ed across `scripts/`, `build.gradle.kts` and every module script). Round 845's own note
+already says "the 8-profile grid was not run". So: one affected claim, and it is the one the
+prompt suspected.
+
+**THE RE-MEASUREMENT — ROUND 848's 14 ARMS, AND THEY STAND.** `scripts/round853-serve1-arms.sh`
+(committed BEFORE any ablation, round 789) re-runs the sweep with two guards: the module-name check
+on the classpath, and a **positive control on the binary itself** — `ModeLedger`, round 848's own
+class, must be present in the class dir under test, which is precisely what the stale dir failed.
+Baseline ×2 plus all 14 arms on the compiler profile: **every one 46 lines, `trunc=0`,
+`added=0 removed=0`, md5 `84bbe7f0…`** — `--flowScanLegacy`, `--flowScanBogus`, `--flowEagerSet`,
+`--argNarrowGateOff`, `--dispatchGated`, `--ianyGateOff`, `--ianyArgGateOff`, `--cmamPreGate`,
+`--ccetPreGate`, `--verifyDeferSuppression`, `--verifyUnionRetry`, `--verifyLoopRetry`,
+`--verifyImplRelated`, `--workers 4`. **`--flowScanBogus`, whose job is to corrupt the scanner, is
+byte-identical on a binary that provably honours the flag.** Round 848's three-way classification
+is a finding, not an artifact, and its suite-level half (`FlowScan.bogus` defaulted true → 13,902
+tests, exactly 1 failure) was never in doubt — it is a different instrument that never touched the
+classpath file.
+
+**THE DIGEST WAS NOT THE SMOKING GUN — IT WAS A FOURTH LINEAGE.** Round 848 recorded `4090b73e…`
+where this round's verified capture prints `84bbe7f0…`, which reads exactly like two different
+binaries. Hashing the ONE verified capture six ways settles it: `s#.*/src/#src/#` + `sort`
+reproduces **`4090b73e…` exactly**. Round 841 named three live lineages; there are **four**
+(`docs/perf/aot-cache.md` § 11.5 is the table). Round 848's number is exonerated, not retracted.
+
+**AND THE STALENESS COULD NOT HAVE CHANGED THE ANSWER ANYWAY — measured, not argued.** Running the
+stale pre-848 root class dir against the compiler profile prints the **same 46 lines and the same
+`84bbe7f0…`** as today's binary. So rounds 848–852 moved nothing this profile can see, exactly as
+each of them claimed, and round 852's own "0/0 at all three steps" is corroborated from a direction
+it could not measure from. A bonus that costs nothing: the same capture reproduces
+**`59d930db…`**, the round-826/836–840 lineage — so the compiler profile's diagnostics are
+**byte-stable from round 817 to round 853**, ~36 rounds.
+
+**THE GUARD DISCRIMINATES (one mistake at a time, round 807).** Re-introducing exactly the stale
+path — the root class dir substituted for core's in `xtsc-classpath.txt` — makes `grid838.sh` exit
+**1** with `stale (pre-module-split)` **before launching any JVM**; restoring the good file lets it
+proceed to `java`. Positive and negative control in one pair. The stale root `build/classes` tree
+is now **deleted** (nothing in the build produces it — the root has no `src/`, and the only
+reference left is a comment in `grid838.sh`), so a future stale file fails loudly instead of
+silently compiling.
+
+**AND THEN RUNNING THE GATES FOUND THE SAME BUG IN BOTH OF THEM — WHICH IS THE ROUND'S REAL
+DELIVERABLE, BECAUSE ONE OF THEM IS THE INSTRUMENT THAT EXISTS TO NOTICE CHECKER DRIFT.** Deleting
+the root leftover made `huge_methods.py` die with `no class files` — it censused
+`REPO/build/classes/…`, the pre-split path. Worse, `cost_gate.py`'s `resolve_classpath()`
+**PREPENDS** that same root dir to the resolved classpath, and it has to prepend *something*
+because `jvmRuntimeClasspath` resolves DEPENDENCIES only — so the leftover, first on the classpath,
+**was the compiler every gate run has loaded since MOD.3**. That is why every round in the window
+reported `+0.00% on all 18 counters`: a frozen binary cannot drift. Both are fixed to resolve the
+`-core` module and both carry a positive control (`huge_methods.py` refuses the legacy path BY
+NAME; `cost_gate.py` requires `MainKt` under the module dir). A third drift fell out of the same
+stone: `exit 1 when the compile finds errors` (d5ed6276, tsc semantics) means a correctly-wired
+cost gate returns 1 on every dashboard profile — the frozen binary predated it, so the run is now
+judged by the presence of the counter block rather than by `rc`.
+
+**THE COUNTERS HAD NOT STOOD STILL, AND THE ABLATION SAYS WHOSE THEY ARE.** Correctly wired, HEAD
+against the round-838 baseline: **`narrow.walks` 17,851 → 31,961 (+79.04%)**, `globals.lookups`
++4.93%, `globals.misses` +4.99%, `typeNode.cacheHits` +4.10%, `typeNode.cacheable` +2.72%,
+`typeOfExpr.calls` +0.53% (reproduced exactly on a second run — these counters are deterministic).
+**One mistake at a time:** revert round 852's `Checker.kt` hunk alone, rebuild, re-run — **+0.00%
+on all 18**. So the whole delta is **(NARROW.2)(c)**, and rounds 839–851 genuinely moved nothing
+(their `+0.00%` claims are true, they were just unfalsifiable at the time). Mechanism, read off
+round 852's own design: `cmamNarrowedAnyReceiverType` is keyed on *a narrow HAPPENED*, so the walk
+is LAUNCHED to answer that, over the `any`-receiver population the walker used to bail on. Round
+852's diagnostic results are untouched; only "it was free" is retracted. Baseline `--update`d in
+the same commit as this justification, per COST.1, and the price is queued as **(NARROW.2)(e)** —
+this is the round-713 failure class (`+11.5% getTypeOfExpression for one diagnostic, no gate
+noticed`), caught this time only because the instrument was being audited.
+**The JIT half STANDS on the other instrument:** the fixed census reads 649 classes / 14,532
+methods / **0 over the limit**, and `HugeMethodLimitTest` — which locates the classes from a marker
+resource on the TEST classpath and so was never fooled — has been running the same whole-program
+census inside every green suite. CLAUDE.md's "the suite test is the SECOND instrument on purpose"
+paid for itself a second time.
+
+**WHAT THIS ROUND DELIBERATELY DID NOT DO.** No re-run of the 8-profile grid for rounds 843–851 —
+none of them quoted one, and manufacturing captures to "check" claims that were never made would be
+the recon-only failure in a different costume. No attempt to REDUCE (NARROW.2)(c)'s narrowing-walk
+cost: pricing it in wall time and deciding whether the opening can be narrowed is a design round,
+and taking it as a side effect of an audit is exactly what the queue entry for (c) forbade for (d).
+
 EIGHT-PROFILE GRID BY *NOTHING* AT EVERY ONE OF ITS THREE STEPS AND COST THE CORPUS *NOTHING*, AND
 THE ROUND'S MOST EXPENSIVE FINDING IS THAT THE COMMITTED GRID HARNESS HAD BEEN MEASURING A
 FIVE-ROUND-OLD COMPILER.**

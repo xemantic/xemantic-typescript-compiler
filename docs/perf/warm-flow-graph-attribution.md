@@ -43,6 +43,13 @@ into a residue and called "the flow walk".*
 > is not enough for `LinkedHashMap`'s `afterNodeInsertion` to clear this row's
 > draw spread. Reverted rather than kept. § 6.
 >
+> **(5*) ROUND 865 ADDED § 9: the minting walk's own produced-vs-consumed
+> census. 52.3% of every flow node this compiler mints is never read by any
+> consumer — and it is a PRICED NEGATIVE, because only 22.0% of the walk sits
+> in containers nothing reads (43 ms = 0.63% warm, under the floor) and the
+> failure direction there is inverted from (3)'s: a missing flow node is a
+> false positive, not a fallback.**
+>
 > **(5) SO CLAUDE.md's "`Binder.bind` IS MEASURED AND CLOSED — DO NOT RE-OPEN
 > IT" WAS TRUE OF WHAT ROUND 801 MEASURED AND FALSE OF THE REGION.** The cold
 > partition stopped one level short and named its remainder after the thing it
@@ -299,7 +306,222 @@ of a graph the checker requires, has no measurable sub-structure, and cannot be
 partitioned at a price below its own size. **On that, round 801's verdict now
 holds for a measured reason rather than by default.**
 
-## 8. Reproducing
+## 9. (WARM.12) round 865 — the produced-vs-consumed census of the MINTING walk, and why it is a priced negative
+
+*Round 865, 2026-08-09. § 6 above closed the minting walk to timing with an
+arithmetic argument; this section opens it with counters, which is round 736's
+escape and the play that produced both of the last two wins.*
+
+> **HEADLINE.** **52.3% of the flow nodes this compiler mints are never looked
+> at by any consumer** — 123,880 of 236,464 on the compiler profile — and
+> **that is not a prize.** The never-read mass is not concentrated in anything
+> a builder could decline to build: **0.3%** of it is in files nothing ever
+> reads, **22.0%** is in function-like containers nothing ever reads, and the
+> remaining 30% is interleaved with read nodes inside containers that ARE read,
+> where the chain makes it unskippable. The whole implementable population is
+> therefore **22.0% of the walk = 43 ms = 0.63% of a warm rebuild**, below this
+> arc's 1% floor, and it would have to be bought with a LAZY per-container flow
+> graph whose failure direction is inverted from § 5's: a missing side-table
+> entry degrades to a correct fallback, a missing FLOW NODE is a false positive.
+> **Priced negative; nothing was changed in the flow graph.**
+
+### 9.1 The instrument
+
+`--flowCensus` (`FlowCensus`, `SpineDispatch.kt`) registers every `nextId++` in
+`FlowGraphBuilder` against the FILE and the function-like CONTAINER it was
+minted in, and marks every flow node any consumer in the checker ever looks at,
+over eight channels: the two narrowing walkers, `isAssignedAtFlow`,
+`isPostSuperFlowNode`, `evolvingArrayWalkTrips`, `walkAliasedConditionInit`,
+`FlowGraph.flowAt`'s hand-out, and the container/closure-start readers. Off (the
+default) every hook is one static read and a not-taken branch, and nothing is
+retained.
+
+Four laws it is built to obey, each of which has cost this arc a round:
+
+* **Keyed on the MINTS, not on what survives** (round 829). The parts sum to
+  `FrontEnd.flowNodesBuilt` exactly: `236,464 = 236,587 − 123`, the 123 being
+  one placeholder `FlowStart` per graph that the builder's field initializer
+  mints and `build` immediately overwrites. A pin asserts that identity, so a
+  mint site added later without a registration reddens instead of silently
+  shrinking the denominator.
+* **Keyed on boundaries no caller short-circuits** (round 849). Each hook sits
+  where its consumer READS the node, above that consumer's own memo/budget/seen
+  guards.
+* **`FlowNode.id` restarts at 0 in every file**, exactly as `nodeId` does
+  (round 787), so nothing is keyed on it: the inventory is per file and the
+  touched set is an IDENTITY set. That is sound *only* because the `FlowNode`
+  implementations are plain classes and not data classes — round 471's
+  `HashSet<Node>` hazard is about data-class `hashCode()` deep recursion, and
+  `FlowBranchLabel`'s mutable antecedent list would be exactly that hazard the
+  day anyone adds `data` to these declarations.
+* **A count is not a cost** (round 732) — hence the per-container AST-VISIT
+  axis beside the node counts. It is the only column that may be read as a
+  share of the walk, and § 9.3 is why that distinction decides the round.
+
+### 9.2 The census (compiler profile, `--noEmit`, 123 graphs)
+
+```
+files 123 (of which declaration files 45)   minted 236464   read 112584   never read 123880 (52.3%)
+```
+
+| kind | minted | read | never read | read % | of which in a `.d.ts` (minted/read) |
+|---|---:|---:|---:|---:|---|
+| `FlowStart` | 11,668 | 5,730 | 5,938 | 49.1% | 75 / 0 |
+| **`FlowUnreachable`** | **17,161** | **0** | **17,161** | **0.0%** | 0 / 0 |
+| `FlowBranchLabel` | 37,695 | 13,564 | 24,131 | 35.9% | 2 / 0 |
+| `FlowLoopLabel` | 1,295 | 910 | 385 | 70.2% | 0 / 0 |
+| `FlowAssignment` | 45,511 | 28,450 | 17,061 | 62.5% | 102 / 0 |
+| `FlowCondition` | 64,655 | 37,491 | 27,164 | 57.9% | 4 / 0 |
+| `FlowSwitchClause` | 5,970 | 2,008 | 3,962 | 33.6% | 0 / 0 |
+| `FlowCall` | 52,509 | 24,431 | 28,078 | 46.5% | 0 / 0 |
+| **`FlowArrayMutation`** | **0** | 0 | 0 | — | 0 / 0 |
+| **total** | **236,464** | **112,584** | **123,880** | **47.6%** | 183 / 0 |
+
+Consumers, by channel (touch CALLS, so repeats included):
+
+| channel | calls |
+|---|---:|
+| `narrowTypeFromFlow` | 991,970 |
+| `walkAliasedConditionInit` | 219,920 |
+| `FlowGraph.flowAt` (hand-out) | 176,767 |
+| `…FollowLoopEntry` (the mirror) | 64,959 |
+| container / closure starts | 1,538 |
+| `isAssignedAtFlow` | 1,182 |
+| `isPostSuperFlowNode` | 0 |
+| `evolvingArrayWalkTrips` | 0 |
+
+Three by-products worth recording on their own account:
+
+* **`FlowArrayMutation` is minted NOWHERE.** The class exists, the sealed `when`
+  arms that handle it exist in six walkers, and `grep` finds no constructor call
+  outside its own declaration. It is dead weight in the type hierarchy, not in
+  the compile.
+* **`FlowUnreachable` is minted 17,161 times and read ZERO times.** Not "rarely"
+  — exactly zero, over 78 program files.
+* **Declaration files mint 183 nodes in total and none is ever read.** The
+  intuition that we build flow graphs for `.d.ts` files for nothing is correct
+  and worth **0.08%** of the mints.
+
+### 9.3 The decision, and the arithmetic that makes it a negative
+
+The question is not how many nodes are unread but how much of the WALK could
+have been skipped, and those differ by construction: a flow node minted inside a
+container the checker does read is on somebody's antecedent chain and cannot be
+declined individually. So the census reports the population three ways.
+
+| candidate rule | population | share of mints | share of the WALK |
+|---|---:|---:|---:|
+| skip a FILE whose graph is never read | 52 of 123 files | 885 nodes, 0.3% | — |
+| skip a CONTAINER whose flow is never read | 5,652 of 11,715 | 52,248 nodes, 22.0% | **107,985 of 490,565 = 22.0%** |
+| skip every never-read NODE (not implementable) | — | 123,880, 52.3% | — |
+
+**The prize is at most 22.0% of the 196.3 ms minting row = 43 ms = 0.63% of a
+warm rebuild**, and that is a *perfect-oracle* bound: it assumes the container
+set is known before the walk, which is the one thing a single forward pass
+cannot know. The 52.3% headline is worth 1.5% and is not reachable by any rule.
+
+Two further reasons not to spend the round buying it:
+
+* **What is left over is ALLOCATION, and allocation is not a cost here.** Every
+  never-read node inside a read container costs exactly one object; round 801
+  measured the removal of 367,189 `String` allocations at **0 ms**, and round
+  864 § 6 measured a per-put field write on this same map at −8.9/+10.5 ms with
+  the sign undecided. The 17,161 unread `FlowUnreachable`s and the 24,131 unread
+  `FlowBranchLabel`s (each carrying an eagerly allocated antecedent list) are
+  that same class of non-prize.
+* **The failure direction is INVERTED from § 5's.** Round 864's M4 arm
+  established that a MISSING side-table entry degrades to `flowAt`'s map
+  fallback — completeness there is a speed property. For the flow GRAPH itself
+  the opposite holds: a missing flow node makes `flowAt` answer `null`, the
+  reference is not narrowed, and the compiler emits a FALSE POSITIVE. So laziness
+  here may not omit; it must defer and then build, and the deferral has to
+  reconstruct the enclosing flow at the container's definition point
+  (`FlowStart.outerFlow`) before it can build anything. Round 855's refutation
+  applies to the obvious shortcut: a per-file, name-keyed "could this root ever
+  be narrowed" pre-filter refuses **0 of 14,117** openings, because every
+  declaration mints a `FlowAssignment` whose subtree contains the declared name.
+
+**Decision: priced negative, stop.** The instrument lands; the flow graph is
+untouched.
+
+### 9.4 What the round tried to measure and could not
+
+**The probe's own cost is below this row's measurement floor, and both readings
+disagree in sign** (`scripts/round865-probe-cost.sh`, two class dirs in a
+rotated interleave `before, after, after, before`, two instrumented draws each):
+
+| arm | draw 1 | draw 2 | draw 3 | draw 4 | all-draw mean | second draws |
+|---|---:|---:|---:|---:|---:|---:|
+| before (no census) | 300.80 | 211.42 | 236.31 | 191.22 | **234.94** | 201.32 |
+| after (census, flag off) | 335.88 | 188.39 | 332.88 | 187.88 | **261.26** | 188.14 |
+
+All-draw the instrumented arm reads **+26 ms** and on second draws **−13 ms** —
+the same shape as round 864 § 6's `HashMap` non-result, and for the same reason:
+the row's own draw spread is **187.9–335.9 ms, a factor of 1.8**, which is more
+than an order of magnitude larger than any plausible price for ~1.5 M not-taken
+branches. Round 846's first-draw-is-slowest law holds **4/4**. What the second
+draws DO say is that the row is where round 864 left it: 187.9–211.4 ms brackets
+its quoted 196.3 ms in both arms.
+
+### 9.5 The ablation — five faults, one at a time (round 807)
+
+`scripts/round865-ablate.sh`, 56 pins per arm (this round's six plus the
+neighbouring INV.2(b), B464, narrowing and mode-restore classes).
+
+| arm | the fault | RED | uniquely its own |
+|---|---|---:|---|
+| **M1** | `newUnreachable` mints without registering | 2 | `every kind the builder mints is registered` |
+| **M2** | the inventory is opened AFTER the first mint | 2 | `no file's inventory holds a node another file minted` |
+| **M3** | the main narrowing walk stops reporting what it looked at | 1 | `the flow chain of a narrowed reference is reported as read` |
+| **M4** | the walk-volume axis is container-blind | 1 | `a function nothing narrows is reported as an entirely unread container` |
+| **M5** | the touch channel's gate is inert | 1 | `negative control - with the flag off the census records nothing` |
+
+**Every arm has a uniquely-its-own failure and no two failing sets coincide** —
+but only after the pins were re-cut, and the FIRST batch is the part worth
+recording:
+
+* **M1 and M2 originally reddened the SAME two pins**, so neither was
+  attributable. The fix was a per-KIND registration pin (only a lost mint site
+  moves it) and restating the per-file pin as an IDENTITY question — does file
+  A's inventory hold a `FlowStart` whose container is file B's `SourceFile` —
+  which only a late-opened inventory moves.
+* **M3 was GREEN**, and the reason is round 807's redundant-signal mechanism seen
+  from the pin side: `flowAt`'s hand-out observes the same ENTRY node through a
+  different channel, so every assertion about "something was read" survived
+  deleting the hook that walks the whole antecedent CHAIN. The pin now asserts
+  that channel's own counter is live.
+* **M5 was GREEN as first written, and that is a finding about the CODE, not the
+  pin: the `if (!on) return` inside `mint`/`visit`/`touch` is a REDUNDANT GUARD**,
+  because every call site is already `if (FlowCensus.on) …`. Ablating the inner
+  guard alone changes nothing observable. The arm now removes the call-site guard
+  as well — one gate, expressed at the two places that implement it — and the
+  negative control reddens uniquely.
+* One trap the re-cut exposed: **a counter read AFTER the `underCensus` helper is
+  0 on a working instrument**, because the helper resets in its `finally` — the
+  same reading a dead instrument gives. Capture inside the block.
+
+### 9.6 Gates
+
+Suite 14,094 → **14,099 / 0 failures / 3 skipped** (a real XML parser over all
+four modules). `cost_gate.py` **+0.00% on all 20 counters**.
+`huge_methods.py --fail-over 0` **0 over the limit**, 659 classes. The 8-profile
+grid **`added=0 removed=0` in both directions on every profile** (46 × 7 and 94
+for harness, no truncated or empty capture), run from TWO class directories with
+round 853's positive control asserted in BOTH directions — the after dir must
+contain `FlowCensus` and the before dir must not, so a mis-pointed dir cannot
+make the arms agree by being one build twice.
+
+### 9.7 A fixture law this round paid for again
+
+The census read **`read 0`** on its first working run, on a fixture whose narrowed
+reference was inside `if (x) { … }`. Nothing was broken: since round 785 a guard
+in that position writes its narrow into `currentLocalTypes` for the THEN branch,
+so the read is answered with **no flow walk at all**. CLAUDE.md already states
+this for enum and argument-position fixtures (round 796); the flow-node census is
+its third consumer, and the fixture needs an **early return** (or a ternary /
+`&&`) before any flow node is consulted.
+
+## 10. Reproducing
 
 ```bash
 scripts/round864-warm-flow.sh r864-base frontend,frontend 2   # the rows + census
@@ -310,4 +532,13 @@ CP="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(scripts/li
 P=build/bench/tsc-project-637d5746
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --frontEnd $P
 java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt --noEmit --frontEnd --flowIndexLegacy $P
+```
+
+```bash
+# (WARM.12) round 865
+java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
+     --noEmit --flowCensus --frontEnd $P               # the census + the rows
+scripts/round865-grid.sh <before-cls> <after-cls>      # 8 profiles, two class dirs
+scripts/round865-probe-cost.sh <before-cls> <after-cls>  # what the probe costs
+scripts/round865-ablate.sh                             # M1..M5, one at a time
 ```
