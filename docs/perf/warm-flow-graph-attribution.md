@@ -502,8 +502,8 @@ recording:
 
 ### 9.6 Gates
 
-Suite 14,094 → **14,099 / 0 failures / 3 skipped** (a real XML parser over all
-four modules). `cost_gate.py` **+0.00% on all 20 counters**.
+Suite 14,094 → **14,100 / 0 failures / 3 skipped** (a real XML parser over all
+four modules; the § 9.5 re-cut replaced one pin with two, hence +6 not +5). `cost_gate.py` **+0.00% on all 20 counters**.
 `huge_methods.py --fail-over 0` **0 over the limit**, 659 classes. The 8-profile
 grid **`added=0 removed=0` in both directions on every profile** (46 × 7 and 94
 for harness, no truncated or empty capture), run from TWO class directories with

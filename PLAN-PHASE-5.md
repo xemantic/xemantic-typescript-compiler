@@ -86,7 +86,7 @@ round 864's. Nothing in the flow graph was changed; the census instrument landed
   for the THEN branch and **no flow walk happens at all**. CLAUDE.md states this for enum and
   argument-position fixtures (round 796); the flow census is its third consumer. Use an early return.
 
-- **GATES.** Suite 14,094 -> **14,099 / 0 failures / 3 skipped** (real XML parser, all four modules);
+- **GATES.** Suite 14,094 -> **14,100 / 0 failures / 3 skipped** (real XML parser, all four modules);
   `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **0 over the limit**,
   659 classes; 8-profile grid **`added=0 removed=0` in BOTH directions** (46x7 / 94, no truncated or
   empty capture) from TWO class dirs with round 853's positive control asserted in both directions —
