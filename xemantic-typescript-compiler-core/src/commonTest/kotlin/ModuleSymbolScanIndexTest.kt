@@ -166,6 +166,36 @@ class ModuleSymbolScanIndexTest {
         assert(idx == listOf("N"))
     }
 
+    /**
+     * The SAME `Symbol` INSTANCE reachable from two files' `locals` is listed
+     * TWICE — the state `mergeModuleAugmentations` creates when it writes an
+     * augmentation's symbol into the target file's table
+     * (`targetResult.locals[exportName] = augSymbol`), so one instance really
+     * is in two `locals` maps in a real program.
+     *
+     * The scan probed it once per table, which matters because the FIRST-MATCH
+     * position of a later table's entry moves when an earlier occurrence is
+     * dropped. It is built here by hand rather than by the binder because the
+     * binder gives each file its own symbol, so a de-duplicating index is
+     * INDISTINGUISHABLE from a correct one on every other fixture in this class
+     * — which is exactly what the ablation reported before this pin existed
+     * (round 869: a pin with no uniquely-its-own failure is not coverage, so cut
+     * an arm or a pin until it has one).
+     */
+    @Test
+    fun `the same symbol instance in two files is listed twice`() {
+        val results = results(
+            "/proj/a.ts" to "namespace N { export const x = 1 }",
+            "/proj/b.ts" to "const plain = 1",
+        )
+        val shared = results[0].locals["N"]!!
+        results[1].locals["N"] = shared
+        val idx = buildModuleSymbolScanIndex(results)
+        assert(idx.size == 2)
+        assert(idx[0] === shared)
+        assert(idx[1] === shared)
+    }
+
     /** A file with no module symbol contributes nothing, and does not disturb the order. */
     @Test
     fun `a file with no module symbols contributes nothing`() {
