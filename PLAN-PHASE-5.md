@@ -20,6 +20,54 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 872 (2026-08-09) — (WARM.20): THE 279 ms CLIENT JVM IS **7.0 ms** OF KOTLIN/NATIVE, THE "THIN
+CLIENT" WAS NEVER ABOUT THE COMPILER JAR, AND SWAPPING THE ARMS FOUND A CI FALSE-GREEN.** On the 3-file
+project an editor actually generates, a request goes **369 -> 105 ms**. `docs/perf/warm-serve-request-attribution.md` § 10.
+
+- **(A) WHAT EXISTED, CHECKED RATHER THAN ASSUMED (round 857's rule).** The `-client` module has shipped
+  since MOD.4 with a jvm target, opt-in `linuxX64`/`macosArm64` executables and a GraalVM task — and
+  **nothing had ever invoked any of it**. Its `clientLib` staging is not wired into `assemble` (the daemon's
+  `xtscLib` is), no native binary had been built, and `scripts/xtsc` reached only `XtscMainKt`. The K/N
+  client links in **1m23s** to a 3.26 MB binary; the GraalVM arm cannot be built on this box (no GraalVM).
+
+- **(B) THE ARM TABLE, against ONE warm daemon with round 871's constant-time refused request so the compile
+  cancels out.** 12 reps, interleaved and rotated, `EPOCHREALTIME` not `date +%s%N` (the fast arms are
+  single-digit ms and `date` is a fork+exec per timestamp): fork+exec floor **0.9**, **native 7.0**,
+  thin JVM+AOT **105.2**, fat JVM+AOT **277.1**, thin JVM **278.1**, JVM dispatcher **286.9 ms** — round
+  871's 279 ms reproduced. **The prediction that failed: "thin client" named the DEPENDENCY EDGE, and the
+  edge is worth 3%** (287 -> 278). Class loading is lazy, so the dispatcher never touches the 5.6 MB
+  compiler jar when the daemon answers; the cost is the JVM. What the edge is worth is that it makes a
+  NATIVE binary affordable, and that is worth the other 97%. Both AOT arms verified loading from the cache
+  (`-Xlog:class+load`, 1,702 / 2,657 classes) — so the fat arm's ~0 gain is a result, not an uncached run.
+
+- **(C) WHAT IT BUYS, AT BOTH ENDS OF THE RANGE, both arms through the LAUNCHER.** 3-file project
+  **369.2 -> 105.3 ms** (72-74% of the wait); compiler profile 7,195 -> 6,881 ms, which is INSIDE its own
+  +-5% spread and is NOT claimed as a measured effect — the fixed cost is what was measured, and 279 ms of
+  7,150 is 3.9% by arithmetic. Same errors and same digest on both projects (`8ccb2942`, `4090b73e`).
+
+- **(D) SHIPPED: the native arm with a JVM FALLBACK, which is the load-bearing half.** The client depends on
+  `-api` and cannot compile, so it exits `XTSC_CLIENT_UNAVAILABLE` (3) — documented to mean *the request
+  never ran*, never *it ran and found errors*, which is exactly what makes re-running it on the JVM arm
+  safe. Fresh checkout, `clean`, any platform with no binary: `xtsc` still works, and four pins assert it.
+  `XTSC_SOCKET` is named explicitly because the client honours it and the dispatcher does not — deriving the
+  path in bash would be a THIRD derivation, which the both-peers-agree invariant forbids.
+
+- **(E) TWO DEFECTS FELL OUT, AND THEY ARE THE ROUND'S REAL YIELD.** (1) A `--daemon` compile **served by a
+  daemon** exited **0** on a failing project where the one-shot CLI and the in-process fallback both exit 1
+  — `runAsClient` propagated `XTSC_REFUSED` and dropped every other code, so `xtsc`'s answer again depended
+  on whether a daemon happened to be running and CI read a failing compile as a pass. `ExitCodeParityTest`
+  pins the code the server puts IN the response, which was always right; the defect was one layer up.
+  (2) The arm's first build let the client **auto-spawn** a daemon — `AotCacheGuardTest` failed on the
+  missing "no compile server on" message and **a daemon was left running after the suite**. `--no-spawn`
+  now makes the swap a latency change and nothing else.
+
+- **(F) GATES.** Suite **14,188 / 0 / 3 skipped** over all four modules = round 871's 14,165 + the 23 new
+  pins, exactly. `cost_gate.py` and `huge_methods.py` **not required and not run** — nothing in core's
+  `commonMain` changed (daemon `jvmMain` + `jvmTest` + shell). Piped invocation returns on the shipped path
+  and on the client's own spawn path (MOD.5's `dup2`). 8-arm single-mistake ablation, every arm with its own
+  failing set; two honest notes recorded (A2's second red is one mistake with two consequences; A5 is
+  invisible to the real-client pin and is discriminated by the argument pin).
+
 **Round 871 (2026-08-09) — (WARM.19): THE FIRST MEASUREMENT IN THIS ARC TAKEN THROUGH THE ARTIFACT THAT
 SHIPS. A `--serve` REQUEST PAYS **2 ms** OVER AN IN-PROCESS REBUILD; THE **279 ms** A CLIENT SEES IS A FRESH
 CLIENT JVM; AND WHAT A REQUEST RE-DID ACROSS REQUESTS WAS **78 FILE READS + 78 PARSES**, IDENTICALLY FOR AN
