@@ -165,6 +165,26 @@ internal val TIERS = listOf(
     // taken from two: the row's warm draw spread is 41%, the widest in § 3's top
     // twelve.
     "fltm",
+    // (WARM.13) round 866 — the two tiers that make a warm A/B possible inside
+    // ONE process, and neither arms a timing probe at all.
+    //
+    // `gated` runs `SpineDispatch.GATED` (round 732): the spine consults only
+    // `enterTable[kindId]`/`leaveTable[kindId]` instead of all 59 handlers. It
+    // records NOTHING — no timestamps, no counters — so unlike every other tier
+    // here its `ms` is a production-comparable wall time and `overheadMs` is the
+    // GATED-minus-plain delta directly. It is NOT a stand-in for a production
+    // per-kind table: it pays a `when(h)` tableswitch plus a loop and an extra
+    // call frame per KEPT handler that a production table would not, so what it
+    // measures is a LOWER bound on such a table's prize, never an upper one
+    // (`docs/perf/dispatch-table.md` § 8).
+    "gated",
+    // `plain` arms nothing whatsoever — the NULL arm this harness never had. Its
+    // rebuild sits in the tier loop beside `gated`, so `gated,plain,gated,plain`
+    // is a rotated interleave of the two arms in one warm process, rather than a
+    // tier rebuild held against a median taken before it. It must have its OWN
+    // arm in [tierBegin]: the `else` branch ENABLES the pass probe, which would
+    // make the control arm the more expensive one and invert the answer.
+    "plain",
 )
 
 /**
@@ -181,6 +201,11 @@ internal fun tierBegin(tier: String) {
     PassTiming.reset()
     when (tier) {
         "dispatch" -> { SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.PROBE }
+        // (WARM.13) round 866 — the A/B pair. `gated` arms the derived table and
+        // NOTHING else; `plain` arms nothing at all and exists so the control
+        // rebuild sits in the same loop, at the same warmth, as the treated one.
+        "gated" -> { SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.GATED }
+        "plain" -> { /* the null arm: no probe, no counters, no boundaries */ }
         "cta" -> { CtaSections.reset(); CtaSections.mode = CtaSections.ON }
         "ctacoarse" -> { CtaSections.reset(); CtaSections.mode = CtaSections.COARSE }
         "cpa" -> { CpaSections.reset(); CpaSections.mode = CpaSections.ON }
@@ -218,6 +243,19 @@ internal fun tierBegin(tier: String) {
  */
 internal fun tierReport(tier: String): String = when (tier) {
     "dispatch" -> SpineDispatch.report() + "\n== (DISPATCH.1) csv ==\n" + SpineDispatch.csv()
+    // (WARM.13) — a GATED rebuild counts nothing, so `SpineDispatch.report()`
+    // would print an all-zero table and read as a failed measurement. What it
+    // CAN state is the arm it ran, taken from the live `mode` (round 850: an arm
+    // must label itself from its own state, never from its tier name) plus the
+    // table's own shape, which is what makes the arm non-vacuous.
+    "gated" -> "== (DISPATCH.1) gated arm — mode: ${SpineDispatch.mode} " +
+        "(OFF=${SpineDispatch.OFF} PROBE=${SpineDispatch.PROBE} GATED=${SpineDispatch.GATED}) " +
+        "enter ${SpineDispatch.enterTable.sumOf { it.size }}/" +
+        "${SpineDispatch.KINDS * SpineDispatch.enterNames.size} leave " +
+        "${SpineDispatch.leaveTable.sumOf { it.size }}/" +
+        "${SpineDispatch.KINDS * SpineDispatch.leaveNames.size} (handler,kind) pairs kept =="
+    "plain" -> "== (WARM.13) plain arm — no probe armed, mode: ${SpineDispatch.mode}, " +
+        "passTiming: ${PassTiming.enabled} =="
     "cta", "ctacoarse" ->
         CtaSections.report() + "\n== (TYPE.2) csv ==\n" + CtaSections.csv() + "== (TYPE.2) csv end =="
     "cpa", "cpacoarse" ->
