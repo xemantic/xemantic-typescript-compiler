@@ -4240,6 +4240,25 @@ object FrontEnd {
     var nanos: LongArray = LongArray(N)
     var calls: LongArray = LongArray(N)
 
+    /**
+     * (WARM.15) round 868 — the OPEN timestamp of a section's first span and the
+     * CLOSE timestamp of its last, both taken from the same monotonic clock as
+     * [nanos].
+     *
+     * They exist so that a partition can be asserted as an ORDERING — "block k
+     * closes before block k+1 opens, and all of them inside the region they
+     * decompose" — which is a fact about the monotonic clock and therefore
+     * DETERMINISTIC, instead of as a wall-clock ratio over the region's residue,
+     * which over a sub-millisecond region in a shared JVM is a coin flip
+     * (round 867: `PostCheckerPartitionTest` failed once in a 14,120-test suite
+     * on a 272 us region and passed in isolation).
+     *
+     * Recorded inside [close], which already holds both timestamps, so no call
+     * site changes and the OFF path is untouched.
+     */
+    var firstAt: LongArray = LongArray(N)
+    var lastAt: LongArray = LongArray(N)
+
     /** Files read by the crawl, and the total decoded UTF-16 length. */
     var filesRead: Long = 0
     var charsRead: Long = 0
@@ -4323,6 +4342,8 @@ object FrontEnd {
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
+        firstAt = LongArray(N)
+        lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
@@ -4392,7 +4413,10 @@ object FrontEnd {
     @Suppress("NOTHING_TO_INLINE")
     inline fun close(sec: Int, t0: Long) {
         if (mode != ON) return
-        nanos[sec] += PassTiming.nowNanos() - t0
+        val now = PassTiming.nowNanos()
+        nanos[sec] += now - t0
+        if (calls[sec] == 0L) firstAt[sec] = t0
+        lastAt[sec] = now
         calls[sec]++
     }
 

@@ -45,9 +45,12 @@ import kotlin.test.Test
  * fail is an assertion on the partition itself**, taken from a compile that
  * actually crosses [TypeScriptCompiler]'s multi-file path.
  *
- * The residue is therefore asserted as a PARTITION CHECK rather than reported as
- * an unattributed remainder: with the blocks abutting, everything it can contain
- * is the four timestamp pairs themselves.
+ * The partition is therefore asserted STRUCTURALLY — each block records exactly
+ * once, its span nests inside the region it decomposes, and the siblings are
+ * ordered and disjoint — from the open/close timestamps the probe records. Round
+ * 868 replaced the original wall-clock residue RATIO with those relations; the
+ * reason, and what the swap costs, are on
+ * [the four blocks partition the post-checker region].
  *
  * [FrontEnd.mode] is saved and restored, never reset to a guessed default
  * (round 619), and the probe is behaviour-free either way — which the last pin
@@ -139,27 +142,77 @@ class PostCheckerPartitionTest {
     }
 
     /**
-     * …and they must PARTITION it. The blocks abut, so the only thing the
-     * residue can hold is the four timestamp pairs; a boundary moved outside the
-     * region, or a block left unclosed, breaks this and nothing else.
+     * Every span this probe records must lie inside the span it decomposes, and
+     * the siblings must be ORDERED and DISJOINT: block k closes before block
+     * k+1 opens.
+     *
+     * Asserted from [FrontEnd.firstAt] / [FrontEnd.lastAt] — the open and close
+     * timestamps of a section's single span — so every comparison is a fact
+     * about a MONOTONIC clock and holds on any machine at any load. It fails,
+     * deterministically, on the mistakes the region's construction is exposed
+     * to: a `t()` hoisted above the containing region's own `t()`, a `close()`
+     * pushed past its `close()`, two blocks whose spans overlap, or a pair
+     * swapped in source order.
+     */
+    private fun assertNestedChain(outer: Int, blocks: List<Int>) {
+        assert(FrontEnd.calls[outer] == 1L)
+        assert(blocks.all { FrontEnd.calls[it] == 1L })
+        // The timestamps are LIVE, and each section is exactly ONE span: for a
+        // single recorded span `nanos` is `lastAt - firstAt` to the nanosecond.
+        // Without this the relations below would all hold vacuously on an array
+        // of zeros, which is what an inert `firstAt`/`lastAt` would leave.
+        assert(FrontEnd.firstAt[outer] > 0L)
+        assert(FrontEnd.nanos[outer] == FrontEnd.lastAt[outer] - FrontEnd.firstAt[outer])
+        assert(blocks.all { FrontEnd.nanos[it] == FrontEnd.lastAt[it] - FrontEnd.firstAt[it] })
+        // Contained: every block opens after the region and closes before it.
+        assert(blocks.all { FrontEnd.firstAt[outer] <= FrontEnd.firstAt[it] })
+        assert(blocks.all { FrontEnd.lastAt[it] <= FrontEnd.lastAt[outer] })
+        // Ordered and disjoint: k closes before k+1 opens.
+        assert(
+            blocks.zipWithNext().all { (a, b) -> FrontEnd.lastAt[a] <= FrontEnd.firstAt[b] },
+        )
+    }
+
+    /**
+     * …and they must PARTITION it: nested, ordered, disjoint, and summing to no
+     * more than the region that contains them.
+     *
+     * **Round 868 re-cut this pin.** Until then the last assertion was
+     * `residue * 4 < post` — a wall-clock RATIO over a region that measures
+     * ~272 us on this fixture, which is not a pin but a coin flip: round 867's
+     * suite failed it once in 14,120 tests while it passed in isolation, on a
+     * change (a spine-prologue amplification flag, gated off) that cannot reach
+     * this region at all. One stop-the-world pause landing in the residue window
+     * is all it takes. A pin that cries wolf is worse than no pin, because the
+     * day it is right it is already being ignored.
+     *
+     * **What the new form protects, honestly.** MORE on structure: the ratio
+     * could not see a block that OVERLAPS its sibling, nor one whose span
+     * ESCAPES the region, whenever the region was big enough to absorb the
+     * arithmetic — [assertNestedChain] fails on both by construction. LESS on
+     * one thing: an unattributed GAP of real work opened between two blocks (a
+     * `t()` moved fifty lines later) is no longer detected, because bounding a
+     * gap means bounding time and that is exactly what cannot be done reliably
+     * here. `sum <= outer` survives — it is guaranteed by nesting, so it is
+     * structural rather than statistical — and it still catches a boundary that
+     * makes a block report MORE than the region containing it.
      */
     @Test
     fun `the four blocks partition the post-checker region`() = withProbe {
         build()
+        val blocks = listOf(
+            FrontEnd.POST_DIAGS, FrontEnd.POST_NSEXPORTS,
+            FrontEnd.POST_EMITPREP, FrontEnd.POST_OUTPUTS,
+        )
         val post = FrontEnd.nanos[FrontEnd.POST]
-        val sum = FrontEnd.nanos[FrontEnd.POST_DIAGS] + FrontEnd.nanos[FrontEnd.POST_NSEXPORTS] +
-            FrontEnd.nanos[FrontEnd.POST_EMITPREP] + FrontEnd.nanos[FrontEnd.POST_OUTPUTS]
-        // Non-vacuity: the region must have been entered and be non-trivial, or
-        // "the parts sum to the whole" would hold for two zeros.
+        val sum = blocks.sumOf { FrontEnd.nanos[it] }
+        // Non-vacuity: the region must have been entered, or every relation
+        // below would hold for zeros.
         assert(post > 0L)
         assert(sum > 0L)
         // No block may exceed the region that contains it.
         assert(sum <= post)
-        // The residue is four timestamp pairs — generously bounded, because this
-        // pin is about a MISPLACED boundary (which loses a whole block's worth),
-        // not about nanosecond accounting.
-        val residue = post - sum
-        assert(residue * 4 < post)
+        assertNestedChain(FrontEnd.POST, blocks)
     }
 
     /**
@@ -171,18 +224,16 @@ class PostCheckerPartitionTest {
     @Test
     fun `the output block is itself partitioned into four`() = withProbe {
         build()
+        val blocks = listOf(
+            FrontEnd.POST_DEPS, FrontEnd.POST_TOPO,
+            FrontEnd.POST_ORPHANS, FrontEnd.POST_ASSEMBLE,
+        )
         val outputs = FrontEnd.nanos[FrontEnd.POST_OUTPUTS]
-        val sum = FrontEnd.nanos[FrontEnd.POST_DEPS] + FrontEnd.nanos[FrontEnd.POST_TOPO] +
-            FrontEnd.nanos[FrontEnd.POST_ORPHANS] + FrontEnd.nanos[FrontEnd.POST_ASSEMBLE]
-        assert(FrontEnd.calls[FrontEnd.POST_DEPS] == 1L)
-        assert(FrontEnd.calls[FrontEnd.POST_TOPO] == 1L)
-        assert(FrontEnd.calls[FrontEnd.POST_ORPHANS] == 1L)
-        assert(FrontEnd.calls[FrontEnd.POST_ASSEMBLE] == 1L)
+        val sum = blocks.sumOf { FrontEnd.nanos[it] }
         assert(outputs > 0L)
         assert(sum > 0L)
         assert(sum <= outputs)
-        val residue = outputs - sum
-        assert(residue * 4 < outputs)
+        assertNestedChain(FrontEnd.POST_OUTPUTS, blocks)
     }
 
     /**
