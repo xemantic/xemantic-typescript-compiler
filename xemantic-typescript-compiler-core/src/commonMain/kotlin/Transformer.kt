@@ -489,12 +489,16 @@ class Transformer(
         val feJsxT0 = FrontEnd.t()
         jsxAutomaticRuntime = run {
             var auto = options.jsx == "react-jsx" || options.jsx == "react-jsxdev"
-            var hits = 0L
-            JSX_RUNTIME_PRAGMA.findAll(sourceFile.text).forEach {
-                auto = it.groupValues[1] == "automatic"
-                hits++
-            }
-            FrontEnd.addJsxPragmaCensus(sourceFile.text.length.toLong(), hits)
+            // (WARM.10) round 863 — [scanJsxRuntimePragmas] is an EXACT
+            // hand-written equivalent of `jsxRuntimePragmaRegex`, which stays
+            // live as the specification the differential pin holds it to. The
+            // matcher was 44.1 ms = 0.55% of a warm EMIT rebuild here, matching
+            // nothing, because its leading literal is two characters — below
+            // `BnM.optimize`'s floor — so it was attempted at every one of the
+            // program's 9,977,097 positions.
+            val pragmas = scanJsxRuntimePragmas(sourceFile.text)
+            for (keyword in pragmas) auto = keyword == "automatic"
+            FrontEnd.addJsxPragmaCensus(sourceFile.text.length.toLong(), pragmas.size.toLong())
             auto
         }
         FrontEnd.close(FrontEnd.TR_JSXPRAGMA, feJsxT0)
@@ -17213,7 +17217,6 @@ class Transformer(
     }
 
     companion object {
-        private val JSX_RUNTIME_PRAGMA = Regex("""/\*\s*@jsxRuntime\s+(classic|automatic)\s*\*/""")
         /** Strict-mode future reserved words that cannot be used as variable names. */
         val strictModeReservedWords = setOf(
             "implements", "interface", "let", "package",
