@@ -20,7 +20,7 @@ SCAN="$SRC/JsxRuntimePragmaScan.kt"
 TR="$SRC/Transformer.kt"
 BENCH=xemantic-typescript-compiler-core/src/commonTest/kotlin/BenchMain.kt
 
-ARMS=("$@"); [[ ${#ARMS[@]} -eq 0 ]] && ARMS=(M1 M2 M3 M4 M5)
+ARMS=("$@"); [[ ${#ARMS[@]} -eq 0 ]] && ARMS=(M1 M2 M3 M4 M5 M6)
 
 apply() {
   case "$1" in
@@ -80,6 +80,19 @@ new="    else -> false\n"
 assert old in s, "M5 anchor missing"
 open(p,'w',encoding='utf-8').write(s.replace(old,new))
 PY
+        ;;
+    # M6 — the scanner finds NOTHING. The mistake the differential battery is
+    # weakest against (an all-empty scanner agrees with the oracle on every case
+    # the oracle also rejects), so it is what tests whether the END-TO-END
+    # positive controls are load-bearing or redundant guards.
+    M6) python3 - "$SCAN" <<'PYY'
+import sys
+p=sys.argv[1]; s=open(p,encoding='utf-8').read()
+old="        if (i < 2 || text[i - 1] != '*' || text[i - 2] != '/') continue\n"
+new="        if (true) continue\n"
+assert old in s, "M6 anchor missing"
+open(p,'w',encoding='utf-8').write(s.replace(old,new))
+PYY
         ;;
     *) echo "unknown arm $1" >&2; exit 1 ;;
   esac
