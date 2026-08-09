@@ -25,7 +25,7 @@
 
 package com.xemantic.typescript.compiler.server
 
-import com.xemantic.typescript.compiler.protocol.XTSC_REFUSED
+import com.xemantic.typescript.compiler.protocol.CompileResponse
 import java.io.File
 
 /**
@@ -67,7 +67,12 @@ fun main(args: Array<String>) {
     val socket = optionValue(args, "--socket") ?: CompileServer.defaultSocketPath()
     when {
         args.contains("--serve") -> CompileServer.serve(socket)
-        args.contains("--daemon") -> runAsClient(args, socket)
+        // Exits only on failure, exactly as `com.xemantic.typescript.compiler.main`
+        // does: an explicit `exitProcess(0)` would cut short whatever the runtime
+        // still wants to do on the way out.
+        args.contains("--daemon") -> runAsClient(args, socket).let {
+            if (it != 0) kotlin.system.exitProcess(it)
+        }
         else -> com.xemantic.typescript.compiler.main(args)
     }
 }
@@ -77,21 +82,42 @@ private fun optionValue(args: Array<String>, name: String): String? {
     return if (i >= 0 && i + 1 < args.size) args[i + 1] else null
 }
 
-private fun runAsClient(args: Array<String>, socket: String) {
+/**
+ * Sends the request, or compiles here when nothing answers; returns the code.
+ *
+ * **It RETURNS the code rather than exiting**, for the same reason
+ * [com.xemantic.typescript.compiler.runCli] does: a pin can then observe the
+ * value, and `ExitCodeParityTest` proved that a pin one layer lower is not
+ * enough. That test asserted the code the server puts IN the response, which
+ * was always right; what this function used to do with it was propagate
+ * `XTSC_REFUSED` and **drop every other non-zero code on the floor** — so a
+ * daemon-served compile with errors exited **0** while the one-shot CLI and this
+ * function's own in-process fallback both exited **1**. `xtsc`'s answer again
+ * depended on whether a daemon happened to be running, which is precisely what
+ * the 2026-08-08 change set out to end, and CI would have read the daemon path
+ * as a pass. Measured round 872; pinned by `XtscClientExitCodeTest`.
+ */
+internal fun runAsClient(
+    args: Array<String>,
+    socket: String,
+    // The seam exists so the pin needs no socket. This module's suite
+    // deliberately never binds one (parking a thread in `accept()` inside a
+    // 14,000-test run is a flakiness source), which is exactly why the defect
+    // above survived: every existing pin stopped at the response object.
+    request: (List<String>, String) -> CompileResponse? = CompileServer::request,
+): Int {
     val forwarded = stripClientOptions(args).map(::absolutize)
-    val response = CompileServer.request(forwarded, socket)
+    val response = request(forwarded, socket)
     if (response == null) {
         // No server: do the work here rather than failing. The point of the
-        // server is latency, not capability.
+        // server is latency, not capability. `runCli`, not `main`: the latter
+        // would exitProcess and there would be nothing left to return.
         System.err.println("xtsc: no compile server on $socket — compiling in-process")
-        com.xemantic.typescript.compiler.main(forwarded.toTypedArray())
-        return
+        return com.xemantic.typescript.compiler.runCli(forwarded.toTypedArray())
     }
     print(response.output)
     System.out.flush()
-    if (response.exitCode == XTSC_REFUSED) {
-        kotlin.system.exitProcess(XTSC_REFUSED)
-    }
+    return response.exitCode
 }
 
 /** Drops the options that steer the client itself; everything else is the compiler's. */

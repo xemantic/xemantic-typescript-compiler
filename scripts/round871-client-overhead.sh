@@ -32,6 +32,11 @@ cleanup() { [ -n "$DAEMON_PID" ] && kill "$DAEMON_PID" 2>/dev/null || true; rm -
 trap cleanup EXIT
 
 export XTSC_AOT=off
+# Round 872 gave the launcher a NATIVE client arm for `--daemon` requests, which
+# is a different measurement from the one this script's header describes. Pin the
+# arm rather than silently re-purposing the script: `scripts/round872-client-arms.sh`
+# is where the arms are compared.
+export XTSC_CLIENT=off
 "$ROOT/scripts/xtsc" --serve --socket "$SOCK" > "$SRVLOG" 2>&1 &
 DAEMON_PID=$!
 for _ in $(seq 1 200); do grep -q "listening on" "$SRVLOG" 2>/dev/null && break; sleep 0.25; done

@@ -36,6 +36,105 @@ XTSC_SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # uncached forever. AotCacheGuardTest pins the two against each other.
 XTSC_MAIN_CLASS="com.xemantic.typescript.compiler.server.XtscMainKt"
 
+# ---------------------------------------------------------------------------
+# (WARM.20) THE CLIENT ARM  --  a `--daemon` request goes through the NATIVE
+# client when there is one, and through the JVM dispatcher when there is not.
+# ---------------------------------------------------------------------------
+#
+# Round 872 measured the fixed per-invocation cost of every client arm that
+# exists, against one warm daemon, with a request the server refuses in constant
+# time: JVM dispatcher 287 ms, thin JVM client 278 ms (the module split buys
+# NOTHING by itself - the cost is the JVM, not the compiler jar), thin JVM +
+# AOT cache 105 ms, and the Kotlin/Native client 7.0 ms, against a 0.9 ms
+# fork+exec floor. On the 78-file compiler profile that is 3.9% -> 0.1%; on a
+# 3-file project - the request an editor actually generates - it is the
+# difference between 376 ms and 98 ms, i.e. THREE QUARTERS of the wait.
+#
+# THE FALLBACK IS THE POINT, not a courtesy. The native client depends on `-api`
+# and nothing else, so it CANNOT compile: with no daemon reachable and none
+# startable it exits XTSC_CLIENT_UNAVAILABLE (3) rather than pretending. That
+# code is documented to mean "the request never ran" - never "it ran and found
+# errors" - so it is safe to re-run here, and re-running is what keeps `xtsc`
+# working on a fresh checkout, after a `clean`, and on any platform with no
+# native binary. Round 857 found the launcher inoperable for a whole window
+# because it depended on an artifact only one task creates; nothing here may
+# depend on the native binary existing.
+XTSC_RESOLVED_CLIENT=""
+xtsc_resolve_client() {
+  # `off` is a real setting, not a debugging leftover: the A/B harnesses and the
+  # pins need to force the JVM arm on a box where the native binary exists.
+  if [ -n "${XTSC_CLIENT:-}" ]; then
+    [ "$XTSC_CLIENT" = "off" ] && return 1
+    [ -x "$XTSC_CLIENT" ] || return 1
+    XTSC_RESOLVED_CLIENT="$XTSC_CLIENT"
+    return 0
+  fi
+  if [ -n "${XTSC_HOME:-}" ] && [ -x "${XTSC_HOME%/}/bin/xtsc-client" ]; then
+    XTSC_RESOLVED_CLIENT="${XTSC_HOME%/}/bin/xtsc-client"
+    return 0
+  fi
+  local c
+  for c in "$XTSC_SCRIPT_DIR"/../xemantic-typescript-compiler-client/build/bin/*/releaseExecutable/*.kexe; do
+    if [ -x "$c" ]; then XTSC_RESOLVED_CLIENT="$c"; return 0; fi
+  done
+  return 1
+}
+
+xtsc_is_daemon_request=0
+for arg in "$@"; do
+  if [ "$arg" = "--daemon" ]; then xtsc_is_daemon_request=1; break; fi
+done
+
+# XTSC_AOT_DECIDE_ONLY is a probe of the AOT decision, which is a property of the
+# JVM arm; answering it from the native arm would report on something the caller
+# is not asking about. Round 871's client harness uses it, so this also keeps
+# that measurement meaning what its own header says.
+if [ "$xtsc_is_daemon_request" -eq 1 ] && [ -z "${XTSC_AOT_DECIDE_ONLY:-}" ] && xtsc_resolve_client; then
+  [ -n "${XTSC_CLIENT_VERBOSE:-}" ] && printf 'xtsc: client native %s\n' "$XTSC_RESOLVED_CLIENT" >&2
+  if [ -n "${XTSC_CLIENT_DECIDE_ONLY:-}" ]; then printf 'native %s\n' "$XTSC_RESOLVED_CLIENT"; exit 0; fi
+
+  xtsc_client_args=()
+  for arg in "$@"; do
+    [ "$arg" = "--daemon" ] || xtsc_client_args+=("$arg")
+  done
+  # The two peers derive the socket path INDEPENDENTLY, in common code, and a
+  # disagreement does not fail - it silently starts a second daemon. They differ
+  # in exactly one respect: the client honours XTSC_SOCKET and the JVM
+  # dispatcher does not. Naming it explicitly here is what keeps the arms
+  # interchangeable; deriving the default path in bash would add a THIRD
+  # derivation, which is the thing the invariant forbids.
+  case " $* " in
+    *" --socket "*) ;;
+    *) [ -n "${XTSC_SOCKET:-}" ] && xtsc_client_args=(--socket "$XTSC_SOCKET" ${xtsc_client_args[@]+"${xtsc_client_args[@]}"}) ;;
+  esac
+  # How the client starts a daemon when none is running. It deliberately knows
+  # nothing about Java, so without this it can only report that it could not.
+  export XTSC_DAEMON_CMD="${XTSC_DAEMON_CMD:-$XTSC_SCRIPT_DIR/xtsc}"
+
+  # stderr is held back rather than streamed: on a fallback the client has
+  # already explained that it found no daemon, and printing that above a compile
+  # that then succeeds is worse than saying nothing. Diagnostics are on STDOUT
+  # and are not touched, so nothing a user reads is buffered.
+  xtsc_client_err="$(mktemp "${TMPDIR:-/tmp}/xtsc-client-err.XXXXXX")"
+  set +e
+  "$XTSC_RESOLVED_CLIENT" ${xtsc_client_args[@]+"${xtsc_client_args[@]}"} 2>"$xtsc_client_err"
+  xtsc_client_code=$?
+  set -e
+  if [ "$xtsc_client_code" -ne 3 ]; then
+    cat "$xtsc_client_err" >&2
+    rm -f "$xtsc_client_err"
+    exit "$xtsc_client_code"
+  fi
+  [ -n "${XTSC_CLIENT_VERBOSE:-}" ] && cat "$xtsc_client_err" >&2
+  rm -f "$xtsc_client_err"
+  # ... and fall through to the JVM arm, which can compile in-process.
+fi
+
+# Answered here rather than beside the native branch so that BOTH outcomes are
+# observable through one hook: a pin that can only see the arm it expects cannot
+# tell "chose the JVM" from "the hook did not fire".
+if [ -n "${XTSC_CLIENT_DECIDE_ONLY:-}" ]; then printf 'jvm\n'; exit 0; fi
+
 xtsc_resolve_classpath || xtsc_die "cannot resolve a classpath - set XTSC_CP or XTSC_HOME, or build this repo first"
 
 decision="$(xtsc_aot_decide "$XTSC_RESOLVED_CP" "$XTSC_MAIN_CLASS")"
