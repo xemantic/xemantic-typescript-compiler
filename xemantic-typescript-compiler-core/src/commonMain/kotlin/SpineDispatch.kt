@@ -6530,12 +6530,17 @@ object SpineAmp {
         val arm = if (reps < 0) "CONTROL (consultations suppressed)" else "REAL"
         appendLine(
             "arm: $arm   reps: $reps   bracketed nodes: $nodes   " +
-                "total ${nanos / 1_000_000} ms"
+                "total ${nanos / 1_000_000} ms   nanos: $nanos"
         )
         val r = if (reps < 0) -reps else reps
         appendLine(
             "consultations performed: $consults   would-consult (S x nodes): $expected   " +
-                "exact multiple: ${expected > 0 && consults == r.toLong() * expected}"
+                // The falsification, per arm: the real arm must have performed
+                // an EXACT multiple of the population, the control arm none of
+                // it. Printing the real arm's test for the control would read
+                // `false` for a control that is working perfectly.
+                if (reps < 0) "control suppressed: ${expected > 0 && consults == 0L}"
+                else "exact multiple: ${expected > 0 && consults == r.toLong() * expected}"
         )
         val perNode = if (nodes > 0) nanos.toDouble() / nodes else 0.0
         val s = if (nodes > 0) expected.toDouble() / nodes else 0.0
