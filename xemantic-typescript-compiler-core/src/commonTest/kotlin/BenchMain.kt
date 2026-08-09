@@ -53,12 +53,20 @@ import kotlin.time.measureTimedValue
  * complete rebuild: tsconfig load, glob discovery, module resolution, parse,
  * bind and check.
  *
- * This runs **check-only**: `noEmit = true` reaches `ProjectCompiler`'s
+ * This runs **check-only by default**: `noEmit = true` reaches `ProjectCompiler`'s
  * `skipEmitOutputs`, so since round 738 nothing is transformed or emitted at all
  * (the earlier "emit-to-memory, only the disk writes are skipped" note here
  * predates that gate and was stale). The number is therefore directly comparable
  * to the arc's `--noEmit` figures — `ab-interleaved.sh` and `cost_gate.py` — and
  * NOT to the emit-mode CI ratio in `bench-history/`.
+ *
+ * **Round 863 adds a 5th argument, `emit`**, which flips exactly that literal.
+ * It exists because a check-only harness is STRUCTURALLY blind to everything
+ * round 738's gate skips — `Transformer.transform` and `Emitter.emit` have zero
+ * calls under `--noEmit`, so a whole-program cost inside them is invisible to
+ * every warm instrument in this repo, to `cost_gate.py`, and to the
+ * `--noEmit --listAll` 8-profile grid at once. Name the MODE with any ratio
+ * taken from it (round 739): the two modes are different compiles.
  *
  * **This is the only harness that measures a WARM compile.** `bench-compile-tsc.sh`
  * forks a fresh JVM per run, so its `--warmup N` warms the page cache and never
@@ -250,6 +258,25 @@ internal fun <T> measureTier(tier: String, build: () -> T): Pair<T, String> {
     return value to text
 }
 
+/**
+ * (WARM.10) round 863 — parse the 5th argument, the EMIT-mode switch.
+ *
+ * Split out of [main] for the reason round 851 gave: a pin on a helper that
+ * [main] does not call is blind, and [main] itself compiles a whole project so
+ * no test can run it. This IS the code [main] runs.
+ *
+ * Deliberately a CLOSED vocabulary. An unknown 5th argument is an error rather
+ * than a silent `false`, because the failure it prevents is not a crash — it is
+ * a run that quietly measures the OTHER mode, and the two modes are different
+ * compiles (round 739). `noEmit` is accepted as an explicit spelling of the
+ * default so a script can name the mode it means.
+ */
+internal fun parseEmitFlag(arg: String?): Boolean = when (val flag = arg?.lowercase()) {
+    null, "", "false", "0", "off", "noemit" -> false
+    "emit", "true", "1", "on" -> true
+    else -> error("usage: 5th argument must be `emit`, `noEmit`, or omitted — not '$flag'")
+}
+
 /** Disarm every probe and release its counters. Safe to call for any tier. */
 internal fun tierStop() {
     PassTiming.enabled = false
@@ -301,8 +328,21 @@ fun main(args: Array<String>) {
     }
     val instrumented = tiers.isNotEmpty()
 
+    // (WARM.10) round 863 — the 5th argument, `emit`, is the ONLY way this
+    // harness can measure the transform/emit path at all. Every warm number in
+    // `docs/perf` is check-only because `noEmit = true` was a literal in three
+    // places here, and round 738's gate makes that skip `Transformer.transform`
+    // and `Emitter.emit` ENTIRELY — so a whole-program cost living there is
+    // invisible to `rows`, to `frontend`, to `cost_gate.py` and to the
+    // `--noEmit --listAll` grid alike. It is deliberately NOT "any 5th argument
+    // means yes": a typo would silently change which compile is being timed,
+    // and the two modes are different compiles (round 739).
+    val emit: Boolean = parseEmitFlag(args.getOrNull(4))
+    val noEmit = !emit
+    println("""{"mode":"${if (emit) "emit" else "noEmit"}"}""")
+
     repeat(warmup) {
-        ProjectCompiler(SystemVfs).build(project, noEmit = true)
+        ProjectCompiler(SystemVfs).build(project, noEmit = noEmit)
     }
 
     val times = mutableListOf<Double>()
@@ -317,7 +357,7 @@ fun main(args: Array<String>) {
     var measuredDrift = false
     repeat(iters) { i ->
         val (result, duration) = measureTimedValue {
-            ProjectCompiler(SystemVfs).build(project, noEmit = true)
+            ProjectCompiler(SystemVfs).build(project, noEmit = noEmit)
         }
         val ms = duration.inWholeMicroseconds / 1000.0
         times.add(ms)
@@ -366,7 +406,7 @@ fun main(args: Array<String>) {
         // that probe's partition anchors, so the ON-minus-COARSE difference
         // prices its boundary differentially inside one process.
         val (measured, report) = measureTier(tier) {
-            measureTimedValue { ProjectCompiler(SystemVfs).build(project, noEmit = true) }
+            measureTimedValue { ProjectCompiler(SystemVfs).build(project, noEmit = noEmit) }
         }
         val (probeResult, probeDuration) = measured
         val probeMs = probeDuration.inWholeMicroseconds / 1000.0

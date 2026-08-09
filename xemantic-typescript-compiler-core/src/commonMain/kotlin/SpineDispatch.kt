@@ -4116,7 +4116,20 @@ object FrontEnd {
     /** `collectNsInternalImportTargets` — the namespace statement walk, PASS 1. INSIDE [POST_ORPHANS]. */
     const val ORPH_NSWALK = 30
 
-    const val N = 31
+    // ---- (WARM.10) round 863 — the one WHOLE-PROGRAM regex that survives on
+    // the EMIT path. `Transformer.transform` opens every file with
+    // `JSX_RUNTIME_PRAGMA.findAll(sourceFile.text)` under NO gate at all, and
+    // that pattern's leading literal is a slash-star — TWO characters, below
+    // `BnM.optimize`'s four-character floor — so `java.util.regex` gives it no
+    // Boyer-Moore prefix search and attempts it at every position of the file.
+    // No check-only instrument in this repo can see it: `--noEmit` skips
+    // [TRANSFORM] entirely (round 738's gate), which is why a defect class this
+    // arc has now hit three times went unmeasured here for 862 rounds.
+
+    /** The jsxRuntime PRAGMA scan at the top of `Transformer.transform`. INSIDE [TRANSFORM]. */
+    const val TR_JSXPRAGMA = 31
+
+    const val N = 32
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4150,6 +4163,7 @@ object FrontEnd {
         "      of which the import(\"…\") text scan",
         "      of which the declare-require probe + require(\"…\") scan",
         "      of which collectNsInternalImportTargets",
+        "    of which the jsxRuntime pragma scan",
     )
 
     /**
@@ -4163,7 +4177,7 @@ object FrontEnd {
         CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
-        TRANSFORM, EMIT, DECL_EMIT,
+        TRANSFORM, TR_JSXPRAGMA, EMIT, DECL_EMIT,
     )
 
     var nanos: LongArray = LongArray(N)
@@ -4213,6 +4227,19 @@ object FrontEnd {
     var orphanChars: Long = 0
     var orphanDeclReqHits: Long = 0
 
+    /**
+     * (WARM.10) census — the population behind [TR_JSXPRAGMA]: how many files
+     * `Transformer.transform` opens, how many characters the pragma scan
+     * re-reads, and how many pragmas it FINDS. The last is what decides whether
+     * a hand-written equivalent can be anchored on a literal, and — exactly as
+     * round 862's `declare … require` census did — a value of 0 is the finding,
+     * not an absence of one (round 758: a timing row without its population
+     * cannot be compared to anything).
+     */
+    var jsxPragmaFiles: Long = 0
+    var jsxPragmaChars: Long = 0
+    var jsxPragmaHits: Long = 0
+
     fun reset() {
         nanos = LongArray(N)
         calls = LongArray(N)
@@ -4222,6 +4249,15 @@ object FrontEnd {
         closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0
         scanWords = 0; scanRecorded = 0
         orphanFiles = 0; orphanChars = 0; orphanDeclReqHits = 0
+        jsxPragmaFiles = 0; jsxPragmaChars = 0; jsxPragmaHits = 0
+    }
+
+    /** (WARM.10) — one call per file entering `Transformer.transform`. */
+    fun addJsxPragmaCensus(chars: Long, hits: Long) {
+        if (mode != ON) return
+        jsxPragmaFiles++
+        jsxPragmaChars += chars
+        jsxPragmaHits += hits
     }
 
     /** (WARM.8)(c) — one call per program file scanned by `cpcRequireOnlyOrphans`. */
@@ -4366,6 +4402,15 @@ object FrontEnd {
             appendLine(
                 "  orphan census: files $orphanFiles ($orphanChars chars), " +
                     "declare-require hits $orphanDeclReqHits"
+            )
+        }
+        // (WARM.10) — the EMIT-path whole-program regex. Zero rows here in a
+        // check-only run is a MEASUREMENT of round 738's gate, not a missing
+        // instrument: `--noEmit` never enters `Transformer.transform`.
+        if (jsxPragmaFiles > 0) {
+            appendLine(
+                "  jsxRuntime pragma census: files $jsxPragmaFiles ($jsxPragmaChars chars), " +
+                    "pragmas found $jsxPragmaHits"
             )
         }
         val frontEnd = nanos[CONFIG] + nanos[CRAWL] + nanos[PARSE] + nanos[IMPORTS] + nanos[BIND]

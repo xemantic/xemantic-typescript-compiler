@@ -483,13 +483,21 @@ class Transformer(
         // classic|automatic */` pragma comments (the LAST pragma wins, tsc
         // collects them in order). Dev-ness (jsxDEV + _jsxFileName) comes from the
         // OPTION only — a `react` file with an `automatic` pragma uses plain jsx/jsxs.
+        // (WARM.10) round 863 — the ONE whole-program regex left on the EMIT
+        // path, probed in situ. One timestamp pair per FILE, so its own cost is
+        // microseconds against the block it measures.
+        val feJsxT0 = FrontEnd.t()
         jsxAutomaticRuntime = run {
             var auto = options.jsx == "react-jsx" || options.jsx == "react-jsxdev"
+            var hits = 0L
             JSX_RUNTIME_PRAGMA.findAll(sourceFile.text).forEach {
                 auto = it.groupValues[1] == "automatic"
+                hits++
             }
+            FrontEnd.addJsxPragmaCensus(sourceFile.text.length.toLong(), hits)
             auto
         }
+        FrontEnd.close(FrontEnd.TR_JSXPRAGMA, feJsxT0)
         jsxDevRuntime = options.jsx == "react-jsxdev"
         jsxRuntimeCallEmitted = false
         hasSeenRuntimeStatement = false
