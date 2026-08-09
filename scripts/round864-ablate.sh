@@ -83,8 +83,8 @@ a="""                    val f = nodeToFlow[nodeKey(node)]
 assert s.count(a)==1
 b="""                    val f = nodeToFlow[nodeKey(node)]
                     flowById[id] = f
-                    val par = node.parent as? NodeBase
-                    val pid = par?.nodeId ?: -1
+                    val par = node.parent
+                    val pid = (par as? NodeBase)?.nodeId ?: -1
                     if (pid in 0 until count) {
                         nodeById[pid] = par
                         flowById[pid] = f
