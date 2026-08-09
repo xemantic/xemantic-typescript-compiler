@@ -426,6 +426,22 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             // pair cannot dominate the ~57 ns it is measuring. Needs the
             // instrumented table, hence --passTiming. Two runs at different N
             // solve for the per-read cost with the pair cost cancelling.
+            // (WARM.14) round 867: the same escape one level up — `N` extra
+            // passes over the consultations a per-kind dispatch table would
+            // SKIP, under ONE timestamp pair, so `s_p` (2-14 ns, an order of
+            // magnitude below a probe boundary) can be read off the slope. A
+            // NEGATIVE N is the control arm, which suppresses every
+            // consultation and prices the loop skeleton at the same site.
+            // Behaviour-free: the amplified set is the table's SKIP set, whose
+            // handlers do nothing at those kinds (round 732 § 4).
+            "--spineAmp", "--spineamp" -> {
+                o.passTiming = true
+                i++
+                if (i < args.size) {
+                    SpineAmp.reset()
+                    modes.set(SpineAmp::reps, args[i].toIntOrNull() ?: 0)
+                }
+            }
             "--globalsAmp", "--globalsamp" -> {
                 o.passTiming = true
                 i++
@@ -814,6 +830,8 @@ internal fun usageText(): String =
           --partitionCheck N run N sequential partition checkers and diff vs the full run (INV.6(6b))
           --workers N        parallel share-nothing partition check on N threads (INV.6(6c); line order may differ)
           --globalsAmp N     (AUDIT.3) price one globals[name] probe: N reads under one timestamp pair (implies --passTiming)
+          --spineAmp N       (WARM.14) price one REJECTING spine handler consultation: N extra skipped-handler passes
+                             per node under one timestamp pair; NEGATIVE N is the control arm (implies --passTiming)
           --fltmCensus       (SETUP.2) produced-vs-consumed census of buildFileLocalTypeMaps (implies --passTiming)
                              + the INV.3(a) globals-lookup conflation classification
           --help, -h         show this help

@@ -1259,6 +1259,7 @@ object PassTiming {
             top(globalsUnscopedByPass, 20, "unscoped by pass")
         }
         if (GlobalsAmp.calls > 0) appendLine(GlobalsAmp.report())
+        if (SpineAmp.nodes > 0) appendLine(SpineAmp.report())
     }
 
     private fun ms(nanos: Long): String {

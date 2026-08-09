@@ -84,6 +84,7 @@ class CliModeRestoreTest {
             PassTiming::class.java,
             FltmCensus::class.java,
             GlobalsAmp::class.java,
+            SpineAmp::class.java,
             SpineDispatch::class.java,
             SpineSections::class.java,
             CallSections::class.java,
@@ -134,6 +135,7 @@ class CliModeRestoreTest {
         PassTiming.reset()
         FltmCensus.reset()
         GlobalsAmp.reset()
+        SpineAmp.reset()
         SpineDispatch.reset()
         SpineSections.reset()
         CallSections.reset()
@@ -263,5 +265,5 @@ private val ACCEPTED_FLAGS = listOf(
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
     "--flowCensus", "--partitionCheck",
-    "--workers", "--globalsAmp", "--outDir", "--project", "--help",
+    "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )

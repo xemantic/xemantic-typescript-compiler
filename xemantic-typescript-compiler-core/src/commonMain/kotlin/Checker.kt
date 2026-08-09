@@ -23048,6 +23048,12 @@ class Checker(
         // (ENTER = the legacy pre-order; also keeps same-position pairs
         // comma-before-np, since the np anchors fire at LEAVES).
         if (spineCmActive) spineCmEnterNode(node)
+        // (WARM.14) round 867: the amplification bracket — `r` extra passes over
+        // exactly the consultations a per-kind table would skip, under ONE
+        // timestamp pair, so `s_p` can be read off the slope. OFF in production:
+        // one static field read and a perfectly-predicted branch, the same shape
+        // the (DISPATCH.1) guard above has had since round 732.
+        if (SpineAmp.reps != 0) spineAmpConsult(node)
         spineEnterKindDispatch(node)
     }
 
@@ -23109,6 +23115,136 @@ class Checker(
             45 -> if (spineCmActive) spineCmEnterNode(node)
             else -> {}
         }
+    }
+
+    /**
+     * (WARM.14) round 867 — one amplified PASS over exactly the consultations a
+     * per-kind dispatch table would SKIP at this node's kind, and nothing else.
+     *
+     * A straight-line copy of [spineEnterNode]'s 46 prologue arms followed by
+     * [spineLeaveNode]'s 13, in production order, each guarded by one bit test
+     * on a register-resident mask (bit `h` set = handler `h` is skipped here,
+     * so CONSULT it) and each keeping its own `spineXxActive` guard, because
+     * production pays that field read for a skipped slot too and a table would
+     * remove it.
+     *
+     * Returns the consultations performed — a value the caller sums, not a
+     * counter it bumps. **Its SIZE is load-bearing**: ~1,400 bytecodes, far over
+     * HotSpot's 325-byte `FreqInlineSize`, so it cannot be inlined into the
+     * amplification loop and no iteration of that loop can be hoisted out of
+     * it. That, and not a sink, is what makes the repetition real (see
+     * [SpineAmp]) — which is also why the leave slots live HERE rather than in
+     * a second method: a 307-byte one would have been inlinable, and the arm
+     * whose consultations are suppressed (the control) is exactly the arm a JIT
+     * would then be able to fold away, biasing `s_p` upward.
+     */
+    private fun spineAmpPass(node: Node, mask: Long, leaveMask: Long): Int {
+        var c = 0
+        if ((mask and (1L shl 0)) != 0L) { c++; ctaSpineEnter(node) }
+        if ((mask and (1L shl 1)) != 0L) { c++; cpaSpineEnter(node) }
+        if ((mask and (1L shl 2)) != 0L) { c++; ccetSpineEnter(node) }
+        if ((mask and (1L shl 3)) != 0L) { c++; spineCtaM3PropertyAnchor(node) }
+        if ((mask and (1L shl 4)) != 0L) { c++; spineCtaM3BodyWalkerAnchor(node) }
+        if ((mask and (1L shl 5)) != 0L) { c++; spineCtaM3StatementAnchor(node) }
+        if ((mask and (1L shl 6)) != 0L) { c++; if (spineArithActive) spineArithEnterNode(node) }
+        if ((mask and (1L shl 7)) != 0L) { c++; if (spineIanyActive) spineIanyEnterNode(node) }
+        if ((mask and (1L shl 8)) != 0L) { c++; if (spineDaActive) spineDaEnterNode(node) }
+        if ((mask and (1L shl 9)) != 0L) { c++; if (spineOsActive) spineOsEnterNode(node) }
+        if ((mask and (1L shl 10)) != 0L) { c++; if (spinePdActive) spinePdEnterNode(node) }
+        if ((mask and (1L shl 11)) != 0L) { c++; if (spineItFileActive) spineItEnterNode(node) }
+        if ((mask and (1L shl 12)) != 0L) { c++; if (spineFpActive) spineFpEnterNode(node) }
+        if ((mask and (1L shl 13)) != 0L) { c++; if (spineAiActive) spineAiEnterNode(node) }
+        if ((mask and (1L shl 14)) != 0L) { c++; if (spineSyActive) spineSyEnterNode(node) }
+        if ((mask and (1L shl 15)) != 0L) { c++; if (spineCoActive) spineCoEnterNode(node) }
+        if ((mask and (1L shl 16)) != 0L) { c++; if (spineB94Active) spineB94EnterNode(node) }
+        if ((mask and (1L shl 17)) != 0L) { c++; if (spineCeActive) spineCeEnterNode(node) }
+        if ((mask and (1L shl 18)) != 0L) { c++; if (spinePmrActive) spinePmrEnterNode(node) }
+        if ((mask and (1L shl 19)) != 0L) { c++; if (spinePiActive) spinePiEnterNode(node) }
+        if ((mask and (1L shl 20)) != 0L) { c++; if (spineGxActive) spineGxEnterNode(node) }
+        if ((mask and (1L shl 21)) != 0L) { c++; if (spineAcActive) spineAcEnterNode(node) }
+        if ((mask and (1L shl 22)) != 0L) { c++; if (spineEvActive) spineEvEnterNode(node) }
+        if ((mask and (1L shl 23)) != 0L) { c++; if (spineUyActive) spineUyEnterNode(node) }
+        if ((mask and (1L shl 24)) != 0L) { c++; if (spineSrActive) spineSrEnterNode(node) }
+        if ((mask and (1L shl 25)) != 0L) { c++; if (spineIaActive) spineIaEnterNode(node) }
+        if ((mask and (1L shl 26)) != 0L) { c++; if (spineTdActive) spineTdEnterNode(node) }
+        if ((mask and (1L shl 27)) != 0L) { c++; if (spineExActive) spineExEnterNode(node) }
+        if ((mask and (1L shl 28)) != 0L) { c++; if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node) }
+        if ((mask and (1L shl 29)) != 0L) { c++; if (spineClActive) spineClEnterNode(node) }
+        if ((mask and (1L shl 30)) != 0L) { c++; if (spineSuActive) spineSuEnterNode(node) }
+        if ((mask and (1L shl 31)) != 0L) { c++; if (spineTcActive) spineTcEnterNode(node) }
+        if ((mask and (1L shl 32)) != 0L) { c++; if (spineDelActive) spineDelEnterNode(node) }
+        if ((mask and (1L shl 33)) != 0L) { c++; if (spineCpActive) spineCpEnterNode(node) }
+        if ((mask and (1L shl 34)) != 0L) { c++; if (spineAbActive) spineAbEnterNode(node) }
+        if ((mask and (1L shl 35)) != 0L) { c++; if (spineIyActive) spineIyEnterNode(node) }
+        if ((mask and (1L shl 36)) != 0L) { c++; if (spineAaActive) spineAaEnterNode(node) }
+        if ((mask and (1L shl 37)) != 0L) { c++; if (spineIdcActive) spineIdcEnterNode(node) }
+        if ((mask and (1L shl 38)) != 0L) { c++; if (spineNaActive) spineNaEnterNode(node) }
+        if ((mask and (1L shl 39)) != 0L) { c++; if (spineAfActive) spineAfEnterNode(node) }
+        if ((mask and (1L shl 40)) != 0L) { c++; if (spineTpoActive) spineTpoEnterNode(node) }
+        if ((mask and (1L shl 41)) != 0L) { c++; if (spineUbdActive) spineUbdEnterNode(node) }
+        if ((mask and (1L shl 42)) != 0L) { c++; if (spineCaActive) spineCaEnterNode(node) }
+        if ((mask and (1L shl 43)) != 0L) { c++; if (spineAtActive) spineAtEnterNode(node) }
+        if ((mask and (1L shl 44)) != 0L) { c++; if (spineNuActive) spineNuEnterNode(node) }
+        if ((mask and (1L shl 45)) != 0L) { c++; if (spineCmActive) spineCmEnterNode(node) }
+        if ((leaveMask and (1L shl 0)) != 0L) { c++; ctaSpineLeave(node) }
+        if ((leaveMask and (1L shl 1)) != 0L) { c++; cpaSpineLeave(node) }
+        if ((leaveMask and (1L shl 2)) != 0L) { c++; ccetSpineLeave(node) }
+        if ((leaveMask and (1L shl 3)) != 0L) { c++; if (spineArithActive) spineArithLeaveNode(node) }
+        if ((leaveMask and (1L shl 4)) != 0L) { c++; if (spineIanyActive) spineIanyLeaveNode(node) }
+        if ((leaveMask and (1L shl 5)) != 0L) { c++; if (spineDaActive) spineDaLeaveNode(node) }
+        if ((leaveMask and (1L shl 6)) != 0L) { c++; if (spineOsActive) spineOsLeaveNode(node) }
+        if ((leaveMask and (1L shl 7)) != 0L) { c++; if (spinePdActive) spinePdLeaveNode(node) }
+        if ((leaveMask and (1L shl 8)) != 0L) { c++; if (spineCaActive) spineCaLeaveNode(node) }
+        if ((leaveMask and (1L shl 9)) != 0L) { c++; if (spineNpActive) spineNpLeaveNode(node) }
+        if ((leaveMask and (1L shl 10)) != 0L) { c++; if (spineIrActive) spineIrLeaveNode(node) }
+        if ((leaveMask and (1L shl 11)) != 0L) { c++; if (spinePmrActive) spinePmrLeaveNode(node) }
+        if ((leaveMask and (1L shl 12)) != 0L) { c++; if (spineTpoActive) spineTpoLeaveNode(node) }
+        return c
+    }
+
+    /**
+     * (WARM.14) round 867 — the amplification bracket, called once per node
+     * from [spineEnterNode] when [SpineAmp.reps] is non-zero.
+     *
+     * ONE timestamp pair covers `r` passes, so the pair's ~100-200 ns cancels
+     * between two runs at different `r` and the slope is the per-pass cost.
+     * The mask loads and the population accounting sit OUTSIDE the pair and are
+     * IDENTICAL in both arms, so they cancel too; the control arm differs in
+     * exactly one thing — the masks it hands the passes are empty.
+     */
+    private fun spineAmpConsult(node: Node) {
+        val r = SpineAmp.reps
+        val kid = (node as NodeBase).kindId
+        val eSkip = SpineDispatch.enterSkipMask[kid]
+        val lSkip = SpineDispatch.leaveSkipMask[kid]
+        // Accumulated for EVERY arm from the real masks, by a different code
+        // path than the passes count with: `consults == |reps| * expected` is
+        // this instrument's arithmetic falsification, and the control arm's
+        // `consults == 0` against a positive `expected` is what proves its
+        // suppression rather than asserting it.
+        SpineAmp.expected += (eSkip.countOneBits() + lSkip.countOneBits()).toLong()
+        val n: Int
+        val eMask: Long
+        val lMask: Long
+        if (r < 0) {
+            n = -r
+            eMask = SpineAmp.controlMask
+            lMask = SpineAmp.controlMask
+        } else {
+            n = r
+            eMask = eSkip
+            lMask = lSkip
+        }
+        var c = 0L
+        var i = 0
+        val t0 = PassTiming.nowNanos()
+        while (i < n) {
+            c += spineAmpPass(node, eMask, lMask)
+            i++
+        }
+        SpineAmp.nanos += PassTiming.nowNanos() - t0
+        SpineAmp.nodes++
+        SpineAmp.consults += c
     }
 
     /** (DISPATCH.1)(a): the probe/gated enter path. Never taken in production. */

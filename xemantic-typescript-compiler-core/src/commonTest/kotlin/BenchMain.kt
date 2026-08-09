@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
+import com.xemantic.typescript.compiler.SpineAmp
 import com.xemantic.typescript.compiler.SpineDispatch
 import com.xemantic.typescript.compiler.SystemVfs
 import kotlin.time.measureTimedValue
@@ -213,6 +214,29 @@ internal val TIERS = listOf(
 )
 
 /**
+ * (WARM.14) round 867 — the ONE parameterised tier family: `amp<N>` runs the
+ * [SpineAmp] amplifier at `N` extra consultation passes per node for one
+ * rebuild, and `ampc<N>` runs its CONTROL arm (the identical loop with every
+ * consultation suppressed) at the same `N`.
+ *
+ * A parameter is unavoidable here — the whole instrument is a SLOPE, so a
+ * single process must be able to run `amp8,ampc8,amp16,ampc16,amp32,ampc32`
+ * and give both arms at three amplification factors at one warmth. Returns
+ * null for anything that is not of this family, so [TIERS]' closed vocabulary
+ * still rejects a typo (`amp` with no number, `ampx8`, `amp0`) rather than
+ * silently measuring nothing.
+ */
+internal fun ampReps(tier: String): Int? {
+    val control = tier.startsWith("ampc")
+    if (!tier.startsWith("amp")) return null
+    val digits = tier.removePrefix(if (control) "ampc" else "amp")
+    if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
+    val n = digits.toIntOrNull() ?: return null
+    if (n <= 0) return null
+    return if (control) -n else n
+}
+
+/**
  * (WARM.13) — the derived tables, saved while [TIERS]' `gatedfull` arm holds its
  * full-table replacement. Non-null exactly while that arm is armed.
  */
@@ -256,6 +280,15 @@ internal fun restoreDispatchTables() {
 internal fun tierBegin(tier: String) {
     PassTiming.enabled = false
     PassTiming.reset()
+    // (WARM.14) — the amplifier arms NO other probe: its bracket is its own and
+    // its answer is a slope, so an armed pass probe would only add boundaries
+    // that do not cancel between two `r` values taken in different rebuilds.
+    val amp = ampReps(tier)
+    if (amp != null) {
+        SpineAmp.reset()
+        SpineAmp.reps = amp
+        return
+    }
     when (tier) {
         "dispatch" -> { SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.PROBE }
         // (WARM.13) round 866 — the A/B pair. `gated` arms the derived table and
@@ -318,7 +351,12 @@ internal fun tierBegin(tier: String) {
  * The tier's report text — produced while the probe is still armed, so a
  * `report()` that labels itself from its own `mode` labels itself correctly.
  */
-internal fun tierReport(tier: String): String = when (tier) {
+internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
+    // Taken while `reps` still holds the arm, so the report labels itself from
+    // its own state (round 850) — a CONTROL row and a REAL row are otherwise
+    // distinguishable only by a zero in the middle of the table.
+    SpineAmp.report()
+} else when (tier) {
     "dispatch" -> SpineDispatch.report() + "\n== (DISPATCH.1) csv ==\n" + SpineDispatch.csv()
     // (WARM.13) — a GATED rebuild counts nothing, so `SpineDispatch.report()`
     // would print an all-zero table and read as a failed measurement. What it
@@ -419,6 +457,12 @@ internal fun tierStop() {
     FrontEnd.reset()
     FltmCensus.on = false
     FltmCensus.reset()
+    // (WARM.14) — the amplifier is the one tier that must be disarmed even when
+    // its own rebuild never ran: `reps != 0` costs every later rebuild in this
+    // process `r` extra passes per node, which is a large, silent, and entirely
+    // plausible-looking slowdown of whatever tier follows it.
+    SpineAmp.reps = 0
+    SpineAmp.reset()
     SpineDispatch.reset()
     CtaSections.reset()
     CpaSections.reset()
@@ -446,7 +490,7 @@ fun main(args: Array<String>) {
         null, "", "false", "0", "off" -> emptyList()
         "passtiming", "true", "1", "on" -> listOf("full")
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
-            val bad = list.filter { it !in TIERS }
+            val bad = list.filter { it !in TIERS && ampReps(it) == null }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(
                     "usage: 4th argument must be `passTiming`, omitted, or a comma-separated " +

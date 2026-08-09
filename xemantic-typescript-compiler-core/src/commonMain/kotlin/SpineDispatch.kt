@@ -316,6 +316,31 @@ object SpineDispatch {
             ids.toIntArray()
         }
 
+    /**
+     * (WARM.14) round 867 — the COMPLEMENT of [enterTable]/[leaveTable] as a
+     * bitmask: bit `h` set = handler `h` is SKIPPED at that kind, i.e. it is a
+     * member of exactly the population a per-kind dispatch table would stop
+     * consulting.
+     *
+     * Derived from the tables rather than from [enterClosure] so the two can
+     * never drift (`SpineAmpProbeTest` pins the equivalence); 46 enter and 13
+     * leave handlers both fit in a `Long`, and a mask is what lets the
+     * amplifier's inner pass be a straight-line copy of the production
+     * prologue with one register-resident bit test per consultation, rather
+     * than an `IntArray` walk with a tableswitch (which is what makes
+     * `--dispatchGated` a cost arm rather than a measurement — § 8.2).
+     */
+    val enterSkipMask: LongArray = buildSkipMask(enterTable, enterNames.size)
+    val leaveSkipMask: LongArray = buildSkipMask(leaveTable, leaveNames.size)
+
+    private fun buildSkipMask(table: Array<IntArray>, count: Int): LongArray =
+        LongArray(KINDS) { kind ->
+            var mask = 0L
+            for (h in 0 until count) mask = mask or (1L shl h)
+            for (h in table[kind]) mask = mask and (1L shl h).inv()
+            mask
+        }
+
     // ── probe accumulators (single-threaded: the check spine) ───────────────
 
     var enterConsult: Array<LongArray> = Array(enterNames.size) { LongArray(KINDS) }
@@ -6384,6 +6409,143 @@ object LibTypeCensus {
                 "second daemon request. It is a LOWER bound — signature and " +
                 "type-node derivations reached only from OUTSIDE these two mint boundaries " +
                 "are not counted."
+        )
+    }
+}
+
+/**
+ * (WARM.14) round 867 — the AMPLIFIED price of ONE rejecting handler
+ * consultation, `s_p`.
+ *
+ * ## Why this instrument and not a timestamp pair
+ *
+ * `docs/perf/dispatch-table.md` § 8.5 reduces the whole per-kind-dispatch-table
+ * question to a single number: `R = 32.0 M x s_p`, where `s_p` is what
+ * production pays for a handler consultation that is entered and immediately
+ * declines. The 1% warm floor is cleared at `s_p >= 2.2 ns` — an order of
+ * magnitude BELOW a warm probe boundary (97-202 ns, round 850), so a pair
+ * around one consultation would be the measurement.
+ *
+ * So this is round 759's escape (`GlobalsAmp`, `--globalsAmp`): AMPLIFY the
+ * signal instead of shrinking the instrument. Per node, `r` extra passes over
+ * exactly the consultations the derived table would skip, all under ONE pair:
+ *
+ * ```
+ * p(r) = boundary + r * (skeleton + S * s_p)
+ * ```
+ *
+ * so two values of `r` cancel the boundary algebraically, and a CONTROL arm
+ * (`reps < 0`) runs the identical loop with every consultation suppressed,
+ * which cancels `skeleton` as well. `s_p` is then
+ * `(slope_real - slope_control) / S`, with `S` — the consultations per pass —
+ * MEASURED by this object rather than assumed, since `consults / (nodes * r)`
+ * is exactly it.
+ *
+ * ## Why re-consulting is behaviour-free
+ *
+ * The amplified set is the table's SKIP set, and round 732 § 4 verified the
+ * table's soundness by running the whole corpus and every profile under
+ * `--dispatchGated`, which does not call those handlers at all, byte-for-byte
+ * identically. A handler that has no observable effect at a kind has none when
+ * called again, and `SpineAmpProbeTest` pins the resulting diagnostics
+ * equivalence directly rather than inheriting it.
+ *
+ * ## The falsification (round 759's law: ARITHMETIC, never timing)
+ *
+ * A repeated predicate whose result is unused is what a JIT deletes, and the
+ * failure is silent — a clean linear fit of nothing, which here would read as
+ * `s_p ~ 0` and CONFIRM the closed direction for the wrong reason. Three
+ * defences, in increasing order of strength:
+ *
+ *  1. [consults] must be an EXACT multiple of [expected] — `consults == r *
+ *     expected` — where [expected] is accumulated once per node by a different
+ *     code path (a `countOneBits` of the same masks) than the one the inner
+ *     passes count with.
+ *  2. The inner pass is a large, non-inlinable method (well over HotSpot's
+ *     325-byte `FreqInlineSize`), so it cannot be inlined into the `r` loop
+ *     and cross-iteration hoisting is structurally impossible. That, not a
+ *     sink, is what makes the repetition real; the bytecode size is a static
+ *     fact (`scripts/huge_methods.py` prints it) rather than a hope.
+ *  3. The control arm's slope is a FLOOR: if the real arm's slope did not
+ *     exceed it, the consultations would be measuring nothing.
+ *
+ * ## What the slope is, and is not
+ *
+ * It is the MARGINAL cost of a consultation with this node's fields already
+ * hot — a LOWER bound on production's, where the same consultation is the
+ * first to touch them. The gap is small here (production consults the same 46
+ * `spineXxActive` fields at every one of ~857 k nodes, so they are hot in
+ * production too), unlike `GlobalsAmp`'s 4x cold/warm gap over a hash table.
+ * Off ([reps] `== 0`) the whole instrument is one static read and a
+ * perfectly-predicted branch in `spineEnterNode`.
+ */
+object SpineAmp {
+
+    /**
+     * Extra consultation passes per node; `0` = OFF.
+     *
+     * NEGATIVE is the CONTROL arm: `|reps|` passes of the identical loop with
+     * every consultation suppressed, which prices the loop skeleton (the `r`
+     * loop, two non-inlined calls per pass, and 59 bit tests) at the same site
+     * and frequency. The real arm's slope MINUS this one is the consultations.
+     */
+    var reps: Int = 0
+
+    /**
+     * The mask the CONTROL arm hands its passes: empty, so every consultation
+     * is suppressed. A mutable field rather than a `0L` literal at the call
+     * site so the control arm's inner passes see a runtime value exactly as
+     * the real arm's do, and the two arms differ in the mask's CONTENTS rather
+     * than in the shape of the code that loads it.
+     */
+    var controlMask: Long = 0L
+
+    /** Nanos inside the bracket, summed over bracketed nodes. */
+    var nanos: Long = 0
+
+    /** Bracketed nodes — the denominator of `p(r)`, one per node, never per pass. */
+    var nodes: Long = 0
+
+    /** Consultations actually performed. `0` in the control arm, by construction. */
+    var consults: Long = 0
+
+    /**
+     * What the REAL arm would consult, accumulated once per node from the
+     * masks' population count — i.e. `S` per node, independent of the arm.
+     * The exact-multiple check `consults == |reps| * expected` is this
+     * instrument's falsification, and the control arm's `consults == 0` while
+     * `expected > 0` is what proves the suppression rather than assuming it.
+     */
+    var expected: Long = 0
+
+    fun reset() {
+        nanos = 0
+        nodes = 0
+        consults = 0
+        expected = 0
+    }
+
+    fun report(): String = buildString {
+        appendLine("== (WARM.14) amplified rejecting-consultation price ==")
+        val arm = if (reps < 0) "CONTROL (consultations suppressed)" else "REAL"
+        appendLine(
+            "arm: $arm   reps: $reps   bracketed nodes: $nodes   " +
+                "total ${nanos / 1_000_000} ms"
+        )
+        val r = if (reps < 0) -reps else reps
+        appendLine(
+            "consultations performed: $consults   would-consult (S x nodes): $expected   " +
+                "exact multiple: ${expected > 0 && consults == r.toLong() * expected}"
+        )
+        val perNode = if (nodes > 0) nanos.toDouble() / nodes else 0.0
+        val s = if (nodes > 0) expected.toDouble() / nodes else 0.0
+        appendLine(
+            "p($r) = ${(perNode * 1000).toLong() / 1000.0} ns per bracketed node " +
+                "= boundary + $r * (skeleton + S * s_p),  S = ${(s * 100).toLong() / 100.0}"
+        )
+        appendLine(
+            "  slope from TWO runs at different reps: (p(r2) - p(r1)) / (r2 - r1); " +
+                "s_p = (slope_real - slope_control) / S"
         )
     }
 }
