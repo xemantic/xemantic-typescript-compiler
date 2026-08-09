@@ -749,3 +749,356 @@ at least one arm.**
   and copied at others, so an undo log needs a per-frame replay flag, and it is
   `currentLocalTypes` territory — the false-positive class round 869 declined
   for the same reason.
+
+---
+
+# (WARM.21) The profile re-taken a THIRD time — the vein's last coherent candidate, and the arc's close — round 874 (2026-08-09)
+
+**Nothing above this line is rewritten. § 0–§ 8 are round 868's record, § 9–§ 13
+round 869's and § 14–§ 20 round 870's; this section is the DIFF against them,
+which is the deliverable, plus the closing statement for the instrument.**
+
+## 21. Validity first — do the last four fixes appear as fallen rows?
+
+Same recipe (`scripts/round874-warm-leaf.sh`, cloned from round 870's), same
+window, two processes, same committed aggregator (`scripts/leaf_owner_profile.py`).
+Round 868's and round 870's dumps are re-aggregated with that same script, so
+the three tables differ in nothing but the binary.
+
+| | round 868 | round 870 | round 874 |
+| --- | ---: | ---: | ---: |
+| median warm rebuild | 7,814 / 7,717 ms | 7,089 / 7,048 ms | **6,591 / 6,603 ms** |
+| compile-thread samples | 8,026 / 8,010 | 8,002 / 7,990 | 8,182 / 8,168 |
+| max stack depth | 140 / 171 | 210 / 220 | 137 / 199 |
+| `checkSpine` INCLUSIVE | 73.66% / 72.83% | 75.28% / 74.34% | **74.09% / 74.05%** |
+
+The `checkSpine` row is the sanity check the round-868 `--stack-depth` trap
+demands, against this arc's independently known ~74%. Both runs land on it.
+
+**The four fixes, as rows (share run1/run2, and ms per rebuild):**
+
+| owner | 868 | 870 | 874 |
+| --- | ---: | ---: | ---: |
+| `computeTypeParamInfo` (round 870) | 1.16% / 90.1 ms | 1.41% / 99.9 ms | **0.18% / 11.7 ms** |
+| `computeExportedFnDeclsThroughStars` (round 868) | 2.64% / 205.3 ms | 0.00% | 0.00% |
+| `computeExportedVarDeclThroughStars` (round 868) | 1.43% / 111.4 ms | 0.00% | 0.00% |
+| `resolveBarrelStarTarget` (round 868) | 1.09% / 84.7 ms | 0.00% | 0.01% / 0.8 ms |
+| `spineOsPushCopy` (round 869) | 0.89% / 68.8 ms | 0.00% | 0.00% |
+| `spinePdPushCopy` (round 869) | 0.74% / 57.6 ms | 0.08% / 5.7 ms | 0.02% / 1.2 ms |
+
+Round 870's fix reads **99.9 → 11.7 ms**, against the 15 ms residue its own
+controlled row predicted. Rounds 868's and 869's stay gone.
+
+**Round 871's cross-request parse cache needed a different reading, and it is
+the sharpest validity check of the three rounds.** The crawl parses on
+`Dispatchers.Default` workers, which this instrument filters out by design — so
+the fix is invisible in the compile-thread table. Counted over ALL threads:
+
+| | 868 | 870 | 874 |
+| --- | ---: | ---: | ---: |
+| samples whose stack contains `Parser` | 251 / 285 | 265 / 282 | **0 / 0** |
+| samples containing `ProjectCompiler`/crawl | 268 / 296 | 282 / 301 | 29 / 24 |
+
+**Not one sample in 16,413 is in the parser.** `BenchMain` rebuilds in one
+process, so from the second rebuild on the cache serves all 78 files — which is
+what round 871 built it for, observed here by an instrument that knows nothing
+about it.
+
+## 22. The ranked table — three rounds, in ms per rebuild
+
+Round 870 § 14.2's denominator trap still governs every number: the JFR window
+is a fixed 90 s of steady state, so a SHARE is a share of wall time and an
+unchanged per-rebuild cost reads HIGHER after the compile gets faster (868 → 874
+is a factor 7,766/6,597 = **1.177**). Everything below is ms/rebuild.
+
+| # | owner | 874 r1/r2 | ms 868 | ms 870 | ms 874 | Δ870 | already attributed? |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | `Checker.cpaSpineLeave` | 1.66/1.64% | 132.2 | 115.4 | 108.9 | −6.4 | yes — round 847 warm handler #3 |
+| 2 | `Checker.ctaSpineEnter` | 1.44/1.53% | 93.0 | 107.8 | 98.0 | −9.8 | yes — round 847 #4 |
+| 3 | `FlowGraphBuilder.recordFlow` | 1.19/1.48% | 105.1 | 91.0 | 88.0 | −3.1 | yes — round 864 |
+| 4 | `Checker.ctaFnBodyFrame` | 1.31/1.31% | 99.3 | 107.8 | 86.3 | −21.5 | partly — SPINE.1 / the `varTypes` copy |
+| 5 | `NodeWalkKt.forEachChild` | 1.25/1.31% | 101.7 | 88.4 | 84.3 | −4.1 | yes — round 803 split it |
+| 6 | `Checker.spineWalkFile` | 1.06/1.00% | 85.2 | 66.7 | 68.2 | +1.5 | yes — the spine walk |
+| 7 | `Checker.ciaMutualFnDecls$resolve` | 1.56/0.48% | 92.0 | 62.7 | 67.4 | +4.6 | **DISCARDED AGAIN — 3.25× between processes** |
+| 8 | `Checker.getUnionType` | 0.99/0.95% | 77.0 | 77.3 | 64.2 | −13.2 | yes — type construction |
+| 9 | `Checker.narrowTypeFromFlowCore` | 0.84/0.91% | 58.6 | 60.1 | 57.7 | −2.4 | yes — round 735 |
+| 10 | `Checker.lookupPerFileForNode` | 0.77/0.84% | 46.0 | 64.1 | 53.3 | −10.8 | yes — INV.3(c) |
+| 11 | `Checker.spineArgListOverlay` | 0.78/0.83% | 54.2 | 61.4 | 53.3 | −8.2 | partly — round 868's (C2) |
+| 12 | `Checker.spineEnterNode` | 0.86/0.75% | 50.4 | 56.1 | 52.9 | −3.3 | yes — the dispatch spine |
+| 13 | `Checker.getTypeFromTypeNodeCore` | 0.72/0.71% | 48.9 | 44.6 | 47.2 | +2.6 | yes |
+| 14 | `FlowGraphBuilder.scanReassignedEntriesFast` | 0.79/0.64% | 50.4 | 43.3 | 47.2 | +3.9 | yes — round 862 |
+| 15 | `Checker.objectLiteralSatisfiesAugmentationMergedInterface` | 0.71/0.70% | 36.3 | 46.4 | 46.4 | −0.0 | NEW-ish — 0.70%, below the floor, UNMOVED in three rounds |
+| 16 | `Checker.lexLevelHasName` | 0.73/0.66% | 46.5 | 50.8 | 46.0 | −4.8 | yes — INV.4(c)(ii) |
+| 17 | `Checker.getTypeOfSymbol` | 0.72/0.60% | 50.4 | 45.5 | 43.6 | −1.9 | yes |
+| 18 | `Checker$Relation.get` | 0.61/0.67% | 32.9 | 43.3 | 42.4 | −0.9 | yes — relation cache probe |
+| 19 | `Checker.getTypeOfIdentifier` | 0.60/0.62% | 48.4 | 53.0 | 40.3 | −12.7 | yes |
+| 20 | `FlowGraph.<init>` | 0.62/0.56% | 35.8 | 39.3 | 39.1 | −0.2 | yes — the INV.2(b) side table |
+
+**Rows 21–60 are FLAT: every one of them is between 19 and 32 ms (0.3–0.5%).**
+The allocation-family shape is unchanged for the third round running —
+`HashMap`/`HashSet` **27.3% / 27.0%** of compile-thread samples, own code
+56.2/59.0, `String` 6.9/5.8, `ArrayList` 4.4/4.2 — and `java.util.regex` is
+**0.01% / 0.05%**, so round 863's "the class is exhausted on this profile"
+survives three rounds of change.
+
+Read row by row this table says the vein is finished: nothing NEW is above the
+1% floor, `ciaMutualFnDecls$resolve` fails the replication test for the second
+round in a row (1.56% against 0.48% on the same binary), and
+`objectLiteralSatisfiesAugmentationMergedInterface` has sat at 0.70% and 46 ms
+through three rounds.
+
+## 23. …and reading it row by row is what would have missed this round's finding
+
+The row is the wrong unit when the mechanism is spread across many of them.
+Round 868's (C1) was already this shape — three rows of 1.1–2.8% that were ONE
+barrel search — and it was caught only because the three rows were adjacent in
+the ranking and shared a name prefix. So this round aggregated the whole table
+by MECHANISM first, and the answer is not close:
+
+| family | ms 868 | ms 870 | ms 874 | 874 r1/r2 |
+| --- | ---: | ---: | ---: | ---: |
+| **INV.4 reach classifiers** (`spine*Status`/`*Edge`/`*Reached`/`tav*`) | 439.2 | 503.0 | **458.8** | 6.91% / 7.00% |
+| scope frame copies (`EpochMap`/`EpochSet`/`AnnScopeStack`/`*PushCopy`/overlays) | 423.8 | 321.3 | 299.8 | 4.53% / 4.55% |
+| `cta*` handlers | 259.6 | 292.1 | 264.7 | 4.00% / 4.03% |
+| name resolution (`lookupPerFile*`/`globalsForFile`/`NameScope`/`lexLevel*`) | 239.2 | 236.5 | 213.5 | 3.06% / 3.42% |
+| flow-graph build | 253.3 | 221.4 | 211.0 | 3.17% / 3.23% |
+| `cpa*` handlers | 221.3 | 207.3 | 194.9 | 2.86% / 3.05% |
+| type construction | 212.6 | 195.4 | 187.2 | 2.90% / 2.78% |
+| module/import resolution | 456.7 | 123.8 | 139.6 | 2.03% / 2.20% |
+| relation engine | 146.2 | 136.1 | 136.4 | 2.18% / 1.96% |
+| `ccet*` handlers | 138.0 | 132.2 | 125.9 | 1.85% / 1.97% |
+| narrowing walk | 91.0 | 123.7 | 121.5 | 1.55% / 2.13% |
+| M3 anchor marking (cta/cpa/ccet) | 97.4 | 104.3 | 108.1 | 1.71% / 1.57% |
+
+**The largest family in the warm compile is the INV.4 migration's own reach
+machinery — 458.8 ms = 6.95% — and it is spread over 66 owners of which the
+biggest is `spineTavStatus` at 0.57%.** That is not checking work: it is the
+scaffolding that answers "would the deleted walker have visited this node?", it
+is invisible to every section probe (nobody would bracket 66 functions), and it
+is precisely what round 732 said a per-kind dispatch table can NOT remove —
+"handlers keyed on PARENT edges, FRAME identity and nodeId REGISTRIES cannot be
+closed by the node's own kind AND are the expensive ones".
+
+Within it, one sub-family is coherent and above the floor: **the TAV pass**
+(INV.4(c)(iv), the migrated `checkTypeUsedAsValue`). Its entry point
+`spineTavIdentifier` reads **2.20% / 2.03% INCLUSIVE = 139.6 ms/rebuild**, and
+it replicates. Its members read 0.18–0.57% each and are scattered across rows
+22, 31, 34 and below, which is why rounds 868 and 870 both walked past it.
+
+## 24. The census — before any timing (round 801)
+
+`FrontEnd`'s TAV counters, compiler profile, warm. **Deterministic: identical to
+the unit on every instrumented rebuild of every process this round took.**
+
+```
+tav census: calls 381670, unreached 229034 (60%), reached 152636;
+            status hops 695014, level hops 798020, level builds 29862;
+            chain queries 169371, probes 467085;
+            value-hit 144029, INERT 151137 (99% of reached), emitted 0
+```
+
+Per warm rebuild, to emit **zero** diagnostics:
+
+- **381,670** identifier dispatches — the pass runs at 44.5% of all nodes;
+- **695,014** reach-classifier ancestor hops, 60% of which end in "this node was
+  never walked by the deleted checker";
+- **798,020** parent hops looking for the nearest scope level, each testing
+  seven node classes (`tavIsLevelOwner`);
+- **467,085** `HashSet<String>` probes up the level chain.
+
+And the line that decides the round: **151,137 of the 152,636 reached
+identifiers — 99.0% — are INERT.** Their name is in no visible level's
+`typeOnly`/`nsOnly` set and is not a type keyword, and this pass owns exactly two
+diagnostics, TS2693 ("only refers to a type") and TS2708 ("cannot use namespace
+as a value"), both of which require one of those. **No reordering of the pass's
+own tests could have emitted anything for them.**
+
+`emitted 0` is the same fact from the other side, and it is also round 793's
+warning arriving on schedule: the OFF arm's obvious falsifier — "the error count
+moves when the pass stops emitting" — is DEAD on the profile the prize is
+measured on, because tsc's own sources never use a type as a value. The
+falsification had to move to fixtures and to the 8-profile grid's instrument
+control (§ 27).
+
+## 25. The price — a CONTROLLED row, because the wall cannot see it
+
+The whole-rebuild wall was tried first and is **discarded, not quoted**: `plain`
+against `tavoff`, ABBA-rotated, 4 draws each in one warm process, read
+6,766 vs 6,642 ms — a 124 ms median difference with a per-arm sd of **3.0%** and
+**2 of 4 pairs** going the wrong way. That is round 840(c)'s reference case
+exactly, and on an effect of this size the wall is not an instrument.
+
+So the price is a controlled row: **one timestamp pair per dispatched
+identifier**, and the gate returns early INSIDE it, so the boundary count is
+identical on both arms and cancels in the difference (round 793's law, round
+795's shape — both arms live in ONE binary, selected by `--tavGateOff`).
+
+| draw (two processes, arms rotated) | gate OFF (pre-874) | gate ON |
+| --- | ---: | ---: |
+| process A, first / last draw of the arm | 336 / **159** ms | 52 / **38** ms |
+| process B, first / last draw of the arm | 325 / **156** ms | 43 / **34** ms |
+
+Round 846's first-draw-is-slowest law is visible in all four arms and the late
+draws are the ones read. **The difference is 121 ms (process A) and 122 ms
+(process B) — 0.8% apart across two processes — = 1.84% of a 6,597 ms warm
+rebuild.** It is independent of the boundary's own price, which is why no
+estimate of that price appears in the arithmetic. (For scale: the ON arm's whole
+row is 34–43 ms over 381,670 pairs, i.e. under 113 ns per pair including the
+work, so the remaining pass cost is a rounding error on top of the instrument.)
+
+Corroboration from the other instrument: the leaf profile put
+`spineTavIdentifier` at 139.6 ms INCLUSIVE, against the controlled row's 121–122
+ms captured plus a residue — two instruments, two mechanisms, 13% apart.
+
+## 26. What landed, and why the superset is the safe shape
+
+`spineTavCandidates` (a `HashSet<String>` per file) is every name that could
+possibly produce this pass's two diagnostics ANYWHERE in the file, as a
+deliberate SUPERSET. The gate is the pass's first line — ahead of the reach
+classifier, which is where 60% of the dispatches were dying — and a name that is
+not a candidate returns immediately.
+
+Its soundness is the claim that four sources are exhaustive over
+`tavBuildLevel`, and each is a line of that function:
+
+| source | where it comes from | how it is collected |
+| --- | --- | --- |
+| the file root's `typeOnly` + `nsOnly` | `tavBuildFileRoot`, already eager | at `spineTavSetup`, free |
+| `TYPE_ONLY_KEYWORDS` | the static keyword set | at `spineTavSetup`, so the gate is ONE probe not two |
+| `tavFnLevel`'s `typeOnly` | exactly TYPE PARAMETER names | at every `TypeParameter` ENTER |
+| `tavModuleLevel`'s `typeOnly` + `nsOnly` | exactly the interface / type-alias / namespace names declared directly in a module block | at every `ModuleBlock` ENTER |
+
+Two properties make this defensible rather than merely plausible:
+
+- **Completeness is structural, not positional.** The two incremental sources are
+  keyed on the node KIND and collected by the spine, which enters every
+  `TypeParameter` and every `ModuleBlock` in the file. A collector keyed on
+  syntactic POSITIONS (class methods, function declarations, class expressions,
+  …) is the fragile version of this and was rejected for that reason.
+- **`tavModuleLevel`'s filters are deliberately NOT reproduced** (`n !in values`,
+  `!tavHasValue(parent, n)`, `n !in KNOWN_GLOBALS`, the sub-module value
+  survey). Dropping a filter WIDENS the set, and a wider gate can only let more
+  identifiers through to an unchanged pass — so the gate cannot go stale if
+  those filters change, only if a new SYNTAX starts feeding a level.
+
+**Order.** The set is filled as the walk proceeds, so a contribution must be in
+it before any identifier that can see it is visited. It is: every node this pass
+REACHES lies inside a body, a parameter, a heritage expression or an expression
+subtree (`spineTavEdge`'s arms — a declaration's own NAME is `TAV_STOP`), and
+`forEachChild` visits `typeParameters` before parameters and body, and a
+`ModuleBlock` before its own statements. Two pins assert exactly that rather than
+leaving it as an argument.
+
+**The row is CONTROLLED — the change moves no boundary and no population:**
+
+| | before | after |
+| --- | ---: | ---: |
+| dispatches | 381,670 | 381,670 |
+| reach-classifier hops | 695,014 | 24,058 |
+| level hops | 798,020 | 9,773 |
+| level builds | 29,862 | 1,435 |
+| chain queries / probes | 169,371 / 467,085 | 1,510 / 2,720 |
+| gate refused | 0 | **365,784 (95.8%)** |
+| emitted | 0 | 0 |
+| **`FrontEnd.TAV`** | **156–159 ms** | **34–43 ms** |
+
+## 27. Gates, and the control the grid needed
+
+- Suite **14,220 / 0 failures / 3 skipped** over all four modules (`xml.etree`)
+  = round 873's 14,205 + the 15 new pins, exactly.
+- `cost_gate.py` **+0.00% on all 20 counters** — which is the expected answer
+  and not a vacuous one: this pass touches no counter the gate records, and 46
+  errors / 78 files says it really compiled the profile.
+- `huge_methods.py --fail-over 0` — 672 classes, **0 over the limit**.
+- **8-profile grid, both arms in ONE binary, diffed in both directions:
+  `added=0 removed=0` on all eight.** A one-binary grid is stronger than a
+  two-class-dir one (a stale dir cannot make the arms agree by being the same
+  dir twice), but it needs its own control, because a pass that emits nothing
+  would let two do-nothing arms agree. Both arms therefore run with
+  `--frontEnd`, and each profile records its census line: the gated arm refuses
+  **365,784 / 365,829 / 366,581 / 366,085 / 367,689 / 493,491 / 525,581 /
+  562,693** identifiers and the ungated arm refuses **0** on every one. The
+  script FAILS if a gated arm refuses under 1,000, or if either arm's reported
+  `gateOff` disagrees with its own flag.
+
+## 28. Pins and ablation
+
+`TavCandidateGateTest`, 15 pins, all over diagnostic CODES (never an AST node,
+whose power-assert rendering is its whole subtree). Eight single-mistake
+ablations, one arm per invocation, each reverted before the next, on a committed
+tree, every arm dry-run first for a real diff and a clean revert
+(`scripts/round874-ablate.sh` + `round874_ablate_apply.py`):
+
+| arm | the mistake | pins reddened |
+| --- | --- | ---: |
+| A1 | the file root's `typeOnly` dropped | 4 |
+| A2 | the file root's `nsOnly` dropped | 2 |
+| A3 | type-parameter names dropped | 4 |
+| A4 | a module block's interfaces dropped | 3 |
+| A5 | a module block's type aliases dropped | 2 |
+| A6 | a module block's nested namespaces dropped | 2 |
+| A7 | `TYPE_ONLY_KEYWORDS` not folded in | 2 |
+| A8 | the collector never called at all | 8 |
+
+Every arm reddens, **every red set is distinct**, and A8's is exactly the union
+of A3–A6's — which is the structural check that the spine hook feeds those four
+sources and nothing else. A5 and A6 initially reddened only their own pin
+because the equivalence pin's source list did not carry those two shapes; the
+list was extended rather than the coincidence being reported as coverage (round
+869's rule), and they now redden two apiece.
+
+**Two pins are reported as UN-ABLATED rather than counted**: `negative control -
+an ordinary value name emits neither diagnostic` and `a class extending an
+interface still emits TS2689`. Every arm at this seam makes the gate NARROWER,
+and a narrower gate can only LOSE an emission — it can never invent one, and it
+cannot reach `spineTavClassHeritage`, which is a different dispatch. Both pins
+therefore guard a direction no mistake in this construction can take, which is
+the same shape as round 868's `an unresolvable specifier contributes no edge`.
+
+## 29. THE CLOSING STATEMENT FOR THE LEAF-PROFILE ARC
+
+Three takes, three fixes, **~800 ms removed from a warm rebuild that started at
+~7.8 s** — the `export *` barrel search (581 ms), the two annotation scope
+frames (130 ms), the `getTypeParamInfo` namespace scan (67 ms) and now the TAV
+pass (121 ms), against a wall that is now ~6.6 s.
+
+**What the instrument found, and why nothing else could have.** All four are
+DIFFUSE costs: work spread over many call sites, inside regions that were
+already attributed, that no pass or section probe would ever have bracketed. The
+three earlier ones were single-row candidates; this one was only visible after
+aggregating the table by MECHANISM, which is the reading the next agent should
+start from rather than re-derive (§ 23, `scripts/round874_compare.py`).
+
+**What it cannot see, stated so it is not rediscovered.** It samples the compile
+thread, so the concurrent crawl is invisible (§ 21 had to count over all threads
+to see round 871's fix). It attributes leaves, so C2 inlining moves a row by up
+to 3.7× between processes and any share that does not replicate is not a share
+(`ciaMutualFnDecls$resolve`, twice now). Its shares are shares of WALL TIME, so
+a per-rebuild cost that never moved reads higher after every win. And it is not
+a price: round 623 eliminated a 5.3%-of-samples leaf for a measured −0.3%, and
+every candidate here was priced by a second instrument before anything was
+built.
+
+**Is the vein exhausted? By rows, yes.** After this round nothing NEW replicates
+above the 1% floor; rows 21–60 are uniformly 19–32 ms; the two next-largest
+NEW-ish rows (`objectLiteralSatisfiesAugmentationMergedInterface` at 46 ms and
+`lookupPerFileForNode` at 53 ms) have been recorded and declined by two rounds
+running; and `ciaMutualFnDecls$resolve` is unpriceable by this instrument.
+
+**By families, no — but what is left is one question, not a list.** The INV.4
+reach machinery is still **~338 ms after this round's 121**, spread over 65
+classifiers of which the largest is now 0.4%, and no other one of them has the
+TAV pass's property of owning a small, name-keyed emission alphabet that a gate
+can decide in one probe. Making the rest cheaper is not a candidate-hunting
+question any more; it is a design question about the pull-based memoized
+ancestor walk itself (a per-node status ARRAY per classifier, or a push-based
+status maintained by the walk that already knows the path). **That is the
+successor item, and the leaf profile has said everything it can about it.**
+
+The instrument to reach for next is therefore not a fourth re-take of this
+table. It is either (a) a census of the reach-classifier family as ONE
+population — how many classifiers are consulted per node, how many of those
+consultations are memo hits, and what a shared status word would cost — or (b)
+`docs/perf/warm-spine-attribution.md`'s per-handler table, which is where the
+remaining ~2 s of `cpaSpineLeave`/`ctaSpineEnter`/`ctaFnBodyFrame`/`recordFlow`
+lives and which this instrument keeps pointing at without being able to open.

@@ -20,6 +20,98 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 874 (2026-08-09) — (WARM.21): THE WARM LEAF PROFILE RE-TAKEN A THIRD TIME. BY ROWS THE VEIN IS
+EXHAUSTED — NOTHING NEW REPLICATES ABOVE 1% AND ROWS 21-60 ARE ALL 19-32 ms. BY **FAMILIES** IT IS NOT, AND
+THAT READING IS THE ROUND'S REAL INSTRUMENT: the largest thing in the warm compile is the INV.4 migration's
+own REACH MACHINERY, **458.8 ms = 6.95% over 66 owners** of which the biggest is 0.57%. Its one coherent
+sub-family is TAKEN: the TAV pass runs **381,670 times to emit ZERO diagnostics**, 99% of what it reaches
+cannot emit, and a per-file name-candidate gate takes its controlled row **156-159 -> 34-43 ms = 121 ms
+(1.84%)**. `docs/perf/warm-leaf-profile.md` §§ 21-29.
+
+- **(A) VALIDITY FIRST, AND IT PASSED ON ALL FOUR PRIOR FIXES.** Same recipe, same window, two processes,
+  round 868's and 870's dumps re-aggregated with the same committed script. `checkSpine` INCLUSIVE
+  **74.09%/74.05%** against the known ~74% (the `--stack-depth` trap's sanity check). Then:
+  `computeTypeParamInfo` **99.9 -> 11.7 ms** (round 870 predicted a 15 ms residue), the four round-868 star
+  walks and round-869 copy pushers still at 0.00%. **Round 871's parse cache needed a DIFFERENT reading and
+  is the sharpest of the four**: the crawl parses on worker threads, which this instrument filters out by
+  design, so it is invisible in the compile-thread table — counted over ALL threads, samples whose stack
+  contains `Parser` go **251/285 -> 265/282 -> 0/0**. Not one sample in 16,413.
+
+- **(B) THE ROW READING SAYS "DONE", AND IT WOULD HAVE MISSED THE ROUND.** Nothing NEW is above the 1% floor;
+  `ciaMutualFnDecls$resolve` fails replication for the SECOND round running (1.56% vs 0.48% on one binary);
+  `objectLiteralSatisfiesAugmentationMergedInterface` has sat at 0.70% / 46 ms through three rounds. So the
+  table was aggregated by MECHANISM instead (`scripts/round874_compare.py`), which is what round 868's (C1)
+  had been — three rows that were one barrel search — caught then only because they were adjacent and shared
+  a prefix. **INV.4 reach classifiers 458.8 ms, scope frame copies 299.8, `cta*` 264.7, name resolution
+  213.5, flow build 211.0.** The reach machinery is not checking work: it answers "would the deleted walker
+  have visited this node?", and round 732 already said a per-kind dispatch table cannot remove it.
+
+- **(C) THE CENSUS, WHICH DECIDED THE SHAPE (round 801's order).** Per warm rebuild: **381,670** dispatches
+  (44.5% of all nodes), **695,014** reach hops, **798,020** parent hops each testing seven node classes,
+  **467,085** chain probes — and **`emitted 0`**. **151,137 of 152,636 reached identifiers (99.0%) are
+  INERT**: their name is in no visible level's typeOnly/nsOnly set and is not a type keyword, and this pass
+  owns only TS2693 and TS2708, both of which require one. **`emitted 0` is also round 793 arriving on
+  schedule** — the OFF arm's obvious falsifier (the error count moves) is DEAD on the very profile the prize
+  is measured on, because tsc's own sources never use a type as a value.
+
+- **(D) THE WALL IS DISCARDED, NOT QUOTED.** `plain` vs `tavoff` ABBA x4 read 6,766 vs 6,642 ms — a 124 ms
+  median with a per-arm sd of **3.0%** and **2 of 4 pairs the wrong way**, round 840(c)'s reference case. The
+  price is a CONTROLLED ROW: one pair per dispatched identifier, the gate returning early INSIDE it, both
+  arms in ONE binary (`--tavGateOff`, round 795), so the boundary count is identical and cancels. Late draws,
+  two processes, arms rotated: **159 -> 38** and **156 -> 34 ms**, i.e. **121 and 122 ms, 0.8% apart** =
+  **1.84%** of a 6,597 ms rebuild. The profile's independent INCLUSIVE reading was 139.6 ms, 13% away.
+
+- **(E) WHAT LANDED, AND WHY A SUPERSET IS THE SAFE SHAPE.** `spineTavCandidates` is every name that could
+  produce either diagnostic ANYWHERE in the file. Four sources, exhaustive over `tavBuildLevel`: the eager
+  file root's typeOnly+nsOnly, `TYPE_ONLY_KEYWORDS` (folded in so the gate is ONE probe), type-PARAMETER
+  names, and a module block's interface/type-alias/namespace names. The last two are collected by the spine
+  at `TypeParameter`/`ModuleBlock` ENTER — **keyed on the node KIND, so completeness is structural**, where a
+  collector keyed on syntactic POSITIONS would be the fragile version. **`tavModuleLevel`'s filters are
+  deliberately NOT reproduced**: dropping a filter widens the set, and a wider gate can only let more
+  identifiers through to an unchanged pass. ORDER holds because every node this pass reaches lies inside a
+  body, a parameter, a heritage expression or an expression subtree, and `forEachChild` visits
+  `typeParameters` before all of them — two pins assert that rather than leaving it as an argument. Row
+  CONTROLLED: dispatches 381,670 both arms, **gate refused 365,784 = 95.8%**, hops 695,014 -> 24,058 and
+  798,020 -> 9,773, probes 467,085 -> 2,720, emitted 0 -> 0.
+
+- **(F) THE GRID NEEDED ITS OWN CONTROL, FOR THE SAME REASON (C) DID.** A one-binary grid is stronger than a
+  two-class-dir one, but two do-nothing arms would agree trivially on a pass that emits nothing. So both arms
+  run with `--frontEnd` and every profile records its census line: the gated arm refuses **365,784 / 365,829
+  / 366,581 / 366,085 / 367,689 / 493,491 / 525,581 / 562,693** and the ungated arm refuses **0**, with the
+  script FAILING if a gated arm refuses under 1,000 or if an arm's reported `gateOff` disagrees with its
+  flag. **added=0 removed=0 on all eight, both directions.**
+
+- **(G) PINS + ABLATION.** `TavCandidateGateTest`, 15 pins, all over diagnostic CODES. EIGHT single-mistake
+  ablations, one arm per invocation, each dry-run for a real diff and reverted before the next, on a
+  committed tree: A1 root typeOnly dropped (4 red), A2 root nsOnly (2), A3 type-parameter names (4), A4 a
+  module block's interfaces (3), A5 its type aliases (2), A6 its nested namespaces (2), A7 the keyword set
+  (2), A8 the collector never called (8). Every arm reddens, **every red set is distinct**, and **A8's is
+  exactly the union of A3-A6's** — the structural check that the spine hook feeds those four sources and
+  nothing else. A5/A6 first reddened only their own pin; the equivalence pin's source list was EXTENDED
+  rather than the coincidence being counted as coverage (round 869's rule). **Two pins are reported as
+  UN-ABLATED**: every arm here makes the gate NARROWER, and a narrower gate can only lose an emission, never
+  invent one, so `negative control - an ordinary value name emits neither diagnostic` and the TS2689 pin
+  guard a direction no mistake in this construction can take.
+
+- **(H) A CASCADE WORTH THE GOTCHA IT EARNED.** The first full-suite run came back with the test JVM CRASHED
+  after 1,237 tests and ten failures in six unrelated classes, including `ArrayIndexOutOfBoundsException`
+  inside census `ArrayList`s — a data-race signature. One cause: the two NEW CLI flags were not in the usage
+  text, and `CliModeRestoreTest` asserts that BEFORE its `ledger.restore()`, so every mode the sweep armed
+  stayed armed for the rest of the JVM. Documenting the flags fixed all ten.
+
+- **(I) GATES.** Suite **14,220 / 0 / 3 skipped** over all four modules (`xml.etree`) = 14,205 + the 15 new
+  pins, exactly. Core `commonMain` DID change, so both ran: `cost_gate.py` **+0.00% on all 20 counters** (46
+  errors / 78 files) and `huge_methods.py --fail-over 0` **0 over the limit**, 672 classes. No daemon left
+  running. Commits `9d8b4ee8`, `49e4795e`, and the docs commit.
+
+- **(J) THE ARC'S CLOSING STATEMENT** is written into the doc (§ 29) rather than left implicit: three takes,
+  four fixes, **~800 ms off a warm rebuild that started at ~7.8 s**; what the instrument cannot see (worker
+  threads, non-replicating leaves, shares that are shares of WALL not of a rebuild, and that it is never a
+  price); and the successor question, which is no longer candidate-hunting — **the remaining ~338 ms of reach
+  machinery is one design question** (a per-node status array, or a push-based status maintained by the walk
+  that already knows the path), and the next instrument is either a census of that family as ONE population
+  or `warm-spine-attribution.md`'s per-handler table.
+
 **Round 873 (2026-08-09) — (SERVE.2): THE FIRST DELIBERATE SWEEP OF THE CLI-vs-DAEMON ANSWER BOUNDARY.
 **31 cells, 45 invocation pairs**; the whole SEQUENCE axis was green on the first run, and the four cells that
 were not are ONE root cause — **a request never said where it was typed** — plus a hang the sweep tripped over:
@@ -709,75 +801,3 @@ round 864's. Nothing in the flow graph was changed; the census instrument landed
   the arms agree by being one build twice. Round-851 order throughout; the harness was committed
   before the ablation (round 789) and the tree is clean after it. Commits `6832bf20`, `01eb02d4`,
   `80ab6723`, `e3241623`.
-
-**Round 864 (2026-08-09) — (WARM.11): THE 4.20% "FLOW WALK" IS **TWO** WALKS, AND THE SECOND ONE IS NOT A
-FLOW WALK — `FlowGraph`'s nodeId SIDE TABLE, **162.3 ms**, VISITING **876,324** NODES TO ANSWER **168**
-QUERIES. FILLED FROM THE NODES `recordFlow` WROTE INSTEAD: **172.99 -> 58.63 ms = 114.4 ms = 1.665% of a
-warm rebuild, a 66.1% fall**.** `docs/perf/warm-flow-graph-attribution.md`.
-
-- **THE COLD PARTITION STOPPED ONE LEVEL SHORT AND NAMED ITS REMAINDER AFTER WHAT IT EXPECTED TO FIND.**
-  Round 801 subtracted the three B464 collectors from `BIND_FLOW` and called the remainder "the flow walk";
-  round 859 carried that forward warm as 316.7 ms = 4.20%, the largest region outside `checkSpine`.
-  Partitioned (residue **0.05%** — `build()` is four statements, so the split is exhaustive by
-  construction): the flow-MINTING walk is **196.3 ms** and `FlowGraph`'s CONSTRUCTOR is **163.5**, of which
-  **162.3** is a second whole-tree `forEachChild` traversal that boxes a `(pos,end)` `Long` per node and
-  asks the flow map. **A residue is not a measurement of whatever you then call it** — round 758 says that
-  about `checkSpine`'s "dispatch machinery, 42%", and here the residue was 57% the thing it was named after.
-
-- **ROUND 788 ANSWERED BY CENSUS, BEFORE THE FIX AND NOT AFTER IT.** The table has ONE reader, `flowAt`,
-  which falls back to the same map lookup for any node it does not own — so filling it from the RECORDED
-  nodes is exactly equivalent and the only work it MOVES is the query-time lookup for an unrecorded node.
-  Measured on the UNCHANGED binary: **176,935 `flowAt` calls, 168** of them on an in-tree node with an empty
-  slot. **612,220 build-time lookups existed to spare 168 query-time ones; produced-to-consumed 0.0003, not
-  1.000.** After the change the same census reads `map-fallback 168` — the identical set, on the other side
-  of `flowAt`.
-
-- **THE CENSUS ALSO SETTLED THE ALIASING QUESTION THE KDoc RAISES AND NOBODY HAD COUNTED**: `recordFlow`
-  writes **262,404** keys with **0** collisions, and **1,700** in-tree nodes are nonetheless answered from a
-  same-extent sibling's key. So aliasing is real on the READ side and absent on the WRITE side — which is
-  why the fill RE-READS the finished map per entry instead of storing the flow it saw at record time, and
-  why an implementation that stored `currentFlow` directly would be wrong on a program this profile does not
-  contain (round 792).
-
-- **MEASURED** (`BenchMain <proj> 3 8 frontend,frontend`, 2 processes x 2 draws per arm, all 8 instrumented
-  rebuilds answering 78 files / 46 errors): **192.48 / 162.33 / 180.66 / 156.48 -> 65.49 / 51.48 / 66.31 /
-  51.21 ms**. Round 846's first-draw-is-slowest law holds **4/4**; on second draws only the saving is
-  **108.1 ms = 1.573%**, the conservative figure. Census flips **876,324 nodes @ 30% answered -> 262,404 @
-  100%**. **The neighbouring MINT row also reads ~20 ms lower and that is NOT claimed** — the change can
-  only ADD work there (one list append per record), so it is draw noise or the young-gen relief of 612,220
-  fewer boxed `Long`s.
-
-- **`--flowIndexLegacy` KEEPS BOTH FILLS IN ONE BINARY** (round 795: build the verify flag so it doubles as
-  the instrument), which is also what makes the 8-profile grid stronger than a two-class-dir one here: the
-  flag picks the pre-864 path inside the COMMITTED binary, so a stale class dir cannot make the arms agree.
-
-- **A PRICED NEGATIVE IN THE SAME REGION: `mutableMapOf()` -> `HashMap()` on the flow map measures NOTHING**
-  — the mint row reads **245.2 vs 236.2 ms** all-draw and **177.0 vs 187.5** on second draws, i.e. **-8.9 ms
-  one way and +10.5 the other, the sign undecided**. 262,404 puts is not enough for `afterNodeInsertion` to
-  clear a row whose first draws span 261-343 ms. **Reverted** rather than kept: an unmeasurable change to a
-  narrowing-critical structure buys risk and nothing else, and round 801 kept its own zero-effect change
-  only because it was one arm of a verifier. Third measured instance of *an operation count is not a cost*.
-
-- **NOT ATTEMPTED, WITH THE ARITHMETIC: a per-node partition of the MINTING walk.** ~857,000 nodes x round
-  850's warm 97-202 ns is **83-173 ms against a 196 ms row** — the instrument would BE the measurement.
-  Anything inside that walk must be priced by counters plus an arm, which is exactly how the `HashMap`
-  question above was decided.
-
-- **ABLATION, FOUR FAULTS ONE AT A TIME (round 807), 120 pins per arm.** **M1** the arm made INERT -> **1
-  RED**, uniquely the non-vacuity pin — with the flag inert the differential compares a binary against
-  itself and passes forever, which is the blind-pin mechanism the pin exists for; **M2** the fill reads the
-  WRONG KEY -> **10**, uniquely its own being the "answered by the map" pin, and it also reddens
-  `FlowScanEquivalenceTest` / `NarrowableRootsPreTestTest` / `Inv2FlowLookupTest`, so a wrong flow answer is
-  visible to the narrowing pins; **M3** the fill also claims the recorded node's PARENT -> **2**, and it is
-  reported as having **no uniquely-its-own failure** (a strict subset of M2's set) — the dangerous direction
-  is caught by the general net, not by a named pin; **M4** `recordFlow` stops listing `Identifier` nodes ->
-  **0**, GREEN ON PURPOSE, because a missing slot degrades to the map fallback. M4 is the safety argument
-  demonstrated rather than asserted: **completeness of the list is a speed property, and the correctness
-  obligation is the other direction — never fill a slot for a node `recordFlow` did not write.**
-
-- **GATES.** Suite 14,090 -> **14,094 / 0 failures / 3 skipped** (real XML parser over all four modules);
-  `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **0 over the limit**, 655
-  classes; 8-profile grid **`added=0 removed=0` in BOTH directions** on every profile (46x7 / 94, no
-  truncated or empty capture); compiler-profile **emit tree byte-identical, 78 files**. Round-851 order
-  throughout; the tree was committed before the ablation (round 789) and is clean after it. Commits
-  `ae84496e`, `035446ea`, `2cee9cf5`, `538aac53`.

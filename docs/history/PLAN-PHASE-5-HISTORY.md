@@ -36844,3 +36844,75 @@ ARGUED FOR.**
   `TypeScriptCompiler.compileParsedCore` **21,535**, `Transformer.transformClassBody`
   **16,233**, `CompilerOptionsKt.applyDirective` **13,694**, `Transformer.transform`
   **8,934**.
+
+**Round 864 (2026-08-09) — (WARM.11): THE 4.20% "FLOW WALK" IS **TWO** WALKS, AND THE SECOND ONE IS NOT A
+FLOW WALK — `FlowGraph`'s nodeId SIDE TABLE, **162.3 ms**, VISITING **876,324** NODES TO ANSWER **168**
+QUERIES. FILLED FROM THE NODES `recordFlow` WROTE INSTEAD: **172.99 -> 58.63 ms = 114.4 ms = 1.665% of a
+warm rebuild, a 66.1% fall**.** `docs/perf/warm-flow-graph-attribution.md`.
+
+- **THE COLD PARTITION STOPPED ONE LEVEL SHORT AND NAMED ITS REMAINDER AFTER WHAT IT EXPECTED TO FIND.**
+  Round 801 subtracted the three B464 collectors from `BIND_FLOW` and called the remainder "the flow walk";
+  round 859 carried that forward warm as 316.7 ms = 4.20%, the largest region outside `checkSpine`.
+  Partitioned (residue **0.05%** — `build()` is four statements, so the split is exhaustive by
+  construction): the flow-MINTING walk is **196.3 ms** and `FlowGraph`'s CONSTRUCTOR is **163.5**, of which
+  **162.3** is a second whole-tree `forEachChild` traversal that boxes a `(pos,end)` `Long` per node and
+  asks the flow map. **A residue is not a measurement of whatever you then call it** — round 758 says that
+  about `checkSpine`'s "dispatch machinery, 42%", and here the residue was 57% the thing it was named after.
+
+- **ROUND 788 ANSWERED BY CENSUS, BEFORE THE FIX AND NOT AFTER IT.** The table has ONE reader, `flowAt`,
+  which falls back to the same map lookup for any node it does not own — so filling it from the RECORDED
+  nodes is exactly equivalent and the only work it MOVES is the query-time lookup for an unrecorded node.
+  Measured on the UNCHANGED binary: **176,935 `flowAt` calls, 168** of them on an in-tree node with an empty
+  slot. **612,220 build-time lookups existed to spare 168 query-time ones; produced-to-consumed 0.0003, not
+  1.000.** After the change the same census reads `map-fallback 168` — the identical set, on the other side
+  of `flowAt`.
+
+- **THE CENSUS ALSO SETTLED THE ALIASING QUESTION THE KDoc RAISES AND NOBODY HAD COUNTED**: `recordFlow`
+  writes **262,404** keys with **0** collisions, and **1,700** in-tree nodes are nonetheless answered from a
+  same-extent sibling's key. So aliasing is real on the READ side and absent on the WRITE side — which is
+  why the fill RE-READS the finished map per entry instead of storing the flow it saw at record time, and
+  why an implementation that stored `currentFlow` directly would be wrong on a program this profile does not
+  contain (round 792).
+
+- **MEASURED** (`BenchMain <proj> 3 8 frontend,frontend`, 2 processes x 2 draws per arm, all 8 instrumented
+  rebuilds answering 78 files / 46 errors): **192.48 / 162.33 / 180.66 / 156.48 -> 65.49 / 51.48 / 66.31 /
+  51.21 ms**. Round 846's first-draw-is-slowest law holds **4/4**; on second draws only the saving is
+  **108.1 ms = 1.573%**, the conservative figure. Census flips **876,324 nodes @ 30% answered -> 262,404 @
+  100%**. **The neighbouring MINT row also reads ~20 ms lower and that is NOT claimed** — the change can
+  only ADD work there (one list append per record), so it is draw noise or the young-gen relief of 612,220
+  fewer boxed `Long`s.
+
+- **`--flowIndexLegacy` KEEPS BOTH FILLS IN ONE BINARY** (round 795: build the verify flag so it doubles as
+  the instrument), which is also what makes the 8-profile grid stronger than a two-class-dir one here: the
+  flag picks the pre-864 path inside the COMMITTED binary, so a stale class dir cannot make the arms agree.
+
+- **A PRICED NEGATIVE IN THE SAME REGION: `mutableMapOf()` -> `HashMap()` on the flow map measures NOTHING**
+  — the mint row reads **245.2 vs 236.2 ms** all-draw and **177.0 vs 187.5** on second draws, i.e. **-8.9 ms
+  one way and +10.5 the other, the sign undecided**. 262,404 puts is not enough for `afterNodeInsertion` to
+  clear a row whose first draws span 261-343 ms. **Reverted** rather than kept: an unmeasurable change to a
+  narrowing-critical structure buys risk and nothing else, and round 801 kept its own zero-effect change
+  only because it was one arm of a verifier. Third measured instance of *an operation count is not a cost*.
+
+- **NOT ATTEMPTED, WITH THE ARITHMETIC: a per-node partition of the MINTING walk.** ~857,000 nodes x round
+  850's warm 97-202 ns is **83-173 ms against a 196 ms row** — the instrument would BE the measurement.
+  Anything inside that walk must be priced by counters plus an arm, which is exactly how the `HashMap`
+  question above was decided.
+
+- **ABLATION, FOUR FAULTS ONE AT A TIME (round 807), 120 pins per arm.** **M1** the arm made INERT -> **1
+  RED**, uniquely the non-vacuity pin — with the flag inert the differential compares a binary against
+  itself and passes forever, which is the blind-pin mechanism the pin exists for; **M2** the fill reads the
+  WRONG KEY -> **10**, uniquely its own being the "answered by the map" pin, and it also reddens
+  `FlowScanEquivalenceTest` / `NarrowableRootsPreTestTest` / `Inv2FlowLookupTest`, so a wrong flow answer is
+  visible to the narrowing pins; **M3** the fill also claims the recorded node's PARENT -> **2**, and it is
+  reported as having **no uniquely-its-own failure** (a strict subset of M2's set) — the dangerous direction
+  is caught by the general net, not by a named pin; **M4** `recordFlow` stops listing `Identifier` nodes ->
+  **0**, GREEN ON PURPOSE, because a missing slot degrades to the map fallback. M4 is the safety argument
+  demonstrated rather than asserted: **completeness of the list is a speed property, and the correctness
+  obligation is the other direction — never fill a slot for a node `recordFlow` did not write.**
+
+- **GATES.** Suite 14,090 -> **14,094 / 0 failures / 3 skipped** (real XML parser over all four modules);
+  `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **0 over the limit**, 655
+  classes; 8-profile grid **`added=0 removed=0` in BOTH directions** on every profile (46x7 / 94, no
+  truncated or empty capture); compiler-profile **emit tree byte-identical, 78 files**. Round-851 order
+  throughout; the tree was committed before the ablation (round 789) and is clean after it. Commits
+  `ae84496e`, `035446ea`, `2cee9cf5`, `538aac53`.
