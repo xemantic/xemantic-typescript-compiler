@@ -4199,7 +4199,26 @@ object FrontEnd {
     /** The outermost `export *` barrel walk — wall, nested levels excluded. */
     const val STAR = 36
 
-    const val N = 37
+    // ---- (WARM.17) round 870 — the WHOLE-PROGRAM SYMBOL SCAN behind
+    // `getTypeParamInfo`, the largest NEW candidate of the RE-TAKEN warm leaf
+    // profile (round 870 § 15: `computeTypeParamInfo` is ~1.41% of warm
+    // compile-thread samples, and was already flagged as unpriced in round
+    // 868's table).
+    //
+    // The function is memoized per `(name, forTypePosition)`, so this row is
+    // the MISS population by construction — which is exactly why no existing
+    // instrument could see it: a memo hides its miss cost inside whichever
+    // caller happened to ask first, and the callers are `checkTypeArgCount` and
+    // `isUnresolvedGenericType`, two ordinary checker predicates.
+    //
+    // One timestamp pair per MISS (not per call), so the boundary cost is
+    // bounded by the census's own [tpiMiss] and can be checked against the row
+    // rather than assumed.
+
+    /** `computeTypeParamInfo` — the `getTypeParamInfo` memo MISS. INSIDE [CHECK]. */
+    const val TPI = 37
+
+    const val N = 38
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4239,6 +4258,7 @@ object FrontEnd {
         "      of which the nodeId side-table walk",
         "      of which the closure-interval arrays",
         "  of which the export-star barrel search",
+        "  of which getTypeParamInfo MISSES",
     )
 
     /**
@@ -4251,7 +4271,7 @@ object FrontEnd {
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
-        CHECK, STAR, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        CHECK, STAR, TPI, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
         TRANSFORM, TR_JSXPRAGMA, EMIT, DECL_EMIT,
@@ -4383,6 +4403,35 @@ object FrontEnd {
 
     private var starDepth: Int = 0
     private var starT0: Long = 0
+
+    /**
+     * (WARM.17) census — the population behind [TPI].
+     *
+     * [tpiCalls] is every `getTypeParamInfo` question and [tpiMiss] the ones the
+     * memo could not answer: their ratio says whether the row is a hit-rate
+     * problem or a per-miss-cost problem, and only the second is fixable here.
+     *
+     * The two SCAN WIDTHS are the finding, and they are counted separately
+     * because they are different shapes of work and only one of them is
+     * removable. [tpiFileProbes] is loop 1 — one `result.locals[name]` HASH
+     * PROBE per program file, i.e. O(files) per miss. [tpiNsSyms] is loop 2 —
+     * every ENTRY of every file's `locals` iterated to find the `SymbolFlags.
+     * Module` ones, i.e. O(all symbols in the program) per miss, re-derived
+     * from scratch every time although the answer is a property of the binder
+     * tables and not of the name being asked. [tpiNsExports] is how many of
+     * those entries survived the flag test and cost an `exports` probe: the gap
+     * between it and [tpiNsSyms] is precisely the work an index deletes.
+     *
+     * [tpiFound] splits the misses by ANSWER (round 801's produced-versus-
+     * consumed test): a miss that answers null paid both whole scans to say
+     * nothing.
+     */
+    var tpiCalls: Long = 0
+    var tpiMiss: Long = 0
+    var tpiFileProbes: Long = 0
+    var tpiNsSyms: Long = 0
+    var tpiNsExports: Long = 0
+    var tpiFound: Long = 0
 
     // ---- (WARM.16) round 869 — the PER-SCOPE WHOLE-MAP COPY census.
     //
@@ -4528,6 +4577,8 @@ object FrontEnd {
         flowAtCalls = 0; flowAtInTreeNull = 0; flowAtForeign = 0
         starWalks = 0; starVisits = 0; starStmts = 0; starFound = 0
         starDepth = 0; starT0 = 0
+        tpiCalls = 0; tpiMiss = 0; tpiFileProbes = 0
+        tpiNsSyms = 0; tpiNsExports = 0; tpiFound = 0
         copyCalls = LongArray(CP_N); copyEntries = LongArray(CP_N)
         copyMax = LongArray(CP_N); copyMuts = LongArray(CP_N)
         copyUndo = LongArray(CP_N)
@@ -4564,6 +4615,22 @@ object FrontEnd {
     fun addStarStmts(n: Int) {
         if (mode != ON) return
         starStmts += n
+    }
+
+    /** (WARM.17) — one call per `getTypeParamInfo`, hit or miss. */
+    fun addTpiCall() {
+        if (mode != ON) return
+        tpiCalls++
+    }
+
+    /** (WARM.17) — one call per memo MISS, after the two scans have run. */
+    fun addTpiMiss(fileProbes: Long, nsSyms: Long, nsExports: Long, found: Boolean) {
+        if (mode != ON) return
+        tpiMiss++
+        tpiFileProbes += fileProbes
+        tpiNsSyms += nsSyms
+        tpiNsExports += nsExports
+        if (found) tpiFound++
     }
 
     /** (WARM.11) — one call per file, from `FlowGraphBuilder.build`. */
@@ -4758,6 +4825,19 @@ object FrontEnd {
                     "(${starVisits / starWalks}/walk), scan width $starStmts " +
                     "(${starStmts / starWalks}/walk); answered $starFound, " +
                     "null ${starWalks - starFound} (${(starWalks - starFound) * 100 / starWalks}%)"
+            )
+        }
+        // (WARM.17) — the getTypeParamInfo memo's MISS population. The two scan
+        // widths are reported separately because only one of them is removable:
+        // loop 1 is O(files) hash probes, loop 2 is O(all symbols) iteration.
+        if (tpiCalls > 0) {
+            appendLine(
+                "  tpi census: calls $tpiCalls, misses $tpiMiss " +
+                    "(${tpiMiss * 100 / tpiCalls}%, ${nanos[TPI] / 1_000_000} ms); " +
+                    "file probes $tpiFileProbes, ns symbols scanned $tpiNsSyms " +
+                    "(${if (tpiMiss > 0) tpiNsSyms / tpiMiss else 0}/miss), " +
+                    "of which module $tpiNsExports; answered $tpiFound, " +
+                    "null ${tpiMiss - tpiFound}"
             )
         }
         // (WARM.16) — the per-scope whole-map copies. `entries` is the volume a

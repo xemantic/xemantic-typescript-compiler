@@ -5388,6 +5388,22 @@ class Checker(
      *  consulted during init via isUnresolvedGenericType / checkTypeArgCount. */
     private val typeParamInfoCache = HashMap<String, TypeParamInfo?>()
 
+    /** (WARM.17) census accumulators for ONE [computeTypeParamInfo] call — never
+     *  recursive, reset at its entry, read by [getTypeParamInfo] right after it
+     *  returns. Declared before `init` per the init-order trap. */
+    private var tpiFileProbes: Long = 0
+    private var tpiNsSyms: Long = 0
+    private var tpiNsExports: Long = 0
+
+    /** (WARM.17) lazily-built [buildModuleSymbolScanIndex] — see its KDoc for why
+     *  it may be frozen and why it is built at the first miss rather than eagerly.
+     *  Declared before `init` per the init-order trap. */
+    private var moduleSymbolScanIndex: List<Symbol>? = null
+
+    private fun moduleSymbolScanIndex(): List<Symbol> =
+        moduleSymbolScanIndex ?: buildModuleSymbolScanIndex(binderResults)
+            .also { moduleSymbolScanIndex = it }
+
     /** M0.3(viii): memo for [fileDeclaresNonGenericType] (`file|name` → verdict, a
      *  pure function of the frozen ASTs — the un-memoized statement scan showed in
      *  the round-623 JFR). Declared before `init` per the init-order trap. */
@@ -51917,16 +51933,22 @@ interface DataView {
         // reference, so the full-program double scan showed at ~1.7% self in the harness
         // JFR. Tier-2 memo; a stored `TypeParamInfo?` distinguishes "computed-null" from
         // "absent" via the two maps' presence keys.
+        FrontEnd.addTpiCall()
         val cacheKey = if (forTypePosition) "T|$name" else "V|$name"
         if (typeParamInfoCache.containsKey(cacheKey)) return typeParamInfoCache[cacheKey]
+        val t0 = FrontEnd.t()
         val computed = computeTypeParamInfo(name, forTypePosition)
+        FrontEnd.close(FrontEnd.TPI, t0)
+        FrontEnd.addTpiMiss(tpiFileProbes, tpiNsSyms, tpiNsExports, computed != null)
         typeParamInfoCache[cacheKey] = computed
         return computed
     }
 
     private fun computeTypeParamInfo(name: String, forTypePosition: Boolean): TypeParamInfo? {
+        tpiFileProbes = 0; tpiNsSyms = 0; tpiNsExports = 0
         // Check binder symbols first (user-declared types)
         for (result in binderResults) {
+            tpiFileProbes++
             val symbol = result.locals[name] ?: continue
             val info = getTypeParamInfoFromSymbol(symbol, forTypePosition)
             if (info != null) return info
@@ -51941,16 +51963,20 @@ interface DataView {
                 }
             }
         }
-        // Also check namespace exports (for types declared inside namespaces)
-        for (result in binderResults) {
-            for ((_, sym) in result.locals) {
-                if (sym.flags.hasAny(SymbolFlags.Module)) {
-                    val exported = sym.exports?.get(name)
-                    if (exported != null) {
-                        val info = getTypeParamInfoFromSymbol(exported, forTypePosition)
-                        if (info != null) return info
-                    }
-                }
+        // Also check namespace exports (for types declared inside namespaces).
+        // (WARM.17) The `binderResults × locals` scan that used to find the
+        // module symbols is hoisted into [moduleSymbolScanIndex] — the SET of
+        // module symbols cannot depend on [name], only their `exports` probe
+        // can, and the probe still happens here, live. Same symbols, same
+        // order, same first-match.
+        val moduleSymbols = moduleSymbolScanIndex()
+        tpiNsSyms += moduleSymbols.size.toLong()
+        for (sym in moduleSymbols) {
+            tpiNsExports++
+            val exported = sym.exports?.get(name)
+            if (exported != null) {
+                val info = getTypeParamInfoFromSymbol(exported, forTypePosition)
+                if (info != null) return info
             }
         }
         val globalSymbol = globals[name]
