@@ -4974,6 +4974,35 @@ class Checker(
     /** Reusable ascent buffer for [spineTavStatus]. */
     private val spineTavChain = ArrayList<Node>(32)
 
+    /**
+     * (WARM.21) round 874 — every name that could possibly produce this pass's
+     * two diagnostics ANYWHERE in the current file, as a deliberate SUPERSET.
+     *
+     * TS2693 needs the name to be a type KEYWORD or in some visible level's
+     * `typeOnly` set; TS2708 needs it in some visible level's `nsOnly` set.
+     * Nothing else can emit, whatever the `values` chain says — so a name that
+     * is in NO level's typeOnly/nsOnly set anywhere in the file cannot emit at
+     * any position in it, and every hop, probe and reach verdict spent on it
+     * was spent establishing that nothing is wrong. On tsc's own sources that
+     * is 99% of the identifiers this pass reaches (round 874's census).
+     *
+     * The three sources of such names are exhaustive over [tavBuildLevel]:
+     *   - the file ROOT's typeOnly + nsOnly, built eagerly by [tavBuildFileRoot];
+     *   - `tavFnLevel`'s typeOnly, which is exactly TYPE PARAMETER names;
+     *   - `tavModuleLevel`'s typeOnly + nsOnly, which are exactly the
+     *     interface / type-alias / namespace names declared DIRECTLY in a
+     *     module block (its filters are dropped here — a superset is sound).
+     *
+     * The last two are collected INCREMENTALLY by [spineTavCandidateNode],
+     * keyed on the node KIND rather than on a syntactic position, so
+     * completeness is structural: the spine enters every `TypeParameter` and
+     * every `ModuleBlock` in the file. It is sound in ORDER because every node
+     * this pass REACHES lies inside a body, a parameter, a heritage expression
+     * or an expression subtree — and `forEachChild` visits `typeParameters`
+     * before all of those, and a `ModuleBlock` before its own statements.
+     */
+    private val spineTavCandidates = HashSet<String>()
+
     /** True for a file that is EXPLICITLY non-strict (strict/alwaysStrict false,
      *  no module/"use strict") — the let/const-implies-strict TS1212 shortcut must
      *  not fire there (tsc only has TS2480 for `let let` in non-strict code;
@@ -23463,6 +23492,10 @@ class Checker(
     private fun spineEnterKindDispatch(node: Node) {
         when ((node as NodeBase).kindId) {
             NodeKind.IDENTIFIER -> { node as Identifier; spineTavIdentifier(node) }
+            // (WARM.21) — the two kinds that can add a name to the TAV
+            // emission-candidate set below the file root. Keyed on the KIND, so
+            // completeness is structural: the spine enters every one of them.
+            NodeKind.TYPE_PARAMETER, NodeKind.MODULE_BLOCK -> spineTavCandidateNode(node)
             NodeKind.PROPERTY_DECLARATION -> {
                 node as PropertyDeclaration
                 spineCheckAccessorModifier(node)
@@ -25460,16 +25493,27 @@ class Checker(
         if (!spineTavActive) {
             spineTavRoot = null
             spineTavStatusMemo = ByteArray(0)
+            spineTavCandidates.clear()
             currentForwardLibTypeNames = emptySet()
             return
         }
         spineTavStatusMemo = ByteArray(result.sourceFile.nodeCount)
-        spineTavRoot = tavBuildFileRoot(result)
+        val root = tavBuildFileRoot(result)
+        spineTavRoot = root
+        // (WARM.21) the file's emission-candidate names. TYPE_ONLY_KEYWORDS is
+        // folded in so the gate is ONE probe rather than two — the keyword arm
+        // is consulted only off the typeof path, so admitting a keyword here is
+        // strictly more permissive and cannot lose an emission.
+        spineTavCandidates.clear()
+        root.typeOnly?.let { spineTavCandidates.addAll(it) }
+        root.nsOnly?.let { spineTavCandidates.addAll(it) }
+        spineTavCandidates.addAll(TYPE_ONLY_KEYWORDS)
     }
 
     private fun spineTavTeardown() {
         spineTavActive = false
         spineTavRoot = null
+        spineTavCandidates.clear()
         spineTavStatusMemo = ByteArray(0)
         spineTavLevelMemo.clear()
         spineTavHeritageSkip.clear()
@@ -25490,28 +25534,46 @@ class Checker(
 
     private fun tavHasValue(level: TavLevel?, name: String): Boolean {
         var l = level
+        var probes = 0
         while (l != null) {
-            if (l.values?.contains(name) == true) return true
+            probes++
+            if (l.values?.contains(name) == true) {
+                FrontEnd.addTavChain(probes)
+                return true
+            }
             l = l.parent
         }
+        FrontEnd.addTavChain(probes)
         return false
     }
 
     private fun tavIsTypeOnly(level: TavLevel?, name: String): Boolean {
         var l = level
+        var probes = 0
         while (l != null) {
-            if (l.typeOnly?.contains(name) == true) return true
+            probes++
+            if (l.typeOnly?.contains(name) == true) {
+                FrontEnd.addTavChain(probes)
+                return true
+            }
             l = l.parent
         }
+        FrontEnd.addTavChain(probes)
         return false
     }
 
     private fun tavIsNsOnly(level: TavLevel?, name: String): Boolean {
         var l = level
+        var probes = 0
         while (l != null) {
-            if (l.nsOnly?.contains(name) == true) return true
+            probes++
+            if (l.nsOnly?.contains(name) == true) {
+                FrontEnd.addTavChain(probes)
+                return true
+            }
             l = l.parent
         }
+        FrontEnd.addTavChain(probes)
         return false
     }
 
@@ -25531,19 +25593,26 @@ class Checker(
     private fun tavLevelAt(node: Node): TavLevel? {
         var child: Node = node
         var p: Node? = (node as NodeBase).parent
+        var hops = 0
         while (p != null) {
+            hops++
             if (tavIsLevelOwner(p)) {
-                if (!(p is MethodDeclaration && child === p.name)) return tavLevelFor(p)
+                if (!(p is MethodDeclaration && child === p.name)) {
+                    FrontEnd.addTavHops(0, hops, 0)
+                    return tavLevelFor(p)
+                }
             }
             child = p
             p = (p as NodeBase).parent
         }
+        FrontEnd.addTavHops(0, hops, 0)
         return spineTavRoot
     }
 
     private fun tavLevelFor(owner: Node): TavLevel? {
         val id = (owner as NodeBase).nodeId
         if (id >= 0) spineTavLevelMemo[id]?.let { return it }
+        FrontEnd.addTavHops(0, 0, 1)
         val parent = tavLevelAt(owner)
         val level = tavBuildLevel(owner, parent)
         if (id >= 0 && level != null) spineTavLevelMemo[id] = level
@@ -25803,7 +25872,9 @@ class Checker(
         chain.clear()
         var cur: Node = node
         var status: Int
+        var hops = 0
         while (true) {
+            hops++
             val parent = (cur as NodeBase).parent
             if (parent == null) {
                 status = if (cur is SourceFile) TAV_REACHED else TAV_UNREACHED
@@ -25834,6 +25905,7 @@ class Checker(
             if (id >= 0 && id < memo.size) memo[id] = status.toByte()
         }
         chain.clear()
+        FrontEnd.addTavHops(hops, 0, 0)
         return status
     }
 
@@ -25843,24 +25915,79 @@ class Checker(
      *  never fires TS2708; the typeof rule skips the type-keyword set. */
     private fun spineTavIdentifier(id: Identifier) {
         if (!spineTavActive) return
+        // (WARM.21) the measurement arm: skip the pass wholesale. It takes no
+        // timestamp pair on purpose — a per-identifier span would cost 390k x
+        // 97-202 ns (round 850) and BE the measurement — so the price is read
+        // off the whole-rebuild wall, ABBA-rotated, and its falsifier is that
+        // the compile's ERROR COUNT moves when the pass stops emitting.
+        if (FrontEnd.tavOff) return
+        if (FrontEnd.mode != FrontEnd.ON) {
+            spineTavIdentifierCore(id)
+            return
+        }
+        FrontEnd.addTavCall()
+        val t0 = FrontEnd.t()
+        spineTavIdentifierCore(id)
+        FrontEnd.close(FrontEnd.TAV, t0)
+    }
+
+    /**
+     * The pass proper. Split out so the (WARM.21) span brackets exactly this and
+     * nothing else — in particular not [tavCensusCouldEmit], whose second chain
+     * walk is real work and would inflate the row it is measured beside.
+     */
+    private fun spineTavIdentifierCore(id: Identifier) {
+        // (WARM.21) the name-candidate gate. It is deliberately the FIRST thing
+        // in the pass — ahead of the reach classifier, whose own memo-miss walk
+        // is 60% of the dispatches — because a name that cannot emit anywhere in
+        // this file cannot emit here, so nothing below it can change an answer.
+        // `--tavGateOff` keeps the pre-874 path in the same binary (round 795),
+        // which is what makes the capture a controlled row rather than a
+        // two-build difference.
+        if (!TavGate.off && id.text !in spineTavCandidates) {
+            FrontEnd.addTavRefused()
+            return
+        }
         val status = spineTavStatus(id)
-        if (status == TAV_UNREACHED) return
+        if (status == TAV_UNREACHED) {
+            FrontEnd.addTavExit(unreached = true, valueHit = false, inert = false)
+            return
+        }
         val name = id.text
         val parent = (id as NodeBase).parent
         val isNewCtor = parent is NewExpression && parent.expression === id
         val isTypeofOperand = parent is TypeOfExpression && parent.expression === id
         val level = tavLevelAt(id)
-        if (tavHasValue(level, name)) return
+        if (tavHasValue(level, name)) {
+            if (FrontEnd.tavInertCensus) FrontEnd.addTavExit(
+                unreached = false, valueHit = true, inert = !tavCensusCouldEmit(level, name),
+            )
+            return
+        }
         val typeOnlyHit = if (isTypeofOperand) tavIsTypeOnly(level, name)
         else name in TYPE_ONLY_KEYWORDS || tavIsTypeOnly(level, name)
         if (typeOnlyHit) {
+            FrontEnd.addTavExit(unreached = false, valueHit = false, inert = false)
+            FrontEnd.addTavEmit()
             emitTS2693(name, id, spineSource, spineFileName)
             return
         }
-        if (isNewCtor) return
+        if (isNewCtor) {
+            if (FrontEnd.tavInertCensus) FrontEnd.addTavExit(
+                unreached = false, valueHit = false, inert = !tavCensusCouldEmit(level, name),
+            )
+            return
+        }
         // A plain-`=` assignment target: checkConstAssignment owns TS2708 there.
-        if (status == TAV_REACHED_NONS) return
+        if (status == TAV_REACHED_NONS) {
+            if (FrontEnd.tavInertCensus) FrontEnd.addTavExit(
+                unreached = false, valueHit = false, inert = !tavCensusCouldEmit(level, name),
+            )
+            return
+        }
         if (tavIsNsOnly(level, name)) {
+            FrontEnd.addTavExit(unreached = false, valueHit = false, inert = false)
+            FrontEnd.addTavEmit()
             val start = id.pos
             val (line, character) = getLineAndCharacterOfPosition(spineSource, start)
             diagnostics.add(Diagnostic(
@@ -25873,7 +26000,63 @@ class Checker(
                 start = start,
                 length = name.length,
             ))
+        } else {
+            // Reached this line = neither typeOnly nor nsOnly hit, i.e. INERT by
+            // construction: no reordering of the tests could have emitted here.
+            FrontEnd.addTavExit(unreached = false, valueHit = false, inert = true)
         }
+    }
+
+    /**
+     * (WARM.21) census only — armed by `--frontEnd`, absent from every timing
+     * arm, and deliberately walking the chain with its OWN loops so it does not
+     * inflate the `tavChainQueries`/`tavChainProbes` counters the production
+     * path fills.
+     *
+     * "Could emit" is the exact complement of INERT: the two diagnostics this
+     * pass owns require the name to be type-only or namespace-only somewhere in
+     * the visible chain, or to be a type KEYWORD — nothing else can produce
+     * one, whatever the values chain says. So a `false` here is a proof that
+     * every hop and probe the identifier paid for was spent establishing that
+     * nothing is wrong.
+     */
+    /**
+     * (WARM.21) — extend [spineTavCandidates] with what a level built AT or
+     * BELOW [node] could contribute to a `typeOnly`/`nsOnly` set.
+     *
+     * Called from the spine's per-kind enter dispatch for exactly two kinds,
+     * which is what makes it complete: `tavFnLevel` puts nothing but TYPE
+     * PARAMETER names into `typeOnly`, and `tavModuleLevel` nothing but the
+     * interface / type-alias / namespace names declared directly in a module
+     * block. Its filters (`n !in values`, `!tavHasValue(parent, n)`,
+     * `n !in KNOWN_GLOBALS`, the sub-module value survey) are deliberately NOT
+     * reproduced: dropping a filter widens the set, and a WIDER gate can only
+     * let more identifiers through to the unchanged pass.
+     */
+    private fun spineTavCandidateNode(node: Node) {
+        if (!spineTavActive) return
+        when (node) {
+            is TypeParameter -> spineTavCandidates.add(node.name.text)
+            is ModuleBlock -> for (st in node.statements) when (st) {
+                is InterfaceDeclaration -> spineTavCandidates.add(st.name.text)
+                is TypeAliasDeclaration -> spineTavCandidates.add(st.name.text)
+                is ModuleDeclaration ->
+                    (st.name as? Identifier)?.text?.let { spineTavCandidates.add(it) }
+                else -> {}
+            }
+            else -> {}
+        }
+    }
+
+    private fun tavCensusCouldEmit(level: TavLevel?, name: String): Boolean {
+        if (name in TYPE_ONLY_KEYWORDS) return true
+        var l = level
+        while (l != null) {
+            if (l.typeOnly?.contains(name) == true) return true
+            if (l.nsOnly?.contains(name) == true) return true
+            l = l.parent
+        }
+        return false
     }
 
     /** The deleted ClassDeclaration arm's `extends` handling: a pure-interface

@@ -4218,7 +4218,19 @@ object FrontEnd {
     /** `computeTypeParamInfo` — the `getTypeParamInfo` memo MISS. INSIDE [CHECK]. */
     const val TPI = 37
 
-    const val N = 38
+    // ---- (WARM.21) round 874 — the TAV pass, ONE timestamp pair per dispatched
+    // identifier (381,670 per rebuild on the compiler profile).
+    //
+    // That is a boundary cost of 37-77 ms at round 850's warm 97-202 ns, i.e.
+    // the same order as the region itself, so THIS ROW IS NEVER A PRICE ON ITS
+    // OWN. It exists to be differenced against ITSELF on a binary carrying both
+    // arms (round 795): the gate returns early INSIDE the span, so the call
+    // count and hence the boundary count are IDENTICAL in both arms and the
+    // difference is boundary-free by construction (round 793's law).
+    /** `spineTavIdentifier` — the whole TAV dispatch. INSIDE [CHECK]. */
+    const val TAV = 38
+
+    const val N = 39
 
     val names: Array<String> = arrayOf(
         "config load + @types + root glob",
@@ -4259,6 +4271,7 @@ object FrontEnd {
         "      of which the closure-interval arrays",
         "  of which the export-star barrel search",
         "  of which getTypeParamInfo MISSES",
+        "  of which the TAV per-identifier dispatch",
     )
 
     /**
@@ -4271,7 +4284,7 @@ object FrontEnd {
         FLOW_BIND,
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         FLOW_INDEX, IDX_SIDETABLE, IDX_CLOSURES,
-        CHECK, STAR, TPI, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
+        CHECK, STAR, TPI, TAV, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
         ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
         TRANSFORM, TR_JSXPRAGMA, EMIT, DECL_EMIT,
@@ -4432,6 +4445,66 @@ object FrontEnd {
     var tpiNsSyms: Long = 0
     var tpiNsExports: Long = 0
     var tpiFound: Long = 0
+
+    // ---- (WARM.21) round 874 — the TAV pass (INV.4(c)(iv), the migrated
+    // `checkTypeUsedAsValue`), the largest REPLICATING candidate of the third
+    // warm leaf profile. No single member of it is above 0.6% of the profile,
+    // which is why two earlier re-takes of that table walked past it: it is
+    // `spineTavIdentifier` (2.20%/2.03% INCLUSIVE, ~140 ms/rebuild) split over
+    // `spineTavStatus`, `spineTavEdge`, `tavLevelAt`, `tavLevelFor` and the
+    // three `TavLevel`-chain queries, each of which reads as a separate 0.2-0.6%
+    // row. A FAMILY aggregation of the leaf table is what surfaced it.
+    //
+    // The pass is dispatched at EVERY Identifier — 44.5% of all nodes — to emit
+    // two diagnostics (TS2693 "only refers to a type", TS2708 "cannot use
+    // namespace as a value") that fire a handful of times per program. So the
+    // census's whole job is the round-801 produced-versus-consumed ratio in the
+    // shape that decides this: how much of the per-identifier scope work is
+    // performed for a name that could not possibly emit either diagnostic.
+    //
+    // [tavOff] is the price instrument and takes NO timestamp pair: a per-node
+    // span would cost 390k x 97-202 ns (round 850) and BE the measurement, so
+    // the pass is switched off wholesale and the whole-rebuild wall is read
+    // ABBA-rotated. Its own falsifier is free and unambiguous — with the pass
+    // off the compile loses its TS2693/TS2708 emissions, so the ERROR COUNT
+    // moves, which is what separates "the arm ran" from "the flag did nothing".
+
+    /** Skip `spineTavIdentifier` wholesale — a MEASUREMENT arm, never production. */
+    var tavOff: Boolean = false
+
+    /**
+     * Arm the INERT classification, which walks the typeOnly/nsOnly chains a
+     * second time for every identifier the pass exits early on.
+     *
+     * It is a separate switch from [mode] because that second walk is real work
+     * and would land INSIDE the [TAV] span, inflating the very row the span
+     * exists to difference. So `frontend` gives the row and `tavcensus` gives
+     * the population, and neither contaminates the other.
+     */
+    var tavInertCensus: Boolean = false
+
+    /** Identifiers the pass was dispatched at, on a file where it is active. */
+    var tavCalls: Long = 0
+    /** Of those, the ones the reach classifier answered TAV_UNREACHED. */
+    var tavUnreached: Long = 0
+    /** Ancestor steps taken by `spineTavStatus`'s own memo-miss walk. */
+    var tavStatusHops: Long = 0
+    /** Parent steps taken by `tavLevelAt` looking for the nearest level owner. */
+    var tavLevelHops: Long = 0
+    /** `TavLevel`s actually built (a `tavLevelFor` memo MISS). */
+    var tavLevelBuilds: Long = 0
+    /** Levels visited by the three chain queries, and how many queries ran. */
+    var tavChainProbes: Long = 0
+    var tavChainQueries: Long = 0
+    /** Reached identifiers whose name has a VALUE meaning — the suppressing exit. */
+    var tavValueHits: Long = 0
+    /** Reached identifiers whose name is in NO level's typeOnly/nsOnly set and is
+     *  not a type keyword: the population that cannot emit and pays anyway. */
+    var tavInert: Long = 0
+    /** TS2693 + TS2708 actually emitted. */
+    var tavEmits: Long = 0
+    /** Dispatches the (WARM.21) name-candidate gate refused before any work. */
+    var tavRefused: Long = 0
 
     // ---- (WARM.16) round 869 — the PER-SCOPE WHOLE-MAP COPY census.
     //
@@ -4626,6 +4699,9 @@ object FrontEnd {
         starDepth = 0; starT0 = 0
         tpiCalls = 0; tpiMiss = 0; tpiFileProbes = 0
         tpiNsSyms = 0; tpiNsExports = 0; tpiFound = 0
+        tavCalls = 0; tavUnreached = 0; tavStatusHops = 0; tavLevelHops = 0
+        tavLevelBuilds = 0; tavChainProbes = 0; tavChainQueries = 0
+        tavValueHits = 0; tavInert = 0; tavEmits = 0; tavRefused = 0
         copyCalls = LongArray(CP_N); copyEntries = LongArray(CP_N)
         copyMax = LongArray(CP_N); copyMuts = LongArray(CP_N)
         copyUndo = LongArray(CP_N)
@@ -4669,6 +4745,47 @@ object FrontEnd {
     fun addTpiCall() {
         if (mode != ON) return
         tpiCalls++
+    }
+
+    /** (WARM.21) — one reached-identifier dispatch of the TAV pass. */
+    fun addTavCall() {
+        if (mode != ON) return
+        tavCalls++
+    }
+
+    /** (WARM.21) — the pass's own exits, classified. */
+    fun addTavExit(unreached: Boolean, valueHit: Boolean, inert: Boolean) {
+        if (mode != ON) return
+        if (unreached) tavUnreached++
+        if (valueHit) tavValueHits++
+        if (inert) tavInert++
+    }
+
+    /** (WARM.21) — one TS2693/TS2708 actually emitted by the pass. */
+    fun addTavEmit() {
+        if (mode != ON) return
+        tavEmits++
+    }
+
+    /** (WARM.21) — one dispatch the name-candidate gate refused. */
+    fun addTavRefused() {
+        if (mode != ON) return
+        tavRefused++
+    }
+
+    /** (WARM.21) — ancestor/parent steps, level builds and chain probes. */
+    fun addTavHops(statusHops: Int, levelHops: Int, levelBuilds: Int) {
+        if (mode != ON) return
+        tavStatusHops += statusHops
+        tavLevelHops += levelHops
+        tavLevelBuilds += levelBuilds
+    }
+
+    /** (WARM.21) — one `TavLevel`-chain query and the levels it visited. */
+    fun addTavChain(probes: Int) {
+        if (mode != ON) return
+        tavChainQueries++
+        tavChainProbes += probes
     }
 
     /** (WARM.17) — one call per memo MISS, after the two scans have run. */
@@ -4906,6 +5023,24 @@ object FrontEnd {
                     "(${if (tpiMiss > 0) tpiNsSyms / tpiMiss else 0}/miss), " +
                     "of which module $tpiNsExports; answered $tpiFound, " +
                     "null ${tpiMiss - tpiFound}"
+            )
+        }
+        // (WARM.21) — the TAV pass. The line that decides anything is [tavInert]:
+        // a reached identifier whose name is in NO visible typeOnly/nsOnly set
+        // and is not a type keyword can emit NEITHER diagnostic, so every hop
+        // and probe it paid for was spent establishing that nothing is wrong.
+        if (tavCalls > 0) {
+            val reached = tavCalls - tavUnreached
+            appendLine(
+                "  tav census: calls $tavCalls, unreached $tavUnreached " +
+                    "(${tavUnreached * 100 / tavCalls}%), reached $reached; " +
+                    "status hops $tavStatusHops, level hops $tavLevelHops, " +
+                    "level builds $tavLevelBuilds; chain queries $tavChainQueries, " +
+                    "probes $tavChainProbes; value-hit $tavValueHits, " +
+                    "INERT $tavInert" +
+                    (if (reached > 0) " (${tavInert * 100 / reached}% of reached)" else "") +
+                    ", emitted $tavEmits; gate refused $tavRefused" +
+                    " (${tavRefused * 100 / tavCalls}%), gateOff=${TavGate.off}"
             )
         }
         // (WARM.16) — the per-scope whole-map copies. `entries` is the volume a

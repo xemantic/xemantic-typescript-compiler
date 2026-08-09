@@ -399,6 +399,19 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--parseCacheOff", "--parsecacheoff" -> {
                 modes.set(CrawlParseCache::enabled, false)
             }
+            // (WARM.21) round 874 — the TAV pass's OFF arm, for pricing it off
+            // the whole-rebuild wall. It deliberately does NOT arm `--frontEnd`:
+            // the census's own extra chain walks would land inside the very
+            // measurement this flag exists to take. Its falsifier is the error
+            // count, which moves because the pass stops emitting.
+            "--tavOff", "--tavoff" -> {
+                modes.set(FrontEnd::tavOff, true)
+            }
+            // (WARM.21) — the pre-874 path, in the SAME binary, so the capture
+            // is a controlled row and the ablation has a non-source switch.
+            "--tavGateOff", "--tavgateoff" -> {
+                modes.set(TavGate::off, true)
+            }
             "--parseAmp", "--parseamp" -> {
                 i++
                 if (i < args.size) {
@@ -843,6 +856,13 @@ internal fun usageText(): String =
                              arms --frontEnd. Two values of N cancel the crawl's fixed floor and
                              give the wall cost of ONE parse round = the ceiling on a
                              cross-request parse cache in the --serve daemon
+          --tavOff           (WARM.21) skip the TAV per-identifier pass (TS2693/TS2708) entirely
+                             — a MEASUREMENT arm read off the whole-rebuild wall, never
+                             production; its falsifier is that those diagnostics disappear
+          --tavGateOff       (WARM.21) restore the pre-874 TAV path: every reached identifier
+                             pays the reach walk, the level lookup and the chain queries, with
+                             no name-candidate gate in front. The in-binary OFF arm that makes
+                             the capture a controlled row
           --flowScanLegacy   (FRONT.2) run the pre-801 B464 reassignment scanner (A/B arm)
           --verifyFlowScan   (FRONT.2) run BOTH scanners and report divergences
           --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner

@@ -38,6 +38,7 @@ import com.xemantic.typescript.compiler.ArgSections
 import com.xemantic.typescript.compiler.CallSections
 import com.xemantic.typescript.compiler.CpaSections
 import com.xemantic.typescript.compiler.CtaSections
+import com.xemantic.typescript.compiler.TavGate
 import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.LibTypeCensus
@@ -211,6 +212,29 @@ internal val TIERS = listOf(
     // [tierBegin] and restored in [tierStop], and a missed restore degrades to
     // running production semantics slowly, never to a wrong answer.
     "gatedfull",
+    // (WARM.21) round 874 — the TAV pass's OFF arm and nothing else. Like
+    // `plain` it arms NO probe, so its `ms` is a production-comparable wall and
+    // `tavoff,plain,plain,tavoff` is an ABBA rotation of the two arms in one
+    // warm process. It must have its own [tierBegin] arm for the same reason
+    // `plain` does: the `else` branch would enable the pass probe and make the
+    // control arm the more expensive one.
+    //
+    // Its falsifier is free: with the pass off the compile loses its
+    // TS2693/TS2708 emissions, so the reported `errors` MOVES. An arm that
+    // reports the same error count as `plain` did not run.
+    "tavoff",
+    // (WARM.21) — the POPULATION arm. It arms [FrontEnd] plus the INERT
+    // classification, whose second chain walk is real work and is therefore
+    // deliberately absent from the plain `frontend` tier, which carries the
+    // [FrontEnd.TAV] span. Round 801's order: the census decides the shape of
+    // the fix and the span prices it, and neither may contaminate the other.
+    "tavcensus",
+    // (WARM.21) — the pre-874 arm of the name-candidate gate, WITH the
+    // [FrontEnd.TAV] span. `frontend,tavgateoff,tavgateoff,frontend` is the
+    // controlled row in one warm process: the gate returns early INSIDE the
+    // span, so both arms take exactly 381,670 timestamp pairs and their
+    // difference carries no boundary at all (round 793/795).
+    "tavgateoff",
 )
 
 /**
@@ -371,6 +395,16 @@ internal fun tierBegin(tier: String) {
         "callcoarse" -> { CallSections.reset(); CallSections.mode = CallSections.COARSE }
         "libtypes" -> { LibTypeCensus.reset(); LibTypeCensus.enabled = true }
         "frontend" -> { FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON }
+        // (WARM.21) — arms nothing but the pass's OFF switch. Deliberately NOT
+        // `FrontEnd.mode = ON`: the census's own extra chain walks would land
+        // inside the measurement this arm exists to take.
+        "tavoff" -> { FrontEnd.tavOff = true }
+        "tavgateoff" -> {
+            FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON; TavGate.off = true
+        }
+        "tavcensus" -> {
+            FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON; FrontEnd.tavInertCensus = true
+        }
         // (WARM.9) the ONE tier that arms two probes, and the pairing is the
         // point: the census prices a SUB-POPULATION of a pass whose own row it
         // does not measure, so without the `rows` table from the same rebuild the
@@ -439,7 +473,7 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     "call", "callcoarse" ->
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
-    "frontend" ->
+    "frontend", "tavcensus", "tavgateoff" ->
         FrontEnd.report() + "\n== (FRONT.1) csv ==\n" + FrontEnd.csv() + "== (FRONT.1) csv end =="
     // Census FIRST, then the pass table — the census must be read while
     // `FltmCensus` still holds its counters, i.e. before `tierStop` releases
@@ -510,6 +544,15 @@ internal fun tierStop() {
     // whatever tier follows.
     FrontEnd.copyAmp = 0
     FrontEnd.copyAmpKinds = -1
+    // (WARM.21) — same hazard as `copyAmp`: a `tavOff` left set silently
+    // removes a whole diagnostic pass from every LATER rebuild in this process,
+    // which reads as a speed-up and changes the error count.
+    FrontEnd.tavOff = false
+    FrontEnd.tavInertCensus = false
+    // (WARM.21) — a `TavGate.off` left set silently restores the pre-874 path
+    // for every LATER rebuild in this process, which reads as a regression in
+    // whatever tier follows.
+    TavGate.off = false
     FrontEnd.reset()
     FltmCensus.on = false
     FltmCensus.reset()
