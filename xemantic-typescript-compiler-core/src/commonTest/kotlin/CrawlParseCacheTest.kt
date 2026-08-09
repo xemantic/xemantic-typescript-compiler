@@ -103,7 +103,11 @@ class CrawlParseCacheTest {
     fun `a byte difference misses - this is what makes an edit safe`() {
         val content = "export const a = 1;"
         CrawlParseCache.store("/p/a.ts", parse("/p/a.ts", content))
-        val edited = "export const a = 2;"
+        // A DIFFERENT length on purpose, so this pin and the same-length one
+        // below separate the two mistakes they are each named for: dropping the
+        // content compare fails both, comparing LENGTHS fails only the other.
+        val edited = "export const aRenamed = 12345;"
+        assert(content.length != edited.length)
         val served = CrawlParseCache.lookup("/p/a.ts", edited, flagsFor("/p/a.ts", edited))
         assert(served == null)
     }
@@ -248,6 +252,34 @@ class CrawlParseCacheTest {
         vfs.writeText("/proj/helper.ts", "export const h = 1;\n")
         val second = compiler.build("/proj", noEmit = true)
         assert(second.diagnostics.none { it.code == 2322 })
+    }
+
+    @Test
+    fun `an edit that adds an import changes which files the crawl reaches`() {
+        // THE wrong-answer path, and the one that the compilation core's own
+        // INV.1(e) gate does NOT cover. That gate re-checks content at
+        // `ParsedSource`, so a mis-keyed hit there degrades to a redundant
+        // parse and a correct type-check — but the CRAWL has already used the
+        // stale tree's `moduleSpecifiers` to decide which files exist, and no
+        // later gate revisits that. A stale tree here loses a whole file from
+        // the program, which surfaces as TS2307 on a program that is fine.
+        val vfs = InMemoryVfs(
+            mapOf(
+                // Explicit `files`, so the program is decided by the CRAWL from
+                // main.ts's specifiers rather than by the directory glob — which
+                // would put extra.ts in the program whatever the tree said.
+                "/proj/tsconfig.json" to """{ "compilerOptions": { "strict": true }, "files": ["main.ts"] }""",
+                "/proj/main.ts" to "export const m = 1;\n",
+                "/proj/extra.ts" to "export const e = 2;\n",
+            )
+        )
+        val compiler = ProjectCompiler(vfs)
+        val first = compiler.build("/proj", noEmit = true)
+        assert(first.programFiles.none { it.endsWith("/extra.ts") })
+        vfs.writeText("/proj/main.ts", "import { e } from './extra';\nexport const m = e;\n")
+        val second = compiler.build("/proj", noEmit = true)
+        assert(second.programFiles.any { it.endsWith("/extra.ts") })
+        assert(second.diagnostics.none { it.code == 2307 })
     }
 
     @Test
