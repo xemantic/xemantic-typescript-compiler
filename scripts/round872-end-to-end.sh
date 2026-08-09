@@ -30,10 +30,13 @@ DAEMON_PID=$!
 for _ in $(seq 1 240); do grep -q "listening on" "$SRVLOG" 2>/dev/null && break; sleep 0.25; done
 grep -q "listening on" "$SRVLOG" || { echo "error: daemon never bound" >&2; exit 1; }
 
+# BOTH arms go through the LAUNCHER, which is what ships: `XTSC_CLIENT=off` is
+# the pre-round-872 path and the bare invocation is the post-872 one, so this is
+# an A/B of the artifact rather than of two commands that resemble it.
 run_arm() {
   case "$1" in
-    jvm)    XTSC_AOT=off "$ROOT/scripts/xtsc" --daemon --socket "$SOCK" --noEmit --listAll "$PROJ" > "$2" 2>&1 || true ;;
-    native) "$KEXE" --socket "$SOCK" --no-spawn --noEmit --listAll "$PROJ" > "$2" 2>&1 || true ;;
+    jvm)    XTSC_AOT=off XTSC_CLIENT=off "$ROOT/scripts/xtsc" --daemon --socket "$SOCK" --noEmit --listAll "$PROJ" > "$2" 2>&1 || true ;;
+    native) XTSC_AOT=off "$ROOT/scripts/xtsc" --daemon --socket "$SOCK" --noEmit --listAll "$PROJ" > "$2" 2>&1 || true ;;
   esac
 }
 
