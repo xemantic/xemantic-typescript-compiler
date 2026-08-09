@@ -439,6 +439,24 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--flowCensus", "--flowcensus" -> {
                 FlowCensus.reset(); modes.set(FlowCensus::on, true)
             }
+            // (WARM.22) round 875 — the INV.4 reach machinery as ONE population.
+            // Counters only: the family is 43 classifiers of which the largest
+            // is 0.86% of a warm rebuild, so nothing in it can be timed against
+            // its own boundary (round 850) — what a design change acts on is
+            // the EDGE EVALUATION count, and that is a count of structure.
+            "--reachCensus", "--reachcensus" -> {
+                ReachCensus.reset(); modes.set(ReachCensus::on, true)
+            }
+            // (WARM.22) — the EDGE amplifier. Arms the census too, because its
+            // arithmetic falsifier prints in that table and a slope with no
+            // falsifier beside it is not a measurement (round 759).
+            "--reachAmp", "--reachamp" -> {
+                i++
+                if (i < args.size) {
+                    ReachCensus.reset(); modes.set(ReachCensus::on, true)
+                    modes.set(ReachCensus::amp, args[i].toIntOrNull() ?: 0)
+                }
+            }
             // (WARM.11) round 864 — the INV.2(b) side-table A/B. Both fills are
             // in the binary, so this selects an arm rather than needing a
             // second build (round 795: a verify flag that restores the old
@@ -620,6 +638,12 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     }
     if (flowScanReport) {
         print(FlowScan.report())
+    }
+    if (ReachCensus.on) {
+        print(ReachCensus.report())
+        println("== (WARM.22) csv ==")
+        print(ReachCensus.csv())
+        println("== (WARM.22) csv end ==")
     }
     if (FlowCensus.on) {
         print(FlowCensus.report())
@@ -869,6 +893,14 @@ internal fun usageText(): String =
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
           --flowCensus       (WARM.12) flow nodes minted vs ever read by any checker consumer
+          --reachCensus      (WARM.22) per-classifier census of the INV.4 reach machinery:
+                             consultations, memo hits, ascents and EDGE EVALUATIONS per
+                             classifier — the population any change to the family acts on
+          --reachAmp N       (WARM.22) N EXTRA evaluations of two reach EDGE predicates (49
+                             and 106 arms) per fold, under one timestamp pair; arms
+                             --reachCensus. Two values of N cancel the boundary and give the
+                             cost of ONE edge evaluation, and the arm-count pair gives its
+                             slope in arms
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --verifyMappedCache  recompute every served INV.5(c) mapped-cache hit and split
                              shape-different serves from id-only ones (implies --passTiming)

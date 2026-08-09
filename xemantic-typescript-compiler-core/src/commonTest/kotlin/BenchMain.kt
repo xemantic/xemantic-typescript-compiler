@@ -41,6 +41,7 @@ import com.xemantic.typescript.compiler.CtaSections
 import com.xemantic.typescript.compiler.TavGate
 import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
+import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
@@ -235,6 +236,21 @@ internal val TIERS = listOf(
     // span, so both arms take exactly 381,670 timestamp pairs and their
     // difference carries no boundary at all (round 793/795).
     "tavgateoff",
+    // (WARM.22) round 875 — the INV.4 reach machinery's per-classifier census.
+    // COUNTERS ONLY, no timestamp anywhere: the family is 43 classifiers whose
+    // largest is 0.86% of a rebuild, so every one of them is below the price of
+    // its own boundary (round 850), and the quantity a design change acts on —
+    // EDGE EVALUATIONS — is a count of structure, identical on every rebuild.
+    // That determinism is its own falsifier: two rebuilds of one binary that
+    // disagree mean the probe is broken, not that the compile varied.
+    "reach",
+    // (WARM.22) — the edge amplifier's r values. Enumerated rather than
+    // parameterised because only these four are ever used and TIERS' closed
+    // vocabulary is what rejects a typo.
+    "reachamp8",
+    "reachamp16",
+    "reachamp24",
+    "reachamp32",
 )
 
 /**
@@ -405,6 +421,19 @@ internal fun tierBegin(tier: String) {
         "tavcensus" -> {
             FrontEnd.reset(); FrontEnd.mode = FrontEnd.ON; FrontEnd.tavInertCensus = true
         }
+        // (WARM.22) — arms the reach census and NOTHING else, so its rebuild is
+        // otherwise a `plain` one and the counters cannot be contaminated by a
+        // second probe's own walks (round 874's `tavcensus`/`frontend` split).
+        "reach" -> { ReachCensus.reset(); ReachCensus.on = true }
+        // (WARM.22) — the edge amplifier at N extra evaluations per fold. It is
+        // a SLOPE instrument, so a process must be able to run
+        // `reachamp8,reachamp24,reachamp8,reachamp24` and get both r values at
+        // one warmth; a single r measures a boundary it cannot separate.
+        "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> {
+            ReachCensus.reset()
+            ReachCensus.on = true
+            ReachCensus.amp = tier.removePrefix("reachamp").toInt()
+        }
         // (WARM.9) the ONE tier that arms two probes, and the pairing is the
         // point: the census prices a SUB-POPULATION of a pass whose own row it
         // does not measure, so without the `rows` table from the same rebuild the
@@ -473,6 +502,8 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     "call", "callcoarse" ->
         CallSections.report() + "\n== (CALL.1) csv ==\n" + CallSections.csv() + "== (CALL.1) csv end =="
     "libtypes" -> LibTypeCensus.report()
+    "reach", "reachamp8", "reachamp16", "reachamp24", "reachamp32" -> ReachCensus.report() +
+        "\n== (WARM.22) csv ==\n" + ReachCensus.csv() + "== (WARM.22) csv end =="
     "frontend", "tavcensus", "tavgateoff" ->
         FrontEnd.report() + "\n== (FRONT.1) csv ==\n" + FrontEnd.csv() + "== (FRONT.1) csv end =="
     // Census FIRST, then the pass table — the census must be read while
@@ -553,6 +584,12 @@ internal fun tierStop() {
     // for every LATER rebuild in this process, which reads as a regression in
     // whatever tier follows.
     TavGate.off = false
+    // (WARM.22) — a `ReachCensus.on` left set costs every LATER rebuild in this
+    // process 43 static reads per classifier consultation, which is small but
+    // is not zero and would land inside whatever tier follows.
+    ReachCensus.on = false
+    ReachCensus.amp = 0
+    ReachCensus.reset()
     FrontEnd.reset()
     FltmCensus.on = false
     FltmCensus.reset()

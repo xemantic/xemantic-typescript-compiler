@@ -17450,6 +17450,7 @@ class Checker(
      * memoized/terminal ancestor, then walks back down over [spineDaEdge].
      */
     private fun spineDaStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.DA]++
         if (node is SourceFile) return DA_ROOT
         val memo = spineDaReachMemo
         run {
@@ -17486,6 +17487,7 @@ class Checker(
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.DA]++; ReachCensus.folds[ReachCensus.DA] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -17852,6 +17854,7 @@ class Checker(
      * memoized/terminal ancestor, then walks back down over [spineOsEdge].
      */
     private fun spineOsStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.OS]++
         if (node is SourceFile) return OS_ROOT
         val memo = spineOsReachMemo
         run {
@@ -17888,6 +17891,7 @@ class Checker(
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.OS]++; ReachCensus.folds[ReachCensus.OS] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -18131,9 +18135,62 @@ class Checker(
         }
     }
 
+    /**
+     * (WARM.22) round 875 — one amplification bracket for [spineCeEdge].
+     *
+     * `r` EXTRA evaluations of the SAME edge on the SAME `(parent, child)` under
+     * ONE timestamp pair, so `nanos(r) = boundary + r * c` and two values of `r`
+     * cancel the boundary (round 759). The production evaluation on the next
+     * line is UNCHANGED and outside the pair — this adds work, it never replaces
+     * any, so the compile's output cannot move.
+     *
+     * The predicate is pure and the callee is far over `FreqInlineSize` (49
+     * arms), so the loop cannot be folded away; [ReachCensus.ampSink] `% r == 0`
+     * is the arithmetic that says so rather than assuming it.
+     *
+     * It measures the WARM MARGINAL cost of an evaluation — everything the
+     * predicate touches is in L1 by the second iteration — so it is a LOWER
+     * bound on what the same call costs in production, and the prize computed
+     * from it is a lower bound too.
+     */
+    private fun reachAmpCe(parent: Node, child: Node) {
+        val r = ReachCensus.amp
+        var s = 0L
+        var q = 0
+        val t0 = PassTiming.nowNanos()
+        while (q < r) {
+            if (spineCeEdge(parent, child)) s++
+            q++
+        }
+        ReachCensus.ampNanos[ReachCensus.AMP_CE] += PassTiming.nowNanos() - t0
+        ReachCensus.ampCalls[ReachCensus.AMP_CE] += r.toLong()
+        ReachCensus.ampBrackets[ReachCensus.AMP_CE]++
+        ReachCensus.ampSink[ReachCensus.AMP_CE] += s
+    }
+
+    /** (WARM.22) — [reachAmpCe]'s twin at 106 arms instead of 49. The PAIR is
+     *  the instrument: one site gives a cost, two sites of different arm counts
+     *  give the slope IN ARMS, which is what decides whether the linear
+     *  `instanceof` chain is the cost or merely where the cost sits. */
+    private fun reachAmpFp(parent: Node, child: Node) {
+        val r = ReachCensus.amp
+        var s = 0L
+        var q = 0
+        val t0 = PassTiming.nowNanos()
+        while (q < r) {
+            if (spineFpEdge(parent, child)) s++
+            q++
+        }
+        ReachCensus.ampNanos[ReachCensus.AMP_FP] += PassTiming.nowNanos() - t0
+        ReachCensus.ampCalls[ReachCensus.AMP_FP] += r.toLong()
+        ReachCensus.ampBrackets[ReachCensus.AMP_FP]++
+        ReachCensus.ampSink[ReachCensus.AMP_FP] += s
+    }
+
     /** Memoized reach classifier — the deleted pdduScanStmts/pdduScanStmt
      *  dispatch arms verbatim (see the PD_* constants). */
     private fun spinePdStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.PD]++
         if (node is SourceFile) return PD_ROOT
         val memo = spinePdReachMemo
         run {
@@ -18170,6 +18227,7 @@ class Checker(
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.PD]++; ReachCensus.folds[ReachCensus.PD] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -25219,9 +25277,11 @@ class Checker(
      * identifiers). Unindexed nodes (nodeId −1) compute without the memo.
      */
     private fun spineUResExprChecked(node: Node): Boolean {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.URESEXPR]++
         val memo = spineUResExprMemo
         var cur: Node = node
         var verdict = 0
+        var uresExprHops = 0
         while (verdict == 0) {
             val id = (cur as NodeBase).nodeId
             if (id >= 0 && id < memo.size && memo[id].toInt() != 0) {
@@ -25230,6 +25290,10 @@ class Checker(
             }
             val parent = (cur as NodeBase).parent
             if (parent == null) { verdict = 2; break }
+            if (ReachCensus.on) {
+                ReachCensus.folds[ReachCensus.URESEXPR]++
+                if (uresExprHops++ == 0) ReachCensus.misses[ReachCensus.URESEXPR]++
+            }
             when (spineUResExprEdge(parent, cur)) {
                 URES_EDGE_ROOT -> verdict = 1
                 URES_EDGE_DESCEND -> cur = parent
@@ -25336,9 +25400,11 @@ class Checker(
      *  recursion arm. Memoized per file by nodeId (same discipline as
      *  [spineUResExprChecked]). */
     private fun spineUResTypeChecked(node: Node): Boolean {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.URESTYPE]++
         val memo = spineUResTypeMemo
         var cur: Node = node
         var verdict = 0
+        var uresTypeHops = 0
         while (verdict == 0) {
             val id = (cur as NodeBase).nodeId
             if (id >= 0 && id < memo.size) {
@@ -25349,6 +25415,10 @@ class Checker(
             ) { verdict = 1; break }
             val parent = (cur as NodeBase).parent
             if (parent == null) { verdict = 2; break }
+            if (ReachCensus.on) {
+                ReachCensus.folds[ReachCensus.URESTYPE]++
+                if (uresTypeHops++ == 0) ReachCensus.misses[ReachCensus.URESTYPE]++
+            }
             if (spineUResTypeDescends(parent, cur)) cur = parent else { verdict = 2; break }
         }
         val v = verdict.toByte()
@@ -25860,6 +25930,7 @@ class Checker(
      * the chain, the descent applies [spineTavApply] and backfills).
      */
     private fun spineTavStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.TAV]++
         val memo = spineTavStatusMemo
         run {
             val id = (node as NodeBase).nodeId
@@ -25880,6 +25951,7 @@ class Checker(
                 status = if (cur is SourceFile) TAV_REACHED else TAV_UNREACHED
                 break
             }
+            if (ReachCensus.on) ReachCensus.folds[ReachCensus.TAV]++
             val edge = spineTavEdge(parent, cur)
             if (edge == TAV_STOP) {
                 status = TAV_UNREACHED
@@ -25900,10 +25972,12 @@ class Checker(
         }
         for (i in chain.indices.reversed()) {
             val n = chain[i]
+            if (ReachCensus.on) ReachCensus.folds[ReachCensus.TAV]++
             status = spineTavApply(status, spineTavEdge((n as NodeBase).parent!!, n))
             val id = n.nodeId
             if (id >= 0 && id < memo.size) memo[id] = status.toByte()
         }
+        if (ReachCensus.on) ReachCensus.misses[ReachCensus.TAV]++
         chain.clear()
         FrontEnd.addTavHops(hops, 0, 0)
         return status
@@ -31562,6 +31636,7 @@ class Checker(
      *  pattern). The SourceFile anchor carries the transient EX_ROOT status
      *  (never memoized) whose sole edge is `child is Statement` → EX_TOP. */
     private fun spineExStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.EX]++
         if (node is SourceFile) return EX_ROOT
         val memo = spineExReachMemo
         run {
@@ -31601,6 +31676,7 @@ class Checker(
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.EX]++; ReachCensus.folds[ReachCensus.EX] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -40848,6 +40924,7 @@ class Checker(
     /** Is [node] reached by the deleted duplicate-identifier walker? Memoized
      *  per file by nodeId (ascent collects the chain, the descent backfills). */
     private fun spineDupIdReached(node: Node): Boolean {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.DUPID]++
         val memo = spineDupIdReachMemo
         run {
             val id = (node as NodeBase).nodeId
@@ -40866,6 +40943,7 @@ class Checker(
                 reached = cur is SourceFile
                 break
             }
+            if (ReachCensus.on) ReachCensus.folds[ReachCensus.DUPID]++
             if (!spineDupIdEdge(parent, cur)) {
                 reached = false
                 break
@@ -40890,6 +40968,7 @@ class Checker(
             val id = (chain[i] as NodeBase).nodeId
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
+        if (ReachCensus.on) ReachCensus.misses[ReachCensus.DUPID]++
         chain.clear()
         return reached
     }
@@ -49479,6 +49558,7 @@ class Checker(
      *  status (never memoized) whose edges route by the per-file MODE via
      *  [spineSmRootEdge]. */
     private fun spineSmStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.SM]++
         if (node is SourceFile) return SM_ROOT
         val memo = spineSmReachMemo
         run {
@@ -49518,6 +49598,7 @@ class Checker(
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.SM]++; ReachCensus.folds[ReachCensus.SM] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -52922,6 +53003,7 @@ interface DataView {
      * [spineAtEdge].
      */
     private fun spineAtStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.AT]++
         if (node is SourceFile) return AT_STMT
         val memo = spineAtReachMemo
         run {
@@ -52958,6 +53040,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.AT]++; ReachCensus.folds[ReachCensus.AT] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -53467,6 +53550,7 @@ interface DataView {
      *  (ascent collects the chain, the descent backfills — a boolean AND over
      *  edges, so one verdict serves the whole walked chain). */
     private fun spineUncalledReached(node: Node): Boolean {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.UNCALLED]++
         val memo = spineUncalledReachMemo
         run {
             val id = (node as NodeBase).nodeId
@@ -53485,6 +53569,7 @@ interface DataView {
                 reached = cur is SourceFile
                 break
             }
+            if (ReachCensus.on) ReachCensus.folds[ReachCensus.UNCALLED]++
             if (!spineUncalledEdge(parent, cur)) {
                 reached = false
                 break
@@ -53509,6 +53594,7 @@ interface DataView {
             val id = (chain[i] as NodeBase).nodeId
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
+        if (ReachCensus.on) ReachCensus.misses[ReachCensus.UNCALLED]++
         chain.clear()
         return reached
     }
@@ -53904,6 +53990,7 @@ interface DataView {
     /** Is [node] reached by the deleted pass driver? Memoized per file by nodeId
      *  (same ascent/backfill scheme as [spineUncalledReached]). */
     private fun spineArithReached(node: Node): Boolean {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.ARITH]++
         val memo = spineArithReachMemo
         run {
             val id = (node as NodeBase).nodeId
@@ -53922,6 +54009,7 @@ interface DataView {
                 reached = cur is SourceFile
                 break
             }
+            if (ReachCensus.on) ReachCensus.folds[ReachCensus.ARITH]++
             if (!spineArithEdge(parent, cur)) {
                 reached = false
                 break
@@ -53946,6 +54034,7 @@ interface DataView {
             val id = (chain[i] as NodeBase).nodeId
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
+        if (ReachCensus.on) ReachCensus.misses[ReachCensus.ARITH]++
         chain.clear()
         return reached
     }
@@ -54541,6 +54630,7 @@ interface DataView {
     /** Is [node] reached by the deleted pass? Memoized per file by nodeId (same
      *  ascent/backfill scheme as [spineArithReached]). */
     private fun spineIanyReached(node: Node): Boolean {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.IANY]++
         val memo = spineIanyReachMemo
         run {
             val id = (node as NodeBase).nodeId
@@ -54559,6 +54649,7 @@ interface DataView {
                 reached = cur is SourceFile
                 break
             }
+            if (ReachCensus.on) ReachCensus.folds[ReachCensus.IANY]++
             if (!spineIanyEdge(parent, cur)) {
                 reached = false
                 break
@@ -54583,6 +54674,7 @@ interface DataView {
             val id = (chain[i] as NodeBase).nodeId
             if (id >= 0 && id < memo.size) memo[id] = fill
         }
+        if (ReachCensus.on) ReachCensus.misses[ReachCensus.IANY]++
         chain.clear()
         return reached
     }
@@ -56365,6 +56457,7 @@ interface DataView {
 
     /** Memoized reach classifier for the comma pass (the deleted arms verbatim). */
     private fun spineCmStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CM]++
         if (node is SourceFile) return CM_STMT
         val memo = spineCmReachMemo
         run {
@@ -56401,6 +56494,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.CM]++; ReachCensus.folds[ReachCensus.CM] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -56761,6 +56855,7 @@ interface DataView {
      * ancestor count.
      */
     private fun spineNuStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.NU]++
         if (node is SourceFile) return NU_STMT * 512
         val memo = spineNuReachMemo
         run {
@@ -56797,6 +56892,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.NU]++; ReachCensus.folds[ReachCensus.NU] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -64853,6 +64949,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient FP_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineFpStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.FP]++
         if (node is SourceFile) return FP_ROOT
         val memo = spineFpReachMemo
         run {
@@ -64885,7 +64982,10 @@ interface DataView {
             result = when {
                 pNode == null -> FP_NONE
                 pStatus == FP_ROOT -> if (c is Statement) FP_REACHED else FP_NONE
-                pStatus == FP_REACHED -> if (spineFpEdge(pNode, c)) FP_REACHED else FP_NONE
+                pStatus == FP_REACHED -> {
+                    if (ReachCensus.amp != 0) reachAmpFp(pNode, c)
+                    if (spineFpEdge(pNode, c)) FP_REACHED else FP_NONE
+                }
                 else -> FP_NONE
             }
             val cid = (c as NodeBase).nodeId
@@ -64893,6 +64993,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.FP]++; ReachCensus.folds[ReachCensus.FP] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -65150,6 +65251,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient AI_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineAiStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.AI]++
         if (node is SourceFile) return AI_ROOT
         val memo = spineAiReachMemo
         run {
@@ -65190,6 +65292,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.AI]++; ReachCensus.folds[ReachCensus.AI] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -65474,6 +65577,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient SY_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineSyStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.SY]++
         if (node is SourceFile) return SY_ROOT
         val memo = spineSyReachMemo
         run {
@@ -65514,6 +65618,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.SY]++; ReachCensus.folds[ReachCensus.SY] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -65672,6 +65777,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient CO_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineCoStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CO]++
         if (node is SourceFile) return CO_ROOT
         val memo = spineCoReachMemo
         run {
@@ -65712,6 +65818,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.CO]++; ReachCensus.folds[ReachCensus.CO] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -66025,6 +66132,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient TC_ROOT status (never
      *  memoized) whose sole edge is `child is Statement` → TC_LIST. */
     private fun spineTcStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.TC]++
         if (node is SourceFile) return TC_ROOT
         val memo = spineTcReachMemo
         run {
@@ -66061,6 +66169,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.TC]++; ReachCensus.folds[ReachCensus.TC] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -66130,6 +66239,7 @@ interface DataView {
      *  pattern). The SourceFile anchor carries the transient NA_ROOT status
      *  (never memoized) whose sole edge is `child is Statement`. */
     private fun spineNaStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.NA]++
         if (node is SourceFile) return NA_ROOT
         val memo = spineNaReachMemo
         run {
@@ -66170,6 +66280,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.NA]++; ReachCensus.folds[ReachCensus.NA] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -66319,6 +66430,7 @@ interface DataView {
      *  pattern). The SourceFile anchor carries the transient DEL_ROOT
      *  status (never memoized) whose sole edge is `child is Statement`. */
     private fun spineDelStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.DEL]++
         if (node is SourceFile) return DEL_ROOT
         val memo = spineDelReachMemo
         run {
@@ -66359,6 +66471,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.DEL]++; ReachCensus.folds[ReachCensus.DEL] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -66504,6 +66617,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient CP_ROOT status (never
      *  memoized) whose sole edge is `child is Statement` → CP_STMT. */
     private fun spineCpStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CP]++
         if (node is SourceFile) return CP_ROOT
         val memo = spineCpReachMemo
         run {
@@ -66543,6 +66657,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.CP]++; ReachCensus.folds[ReachCensus.CP] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -66740,6 +66855,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient AB_ROOT status (never
      *  memoized) whose sole edge is `child is Statement` → AB_STMT. */
     private fun spineAbStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.AB]++
         if (node is SourceFile) return AB_ROOT
         val memo = spineAbReachMemo
         run {
@@ -66779,6 +66895,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.AB]++; ReachCensus.folds[ReachCensus.AB] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -66944,6 +67061,7 @@ interface DataView {
      *  memoized) whose sole edge is `child is Statement` → IY_NON (the legacy
      *  driver entered every top-level statement with inGen=false). */
     private fun spineIyStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.IY]++
         if (node is SourceFile) return IY_ROOT
         val memo = spineIyReachMemo
         run {
@@ -66983,6 +67101,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.IY]++; ReachCensus.folds[ReachCensus.IY] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -67184,6 +67303,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient AA_ROOT status (never
      *  memoized) whose sole edge is `child is Statement` → AA_STMT. */
     private fun spineAaStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.AA]++
         if (node is SourceFile) return AA_ROOT
         val memo = spineAaReachMemo
         run {
@@ -67223,6 +67343,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.AA]++; ReachCensus.folds[ReachCensus.AA] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -67476,6 +67597,7 @@ interface DataView {
      *  pattern). The SourceFile anchor carries the transient B94_ROOT
      *  status (never memoized) whose sole edge is `child is Statement`. */
     private fun spineB94Status(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.B94]++
         if (node is SourceFile) return B94_ROOT
         val memo = spineB94ReachMemo
         run {
@@ -67516,6 +67638,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.B94]++; ReachCensus.folds[ReachCensus.B94] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -67803,6 +67926,7 @@ interface DataView {
      *  pattern). The SourceFile anchor carries the transient CE_ROOT
      *  status (never memoized) whose sole edge is `child is Statement`. */
     private fun spineCeStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CE]++
         if (node is SourceFile) return CE_ROOT
         val memo = spineCeReachMemo
         run {
@@ -67835,7 +67959,10 @@ interface DataView {
             result = when {
                 pNode == null -> CE_NONE
                 pStatus == CE_ROOT -> if (c is Statement) CE_REACHED else CE_NONE
-                pStatus == CE_REACHED -> if (spineCeEdge(pNode, c)) CE_REACHED else CE_NONE
+                pStatus == CE_REACHED -> {
+                    if (ReachCensus.amp != 0) reachAmpCe(pNode, c)
+                    if (spineCeEdge(pNode, c)) CE_REACHED else CE_NONE
+                }
                 else -> CE_NONE
             }
             val cid = (c as NodeBase).nodeId
@@ -67843,6 +67970,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.CE]++; ReachCensus.folds[ReachCensus.CE] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -68163,6 +68291,7 @@ interface DataView {
      *  PMR_ROOT status whose sole edge is `child is Statement` →
      *  PMR_CONTAINER_FILE. */
     private fun spinePmrStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.PMR]++
         if (node is SourceFile) return PMR_ROOT
         val memo = spinePmrReachMemo
         run {
@@ -68202,6 +68331,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.PMR]++; ReachCensus.folds[ReachCensus.PMR] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -70863,6 +70993,7 @@ interface DataView {
      * [spineCaEdge].
      */
     private fun spineCaStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CA]++
         if (node is SourceFile) return CA_LIST
         val memo = spineCaReachMemo
         run {
@@ -70899,6 +71030,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.CA]++; ReachCensus.folds[ReachCensus.CA] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -73758,6 +73890,7 @@ interface DataView {
      *  (never memoized) whose sole edge is `child is Statement` →
      *  SU_INVALID (top-level statements have no super binding). */
     private fun spineSuStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.SU]++
         if (node is SourceFile) return SU_ROOT
         val memo = spineSuReachMemo
         run {
@@ -73797,6 +73930,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.SU]++; ReachCensus.folds[ReachCensus.SU] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -75715,6 +75849,7 @@ interface DataView {
      * over [spineUbdEdge].
      */
     private fun spineUbdStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.UBD]++
         if (node is SourceFile) return UBD_LIST
         val memo = spineUbdReachMemo
         run {
@@ -75751,6 +75886,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.UBD]++; ReachCensus.folds[ReachCensus.UBD] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -77301,6 +77437,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient EV_ROOT status (never
      *  memoized) whose sole edge is `child is Statement` → EV_REACHED. */
     private fun spineEvStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.EV]++
         if (node is SourceFile) return EV_ROOT
         val memo = spineEvReachMemo
         run {
@@ -77340,6 +77477,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.EV]++; ReachCensus.folds[ReachCensus.EV] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -79201,6 +79339,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient AC_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineAcStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.AC]++
         if (node is SourceFile) return AC_ROOT
         val memo = spineAcReachMemo
         run {
@@ -79241,6 +79380,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.AC]++; ReachCensus.folds[ReachCensus.AC] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -82507,6 +82647,7 @@ interface DataView {
      *  (never memoized) whose sole edge is `child is Statement` → TPO_STMT
      *  (the deleted walkStmtsForTypeParamOps entry). */
     private fun spineTpoStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.TPO]++
         if (node is SourceFile) return TPO_ROOT
         val memo = spineTpoReachMemo
         run {
@@ -82548,6 +82689,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.TPO]++; ReachCensus.folds[ReachCensus.TPO] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -83351,6 +83493,7 @@ interface DataView {
      *  memoized) whose sole edge is `child is Statement`. Also consulted by
      *  the pre-spine producer (which allocates the memo per file itself). */
     private fun spineTdStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.TD]++
         if (node is SourceFile) return TD_ROOT
         val memo = spineTdReachMemo
         run {
@@ -83391,6 +83534,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.TD]++; ReachCensus.folds[ReachCensus.TD] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -84481,6 +84625,7 @@ interface DataView {
      *  status (never memoized) whose sole edge is `child is Statement` →
      *  UY_NAME. */
     private fun spineUyStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.UY]++
         if (node is SourceFile) return UY_ROOT
         val memo = spineUyReachMemo
         run {
@@ -84520,6 +84665,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.UY]++; ReachCensus.folds[ReachCensus.UY] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -84702,6 +84848,7 @@ interface DataView {
      *  SR_REBOUND (top-level statements start in a rebinding scope — no
      *  super available). */
     private fun spineSrStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.SR]++
         if (node is SourceFile) return SR_ROOT
         val memo = spineSrReachMemo
         run {
@@ -84741,6 +84888,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.SR]++; ReachCensus.folds[ReachCensus.SR] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -87086,6 +87234,7 @@ interface DataView {
      *  (never memoized) whose sole edge is `child is Statement` → AF_ROUTE
      *  (the deleted driver's entry into the ROUTING walk). */
     private fun spineAfStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.AF]++
         if (node is SourceFile) return AF_ROOT
         val memo = spineAfReachMemo
         run {
@@ -87127,6 +87276,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.AF]++; ReachCensus.folds[ReachCensus.AF] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -88971,6 +89121,7 @@ interface DataView {
      * back down over [spineIrEdge].
      */
     private fun spineIrStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.IR]++
         if (node is SourceFile) return IR_STMT
         val memo = spineIrReachMemo
         run {
@@ -89007,6 +89158,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.IR]++; ReachCensus.folds[ReachCensus.IR] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -159148,6 +159300,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient IDC_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineIdcStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.IDC]++
         if (node is SourceFile) return IDC_ROOT
         val memo = spineIdcReachMemo
         run {
@@ -159188,6 +159341,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.IDC]++; ReachCensus.folds[ReachCensus.IDC] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -162178,6 +162332,7 @@ interface DataView {
 
     /** Memoized reach classifier for the np pass (the deleted arms verbatim). */
     private fun spineNpStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.NP]++
         if (node is SourceFile) return NP_STMT
         val memo = spineNpReachMemo
         run {
@@ -162214,6 +162369,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.NP]++; ReachCensus.folds[ReachCensus.NP] += chain.size.toLong() }
         chain.clear()
         return result
     }
@@ -168538,6 +168694,7 @@ interface DataView {
      *  The SourceFile anchor carries the transient GX_ROOT status (never
      *  memoized) whose sole edge is `child is Statement`. */
     private fun spineGxStatus(node: Node): Int {
+        if (ReachCensus.on) ReachCensus.calls[ReachCensus.GX]++
         if (node is SourceFile) return GX_ROOT
         val memo = spineGxReachMemo
         run {
@@ -168578,6 +168735,7 @@ interface DataView {
             pNode = c
             pStatus = result
         }
+        if (ReachCensus.on) { ReachCensus.misses[ReachCensus.GX]++; ReachCensus.folds[ReachCensus.GX] += chain.size.toLong() }
         chain.clear()
         return result
     }
