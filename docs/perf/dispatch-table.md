@@ -13,6 +13,17 @@ profile with the table APPLIED. The instrumentation is behaviour-free when off.*
 > is where the spine's time actually is — six handlers, 71% of it — and that is
 > a per-handler problem, not a dispatch problem. See § 5.
 
+> **ROUND-866 (WARM.13) — READ § 8 BEFORE QUOTING ANYTHING ABOVE AS A CLOSURE.**
+> Everything in §§ 1–7 is COLD. Warm the verdict is *unidentified*, not
+> confirmed: the prize is bounded in **0–352 ms (0–5.1% of a warm rebuild)** and
+> `--dispatchGated` is structurally unable to narrow it, because what it measures
+> is `G − R` — its own machinery's price MINUS the prize. That machinery is now
+> measured at **+715 ms, +14.4% of the warm `checkSpine` row, 8/8
+> sign-consistent**, which is large enough to hide the whole prize and is what
+> made § 5's cold GATED run come out slower. Round 847 § 5 of
+> `warm-spine-attribution.md` had already re-taken the probe's UPPER bound warm
+> (352 ms); its discount to "40–120 ms" is reasoning, not measurement.
+
 ---
 
 ## 1. What was built
@@ -292,3 +303,189 @@ java -Xmx4g -cp "$CP" com.xemantic.typescript.compiler.MainKt \
 To re-verify the table over the corpus, flip `SpineDispatch.mode`'s initialiser
 to `GATED`, run `./gradlew jvmTest`, and revert. (`SpineDispatchProbeTest`
 save-and-restores the mode so it survives that flip.)
+
+---
+
+# § 8 — (WARM.13), round 866: the WARM re-price, and why GATED cannot settle it
+
+*Round 866, 2026-08-09. Appended; §§ 1–7 are the round-732 record and are
+unchanged. Instruments: `BenchMain`'s new `gated` / `plain` / `gatedrows` /
+`gatedfull` tiers, `scripts/round866-warm-gated.sh`,
+`scripts/round866-warm-gatedrows.sh`, `scripts/round866_analyze.py`,
+`scripts/round866_rows_analyze.py`. Compiler profile, 78 files / 46 errors on
+every one of the 40 rebuilds below.*
+
+> **HEADLINE — THE COLD VERDICT IS NOT CONFIRMED WARM AND IS NOT OVERTURNED
+> EITHER: IT IS *UNIDENTIFIED*. The prize is bounded in `0 – 352 ms` (0 – 5.1%
+> of a warm rebuild) with a point estimate of `187 ms = 2.7%` under one stated
+> assumption, and the arm everybody would reach for — `--dispatchGated` — is
+> STRUCTURALLY unable to narrow it, because what it measures is `G − R`: its own
+> machinery's price MINUS the prize, one equation in two unknowns.**
+>
+> What IS now measured, 8/8 sign-consistent across two batches: **the gated
+> machinery costs `+715 ms`, `+14.4%` of the `checkSpine` row, when it is made
+> to skip nothing.** That number is why round 732's cold GATED run came out
+> slower, and it is large enough to hide the entire prize.
+
+## 8.1 First: the finding this round was commissioned to look for already existed
+
+The brief was that (DISPATCH.1)'s closure is a COLD verdict. It is not — round
+847 § 5 of `docs/perf/warm-spine-attribution.md` re-took the probe's upper bound
+warm: **340–362 ms (mean 352), 10–11 ns per skipped consultation, over the same
+32,006,965 skipped consultations**, a skipped consultation warming **2.95×**
+against the spine's own 3.38×, and concluded the lever's relative value is
+regime-invariant.
+
+**That finding is not in this file, which is the file a next agent greps for
+this question.** Cross-referencing it is half of this round's deliverable. What
+round 847 did NOT do, and this round does, is run the GATED arm warm at all.
+
+## 8.2 `--dispatchGated` is a LOWER-bound instrument, not a stand-in
+
+Read `Checker.spineEnterNodeProbed`'s GATED branch before quoting it:
+
+```kotlin
+val tbl = SpineDispatch.enterTable[kid]
+for (i in tbl.indices) spineEnterHandlerById(tbl[i], node)
+```
+
+Against production's straight-line `if (spineXxActive) spineXxEnterNode(node)`
+sequence, that adds, **per kept handler**, a loop iteration with a bounds check
+and a 46-arm `when(h)` tableswitch to a call the JIT can no longer inline into
+46 distinct sites — plus, per node, one extra call frame and an
+`Array<IntArray>` load. So
+
+* it is **faithful in SEMANTICS** — the corpus and the profile are byte-identical
+  under it (§ 4), which is what makes the derived table's soundness a fact; and
+* it is **pessimistic in COST** by an amount nothing here measures.
+
+Which is why § 5's "`--dispatchGated` measured SLOWER than production" was never
+evidence about the table, only about the harness — a caveat § 5 half-states
+already, and which round 866 makes structural.
+
+## 8.3 The three-arm decomposition — and the one term it cannot reach
+
+Per node the spine makes **59** handler consultations, of which the derived
+table keeps **K = 21.65** and skips **S = 37.35** (round 732's census; `spine.nodes`
+is still 856,962, cost gate unchanged). Write
+
+* `s_p` — a skipped consultation's cost in PRODUCTION (a pure reject). The prize
+  a production per-kind table collects is exactly `R = S·s_p·N`.
+* `d` — the gated machinery's tax on a **kept** consultation;
+  `d'` — its tax on a **rejecting** one; `A` — its per-node fixed cost.
+
+Three arms, all arming the `rows` pass probe **identically** so its boundaries
+cancel (round 793), all comparing the ONE row the table can move:
+
+| arm | what it runs | its delta against `rows` |
+|---|---|---|
+| `rows` | production dispatch | — (the control) |
+| `gatedrows` | gated machinery, DERIVED table | `A + K·d − R` |
+| `gatedfull` | gated machinery, table holding EVERY handler for every kind | `A + K·d + S·d'` |
+
+`gatedfull` is the arm round 732 never had: the same machinery, skipping
+**nothing** by construction, so its delta contains no `R` at all. (A full table
+IS the production handler set, so it is a pure cost arm — its output is
+identical and a missed restore degrades to running production semantics slowly,
+never to a wrong answer.)
+
+**Measured**, 2 batches × 4 processes, each process 3 warm-up + 6 measured
+rebuilds then 4 tier rebuilds as two adjacent pairs, tier ORDER rotated across
+processes so neither arm always holds the coldest instrumented slot:
+
+| arm | n | median Δ`checkSpine` | mean | min | max | sign |
+|---|---:|---:|---:|---:|---:|---|
+| `gatedfull` | 8 | **+715.5 ms (+14.45%)** | +694.6 | +454.4 | +846.4 | **8/8 slower** |
+| `gatedrows` | 8 | +75.2 ms (+1.51%) | +25.3 | −275.8 | +282.5 | 5/8 slower |
+
+control `rows` `checkSpine`: n=16, mean 4,960.4 ms, sd 218.3 (**4.40%**).
+
+From those two rows,
+
+```
+S·(s_p + d') = Δ(gatedfull) − Δ(gatedrows) = 640.2 ms = 20.00 ns per skipped consultation
+R            = A + K·d − Δ(gatedrows)
+```
+
+and **`d` is identified by no arm here.** The corners:
+
+| assumption | R |
+|---|---:|
+| `d = d'` (a uniform per-consultation tax, 14.15 ns, `A = 0`) | **187.3 ms** = 2.7% of a warm rebuild, 3.8% of the row |
+| `d = 0` (the whole tax falls on the rejecting consultations) | ~0 ms |
+| round 847's independent probe cap | ≤ 352 ms |
+
+`d ≤ d'` is the only inequality that can be argued (a rejecting handler is the
+most inlinable thing in the prologue, so it loses the most by being reached
+through a tableswitch), and it does not close the gap. **`R ∈ [0, 352] ms`.**
+
+The 20.00 ns per skipped consultation cross-checks against round 847
+independently: its probe attributes **10–11 ns** to the same consultation with
+the tableswitch and the call CALIBRATED OUT, so ~10 ns of tableswitch + call on
+top is exactly the residue this arm should see. Two instruments of different
+construction, agreeing.
+
+## 8.4 The wall arm, and a second instance of round 840(c)
+
+Before the row arms, the same comparison was run on WALL time (`gated` vs the
+new null `plain` tier, 2 batches × 2 processes × 2 pairs):
+
+| batch | n | median Δ | gated faster |
+|---|---:|---:|---|
+| 1 | 4 | **−102.3 ms (−1.49%)** | 3/4 |
+| 2 | 4 | **+237.7 ms (+3.53%)** | 0/4 |
+| all | 8 | +117.4 ms (+1.73%) | 3/8 |
+
+**The two batches disagree in SIGN.** Batch 1 alone reads as "GATED is 1.5%
+faster warm — build the table"; batch 2 alone reads as "3.5% slower — closed".
+Per-arm sd is 2.23% / 1.53%, both over the ~1% quiet-box rule. This is round
+840(c)/858's law for the third time in this arc, and it is why the round moved
+to the row: the wall carries the front end and the ~416 tail passes, ~34% of a
+warm rebuild that is, for this question, pure drift.
+
+## 8.5 What would settle it, and what it must beat
+
+One number decides: **`s_p`, the production cost of one rejecting handler
+consultation, in the production inlining regime.** `R = 32.0 M × s_p`, so the
+1% floor (≈69 ms of a ~6,900 ms warm rebuild) is cleared at **s_p ≥ 2.2 ns** —
+which is roughly "one field load, one compare, one predicted branch", i.e. the
+lever is plausible on its face and has never been measured.
+
+It cannot be measured by a timestamp pair: at ~2–14 ns it is far below the warm
+boundary cost (97–202 ns, round 850), so **the instrument is round 759's
+amplification** — `r` extra consultations of a handler that provably rejects,
+inserted in the PRODUCTION prologue behind a static flag, with `s_p` read off
+the slope and two values of `r` cancelling the boundary algebraically. Its
+hazard is equally clear and is why it was not attempted here as an afterthought:
+a rejecting consultation is exactly the shape a JIT can prove side-effect-free
+and delete, so the arm needs round 759's arithmetic falsification (a sink that
+is an exact multiple of the amplified count), not a plausible-looking slope.
+
+And any implementation must ALSO beat its own dispatch tax, because that is what
+killed GATED: a production table that keeps `R` must dispatch its kept 21.65
+consultations for less than `R/K·N` ≈ **10 ns each** under the uniform corner.
+Two shapes, each with a named hazard:
+
+* **A dense per-kind `when (kindId)` with straight-line call lists** — near-zero
+  dispatch, but 138 arms × up to ~20 calls is far over HotSpot's 8,000-bytecode
+  `HugeMethodLimit`, i.e. *never JIT-compiled* and a measured −33.6% warm cliff
+  (round 845). It must be split by a CONTIGUOUS key range with the hottest kinds
+  in the entry function (round 802) — that is a design constraint, not a detail.
+* **A per-kind `Long` bitmask** (46 enter handlers fit in 64 bits): one array
+  load per node, then the existing straight-line sequence with each
+  `if (spineXxActive)` field load replaced by a bit test on a register-resident
+  local. No huge method, and it removes the 46 per-node field reloads that the
+  intervening calls force today — but its own 46 branches remain, and whether
+  that clears 10 ns per kept consultation is itself unmeasured.
+
+## 8.6 What this section does NOT show
+
+* **No production table was built and nothing was optimized.** The four new
+  tiers and two scripts are the whole landing.
+* `d` is unidentified, so `187 ms` is a point estimate under a stated
+  assumption, never a measurement. The measurement is `Δ(gatedfull)` and
+  `Δ(gatedrows)`; everything else is arithmetic on top of them.
+* One profile, one box, `--noEmit`, check-only.
+* The `gatedrows` arm's spread (−276 to +283 ms against a control sd of 4.40%)
+  is wide enough that its median carries ±~100 ms, which propagates straight
+  into `R`.

@@ -80,6 +80,94 @@ class BenchGatedTierTest {
     fun `both arms of the A-B pair are tier names the harness accepts`() {
         assert("gated" in TIERS)
         assert("plain" in TIERS)
+        assert("gatedrows" in TIERS)
+        assert("gatedfull" in TIERS)
+    }
+
+    /**
+     * The cost-only arm must SKIP NOTHING — that is its entire definition, and
+     * the number it produces (`G`, the gated machinery's own price) is what
+     * makes the other arm's `G - R` solvable. A `gatedfull` whose table were
+     * still the derived one would silently be a second `gatedrows`, and the two
+     * arms would then differ by nothing but noise while the round reported a
+     * decomposition.
+     */
+    @Test
+    fun `the gatedfull arm skips nothing and the derived table comes back`() = withSavedModes {
+        val derivedEnter = SpineDispatch.enterTable.sumOf { it.size }
+        val derivedLeave = SpineDispatch.leaveTable.sumOf { it.size }
+        val allEnter = SpineDispatch.KINDS * SpineDispatch.enterCount
+        val allLeave = SpineDispatch.KINDS * SpineDispatch.leaveCount
+        assert(derivedEnter < allEnter)
+        tierBegin("gatedfull")
+        assert(SpineDispatch.mode == SpineDispatch.GATED)
+        assert(SpineDispatch.enterTable.sumOf { it.size } == allEnter)
+        assert(SpineDispatch.leaveTable.sumOf { it.size } == allLeave)
+        // …and every kind must hold the handlers in ASCENDING id order, or the
+        // arm runs the prologue in a different order from production.
+        for (k in 0 until SpineDispatch.KINDS) {
+            assert(SpineDispatch.enterTable[k].toList() == (0 until SpineDispatch.enterCount).toList())
+        }
+        tierStop()
+        assert(SpineDispatch.enterTable.sumOf { it.size } == derivedEnter)
+        assert(SpineDispatch.leaveTable.sumOf { it.size } == derivedLeave)
+    }
+
+    /**
+     * The swap must be exact, not merely the right SIZE: a restore that put back
+     * a differently-shaped table of the same total would leave the derived table
+     * permanently wrong for every later arm in the process.
+     */
+    @Test
+    fun `the table restore is element-wise exact and idempotent`() = withSavedModes {
+        val before = List(SpineDispatch.KINDS) { SpineDispatch.enterTable[it].toList() }
+        installFullDispatchTables()
+        installFullDispatchTables()   // idempotent: must not save the FULL table as the original
+        restoreDispatchTables()
+        restoreDispatchTables()       // a second restore is a no-op, not a re-swap
+        val after = List(SpineDispatch.KINDS) { SpineDispatch.enterTable[it].toList() }
+        assert(after == before)
+    }
+
+    /**
+     * The row-level A/B's whole validity is that its two arms differ in the
+     * DISPATCH and in nothing else — so `gatedrows` must arm the pass probe in
+     * exactly the state the bare `rows` tier does. Change either tier's probe
+     * settings and this fails: the `checkSpine` difference would then be the
+     * probe's own, at a tier whose two arms nobody would think to re-check.
+     */
+    @Test
+    fun `the gatedrows arm differs from rows in the dispatch and nothing else`() = withSavedModes {
+        fun probeState(tier: String): Triple<Boolean, Boolean, Boolean> {
+            tierBegin(tier)
+            val s = Triple(PassTiming.enabled, PassTiming.detail, PassTiming.spineDetail)
+            tierStop()
+            return s
+        }
+        val rows = probeState("rows")
+        assert(probeState("gatedrows") == rows)
+        assert(probeState("gatedfull") == rows)
+        tierBegin("rows")
+        assert(SpineDispatch.mode == SpineDispatch.OFF)
+        tierStop()
+        tierBegin("gatedrows")
+        assert(SpineDispatch.mode == SpineDispatch.GATED)
+        tierStop()
+    }
+
+    /** …and its report must carry both halves: the arm's label and the table. */
+    @Test
+    fun `the gatedrows report names its arm and still prints the pass table`() = withSavedModes {
+        tierBegin("gatedrows")
+        val text = tierReport("gatedrows")
+        tierStop()
+        assert("gatedrows arm — mode: ${SpineDispatch.GATED}" in text)
+        assert("pairs kept" in text)
+        // The `rows` tier's own signature, and NOT a containment test on
+        // "checkSpine" — that string is in the tier's boilerplate warning, so it
+        // would pass for a report of any tier, taken from any state.
+        assert("detail=false spineDetail=false" in text)
+        assert("xtsc pass timing" in text)
     }
 
     @Test

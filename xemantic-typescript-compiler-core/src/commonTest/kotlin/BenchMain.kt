@@ -185,7 +185,64 @@ internal val TIERS = listOf(
     // arm in [tierBegin]: the `else` branch ENABLES the pass probe, which would
     // make the control arm the more expensive one and invert the answer.
     "plain",
+    // …and the tier that answers the same question with the RIGHT denominator.
+    // The wall carries the front end and the ~416 tail passes — together ~34% of
+    // a warm rebuild — which are, for this question, pure noise: the table can
+    // only ever move `checkSpine`. `gatedrows` arms the GATED dispatch AND the
+    // `rows` pass probe, so `gatedrows,rows,gatedrows,rows` gives the ONE row
+    // that can move, twice per arm per process, in one warm process. Round 846
+    // measured `rows` as the probe-free tier (+0.0% warm), and it is armed
+    // IDENTICALLY in both arms, so its boundaries cancel (round 793).
+    "gatedrows",
+    // …and the arm that makes the other two INTERPRETABLE. `gatedrows` measures
+    // `G - R`: the gated machinery's own price MINUS the work the table skips —
+    // one equation in two unknowns, which is why round 732's cold GATED run
+    // could never bound the prize (its own § 5 reports it as "not proof that the
+    // idea must lose"). `gatedfull` runs the SAME machinery over a table that
+    // holds every handler for every kind, so it skips NOTHING by construction
+    // and its delta against `rows` is `G` at 59 consultations per node, with no
+    // `R` in it. Differencing the two arms then cancels the per-node fixed cost
+    // and yields the per-consultation dispatch price directly
+    // (`docs/perf/dispatch-table.md` § 8.3).
+    //
+    // It is a COST arm, not a behaviour arm: a full table IS the production
+    // handler set, so its output is identical — the tables are swapped in
+    // [tierBegin] and restored in [tierStop], and a missed restore degrades to
+    // running production semantics slowly, never to a wrong answer.
+    "gatedfull",
 )
+
+/**
+ * (WARM.13) — the derived tables, saved while [TIERS]' `gatedfull` arm holds its
+ * full-table replacement. Non-null exactly while that arm is armed.
+ */
+private var savedEnterTable: Array<IntArray>? = null
+private var savedLeaveTable: Array<IntArray>? = null
+
+/** Swap in a table that keeps every handler for every kind, and remember the real one. */
+internal fun installFullDispatchTables() {
+    if (savedEnterTable != null) return
+    savedEnterTable = Array(SpineDispatch.KINDS) { SpineDispatch.enterTable[it] }
+    savedLeaveTable = Array(SpineDispatch.KINDS) { SpineDispatch.leaveTable[it] }
+    val allEnter = IntArray(SpineDispatch.enterCount) { it }
+    val allLeave = IntArray(SpineDispatch.leaveCount) { it }
+    for (k in 0 until SpineDispatch.KINDS) {
+        SpineDispatch.enterTable[k] = allEnter
+        SpineDispatch.leaveTable[k] = allLeave
+    }
+}
+
+/** Put the derived tables back. Idempotent; a no-op when none were swapped out. */
+internal fun restoreDispatchTables() {
+    val e = savedEnterTable ?: return
+    val l = savedLeaveTable ?: return
+    for (k in 0 until SpineDispatch.KINDS) {
+        SpineDispatch.enterTable[k] = e[k]
+        SpineDispatch.leaveTable[k] = l[k]
+    }
+    savedEnterTable = null
+    savedLeaveTable = null
+}
 
 /**
  * Arm the probe a tier names, and zero its counters.
@@ -206,6 +263,26 @@ internal fun tierBegin(tier: String) {
         // rebuild sits in the same loop, at the same warmth, as the treated one.
         "gated" -> { SpineDispatch.reset(); SpineDispatch.mode = SpineDispatch.GATED }
         "plain" -> { /* the null arm: no probe, no counters, no boundaries */ }
+        // The `rows` arm of `tierBegin`'s `else`, plus the gated dispatch. Its
+        // control is the bare `rows` tier, whose probe state this reproduces
+        // EXACTLY — the two arms must differ in the dispatch and in nothing
+        // else, or the row difference is the probe's.
+        "gatedrows" -> {
+            SpineDispatch.reset()
+            SpineDispatch.mode = SpineDispatch.GATED
+            PassTiming.detail = false
+            PassTiming.spineDetail = false
+            PassTiming.enabled = true
+        }
+        // The cost-only arm: the same machinery over a table that skips nothing.
+        "gatedfull" -> {
+            SpineDispatch.reset()
+            installFullDispatchTables()
+            SpineDispatch.mode = SpineDispatch.GATED
+            PassTiming.detail = false
+            PassTiming.spineDetail = false
+            PassTiming.enabled = true
+        }
         "cta" -> { CtaSections.reset(); CtaSections.mode = CtaSections.ON }
         "ctacoarse" -> { CtaSections.reset(); CtaSections.mode = CtaSections.COARSE }
         "cpa" -> { CpaSections.reset(); CpaSections.mode = CpaSections.ON }
@@ -256,6 +333,15 @@ internal fun tierReport(tier: String): String = when (tier) {
         "${SpineDispatch.KINDS * SpineDispatch.leaveNames.size} (handler,kind) pairs kept =="
     "plain" -> "== (WARM.13) plain arm — no probe armed, mode: ${SpineDispatch.mode}, " +
         "passTiming: ${PassTiming.enabled} =="
+    // Label FIRST, from the live mode, then the pass table — a reader must be
+    // able to tell which arm a `checkSpine` row came from without counting rows
+    // (round 850), and here the two arms' tables are otherwise identical in
+    // shape and differ only in one number.
+    "gatedrows", "gatedfull" ->
+        "== (WARM.13) $tier arm — mode: ${SpineDispatch.mode}, " +
+            "enter ${SpineDispatch.enterTable.sumOf { it.size }}/" +
+            "${SpineDispatch.KINDS * SpineDispatch.enterCount} (handler,kind) pairs kept ==\n" +
+            buildString { PassTiming.enabled = false; PassTiming.dump { appendLine(it) } }
     "cta", "ctacoarse" ->
         CtaSections.report() + "\n== (TYPE.2) csv ==\n" + CtaSections.csv() + "== (TYPE.2) csv end =="
     "cpa", "cpacoarse" ->
@@ -319,6 +405,11 @@ internal fun parseEmitFlag(arg: String?): Boolean = when (val flag = arg?.lowerc
 internal fun tierStop() {
     PassTiming.enabled = false
     SpineDispatch.mode = SpineDispatch.OFF
+    // (WARM.13) — before anything else reads the tables. A missed restore is not
+    // a correctness bug (a full table is the production handler set) but it
+    // would silently turn every later `gatedrows` arm into a `gatedfull` one,
+    // i.e. into the arm whose whole point is that it skips nothing.
+    restoreDispatchTables()
     CtaSections.mode = CtaSections.OFF
     CpaSections.mode = CpaSections.OFF
     ArgSections.mode = ArgSections.OFF
