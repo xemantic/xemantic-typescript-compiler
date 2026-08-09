@@ -386,10 +386,16 @@ class FlowGraph(
             // rewrite would MOVE from build time to query time, and only a census
             // can say whether that is 0 or 600,000.
             if (FrontEnd.mode == FrontEnd.ON) FrontEnd.addFlowAt(if (f == null) 1 else 0)
+            // (WARM.12) round 865 — the hand-out. Every walk in the checker starts
+            // at a node this method returned, so hooking here means no flow node
+            // can reach a consumer through an unhooked channel.
+            if (FlowCensus.on && f != null) FlowCensus.touch(f, FlowCensus.CH_FLOWAT)
             return f
         }
         if (FrontEnd.mode == FrontEnd.ON) FrontEnd.addFlowAt(2)
-        return nodeToFlow[nodeKey(node)]
+        val fallback = nodeToFlow[nodeKey(node)]
+        if (FlowCensus.on && fallback != null) FlowCensus.touch(fallback, FlowCensus.CH_FLOWAT)
+        return fallback
     }
 
     /**
@@ -637,6 +643,9 @@ class FlowGraphBuilder {
         sourceText = sourceFile.text
         reassignScanCache.clear() // per-file text — a reused builder must not serve stale scans
         narrowingNodes.clear() // ditto: a reused builder must not carry another file's nodes
+        // (WARM.12) round 865 — open this file's mint inventory BEFORE the first
+        // factory call, so no minted node can land in the previous file's.
+        FlowCensus.beginFile(sourceFile.fileName, sourceFile.fileName.endsWith(".d.ts"))
         currentFlow = newStart(sourceFile)
         // (WARM.11) round 864 — the two spans below ABUT and cover everything
         // `build` does beyond three field writes, so [FrontEnd.FLOW_BIND] +
@@ -690,24 +699,56 @@ class FlowGraphBuilder {
 
     // ---- factories -------------------------------------------------------
 
-    private fun newStart(container: Node?): FlowStart = FlowStart(nextId++, container)
-    private fun newUnreachable(): FlowUnreachable = FlowUnreachable(nextId++)
-    private fun newBranchLabel(): FlowBranchLabel = FlowBranchLabel(nextId++)
-    private fun newLoopLabel(): FlowLoopLabel = FlowLoopLabel(nextId++)
+    private fun newStart(container: Node?): FlowStart = noteMint(FlowStart(nextId++, container))
+    private fun newUnreachable(): FlowUnreachable = noteMint(FlowUnreachable(nextId++))
+    private fun newBranchLabel(): FlowBranchLabel = noteMint(FlowBranchLabel(nextId++))
+    private fun newLoopLabel(): FlowLoopLabel = noteMint(FlowLoopLabel(nextId++))
     private fun newAssignment(node: Node, antecedent: FlowNode): FlowAssignment =
-        FlowAssignment(nextId++, node, antecedent).also { noteNarrowingNode(it) }
+        noteMint(FlowAssignment(nextId++, node, antecedent)).also { noteNarrowingNode(it) }
     private fun newCondition(isTrue: Boolean, expr: Expression, antecedent: FlowNode): FlowCondition =
-        FlowCondition(nextId++, isTrue, expr, antecedent).also { noteNarrowingNode(it) }
+        noteMint(FlowCondition(nextId++, isTrue, expr, antecedent)).also { noteNarrowingNode(it) }
     private fun newSwitchClause(
         switchStmt: SwitchStatement,
         clauseStart: Int,
         clauseEnd: Int,
         antecedent: FlowNode,
     ): FlowSwitchClause =
-        FlowSwitchClause(nextId++, switchStmt, clauseStart, clauseEnd, antecedent)
+        noteMint(FlowSwitchClause(nextId++, switchStmt, clauseStart, clauseEnd, antecedent))
             .also { noteNarrowingNode(it) }
     private fun newCall(call: CallExpression, antecedent: FlowNode): FlowCall =
-        FlowCall(nextId++, call, antecedent).also { noteNarrowingNode(it) }
+        noteMint(FlowCall(nextId++, call, antecedent)).also { noteNarrowingNode(it) }
+
+    /**
+     * (WARM.12) round 865 — register one mint with [FlowCensus], attributed to the
+     * enclosing function-like container (the LAZY-CONSTRUCTION axis).
+     *
+     * Every `nextId++` in this class flows through here EXCEPT the [currentFlow]
+     * field initializer, which mints a placeholder `FlowStart` that `build`
+     * immediately overwrites — so the census total is exactly
+     * `FrontEnd.flowNodesBuilt - <graphs built>`, an identity
+     * `FlowNodeCensusTest` pins so that a mint site added later without a
+     * registration reddens instead of silently shrinking the denominator
+     * (round 829).
+     */
+    private fun <T : FlowNode> noteMint(node: T): T {
+        if (FlowCensus.on) {
+            // A function's own `FlowStart` is minted BEFORE its container is
+            // pushed, so it would otherwise be charged to the enclosing scope;
+            // charge it to the function it starts, which is what makes
+            // "container entirely unread" mean "this function's graph was never
+            // consulted".
+            val own = (node as? FlowStart)?.container?.pos
+            FlowCensus.mint(node, own ?: functionLikeStack.lastOrNull()?.pos ?: -1)
+        }
+        return node
+    }
+
+    /** (WARM.12) round 865 — one AST node visited by the minting walk, charged to
+     *  the container it is inside. The census's node counts say what was BUILT;
+     *  only this says how much of the WALK a container is worth (round 758). */
+    private fun noteVisit() {
+        FlowCensus.visit(functionLikeStack.lastOrNull()?.pos ?: -1)
+    }
 
     private fun noteNarrowingNode(node: FlowNode) {
         if (PassTiming.detailed) narrowingNodes.add(node)
@@ -762,6 +803,7 @@ class FlowGraphBuilder {
     }
 
     private fun bindStatement(stmt: Statement) {
+        if (FlowCensus.on) noteVisit()
         when (stmt) {
             is Block -> bindEachStatement(stmt.statements)
             is VariableStatement -> bindVariableStatement(stmt)
@@ -1256,13 +1298,15 @@ class FlowGraphBuilder {
                 val varDecls = collectEnclosingVarDecls(enclosing)
                 FrontEnd.close(FrontEnd.FLOW_VARDECLS, feV)
                 FrontEnd.addClosureCensus(reassigned.size.toLong())
-                FlowStart(
-                    id = nextId++,
-                    container = container,
-                    outerFlow = savedFlow,
-                    reassignedAfterNames = reassigned,
-                    localNames = locals,
-                    enclosingVarDecls = varDecls,
+                noteMint(
+                    FlowStart(
+                        id = nextId++,
+                        container = container,
+                        outerFlow = savedFlow,
+                        reassignedAfterNames = reassigned,
+                        localNames = locals,
+                        enclosingVarDecls = varDecls,
+                    )
                 ).also { closureStarts.add(it) }
             } else {
                 newStart(container)
@@ -1780,6 +1824,7 @@ class FlowGraphBuilder {
     }
 
     private fun bindExpression(expr: Expression) {
+        if (FlowCensus.on) noteVisit()
         when (expr) {
             is Identifier -> recordFlow(expr)
             is StringLiteralNode,

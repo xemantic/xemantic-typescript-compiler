@@ -20362,6 +20362,7 @@ class Checker(
                 flowDepthTripped = true
                 return true
             }
+            if (FlowCensus.on) FlowCensus.touch(flow, FlowCensus.CH_ASSIGNED) // (WARM.12)
             if (!visited.add(flow.id)) return false
             // Linear pass-through antecedents follow ITERATIVELY without consuming
             // depth (tsc getTypeAtFlowNode's `while(true)` loop — same accounting as
@@ -69775,6 +69776,7 @@ interface DataView {
     private fun isPostSuperFlowNode(flow: FlowNode, cache: HashMap<Int, Boolean>): Boolean {
         var f = flow
         while (true) {
+            if (FlowCensus.on) FlowCensus.touch(f, FlowCensus.CH_POSTSUPER) // (WARM.12)
             when (f) {
                 is FlowStart -> return false
                 is FlowUnreachable -> return true // unreachable code is "post-super" to silence errors
@@ -107692,6 +107694,7 @@ interface DataView {
         val sf = graph.sourceFile ?: return
         var bestBlock: Block? = null
         for (start in graph.containerStarts) {
+            if (FlowCensus.on) FlowCensus.touch(start, FlowCensus.CH_STARTS) // (WARM.12)
             val fn = start.container ?: continue
             val body = functionLikeBodyBlock(fn) ?: continue
             if (reference.pos < body.pos || reference.pos >= body.end) continue
@@ -107740,6 +107743,7 @@ interface DataView {
                 flowDepthTripped = true
                 return
             }
+            if (FlowCensus.on) FlowCensus.touch(flow, FlowCensus.CH_EVOLVING) // (WARM.12)
             if (!visited.add(flow.id)) return
             flow = when (val f = flow) {
                 is FlowAssignment -> {
@@ -108198,6 +108202,11 @@ interface DataView {
             if (NarrowSections.mode != NarrowSections.OFF) {
                 NarrowSections.arrival(flowNode.id, narrowProbeKindOf(flowNode), depth)
             }
+            // (WARM.12) round 865 — the consumed side of the flow-node census.
+            // Deliberately ABOVE `memo.served` and the `seen` cycle guard (round
+            // 849): this walk looks at the node here, and a hook below either
+            // guard would report a node the walk did read as unread.
+            if (FlowCensus.on) FlowCensus.touch(flowNode, FlowCensus.CH_NARROW)
             // Per-invocation flow-node memo (tsc's sharedFlowNodes): serve an entry
             // computed at a same-or-deeper entry depth (a clean completion there proves a
             // shallower(-or-equal)-entry revisit would recompute the identical value), OR
@@ -109736,6 +109745,7 @@ interface DataView {
     ): Expression? {
         var flow = startIn
         while (budget[0]-- > 0) {
+            if (FlowCensus.on) FlowCensus.touch(flow, FlowCensus.CH_ALIAS) // (WARM.12)
             when (flow) {
                 is FlowAssignment -> {
                     val n = flow.node
@@ -133870,6 +133880,7 @@ interface DataView {
         // is now answered from a precomputed pos-sorted index in O(nesting depth);
         // [FlowGraph.innermostClosureAt] documents why it is the same answer.
         val found: FlowStart? = graph.innermostClosureAt(recv.pos)
+        if (FlowCensus.on && found != null) FlowCensus.touch(found, FlowCensus.CH_STARTS) // (WARM.12)
         CpaSections.closeN(CpaSections.N_B464_SCAN, b464T1)
         val closure = found ?: return false
         // Receiver must be CAPTURED — not one of the closure's own params/locals.
@@ -134753,6 +134764,8 @@ interface DataView {
                 narrowRetryRelevantObs++  // (ENGINE.2d)(a), mirrored
                 return declaredType
             }
+            // (WARM.12) round 865 — mirrored census hook (see narrowTypeFromFlowCore).
+            if (FlowCensus.on) FlowCensus.touch(flowNode, FlowCensus.CH_LOOPENTRY)
             // Round 736: the height disjunct, mirrored (see [NarrowFlowMemo.served]).
             memo.served(flowNode.id, depth, NARROW_MAX_DEPTH)?.let {
                 val h = depth + memo.lastHitHeight

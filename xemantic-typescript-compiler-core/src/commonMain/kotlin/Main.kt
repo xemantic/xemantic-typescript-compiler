@@ -398,6 +398,13 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--flowScanBogus", "--flowscanbogus" -> {
                 modes.set(FlowScan::bogus, true)
             }
+            // (WARM.12) round 865 — the flow-node produced-vs-consumed census.
+            // Counters only, never a timestamp: the minting walk cannot be
+            // partitioned by timing at a price below its own size (round 864
+            // § 6), so what is deletable in it is decided by population.
+            "--flowCensus", "--flowcensus" -> {
+                FlowCensus.reset(); modes.set(FlowCensus::on, true)
+            }
             // (WARM.11) round 864 — the INV.2(b) side-table A/B. Both fills are
             // in the binary, so this selects an arm rather than needing a
             // second build (round 795: a verify flag that restores the old
@@ -563,6 +570,9 @@ private fun runCliCore(args: Array<String>, modes: ModeLedger): Int {
     }
     if (flowScanReport) {
         print(FlowScan.report())
+    }
+    if (FlowCensus.on) {
+        print(FlowCensus.report())
     }
     if (IanySections.mode != IanySections.OFF) {
         println(IanySections.report())
@@ -794,6 +804,7 @@ internal fun usageText(): String =
           --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
+          --flowCensus       (WARM.12) flow nodes minted vs ever read by any checker consumer
           --typeOfExprCallers  (TYPE.1) attribute the getTypeOfExpression calls by CALLER + co-occurrence
           --verifyMappedCache  recompute every served INV.5(c) mapped-cache hit and split
                              shape-different serves from id-only ones (implies --passTiming)

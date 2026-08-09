@@ -4548,6 +4548,290 @@ object FrontEnd {
 }
 
 /**
+ * (WARM.12) round 865 — the PRODUCED-versus-CONSUMED census of the flow graph
+ * itself: which of the flow nodes `FlowGraphBuilder` mints does any consumer in
+ * the checker ever look at?
+ *
+ * **Why a census and not a timing partition.** Round 864 left the flow-MINTING
+ * walk as the largest remaining front-end row (196.3 ms = 2.9% of a warm
+ * rebuild, 236,587 flow nodes) and refused to partition it further, with the
+ * arithmetic: the walk visits ~857,000 AST nodes, so a per-node timestamp pair
+ * at round 850's warm 97-202 ns is 83-173 ms against a 196 ms row — the
+ * instrument would BE the measurement. Counters are the escape (round 736), and
+ * the produced-to-consumed ratio is the question that decides whether the row
+ * can be *deleted* rather than *moved* (round 801: 1.000 means MOVED).
+ *
+ * **The four laws this is built to obey.**
+ *  * **Keyed on the MINTS, not on what survives** (round 829). Every
+ *    `nextId++` in `FlowGraphBuilder` registers here, so the parts sum to
+ *    `FrontEnd.flowNodesBuilt` exactly and a producer that stores nothing
+ *    cannot hide.
+ *  * **Keyed on boundaries no caller short-circuits** (round 849). Each
+ *    consumer's hook sits where that consumer READS the node's contents, above
+ *    its own memo/budget guards, and `flowAt` is hooked at the hand-out so a
+ *    node cannot reach a consumer unhooked.
+ *  * **`FlowNode.id` restarts at 0 in every file** exactly as `nodeId` does
+ *    (round 787), so nothing here is keyed on it: the inventory is per FILE and
+ *    the touched set is an IDENTITY set. That is safe only because the
+ *    `FlowNode` implementations are plain classes, NOT data classes — the
+ *    round-471 `HashSet<Node>` hazard is about data-class `hashCode()` deep
+ *    recursion, and `FlowBranchLabel`'s mutable antecedent list would be exactly
+ *    that hazard if anyone ever made these data classes.
+ *  * **A count is not a cost** (round 732). The output is a POPULATION; the
+ *    price of any share of it is a separate measurement.
+ *
+ * Off (the default) every hook is one static read and a not-taken branch, and
+ * nothing is retained.
+ */
+object FlowCensus {
+
+    /** `--flowCensus`. */
+    var on: Boolean = false
+
+    // -- kinds, in `FlowNode` declaration order ------------------------------
+    const val K_START = 0
+    const val K_UNREACHABLE = 1
+    const val K_BRANCH = 2
+    const val K_LOOP = 3
+    const val K_ASSIGN = 4
+    const val K_CONDITION = 5
+    const val K_SWITCH = 6
+    const val K_CALL = 7
+    const val K_ARRAYMUT = 8
+    const val NK = 9
+
+    val kindNames: Array<String> = arrayOf(
+        "FlowStart", "FlowUnreachable", "FlowBranchLabel", "FlowLoopLabel",
+        "FlowAssignment", "FlowCondition", "FlowSwitchClause", "FlowCall",
+        "FlowArrayMutation",
+    )
+
+    // -- consumer channels ---------------------------------------------------
+    /** `narrowTypeFromFlowCore` — the main narrowing walk. */
+    const val CH_NARROW = 0
+    /** `narrowTypeFromFlowFollowLoopEntry` — the (ENGINE.2d) mirror. */
+    const val CH_LOOPENTRY = 1
+    /** `isAssignedAtFlow` — the definite-assignment walk. */
+    const val CH_ASSIGNED = 2
+    /** `isPostSuperFlowNode` — the `super()` reachability walk. */
+    const val CH_POSTSUPER = 3
+    /** `evolvingArrayWalkTrips` — the TS2563 trip probe. */
+    const val CH_EVOLVING = 4
+    /** `walkAliasedConditionInit` — the const-alias back-walk. */
+    const val CH_ALIAS = 5
+    /** `FlowGraph.flowAt` handing a node out (the walks' entry points). */
+    const val CH_FLOWAT = 6
+    /** `containerStarts` / `innermostClosureAt` / `outerFlowForCapturedName`. */
+    const val CH_STARTS = 7
+    const val NCH = 8
+
+    val channelNames: Array<String> = arrayOf(
+        "narrowTypeFromFlow", "…FollowLoopEntry", "isAssignedAtFlow",
+        "isPostSuperFlowNode", "evolvingArrayWalkTrips", "walkAliasedConditionInit",
+        "flowAt (hand-out)", "container/closure starts",
+    )
+
+    /** One source file's minted inventory, in mint order. */
+    class FileInventory(val file: String, val declarationFile: Boolean) {
+        val nodes = ArrayList<FlowNode>()
+        /** Per container `pos`: how many AST nodes the MINTING walk visited inside
+         *  it. This is the axis that turns "22% of the flow NODES" into "N% of the
+         *  WALK" — round 758's law, which is the whole reason a share of a
+         *  population may never be quoted as a share of a cost. */
+        val visits = HashMap<Int, Long>()
+        /** Parallel to [nodes]: the `pos` of the enclosing function-like container,
+         *  or -1 for file-level flow. This is the LAZY-CONSTRUCTION axis — a
+         *  container none of whose nodes is ever read is a container whose graph
+         *  could in principle not have been built at all. */
+        val containers = ArrayList<Int>()
+    }
+
+    val files = ArrayList<FileInventory>()
+    private var cur: FileInventory? = null
+
+    /** Identity set — see the class KDoc on why this is sound here. */
+    private val touched = HashSet<FlowNode>()
+    val touchCalls = LongArray(NCH)
+
+    fun reset() {
+        files.clear(); cur = null; touched.clear()
+        for (c in 0 until NCH) touchCalls[c] = 0
+    }
+
+    /** Opens a file's inventory — called from `FlowGraphBuilder.build`. */
+    fun beginFile(file: String, declarationFile: Boolean) {
+        if (!on) return
+        val inv = FileInventory(file, declarationFile)
+        files.add(inv)
+        cur = inv
+    }
+
+    /** One AST node visited by the minting walk, inside container [containerPos]. */
+    fun visit(containerPos: Int) {
+        if (!on) return
+        val inv = cur ?: return
+        inv.visits[containerPos] = (inv.visits[containerPos] ?: 0L) + 1
+    }
+
+    /** One minted flow node, with the container it was minted inside. */
+    fun mint(node: FlowNode, containerPos: Int) {
+        if (!on) return
+        val inv = cur ?: return
+        inv.nodes.add(node)
+        inv.containers.add(containerPos)
+    }
+
+    /** One consumer looking at [node] through channel [ch]. */
+    fun touch(node: FlowNode, ch: Int) {
+        if (!on) return
+        touchCalls[ch]++
+        touched.add(node)
+    }
+
+    /** Did any consumer ever look at [node]? */
+    fun wasRead(node: FlowNode): Boolean = node in touched
+
+    /**
+     * The whole census, reduced. [report] renders exactly this, and the pins
+     * assert on it — so a pin and the printed table can never disagree.
+     */
+    class Summary(
+        val files: Int,
+        val declarationFiles: Long,
+        val minted: Long,
+        val read: Long,
+        val mintedByKind: LongArray,
+        val readByKind: LongArray,
+        val mintedDeclByKind: LongArray,
+        val readDeclByKind: LongArray,
+        val filesWithNoRead: Long,
+        val nodesInFilesWithNoRead: Long,
+        val containers: Long,
+        val containersUnread: Long,
+        val nodesInUnreadContainers: Long,
+        val walkVisits: Long,
+        val walkVisitsUnread: Long,
+    )
+
+    fun summary(): Summary {
+        val produced = LongArray(NK)
+        val read = LongArray(NK)
+        val producedDecl = LongArray(NK)
+        val readDecl = LongArray(NK)
+        var filesWithNoRead = 0L
+        var nodesInFilesWithNoRead = 0L
+        var declFiles = 0L
+        var containers = 0L
+        var containersUnread = 0L
+        var nodesInUnreadContainers = 0L
+        var walkVisits = 0L
+        var walkVisitsUnread = 0L
+        for (inv in files) {
+            if (inv.declarationFile) declFiles++
+            var fileRead = 0L
+            val perContainerTotal = HashMap<Int, Long>()
+            val perContainerRead = HashMap<Int, Long>()
+            for (i in inv.nodes.indices) {
+                val n = inv.nodes[i]
+                val k = kindOf(n)
+                val hit = n in touched
+                produced[k]++
+                if (inv.declarationFile) producedDecl[k]++
+                if (hit) {
+                    read[k]++
+                    fileRead++
+                    if (inv.declarationFile) readDecl[k]++
+                }
+                val c = inv.containers[i]
+                perContainerTotal[c] = (perContainerTotal[c] ?: 0L) + 1
+                if (hit) perContainerRead[c] = (perContainerRead[c] ?: 0L) + 1
+            }
+            if (fileRead == 0L) {
+                filesWithNoRead++
+                nodesInFilesWithNoRead += inv.nodes.size
+            }
+            for ((c, total) in perContainerTotal) {
+                containers++
+                val v = inv.visits[c] ?: 0L
+                walkVisits += v
+                if ((perContainerRead[c] ?: 0L) == 0L) {
+                    containersUnread++
+                    nodesInUnreadContainers += total
+                    walkVisitsUnread += v
+                }
+            }
+        }
+        var pTotal = 0L
+        var rTotal = 0L
+        for (k in 0 until NK) { pTotal += produced[k]; rTotal += read[k] }
+        return Summary(
+            files.size, declFiles, pTotal, rTotal, produced, read, producedDecl, readDecl,
+            filesWithNoRead, nodesInFilesWithNoRead,
+            containers, containersUnread, nodesInUnreadContainers,
+            walkVisits, walkVisitsUnread,
+        )
+    }
+
+    fun kindOf(node: FlowNode): Int = when (node) {
+        is FlowStart -> K_START
+        is FlowUnreachable -> K_UNREACHABLE
+        is FlowBranchLabel -> K_BRANCH
+        is FlowLoopLabel -> K_LOOP
+        is FlowAssignment -> K_ASSIGN
+        is FlowCondition -> K_CONDITION
+        is FlowSwitchClause -> K_SWITCH
+        is FlowCall -> K_CALL
+        is FlowArrayMutation -> K_ARRAYMUT
+    }
+
+    private fun pct(a: Long, d: Long): String {
+        if (d <= 0L) return "  - "
+        val tenths = a * 1000 / d
+        return "${(tenths / 10).toString().padStart(3)}.${tenths % 10}%"
+    }
+
+    fun report(): String = buildString {
+        val q = summary()
+        appendLine("== (WARM.12) flow-node produced-vs-consumed census ==")
+        appendLine(
+            "files ${q.files} (of which declaration files ${q.declarationFiles})   " +
+                "minted ${q.minted}   read ${q.read}   never read ${q.minted - q.read} " +
+                "(${pct(q.minted - q.read, q.minted)})"
+        )
+        appendLine("kind                 minted      read  never    read%   (of which .d.ts minted/read)")
+        for (k in 0 until NK) {
+            appendLine(
+                "  ${kindNames[k].padEnd(18)} ${q.mintedByKind[k].toString().padStart(7)} " +
+                    "${q.readByKind[k].toString().padStart(9)} " +
+                    "${(q.mintedByKind[k] - q.readByKind[k]).toString().padStart(7)} " +
+                    "  ${pct(q.readByKind[k], q.mintedByKind[k])}   " +
+                    "${q.mintedDeclByKind[k]}/${q.readDeclByKind[k]}"
+            )
+        }
+        appendLine(
+            "files whose graph is NEVER read: ${q.filesWithNoRead} of ${q.files}, " +
+                "holding ${q.nodesInFilesWithNoRead} nodes " +
+                "(${pct(q.nodesInFilesWithNoRead, q.minted)} of all mints)"
+        )
+        appendLine(
+            "containers (function-like scopes + file level): ${q.containers}, of which " +
+                "${q.containersUnread} entirely unread, holding ${q.nodesInUnreadContainers} nodes " +
+                "(${pct(q.nodesInUnreadContainers, q.minted)} of all mints)"
+        )
+        appendLine(
+            "minting-walk AST visits: ${q.walkVisits}, of which inside an entirely unread " +
+                "container ${q.walkVisitsUnread} (${pct(q.walkVisitsUnread, q.walkVisits)}) " +
+                "— THIS is the share of the WALK a perfect oracle could skip, and the " +
+                "node share above is not it (round 758)"
+        )
+        appendLine("touch calls by channel:")
+        for (c in 0 until NCH) {
+            appendLine("  ${channelNames[c].padEnd(26)} ${touchCalls[c].toString().padStart(10)}")
+        }
+    }
+}
+
+/**
  * (ENGINE.2) round 787 — the opt-in partition of the PROPERTY-ACCESS path, the
  * largest single block of checking work in this compiler and the one site the
  * (ENGINE.1) arc never reached.
