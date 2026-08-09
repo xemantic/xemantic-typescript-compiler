@@ -35,7 +35,7 @@ import kotlinx.serialization.json.Json
  * started days ago keeps answering a client rebuilt this minute — so everything
  * here is versioned and tolerant by construction.
  */
-public const val XTSC_PROTOCOL_VERSION: Int = 1
+public const val XTSC_PROTOCOL_VERSION: Int = 2
 
 /**
  * The version reported by a peer that predates protocol versioning.
@@ -47,11 +47,34 @@ public const val XTSC_PROTOCOL_VERSION: Int = 1
  */
 public const val XTSC_PROTOCOL_UNVERSIONED: Int = 0
 
-/** One compile, expressed exactly as the command line that requested it. */
+/**
+ * One compile, expressed exactly as the command line that requested it — plus
+ * the directory that command line was typed in.
+ *
+ * **[workingDirectory] is not decoration: without it a request does not say what
+ * it means** (round 873's parity sweep, protocol version 2). Every relative path
+ * on a command line — `.`, `./project`, `--outDir out`, and above all the
+ * project path a user simply did not type, which the CLI defaults to `"."` —
+ * resolves against the client's directory, and the daemon's is a different one
+ * that a JVM cannot change. Measured before this field existed:
+ * `xtsc --daemon --noEmit` in a project with errors compiled the DAEMON's own
+ * directory and exited **0**, and `--outDir out` wrote the user's compiled
+ * JavaScript into it.
+ *
+ * The two clients had each grown a heuristic instead — *"rewrite an argument
+ * that names something existing here"* — which cannot work, because a client
+ * does not parse the compiler's options and so cannot tell a project path from
+ * the `4` in `--workers 4`. Sending the directory moves the question to the one
+ * place that HAS the option table: the compiler itself.
+ *
+ * Empty means "the server's own directory", which is what a pre-version-2 client
+ * silently got.
+ */
 @Serializable
 public data class CompileRequest(
     val args: List<String>,
     val protocolVersion: Int = XTSC_PROTOCOL_UNVERSIONED,
+    val workingDirectory: String = "",
 )
 
 /**

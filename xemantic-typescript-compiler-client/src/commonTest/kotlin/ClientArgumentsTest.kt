@@ -88,4 +88,24 @@ class ClientArgumentsTest {
         assert(parsed.forwarded == listOf("--noEmit"))
     }
 
+    // (SERVE.2) round 873. This client USED to absolutize any argument naming
+    // something that exists here, and the rule was unfixable at this layer: a
+    // client does not parse the compiler's options, so it cannot tell a project
+    // path from the `4` in `--workers 4`, and it never sees the path a user did
+    // not type. The directory travels in the request instead, so a path argument
+    // that DOES exist must now also be forwarded exactly as written - restoring
+    // the rewriting would make one command line produce two different requests
+    // depending on which client ran it.
+    @Test
+    fun `should forward an existing path argument verbatim rather than absolutizing it`() {
+        val parsed = parseClientArguments(listOf("--noEmit", "."))
+        assert(parsed.forwarded == listOf("--noEmit", "."))
+    }
+
+    @Test
+    fun `should forward an option value that looks like a path verbatim`() {
+        val parsed = parseClientArguments(listOf("--outDir", "out", "--workers", "4"))
+        assert(parsed.forwarded == listOf("--outDir", "out", "--workers", "4"))
+    }
+
 }

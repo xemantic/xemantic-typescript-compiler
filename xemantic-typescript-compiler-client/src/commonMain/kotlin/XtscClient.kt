@@ -70,14 +70,25 @@ public class XtscClient(
     private val clock: MonotonicClock = MonotonicClock.system,
 ) {
 
-    public suspend fun run(args: List<String>, allowSpawn: Boolean = true): Int {
+    public suspend fun run(
+        args: List<String>,
+        allowSpawn: Boolean = true,
+        // Injected so the pin does not depend on where the test process runs;
+        // production always passes the real one.
+        workingDirectory: String = currentWorkingDirectory(),
+    ): Int {
         socketPathProblem(socketPath)?.let {
             stderr("xtsc: $it\n")
             return XTSC_CLIENT_UNAVAILABLE
         }
+        // The directory is part of the request, not of the arguments: every
+        // relative path on the command line — including the project path the
+        // user did not type, which the compiler defaults to `"."` — means
+        // something HERE, and the daemon is somewhere else (round 873).
         val request = CompileRequest(
             args = args,
             protocolVersion = XTSC_PROTOCOL_VERSION,
+            workingDirectory = workingDirectory,
         )
         sendCompileRequest(socketPath, request)?.let { return report(it) }
 

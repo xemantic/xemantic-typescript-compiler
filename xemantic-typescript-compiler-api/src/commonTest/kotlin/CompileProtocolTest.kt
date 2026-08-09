@@ -90,10 +90,49 @@ class CompileProtocolTest {
     // and the older one has to keep working rather than fail to decode.
     @Test
     fun `should tolerate a field added by a newer peer`() {
-        val newer = """{"args":["--noEmit"],"protocolVersion":1,"cwd":"/proj"}"""
+        val newer = """{"args":["--noEmit"],"protocolVersion":$XTSC_PROTOCOL_VERSION,""" +
+            """"somethingAddedLater":"/proj"}"""
         val decoded = xtscProtocolJson.decodeFromString<CompileRequest>(newer)
         assert(decoded.args == listOf("--noEmit"))
         assert(decoded.protocolVersion == XTSC_PROTOCOL_VERSION)
+    }
+
+    // (SERVE.2) round 873. The directory is part of what a request MEANS: every
+    // relative path on the command line resolves against it, including the
+    // project path a user did not type at all (the CLI defaults it to "."), and
+    // the daemon's own directory is a different one that a JVM cannot change.
+    @Test
+    fun `should carry the client's working directory`() {
+        val request = CompileRequest(
+            args = listOf("--noEmit"),
+            protocolVersion = XTSC_PROTOCOL_VERSION,
+            workingDirectory = "/home/user/proj",
+        )
+        val decoded = xtscProtocolJson.decodeFromString<CompileRequest>(
+            xtscProtocolJson.encodeToString(request)
+        )
+        assert(decoded.workingDirectory == "/home/user/proj")
+        assert(decoded == request)
+    }
+
+    // A version-1 daemon never sent it and a version-1 client never will, so the
+    // absent field has to mean "the server's own directory" - which is exactly
+    // what the whole request used to mean.
+    @Test
+    fun `should read an absent working directory as empty rather than as a path`() {
+        val v1 = """{"args":["--noEmit"],"protocolVersion":1}"""
+        val decoded = xtscProtocolJson.decodeFromString<CompileRequest>(v1)
+        assert(decoded.workingDirectory == "")
+    }
+
+    // The field is the whole reason for the version bump: a version-1 daemon
+    // answers a version-2 request by resolving it against its OWN directory,
+    // silently compiling a different tree. `protocolProblem` is what stops that,
+    // so the two must move together.
+    @Test
+    fun `should refuse a peer that predates the working directory`() {
+        assert(XTSC_PROTOCOL_VERSION >= 2)
+        assert(protocolProblem(1) != null)
     }
 
     @Test

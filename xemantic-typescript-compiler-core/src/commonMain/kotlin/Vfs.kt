@@ -92,9 +92,31 @@ object SystemVfs : Vfs {
         emptyList()
     }
 
+    /**
+     * (SERVE.2) round 873 — the directory relative paths resolve against, when
+     * it is NOT this process's own.
+     *
+     * A compile server runs in a directory that has nothing to do with the one
+     * the user typed the command in, and a JVM cannot change its own cwd, so
+     * `--serve` installs the requesting client's directory here for the duration
+     * of one request. This is THE funnel: `ProjectCompiler.build` absolutizes
+     * both the project path and a `--outDir` override through
+     * [resolveAbsolute] before doing anything with either, so one variable makes
+     * a served request resolve exactly as the same command line would have
+     * resolved locally — rather than each client guessing which of the
+     * compiler's arguments is a path, which is what it used to do and could not
+     * get right.
+     *
+     * Process-global and therefore install-and-restore, on the ONE compile
+     * thread (`CompileServer` invariant 1), exactly like the round-848 mode
+     * ledger. Null means this process's own working directory.
+     */
+    var workingDirectory: String? = null
+
     override fun resolveAbsolute(path: String): String {
         val p = PathUtil.normalize(path)
         if (p.startsWith("/")) return p
+        workingDirectory?.let { return PathUtil.join(PathUtil.normalize(it), p) }
         // SystemFileSystem.resolve throws for paths that don't exist, so resolve the
         // CWD (".", always present) and join the relative part onto it instead of
         // resolving [path] directly.

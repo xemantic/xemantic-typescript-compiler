@@ -72,7 +72,22 @@ class TsConfigLoader(private val vfs: Vfs) {
         val diags = mutableListOf<Diagnostic>()
         val merged = loadMerged(tsconfigPath, mutableSetOf(), diags)
             ?: return LoadedTsConfig(
-                projectDefaults(), configDir, defaultInclude, defaultExclude, emptyList(), emptyList(), diags,
+                projectDefaults(),
+                configDir,
+                // A config file that does not EXIST must not fall back to `**/*`
+                // (round 873). `configDir` is then `dirname` of a path nobody
+                // ever confirmed, so for `xtsc /nonexistent-project` it is `/`
+                // and the crawl walks the WHOLE FILESYSTEM — measured at over 30
+                // minutes of CPU before it was killed, having emitted TS5083
+                // first and then gone looking for `**/*` under the root. Under
+                // `--serve` the same request wedges the single compile thread
+                // for good: every later request on that daemon blocks forever,
+                // and the client has no timeout to notice. tsc reports the path
+                // and compiles nothing, which is what an empty include does; a
+                // config that exists but does not PARSE keeps the default,
+                // because there `configDir` is a directory the user did name.
+                if (vfs.exists(tsconfigPath)) defaultInclude else emptyList(),
+                defaultExclude, emptyList(), emptyList(), diags,
             )
 
         val co = merged.compilerOptions ?: JsonObject(emptyMap())

@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.client
 
+import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.protocol.xtscSocketPath
 import kotlinx.coroutines.runBlocking
 
@@ -59,13 +60,17 @@ public data class ClientArguments(
 )
 
 /**
- * Splits the client's options from the compiler's and absolutizes path
- * arguments.
+ * Splits the client's own options from the compiler's.
  *
- * Only arguments that are not flags AND that name something existing here are
- * rewritten, which leaves option values and bare numbers untouched. The
- * rewriting is not cosmetic: the daemon has a different working directory, so a
- * relative path would resolve against ITS cwd and compile the wrong tree.
+ * **It no longer rewrites anything** (round 873, protocol version 2). It used to
+ * absolutize every argument that named something existing here, because the
+ * daemon's working directory is not the user's — but a client does not parse the
+ * compiler's options, so that rule could not tell a project path from the `4` in
+ * `--workers 4`, and it was blind to the two cases that mattered: a path
+ * argument the user did not type at all, and an output directory that does not
+ * exist yet. The directory now travels in the request
+ * ([CompileRequest.workingDirectory]) and the COMPILER resolves against it, so
+ * this is the strict pass-through the client's own KDoc always claimed.
  */
 public fun parseClientArguments(args: List<String>): ClientArguments {
     var socket: String? = null
@@ -83,7 +88,7 @@ public fun parseClientArguments(args: List<String>): ClientArguments {
                 i++
             }
             else -> {
-                forwarded += absolutizeArgument(args[i])
+                forwarded += args[i]
                 i++
             }
         }
@@ -94,9 +99,6 @@ public fun parseClientArguments(args: List<String>): ClientArguments {
         forwarded = forwarded,
     )
 }
-
-private fun absolutizeArgument(arg: String): String =
-    if (arg.startsWith("-")) arg else absolutePathIfExists(arg) ?: arg
 
 /**
  * The socket both peers derive independently, so they must agree exactly — a

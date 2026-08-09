@@ -26,7 +26,6 @@
 package com.xemantic.typescript.compiler.server
 
 import com.xemantic.typescript.compiler.protocol.CompileResponse
-import java.io.File
 
 /**
  * (SERVER.1) The dispatching entry point: compile server, thin client, or the
@@ -106,7 +105,7 @@ internal fun runAsClient(
     // above survived: every existing pin stopped at the response object.
     request: (List<String>, String) -> CompileResponse? = CompileServer::request,
 ): Int {
-    val forwarded = stripClientOptions(args).map(::absolutize)
+    val forwarded = stripClientOptions(args)
     val response = request(forwarded, socket)
     if (response == null) {
         // No server: do the work here rather than failing. The point of the
@@ -134,17 +133,15 @@ private fun stripClientOptions(args: Array<String>): List<String> {
     return out
 }
 
-/**
- * Resolves path-like arguments against the CLIENT's working directory.
- *
- * The server runs somewhere else entirely, so a relative `.` or `./project`
- * would resolve against ITS cwd and silently compile the wrong tree — or
- * nothing. Only arguments that are not flags and that actually exist as a file
- * or directory here are rewritten, which leaves option values such as
- * `--socket /tmp/x.sock` (already absolute) and bare numbers untouched.
- */
-private fun absolutize(arg: String): String {
-    if (arg.startsWith("-")) return arg
-    val file = File(arg)
-    return if (file.exists()) file.absolutePath else arg
-}
+// Path resolution is NOT here any more, and no argument is rewritten at all
+// (round 873, protocol version 2). This file used to absolutize every argument
+// that named something existing HERE, because the daemon's working directory is
+// not the user's — a rule that cannot work, because a client does not parse the
+// compiler's options and so cannot tell a project path from the `4` in
+// `--workers 4`, and which was blind to the two cases that mattered: a project
+// path the user did not type (the compiler defaults it to `"."`, which the
+// daemon then resolved against its OWN directory and compiled the wrong tree,
+// exiting 0 on a failing project) and a `--outDir` that does not exist yet (the
+// daemon emitted the user's JavaScript into its own directory). The directory
+// now travels in `CompileRequest.workingDirectory` and `SystemVfs` resolves
+// against it, which is the one place that HAS the option table.

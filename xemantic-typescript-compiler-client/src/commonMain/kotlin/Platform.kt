@@ -81,21 +81,19 @@ public fun currentUserName(): String =
     readEnv("USER") ?: readEnv("USERNAME") ?: readEnv("LOGNAME") ?: "unknown"
 
 /**
- * The absolute form of [path] if it names something that exists, else null.
+ * The client's working directory, absolute.
  *
- * Path arguments must be absolutized before they are sent: the daemon runs in a
- * different working directory entirely, so a relative `.` or `./project` would
- * resolve against ITS cwd and silently compile the wrong tree — or nothing.
+ * Path arguments must be absolutized before they are sent, and a MISSING path
+ * argument means this directory: the daemon runs somewhere else entirely, and a
+ * JVM cannot change its own cwd, so a request that does not say where it is gets
+ * compiled against the DAEMON's directory (round 873).
  */
-public fun absolutePathIfExists(path: String): String? {
-    if (path.isEmpty()) return null
-    return try {
-        val p = Path(path)
-        if (SystemFileSystem.exists(p)) SystemFileSystem.resolve(p).toString() else null
-    } catch (_: Exception) {
-        null
-    }
+public fun currentWorkingDirectory(): String = try {
+    SystemFileSystem.resolve(Path(".")).toString()
+} catch (_: Exception) {
+    "."
 }
+
 
 /** [MonotonicClock] over `kotlin.time`, which is multiplatform already. */
 internal class SystemMonotonicClock : MonotonicClock {

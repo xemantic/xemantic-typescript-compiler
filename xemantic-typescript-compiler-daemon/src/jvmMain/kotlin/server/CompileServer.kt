@@ -25,6 +25,7 @@
 
 package com.xemantic.typescript.compiler.server
 
+import com.xemantic.typescript.compiler.SystemVfs
 import com.xemantic.typescript.compiler.protocol.CompileRequest
 import com.xemantic.typescript.compiler.protocol.CompileResponse
 import com.xemantic.typescript.compiler.protocol.XTSC_PROTOCOL_VERSION
@@ -168,14 +169,25 @@ object CompileServer {
      * The exit code is derived from the compiler's own summary line rather than
      * recomputed, so it cannot drift from what the CLI reports.
      */
-    private fun compileCapturing(args: List<String>): CompileResponse {
+    private fun compileCapturing(args: List<String>, workingDirectory: String): CompileResponse {
         val buffer = ByteArrayOutputStream()
         val previous = System.out
+        val previousCwd = SystemVfs.workingDirectory
         val mark = TimeSource.Monotonic.markNow()
         var failed: Throwable? = null
         var code = 0
         try {
             System.setOut(PrintStream(buffer, true, StandardCharsets.UTF_8))
+            // (SERVE.2) round 873. The request's directory, not this process's:
+            // every relative path on the command line means something THERE, and
+            // the most important one is the path a user did not type at all —
+            // the CLI defaults the project to `"."`, so before this a
+            // `xtsc --daemon --noEmit` compiled the DAEMON's directory and
+            // reported OK on a project full of errors. Install-and-restore, on
+            // the one compile thread, exactly like the round-848 mode ledger:
+            // this is process-global state and a request that left it set would
+            // reconfigure every later one.
+            SystemVfs.workingDirectory = workingDirectory.ifEmpty { null }
             // `runCli`, NOT `main`: main ends the process, which inside the
             // daemon would take the server down with the first project that has
             // an error. runCli returns the same code instead — so the server
@@ -188,6 +200,7 @@ object CompileServer {
             failed = e
         } finally {
             System.setOut(previous)
+            SystemVfs.workingDirectory = previousCwd
         }
         val elapsed = mark.elapsedNow().inWholeMilliseconds
         val text = buffer.toString(StandardCharsets.UTF_8) +
@@ -222,7 +235,7 @@ object CompileServer {
                 protocolVersion = XTSC_PROTOCOL_VERSION,
             )
         } else {
-            compileCapturing(request.args)
+            compileCapturing(request.args, request.workingDirectory)
         }
 
     /**
@@ -331,7 +344,14 @@ object CompileServer {
      * from a peer that may not understand this request is worse than doing the
      * work here, and the message says which way to fix it.
      */
-    fun request(args: List<String>, socketPath: String = defaultSocketPath()): CompileResponse? {
+    fun request(
+        args: List<String>,
+        socketPath: String = defaultSocketPath(),
+        // THIS process's directory, because `request` runs in the CLIENT — the
+        // JVM dispatcher, launched by the user in the user's project. The daemon
+        // cannot know it any other way and a JVM cannot change its own cwd.
+        workingDirectory: String = File(".").absolutePath.removeSuffix("/.").ifEmpty { "/" },
+    ): CompileResponse? {
         socketPathProblem(socketPath)?.let { System.err.println("xtsc: $it"); return null }
         if (!UnixSocketAddress.isSupported()) return null
         val address = UnixSocketAddress(socketPath)
@@ -345,6 +365,7 @@ object CompileServer {
                                 CompileRequest(
                                     args = args,
                                     protocolVersion = XTSC_PROTOCOL_VERSION,
+                                    workingDirectory = workingDirectory,
                                 )
                             )
                         )
