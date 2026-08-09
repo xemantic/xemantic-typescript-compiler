@@ -93,7 +93,20 @@ if [ "$xtsc_is_daemon_request" -eq 1 ] && [ -z "${XTSC_AOT_DECIDE_ONLY:-}" ] && 
   [ -n "${XTSC_CLIENT_VERBOSE:-}" ] && printf 'xtsc: client native %s\n' "$XTSC_RESOLVED_CLIENT" >&2
   if [ -n "${XTSC_CLIENT_DECIDE_ONLY:-}" ]; then printf 'native %s\n' "$XTSC_RESOLVED_CLIENT"; exit 0; fi
 
-  xtsc_client_args=()
+  # --no-spawn IS THE POINT, and it is what keeps this a LATENCY change and
+  # nothing else. The thin client's own default is to START a daemon when it
+  # finds none, which is right for a binary invoked as `xtsc`, and WRONG as a
+  # side effect of swapping an arm: `--daemon` has always meant "use a server if
+  # one is up, else compile here and say so", and auto-spawn would silently
+  # replace an in-process compile with a long-lived JVM the user never asked
+  # for. It is not a hypothetical — the first build of this arm spawned one from
+  # inside the 14,000-test suite, where `AotCacheGuardTest` caught it and a
+  # daemon was left running afterwards.
+  #
+  # So: identical semantics on every path, and the win is unaffected, because
+  # the case this round is about (an editor, a warm daemon) has one running
+  # already. Auto-spawn is a product decision that deserves its own round.
+  xtsc_client_args=(--no-spawn)
   for arg in "$@"; do
     [ "$arg" = "--daemon" ] || xtsc_client_args+=("$arg")
   done
@@ -107,10 +120,6 @@ if [ "$xtsc_is_daemon_request" -eq 1 ] && [ -z "${XTSC_AOT_DECIDE_ONLY:-}" ] && 
     *" --socket "*) ;;
     *) [ -n "${XTSC_SOCKET:-}" ] && xtsc_client_args=(--socket "$XTSC_SOCKET" ${xtsc_client_args[@]+"${xtsc_client_args[@]}"}) ;;
   esac
-  # How the client starts a daemon when none is running. It deliberately knows
-  # nothing about Java, so without this it can only report that it could not.
-  export XTSC_DAEMON_CMD="${XTSC_DAEMON_CMD:-$XTSC_SCRIPT_DIR/xtsc}"
-
   # stderr is held back rather than streamed: on a fallback the client has
   # already explained that it found no daemon, and printing that above a compile
   # that then succeeds is worse than saying nothing. Diagnostics are on STDOUT

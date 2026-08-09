@@ -301,17 +301,45 @@ class LauncherClientArmTest {
         dir.deleteRecursively()
     }
 
-    // Without this the client knows no way to start a daemon: it deliberately
-    // knows nothing about Java, so it could only report that it could not.
+    /**
+     * The arm swap must be a LATENCY change and nothing else.
+     *
+     * The client's own default is to START a daemon when it finds none — right
+     * for a binary invoked as `xtsc`, wrong as a side effect of swapping an arm:
+     * `--daemon` has always meant "use a server if one is up, else compile here
+     * and say so", and auto-spawn would silently replace an in-process compile
+     * with a long-lived JVM nobody asked for. Not hypothetical — the first build
+     * of this arm spawned one from inside the 14,000-test suite,
+     * `AotCacheGuardTest` failed on the missing "no compile server on" message,
+     * and a daemon was still running when the run finished.
+     */
     @Test
-    fun `the client is told how to start a daemon`() {
+    fun `the client is told not to start a daemon`() {
         val dir = tmpDir()
         val fake = File(dir, "xtsc-client")
-        fake.writeText("#!/bin/sh\necho \"CMD: \$XTSC_DAEMON_CMD\"\nexit 0\n")
+        fake.writeText("#!/bin/sh\necho \"ARGS: ${'$'}@\"\nexit 0\n")
         fake.setExecutable(true)
         val (_, out, _) = run(mapOf("XTSC_CLIENT" to fake.absolutePath), "--daemon", "--noEmit", ".")
-        assert(out.contains("CMD: ") && out.contains("xtsc"))
-        assert("CMD: \n" !in out)
+        assert("--no-spawn" in out)
+        dir.deleteRecursively()
+    }
+
+    // The same property asserted where it actually bites, with the REAL client:
+    // a `--daemon` request with nothing listening must still compile in-process
+    // and say so, exactly as it did before there was an arm, and must leave no
+    // daemon behind. This is `AotCacheGuardTest`'s dispatcher case seen from the
+    // arm's side.
+    @Test
+    fun `an unreachable daemon still compiles in-process and leaves nothing behind`() {
+        val dir = tmpDir()
+        val absent = File(dir, "absent.sock")
+        val (_, out, err) = run(
+            mapOf("XTSC_AOT" to "off"),
+            "--daemon", "--socket", absent.absolutePath, "--noEmit", dir.absolutePath,
+        )
+        assert("no compile server on" in err)
+        assert("whole-project build" in out)
+        assert(!absent.exists())
         dir.deleteRecursively()
     }
 

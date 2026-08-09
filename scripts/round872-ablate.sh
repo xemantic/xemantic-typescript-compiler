@@ -43,8 +43,17 @@ PY
     A3) sed -i 's/if \[ "\$xtsc_is_daemon_request" -eq 1 \] && \[ -z "\${XTSC_AOT_DECIDE_ONLY:-}" \] && xtsc_resolve_client; then/if xtsc_resolve_client; then/' "$LAUNCHER" ;;
     # XTSC_SOCKET is no longer named explicitly, so the two arms can disagree
     A4) sed -i 's|\*) \[ -n "\${XTSC_SOCKET:-}" \] \&\& xtsc_client_args=(--socket "\$XTSC_SOCKET" \${xtsc_client_args\[@\]+"\${xtsc_client_args\[@\]}"}) ;;|*) ;;|' "$LAUNCHER" ;;
-    # the client is no longer told how to start a daemon
-    A5) sed -i 's|^  export XTSC_DAEMON_CMD=.*$|  :|' "$LAUNCHER" ;;
+    # the client is allowed to start a daemon, silently replacing an in-process
+    # compile with a long-lived JVM the user never asked for
+    A5) python3 - "$LAUNCHER" <<'PY'
+import sys
+p=sys.argv[1]; s=open(p).read()
+old='  xtsc_client_args=(--no-spawn)'
+new='  xtsc_client_args=()'
+assert s.count(old)==1, "anchor"
+open(p,'w').write(s.replace(old,new))
+PY
+      ;;
     # --daemon is forwarded to the client, where it means nothing
     A6) python3 - "$LAUNCHER" <<'PY'
 import sys
