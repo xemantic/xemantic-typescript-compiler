@@ -116,40 +116,69 @@ class FlowNodeCensusTest {
     }
 
     @Test
-    fun `a mint lands in the inventory of the file that minted it`() {
-        val sizes = underCensus {
+    fun `every kind the builder mints is registered`() {
+        val q = underCensus {
+            FlowGraphBuilder().build(Parser(fixture, "c.ts").parse())
+            FlowCensus.summary()
+        }
+        // The denominator pin above sees a LOST mint site only through the total,
+        // which the per-file pin below also moves; this one names the kind, so a
+        // factory that stops registering is attributable rather than merely
+        // detectable. FlowUnreachable is the kind the round's own headline is
+        // about (minted 17,161 and read 0 on the compiler profile) and it is the
+        // one a fixture must deliberately contain — every `return` mints one.
+        assert(q.mintedByKind[FlowCensus.K_START] > 0)
+        assert(q.mintedByKind[FlowCensus.K_UNREACHABLE] > 0)
+        assert(q.mintedByKind[FlowCensus.K_BRANCH] > 0)
+        assert(q.mintedByKind[FlowCensus.K_LOOP] > 0)
+        assert(q.mintedByKind[FlowCensus.K_ASSIGN] > 0)
+        assert(q.mintedByKind[FlowCensus.K_CONDITION] > 0)
+    }
+
+    @Test
+    fun `no file's inventory holds a node another file minted`() {
+        val foreign = underCensus {
             FlowGraphBuilder().build(Parser(fixture, "a.ts").parse())
-            val afterA = FrontEnd.flowNodesBuilt
-            FlowGraphBuilder().build(Parser("function b() { return 1; }", "b.ts").parse())
-            val afterB = FrontEnd.flowNodesBuilt
-            listOf(
-                FlowCensus.files[0].file, FlowCensus.files[1].file,
-                FlowCensus.files[0].nodes.size.toString(),
-                FlowCensus.files[1].nodes.size.toString(),
-                (afterA - 1).toString(), (afterB - afterA - 1).toString(),
+            val b = Parser("function b() { return 1; }", "b.ts").parse()
+            FlowGraphBuilder().build(b)
+            // Identity, not a count: an inventory opened one statement too late
+            // leaves b.ts's own FlowStart in a.ts's list while both totals stay
+            // plausible, and only the node's own container can see that.
+            Triple(
+                FlowCensus.files[0].file,
+                FlowCensus.files[0].nodes.count { it is FlowStart && it.container === b },
+                FlowCensus.files[1].nodes.count { it is FlowStart && it.container === b },
             )
         }
-        assert(sizes[0] == "a.ts")
-        assert(sizes[1] == "b.ts")
-        // Each file's inventory holds exactly its OWN mints: an inventory opened
-        // after the first factory call would push a.ts's start node into the
-        // previous file's list and shift both counts.
-        assert(sizes[2] == sizes[4])
-        assert(sizes[3] == sizes[5])
+        assert(foreign.first == "a.ts")
+        assert(foreign.second == 0)
+        assert(foreign.third == 1)
     }
 
     @Test
     fun `the flow chain of a narrowed reference is reported as read`() {
-        val q = underCensus {
+        // `underCensus` resets in its `finally`, so anything the assertions read
+        // must be captured INSIDE the block — a counter read outside is 0 on a
+        // working instrument, which is the same reading a dead one gives.
+        val captured = underCensus {
             diagnose(fixture, directives = "")
-            FlowCensus.summary()
+            FlowCensus.summary() to FlowCensus.touchCalls[FlowCensus.CH_NARROW]
         }
+        val q = captured.first
         // The positive control: something must be read, or a census that reports
         // "nothing is ever consumed" would pass vacuously and the round's whole
         // finding would be an instrument artefact.
         assert(q.read > 0)
         assert(q.readByKind[FlowCensus.K_CONDITION] > 0)
         assert(q.minted > q.read)
+        // …and the main narrowing walk's own channel must be live. Without this
+        // the pins above are satisfied by `flowAt`'s hand-out alone — which is a
+        // DIFFERENT channel observing the same entry node — so dropping the walk
+        // hook, the one that reaches the whole antecedent CHAIN (991,970 touches
+        // against 176,767 hand-outs on the compiler profile), leaves every
+        // assertion green. Measured: it did, in this round's first ablation
+        // batch (round 807's redundant-signal mechanism, seen from the pin side).
+        assert(captured.second > 0)
     }
 
     @Test

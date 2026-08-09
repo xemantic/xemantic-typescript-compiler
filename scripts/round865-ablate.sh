@@ -78,25 +78,26 @@ assert s.count(old)==1
 open(p,'w',encoding='utf-8').write(s.replace(old,new))
 PY
       ;;
-    M5) # the probe gate is inert — the census records with the flag off
-      python3 - "$SPINE" <<'PY'
+    M5) # the touch channel's GATE is inert — the census records with the flag off.
+        # ONE fault, expressed at the two places that implement one gate: the call
+        # site in the checker and the guard inside `touch`. Ablating only the
+        # inner one is a NO-OP (measured, this round's first batch) — with every
+        # call site guarded the inner `if (!on) return` is a REDUNDANT GUARD,
+        # which round 807 says to report rather than claim as coverage.
+      python3 - "$SPINE" "$CHECKER" <<'PYEOF'
 import sys
-p=sys.argv[1]; s=open(p,encoding='utf-8').read()
-for old,new in [
- ("""    fun visit(containerPos: Int) {
-        if (!on) return""","""    fun visit(containerPos: Int) {
-        if (false) return"""),
- ("""    fun mint(node: FlowNode, containerPos: Int) {
-        if (!on) return""","""    fun mint(node: FlowNode, containerPos: Int) {
-        if (false) return"""),
- ("""    fun touch(node: FlowNode, ch: Int) {
-        if (!on) return""","""    fun touch(node: FlowNode, ch: Int) {
-        if (false) return"""),
-]:
-    assert s.count(old)==1, old[:40]
-    s=s.replace(old,new)
-open(p,'w',encoding='utf-8').write(s)
-PY
+sp, ch = sys.argv[1], sys.argv[2]
+s = open(sp, encoding='utf-8').read()
+old = "    fun touch(node: FlowNode, ch: Int) {\n        if (!on) return"
+new = "    fun touch(node: FlowNode, ch: Int) {\n        if (false) return"
+assert s.count(old) == 1
+open(sp, 'w', encoding='utf-8').write(s.replace(old, new))
+c = open(ch, encoding='utf-8').read()
+oldc = "            if (FlowCensus.on) FlowCensus.touch(flowNode, FlowCensus.CH_NARROW)"
+newc = "            if (true) FlowCensus.touch(flowNode, FlowCensus.CH_NARROW)"
+assert c.count(oldc) == 1
+open(ch, 'w', encoding='utf-8').write(c.replace(oldc, newc))
+PYEOF
       ;;
     *) echo "unknown arm $1" >&2; return 1 ;;
   esac
