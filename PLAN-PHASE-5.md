@@ -47,14 +47,14 @@ CHECK-ONLY GATE THE ITEM NAMED.** `docs/perf/warm-tail-attribution.md` § 13.
   begins with a literal and costs **a seventh as much**. Second time in three rounds that the most
   expensive thing in a region is a whole-program regex matching nothing (round 860 was the first).
 
-- **WHAT LANDED — two equivalences and then the gate, three commits.** (a) `3373abc0`:
+- **WHAT LANDED — two equivalences and then the gate, three commits.** (a) `925d4d24`:
   `containsDeclareRequire`, an exact hand-written scan anchored on the literal `require` (571
   occurrences, one linear sweep plus 571 constant-time rejections), with `declareRequireRegex` kept
   LIVE as the specification — round 860's law, an exact rewrite rather than a *gate*, since a gate is
   a legality claim the profiles cannot falsify (round 792); the same commit DEFERS the `import("…")`
   pass behind the candidate sets, which is sound because `staticallyReferenced` enters the final
   filter only as `it !in staticallyReferenced`, beside `(it in requireReached || it in
-  nsInternalImportTargets)`. (b) `e5db39c8`: the gate itself.
+  nsInternalImportTargets)`. (b) `2926050a`: the gate itself.
 
 - **THE MEASUREMENT** (`BenchMain <proj> 3 8 frontend,frontend`, 2 processes x 2 draws per arm, all
   12 instrumented rebuilds answering 78 files / 46 errors). HEAD **138.68 ms** (draws 136.53 /
@@ -100,7 +100,7 @@ CHECK-ONLY GATE THE ITEM NAMED.** `docs/perf/warm-tail-attribution.md` § 13.
   over all four modules); `cost_gate.py` **+0.00% on all 20 counters** at every sub-step;
   `huge_methods.py --fail-over 0` **0 over the limit**, 652 classes. Round-851 order throughout, and
   the before-arm was rebuilt IN THE FOREGROUND with `git status` checked before and after (round
-  805). Commits `e83cbbf0`, `3373abc0`, `e5db39c8`, `eb654437`.
+  805). Commits `ccd0de2b`, `925d4d24`, `2926050a`, `366d5bd4`.
 
 **Round 861 (2026-08-08) — (WARM.9): THE LAST TAIL PASS OVER 1% IS PRICED WARM AND IT IS A
 NEGATIVE — 85.6 ms = 1.09%, NOT THE ~1.68% PROJECTED, AND THE NUMBER IS AN UPPER BOUND THE
@@ -1168,7 +1168,7 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   +0.00% on all 20 at every sub-step, `huge_methods.py --fail-over 0` 0 over the limit, 8-profile
   grid **added=0 removed=0 both directions** from two class dirs (651 vs 652 classes), and the EMIT
   tree byte-identical at 78 files. `ab-warm.sh` printed `WIN of 2.3% (B wins 3/3)` and is set aside:
-  arm A's sd is 2.76%. Commits `e83cbbf0`, `3373abc0`, `e5db39c8`, `eb654437`.
+  arm A's sd is 2.76%. Commits `ccd0de2b`, `925d4d24`, `2926050a`, `366d5bd4`.
   `docs/perf/warm-tail-attribution.md` § 13.
 
 - [x] **(WARM.6) — DONE, ROUND 859. THE TAIL IS FLAT WARM TOO — round 801's cold verdict survives

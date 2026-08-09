@@ -1027,7 +1027,7 @@ scan was the first), and both were invisible until a probe was put under them.
 
 ### 13.3 What landed — two changes, both EQUIVALENCES, neither a gate
 
-**(a) `3373abc0` — `containsDeclareRequire`, an exact hand-written equivalent**
+**(a) `925d4d24` — `containsDeclareRequire`, an exact hand-written equivalent**
 anchored on the literal `require` (571 occurrences in those 9,977,097
 characters: one linear sweep plus 571 constant-time rejections). Round 860's law
 applies unchanged — a *gate* is a claim about where a construct may legally
@@ -1045,7 +1045,7 @@ sets empty the filter yields nothing whatever the subtractive set holds. So the
 function now runs in two passes and pass 2 is skipped whenever no candidate
 exists — which on tsc's own sources is every compile.
 
-**(b) `e5db39c8` — the queue item, `if (options.skipEmitOutputs) emptySet()
+**(b) `2926050a` — the queue item, `if (options.skipEmitOutputs) emptySet()
 else …`.** Re-verified rather than inherited: `grep` gives four hits for the
 value (declaration, call, `return`, one use) and **one** write site for
 `jsOutputMap`, inside `cpcTransformAndEmit`, whose loop iterates `emptyList()`
@@ -1057,7 +1057,7 @@ under `skipEmitOutputs`. The gate is `skipEmitOutputs`, never `options.noEmit`
 
 | arm | `cpcRequireOnlyOrphans` | spread | `POST` | wall median |
 |---|---:|---:|---:|---:|
-| HEAD (`e83cbbf0`) | **138.68 ms** | 11.8% | 141.94 ms | 7,624 ms |
+| HEAD (`ccd0de2b`) | **138.68 ms** | 11.8% | 141.94 ms | 7,624 ms |
 | + (a) the rewrite and the deferral | **2.310 ms** | 4.8% | 5.59 ms | 7,091 ms |
 | + (b) the check-only gate | **0.0005 ms** | — | 2.84 ms | 6,898 ms |
 
