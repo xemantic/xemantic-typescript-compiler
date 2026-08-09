@@ -165,6 +165,20 @@ class ReachCensusTest {
     }
 
     @Test
+    fun `a classifier that folded an edge was also counted as consulted`() {
+        runCensus()
+        for (i in 0 until ReachCensus.N) {
+            // A dropped `calls` increment leaves the classifier's folds and
+            // ascents intact, so every OTHER pin still reads a healthy census
+            // and only this one can see that a whole classifier's consultations
+            // are being charged to nobody — which is how a family total comes
+            // out low and a "the family prices below 1%" verdict comes out
+            // unearned.
+            assert(ReachCensus.calls[i] > 0L || ReachCensus.folds[i] == 0L)
+        }
+    }
+
+    @Test
     fun `the census is reproducible across two identical compiles`() {
         runCensus()
         val first = ReachCensus.calls.copyOf()
