@@ -1522,7 +1522,27 @@ class TypeScriptCompiler {
         val sortedTsFiles = if (options.noResolve) tsFileNames else topologicalSort(tsFileNames, depsForSort, importDepsNoRefPath, filesWithImportEquals, importDeps)
         FrontEnd.close(FrontEnd.POST_TOPO, feOutBlockT0)
         feOutBlockT0 = FrontEnd.t()
-        val requireOnlyOrphans = cpcRequireOnlyOrphans(
+        // (WARM.8)(c) round 862 — the census is DEAD WORK in a check-only
+        // compile, and the argument is by construction rather than by census.
+        // Its result has exactly one consumer, the line below this block, where
+        // it filters the keys of `jsOutputMap` before a `mapNotNull` — and under
+        // `skipEmitOutputs` that map is EMPTY, because round 738's gate makes
+        // `cpcTransformAndEmit` iterate `emptyList()` and that loop is the map's
+        // only writer. So `mapNotNull` yields nothing whatever the filter holds.
+        //
+        // The gate is [CompilerOptions.skipEmitOutputs], which only
+        // `ProjectCompiler` sets, NEVER the `@noEmit` corpus DIRECTIVE that 440
+        // generated tests use — their baselines were produced by a core that
+        // still emits (round 738; `SkipEmitOutputsTest` and
+        // `RequireOnlyOrphanTest` both carry the negative control).
+        //
+        // After the same round's deferral above this is worth ~2.3 ms on the
+        // compiler profile rather than the ~130 ms the queue item priced, since
+        // that profile carries no `declare … require` at all. It stays because
+        // the deferral's saving is PROFILE-DEPENDENT and this one is not: on a
+        // program that does carry the shape, pass 2 runs over every file and
+        // this gate is what a `--noEmit` build saves.
+        val requireOnlyOrphans = if (options.skipEmitOutputs) emptySet() else cpcRequireOnlyOrphans(
             parsed = parsed,
             tsFileNames = tsFileNames,
             importDeps = importDeps,

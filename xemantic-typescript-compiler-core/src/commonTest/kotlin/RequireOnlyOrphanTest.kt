@@ -131,4 +131,66 @@ class RequireOnlyOrphanTest {
         assert(render(checkOnly) == render(emitting))
         assert(checkOnly.programFiles.size == emitting.programFiles.size)
     }
+
+    private fun <T> withProbe(block: () -> T): T {
+        val saved = FrontEnd.mode
+        try {
+            FrontEnd.reset()
+            FrontEnd.mode = FrontEnd.ON
+            return block()
+        } finally {
+            FrontEnd.mode = saved
+            FrontEnd.reset()
+        }
+    }
+
+    /**
+     * THE GATE — (WARM.8)(c) proper. The census must not run at all in a
+     * check-only compile, and must run in an emitting one. Nothing in any
+     * output can see this (the result is discarded either way), so the probe's
+     * own `calls` column is the only instrument that can, and the pin is
+     * asserted in BOTH directions so a gate that swallowed the emitting case
+     * too would redden here rather than in the corpus.
+     */
+    @Test
+    fun `the orphan census is skipped in a check-only compile and runs in an emitting one`() = withProbe {
+        ProjectCompiler(InMemoryVfs(requireOnly)).build("/proj", noEmit = true)
+        assert(FrontEnd.calls[FrontEnd.POST_ORPHANS] == 1L)      // the block is still entered
+        assert(FrontEnd.calls[FrontEnd.ORPH_DECLREQ] == 0L)      // …and does nothing inside it
+        assert(FrontEnd.orphanFiles == 0L)
+        FrontEnd.reset()
+        ProjectCompiler(InMemoryVfs(requireOnly)).build("/proj", noEmit = false)
+        assert(FrontEnd.calls[FrontEnd.ORPH_DECLREQ] > 0L)
+        assert(FrontEnd.orphanFiles > 0L)
+    }
+
+    /**
+     * NEGATIVE CONTROL — the `@noEmit` DIRECTIVE must not reach this gate.
+     * 440 generated corpus tests set it and their baselines were produced by a
+     * core that still emits (round 738), so a directive-driven `noEmit`
+     * multi-file compile must still run the census and still drop the orphan.
+     * This is the pin that fails if someone "simplifies" the gate to
+     * `options.noEmit`, exactly as `SkipEmitOutputsTest`'s own control does for
+     * the emit loop.
+     */
+    @Test
+    fun `negative control - the noEmit DIRECTIVE must not reach the orphan gate`() {
+        val result = TypeScriptCompiler().compile(
+            """
+            // @Filename: a.ts
+            export const fromA: number = 1
+            // @Filename: b.ts
+            declare const require: (s: string) => unknown
+            const a = require('./a')
+            export const fromB: number = 2
+            """.trimIndent(),
+            "input.ts",
+            mapOf("noEmit" to "true"),
+        )
+        assert(result.options.noEmit)
+        assert(!result.options.skipEmitOutputs)
+        // The directive still emits, and the orphan is still dropped from it.
+        assert(result.jsOutputs.any { it.first.endsWith("b.js") })
+        assert(result.jsOutputs.none { it.first.endsWith("a.js") })
+    }
 }
