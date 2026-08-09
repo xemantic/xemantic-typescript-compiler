@@ -175,6 +175,27 @@ class TavCandidateGateTest {
     }
 
     @Test
+    fun `a NESTED type-only namespace used as a value still emits TS2708`() {
+        diagnose(
+            """
+            namespace Outer {
+                namespace Inner {
+                    export interface Entry {
+                        id: number
+                    }
+                }
+                export function grab() {
+                    const taken = Inner
+                    return taken
+                }
+            }
+            """.trimIndent(),
+        ) should {
+            have(any { it.code == 2708 })
+        }
+    }
+
+    @Test
     fun `a type keyword used as a value still emits TS2693 - the keyword source`() {
         diagnose(
             """
