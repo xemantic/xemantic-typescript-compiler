@@ -182,6 +182,147 @@ classpath file.
 **THE DIGEST WAS NOT THE SMOKING GUN — IT WAS A FOURTH LINEAGE.** Round 848 recorded `4090b73e…`
 where this round's verified capture prints `84bbe7f0…`, which reads exactly like two different
 binaries. Hashing the ONE verified capture six ways settles it: `s#.*/src/#src/#` + `sort`
+
+**Round 857 (2026-08-08) — (MOD.7) CLOSED: THE SHIPPED AOT CACHE IS RETRAINED AGAINST THE
+POST-SPLIT LAYOUT, AND THE DEV LAUNCHER HAD BEEN INOPERABLE SINCE THE SPLIT.** The module
+split moved everything the fingerprint binds: the classpath went **8 → 14 jars** (ktor ×3,
+slf4j, `-api`, `-daemon`, plus stdlib 2.4.0 → 2.4.10, kotlinx-io 0.9.0 → 0.9.1,
+serialization 1.9.0 → 1.11.0), the ORDER changed (first entry is now `annotations-23.0.0`,
+not the core jar), and the fingerprint went `73c2f5feb9c0f857` → **`086a6cb1ae5b4203`**, so
+the shipped cache read `SKIP no-cache-file` — fail-safe, and therefore silent, for as long
+as the debt stood.
+
+- **The launcher could not run AT ALL, and that is the finding a retrain would have hidden.**
+  MOD.4b replaced the hand-listed dev classpath with the staged
+  `…-daemon/build/install/lib` (`xtscLib` Sync), and **nothing had run `assemble` since the
+  split** — `scripts/xtsc` died with `cannot resolve a classpath … or build this repo first`.
+  Correct behaviour (a loud refusal, not a wrong answer), but it means a fresh checkout or a
+  `clean` leaves the launcher inoperable until `./gradlew assemble`, which no doc said.
+- **Trained after the last build** (round 842's rule): 30.0 s, 54,816,768 B, self-verified,
+  `pruned 1 stale cache(s)`. **Proved USED, not present**: `-Xlog:class+load=info` shows
+  **955 of 960 `com.xemantic` classes with `source: shared objects file`**, `Checker` among
+  them, with `XTSC_AOT_VERBOSE=1` printing `aot USE …` on every timed run.
+- **The guard re-verified END TO END on the new classpath**, not just by pins: with
+  `Checker.class` removed from a copy of the core jar, unguarded-cached **compiled and
+  reported `FAILED — 2 error(s)`** (type-checking against a class the jar no longer holds),
+  unguarded-plain died `NoClassDefFoundError`, and **guarded `scripts/xtsc` read
+  `SKIP no-cache-file` and died the same honest death**. `AotCacheGuardTest` **13/13**; the
+  one-mistake ablation (manifest comparison deleted, on a COPY of `scripts/` via
+  `XTSC_TEST_LAUNCHER`) fails **exactly one** pin, `a mutated classpath entry is refused`.
+- **THE LADDER, ARM AND MODE NAMED** — shipped JVM launcher arm, check-only mode, sequential,
+  compiler profile, 4 rotated pairs: **median 24,082 → 15,160 ms, paired median −9,035 ms,
+  ratio 1.600×, cached faster 4/4.** All 8 runs 46 errors and ONE digest,
+  `84bbe7f0a60d81c40349527a068b8647` — the round-841/853 `grid838.sh` lineage, so the
+  compiler profile is byte-stable r817 → r857 and is now witnessed through the shipped jar
+  launcher for the first time.
+- **A COMMITTED HARNESS THE SPLIT HAD BROKEN, FIXED AND GIVEN A DETECTOR.**
+  `scripts/aot-corpus-suite.sh` built its AOT prefix as `<core jar>:$(cat build/bench/cp.txt)`
+  — post-split not a prefix of the trained classpath, so the JVM would have declined the
+  cache and **both arms would have run uncached, agreed, and proved nothing** (round 842
+  § 13.3's trap, in committed code; it is also the exact hand-assembled-classpath mistake
+  MOD.4b deleted from the launcher). It now reads the staged lib dir with the launcher's own
+  `find | LC_ALL=C sort`, and a served-class count of **zero is now a hard failure**. Re-run:
+  646 classes, **13,950 run / 2 failed / 3 ignored in BOTH arms, per-class diff EMPTY**,
+  955 of 5,313 classes from the cache, 2:31 → 2:18. The 2 failures are `HugeMethodLimitTest`'s
+  classpath-layout pins, green under Gradle.
+- **A SIXTH DIGEST LINEAGE, AND ITS CAUSE IS THE SORT.** This round's harness first reported
+  `4b9635d6…`/`bcb1512a…` for the *same* 46 lines: it sorted in Python (code-point order)
+  where every recorded lineage sorts in the shell (locale collation). The recipe includes the
+  COLLATION, not just the `grep` and the `sed` — `docs/perf/aot-cache.md` § 11/§ 14.5.
+- **Left where it was found:** `build/bench/cp.txt` is still the pre-split, pre-bump
+  dependency list that `ab-*.sh` / `cost_gate.py` / `aot-draw-variance.sh` all read, and
+  `cost_gate.py` has still not run since the split. Neither is an AOT question and neither
+  was touched. Full detail: `docs/perf/aot-cache.md` § 14.
+
+**Round 855 (2026-08-08) — (NARROW.2)(f) CLOSED AS A MEASURED NEGATIVE: THE PRE-TEST REFUSES
+**0 OF 14,117** OPENINGS, THE REASON IS STRUCTURAL RATHER THAN A TUNING FAILURE, AND THE
+PREDICATE COSTS **150–211 ms** TO BUY NOTHING.** Round 854 priced round 852's narrowed-`any`
+opening at 1.91% of a warm rebuild with 85.6% of it spent on receivers the flow never narrows,
+and stopped — queueing (f) with the instruction to census the candidate pre-test BEFORE building
+it, because 1.63% is a CEILING (a perfect oracle) while the concrete design is coarser. That
+instruction is the whole value of this round: the design looked obviously worth ~1% and is worth
+exactly nothing, and one probe run said so for the price of one build.
+
+**THE CENSUS, cold, compiler profile, probe HONOURING NOTHING** (the predicate is evaluated, the
+verdict recorded, and the walk runs anyway — so the population is bit-identical to round 854's and
+every rep prints the profile's usual 46 diagnostics):
+
+```
+cmamNarrowedAny (e): openings=14117 narrowed=1345 accepted=1051  walkOnly=385/406/360 ms
+cmamAnyPreTest  (f): refused=0 (noPath=0) kept=14117
+                     refusedNarrowed=0 refusedAccepted=0 keptNarrowed=1345
+                     refusedSpan=0ms refusedWalkOnly=0ms  preTestCost=211/162/150 ms
+```
+
+Re-taken on the COMMITTED binary after the pins went green (2 reps): identical — `refused=0`,
+`openings=14117 narrowed=1345 accepted=1051`, `preTestCost=168/128 ms`, 46 diagnostics.
+
+**THE STRUCTURAL REASON, which is the part that must survive this round.** The candidate was a
+per-FILE set of the root names any narrowing node could narrow, consulted before the walk. But
+**every `VariableDeclaration`, `Parameter` and `BindingElement` mints a `FlowAssignment`**, and
+that node's subtree contains the declared name — so **every root DECLARED in a file is in that
+file's narrowable set BY CONSTRUCTION**, narrowed or not, including a `declare const g: any` that
+nothing ever tests. The set can only refuse a root with NO declaration in the file at all (an
+import, a cross-file ambient), and tsc's own `any` receivers are locals and parameters. **There is
+no coarser or finer variant to try: the declaration that makes a name exist is itself one of the
+narrowing nodes the set is built from.** Do not re-propose a name-keyed narrowability set here.
+
+**A NEGATIVE WITH A PRICE ATTACHED.** `preTestCost` — the pre-test's own wall, measured at every
+opening — is **150–211 ms cold against a `walkOnly` of 360–406 ms** for the entire population it
+was meant to shrink. Most of it is the one-off `narrowableRoots()` construction per file, which a
+shipped gate pays exactly as the probe does. Even at a hypothetical 100% yield the arithmetic
+would be marginal; at 0% it is a pure loss. **Go/no-go was ~70%; measured 0%.**
+
+**THE INSTRUMENT IS ALIVE — round 790's complement population refuses.** A zero reads the same
+from a sound skip and from a dead probe, so the refusing population had to be exhibited. Through
+the project CLI on a two-file project, on the same class dir that produced the profile reading:
+`refused=1` for an imported root, falling to `refused=0` when one `if (imported)` is added. In
+suite, this is pinned at the SET level.
+
+**WHAT THE THREE EARLY PIN FAILURES TURNED OUT TO MEAN — the diagnosis is worth as much as the
+verdict: THE PINS WERE WRONG, the implementation and the design reading were not.** The first
+`NarrowableRootsPreTestTest` draft tried to exhibit the refusing population through `diagnose()`,
+which is SINGLE-FILE. A single-file fixture's `import` does not resolve, so the receiver is not
+`anyType`, so **no opening runs at all** — the failing subexpression was `openings > 0`, reading
+`0`, in both positive controls, and the third pin failed downstream of the same cause. The
+refusing population is *inexpressible* through that harness. The fix was not to weaken the pins
+but to **split them by level**: the SET is now unit-pinned directly (`FlowGraphBuilder().build(…)
+.narrowableRoots()` — membership for a condition/switch/assert root, membership for a merely
+DECLARED root = the finding, NON-membership for an imported root = the positive control, and its
+disappearance when a condition mentions that root = the control's own control), while the CONSUMER
+is census-pinned on the populations `diagnose()` can reach. 10 pins, all green alongside round
+854's 4. **The general lesson, and it has bitten before (round 806, in the other direction): a
+fixture shape validated at one harness is not portable to another — `diagnose()` and the project
+CLI do not have the same expressive power, and "the pin failed" is a claim about the fixture until
+the failing subexpression is read.**
+
+**ROUND 854's 1.63% REMAINS A CEILING THIS DESIGN CANNOT REALISE.** (NARROW.2)(c)'s cost therefore
+stands as **measured and accepted**, not as an open regression: it is 1.91% of a warm rebuild, it
+bought two conformance cases (`types/any` 3 failing of 9 → 1) with a 0/0 eight-profile grid and a
+clean corpus, and the waste inside it is **not addressable by asking whether the name is narrowable
+anywhere in the file**. A future attempt needs a *path-and-position* oracle — does any narrowing
+node lie on THIS reference's flow path — which is the walk itself. That is the honest statement of
+where this ends.
+
+**LANDED:** `FlowGraph.narrowableRoots()` + the mint-time inventory in `FlowGraphBuilder`, both
+`PassTiming.detailed`-gated so a production compile keeps no inventory and the accessor answers
+`null` = "unknown, refuse nothing" (never an EMPTY set, which would mean "refuse everything");
+`PassTiming.cmamAnyPre*` (7 counters + a `--passTiming` row); `Checker.cmamPreTestMayNarrow` called
+as a probe only; `NarrowableRootsPreTestTest` (10 pins); `scripts/round855-ablate.sh`;
+`docs/perf/narrowed-any-opening-price.md` § 4b. Commits `bc2495a7`, `d7461d4c`.
+
+**WHAT THIS ROUND DID *NOT* RUN, stated rather than implied.** (1) **The ablation did not execute.**
+`scripts/round855-ablate.sh` was committed before use (round 789) and then lost its own run to a
+bash bug — `"${@:-A1 A2 A3 A4}"` expands the default as ONE word, so `apply` fell through to its
+`unknown arm` branch for every arm while the script still printed `complete; tree restored`. The
+tree was never corrupted and nothing was mis-recorded, but **the 10 new pins are NOT yet
+verified-discriminating** and must not be quoted as such. The bug is fixed (an array default) and
+the four arms are specified in the script: drop the `FlowCondition` arm, drop the `FlowAssignment`
+arm, stop recording the pre-test span, remove the `detailed` gate. (2) **The full suite, `cost_gate.py`
+and `huge_methods.py` were not run this round.** The change is probe-only and `PassTiming.detailed`-
+gated, so a production compile's behaviour and counters should be untouched — but "should" is not a
+gate reading. **Both are the next round's first task, before anything else**; see the queue entry.
+
 reproduces **`4090b73e…` exactly**. Round 841 named three live lineages; there are **four**
 (`docs/perf/aot-cache.md` § 11.5 is the table). Round 848's number is exonerated, not retracted.
 

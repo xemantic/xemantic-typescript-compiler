@@ -20,6 +20,80 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 867 (2026-08-09) — (WARM.14): `s_p` MEASURED, AND THE DISPATCH-TABLE QUESTION SETTLED AT ~1%.**
+The production cost of one handler consultation that is entered and immediately declines is
+**`s_p` = 2.286 ns [envelope 2.148-2.512]**, so **`R` = 32.0 M x `s_p` = 73.2 ms [68.7-80.4] = 1.06% of a
+warm rebuild [1.00-1.17%], 1.47% of the `checkSpine` row.** Round 866's `[0, 352] ms` becomes `[69, 80]`,
+and its 187 ms point estimate — the `d = d'` uniform-tax corner — was **2.6x too high**. The lever is
+REAL and MARGINAL. `docs/perf/dispatch-table.md` § 9.
+
+- **WHAT WAS AMPLIFIED, AND WHY THAT POPULATION.** Round 759's amplification, one level up: per node, `r`
+  extra passes over **exactly the (handler, kind) pairs the derived table would SKIP** — the
+  `enterTable`/`leaveTable` complement as a `Long` bitmask — all under ONE bracket, so `p(r) = boundary +
+  r * (skeleton + S * s_p)` and two `r` values cancel the boundary algebraically. A **CONTROL arm**
+  (negative `reps`) runs the identical loop with every consultation suppressed, which cancels the
+  skeleton as well. Not "all 59 consultations": the prize is by definition what a table stops consulting.
+  **The population is MEASURED rather than inherited and lands on § 8's numbers to the unit — 856,962
+  bracketed nodes, 32,006,965 would-consult slots, S = 37.3493 against round 732's 37.35** — and its
+  weighting needs no argument, because the bracket runs at every node of the real compile.
+- **THE FALSIFICATION IS ARITHMETIC, NOT A PLAUSIBLE SLOPE (round 759's law), AND IT MATTERS HERE MORE
+  THAN USUALLY: a rejecting consultation is exactly what a JIT can prove side-effect-free and DELETE, and
+  that failure reads as `s_p ~ 0`, i.e. it CONFIRMS the closed direction for the wrong reason.** Four
+  checks, green on **48/48 rebuilds** across both batches: `consults == r x expected` EXACTLY at every `r`
+  (256,055,720 = 8 x 32,006,965; 3,072,668,640 = 96 x 32,006,965), with `expected` counted by a different
+  code path (a `countOneBits` of the masks) from the one the passes count with; the control at **0**
+  consultations over a population `> 0`; **`spineAmpPass` at 1,429 bytecodes = 4.4x HotSpot's 325-byte
+  `FreqInlineSize`, so it cannot be inlined into the `r` loop and cross-iteration hoisting is
+  STRUCTURALLY impossible** (a 307-byte leave-only second method was merged in for exactly that reason);
+  and the control arm as a floor the real arm clears by 7.5x. Every rebuild also answered 78 files / 46
+  errors.
+- **THREE INDEPENDENT `r`-PAIRS, AGREEING TO 2.4%** (batch 2, `r` = 16/48/96, per-arm sd 2.0-5.0%):
+  (16,48) -> 2.253 ns, (48,96) -> 2.308, (16,96) -> 2.286. **And a SECOND BATCH of a DIFFERENT DESIGN
+  replicates it**: batch 1 (`r` = 8/16/32) reads 2.462 / 2.162 / 2.262, median **2.262** against batch 2's
+  **2.286** — 1% apart, which is round 840(c)'s requirement met by construction rather than by draw.
+- **BATCH 1's DESIGN WAS WRONG AND ITS OWN NUMBERS SAY SO — A REUSABLE TRAP.** It ran BOTH arms in ONE
+  process and read a per-arm sd of **16-38%**, because **the two arms share one compiled `spineAmpPass`**:
+  they differ only in the mask they pass it, so whichever runs first writes the branch profile the other
+  is compiled against, and an arm whose consultation branches were profiled as NEVER TAKEN pays an
+  uncommon trap for each of them (`p4`'s controls were the batch's cheapest and its reals its dearest, by
+  2x). Batch 2 gives each arm its own JVM, discards a leading throwaway amp rebuild (the uninstrumented
+  loop never touches `spineAmpPass`, so the first amp tier is the one that warms it), and widens the
+  spread. Per-arm sd falls to 2-5%.
+- **THE DECISION, OUT LOUD.** `R` clears the 1% floor and only just — the envelope's low end is AT 1.00%.
+  So (DISPATCH.1) is **not confirmed closed warm and is not a 2.7% prize**: it is a ~1% lever, real by
+  this arc's standards and marginal by its measurement standards (`ab-warm.sh`'s band is +-1.0%, so a
+  landed table could not be confirmed by the harness that would judge it). **Nothing was built.**
+  (WARM.13) re-opens as **(WARM.13b)**, an implementation item, with one number that changes its outlook:
+  **the CONTROL arm is a direct measurement of the proposed per-kind `Long`-bitmask dispatch skeleton — a
+  mask load plus 59 register-resident bit tests — at 13.16 ns per node = ~11.3 ms whole-compile, 15% of
+  the prize.** Round 866's `+715 ms` GATED tax was the `IntArray` walk, the 46-arm tableswitch and the
+  extra frame; it was never the idea. Net ~62-73 ms. The 8,000-bytecode cliff stays a hard constraint on
+  the `when (kindId)` shape (-33.6% warm, round 845) and is the second reason to prefer the bitmask.
+- **THE BIAS THE INSTRUMENT CANNOT REACH, NAMED RATHER THAN IMPLIED — this round's `d`.** The amplified
+  consultation happens at `spineAmpPass`'s call site, not at `spineEnterNode`'s. A census says **36 of the
+  59 handlers are under `FreqInlineSize`** (median 257 bytecodes) and 23 are over it, so for a third of
+  the population both sites must call while for the rest the two sites' inlining decisions could differ,
+  in an unknown direction. A second, SIGNED bias: the amplified slot pays one bit test (~0.22 ns, from the
+  control arm's 13.16 ns / 59 slots) that production does not, pushing `s_p` toward the low end.
+- **PINS + ABLATION (one mistake at a time, round 807).** `SpineAmpProbeTest` (5) + `BenchAmpTierTest`
+  (5). Five single-mistake ablations, each reverted before the next: an INVERTED skip mask -> only `the
+  skip mask is exactly the complement of the dispatch table`; a loop pinned to one iteration -> only `the
+  real arm performs exactly reps times the would-consult population`; a control arm handed the REAL masks
+  -> only `the control arm suppresses every consultation over the same population`; `tierStop`'s
+  disarm deleted -> `a following tier is not silently amplified` (+1); the arm's sign dropped from the
+  tier parser -> `the tier parser reads the amplification factor and the arm's sign` (+2). **One pin did
+  NOT discriminate and is recorded as such rather than claimed: `amplification does not change what the
+  compiler answers` stayed GREEN under the inverted mask** — re-running the KEPT handlers is idempotent
+  on that fixture too — so it is an equivalence guarantee, not a seam pin.
+- **GATES.** Suite **14,120 / 1 / 3** over all four modules (`xml.etree`); the one failure is
+  `PostCheckerPartitionTest`'s `residue * 4 < post` ratio over a **272 us** region, **green in isolation**
+  and structurally unreachable from a spine-prologue change — a timing-flaky pin, not a regression.
+  `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **exit 0** (the new
+  `spineAmpPass` is 1,429 bytecodes, 5.6x under the limit and 4.4x over `FreqInlineSize`, which is the
+  point). **The 8-profile grid is VACUOUS BY CONSTRUCTION this round and was not run:** the only
+  `commonMain` behaviour change is gated on `SpineAmp.reps != 0`, which is 0 in every run that does not
+  pass `--spineAmp`, and the cost gate's own compiler-profile compile is unchanged at 46 errors.
+
 **Round 866 (2026-08-09) — (WARM.13): THE PER-KIND SPINE DISPATCH TABLE, RE-PRICED WARM. THE VERDICT IS
 **UNIDENTIFIED, NOT CLOSED**: the prize is bounded in **0-352 ms (0-5.1% of a warm rebuild)**, and the
 one arm anybody would reach for — `--dispatchGated` — is STRUCTURALLY unable to narrow it, because what
@@ -734,146 +808,6 @@ its-own ablation failure. `docs/perf/classpath-readers-audit.md` is the permanen
 - **GATES: full suite green (see STATUS.md).** `cost_gate.py` / `huge_methods.py` not required —
   nothing under `commonMain` changed; the round is scripts plus one jvmTest class.
 
-**Round 857 (2026-08-08) — (MOD.7) CLOSED: THE SHIPPED AOT CACHE IS RETRAINED AGAINST THE
-POST-SPLIT LAYOUT, AND THE DEV LAUNCHER HAD BEEN INOPERABLE SINCE THE SPLIT.** The module
-split moved everything the fingerprint binds: the classpath went **8 → 14 jars** (ktor ×3,
-slf4j, `-api`, `-daemon`, plus stdlib 2.4.0 → 2.4.10, kotlinx-io 0.9.0 → 0.9.1,
-serialization 1.9.0 → 1.11.0), the ORDER changed (first entry is now `annotations-23.0.0`,
-not the core jar), and the fingerprint went `73c2f5feb9c0f857` → **`086a6cb1ae5b4203`**, so
-the shipped cache read `SKIP no-cache-file` — fail-safe, and therefore silent, for as long
-as the debt stood.
-
-- **The launcher could not run AT ALL, and that is the finding a retrain would have hidden.**
-  MOD.4b replaced the hand-listed dev classpath with the staged
-  `…-daemon/build/install/lib` (`xtscLib` Sync), and **nothing had run `assemble` since the
-  split** — `scripts/xtsc` died with `cannot resolve a classpath … or build this repo first`.
-  Correct behaviour (a loud refusal, not a wrong answer), but it means a fresh checkout or a
-  `clean` leaves the launcher inoperable until `./gradlew assemble`, which no doc said.
-- **Trained after the last build** (round 842's rule): 30.0 s, 54,816,768 B, self-verified,
-  `pruned 1 stale cache(s)`. **Proved USED, not present**: `-Xlog:class+load=info` shows
-  **955 of 960 `com.xemantic` classes with `source: shared objects file`**, `Checker` among
-  them, with `XTSC_AOT_VERBOSE=1` printing `aot USE …` on every timed run.
-- **The guard re-verified END TO END on the new classpath**, not just by pins: with
-  `Checker.class` removed from a copy of the core jar, unguarded-cached **compiled and
-  reported `FAILED — 2 error(s)`** (type-checking against a class the jar no longer holds),
-  unguarded-plain died `NoClassDefFoundError`, and **guarded `scripts/xtsc` read
-  `SKIP no-cache-file` and died the same honest death**. `AotCacheGuardTest` **13/13**; the
-  one-mistake ablation (manifest comparison deleted, on a COPY of `scripts/` via
-  `XTSC_TEST_LAUNCHER`) fails **exactly one** pin, `a mutated classpath entry is refused`.
-- **THE LADDER, ARM AND MODE NAMED** — shipped JVM launcher arm, check-only mode, sequential,
-  compiler profile, 4 rotated pairs: **median 24,082 → 15,160 ms, paired median −9,035 ms,
-  ratio 1.600×, cached faster 4/4.** All 8 runs 46 errors and ONE digest,
-  `84bbe7f0a60d81c40349527a068b8647` — the round-841/853 `grid838.sh` lineage, so the
-  compiler profile is byte-stable r817 → r857 and is now witnessed through the shipped jar
-  launcher for the first time.
-- **A COMMITTED HARNESS THE SPLIT HAD BROKEN, FIXED AND GIVEN A DETECTOR.**
-  `scripts/aot-corpus-suite.sh` built its AOT prefix as `<core jar>:$(cat build/bench/cp.txt)`
-  — post-split not a prefix of the trained classpath, so the JVM would have declined the
-  cache and **both arms would have run uncached, agreed, and proved nothing** (round 842
-  § 13.3's trap, in committed code; it is also the exact hand-assembled-classpath mistake
-  MOD.4b deleted from the launcher). It now reads the staged lib dir with the launcher's own
-  `find | LC_ALL=C sort`, and a served-class count of **zero is now a hard failure**. Re-run:
-  646 classes, **13,950 run / 2 failed / 3 ignored in BOTH arms, per-class diff EMPTY**,
-  955 of 5,313 classes from the cache, 2:31 → 2:18. The 2 failures are `HugeMethodLimitTest`'s
-  classpath-layout pins, green under Gradle.
-- **A SIXTH DIGEST LINEAGE, AND ITS CAUSE IS THE SORT.** This round's harness first reported
-  `4b9635d6…`/`bcb1512a…` for the *same* 46 lines: it sorted in Python (code-point order)
-  where every recorded lineage sorts in the shell (locale collation). The recipe includes the
-  COLLATION, not just the `grep` and the `sed` — `docs/perf/aot-cache.md` § 11/§ 14.5.
-- **Left where it was found:** `build/bench/cp.txt` is still the pre-split, pre-bump
-  dependency list that `ab-*.sh` / `cost_gate.py` / `aot-draw-variance.sh` all read, and
-  `cost_gate.py` has still not run since the split. Neither is an AOT question and neither
-  was touched. Full detail: `docs/perf/aot-cache.md` § 14.
-
-**Round 855 (2026-08-08) — (NARROW.2)(f) CLOSED AS A MEASURED NEGATIVE: THE PRE-TEST REFUSES
-**0 OF 14,117** OPENINGS, THE REASON IS STRUCTURAL RATHER THAN A TUNING FAILURE, AND THE
-PREDICATE COSTS **150–211 ms** TO BUY NOTHING.** Round 854 priced round 852's narrowed-`any`
-opening at 1.91% of a warm rebuild with 85.6% of it spent on receivers the flow never narrows,
-and stopped — queueing (f) with the instruction to census the candidate pre-test BEFORE building
-it, because 1.63% is a CEILING (a perfect oracle) while the concrete design is coarser. That
-instruction is the whole value of this round: the design looked obviously worth ~1% and is worth
-exactly nothing, and one probe run said so for the price of one build.
-
-**THE CENSUS, cold, compiler profile, probe HONOURING NOTHING** (the predicate is evaluated, the
-verdict recorded, and the walk runs anyway — so the population is bit-identical to round 854's and
-every rep prints the profile's usual 46 diagnostics):
-
-```
-cmamNarrowedAny (e): openings=14117 narrowed=1345 accepted=1051  walkOnly=385/406/360 ms
-cmamAnyPreTest  (f): refused=0 (noPath=0) kept=14117
-                     refusedNarrowed=0 refusedAccepted=0 keptNarrowed=1345
-                     refusedSpan=0ms refusedWalkOnly=0ms  preTestCost=211/162/150 ms
-```
-
-Re-taken on the COMMITTED binary after the pins went green (2 reps): identical — `refused=0`,
-`openings=14117 narrowed=1345 accepted=1051`, `preTestCost=168/128 ms`, 46 diagnostics.
-
-**THE STRUCTURAL REASON, which is the part that must survive this round.** The candidate was a
-per-FILE set of the root names any narrowing node could narrow, consulted before the walk. But
-**every `VariableDeclaration`, `Parameter` and `BindingElement` mints a `FlowAssignment`**, and
-that node's subtree contains the declared name — so **every root DECLARED in a file is in that
-file's narrowable set BY CONSTRUCTION**, narrowed or not, including a `declare const g: any` that
-nothing ever tests. The set can only refuse a root with NO declaration in the file at all (an
-import, a cross-file ambient), and tsc's own `any` receivers are locals and parameters. **There is
-no coarser or finer variant to try: the declaration that makes a name exist is itself one of the
-narrowing nodes the set is built from.** Do not re-propose a name-keyed narrowability set here.
-
-**A NEGATIVE WITH A PRICE ATTACHED.** `preTestCost` — the pre-test's own wall, measured at every
-opening — is **150–211 ms cold against a `walkOnly` of 360–406 ms** for the entire population it
-was meant to shrink. Most of it is the one-off `narrowableRoots()` construction per file, which a
-shipped gate pays exactly as the probe does. Even at a hypothetical 100% yield the arithmetic
-would be marginal; at 0% it is a pure loss. **Go/no-go was ~70%; measured 0%.**
-
-**THE INSTRUMENT IS ALIVE — round 790's complement population refuses.** A zero reads the same
-from a sound skip and from a dead probe, so the refusing population had to be exhibited. Through
-the project CLI on a two-file project, on the same class dir that produced the profile reading:
-`refused=1` for an imported root, falling to `refused=0` when one `if (imported)` is added. In
-suite, this is pinned at the SET level.
-
-**WHAT THE THREE EARLY PIN FAILURES TURNED OUT TO MEAN — the diagnosis is worth as much as the
-verdict: THE PINS WERE WRONG, the implementation and the design reading were not.** The first
-`NarrowableRootsPreTestTest` draft tried to exhibit the refusing population through `diagnose()`,
-which is SINGLE-FILE. A single-file fixture's `import` does not resolve, so the receiver is not
-`anyType`, so **no opening runs at all** — the failing subexpression was `openings > 0`, reading
-`0`, in both positive controls, and the third pin failed downstream of the same cause. The
-refusing population is *inexpressible* through that harness. The fix was not to weaken the pins
-but to **split them by level**: the SET is now unit-pinned directly (`FlowGraphBuilder().build(…)
-.narrowableRoots()` — membership for a condition/switch/assert root, membership for a merely
-DECLARED root = the finding, NON-membership for an imported root = the positive control, and its
-disappearance when a condition mentions that root = the control's own control), while the CONSUMER
-is census-pinned on the populations `diagnose()` can reach. 10 pins, all green alongside round
-854's 4. **The general lesson, and it has bitten before (round 806, in the other direction): a
-fixture shape validated at one harness is not portable to another — `diagnose()` and the project
-CLI do not have the same expressive power, and "the pin failed" is a claim about the fixture until
-the failing subexpression is read.**
-
-**ROUND 854's 1.63% REMAINS A CEILING THIS DESIGN CANNOT REALISE.** (NARROW.2)(c)'s cost therefore
-stands as **measured and accepted**, not as an open regression: it is 1.91% of a warm rebuild, it
-bought two conformance cases (`types/any` 3 failing of 9 → 1) with a 0/0 eight-profile grid and a
-clean corpus, and the waste inside it is **not addressable by asking whether the name is narrowable
-anywhere in the file**. A future attempt needs a *path-and-position* oracle — does any narrowing
-node lie on THIS reference's flow path — which is the walk itself. That is the honest statement of
-where this ends.
-
-**LANDED:** `FlowGraph.narrowableRoots()` + the mint-time inventory in `FlowGraphBuilder`, both
-`PassTiming.detailed`-gated so a production compile keeps no inventory and the accessor answers
-`null` = "unknown, refuse nothing" (never an EMPTY set, which would mean "refuse everything");
-`PassTiming.cmamAnyPre*` (7 counters + a `--passTiming` row); `Checker.cmamPreTestMayNarrow` called
-as a probe only; `NarrowableRootsPreTestTest` (10 pins); `scripts/round855-ablate.sh`;
-`docs/perf/narrowed-any-opening-price.md` § 4b. Commits `bc2495a7`, `d7461d4c`.
-
-**WHAT THIS ROUND DID *NOT* RUN, stated rather than implied.** (1) **The ablation did not execute.**
-`scripts/round855-ablate.sh` was committed before use (round 789) and then lost its own run to a
-bash bug — `"${@:-A1 A2 A3 A4}"` expands the default as ONE word, so `apply` fell through to its
-`unknown arm` branch for every arm while the script still printed `complete; tree restored`. The
-tree was never corrupted and nothing was mis-recorded, but **the 10 new pins are NOT yet
-verified-discriminating** and must not be quoted as such. The bug is fixed (an array default) and
-the four arms are specified in the script: drop the `FlowCondition` arm, drop the `FlowAssignment`
-arm, stop recording the pre-test span, remove the `detailed` gate. (2) **The full suite, `cost_gate.py`
-and `huge_methods.py` were not run this round.** The change is probe-only and `PassTiming.detailed`-
-gated, so a production compile's behaviour and counters should be untouched — but "should" is not a
-gate reading. **Both are the next round's first task, before anything else**; see the queue entry.
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 - [x] **(NARROW.2)(a) — CLOSED round 838. An `instanceof` whose RHS is a CONSTRUCTOR VALUE
@@ -1236,7 +1170,39 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   all 20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit both times. Commits
   `61194621`, `9eedc04b`. `docs/perf/warm-tail-attribution.md` § 12.
 
-- [ ] **(WARM.14) — PROMOTED ROUND 866. MEASURE `s_p`, THE PRODUCTION COST OF ONE *REJECTING* HANDLER
+- [ ] **(WARM.13b) — RE-OPENED ROUND 867 AS AN *IMPLEMENTATION* ITEM, AND NOW WITH A PRICE ON BOTH
+  SIDES. BUILD THE PER-KIND SPINE DISPATCH TABLE — AS A `Long` BITMASK, NOT A `when (kindId)`.** Round
+  867 measured the prize at **`R` = 73.2 ms [68.7-80.4] = 1.06% [1.00-1.17%] of a warm rebuild, 1.47% of
+  the `checkSpine` row** (`s_p` = 2.286 ns [2.148-2.512], `docs/perf/dispatch-table.md` § 9) — REAL and
+  MARGINAL, one band, at the edge of what `ab-warm.sh` (+-1.0%) can confirm, so a landed table would have
+  to be defended on `cost_gate.py` counters plus § 9's decomposition rather than on the warm A/B alone.
+  **What is new and changes the outlook: the amplifier's CONTROL arm is a direct measurement of the
+  proposed dispatch skeleton** — a per-kind mask load plus 59 register-resident bit tests — at **13.16 ns
+  per node = ~11.3 ms whole-compile, 15% of the prize**. Round 866's `+715 ms` GATED tax was the
+  `IntArray` walk, the 46-arm tableswitch and the extra call frame; it was never the idea. Net ~62-73 ms.
+  **Hard design constraints, both measured elsewhere in this arc:** a dense per-kind `when (kindId)` with
+  straight-line call lists (138 arms x up to ~20 calls) is far over HotSpot's 8,000-bytecode
+  `HugeMethodLimit` — never JIT-compiled, a **-33.6% warm cliff** (round 845) — so it would have to be
+  split by a CONTIGUOUS key range with the hottest kinds in the entry function and never a fall-through
+  chain (round 802); the bitmask shape avoids the cliff entirely, which is the second reason to prefer
+  it. `SpineDispatch.enterSkipMask`/`leaveSkipMask` (round 867) are the masks, already derived from the
+  tables and pinned complement-exact. Back-pointer: (DISPATCH.1).
+
+- [x] **(WARM.14) — DONE, ROUND 867. `s_p` MEASURED: 2.286 ns [2.148-2.512], SO `R` = 32.0 M x `s_p` =
+  73.2 ms = **1.06% of a warm rebuild** [1.00-1.17%] — THE LEVER IS REAL AND MARGINAL, AND ROUND 866's
+  187 ms POINT ESTIMATE WAS 2.6x TOO HIGH.** Two independent batches and three independent `r`-pairs
+  each, agreeing to 1% (batch 1 median 2.262 ns at 26-38% per-arm sd, batch 2 median 2.286 ns at 2-5%).
+  Instrument: round 759's AMPLIFICATION — `r` extra passes per node over exactly the (handler, kind)
+  pairs the derived table would SKIP, under ONE bracket, plus a CONTROL arm running the identical loop
+  with every consultation suppressed, so two `r` values cancel the boundary and the two arms cancel the
+  skeleton. **The population is MEASURED, not inherited, and lands on § 8's numbers to the unit:
+  856,962 bracketed nodes, 32,006,965 would-consult slots, S = 37.3493.** Falsification is ARITHMETIC on
+  48/48 rebuilds (`consults == r x expected` exactly; the control at 0 over a non-empty population;
+  `spineAmpPass` at 1,429 bytecodes = 4.4x `FreqInlineSize`, so cross-iteration hoisting is structurally
+  impossible; the control arm a floor the real arm clears by 7.5x). Artifact:
+  `docs/perf/dispatch-table.md` § 9. The brief as promoted round 866 follows.
+
+- [x] **(WARM.14) — the brief. MEASURE `s_p`, THE PRODUCTION COST OF ONE *REJECTING* HANDLER
   CONSULTATION — THE SINGLE NUMBER THAT DECIDES (DISPATCH.1), AND THE ONLY TERM ROUND 866 COULD NOT
   REACH.** `R = 32.0 M x s_p`, so the 1% floor (~69 ms of a ~6,900 ms warm rebuild) is cleared at
   **`s_p` >= 2.2 ns** — about one field load, one compare and one predicted branch. Round 866 bounded

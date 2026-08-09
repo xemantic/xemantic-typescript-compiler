@@ -13,6 +13,15 @@ profile with the table APPLIED. The instrumentation is behaviour-free when off.*
 > is where the spine's time actually is — six handlers, 71% of it — and that is
 > a per-handler problem, not a dispatch problem. See § 5.
 
+> **ROUND-867 (WARM.14) — THE ANSWER IS IN § 9, AND IT SUPERSEDES § 8's RANGE.**
+> `s_p` — the production cost of ONE consultation that is entered and
+> immediately declines — is **2.286 ns [2.148–2.512]**, so the prize is
+> **`R` = 73.2 ms [68.7–80.4] = 1.06% of a warm rebuild [1.00–1.17%]**, 1.47%
+> of the `checkSpine` row. § 8's `[0, 352] ms` becomes `[69, 80]` and its
+> 187 ms point estimate was 2.6× too high. The lever is REAL and MARGINAL, the
+> implementation shape is decided (a per-kind `Long` bitmask, whose skeleton
+> § 9.6 prices at ~11.3 ms), and nothing was built. **§ 9.**
+
 > **ROUND-866 (WARM.13) — READ § 8 BEFORE QUOTING ANYTHING ABOVE AS A CLOSURE.**
 > Everything in §§ 1–7 is COLD. Warm the verdict is *unidentified*, not
 > confirmed: the prize is bounded in **0–352 ms (0–5.1% of a warm rebuild)** and
@@ -489,3 +498,208 @@ Two shapes, each with a named hazard:
 * The `gatedrows` arm's spread (−276 to +283 ms against a control sd of 4.40%)
   is wide enough that its median carries ±~100 ms, which propagates straight
   into `R`.
+
+---
+
+# § 9 — (WARM.14), round 867: `s_p` MEASURED, and the question settled at ~1%
+
+*Round 867, 2026-08-09. Appended; §§ 1–7 are the round-732 cold record and § 8
+is round 866's warm re-price — both unchanged. Instruments: `SpineAmp` +
+`SpineDispatch.enterSkipMask`/`leaveSkipMask` + `Checker.spineAmpPass`,
+`--spineAmp N`, `BenchMain`'s `amp<N>`/`ampc<N>` tiers,
+`scripts/round867-warm-amp.sh` (batch 1), `scripts/round867-warm-amp2.sh`
+(batch 2, the one quoted), `scripts/round867_analyze.py`. Compiler profile,
+78 files / 46 errors on every one of the 48 rebuilds below.*
+
+> **HEADLINE — `s_p = 2.29 ns` [envelope 2.15–2.51], so
+> `R = 32.0 M × s_p = 73.2 ms` [68.7–80.4] = **1.06% of a warm rebuild**
+> [1.00–1.17%], or 1.47% of the `checkSpine` row it lives in. Two independent
+> batches, three independent `r`-pairs each, agreeing to 1%.**
+>
+> § 8's `[0, 352] ms` is now `[69, 80] ms`, and its 187 ms point estimate — the
+> `d = d'` uniform-tax corner — is **2.6× too high**. The lever is REAL and it
+> is MARGINAL: one band, at the very edge of what `ab-warm.sh` (±1.0%) can
+> confirm, and not the 2.7% that corner suggested.
+
+## 9.1 What was amplified, and why that population
+
+`s_p` is the production cost of a handler consultation that is entered and
+immediately declines. At 2 ns it is two orders of magnitude below a warm probe
+boundary (97–202 ns, round 850), so the instrument is round 759's
+AMPLIFICATION, not a timestamp pair: per node, `r` extra passes over the
+consultations under ONE bracket, and two values of `r` cancel the boundary
+algebraically.
+
+The population is **exactly the (handler, kind) pairs the derived table would
+skip** — `SpineDispatch.enterTable`/`leaveTable`'s complement, taken as a
+bitmask — and not "all 59 consultations", because the prize is by definition
+what a table stops consulting. The probe MEASURES that population rather than
+inheriting it, and it lands on § 8's number to the unit:
+
+| | measured by `SpineAmp` | § 8 / round 732 |
+|---|---:|---:|
+| bracketed nodes | **856,962** | 856,962 |
+| would-consult slots | **32,006,965** | 32,006,965 |
+| S (skipped consultations per node) | **37.3493** | 37.35 |
+
+Weighting needs no argument: the bracket runs at every node of the real compile,
+so each (handler, kind) pair is amplified exactly as often as it occurs. Round
+758's law still binds the write-up — a count is not a cost, and this IS the
+forbidden multiplication — so § 9.4 states what varies inside the population and
+§ 9.5 states the one bias the instrument cannot reach.
+
+## 9.2 Why batch 1's design was wrong, and what batch 2 changed
+
+Batch 1 ran BOTH arms in ONE process at `r` = 8/16/32 and read a per-arm sd of
+**16–38%**. Two artifacts, both visible in its own numbers:
+
+1. **The two arms share one compiled `spineAmpPass`.** They differ only in the
+   mask they pass it, so whichever arm runs first writes the branch profile the
+   other is compiled against — and an arm whose consultation branches were
+   profiled as NEVER TAKEN pays an uncommon trap for each of them. (`p4`'s
+   control arms were the batch's cheapest and its real arms its dearest, by 2×.)
+2. **The first amplified rebuild in a process is the one that warms
+   `spineAmpPass`** — the uninstrumented loop never touches it.
+
+Batch 2 gives **each arm its own JVM**, discards a leading throwaway amp
+rebuild, and widens the spread to `r` = 16/48/96 (the boundary is a per-node
+constant, so a wider spread divides the same noise by a larger denominator).
+Per-arm sd falls to **2.0–5.0%**.
+
+## 9.3 The measurement (batch 2: 8 processes, 24 analysed rebuilds)
+
+`p(r)`, ns per bracketed node, median of 4 processes:
+
+| arm | r=16 | r=48 | r=96 | sd |
+|---|---:|---:|---:|---:|
+| REAL | 1,841.05 | 4,956.18 | 9,723.74 | 3.8 / 2.6 / 5.0% |
+| CONTROL | 274.75 | 697.23 | 1,327.89 | 4.9 / 2.0 / 2.3% |
+
+Slopes (ns per PASS per node) and the three independent `r`-pairs:
+
+| pair | slope REAL | slope CONTROL | `s_p` = (Δslope)/S |
+|---|---:|---:|---:|
+| (16,48) | 97.348 | 13.203 | **2.253 ns** |
+| (48,96) | 99.324 | 13.139 | **2.308 ns** |
+| (16,96) | 98.534 | 13.164 | **2.286 ns** |
+
+**Spread across the three pairs: 2.4%.** Per-process slopes (REAL sd 5.8%,
+CONTROL sd 1.9%) give a worst-case envelope of **2.148–2.512 ns**.
+
+**Batch 1 replicates it from the other design**: its median-based pairs read
+2.462 / 2.162 / 2.262 ns, median **2.262** against batch 2's **2.286** — a 1%
+disagreement between a 26–38%-sd batch and a 2–5%-sd one. Round 840(c)'s
+replication requirement is met, and by two batches that differ in construction
+rather than only in draw.
+
+```
+R = 32,006,965 × 2.286 ns = 73.2 ms = 1.06% of a ~6,900 ms warm rebuild
+                                    = 1.47% of the 4,960 ms `checkSpine` row
+envelope:                    68.7 – 80.4 ms = 1.00 – 1.17%
+```
+
+## 9.4 The falsification — ARITHMETIC, not a plausible slope
+
+A repeated predicate whose result is unused is what a JIT deletes, and the
+failure is silent: a clean linear fit of nothing, which here would have read as
+`s_p ≈ 0` and CONFIRMED the closed direction for the wrong reason. Four checks,
+all reported by the probe itself and all green on **48/48 rebuilds across both
+batches**:
+
+1. **The sink identity.** `consults == r × expected`, EXACTLY, at every `r`
+   (256,055,720 = 8 × 32,006,965; 3,072,668,640 = 96 × 32,006,965). `expected`
+   is accumulated once per node by a different code path (a `countOneBits` of
+   the masks) from the one the passes count with (a per-slot branch).
+2. **The control consults zero** over a population that is `> 0` — so its
+   suppression is measured, not asserted.
+3. **Non-inlinability, statically.** `spineAmpPass` is **1,429 bytecodes**, 4.4×
+   over HotSpot's 325-byte `FreqInlineSize`, so it cannot be inlined into the
+   `r` loop and cross-iteration hoisting is structurally impossible rather than
+   merely unlikely. (A 307-byte leave-only second method was merged into it for
+   exactly this reason.)
+4. **The control arm is a floor the real arm must clear**, and it clears it by
+   7.5×.
+
+Every rebuild also answered the same program (78 files, 46 errors), which is the
+behaviour check: the amplified set is the table's SKIP set, whose handlers do
+nothing at those kinds (§ 4).
+
+## 9.5 What varies inside the population, and the one bias left
+
+**Within the population.** The 59 handlers decline for different reasons — an
+own-kind test, a PARENT-edge test, a FRAME-owner identity test, a nodeId
+registry probe — and the table's skip set is the own-kind-closable part, whose
+per-slot shape is nonetheless not uniform: **36 of the 59 handlers are under
+`FreqInlineSize`** (median handler size 257 bytecodes) and 23 are over it, i.e.
+some consultations are a call the JIT can never remove and others are an
+inlinable guard. `s_p` is the MEAN over the population as it occurs, which is
+the right quantity for `R` and the wrong one for reasoning about any single
+handler.
+
+**The bias the instrument cannot reach**, stated plainly because it is this
+round's `d`: the amplified consultation happens at `spineAmpPass`'s call site,
+not at `spineEnterNode`'s. For the 23 over-limit handlers both sites must call;
+for the other 36 the two sites' inlining decisions could differ, and the
+DIRECTION of that difference is unknown and unmeasured. A second, smaller and
+signed bias: the amplified slot pays one bit test (~0.22 ns, from the control
+arm's 13.16 ns / 59 slots) that production does not, so `s_p` is over-read by
+roughly that much — pushing `R` toward the low end of its envelope.
+
+## 9.6 The decision, and what a builder must beat
+
+`R` clears the 1% floor — and only just, with the envelope's low end AT 1.00%.
+So:
+
+* **(DISPATCH.1) is not confirmed closed warm, and is not a 2.7% prize either.
+  It is a ~1% lever**, which is a real one by this arc's standards and a
+  marginal one by its measurement standards: `ab-warm.sh`'s band is ±1.0%, so a
+  landed table could not be confirmed by the harness that would judge it, and
+  would have to be defended on `cost_gate.py` counters plus this decomposition.
+* **(WARM.13) reopens as an IMPLEMENTATION item** (nothing was built this
+  round), with one new number that changes its outlook: **the control arm is a
+  direct measurement of the proposed per-kind `Long`-bitmask dispatch
+  skeleton** — a mask load plus 59 register-resident bit tests — at **13.16 ns
+  per node**, i.e. **~11.3 ms over the whole compile, 15% of the prize**. That
+  is the first evidence that a table can be built for less than it saves:
+  round 866's `+715 ms` GATED tax was the `IntArray` walk, the 46-arm
+  tableswitch and the extra frame, NOT the idea. Net, the bitmask shape is
+  worth ~62–73 ms (0.90–1.06%).
+* The **8,000-bytecode cliff is a hard design constraint**, not a detail: a
+  dense per-kind `when (kindId)` with straight-line call lists (138 arms × up to
+  ~20 calls) is far over `HugeMethodLimit`, i.e. never JIT-compiled and a
+  measured −33.6% warm cliff (round 845). Split by a CONTIGUOUS key range, keep
+  the hottest kinds in the entry function, and never a fall-through chain
+  (round 802). The bitmask shape avoids the cliff entirely, which is the second
+  reason to prefer it.
+
+## 9.7 What this section does NOT show
+
+* **Nothing was optimized and no table was built.** The landing is the probe,
+  its two tiers, two scripts, an analyzer and five pins.
+* `s_p` is the mean over the skip population at the amplifier's call site; § 9.5
+  names the residual, and it is the reason the answer is quoted as a range.
+* One profile, one box, `--noEmit`, check-only, and a `~6,900 ms` warm
+  denominator taken from round 843 rather than re-measured here.
+* The marginal (repeat) nature of an amplified cost is argued to be small here
+  — production consults the same 46 `spineXxActive` fields at every one of
+  856,962 nodes, so they are hot in production too — but it is argued, not
+  measured.
+
+## 9.8 Reproducing
+
+```bash
+./gradlew compileKotlinJvm compileTestKotlinJvm
+./gradlew --stop && pkill -f 'KotlinCompile[D]aemon'
+bash scripts/round867-warm-amp2.sh a      # 4 processes, ~7 min
+bash scripts/round867-warm-amp2.sh b      # 4 more
+python3 scripts/round867_analyze.py --drop-first build/bench/round867amp2/*.log
+```
+
+or, cold and in one shot, from the CLI:
+
+```bash
+java -cp <cp> com.xemantic.typescript.compiler.MainKt \
+     --noEmit --passTiming --spineAmp 48  build/bench/tsc-project-*
+java -cp <cp> com.xemantic.typescript.compiler.MainKt \
+     --noEmit --passTiming --spineAmp -48 build/bench/tsc-project-*
+```
