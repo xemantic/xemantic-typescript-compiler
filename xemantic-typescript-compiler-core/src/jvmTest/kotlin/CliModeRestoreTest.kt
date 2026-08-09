@@ -98,6 +98,7 @@ class CliModeRestoreTest {
             FlowIndex::class.java,
             PartitionCheck::class.java,
             ParallelCheckMode::class.java,
+            FlowCensus::class.java,
         )
 
         /**
@@ -144,6 +145,7 @@ class CliModeRestoreTest {
         CpaSections.reset()
         FrontEnd.reset()
         FlowScan.reset()
+        FlowCensus.reset()
         PartitionCheck.reportLines.clear()
     }
 
@@ -260,6 +262,6 @@ private val ACCEPTED_FLAGS = listOf(
     "--verifyImplRelated", "--verifyImplRelatedAll", "--verifyImplRelatedBogus",
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
-    "--partitionCheck",
+    "--flowCensus", "--partitionCheck",
     "--workers", "--globalsAmp", "--outDir", "--project", "--help",
 )
