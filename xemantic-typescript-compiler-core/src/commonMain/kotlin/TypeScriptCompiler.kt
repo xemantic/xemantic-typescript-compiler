@@ -2172,8 +2172,6 @@ class TypeScriptCompiler {
                         }
                     }
                 }
-                val staticallyReferenced = mutableSetOf<String>()
-                for ((_, depList) in importDeps) staticallyReferenced.addAll(depList)
                 val importTypeRegex = Regex("""import\s*\(\s*["']([^"']+)["']""")
                 val requireCallRegex = Regex("""\brequire\s*\(\s*["']([^"']+)["']""")
                 // Only a USER-declared `require` value (`declare const/var/function require`)
@@ -2182,23 +2180,18 @@ class TypeScriptCompiler {
                 // resolve a bare `require('./x')` → x is a program file and emits, so we must
                 // NOT treat such a target as an orphan. This gate makes the drop corpus-unique
                 // to the moduleResolutionWithRequire* shape.
-                val declareRequireRegex = Regex("""\bdeclare\s+(?:const|var|let|function)\s+require\b""")
                 val requireReached = mutableSetOf<String>()
                 val nsInternalImportTargets = mutableSetOf<String>()
+                // (WARM.8)(c) round 862 — PASS 1: the two CANDIDATE producers.
+                // Level-3 `FrontEnd` blocks abut over each per-file scan, so the
+                // 130 ms round 861 measured for this function is attributed to
+                // one of them rather than guessed at (§ 12.6 recorded that it
+                // was not sub-partitioned).
                 for (fileName in tsFileNames) {
                     val sf = parsedSourceFiles[fileName] ?: continue
                     val text = sf.text
-                    // (WARM.8)(c) level 3 — three abutting blocks over the three
-                    // per-file scans, so the 130 ms round 861 measured for this
-                    // function can be attributed to one of them rather than
-                    // guessed at (§ 12.6 says it was not sub-partitioned).
                     var feOrphT0 = FrontEnd.t()
-                    for (m in importTypeRegex.findAll(text)) {
-                        resolveToInput(fileName, m.groupValues[1])?.let { staticallyReferenced.add(it) }
-                    }
-                    FrontEnd.close(FrontEnd.ORPH_IMPORTTYPE, feOrphT0)
-                    feOrphT0 = FrontEnd.t()
-                    val declRequireHit = declareRequireRegex.containsMatchIn(text)
+                    val declRequireHit = containsDeclareRequire(text)
                     if (declRequireHit) {
                         for (m in requireCallRegex.findAll(text)) {
                             resolveToInput(fileName, m.groupValues[1])?.let { requireReached.add(it) }
@@ -2210,13 +2203,37 @@ class TypeScriptCompiler {
                     FrontEnd.close(FrontEnd.ORPH_NSWALK, feOrphT0)
                     FrontEnd.addOrphanCensus(text.length.toLong(), declRequireHit)
                 }
-                val lastFile = tsFileNames.last()
-                // Never drop the last @Filename unit (the harness sole-root) — only earlier,
-                // genuinely-unreachable inputs.
-                tsFileNames.filter {
-                    it != lastFile && it !in staticallyReferenced &&
-                        (it in requireReached || it in nsInternalImportTargets)
-                }.toSet()
+                // (WARM.8)(c) — `staticallyReferenced` is purely SUBTRACTIVE: it
+                // appears in the final filter only as `it !in staticallyReferenced`,
+                // and the candidate conjunct beside it is
+                // `(it in requireReached || it in nsInternalImportTargets)`. With
+                // both candidate sets empty the filter yields nothing whatever
+                // `staticallyReferenced` holds, so PASS 2 — an `import("…")` scan
+                // over the full text of every program file — answers a question
+                // nobody asks. On tsc's own sources that is the whole of it: the
+                // `declare … require` probe accepts 0 of 78 files.
+                if (requireReached.isEmpty() && nsInternalImportTargets.isEmpty()) {
+                    emptySet()
+                } else {
+                    // PASS 2 — the subtractive set, built only where a candidate exists.
+                    val staticallyReferenced = mutableSetOf<String>()
+                    for ((_, depList) in importDeps) staticallyReferenced.addAll(depList)
+                    for (fileName in tsFileNames) {
+                        val sf = parsedSourceFiles[fileName] ?: continue
+                        val feOrphT0 = FrontEnd.t()
+                        for (m in importTypeRegex.findAll(sf.text)) {
+                            resolveToInput(fileName, m.groupValues[1])?.let { staticallyReferenced.add(it) }
+                        }
+                        FrontEnd.close(FrontEnd.ORPH_IMPORTTYPE, feOrphT0)
+                    }
+                    val lastFile = tsFileNames.last()
+                    // Never drop the last @Filename unit (the harness sole-root) — only earlier,
+                    // genuinely-unreachable inputs.
+                    tsFileNames.filter {
+                        it != lastFile && it !in staticallyReferenced &&
+                            (it in requireReached || it in nsInternalImportTargets)
+                    }.toSet()
+                }
             } else emptySet()
         return requireOnlyOrphans
     }

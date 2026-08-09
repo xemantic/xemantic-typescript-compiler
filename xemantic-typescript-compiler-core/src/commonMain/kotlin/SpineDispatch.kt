@@ -4099,16 +4099,21 @@ object FrontEnd {
     // ---- (WARM.8)(c) level 3 — [POST_ORPHANS] is 97.6% of [POST_OUTPUTS] and
     // 1.72% of a warm rebuild (round 861 § 12), and § 12.6 says in as many words
     // that it "was not sub-partitioned, so nothing here says which of its scans
-    // costs the 130 ms". These three blocks are the three per-FILE scans of its
-    // one loop; they cost three timestamp pairs per program file (78 files =
-    // 234 pairs, ~20 us against a ~130 ms block), and the residue is the two
-    // set constructions plus the final filter.
+    // costs the 130 ms". These three blocks are the three per-FILE scans, so
+    // unlike every level above them they record once per PROGRAM FILE (78 files
+    // = ~234 timestamp pairs, ~20 us against a ~130 ms block).
+    //
+    // Since round 862 the function runs in TWO passes and [ORPH_IMPORTTYPE] is
+    // the second one, so its `calls` are 0 whenever the candidate sets came out
+    // empty — which is the normal case and is the whole saving. A count of 0
+    // there is therefore a MEASUREMENT, not a dropped boundary; `orphanFiles`
+    // is the population that is always counted.
 
-    /** The `import("…")` text scan feeding `staticallyReferenced`. INSIDE [POST_ORPHANS]. */
+    /** The `import("…")` text scan feeding `staticallyReferenced` — PASS 2. INSIDE [POST_ORPHANS]. */
     const val ORPH_IMPORTTYPE = 28
-    /** The `declare … require` probe plus its `require("…")` scan. INSIDE [POST_ORPHANS]. */
+    /** The `declare … require` probe plus its `require("…")` scan — PASS 1. INSIDE [POST_ORPHANS]. */
     const val ORPH_DECLREQ = 29
-    /** `collectNsInternalImportTargets` — the top-level/namespace statement walk. INSIDE [POST_ORPHANS]. */
+    /** `collectNsInternalImportTargets` — the namespace statement walk, PASS 1. INSIDE [POST_ORPHANS]. */
     const val ORPH_NSWALK = 30
 
     const val N = 31
@@ -4157,7 +4162,7 @@ object FrontEnd {
         FLOW_REASSIGN, FLOW_SCAN, FLOW_SETBUILD, FLOW_LOCALNAMES, FLOW_VARDECLS,
         CHECK, POST, POST_DIAGS, POST_NSEXPORTS, POST_EMITPREP, POST_OUTPUTS,
         POST_DEPS, POST_TOPO, POST_ORPHANS, POST_ASSEMBLE,
-        ORPH_IMPORTTYPE, ORPH_DECLREQ, ORPH_NSWALK,
+        ORPH_DECLREQ, ORPH_NSWALK, ORPH_IMPORTTYPE,
         TRANSFORM, EMIT, DECL_EMIT,
     )
 

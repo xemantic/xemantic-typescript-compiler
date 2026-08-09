@@ -72,6 +72,18 @@ class PostCheckerPartitionTest {
             """.trimIndent(),
     )
 
+    /** A program that DOES carry a require-only candidate, so pass 2 must run. */
+    private val requireFiles = mapOf(
+        "/proj/tsconfig.json" to """{ "include": ["src/**/*.ts"] }""",
+        "/proj/src/a.ts" to "export const fromA: number = 1\n",
+        "/proj/src/b.ts" to
+            """
+            declare const require: (s: string) => unknown
+            const a = require('./a')
+            export const fromB: number = 2
+            """.trimIndent(),
+    )
+
     private fun <T> withProbe(block: () -> T): T {
         val saved = FrontEnd.mode
         try {
@@ -185,24 +197,41 @@ class PostCheckerPartitionTest {
     fun `the orphan block is partitioned into its three per-file scans`() = withProbe {
         buildEmitting()
         val orphans = FrontEnd.nanos[FrontEnd.POST_ORPHANS]
-        val importType = FrontEnd.calls[FrontEnd.ORPH_IMPORTTYPE]
-        // The loop runs once per program file, and all three blocks are inside
-        // it — a boundary dropped from any one of them reads a different count.
-        assert(importType > 0L)
-        assert(FrontEnd.calls[FrontEnd.ORPH_DECLREQ] == importType)
-        assert(FrontEnd.calls[FrontEnd.ORPH_NSWALK] == importType)
+        val declReq = FrontEnd.calls[FrontEnd.ORPH_DECLREQ]
+        // Pass 1 runs once per program file, and both its blocks are inside that
+        // loop — a boundary dropped from either reads a different count.
+        assert(declReq > 0L)
+        assert(FrontEnd.calls[FrontEnd.ORPH_NSWALK] == declReq)
         // …and the census, which is the population, counts the same files.
-        assert(FrontEnd.orphanFiles == importType)
+        assert(FrontEnd.orphanFiles == declReq)
         assert(FrontEnd.orphanChars > 0L)
         // Neither fixture file declares `require`, so the probe accepts none of
         // them — the reading that says the scan is skippable, and a non-vacuous
         // assertion because the counter is bumped on every file either way.
         assert(FrontEnd.orphanDeclReqHits == 0L)
+        // …hence PASS 2 never runs, which is (WARM.8)(c)'s saving in its
+        // smallest observable form: `staticallyReferenced` is purely
+        // subtractive, so with no candidate there is nothing to subtract from.
+        assert(FrontEnd.calls[FrontEnd.ORPH_IMPORTTYPE] == 0L)
         val sum = FrontEnd.nanos[FrontEnd.ORPH_IMPORTTYPE] +
             FrontEnd.nanos[FrontEnd.ORPH_DECLREQ] + FrontEnd.nanos[FrontEnd.ORPH_NSWALK]
         assert(orphans > 0L)
         assert(sum > 0L)
         assert(sum <= orphans)
+    }
+
+    /**
+     * …and the complement: a program that DOES carry a require-only candidate
+     * must run pass 2 over every file. Without this the pin above would be
+     * satisfied by a pass 2 that had simply been deleted.
+     */
+    @Test
+    fun `pass 2 runs once per file when a candidate exists`() = withProbe {
+        ProjectCompiler(InMemoryVfs(requireFiles)).build("/proj", noEmit = false)
+        val declReq = FrontEnd.calls[FrontEnd.ORPH_DECLREQ]
+        assert(declReq > 0L)
+        assert(FrontEnd.orphanDeclReqHits == 1L)
+        assert(FrontEnd.calls[FrontEnd.ORPH_IMPORTTYPE] == declReq)
     }
 
     /**
