@@ -35,8 +35,10 @@ USE:
     scripts/serve_parity.py --out DIR --only no-path,emit     # named cells
     scripts/serve_parity.py --selftest                        # comparator check
 
-Exit 0 iff every cell PASSes (a cell whose divergence is documented and
-deliberate is declared KNOWN in the cell itself and prints as such).
+Exit 0 iff every cell PASSes.  There is deliberately no "this one is allowed to
+differ" marker: one existed while three cells were divergent, and the round-873
+ablation caught it absorbing an UNRELATED exit-code divergence into its own
+documented excuse.
 """
 
 from __future__ import annotations
@@ -135,10 +137,11 @@ class Cell:
     what: str
     steps: list[Step]
     projects: list[str] = field(default_factory=list)
-    # A cell whose divergence is deliberate and documented states WHY here. It
-    # is reported as KNOWN rather than DIFF, and the reason is printed with it,
-    # so this can never be a silent escape hatch.
-    known: str | None = None
+    # There is deliberately NO "this cell is allowed to differ" field. One
+    # existed while three cells were divergent, and the round-873 ablation showed
+    # what it costs: under arm A1 a cell absorbed an UNRELATED exit-code
+    # divergence into its own documented excuse and printed as KNOWN. A cell
+    # either passes or it is a finding.
 
     def fixtures(self) -> list[str]:
         names = list(self.projects)
@@ -311,9 +314,6 @@ def cells() -> list[Cell]:
             Step(args=["--watch", _abs("clean")], project="clean", label="refused"),
             Step(args=["--noEmit", _abs("typeerr")], project="typeerr", label="normal"),
         ],
-        known="--watch is refused by the daemon in constant time and RUN by the CLI "
-              "forever; the refused step is compared for the daemon's refusal only "
-              "(the CLI arm is not run for it).",
     ))
     # THE cell round 871's cross-request parse cache put in the blast radius.
     out.append(Cell(
@@ -576,7 +576,7 @@ def run_cell(cell: Cell, out: Path, cp: str, java: str, daemon: Daemon,
         return "ERROR", problems + [f"only {ran}/{len(cell.steps)} steps ran"]
     if not problems:
         return "PASS", []
-    return ("KNOWN" if cell.known else "DIFF"), problems
+    return "DIFF", problems
 
 
 # --------------------------------------------------------------------------
@@ -672,17 +672,14 @@ def main() -> int:
             print(f"{verdict:6s} {cell.name:28s} {cell.what}")
             for p in problems:
                 print("   " + p.replace("\n", "\n   "))
-            if verdict == "KNOWN":
-                print(f"   KNOWN because: {cell.known}")
     finally:
         daemon.stop()
 
     steps = sum(len(c.steps) for _, c, _ in results)
     n_pass = sum(1 for v, _, _ in results if v == "PASS")
-    n_known = sum(1 for v, _, _ in results if v == "KNOWN")
     bad = [(v, c) for v, c, _ in results if v in ("DIFF", "ERROR")]
     print(f"\n{len(results)} cells, {steps} invocation pairs: "
-          f"{n_pass} PASS, {n_known} KNOWN, {len(bad)} DIFF/ERROR")
+          f"{n_pass} PASS, {len(bad)} DIFF/ERROR")
     for v, c in bad:
         print(f"  {v} {c.name}")
     (out / "report.json").write_text(json.dumps(

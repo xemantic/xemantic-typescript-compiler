@@ -91,7 +91,7 @@ for arm in "${ARMS[@]}"; do
         git checkout -- "$SERVER" "$CLIENT"; exit 1; }
     python3 -u scripts/serve_parity.py --out "build/serve-parity-$arm" --timeout 120 \
         > "$OUT/$arm.matrix.log" 2>&1 || true
-    echo "    verdict: $(tail -3 "$OUT/$arm.matrix.log" | grep 'invocation pairs' || echo '(none)')"
+    echo "    verdict: $(grep 'invocation pairs' "$OUT/$arm.matrix.log" || echo '(none)')"
     grep -E '^(DIFF|ERROR)' "$OUT/$arm.matrix.log" | sed 's/^/    /' || echo "    (no red cells)"
     git checkout -- "$SERVER" "$CLIENT"
 done
