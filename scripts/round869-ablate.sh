@@ -26,7 +26,7 @@ mkdir -p "$OUT"
 # word, so a no-argument run hits the `unknown arm` branch and still reports
 # success — an all-green sweep from a driver that ran no arm at all.
 ARMS=("$@")
-[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5 A6 A7)
+[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5 A6 A7 A8 A9)
 
 [[ -z "$(git status --porcelain -- "$SRC")" ]] || {
   echo "REFUSED: $SRC is dirty — ablate on a committed tree" >&2; exit 1; }

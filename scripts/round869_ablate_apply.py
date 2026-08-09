@@ -50,6 +50,15 @@ ARMS = {
     'A5': ("        marks.add(undoKeys.size)", "        marks.add(0)"),
     # pop() leaves a key the frame INTRODUCED in the live map.
     'A6': (RESTORE, "            if (v != null) live[k] = v"),
+    # push() starts the new scope EMPTY — the "a frame does not inherit" defect.
+    'A8': ("""        owners.add(owner)
+        marks.add(undoKeys.size)""",
+           """        live.clear()
+        owners.add(owner)
+        marks.add(undoKeys.size)"""),
+    # reset() drops the frames but keeps the entries — a CROSS-FILE annotation leak.
+    'A9': ("""        live.clear()
+        owners.clear()""", "        owners.clear()"),
     # topOwner() answers the OUTERMOST frame.
     'A7': ("    fun topOwner(): Node? = if (owners.isEmpty()) null else owners[owners.size - 1]",
            "    fun topOwner(): Node? = if (owners.isEmpty()) null else owners[0]"),

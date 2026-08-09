@@ -258,3 +258,206 @@ reason (rounds 855/856).
   round 801 already measured that an allocation count is not a cost in this
   codebase (367,189 `String` allocations removed = 0 ms), so an allocation table
   would have added a column nobody may act on.
+
+---
+
+# (WARM.16) The copy candidate, PRICED — round 869 (2026-08-09)
+
+**Nothing above this line is rewritten. § 0-§ 8 are round 868's record; this
+section is what its candidate (C2) turned into, and what its candidate (C3) did
+NOT.**
+
+## 9. The census — which had to come before any timing (round 801)
+
+`FrontEnd`'s copy counters (`--frontEnd`, the `copyamp*` tiers), compiler
+profile, warm. **Deterministic: identical to the unit on all 24 instrumented
+rebuilds taken this round.**
+
+| family | pushes | entries copied | mean | max | writes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `EpochMap(localTypes)` | 28,828 | 471,726 | 16.3 | 272 | 44,320 |
+| `EpochSet(paramBindings)` | 35,015 | 39,522 | 1.1 | 20 | 7,969 |
+| **`spineOs` annotation frames** | **34,155** | **1,841,284** | **53.9** | 143 | **17,600** |
+| **`spinePd` annotation frames** | **21,674** | **1,247,050** | **57.5** | 143 | **16,854** |
+| `CtaFrame.varTypes` (`toMutableMap`) | 30,433 | 1,145,523 | 37.6 | 100 | 2,564 |
+| `CtaFrame` localTypes+declNodes+shadowed | 9,525 | 1,089,527 | 114.3 | 406 | *n/a* |
+| **TOTAL** | **159,630** | **5,834,632** | | | **89,307** |
+
+**5.83 M entries copied to serve 89 k writes — 1.5%.** That is round 801's
+produced-versus-consumed test in the setting where it decides something: a copy
+costs O(size), an undo log costs O(writes), and the two are exactly equivalent
+for a stack that is strictly LIFO, never removes a key, and whose readers
+neither mutate nor retain the map.
+
+**The `n/a` is deliberate and is round 849's law.** The `CtaFrame` local family's
+writes go through a plain `HashMap` that the cta sandwich installs into
+`currentLocalTypes`, so the `EpochMap` hook cannot see them: the counter reads 0
+and that 0 is UN-INSTRUMENTED, not measured. Reporting it as a finding would be
+the round-849 mistake (a census keyed on a boundary the caller short-circuits
+read "nothing ever reads a derived lib type back" where the truth is 133.9 reads
+per production). Every other row's `writes` is a real count.
+
+## 10. The price — amplification, because a boundary would exceed the quantity
+
+`copyAmp = r` performs `r` EXTRA whole-map copies at every censused site and
+takes **no timestamp pair anywhere**; the answer is read off the WHOLE-REBUILD
+wall, so `wall(r) = base + r·C` and two values of `r` cancel `base`
+algebraically. At a mean copy of 16-114 entries one warm probe boundary
+(97-202 ns, round 850) would be the measurement. Falsification is ARITHMETIC:
+`ampSink` must equal `r ×` the censused entry count of the ARMED families, and
+it did on every one of the 24 rebuilds (e.g. `49,413,344 = 16 × 3,088,334`).
+
+Design: ABBA-rotated inside each process (`r16,r8,r0,r0,r8,r16`), 3 warm-up
+rebuilds + 5 measured ones before the first tier, because the FIRST instrumented
+rebuild in a process is the slowest draw — a 5-for-5 law in this arc, and here
+worth up to **15%** (batch 2 read `r=0` at 8,082 ms in cycle 1 and 6,872 ms in
+cycle 2). An un-rotated ladder puts that bias entirely on whichever arm runs
+first and silently flattens the slope.
+
+| arm | draws | mean ms | pair | slope |
+| --- | ---: | ---: | --- | ---: |
+| **whole family** (batch 3) | | | | |
+| `r = 0` | 2 | 7,497.0 | | |
+| `r = 8` | 2 | 8,971.3 | 0→8 | 184.3 ms |
+| `r = 16` | 2 | 10,782.3 | 8→16 | 226.4 ms |
+| | | | least squares | **205.3 ms** |
+| **`spineOs` + `spinePd` only** (batches 4+5) | | | | |
+| `r = 0` | 4 | 7,052.0 | | |
+| `r = 8` | 4 | 8,255.9 | 0→8 | 150.5 ms |
+| `r = 16` | 4 | 9,126.4 | 8→16 | 108.8 ms |
+| | | | least squares | **129.7 ms** |
+
+Against a probe-free warm rebuild of 7,337 ms (batch 3) / ~7,447 ms (batches
+4+5):
+
+- the WHOLE per-scope copy family is **205 ms = 2.80%** of a warm rebuild;
+- the two ANNOTATION families alone are **129.7 ms = 1.74%** [1.46-2.02%].
+
+The two independent `r`-pairs bracket the point estimate at ±16%, which is
+looser than round 867's ±1% and is said out loud rather than smoothed: what the
+interval supports is "above the 1% decision floor at both ends", not a third
+decimal. The interval is also **conservative in a known direction** — an
+amplified copy dies in eden immediately, where a production copy is retained for
+its frame's lifetime, so the amplifier under-counts promotion and GC.
+
+Corroboration from the other instrument: round 868's profile put
+`putMapEntries` at 5.4% of compile-thread samples INCLUSIVE, i.e. ~400 ms of a
+7.5 s rebuild against the amplifier's 205 ms. Same order, factor 2 apart, in the
+direction the caveat above predicts.
+
+## 11. Why only two of the six families were taken
+
+**Not "the two biggest".** The classification is by whether copy semantics can
+be replaced *provably*, and the discriminator is what the map IS:
+
+| family | replaceable? | why |
+| --- | --- | --- |
+| `spineOs` / `spinePd` annotation frames | **yes** | strict LIFO; no key is ever removed; all three consumers (`spread2698CheckOperand`, `rest2700Check`, the `pddu*` pair) only LOOK UP, synchronously, inside one spine node's handler |
+| `CtaFrame.varTypes` | not yet | deliberately SHARED at some frames and copied at others (`if (node is Block) copy else share`), so an undo log needs a per-frame replay flag; also a `LinkedHashMap` for no reason (round 483) — see § 13 |
+| `CtaFrame` localTypes/declNodes/shadowed, `EpochMap`, `EpochSet` | not here | these ARE `currentLocalTypes`, where a wrong scope does not crash — it silently resolves a name to an outer binding (the `applyBodyLocalShadowing` FP class), and where the write census is un-instrumented (§ 9) |
+
+The two taken families are the ones where the FP hazard is **structurally
+absent** rather than argued away.
+
+## 12. What landed, and the controlled row
+
+`AnnScopeStack` (commonMain, `internal`, its own file so every rule is pinned
+directly rather than through a compile) keeps ONE live map plus an undo log:
+`push` records a mark, `put` appends the key's pre-write value (`null` = absent,
+unambiguous because a `TypeNode` is never null), `pop` replays this frame's
+slice **in REVERSE** — which is what makes a repeated write to one key correct
+with no per-frame "already shadowed" set, since the last restore applied to a
+key is its first record.
+
+The row is CONTROLLED in round 793's sense — the change moves no boundary and no
+population:
+
+| | before | after |
+| --- | ---: | ---: |
+| `spineOs` pushes / writes | 34,155 / 17,600 | 34,155 / 17,600 |
+| `spinePd` pushes / writes | 21,674 / 16,854 | 21,674 / 16,854 |
+| **entries copied by the two** | **3,088,334** | **0** |
+| undo-log records | 0 | 34,454 |
+| entries copied, all six families | 5,834,632 | 2,746,298 |
+
+**89.6× less work over an identical population.** And the amplifier is the
+change's own falsifier: re-run on the AFTER binary, `copyampos` reads a slope of
+**+5.5 ms over `r = 0..16`** (0→8 `+14.7`, 8→16 `−3.7`) with `ampSink = 0` — it
+finds nothing left to amplify at those sites, so the copies are gone rather than
+merely uncounted.
+
+Equivalence: 8-profile grid with BOTH arms rebuilt from source and diffed in both
+directions, **added = 0 / removed = 0 on all eight** (8 distinct captures;
+compiler digest `59d930db…`, the recipe CLAUDE.md records). Suite
+**14,139 / 0 / 3**. `cost_gate.py` **+0.00% on all 20 counters**.
+`huge_methods.py --fail-over 0` exit 0.
+
+### Pins and ablation
+
+`AnnScopeStackTest`, 11 pins, all over strings and ints — never a `TypeNode`,
+whose power-assert rendering is its whole subtree. Nine single-mistake
+ablations, each reverted before the next (`scripts/round869-ablate.sh`, one arm
+per invocation, on a committed tree):
+
+| arm | the mistake | pins reddened |
+| --- | --- | ---: |
+| A1 | `pop` drops the frame without restoring | 6 |
+| A2 | `pop` replays its slice FORWARD | 1 |
+| A3 | `put` records the NEW value | 6 |
+| A4 | `put` persists with no frame open | 1 |
+| A5 | `push` records mark 0 | 4 |
+| A6 | `pop` leaves a key the frame INTRODUCED | 4 |
+| A7 | `topOwner` answers the OUTERMOST frame | 1 |
+| A8 | `push` starts the scope EMPTY | 4 |
+| A9 | `reset` keeps the entries (cross-FILE leak) | 1 |
+
+Every arm reddens, and **every one of the 11 pins is reddened by at least one
+arm** — A8 and A9 exist for exactly that reason: after the first seven, `an
+inner scope sees the outer scope's entries` and `reset drops every scope and
+every entry` had no failure of their own, and round 868's rule is that such a
+pin is RECORDED as un-ablated rather than counted as coverage. Cutting an arm
+for each was cheaper than the disclaimer, and A9's defect — an annotation
+surviving a file boundary — is the one a corpus baseline would find hardest to
+attribute.
+
+Eight of the nine red SETS are distinct. **A1 and A3 are not: they are the same
+defect in two spellings** (not restoring, and restoring the value that is
+already there), so no pin can separate them and this is reported as one
+discriminated defect with two spellings rather than as two arms of coverage.
+
+## 13. What did NOT work, and what was left unpriced
+
+**The whole-rebuild `ab-warm.sh` A/B is DISCARDED, not quoted as corroboration.**
+Batch 1: **−330 ms (−4.42%), B wins 2/2**, both pairs sign-consistent, with the
+winner in the disadvantaged position once. Batch 2: **−77 ms (−1.04%), 1/2**,
+and the driver's own verdict line reads `NOISE-DOMINATED — the per-pair spread
+dwarfs the effect`. Per-arm sd was 1.40% (batch 1, arm B) and 3.47% (batch 2,
+arm A), i.e. above the 1.0% quiet-box threshold in both. This is round 840(c)
+and round 858's reference case exactly — **a sign-consistent paired batch is not
+a result** — and had only batch 1 been run, this section would be claiming
+−4.4% for a change whose controlled instrument says 1.74%.
+
+**(C3), `ArrayList.clear` on the ~15 ancestor-walk buffers, is LEFT UNPRICED —
+deliberately, and the leaf share is not acted on.** It is round 623's exact bias
+class (a counted loop, whose self-samples safepoint bias inflates; round 623
+eliminated a 5.3%-of-samples leaf and measured −0.3%). One structural fact was
+established for the next round and is worth the reader's time: there are **47**
+`ArrayList<Node>` ascent buffers and **97** `chain.clear()` call sites, i.e. the
+idiom is a PAIR per classifier — a leading clear and a trailing one — and
+because every filling path ends with the trailing clear, **the leading clear
+always runs on an already-empty list, where `ArrayList.clear`'s null-out loop
+does not execute at all.** So the leaf's samples are spread over twice as many
+call sites as there is work, which is a second reason (on top of safepoint bias)
+that its 1.5% over-reads. Pricing it needs a census of ELEMENTS cleared —
+invocations that miss the memo × mean chain length — or round 759's
+amplification; a share from the table above is not a price and must not be used
+as one.
+
+**Also not taken, and now priced rather than guessed:** `CtaFrame.varTypes` is
+**1,145,523 entries for 2,564 writes — 0.22%, the most wasteful ratio of the
+six** — and it is built with `toMutableMap()`, i.e. a `LinkedHashMap`, although
+a grep for `.keys/.values/.entries/.forEach/.map/.iterator/.sorted` over all 211
+`varTypes` references finds **zero** iteration anywhere, so nothing consumes its
+order. Two separate improvements sit there (the map flavour, and the copy), and
+the copy needs a per-frame replay flag because some frames share the map on
+purpose. Queued as (WARM.17).
