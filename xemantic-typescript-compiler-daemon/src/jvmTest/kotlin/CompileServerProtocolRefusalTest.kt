@@ -58,6 +58,12 @@ import kotlin.test.Test
  * very same arguments DO produce it at the current version. Without that
  * control every assertion here would pass just as well against a project that
  * silently compiled to nothing.
+ *
+ * **Ablation (the guard in `respondTo` replaced by `null`):** the three
+ * "refused and never compiled" pins fail and the control stays green, so they
+ * discriminate the guard and nothing ambient. `the mismatch message is
+ * peer-neutral` stays green there on purpose — it pins the OTHER half of the
+ * fix and is ablated by reverting the wording, not the guard.
  */
 class CompileServerProtocolRefusalTest {
 
@@ -111,6 +117,11 @@ class CompileServerProtocolRefusalTest {
             // The refusal says which versions disagree, in both directions.
             assert("${XTSC_PROTOCOL_VERSION - 1}" in response.output)
             assert("$XTSC_PROTOCOL_VERSION" in response.output)
+            // The refusal itself speaks THIS build's version, which is what
+            // lets a mismatched client recognise it as a refusal rather than
+            // read it as a compile that found nothing.
+            assert(response.protocolVersion == XTSC_PROTOCOL_VERSION)
+            assert(protocolProblem(response.protocolVersion) == null)
         } finally {
             dir.deleteRecursively()
         }
@@ -157,20 +168,6 @@ class CompileServerProtocolRefusalTest {
         } finally {
             dir.deleteRecursively()
         }
-    }
-
-    /**
-     * The response a client reads back always speaks THIS build's version, so a
-     * mismatched client can recognise the refusal for what it is rather than
-     * reading it as a compile that found nothing.
-     */
-    @Test
-    fun `a refusal is answered at this build's own protocol version`() {
-        val response = CompileServer.respondTo(
-            CompileRequest(args = listOf("--noEmit", "."), protocolVersion = 1),
-        )
-        assert(response.protocolVersion == XTSC_PROTOCOL_VERSION)
-        assert(protocolProblem(response.protocolVersion) == null)
     }
 
     /**
