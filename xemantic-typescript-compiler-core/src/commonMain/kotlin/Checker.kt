@@ -3725,7 +3725,7 @@ class Checker(
     // legacy `anns` map (name → annotation TypeNode, statement-ordered with a
     // fresh HashMap copy at every block/branch/loop/clause boundary and a
     // params-seeded copy at fn-body entry) is reproduced by PUSH frames
-    // ([SpineOsFrame]) spawned at exactly the legacy copy edges; the TP scope
+    // ([AnnScopeStack]) spawned at exactly the legacy copy edges; the TP scope
     // (legacy withInternedTpScope at every walked fn-like) is rebuilt
     // PULL-based at each emission from the anchor's ancestor chain. The
     // bounded emission leaves (spread2698CheckOperand / rest2700Check and
@@ -3736,10 +3736,10 @@ class Checker(
     private var spineOsReachMemo = ByteArray(0)
     /** Reusable ascent buffer for [spineOsStatus]. */
     private val spineOsChain = ArrayList<Node>()
-    /** One legacy `anns` scope: owner popped at its leave; the map is the copy
-     *  taken at the owner's enter (fn bodies add their param annotations). */
-    private class SpineOsFrame(val owner: Node, val anns: HashMap<String, TypeNode>)
-    private val spineOsFrames = ArrayList<SpineOsFrame>()
+    /** One legacy `anns` scope per open frame. (WARM.16) round 869: the legacy
+     *  whole-map COPY at every such boundary is an UNDO LOG over one live map —
+     *  identical contents at every moment, O(writes) instead of O(size). */
+    private val spineOsAnns = AnnScopeStack()
 
     // ── (M0.4) round 624: checkArrayPushDiscriminatedUnionElements
     // (B473/B482/B487*) on the spine ──
@@ -3756,8 +3756,7 @@ class Checker(
     private var spinePdActive = false
     private var spinePdReachMemo = ByteArray(0)
     private val spinePdChain = ArrayList<Node>()
-    private class SpinePdFrame(val owner: Node, val anns: HashMap<String, TypeNode>)
-    private val spinePdFrames = ArrayList<SpinePdFrame>()
+    private val spinePdAnns = AnnScopeStack()
     /** currentFileLocals at spine ENTRY — what the slot-moved legacy pass saw. */
     private var spinePdRestingLocals: SymbolTable? = null
 
@@ -17611,7 +17610,7 @@ class Checker(
     /** Per-file setup for the spine-hosted object-spread/rest pass. */
     private fun spineOsSetup(result: BinderResult) {
         spineOsActive = !spineIsDts
-        spineOsFrames.clear()
+        spineOsAnns.reset()
         spineOsReachMemo = if (!spineOsActive) ByteArray(0) else {
             val n = result.sourceFile.nodeCount
             if (n > 0) ByteArray(n) else ByteArray(0)
@@ -17620,7 +17619,7 @@ class Checker(
 
     private fun spineOsTeardown() {
         spineOsActive = false
-        spineOsFrames.clear()
+        spineOsAnns.reset()
         spineOsReachMemo = ByteArray(0)
     }
 
@@ -17628,7 +17627,7 @@ class Checker(
      *  recording/rest step at declarators, the TS2698 anchor at spreads. */
     private fun spineOsEnterNode(node: Node) {
         when ((node as NodeBase).kindId) {
-            NodeKind.SOURCE_FILE -> { spineOsFrames.add(SpineOsFrame(node, HashMap())); return }
+            NodeKind.SOURCE_FILE -> { spineOsAnns.push(node); return }
             NodeKind.BLOCK -> {
                 when (spineOsStatus(node)) {
                     OS_STMT -> spineOsPushCopy(node)
@@ -17688,20 +17687,17 @@ class Checker(
 
     /** Per-node LEAVE hook: pop the frame(s) this node owns. */
     private fun spineOsLeaveNode(node: Node) {
-        val frames = spineOsFrames
-        while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+        while (spineOsAnns.topOwner() === node) {
             SpineDispatch.work()
-            frames.removeAt(frames.size - 1)
+            spineOsAnns.pop()
         }
     }
 
-    private fun spineOsTopAnns(): HashMap<String, TypeNode> =
-        spineOsFrames.lastOrNull()?.anns ?: HashMap()
+    private fun spineOsTopAnns(): Map<String, TypeNode> = spineOsAnns.view
 
     private fun spineOsPushCopy(owner: Node) {
-        val src = spineOsTopAnns()
-        FrontEnd.addCopy(FrontEnd.CP_OS, src.size); FrontEnd.ampCopyMap(FrontEnd.CP_OS, src)
-        spineOsFrames.add(SpineOsFrame(owner, HashMap(src)))
+        FrontEnd.addCopy(FrontEnd.CP_OS, 0)
+        spineOsAnns.push(owner)
     }
 
     /** A fn-like's Block body: copy of the fn-position map + its Identifier-named
@@ -17721,16 +17717,14 @@ class Checker(
     }
 
     private fun spineOsPushFnFrame(owner: Node, params: List<Parameter>) {
-        val src = spineOsTopAnns()
-        FrontEnd.addCopy(FrontEnd.CP_OS, src.size); FrontEnd.ampCopyMap(FrontEnd.CP_OS, src)
-        val anns = HashMap(src)
+        FrontEnd.addCopy(FrontEnd.CP_OS, 0)
+        spineOsAnns.push(owner)
         for (p in params) {
             val id = p.name as? Identifier ?: continue
             val t = p.type ?: continue
-            FrontEnd.noteMut(FrontEnd.CP_OS)
-            anns[id.text] = t
+            FrontEnd.noteMut(FrontEnd.CP_OS); FrontEnd.addUndo(FrontEnd.CP_OS, 1)
+            spineOsAnns.put(id.text, t)
         }
-        spineOsFrames.add(SpineOsFrame(owner, anns))
     }
 
     /** The legacy VariableStatement per-declarator step: record the annotation,
@@ -17739,7 +17733,12 @@ class Checker(
     private fun spineOsVarDecl(d: VariableDeclaration) {
         if (spineOsStatus(d) != OS_VD) return
         val anns = spineOsTopAnns()
-        (d.name as? Identifier)?.let { id -> d.type?.let { FrontEnd.noteMut(FrontEnd.CP_OS); anns[id.text] = it } }
+        (d.name as? Identifier)?.let { id ->
+            d.type?.let {
+                FrontEnd.noteMut(FrontEnd.CP_OS); FrontEnd.addUndo(FrontEnd.CP_OS, 1)
+                spineOsAnns.put(id.text, it)
+            }
+        }
         val restEl = (d.name as? ObjectBindingPattern)?.elements?.firstOrNull { it.dotDotDotToken }
         val initE = d.initializer
         if (restEl != null && initE != null) {
@@ -17952,7 +17951,7 @@ class Checker(
     /** Per-file setup for the spine-hosted array-push/splice/concat pass. */
     private fun spinePdSetup(result: BinderResult) {
         spinePdActive = !spineIsDts
-        spinePdFrames.clear()
+        spinePdAnns.reset()
         spinePdReachMemo = if (!spinePdActive) ByteArray(0) else {
             val n = result.sourceFile.nodeCount
             if (n > 0) ByteArray(n) else ByteArray(0)
@@ -17961,7 +17960,7 @@ class Checker(
 
     private fun spinePdTeardown() {
         spinePdActive = false
-        spinePdFrames.clear()
+        spinePdAnns.reset()
         spinePdReachMemo = ByteArray(0)
     }
 
@@ -17969,7 +17968,7 @@ class Checker(
      *  per-statement record/check work at the four reached statement kinds. */
     private fun spinePdEnterNode(node: Node) {
         when ((node as NodeBase).kindId) {
-            NodeKind.SOURCE_FILE -> spinePdFrames.add(SpinePdFrame(node, HashMap()))
+            NodeKind.SOURCE_FILE -> spinePdAnns.push(node)
             NodeKind.BLOCK -> when (spinePdStatus(node)) {
                 PD_LIST, PD_NESTED, PD_FNBODY_PLAIN -> spinePdPushCopy(node, null)
                 PD_FNBODY -> spinePdPushCopy(node, spinePdParamsOf(node))
@@ -17987,28 +17986,27 @@ class Checker(
 
     /** Per-node LEAVE hook: pop the frame this node owns. */
     private fun spinePdLeaveNode(node: Node) {
-        val frames = spinePdFrames
-        while (frames.isNotEmpty() && frames[frames.size - 1].owner === node) {
+        while (spinePdAnns.topOwner() === node) {
             SpineDispatch.work()
-            frames.removeAt(frames.size - 1)
+            spinePdAnns.pop()
         }
     }
 
-    private fun spinePdTopAnns(): HashMap<String, TypeNode> =
-        spinePdFrames.lastOrNull()?.anns ?: HashMap()
+    private fun spinePdTopAnns(): Map<String, TypeNode> = spinePdAnns.view
 
     private fun spinePdPushCopy(owner: Node, params: List<Parameter>?) {
-        val src = spinePdTopAnns()
-        FrontEnd.addCopy(FrontEnd.CP_PD, src.size); FrontEnd.ampCopyMap(FrontEnd.CP_PD, src)
-        val anns = HashMap(src)
+        FrontEnd.addCopy(FrontEnd.CP_PD, 0)
+        spinePdAnns.push(owner)
         if (params != null) {
             for (p in params) {
                 val n = (p.name as? Identifier)?.text
                 val t = p.type
-                if (n != null && t != null) { FrontEnd.noteMut(FrontEnd.CP_PD); anns[n] = t }
+                if (n != null && t != null) {
+                    FrontEnd.noteMut(FrontEnd.CP_PD); FrontEnd.addUndo(FrontEnd.CP_PD, 1)
+                    spinePdAnns.put(n, t)
+                }
             }
         }
-        spinePdFrames.add(SpinePdFrame(owner, anns))
     }
 
     /** The params seeded into a PD_FNBODY Block's copy (the legacy
@@ -18037,7 +18035,10 @@ class Checker(
                     for (d in node.declarationList.declarations) {
                         val n = (d.name as? Identifier)?.text
                         val t = d.type
-                        if (n != null && t != null) { FrontEnd.noteMut(FrontEnd.CP_PD); anns[n] = t }
+                        if (n != null && t != null) {
+                            FrontEnd.noteMut(FrontEnd.CP_PD); FrontEnd.addUndo(FrontEnd.CP_PD, 1)
+                            spinePdAnns.put(n, t)
+                        }
                     }
                 }
                 for (d in node.declarationList.declarations) {
@@ -167462,7 +167463,7 @@ interface DataView {
         return getTypeFromTypeNode(ann)
     }
 
-    private fun pdduCheckExpr(expr: Expression, source: String, fileName: String, localAnns: MutableMap<String, TypeNode>) {
+    private fun pdduCheckExpr(expr: Expression, source: String, fileName: String, localAnns: Map<String, TypeNode>) {
         val call = expr as? CallExpression ?: return
         // B487c (indexSignatureOfTypeUnknownStillRequiresIndexSignature): an ARRAY arg can
         // never satisfy a `{ [x: string]: T }` param — arrays carry a numeric index signature,
