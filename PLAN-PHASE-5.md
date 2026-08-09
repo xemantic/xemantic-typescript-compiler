@@ -20,6 +20,96 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 870 (2026-08-09) — (WARM.17): THE WARM LEAF PROFILE RE-TAKEN ON THE POST-868/869 BINARY — THE TWO
+FIXED FAMILIES ARE **GONE FROM ITS OWN TABLE** (-410 ms and -113 ms, the second agreeing with round 869's
+amplifier to 13%), NOTHING NEW ROSE INTO THEIR PLACE, AND ITS TOP SURVIVING CANDIDATE IS TAKEN: the
+`getTypeParamInfo` memo's MISS stops re-deciding which symbols are namespaces — **2,992,718 -> 2,277
+symbols scanned, 82 -> 15 ms**, over an IDENTICAL population.
+`docs/perf/warm-leaf-profile.md` §§ 14-20.
+
+- **(A) THE VALIDITY CHECK IS THE ROUND'S FIRST DELIVERABLE, AND IT PASSED.** Same recipe, same window,
+  two processes, and — the thing that makes the two tables comparable at all — **round 868's own dumps
+  re-aggregated with the SAME script**, now committed as `scripts/leaf_owner_profile.py` (it REFUSES a
+  `jfr print` dump whose deepest stack is 5 frames, filters to the compile thread, and charges stdlib
+  leaves to the nearest non-stdlib OWNER — round 868's three traps, as code). `checkSpine` INCLUSIVE
+  reads **75.28%/74.34%** against this arc's independently known ~74%, which is the sanity check the
+  `--stack-depth` trap demands. Then: `computeExportedFnDeclsThroughStars` 2.79/2.50% -> **0.24/0.18%**,
+  `computeExportedVarDeclThroughStars` 1.56/1.31% -> **0.26/0.16%**, `resolveBarrelStarTarget` and
+  `spineOsPushCopy` -> **0.00%**, and BOTH replacements appear where they should (`buildStarExportIndex`
+  0.04/0.00%, `AnnScopeStack` 0.49/0.35%). By family, in ms/rebuild: the barrel search **471 -> 61**, the
+  two annotation frames **153 -> 40**. That second figure is a genuine cross-instrument agreement —
+  round 869 priced those two families by AMPLIFICATION at **129.7 ms** and this profile, which knows
+  nothing of that measurement, reads **113.3 ms**.
+
+- **(B) THE DENOMINATOR TRAP, WHICH IS HOW THIS TABLE WOULD HAVE BEEN MISREAD.** The JFR window is a
+  fixed 90 s of steady state, so the sample count is a constant (~8,000 both rounds) and **a share is a
+  share of WALL TIME, not of a rebuild** — an unchanged per-rebuild cost READS HIGHER once the compile
+  got faster, by exactly 7,766/7,068 = **1.099**. Every cross-round row is therefore quoted in ms/rebuild.
+  Read that way, **six of round 868's top-20 rows are gone and NOTHING NEW rose into their place**: the
+  rows that "moved up" (`ctaFnBodyFrame`, `ctaSpineEnter`, `lookupPerFileForNode`) are the same ms against
+  a smaller denominator. The shape is also unchanged — HashMap/HashSet **26.6/27.3%** of compile-thread
+  samples, and `java.util.regex` **0.04/0.13%**, i.e. round 863's "the class is exhausted on this
+  profile" survives two rounds of change.
+
+- **(C) THE CANDIDATE, AND WHY IT AND NOT THE BIGGER ONE.** After discarding every already-attributed row,
+  `computeTypeParamInfo` is the largest that replicates (**1.47/1.35%**) — and round 868's own table
+  already carried it as "NEW - memoized, so this is the MISS population" without pricing it.
+  `ciaMutualFnDecls$resolve` is BIGGER in run 1 and is DISCARDED: **1.40% against 0.38% on the same
+  binary** is a 3.7x spread, and a share that does not replicate is not a share.
+  `objectLiteralSatisfiesAugmentationMergedInterface` replicates cleanly and is simply too small (0.66%).
+
+- **(D) PRICED BY AN INDEPENDENT INSTRUMENT (`FrontEnd.TPI`), NOT BY THE PROFILE.** One timestamp pair per
+  MISS plus a census; **deterministic to the unit over two processes** (82,316,551 and 82,273,289 ns,
+  0.05% apart, every count identical). `calls 28663, misses 1077 (3.8%), 82 ms; file probes 45906, ns
+  symbols scanned 2992718 (2778/miss), of which module 2184; answered 880, null 197`. **82 ms = 1.16% of
+  a warm rebuild**, agreeing with the profile's 99.9 ms to 18%. **The memo is not the problem — it
+  answers 96.2% of the questions.** The whole cost is one of the miss's three lookups: "is this name
+  exported by some namespace anywhere in the program?", answered by iterating EVERY entry of EVERY file's
+  `locals`. **2,992,718 symbols iterated to reach 2,184 module-flagged ones — 99.93% of the scan
+  re-decides a question that is a property of the binder tables and not of the name being asked.**
+
+- **(E) WHAT LANDED, AND THE CONTROLLED ROW.** `buildModuleSymbolScanIndex` (commonMain, `internal`, its
+  own file so every rule is pinned directly) returns the module symbols in the scan's exact order —
+  `binderResults` order, then each file's `locals` insertion order, **duplicates preserved**, because one
+  `Symbol` instance really is reachable from two files' `locals` (`mergeModuleAugmentations` creates
+  exactly that) and the scan probed it once per table. The `exports` table is deliberately NOT indexed: it
+  is a `var` the checker's own merging writes to, so the probe stays live. **Freezing rule:** the
+  module-symbol SET is settled by init pass 1b, long before any checking pass, and `getTypeParamInfo`'s
+  memo has frozen whole ANSWERS over the same tables since round 481 — so caching the LIST is strictly
+  weaker than an assumption this function has relied on for 389 rounds; it is nonetheless built LAZILY at
+  the first miss, so its disagreement window is contained in the memo's. **Row CONTROLLED (round 793):**
+  calls 28,663 / misses 1,077 / file probes 45,906 / module probes 2,184 / answered 880 / null 197 are
+  IDENTICAL on both arms to the unit, and only the scan width moves — **2,992,718 -> 2,277 (1,314x)**,
+  **82 -> 15 ms**.
+
+- **(F) THE DECISION, SAID PLAINLY IN BOTH DIRECTIONS.** The CANDIDATE priced at **1.16%**, above the
+  decision floor, which is what justified building anything; the CAPTURE is **67 ms = 0.95%**, and the
+  15 ms residue is loop 1's 45,906 per-file hash probes plus the live `exports` probes — **0.21%, below
+  the floor, deliberately NOT taken**. No whole-rebuild A/B is quoted: rounds 858 and 869 § 13 both
+  measured that a two-batch `ab-warm.sh` cannot separate drift from an effect of this size, and a
+  controlled row needs no help.
+
+- **(G) PINS + ABLATION.** `ModuleSymbolScanIndexTest`, 11 pins, all over strings/ints/identity (never a
+  `Symbol` or an AST node). NINE single-mistake ablations, one arm per invocation, each reverted before
+  the next, on a committed tree, every arm dry-run first for a real diff and a clean revert: A1 gate reads
+  `ValueModule` only, A2 `NamespaceModule` only, A3 no gate at all, A4 file order reversed, A5 within-file
+  order sorted by name, A6 duplicates dropped by INSTANCE, A7 by NAME, A8 only the first module symbol per
+  file, A9 the index carries a COPY of the symbol. **A1/A2 are a deliberate PAIR** — CLAUDE.md records
+  that `SymbolFlags.Module` is the UNION of the two and that either half alone compiles and silently loses
+  the other, so a single "the gate is wrong" arm would have been satisfied by either. **A6 initially left
+  every pin GREEN, and the honest reading was that the fixture set could not express it**: the binder
+  gives each file its own symbol, so nothing built through it puts one instance into two `locals` tables
+  — an 11th pin was cut that builds that state by hand, and A6 now reddens it and nothing else (round
+  869's rule). **Two things reported rather than claimed:** `an empty program has an empty index` is
+  structurally UN-ABLATABLE (every arm maps empty to empty), and **A5 and A8 share a red set** — different
+  defects that one pin catches, so one discriminated position, not two. 10 of the 11 pins redden.
+
+- **(H) GATES.** Suite **14,150 / 0 / 3** over all four modules (`xml.etree`) = 14,139 + the 11 new pins,
+  exactly. `cost_gate.py` **+0.00% on all 20 counters**. `huge_methods.py --fail-over 0` exit 0, census 0.
+  **8-profile grid with BOTH arms rebuilt from source and diffed in both directions: added=0 removed=0 on
+  all eight**, 8 distinct captures, compiler digest `59d930db…`. Round 853's positive control both ways:
+  the AFTER dir holds `ModuleSymbolScanIndexKt` and the BEFORE dir does not (665 vs 664 classes).
+
 **Round 869 (2026-08-09) — (WARM.16): ROUND 868's COPY CANDIDATE IS PRICED — THE WHOLE PER-SCOPE
 WHOLE-MAP COPY FAMILY IS **205 ms = 2.80%** OF A WARM REBUILD, AND THE TWO FAMILIES WHERE THE FALSE-POSITIVE
 HAZARD IS STRUCTURALLY ABSENT (**129.7 ms = 1.74%**) NOW COPY NOTHING: **3,088,334 ENTRIES -> 34,454 UNDO
@@ -93,7 +183,7 @@ UNPRICED. `docs/perf/warm-leaf-profile.md` §§ 9-13.
   classifier, and since every filling path ends with the trailing clear the LEADING one always runs on an
   already-empty list where the null-out loop does not execute — so its samples are spread over twice as
   many sites as there is work. Queued as (WARM.18) with the instrument it needs named; `CtaFrame.varTypes`
-  (the worst ratio of the six, 0.22%, and a `LinkedHashMap` with zero order consumers) as (WARM.17).
+  (the worst ratio of the six, 0.22%, and a `LinkedHashMap` with zero order consumers) as (WARM.17), renumbered (WARM.19) in round 870.
 
 - **(G) GATES.** Suite **14,139 / 0 / 3** over all four modules (`xml.etree`), = 14,128 + the 11 new pins,
   exactly. `cost_gate.py` **+0.00% on all 20 counters**. `huge_methods.py --fail-over 0` exit 0.
@@ -779,158 +869,6 @@ replaced it with a measurement. `docs/perf/warm-tail-attribution.md` § 11.
   subtraction, and is invisible to the corpus fixtures it exists for because they run WITH emit. It
   is a check-only lever and moves the CI emit ratio by zero; say so when landing it.
 
-**Round 860 (2026-08-08) — (WARM.7) LANDED: THE DUPLICATED 10-MEGABYTE UMD SCAN IS GONE, 96.4 ms
--> 4.7 ms = 1.17% OF A WARM REBUILD — AND THE HALF ROUND 859 SAID "NEEDS A GATE" NEEDED NO GATE AT
-ALL.** The first optimizing round of the warm arc, executing round 859's own recommendation.
-`docs/perf/warm-tail-attribution.md` § 10 is the permanent record, appended to the document that
-priced the candidate so that predicted and actual sit together.
-
-- **WHAT LANDED, IN TWO INDEPENDENTLY GATED COMMITS.** **(a) `5462fa75`** — both
-  `checkUmdGlobalVsDeclareGlobalConst` and `checkCrossFileModuleAugmentationDuplicates` read one
-  per-FILE memo (`Checker.umdExportAsNamespaceOccurrences`) instead of each compiling and running
-  its own `(?m)^[ \t]*export[ \t]+as[ \t]+namespace…` over the full text of every checked file.
-  The shared value is the NARROWEST thing both consume — the group-1 identifier and its offset —
-  and it is a pure function of the file text, consulting no ambient state, so it cannot be the
-  program-ORDER dependency of rounds 754/776/778. **(b) `c9b693cd`** — the matcher itself is
-  replaced by a hand-written EXACT equivalent, anchored on the literal `namespace` via
-  `String.indexOf` (494 occurrences in 9,977,097 characters, so one linear sweep plus 494
-  constant-time rejections).
-- **THE ROWS, which are the primary evidence** (`BenchMain <proj> 3 8 rows,rows`, one process and
-  two instrumented draws per arm, three arms from one session, daemons stopped). Arm A = HEAD
-  `213292cb`: `checkCrossFileModuleAugmentationDuplicates` **50.1 ms**,
-  `checkUmdGlobalVsDeclareGlobalConst` **46.3 ms**, together **96.4 ms = 1.233%** of arm A's warm
-  wall (7,821 ms) — **round 859's 98.2 ms / 1.30% replicates on a different day and build.** After
-  (a): **54.2 / 0.6 = 54.9 ms**, saving **41.5 ms = 0.531%**. After (b): **4.3 / 0.3 = 4.7 ms**,
-  saving **91.7 ms = 1.173%**.
-- **AND THE ROW THAT MOVES AFTER (a) IS THE OTHER ONE — a pass-order fact round 859 could not have
-  stated.** `checkCrossFileModuleAugmentationDuplicates` is init step 73h and
-  `checkUmdGlobalVsDeclareGlobalConst` is 73j, so the memo is FILLED by the former and SERVED to the
-  latter: the second row collapses to 0.6 ms while the first is unchanged. Anyone reading "run the
-  scan once, ~49 ms" would have watched the wrong row.
-- **THE `.d.ts` GATE WAS DECLINED ON ITS OWN TERMS, AND THAT IS THE ROUND'S TRANSFERABLE RESULT.**
-  Round 859 named it and deliberately left its soundness open. It is a claim about where the
-  construct may legally APPEAR, and round 792's law is that a profile with **0 `.d.ts` files among
-  its 78** cannot falsify such a claim — round 792's own pre-gate measured 0 emitting calls in a
-  22,187-call skip set and still killed 7 corpus baselines. The substring filter that IS sound
-  (`namespace`) was already priced at zero by round 859. So the matcher was replaced rather than
-  gated: an exact rewrite makes no legality claim at all, is differentially pinned against the
-  pattern it replaces, and additionally removes a regex-DIALECT hazard from `commonMain` (the engine
-  behind `kotlin.text.Regex` is `java.util.regex` on the JVM and a different one on Native).
-- **THE PIN THAT WAS BLIND, AND WHY — the round's CLAUDE.md entry.** The first discrimination check
-  read pass B's positive control as GREEN against a binary whose pass B was PassLab-disabled.
-  `PassLab.ensureLoaded()` lives in `runWithDeepStack`, "the one funnel every JVM compile crosses" —
-  and a direct `Checker(options, results)` construction, which is the documented multi-file test
-  harness, crosses it for exactly nothing. So the fixture ran UN-ABLATED whenever JUnit happened to
-  execute it before the first `diagnose()` in the same class. The helper now runs through
-  `runWithDeepStack`, which is also what production does, and the ablation then reddens **exactly
-  one** pin for pass B and **two** for pass A, with every other pin green (round 807, one mistake at
-  a time). A separate injected fault — dropping the line-start anchor from the new scanner — reddens
-  exactly the differential pin and the hand-written negative control.
-- **ROUNDS 793 AND 788, ANSWERED BEFORE THE SAVING WAS QUOTED.** 793 needs no subtraction here:
-  both passes still exist and are still wrapped in `pass(...)`, and the boundary census is IDENTICAL
-  in all three arms — **834 pass-row lines** (417 × 2 draws) with `calls = 1` on each UMD row. 788 is
-  answered by produced-vs-consumed: 78 productions serving 156 consumptions after (a), with no third
-  consumer to move the work to — the other two `export as namespace` readers use DIFFERENT patterns
-  and **their rows are flat across all three arms** (0.0–0.1 and 0.2–0.3 ms), which is that argument
-  in measured form. Per-arm partition check: pass rows sum to 99.71% / 99.68% / 99.65% of
-  `checkerInitNanos`.
-- **THE A/B DECIDES NOTHING, AND BOTH BATCHES ARE QUOTED RATHER THAN THE FRIENDLIER ONE.** Batch 1:
-  `VERDICT: NOISE-DOMINATED … This run decides NOTHING in either direction` (n=2, −0.75%, B wins
-  1/2, one pair at +1.63%). Batch 2, same two binaries: `VERDICT: WIN of 3.0% (B wins 3/3) — outside
-  the +/-1.0% warm band` (n=3, −3.03%). **Neither is quotable and the second least of all**: all
-  four arm sds are **1.55–1.85%**, above CLAUDE.md's ~1% discard threshold, and 3.0% is 2.6× what
-  the rows measure — round 840(c)'s shape exactly. Two batches that disagree is the correct outcome
-  for a 1.17% effect on a ±1.0% instrument on a box that was not quiet. **The arm-level walls and
-  `checkerInitNanos` must not be read as the saving in either direction** — arm B1's wall median is
-  HIGHER than arm A's and arm A's `checkerInitNanos` is 568 ms above arm B2's; both are draw noise
-  around a ~10% spread.
-- **WHAT DID NOT WORK / WAS NOT DONE.** No in-situ span was put around each `findAll` (round 859's
-  suggested first step): the per-PASS rows already isolate the scan to within the 4.7 ms residue, so
-  the span would have added boundaries without adding resolution — but that residue was therefore
-  never sub-partitioned and is only PRESUMED to be the two passes' AST walks. No cold A/B (cold the
-  two passes are 0.38%, so the saving is below the cold band by construction — this is a warm-regime
-  lever by design). n=2 instrumented draws per arm, sufficient only because the effect is ~99% of
-  the rows it acts on. One profile, `--noEmit`, sequential; a project that actually CONTAINS
-  `export as namespace` makes these passes emit rather than scan-and-return.
-- **GATES, per sub-step, one at a time, every gradle step before the daemon stop (round 851).**
-  (a): suite **14,049 / 0 / 3 skipped** (859's 14,040 + 9 new pins), `cost_gate.py` **+0.00% on all
-  20 counters**, `huge_methods.py --fail-over 0` **651 classes / 14,573 methods / 0 over the limit**,
-  8-profile grid **added=0 removed=0 on every profile**, no capture truncated or empty. (b): suite
-  **14,051 / 0 / 3 skipped**, `cost_gate.py` **+0.00% on all 20**, `huge_methods.py` **14,578
-  methods / 0 over**, grid **added=0 removed=0 on all 8** against the same round-859 before-arm.
-  Both builds warning-clean. Round-853 positive control on the measurement: `UmdExportAsNamespaceKt`
-  is ABSENT from arm A's class dir and present in B1/B2, whose copies differ by md5.
-
-**Round 859 (2026-08-08) — (WARM.6): THE TAIL IS FLAT WARM TOO, WHICH IS THE NEGATIVE THIS ROUND
-WAS COMMISSIONED TO FIND — BUT ITS WARM-UP RATIO IS NOT UNIFORM, AND AT THE BOTTOM OF IT SIT TWO
-PASSES RUNNING THE SAME 10-MEGABYTE REGEX THAT MATCHES NOTHING.** The premise was that the tail's
-share MORE THAN DOUBLES warm (10.4% cold → 22.9%, round 846) while nobody had ever checked whether
-round 801's cold flatness survived. It does. `docs/perf/warm-tail-attribution.md` is the permanent
-record; every figure below is a within-round share or ratio, never a cross-round absolute.
-
-- **THE HEADLINE NEGATIVE.** Warm, the ~416 tail passes are **1,530 ms = 20.3%** of the artifact and
-  **exactly ONE clears 1%** — `init:buildFileLocalTypeMaps` at **268.4 ms = 3.56%**. The second is
-  **50.0 ms = 0.66%**, and **344 of the 416 are under 5 ms each**, summing 325 ms. Round 801's cold
-  "largest 75 ms = 0.26%" rescales and holds. There is no warm-only giant in the tail. Round 846's
-  central ratios also replicate on a fresh build and the post-858 dependency tail: `checkSpine`
-  **3.27×** against the tail's **2.67×** (846 read 3.46× / 2.59×).
-- **AND THE FINDING, WHICH IS ROUND 847's LAW ONE LEVEL DOWN.** Over the 72 tail passes ≥ 5 ms the
-  warm/cold ratio spans **0.85× to 5.68×**, median 2.90×. The two at the bottom —
-  `checkUmdGlobalVsDeclareGlobalConst` (**0.85×**, i.e. genuinely SLOWER warm: cold 41.6/43.3 against
-  warm 47.2/48.1/56.5/48.0, non-overlapping) and `checkCrossFileModuleAugmentationDuplicates`
-  (**1.05×**) — are together **98.2 ms = 1.30% of the warm artifact against 0.38% cold, a 3.4× share
-  increase.** Cold they are two unremarkable rows in a flat tail; warm they are the 2nd and 3rd
-  largest passes outside `checkSpine`.
-- **THE MECHANISM, AND IT IS NOT A GUESS ABOUT A HOT LINE.** Both run the SAME
-  `(?m)^[ \t]*export[ \t]+as[ \t]+namespace…` `java.util.regex` over all **9,977,097** characters.
-  A standalone JVM running that exact pattern over that exact text measures **84 ms cold →
-  53.9–59.4 ms in steady state** — MORE than either pass's whole warm row (50.0 / 48.3 ms) — and
-  finds **0 hits**: tsc's own sources contain no `export as namespace` at all, so the compiler reads
-  ten megabytes twice per compile to emit nothing. **The control is already in the file**:
-  `checkExportAsNamespaceSelfCycle` runs essentially the same pattern and measures **0.0 ms in every
-  draw**, because a `.d.ts` test and an `export = X` lookup sit ABOVE its `findAll`. Queued as
-  **(WARM.7)** — dedup is the risk-free ~0.65%; the `.d.ts` gate would return the full 1.30% (this
-  profile has **0 `.d.ts` files among its 78**) but its SOUNDNESS is a correctness question this
-  round deliberately did not settle.
-- **A CORRECTION TO ROUND 846: THE RESIDUAL IS NOT THE FRONT END.** 846 priced it as `wall −
-  checkerInitNanos` = 11.1%. With the `FrontEnd` probe in the SAME warm process: front end proper
-  **663 ms = 8.79%**, post-checker tails **143 ms = 1.90%** — and **806.4 against the residual's
-  812.7 = a 99.2% partition check between two probes sharing no code, inside one process.** They
-  warm **4.38×** and **1.27×**; the 1.9% has the worst ratio of any region measured and NO probe
-  below it (**(WARM.8)**). The cold equivalent of that check does NOT hold (3,085 vs 3,515) because
-  there the two arms are different JVMs — a cross-process residual is not a partition check and is
-  not quoted as one.
-- **INSIDE THE FRONT END, WHAT STAYS WARM IS THE FLOW GRAPH, NOT THE I/O.** config **41×**, crawl
-  **7.52×**, `extractRelativeImports` **17.5×**, `bindLexicalScopes` **6.44×** all collapse;
-  `FlowGraphBuilder.build` warms **2.73×** and its walk is **316.7 ms = 4.20% of the warm
-  artifact** — the largest single region outside `checkSpine`, at 1.34 µs/node over 236,587 nodes
-  against round 801's cold 3.0. Round 801 measured and CLOSED that region; its warm SHARE is
-  higher (3.30% → 4.20%), which is a reason to re-read the closure, not to re-derive it.
-- **BUILT: a `frontend` tier for `BenchMain`.** The `FrontEnd` probe (round 738; its bind level,
-  round 801) had never been run inside a warm process for exactly the reason round 851 gave about
-  the largest spine handler — **it had no tier name.** It needs no `*coarse` twin (per-FILE spans,
-  78 files, microseconds against a ~900 ms region) and measured free in both regimes (−356 / −612 /
-  +70 / +271 ms against its process median, straddling zero, same as `rows`). `BenchFrontEndTierTest`
-  (4 pins) is built to fail **if the tier were INERT** — the fixture records through
-  `FrontEnd.addCrawlFile`/`close` INSIDE `measureTier`'s build lambda and asserts the recorded
-  `4242 chars` and the bind row are in the text, so dropping the arm from `tierBegin`, or reordering
-  the disarm before the dump, reddens it; a negative control asserts the same calls are no-ops off
-  the tier.
-- **WHAT DID NOT WORK / WAS NOT DONE, stated up front.** The two slow passes were **not**
-  sub-partitioned with an in-situ probe — the attribution rests on the standalone scan costing more
-  than each whole row plus both passes containing it, and (WARM.7)'s first step is that span, not an
-  edit. `init:buildFileLocalTypeMaps`'s warm prize (round 829's deletable 47.1% projected onto 3.56%
-  = ~1.68%) is an ARITHMETIC PROJECTION of a population share onto a ms row, not a measurement, and
-  its warm draw spread is **41%**, the widest in the top 12. No `spine` tier was taken, no A/B was
-  run, nothing was optimized, and no `commonMain` code changed.
-- **GATES (all three, one at a time, all BEFORE the daemon stop — round 851).** Suite
-  **14,040 / 0 failures / 3 skipped** (core 13,963 + api 27 + client 18 + daemon 32, counted with
-  `xml.etree` over all four modules' XMLs); `cost_gate.py` **+0.00% on all 20 counters**;
-  `huge_methods.py --fail-over 0` **649 classes / 14,567 methods / 0 over the limit**. The build was
-  warning-clean. The measuring script carries a round-853 positive control — it aborts unless the
-  test class dir holds `BenchFrontEndTierTest.class`, a class that did not exist before this round,
-  so a stale directory cannot satisfy it.
-
 **TOP OF QUEUE (owner-requested 2026-07-26, round 684) — work this before PERF.**
 
 - [x] **(NARROW.2)(a) — CLOSED round 838. An `instanceof` whose RHS is a CONSTRUCTOR VALUE
@@ -1333,7 +1271,17 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   A/B is DISCARDED**: batch 1 -4.42% B wins 2/2, batch 2 -1.04% 1/2 and NOISE-DOMINATED, per-arm sd 1.40%
   and 3.47% — round 840(c) exactly. `docs/perf/warm-leaf-profile.md` §§ 9-13.
 
-- [ ] **(WARM.17) — `CtaFrame.varTypes`: THE MOST WASTEFUL COPY RATIO OF THE SIX, AND TWO SEPARATE
+- [x] **(WARM.17) — RE-TAKE THE WARM LEAF PROFILE, AND ACT ON ITS TOP NEW CANDIDATE.** DONE round 870.
+  Validity check passed (the two fixed families are gone from the profile's own table: barrel search
+  **471 -> 61 ms**, annotation frames **153 -> 40 ms**, the latter within 13% of round 869's independent
+  amplifier). Nothing new rose into their place. Top surviving candidate `computeTypeParamInfo` priced
+  INDEPENDENTLY at **82 ms = 1.16%** by `FrontEnd.TPI` (deterministic to the unit over two processes) and
+  taken: `buildModuleSymbolScanIndex` moves the whole-program `binderResults x locals` module-symbol scan
+  out of the memo miss, **2,992,718 -> 2,277 scanned, 82 -> 15 ms**, over an identical population.
+  Captured **0.95%**; the 15 ms residue (0.21%) is below the floor and deliberately left.
+  `docs/perf/warm-leaf-profile.md` §§ 14-20.
+
+- [ ] **(WARM.19, was (WARM.17) until round 870 took that label) — `CtaFrame.varTypes`: THE MOST WASTEFUL COPY RATIO OF THE SIX, AND TWO SEPARATE
   IMPROVEMENTS SIT IN IT.** Round 869's census: **1,145,523 entries copied for 2,564 writes = 0.22%**,
   30,433 pushes, mean 37.6. (a) It is built with `toMutableMap()`, i.e. a **LinkedHashMap** (round 483's
   trap, still live), although a grep for `.keys/.values/.entries/.forEach/.map/.iterator/.sorted` over all

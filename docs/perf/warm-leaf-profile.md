@@ -461,3 +461,291 @@ a grep for `.keys/.values/.entries/.forEach/.map/.iterator/.sorted` over all 211
 order. Two separate improvements sit there (the map flavour, and the copy), and
 the copy needs a per-frame replay flag because some frames share the map on
 purpose. Queued as (WARM.17).
+
+---
+
+# (WARM.17) The profile RE-TAKEN, and its top new candidate priced — round 870 (2026-08-09)
+
+**Nothing above this line is rewritten. § 0–§ 8 are round 868's record and
+§ 9–§ 13 are round 869's; this section is the DIFF against them, which is the
+deliverable.**
+
+## 14. Why re-take it, and the instrument's own validity check
+
+Rounds 868 and 869 removed ~711 ms from the warm rebuild — 581 ms by
+`StarExportIndex` and 129.7 ms by `AnnScopeStack` — on a wall of ~7.5 s. That is
+~10% of the artifact, concentrated in two specific places, so **every share in
+§ 3's table is a share of a denominator that no longer exists** and the ranking
+could have reordered.
+
+Same recipe (`scripts/round870-warm-leaf.sh`, cloned from round 868's), same
+window, two processes. The aggregation is now a committed instrument,
+`scripts/leaf_owner_profile.py`, which carries round 868's three traps as code:
+it REFUSES a `jfr print` dump whose deepest stack is 5 frames (the
+`--stack-depth` trap), filters to the compile thread, and charges stdlib leaves
+to the nearest non-stdlib OWNER.
+
+**Round 868's dumps were re-aggregated with the SAME script**, so the two tables
+below differ in nothing but the binary. (It reproduces § 3's published numbers
+row for row, with one deliberate difference: `kotlin.*` is charged through to
+its caller here, so round 868's `MapsKt__MapsKt.toMutableMap` row is distributed
+into `ctaFnBodyFrame` / `ctaSpineEnter` rather than standing alone.)
+
+| | round 868 | round 870 |
+| --- | ---: | ---: |
+| median warm rebuild | 7,814 / 7,717 ms | **7,089 / 7,048 ms** |
+| compile-thread samples | 8,026 / 8,010 | 8,002 / 7,990 |
+| max stack depth | 140 / 171 | 210 / 220 |
+| `checkSpine` INCLUSIVE | 73.66% / 72.83% | 75.28% / 74.34% |
+
+The `checkSpine` row is the sanity check the round-868 trap demands: this arc's
+independently-known figure is ~74%, and both runs land on it.
+
+### 14.1 THE VALIDITY CHECK — did the two fixed families disappear?
+
+Yes, and this is the table that says whether anything above may be believed.
+Shares are of compile-thread samples, run 1 / run 2, by nearest non-stdlib
+owner (SELF):
+
+| owner | 868 | 870 |
+| --- | ---: | ---: |
+| `computeExportedFnDeclsThroughStars` | 2.79% / 2.50% | **0.24% / 0.18%** |
+| `computeExportedVarDeclThroughStars` | 1.56% / 1.31% | **0.26% / 0.16%** |
+| `resolveBarrelStarTarget` | 1.20% / 0.99% | **0.00% / 0.00%** |
+| `spineOsPushCopy` | 0.92% / 0.85% | **0.00% / 0.00%** |
+| `spinePdPushCopy` | 0.65% / 0.84% | **0.10% / 0.06%** |
+| `buildStarExportIndex` (round 868's replacement) | — | 0.04% / 0.00% |
+| `AnnScopeStack` (round 869's replacement) | — | 0.49% / 0.35% |
+
+**Both replacements appear exactly where they should, and cost a fraction of
+what they replaced.** Summed by family and converted to ms per rebuild:
+
+| family | 868 | 870 | Δ |
+| --- | ---: | ---: | ---: |
+| the `export *` barrel search (incl. its index) | 471.2 ms | 61.0 ms | **−410.2** |
+| the two annotation scope frames (incl. `AnnScopeStack`) | 153.0 ms | 39.8 ms | **−113.3** |
+
+The second is a genuine cross-instrument agreement: round 869 priced the two
+annotation families by AMPLIFICATION at **129.7 ms** and this profile, which
+knows nothing about that measurement, reads **113.3 ms** — 13% apart. The first
+under-reads the census's 581 ms by 29%, in the expected direction: a leaf
+profile charges a removed subtree's callees (`moduleNamedExportsOf`, symbol
+resolution) to themselves, where the census's span contained them.
+
+### 14.2 THE DENOMINATOR TRAP — a share is not comparable across rounds
+
+The JFR window is a fixed 90 s of steady state, so the sample count is a
+constant (~8,000 in both rounds) and **a share is a share of WALL TIME, not of a
+rebuild.** A per-rebuild cost that did not change therefore READS HIGHER after
+the compile got faster, by exactly 7,766/7,068 = **1.099**. Every cross-round
+comparison below is in **ms per rebuild** (share × that round's median) for that
+reason, and a row that "rose" by less than 10% did not rise at all.
+
+## 15. The ranked table — round 868 versus round 870, in ms per rebuild
+
+Share run 1 / run 2 for each round, then ms/rebuild and the delta. Column 6 maps
+the row onto what this arc has already attributed; **a row that is
+already-attributed checking work is NOT a finding.**
+
+| # | owner | 868 | 870 | ms 868 | ms 870 | Δ | already attributed? |
+| ---: | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| 1 | `Checker.cpaSpineLeave` | 1.78/1.62% | 1.64/1.63% | 132.2 | 115.4 | −16.8 | yes — round 847 warm handler #3 |
+| 2 | `Checker.ctaFnBodyFrame` | 1.17/1.39% | 1.67/1.38% | 99.3 | 107.8 | +8.6 | partly — SPINE.1, and it now absorbs the `toMutableMap` leaf |
+| 3 | `Checker.ctaSpineEnter` | 1.22/1.17% | 1.80/1.25% | 93.0 | 107.8 | +14.9 | yes — round 847 #4, same absorption |
+| 4 | **`Checker.computeTypeParamInfo`** | 1.35/0.97% | 1.47/1.35% | 90.1 | **99.9** | +9.8 | **NEW — flagged unpriced by round 868; TAKEN this round** |
+| 5 | `FlowGraphBuilder.recordFlow` | 1.13/1.57% | 1.22/1.35% | 105.1 | 91.1 | −14.0 | yes — round 864 (FLOW_BIND) |
+| 6 | `NodeWalkKt.forEachChild` | 1.40/1.22% | 1.29/1.21% | 101.7 | 88.4 | −13.3 | yes — round 803 split it; it is the walk |
+| 7 | `Checker.getUnionType` | 0.92/1.06% | 1.04/1.15% | 77.0 | 77.4 | +0.4 | yes — type construction |
+| 8 | `Checker.spineWalkFile` | 1.06/1.14% | 0.96/0.93% | 85.2 | 66.7 | −18.5 | yes — the spine walk |
+| 9 | `Checker.lookupPerFileForNode` | 0.61/0.57% | 0.99/0.83% | 46.0 | 64.1 | +18.1 | yes — INV.3(c), ~2 M calls/compile |
+| 10 | `Checker.ciaMutualFnDecls$resolve` | 1.13/1.24% | 1.40/0.38% | 92.0 | 62.7 | −29.3 | NEW but **DISCARDED — does not replicate** (3.7× between processes) |
+| 11 | `Checker.spineArgListOverlay` | 0.76/0.64% | 0.94/0.80% | 54.2 | 61.4 | +7.2 | partly — round 868's (C2), a per-scope copy |
+| 12 | `Checker.narrowTypeFromFlowCore` | 0.72/0.79% | 0.89/0.81% | 58.6 | 60.1 | +1.5 | yes — round 735 priced the narrowing tail |
+| 13 | `Checker.spineEnterNode` | 0.71/0.59% | 0.76/0.83% | 50.4 | 56.1 | +5.8 | yes — the dispatch spine (WARM.13/14) |
+| 14 | `Checker.getTypeOfIdentifier` | 0.66/0.59% | 0.66/0.84% | 48.4 | 53.0 | +4.6 | yes |
+| 15 | `Checker.lexLevelHasName` | 0.74/0.46% | 0.62/0.81% | 46.5 | 50.8 | +4.4 | yes — INV.4(c)(ii) |
+| 16 | `Checker.objectLiteralSatisfiesAugmentationMergedInterface` | 0.52/0.41% | 0.65/0.66% | 36.3 | 46.4 | +10.1 | NEW — **0.66%, below the 1% floor** |
+| 17 | `Checker.getTypeOfSymbol` | 0.49/0.81% | 0.72/0.56% | 50.4 | 45.5 | −4.9 | yes |
+| 18 | `Checker.getTypeFromTypeNodeCore` | 0.51/0.75% | 0.55/0.71% | 48.9 | 44.6 | −4.3 | yes |
+| 19 | `FlowGraphBuilder.scanReassignedEntriesFast` | 0.69/0.61% | 0.59/0.64% | 50.4 | 43.3 | −7.0 | yes — round 862 rewrote it |
+| 20 | `Checker$Relation.get` | 0.64/0.21% | 0.64/0.59% | 32.9 | 43.3 | +10.4 | yes — relation cache probe |
+
+Six of round 868's top-20 rows are gone entirely (the four star walks and the
+two copy pushers). **Nothing NEW rose into their place**: the rows that moved up
+are the ones that were already there, at an unchanged ms, against a smaller
+denominator — which is § 14.2's trap and the single most likely way to misread
+this table.
+
+The allocation-family shape is unchanged and its two readings still hold:
+`HashMap`/`HashSet` **26.6% / 27.3%** of compile-thread samples (868: 26.8/25.9),
+own code 57.0/58.2, `String` 6.3/5.7, `ArrayList` 4.6/4.3, and
+**`java.util.regex` 0.04% / 0.13%** — 3 and 10 samples in 16,000, i.e. round
+863's "the class is exhausted on this profile" survives two rounds of change.
+
+## 16. The candidate — and what it cost to establish it is one
+
+After discarding every already-attributed row, one candidate is above the 1%
+decision floor and replicates: **`computeTypeParamInfo`, 1.47% / 1.35%**. It is
+the MISS body of `getTypeParamInfo`'s memo, and round 868's own table already
+carried it as "**NEW** — memoized, so this is the MISS population" without
+pricing it.
+
+`ciaMutualFnDecls$resolve` is DISCARDED although it is bigger in run 1 than the
+candidate: 1.40% against 0.38% is a 3.7× spread on one binary, and round 868's
+rule is that a share which does not replicate across processes is not a share.
+`objectLiteralSatisfiesAugmentationMergedInterface` replicates cleanly
+(0.65/0.66%) and is simply too small.
+
+### 16.1 The independent price — a counter+span census, not the profile
+
+`FrontEnd.TPI` (armed by `--frontEnd`), one timestamp pair per MISS, with a
+census beside it. **Deterministic to the unit across two processes**
+(82,316,551 ns and 82,273,289 ns, 0.05% apart; every count identical):
+
+```
+tpi census: calls 28663, misses 1077 (3%, 82 ms); file probes 45906,
+            ns symbols scanned 2992718 (2778/miss), of which module 2184;
+            answered 880, null 197
+```
+
+**82 ms on a ~7,050 ms warm rebuild = 1.16%** — agreeing with the profile's
+99.9 ms to within 18%, two instruments, two mechanisms.
+
+The population is the finding, and it is not the one the row's size suggests.
+The memo works: **96.2% of the 28,663 questions are answered from it.** The cost
+is entirely in what a MISS does, and specifically in its second of three
+lookups — "is this name exported by some namespace anywhere in the program?",
+answered by iterating EVERY entry of EVERY file's `locals` and testing
+`SymbolFlags.Module` on each:
+
+> **2,992,718 symbols iterated to reach 2,184 module-flagged ones — 99.93% of
+> the scan re-decides a question that is a property of the binder tables and not
+> of the name being asked.**
+
+Which symbols are namespaces cannot depend on the name. Only their `exports`
+probe can.
+
+## 17. What landed, and the CONTROLLED row
+
+`buildModuleSymbolScanIndex` (commonMain, `internal`, its own file so every rule
+is pinned directly rather than through a compile) returns the program's module
+symbols in the scan's exact order — `binderResults` order, then each file's
+`locals` insertion order, **duplicates preserved**, because one `Symbol`
+instance really is reachable from two files' `locals` (that is what
+`mergeModuleAugmentations` creates) and the scan probed it once per table.
+
+The `exports` table is deliberately NOT indexed: it is a `var` the checker's own
+merging writes to, so the probe stays live and in place.
+
+**When it may be frozen.** The module-symbol SET is settled by init pass 1b
+(`mergeModuleAugmentations`, the only place the checker adds an entry to a
+file's `locals` or sets a `Module` bit on one), which runs in the setup block
+long before any checking pass — and `getTypeParamInfo`'s memo has been freezing
+whole ANSWERS over those same tables since round 481, so caching the LIST is
+strictly weaker than an assumption this function has relied on for 389 rounds.
+It is nonetheless built lazily, at the first miss, so its disagreement window is
+contained in that of the memo above it.
+
+The row is CONTROLLED in round 793's sense — the change moves no boundary and no
+population:
+
+| | before | after |
+| --- | ---: | ---: |
+| `getTypeParamInfo` calls | 28,663 | 28,663 |
+| memo misses | 1,077 | 1,077 |
+| loop-1 file probes | 45,906 | 45,906 |
+| module `exports` probes | 2,184 | 2,184 |
+| answered / null | 880 / 197 | 880 / 197 |
+| **ns symbols scanned** | **2,992,718** | **2,277** |
+| **`FrontEnd.TPI`** | **82 ms** | **15 ms** |
+
+**1,314× less scanning over an identical population; 67 ms captured = 0.95% of
+a warm rebuild.**
+
+That is said plainly rather than rounded up: the CANDIDATE priced at 1.16%,
+above the decision floor, which is what justified building anything; the
+CAPTURE is 0.95%, and the 15 ms residue is loop 1's 45,906 per-file hash probes
+plus the live `exports` probes — **0.21%, below the floor, and deliberately not
+taken.** No whole-rebuild A/B is quoted: rounds 869 § 13 and 858 both measured
+that a two-batch `ab-warm.sh` on an effect of this size cannot separate drift
+from result, and the controlled row needs no help.
+
+## 18. Pins and ablation
+
+`ModuleSymbolScanIndexTest`, 11 pins, all over strings, ints and identity —
+never a `Symbol` or an AST node, whose power-assert rendering is its whole
+subtree. Nine single-mistake ablations, one arm per invocation, each reverted
+before the next, on a committed tree (`scripts/round870-ablate.sh` +
+`round870_ablate_apply.py`; every arm dry-run first for a real diff and a clean
+revert, per rounds 855/856):
+
+| arm | the mistake | pins reddened |
+| --- | --- | ---: |
+| A1 | membership gate reads `ValueModule` only | 1 |
+| A2 | membership gate reads `NamespaceModule` only | 8 |
+| A3 | no membership gate — every local symbol admitted | 3 |
+| A4 | file order reversed | 2 |
+| A5 | within-file order sorted by name | 1 |
+| A6 | duplicates dropped by Symbol INSTANCE | 1 |
+| A7 | duplicates dropped by NAME | 2 |
+| A8 | only the first module symbol of each file kept | 1 |
+| A9 | the index carries a COPY of each symbol | 1 |
+
+A1 and A2 exist as a PAIR on purpose: CLAUDE.md records that
+`SymbolFlags.Module` is the UNION of `ValueModule` and `NamespaceModule`, that
+the binder gives them to different syntax, and that a rule written with either
+half alone compiles and silently loses the other. A single "the gate is wrong"
+arm would have been satisfied by either.
+
+**A6 initially left every pin green, and the honest reading is that the fixture
+set could not express it, not that the guard is redundant** — the binder gives
+each file its own symbol, so nothing built through it puts one instance into two
+`locals` tables, although `mergeModuleAugmentations` does exactly that in a real
+program. Following round 869's rule (a pin or an arm without a uniquely-its-own
+failure is recorded, not counted), an 11th pin was cut that builds that state by
+hand, and A6 now reddens it and nothing else.
+
+**Two things are reported rather than claimed.** `an empty program has an empty
+index` is UN-ABLATED and structurally un-ablatable: every arm maps an empty
+input to an empty output, so no mistake at this seam can break it — the same
+shape as round 868's `an unresolvable specifier contributes no edge`. And **A5
+and A8 share a red set**: they are different defects (a re-sort, and a truncation
+to one entry per file) that the same within-file-order pin catches, so no pin
+separates them and they are one discriminated position, not two.
+
+Every other arm has a distinct red set, and **10 of the 11 pins are reddened by
+at least one arm.**
+
+## 19. Gates
+
+- Suite **14,150 / 0 / 3** over all four modules (`xml.etree`), = 14,139 + the
+  11 new pins, exactly.
+- `cost_gate.py` **+0.00% on all 20 counters**.
+- `huge_methods.py --fail-over 0` — `OVER THE LIMIT: 0`, exit 0.
+- **8-profile grid, BOTH arms rebuilt from source and diffed in both
+  directions: added = 0 / removed = 0 on all eight.** Eight distinct captures;
+  compiler digest `59d930db…`, the recipe CLAUDE.md records. Round 853's
+  positive control both ways: the AFTER dir holds `ModuleSymbolScanIndexKt` and
+  the BEFORE dir does not (665 vs 664 classes), so a stale or mis-pointed dir
+  cannot make the arms agree by being the same dir twice.
+
+## 20. What was NOT done
+
+- **`lookupPerFileForNode` (64 ms) and `objectLiteralSatisfiesAugmentation-
+  MergedInterface` (46 ms)** are the next NEW-ish rows and both are below the
+  1% floor on their own. Recorded, not taken.
+- **`ciaMutualFnDecls$resolve` is unpriced and its share is not actionable** —
+  1.40% versus 0.38% between two processes of the same binary. If a later round
+  wants it, the profile cannot be the instrument; a census can.
+- **(C3), `ArrayList.clear` on the ~47 ancestor-walk buffers, is STILL
+  unpriced** and stays queued exactly as round 869 left it (§ 13): it is round
+  623's bias class, its samples are spread over twice as many call sites as
+  there is work, and it needs an ELEMENTS-cleared census or amplification.
+- **`CtaFrame.varTypes`** — the worst produced-versus-consumed ratio of round
+  869's six copy families (1,145,523 entries for 2,564 writes) and still a
+  `LinkedHashMap` with zero order consumers. Its owners (`ctaFnBodyFrame`,
+  `ctaSpineEnter`) are rows 2 and 3 of § 15 precisely because they absorb its
+  `toMutableMap` leaf. Not taken here: it is deliberately SHARED at some frames
+  and copied at others, so an undo log needs a per-frame replay flag, and it is
+  `currentLocalTypes` territory — the false-positive class round 869 declined
+  for the same reason.
