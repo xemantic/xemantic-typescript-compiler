@@ -20,6 +20,105 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 863 (2026-08-09) — (WARM.10): THE WHOLE-PROGRAM REGEX CLASS IS SWEPT SYSTEMATICALLY RATHER THAN
+HIT BY ACCIDENT, AND THE ONE OFFENDER LEFT WAS ON THE **EMIT** PATH, WHERE NO INSTRUMENT IN THIS REPO
+COULD SEE IT: `Transformer.transform`'s jsxRuntime pragma scan, **44.1 ms -> 1.66 ms = 42.5 ms = 0.53% of
+a warm EMIT rebuild, a 96.2% fall.**** `docs/perf/whole-program-regex-census.md`.
+
+- **THE CLASS, STATED SO MEMBERSHIP IS DECIDABLE.** `Pattern.compile` hands a pattern to `BnM.optimize`
+  (Boyer-Moore) only when its root is a literal `Slice`, and `BnM.optimize` returns the node unchanged when
+  that literal is **shorter than four characters**. So `\b…`, `(?m)^…`, an alternation, a character class, a
+  lookaround **and a one-to-three-character literal** all produce a `Start` root whose `match` loops over
+  every offset. A bare `^` WITHOUT `(?m)` is the exception — it compiles to `Begin` and is attempted once.
+  Rounds 860 and 862 each found one member of this class by accident; this round enumerated it.
+
+- **THE CENSUS IS THE ROUND'S FIRST DELIVERABLE AND IT IS COMPLETE.** All **110** `Regex` construction
+  sites in `commonMain`, classified by SUBJECT (whole-file / whole-json / substring / small), by frequency
+  and gate, and by literal prefix. **21 have a WHOLE-FILE subject; exactly ONE is both ungated and
+  prefix-less on the compiler profile** — `Transformer.kt:488`, whose leading literal is a slash-star, TWO
+  characters, run over the full text of every transformed file under **no gate whatsoever**.
+
+- **IT WAS INVISIBLE FOR A STRUCTURAL REASON, NOT AN OVERSIGHT.** Round 738's `skipEmitOutputs` gate means
+  `--noEmit` never enters `Transformer.transform`, so `BenchMain` (check-only in three hard-coded places),
+  `cost_gate.py` and the `--noEmit --listAll` 8-profile grid are blind to it **at once**. The instrument had
+  to be built before the defect could be priced — the same shape round 859 recorded for `FrontEnd` and round
+  851 for the largest spine handler, one level further out: **it had no MODE, not just no tier name.**
+
+- **BUILT: `BenchMain`'s EMIT mode** (5th argument, parsed by `parseEmitFlag`, split out because `main`
+  compiles a whole project and no pin can run it). Its vocabulary is CLOSED — an unknown 5th argument is an
+  error, never a silent `false`, because the damage is not a crash but a run that quietly measures the OTHER
+  mode, and the two modes are different compiles (round 739). Plus `FrontEnd.TR_JSXPRAGMA`, one timestamp
+  pair per FILE inside `TRANSFORM`, with the population census that separates "this row is big" from "this
+  row is big and buys nothing".
+
+- **MEASURED** (`BenchMain <proj> 3 8 frontend,frontend emit`, 2 processes x 2 draws per arm, all 8
+  instrumented rebuilds answering 78 files / 46 errors): before **44.139 ms** (45.886 / 44.092 / 43.243 /
+  43.336, spread 6.0%), after **1.662 ms** (1.711 / 1.665 / 1.637 / 1.637, spread 4.5%) — **42.48 ms =
+  0.531%** of the before arm's warm emit wall, the row falling **96.2%**. Census bit-identical in both arms:
+  **78 files, 9,977,097 characters, 0 pragmas found.** Cold the same row reads 62 ms, i.e. it warms 1.4x
+  against `checkSpine`'s 3.27x — exactly the ratio round 859 measured for the other members of this class.
+
+- **THE PARENT ROW CANNOT SEE THE SAVING, AND SAYING SO IS PART OF THE RESULT.**
+  `Transformer.transform` reads 782 / 789 / 894 / 919 ms before and 860 / 862 / 889 / 948 after: a 17.5%
+  draw spread with a ~14% BETWEEN-PROCESS effect inside the before arm alone, **3x the 42 ms being
+  measured**, so a before/after comparison of the parent row would have reported the wrong SIGN. The
+  sub-row is the measurement. Round 854's lesson about differencing a `--passTiming` row across arms, one
+  level in.
+
+- **THE CLASS IS NOW EXHAUSTED ON THIS PROFILE, AND THAT IS MEASURED.** A JFR discovery run of the same
+  warm EMIT compile: **64 of 9,541 samples** carry a `java.util.regex` frame and **54 of those 64 are
+  `Transformer.transform`**; the rest is `RealLibResolver.referencedLibNames` (7 samples ~ 6 ms ~ 0.07%),
+  the include/exclude globs, `Parser.checkTripleSlashSelfReference` and `Transformer.generateModuleTempName`
+  at one each. No fourth offender above the round's 0.2% floor; what was left is named. Used for DISCOVERY
+  only — round 623's law stands, a JFR self-% is not a price. (Trap worth keeping: `jfr print` truncates its
+  DISPLAY to five frames unless `--stack-depth` is passed, which reads exactly like "the JVM did not record
+  the caller" — the first aggregation attributed 59 of 60 samples to `<truncated>`.)
+
+- **ROUNDS 793, 801 AND 846, ANSWERED BEFORE THE SAVING WAS QUOTED.** No boundary vanishes — the probe is
+  present in BOTH arms with 78 calls, so there is nothing to subtract. Nothing MOVES — the scan's only
+  output is one boolean per file, the census reads 0 pragmas in both arms, and the emitted tree is
+  byte-identical; this is the same value computed by a cheaper method, not a skip whose work reappears. And
+  first-draw-is-slowest reproduces in 1 of 2 before-arm processes (the other pair inverts by 0.2%); dropping
+  every first draw gives 42.06 ms = 0.526%, inside the quoted figure.
+
+- **LANDED AS AN EXACT REWRITE, NOT A GATE** — round 860's law, for round 792's reason: a gate is a claim
+  about where a construct may legally appear and these profiles cannot falsify one. `scanJsxRuntimePragmas`
+  is anchored on the literal `@jsxRuntime` via `indexOf` (tsc's sources carry **0** of those in 9,977,097
+  characters, so the scan is one linear sweep), `jsxRuntimePragmaRegex` stays LIVE as the specification a
+  12,000-case differential holds it to, and the rewrite removes a regex-DIALECT hazard from `commonMain`.
+  The two non-obvious terms: regex `\s` is **narrower** than `Char.isWhitespace()` (which also accepts
+  `Character.isSpaceChar`, i.e. NBSP), and matches may not OVERLAP — a pragma whose closing star-slash is
+  followed by another star offers the next candidate an opening slash-star that `findAll` never sees.
+
+- **MOST OF THE CLASS IS GATED TO ZERO ON THIS PROFILE, NOT ABSENT, AND NOTHING WAS DONE ABOUT IT.** Nine
+  whole-file prefix-less matchers cost nothing here only because tsc's own sources carry no `.js`, no
+  `.d.ts`, no `resolveJsonModule` and a NodeNext module setting: on an `allowJs` project FOUR independent
+  lazy JSDoc-block scans sweep the same text, on a `commonjs` project every file containing the word `await`
+  gets a `(?m)^` sweep at every parse site, on a `@types` tree the UMD pattern returns. Per round 792 a
+  profile that does not contain a shape cannot justify a change about it — they are recorded in the census
+  so the next agent measuring a different project shape knows where to look, and not acted on.
+
+- **ABLATION, SIX MISTAKES ONE AT A TIME (round 807), 26 pins per arm.** **M1** the non-overlap cursor
+  dropped -> 2 RED, uniquely the overlap pin; **M2** `\s` widened to `Char.isWhitespace()` -> 2, uniquely
+  the NBSP pin; **M3** the forward `\s+` weakened to `\s*` -> 2, uniquely the near-miss pin; **M4** the
+  transformer takes the FIRST pragma instead of the LAST -> 1, uniquely `the last pragma in the file wins`;
+  **M5** the harness flag defaults instead of failing -> 1, uniquely its own negative control; **M6** the
+  scanner finds NOTHING -> 6, uniquely both END-TO-END positive controls. **Every mistake has a
+  uniquely-its-own failure and no two failing sets coincide.** M6 exists because the differential battery is
+  weakest against an all-empty scanner (which agrees with the oracle on every case the oracle also rejects),
+  and it is what proves the positive controls are load-bearing rather than redundant guards. Stated plainly:
+  **the battery itself never fails ALONE** — it is the general net, the only pin that would catch an
+  unanticipated divergence, but it attributes nothing and is not claimed as coverage. M4 is the one that
+  matters most, on round 862's pattern: taking the first pragma is silently WRONG rather than slow.
+
+- **GATES.** Suite 14,072 -> **14,090 / 0 failures / 3 skipped** (real XML parser over all four modules);
+  `cost_gate.py` **+0.00% on all 20 counters** at every sub-step; `huge_methods.py --fail-over 0` **0 over
+  the limit**, 653 classes; 8-profile grid **`added=0 removed=0` in both directions** from two class dirs
+  (652 vs 653, round 853's positive control) — run as a CONTROL, because it is structurally blind to a value
+  that reaches no diagnostic — and the gate that CAN see it, **EMIT mode `diff -r` of the compiler profile,
+  78 files from each arm, IDENTICAL**. Round-851 order throughout; the before arm was rebuilt in the
+  FOREGROUND with `git status` checked either side (round 805). Commits `fa2e5f27`, `49256c56`, `9c7425a2`.
+
 **Round 862 (2026-08-09) — (WARM.8)(c) LANDED, AND THE QUEUE ITEM WAS THE SMALLER HALF OF ITS OWN
 PRIZE: `cpcRequireOnlyOrphans` GOES 138.7 ms -> 0.0005 ms AND THE WHOLE POST-CHECKER REGION
 141.9 -> 2.84 ms = 139.1 ms = 1.82% OF A WARM REBUILD, 98.0% OF THE REGION — OF WHICH 136.4 ms
@@ -1147,6 +1246,31 @@ round 843, and the ladder it re-measured moved 40%. `docs/perf/warm-jvm-attribut
   to the corpus. Gates: suite 14,060 then 14,061 / 0 failures / 3 skipped, `cost_gate.py` +0.00% on
   all 20 counters both times, `huge_methods.py --fail-over 0` 0 over the limit both times. Commits
   `61194621`, `9eedc04b`. `docs/perf/warm-tail-attribution.md` § 12.
+
+- [x] **(WARM.10) — DONE, ROUND 863. THE WHOLE-PROGRAM REGEX CLASS IS SWEPT, AND THE LAST OFFENDER WAS ON
+  THE EMIT PATH: `Transformer.transform`'s jsxRuntime pragma scan, **44.1 ms -> 1.66 ms = 42.5 ms = 0.53%
+  of a warm EMIT rebuild, a 96.2% fall**.** Rounds 860 and 862 each hit this class by accident, so it was
+  promoted and enumerated. Membership is decidable: `BnM.optimize` gives Boyer-Moore only to a pattern whose
+  root is a literal `Slice` of **>= 4** characters, so `\b`, `(?m)^`, an alternation, a character class and a
+  1-3 character literal all mean every offset of the text is attempted. The census
+  (`docs/perf/whole-program-regex-census.md`) covers all **110** `Regex` sites in `commonMain` by SUBJECT and
+  by prefix: **21 are WHOLE-FILE and exactly ONE is both ungated and prefix-less here** — its literal is a
+  slash-star, TWO characters, over the full text of every transformed file. **It was invisible because
+  round 738's emit gate makes `--noEmit` skip the transformer entirely**, so `BenchMain`, `cost_gate.py` and
+  the `--noEmit --listAll` grid were blind at once; the round had to BUILD the instrument (an `emit` mode for
+  `BenchMain` with a closed flag vocabulary, plus `FrontEnd.TR_JSXPRAGMA` and its census) before it could
+  price anything. Measured 2 processes x 2 draws: 44.139 -> 1.662 ms over 9,977,097 characters finding **0**
+  pragmas in both arms; the PARENT row cannot see it (17.5% draw spread, ~14% between-process effect = 3x the
+  effect) and that is recorded. Landed as an EXACT rewrite anchored on `@jsxRuntime`, the pattern kept live as
+  the oracle of a 12,000-case differential; the two non-obvious terms are that regex `\s` is narrower than
+  `Char.isWhitespace()` and that matches may not overlap. Class exhausted on this profile per a JFR discovery
+  run (64 of 9,541 samples reach `java.util.regex`, **54 of them this site**); `RealLibResolver.referencedLibNames`
+  (~6 ms) left, and the nine members gated to zero here are recorded rather than acted on (round 792). Ablation
+  six mistakes one at a time, 26 pins per arm: M1 2 RED, M2 2, M3 2, M4 1, M5 1, M6 6 — every mistake with a
+  uniquely-its-own failure, and the battery recorded as the general net rather than claimed as attribution.
+  Gates: suite **14,090 / 0 / 3**, `cost_gate.py` +0.00% on all 20, `huge_methods.py --fail-over 0` 0 over the
+  limit, grid `added=0 removed=0` both directions (control), EMIT `diff -r` 78 files IDENTICAL (the real gate).
+  Commits `fa2e5f27`, `49256c56`, `9c7425a2`. `docs/perf/whole-program-regex-census.md`.
 
 - [x] **(WARM.8)(c) — DONE, ROUND 862, AND THE QUEUE ITEM WAS THE SMALLER HALF: `cpcRequireOnlyOrphans`
   goes **138.7 ms -> 0.0005 ms** and the whole post-checker region **141.9 -> 2.84 ms = 98.0% of the
