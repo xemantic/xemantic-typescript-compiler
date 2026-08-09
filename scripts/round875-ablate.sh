@@ -126,12 +126,24 @@ new=old+'        if (ReachCensus.on) return TAV_UNREACHED\n'
 open(p,'w').write(s.replace(old,new,1))
 EOF
        ;;
+    # A7 — a counter loses its `on` guard, so the instrument is no longer
+    # behaviour-free when off: it costs production one increment per fold and
+    # pollutes whatever tier runs next with a census nobody armed. Only the
+    # negative control can see it.
+    A7) python3 - <<'EOF'
+p='xemantic-typescript-compiler-core/src/commonMain/kotlin/Checker.kt'
+s=open(p,errors='replace').read()
+old='        if (ReachCensus.on) ReachCensus.calls[ReachCensus.CE]++\n'
+assert s.count(old)==1
+open(p,'w').write(s.replace(old,'        ReachCensus.calls[ReachCensus.CE]++\n',1))
+EOF
+       ;;
     *) echo "unknown arm: $1" >&2; return 9 ;;
   esac
 }
 
 ARMS=("$@")
-[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5 A6)
+[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5 A6 A7)
 
 for arm in "${ARMS[@]}"; do
   echo "== $arm dry-run $(date)" | tee -a "$OUT/log"
