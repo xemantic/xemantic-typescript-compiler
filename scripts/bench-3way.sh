@@ -35,8 +35,17 @@
 #                     Round 771: ~1.97x the JVM cold, output byte-identical on all
 #                     8 profiles — see docs/perf/aot-native-image.md.
 #   --project NAME    tsc subproject profile (default compiler)
-#   --xtsc-iters N    measured xtsc runs, median (default 1; ~30s each in CI)
+#   --xtsc-iters N    measured COLD xtsc runs, median (default 1; ~30s each in CI)
 #   --ref-iters N     measured tsc/tsgo runs, median (default 3; cheap)
+#   --xtsc-warmup N   in-process warm-up rebuilds before the warm arm's measured
+#                     window (default 6). SIX is measured, not chosen: two
+#                     identical 16-iteration ladders re-sliced per setting put two
+#                     IDENTICAL process medians 3.3% apart at warmup 2, 2.0% at 3,
+#                     0.8% at 6. Under three, the measured window sits in the JIT
+#                     ramp and the series' own noise floor swamps the trend it is
+#                     supposed to show.
+#   --xtsc-warm-iters N  measured warm rebuilds, median (default 8)
+#   --no-warm         skip the warm arm (cold-only, the pre-2026-08-10 behaviour)
 #   --modes LIST      comma-separated subset of check-only,emit (default both)
 #   --out-dir DIR     bench-history root (default bench-history)
 #   --label TEXT      free-text note stored in the report
@@ -48,6 +57,7 @@ cd "$REPO_ROOT"
 
 TSC_BIN=""; TSGO_BIN=""; XTSC_NATIVE=""; PROJECT=compiler
 XTSC_ITERS=1; REF_ITERS=3
+XTSC_WARMUP=6; XTSC_WARM_ITERS=8; WARM=1
 MODES="check-only,emit"
 OUT_DIR="$REPO_ROOT/bench-history"; LABEL=""
 while [[ $# -gt 0 ]]; do
@@ -57,6 +67,9 @@ while [[ $# -gt 0 ]]; do
         --xtsc-native) XTSC_NATIVE="$2"; shift 2 ;;
         --project)    PROJECT="$2"; shift 2 ;;
         --xtsc-iters) XTSC_ITERS="$2"; shift 2 ;;
+        --xtsc-warmup) XTSC_WARMUP="$2"; shift 2 ;;
+        --xtsc-warm-iters) XTSC_WARM_ITERS="$2"; shift 2 ;;
+        --no-warm)    WARM=0; shift ;;
         --ref-iters)  REF_ITERS="$2"; shift 2 ;;
         --modes)      MODES="$2"; shift 2 ;;
         --out-dir)    OUT_DIR="$2"; shift 2 ;;
@@ -122,6 +135,67 @@ run_xtsc() { # $1=mode ; sets xtsc_wall xtsc_self xtsc_err xtsc_files LOC
 }
 
 # --------------------------------------------------------------------------
+# 1a. xtsc WARM — the arm this bench exists for.
+#
+# WHY THIS IS THE HEADLINE AND THE COLD ARM IS NOT. The JVM is the fastest
+# target and the one the perf arc optimises; a cold single-shot measures ~75%
+# JVM warm-up, so the cold ratio moves when HotSpot's ramp moves and barely
+# responds to the compiler getting faster. Measured on the dev box, same commit,
+# same profile: cold 27,996 ms against warm 6,481 ms check-only. A series meant
+# to show the moment xtsc MATCHES tsc has to watch the number that is actually
+# converging.
+#
+# The warm number is an in-process REBUILD, so it excludes JVM startup — it is
+# the daemon / `--serve` / watch figure, not the one-shot CLI figure. tsc and
+# tsgo are still whole processes, which slightly flatters xtsc: node's startup is
+# a few hundred ms of tsc's ~15 s and tsgo is native. The cold arm is kept in the
+# report precisely so both readings stay visible.
+#
+# `BenchMain` lives in commonTest, so this needs the TEST classes as well as the
+# main ones, and the dependency tail comes from the shared validating resolver —
+# never a hand-frozen cp file (round 858).
+# --------------------------------------------------------------------------
+run_xtsc_warm() { # $1=mode ; sets xtsc_warm (0 when the arm is off/unavailable)
+    xtsc_warm=0
+    [[ "$WARM" -eq 1 ]] || return 0
+    local mode="$1" emitarg="off" out main test cp_tail
+    [[ "$mode" == emit ]] && emitarg="emit"
+    main="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main"
+    test="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"
+    if [[ ! -f "$test/com/xemantic/typescript/compiler/bench/BenchMainKt.class" ]]; then
+        echo "== xtsc-warm ($mode): compiling test classes ==" >&2
+        ./gradlew -q compileTestKotlinJvm >&2 || { echo "warm arm unavailable" >&2; return 0; }
+    fi
+    # shellcheck source=lib/dep-classpath.sh
+    . "$REPO_ROOT/scripts/lib/dep-classpath.sh"
+    cp_tail="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-warm.txt")" || {
+        echo "warm arm: could not resolve the dependency tail" >&2; return 0; }
+
+    echo "== xtsc-warm ($mode, warmup $XTSC_WARMUP, iters $XTSC_WARM_ITERS) =="
+    out="$(mktemp)"
+    java -Xmx4g -cp "$main:$test:$cp_tail" \
+        com.xemantic.typescript.compiler.bench.BenchMainKt \
+        "$PROJ_DIR" "$XTSC_WARMUP" "$XTSC_WARM_ITERS" off "$emitarg" >"$out" 2>&1 || true
+    # BenchMain self-falsifies: it prints files/errors per iteration and aborts on
+    # drift. Take the median of the `iter` lines; a run that produced none is a
+    # failed arm, reported as 0 rather than silently as a fast one.
+    xtsc_warm="$(python3 - "$out" <<'PY'
+import json, statistics, sys
+its=[]
+for line in open(sys.argv[1], errors="replace"):
+    line=line.strip()
+    if not line.startswith("{"): continue
+    try: o=json.loads(line)
+    except Exception: continue
+    if "iter" in o: its.append(o["ms"])
+print(int(statistics.median(its)) if its else 0)
+PY
+)"
+    [[ "$xtsc_warm" != 0 ]] || { echo "::warning::warm arm produced no iterations" >&2; sed -n '1,20p' "$out" >&2; }
+    rm -f "$out"
+}
+
+# --------------------------------------------------------------------------
 # 1b. The ahead-of-time xtsc binary (optional), on the SAME project and mode.
 #
 # Uses xtsc's OWN CLI rather than bench-compile-tsc.sh, which drives `java`.
@@ -179,10 +253,11 @@ run_ref() { # $1=bin  $2=mode ; echoes "wall_ms err"
 MODE_DATA=()
 for MODE in "${MODE_LIST[@]}"; do
     run_xtsc "$MODE"
+    run_xtsc_warm "$MODE"
     echo "== tsc ($TSC_VER, $MODE) ==";   read -r tsc_wall  tsc_err  < <(run_ref "$TSC_BIN"  "$MODE")
     echo "== tsgo ($TSGO_VER, $MODE) =="; read -r tsgo_wall tsgo_err < <(run_ref "$TSGO_BIN" "$MODE")
     run_native "$MODE"
-    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err $nat_wall $nat_self $nat_err")
+    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err $nat_wall $nat_self $nat_err $xtsc_warm")
 done
 
 # --------------------------------------------------------------------------
@@ -202,6 +277,7 @@ export B_PROJECT="$PROJECT" B_RUNNER="$RUNNER" B_SLUG="$REPO_SLUG" B_LABEL="$LAB
 export B_TS_COMMIT="$TS_COMMIT8" B_FILES="$xtsc_files" B_LOC="$LOC"
 export B_TSC_VER="$TSC_VER" B_TSGO_VER="$TSGO_VER"
 export B_XITERS="$XTSC_ITERS" B_REFITERS="$REF_ITERS"
+export B_WARMUP="$XTSC_WARMUP" B_WARMITERS="$XTSC_WARM_ITERS"
 B_MODE_DATA="$(printf '%s\n' "${MODE_DATA[@]}")"; export B_MODE_DATA
 
 python3 - <<'PYEOF'
@@ -218,13 +294,15 @@ project, runner, slug, label = g("B_PROJECT"), g("B_RUNNER"), g("B_SLUG"), g("B_
 ts_commit, files, loc = g("B_TS_COMMIT"), i("B_FILES"), i("B_LOC")
 tsc_ver, tsgo_ver = g("B_TSC_VER"), g("B_TSGO_VER")
 xiters, refiters = i("B_XITERS"), i("B_REFITERS")
+warmup, warmiters = i("B_WARMUP"), i("B_WARMITERS")
 
 # mode xtsc_wall xtsc_self xtsc_err tsc_wall tsc_err tsgo_wall tsgo_err
-#      nat_wall nat_self nat_err   (nat_* are 0 when --xtsc-native was not passed)
+#      nat_wall nat_self nat_err xtsc_warm
+# (nat_* are 0 without --xtsc-native; xtsc_warm is 0 under --no-warm)
 modes = []
 for line in g("B_MODE_DATA").splitlines():
     p = line.split()
-    if len(p) == 11:
+    if len(p) == 12:
         modes.append((p[0],) + tuple(int(x) for x in p[1:]))
 
 def sec(ms): return f"{ms/1000:.2f}s" if ms else "n/a"
@@ -248,13 +326,14 @@ lines = [
     f"- **TypeScript pin**: `{ts_commit}` (typeScriptCommit)",
     f"- **Profile**: `{project}` — {files} files, {loc:,} LOC",
     f"- **Runner**: {runner}",
-    f"- **Method**: cold single process; wall-clock is the comparable metric. "
-    f"xtsc = median of {xiters}, tsc/tsgo = median of {refiters}.",
+    f"- **Method**: xtsc **warm** = median of {warmiters} in-process rebuilds after "
+    f"{warmup} warm-up rebuilds (the headline); xtsc **cold** = median of {xiters} "
+    f"single-shot process(es); tsc/tsgo = median of {refiters} processes.",
 ]
 if label:
     lines.append(f"- **Label**: {label}")
 
-for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr in modes:
+for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes:
     lines += [
         "",
         f"## {mode}",
@@ -263,25 +342,46 @@ for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr in modes:
         "",
         "| Compiler | Version | Wall | Throughput | Errors |",
         "|---|---|---:|---:|---:|",
-        f"| xtsc | {rev} | {sec(xw)} | {tput(xw)} LOC/s | {xerr} |",
+    ]
+    if xwarm:
+        lines.append(f"| **xtsc (warm JVM)** | {rev} | **{sec(xwarm)}** | {tput(xwarm)} LOC/s | {xerr} |")
+    lines += [
+        f"| xtsc (cold JVM) | {rev} | {sec(xw)} | {tput(xw)} LOC/s | {xerr} |",
         f"| tsc | {tsc_ver} | {sec(tw)} | {tput(tw)} LOC/s | {terr} |",
         f"| tsgo | {tsgo_ver} | {sec(gw)} | {tput(gw)} LOC/s | {gerr} |",
     ]
     if nw:
         lines.append(f"| xtsc-native | {rev} (AOT) | {sec(nw)} | {tput(nw)} LOC/s | {nerr} |")
+    if xwarm:
+        # Direction-aware: xtsc passed tsc in the warm regime on 2026-08-10
+        # (0.49x check-only), so a fixed "parity is 1.00x" line would describe a
+        # milestone already behind us and point the reader at the wrong gap.
+        def _vs(name, other):
+            if not other:
+                return f"n/a vs {name}"
+            r = xwarm / other
+            return (f"{1/r:.2f}x FASTER than {name}" if r < 1
+                    else f"{r:.2f}x {name} — parity at 1.00x")
+        lines += [
+            "",
+            f"**Warm JVM — the target metric: {_vs('tsc', tw)}; {_vs('tsgo', gw)}.**",
+        ]
     lines += [
         "",
-        f"Relative (wall): xtsc is **{ratio(xw,tw)}** tsc and **{ratio(xw,gw)}** tsgo; "
+        f"Cold JVM (one-shot CLI): **{ratio(xw,tw)}** tsc and **{ratio(xw,gw)}** tsgo; "
         f"tsc is **{ratio(tw,gw)}** tsgo. "
         f"xtsc self-reported time (excl. JVM startup/JIT): **{sec(xself)}**.",
     ]
     if nw:
         lines += [
             "",
-            f"Ahead-of-time (GraalVM native-image): **{sec(nw)}**, "
-            f"**{ratio(xw,nw)}** the JVM arm, **{ratio(nw,tw)}** tsc, **{ratio(nw,gw)}** tsgo. "
-            f"Same compiler, same output — the JVM arm's extra time is warm-up a "
-            f"one-shot CLI run never amortizes (docs/perf/aot-native-image.md).",
+            f"Ahead-of-time (GraalVM native-image, Oracle + PGO): **{sec(nw)}** — "
+            f"**{ratio(nw,tw)}** tsc, **{ratio(nw,gw)}** tsgo, **{ratio(xw,nw)}** the COLD "
+            f"JVM arm and **{ratio(nw,xwarm) if xwarm else 'n/a'}** the WARM one. "
+            f"Same compiler, same output. The AOT image is expected to TRAIL the warm JVM "
+            f"(measured 8.4 s vs 6.5 s on the dev box) — its value is that it needs no "
+            f"warm-up at all, so it is the one-shot CLI answer while the warm JVM is the "
+            f"daemon answer (docs/perf/aot-native-image.md).",
         ]
 lines += [
     "",
@@ -302,19 +402,23 @@ with open(os.path.join(runs_dir, run_name), "w", encoding="utf-8", newline="\n")
 # Rows live between explicit markers so the pre-739 single-mode archive below
 # them is never rewritten (its columns differ — see the README's archive note).
 index = os.path.join(out_dir, "README.md")
-START, END = "<!-- BENCH-ROWS-START -->", "<!-- BENCH-ROWS-END -->"
-# The AOT columns are APPENDED rather than inserted: rows written before round
-# 772 have 10 cells, and Markdown renders the missing trailing cells as empty,
-# so every historical row stays under the headers it was written for. Inserting
-# mid-table would silently shift ~341 archived rows by one column.
-col = ("| Date | xtsc rev | Mode | xtsc | tsc | tsgo | xtsc/tsc | xtsc/tsgo | xtsc err | Run "
-       "| xtsc-nat | nat/tsc | nat/tsgo |\n"
-       "|---|---|---|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|\n")
+# V2 MARKERS, 2026-08-10 — the series RESTARTS here (owner: "it does not matter
+# that much, we can restart it now"). The old table is left in place below,
+# untouched, under its own markers: its primary xtsc column is a COLD single-shot
+# and this one's is a WARM rebuild, so the two are not the same measurement and
+# must never share a column. Mixing them would show a ~4x "improvement" on the
+# day the harness changed.
+START, END = "<!-- BENCH-ROWS-V2-START -->", "<!-- BENCH-ROWS-V2-END -->"
+col = ("| Date | xtsc rev | Mode | xtsc warm | warm/tsc | warm/tsgo | tsc | tsgo "
+       "| xtsc cold | xtsc-nat | nat/tsc | err | Run |\n"
+       "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
 new_rows = "".join(
-    f"| {date_h} | [`{rev}`]({commit_url}) | {mode} | {sec(xw)} | {sec(tw)} | {sec(gw)} "
-    f"| {ratio(xw,tw)} | {ratio(xw,gw)} | {xerr} | [report](runs/{run_name}) "
-    f"| {sec(nw) if nw else '—'} | {ratio(nw,tw) if nw else '—'} | {ratio(nw,gw) if nw else '—'} |\n"
-    for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr in modes)
+    f"| {date_h} | [`{rev}`]({commit_url}) | {mode} | {sec(xwarm) if xwarm else '—'} "
+    f"| {ratio(xwarm,tw) if xwarm else '—'} | {ratio(xwarm,gw) if xwarm else '—'} "
+    f"| {sec(tw)} | {sec(gw)} | {sec(xw)} "
+    f"| {sec(nw) if nw else '—'} | {ratio(nw,tw) if nw else '—'} | {xerr} "
+    f"| [report](runs/{run_name}) |\n"
+    for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes)
 
 txt = open(index, encoding="utf-8").read() if os.path.exists(index) else ""
 if START in txt and END in txt:
@@ -323,9 +427,19 @@ if START in txt and END in txt:
     body_rows = "".join(l + "\n" for l in body.splitlines()
                         if l.startswith("| 2"))          # data rows only
     txt = head + START + "\n\n" + col + new_rows + body_rows + "\n" + END + tail
-else:  # bootstrap: keep whatever is already there as the archive
-    txt = ("# Bench history\n\n"
-           + START + "\n\n" + col + new_rows + "\n" + END + "\n\n" + txt)
+else:
+    # Bootstrap of the V2 block. Whatever is already in the file — including the
+    # entire V1 table with its own markers — is kept BELOW as the archive, so no
+    # historical row is rewritten or lost; only the primary table changes meaning.
+    header = "" if txt.lstrip().startswith("# ") else "# Bench history\n\n"
+    banner = ("\n> **Series restarted 2026-08-10.** The primary `xtsc` column is now a "
+              "**warm** in-process rebuild (the JVM is the fastest target and the one the "
+              "perf arc optimises; a cold single-shot was ~75% JVM warm-up and barely moved "
+              "when the compiler got faster). The AOT arm also switched from GraalVM CE to "
+              "**Oracle + PGO**. Rows below the V1 markers are the old cold-primary series "
+              "and are NOT comparable to these.\n\n")
+    txt = (header + banner + START + "\n\n" + col + new_rows + "\n" + END + "\n\n"
+           + "## Archive — V1 series (cold-primary xtsc column)\n\n" + txt)
 with open(index, "w", encoding="utf-8", newline="\n") as f:
     f.write(txt)
 
@@ -335,8 +449,11 @@ PYEOF
 echo
 echo "=== 3-way bench ($PROJECT @ $TS_COMMIT8) ==="
 for row in "${MODE_DATA[@]}"; do
-    read -r m xw xs xe tw te gw ge nw ns ne <<<"$row"
+    read -r m xw xs xe tw te gw ge nw ns ne xwarm <<<"$row"
     echo "  -- $m --"
+    if [[ "$xwarm" != 0 ]]; then
+        printf '    %-6s %8s ms warm rebuild  <-- headline\n' xtsc-w "$xwarm"
+    fi
     printf '    %-6s %8s ms wall  %6s errors\n' xtsc "$xw" "$xe"
     printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsc  "$tw" "$te" "$TSC_VER"
     printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsgo "$gw" "$ge" "$TSGO_VER"

@@ -46,11 +46,19 @@ jobs:
       # every archived row was measured with, and GraalVM is used ONLY to build
       # the native image. Swapping these two steps would silently re-baseline the
       # whole xtsc series onto GraalVM's JIT.
-      - name: Set up GraalVM (for the AOT arm only)
+      #
+      # ORACLE, not Community, since 2026-08-10 — and this RE-BASELINES the AOT
+      # column of the archived series. Every row before that date measured a CE
+      # image (which had CI's AOT arm at ~1.02x tsc); every row after measures
+      # Oracle GraalVM + PGO, which on the dev box is -13.9% check-only / -19.5%
+      # emit against the Oracle base and ~1.8-1.9x tsc. The AOT column is
+      # therefore NOT comparable across that boundary. The xtsc JVM, tsc and
+      # tsgo columns are untouched and remain continuous.
+      - name: Set up GraalVM (Oracle, for the AOT arm only)
         uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'graalvm-community'
+          distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 26
@@ -82,14 +90,20 @@ jobs:
           "$PWD/node_modules/.bin/tsc"  --version
           "$PWD/node_modules/.bin/tsgo" --version
 
-      # ~2 min. Non-fatal on purpose: if the image fails to build, the bench still
-      # publishes its 3-way row rather than losing the data point entirely — the
-      # AOT columns simply read "—" for that run.
-      - name: Build the AOT binary
+      # ~10 min now, not ~2: the PGO cycle is three builds plus two training runs
+      # (scripts/build-native-pgo.sh has the recipe). Still non-fatal on purpose:
+      # if the image fails to build, the bench publishes its 3-way row rather
+      # than losing the data point entirely — the AOT columns read "—" instead.
+      #
+      # NO `--allow-no-pgo` HERE, deliberately. That flag degrades to a plain
+      # image, which would keep publishing an AOT number under the same column
+      # heading while measuring a materially slower binary — the silent-downgrade
+      # failure this repo keeps paying for. Better the column reads "—".
+      - name: Build the AOT binary (Oracle + PGO)
         id: aot
         continue-on-error: true
         run: |
-          ./gradlew :xemantic-typescript-compiler-cli:nativeImage --no-configuration-cache -PgraalvmHome="$GRAALVM_HOME"
+          scripts/build-native-pgo.sh --graalvm-home "$GRAALVM_HOME"
           # The image is built by the CLI module — the lean one-shot entry point,
           # which carries the compiler and none of the daemon transport. This step
           # is continue-on-error, so a stale path would SILENTLY drop the AOT arm
@@ -112,12 +126,18 @@ jobs:
           else
             echo "::warning::AOT binary unavailable — publishing the 3-way row without it"
           fi
+          # The WARM arm is the headline (see bench-3way.sh § 1a): the JVM is the
+          # fastest target and the one the perf arc optimises, so the series has
+          # to watch the number that converges on tsc. warmup 6 is the measured
+          # floor for a <1% between-process spread; 5 measured iterations keeps
+          # the added CI time near ~5 min per mode.
           scripts/bench-3way.sh \
             --tsc  "$TSC_BIN" \
             --tsgo "$TSGO_BIN" \
             "${native_args[@]}" \
             --project compiler \
             --xtsc-iters 1 --ref-iters 3 \
+            --xtsc-warmup 6 --xtsc-warm-iters 5 \
             --label "$BENCH_LABEL"
 
       - name: Commit results
