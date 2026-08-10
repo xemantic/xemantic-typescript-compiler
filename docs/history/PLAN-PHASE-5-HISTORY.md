@@ -1,5 +1,85 @@
 
 
+**Round 866 (2026-08-09) — (WARM.13): THE PER-KIND SPINE DISPATCH TABLE, RE-PRICED WARM. THE VERDICT IS
+**UNIDENTIFIED, NOT CLOSED**: the prize is bounded in **0-352 ms (0-5.1% of a warm rebuild)**, and the
+one arm anybody would reach for — `--dispatchGated` — is STRUCTURALLY unable to narrow it, because what
+it measures is `G - R`: its own machinery's price MINUS the prize. That machinery is now measured, and
+it is **+715 ms = +14.4% of the warm `checkSpine` row, 8/8 sign-consistent.**
+`docs/perf/dispatch-table.md` § 8.
+
+- **THE BRIEF'S PREMISE WAS HALF FALSE, AND FINDING THAT OUT WAS THE FIRST TEN MINUTES.** The closure is
+  not cold-only: **round 847 § 5 already re-took the probe's UPPER bound warm** — 340-362 ms (mean 352),
+  10-11 ns per skipped consultation over the same 32,006,965 of them, a skipped consultation warming
+  **2.95x** against the spine's 3.38x, i.e. regime-invariant. **But that finding is in
+  `warm-spine-attribution.md` and NOT in `dispatch-table.md`, which is the file a next agent greps for
+  this question** — so the round was commissioned by a real documentation gap even though its stated
+  premise was wrong. Cross-referencing it is half the deliverable; a `> ROUND-866` note now sits under
+  that file's cold HEADLINE.
+
+- **`--dispatchGated` IS A LOWER-BOUND INSTRUMENT, NOT A STAND-IN — AND THE REASON IS IN ITS FIVE LINES.**
+  The GATED branch replaces production's straight-line `if (spineXxActive) spineXxEnterNode(node)` with a
+  loop over `enterTable[kid]` dispatching through a 46-arm `when(h)` tableswitch, so per KEPT handler it
+  adds a bounds check, a loop iteration and a call the JIT can no longer inline into 46 distinct sites,
+  plus one call frame and an `Array<IntArray>` load per node. It is faithful in SEMANTICS (byte-identical
+  corpus and profile, § 4 — which is what makes the derived table's soundness a fact) and pessimistic in
+  COST by an amount nothing measured. Round 732's own § 5 half-says this; this round makes it structural.
+
+- **SO A THIRD ARM WAS BUILT, AND IT IS THE ROUND'S MEASUREMENT.** `gatedfull` runs the SAME machinery
+  over a table holding every handler for every kind: it skips **nothing** by construction, so its delta
+  carries no `R` at all and prices the machinery alone. Two batches x 4 processes, tier order rotated,
+  all three arms arming the `rows` pass probe IDENTICALLY so its boundaries cancel (round 793):
+  **`gatedfull` +715.5 ms median (+14.45% of the row), 8/8 slower, +454 to +846**; **`gatedrows` +75.2 ms
+  median (5/8 slower, -276 to +283)**. Control `rows` `checkSpine` n=16, mean 4,960.4, **sd 4.40%**.
+
+- **AND THE IDENTITY, WHICH IS WHERE IT STOPS.** With `K = 21.65` kept and `S = 37.35` skipped
+  consultations per node, `delta(gatedrows) = A + K*d - R` and `delta(gatedfull) = A + K*d + S*d'`, so
+  **`R = A + K*d - delta(gatedrows)`** — the prize is exactly the tax GATED pays on the consultations it
+  KEEPS, less the margin by which it trails production. `d` is identified by no arm here: `d = d'` (a
+  uniform per-consultation tax) gives **187.3 ms = 2.7% warm**, `d = 0` gives **~0**, and `d <= d'` is
+  the only inequality that can be argued (a rejecting handler is the most inlinable thing in the
+  prologue, so it loses the most by being reached through a tableswitch). Round 847's probe caps it at
+  352 ms. **The two instruments cross-check**: `S*(s_p + d')` reads **20.00 ns** per skipped consultation
+  against round 847's **10-11 ns** for the same consultation with the tableswitch and call calibrated
+  out — ~10 ns of tableswitch + call on top is exactly the residue this arm should see.
+
+- **THE WALL ARM IS THIS ARC'S THIRD ROUND-840(c) INSTANCE, AND IT IS WHY THE ROUND MOVED TO THE ROW.**
+  `gated` vs a new NULL `plain` tier, 2 batches x 2 processes x 2 pairs: **batch 1 -102.3 ms (-1.49%),
+  gated faster 3/4; batch 2 +237.7 ms (+3.53%), 0/4** — the batches **disagree in sign**, per-arm sd
+  2.23% / 1.53%, both over the ~1% quiet-box rule. Batch 1 alone would have been written up as "GATED is
+  faster warm, build the table". The wall additionally carries the front end and the ~416 tail passes —
+  ~34% of a rebuild that is, for this question, pure drift — and `checkSpine` is the only row the table
+  can move.
+
+- **WHAT WOULD SETTLE IT, PROMOTED AS (WARM.14).** One number: `s_p`, the production cost of one
+  rejecting consultation. `R = 32.0 M x s_p`, so the 1% floor is cleared at **`s_p` >= 2.2 ns**. It is an
+  order of magnitude below the warm boundary cost (97-202 ns, round 850), so the instrument is round
+  759's AMPLIFICATION, and its hazard is stated in the queue item: a rejecting consultation is exactly
+  what a JIT can prove side-effect-free and delete, so the arm needs arithmetic falsification, not a
+  plausible slope. Any implementation must then also beat its own dispatch tax (~10 ns per kept
+  consultation); the two candidate shapes carry named hazards — a dense per-kind `when (kindId)` is far
+  over the 8,000-bytecode cliff (round 845's -33.6% warm) and must be split by contiguous key range
+  (round 802); a per-kind `Long` bitmask avoids that and removes the 46 per-node `spineXxActive` field
+  reloads the intervening calls force today, but its own 46 branches are unmeasured.
+
+- **WHAT DID NOT HAPPEN, UP FRONT.** No production table was built, nothing under `commonMain` changed,
+  and nothing was optimized. The landing is four `commonTest` tiers (`gated`, `plain`, `gatedrows`,
+  `gatedfull`), two harnesses, two analyzers and `BenchGatedTierTest` (10 pins). The `gatedfull` arm
+  swaps the tables in `tierBegin` and restores them in `tierStop`; a missed restore is not a correctness
+  bug (a full table IS the production handler set) but would silently turn every later `gatedrows` arm
+  into a `gatedfull` one, which is what two of those pins exist for — along with `plain`, whose whole
+  content is the ABSENCE of instrumentation and which therefore needs its own `when` arm: `tierBegin`'s
+  `else` ENABLES the pass probe, so a dropped `plain` arm does not fail, it makes the CONTROL the
+  expensive side and inverts the answer.
+
+- **GATES.** Suite 14,100 -> **14,110 / 0 failures / 3 skipped** (real XML parser over all four modules);
+  `cost_gate.py` **+0.00% on all 20 counters**; `huge_methods.py --fail-over 0` **0 over the limit**, 659
+  classes / 14,670 methods. The 8-profile grid is **vacuous by construction and was not run** — nothing
+  under `commonMain` changed, and the one behaviour claim in the round (that GATED is output-identical)
+  is `SpineDispatchProbeTest`'s pre-existing pin plus § 4's whole-corpus verification. Round-851 order
+  throughout: every gradle step ran before each daemon stop, and the measuring scripts refuse to start
+  unless the class dir holds `BenchGatedTierTest.class`, a class that did not exist before this round
+  (round 853's positive control). Commits `e36b9b1c`, and this round's follow-ups.
+
 **Round 863 (2026-08-09) — (WARM.10): THE WHOLE-PROGRAM REGEX CLASS IS SWEPT SYSTEMATICALLY RATHER THAN
 HIT BY ACCIDENT, AND THE ONE OFFENDER LEFT WAS ON THE **EMIT** PATH, WHERE NO INSTRUMENT IN THIS REPO
 COULD SEE IT: `Transformer.transform`'s jsxRuntime pragma scan, **44.1 ms -> 1.66 ms = 42.5 ms = 0.53% of
