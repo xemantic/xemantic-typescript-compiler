@@ -375,13 +375,19 @@ for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes:
     if nw:
         lines += [
             "",
-            f"Ahead-of-time (GraalVM native-image, Oracle + PGO): **{sec(nw)}** — "
+            # Deliberately does NOT name a distribution or claim PGO: bench.yml
+            # publishes the Oracle BASE image (PGO moved to native.yml, which
+            # builds the shipped artifact), so a hardcoded "Oracle + PGO" here
+            # would overstate this column by ~14% check-only / ~20% emit.
+            f"Ahead-of-time (GraalVM native-image): **{sec(nw)}** — "
             f"**{ratio(nw,tw)}** tsc, **{ratio(nw,gw)}** tsgo, **{ratio(xw,nw)}** the COLD "
             f"JVM arm and **{ratio(nw,xwarm) if xwarm else 'n/a'}** the WARM one. "
             f"Same compiler, same output. The AOT image is expected to TRAIL the warm JVM "
             f"(measured 8.4 s vs 6.5 s on the dev box) — its value is that it needs no "
             f"warm-up at all, so it is the one-shot CLI answer while the warm JVM is the "
-            f"daemon answer (docs/perf/aot-native-image.md).",
+            f"daemon answer (docs/perf/aot-native-image.md). NOTE: CI publishes the "
+            f"NON-PGO base image here; the shipped artifact (native.yml, Oracle + PGO) is "
+            f"~14% faster check-only and ~20% faster on emit.",
         ]
 lines += [
     "",

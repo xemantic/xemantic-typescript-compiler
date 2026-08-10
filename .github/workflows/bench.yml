@@ -90,20 +90,28 @@ jobs:
           "$PWD/node_modules/.bin/tsc"  --version
           "$PWD/node_modules/.bin/tsgo" --version
 
-      # ~10 min now, not ~2: the PGO cycle is three builds plus two training runs
-      # (scripts/build-native-pgo.sh has the recipe). Still non-fatal on purpose:
-      # if the image fails to build, the bench publishes its 3-way row rather
-      # than losing the data point entirely — the AOT columns read "—" instead.
+      # PLAIN Oracle image, NOT the PGO one — deliberately, and the AOT column
+      # must be read accordingly.
       #
-      # NO `--allow-no-pgo` HERE, deliberately. That flag degrades to a plain
-      # image, which would keep publishing an AOT number under the same column
-      # heading while measuring a materially slower binary — the silent-downgrade
-      # failure this repo keeps paying for. Better the column reads "—".
-      - name: Build the AOT binary (Oracle + PGO)
+      # This workflow runs on EVERY push to main, and the PGO cycle is three
+      # builds plus two training runs (~10 min against ~2). That latency is not
+      # worth paying per push for a column that is not the headline. PGO lives in
+      # native.yml, which BUILDS THE SHIPPED ARTIFACT and is manual-trigger only.
+      #
+      # CONSEQUENCE, stated so nobody misreads the series: this column is the
+      # Oracle BASE image and is ~14% (check-only) / ~20% (emit) SLOWER than the
+      # binary native.yml publishes. It tracks AOT trend, not shipped AOT
+      # performance; for the latter read docs/perf/aot-native-image.md § 10 or a
+      # native.yml run.
+      #
+      # ~2 min, and non-fatal on purpose: if the image fails to build the bench
+      # still publishes its 3-way row, with the AOT columns reading "—".
+      - name: Build the AOT binary (Oracle, no PGO — see comment)
         id: aot
         continue-on-error: true
         run: |
-          scripts/build-native-pgo.sh --graalvm-home "$GRAALVM_HOME"
+          ./gradlew :xemantic-typescript-compiler-cli:nativeImage \
+            --no-configuration-cache -PgraalvmHome="$GRAALVM_HOME"
           # The image is built by the CLI module — the lean one-shot entry point,
           # which carries the compiler and none of the daemon transport. This step
           # is continue-on-error, so a stale path would SILENTLY drop the AOT arm

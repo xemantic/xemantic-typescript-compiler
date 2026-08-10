@@ -1,0 +1,170 @@
+# Compare the compiler across JVMs — which JDK vendor / JIT should xtsc RUN on.
+#
+# Every other bench here varies the compiler and holds the JVM fixed. This one
+# does the opposite: same bytecode, same heap, same profile, only the JVM
+# changes. Manual trigger only, and by default against `main`.
+#
+# READ THIS BEFORE ACTING ON A RESULT FROM HERE. GitHub-hosted runners are
+# shared and noisy, and this repo's own rule is that a loaded box swings ±13%
+# while the warm A/B band is ±1%. A 3-rep run on a shared runner is a SCREENING
+# tool — it is good for "is there anything here at all" and for tracking a large
+# effect over time. It is NOT sufficient to decide a few-percent question; that
+# needs a quiet box and replication. The dev-box measurements it should be read
+# against are in docs/perf/jdk-jit-vendor-comparison.md, which also records a
+# clean sign-consistent 3/3 result that REVERSED on replication.
+#
+# BOTH REGIMES MATTER and the defaults below run both only if you ask: the Graal
+# JIT loses cold and wins warm (measured −5.4%/−10.2% warm, +8.2%/+4.6% cold),
+# so a single-regime run picks its winner by accident.
+name: JVM bench
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch/ref to benchmark'
+        default: 'main'
+      modes:
+        description: 'Comma-separated: noEmit,emit (emit roughly doubles the run)'
+        default: 'noEmit'
+      warmup:
+        description: 'In-process warm-up rebuilds before the measured window'
+        default: '4'
+      iters:
+        description: 'Measured warm rebuilds per process'
+        default: '3'
+      warm_reps:
+        description: 'Warm repetitions per arm (3 is the floor for a verdict)'
+        default: '3'
+      cold_reps:
+        description: 'Cold repetitions per arm'
+        default: '1'
+      publish:
+        description: 'Commit the report under bench-history/jvm-runs/'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  jvm-bench:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+          fetch-depth: 0
+
+      # ORDER IS LOAD-BEARING, TWICE OVER.
+      #  1. Every setup-java/setup-graalvm step overwrites JAVA_HOME, so each
+      #     one's path is captured into its own variable IMMEDIATELY after it.
+      #     `JAVA_HOME_26_X64` cannot be used for this: Zulu 26 and Temurin 26
+      #     would both claim that name and the second would win silently.
+      #  2. The LAST setup wins JAVA_HOME, and that is the JDK Gradle compiles
+      #     with. Temurin 26 is deliberately last so the BUILD is identical to
+      #     every other workflow and only the measured arms vary.
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm-community'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: echo "JDK_GRAAL_CE=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - uses: graalvm/setup-graalvm@v1
+        with:
+          java-version: '25'
+          distribution: 'graalvm'
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: echo "JDK_GRAAL_ORACLE=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: zulu
+          java-version: '26'
+      - run: echo "JDK_ZULU26=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '26'
+      - run: echo "JDK_TEMURIN26=$JAVA_HOME" >> "$GITHUB_ENV"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v6
+
+      # Compiles main + test classes and materialises the bench profile, both of
+      # which the script needs before it stops the daemons (round 851: a gradle
+      # step AFTER the stop can be killed mid-compile and leave a wiped class
+      # dir behind an earlier BUILD SUCCESSFUL).
+      - name: Build and materialise the profile
+        run: |
+          ./gradlew compileTestKotlinJvm
+          scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
+
+      - name: Assert every arm resolved to a real JDK
+        run: |
+          set -euo pipefail
+          for v in JDK_TEMURIN26 JDK_ZULU26 JDK_GRAAL_ORACLE JDK_GRAAL_CE; do
+            home="${!v:-}"
+            # A silently-empty arm would drop out of the comparison and the
+            # report would still look complete — the failure this asserts away.
+            [ -n "$home" ] && [ -x "$home/bin/java" ] || { echo "$v unresolved ($home)" >&2; exit 1; }
+            printf '%-18s %s\n' "$v" "$("$home/bin/java" -version 2>&1 | head -1)"
+          done
+
+      - name: Run the JVM comparison
+        env:
+          MODES: ${{ github.event.inputs.modes || 'noEmit' }}
+          WARMUP: ${{ github.event.inputs.warmup || '4' }}
+          ITERS: ${{ github.event.inputs.iters || '3' }}
+          WARM_REPS: ${{ github.event.inputs.warm_reps || '3' }}
+          COLD_REPS: ${{ github.event.inputs.cold_reps || '1' }}
+        run: |
+          scripts/bench-jvms.sh \
+            --arm "temurin26=$JDK_TEMURIN26/bin/java" \
+            --arm "zulu26=$JDK_ZULU26/bin/java" \
+            --arm "graal-oracle25=$JDK_GRAAL_ORACLE/bin/java" \
+            --arm "graal-ce25=$JDK_GRAAL_CE/bin/java" \
+            --baseline temurin26 \
+            --modes "$MODES" --warmup "$WARMUP" --iters "$ITERS" \
+            --warm-reps "$WARM_REPS" --cold-reps "$COLD_REPS"
+
+      - name: Publish to the job summary
+        if: always()
+        run: |
+          {
+            echo "### JVM bench — \`${{ github.event.inputs.ref || 'main' }}\`"
+            echo "_Shared runner: screening only, see the workflow header._"
+            echo
+            cat build/bench/jvms/report.md 2>/dev/null || echo "no report produced"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jvm-bench
+          path: |
+            build/bench/jvms/report.md
+            build/bench/jvms/results.tsv
+          if-no-files-found: warn
+
+      - name: Commit the report
+        if: ${{ github.event.inputs.publish != 'false' }}
+        run: |
+          set -euo pipefail
+          stamp=$(date -u +%Y%m%dT%H%M%SZ); rev=$(git rev-parse --short=12 HEAD)
+          dest="bench-history/jvm-runs"; mkdir -p "$dest"
+          cp build/bench/jvms/report.md  "$dest/$stamp-$rev.md"
+          cp build/bench/jvms/results.tsv "$dest/$stamp-$rev.tsv"
+          git config user.name  'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add "$dest"
+          git diff --cached --quiet -- "$dest" && { echo "nothing to commit"; exit 0; }
+          git commit -m "chore(bench): JVM comparison @ ${rev} [skip ci]"
+          for attempt in 1 2 3; do
+            if git pull --rebase --autostash origin main && git push origin "HEAD:main"; then exit 0; fi
+            echo "push attempt $attempt failed; retrying"; sleep $((attempt * 5))
+          done
+          echo "error: could not push the JVM bench report" >&2; exit 1
