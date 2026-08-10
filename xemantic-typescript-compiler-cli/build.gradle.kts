@@ -84,3 +84,167 @@ kotlin {
     }
 
 }
+
+/**
+ * Runs a shell command, streaming its output to the Gradle console.
+ * Throws an [IllegalStateException] if the process exits with a non-zero code.
+ */
+fun runCommand(vararg cmd: String, workingDir: File = projectDir) {
+    val exitCode = ProcessBuilder(*cmd)
+        .directory(workingDir)
+        .inheritIO()
+        .start()
+        .waitFor()
+    check(exitCode == 0) { "Command failed (exit $exitCode): ${cmd.joinToString(" ")}" }
+}
+
+// ---------------------------------------------------------------------------
+// AOT — GraalVM native-image
+// ---------------------------------------------------------------------------
+//
+// Ahead-of-time compiles the JVM target into a standalone native executable.
+// Measured round 771 on the compiler profile: 13,350 ms against the JVM's
+// 26,272 ms (1.97x), with `--listAll` output BYTE-IDENTICAL to the JVM's on all
+// eight bench profiles, 392 MB RSS against a 4 GB heap allowance. The win is
+// not faster code — it is the ~14.7 s of JVM warm-up a one-shot CLI run never
+// amortizes. Full derivation and caveats: docs/perf/aot-native-image.md.
+//
+//   ./gradlew :xemantic-typescript-compiler-cli:nativeImage
+//   ./gradlew :…-cli:nativeImage -PgraalvmHome=/opt/graalvm
+//   ./gradlew :…-cli:nativeImage -PnativeImageHeap=6g   # builder heap, default 5g
+//   ./gradlew :…-cli:nativeImage -PnativeImageArgs="--pgo-instrument" \
+//       -PnativeImageOutput=xtsc-instrumented
+//   ./gradlew :…-cli:nativeImage -PnativeImageArgs="--pgo=/abs/path/xtsc.iprof"
+//
+// THE TASK LIVES HERE, NOT IN THE DAEMON MODULE (MOD.7). Its entry point is the
+// LEAN CLI: a one-shot binary can never serve or contact a daemon, so building
+// it from the mode dispatcher put ktor-network, slf4j and the socket machinery
+// into the closed-world analysis for nothing. The refusal of --serve/--daemon
+// that replaces them is in `cli/Main.kt`, and is what keeps this from being
+// round 840's silent wrong success. `scripts/xtsc` is UNAFFECTED and still runs
+// the dispatcher — it has a daemon to reach.
+//
+// DELIBERATELY NOT wired into `build`/`check`: it needs a GraalVM JDK *and* a
+// working C toolchain (gcc + binutils + libc headers + zlib), which a plain
+// JVM CI runner does not have, and it adds ~2 min. Nothing about the normal
+// build changes if GraalVM is absent — the task simply fails with the message
+// below when explicitly asked for.
+//
+// Reflection metadata lives in the CORE module's
+// src/jvmMain/resources/META-INF/native-image/... and is picked up from the
+// classpath automatically; it is 18 entries, all kotlinx-coroutines atomic field
+// updaters. There is ZERO application reflection (the TypeScript libs are
+// embedded as Kotlin string constants rather than resources), which is why
+// `--no-fallback` succeeds unassisted. Round 840(b)'s one open question —
+// whether closed-world analysis needs help with `UnixDomainSocketAddress` /
+// `ServerSocketChannel.open(StandardProtocolFamily.UNIX)` — is MOOT for this
+// image, because nothing on this classpath opens a socket at all. Regenerate
+// metadata with the tracing agent only if a dependency starts reflecting:
+//   java -agentlib:native-image-agent=config-output-dir=<dir> -cp ... \
+//       com.xemantic.typescript.compiler.cli.MainKt ...
+//
+// `-O3 -march=native` was measured and is worth NOTHING here (13,325 vs
+// 13,335 ms) — the residual 15% against JVM peak is the absence of PGO. Do not
+// add codegen flags expecting a win; PGO itself goes through -PnativeImageArgs.
+
+// (MOD.7). The image's entry point is the lean one-shot CLI, which REFUSES the
+// daemon modes rather than silently treating them as project arguments — the
+// third option between "carry the whole transport" (the daemon dispatcher, where
+// this task used to live) and round 840's measured silent wrong success (the
+// bare `…compiler.MainKt`: `--serve --socket /tmp/x.sock` bound no socket, took
+// the socket path as the project, emitted 173 files, exit 0).
+//
+// `NativeImageEntryPointTest` reads this line — it must stay a single
+// `val nativeImageMainClass = "…"` assignment — and checks the named class
+// actually exists with a `main`, which a string comparison alone cannot.
+val nativeImageMainClass = "com.xemantic.typescript.compiler.cli.MainKt"
+
+// `tasks.register`, not `by tasks.registering`: the delegated form is deprecated
+// in Gradle 9.6 and this build is kept warning-clean.
+val nativeImage = tasks.register("nativeImage") {
+    group = "build"
+    description = "Ahead-of-time compiles the JVM target into a native executable (needs GraalVM + a C toolchain)."
+
+    val jvmMain = kotlin.targets.getByName("jvm").compilations.getByName("main")
+    dependsOn(jvmMain.compileTaskProvider)
+
+    val classpathFiles = files(jvmMain.output.allOutputs, jvmMain.runtimeDependencyFiles)
+    inputs.files(classpathFiles)
+    inputs.property("mainClass", nativeImageMainClass)
+
+    // Resolved at CONFIGURATION time so the task's inputs are honest.
+    val graalHome = (project.findProperty("graalvmHome") as String?)
+        ?: System.getenv("GRAALVM_HOME")
+    val builderHeap = (project.findProperty("nativeImageHeap") as String?) ?: "5g"
+
+    // Extra arguments, space separated, appended after the standard ones and
+    // before the main class (native-image takes its options first). Added for the
+    // PGO cycle — `--pgo-instrument`, then `--pgo=/abs/path/x.iprof` — which
+    // Oracle GraalVM has and GraalVM Community does NOT: with CE the builder
+    // rejects the flag, so a failure here is a distribution question first.
+    // Splitting on whitespace means a path containing a space cannot be passed;
+    // pass an absolute path without one.
+    val extraArgs = (project.findProperty("nativeImageArgs") as String?)
+        ?.split(" ", "\t", "\n")
+        ?.filter { it.isNotBlank() }
+        ?: emptyList()
+
+    // The output NAME, so an instrumented image and a final one can sit side by
+    // side in build/native/ instead of overwriting each other. It is an input
+    // AND selects the declared output — both, or Gradle would consider a
+    // differently-named image up to date.
+    val outputName = (project.findProperty("nativeImageOutput") as String?) ?: "xtsc"
+    inputs.property("nativeImageArgs", extraArgs)
+    inputs.property("outputName", outputName)
+
+    val outputDir = layout.buildDirectory.dir("native")
+    val binaryFile = outputDir.map { it.file(outputName) }
+    outputs.file(binaryFile)
+
+    doLast {
+        // Prefer an explicit GraalVM home; fall back to whatever is on PATH so a
+        // GraalVM-provisioned CI runner works with no extra configuration.
+        val fromHome = graalHome?.let { File(it).resolve("bin/native-image") }
+        val onPath = System.getenv("PATH")
+            ?.split(File.pathSeparator)
+            ?.map { File(it).resolve("native-image") }
+            ?.firstOrNull { it.canExecute() }
+        val tool = when {
+            fromHome != null && fromHome.canExecute() -> fromHome.absolutePath
+            fromHome != null -> error(
+                "native-image not found at $fromHome — is '$graalHome' a GraalVM JDK?"
+            )
+            onPath != null -> onPath.absolutePath
+            // Checked explicitly rather than left to ProcessBuilder, which reports
+            // this as a bare `IOException: Cannot run program "native-image"` that
+            // says nothing about what to install or which flag to pass.
+            else -> error(
+                "native-image not found. Install a GraalVM JDK and either put its " +
+                    "bin/ on PATH, set GRAALVM_HOME, or pass -PgraalvmHome=/path/to/graalvm. " +
+                    "A C toolchain (gcc, binutils, libc headers, zlib) is also required."
+            )
+        }
+
+        val out = outputDir.get().asFile
+        out.mkdirs()
+        val binary = out.resolve(outputName)
+
+        // A missing C toolchain is the most likely failure and its message is
+        // opaque (it aborts inside CCompilerInvoker), so say so up front.
+        logger.lifecycle(
+            "Building native image via $tool (needs gcc + binutils + libc headers + zlib on PATH) ..."
+        )
+        runCommand(
+            *(
+                listOf(
+                    tool,
+                    "-cp", classpathFiles.joinToString(File.pathSeparator) { it.absolutePath },
+                    "-o", binary.absolutePath,
+                    "--no-fallback",
+                    "-J-Xmx$builderHeap"
+                ) + extraArgs + nativeImageMainClass
+                ).toTypedArray()
+        )
+        logger.lifecycle("Native executable: $binary")
+    }
+}
