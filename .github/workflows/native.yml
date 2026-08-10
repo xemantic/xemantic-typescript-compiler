@@ -46,16 +46,30 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Set up GraalVM
+      # ORACLE GraalVM, not Community — PGO is an Oracle-only feature and it is
+      # the biggest single lever ever measured on this compiler (2026-08-10:
+      # -13.9% check-only / -19.5% emit over the Oracle base, and Oracle base is
+      # itself ahead of CE). `distribution: graalvm` is Oracle GraalVM under the
+      # GraalVM Free Terms and Conditions, which permits production use and
+      # redistribution of the images built with it.
+      #
+      # 25, not 26: GraalVM ships NO JDK 26 build in either distribution
+      # (Oracle's graalvm-jdk-26 404s, CE's newest is graal-25.2.4 / JDK 25.0.4),
+      # which is exactly why `javaTarget` is 25 and not 26 — native-image cannot
+      # read a class file its own JVM rejects. Raise both together, or neither.
+      - name: Set up GraalVM (Oracle, for PGO)
         uses: graalvm/setup-graalvm@v1
         with:
           java-version: '25'
-          distribution: 'graalvm-community'
+          distribution: 'graalvm'
           github-token: ${{ secrets.GITHUB_TOKEN }}
           cache: 'gradle'
 
-      - name: Build native image
-        run: ./gradlew :xemantic-typescript-compiler-cli:nativeImage --no-configuration-cache
+      # Three builds and two training runs — see the script's header for the
+      # recipe and the both-modes trap. Not inlined here: bench.yml runs the same
+      # cycle, and two copies of it would drift silently.
+      - name: Build native image (Oracle + PGO)
+        run: scripts/build-native-pgo.sh --graalvm-home "$GRAALVM_HOME"
 
       - name: Report binary
         run: |
@@ -70,7 +84,14 @@ jobs:
           set -euo pipefail
           scripts/bench-compile-tsc.sh --project compiler --no-emit --no-log --iterations 1
           PROFILE=$(ls -d build/bench/tsc-project-* | head -1)
-          CP="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(cat build/bench/cp.txt)"
+          # NOT `cat build/bench/cp.txt` (which is what this line used to be):
+          # that file lives under gitignored build/, NOTHING in CI writes it, and
+          # `DepClasspathGuardTest` — which exists to stop exactly this — only
+          # walks scripts/, so a workflow reading it is outside the guard. An
+          # empty tail would have left `java` unable to find the Kotlin stdlib,
+          # and the `|| true` below would have captured the resulting stack trace
+          # into jvm.raw and failed the diff as if the NATIVE image were wrong.
+          CP="xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main:$(scripts/lib/dep-classpath.sh --print)"
           # The compiler exits 1 when it finds errors (tsc semantics, 2026-08-08)
           # and this profile has 46. Under `set -euo pipefail` that would fail the
           # PIPELINE, so each run is captured first and filtered afterwards; the
