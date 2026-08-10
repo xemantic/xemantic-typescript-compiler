@@ -89,11 +89,12 @@ jobs:
         id: aot
         continue-on-error: true
         run: |
-          ./gradlew :xemantic-typescript-compiler-daemon:nativeImage --no-configuration-cache -PgraalvmHome="$GRAALVM_HOME"
-          # The image is built by the daemon module — it holds the dispatcher the
-          # entry point names. This step is continue-on-error, so a stale path
-          # would SILENTLY drop the AOT arm instead of failing; assert it exists.
-          bin="$PWD/xemantic-typescript-compiler-daemon/build/native/xtsc"
+          ./gradlew :xemantic-typescript-compiler-cli:nativeImage --no-configuration-cache -PgraalvmHome="$GRAALVM_HOME"
+          # The image is built by the CLI module — the lean one-shot entry point,
+          # which carries the compiler and none of the daemon transport. This step
+          # is continue-on-error, so a stale path would SILENTLY drop the AOT arm
+          # instead of failing; assert it exists.
+          bin="$PWD/xemantic-typescript-compiler-cli/build/native/xtsc"
           test -x "$bin" || { echo "native image missing at $bin" >&2; exit 1; }
           echo "bin=$bin" >> "$GITHUB_OUTPUT"
 

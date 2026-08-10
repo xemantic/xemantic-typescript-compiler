@@ -5,6 +5,28 @@ queue item. Nothing in the build system was changed: the image is built from the
 existing `build/classes/kotlin/jvm/main` + `build/bench/cp.txt` classpath by a
 standalone `native-image` invocation.*
 
+> **(MOD.7), 2026-08-10 — WHICH MODULE BUILDS THE IMAGE, AND WHAT IT NO LONGER CARRIES.**
+> The `nativeImage` task moved from `:xemantic-typescript-compiler-daemon` to
+> `:xemantic-typescript-compiler-cli`, and the image's entry point is now
+> `…compiler.cli.MainKt` — a LEAN one-shot CLI that **refuses** `--serve` / `--daemon` /
+> `--socket` (exit 2) instead of doing what round 840(b) measured the bare
+> `…compiler.MainKt` doing: adopting the socket path as the project, emitting 173 files and
+> exiting 0. Invoke it as
+> `./gradlew :xemantic-typescript-compiler-cli:nativeImage`; the binary is
+> `xemantic-typescript-compiler-cli/build/native/xtsc` and both CI workflows were updated.
+> Two new passthroughs for the PGO cycle (§ 9 item 3): `-PnativeImageArgs="…"` (extra
+> `native-image` arguments, e.g. `--pgo-instrument` / `--pgo=/abs/x.iprof`, Oracle GraalVM
+> only) and `-PnativeImageOutput=name` (so an instrumented and a final image coexist).
+> **Dependency effect, measured from `jvmRuntimeClasspath`: 23 → 15 modules.** Gone:
+> `io.ktor:ktor-network` / `ktor-io` / `ktor-utils` (+ their `-jvm` variants),
+> `org.slf4j:slf4j-api`, and `:xemantic-typescript-compiler-api`. **NOT gone, and no claim
+> is made that it is: kotlinx-serialization**, which the core needs to parse tsconfig.json.
+> Consequence for § 9 item 5: the `UnixDomainSocketAddress` closed-world question is **moot
+> for this image** — nothing on its classpath opens a socket. It remains open for any
+> future image built from the dispatcher.
+> **UNMEASURED:** image size, build time and run time were not re-taken; GraalVM is not
+> installed on the development box and no image has been built from the new entry point.
+
 ## 0. The artifact points — all FIVE, and how to read them (index, round 828)
 
 This document is the arc's artifact-point index. There are **five** ways to run the
