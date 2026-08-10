@@ -139,6 +139,25 @@ jobs:
           # to watch the number that converges on tsc. warmup 6 is the measured
           # floor for a <1% between-process spread; 5 measured iterations keeps
           # the added CI time near ~5 min per mode.
+          #
+          # TWO warm arms, and this is why the series never has to pick a JVM.
+          # The Graal JIT is a measured ~5% (check-only) / ~10% (emit) WARM win
+          # over HotSpot while LOSING cold by 8-16%, and warm is the daemon
+          # regime — so "which JVM should the bench use" had exactly one honest
+          # answer that is not a choice: report both, on identical bytecode, in
+          # the same run. Temurin stays the PRIMARY (neutral, tracks upstream
+          # JDKs, closest to what users run, and it does not freeze the series on
+          # JDK 25 the way a GraalVM-only arm would).
+          #
+          # GRAALVM_HOME survives the setup-java step that follows setup-graalvm
+          # (see the ordering comment above), which is what makes this arm
+          # available without disturbing the build JDK.
+          warm2_args=()
+          if [[ -n "${GRAALVM_HOME:-}" && -x "$GRAALVM_HOME/bin/java" ]]; then
+            warm2_args=(--warm-jvm2 "graal-oracle25=$GRAALVM_HOME/bin/java")
+          else
+            echo "::warning::GRAALVM_HOME unusable — publishing a single warm arm"
+          fi
           scripts/bench-3way.sh \
             --tsc  "$TSC_BIN" \
             --tsgo "$TSGO_BIN" \
@@ -146,6 +165,8 @@ jobs:
             --project compiler \
             --xtsc-iters 1 --ref-iters 3 \
             --xtsc-warmup 6 --xtsc-warm-iters 5 \
+            --warm-jvm "temurin26=$JAVA_HOME/bin/java" \
+            "${warm2_args[@]}" \
             --label "$BENCH_LABEL"
 
       - name: Commit results

@@ -46,6 +46,11 @@
 #                     supposed to show.
 #   --xtsc-warm-iters N  measured warm rebuilds, median (default 8)
 #   --no-warm         skip the warm arm (cold-only, the pre-2026-08-10 behaviour)
+#   --warm-jvm L=P    label + java binary for the primary warm arm (default: `java`)
+#   --warm-jvm2 L=P   OPTIONAL second warm arm on a DIFFERENT JVM, same bytecode,
+#                     same run. Exists because the Graal JIT is ~5%/~10% faster
+#                     WARM and 8-16% slower COLD than HotSpot, and warm is the
+#                     daemon regime — reporting both means never having to pick.
 #   --modes LIST      comma-separated subset of check-only,emit (default both)
 #   --out-dir DIR     bench-history root (default bench-history)
 #   --label TEXT      free-text note stored in the report
@@ -58,6 +63,7 @@ cd "$REPO_ROOT"
 TSC_BIN=""; TSGO_BIN=""; XTSC_NATIVE=""; PROJECT=compiler
 XTSC_ITERS=1; REF_ITERS=3
 XTSC_WARMUP=6; XTSC_WARM_ITERS=8; WARM=1
+WARM_JVM1=""; WARM_LABEL1="jvm"; WARM_JVM2=""; WARM_LABEL2="jvm2"
 MODES="check-only,emit"
 OUT_DIR="$REPO_ROOT/bench-history"; LABEL=""
 while [[ $# -gt 0 ]]; do
@@ -70,6 +76,8 @@ while [[ $# -gt 0 ]]; do
         --xtsc-warmup) XTSC_WARMUP="$2"; shift 2 ;;
         --xtsc-warm-iters) XTSC_WARM_ITERS="$2"; shift 2 ;;
         --no-warm)    WARM=0; shift ;;
+        --warm-jvm)   WARM_LABEL1="${2%%=*}"; WARM_JVM1="${2#*=}"; shift 2 ;;
+        --warm-jvm2)  WARM_LABEL2="${2%%=*}"; WARM_JVM2="${2#*=}"; shift 2 ;;
         --ref-iters)  REF_ITERS="$2"; shift 2 ;;
         --modes)      MODES="$2"; shift 2 ;;
         --out-dir)    OUT_DIR="$2"; shift 2 ;;
@@ -155,31 +163,53 @@ run_xtsc() { # $1=mode ; sets xtsc_wall xtsc_self xtsc_err xtsc_files LOC
 # main ones, and the dependency tail comes from the shared validating resolver —
 # never a hand-frozen cp file (round 858).
 # --------------------------------------------------------------------------
-run_xtsc_warm() { # $1=mode ; sets xtsc_warm (0 when the arm is off/unavailable)
-    xtsc_warm=0
-    [[ "$WARM" -eq 1 ]] || return 0
-    local mode="$1" emitarg="off" out main test cp_tail
-    [[ "$mode" == emit ]] && emitarg="emit"
+# The warm classpath, resolved ONCE. `BenchMain` lives in commonTest, so this
+# needs the TEST classes as well as the main ones, and the dependency tail comes
+# from the shared validating resolver — never a hand-frozen cp file (round 858).
+WARM_CP=""
+warm_classpath() {
+    [[ -n "$WARM_CP" ]] && { printf '%s' "$WARM_CP"; return 0; }
+    local main test cp_tail
     main="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main"
     test="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"
     if [[ ! -f "$test/com/xemantic/typescript/compiler/bench/BenchMainKt.class" ]]; then
-        echo "== xtsc-warm ($mode): compiling test classes ==" >&2
-        ./gradlew -q compileTestKotlinJvm >&2 || { echo "warm arm unavailable" >&2; return 0; }
+        echo "== xtsc-warm: compiling test classes ==" >&2
+        ./gradlew -q compileTestKotlinJvm >&2 || return 1
     fi
     # shellcheck source=lib/dep-classpath.sh
     . "$REPO_ROOT/scripts/lib/dep-classpath.sh"
-    cp_tail="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-warm.txt")" || {
-        echo "warm arm: could not resolve the dependency tail" >&2; return 0; }
+    cp_tail="$(xtsc_dep_classpath "$REPO_ROOT/build/bench/cp-warm.txt")" || return 1
+    WARM_CP="$main:$test:$cp_tail"
+    printf '%s' "$WARM_CP"
+}
 
-    echo "== xtsc-warm ($mode, warmup $XTSC_WARMUP, iters $XTSC_WARM_ITERS) =="
+# $1=mode $2=java binary $3=label ; sets warm_result (0 when unavailable)
+#
+# TWO warm arms are measured per mode, on the SAME bytecode in the SAME run: the
+# build JDK, and optionally a second JVM (--warm-jvm2). That exists because the
+# Graal JIT is a measured ~5% check-only / ~10% emit WARM win over HotSpot while
+# LOSING cold by 8-16% (docs/perf/jdk-jit-vendor-comparison.md § 2), and the warm
+# arm is the daemon regime. Reporting both means the series never has to pick a
+# JVM — and picking one would have forced either a re-baseline or a number that
+# does not describe what ships.
+run_xtsc_warm() {
+    warm_result=0
+    [[ "$WARM" -eq 1 ]] || return 0
+    local mode="$1" jb="$2" label="$3" emitarg="off" out cp
+    [[ "$mode" == emit ]] && emitarg="emit"
+    [[ -x "$jb" || "$jb" == java ]] || {
+        echo "::warning::warm arm '$label': no executable java at $jb" >&2; return 0; }
+    cp="$(warm_classpath)" || { echo "warm arm '$label': no classpath" >&2; return 0; }
+
+    echo "== xtsc-warm/$label ($mode, warmup $XTSC_WARMUP, iters $XTSC_WARM_ITERS) =="
     out="$(mktemp)"
-    java -Xmx4g -cp "$main:$test:$cp_tail" \
+    "$jb" -Xmx4g -cp "$cp" \
         com.xemantic.typescript.compiler.bench.BenchMainKt \
         "$PROJ_DIR" "$XTSC_WARMUP" "$XTSC_WARM_ITERS" off "$emitarg" >"$out" 2>&1 || true
     # BenchMain self-falsifies: it prints files/errors per iteration and aborts on
     # drift. Take the median of the `iter` lines; a run that produced none is a
     # failed arm, reported as 0 rather than silently as a fast one.
-    xtsc_warm="$(python3 - "$out" <<'PY'
+    warm_result="$(python3 - "$out" <<'PY'
 import json, statistics, sys
 its=[]
 for line in open(sys.argv[1], errors="replace"):
@@ -191,7 +221,8 @@ for line in open(sys.argv[1], errors="replace"):
 print(int(statistics.median(its)) if its else 0)
 PY
 )"
-    [[ "$xtsc_warm" != 0 ]] || { echo "::warning::warm arm produced no iterations" >&2; sed -n '1,20p' "$out" >&2; }
+    [[ "$warm_result" != 0 ]] || {
+        echo "::warning::warm arm '$label' produced no iterations" >&2; sed -n '1,20p' "$out" >&2; }
     rm -f "$out"
 }
 
@@ -253,11 +284,15 @@ run_ref() { # $1=bin  $2=mode ; echoes "wall_ms err"
 MODE_DATA=()
 for MODE in "${MODE_LIST[@]}"; do
     run_xtsc "$MODE"
-    run_xtsc_warm "$MODE"
+    run_xtsc_warm "$MODE" "${WARM_JVM1:-java}" "$WARM_LABEL1"; xtsc_warm="$warm_result"
+    xtsc_warm2=0
+    if [[ -n "$WARM_JVM2" ]]; then
+        run_xtsc_warm "$MODE" "$WARM_JVM2" "$WARM_LABEL2"; xtsc_warm2="$warm_result"
+    fi
     echo "== tsc ($TSC_VER, $MODE) ==";   read -r tsc_wall  tsc_err  < <(run_ref "$TSC_BIN"  "$MODE")
     echo "== tsgo ($TSGO_VER, $MODE) =="; read -r tsgo_wall tsgo_err < <(run_ref "$TSGO_BIN" "$MODE")
     run_native "$MODE"
-    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err $nat_wall $nat_self $nat_err $xtsc_warm")
+    MODE_DATA+=("$MODE $xtsc_wall $xtsc_self $xtsc_err $tsc_wall $tsc_err $tsgo_wall $tsgo_err $nat_wall $nat_self $nat_err $xtsc_warm $xtsc_warm2")
 done
 
 # --------------------------------------------------------------------------
@@ -278,6 +313,7 @@ export B_TS_COMMIT="$TS_COMMIT8" B_FILES="$xtsc_files" B_LOC="$LOC"
 export B_TSC_VER="$TSC_VER" B_TSGO_VER="$TSGO_VER"
 export B_XITERS="$XTSC_ITERS" B_REFITERS="$REF_ITERS"
 export B_WARMUP="$XTSC_WARMUP" B_WARMITERS="$XTSC_WARM_ITERS"
+export B_WLABEL1="$WARM_LABEL1" B_WLABEL2="$WARM_LABEL2"
 B_MODE_DATA="$(printf '%s\n' "${MODE_DATA[@]}")"; export B_MODE_DATA
 
 python3 - <<'PYEOF'
@@ -295,14 +331,16 @@ ts_commit, files, loc = g("B_TS_COMMIT"), i("B_FILES"), i("B_LOC")
 tsc_ver, tsgo_ver = g("B_TSC_VER"), g("B_TSGO_VER")
 xiters, refiters = i("B_XITERS"), i("B_REFITERS")
 warmup, warmiters = i("B_WARMUP"), i("B_WARMITERS")
+wlabel1, wlabel2 = g("B_WLABEL1", "jvm"), g("B_WLABEL2", "jvm2")
 
 # mode xtsc_wall xtsc_self xtsc_err tsc_wall tsc_err tsgo_wall tsgo_err
-#      nat_wall nat_self nat_err xtsc_warm
-# (nat_* are 0 without --xtsc-native; xtsc_warm is 0 under --no-warm)
+#      nat_wall nat_self nat_err xtsc_warm xtsc_warm2
+# (nat_* are 0 without --xtsc-native; xtsc_warm is 0 under --no-warm;
+#  xtsc_warm2 is 0 unless --warm-jvm2 was given)
 modes = []
 for line in g("B_MODE_DATA").splitlines():
     p = line.split()
-    if len(p) == 12:
+    if len(p) == 13:
         modes.append((p[0],) + tuple(int(x) for x in p[1:]))
 
 def sec(ms): return f"{ms/1000:.2f}s" if ms else "n/a"
@@ -333,7 +371,7 @@ lines = [
 if label:
     lines.append(f"- **Label**: {label}")
 
-for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes:
+for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm, xwarm2 in modes:
     lines += [
         "",
         f"## {mode}",
@@ -344,7 +382,9 @@ for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes:
         "|---|---|---:|---:|---:|",
     ]
     if xwarm:
-        lines.append(f"| **xtsc (warm JVM)** | {rev} | **{sec(xwarm)}** | {tput(xwarm)} LOC/s | {xerr} |")
+        lines.append(f"| **xtsc (warm, {wlabel1})** | {rev} | **{sec(xwarm)}** | {tput(xwarm)} LOC/s | {xerr} |")
+    if xwarm2:
+        lines.append(f"| **xtsc (warm, {wlabel2})** | {rev} | **{sec(xwarm2)}** | {tput(xwarm2)} LOC/s | {xerr} |")
     lines += [
         f"| xtsc (cold JVM) | {rev} | {sec(xw)} | {tput(xw)} LOC/s | {xerr} |",
         f"| tsc | {tsc_ver} | {sec(tw)} | {tput(tw)} LOC/s | {terr} |",
@@ -364,8 +404,19 @@ for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes:
                     else f"{r:.2f}x {name} — parity at 1.00x")
         lines += [
             "",
-            f"**Warm JVM — the target metric: {_vs('tsc', tw)}; {_vs('tsgo', gw)}.**",
+            f"**Warm JVM ({wlabel1}) — the target metric: {_vs('tsc', tw)}; {_vs('tsgo', gw)}.**",
         ]
+        if xwarm2:
+            # The two warm arms are the SAME bytecode in the SAME run, so this
+            # delta is a within-round JVM comparison and nothing else.
+            d = (xwarm2 - xwarm) / xwarm * 100
+            lines.append(
+                f"Second warm JVM (`{wlabel2}`): **{sec(xwarm2)}**, "
+                f"**{d:+.1f}%** against `{wlabel1}` on identical bytecode — "
+                f"{ratio(xwarm2,tw)} tsc, {ratio(xwarm2,gw)} tsgo. One run is not a "
+                f"verdict on a few-percent difference (see "
+                f"docs/perf/jdk-jit-vendor-comparison.md); read the trend across rows."
+            )
     lines += [
         "",
         f"Cold JVM (one-shot CLI): **{ratio(xw,tw)}** tsc and **{ratio(xw,gw)}** tsgo; "
@@ -416,15 +467,15 @@ index = os.path.join(out_dir, "README.md")
 # day the harness changed.
 START, END = "<!-- BENCH-ROWS-V2-START -->", "<!-- BENCH-ROWS-V2-END -->"
 col = ("| Date | xtsc rev | Mode | xtsc warm | warm/tsc | warm/tsgo | tsc | tsgo "
-       "| xtsc cold | xtsc-nat | nat/tsc | err | Run |\n"
-       "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|\n")
+       "| xtsc cold | xtsc-nat | nat/tsc | err | Run | warm2 |\n"
+       "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|\n")
 new_rows = "".join(
     f"| {date_h} | [`{rev}`]({commit_url}) | {mode} | {sec(xwarm) if xwarm else '—'} "
     f"| {ratio(xwarm,tw) if xwarm else '—'} | {ratio(xwarm,gw) if xwarm else '—'} "
     f"| {sec(tw)} | {sec(gw)} | {sec(xw)} "
     f"| {sec(nw) if nw else '—'} | {ratio(nw,tw) if nw else '—'} | {xerr} "
-    f"| [report](runs/{run_name}) |\n"
-    for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm in modes)
+    f"| [report](runs/{run_name}) | {sec(xwarm2) if xwarm2 else '—'} |\n"
+    for mode, xw, xself, xerr, tw, terr, gw, gerr, nw, nself, nerr, xwarm, xwarm2 in modes)
 
 txt = open(index, encoding="utf-8").read() if os.path.exists(index) else ""
 if START in txt and END in txt:
@@ -455,10 +506,16 @@ PYEOF
 echo
 echo "=== 3-way bench ($PROJECT @ $TS_COMMIT8) ==="
 for row in "${MODE_DATA[@]}"; do
-    read -r m xw xs xe tw te gw ge nw ns ne xwarm <<<"$row"
+    # EVERY field must be named: `read` assigns the unconsumed remainder to the
+    # LAST variable, so a missing name here silently prints "6853 6480" as one
+    # number rather than failing.
+    read -r m xw xs xe tw te gw ge nw ns ne xwarm xwarm2 <<<"$row"
     echo "  -- $m --"
     if [[ "$xwarm" != 0 ]]; then
-        printf '    %-6s %8s ms warm rebuild  <-- headline\n' xtsc-w "$xwarm"
+        printf '    %-8s %8s ms warm rebuild (%s)  <-- headline\n' xtsc-w "$xwarm" "$WARM_LABEL1"
+    fi
+    if [[ "${xwarm2:-0}" != 0 ]]; then
+        printf '    %-8s %8s ms warm rebuild (%s)\n' xtsc-w2 "$xwarm2" "$WARM_LABEL2"
     fi
     printf '    %-6s %8s ms wall  %6s errors\n' xtsc "$xw" "$xe"
     printf '    %-6s %8s ms wall  %6s errors  (%s)\n' tsc  "$tw" "$te" "$TSC_VER"
