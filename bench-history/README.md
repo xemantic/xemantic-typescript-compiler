@@ -1,3 +1,17 @@
+
+> **Series restarted 2026-08-10.** The primary `xtsc` column is now a **warm** in-process rebuild (the JVM is the fastest target and the one the perf arc optimises; a cold single-shot was ~75% JVM warm-up and barely moved when the compiler got faster). The AOT arm also switched from GraalVM CE to **Oracle + PGO**. Rows below the V1 markers are the old cold-primary series and are NOT comparable to these.
+
+<!-- BENCH-ROWS-V2-START -->
+
+| Date | xtsc rev | Mode | xtsc warm | warm/tsc | warm/tsgo | tsc | tsgo | xtsc cold | xtsc-nat | nat/tsc | err | Run |
+|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| 2026-08-10 | [`ec3b7e61910d`](https://github.com/xemantic/xemantic-typescript-compiler/commit/ec3b7e61910d1d52c2e4f25a7a27487f1bb313a7) | check-only | 4.56s | 0.42× | 2.70× | 10.88s | 1.69s | 25.95s | 5.61s | 0.52× | 46 | [report](runs/20260810T210750Z-ec3b7e61910d.md) |
+| 2026-08-10 | [`ec3b7e61910d`](https://github.com/xemantic/xemantic-typescript-compiler/commit/ec3b7e61910d1d52c2e4f25a7a27487f1bb313a7) | emit | 5.41s | 0.40× | 2.22× | 13.41s | 2.43s | 30.67s | 6.51s | 0.49× | 46 | [report](runs/20260810T210750Z-ec3b7e61910d.md) |
+
+<!-- BENCH-ROWS-V2-END -->
+
+## Archive — V1 series (cold-primary xtsc column)
+
 # Bench history
 
 Three-way compile bench — **xtsc** vs the reference JS **tsc** vs the native **tsgo** — on
