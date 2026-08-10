@@ -436,7 +436,8 @@ either. `--no-fallback` succeeds first try.
    mode it is actually measured in.~~ **DONE 2026-07-30 (commit `a1ff6033`) — CI publishes
    BOTH modes on all four arms; § 0a has the series.** It answered more than it was asked:
    the native arm is at **tsc parity in both modes** (1.04× / 1.01×).
-3. **PGO** — needs Oracle GraalVM; the only remaining source of the 15%. **STILL OPEN.**
+3. **PGO** — needs Oracle GraalVM; the only remaining source of the 15%. **CLOSED 2026-08-10,
+   § 10: −21.2% check-only and −19.1% emit, 5/5 paired in both modes, output byte-identical.**
 4. **Build integration**, which is the owner's decision, and with it the question of
    whether the shipped artifact is a native binary, a JVM jar, or both. **STILL OPEN as
    the SHIPPING decision ((AOT.1)); the Gradle `nativeImage` task exists and CI runs it on
@@ -446,3 +447,63 @@ either. `--no-fallback` succeeds first try.
    `--serve`/`--daemon` never run on a native image at all (the `UnixDomainSocketAddress`
    closed-world question from round 840(b) is still open), and § 2's byte-identity grid has
    not been re-taken since the entry point moved to `server.XtscMainKt`.
+
+## 10. PGO measured — 2026-08-10, and it is the biggest single lever in this file
+
+Item 3 above, closed. § 3 predicted this: `-O3 -march=native` bought 0.07%, so the gap to
+JVM peak had to be profile-guided inlining and branch layout rather than codegen flags. It
+was.
+
+**All numbers below are one box, one session, one workload** (78-file `compiler` profile,
+5 rotated reps per arm per mode) — within-round and therefore comparable to each other, and
+to nothing in another section of this file.
+
+| image | check-only | emit | vs Oracle base |
+|---|---:|---:|---|
+| GraalVM **CE 25.2.4** (what CI builds today) | 11,481 ms | 13,704 ms | +12.3% / +11.7% |
+| **Oracle GraalVM 25.0.4**, no PGO | 10,222 ms | 12,269 ms | — |
+| **Oracle GraalVM 25.0.4 + PGO** | **8,057 ms** | **9,929 ms** | **−21.2% / −19.1%** |
+
+PGO wins **5/5 paired reps in both modes**; per-arm sd is 2.1–6.1%, so a ~20% effect is far
+outside it. End to end, CE-today to Oracle-plus-PGO is **−29.8% check-only, −27.5% emit**.
+
+**Correctness.** All three images: 46 diagnostics, `--noEmit --listAll` identical to the
+JVM's output bar the `time:` line, and `diff -r` of all **78 emitted `.js` files** empty
+between every pair. PGO changes codegen, so the emit diff is the load-bearing check, not a
+formality.
+
+**Against the other artifacts on this box, same day**: JVM cold ~24–25 s, JVM warm
+(in-process, plateau) ~6.2–6.4 s, CRaC restore ~6.8–7.3 s (`crac-checkpoint.md`), and
+**tsc 6.0.3 at 15,557 ms check-only / 19,304 ms emit** (measured 2026-08-09, same box, same
+profile). So the PGO image is **~1.93× FASTER than tsc in both modes**, where § 0a's CI
+series has the CE image at 1.02× tsc. It also lands within ~25% of the warm JVM, from ~60%
+before, with no warm-up, no 340 MB restore image and none of CRaC's hazards.
+
+### 10.1 Two things this does NOT establish
+
+- **The CE-vs-Oracle row confounds two variables** and cannot be read as "the innovation
+  stream is slower". CE 25.2.4 and Oracle 25.0.4 differ in *distribution* (Oracle carries
+  optimizations CE does not) **and** in Graal version (25.2 innovation vs 25.0 LTS) — note
+  both sit on the SAME JDK base, 25.0.4, so the JDK is not a variable. Oracle publishes no
+  innovation-stream build (25i2/25.2 URLs all 404), so the pair cannot be separated.
+- **One training workload.** The profile was collected from compiling tsc's own sources. A
+  second, unlike project should be profiled before this is called general.
+
+### 10.2 The recipe, and the trap in it
+
+```
+./gradlew :xemantic-typescript-compiler-cli:nativeImage -PgraalvmHome=$ORACLE \
+    -PnativeImageArgs="--pgo-instrument" -PnativeImageOutput=xtsc-instrumented
+cd <a scratch dir> && <…>/xtsc-instrumented --noEmit <profile>   # writes default.iprof here
+cd <another>       && <…>/xtsc-instrumented          <profile>   # emit mode, second profile
+./gradlew :xemantic-typescript-compiler-cli:nativeImage -PgraalvmHome=$ORACLE \
+    -PnativeImageArgs="--pgo=<noemit>.iprof,<emit>.iprof"
+```
+
+**Train on BOTH modes.** Round 840(c) found the JDK AOT cache trained with `--noEmit`
+carried no emitter profile at all and adding one bought −932 ms; the same trap applies here,
+and this measurement's emit arm is only meaningful because the emit profile was collected.
+The instrumented binary runs ~2× slower and is 119 MB; the profiles are 12 MB and 13 MB.
+
+**Cost**: ~6 minutes of extra build (instrumented 2m46 + two profile runs 43 s + final
+2m42) against a 2m36 plain build. The PGO image is also *smaller* — 52 MB vs 56 MB.
