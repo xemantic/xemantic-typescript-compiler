@@ -24,11 +24,11 @@ kotlinxSerialization = "1.11.0"
 # reflects onto `java.net.UnixDomainSocketAddress`, so it needs Java 16+.
 ktor = "3.5.2"
 
-versionsPlugin = "0.54.0"
+versionsPlugin = "0.61.0"
 dokkaPlugin = "2.2.0"
 mavenPublishPlugin = "0.37.0"
 jreleaserPlugin = "1.25.0"
-xemanticConventionsPlugin = "0.6.8"
+xemanticConventionsPlugin = "0.7.1"
 
 [libraries]
 kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin" }
@@ -51,7 +51,10 @@ kotlin-multiplatform = { id = "org.jetbrains.kotlin.multiplatform", version.ref 
 kotlin-plugin-power-assert = { id = "org.jetbrains.kotlin.plugin.power-assert", version.ref = "kotlin" }
 kotlin-plugin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
 dokka = { id = "org.jetbrains.dokka", version.ref = "dokkaPlugin" }
-versions = { id = "com.github.ben-manes.versions", version.ref = "versionsPlugin" }
+# `com.github.ben-manes.versions` is the DEPRECATED marker id for this plugin
+# (it prints a deprecation notice at configuration time); `io.github.…` is the
+# same artifact under its current coordinates.
+versions = { id = "io.github.ben-manes.versions", version.ref = "versionsPlugin" }
 maven-publish = { id = "com.vanniktech.maven.publish", version.ref = "mavenPublishPlugin" }
 jreleaser = { id = "org.jreleaser", version.ref = "jreleaserPlugin" }
 xemantic-conventions = { id = "com.xemantic.gradle.xemantic-conventions", version.ref = "xemanticConventionsPlugin" }

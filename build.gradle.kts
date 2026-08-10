@@ -23,7 +23,9 @@
  * are granted as described in the file LICENSE-EXCEPTION.
  */
 
+import com.github.benmanes.gradle.versions.updates.DependencyUpdatesTask
 import com.vanniktech.maven.publish.MavenPublishBaseExtension
+import org.gradle.plugins.signing.Sign
 import org.jreleaser.model.Active
 
 // The aggregator. It carries NO sources and NO compiler configuration — that all
@@ -56,10 +58,33 @@ xemantic {
     // the project applying this plugin — the root. The equivalent manifest
     // population is reinstated below, ordering-safe, so the artifacts keep their
     // Implementation-* attributes and META-INF/LICENSE.
-    applySignBeforePublishing()
+    // NOT applySignBeforePublishing() / applyReportOnlyStableDependencyUpdates()
+    // either — xemantic-conventions 0.7.0 DELETED both (0.6.8's `VersionsKt` and
+    // the two `XemanticConfiguration` members are simply gone from the 0.7.x jar,
+    // and `applyAllConventions()` there is jar-manifests + test-reporting +
+    // JReleaser only). They are reinstated verbatim below, so the bump is
+    // behaviour-preserving.
     applyAxTestReporting()
     applyJReleaserConventions()
-    applyReportOnlyStableDependencyUpdates()
+}
+
+// Reinstates 0.6.8's `applySignBeforePublishing()`: a repository publication must
+// run after the signing tasks, or it uploads unsigned artifacts.
+tasks.withType<PublishToMavenRepository>().configureEach {
+    dependsOn(tasks.withType<Sign>())
+}
+
+// Reinstates 0.6.8's `applyReportOnlyStableDependencyUpdates()`, including its
+// default keyword list — the report must not propose a prerelease as an update.
+val unstableVersionKeywords = listOf("alpha", "beta", "rc")
+
+fun isNonStableVersion(version: String): Boolean {
+    val lower = version.lowercase()
+    return unstableVersionKeywords.any { it in lower }
+}
+
+tasks.withType<DependencyUpdatesTask>().configureEach {
+    rejectVersionIf { isNonStableVersion(candidate.version) }
 }
 
 // Captured here because the `xemantic` extension exists only on this project,
