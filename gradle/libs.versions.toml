@@ -1,6 +1,15 @@
 [versions]
 kotlinTarget = "2.4"
-javaTarget = "17"
+# The BYTECODE target, not the JDK the build runs on — there is deliberately no
+# Gradle toolchain (see the core module's link to Jake Wharton's post), so the
+# build compiles with whatever JDK is on PATH and merely EMITS for this one.
+# Raised 17 -> 25 on 2026-08-10 (owner-approved). The ceiling is GraalVM, not
+# Kotlin: `JvmTarget` reaches JVM_26, but GraalVM ships no JDK 26 build at all
+# (Oracle's graalvm-jdk-26 404s; CE's newest is graal-25.2.4 / JDK 25.0.4), and
+# native-image cannot read a class file its own JVM rejects. So targeting 26
+# would cost the `nativeImage` task and both CI native workflows — i.e. the
+# fastest artifact this project ships. Re-test the ceiling when GraalVM 26 lands.
+javaTarget = "25"
 
 kotlin = "2.4.10"
 asm = "9.10.1"
