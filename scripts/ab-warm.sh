@@ -120,7 +120,26 @@ cd "$REPO_ROOT"
 
 DIR_A="$1"; DIR_B="$2"; PAIRS="$3"
 
-WARMUP="${WARMUP:-2}"
+# SIX, not two (2026-08-10). The default used to be 2, which puts every measured
+# iteration inside the JIT ramp. That does NOT bias a paired A/B — the ramp is
+# common-mode and cancels in the delta — but it lands squarely on the ONE
+# quantity the verdict below gates on: the spread BETWEEN process medians.
+#
+# Measured as an A/A (two 16-iteration ladders, separate JVMs, one binary, the
+# same data re-sliced per setting — so the arms are identical by construction):
+#
+#   WARMUP     2      3      4      6      8
+#   A/A gap  3.3%   2.0%   2.0%   0.8%   0.9%
+#
+# At 2 the two identical arms sit 3.3% apart, i.e. warm-up noise alone spends
+# more than three times the +/-1.0% band this driver requires before a real
+# effect is measured at all. Six buys the band back; eight buys nothing more.
+# Cost is 4 extra rebuilds (~28 s) per sample.
+#
+# It does NOT make an ABSOLUTE number stable, and nothing can: the ladder still
+# drifts -3.4% between iterations 9-12 and 13-16, sign-consistent across both
+# runs. Only within-round PAIRED deltas are quotable — see CLAUDE.md.
+WARMUP="${WARMUP:-6}"
 ITERS="${ITERS:-8}"
 HEAP="${HEAP:-4g}"
 TEST_CLASSES="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"

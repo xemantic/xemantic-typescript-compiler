@@ -610,7 +610,13 @@ internal fun tierStop() {
 fun main(args: Array<String>) {
     val project = args.getOrNull(0)
         ?: error("usage: BenchMainKt <projectDir> <warmup> <iters> [passTiming]")
-    val warmup = args.getOrNull(1)?.toIntOrNull() ?: 3
+    // SIX, not three (2026-08-10). Measured A/A — two 16-iteration ladders in
+    // separate JVMs on one binary, re-sliced per setting — the gap between two
+    // IDENTICAL process medians is 3.3% at warmup 2, 2.0% at 3, 0.8% at 6 and
+    // 0.9% at 8. Under three the measured window sits in the JIT ramp, which is
+    // common-mode in a paired delta but is exactly the between-process spread
+    // `ab-warm.sh` refuses a verdict on. Six buys the band; eight buys nothing.
+    val warmup = args.getOrNull(1)?.toIntOrNull() ?: 6
     val iters = args.getOrNull(2)?.toIntOrNull() ?: 10
     // Opt-in, and deliberately NOT a "any 4th argument means yes" test: a typo
     // would then silently buy a probe-contaminated extra rebuild.
