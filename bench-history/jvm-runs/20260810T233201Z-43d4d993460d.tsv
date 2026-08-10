@@ -1,0 +1,17 @@
+block	arm	mode	rep	ms	errors
+cold	temurin26	noEmit	1	25082	30
+cold	zulu26	noEmit	1	28512	30
+cold	graal-oracle25	noEmit	1	24323	30
+cold	graal-ce25	noEmit	1	25847	30
+warm	temurin26	noEmit	1	4682.3	46
+warm	zulu26	noEmit	1	4908.5	46
+warm	graal-oracle25	noEmit	1	4369.8	46
+warm	graal-ce25	noEmit	1	4772.1	46
+warm	zulu26	noEmit	2	4490.9	46
+warm	graal-oracle25	noEmit	2	4535.4	46
+warm	graal-ce25	noEmit	2	4904.8	46
+warm	temurin26	noEmit	2	4546.7	46
+warm	graal-oracle25	noEmit	3	4362.5	46
+warm	graal-ce25	noEmit	3	4726.2	46
+warm	temurin26	noEmit	3	4244.5	46
+warm	zulu26	noEmit	3	4453.7	46
