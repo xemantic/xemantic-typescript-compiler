@@ -306,11 +306,8 @@ Both of round 889 § 3's obligations were re-checked for every routed container.
 
 ### 5.5 Still queued
 
-- **(HASH.1)(b)** — the same finalizer for the CHECKER's packed id-pair keys:
-  `Relation.packKey` / `packRelationKey` (0.97% of the family, 56% treeified),
-  `resolvedPropertyTypes`, `ts2403IdentityStack`, `relationComparisonStack`,
-  `elaborationStack`, `functionElaborationStack`. All are membership/lookup only
-  — none is iterated, which is the same soundness check as § 3.
+- ~~**(HASH.1)(b)**~~ — **DONE, round 890, § 5 above.** The packed id-pair family
+  is swept and closed: two sites fixed, four measured already-fine, two refused.
 - **(HASH.1)(c)** — `nodeTypes`, keyed by an AST data class, is 0.74% with 34%
   treeified AND pays a deep structural `hashCode`. Its structural equality is
   deliberate and load-bearing (`getTypeFromTypeNodeCore`'s comment: same-shaped
