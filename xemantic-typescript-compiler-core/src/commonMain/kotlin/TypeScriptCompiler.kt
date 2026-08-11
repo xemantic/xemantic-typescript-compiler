@@ -1931,6 +1931,55 @@ class TypeScriptCompiler {
     }
 
     /**
+     * (PERF.HW.c): assign the program's files to `workers` partition checkers so
+     * that the SLOWEST worker finishes as early as possible — because the wall of
+     * a parallel phase is the slowest worker, not the average one.
+     *
+     * The predecessor was `i % workers == w`, round-robin over the crawl's sorted
+     * order, and on a real program that is close to worst case: the compiler
+     * profile's 78 files span three orders of magnitude and `checker.ts` alone is
+     * **31.6% of the whole program**, so whichever bucket drew it decided the
+     * wall. Measured over that profile, the heaviest bucket carried 1.90x the
+     * mean at 4 workers, 2.28x at 6 and 3.32x at 8 — i.e. the partition ALONE
+     * capped the achievable speedup at 2.10x / 2.63x / 2.41x before a single
+     * line of checker work was considered, and it is why 8 workers came out
+     * WORSE than 6.
+     *
+     * This is longest-processing-time-first: take the files in descending size
+     * and give each to the currently lightest bucket. LPT is within 4/3 of
+     * optimal for any input, and on this profile it takes the ceiling to 3.16x
+     * at every level >= 4 — which is then the REAL ceiling of file-level
+     * parallelism on this program, since one file being 31.6% of the input means
+     * no assignment whatever can beat 1/0.316.
+     *
+     * **Source LENGTH is a proxy for checking cost, not the cost itself** — it
+     * carries no information about which files are type-heavy. It is used because
+     * it is exact, free (the text is already in hand), and available BEFORE any
+     * checking happens, which a true cost measure is not. A wrong proxy costs
+     * balance, never correctness.
+     *
+     * **The order must be total, or the partition stops being a function of the
+     * program.** Ties break on `fileName`, so the assignment is reproducible
+     * across runs and platforms; a partition that depended on iteration or
+     * scheduling order would make diagnostics depend on it too (INV.6), and the
+     * whole verification method here is byte-identical output.
+     */
+    internal fun balancedFilePartition(files: List<SourceFile>, workers: Int): List<Set<String>> {
+        val order = files.sortedWith(
+            compareByDescending<SourceFile> { it.text.length }.thenBy { it.fileName }
+        )
+        val buckets = List(workers) { mutableSetOf<String>() }
+        val load = LongArray(workers)
+        for (file in order) {
+            var lightest = 0
+            for (w in 1 until workers) if (load[w] < load[lightest]) lightest = w
+            buckets[lightest].add(file.fileName)
+            load[lightest] += file.text.length.toLong()
+        }
+        return buckets
+    }
+
+    /**
      * (JIT.1)(e) round 816 — phase 2 of the multi-file pipeline: bind every parsed
      * file and run the checker (or, under `--workers`, the INV.6 partition checkers),
      * moved verbatim out of [cpcCompileMultiFile]. The one value that crosses the
@@ -1991,10 +2040,10 @@ class TypeScriptCompiler {
             // times).
             RealLibSnapshots.prewarmParsedLibFiles(options)
             val sourceList = parsedSourceFiles.values.toList()
-            val fileNames = sourceList.map { it.fileName }
+            val assignments = balancedFilePartition(sourceList, workers)
             val tasks = (0 until workers).map { w ->
                 {
-                    val assigned = fileNames.filterIndexed { i, _ -> i % workers == w }.toSet()
+                    val assigned = assignments[w]
                     val workerBinder = Binder(options)
                     val workerResults = sourceList.map { workerBinder.bind(it) }
                     Checker(options, workerResults, isMultiFileSource = parsed.hasExplicitFilenames,

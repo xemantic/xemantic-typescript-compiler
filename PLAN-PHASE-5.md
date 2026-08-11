@@ -20,6 +20,68 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 877 (2026-08-11) — (PERF.HW.c): THE WORKER PARTITION WAS THE LIMITER, AND IT WAS A ONE-LINE
+`i % workers == w`.**
+
+Round 876's warm ladder plateaued at ~1.6x and its Amdahl fit gave R = 0.39 / 0.54 / 0.53 / 0.57 at
+N = 2/4/6/8 — R rising with N, which is not a serial residue at all but an N-growing overhead. The
+census that explains it needs no profiler: the compiler profile's 78 files span three orders of
+magnitude and **`checker.ts` is 3,151,774 of 9,977,169 chars = 31.6% of the whole program**, so
+round-robin over the crawl's sorted order gave the heaviest bucket **1.90x / 2.28x / 3.32x** the mean
+at 4 / 6 / 8 workers.
+
+- **A PARTITION IMBALANCE IS A CEILING, NOT A TAX.** The wall of a parallel phase is the SLOWEST
+  worker, so max/mean IS the reciprocal of the best achievable speedup: **2.10x / 2.63x / 2.41x**
+  before a single line of checker work is considered. That is also the whole explanation of a result
+  this project has recorded three times and never explained — **w8 being worse than w4** (round 826
+  cold: 1.242x vs 1.361x). It was never about cores or memory bandwidth; at w8 one bucket drew
+  `checker.ts` AND its ordinary share.
+
+- **WHAT LANDED.** `balancedFilePartition`: files in descending size, each to the currently lightest
+  bucket — longest-processing-time-first, which is within 4/3 of optimal for any input. On this
+  profile it takes the ceiling to **3.16x at every level >= 4**, and 3.16x is then the REAL ceiling of
+  file-level parallelism here, since one file being 31.6% of the input means no assignment whatever
+  beats 1/0.316. Raising it further is not a scheduling problem — it needs sub-file parallelism.
+
+- **MEASURED, WARM** (`BenchMain <prof> 6 8 off noEmit workers<N>`, one JVM per level, round 867):
+  w4 **4,112.1 -> 3,232.1 ms**, i.e. **1.531x -> 1.947x** against the 6,293.7 ms sequential median;
+  w6 3,846.3 -> 3,478.9, i.e. 1.636x -> 1.809x. The two arms' ranges do not overlap at w4
+  (3,067-3,748 against 3,808-4,459). **The optimum moved from 6 back to 4** — balancing removed the
+  reason to spend more workers.
+
+- **MEASURED, COLD** (median of the standard capture): w2 21,254 -> 17,004, w4 19,980 -> **15,438**,
+  w8 23,562 -> 20,022 ms. Round 876's change moved nothing cold and this one moves 23%, which is the
+  expected asymmetry: a JIT-warming effect can be paid back by the ramp, a partition cannot.
+
+- **THE tsgo ANCHOR, TAKEN IN THE SAME SESSION ON THE SAME BOX** rather than inferred from
+  cross-round ratios: tsgo 7.0.0-dev.20260707.2, `--noEmit -p <profile>`, 5 runs, median **1,740 ms**
+  (65 of its own diagnostics — a different compiler's completeness, not a correctness comparison).
+  The gap goes **3.62x** (warm sequential) -> **2.36x** (w4 round-robin) -> **1.86x** (w4 balanced).
+  Said plainly: tsgo pays full process startup inside its 1,740 ms while xtsc's 3,232 ms is a warm
+  in-JVM rebuild, so this comparison already flatters xtsc, and the cold-CLI gap is ~8.9x.
+
+- **TWO PROPERTIES THE CODE DEPENDS ON, BOTH PINNED.** (i) The order is TOTAL — size descending,
+  ties on `fileName` — so the assignment is a pure function of the program; a partition that depended
+  on iteration or scheduling order would make diagnostics depend on it, and byte-identical output is
+  this project's entire verification method. (ii) Every file lands in exactly one bucket: a dropped
+  file is a silently MISSING diagnostic, which no baseline would catch on a fixture the partition
+  happens to cover. `BalancedFilePartitionTest` asserts coverage, disjointness, bucket count,
+  order-independence (forward, reversed and re-sorted inputs agree), the equal-size tie case, and the
+  balance claim as a strict inequality against the round-robin it replaced.
+
+- **SOURCE LENGTH IS A PROXY AND IS DOCUMENTED AS ONE.** It carries no information about which files
+  are type-heavy; it is used because it is exact, free (the text is already in hand) and available
+  BEFORE any checking happens, which a true cost measure is not. A wrong proxy costs balance, never
+  correctness — so a better weight (node count, or a recorded per-file check time) is a pure
+  improvement whenever someone wants it.
+
+- **CORRECTNESS.** 10 `--listAll` captures at w1/w2/w4/w8 — all 46 errors, all md5
+  `59d930db849399aea5e03e25fedb8e4e`, identical to both pre-change arms.
+
+- **GATES.** Suite **14,255 -> 14,261** / 0 failures / 3 skipped = exactly the 6 new pins.
+  `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
+  classes. Warning-clean.
+
 **Round 876 (2026-08-11) — (PERF.HW.b): THE SEQUENTIAL BIND A PARALLEL COMPILE WAS PAYING FOR AND
 NOBODY READ — AND THE INSTRUMENT THAT MAKES WARM CONCURRENCY MEASURABLE AT ALL.**
 
