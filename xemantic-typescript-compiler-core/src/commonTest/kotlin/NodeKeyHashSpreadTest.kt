@@ -41,8 +41,22 @@ import kotlin.test.Test
  * distribution, and it is written here against the REAL extents of a parsed
  * file rather than a synthetic model.
  *
- * Every pin below reddens if the finalizer in [nodeKey] is removed — that is
- * the round-807 single-mistake ablation these were verified against.
+ * **Verified by the round-807 single-mistake ablation** (remove the finalizer,
+ * change nothing else), and reported honestly, because a pin with no uniquely
+ * its own failure is a redundant guard rather than a pin:
+ *
+ *  - THREE pins DISCRIMINATE — `no bucket … reaches the treeify threshold`,
+ *    `a synthetic file-sized extent set …`, and `… spread far wider than the raw
+ *    packing they are built from` (the last one only after it was rewritten to
+ *    compare against the raw packing longhand; its first form asserted bucket
+ *    occupancy against the count of distinct node LENGTHS and stayed GREEN under
+ *    the ablation, because the rich fixture is small enough that `pos xor end`
+ *    still spreads over it — it was measuring the fixture, not the packing).
+ *  - TWO DO NOT, and are kept as INVARIANT GUARDS with no claim attached:
+ *    `the packing is injective …` and `a node key round-trips …`. Both packings
+ *    are bijections, so neither pin can tell them apart; what they defend is a
+ *    FUTURE change that reaches for a cheaper mix and loses injectivity, which
+ *    would corrupt node identity silently.
  *
  * The bucket arithmetic mirrors `java.util.HashMap` exactly: the table index is
  * `(hash xor (hash ushr 16)) and (capacity - 1)` over `Long.hashCode()`, and a
@@ -107,17 +121,24 @@ class NodeKeyHashSpreadTest {
     }
 
     @Test
-    fun `the fixture's node keys occupy far more buckets than there are node lengths`() {
+    fun `the fixture's node keys spread far wider than the raw packing they are built from`() {
+        // The comparison is made INSIDE the pin, against the un-mixed packing
+        // written out longhand, so it cannot go vacuous: strip the finalizer from
+        // [nodeKey] and the two sides become the same expression and the
+        // inequality fails by construction. An earlier version of this pin
+        // compared bucket occupancy to the number of distinct node LENGTHS and
+        // stayed GREEN under exactly that ablation — the rich fixture is small
+        // enough that `pos xor end` still spreads over it — so it was measuring
+        // the fixture rather than the packing (round 807).
         val nodes = fixtureNodes()
-        val keys = nodes.map { nodeKey(it.pos, it.end) }.distinct()
         val capacity = 1 shl 12
-        val used = histogram(keys, capacity).count { it > 0 }
-        // The un-mixed packing's whole bucket range is the set of `pos xor end`
-        // values, which for a tree is dominated by the set of node LENGTHS —
-        // this fixture has far fewer distinct lengths than distinct extents, so
-        // the inequality below is exactly what separates the two packings.
-        val distinctLengths = nodes.map { it.end - it.pos }.distinct().size
-        assert(used > distinctLengths * 2)
+        val mixed = nodes.map { nodeKey(it.pos, it.end) }.distinct()
+        val raw = nodes.map { (it.pos.toLong() shl 32) or (it.end.toLong() and 0xFFFFFFFFL) }
+            .distinct()
+        assert(mixed.size == raw.size)
+        val usedMixed = histogram(mixed, capacity).count { it > 0 }
+        val usedRaw = histogram(raw, capacity).count { it > 0 }
+        assert(usedMixed > usedRaw * 2)
     }
 
     @Test

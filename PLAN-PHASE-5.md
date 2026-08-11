@@ -20,6 +20,125 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
+PRICED AND REFUSED, NOT UNSTARTED — AND THE CENSUS FOUND THE HASH FAMILY'S REAL DEFECT ON THE WAY
+PAST: `nodeKey` HASHES TO `pos xor end`, i.e. TO **THE SET OF NODE LENGTHS**, SO `nodeToFlow` WAS
+NOT A HASH TABLE BUT A HANDFUL OF RED-BLACK TREES.**
+
+Round 886 left one structural item on the board and deliberately did not start it: "hash probing is
+24.3-24.6% of compile-thread samples as a LEAF; tsgo's answer is ~25 narrow `core.LinkStore[K,V]`s,
+each ONE probe returning a struct of CO-ACCESSED fields; ours is one map per FACT — a checker-wide
+refactor, priced as such." Being invisible row-by-row is exactly why it needed a census rather than
+a guess. `docs/perf/hash-key-spread.md`.
+
+- **(A) THE CO-ACCESS CENSUS, AND ITS VERDICT.** `scripts/round889_coaccess.py` reads `Checker.kt`
+  through the round-809 length-preserving stripper, finds every container probe whose key is a
+  COMPARABLE expression (a bare identifier or a simple dotted path — anything with a call or an
+  operator in it is skipped, because two occurrences of such a text are not reliably the same value),
+  attributes each to its INNERMOST enclosing `fun`, and reports every `(function, key)` at which two
+  or more DISTINCT containers are probed. **Clusters are ranked by the hash-family samples their
+  enclosing function OWNS** (round 732's law — a cluster of twenty cold sites must not outrank one on
+  a two-million-call path), using round 888's kept dumps.
+
+  | hash samples | maps | function / key | containers |
+  |---:|---:|---|---|
+  | 79 | 2 | `getTypeFromTypeNodeCore` `[node]` | `nodeTypes`, `nodeTypeResolutionInProgress` |
+  | 59 | 2 | `getTypeOfIdentifier` `[id.text]` | `currentLocalTypes`, `currentParamBindingNames` |
+  | 32 | 2 | `isOptionalProperty` `[symbol.id]` | `mappedRequiredMemberIds`, `optionalTupleMemberIds` |
+  | 30 | 2 | `walkMemoServe` `[root]` | `currentLocalTypes`, `narrowedDeclaredTypes` |
+  | 23 | 2 | `spineExEnterNode` `[name]` | `spineExDeclared`, `spineExCands` |
+  | 6 | 4 | `checkAssignmentExpressionCore` `[target.text]` | 4 scope maps |
+  | 1 | 2 | `getTypeOfSymbol` `[symbol.id]` | `symbolTypes`, `symbolTypeResolutionInProgress` |
+
+  **Read the first and last rows together and the verdict writes itself.** The two clusters that ARE
+  tsc's `NodeLinks`/`SymbolLinks` shape exactly — a type cache plus its in-progress sentinel, same
+  key, same site — are the TOP cluster at **0.49% of the profile** and the BOTTOM one at **1 sample**;
+  and a merge saves one of the two probes on the MISS path only, since a cache HIT never touches the
+  sentinel today. 254 clusters exist and the rest is a long tail of 2-container pairs. **So the
+  `LinkStore` shape does not port, and it is not a near miss** — our per-entity facts are consulted
+  one at a time from many sites rather than in the fixed bundles tsgo's ~25 stores group.
+
+- **(B) THE SAME CENSUS FROM THE OTHER SIDE SAYS IT TOO.** `scripts/round889_keyshape.py` weights
+  every hash sample by the KEY TYPE of the containers its owner probes: **map COPY/construction
+  18.0%** of the family (`ctaFnBodyFrame`, `spineArgListOverlay`, `ctaSpineEnter`, `EpochMap.<init>`
+  — the known (C2)/(WARM.18) family), `Int`-keyed probes 15.8%, `String`-keyed 14.3%, unclassified
+  (probes through a property path) 40.8%. **The largest identified mechanism is not per-entity fact
+  probing at all**, and a `LinkStore` fixes neither of the two that are.
+
+- **(C) A CORRECTION TO ROUND 886's OWN NUMBER, AND IT IS WHERE THE ROUND TURNS.**
+  `round886_hash_owners.py` matches the family with the prefix `"java.util.HashMap."`. A treeified
+  bucket's frames are `java.util.HashMap$TreeNode.find` / `.putTreeVal` / `.split` — **`HashMap$TreeNode.`,
+  not `HashMap.`** — so every sample inside a red-black bucket fell OUTSIDE the family it belongs to.
+  Corrected: the family is **26.42%**, and the missing **6.46% of all compile-thread samples is
+  treeified-bucket work**. The excluded part is precisely the part with a mechanism and a fix, and it
+  was invisible for two rounds because of one absent `$`.
+
+- **(D) THE MECHANISM.** `java.lang.Long.hashCode` is `(int)(v xor (v ushr 32))`, so the packing
+  `(pos shl 32) or end` hashes to **exactly `pos xor end`** — and for an AST node `end` is `pos` plus
+  the node's LENGTH, so that XOR is dominated by its low bits and its entire range is "the set of node
+  lengths in this file": a few hundred values **however many nodes the file has**. `HashMap`'s own
+  spread (`h xor (h ushr 16)`) cannot recover a dimension the XOR already destroyed.
+
+  | group | family share | of which TREEIFIED | tree share of group |
+  |---|---:|---:|---:|
+  | **`nodeToFlow`** — `(pos shl 32) or end` | **2.02%** | **1.60%** | **79%** |
+  | **`Relation.cache`** — `(srcId shl 32) or tgtId` | **0.97%** | **0.54%** | **56%** |
+  | `nodeTypes` — AST data-class key | 0.74% | 0.25% | 34% |
+  | everything else (mostly `String`-keyed) | 22.69% | 4.07% | 18% |
+
+  Modelled on a 20,000-node file (`nodeToFlow` is per FILE): the un-mixed key fills **278 of 32,768
+  buckets, max bucket 1,765, 98.3% of keys past the treeify threshold**. At the program-wide flow-node
+  population it is **399 buckets of 524,288, max 23,118, 99.9%**.
+
+- **(E) WHAT LANDED — ONE LINE.** `nodeKey` gets a multiplicative finalizer by the golden-ratio odd
+  constant `0x9E3779B97F4A7C15`, the one `LongKeyMap` already uses for the same reason. Multiplication
+  by an ODD constant modulo 2^64 is a **BIJECTION**, so the key stays exact and collision-free as an
+  identity and only its bit pattern changes: **14,896 buckets, max 6, ZERO treeified.** It fixes
+  `nodeToFlow`, `nodeToSymbol` and `moduleInstanceStates` at once.
+
+- **(F) THE SOUNDNESS ARGUMENT IS THAT NOTHING MAY DEPEND ON THE KEY'S VALUE, AND TWO THINGS COULD.**
+  Nothing unpacks `pos`/`end` from a node key (the repo's only unpacking site is `PassTiming`'s
+  `redundantPairNanos`, a *site-id* pair). And all three containers are `mutableMapOf`, i.e.
+  **LinkedHashMaps iterating in INSERTION order**, so the one place a `nodeToSymbol` is iterated
+  (`TypeScriptCompiler`'s symbol frontier) cannot move — had any been a plain `HashMap` this would
+  have been an iteration-ORDER change, the rounds-754/776/778 hazard that no output diff sees.
+  `Binder`'s `key != nodeKey(-1, -1)` compares against the packer's own answer, so it is unaffected.
+
+- **(G) THE ABLATION IS HONEST: 3 OF 5 PINS DISCRIMINATE, AND THE REPAIR IS WORTH MORE THAN THE COUNT.**
+  One mistake, the finalizer removed, nothing else changed. Two spread pins reddened immediately. A
+  third — `the fixture's node keys occupy far more buckets than there are node lengths` — stayed
+  **GREEN**, because the rich fixture is small enough that `pos xor end` still spreads over it: **the
+  pin was measuring the FIXTURE, not the packing.** Rewritten to compute the un-mixed packing
+  LONGHAND inside the pin and compare, so stripping the finalizer makes the two sides the same
+  expression and the inequality fails by construction. The remaining two (`injective`, `round-trips`)
+  cannot discriminate — both packings are bijections — and are kept as INVARIANT GUARDS with **no
+  claim attached** (round 807), defending a future cheaper mix that loses injectivity.
+
+- **(H) NO WALL-TIME NUMBER IS CLAIMED.** ~1.6% of samples on the `nodeToFlow` group is at the edge of
+  what two batches settle on this box (rounds 840(c)/858/886 all produced a sign-consistent batch that
+  did not replicate). The claim is the **bucket arithmetic**, which is deterministic and reproducible
+  offline. `cost_gate.py` **+0.00% on all 20 counters** is the EXPECTED answer (round 876) — same
+  keys, same answers, same order — and is read as the control that no checker decision moved.
+
+- **(I) A PROCESS TRAP PAID TWICE.** A backgrounded `sleep` is preempted by the next command
+  (CLAUDE.md's own entry), so several "waits" of mine passed almost no real time — the tell was
+  `ps -o etime` showing the test JVM aging 46 seconds across what I believed were 40 minutes. And the
+  first control re-run was killed mid-`compileKotlinJvm` by the OOM killer with three JVMs resident
+  (8.4 GB used / 1.9 GB free, zero swap): the log simply STOPS at the task line with no `BUILD FAILED`.
+
+- **(J) QUEUED.** **(HASH.1)(b)** — the same finalizer for the CHECKER's packed id-pair keys:
+  `Relation.packKey`/`packRelationKey` (**0.97% of the family, 56% treeified**), `resolvedPropertyTypes`,
+  `ts2403IdentityStack`, `relationComparisonStack`, `elaborationStack`, `functionElaborationStack`.
+  All are membership/lookup only — none is iterated, which is § (F)'s check again. **(HASH.1)(c)** —
+  `nodeTypes` is 0.74% with 34% treeified AND pays a deep structural `hashCode`, but its structural
+  equality is deliberate and load-bearing, so it needs a cached-hash node or nothing. And **the 4.07%
+  of treeified samples in String-keyed maps is unexplained** — `String.hashCode` is not degenerate, so
+  that means genuinely large per-bucket populations; worth one census before anything is designed.
+
+- **(K) GATES.** Suite **14,286 -> 14,291 / 0 failures / 3 skipped** = exactly the 5 new
+  `NodeKeyHashSpreadTest` pins. `cost_gate.py` **+0.00% on all 20 counters** (46 errors / 78 files).
+  `huge_methods.py --fail-over 0`: **0 over the limit**, 690 classes.
+
 **Round 888 (2026-08-11) — (WARM.21)+(WARM.13b): THE WARM LEAF PROFILE RE-TAKEN A FOURTH TIME, AND
 THE ALREADY-PRICED LEVER IT ROUTES TO — **THE PER-KIND SPINE ENTER SKIP MASK** — LANDED. 32,006,965
 HANDLER CONSULTATIONS PER REBUILD THAT ARE ENTERED AND IMMEDIATELY DECLINE, REPLACED BY ONE ARRAY
