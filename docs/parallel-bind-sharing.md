@@ -132,6 +132,56 @@ positive control demonstrates. So:
 
 That gate is the recommended next step, and it is much smaller than stages 2-4.
 
+## 2c. The shape gate — the exact soundness condition, decomposed (round 884, NOT implemented)
+
+`--shareBind` shipped opt-in in round 883 (-5% warm at w4, replicated). What would make it default is
+a gate deciding, before any checker runs, whether this program can share. The condition is **not**
+"no merge happens" — it is narrower, and the difference is what makes a hand-rolled gate dangerous.
+
+The merge site is:
+
+```kotlin
+for (result in binderResults) {
+    if (isModuleFile(result.sourceFile.statements)) {
+        for ((name, symbol) in result.locals)
+            if (moduleLocalContributesGlobally(name, symbol)) mergeSingleSymbol(globals, name, symbol)
+    } else { /* script file: the FULL merge — its locals ARE the global namespace */ }
+}
+```
+
+and `mergeSingleSymbol` has two branches with **different consequences for a shared bind**:
+
+- **`existing != null` (mutate).** The object mutated is `existing`, i.e. whatever is ALREADY in
+  `globals`. For a SHARED name — a module local colliding with a lib/script global (`Symbol`, `Node`,
+  `Performance`) — `existing` is the **lib** symbol, which is per-`Checker` and not shared. The
+  program's `symbol` is only READ. **This case is harmless for sharing.**
+- **`existing == null` (adopt).** `target[name] = symbol` aliases a PROGRAM symbol into `globals`. That
+  alone mutates nothing — but it makes the program symbol reachable as `globals[name]`, so any LATER
+  file merging the same name takes the mutate branch **on a binder-owned object**. That is the
+  cross-worker corruption, and it needs two files contributing one global name.
+
+So the sound condition is: **no program symbol is ever adopted into `globals`** (or, weaker but harder
+to establish: adopted but never merged onto again). Round 882's measurement is the empirical form of
+exactly this — 0 of 15,580 changed on an all-module program.
+
+**Why it cannot simply call the predicate.** `moduleLocalContributesGlobally` is a `Checker` member
+that reads checker state — `umdGlobalNames` (regex-collected before the merge) and, for the SHARED-name
+case, the lib globals themselves. None of it exists before a `Checker` is constructed, which is where
+the gate has to run. So the gate must either be hoisted along with the state it reads, or be a
+**conservative superset** that refuses more than necessary and can never permit wrongly.
+
+**A conservative superset that looks sufficient** (each clause AST-visible, no checker state):
+refuse sharing if any file is a non-module (script) file; or declares `declare global`; or declares an
+ambient `declare module "spec"`; or carries `export as namespace X`. Every one of those is a route to
+a global contribution. **It has not been validated**, and the validation is not optional: the
+obligation is to show the superset covers `moduleLocalContributesGlobally`'s true set, not to show it
+passes on one profile. The cheap check is differential — run both, on all eight profiles plus the
+corpus, and assert the superset never says "share" where the real predicate would have merged.
+
+**Do not implement this from the summary above.** Read the merge site and both predicates first; the
+reasoning here is a map, not a substitute, and a gate wrong in the permissive direction produces
+silently wrong diagnostics on a program shape nobody in this repo's corpus has.
+
 ## 3. What makes it hard — the identity invariants it collides with
 
 The obvious fix — copy each symbol on adoption so the binder's objects are never touched — changes
