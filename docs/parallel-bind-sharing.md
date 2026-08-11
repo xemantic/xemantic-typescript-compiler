@@ -192,6 +192,37 @@ The hard part is not the table; it is finding the read sites. Round 884's three 
 cheapest possible map of them — start there, since each names a concrete path that needs the merged
 view.
 
+### Round 885: the table is IN, two sites routed, one path left — and it is a *third kind*
+
+`mergedSymbols` is implemented as an **`IntKeyMap<Symbol>` keyed by `Symbol.id`** (the clone carries
+the original's id, so an id already names "the same logical symbol", and an int probe beats hashing an
+object — tsc keys by a `mergeId` it WRITES onto the source, which a shared bind cannot allow; tsgo
+hashes the pointer). `getMergedSymbol` short-circuits on an empty table, so the default path is one
+comparison. It is recorded in `cloneSymbolForMerge` and consulted at the two symbol -> type choke
+points, `getDeclaredTypeOfSymbol` and `getTypeOfSymbol`.
+
+**That fixed `jsExportMemberMergedWithModuleAugmentation`. The two `extendGenericArray` cases remain,
+and their path is different in kind — worth reading before continuing:**
+
+    pass("init:mergeLibGlobals")        { mergeSymbolTable(globals, libGlobals) }   // globals["Array"] = lib symbol
+    pass("init:wireGlobalArrayTypes")   { globals["Array"] -> globalArrayType }     // Type CACHED IN A FIELD
+    ...
+    pass("init:mergeFileLocalsIntoGlobals")                                          // user's interface Array<T> merges
+
+`globalArrayType` is built at step 2 from the pre-merge symbol and stored in a **field**. In-place
+mutation works because that `Type` resolves its members lazily off the *same object* the merge then
+edits. With a clone, the `Type` holds a `symbol` back-reference to the ORIGINAL and never sees the
+user's `foo(): T`.
+
+So the remaining sites are not name lookups at all — they are **`Type.symbol` back-references
+dereferenced for member resolution**. tsc covers this with the same hop applied at ~147
+`getSymbolOfDeclaration` call sites. For us the candidate choke point is wherever
+`resolveStructuredTypeMembers` (and its kin) dereference `type.symbol` to read `declarations`.
+
+**Do not fix it by re-ordering the passes.** Re-wiring `globalArrayType` after the file-locals merge
+would make these two tests pass and leave the general defect — any type built before any later merge
+has the same hazard. The dereference hop is the fix; the pass order is not the bug.
+
 ## 2c. The shape gate — SUPERSEDED by § 2d, kept for the reasoning (round 884, NOT implemented)
 
 `--shareBind` shipped opt-in in round 883 (-5% warm at w4, replicated). What would make it default is

@@ -71,6 +71,39 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**Round 885 (2026-08-11) — (PERF.HW.l): THE FORWARDING TABLE IS IN, TWO SITES ROUTED, **3 FAILURES -> 2**
+— AND THE PATH THAT REMAINS IS A **DIFFERENT KIND**, WHICH IS THE FINDING.**
+
+Round 884 measured that tsc's `cloneSymbol` alone is not portable here. This lands the other half of
+tsc's/tsgo's design: `mergedSymbols` + `getMergedSymbol`.
+
+- **THE TABLE.** `IntKeyMap<Symbol>` keyed by `Symbol.id` — the clone carries the original's id, so an
+  id already names "the same logical symbol", and an int probe beats hashing an object. **Deliberately
+  neither reference implementation's key**: tsc keys by a `mergeId` it WRITES ONTO the source symbol,
+  which is precisely the write a shared bind cannot allow; tsgo hashes the pointer, which is safe but
+  dearer. `getMergedSymbol` short-circuits on an empty table, so the default path is one comparison.
+
+- **ROUTED AT THE TWO SYMBOL -> TYPE CHOKE POINTS** (`getDeclaredTypeOfSymbol`, `getTypeOfSymbol`).
+  That fixed `jsExportMemberMergedWithModuleAugmentation`; both `extendGenericArray` cases remain.
+
+- **THE REMAINING PATH IS NOT A NAME LOOKUP, AND THAT IS WHY IT SURVIVED.** The pass order is
+  `init:mergeLibGlobals` -> `init:wireGlobalArrayTypes` (which builds `globalArrayType` from
+  `globals["Array"]` and **caches the Type in a FIELD**) -> `init:mergeFileLocalsIntoGlobals` (where
+  the user's `interface Array<T> { foo(): T }` merges). In-place mutation works because that cached
+  `Type` resolves its members lazily off the SAME OBJECT the merge then edits; with a clone the `Type`
+  holds a `symbol` back-reference to the original and never sees `foo`. So the outstanding sites are
+  **`Type.symbol` back-references dereferenced for member resolution** — which is exactly the class
+  tsc covers with the same hop at ~147 `getSymbolOfDeclaration` call sites.
+
+- **RECORDED SO THE NEXT SESSION DOES NOT TAKE THE CHEAP FIX: do NOT re-order the passes.** Re-wiring
+  `globalArrayType` after the file-locals merge makes these two tests pass and leaves the general
+  defect — any type built before any later merge has the same hazard. The dereference hop is the fix;
+  the pass order is not the bug.
+
+- **STILL OFF BY DEFAULT, so the shipped path is unchanged and the gates measure it**: suite
+  **14,270 / 0 / 3 skipped** (unchanged — this round adds mechanism, not pins), `cost_gate.py` +0.00%
+  on all 20 counters, `huge_methods.py --fail-over 0` 0 over the limit at 688 classes.
+
 **Round 884 (2026-08-11) — (PERF.HW.k): tsc AND tsgo BOTH SOLVE THIS, THE SHAPE GATE IS **SUPERSEDED**,
 AND THE CLONE ALONE IS **MEASURED INSUFFICIENT** — THE CORPUS NAMED THE THREE TESTS THAT PROVE IT.**
 

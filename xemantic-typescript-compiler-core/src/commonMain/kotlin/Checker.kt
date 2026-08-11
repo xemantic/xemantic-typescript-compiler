@@ -113,6 +113,22 @@ class Checker(
      */
     private val mergeAdoptedSymbolIds = HashSet<Int>()
 
+    /**
+     * (PERF.HW.k) tsc's `mergedSymbols` / tsgo's `c.mergedSymbols`: binder symbol
+     * -> the CHECKER-OWNED copy the merge writes to.
+     *
+     * Keyed by `Symbol.id` rather than by object identity (tsgo hashes the
+     * pointer) because [cloneSymbolForMerge] carries the original's id over, so an
+     * id is already the shared name for "the same logical symbol" — and an
+     * `IntKeyMap` probe is cheaper than hashing an object. tsc keys the same table
+     * by a `mergeId` it WRITES ONTO the source symbol; we must not, because that
+     * write is the one thing a shared bind cannot allow.
+     *
+     * Per-`Checker` by construction, which is what makes N workers able to share
+     * one bind: each has its own merged view over the same pristine binder output.
+     */
+    private val mergedSymbols = IntKeyMap<Symbol>(256)
+
     /** Per-file binder results for lookup. */
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
@@ -9670,8 +9686,24 @@ class Checker(
         clone.target = symbol.target
         symbol.members?.let { clone.members = symbolTable().apply { putAll(it) } }
         symbol.exports?.let { clone.exports = symbolTable().apply { putAll(it) } }
+        // tsc's `recordMergedSymbol`: every later reader that still holds the
+        // ORIGINAL must be able to find this copy.
+        mergedSymbols[symbol.id] = clone
         return clone
     }
+
+    /**
+     * (PERF.HW.k) tsc's / tsgo's `getMergedSymbol`: the merged view of a symbol.
+     *
+     * Readers reach symbols through tables the merge does not rewrite —
+     * `BinderResult.locals`, `nodeToSymbol`, a cached lib table — and those still
+     * hold the pristine binder object. Without this hop they see the un-merged
+     * declarations, which is exactly what the corpus caught: `extendGenericArray`
+     * (a user `interface Array<T>` merging into the lib's) lost its diagnostic
+     * because the type was built from the original symbol's declarations.
+     */
+    private fun getMergedSymbol(symbol: Symbol): Symbol =
+        if (mergedSymbols.entryCount == 0) symbol else mergedSymbols[symbol.id] ?: symbol
 
     private fun mergeSingleSymbol(target: SymbolTable, name: String, symbol: Symbol) {
         val existing = target[name]
@@ -104721,7 +104753,10 @@ interface DataView {
     }
 
     /** Get the declared type of a symbol (class, interface, enum, type alias, etc.). */
-    private fun getDeclaredTypeOfSymbol(symbol: Symbol): Type {
+    private fun getDeclaredTypeOfSymbol(symbolIn: Symbol): Type {
+        // (PERF.HW.k) the merged view, or `symbolIn` when nothing was ever cloned
+        // (the default path: one probe against an empty table).
+        val symbol = getMergedSymbol(symbolIn)
         declaredTypes[symbol.id]?.let {
             // (WARM.3) the CONSUMED side of the produced-vs-consumed ratio.
             if (LibTypeCensus.enabled) {
@@ -105849,7 +105884,8 @@ interface DataView {
      * Get the type of a symbol (variable, parameter, function, class, etc.).
      * Cached in [symbolTypes].
      */
-    private fun getTypeOfSymbol(symbol: Symbol): Type {
+    private fun getTypeOfSymbol(symbolIn: Symbol): Type {
+        val symbol = getMergedSymbol(symbolIn)
         // (SETUP.2) census hook — BEFORE the memo fast path, because a later ask
         // served from `symbolTypes` is exactly what round 788's law calls a MOVE.
         if (FltmCensus.on) FltmCensus.noteAsk(symbol.id)
