@@ -11,8 +11,8 @@ on:
         description: 'npm spec for the reference JS tsc'
         default: 'typescript@6'
       tsgo_spec:
-        description: 'npm spec for the native tsgo (@typescript/native-preview, or typescript@7 once native ships there)'
-        default: '@typescript/native-preview@latest'
+        description: 'npm spec for the native TypeScript 7 compiler (typescript@7; the retired preview channel was @typescript/native-preview)'
+        default: 'typescript@7'
       label:
         description: 'optional note stored in the report'
         default: ''
@@ -80,15 +80,27 @@ jobs:
         env:
           # ${{ }} evaluated by GitHub into env values (no bash quote-breakout / injection).
           TSC_SPEC: ${{ github.event.inputs.tsc_spec || 'typescript@6' }}
-          TSGO_SPEC: ${{ github.event.inputs.tsgo_spec || '@typescript/native-preview@latest' }}
+          TSGO_SPEC: ${{ github.event.inputs.tsgo_spec || 'typescript@7' }}
         run: |
-          mkdir -p "$RUNNER_TEMP/bench-tools" && cd "$RUNNER_TEMP/bench-tools"
-          npm init -y >/dev/null 2>&1
-          npm install --no-audit --no-fund "$TSC_SPEC" "$TSGO_SPEC"
-          echo "tsc=$PWD/node_modules/.bin/tsc"   >> "$GITHUB_OUTPUT"
-          echo "tsgo=$PWD/node_modules/.bin/tsgo" >> "$GITHUB_OUTPUT"
-          "$PWD/node_modules/.bin/tsc"  --version
-          "$PWD/node_modules/.bin/tsgo" --version
+          # SEPARATE npm roots, and that is now load-bearing: since the 7.0
+          # release the native compiler IS the `typescript` package, so the two
+          # reference specs share a package NAME (typescript@6 vs typescript@7)
+          # and cannot coexist in one node_modules.
+          for pair in "tsc:$TSC_SPEC" "tsgo:$TSGO_SPEC"; do
+            dir="$RUNNER_TEMP/bench-tools/${pair%%:*}"
+            mkdir -p "$dir" && (cd "$dir" && npm init -y >/dev/null 2>&1 \
+              && npm install --no-audit --no-fund "${pair#*:}")
+          done
+          # The bin NAME differs by spec: `@typescript/native-preview` ships
+          # `tsgo`, `typescript@7` ships `tsc` (it replaces tsc). Resolve
+          # whichever the installed spec provided rather than assuming.
+          TSGO_DIR="$RUNNER_TEMP/bench-tools/tsgo/node_modules/.bin"
+          TSGO_BIN="$TSGO_DIR/tsgo"; [ -x "$TSGO_BIN" ] || TSGO_BIN="$TSGO_DIR/tsc"
+          [ -x "$TSGO_BIN" ] || { echo "no tsgo/tsc bin from $TSGO_SPEC" >&2; exit 1; }
+          echo "tsc=$RUNNER_TEMP/bench-tools/tsc/node_modules/.bin/tsc" >> "$GITHUB_OUTPUT"
+          echo "tsgo=$TSGO_BIN" >> "$GITHUB_OUTPUT"
+          "$RUNNER_TEMP/bench-tools/tsc/node_modules/.bin/tsc" --version
+          "$TSGO_BIN" --version
 
       # PLAIN Oracle image, NOT the PGO one — deliberately, and the AOT column
       # must be read accordingly.

@@ -450,6 +450,11 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             // site nobody grepped for is still caught.
             // (PERF.HW.i) round 883 — one shared bind for all workers. Opt-in:
             // sound only while no program symbol merges into `globals`.
+            // (PERF.HW.k) restore the pre-clone in-place merge — the control arm
+            // for --bindMutationCheck, which the fix itself drives to zero.
+            "--mergeClone", "--mergeclone" -> {
+                MergeClone.reset(); modes.set(MergeClone::enabled, true)
+            }
             "--shareBind", "--sharebind" -> {
                 ShareBind.reset(); modes.set(ShareBind::enabled, true)
             }
@@ -910,6 +915,9 @@ internal fun usageText(): String =
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
           --flowCensus       (WARM.12) flow nodes minted vs ever read by any checker consumer
+          --mergeClone       (PERF.HW.k) copy a binder-owned symbol before the merge writes to it
+                             (tsc/tsgo design). EXPERIMENTAL: sound only once the getMergedSymbol
+                             forwarding table lands — see docs/parallel-bind-sharing.md
           --shareBind        (PERF.HW.i) under --workers, bind the program ONCE and share it with
                              every worker instead of N full binds. Sound for an ALL-MODULE program
                              (docs/parallel-bind-sharing.md); a program with global script files

@@ -136,6 +136,22 @@ class Symbol(
     /** For import aliases: the resolved target symbol. Set by the checker. */
     var target: Symbol? = null
 
+    /**
+     * (PERF.HW.k) CHECKER-OWNED, i.e. tsc's `SymbolFlags.Transient` as a field.
+     *
+     * `false` on every `Symbol` the binder mints, `true` only on the copies
+     * `Checker.cloneSymbolForMerge` makes. The merge reads it to decide whether it
+     * may mutate in place: a transient symbol belongs to the checker that made it,
+     * a non-transient one is BINDER-OWNED and must be copied first.
+     *
+     * That is what keeps binder output pristine, which is what lets N `--workers`
+     * checkers share one bind (`docs/parallel-bind-sharing.md`). tsc has done this
+     * since forever for a different reason — a bound `SourceFile` is reused across
+     * `Program` instances in watch/incremental/the language service, so a checker
+     * that mutated it would leak one program's merges into the next.
+     */
+    var transient: Boolean = false
+
     override fun toString(): String = "Symbol($name, flags=${flags.value})"
 
     companion object {

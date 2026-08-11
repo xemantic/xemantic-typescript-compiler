@@ -5565,6 +5565,35 @@ object MergeCensus {
  * slice and can collide with none of them — the same invariant round 825's
  * `forceIntrinsicTypeInit` exists to express.
  */
+/**
+ * (PERF.HW.k) `--mergeClone` — copy a binder-owned symbol before the merge writes
+ * to it, which is tsc's and tsgo's design (`cloneSymbol` + a transient flag).
+ *
+ * **OFF BY DEFAULT, AND THE REASON IS A MEASURED FAILURE, NOT CAUTION.** Copying
+ * alone is NOT sufficient here, and the corpus said so: `extendGenericArray`,
+ * `extendGenericArray2` and `jsExportMemberMergedWithModuleAugmentation` all
+ * regress with it on. The cause is that our aliasing is load-bearing — because
+ * `globals[name]` IS the binder's object today, every reader that reaches a
+ * symbol through `BinderResult.locals` / `nodeToSymbol` sees the merged
+ * declarations for free. Copy it and those readers get the un-merged original.
+ *
+ * tsc solves exactly this with a FORWARDING TABLE — `mergedSymbols[source] =
+ * clone` plus a `getMergedSymbol` every reader passes through — and tsgo keeps it
+ * per-`Checker`, keyed by symbol identity, which is what makes N checkers able to
+ * share one bind. Landing that table is the remaining work; this flag exists so
+ * the clone half is in the tree, measured, and reachable while it happens.
+ *
+ * It also gives `--bindMutationCheck` its control arm: with the clone ON nothing
+ * mutates binder output, with it OFF the old in-place merge does, and a pin can
+ * assert both in ONE binary (round 795's verify-flag shape) rather than trusting
+ * a zero.
+ */
+object MergeClone {
+    /** OFF by default — see the KDoc: copying without forwarding loses merges. */
+    var enabled: Boolean = false
+    fun reset() { enabled = false }
+}
+
 object ShareBind {
     var enabled: Boolean = false
     fun reset() { enabled = false }

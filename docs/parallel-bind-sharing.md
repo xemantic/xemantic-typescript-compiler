@@ -132,7 +132,67 @@ positive control demonstrates. So:
 
 That gate is the recommended next step, and it is much smaller than stages 2-4.
 
-## 2c. The shape gate — the exact soundness condition, decomposed (round 884, NOT implemented)
+## 2d. THE ANSWER: tsc and tsgo already solve this, and the shape gate is SUPERSEDED
+
+Both reference compilers are on this box now — tsc's sources at
+`build/bench/tsc-project-*/src/compiler/`, and TypeScript 7.0.2's Go sources at `typescript-go-repo/`
+(tag `typescript/v7.0.2`). Neither mutates binder output, and they do it the same way.
+
+**tsc** (`checker.ts`) — copy-on-write plus a forwarding table:
+
+```ts
+if (!(target.flags & SymbolFlags.Transient)) { ...; target = cloneSymbol(resolvedTarget); }
+...
+function recordMergedSymbol(target, source) {
+    if (!source.mergeId) { source.mergeId = nextMergeId; nextMergeId++; }
+    mergedSymbols[source.mergeId] = target;          // var mergedSymbols: Symbol[] = []
+}
+function getMergedSymbol(symbol) { ... mergedSymbols[symbol.mergeId] ... }
+```
+and `mergeSymbolTable` writes the result back with `target.set(id, merged)`. Its motivation is NOT
+parallelism — tsc is single-threaded — but that a bound `SourceFile` is reused across `Program`
+instances in watch / incremental / the language service.
+
+**tsgo** (`internal/checker/checker.go`) — the same clone, with the one change that makes it
+parallel-safe:
+
+```go
+mergedSymbols map[*ast.Symbol]*ast.Symbol   // per-Checker, keyed by symbol IDENTITY
+```
+
+tsc writes `mergeId` **onto the shared symbol**; tsgo instead keys a per-`Checker` map by pointer, so
+**nothing at all is written to a binder `Symbol`** and N checkers share one bind unconditionally. That
+is why tsgo needs no shape gate — and why we should not build one.
+
+### What round 884 measured: the clone ALONE is not enough
+
+`--mergeClone` (tsc's `cloneSymbol` + a `Symbol.transient` flag, id deliberately carried over so the
+copy is the same logical symbol to every id-keyed cache) was implemented and run against the corpus.
+**Three tests regress**: `extendGenericArray`, `extendGenericArray2` (expected diagnostics, none
+produced) and `jsExportMemberMergedWithModuleAugmentation` (TS2353 where TS2741 belongs).
+
+The cause is that **our aliasing is load-bearing**. Because `globals[name]` IS the binder's object
+today, every reader that reaches a symbol through `BinderResult.locals` / `nodeToSymbol` sees the
+merged declarations for free. Copy it — at adoption or on first write, both break identically — and
+those readers get the un-merged original. **That is precisely the hole `getMergedSymbol` fills**, and
+it is why tsc has a forwarding table rather than just a clone.
+
+So the remaining work is exactly one thing: **the forwarding table**, tsgo's shape.
+
+1. `mergedSymbols` per `Checker`. Use an **id-keyed** map (`IntKeyMap`, already in the tree) rather
+   than hashing the object: `Symbol.id` is an Int and the clone carries the original's id, so this
+   gets tsc's cheap lookup with tsgo's safety.
+2. Record at clone time; route readers through `getMergedSymbol`.
+3. The cost is bounded and small: `globals.lookups` is **748,522** per compile, so even an extra probe
+   on every one of them is ~15-22 ms ≈ **0.24-0.35%** of a warm sequential rebuild, against a measured
+   **-5%** for the sharing it unlocks.
+4. Then `--shareBind` becomes unconditional and `--mergeClone` becomes the default.
+
+The hard part is not the table; it is finding the read sites. Round 884's three failures are the
+cheapest possible map of them — start there, since each names a concrete path that needs the merged
+view.
+
+## 2c. The shape gate — SUPERSEDED by § 2d, kept for the reasoning (round 884, NOT implemented)
 
 `--shareBind` shipped opt-in in round 883 (-5% warm at w4, replicated). What would make it default is
 a gate deciding, before any checker runs, whether this program can share. The condition is **not**

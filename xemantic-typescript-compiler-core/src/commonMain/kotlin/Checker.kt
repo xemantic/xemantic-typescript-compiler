@@ -9641,6 +9641,38 @@ class Checker(
         }
     }
 
+    /**
+     * (PERF.HW.k) tsc's `cloneSymbol`: a CHECKER-OWNED copy of a binder symbol, so
+     * the merge can write to the copy and leave the original pristine.
+     *
+     * **The id is DELIBERATELY carried over rather than freshly allocated.** A new
+     * id would shift the whole subsequent sequence, and CLAUDE.md records that
+     * id-allocation drift reshuffles ~350 boundary tests — a blast radius wildly
+     * out of proportion to this change. Carrying it means the clone and the
+     * original are the SAME logical symbol to every id-keyed cache, which is
+     * exactly the identity tsc maintains through its `mergedSymbols` forwarding
+     * table. It is also why we need no such table: an id-keyed reader cannot tell
+     * the two apart, and a name-keyed reader gets the clone because the clone is
+     * what the merge writes back.
+     *
+     * `members`/`exports` are copied as MAPS (tsc does the same) — otherwise the
+     * clone would share the original's tables and merging into them would mutate
+     * binder state through the back door. The symbols INSIDE those maps stay
+     * shared, and are themselves copied on their own first mutation by the
+     * recursive `mergeSymbolTable` below.
+     */
+    private fun cloneSymbolForMerge(symbol: Symbol): Symbol {
+        val clone = Symbol(symbol.flags, symbol.name, symbol.id)
+        clone.transient = true
+        clone.declarations.addAll(symbol.declarations)
+        clone.valueDeclaration = symbol.valueDeclaration
+        clone.parent = symbol.parent
+        clone.target = symbol.target
+        symbol.members?.let { clone.members = symbolTable().apply { putAll(it) } }
+        symbol.exports?.let { clone.exports = symbolTable().apply { putAll(it) } }
+        return clone
+    }
+
     private fun mergeSingleSymbol(target: SymbolTable, name: String, symbol: Symbol) {
         val existing = target[name]
         if (existing != null) {
@@ -9649,16 +9681,25 @@ class Checker(
                 if (existing.id in mergeAdoptedSymbolIds) FrontEnd.mergeMutatesAdopted++
                 FrontEnd.mergeDeclarationsAppended += symbol.declarations.size.toLong()
             }
+            // (PERF.HW.k) COPY-ON-WRITE, exactly tsc's shape: a non-transient
+            // target is binder-owned, so clone it, mutate the clone, and write the
+            // clone back into the table (tsc's `target.set(id, merged)`). Every
+            // later merge on this name finds a transient symbol and mutates in
+            // place, so at most ONE copy is made per merged name.
+            val merged =
+                if (MergeClone.enabled && !existing.transient) {
+                    cloneSymbolForMerge(existing).also { target[name] = it }
+                } else existing
             // Merge: combine flags and declarations
-            existing.flags = existing.flags or symbol.flags
-            existing.declarations.addAll(symbol.declarations)
-            if (existing.valueDeclaration == null && symbol.valueDeclaration != null) {
-                existing.valueDeclaration = symbol.valueDeclaration
+            merged.flags = merged.flags or symbol.flags
+            merged.declarations.addAll(symbol.declarations)
+            if (merged.valueDeclaration == null && symbol.valueDeclaration != null) {
+                merged.valueDeclaration = symbol.valueDeclaration
             }
             // Merge enum exports
             if (symbol.exports != null) {
-                if (existing.exports == null) existing.exports = symbolTable()
-                mergeSymbolTable(existing.exports!!, symbol.exports!!)
+                if (merged.exports == null) merged.exports = symbolTable()
+                mergeSymbolTable(merged.exports!!, symbol.exports!!)
             }
         } else {
             if (MergeCensus.enabled) {

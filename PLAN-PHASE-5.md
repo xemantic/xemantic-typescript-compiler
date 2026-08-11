@@ -71,6 +71,59 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**Round 884 (2026-08-11) — (PERF.HW.k): tsc AND tsgo BOTH SOLVE THIS, THE SHAPE GATE IS **SUPERSEDED**,
+AND THE CLONE ALONE IS **MEASURED INSUFFICIENT** — THE CORPUS NAMED THE THREE TESTS THAT PROVE IT.**
+
+Owner asked how tsc and tsgo handle a shared bind. Both reference compilers are now ON THIS BOX — tsc's
+sources at `build/bench/tsc-project-*/src/compiler/`, and **TypeScript 7.0.2's Go sources at
+`typescript-go-repo/`** (tag `typescript/v7.0.2`, gitignored) — so the answer is read, not recalled.
+
+- **NEITHER MUTATES BINDER OUTPUT, AND THE MECHANISM IS THE SAME.** tsc clones a non-transient merge
+  target (`target = cloneSymbol(resolvedTarget)`), writes the clone back (`target.set(id, merged)`),
+  and forwards through `mergedSymbols[source.mergeId]` / `getMergedSymbol`. Its motivation is NOT
+  parallelism — tsc is single-threaded — but that a bound `SourceFile` is reused across `Program`
+  instances in watch / incremental / the language service. **tsgo keeps the clone and changes exactly
+  one thing**: `mergedSymbols map[*ast.Symbol]*ast.Symbol`, per-`Checker`, keyed by IDENTITY, where tsc
+  writes `mergeId` ONTO the shared symbol. So tsgo writes nothing to a binder `Symbol` and N checkers
+  share one bind unconditionally — **no shape gate, which is why ours is superseded rather than built**.
+
+- **THE CLONE WAS IMPLEMENTED AND THE CORPUS FALSIFIED THE CHEAP VERSION.** `--mergeClone` ports tsc's
+  `cloneSymbol` plus a `Symbol.transient` flag, with the id DELIBERATELY carried over so the copy is
+  the same logical symbol to every id-keyed cache (a fresh id would shift the sequence, and CLAUDE.md
+  prices that at ~350 reshuffled boundary tests). Round 883's own recommendation was to try it WITHOUT
+  the forwarding table and let the corpus decide. It decided: **`extendGenericArray`,
+  `extendGenericArray2` (expected diagnostics, none produced) and
+  `jsExportMemberMergedWithModuleAugmentation` (TS2353 where TS2741 belongs)**.
+
+- **WHY, AND IT IS THE USEFUL PART: OUR ALIASING IS LOAD-BEARING.** Because `globals[name]` IS the
+  binder's object today, every reader reaching a symbol through `BinderResult.locals` / `nodeToSymbol`
+  sees the merged declarations FOR FREE. Copy it — at adoption or on first write, both break
+  identically — and those readers get the un-merged original. That is exactly the hole
+  `getMergedSymbol` fills, and exactly why tsc has a table rather than just a clone. **The three
+  failing tests are now the cheapest available map of the read sites that need it.**
+
+- **SHIPPED OFF BY DEFAULT, WHICH IS THE HONEST STATE.** `MergeClone.enabled = false`; the shipped path
+  is bit-identical (`cost_gate.py` +0.00% on all 20 counters — and note that with the clone ON,
+  `globals.misses` moved by 5, which is how the flag's reach is visible at all). The mechanism stays in
+  the tree, measured and reachable, so the next session lands one thing: the id-keyed `IntKeyMap`
+  forwarding table, priced at 0.24-0.35% against the -5% it unlocks.
+
+- **BENCHES NOW CITE THE SHIPPED RELEASE.** TypeScript 7.0 shipped as the `typescript` package itself
+  (`latest = 7.0.2`); `@typescript/native-preview` is the retired preview channel and stopped at the
+  dev build this project had been comparing against. `tools/tsgo-7.0.2/lib/tsc` measures **1,774 ms**
+  median against the dev build's 1,788 on the compiler profile, same 65 diagnostics — **statistically
+  identical, so the series stays continuous** across the switch. `.github/workflows/bench.yml` now
+  defaults `tsgo_spec` to `typescript@7` and installs the two references into SEPARATE npm roots, which
+  is newly load-bearing: they share a package NAME now (`typescript@6` vs `typescript@7`) and the bin
+  name differs by spec (`tsgo` vs `tsc`), so the step resolves whichever the spec provided.
+
+- **GATES.** Suite **14,265 -> 14,270** / 0 failures / 3 skipped = exactly the 5 new pins, including
+  the discriminating pair (with the clone OFF the old in-place merge mutates binder state; with it ON
+  nothing does) and a shared-bind-on-script-files pin that only passes with the clone armed.
+  `cost_gate.py` +0.00% on all 20. `huge_methods.py --fail-over 0`: 0 over the limit, 688 classes.
+  Compiler profile byte-identical, sequential and `--workers 4 --shareBind` alike (46 errors,
+  `59d930db…`).
+
 **Round 883 (2026-08-11) — (PERF.HW.i): ONE SHARED BIND FOR ALL WORKERS — **-5% WARM AT w4, REPLICATED
 IN TWO BATCHES WITH THE ROTATION REVERSED, THE TWO ARMS' RUNS COMPLETELY SEPARATE** — AND IT REFUTES A
 LAW THIS ARC DOCUMENTED TWO ROUNDS AGO.**

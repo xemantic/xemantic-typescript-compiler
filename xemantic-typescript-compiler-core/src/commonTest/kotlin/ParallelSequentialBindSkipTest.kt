@@ -198,12 +198,14 @@ class ParallelSequentialBindSkipTest {
      * into `globals` and merges the second into it, which appends to a
      * binder-owned `declarations` list.
      */
-    @Test
-    fun `the bind mutation check sees a merge that touches a program symbol`() {
-        val saved = BindMutationCheck.enabled
+    /** Two GLOBAL SCRIPT files declaring one name — the shape that merges. */
+    private fun compileTwoScriptsUnderMutationCheck(clone: Boolean): Long {
+        val savedCheck = BindMutationCheck.enabled
+        val savedClone = MergeClone.enabled
         try {
             BindMutationCheck.reset()
             BindMutationCheck.enabled = true
+            MergeClone.enabled = clone
             val options = CompilerOptions()
             val parsed = ParsedSource(
                 options,
@@ -214,13 +216,103 @@ class ParallelSequentialBindSkipTest {
                 hasExplicitFilenames = true,
             )
             TypeScriptCompiler().compileParsed(parsed, options, "/p/one.ts")
-            // The arm ran at all…
             assert(BindMutationCheck.symbolsChecked > 0)
-            // …and it is not blind: the second file's declaration was appended to
-            // the first file's symbol, which is binder-owned.
-            assert(BindMutationCheck.declarationsChanged > 0)
+            return BindMutationCheck.totalChanged
         } finally {
-            BindMutationCheck.enabled = saved
+            BindMutationCheck.enabled = savedCheck
+            MergeClone.enabled = savedClone
+        }
+    }
+
+    /**
+     * (PERF.HW.k) **THE PAIR THAT MEANS ANYTHING.** The fix drives its own
+     * instrument to zero — once the merge copies before it writes, nothing mutates
+     * binder output on any program — so a bare `changed == 0` no longer
+     * discriminates a working fix from a blind arm. `--mergeCloneOff` restores the
+     * old in-place merge in the SAME binary (round 795), and the two arms are
+     * asserted together: mutations WITH the old behaviour, none with the new.
+     *
+     * The fixture is the one that used to be unsafe — two GLOBAL SCRIPT files (no
+     * import, no export) declaring one name, so INV.3(d) does not keep them out of
+     * `globals` and the merge genuinely fires.
+     */
+    @Test
+    fun `copy-on-write stops the merge mutating binder symbols`() {
+        val withOldInPlaceMerge = compileTwoScriptsUnderMutationCheck(clone = false)
+        val withCopyOnWrite = compileTwoScriptsUnderMutationCheck(clone = true)
+        // The arm can see: the old behaviour still mutates binder-owned state.
+        assert(withOldInPlaceMerge > 0)
+        // And the fix removes it entirely, on the shape that used to be unsafe.
+        assert(withCopyOnWrite == 0L)
+    }
+
+    /**
+     * (PERF.HW.k) copy-on-write must not change what the compiler ANSWERS — the
+     * merged view is the clone, and every reader must land on it.
+     */
+    @Test
+    fun `copy-on-write is behaviour-free on a merging program`() {
+        val saved = MergeClone.enabled
+        try {
+            val options = CompilerOptions()
+            fun run(clone: Boolean): List<String> {
+                MergeClone.enabled = clone
+                val parsed = ParsedSource(
+                    options,
+                    listOf(
+                        SourceFileEntry("/p/one.ts", "declare var shared: number;\nvar other: string;\n"),
+                        SourceFileEntry("/p/two.ts", "declare var shared: number;\nvar other: number;\n"),
+                    ),
+                    hasExplicitFilenames = true,
+                )
+                return TypeScriptCompiler().compileParsed(parsed, options, "/p/one.ts")
+                    .diagnostics.map { "${it.fileName}|${it.start}|${it.code}|${it.message}" }.sorted()
+            }
+            val inPlace = run(false)
+            val copied = run(true)
+            assert(copied == inPlace)
+        } finally {
+            MergeClone.enabled = saved
+        }
+    }
+
+    /**
+     * (PERF.HW.i + k) the point of the whole exercise: with binder output now
+     * pristine, a SHARED bind must be sound on the program shape that previously
+     * made it unsafe — global script files that merge into `globals`.
+     */
+    @Test
+    fun `a shared bind is sound on a script-file program once the merge copies`() {
+        val savedShare = ShareBind.enabled
+        val savedWorkers = ParallelCheckMode.workers
+        val savedClone = MergeClone.enabled
+        try {
+            // Explicit: the soundness this asserts is a property of the CLONE, and
+            // the clone is off by default until the forwarding table lands.
+            MergeClone.enabled = true
+            val options = CompilerOptions()
+            fun run(share: Boolean, workers: Int): List<String> {
+                ShareBind.enabled = share
+                ParallelCheckMode.workers = workers
+                val parsed = ParsedSource(
+                    options,
+                    listOf(
+                        SourceFileEntry("/p/one.ts", "declare var shared: number;\nvar other: string;\n"),
+                        SourceFileEntry("/p/two.ts", "declare var shared: number;\nvar other: number;\n"),
+                        SourceFileEntry("/p/three.ts", "var third: boolean;\n"),
+                    ),
+                    hasExplicitFilenames = true,
+                )
+                return TypeScriptCompiler().compileParsed(parsed, options, "/p/one.ts")
+                    .diagnostics.map { "${it.fileName}|${it.start}|${it.code}|${it.message}" }.sorted()
+            }
+            val sequential = run(share = false, workers = 1)
+            val sharedParallel = run(share = true, workers = 4)
+            assert(sharedParallel == sequential)
+        } finally {
+            ShareBind.enabled = savedShare
+            ParallelCheckMode.workers = savedWorkers
+            MergeClone.enabled = savedClone
         }
     }
 
