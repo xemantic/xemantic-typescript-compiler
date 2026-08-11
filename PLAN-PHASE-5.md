@@ -20,6 +20,118 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 891 (2026-08-11) — (WARM.18): THE `CtaFrame.varTypes` PER-SCOPE COPY BECOMES AN UNDO LOG —
+**1,145,523 ENTRIES COPIED PER REBUILD -> 16,182 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND THE
+OTHER THREE FAMILIES ARE **REFUSED WITH A PRICED CONDITION TABLE**, INCLUDING THE ONE THAT IS THE
+BIGGER PRIZE.**
+
+Round 869 replaced two of the six per-scope whole-map copy families and said in as many words why it
+stopped: the rest are where a wrong scope does not crash — it silently resolves a name to an OUTER
+binding (the `applyBodyLocalShadowing` FP class). This round worked the item in the order CLAUDE.md
+requires — **conditions first, price second, code third** — and took exactly one of the four.
+`docs/perf/cta-frame-copy-families.md`.
+
+- **(A) THE CONDITION TABLE, WHICH IS WHAT DECIDED IT.** Round 869's law: replaceable EXACTLY when the
+  stack is strictly LIFO, no key is removed, and no reader mutates or retains the map.
+
+  | family | one LIFO stack? | removal? | retains / iterates? | writes/entries | price | verdict |
+  |---|---|---|---|---:|---:|---|
+  | `CtaFrame.varTypes` | **YES** — `ctaFrames`, one frame per owner node, `reset` per file | **none** in 217 refs (3 write paths + one `putAll`) | ~15 legacy call sites, all synchronous in one dispatch; **no** `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted` reader | 0.22% (recorded) | **33.9 ms = 0.59%** | **CONVERTED** |
+  | `CtaFrame` localTypes+declNodes+shadowed | copies at ONE site, but the maps are installed into AMBIENT fields >=12 other sites re-install with different objects | — | — | **UN-INSTRUMENTED** | **43-55 ms = 0.8-1.0%** | **REFUSED** |
+  | `EpochMap(localTypes)` | **NO** — THREE spine stacks (ccet/cpa/cta-narrowing) plus >=12 ad-hoc `currentLocalTypes = EpochMap(currentLocalTypes)` sites whose restore is a **POINTER SWAP** | — | — | 9.4% | ~14-24 ms = 0.25-0.42% (derived) | **REFUSED** |
+  | `EpochSet(paramBindings)` | same | — | — | 20% | ~1-2 ms (derived) | **REFUSED** |
+
+- **(B) THE PRICE, AND THE MEASUREMENT LESSON THAT COST THE ROUND AN EXTRA BATCH.** Three new
+  per-family amplifier arms (`copyampcv<r>` / `copyampcl<r>` / `copyampcta<r>`, the shape round 869's
+  `copyampos` established) price ONE family on the binary that still has it. **Two batches of the same
+  family on the same binary, with OPPOSITE rotations, read 53.6 and 14.1 ms/rep — a 4x
+  disagreement.** The cause is round 869's own first-draw law taken one step further: rotation INSIDE
+  a process is not enough at two draws per arm, because the leading draw's ~15% lands wholly on
+  whichever arm ran first (`r=16` in batch 1, `r=0` in batch 2) and a 6-point fit cannot absorb it.
+  Pooling the 12 draws gives **33.9 ms**; discarding each batch's leading draw gives **32.6** with the
+  two sub-intervals agreeing to 2.5%. **Quoted: ~33 ms = 0.59% [0.47-0.64%].** Batch 1 alone would
+  have been written up as 0.94%. Arithmetic falsifier held on every rebuild
+  (`ampSink == r x entries`, e.g. `18,328,368 = 16 x 1,145,523`).
+
+- **(C) THE ONE MECHANISM `AnnScopeStack` DOES NOT HAVE, AND IT IS NOT COSMETIC.** This family's map
+  is handed OUT by reference to helpers that WRITE into it (`checkVarDeclAssignability`,
+  `ctaTypeParamsIntoLocals`, the `extraVarTypes` `putAll`), so the scope cannot be a private map with
+  a `put` method — it is a `MutableMap` **FACADE** (`VarScopeStack.view`) whose `put`/`putAll`/
+  `remove` route through the log. `clear()` THROWS: it cannot be recorded in O(1), and a silent one
+  would drop the enclosing scopes' entries with no way to restore them at the pop. **And the facade
+  is the only place this family's writes can be counted, which is how a five-round-old census number
+  turned out to be wrong: the old hook was attached to 2 of the 3 write paths, so it read 2,564 where
+  the truth is 16,182** — 6.3x optimistic, with nothing anywhere saying so.
+
+- **(D) SHARING IS "OPEN NO SCOPE".** A BARE (non-`Block`) then-statement narrowing frame deliberately
+  shares its parent's map, because the legacy dispatch it reproduces passed the map straight through.
+  That is the frame's `varScoped` flag, which is also what `ctaSpineLeave` pops on — so push and pop
+  are mirrored by construction rather than by a separate rule. Every other frame kind (8 fn-body
+  shapes, statement blocks, `ModuleBlock`, switch clauses) opens a scope; the file-root frame does
+  not, and is dropped by `reset`.
+
+- **(E) THE CONTROLLED ROW (round 793 — the change moves no boundary and no population).**
+
+  | | before | after |
+  |---|---:|---:|
+  | `CtaFrame.varTypes` pushes | 30,433 | 30,433 |
+  | entries copied by it | **1,145,523** | **0** |
+  | undo records | 0 | **16,182** |
+  | entries copied, all six families | 2,746,298 | 1,600,775 |
+
+  **70.8x less work over an identical population.** And the amplifier is the change's own falsifier:
+  `copyampcv16/8/0` re-run on the new binary reads **`ampSink 0`** — it finds nothing left to
+  amplify, so the copies are GONE rather than merely uncounted.
+
+- **(F) WHY THE BIGGER PRIZE WAS REFUSED — this is not a ranking by size.** The cta LOCAL family is
+  0.8-1.0% against `varTypes`' 0.59%. Three facts stopped it: (i) its produced-versus-consumed ratio
+  **does not exist yet** — the census reads `writes 0` and that is round 849's un-instrumented zero,
+  not a measurement, and round 801's law is that the ratio comes FIRST; (ii) its sibling
+  `ambiguousNames` is a **RESET, not a shadow** (a fn frame gives it a fresh EMPTY set), which an
+  undo log expresses in O(size) — the very cost being removed — so the family is not one mechanism;
+  (iii) the narrowing frame copies `localTypes` into the `EpochMap` family, which is refused for not
+  being a stack at all, so converting the cta half leaves two disciplines over one ambient field.
+  Queued as **(WARM.18b)** with its instrument named: a counting facade over `CtaFrame.localTypes`,
+  run for one census, BEFORE any code.
+
+- **(G) PINS AND ABLATION.** `VarScopeStackTest`, 13 pins, all over strings and ints. The shadowing
+  shape is pinned directly (inner scope sees outer entries; an inner write is gone after the pop; a
+  shadowed key comes back with the OUTER value, not absent; repeated writes to one key still restore
+  the INHERITED value — the pin the reverse replay exists for), plus the `putAll` seed path, the
+  removal path, the SHARED-frame case, the file-root/`reset` boundary, and `toMutableMap()` still
+  being a detached snapshot (the legacy nested walk's one genuine copy).
+  **Eight single-mistake ablations** (`scripts/round891-ablate.sh`, one arm per invocation, each
+  reverted before the next, on a committed tree — round 789/851), red set predicted per arm:
+
+  | arm | the mistake | pins red |
+  |---|---|---:|
+  | A1 | `pop` replays its slice FORWARD | **2** |
+  | A2 | `pop` restores nothing, only truncates | 9 |
+  | A3 | a write records ABSENT instead of the pre-write value | 7 |
+  | A4 | `putAll` bypasses the log | **1** |
+  | A5 | `push` records mark 0 | 6 |
+  | A6 | a file-root write (no scope open) IS recorded | **1** |
+  | A7 | `remove` is not recorded | **1** |
+  | A8 | `reset` keeps the entries — a cross-FILE leak | 2 |
+
+  **All eight red sets are DISTINCT** (A3 and A5 differ by exactly one pin), and A4/A6/A7 each have a
+  uniquely-their-own failure. **A1 — the mistake the whole scheme turns on — is seen by exactly two
+  pins**, `repeated writes to one key in one scope still restore the inherited value` (forward replay
+  leaves the LAST pre-write value, i.e. the inner one) and `a write made with no scope open persists`.
+  **REPORTED HONESTLY (round 868): 3 of the 13 pins are reddened by NO arm** — `an inner scope sees
+  the outer scope's entries`, `toMutableMap on the view is a detached snapshot` and `popping with no
+  scope open is a no-op`. Every arm here breaks the POP or the RECORD, and those three assert the READ
+  path and the guarded no-op; they are recorded as INVARIANT GUARDS with no discrimination claim
+  attached, not counted as coverage.
+
+- **(H) GATES.** Suite **14,295 -> 14,308 / 0 failures / 3 skipped** = exactly the 13 new pins.
+  Compiler-profile `--listAll` digest **`59d930db849399aea5e03e25fedb8e4e`** over 46 errors — the
+  cross-round recipe CLAUDE.md records, i.e. equivalence against a capture taken before this arc.
+  `cost_gate.py` **+0.00% on all 20 counters** (the EXPECTED control, round 876 — this change moves no
+  decision). `huge_methods.py --fail-over 0` **0 over the limit, 692 classes**. **NO WALL-TIME A/B IS
+  CLAIMED** — 0.59% is inside what this box settles (rounds 840(c)/858/886); the claim is the
+  controlled row plus the amplifier price, both deterministic.
+
 **Round 890 (2026-08-11) — (HASH.1)(b): THE PACKED-KEY SWEEP, RUN ON THE **REAL** KEY POPULATIONS
 RATHER THAN A MODEL. THIRTEEN PACKED-LONG KEY SITES CENSUSED; **TWO ARE DEGENERATE AND FIXED, FOUR
 ARE MEASURED ALREADY-FINE, TWO ARE REFUSED** — AND THE MECHANISM IS SHARPER THAN ROUND 889 COULD

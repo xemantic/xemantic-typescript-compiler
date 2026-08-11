@@ -98,7 +98,7 @@ mutates or retains the map.
 
 | family | one LIFO stack? | key removal? | reader retains / iterates? | writes/entries | verdict |
 | --- | --- | --- | --- | ---: | --- |
-| `CtaFrame.varTypes` | **YES** — `ctaFrames`, `addLast`/`removeLast`, at most one frame per owner node, `reset` at the file boundary | **none** — the only mutations of a frame map in 217 `varTypes` references are two `[k] = v` writes and one `putAll` | handed BY REFERENCE to ~15 legacy call sites, every one synchronous inside one spine dispatch; `toMutableMap()` (the legacy nested walk) still yields a genuine detached copy; **no `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted` reader anywhere** | 2,564+ / 1,145,523 = **0.22%** | **CONVERTED** |
+| `CtaFrame.varTypes` | **YES** — `ctaFrames`, `addLast`/`removeLast`, at most one frame per owner node, `reset` at the file boundary | **none** — the only mutations of a frame map in 217 `varTypes` references are THREE write paths (`ctaSpineEnter`'s declaration recording, `checkVarDeclAssignability`'s, `ctaTypeParamsIntoLocals`' parameter writes) plus the `extraVarTypes` `putAll` | handed BY REFERENCE to ~15 legacy call sites, every one synchronous inside one spine dispatch; `toMutableMap()` (the legacy nested walk) still yields a genuine detached copy; **no `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted` reader anywhere** | 2,564+ / 1,145,523 = **0.22%** | **CONVERTED** |
 | `CtaFrame` localTypes+declNodes+shadowed | stack yes (one copy site, `ctaFnBodyFrame`) — but the maps are installed into AMBIENT FIELDS (`currentLocalTypes` &c) that **≥12 other sites re-install with different objects**, so "the map a write lands in" is not a function of the frame stack | not audited | not audited | **UN-INSTRUMENTED** | **REFUSED** — see § 4 |
 | `EpochMap(localTypes)` | **NO** — THREE spine stacks (ccet, cpa, the cta narrowing frame) plus ≥12 ad-hoc `currentLocalTypes = EpochMap(currentLocalTypes)` install/restore sites in legacy helpers whose restore is a **POINTER SWAP**, not a pop | — | — | 44,320 / 471,726 = 9.4% | **REFUSED** — the precondition cannot even be *stated* over the family |
 | `EpochSet(paramBindings)` | same three stacks | — | — | 7,969 / 39,522 = 20% | **REFUSED** — 0.03% |
@@ -151,8 +151,20 @@ population:
 | --- | ---: | ---: |
 | `CtaFrame.varTypes` pushes | 30,433 | 30,433 |
 | entries copied by it | 1,145,523 | **0** |
-| undo records | 0 | (see the session note) |
+| undo records | 0 | **16,182** |
 | entries copied, all six families | 2,746,298 | 1,600,775 |
+
+**70.8x less work over an identical population.** And the amplifier is the
+change's own falsifier: `copyampcv16/8/0` re-run on the new binary reads
+**`ampSink 0`** at every `r` — it finds nothing left to amplify, so the copies
+are gone rather than merely uncounted.
+
+**The write count moved 2,564 -> 16,182 and that is not a regression, it is the
+census becoming complete.** The pre-891 hook was attached to two of the three
+write paths; `ctaTypeParamsIntoLocals`' parameter writes and the `extraVarTypes`
+`putAll` went through the map by reference and were never counted. The facade is
+the only way into the family now, so the number is exact for the first time —
+and it is still **1.4%** of the entries it replaces.
 
 `clear()` on the view throws: no `varTypes` reader clears the map, and a clear
 cannot be recorded in O(1) — a silent one would drop the enclosing scopes'
