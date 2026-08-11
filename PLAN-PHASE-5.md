@@ -20,6 +20,93 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 888 (2026-08-11) — (WARM.21)+(WARM.13b): THE WARM LEAF PROFILE RE-TAKEN A FOURTH TIME, AND
+THE ALREADY-PRICED LEVER IT ROUTES TO — **THE PER-KIND SPINE ENTER SKIP MASK** — LANDED. 32,006,965
+HANDLER CONSULTATIONS PER REBUILD THAT ARE ENTERED AND IMMEDIATELY DECLINE, REPLACED BY ONE ARRAY
+LOAD AND 40 REGISTER-RESIDENT BIT TESTS. AND THE ROUND-732 CLOSURE TABLE WAS **RE-DERIVED FROM
+TODAY'S SOURCE**, NOT TRUSTED.**
+
+Thirteen rounds since the last leaf profile, and CLAUDE.md's own rule is that a number is
+re-measured before a round is spent inside it. Same recipe as round 874 (`scripts/round888-warm-leaf.sh`),
+so the only variable is the binary. `docs/perf/warm-leaf-profile.md` §§ 30-31.
+
+- **(A) VALIDITY.** `checkSpine` INCLUSIVE **73.25% / 71.90%** against the known ~74% (the
+  `--stack-depth` trap's check); max depth 177/236 against the 512 cap. Medians **5,918.6 / 5,891.2 ms**,
+  46 errors / 78 files.
+
+- **(B) BY ROW THE VEIN IS STILL EXHAUSTED, AND BY A WIDER MARGIN.** Top row `cpaSpineLeave` is
+  **1.7% / 101.9 ms**; then `ctaFnBodyFrame` 91.5, `recordFlow` 86.7, `ctaSpineEnter` 84.6,
+  `getUnionType` 67.1, `forEachChild` 66.1, `spineWalkFile` 65.3, `narrowTypeFromFlowCore` 56.6.
+  Nothing NEW above 1%; rows 21-40 are 26-36 ms. `ciaMutualFnDecls$resolve` fails replication for the
+  THIRD round running.
+
+- **(C) A ROW THAT LOOKS LIKE A 35 ms REGRESSION AND IS A KEY SPLIT.**
+  `objectLiteralSatisfiesAugmentationMergedInterface` reads 0.4 -> 35.9 ms because C2 inlined the outer
+  method in THIS binary and the OWNER frame moved to its local `$scanIface`; the two rows sum to 41.3
+  against round 874's 46.4. Round 868's "leaf attribution is not stable across processes" operating at
+  the OWNER level ACROSS ROUNDS. Check for a split before reading any large single-row delta.
+
+- **(D) BY MECHANISM FAMILY** (`scripts/round888_families.py`, same patterns over both rounds' dumps):
+  INV.4 reach classifiers **484.6 -> 371.1 ms** (round 874's own TAV gate arriving, predicted 121),
+  type construction 345.8 -> 295.7, name resolution 261.9 -> 247.7, spine walk core 245.3 -> 220.3,
+  `cta*` 264.7 -> 216.0, flow build 214.7 -> 207.2, `cpa*` 194.9 -> 143.6, `ccet*` 125.9 -> 92.5.
+  The reach family is still the largest and is now **65 owners whose biggest is `spineCeStatus` at
+  21.8 ms (0.37%)** — round 875's census verdict stands. **Cross-round ms is a CANDIDATE RANKING, not a
+  measurement** (the 12.8% anchor-spread law); nothing here is claimed as this round's win.
+
+- **(E) SO THE ROUND TOOK THE PRE-PRICED ITEM.** `dispatch-table.md` § 9.6 left (WARM.13b) as an
+  implementation item at **73.2 ms [68.7-80.4]** with its skeleton measured at ~15% of that — 1.24% of
+  this round's 5,905 ms denominator. `spineEnterNode` now reads `spineEnterMask[kindId]` once and puts
+  one bit test in front of each of the 40 CLOSED handlers' existing `spineXxActive` guard; `&&`
+  short-circuits so a skipped handler costs the bit test and not even the field read. Emitted:
+  **1 `laload` + 40 `land`/`lcmp`/`ifne`**, 544 -> 964 bytecodes.
+
+- **(F) LEAVE IS DELIBERATELY NOT MASKED** — only 1 of its 13 handlers is closed, so a leave mask could
+  skip at most ~2.7% of the 32.0 M slots and a per-node array load costs more than the one test saves.
+
+- **(G) THE SOUNDNESS CHECK IS THE ROUND'S REAL DELIVERABLE.** The closure table dates from round 732
+  and its handlers have been edited in ~150 rounds since; a stale closure silently drops a diagnostic
+  and round 753's law forbids reading a green corpus as proof it cannot. `scripts/spine_closure_audit.py`
+  re-derives each handler's TOP-LEVEL kind gate from today's `Checker.kt` — brace-matched over a
+  length-preserving comment/string stripper that treats `'` as a char literal (round 809) — and checks
+  the declared closure contains it. Five gate forms recognised plus one level of `...Core` delegation;
+  `is Statement` resolves to `STATEMENT_KINDS`; anything unrecognised is reported as a PROBLEM, so it
+  fails closed. **46 handlers, 6 OPEN, 40 audited, ALL clean — the table has NOT gone stale.**
+
+- **(H) THE ABLATION: 3 arms, one mistake each, every red set DISJOINT.** A1 `spineCaEnterNode` loses
+  `BINARY_EXPRESSION` -> **1 red**; A2 `ctaSpineEnter` (OPEN) given a closure -> **3**; A3
+  `spineCtaM3StatementAnchor` loses `EXPRESSION_STATEMENT` -> **6**. A1 is the one that matters: a
+  closed handler stops being consulted where it acts, a diagnostic disappears, and the ONLY pin that
+  sees it is the two-armed `masked and unmasked agree where the closed handlers actually emit`.
+
+- **(I) ONE INSTRUMENT CHANGED AND IT IS NOT A REGRESSION — the round's one suite failure.**
+  `spineCtaM3StatementAnchor` is a `CtaSections` probe wrapper, so the mask refuses its call BEFORE the
+  probe's `A_GATE` row can count it; `level A opens on the handler so the eligibility gate is a row`
+  asserted `invocationsA > stmtKind.sum()` and they are now equal at 11. That gap WAS the wasted work.
+  Restated across both arms (strictly reduce consultations, change no anchor, old inequality still holds
+  unmasked) — which is what A3 reddens. **Consequence: a `CtaSections` table taken with the mask on is
+  not comparable to a pre-888 one** (round 793's law one region over); `CtaSections.mode` is OFF in
+  production so nothing the compiler decides moves.
+
+- **(J) NO WALL-TIME NUMBER IS CLAIMED.** ~62 ms net = **0.9-1.1%**, inside `ab-warm.sh`'s +-1.0% band
+  and below what two batches on this box have settled recently (rounds 840(c)/858/886) — and
+  `dispatch-table.md` § 9.6 said so IN ADVANCE. The claim is COUNTED REMOVED WORK plus § 9's
+  decomposition. `cost_gate.py` **+0.00% on all 20** with `spine.nodes 856962` matching round 867's
+  amplified population exactly is the EXPECTED control (round 876), not a win.
+
+- **(K) GATES.** Suite **14,276 -> 14,286 / 0 failures / 3 skipped** = exactly the 9 new mask pins
+  plus the re-pointed CtaSections one.
+  `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: **0 over the limit**,
+  690 classes. Output grid on the one materialised profile, ONE binary with `--spineMaskOff` as the OFF
+  arm: 46 diagnostics, **added=0 removed=0** (a ONE-profile claim — round 782 — with the 13k-baseline
+  corpus as the primary output gate).
+
+- **(L) WHAT DID NOT WORK / COST TIME.** The audit's first stripper was a char-by-char Python loop over
+  7 MB and blew a 120 s timeout; the regex-alternation rewrite runs in under a second. Killing it with
+  `pkill -f "spine_closure_audit"` killed the invoking shell instead — CLAUDE.md's documented self-match
+  trap, exit 144, no output. And a TypeScript template literal inside a Kotlin raw string needs
+  `${'$'}{...}`: `` `x${idx}y` `` compiled as a Kotlin template and failed with `Unresolved reference 'idx'`.
+
 **Round 887 (2026-08-11) — (SPINE.1)(m3-inert): THE THREE SPINE-ANCHOR MARK FAMILIES ARE **DELETED**.
 319,777 MARKS AND 48,868 CONSULTATIONS PER CORPUS RUN, **ZERO AFFIRMATIVE** — AND THE MECHANISM IS
 NOT "THE CORPUS DOES NOT HAPPEN TO EXERCISE IT", IT IS THAT THE MARK SITES AND THE CONSULTATION

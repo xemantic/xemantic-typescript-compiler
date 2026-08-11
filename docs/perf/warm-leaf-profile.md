@@ -1102,3 +1102,224 @@ consultations are memo hits, and what a shared status word would cost — or (b)
 `docs/perf/warm-spine-attribution.md`'s per-handler table, which is where the
 remaining ~2 s of `cpaSpineLeave`/`ctaSpineEnter`/`ctaFnBodyFrame`/`recordFlow`
 lives and which this instrument keeps pointing at without being able to open.
+
+---
+
+## 30. Round 888 — the FOURTH take, and what thirteen rounds did to the table
+
+Round 874 closed the arc at § 29. Round 888 re-opened it for one reason:
+CLAUDE.md's own rule that a number is re-measured before a round is spent
+inside it (round 755's target had halved while it sat in the queue), and
+rounds 876–887 had landed the sequential-bind removal, the balanced worker
+partition, the merge forwarding table and the anchor-mark deletion in between.
+
+Recipe IDENTICAL to round 874 (`scripts/round888-warm-leaf.sh`, same window,
+same warm-up ladder, two processes), so the only variable is the binary.
+
+### 30.1 Validity
+
+`checkSpine` INCLUSIVE reads **73.25% / 71.90%** against this arc's known ~74%
+— the `--stack-depth` trap's sanity check (§ 1). Max observed stack depth
+177 / 236 against the 512 cap, so nothing is truncated. 8,184 and 8,089 samples
+on `xtsc-deep-stack`; 44 and 37 on other threads.
+
+Medians: **5,918.6 and 5,891.2 ms**, 46 errors / 78 files in both.
+
+### 30.2 By row — still exhausted, and by a wider margin
+
+| # | owner | r1 | r2 | ms 874 | ms 888 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| 1 | `Checker.cpaSpineLeave` | 1.86% | 1.59% | 108.9 | **101.9** |
+| 2 | `Checker.ctaFnBodyFrame` | 1.39% | 1.71% | 86.3 | 91.5 |
+| 3 | `FlowGraphBuilder.recordFlow` | 1.41% | 1.53% | 88.0 | 86.7 |
+| 4 | `Checker.ctaSpineEnter` | 1.37% | 1.50% | 98.0 | 84.6 |
+| 5 | `Checker.getUnionType` | 1.20% | 1.08% | 64.2 | 67.1 |
+| 6 | `NodeWalkKt.forEachChild` | 1.09% | 1.15% | 84.3 | 66.1 |
+| 7 | `Checker.spineWalkFile` | 1.19% | 1.03% | 68.2 | 65.3 |
+| 8 | `Checker.narrowTypeFromFlowCore` | 1.08% | 0.84% | 57.7 | 56.6 |
+| 9 | `Checker.lookupPerFileForNode` | 0.88% | 0.80% | 53.3 | 49.7 |
+| 10 | `Checker$Relation.get` | 0.72% | 0.95% | 42.4 | 49.4 |
+
+Nothing NEW is above 1%, and the top row is now **1.7% / ~102 ms**. Rows 21–40
+are 26–36 ms. `ciaMutualFnDecls$resolve` fails replication for the THIRD round
+running (0.43% / 0.36% here after 1.56% / 0.48% at round 874) — a leaf that has
+never replicated across two processes should be treated as absent.
+
+**One row is a trap and is recorded so the next reader does not lose the time
+this one did.** `objectLiteralSatisfiesAugmentationMergedInterface` reads
+`0.4 ms -> 35.9 ms` and is NOT a regression: C2 inlined the outer method in this
+binary, so the OWNER frame moved to its local `$scanIface`, and the two rows sum
+to 41.3 against round 874's 46.4. That is round 868's "leaf attribution is not
+stable across processes" operating one level up, at the OWNER, ACROSS ROUNDS —
+so a large single-row delta must be checked for a key SPLIT (`--grep` on
+`scripts/round888_compare.py`) before it is read as a change in cost.
+
+### 30.3 By mechanism family — where the thirteen rounds actually went
+
+`scripts/round888_families.py` makes round 874 § 23's aggregation reproducible
+and runs the SAME patterns over both rounds' dumps (its patterns are slightly
+wider than § 23's hand-cut ones, which is why its 874 column reads 484.6 where
+§ 23 reads 458.8; only the within-script comparison is meaningful).
+
+| family | ms 874 | ms 888 | 888 r1/r2 |
+| --- | ---: | ---: | ---: |
+| **INV.4 reach classifiers** | 484.6 | **371.1** | 6.56% / 6.01% |
+| type construction | 345.8 | 295.7 | 4.99% / 5.03% |
+| name resolution | 261.9 | 247.7 | 4.47% / 3.92% |
+| spine walk core | 245.3 | 220.3 | 3.69% / 3.77% |
+| `cta*` handlers | 264.7 | 216.0 | 3.40% / 3.92% |
+| flow-graph build | 214.7 | 207.2 | 3.37% / 3.65% |
+| module/import resolution | 184.4 | 192.3 | 3.23% / 3.29% |
+| scope frame copies | 192.1 | 183.2 | 3.13% / 3.08% |
+| `cpa*` handlers | 194.9 | 143.6 | 2.59% / 2.27% |
+| narrowing walk | 148.5 | 142.2 | 2.63% / 2.19% |
+| relation engine | 115.4 | 118.3 | 1.94% / 2.06% |
+| `ccet*` handlers | 125.9 | 92.5 | 1.54% / 1.59% |
+
+**The reach classifiers are still the largest family and they fell 113.5 ms** —
+which is round 874's own TAV gate arriving, predicted at 121 ms. The family is
+now 371 ms over **65 owners whose largest is `spineCeStatus` at 21.8 ms
+(0.37%)**, i.e. round 875's census verdict stands: every mechanism in it prices
+below 1% and only the memo TRANSPOSITION is open, at <= ~0.8%.
+
+`cta*`/`cpa*`/`ccet*` fell 48.7 / 51.3 / 33.4 ms between them, which is where
+round 887's anchor-mark deletion lands (round 874's separate "M3 anchor marking"
+family was 108.1 ms and no longer exists).
+
+### 30.4 The caveat that governs every number above
+
+Cross-round ms/rebuild is a CANDIDATE RANKING, not a measurement. CLAUDE.md's
+own law — the sequential self-compile anchor moved 12.8% across four rounds with
+identical code — applies here too, so a family moving by less than ~10% is not
+evidence of anything, and the two big leaf families (`hash-probe` 24.42% ->
+19.16% leaf, `string-build` 6.29% -> 4.33%) are quoted as observations, not as
+wins claimed by this round. Only within-round paired deltas are quotable.
+
+### 30.5 What the profile decided
+
+Nothing new above ~1%, by row or by family — so the round took the already
+priced, already argued implementation item instead: **(WARM.13b), the per-kind
+ENTER skip mask**, whose prize round 867 fixed at 73.2 ms and whose skeleton it
+measured at ~15% of that. Against this round's 5,905 ms denominator that is
+**1.24%**. See § 31.
+
+---
+
+## 31. Round 888 — (WARM.13b): the per-kind ENTER skip mask, landed
+
+`dispatch-table.md` § 9.6 left this as "an IMPLEMENTATION item, with one new
+number that changes its outlook". This is that implementation. Nothing here
+re-derives `s_p` — § 9's two batches settled it at **2.286 ns [2.148–2.512]**
+and its own § 9.6 forbids re-deciding it with `--dispatchGated` (that arm
+measures `G − R`, one equation in two unknowns).
+
+### 31.1 The shape
+
+`spineEnterNode` reads `spineEnterMask[(node as NodeBase).kindId]` ONCE and puts
+one bit test in front of each CLOSED handler's existing `spineXxActive` guard:
+
+```kotlin
+val skip = spineEnterMask[(node as NodeBase).kindId]
+...
+if (skip and (1L shl 12) == 0L && spineFpActive) spineFpEnterNode(node)
+```
+
+`&&` short-circuits, so a skipped handler costs the bit test and **not even the
+field read**. The six OPEN handlers carry no test at all. Emitted bytecode,
+verified with `javap`: **1 `laload`, 40 `land` / `lcmp` / `ifne`**, method
+544 -> **964** bytecodes, far under HotSpot's 8,000 `HugeMethodLimit` (round
+845: crossing it is a −33.6% WARM cliff).
+
+### 31.2 LEAVE is deliberately not masked
+
+Only **1 of the 13** leave handlers (`spineIrLeaveNode`) is closed, so a leave
+mask could skip at most ~1 slot per node = **≤2.7%** of the 32.0 M, and a
+per-node array load there costs more than the one bit test saves. Round 867's
+`R` is therefore ~97.3% collectable by the enter mask alone.
+
+### 31.3 Soundness is SYNTACTIC, and the table was re-derived, not trusted
+
+A closure is a claim that the handler does nothing observable outside it, and
+its only accepted justifications are syntactic (`SpineDispatch`'s own rule).
+The table dates from **round 732** and its handlers have been edited in ~150
+rounds since; a closure gone stale silently drops a diagnostic, and round 753's
+law says a green corpus bounds frequency, not existence.
+
+So `scripts/spine_closure_audit.py` re-derives each handler's top-level kind
+gate from today's `Checker.kt` — brace-matched over a comment/string stripper
+that PRESERVES LINE LENGTH and treats `'` as a char literal (round 809) — and
+checks the declared closure contains it. It recognises five gate forms:
+`if (kindId != K) return`, `if (node !is T) return`, `if (node is T …) {`,
+`when (kindId) { … }` with a no-op or absent `else`, and one level of
+`...Core` delegation; `is Statement` resolves to `STATEMENT_KINDS`.
+
+**Result: 46 handlers, 6 OPEN, 40 audited, ALL clean.** The table has not gone
+stale. A `when` whose `else` does work, or an unrecognised top-level statement,
+is reported as a PROBLEM rather than passed — the script fails closed.
+
+### 31.4 What the gates said
+
+* **Corpus**: 14,286 / 0 failures / 3 skipped (14,276 + 9 mask pins + the
+  re-pointed CtaSections pin of § 31.6).
+* **Output grid**, one binary, `--spineMaskOff` as the OFF arm: the compiler
+  profile at 46 diagnostics, **added=0 removed=0**. Only that one profile is
+  materialised on this box, so this is a claim about ONE profile (round 782) —
+  the 13k-baseline corpus is the primary output gate here, not the grid.
+* **`cost_gate.py`: +0.00% on all 20 counters**, `spine.nodes 856962` matching
+  round 867's amplified population exactly. That is the EXPECTED answer and is
+  read as a control that semantics are untouched (round 876), never as a win.
+* **`huge_methods.py --fail-over 0`: 0 over the limit**, 690 classes.
+
+### 31.5 The ablation — three arms, one mistake each
+
+Round 807: a combined ablation cannot attribute. `scripts/round888-ablate.sh`
+runs one arm per invocation, dry-runs each edit for a real diff, and reverts
+before the next; the arm list is an ARRAY, not `"${@:-…}"` (round 855).
+
+| arm | the mistake | red |
+| --- | --- | ---: |
+| A1 | `spineCaEnterNode` closure loses `BINARY_EXPRESSION` | **1** |
+| A2 | `ctaSpineEnter` (OPEN) given a closure | **3** |
+| A3 | `spineCtaM3StatementAnchor` loses `EXPRESSION_STATEMENT` | **6** |
+
+**Every arm reddens and every red set is DISJOINT.** A1 is the sharpest and the
+one that matters: a closed handler silently stops being consulted at a kind it
+acts on, the compiler loses a diagnostic, and the ONLY pin that sees it is
+`masked and unmasked agree where the closed handlers actually emit` — the
+two-armed ON-vs-OFF comparison. A2 reddens the two structural pins plus the
+pre-existing `SpineDispatchProbeTest`. A3 reddens the re-pointed CtaSections
+pin plus five of its siblings.
+
+### 31.6 One instrument DID change, and it is not a regression
+
+`spineCtaM3StatementAnchor` is a `CtaSections` probe wrapper, so the mask now
+refuses its call BEFORE the probe's `A_GATE` row can count it — and
+`CtaSectionProbeTest`'s `level A opens on the handler so the eligibility gate is
+a row` failed on exactly that, asserting `invocationsA > stmtKind.sum()` where
+the two are now equal at 11.
+
+That premise — "the handler is consulted about EVERY node, so its invocation
+count is far larger than the number of statements that anchor" — WAS the wasted
+work. The pin is restated across both arms (the mask must strictly reduce
+consultations, change no anchor, and the unmasked arm must still show the old
+inequality), which is strictly stronger and is what A3 reddens.
+
+**The consequence a next reader needs: a `CtaSections` table taken with the mask
+on is not comparable to a pre-888 one** — round 793's law (removing a section
+also removes its boundaries) one region over. `CtaSections.mode` is OFF in
+production, so nothing the compiler decides is affected.
+
+### 31.7 What is NOT claimed
+
+**No wall-time number.** The prize is 73.2 ms = 1.24% of this round's 5,905 ms
+rebuild, minus a skeleton round 867 measured at ~15% of it — i.e. ~62 ms,
+**0.9–1.1%**, which is inside `ab-warm.sh`'s ±1.0% band and below what two
+batches on this box have settled in recent memory (rounds 840(c), 858, 886).
+`dispatch-table.md` § 9.6 said so in advance: a landed table "could not be
+confirmed by the harness that would judge it, and would have to be defended on
+`cost_gate.py` counters plus this decomposition". It is.
+
+What IS claimed is COUNTED REMOVED WORK, from the amplifier's own census of the
+population: **32,006,965 handler consultations per compiler-profile rebuild that
+are entered and immediately decline, ~97.3% of them on the enter side**, now
+replaced by 856,962 array loads and one register-resident bit test each.
