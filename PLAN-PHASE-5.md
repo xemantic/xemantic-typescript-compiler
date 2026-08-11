@@ -20,6 +20,146 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 892 (2026-08-11) — (WARM.18b): THE FAMILY ROUND 891 REFUSED IS **CONVERTED** — `CtaFrame`'s
+localTypes+declNodes+shadowed AND THE NARROWING FRAME'S `EpochMap`, **1,214,236 ENTRIES COPIED PER
+REBUILD -> 28,695 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND ALL THREE REFUSAL REASONS
+DISSOLVED UNDER THE INSTRUMENT ROUND 891 QUEUED BUT DID NOT BUILD.**
+
+Round 891 refused this family for three named reasons and queued **(WARM.18b)** with its instrument
+named: *"a counting facade over `CtaFrame.localTypes`, run for one census, BEFORE any code."* This
+round built exactly that, first, and read it before writing a line of the fix.
+`docs/perf/cta-frame-copy-families.md` §§ 6-10.
+
+- **(A) THE INSTRUMENT, AND WHY IT HAD TO BE A FACADE.** A THROWAWAY counting facade over every write
+  path of all three components (round 890's shape: census, read, **revert**). It is the only way in —
+  the maps are reached by REFERENCE through the ambient fields (`currentLocalTypes` &c), so a hook
+  anywhere else is round 891's own 2-of-3-paths hook again, which read 6.3x optimistic with nothing
+  saying so.
+
+  | write path | count |
+  |---|---:|
+  | `localTypes.put` @ fn-frame | 24,572 |
+  | `localTypes.remove` @ fn-frame | 81 |
+  | `localTypes.put` @ narrowing frame | 1,942 |
+  | `declNodes.put` / `.remove` @ fn-frame | 1,582 / 352 |
+  | `shadowed.add` @ fn-frame | 166 |
+  | **writes needing an undo record** | **28,695** |
+  | writes at the file root (no scope open — free) | 567 |
+  | `putAll`/`addAll` anywhere but the seed, and `clear()` | **0 / 0** |
+
+  **28,695 against 1,089,527 entries copied = 2.6%**, the same order as `varTypes`' 1.4%. Adding the
+  narrowing frames' 124,709 entries the population at stake is **1,214,236**.
+
+- **(B) THE THREE REFUSALS, ANSWERED — AND TWO OF THEM WERE ARTEFACTS OF NOT HAVING MEASURED.**
+  (i) the ratio is 2.6%, not an un-instrumented zero. (ii) **`ambiguousNames` RESETS rather than
+  shadows — true, and irrelevant: it is not in the family.** A fn frame gives it a FRESH EMPTY set,
+  which is O(1); it was never COPIED, so there is nothing to replace and no mechanism to find. The
+  refusal treated a sibling FIELD as a sibling COST. (iii) the narrowing frame's
+  `EpochMap(top.localTypes)` — **the one real reason, and its answer is to convert it too, onto the
+  same stack.** Not optional: a function declared inside a then-branch takes its base from
+  `ctaFrames.last()`, so a copy there and a live map at the fn frame is exactly the
+  two-disciplines-over-one-ambient-field hazard round 891 named — a nested body would inherit the
+  PRE-narrow map. It is also worth another 124,709 entries.
+
+- **(C) THE CONDITION TABLE, RE-AUDITED OVER ALL 423 REFERENCES** (374 `currentLocalTypes`, 12
+  `currentLocalDeclTypeNodes`, 37 `currentShadowedNames`). Strictly LIFO on `ctaFrames` with a
+  per-file `reset`; **no `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted`/
+  `.toMutableMap` reader and no `for (x in map)` anywhere** (the one whole-collection read is
+  `name in currentShadowedNames`, i.e. `contains`); **0 `clear()` calls, measured**; 433 removals,
+  all recordable. **The retention question is the one round 891 could not settle and it resolves
+  cleanly:** the 56 `= currentLocalTypes` sites are 37 local `val saved…` POINTER SWAPS (the object
+  identity is stable, so the restore puts the same object back) plus exactly two FIELD retentions —
+  `spineCaRestingLocalTypes` and `spineArithBase` — both taken at SPINE ENTRY, i.e. the PRE-SPINE
+  resting map, which is never a cta frame's. And the ≥12 ad-hoc `EpochMap(currentLocalTypes)`
+  installs that round 891 read as disqualifying are harmless *because* each is a genuine DETACHED
+  snapshot that is written into and then discarded by a pointer-swap restore — a copy that never
+  merges back cannot observe the difference between a copy chain and a live map.
+
+- **(D) WHAT LANDED.** `MapScopeStack<V>` + `SetScopeStack` (`ScopeStack.kt`). **Round 891's
+  `VarScopeStack` is RETIRED ONTO the generic class rather than copied beside it** — the
+  reverse-replay mechanism now exists once, not twice. The set twin needs two things the map does
+  not: one BIT per touched element (`had` = present-before) instead of a value, so the restore is a
+  different statement; and `addAll` recording per ELEMENT. **Two flags on `CtaFrame`, because the two
+  scope-opening shapes are not the same shape:** `localScoped` (fn-body AND narrowing frames -> pop
+  the localTypes stack) and `ctaFnScoped` (fn-body only -> also pop declNodes and shadowedNames,
+  which the narrowing frame SHARES with its parent). The three `putAll(base.*)` seeds are simply
+  GONE: `base` is `ctaFrames.last()` at all eight call sites and every frame now holds the live view,
+  so the scope just opened already holds what the copy would have been seeded with.
+
+- **(E) ONE DELIBERATE, STATED DIVERGENCE.** The `onMutate` hook reproduces the expression-memo epoch
+  bump the replaced `EpochMap` performed, and it is a SUPERSET — the fn-body maps were plain
+  `HashMap`s and did not bump, so ~25,000 writes now bump that did not. That is the SAFE direction
+  for a probe-only fence (round 660): an extra bump can only make the shadow memo MISS, where a
+  missing one could make it serve a stale entry.
+
+- **(F) THE CONTROLLED ROW (round 793 — the change moves no boundary and no population).**
+
+  | | before | after |
+  |---|---:|---:|
+  | `CtaFrame` local pushes | 9,525 | **11,016** (+1,491 = the narrowing frames, MOVED here) |
+  | entries copied by it | **1,089,527** | **0** |
+  | undo records | 0 | **28,695** |
+  | `EpochMap` pushes / entries / writes | 28,828 / 471,726 / 44,320 | 27,337 / 347,017 / 42,378 |
+  | entries copied, ALL SIX families | 1,600,775 | **386,539** |
+
+  **42.3x less work over an identical population.** The three `EpochMap` deltas are exact
+  (−1,491 / −124,709 / −1,942 = the narrowing frames, their entries and their writes), which is the
+  falsifier that they MOVED rather than vanished. **And the headline is an INDEPENDENT cross-check:
+  the undo log records 28,695 — the throwaway census's write count to the unit — measured by a
+  different instrument, on a different binary.**
+
+- **(G) PINS AND ABLATION.** `ScopeStackTest` (round 891's 13, re-pointed at the generic class, plus
+  12 new: the set twin's shadow/restore/`addAll`/root/reset/no-op/`clear`, the map at a NON-`String`
+  value type, the `onMutate` contract and the map's `clear`) and a new `CtaLocalScopePinTest` whose 4
+  pins go THROUGH A COMPILE and assert BOTH directions of one shadowing — the inner binding wins
+  inside the body (a TS2322 that must be PRESENT, which is what stops the others passing vacuously)
+  and the outer binding is back after it (a TS2322 that must be ABSENT, reachable only if the pop
+  restored). **THE ABLATION — 12 arms, one mistake each, on a committed tree, two source
+  files (mechanism in `ScopeStack.kt`, wiring in `Checker.kt`):**
+
+  | arm | the mistake | red |
+  |---|---|---:|
+  | A1 | map `pop` replays FORWARD | 2 |
+  | A2 | map `pop` restores nothing | 13 |
+  | A3 | a write records ABSENT | 9 |
+  | A4 | set `pop` restores nothing | 4 |
+  | A5 | the set records "was PRESENT" unconditionally | 2 |
+  | A6 | `push` records mark 0 | 8 |
+  | A7 | a file-root write IS recorded | 2 |
+  | A8 | `reset` keeps the entries | 2 |
+  | A9 | the NARROWING frame shares instead of scoping | **1** (was **0**) |
+  | A10 | the fn pop drops the declNodes/shadowed pops | **0** |
+  | A11 | `reset` skips the localTypes stack | **0** |
+  | A12 | the fn-body frame opens NO localTypes scope | 3 |
+
+  **Every non-zero red set is DISTINCT** (A3/A6 and A7/A8 each differ by exactly one pin); **five arms
+  have a uniquely-their-own failing pin** (A2, A4, A7, A8, A9) and the other five are discriminated
+  by their SET only, which is stated rather than dressed up. **THE ABLATION'S REAL PRODUCT IS THAT IT
+  FOUND A MISSING PIN, WHICH IS THE STRONGEST EVIDENCE IT WAS WORTH RUNNING: A9 — the arm for the
+  invariant that DECIDED THE ROUND — reddened NOTHING**, because no fixture contained an `if`; round
+  813's law is that such a green is as often BLIND as it is redundant, and here it was blind. **The
+  first replacement pin then FAILED ON HEAD** — this compiler emits nothing at all for
+  `const s: string = <string | undefined>`, so a nullish pin would have been vacuous in BOTH
+  directions. The shape that works (`typeof x === "string"` over `string | number`) was verified
+  against an un-narrowed control in the scratch-project CLI loop BEFORE either assertion was written,
+  and that control shipped as a pin. **A10 and A11 still redden nothing and the reason is structural,
+  not a redundant guard**: A10's consumers are AST-shape/shadow-detection rules no fixture drives
+  across a fn boundary, and A11 is a CROSS-FILE leak, which `diagnose()` — single-file — cannot
+  express at all. **12 of the 32 pins are reddened by no arm** and are recorded as INVARIANT GUARDS
+  with no coverage claim (the READ-path pins, the guarded no-ops, both `clear()` refusals, the
+  `toMutableMap` detachment, the `onMutate` contract, and the four SET-side root/reset/no-op/clear
+  pins, for which no arm was cut because A7/A8 both aimed at the map stack).
+
+- **(H) GATES.** Suite **14,308 -> 14,324 / 0 failures / 3 skipped** = exactly the 16 new pins.
+  Compiler-profile `--listAll` digest **`59d930db849399aea5e03e25fedb8e4e`** over 46 errors — the
+  cross-round recipe CLAUDE.md records, i.e. equivalence against a capture predating this arc.
+  `cost_gate.py` **+0.00% on all 20 counters** (the EXPECTED control, round 876 — this moves no
+  decision). `huge_methods.py --fail-over 0` **0 over the limit, 694 classes**. **NO WALL-TIME A/B IS
+  CLAIMED** — round 891's amplifier priced this family at 43-55 ms from a single unreplicated batch
+  and the narrowing entries add ~4-6 ms at the measured 30-51 ns/entry, so ~0.8-1.1%, inside what
+  this box settles (rounds 840(c)/858/886). The claim is the controlled row plus the cross-checked
+  census.
+
 **Round 891 (2026-08-11) — (WARM.18): THE `CtaFrame.varTypes` PER-SCOPE COPY BECOMES AN UNDO LOG —
 **1,145,523 ENTRIES COPIED PER REBUILD -> 16,182 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND THE
 OTHER THREE FAMILIES ARE **REFUSED WITH A PRICED CONDITION TABLE**, INCLUDING THE ONE THAT IS THE

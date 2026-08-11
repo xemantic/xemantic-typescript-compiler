@@ -99,11 +99,17 @@ mutates or retains the map.
 | family | one LIFO stack? | key removal? | reader retains / iterates? | writes/entries | verdict |
 | --- | --- | --- | --- | ---: | --- |
 | `CtaFrame.varTypes` | **YES** — `ctaFrames`, `addLast`/`removeLast`, at most one frame per owner node, `reset` at the file boundary | **none** — the only mutations of a frame map in 217 `varTypes` references are THREE write paths (`ctaSpineEnter`'s declaration recording, `checkVarDeclAssignability`'s, `ctaTypeParamsIntoLocals`' parameter writes) plus the `extraVarTypes` `putAll` | handed BY REFERENCE to ~15 legacy call sites, every one synchronous inside one spine dispatch; `toMutableMap()` (the legacy nested walk) still yields a genuine detached copy; **no `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted` reader anywhere** | 2,564+ / 1,145,523 = **0.22%** | **CONVERTED** |
-| `CtaFrame` localTypes+declNodes+shadowed | stack yes (one copy site, `ctaFnBodyFrame`) — but the maps are installed into AMBIENT FIELDS (`currentLocalTypes` &c) that **≥12 other sites re-install with different objects**, so "the map a write lands in" is not a function of the frame stack | not audited | not audited | **UN-INSTRUMENTED** | **REFUSED** — see § 4 |
+| `CtaFrame` localTypes+declNodes+shadowed | stack yes (one copy site, `ctaFnBodyFrame`) — but the maps are installed into AMBIENT FIELDS (`currentLocalTypes` &c) that **≥12 other sites re-install with different objects**, so "the map a write lands in" is not a function of the frame stack | not audited | not audited | **UN-INSTRUMENTED** | ~~REFUSED — see § 4~~ **SUPERSEDED by § 6-10 — CONVERTED in round 892** |
 | `EpochMap(localTypes)` | **NO** — THREE spine stacks (ccet, cpa, the cta narrowing frame) plus ≥12 ad-hoc `currentLocalTypes = EpochMap(currentLocalTypes)` install/restore sites in legacy helpers whose restore is a **POINTER SWAP**, not a pop | — | — | 44,320 / 471,726 = 9.4% | **REFUSED** — the precondition cannot even be *stated* over the family |
 | `EpochSet(paramBindings)` | same three stacks | — | — | 7,969 / 39,522 = 20% | **REFUSED** — 0.03% |
 
 ## 4. Why the cta local family is refused even though it is the bigger prize
+
+> **SUPERSEDED (round 892).** All three reasons below were answered by the
+> instrument this section queued; §§ 6-11 carry the measurement and the
+> conversion. Reason 2 was simply wrong — `ambiguousNames` is not in the family.
+> The section is kept verbatim because it is the record of what the refusal
+> was based on.
 
 It is 0.8-1.0% against `varTypes`' 0.59%, so this is not a ranking by size. Three
 facts, in the order they were established:
@@ -282,3 +288,64 @@ Price, from round 891's amplifier: the cta local family measured **43-55 ms**
 = 0.8-1.1% of a warm rebuild**, and **no wall-time A/B is claimed** — that is
 inside what this box settles (rounds 840(c)/858/886). The defence is the
 controlled row plus `cost_gate.py` at +0.00%.
+
+## 11. The ablation — 12 arms, one mistake each, on a committed tree
+
+`scripts/round892-ablate.sh` + `round892_ablate_apply.py`. Each arm is a single
+edit, reverted before the next (round 807: a combined ablation cannot
+attribute). Two files are ablated because two things are being tested — the
+MECHANISM (`ScopeStack.kt`, seen by `ScopeStackTest`) and the WIRING
+(`Checker.kt` — which frame opens which scope, seen only through a compile, by
+`CtaLocalScopePinTest`). The run also sweeps in round 869's `AnnScopeStackTest`
+(the filter matches it), which no arm touches; `ran 43` is 25 + 7 + 11.
+
+| arm | the mistake | red |
+| --- | --- | ---: |
+| A1 | map `pop` replays its slice FORWARD | 2 |
+| A2 | map `pop` restores nothing, only truncates | 13 |
+| A3 | a write records ABSENT instead of the pre-write value | 9 |
+| A4 | set `pop` restores nothing | 4 |
+| A5 | the set records "was PRESENT" unconditionally | 2 |
+| A6 | `push` records mark 0 | 8 |
+| A7 | a file-root write (no scope open) IS recorded | 2 |
+| A8 | `reset` keeps the entries — a cross-FILE leak | 2 |
+| A9 | the NARROWING frame shares instead of scoping | **1** (was **0**) |
+| A10 | the fn pop drops the declNodes/shadowedNames pops | **0** |
+| A11 | `reset` skips the localTypes stack | **0** |
+| A12 | the fn-body frame opens NO localTypes scope | 3 |
+
+**Every non-zero red set is DISTINCT** (A3 and A6 differ by exactly one pin, as
+do A7 and A8). **Five arms have a uniquely-their-own failing pin** — A2, A4, A7,
+A8 and A9; the other five (A1, A3, A5, A6, A12) are discriminated by their red
+SET rather than by any single pin, which is stated rather than dressed up.
+
+**A9 is the round's own finding and it is why the ablation was worth running.**
+It reddened **nothing** on the first sweep — and A9 is the arm for the invariant
+that decided the whole round, the narrowing frame having to be a scope on the
+shared stack. Round 813's law says a green pin under its own ablation is as
+often BLIND as the guard is redundant, and here it was blind: no fixture in
+`CtaLocalScopePinTest` contained an `if`. **The first replacement pin then FAILED
+ON HEAD**, because this compiler emits nothing at all for
+`const s: string = <string | undefined>` — a nullish pin would have been vacuous
+in BOTH directions. The shape that works (`typeof x === "string"` over
+`string | number`) was verified against an un-narrowed control in the
+scratch-project CLI loop before either assertion was written, and that control
+shipped as a pin. A9 now fails exactly one pin and nothing else does.
+
+**Two arms redden nothing and the reason is structural, not a redundant guard:**
+
+- **A10** — the declNodes/shadowedNames pops. Their consumers are AST-shape
+  rules (`currentLocalDeclTypeNodes` feeds the tuple-target checks) and the
+  shadow-detection ecology, and no fixture here drives one across a fn boundary.
+  An unpinned invariant, recorded as such.
+- **A11** — the per-FILE `reset`. `diagnose()` is SINGLE-FILE, so a cross-file
+  leak is not expressible through this harness at all. Pinning it needs the
+  multi-file `Checker(options, binderResults)` construction.
+
+**Twelve of the 32 pins are reddened by no arm** and are recorded as INVARIANT
+GUARDS with no discrimination claim attached (round 807/868): the READ-path
+pins (`an inner scope sees the outer scope's entries` and its set twin), the
+guarded no-ops (`popping with no scope open`), the two `clear()` refusals, the
+`toMutableMap` detachment, the `onMutate` contract, the positive-direction
+compile pins, and the four SET-side root/reset/no-op/clear pins — for which no
+arm was cut, because A7 and A8 were both aimed at the map stack.
