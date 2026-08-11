@@ -25,8 +25,9 @@ import com.xemantic.kotlin.test.assert
 import kotlin.test.Test
 
 /**
- * (WARM.18) round 891 — pins [VarScopeStack], the undo-log replacement for the
- * `CtaFrame.varTypes` per-push whole-map copy.
+ * (WARM.18)/(WARM.18b) rounds 891-892 — pins [MapScopeStack] and [SetScopeStack],
+ * the undo-log replacements for the `CtaFrame.varTypes` and `CtaFrame`
+ * localTypes/declNodes/shadowedNames per-push whole-map copies.
  *
  * **Why the pins are HERE and not through a compile.** The property being
  * replaced is "a scope push behaves like a copy", and its failure mode is the
@@ -39,13 +40,13 @@ import kotlin.test.Test
  *
  * Every value is a bare word so the power-assert diagram stays readable.
  */
-class VarScopeStackTest {
+class ScopeStackTest {
 
-    private fun at(s: VarScopeStack, k: String): String = s.view[k] ?: "absent"
+    private fun at(s: MapScopeStack<String>, k: String): String = s.view[k] ?: "absent"
 
     @Test
     fun `an inner scope sees the outer scope's entries`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["a"] = "string"
         s.push()
@@ -55,7 +56,7 @@ class VarScopeStackTest {
 
     @Test
     fun `a write in an inner scope is gone after the scope closes`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.push()
         s.view["b"] = "number"
@@ -67,7 +68,7 @@ class VarScopeStackTest {
 
     @Test
     fun `a shadowed key comes back with the OUTER value - not absent`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["c"] = "string"
         s.push()
@@ -79,7 +80,7 @@ class VarScopeStackTest {
 
     @Test
     fun `repeated writes to one key in one scope still restore the inherited value`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["d"] = "string"
         s.push()
@@ -93,7 +94,7 @@ class VarScopeStackTest {
 
     @Test
     fun `nesting three deep unwinds one level at a time`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push(); s.view["e"] = "string"
         s.push(); s.view["e"] = "number"
         s.push(); s.view["e"] = "boolean"
@@ -112,7 +113,7 @@ class VarScopeStackTest {
      */
     @Test
     fun `putAll is recorded and is undone at the pop`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["f"] = "string"
         s.push()
@@ -126,7 +127,7 @@ class VarScopeStackTest {
 
     @Test
     fun `a remove inside a scope is undone at the pop`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["h"] = "string"
         s.push()
@@ -144,7 +145,7 @@ class VarScopeStackTest {
      */
     @Test
     fun `a write made with no scope open persists - the shared frame`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["i"] = "string"
         // no push here: this is the SHARED frame
@@ -157,7 +158,7 @@ class VarScopeStackTest {
 
     @Test
     fun `the file root's writes survive every pop and are dropped only by reset`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.view["k"] = "string"
         s.push()
         s.view["k"] = "number"
@@ -172,7 +173,7 @@ class VarScopeStackTest {
 
     @Test
     fun `reset drops every scope and every entry`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push(); s.view["l"] = "string"
         s.push(); s.view["m"] = "number"
         s.reset()
@@ -190,7 +191,7 @@ class VarScopeStackTest {
      */
     @Test
     fun `toMutableMap on the view is a detached snapshot`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         s.view["n"] = "string"
         val snapshot = s.view.toMutableMap()
@@ -204,7 +205,7 @@ class VarScopeStackTest {
 
     @Test
     fun `the undo log costs one record per write and not one per entry`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.push()
         for (i in 0 until 40) s.view["v$i"] = "string"
         s.push()
@@ -219,10 +220,167 @@ class VarScopeStackTest {
     /** A pop with nothing open is the guarded no-op the spine's leave relies on. */
     @Test
     fun `popping with no scope open is a no-op`() {
-        val s = VarScopeStack()
+        val s = MapScopeStack<String>()
         s.view["p"] = "string"
         s.pop()
         assert(at(s, "p") == "string")
         assert(s.depth == 0)
+    }
+
+    // ---- (WARM.18b) round 892 — the value type is a PARAMETER, and the epoch
+    // hook. The cta LOCAL family instantiates the same class at `Type` and at
+    // `TypeNode`, so nothing about the mechanism may depend on `String`.
+
+    @Test
+    fun `the map stack shadows and restores at a non-String value type`() {
+        val s = MapScopeStack<Int>()
+        s.push()
+        s.view["k"] = 1
+        s.push()
+        s.view["k"] = 2
+        assert(s.view["k"] == 2)
+        s.pop()
+        assert(s.view["k"] == 1)
+    }
+
+    /** The bump the replaced `EpochMap` performed — every RECORDED mutation,
+     *  and the root writes too (a superset, which is the safe direction). */
+    @Test
+    fun `onMutate fires once per mutation including at the file root`() {
+        var bumps = 0
+        val s = MapScopeStack<Int>(onMutate = { bumps++ })
+        s.view["root"] = 0
+        assert(bumps == 1)
+        s.push()
+        s.view["a"] = 1
+        s.view["a"] = 2
+        s.view.remove("a")
+        assert(bumps == 4)
+        s.pop()
+        assert(bumps == 4)
+    }
+
+    /** A clear cannot be recorded in O(1) and would drop the ENCLOSING scopes'
+     *  entries with no way to restore them at the pop. */
+    @Test
+    fun `clear on the map view throws instead of silently dropping outer scopes`() {
+        val s = MapScopeStack<String>()
+        s.push()
+        s.view["a"] = "string"
+        var threw = false
+        try { s.view.clear() } catch (_: UnsupportedOperationException) { threw = true }
+        assert(threw)
+        assert(at(s, "a") == "string")
+    }
+
+    // ---- (WARM.18b) round 892 — [SetScopeStack], the `shadowedNames` twin.
+    // A set records one BIT per touched element (present-before / absent-before)
+    // where the map records a value, so the restore is a different statement and
+    // needs its own pins.
+
+    @Test
+    fun `an inner set scope sees the outer scope's elements`() {
+        val s = SetScopeStack()
+        s.push()
+        s.view.add("outer")
+        s.push()
+        assert("outer" in s.view)
+        assert(s.depth == 2)
+    }
+
+    @Test
+    fun `an add in an inner set scope is gone after the scope closes`() {
+        val s = SetScopeStack()
+        s.push()
+        s.push()
+        s.view.add("inner")
+        assert("inner" in s.view)
+        s.pop()
+        assert("inner" !in s.view)
+    }
+
+    /** The mirror of the map stack's shadowing pin: a REMOVE of an inherited
+     *  element must put it BACK, not leave it absent. */
+    @Test
+    fun `removing an inherited element is undone at the pop`() {
+        val s = SetScopeStack()
+        s.push()
+        s.view.add("kept")
+        s.push()
+        s.view.remove("kept")
+        assert("kept" !in s.view)
+        s.pop()
+        assert("kept" in s.view)
+    }
+
+    /** The pin the REVERSE replay exists for: with a forward replay the last
+     *  restore applied would be this scope's own state, not the inherited one. */
+    @Test
+    fun `repeated adds and removes in one set scope restore the inherited state`() {
+        val s = SetScopeStack()
+        s.push()
+        s.view.add("k")
+        s.push()
+        s.view.remove("k")
+        s.view.add("k")
+        s.view.remove("k")
+        s.pop()
+        assert("k" in s.view)
+        assert(s.undoSize == 1)
+    }
+
+    @Test
+    fun `addAll is recorded per element and is undone at the pop`() {
+        val s = SetScopeStack()
+        s.push()
+        s.view.add("a")
+        s.push()
+        s.view.addAll(listOf("a", "b", "c"))
+        assert(s.liveSize == 3)
+        s.pop()
+        assert(s.liveSize == 1)
+        assert("a" in s.view)
+    }
+
+    @Test
+    fun `a set add made with no scope open persists - the shared frame`() {
+        val s = SetScopeStack()
+        s.view.add("root")
+        s.push()
+        s.pop()
+        assert("root" in s.view)
+        assert(s.undoSize == 0)
+    }
+
+    @Test
+    fun `reset drops every set scope and every element`() {
+        val s = SetScopeStack()
+        s.view.add("root")
+        s.push()
+        s.view.add("inner")
+        s.reset()
+        assert(s.liveSize == 0)
+        assert(s.depth == 0)
+        assert(s.undoSize == 0)
+    }
+
+    @Test
+    fun `popping the set stack with no scope open is a no-op`() {
+        val s = SetScopeStack()
+        s.view.add("p")
+        s.pop()
+        assert("p" in s.view)
+        assert(s.depth == 0)
+    }
+
+    @Test
+    fun `clear on the set view throws instead of silently dropping outer scopes`() {
+        val s = SetScopeStack()
+        s.push()
+        s.view.add("a")
+        var threw = false
+        try { s.view.clear() } catch (_: UnsupportedOperationException) { threw = true }
+        assert(threw)
+        assert("a" in s.view)
     }
 }

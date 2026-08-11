@@ -2484,9 +2484,9 @@ class Checker(
         // SANDWICH pattern (the frame's maps are installed into the ambient
         // fields, the SAME legacy helpers run against them, then the ambient
         // is restored — zero reimplementation drift).
-        val localTypes: MutableMap<String, Type> = HashMap(),
-        val localDeclNodes: HashMap<String, TypeNode> = HashMap(),
-        val shadowedNames: MutableSet<String> = HashSet(),
+        val localTypes: MutableMap<String, Type>,
+        val localDeclNodes: MutableMap<String, TypeNode>,
+        val shadowedNames: MutableSet<String>,
         val ambiguousNames: MutableSet<String> = mutableSetOf(),
         /** (WARM.18) round 891 — true when this frame OPENED a [ctaVarScope]
          *  scope, i.e. where it used to own a `varTypes` COPY. False for the
@@ -2496,19 +2496,47 @@ class Checker(
          *  It is what [ctaSpineLeave] pops on, so it must be set at exactly the
          *  pushes that call `ctaVarScope.push()`. */
         val varScoped: Boolean = true,
+        /** (WARM.18b) round 892 — true when this frame OPENED a
+         *  [ctaLocalTypeScope] scope, i.e. where it used to own a `localTypes`
+         *  COPY. That is the eight fn-body shapes (which also copied
+         *  `localDeclNodes`/`shadowedNames`, see [ctaFnScoped]) AND the
+         *  narrowing frame (which copied `localTypes` ALONE, into an
+         *  `EpochMap`, and SHARED the other two). Every other frame shares all
+         *  three; the file-root frame opens nothing and is dropped by `reset`. */
+        val localScoped: Boolean = false,
+        /** (WARM.18b) round 892 — true when this frame also opened the
+         *  [ctaDeclNodeScope] / [ctaShadowScope] scopes. Fn-body frames only:
+         *  the narrowing frame SHARES those two with its parent, so its
+         *  `localScoped` is true while this is false. */
+        val ctaFnScoped: Boolean = false,
     )
     private val ctaFrames = ArrayDeque<CtaFrame>()
 
     /** (WARM.18) round 891 — the `varTypes` family as ONE live map plus an undo
      *  log. Every frame's `varTypes` is this stack's `view`; a frame that used
      *  to COPY now opens a scope instead. See [VarScopeStack]. */
-    private val ctaVarScope = VarScopeStack()
+    private val ctaVarScope = MapScopeStack<String>(FrontEnd.CP_CTA_VAR)
+
+    /** (WARM.18b) round 892 — the `currentLocalTypes` family as ONE live map
+     *  plus an undo log, in place of the whole-map copy each fn-body frame took
+     *  (1,089,527 entries per warm rebuild against 28,695 writes = 2.6%). The
+     *  epoch bump reproduces the `EpochMap` the narrowing frame used to mint —
+     *  a superset, which is the safe direction for a probe-only fence. */
+    private val ctaLocalTypeScope = MapScopeStack<Type>(FrontEnd.CP_CTA_LOCAL) {
+        bumpExprEpoch("ctaLocalTypeScope")
+    }
+    private val ctaDeclNodeScope = MapScopeStack<TypeNode>(FrontEnd.CP_CTA_LOCAL)
+    private val ctaShadowScope = SetScopeStack(FrontEnd.CP_CTA_LOCAL)
 
     private fun ctaSpineFileReset(sf: SourceFile) {
         ctaFrames.clear()
         ctaVarScope.reset()
+        ctaLocalTypeScope.reset(); ctaDeclNodeScope.reset(); ctaShadowScope.reset()
         ctaFrames.addLast(CtaFrame(sf, ctaVarScope.view, null, null, emptySet(),
             inFn = false, inAsync = false, inGen = false, inInstanceMember = false,
+            localTypes = ctaLocalTypeScope.view,
+            localDeclNodes = ctaDeclNodeScope.view,
+            shadowedNames = ctaShadowScope.view,
             varScoped = false))
         ctaM3NarrowThen.clear()
     }
@@ -2959,6 +2987,11 @@ class Checker(
         // immediately, which is what keeps push and pop paired.
         FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0)
         ctaVarScope.push()
+        // (WARM.18b) round 892 — the localTypes family likewise. The three
+        // scopes open TOGETHER here and close together at [ctaSpineLeave]'s
+        // `ctaFnScoped` pop, which is what keeps them in step with `ctaFrames`.
+        FrontEnd.addCopy(FrontEnd.CP_CTA_LOCAL, 0)
+        ctaLocalTypeScope.push(); ctaDeclNodeScope.push(); ctaShadowScope.push()
         val inner = ctaVarScope.view
         extraVarTypes?.let { inner.putAll(it) }
         val tpNames = (outerTpNames ?: base.typeParams) + (tps?.map { it.name.text } ?: emptyList())
@@ -2969,13 +3002,15 @@ class Checker(
             inGen = if (viaCheckFunctionBody) isGenerator else base.inGen,
             inInstanceMember = inInstanceMember,
             classForThis = classForThis,
-            narrowedDeclared = base.narrowedDeclared)
-        FrontEnd.addCopy(FrontEnd.CP_CTA_LOCAL, base.localTypes.size + base.localDeclNodes.size + base.shadowedNames.size)
-        FrontEnd.ampCopyMap(FrontEnd.CP_CTA_LOCAL, base.localTypes); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_LOCAL, base.localDeclNodes)
-        FrontEnd.ampCopySet(FrontEnd.CP_CTA_LOCAL, base.shadowedNames)
-        frame.localTypes.putAll(base.localTypes)
-        frame.localDeclNodes.putAll(base.localDeclNodes)
-        frame.shadowedNames.addAll(base.shadowedNames)
+            narrowedDeclared = base.narrowedDeclared,
+            localTypes = ctaLocalTypeScope.view,
+            localDeclNodes = ctaDeclNodeScope.view,
+            shadowedNames = ctaShadowScope.view,
+            localScoped = true, ctaFnScoped = true)
+        // (WARM.18b) round 892 — the three `putAll(base.*)` seeds are GONE:
+        // `base` is `ctaFrames.last()` at every one of the eight call sites and
+        // every frame now holds the LIVE view, so the scope just opened already
+        // holds exactly what the copy would have been seeded with.
         // (cta-m3c) round 570: the fn-body sandwich is ALWAYS-ON — the round-568
         // fourslashImpl drift (TP-constraint materialization timing flipping a
         // TS2339 verdict) is removed at its source by the round-569/570
@@ -3134,7 +3169,16 @@ class Checker(
                 if (narrowVarScoped) ctaVarScope.push()
                 val nd = top.narrowedDeclared.toMutableMap()
                 top.localTypes[varName]?.let { nd[varName] = it }
-                val lt = EpochMap(top.localTypes)
+                // (WARM.18b) round 892 — the wrapper's `EpochMap(top.localTypes)`
+                // copy becomes a scope on the SAME stack the fn-body frames use.
+                // It must be the same stack: a fn declared inside this then-branch
+                // takes its base from `ctaFrames.last()`, so a copy here and a
+                // live map there would be two disciplines over one ambient field.
+                // `localDeclNodes`/`shadowedNames` are SHARED by this frame, so
+                // only the localTypes scope opens (`ctaFnScoped` stays false).
+                FrontEnd.addCopy(FrontEnd.CP_CTA_LOCAL, 0)
+                ctaLocalTypeScope.push()
+                val lt = ctaLocalTypeScope.view
                 lt[varName] = narrowedType
                 ctaFrames.addLast(CtaFrame(node,
                     ctaVarScope.view,
@@ -3144,7 +3188,8 @@ class Checker(
                     shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames,
                     classForThis = top.classForThis,
                     narrowedDeclared = nd,
-                    varScoped = narrowVarScoped))
+                    varScoped = narrowVarScoped,
+                    localScoped = true))
             }
         }
         val parent = (node as NodeBase).parent
@@ -3351,6 +3396,10 @@ class Checker(
             // in step even if `pop` were ever to throw.
             val gone = ctaFrames.removeLast()
             if (gone.varScoped) ctaVarScope.pop()
+            // (WARM.18b) round 892 — same rule for the localTypes family, with
+            // TWO flags because the narrowing frame scopes `localTypes` alone.
+            if (gone.localScoped) ctaLocalTypeScope.pop()
+            if (gone.ctaFnScoped) { ctaDeclNodeScope.pop(); ctaShadowScope.pop() }
         }
     }
 
