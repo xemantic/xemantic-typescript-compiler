@@ -286,7 +286,7 @@ internal val TIERS = listOf(
  */
 internal fun copyAmpReps(tier: String): Int? {
     if (!tier.startsWith("copyamp")) return null
-    val digits = tier.removePrefix("copyamp").removePrefix("os")
+    val digits = tier.removePrefix("copyamp").dropWhile { it in 'a'..'z' }
     if (digits.isEmpty() || !digits.all { it in '0'..'9' }) return null
     return digits.toIntOrNull()
 }
@@ -298,8 +298,18 @@ internal fun copyAmpReps(tier: String): Int? {
  * that still has them, instead of as the difference of two whole-family slopes
  * each carrying its own error.
  */
-internal fun copyAmpKinds(tier: String): Int =
-    if (tier.startsWith("copyampos")) (1 shl FrontEnd.CP_OS) or (1 shl FrontEnd.CP_PD) else -1
+internal fun copyAmpKinds(tier: String): Int = when {
+    tier.startsWith("copyampos") -> (1 shl FrontEnd.CP_OS) or (1 shl FrontEnd.CP_PD)
+    // (WARM.18) round 891 — the two `CtaFrame` families, which are what round
+    // 869 left behind. `cv` is `varTypes` alone (the family this round replaces),
+    // `cl` the localTypes/declNodes/shadowedNames fn-body copies (refused), and
+    // `cta` both. Same reason as `os`: the prize of replacing exactly ONE family
+    // is measured on the binary that still has it.
+    tier.startsWith("copyampcv") -> 1 shl FrontEnd.CP_CTA_VAR
+    tier.startsWith("copyampcl") -> 1 shl FrontEnd.CP_CTA_LOCAL
+    tier.startsWith("copyampcta") -> (1 shl FrontEnd.CP_CTA_VAR) or (1 shl FrontEnd.CP_CTA_LOCAL)
+    else -> -1
+}
 
 internal fun ampReps(tier: String): Int? {
     val control = tier.startsWith("ampc")

@@ -2488,13 +2488,28 @@ class Checker(
         val localDeclNodes: HashMap<String, TypeNode> = HashMap(),
         val shadowedNames: MutableSet<String> = HashSet(),
         val ambiguousNames: MutableSet<String> = mutableSetOf(),
+        /** (WARM.18) round 891 — true when this frame OPENED a [ctaVarScope]
+         *  scope, i.e. where it used to own a `varTypes` COPY. False for the
+         *  file-root frame (dropped by `reset`, never popped) and for a BARE
+         *  then-statement narrowing frame, which deliberately SHARES its
+         *  parent's map because the legacy dispatch passed it straight through.
+         *  It is what [ctaSpineLeave] pops on, so it must be set at exactly the
+         *  pushes that call `ctaVarScope.push()`. */
+        val varScoped: Boolean = true,
     )
     private val ctaFrames = ArrayDeque<CtaFrame>()
 
+    /** (WARM.18) round 891 — the `varTypes` family as ONE live map plus an undo
+     *  log. Every frame's `varTypes` is this stack's `view`; a frame that used
+     *  to COPY now opens a scope instead. See [VarScopeStack]. */
+    private val ctaVarScope = VarScopeStack()
+
     private fun ctaSpineFileReset(sf: SourceFile) {
         ctaFrames.clear()
-        ctaFrames.addLast(CtaFrame(sf, mutableMapOf(), null, null, emptySet(),
-            inFn = false, inAsync = false, inGen = false, inInstanceMember = false))
+        ctaVarScope.reset()
+        ctaFrames.addLast(CtaFrame(sf, ctaVarScope.view, null, null, emptySet(),
+            inFn = false, inAsync = false, inGen = false, inInstanceMember = false,
+            varScoped = false))
         ctaM3NarrowThen.clear()
     }
 
@@ -2938,8 +2953,13 @@ class Checker(
         seedClass: ClassDeclaration? = null,
         paramTypeFallback: TypeNode? = null,
     ): CtaFrame {
-        FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, base.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, base.varTypes)
-        val inner = base.varTypes.toMutableMap()
+        // (WARM.18) round 891 — a SCOPE, not a copy. `base` is `ctaFrames.last()`
+        // at every one of the eight call sites, so the scope opens exactly where
+        // the copy used to be taken; the caller pushes the returned frame
+        // immediately, which is what keeps push and pop paired.
+        FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0)
+        ctaVarScope.push()
+        val inner = ctaVarScope.view
         extraVarTypes?.let { inner.putAll(it) }
         val tpNames = (outerTpNames ?: base.typeParams) + (tps?.map { it.name.text } ?: emptyList())
         val frame = CtaFrame(body, inner, returnAnn?.let { resolveSimpleTypeName(it) }, returnAnn,
@@ -3107,20 +3127,24 @@ class Checker(
                 ctaM3NarrowFramePushed = true
                 val top = ctaFrames.last()
                 val (varName, narrowedType) = narrowing
-                FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, if (node is Block) top.varTypes.size else 0)
-                if (node is Block) FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
+                FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0)
+                // (WARM.18) round 891 — the then-BLOCK's copy becomes a scope; a
+                // BARE then still SHARES, which is exactly "open no scope".
+                val narrowVarScoped = node is Block
+                if (narrowVarScoped) ctaVarScope.push()
                 val nd = top.narrowedDeclared.toMutableMap()
                 top.localTypes[varName]?.let { nd[varName] = it }
                 val lt = EpochMap(top.localTypes)
                 lt[varName] = narrowedType
                 ctaFrames.addLast(CtaFrame(node,
-                    if (node is Block) top.varTypes.toMutableMap() else top.varTypes,
+                    ctaVarScope.view,
                     top.returnType, top.returnTypeNode, top.typeParams,
                     top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                     localTypes = lt, localDeclNodes = top.localDeclNodes,
                     shadowedNames = top.shadowedNames, ambiguousNames = top.ambiguousNames,
                     classForThis = top.classForThis,
-                    narrowedDeclared = nd))
+                    narrowedDeclared = nd,
+                    varScoped = narrowVarScoped))
             }
         }
         val parent = (node as NodeBase).parent
@@ -3230,8 +3254,8 @@ class Checker(
                     // audit's lt-digest experiment showed block/namespace/clause
                     // recordings LEAK into the enclosing scope).
                     val top = ctaFrames.last()
-                    FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, top.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
-                    ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
+                    FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0); ctaVarScope.push()
+                    ctaFrames.addLast(CtaFrame(node, ctaVarScope.view,
                         top.returnType, top.returnTypeNode, top.typeParams,
                         top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                 classForThis = top.classForThis,
@@ -3255,8 +3279,8 @@ class Checker(
                 currentFileLocals?.get(nameNode.text) ?: globals[nameNode.text]
             } else null
             val pushSym = if (moduleSymbol != null && moduleSymbol.flags.hasAny(SymbolFlags.Module)) moduleSymbol else null
-            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, top.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
-            ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
+            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0); ctaVarScope.push()
+            ctaFrames.addLast(CtaFrame(node, ctaVarScope.view,
                 null, null, emptySet(),
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                 classForThis = top.classForThis,
@@ -3269,8 +3293,8 @@ class Checker(
         // threaded through unchanged).
         if (node is CaseClause || node is DefaultClause) {
             val top = ctaFrames.last()
-            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, top.varTypes.size); FrontEnd.ampCopyMap(FrontEnd.CP_CTA_VAR, top.varTypes)
-            ctaFrames.addLast(CtaFrame(node, top.varTypes.toMutableMap(),
+            FrontEnd.addCopy(FrontEnd.CP_CTA_VAR, 0); ctaVarScope.push()
+            ctaFrames.addLast(CtaFrame(node, ctaVarScope.view,
                 top.returnType, top.returnTypeNode, top.typeParams,
                 top.inFn, top.inAsync, top.inGen, top.inInstanceMember,
                 classForThis = top.classForThis,
@@ -3296,7 +3320,9 @@ class Checker(
                 val ann = node.type
                 if (nm != null && ann != null) {
                     val s = resolveSimpleTypeName(ann) ?: intersectionTypeNameForVarTypes(ann)
-                    if (s != null) { FrontEnd.noteMut(FrontEnd.CP_CTA_VAR); ctaFrames.last().varTypes[nm.text] = s }
+                    // (WARM.18) the write is counted by `VarScopeStack.View`, which is
+                    // the only way into the family now — counting here too would double.
+                    if (s != null) ctaFrames.last().varTypes[nm.text] = s
                 }
             }
         }
@@ -3319,7 +3345,12 @@ class Checker(
     private fun ctaSpineLeave(node: Node) {
         if (ctaFrames.size > 1 && ctaFrames.last().owner === node) {
             SpineDispatch.work()
-            ctaFrames.removeLast()
+            // (WARM.18) round 891 — the pop MUST mirror the push: a frame that
+            // opened a `varTypes` scope closes it here, and one that shared its
+            // parent's map must not. `removeLast` first so the two stacks stay
+            // in step even if `pop` were ever to throw.
+            val gone = ctaFrames.removeLast()
+            if (gone.varScoped) ctaVarScope.pop()
         }
     }
 
@@ -96530,7 +96561,9 @@ interface DataView {
         // Round 460: skip the block-UNAWARE string map too for ambiguous names (absent
         // entries behave permissively in every consumer).
         if (declaredTypeStr != null && name.text !in ambiguousBlockLocalNames) {
-            FrontEnd.noteMut(FrontEnd.CP_CTA_VAR)
+            // (WARM.18) counted by `VarScopeStack.View` — and only when the map
+            // handed in IS the scope stack's view, which is the population the
+            // census is about.
             varTypes[name.text] = declaredTypeStr
         }
 
