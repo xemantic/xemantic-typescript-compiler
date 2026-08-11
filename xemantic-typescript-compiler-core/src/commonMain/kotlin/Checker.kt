@@ -1035,19 +1035,87 @@ class Checker(
         return newScope to newAst
     }
 
+    /* ---------------------------------------------------------------------
+     * (SPINE.1)(m3-flags), round 886 — the three spine-anchor mark tables as
+     * ONE per-file bit-per-node array.
+     *
+     * Was: three `HashMap<String, HashSet<Int>>`, i.e. per mark a String-keyed
+     * map probe, a `getOrPut` lambda check and a `HashSet.add` that BOXES the
+     * nodeId (`Integer.valueOf` caches only -128..127; nodeIds run to the tens
+     * of thousands). The round-874 leaf dumps price the family at **1.16-1.31%
+     * of a warm rebuild, 1.05-1.26% of it in the MARK** — the marks vastly
+     * outnumber the tests (0.05-0.11%).
+     *
+     * Now: tsgo's shape. It keeps per-node boolean facts as BITS in a single
+     * `NodeCheckFlags uint32` inside one links struct
+     * (`typescript-go-repo/internal/checker/types.go`, `NodeLinks.flags`), so a
+     * fact costs one store lookup and a bit test rather than a set per fact.
+     * The JVM analogue of "one lookup" is INV.2(b)'s per-file nodeId side
+     * table, already the sanctioned idiom in this walk (`ByteArray(
+     * sourceFile.nodeCount)`), so the three facts become three BITS of one
+     * `ByteArray` and the mark becomes an array store.
+     *
+     * Round 787's law is why this is keyed per FILE and not program-wide:
+     * `nodeId` restarts at 0 in every `SourceFile`, so one program-wide array
+     * would collapse one node per file onto each id.
+     *
+     * LIFETIME: never cleared, exactly like the three maps it replaces — the
+     * legacy walkers run as later passes and test marks for files the spine
+     * finished long before, passing their own `fileName` rather than
+     * [spineFileName].
+     * ------------------------------------------------------------------- */
+
+    /** fileName → bit-per-nodeId anchor marks. Grows on demand, so no path
+     *  needs to pre-size it from `sourceFile.nodeCount` (the
+     *  [checkUnresolvedNames] walk sets [spineFileName] without running the
+     *  per-file `*SpineFileReset` hooks). */
+    private val m3AnchorFlags = HashMap<String, ByteArray>()
+
+    /** Cached array for [m3FlagsFile] — the mark path runs inside a per-file
+     *  walk, so the map probe is paid once per file rather than once per mark. */
+    private var m3FlagsFile: String? = null
+    private var m3FlagsCur: ByteArray = ByteArray(0)
+
+    /** The current file's array, sized to admit [minSize]; creates/grows and
+     *  writes back to both [m3AnchorFlags] and the cache. */
+    private fun m3FlagsForCurrent(minSize: Int): ByteArray {
+        var arr = if (spineFileName == m3FlagsFile) m3FlagsCur else m3AnchorFlags[spineFileName]
+        if (arr == null || arr.size < minSize) {
+            val grown = ByteArray(maxOf(minSize, (arr?.size ?: 0) * 2, 64))
+            if (arr != null) arr.copyInto(grown)
+            arr = grown
+            m3AnchorFlags[spineFileName] = arr
+        }
+        m3FlagsFile = spineFileName
+        m3FlagsCur = arr
+        return arr
+    }
+
+    /** Set [bit] for [n] in the CURRENT spine file. Unindexed nodes (a `copy()`
+     *  or a Transformer-synthesized node, INV.2(a): nodeId -1) are refused —
+     *  they carry no identity a later test could match. */
+    private fun m3Mark(n: Node, bit: Int) {
+        val id = (n as NodeBase).nodeId
+        if (id < 0) return
+        val arr = if (spineFileName == m3FlagsFile && id < m3FlagsCur.size) m3FlagsCur
+        else m3FlagsForCurrent(id + 1)
+        arr[id] = (arr[id].toInt() or bit).toByte()
+    }
+
+    /** Is [bit] set for [n] in [fileName]? */
+    private fun m3Has(n: Node, fileName: String, bit: Int): Boolean {
+        val id = (n as NodeBase).nodeId
+        if (id < 0) return false
+        val arr = m3AnchorFlags[fileName] ?: return false
+        return id < arr.size && (arr[id].toInt() and bit) != 0
+    }
+
     /** (ccet-m3): nodeIds of Call/New/TaggedTemplate nodes the spine
      *  anchored, per file — the legacy emitters' truncation marks. */
-    private val ccetM3Anchored = HashMap<String, HashSet<Int>>()
+    private fun ccetM3MarkAnchored(n: Node) = m3Mark(n, M3_BIT_CCET)
 
-    private fun ccetM3MarkAnchored(n: Node) {
-        val id = (n as NodeBase).nodeId
-        if (id >= 0) ccetM3Anchored.getOrPut(spineFileName) { HashSet() }.add(id)
-    }
-
-    private fun ccetM3IsAnchored(n: Node, fileName: String): Boolean {
-        val id = (n as NodeBase).nodeId
-        return id >= 0 && ccetM3Anchored[fileName]?.contains(id) == true
-    }
+    private fun ccetM3IsAnchored(n: Node, fileName: String): Boolean =
+        m3Has(n, fileName, M3_BIT_CCET)
 
     /** (ccet-m3): does the legacy ccet walk REACH [node]? Per-edge precision
      *  over the legacy walkers' recursion. Unreached (fail closed):
@@ -1604,17 +1672,10 @@ class Checker(
     /** (cpa-m3a): nodeIds of statements whose cpa emissions the spine
      *  anchored, per file — consulted by the legacy truncation marks (the
      *  cta-m3h0 recorded-set pattern; gate identity by construction). */
-    private val cpaM3Anchored = HashMap<String, HashSet<Int>>()
+    private fun cpaM3MarkAnchored(stmt: Node) = m3Mark(stmt, M3_BIT_CPA)
 
-    private fun cpaM3MarkAnchored(stmt: Node) {
-        val id = (stmt as NodeBase).nodeId
-        if (id >= 0) cpaM3Anchored.getOrPut(spineFileName) { HashSet() }.add(id)
-    }
-
-    private fun cpaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean {
-        val id = (stmt as NodeBase).nodeId
-        return id >= 0 && cpaM3Anchored[fileName]?.contains(id) == true
-    }
+    private fun cpaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean =
+        m3Has(stmt, fileName, M3_BIT_CPA)
 
     /** (cpa-m2a/m2b): is [stmt] reached by the legacy cpa dispatchers? The
      *  walk climbs (child, parent) EDGES with per-arm precision mirroring the
@@ -2505,18 +2566,11 @@ class Checker(
      *  truncation marks — gate identity by CONSTRUCTION (the marks truncate
      *  exactly what the spine emitted, never a re-derived approximation).
      *  Program-lifetime retention (the legacy giants run after the spine). */
-    private val ctaM3AnchoredStmts = HashMap<String, HashSet<Int>>()
-
-    private fun ctaM3MarkAnchored(stmt: Node) {
-        val id = (stmt as NodeBase).nodeId
-        if (id >= 0) ctaM3AnchoredStmts.getOrPut(spineFileName) { HashSet() }.add(id)
-    }
+    private fun ctaM3MarkAnchored(stmt: Node) = m3Mark(stmt, M3_BIT_CTA)
 
     /** The legacy-side mark test: was this statement spine-anchored? */
-    private fun ctaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean {
-        val id = (stmt as NodeBase).nodeId
-        return id >= 0 && ctaM3AnchoredStmts[fileName]?.contains(id) == true
-    }
+    private fun ctaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean =
+        m3Has(stmt, fileName, M3_BIT_CTA)
 
     /** (cta-m3a): the top-level + namespace-body VariableStatement emission —
      *  the legacy arm's leaf calls run from the spine under a per-dispatch
@@ -50391,6 +50445,19 @@ class Checker(
     }
 
     companion object {
+        /* (SPINE.1)(m3-flags): the three spine-anchor bits of `m3AnchorFlags`.
+         * `const val` primitives are emitted with a `ConstantValue` attribute
+         * and inlined at the use site, so they cost `<clinit>` nothing (round
+         * 820) and carry no init-order hazard. */
+        /** Bit for the (cta-m3) statement anchors. */
+        private const val M3_BIT_CTA = 1
+
+        /** Bit for the (cpa-m3) statement anchors. */
+        private const val M3_BIT_CPA = 2
+
+        /** Bit for the (ccet-m3) Call/New/TaggedTemplate anchors. */
+        private const val M3_BIT_CCET = 4
+
         /** Access modifiers rejected on object-literal members (TS1042/TS1184,
          *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
          *  `init`, so an instance field declared after `init` would read null. */
