@@ -97,14 +97,33 @@ facts about a symbol pays three probes.
 Porting that wholesale is a checker-wide refactor and is NOT proposed here. What
 IS available is the same idea applied where the facts are booleans, which is § 5.
 
-## 4. Left open, and the one number a next round needs
+## 4. String building — CLOSED in the same round, and it is diffuse too
 
-**String building is 5.8-6.8% of samples as a LEAF and is unattributed.** The
-whole-program regex class is closed (rounds 860-863; `java.util.regex` is
-**0.0%**, not one sample in 16,036) — this is something else, and no section
-probe in this repo brackets it. It is the largest unattributed family the dumps
-show. Next step is an owner ranking (`round886_hash_owners.py string`), not a
-guess.
+**String building is 5.8-6.8% of samples as a LEAF**, and the whole-program regex
+class cannot explain it (rounds 860-863 closed that; `java.util.regex` is
+**0.0%**, not one sample in 16,036). It looked like the largest unattributed
+family the dumps show, so it was ranked rather than guessed at
+(`round886_hash_owners.py string`) — and the answer is the same shape as § 3:
+
+| owner | share |
+| --- | ---: |
+| `ciaMutualFnDecls$resolve` | 0.32% |
+| `checkIdentifierResolved` | 0.20% |
+| `internUnion` | 0.18% |
+| `lineStartsFor` | 0.18% |
+| …16 more to reach ~2.3% | <= 0.15% each |
+
+**Max owner 0.32%, no concentration** — below any candidate floor, spread over
+hundreds of sites. So the two largest stdlib families in this compiler, hash
+probing (24%) and string building (6%), are BOTH diffuse, and neither is
+addressable by a local fix. That is a structural statement about this codebase
+and it is the honest ceiling on what any single mechanical change here can
+return.
+
+Worth noting against a plausible misreading: `internUnion` at 0.18% is the intern
+caches' surviving STRING key path (M0.3(iii) packed only the dominant shapes into
+`LongKeyMap`). Extending the packed key to wider shapes is therefore worth
+~0.2% at most — priced, and not worth a round.
 
 ## 5. What was taken: the anchor marks as a per-node flags word
 
