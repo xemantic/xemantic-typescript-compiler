@@ -20,6 +20,72 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 886 (2026-08-11) — (SPINE.1)(m3-flags): tsgo MINED AND PRICED. ITS TWO PORTABLE-LOOKING
+DEVICES ARE **DEAD** (0.17% / 0.15%), AND THE ANCHOR MARKS I MADE CHEAP TURN OUT TO BE **INERT** —
+184,569 PRODUCED, 15,446 CONSULTED, **0 AFFIRMATIVE**.**
+
+Owner asked whether tsgo's sources (on the box since round 884) hold anything we can use. Every
+candidate was priced against round 874's kept warm leaf dumps BEFORE any code was written, which is
+the only reason the round did not spend itself on a 0.17% lever.
+
+- **THE INSTRUMENT.** `scripts/round886_mechanism.py` re-aggregates a `jfr print --stack-depth 512`
+  dump by MECHANISM family (round 874's law); `scripts/round886_hash_owners.py` charges a stdlib
+  family's samples to their nearest non-stdlib OWNER (round 868's law). Full table:
+  `docs/perf/tsgo-portability-census.md`.
+
+- **DEAD, MEASURED.** tsgo's `CacheHashKey` (128-bit xxh3 keys replacing tsc's string keys, used for
+  the relation cache / instantiation caches / signature keys) buys us nothing: we already use EXACT
+  packed `Long` keys (M0.3(iii)), and the residual boxing in `HashMap<Long,·>`/`HashSet<Long>` is
+  **0.16-0.18%** of samples. Its `getFlowReferenceKey` (hashing the flow path rather than building
+  it) is **0.09-0.22%**. The relation ENGINE is 3.6-3.7% inclusive — not our bottleneck either.
+
+- **THE REAL STRUCTURAL GAP, RECORDED AND NOT ATTEMPTED.** Hash probing is **24.3-24.6% of
+  compile-thread samples as a LEAF** (round 868 read 26.8/25.9 on a different binary). tsgo's answer
+  is ~25 narrow `core.LinkStore[K,V]`s, each ONE probe returning a struct of CO-ACCESSED fields;
+  tsc goes further and makes it a field on the node. Ours is one map per FACT. Max single owner is
+  **1.19%** with a long tail, so no row clears a candidate floor — a checker-wide refactor, priced
+  as such, deliberately not started.
+
+- **WHAT LANDED.** The bounded case: `ctaM3AnchoredStmts`/`cpaM3Anchored`/`ccetM3Anchored` were each
+  a `HashMap<String, HashSet<Int>>`, so every mark paid a String-keyed probe, a `getOrPut` lambda
+  check and a `HashSet.add` that BOXES the nodeId. Priced at **1.16-1.31% of a warm rebuild, 1.05-1.26%
+  of it in the MARK**. They now share ONE per-file `ByteArray` of bits — tsgo's `NodeCheckFlags`
+  shape in this walk's existing INV.2(b) idiom — with the map probe paid once per FILE.
+
+- **AND THEN THE ABLATION REFUTED THE THEORY BEHIND THE PIN, WHICH IS THE ROUND'S REAL FINDING.**
+  Making the array PROGRAM-WIDE (round 787's mistake) is unobservable through **every** instrument
+  here: the 4 new pins GREEN, the corpus **14,140 / 0**, and a `--listAll` whole-output diff over the
+  78-file profile **0 lines**. The census says why — `marks=184569 tests=15446 **true=0**
+  programWideWouldDiffer=4666 **noMarksForThatFile=0**`. Not one consultation affirms, so no
+  truncation ever fires; and the `noMarksForThatFile=0` control rules out the alternative reading (a
+  key mismatch between the mark site's `spineFileName` and the test site's `fileName`), which
+  otherwise looks identical (round 849). **Round 801's produced-vs-consumed ratio should have been
+  run FIRST; it was run only after the ablation surprised me.**
+
+- **CONSEQUENCE, QUEUED AS (SPINE.1)(m3-inert).** The 1.05-1.26% this round made cheap may be
+  removable outright rather than merely reduced. NOT a licence to delete: round 753's law says a
+  profile zero bounds FREQUENCY, never existence, and the corpus carries dedicated anchor pins whose
+  shapes presumably DO affirm. Next step is a `true` census over the CORPUS, then gating the 16 mark
+  sites to the kinds the 6 test sites can ask about.
+
+- **PINS RENAMED, per round 807** ("a signal with no uniquely-its-own failure is a REDUNDANT guard —
+  say so"). `M3AnchorFlagsTest` is documented as an output-EQUIVALENCE pin, not a seam pin; only its
+  growth case discriminates.
+
+- **NO WALL-TIME SAVING IS CLAIMED — TWO A/B BATCHES AND THEY DISAGREE.** Batch 1 read **-3.28%,
+  B wins 3/3, outside the band**; batch 2 read **-0.75%, 2/3, NOISE-DOMINATED** with the per-pair
+  range crossing zero ([-148, +147] ms). Batch 1 was suspect before batch 2 ran: it overshot its own
+  mechanism 2.5x and its arm sd was already 1.08%. Three of the four arm sds are at or above the ~1%
+  quiet-box threshold, so this box could not settle a 1.2% question today whatever the medians said
+  (rounds 840(c)/858). The change stays on EQUIVALENCE plus counted removed work, not on a number.
+  Next instrument for anything this size: a deterministic in-process counter or round 759's
+  amplification — the same conclusion (WARM.14) reached for the dispatch table.
+
+- **GATES.** Suite **14,274 / 0 failures / 3 skipped** (round 885: 14,270; +4 = this pin).
+  `cost_gate.py` **+0.00% on all 20 counters** — the EXPECTED answer for a data-structure change and
+  read as a control that the semantics are untouched (round 876), not as a win.
+  `huge_methods.py --fail-over 0`: **0 over the limit**, 688 classes.
+
 **Round 878 (2026-08-11) — (PERF.HW.d): THE PER-WORKER CENSUS. THE PARTITION IS NO LONGER THE
 LIMITER — DUPLICATED PER-WORKER WORK IS, AND IT IS 40-45% OF THE WHOLE COMPILE, PER WORKER.**
 

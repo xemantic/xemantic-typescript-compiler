@@ -138,8 +138,102 @@ Two invariants a change here must keep, both load-bearing:
   files the spine finished long before, passing their own `fileName` rather than
   `spineFileName`.
 
-Why the pin can see a mistake at all: these marks exist so the legacy walkers can
-**truncate** emissions the spine already anchored, so a leaked mark truncates a
-diagnostic that was never anchored (the file LOSES it) and a lost mark truncates
-nothing (the diagnostic is emitted TWICE). `M3AnchorFlagsTest` asserts both
-directions, plus growth past the initial array size.
+### 5a. The wall-time claim is NOT established — two batches, and they disagree
+
+Predicted from the profile: 1.16-1.31%. Measured with `scripts/ab-warm.sh`
+(3 pairs, warmup 6, iters 8, rotated), **twice**:
+
+| batch | median delta | wins | per-pair range | arm sd (A / B) | verdict |
+| --- | ---: | ---: | --- | --- | --- |
+| 1 | **-3.28%** | 3/3 | [-305, -83] ms | 0.85% / 1.08% | WIN, outside the band |
+| 2 | **-0.75%** | 2/3 | [-148, **+147**] ms | 1.18% / 1.50% | **NOISE-DOMINATED** |
+
+**Batch 1 did not replicate, and it was already suspect before batch 2 ran** —
+it overshot its own mechanism by 2.5x, which is a warning rather than a bonus,
+and its arm-B sd (1.08%) was already over this box's ~1% quiet-box threshold with
+an effect only ~3x the sd (the sanctioned explicit override wants *tens* of times).
+Round 840(c) is the precedent: a batch read 5/5 at -6.6% and replicated to +0.3%
+and 3/6; the effect was zero. Round 858 is the same law from the other side — a
+byte-identical configuration moved **-2.7% between batches**.
+
+So: **no wall-time saving is claimed here.** Three of the four arm sds are at or
+above 1.0%, so this box could not settle a 1.2% question today whatever the
+medians said. What IS established, and is why the change stays:
+
+- **Equivalence**, by three independent instruments — the 14,140-test corpus, a
+  `--listAll` whole-output diff over the 78-file profile (0 lines), and
+  `cost_gate.py` at **+0.00% on all 20 counters** (the expected control for a
+  data-structure change, round 876).
+- **The work removed is real and counted, not inferred**: 184,569 marks per
+  compile, each formerly a String-keyed map probe plus a `HashSet.add` that boxes
+  the nodeId, now an array store.
+
+The harness's own advice is the right next instrument and is recorded as such:
+decide a sub-band change on a deterministic in-process counter or on round 759's
+amplification, never on a warm A/B alone — the same conclusion (WARM.14) reached
+for the dispatch table at ~1%.
+
+## 6. THE ROUND'S REAL FINDING: those 184,569 marks buy NOTHING on this profile
+
+The plan was a seam pin per invariant, on the theory that the marks are what lets
+the legacy walkers **truncate** emissions the spine anchored — so a leaked mark
+should lose a diagnostic and a lost mark should duplicate one. **The ablation
+refuted the theory, not the pin.** Replacing the per-file array with ONE
+program-wide array — round 787's mistake, the most load-bearing invariant here —
+is unobservable through every instrument this repo owns:
+
+| instrument | result under the program-wide ablation |
+| --- | --- |
+| the four new pins | all GREEN |
+| the corpus (14,140 tests) | **14,140 / 0 failures** |
+| `--listAll` over the 78-file compiler profile | **0 lines differ** |
+
+The produced-vs-consumed census (round 801's law, which this round ran only
+AFTER the ablation surprised it — it should have been first) says why:
+
+```
+marks=184569  tests=15446  true=0  programWideWouldDiffer=4666
+noMarksForThatFile=0  idPastEnd=288  maxTestId=274609  filesMarked=74
+```
+
+Read in order:
+
+- **`true=0`.** Not one of the 15,446 consultations answers yes, so no truncation
+  ever fires on this profile and no wrong answer can reach an output. That is why
+  all three instruments are blind, and it makes a behavioural pin for the
+  per-file invariant **not expressible** on any input this repo has.
+- **`noMarksForThatFile=0` rules out the alternative explanation.** Every test's
+  file HAS marks, so this is NOT a key mismatch between the mark site's
+  `spineFileName` and the test site's `fileName` — the tables are correctly
+  wired and simply never affirm. (A zero from a blind instrument reads exactly
+  like a real negative — round 849 — so this control is the finding, not a
+  footnote.)
+- **`programWideWouldDiffer=4666`** confirms the ablation really did corrupt the
+  answer 4,666 times. It changed no output because the answer is consumed only to
+  truncate, and there was nothing to truncate.
+
+**So the marks are produced 184,569 times, consulted 12x less often, and are
+INERT on the compiler profile.** This is round 789's shape one region over — a
+check paid for by every caller and used by almost none — and it means the
+1.05-1.26% this round made cheap is a cost that could potentially be removed
+outright rather than merely reduced.
+
+**Do NOT read that as "delete the marks".** Round 753's law applies in full: a
+profile zero bounds a hazard's FREQUENCY, never its existence, and the corpus
+contains dedicated anchor pins (`CcetAnchorTest`, `CpaAnchorTest`,
+`CtaFnBodyAnchorTest`) whose shapes presumably DO affirm — the profile simply
+does not carry them. The next step is therefore a census of `true` over the
+CORPUS, not a deletion; if the affirmative population is small and
+shape-identifiable, gating the 16 mark sites to the kinds the 6 test sites can
+ask about is worth more than this round's change.
+
+Queued as **(SPINE.1)(m3-inert)**.
+
+## 7. What the pins actually pin
+
+Renamed to say so, per round 807 ("a signal with no uniquely-its-own failure is a
+REDUNDANT guard — say so, do not claim the pin"). `M3AnchorFlagsTest` pins output
+EQUIVALENCE of the anchored shapes: each diagnostic emitted exactly once, a
+multi-file run agreeing with the per-file runs, and a nodeId past the array's
+initial size still marking — that last one does discriminate, since a mistake in
+`m3FlagsForCurrent`'s sizing loses marks and duplicates diagnostics.

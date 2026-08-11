@@ -32,18 +32,36 @@ import kotlin.test.Test
  * (SPINE.1)(m3-flags) round 886 — the three spine-anchor mark tables as ONE
  * per-file bit-per-nodeId `ByteArray`.
  *
- * The marks exist so the LEGACY cta/cpa/ccet walkers can truncate emissions the
- * spine anchors already produced, which is what makes both failure directions
- * observable as diagnostics rather than as timing:
+ * **THESE ARE OUTPUT-EQUIVALENCE PINS, NOT SEAM PINS — SAY SO, because round
+ * 886 ABLATED the per-file keying and every one of them stayed GREEN.**
  *
- *  - a mark that LEAKS across files truncates a diagnostic that was never
- *    anchored — the file loses it;
- *  - a mark that is LOST truncates nothing — the diagnostic is emitted twice.
+ * The round's intent was a seam pin per invariant: the marks exist so the legacy
+ * cta/cpa/ccet walkers can TRUNCATE emissions the spine anchored, so a leaked
+ * mark should truncate a diagnostic that was never anchored (the file loses it)
+ * and a lost mark should truncate nothing (it is emitted twice). Replacing the
+ * per-file array with ONE PROGRAM-WIDE array — round 787's mistake, the single
+ * most load-bearing invariant here — is unobservable through **every**
+ * instrument this repo owns: these four pins, all 14,140 corpus tests, and a
+ * `--listAll` whole-output diff over the 78-file compiler profile (0 lines).
  *
- * Both are exactly what the old `HashMap<String, HashSet<Int>>` could not get
- * wrong and the new array can: round 787's law says `nodeId` restarts at 0 in
- * every `SourceFile`, so per-file keying is load-bearing, and the array grows
- * on demand rather than being pre-sized, so a high nodeId must still mark.
+ * The census says why, and it is not a key mismatch (`noMarksForThatFile=0`,
+ * i.e. every test's file HAS marks — the tables are correctly wired):
+ *
+ * ```
+ * marks=184569  tests=15446  true=0  programWideWouldDiffer=4666
+ * ```
+ *
+ * **Not one of the 15,446 consultations answers `true` on that profile**, so no
+ * truncation ever fires and no wrong answer can reach an output. A behavioural
+ * pin for the per-file invariant is therefore not expressible on any input this
+ * repo has; recording that is worth more than a pin that would pass either way.
+ * See `docs/perf/tsgo-portability-census.md` § 6.
+ *
+ * What these four DO pin, which is real and worth keeping: the anchored shapes
+ * produce their diagnostics exactly once, a multi-file program agrees with the
+ * per-file runs, and a nodeId past the array's initial size still marks — i.e.
+ * the growth path and the no-duplicate property, which a mistake in
+ * [Checker.m3FlagsForCurrent]'s sizing WOULD break.
  *
  * Built by direct `Checker(options, binderResults)` construction with
  * path-shaped file names (flat names defeat relative module resolution — the
@@ -84,10 +102,11 @@ class M3AnchorFlagsTest {
     }
 
     @Test
-    fun `marks do not leak between files sharing the same nodeIds`() {
-        // Two byte-identical files: every anchored node in b.ts has a nodeId
-        // that is also anchored in a.ts. A program-wide array would collapse
-        // them onto each other and truncate b.ts's diagnostics away.
+    fun `a multi-file program agrees with the per-file runs`() {
+        // Two byte-identical files, so every anchored nodeId in b.ts is also
+        // anchored in a.ts. NOTE: this does NOT discriminate the per-file
+        // keying - see the class KDoc; it pins that a multi-file run agrees
+        // with the per-file runs, which a sizing or lifetime mistake breaks.
         val together = check("/proj/a.ts" to shapes, "/proj/b.ts" to shapes)
         val alone = check("/proj/a.ts" to shapes) + check("/proj/b.ts" to shapes)
         assert(keys(together) == keys(alone))
@@ -107,7 +126,7 @@ class M3AnchorFlagsTest {
     }
 
     @Test
-    fun `an unanchored file is unaffected by another file's marks`() {
+    fun `a file with no anchored shape stays diagnostic-free beside one that has them`() {
         val clean = "export const ok: number = 1;"
         val withNeighbour = check("/proj/dirty.ts" to shapes, "/proj/clean.ts" to clean)
         val cleanOnly = withNeighbour.filter { it.fileName == "/proj/clean.ts" }
