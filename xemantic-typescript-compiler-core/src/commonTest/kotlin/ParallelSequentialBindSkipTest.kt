@@ -111,6 +111,33 @@ class ParallelSequentialBindSkipTest {
         assert(parallel.binds == 0L)
     }
 
+    /**
+     * (PERF.HW.d): the per-worker census must cover every worker, or the
+     * `slowest/mean` it exists to report is computed over a partial population
+     * and understates the imbalance — silently, since a zero entry looks like a
+     * fast worker rather than a missing one.
+     */
+    @Test
+    fun `the per-worker census records one live entry per worker`() {
+        compileWith(4)
+        assert(FrontEnd.workerNanos.size == 4)
+        assert(FrontEnd.workerFiles.size == 4)
+        assert(FrontEnd.workerChars.size == 4)
+        assert(FrontEnd.workerNanos.all { it > 0 })
+    }
+
+    /**
+     * The census's file counts must PARTITION the program — the same claim
+     * `BalancedFilePartitionTest` makes about the partition itself, made again
+     * where it is observed, so a census that double-counted or dropped a worker
+     * could not report a plausible-looking balance.
+     */
+    @Test
+    fun `the census file counts sum to the program`() {
+        compileWith(4)
+        assert(FrontEnd.workerFiles.sum() == 2L)
+    }
+
     @Test
     fun `the skip is behaviour-free - both worker counts report the same diagnostics`() {
         val sequential = compileWith(1)

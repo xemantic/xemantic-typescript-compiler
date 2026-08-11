@@ -2041,15 +2041,30 @@ class TypeScriptCompiler {
             RealLibSnapshots.prewarmParsedLibFiles(options)
             val sourceList = parsedSourceFiles.values.toList()
             val assignments = balancedFilePartition(sourceList, workers)
+            // (PERF.HW.d) sized here, before any thread starts; worker `w` writes
+            // index `w` and nothing reads them until every worker has joined.
+            FrontEnd.workerNanos = LongArray(workers)
+            FrontEnd.workerFiles = LongArray(workers)
+            FrontEnd.workerChars = LongArray(workers)
             val tasks = (0 until workers).map { w ->
                 {
+                    val workerT0 = PassTiming.nowNanos()
                     val assigned = assignments[w]
+                    FrontEnd.workerFiles[w] = assigned.size.toLong()
+                    FrontEnd.workerChars[w] =
+                        sourceList.filter { it.fileName in assigned }.sumOf { it.text.length.toLong() }
                     val workerBinder = Binder(options)
                     val workerResults = sourceList.map { workerBinder.bind(it) }
-                    Checker(options, workerResults, isMultiFileSource = parsed.hasExplicitFilenames,
+                    // The whole check runs in `Checker`'s init block, so the
+                    // constructor IS this worker's work — bind included.
+                    val workerChecker = Checker(
+                        options, workerResults, isMultiFileSource = parsed.hasExplicitFilenames,
                         assignedFileNames = assigned,
                         allInputFileNames = allInputFileNames,
-                        jsonModuleContents = jsonModules)
+                        jsonModuleContents = jsonModules,
+                    )
+                    FrontEnd.workerNanos[w] = PassTiming.nowNanos() - workerT0
+                    workerChecker
                 }
             }
             val workerCheckers = runInDeepStackWorkers(tasks)

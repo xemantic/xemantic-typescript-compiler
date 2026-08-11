@@ -4563,6 +4563,27 @@ object FrontEnd {
      */
     var sequentialFileBinds: Long = 0
 
+    /**
+     * (PERF.HW.d) census — per-worker elapsed nanos, assigned file count and
+     * assigned source chars, indexed by worker.
+     *
+     * The partition is balanced on source LENGTH, which is a PROXY for checking
+     * cost (round 877), and nothing in this repo could say how good a proxy it
+     * is: a `--workers` run reports one wall and the per-worker spread is exactly
+     * what that wall hides. These three arrays make the residual imbalance
+     * measurable — `nanos` against `chars` IS the proxy's error — and separate it
+     * from the duplicated per-worker work every checker performs regardless of
+     * its assignment.
+     *
+     * Race-free by construction rather than by luck: worker `w` writes index `w`
+     * and no other, the arrays are sized before the threads start, and nothing
+     * reads them until every worker has joined. Maintained unconditionally (three
+     * stores per WORKER, not per file) so a reader need not arm the probe.
+     */
+    var workerNanos: LongArray = LongArray(0)
+    var workerFiles: LongArray = LongArray(0)
+    var workerChars: LongArray = LongArray(0)
+
     /** Core parse loop: pre-parses REUSED versus parsed FRESH. */
     var parsedReused: Long = 0
     var parsedFresh: Long = 0
@@ -4935,6 +4956,7 @@ object FrontEnd {
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
         sequentialFileBinds = 0
+        workerNanos = LongArray(0); workerFiles = LongArray(0); workerChars = LongArray(0)
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
         closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0
@@ -5368,6 +5390,24 @@ object FrontEnd {
             "FRONT END (config+crawl+parse+imports+bind): ${frontEnd / 1_000_000} ms = " +
                 "${if (total > 0) frontEnd * 100 / total else 0}% of the measured total"
         )
+        // (PERF.HW.d) — the per-worker spread the single `checker construct` wall
+        // hides. `slowest/mean` is the factor by which the partition, not the
+        // checker, bounds this run; `nanos` against `chars` is the error of the
+        // source-length proxy the partition is balanced on.
+        if (workerNanos.isNotEmpty()) {
+            val slowest = workerNanos.max()
+            val mean = workerNanos.sum() / workerNanos.size
+            appendLine(
+                "  workers: slowest ${slowest / 1_000_000} ms, mean ${mean / 1_000_000} ms, " +
+                    "slowest/mean ${if (mean > 0) slowest * 100 / mean else 0}%"
+            )
+            for (w in workerNanos.indices) {
+                appendLine(
+                    "    w$w  ${workerNanos[w] / 1_000_000} ms   " +
+                        "${workerFiles[w]} files   ${workerChars[w] / 1000} k chars"
+                )
+            }
+        }
     }
 
     fun csv(): String = buildString {

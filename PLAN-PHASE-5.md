@@ -20,6 +20,57 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 878 (2026-08-11) — (PERF.HW.d): THE PER-WORKER CENSUS. THE PARTITION IS NO LONGER THE
+LIMITER — DUPLICATED PER-WORKER WORK IS, AND IT IS 40-45% OF THE WHOLE COMPILE, PER WORKER.**
+
+Round 877 fixed a real imbalance and then reasoned that the residue was more of the same, quoting a
+3.16x ceiling computed from source lengths. The census says otherwise, and the single observation that
+kills the model is this: **at w4 the worker holding `checker.ts` ALONE costs 13,503 ms while a worker
+holding 26 files costs 13,160 ms.** If assignment work dominated, those could not be 2.6% apart.
+
+- **THE INSTRUMENT.** `FrontEnd.workerNanos` / `workerFiles` / `workerChars`, printed by `--frontEnd`
+  as `slowest/mean` plus a row per worker. Worker `w` writes index `w` and no other, the arrays are
+  sized before any thread starts, and nothing reads them until every worker has joined — race-free by
+  construction rather than by luck, which is the standard this repo already holds a census to. Three
+  stores per WORKER (not per file), maintained unconditionally so a reader need not arm the probe.
+
+- **THE TABLE** (cold, compiler profile, `--frontEnd --workers N`):
+  w2 — 15,530 / 15,512 ms, **100%**;
+  w4 — 13,503 / 13,164 / 13,168 / 13,160 ms, **101%** (w0 = `checker.ts` alone, 3,151 k chars; the
+  others 25-26 files and 2,275 k chars each);
+  w6 — 15,885 vs ~11,650 ms, **128%** — the one level at which the indivisible giant binds.
+
+- **THE DECOMPOSITION.** Fitting `worker = D + k x assigned chars` across the levels gives
+  **D = 9.4-11.2 s** against a ~24.6 s sequential compile. D is the work every checker does regardless
+  of `assignedFileNames`: the full re-bind of all 78 files plus the ~318 program-wide collectors.
+  **That caps file-level parallelism near 2.4x no matter how many cores are added**, which is the
+  plateau the ladder has been showing all along. Round 877's 3.16x was the ceiling of the ASSIGNMENT
+  and the assignment is not what is left — a ceiling computed over the wrong term.
+
+- **A SECOND, INDEPENDENT REASON NOT TO SPEND WORKERS PAST 4:** the SAME single file (`checker.ts`,
+  nothing else assigned) costs **13,503 ms at w4 and 15,885 ms at w6**. Past 4 workers the run
+  contends on 8 cores and the CRITICAL worker gets slower — an effect no partition can answer, and
+  the mechanism behind the "N-growing overhead" both this ladder and round 826's showed as a rising
+  fitted R. Peak RSS says the same: w1 1,393 MB, w4 1,468 MB (+5%), w6 2,445 MB (+75%).
+
+- **THE EMIT BLIND SPOT, CLOSED FOR THE PARALLEL PATH.** CLAUDE.md records that `--noEmit` makes every
+  instrument here blind to transform/emit, and every `--workers` capture ever taken in this project —
+  including rounds 876 and 877 — was `--noEmit`. A full `--outDir` build at w1 and at w4 emits **78
+  files each and `diff -r` reports no difference**. So the parallel path is now verified on the axis
+  that had never been checked, not merely on diagnostics.
+
+- **WHAT THIS MAKES THE NEXT ITEM, WITH A PRICE ON IT.** `docs/parallel-caching.md` Phase 1 — resolve
+  the context-free, assignment-independent slice ONCE in the single-threaded prefix, freeze it, share
+  it read-only across workers (its Tier 1: "build eagerly in a single-threaded phase, expose as
+  read-only Map, share freely") — is worth up to D. That is the largest single number anywhere in the
+  parallel path and it is now measured rather than argued. The obligation it carries is also known:
+  Tier 3 (`Type.id` allocation, the intern caches, `symbolTypes`) is first-touch-ordered and must stay
+  per-worker, so the work is to separate the two tiers, not to share more.
+
+- **GATES.** Suite **14,261 -> 14,263** / 0 failures / 3 skipped = exactly the 2 new census pins.
+  `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
+  classes. Warning-clean.
+
 **Round 877 (2026-08-11) — (PERF.HW.c): THE WORKER PARTITION WAS THE LIMITER, AND IT WAS A ONE-LINE
 `i % workers == w`.**
 
