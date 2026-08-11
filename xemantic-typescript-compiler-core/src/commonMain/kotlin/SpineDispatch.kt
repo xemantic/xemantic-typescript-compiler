@@ -4580,6 +4580,29 @@ object FrontEnd {
      * reads them until every worker has joined. Maintained unconditionally (three
      * stores per WORKER, not per file) so a reader need not arm the probe.
      */
+    /**
+     * (PERF.HW.g) census — `Checker.mergeSingleSymbol`, the single blocker to
+     * sharing one bind across `--workers` checkers (`docs/parallel-bind-sharing.md`).
+     *
+     * It has two branches and they cost different things to fix. [mergeAdopts] is
+     * the `else`, which puts the BINDER's own `Symbol` object into `globals` — the
+     * reason a bind is CONSUMED by a checker rather than merely read, and the half
+     * that a copy-on-adoption makes immutable. [mergeMutates] is the branch that
+     * edits a symbol already in the table; [mergeMutatesAdopted] counts the subset
+     * of those whose target was itself adopted from a binder table, i.e. the
+     * mutations that actually reach binder-owned state and the only ones stage 3
+     * has to solve.
+     *
+     * Round 801's order: the produced-vs-consumed split decides the design, and a
+     * count of call sites does not. Written on the checker's own thread; under
+     * `--workers` each worker has its own `Checker` and the LAST to finish wins,
+     * which is why this is a shape census taken sequentially, never a total.
+     */
+    var mergeAdopts: Long = 0
+    var mergeMutates: Long = 0
+    var mergeMutatesAdopted: Long = 0
+    var mergeDeclarationsAppended: Long = 0
+
     var workerNanos: LongArray = LongArray(0)
     var workerFiles: LongArray = LongArray(0)
     var workerChars: LongArray = LongArray(0)
@@ -4956,6 +4979,8 @@ object FrontEnd {
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
         sequentialFileBinds = 0
+        mergeAdopts = 0; mergeMutates = 0; mergeMutatesAdopted = 0
+        mergeDeclarationsAppended = 0
         workerNanos = LongArray(0); workerFiles = LongArray(0); workerChars = LongArray(0)
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
@@ -5390,6 +5415,17 @@ object FrontEnd {
             "FRONT END (config+crawl+parse+imports+bind): ${frontEnd / 1_000_000} ms = " +
                 "${if (total > 0) frontEnd * 100 / total else 0}% of the measured total"
         )
+        // (PERF.HW.g) — `mergeSingleSymbol`'s shape. `adopts` is how many binder
+        // `Symbol` objects ended up IN `globals` by reference, i.e. the population
+        // a copy-on-adoption has to clone; `mutatesAdopted` is the subset of
+        // mutations that actually reach binder-owned state.
+        if (MergeCensus.enabled) {
+            appendLine(
+                "  mergeSingleSymbol: adopts $mergeAdopts, mutates $mergeMutates " +
+                    "(of which reach an adopted symbol: $mergeMutatesAdopted), " +
+                    "declarations appended $mergeDeclarationsAppended"
+            )
+        }
         // (PERF.HW.d) — the per-worker spread the single `checker construct` wall
         // hides. `slowest/mean` is the factor by which the partition, not the
         // checker, bounds this run; `nanos` against `chars` is the error of the
@@ -5455,6 +5491,22 @@ object FrontEnd {
  * Off (the default) every hook is one static read and a not-taken branch, and
  * nothing is retained.
  */
+/**
+ * (PERF.HW.g) `--mergeCensus` — arms the `mergeSingleSymbol` census whose counters
+ * live on [FrontEnd] (`mergeAdopts` / `mergeMutates` / `mergeMutatesAdopted` /
+ * `mergeDeclarationsAppended`).
+ *
+ * Opt-in because the census maintains a per-`Checker` `HashSet<Int>` of adopted
+ * symbol ids, which is the only way to tell a mutation that reaches BINDER-owned
+ * state from one the checker already owned — and that set is exactly the sort of
+ * program-wide side table this arc measures rather than ships. Behaviour-free when
+ * off: every hook is one static boolean read.
+ */
+object MergeCensus {
+    var enabled: Boolean = false
+    fun reset() { enabled = false }
+}
+
 object FlowCensus {
 
     /** `--flowCensus`. */

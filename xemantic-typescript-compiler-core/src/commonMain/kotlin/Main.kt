@@ -439,6 +439,12 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--flowCensus", "--flowcensus" -> {
                 FlowCensus.reset(); modes.set(FlowCensus::on, true)
             }
+            // (PERF.HW.g) round 881 — the `mergeSingleSymbol` shape, which is the
+            // single blocker to sharing one bind across `--workers` checkers.
+            // Counters only; `docs/parallel-bind-sharing.md` § 4 stage 1.
+            "--mergeCensus", "--mergecensus" -> {
+                MergeCensus.reset(); modes.set(MergeCensus::enabled, true)
+            }
             // (WARM.22) round 875 — the INV.4 reach machinery as ONE population.
             // Counters only: the family is 43 classifiers of which the largest
             // is 0.86% of a warm rebuild, so nothing in it can be timed against
@@ -893,6 +899,10 @@ internal fun usageText(): String =
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
           --flowCensus       (WARM.12) flow nodes minted vs ever read by any checker consumer
+          --mergeCensus      (PERF.HW.g) mergeSingleSymbol's shape: how many binder Symbols the
+                             checker ADOPTS by reference versus mutates, and how many of those
+                             mutations reach binder-owned state — the blocker to sharing one
+                             bind across --workers checkers (docs/parallel-bind-sharing.md)
           --reachCensus      (WARM.22) per-classifier census of the INV.4 reach machinery:
                              consultations, memo hits, ascents and EDGE EVALUATIONS per
                              classifier — the population any change to the family acts on

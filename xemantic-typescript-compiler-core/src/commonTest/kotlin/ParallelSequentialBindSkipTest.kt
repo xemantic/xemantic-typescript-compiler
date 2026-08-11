@@ -138,6 +138,48 @@ class ParallelSequentialBindSkipTest {
         assert(FrontEnd.workerFiles.sum() == 2L)
     }
 
+    /**
+     * (PERF.HW.g): the `mergeSingleSymbol` census must be REACHED.
+     *
+     * Its whole purpose is to size the population blocking a shared bind, and a
+     * census that reads zero because its hook sits behind a guard the caller
+     * already short-circuits is indistinguishable from a real negative — round
+     * 849 lost a round to exactly that, and this round's own first run put the
+     * adopted-id set after the `init` block, where it was null. So the pin is
+     * that the counters MOVE, and that the adopted-vs-mutated split is
+     * consistent: a mutation can only reach an adopted symbol if something was
+     * adopted first.
+     */
+    @Test
+    fun `the merge census is reached and its two branches are consistent`() {
+        val saved = MergeCensus.enabled
+        try {
+            MergeCensus.enabled = true
+            FrontEnd.reset()
+            compileWith(1)
+            assert(FrontEnd.mergeAdopts > 0)
+            assert(FrontEnd.mergeMutatesAdopted <= FrontEnd.mergeMutates)
+            assert(FrontEnd.mergeMutatesAdopted <= FrontEnd.mergeAdopts)
+        } finally {
+            MergeCensus.enabled = saved
+        }
+    }
+
+    /** Off is off: the counters must not move when the census is not armed. */
+    @Test
+    fun `negative control - the census is silent when it is not armed`() {
+        val saved = MergeCensus.enabled
+        try {
+            MergeCensus.enabled = false
+            FrontEnd.reset()
+            compileWith(1)
+            assert(FrontEnd.mergeAdopts == 0L)
+            assert(FrontEnd.mergeMutates == 0L)
+        } finally {
+            MergeCensus.enabled = saved
+        }
+    }
+
     @Test
     fun `the skip is behaviour-free - both worker counts report the same diagnostics`() {
         val sequential = compileWith(1)

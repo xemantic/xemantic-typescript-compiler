@@ -71,6 +71,54 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**Round 881 (2026-08-11) — (PERF.HW.g): THE BIND-SHARING REFACTOR OPENED, AND STAGE 1's CENSUS SAYS THE
+BLOCKER IS **406 OBJECTS**, NOT A SYMBOL GRAPH.**
+
+Owner-directed (the alternative on the table was flipping the `--workers` default; the owner chose this
+instead). Design record: `docs/parallel-bind-sharing.md`.
+
+- **THE BLOCKER, EXACTLY.** `Checker.mergeSingleSymbol` has two branches and both touch binder-owned
+  state. The `else` **ADOPTS** — `target[name] = symbol` puts the BINDER's own `Symbol` object into
+  `globals`, which is why `PartitionCheck` documents that a worker must never reuse an already-checked
+  bind: a bind is not read by a checker, it is CONSUMED by one. The `if` **MUTATES** it in place, and
+  `declarations.addAll` is not idempotent, so a second checker over the same tables appends duplicates.
+
+- **THE CENSUS (`--mergeCensus`, counters on `FrontEnd`).** On the compiler profile:
+  **adopts 406, mutates 175, of which 164 reach an adopted symbol, declarations appended 175** —
+  against the ~105 k symbols a worker mints. **The reason is already in the tree**: INV.3(d) retired
+  the merge for module-only names, so only genuinely global names reach `globals` at all and every
+  module file's locals are never merged, never adopted, never mutated. So stage 2 (copy on adoption)
+  is a surgical change to one `else` branch and stage 3 touches 164 sites' worth of state — **far
+  smaller than the design doc's own § 3 warning implies**, though § 3 still applies in full, because
+  the risk was never the size of the population but that those 406 are exactly the objects whose
+  identity `globals` hands out (id-keyed caches, INV.3(c)'s merged-instance invariant,
+  `canonicalEnumSymbol`'s frozen verdicts).
+
+- **WHAT THE CENSUS DOES NOT ANSWER, AND STAGE 1 IS NOT CLOSED UNTIL IT DOES.** It watches
+  `mergeSingleSymbol` alone. Whether the checker mutates a binder-owned `Symbol` anywhere ELSE is a
+  separate question and a bind cannot be shared until it is answered no.
+
+- **THE PRICE, RESTATED SO NOBODY RE-DERIVES IT OPTIMISTICALLY** (`docs/parallel-bind-sharing.md` § 2):
+  sharing alone buys **zero wall** — round 879/880's law, a per-worker fixed cost hoisted to the serial
+  prefix leaves `F + A/N`. The prize is (a) parallelising the single shared bind, **~386 ms at N=4**,
+  available only once it is shared, and (b) an UNMEASURED fraction of the +37% contention term
+  (~526 ms at N=4) from four workers no longer each building a full symbol graph. **13-29% of a warm
+  rebuild, of which only (a) is currently justified by measurement.**
+
+- **TWO TRAPS PAID FOR IN THIS ROUND.** The adopted-id set was first declared beside its own helper
+  ~9,600 lines down and was therefore **null throughout every init pass** — CLAUDE.md's documented
+  Kotlin ordering trap, whose tell is an impossible NPE on a non-nullable `val` (here from
+  `bindRealLibs`); it now sits next to `globals`. And the new flag went into the usage text and
+  `ACCEPTED_FLAGS` in the same edit, because round 874 showed an undocumented flag fails
+  `CliModeRestoreTest` BEFORE its `ledger.restore()` and leaves every swept mode armed for the rest of
+  the test JVM.
+
+- **GATES.** Suite **14,263 -> 14,265** / 0 failures / 3 skipped = exactly the 2 new pins (the census is
+  reached and its branches are consistent; plus a negative control that the counters do not move when
+  it is not armed — round 849's law, a zero from an unreached hook reads like a real negative).
+  `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 681
+  classes. Warning-clean.
+
 **Round 880 (2026-08-11) — (PERF.HW.f): THE PARALLEL PATH IS DECOMPOSED AND ITS FLOOR IS NAMED.
 `wall(N) = 1,447 ms + 7,717/N` WARM. THE 1,447 IS A **PER-WORKER FIXED COST THAT SHARING CANNOT
 REDUCE** — ONLY DOING LESS WORK CAN. GC AND THE JIT ARE BOTH MEASURED AND BOTH ACQUITTED.**

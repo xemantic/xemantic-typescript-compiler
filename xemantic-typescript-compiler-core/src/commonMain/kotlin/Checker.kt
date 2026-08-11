@@ -97,6 +97,22 @@ class Checker(
     private val globals: SymbolTable =
         if (PassTiming.detailed) InstrumentedSymbolTable() else symbolTable()
 
+    /**
+     * (PERF.HW.g) the ids of every `Symbol` this checker ADOPTED from a binder
+     * table, so the census can separate mutations that reach binder-owned state
+     * from mutations of a symbol the checker already owned
+     * (`docs/parallel-bind-sharing.md` § 4 stage 1). Populated only while
+     * [MergeCensus.enabled].
+     *
+     * Declared HERE, next to [globals], and not beside its own helper ~9,600
+     * lines down, because the whole checker runs inside this class's `init` and
+     * Kotlin initializes properties in DECLARATION order — a field declared after
+     * the init block is still `null` throughout every pass, and the tell is an
+     * impossible-looking NPE on a non-nullable `val` (CLAUDE.md; this census hit
+     * it on its first run, from `bindRealLibs`).
+     */
+    private val mergeAdoptedSymbolIds = HashSet<Int>()
+
     /** Per-file binder results for lookup. */
     private val fileResults: Map<String, BinderResult> =
         binderResults.associateBy { it.sourceFile.fileName }
@@ -9628,6 +9644,11 @@ class Checker(
     private fun mergeSingleSymbol(target: SymbolTable, name: String, symbol: Symbol) {
         val existing = target[name]
         if (existing != null) {
+            if (MergeCensus.enabled) {
+                FrontEnd.mergeMutates++
+                if (existing.id in mergeAdoptedSymbolIds) FrontEnd.mergeMutatesAdopted++
+                FrontEnd.mergeDeclarationsAppended += symbol.declarations.size.toLong()
+            }
             // Merge: combine flags and declarations
             existing.flags = existing.flags or symbol.flags
             existing.declarations.addAll(symbol.declarations)
@@ -9640,6 +9661,10 @@ class Checker(
                 mergeSymbolTable(existing.exports!!, symbol.exports!!)
             }
         } else {
+            if (MergeCensus.enabled) {
+                FrontEnd.mergeAdopts++
+                mergeAdoptedSymbolIds.add(symbol.id)
+            }
             target[name] = symbol
         }
     }
