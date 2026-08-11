@@ -1036,86 +1036,54 @@ class Checker(
     }
 
     /* ---------------------------------------------------------------------
-     * (SPINE.1)(m3-flags), round 886 — the three spine-anchor mark tables as
-     * ONE per-file bit-per-node array.
+     * (SPINE.1)(m3-inert), round 887 — THE THREE SPINE-ANCHOR MARK TABLES ARE
+     * GONE, BECAUSE THE TRUNCATION THEY FED WAS UNREACHABLE BY CONSTRUCTION.
      *
-     * Was: three `HashMap<String, HashSet<Int>>`, i.e. per mark a String-keyed
-     * map probe, a `getOrPut` lambda check and a `HashSet.add` that BOXES the
-     * nodeId (`Integer.valueOf` caches only -128..127; nodeIds run to the tens
-     * of thousands). The round-874 leaf dumps price the family at **1.16-1.31%
-     * of a warm rebuild, 1.05-1.26% of it in the MARK** — the marks vastly
-     * outnumber the tests (0.05-0.11%).
+     * They existed so the legacy cta/cpa/ccet walkers could TRUNCATE emissions
+     * the spine had already anchored: the spine set a bit on the anchored node,
+     * the legacy arm tested it and popped whatever it had just appended. Round
+     * 886 made them cheap (three `HashMap<String, HashSet<Int>>` → one per-file
+     * `ByteArray` of bits, tsgo's `NodeCheckFlags` shape) and then found by
+     * census that **not one consultation ever answered `true`**. Round 887
+     * repeated that census over the whole corpus, with the two controls round
+     * 886 lacked:
      *
-     * Now: tsgo's shape. It keeps per-node boolean facts as BITS in a single
-     * `NodeCheckFlags uint32` inside one links struct
-     * (`typescript-go-repo/internal/checker/types.go`, `NodeLinks.flags`), so a
-     * fact costs one store lookup and a bit test rather than a set per fact.
-     * The JVM analogue of "one lookup" is INV.2(b)'s per-file nodeId side
-     * table, already the sanctioned idiom in this walk (`ByteArray(
-     * sourceFile.nodeCount)`), so the three facts become three BITS of one
-     * `ByteArray` and the mark becomes an array store.
+     *     marks 319,777   consultations 48,868   TRUE 0
+     *     markReadBackOk 319,777  markReadBackFail 0      (positive control)
+     *     testNoArrayForFile 0                            (key control)
+     *     testIdOutOfRange 305
+     *     testInRangeNoBitAtAll 6,050
+     *     testInRangeOtherBitSet 42,513
+     *     testInRangeThisBitSet 0
      *
-     * Round 787's law is why this is keyed per FILE and not program-wide:
-     * `nodeId` restarts at 0 in every `SourceFile`, so one program-wide array
-     * would collapse one node per file onto each id.
+     * The positive control rules out a broken store/load path; the key control
+     * rules out the `spineFileName` vs `fileName` mismatch that would look
+     * identical (round 849). **`testInRangeOtherBitSet = 42,513` is the real
+     * finding: 87% of consultations land on a node that IS marked — just never
+     * with the bit being asked for.** The mark sites and the consultation sites
+     * are disjoint in (bit × node kind):
      *
-     * LIFETIME: never cleared, exactly like the three maps it replaces — the
-     * legacy walkers run as later passes and test marks for files the spine
-     * finished long before, passing their own `fileName` rather than
-     * [spineFileName].
+     *   - CTA marked `Block`, `VariableStatement`, `ExpressionStatement`,
+     *     `ReturnStatement`, `IfStatement` and `PropertyDeclaration`; it was
+     *     read back only for the first four, and never affirmatively.
+     *   - CPA marked seven statement kinds plus every loop/switch condition and
+     *     class-heritage `Expression` plus `PropertyDeclaration` — 140,528
+     *     marks — and was read back at ONE site, for a `VariableStatement`.
+     *   - CCET marked exactly the three kinds it was read back for, 30,650
+     *     marks against 36 consultations, still never `true`.
+     *
+     * So the truncation branches were dead code guarded by a flag that could
+     * not be set, and the marks were stores nothing could load. Removing them
+     * deletes 319,777 array stores and 48,868 consultations per corpus run;
+     * round 886 priced the mark path at 1.05-1.26% of a warm rebuild.
+     *
+     * IF YOU ARE RE-ADDING AN ANCHOR MARK: a mark is useful only where some
+     * consultation site can pass that very node, and the disjointness above is
+     * what made this family silently useless for its whole life. Add the
+     * consultation site in the SAME commit, and pin an input at which the
+     * truncation actually fires — a mark whose bit is never asked for is
+     * indistinguishable, in every instrument this repo owns, from no mark.
      * ------------------------------------------------------------------- */
-
-    /** fileName → bit-per-nodeId anchor marks. Grows on demand, so no path
-     *  needs to pre-size it from `sourceFile.nodeCount` (the
-     *  [checkUnresolvedNames] walk sets [spineFileName] without running the
-     *  per-file `*SpineFileReset` hooks). */
-    private val m3AnchorFlags = HashMap<String, ByteArray>()
-
-    /** Cached array for [m3FlagsFile] — the mark path runs inside a per-file
-     *  walk, so the map probe is paid once per file rather than once per mark. */
-    private var m3FlagsFile: String? = null
-    private var m3FlagsCur: ByteArray = ByteArray(0)
-
-    /** The current file's array, sized to admit [minSize]; creates/grows and
-     *  writes back to both [m3AnchorFlags] and the cache. */
-    private fun m3FlagsForCurrent(minSize: Int): ByteArray {
-        var arr = if (spineFileName == m3FlagsFile) m3FlagsCur else m3AnchorFlags[spineFileName]
-        if (arr == null || arr.size < minSize) {
-            val grown = ByteArray(maxOf(minSize, (arr?.size ?: 0) * 2, 64))
-            if (arr != null) arr.copyInto(grown)
-            arr = grown
-            m3AnchorFlags[spineFileName] = arr
-        }
-        m3FlagsFile = spineFileName
-        m3FlagsCur = arr
-        return arr
-    }
-
-    /** Set [bit] for [n] in the CURRENT spine file. Unindexed nodes (a `copy()`
-     *  or a Transformer-synthesized node, INV.2(a): nodeId -1) are refused —
-     *  they carry no identity a later test could match. */
-    private fun m3Mark(n: Node, bit: Int) {
-        val id = (n as NodeBase).nodeId
-        if (id < 0) return
-        val arr = if (spineFileName == m3FlagsFile && id < m3FlagsCur.size) m3FlagsCur
-        else m3FlagsForCurrent(id + 1)
-        arr[id] = (arr[id].toInt() or bit).toByte()
-    }
-
-    /** Is [bit] set for [n] in [fileName]? */
-    private fun m3Has(n: Node, fileName: String, bit: Int): Boolean {
-        val id = (n as NodeBase).nodeId
-        if (id < 0) return false
-        val arr = m3AnchorFlags[fileName] ?: return false
-        return id < arr.size && (arr[id].toInt() and bit) != 0
-    }
-
-    /** (ccet-m3): nodeIds of Call/New/TaggedTemplate nodes the spine
-     *  anchored, per file — the legacy emitters' truncation marks. */
-    private fun ccetM3MarkAnchored(n: Node) = m3Mark(n, M3_BIT_CCET)
-
-    private fun ccetM3IsAnchored(n: Node, fileName: String): Boolean =
-        m3Has(n, fileName, M3_BIT_CCET)
 
     /** (ccet-m3): does the legacy ccet walk REACH [node]? Per-edge precision
      *  over the legacy walkers' recursion. Unreached (fail closed):
@@ -1600,7 +1568,6 @@ class Checker(
             val topF = ccetFrames.last()
             if (!topF.dead && ccetM3ChainOk(node)) {
                 SpineSections.hit(SpineSections.CCET_CALL)
-                ccetM3MarkAnchored(node)
                 withCcetFrameAmbient(topF, SpineSections.CCET_AMBIENT, kid) {
                     when ((node as NodeBase).kindId) {
                         NodeKind.CALL_EXPRESSION -> { node as CallExpression; checkSingleCallExpressionTypes(node, spineSource, spineFileName) }
@@ -1668,14 +1635,6 @@ class Checker(
             if (shadowsCallable) currentLocalTypes[nm.text] = anyType
         }
     }
-
-    /** (cpa-m3a): nodeIds of statements whose cpa emissions the spine
-     *  anchored, per file — consulted by the legacy truncation marks (the
-     *  cta-m3h0 recorded-set pattern; gate identity by construction). */
-    private fun cpaM3MarkAnchored(stmt: Node) = m3Mark(stmt, M3_BIT_CPA)
-
-    private fun cpaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean =
-        m3Has(stmt, fileName, M3_BIT_CPA)
 
     /** (cpa-m2a/m2b): is [stmt] reached by the legacy cpa dispatchers? The
      *  walk climbs (child, parent) EDGES with per-arm precision mirroring the
@@ -2320,7 +2279,6 @@ class Checker(
             cpaM2StmtPosition(node) && cpaM2ChainOk(node, forAnchor = true)
         ) {
             SpineSections.hit(SpineSections.CPA_ANCHOR)
-            cpaM3MarkAnchored(node)
             val top = cpaFrames.last()
             withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                 when ((node as NodeBase).kindId) {
@@ -2398,7 +2356,6 @@ class Checker(
             if (owner != null && node is Expression &&
                 cpaM2StmtPosition(owner) && cpaM2ChainOk(owner, forAnchor = true)) {
                 SpineSections.hit(SpineSections.CPA_OWNER)
-                cpaM3MarkAnchored(node)
                 val top = cpaFrames.last()
                 withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                     checkPropertyAccessInExpr(node, spineSource, spineFileName, top.classType)
@@ -2420,7 +2377,6 @@ class Checker(
                 if (cls is ClassDeclaration &&
                     cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
                     SpineSections.hit(SpineSections.CPA_EWTA)
-                    cpaM3MarkAnchored(node)
                     val top = cpaFrames.last()
                     withCpaFrameAmbient(top, SpineSections.CPA_AMBIENT, kid) {
                         checkPropertyAccessInExpr(p.expression, spineSource, spineFileName, top.classType)
@@ -2439,7 +2395,6 @@ class Checker(
             if (init != null && cls is ClassDeclaration &&
                 cpaM2StmtPosition(cls) && cpaM2ChainOk(cls, forAnchor = true)) {
                 SpineSections.hit(SpineSections.CPA_PROPDECL)
-                cpaM3MarkAnchored(node)
                 val top = cpaFrames.last()
                 val clsType = cpaResolveClassType(cls)
                 val isStatic = ModifierFlag.Static in node.modifiers
@@ -2476,8 +2431,7 @@ class Checker(
             // (cpa-m3a): ANCHORED statements record interleaved with the
             // anchor's initializer walks (the legacy per-decl order) — the
             // decl-leave path serves the remaining (non-anchored) chains.
-            if (vdl is VariableDeclarationList && vs is VariableStatement && cpaM2ChainOk(vs) &&
-                !cpaM3IsAnchoredStmt(vs, spineFileName)) {
+            if (vdl is VariableDeclarationList && vs is VariableStatement && cpaM2ChainOk(vs)) {
                 SpineSections.hit(SpineSections.CPA_VARDECL)
                 val frame = cpaFrames.last()
                 withCpaFrameAmbient(frame, SpineSections.CPA_AMBIENT, kid) {
@@ -2560,17 +2514,6 @@ class Checker(
      *  CfaTooLargeBailTest). The legacy walk trips and reports in its own
      *  order. */
     private var ctaM3RecordOnlySuppress = false
-
-    /** (cta-m3h0): nodeIds of statements the spine ANCHORED (emissions moved),
-     *  recorded per file during checkSpine and consulted by the legacy
-     *  truncation marks — gate identity by CONSTRUCTION (the marks truncate
-     *  exactly what the spine emitted, never a re-derived approximation).
-     *  Program-lifetime retention (the legacy giants run after the spine). */
-    private fun ctaM3MarkAnchored(stmt: Node) = m3Mark(stmt, M3_BIT_CTA)
-
-    /** The legacy-side mark test: was this statement spine-anchored? */
-    private fun ctaM3IsAnchoredStmt(stmt: Node, fileName: String): Boolean =
-        m3Has(stmt, fileName, M3_BIT_CTA)
 
     /** (cta-m3a): the top-level + namespace-body VariableStatement emission —
      *  the legacy arm's leaf calls run from the spine under a per-dispatch
@@ -23584,7 +23527,6 @@ class Checker(
             val cls = (node as NodeBase).parent
             if (cls is ClassDeclaration && ctaM3NestedChainOk((cls as NodeBase).parent ?: cls)) {
                 ctaM3NearestList(node)?.let { list ->
-                    ctaM3MarkAnchored(node)
                     ctaM3StmtAnchor(node, list)
                 }
             }
@@ -23605,7 +23547,6 @@ class Checker(
      */
     private fun spineCtaM3BodyWalkerAnchor(node: Node) {
         if (node is Block && ctaM3BodyWalkersEligible(node)) {
-            ctaM3MarkAnchored(node)
             checkForInNumericForRedeclare(node.statements, spineSource, spineFileName)
             when (val owner = (node as NodeBase).parent) {
                 // GetAccessor: the legacy arm passes emptyList()/null → the
@@ -23645,8 +23586,8 @@ class Checker(
         if ((node is VariableStatement || node is ExpressionStatement || node is ReturnStatement || node is IfStatement) && !spineIsDts) {
             val p = (node as NodeBase).parent
             val anchored = when (p) {
-                is SourceFile -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
-                is ModuleBlock -> { ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true }
+                is SourceFile -> { ctaM3StmtAnchor(node as Statement, p.statements); true }
+                is ModuleBlock -> { ctaM3StmtAnchor(node as Statement, p.statements); true }
                 // (cta-m3d/m3h1): fn-body-DIRECT statements of eligible chains,
                 // and NESTED statement-position Blocks outside narrowing-DISCARD
                 // regions (their legacy dispatch is the marked InStatements
@@ -23654,15 +23595,15 @@ class Checker(
                 is Block -> if (ctaM3FnBodyAnchorScope(node) != null ||
                     ctaM3NestedChainOk(p)
                 ) {
-                    ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
+                    ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
                 // (cta-m3h1): switch-clause statements — the LIST surface too
                 // (legacy dispatches clause.statements via InStatements).
                 is CaseClause -> if (ctaM3NestedChainOk(p)) {
-                    ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
+                    ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
                 is DefaultClause -> if (ctaM3NestedChainOk(p)) {
-                    ctaM3MarkAnchored(node); ctaM3StmtAnchor(node as Statement, p.statements); true
+                    ctaM3StmtAnchor(node as Statement, p.statements); true
                 } else false
                 // (cta-m3h1): BARE statement positions — the REDUCED InStmt
                 // surface.
@@ -23670,7 +23611,6 @@ class Checker(
                 is WhileStatement, is DoStatement, is LabeledStatement -> {
                     val list = if (ctaM3NestedChainOk(p)) ctaM3NearestList(node) else null
                     if (list != null) {
-                        ctaM3MarkAnchored(node)
                         ctaM3StmtAnchor(node as Statement, list, bareSurface = true)
                         true
                     } else false
@@ -50445,19 +50385,6 @@ class Checker(
     }
 
     companion object {
-        /* (SPINE.1)(m3-flags): the three spine-anchor bits of `m3AnchorFlags`.
-         * `const val` primitives are emitted with a `ConstantValue` attribute
-         * and inlined at the use site, so they cost `<clinit>` nothing (round
-         * 820) and carry no init-order hazard. */
-        /** Bit for the (cta-m3) statement anchors. */
-        private const val M3_BIT_CTA = 1
-
-        /** Bit for the (cpa-m3) statement anchors. */
-        private const val M3_BIT_CPA = 2
-
-        /** Bit for the (ccet-m3) Call/New/TaggedTemplate anchors. */
-        private const val M3_BIT_CCET = 4
-
         /** Access modifiers rejected on object-literal members (TS1042/TS1184,
          *  [spineCheckObjLitModifiers]). Companion-hosted: the spine runs during
          *  `init`, so an instance field declared after `init` would read null. */
@@ -94074,11 +94001,7 @@ interface DataView {
             // scope — TS2403 (first decl wins: string) + TS2365 (string < number) + TS2356
             // (string++). Dedicated walker; corpus-EXHAUSTIVE FP-safety (the only two files
             // with this shape are the targets).
-            // (cta-m3l): both body-level walkers are spine-anchored for eligible
-            // bodies — the recorded set (keyed on the body Block's nodeId) gates
-            // the legacy pair off exactly where the spine emitted.
-            val ctaM3BodyAnchored = ctaM3IsAnchoredStmt(it, fileName)
-            if (!ctaM3BodyAnchored) checkForInNumericForRedeclare(it.statements, source, fileName)
+            checkForInNumericForRedeclare(it.statements, source, fileName)
             val innerTypes = varTypes.toMutableMap()
             // Save outer local types and create inner scope copy
             val savedLocalTypes = currentLocalTypes
@@ -94140,9 +94063,7 @@ interface DataView {
                 // machinery can reuse the typing without emitting. Both run under
                 // the TP scope; emissions first (a per-param emission never saw
                 // its own typing in the interleaved original).
-                // (cta-m3m): spine-anchored in the ctaFnBodyFrame sandwich for
-                // eligible bodies — gated by the same recorded set as m3l.
-                if (!ctaM3BodyAnchored) for (param in parameters) {
+                for (param in parameters) {
                     val paramName = param.name
                     if (paramName is ObjectBindingPattern && param.initializer != null) {
                         checkDestructuringFromNullableUnion(paramName, param.initializer, source, fileName)
@@ -94154,9 +94075,8 @@ interface DataView {
             val allTypeParams = outerTypeParams + collectTypeParamNames(funcTypeParams)
             // B205: lib-FlatArray depth-param assignment (both annotations resolve to
             // any through the unevaluated recursive conditional, so the standard
-            // assignment path below is silent). (cta-m3l): spine-anchored for
-            // eligible bodies, see above.
-            if (!ctaM3BodyAnchored) checkFlatArrayDepthParamAssignments(it.statements, parameters, funcTypeParams, source, fileName)
+            // assignment path below is silent).
+            checkFlatArrayDepthParamAssignments(it.statements, parameters, funcTypeParams, source, fileName)
             try {
                 checkTypeAssignabilityInStatements(it.statements, source, fileName, innerTypes, retType, allTypeParams, returnTypeNode)
             } finally {
@@ -94659,18 +94579,12 @@ interface DataView {
         when (stmt) {
             is Block -> checkTypeAssignabilityInStatements(stmt.statements, source, fileName, varTypes.toMutableMap(), returnType, typeParams, returnTypeNode)
             is ExpressionStatement -> {
-                // (cta-m3h1): spine-anchored BARE positions truncate here too.
-                val ctaM3Mk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 checkAssignmentExpression(stmt.expression, source, fileName, varTypes, typeParams)
-                if (ctaM3Mk >= 0) while (diagnostics.size > ctaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is ReturnStatement -> {
-                val ctaM3Mk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 if (returnType != null || returnTypeNode != null) checkReturnAssignability(stmt, returnType ?: "", source, fileName, varTypes, typeParams, returnTypeNode)
-                if (ctaM3Mk >= 0) while (diagnostics.size > ctaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is VariableStatement -> {
-                val ctaM3Mk = if (ctaM3IsAnchoredStmt(stmt, fileName)) diagnostics.size else -1
                 for (decl in stmt.declarationList.declarations) {
                     checkVarDeclAssignability(decl, source, fileName, varTypes, typeParams)
                     // B127: an assignment used as a var-decl initializer (`const x = a = b`)
@@ -94683,7 +94597,6 @@ interface DataView {
                         checkAssignmentExpression(init, source, fileName, varTypes, typeParams)
                     }
                 }
-                if (ctaM3Mk >= 0) while (diagnostics.size > ctaM3Mk) diagnostics.removeAt(diagnostics.size - 1)
             }
             is IfStatement -> {
                 // B417: flow-aware TS2367 on the if/else-if CONDITION.
@@ -140619,17 +140532,13 @@ interface DataView {
     private fun checkCallTypesInExpr(expr: Expression, source: String, fileName: String) {
         when (expr) {
             is CallExpression -> {
-                val ccetM3Mk = if (ccetM3IsAnchored(expr, fileName)) diagnostics.size else -1
                 checkSingleCallExpressionTypes(expr, source, fileName)
-                if (ccetM3Mk >= 0) while (diagnostics.size > ccetM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 // Recurse into callee and arguments
                 checkCallTypesInExpr(expr.expression, source, fileName)
                 for (arg in expr.arguments) checkCallTypesInExpr(arg, source, fileName)
             }
             is NewExpression -> {
-                val ccetM3Mk = if (ccetM3IsAnchored(expr, fileName)) diagnostics.size else -1
                 checkSingleNewExpressionTypes(expr, source, fileName)
-                if (ccetM3Mk >= 0) while (diagnostics.size > ccetM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkCallTypesInExpr(expr.expression, source, fileName)
                 expr.arguments?.forEach { checkCallTypesInExpr(it, source, fileName) }
             }
@@ -140767,9 +140676,7 @@ interface DataView {
                 for (span in expr.templateSpans) checkCallTypesInExpr(span.expression, source, fileName)
             }
             is TaggedTemplateExpression -> {
-                val ccetM3Mk = if (ccetM3IsAnchored(expr, fileName)) diagnostics.size else -1
                 checkSingleTaggedTemplateTypes(expr, source, fileName)
-                if (ccetM3Mk >= 0) while (diagnostics.size > ccetM3Mk) diagnostics.removeAt(diagnostics.size - 1)
                 checkCallTypesInExpr(expr.tag, source, fileName)
                 // Also recurse into substitutions so nested calls/errors surface.
                 (expr.template as? TemplateExpression)?.let { tmpl ->
