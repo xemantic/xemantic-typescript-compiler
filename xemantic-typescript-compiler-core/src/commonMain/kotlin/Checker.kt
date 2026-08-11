@@ -570,7 +570,11 @@ class Checker(
 
     private val typeParamInternCache: MutableMap<Long, Type.TypeParam> = mutableMapOf()
 
-    /** M1.13: file-aware intern-cache key. See [typeParamInternCache] / TypeParameter.internSalt. */
+    /** M1.13: file-aware intern-cache key. See [typeParamInternCache] / TypeParameter.internSalt.
+     *  (HASH.1)(b) round 890 MEASURED this packing on the compiler profile and it does
+     *  NOT need [packIdPair]'s finalizer: the two halves are uncorrelated (a per-file
+     *  salt against an AST position), so 1,186 real keys fill 919 of 2,048 buckets with
+     *  a max bucket of 4 and nothing treeified. */
     private fun internKey(tp: TypeParameter): Long =
         (tp.internSalt.toLong() shl 32) or (tp.pos.toLong() and 0xFFFFFFFFL)
 
@@ -40491,7 +40495,7 @@ class Checker(
         val bRef = b as? Type.Reference
         val aKey = aRef?.target?.id ?: a.symbol?.id ?: a.id
         val bKey = bRef?.target?.id ?: b.symbol?.id ?: b.id
-        val pair = (aKey.toLong() shl 32) or (bKey.toLong() and 0xFFFFFFFFL)
+        val pair = packIdPair(aKey, bKey)
         if (pair in ts2403IdentityStack) {
             if (aRef != null && bRef != null) {
                 return ts2403CompareRefArgs(aRef, bRef, depth)
@@ -105374,7 +105378,7 @@ interface DataView {
         val src = canonicalEnumSymbol(sourceEnum)
         val tgt = canonicalEnumSymbol(targetEnum)
         if (src.id == tgt.id) return null
-        val key = (src.id.toLong() shl 32) or (tgt.id.toLong() and 0xffffffffL)
+        val key = packIdPair(src.id, tgt.id)
         return enumTypesRelationCache.getOrPut(key) {
             if (src.name != tgt.name) return@getOrPut EnumRelFailure.Plain
             // tsc requires BOTH to be RegularEnum: a `const` enum relates only to itself.
@@ -108187,7 +108191,11 @@ interface DataView {
      *  that walk's inputs (starting type id folded with the path hash). The
      *  kind+inputId halves exist because the 12 call sites run three different
      *  walk functions from different starting types over different paths —
-     *  round 662 measured what happens without them. */
+     *  round 662 measured what happens without them.
+     *
+     *  (HASH.1)(b) round 890 MEASURED this key too: the `* 31` folds below already
+     *  spread it, so it does NOT need [packIdPair]'s finalizer — 31,875 real keys fill
+     *  25,257 of 65,536 buckets, max bucket 6, nothing treeified. */
     private fun walkMemoKey(reference: Node, kind: Int, inputId: Long): Long {
         val fh = (currentFlowGraph?.sourceFile?.fileName?.hashCode() ?: 0).toLong()
         var key = (((reference as NodeBase).nodeId.toLong()) shl 32) or (fh and 0xFFFF_FFFFL)
@@ -149214,8 +149222,9 @@ interface DataView {
             cache[packKey(sourceId, targetId)] = result
         }
 
-        private fun packKey(a: Int, b: Int): Long =
-            (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
+        /** (HASH.1)(b) round 890: see [packIdPair] — this map's 43,080 real keys
+         *  collapsed onto 18,201 hashes, 1,140 of them in a single bucket. */
+        private fun packKey(a: Int, b: Int): Long = packIdPair(a, b)
     }
 
     /**
@@ -149519,8 +149528,11 @@ interface DataView {
         return result
     }
 
-    private fun packRelationKey(a: Int, b: Int): Long =
-        (a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)
+    /** (HASH.1)(b) round 890: see [packIdPair]. Load-bearing for
+     *  [CheckerState.resolvedPropertyTypes] (10,482 keys, max bucket 10 -> 6);
+     *  the three recursion stacks it also keys hold at most 27 entries at once
+     *  (measured), so for them the finalizer is free rather than a saving. */
+    private fun packRelationKey(a: Int, b: Int): Long = packIdPair(a, b)
 
     private fun countOccurrences(stack: List<Int>, id: Int): Int {
         var n = 0

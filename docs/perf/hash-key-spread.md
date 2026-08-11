@@ -192,7 +192,92 @@ control that no checker decision moved.
 876): this change moves no counter by construction — same keys, same answers,
 same order. It is read as evidence that the semantics are untouched.
 
-## 5. Queued
+## 5. (HASH.1)(b), round 890 — the sweep, on the REAL key populations
+
+Round 889 modelled `nodeKey` on a synthetic 20,000-node file. Round 890 did not
+model anything: a throwaway census (an `add(name, key)` at every packed-Long
+write site, dumped under `--passTiming`, reverted before the fix) captured the
+**actual** key population of every such container on the compiler profile, and
+`scripts/round890_bucket_model.py` ran `java.util.HashMap`'s bucket arithmetic
+over each — as packed, and after the golden-ratio finalizer.
+
+### 5.1 The table
+
+`used`/`max`/`tree%` are the un-mixed packing; the primed columns are the same
+population multiplied by `0x9E3779B97F4A7C15`. `cap` is the table a default
+`HashMap` ends at after that many puts (load factor 0.75).
+
+| packer | halves | correlated? | container | keys | cap | used | max | tree% | used' | max' | tree%' | verdict |
+| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| `Relation.packKey` | (srcTypeId, tgtTypeId) | **YES** | `Relation.cache` | 43,080 | 65,536 | 17,486 | **1,140** | **27.3%** | 31,532 | 6 | 0% | **FIXED** |
+| `packRelationKey` | (typeId, symId) | **YES** | `resolvedPropertyTypes` | 10,482 | 16,384 | 5,698 | 10 | 2.1% | 7,742 | 6 | 0% | **FIXED** |
+| `packRelationKey` | (typeId, typeId) | **YES** | `relationComparisonStack` | 51,447 seen, **27 LIVE** | 64 | — | — | — | — | — | — | free ride |
+| `packRelationKey` | ″ | ″ | `elaborationStack` | 1 seen, 1 live | 16 | — | — | — | — | — | — | free ride |
+| `packRelationKey` | ″ | ″ | `functionElaborationStack` | **0** on this profile | — | — | — | — | — | — | — | free ride |
+| inline pair | (targetId, targetId) | **YES** | `ts2403IdentityStack` | 6,214 seen, **2 LIVE** | 16 | — | — | — | — | — | — | uniformity |
+| inline pair | (enumSymId, enumSymId) | **YES** | `enumTypesRelationCache` | **0** on this profile | — | — | — | — | — | — | — | uniformity |
+| `Checker.internKey` | (internSalt, pos) | **no** | `typeParamInternCache` | 1,186 | 2,048 | 919 | 4 | 0% | 902 | 4 | 0% | **already fine** |
+| `Checker.walkMemoKey` | (nodeId, fileHash) + `* 31` folds | mixed by the folds | `walkMemo` | 31,875 | 65,536 | 25,257 | 6 | 0% | 25,325 | 6 | 0% | **already fine** |
+| `nodeKey` | (pos, end) | **YES** | `nodeToFlow`, `nodeToSymbol`, `moduleInstanceStates` | — | — | — | — | — | — | — | — | fixed in (a) |
+| 3 × M0.3(iii) intern keys | (id, id) | **YES** | `referenceCacheLong`, `unionInternCacheLong`, `intersectionInternCacheLong` | — | — | — | — | — | — | — | — | **already fine** — `LongKeyMap.bucket` applies the same finalizer INSIDE the map |
+| `SpineDispatch.nodeKey` | (fileHash, nodeId) | no | `distinctPa`, `distinctP` | — | — | — | — | — | — | — | — | **refused** — `[CENSUS]`-only containers, never written in a production run |
+| `PassTiming` `(pos, end)` / `(firstOrigin, site)` | — | — | 5 probe maps | — | — | — | — | — | — | — | — | **REFUSED — `redundantPairNanos` is UNPACKED** (`k and 0xFFFF_FFFFL`, PassTiming.kt:1005) |
+
+### 5.2 The mechanism, sharper than round 889 could state it
+
+For `nodeKey` the collapse was "the hash's range is the set of node lengths".
+For an id pair it is sharper, and the census names it exactly:
+
+```
+Relation.cache — 43,080 keys, 18,201 distinct hashes
+  hash == 1  ->  1,140 keys      hash == 6  ->  471
+  hash == 2  ->    420           hash == 7  ->  440
+```
+
+**Type ids are minted sequentially, and the pairs a relation actually asks about
+are overwhelmingly NEIGHBOURS** — an instantiation against its target, a union
+against a member it was built from, a reference against the interface it points
+at. `a xor b` for `(2k, 2k+1)` is `1` for every k, so 1,140 unrelated type pairs
+share one bucket; 21% of all queried pairs have `|src - tgt| <= 64`, i.e. hash
+under 128. **The diagonal is the degenerate limit**: `a xor a == 0`, so an
+un-mixed identity relation would put every `(T, T)` query in bucket 0.
+
+### 5.3 What is claimed, and what is not
+
+**Claimed:** the bucket arithmetic above, which is deterministic, computed from
+the real populations, and reproducible offline from
+`scripts/round890_bucket_model.py`. Round 889's JFR attribution independently
+prices the `Relation.cache` group at **0.97% of compile-thread samples with 56%
+of it inside `HashMap$TreeNode` frames**, so the recoverable part is ~0.5% of
+samples ≈ ~30 ms of a ~5.9 s warm rebuild.
+
+**Not claimed:** any wall-time delta. ~0.5% is well inside what this box can
+settle (rounds 840(c)/858/886 each produced a sign-consistent batch that did not
+replicate), so no A/B was run. `cost_gate.py` at +0.00% is the EXPECTED answer
+(round 876) and is read only as the control that no checker decision moved —
+same keys, same answers, same order.
+
+**Also not claimed: that the pins guard the ROUTING.** `IdPairKeyHashSpreadTest`
+pins `packIdPair` itself. A future site that hand-rolls `(a shl 32) or b` again
+instead of calling it is invisible to every pin in this repo; the only defence is
+that `packIdPair` is now the sole id-pair packer in `Checker.kt` and its KDoc
+says so.
+
+### 5.4 The two soundness obligations, re-checked per site
+
+Both of round 889 § 3's obligations were re-checked for every routed container.
+
+- **Nothing unpacks.** `grep` for `ushr 32` / `and 0xFFFFFFFF` over a routed key
+  finds nothing. The repo's ONE unpacking site is `PassTiming.kt:1005`
+  (`redundantPairNanos`, a site-id pair) — which is exactly why the probe maps
+  are refused rather than swept along.
+- **Nothing iterates.** All seven routed containers are membership-or-lookup
+  only (`in`, `[]`, `getOrPut`, `add`/`remove`); none has a `.keys`/`.values`/
+  `.entries`/`forEach` reader. Four of them are plain `HashMap`/`HashSet` rather
+  than `mutableMapOf`, so had any been iterated this would have been a
+  rounds-754/776/778 program-order change that no output diff can see.
+
+### 5.5 Still queued
 
 - **(HASH.1)(b)** — the same finalizer for the CHECKER's packed id-pair keys:
   `Relation.packKey` / `packRelationKey` (0.97% of the family, 56% treeified),

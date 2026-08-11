@@ -323,6 +323,46 @@ fun nodeKey(pos: Int, end: Int): Long =
 fun nodeKey(node: Node): Long = nodeKey(node.pos, node.end)
 
 /**
+ * Pack a pair of 32-bit ids into one Long map key — the checker's house idiom
+ * since M0.3(iii) — with [nodeKey]'s multiplicative finalizer applied.
+ *
+ * **(HASH.1)(b) round 890 — why the multiply is load-bearing here too, and what
+ * it is worth.** `java.lang.Long.hashCode()` is `(int) (v xor (v ushr 32))`, so
+ * a plain `(a shl 32) or b` packing hashes to exactly `a xor b`. Type and Symbol
+ * ids are minted SEQUENTIALLY, and the pairs a relation actually asks about are
+ * overwhelmingly NEIGHBOURS — an instantiation against its target, a union
+ * against a member it was built from — so `a xor b` piles them into the handful
+ * of buckets `1, 2, 3, …`. Measured over the compiler profile's real key
+ * populations (`scripts/round890_bucket_model.py`, and note this is not a model
+ * of the ids but the ids themselves):
+ *
+ *  - `Relation.cache` — 43,080 keys collapse onto **18,201 distinct hashes**,
+ *    the commonest being `XOR == 1` with **1,140 keys in one bucket**
+ *    (`(2k, 2k+1)` pairs). 17,486 of 65,536 buckets used, **27.3% of keys past
+ *    the treeify threshold**. With the finalizer: 31,532 buckets, max **6**,
+ *    ZERO treeified.
+ *  - `resolvedPropertyTypes` — max bucket 10, 2.1% treeified -> max 6, zero.
+ *
+ * Round 889's JFR attribution priced the `Relation.cache` group at 0.97% of
+ * compile-thread samples with **56% of it inside `HashMap$TreeNode` frames**.
+ *
+ * **The soundness argument is [nodeKey]'s, and it must be re-checked per site:
+ * nothing may UNPACK the key, and nothing may depend on ITERATION ORDER.**
+ * Every container keyed through here is membership-or-lookup only and none is
+ * iterated (`Relation.cache`, `resolvedPropertyTypes`, `relationComparisonStack`,
+ * `elaborationStack`, `functionElaborationStack`, `ts2403IdentityStack`,
+ * `enumTypesRelationCache`). `PassTiming.redundantPairNanos` is the repo's one
+ * key that IS unpacked (`k and 0xFFFF_FFFFL`) — it must never be routed here.
+ *
+ * Two other packed keys were measured and are FINE as they stand, which is why
+ * they do not call this: `Checker.internKey` (`(internSalt, pos)`, max bucket 4)
+ * and `Checker.walkMemoKey` (whose `* 31` folds of the walk kind and input
+ * digest already spread it, max bucket 6).
+ */
+internal fun packIdPair(a: Int, b: Int): Long =
+    ((a.toLong() shl 32) or (b.toLong() and 0xFFFFFFFFL)) * NODE_KEY_MIX
+
+/**
  * Parse a TypeScript NUMERIC LITERAL's source text to its numeric value,
  * honouring every base TypeScript allows plus `_` separators.
  *

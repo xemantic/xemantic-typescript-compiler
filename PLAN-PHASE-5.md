@@ -20,6 +20,91 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 890 (2026-08-11) — (HASH.1)(b): THE PACKED-KEY SWEEP, RUN ON THE **REAL** KEY POPULATIONS
+RATHER THAN A MODEL. THIRTEEN PACKED-LONG KEY SITES CENSUSED; **TWO ARE DEGENERATE AND FIXED, FOUR
+ARE MEASURED ALREADY-FINE, TWO ARE REFUSED** — AND THE MECHANISM IS SHARPER THAN ROUND 889 COULD
+STATE IT: `Relation.cache`'s 43,080 REAL KEYS COLLAPSE ONTO **18,201 HASHES, 1,140 OF THEM IN ONE
+BUCKET**, BECAUSE TYPE IDS ARE MINTED SEQUENTIALLY AND A RELATION ASKS ABOUT **NEIGHBOURS**.**
+
+Round 889 fixed `nodeKey` and queued the family. This round did not model anything it could measure:
+a THROWAWAY census (an `add(name, key)` at every packed-Long write site, dumped under `--passTiming`,
+reverted before a line of the fix was written) captured the ACTUAL key population of every such
+container on the compiler profile, and `scripts/round890_bucket_model.py` ran `java.util.HashMap`'s
+bucket arithmetic over each — as packed, and after the golden-ratio finalizer.
+`docs/perf/hash-key-spread.md` § 5.
+
+- **(A) THE TABLE.** Primed columns are the same population multiplied by `0x9E3779B97F4A7C15`.
+
+  | packer | halves | correlated? | container | keys | cap | used | max | tree% | used' | max' | tree%' | verdict |
+  |---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---|
+  | `Relation.packKey` | (srcTypeId, tgtTypeId) | **YES** | `Relation.cache` | 43,080 | 65,536 | 17,486 | **1,140** | **27.3%** | 31,532 | 6 | 0% | **FIXED** |
+  | `packRelationKey` | (typeId, symId) | **YES** | `resolvedPropertyTypes` | 10,482 | 16,384 | 5,698 | 10 | 2.1% | 7,742 | 6 | 0% | **FIXED** |
+  | `packRelationKey` | (typeId, typeId) | YES | `relationComparisonStack` | 51,447 seen, **27 LIVE** | 64 | — | — | — | — | — | — | free ride |
+  | `packRelationKey` | ″ | ″ | `elaborationStack` | 1 seen, 1 live | 16 | — | — | — | — | — | — | free ride |
+  | `packRelationKey` | ″ | ″ | `functionElaborationStack` | **0** on this profile | — | — | — | — | — | — | — | free ride |
+  | inline pair | (targetId, targetId) | YES | `ts2403IdentityStack` | 6,214 seen, **2 LIVE** | 16 | — | — | — | — | — | — | uniformity |
+  | inline pair | (enumSymId, enumSymId) | YES | `enumTypesRelationCache` | **0** on this profile | — | — | — | — | — | — | — | uniformity |
+  | `internKey` | (internSalt, pos) | **no** | `typeParamInternCache` | 1,186 | 2,048 | 919 | 4 | 0% | 902 | 4 | 0% | **already fine** |
+  | `walkMemoKey` | (nodeId, fileHash) + `* 31` folds | mixed by the folds | `walkMemo` | 31,875 | 65,536 | 25,257 | 6 | 0% | 25,325 | 6 | 0% | **already fine** |
+  | 3 × M0.3(iii) intern keys | (id, id) | YES | `referenceCacheLong` &c | — | — | — | — | — | — | — | — | **already fine** — `LongKeyMap.bucket` applies the SAME finalizer inside the map |
+  | `SpineDispatch.nodeKey` | (fileHash, nodeId) | no | `distinctPa`/`distinctP` | — | — | — | — | — | — | — | — | **refused** — `[CENSUS]`-only, never written in production |
+  | `PassTiming` pairs ×5 | — | — | probe maps | — | — | — | — | — | — | — | — | **REFUSED — `redundantPairNanos` is UNPACKED** (`k and 0xFFFF_FFFFL`) |
+  | `nodeKey` | (pos, end) | YES | `nodeToFlow` &c | — | — | — | — | — | — | — | — | fixed in (a) |
+
+- **(B) THE MECHANISM, NAMED EXACTLY.** For `nodeKey` the collapse was "the hash's range is the set
+  of node lengths". For an id pair the census names it outright: `hash == 1 -> 1,140 keys`,
+  `hash == 2 -> 420`, `hash == 6 -> 471`, `hash == 7 -> 440`. **Type ids are minted SEQUENTIALLY and
+  the pairs a relation actually asks about are overwhelmingly NEIGHBOURS** — an instantiation against
+  its target, a union against a member it was built from — so `a xor b` for `(2k, 2k+1)` is `1` for
+  every k and 1,140 unrelated type pairs share one bucket; **21% of all queried pairs have
+  `|src - tgt| <= 64`**, i.e. a hash under 128. **The diagonal is the degenerate limit**: `a xor a`
+  is 0, so an un-mixed identity relation would put every `(T, T)` query in bucket 0.
+
+- **(C) A DISTINCTION THE MODEL-ONLY APPROACH WOULD HAVE GOT WRONG IN BOTH DIRECTIONS.** Ranked by
+  total distinct keys, `relationComparisonStack` (51,447) looks like the family's worst offender and
+  `resolvedPropertyTypes` (10,482) like a rounding error. **The census's `maxLive` column inverts
+  that**: the stack is add/remove and never holds more than **27 entries at once**, so its table
+  never grows past 64 and it cannot treeify however bad its hash is — while `resolvedPropertyTypes`
+  is a grow-only cache and does. **A key population is not a map population**; a sweep that ranks by
+  the first mis-prices every transient container it touches.
+
+- **(D) FOUR SITES ARE ALREADY FINE AND SAYING SO IS PART OF CLOSING THE FAMILY.** `internKey` packs
+  a per-file SALT against an AST position — genuinely uncorrelated halves, max bucket 4.
+  `walkMemoKey`'s `* 31` folds of the walk kind and input digest already spread it, max bucket 6. The
+  three M0.3(iii) intern caches are `LongKeyMap`s, which apply this very finalizer INSIDE `bucket()`
+  — the fix has been sitting in the repo, correct, for the one map family that did not need help.
+  Both live sites now carry a one-line KDoc stating the measurement, so the next agent does not
+  re-derive it.
+
+- **(E) TWO SITES ARE REFUSED, ONE OF THEM ON A SOUNDNESS OBLIGATION.** `SpineDispatch.nodeKey` feeds
+  `[CENSUS]`-only sets that a production run never writes. And **`PassTiming.redundantPairNanos` is
+  the repo's one key that is UNPACKED** (`(k and 0xFFFF_FFFFL).toInt()`, PassTiming.kt:1005) — a
+  finalizer there would silently mis-attribute the probe's own table. That is round 889 § (F)'s first
+  obligation actually biting something, which is why it is checked per site rather than assumed.
+
+- **(F) THE SECOND OBLIGATION, RE-CHECKED.** All seven ROUTED containers are membership-or-lookup
+  only (`in`, `[]`, `getOrPut`, `add`/`remove`) and none has a `.keys`/`.values`/`.entries`/`forEach`
+  reader. **Four of them are plain `HashMap`/`HashSet`, not `mutableMapOf`** — so unlike round 889's
+  three LinkedHashMaps, had any been iterated this WOULD have been a rounds-754/776/778 program-order
+  change that no output diff can see. The check was the deciding one here, not a formality.
+
+- **(G) THE PINS, AND THE ONE THAT FAILED FIRST TIME FOR A GOOD REASON.** `IdPairKeyHashSpreadTest`,
+  four pins, every one comparing against the un-mixed packing written LONGHAND inside the pin (round
+  889's lesson). The neighbouring-ids pin failed on its first run because I wrote the adjacent pair as
+  `(2k+1, 2k+2)`, which does NOT XOR to 1 — `(2k, 2k+1)` does; the pin was asserting the pathology it
+  claimed to reproduce and the pathology was not there, which is exactly the failure mode a
+  longhand-comparison pin is supposed to expose, and it exposed it on the author.
+
+- **(H) NO WALL-TIME NUMBER IS CLAIMED.** Round 889's JFR prices the `Relation.cache` group at 0.97%
+  of compile-thread samples with 56% inside `HashMap$TreeNode` frames, i.e. a recoverable ~0.5% ≈
+  ~30 ms of a ~5.9 s warm rebuild — well inside what this box settles (rounds 840(c)/858/886). The
+  claim is the bucket arithmetic on the REAL populations, which is deterministic and reproducible
+  offline. `cost_gate.py` +0.00% is the EXPECTED control (round 876), not a win.
+
+- **(I) WHAT THE PINS DO NOT GUARD, STATED PLAINLY.** They pin `packIdPair` itself. **A future site
+  that hand-rolls `(a shl 32) or b` again is invisible to every pin in this repo** — the only defence
+  is that `packIdPair` is now the sole id-pair packer in `Checker.kt` and its KDoc says so.
+
 **Round 889 (2026-08-11) — (HASH.1)(a): THE CO-ACCESS CENSUS ANSWERS **NO** — tsgo's `LinkStore` IS
 PRICED AND REFUSED, NOT UNSTARTED — AND THE CENSUS FOUND THE HASH FAMILY'S REAL DEFECT ON THE WAY
 PAST: `nodeKey` HASHES TO `pos xor end`, i.e. TO **THE SET OF NODE LENGTHS**, SO `nodeToFlow` WAS
