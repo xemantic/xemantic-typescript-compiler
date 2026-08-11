@@ -412,6 +412,11 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             "--tavGateOff", "--tavgateoff" -> {
                 modes.set(TavGate::off, true)
             }
+            // (WARM.13b) — the pre-888 straight-line spine prologue, in the SAME
+            // binary, so the equivalence pin and any A/B are a controlled row.
+            "--spineMaskOff", "--spinemaskoff" -> {
+                modes.set(SpineMask::off, true)
+            }
             "--parseAmp", "--parseamp" -> {
                 i++
                 if (i < args.size) {
@@ -909,6 +914,9 @@ internal fun usageText(): String =
                              pays the reach walk, the level lookup and the chain queries, with
                              no name-candidate gate in front. The in-binary OFF arm that makes
                              the capture a controlled row
+          --spineMaskOff     (WARM.13b) restore the pre-888 spine prologue: all 46 enter
+                             handlers consulted at every node, with no per-kind skip mask.
+                             The in-binary OFF arm for the equivalence pin and the A/B
           --flowScanLegacy   (FRONT.2) run the pre-801 B464 reassignment scanner (A/B arm)
           --verifyFlowScan   (FRONT.2) run BOTH scanners and report divergences
           --flowScanBogus    (FRONT.2) positive control: corrupt the fast scanner

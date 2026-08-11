@@ -3585,6 +3585,19 @@ class Checker(
     // (the recordings are statement-ordered and leak across blocks — pull-based
     // rebuild would have to replay them) and INSTALLED into the shared checker
     // fields only around each emission/recording ([spineArithInstalled]).
+    /**
+     * (WARM.13b) round 888 — the per-kind ENTER skip mask, read once per node
+     * by [spineEnterNode]. Bit `h` set = handler `h` cannot act on that node's
+     * [NodeKind] and is not consulted.
+     *
+     * Chosen ONCE here, not per node, so the `--spineMaskOff` arm costs an
+     * array-reference load rather than a branch and both arms run the identical
+     * instruction sequence. Declared with the other spine fields and BEFORE the
+     * `init` block, because the whole checker runs inside `init` and a property
+     * declared below it is still null while every pass executes.
+     */
+    private val spineEnterMask: LongArray = SpineMask.enterMask()
+
     /** Per-file activation: !d.ts && !.js/.jsx (the legacy pass's exact skip). */
     private var spineArithActive = false
     /** The current file's flow graph for currentArithmeticFlowGraph (the round-453
@@ -23221,6 +23234,16 @@ class Checker(
         // this is one static field read + a perfectly-predicted branch; the
         // straight-line prologue below is byte-identical to the pre-probe one.
         if (SpineDispatch.mode != SpineDispatch.OFF) { spineEnterNodeProbed(node); return }
+        // (WARM.13b) round 888 — ONE array load, then one register-resident bit
+        // test in front of each CLOSED handler's existing guard. Bit `h` set =
+        // `SpineDispatch.enterClosure[h]` does not contain this kind, i.e. the
+        // handler's own top-level gate would reject the node after a call. The
+        // six OPEN handlers carry no test. `&&` short-circuits, so a skipped
+        // handler costs the bit test and not even its `spineXxActive` field
+        // read. Round 867 priced the population removed at 73.2 ms and this
+        // skeleton at ~15% of that; `scripts/spine_closure_audit.py` is the
+        // soundness check that every closure still contains its handler's gate.
+        val skip = spineEnterMask[(node as NodeBase).kindId]
         ctaSpineEnter(node)
         // (cpa-m2a/m3a): the g2 frame skeleton — always-on since the first
         // emission moves.
@@ -23228,9 +23251,9 @@ class Checker(
         // (ccet-m2): the g3 frame skeleton — ALWAYS-ON since round 589 (the
         // "inert" note was stale from before the round-591 anchors landed).
         ccetSpineEnter(node)
-        spineCtaM3PropertyAnchor(node)
-        spineCtaM3BodyWalkerAnchor(node)
-        spineCtaM3StatementAnchor(node)
+        if (skip and (1L shl 3) == 0L) spineCtaM3PropertyAnchor(node)
+        if (skip and (1L shl 4) == 0L) spineCtaM3BodyWalkerAnchor(node)
+        if (skip and (1L shl 5) == 0L) spineCtaM3StatementAnchor(node)
         // INV.4(d) walker 2: edge-triggered scope frames + enter-position
         // emissions for the arithmetic pass (must precede the kind dispatch —
         // a node's own frames nest inside its parent-edge frames).
@@ -23239,54 +23262,54 @@ class Checker(
         if (spineIanyActive) spineIanyEnterNode(node)
         // INV.4(d) walker 5: the set-based definite-assignment pass — the
         // per-statement frame step + core-frame spawns.
-        if (spineDaActive) spineDaEnterNode(node)
+        if (skip and (1L shl 8) == 0L && spineDaActive) spineDaEnterNode(node)
         if (spineOsActive) spineOsEnterNode(node)
-        if (spinePdActive) spinePdEnterNode(node)
-        if (spineItFileActive) spineItEnterNode(node)
-        if (spineFpActive) spineFpEnterNode(node)
-        if (spineAiActive) spineAiEnterNode(node)
-        if (spineSyActive) spineSyEnterNode(node)
-        if (spineCoActive) spineCoEnterNode(node)
-        if (spineB94Active) spineB94EnterNode(node)
-        if (spineCeActive) spineCeEnterNode(node)
-        if (spinePmrActive) spinePmrEnterNode(node)
-        if (spinePiActive) spinePiEnterNode(node)
-        if (spineGxActive) spineGxEnterNode(node)
-        if (spineAcActive) spineAcEnterNode(node)
-        if (spineEvActive) spineEvEnterNode(node)
-        if (spineUyActive) spineUyEnterNode(node)
-        if (spineSrActive) spineSrEnterNode(node)
-        if (spineIaActive) spineIaEnterNode(node)
-        if (spineTdActive) spineTdEnterNode(node)
-        if (spineExActive) spineExEnterNode(node)
-        if (spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
-        if (spineClActive) spineClEnterNode(node)
-        if (spineSuActive) spineSuEnterNode(node)
-        if (spineTcActive) spineTcEnterNode(node)
-        if (spineDelActive) spineDelEnterNode(node)
-        if (spineCpActive) spineCpEnterNode(node)
-        if (spineAbActive) spineAbEnterNode(node)
-        if (spineIyActive) spineIyEnterNode(node)
-        if (spineAaActive) spineAaEnterNode(node)
-        if (spineIdcActive) spineIdcEnterNode(node)
-        if (spineNaActive) spineNaEnterNode(node)
-        if (spineAfActive) spineAfEnterNode(node)
-        if (spineTpoActive) spineTpoEnterNode(node)
+        if (skip and (1L shl 10) == 0L && spinePdActive) spinePdEnterNode(node)
+        if (skip and (1L shl 11) == 0L && spineItFileActive) spineItEnterNode(node)
+        if (skip and (1L shl 12) == 0L && spineFpActive) spineFpEnterNode(node)
+        if (skip and (1L shl 13) == 0L && spineAiActive) spineAiEnterNode(node)
+        if (skip and (1L shl 14) == 0L && spineSyActive) spineSyEnterNode(node)
+        if (skip and (1L shl 15) == 0L && spineCoActive) spineCoEnterNode(node)
+        if (skip and (1L shl 16) == 0L && spineB94Active) spineB94EnterNode(node)
+        if (skip and (1L shl 17) == 0L && spineCeActive) spineCeEnterNode(node)
+        if (skip and (1L shl 18) == 0L && spinePmrActive) spinePmrEnterNode(node)
+        if (skip and (1L shl 19) == 0L && spinePiActive) spinePiEnterNode(node)
+        if (skip and (1L shl 20) == 0L && spineGxActive) spineGxEnterNode(node)
+        if (skip and (1L shl 21) == 0L && spineAcActive) spineAcEnterNode(node)
+        if (skip and (1L shl 22) == 0L && spineEvActive) spineEvEnterNode(node)
+        if (skip and (1L shl 23) == 0L && spineUyActive) spineUyEnterNode(node)
+        if (skip and (1L shl 24) == 0L && spineSrActive) spineSrEnterNode(node)
+        if (skip and (1L shl 25) == 0L && spineIaActive) spineIaEnterNode(node)
+        if (skip and (1L shl 26) == 0L && spineTdActive) spineTdEnterNode(node)
+        if (skip and (1L shl 27) == 0L && spineExActive) spineExEnterNode(node)
+        if (skip and (1L shl 28) == 0L && spineSmMode != SM_MODE_OFF) spineSmEnterNode(node)
+        if (skip and (1L shl 29) == 0L && spineClActive) spineClEnterNode(node)
+        if (skip and (1L shl 30) == 0L && spineSuActive) spineSuEnterNode(node)
+        if (skip and (1L shl 31) == 0L && spineTcActive) spineTcEnterNode(node)
+        if (skip and (1L shl 32) == 0L && spineDelActive) spineDelEnterNode(node)
+        if (skip and (1L shl 33) == 0L && spineCpActive) spineCpEnterNode(node)
+        if (skip and (1L shl 34) == 0L && spineAbActive) spineAbEnterNode(node)
+        if (skip and (1L shl 35) == 0L && spineIyActive) spineIyEnterNode(node)
+        if (skip and (1L shl 36) == 0L && spineAaActive) spineAaEnterNode(node)
+        if (skip and (1L shl 37) == 0L && spineIdcActive) spineIdcEnterNode(node)
+        if (skip and (1L shl 38) == 0L && spineNaActive) spineNaEnterNode(node)
+        if (skip and (1L shl 39) == 0L && spineAfActive) spineAfEnterNode(node)
+        if (skip and (1L shl 40) == 0L && spineTpoActive) spineTpoEnterNode(node)
         // INV.4(d) walker 7: the use-before-declaration pass — the per-list
         // ForwardRefs anchor + loop-header self-ref checks.
-        if (spineUbdActive) spineUbdEnterNode(node)
+        if (skip and (1L shl 41) == 0L && spineUbdActive) spineUbdEnterNode(node)
         // INV.4(d) walker 9: the const-assignment pass — frame steps/spawns +
         // assignment/inc-dec/regex anchors.
-        if (spineCaActive) spineCaEnterNode(node)
+        if (skip and (1L shl 42) == 0L && spineCaActive) spineCaEnterNode(node)
         // INV.4(d) walker 10: the always-truthy pass — condition/operand
         // anchors.
-        if (spineAtActive) spineAtEnterNode(node)
+        if (skip and (1L shl 43) == 0L && spineAtActive) spineAtEnterNode(node)
         // INV.4(d) walker 11: the null/undefined-usage pass — TS18050 anchors.
-        if (spineNuActive) spineNuEnterNode(node)
+        if (skip and (1L shl 44) == 0L && spineNuActive) spineNuEnterNode(node)
         // INV.4(d) walker 12: the comma-operator pass — TS2695 anchors
         // (ENTER = the legacy pre-order; also keeps same-position pairs
         // comma-before-np, since the np anchors fire at LEAVES).
-        if (spineCmActive) spineCmEnterNode(node)
+        if (skip and (1L shl 45) == 0L && spineCmActive) spineCmEnterNode(node)
         // (WARM.14) round 867: the amplification bracket — `r` extra passes over
         // exactly the consultations a per-kind table would skip, under ONE
         // timestamp pair, so `s_p` can be read off the slope. OFF in production:

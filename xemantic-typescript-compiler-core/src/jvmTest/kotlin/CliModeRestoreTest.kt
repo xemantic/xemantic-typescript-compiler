@@ -97,6 +97,7 @@ class CliModeRestoreTest {
             FrontEnd::class.java,
             CrawlParseCache::class.java,
             TavGate::class.java,
+            SpineMask::class.java,
             FlowScan::class.java,
             FlowIndex::class.java,
             PartitionCheck::class.java,
@@ -132,6 +133,7 @@ class CliModeRestoreTest {
             "CpaSections.verifyDeferSuppression",
             "CallSections.verifyImplRelated",
             "TavGate.off",
+            "SpineMask.off",
         )
     }
 
@@ -157,6 +159,7 @@ class CliModeRestoreTest {
         FrontEnd.reset()
         CrawlParseCache.reset()
         TavGate.reset()
+        SpineMask.reset()
         FlowScan.reset()
         FlowCensus.reset()
         MergeCensus.reset()
@@ -278,7 +281,7 @@ private val ACCEPTED_FLAGS = listOf(
     "--verifyDeferSuppressionBogus", "--cmamPreGate", "--cmamPreGateBogus",
     "--verifyImplRelated", "--verifyImplRelatedAll", "--verifyImplRelatedBogus",
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--parseAmp", "--parseCacheOff",
-    "--tavOff", "--tavGateOff", "--flowScanLegacy",
+    "--tavOff", "--tavGateOff", "--spineMaskOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
     "--flowCensus", "--mergeCensus", "--bindMutationCheck", "--shareBind", "--mergeClone", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
