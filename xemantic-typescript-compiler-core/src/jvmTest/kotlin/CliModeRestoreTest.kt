@@ -103,6 +103,7 @@ class CliModeRestoreTest {
             ParallelCheckMode::class.java,
             FlowCensus::class.java,
             MergeCensus::class.java,
+            BindMutationCheck::class.java,
         )
 
         /**
@@ -155,6 +156,7 @@ class CliModeRestoreTest {
         FlowScan.reset()
         FlowCensus.reset()
         MergeCensus.reset()
+        BindMutationCheck.reset()
         PartitionCheck.reportLines.clear()
     }
 
@@ -272,6 +274,6 @@ private val ACCEPTED_FLAGS = listOf(
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--parseAmp", "--parseCacheOff",
     "--tavOff", "--tavGateOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
-    "--flowCensus", "--mergeCensus", "--partitionCheck",
+    "--flowCensus", "--mergeCensus", "--bindMutationCheck", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )

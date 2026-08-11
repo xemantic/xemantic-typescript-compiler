@@ -1964,6 +1964,72 @@ class TypeScriptCompiler {
      * scheduling order would make diagnostics depend on it too (INV.6), and the
      * whole verification method here is byte-identical output.
      */
+    /**
+     * (PERF.HW.h) one `Symbol`'s mutable state, as it stood before the checker ran.
+     *
+     * `declarations` is compared by SIZE rather than by content because the only
+     * mutation `mergeSingleSymbol` performs on it is `addAll`, and a size is
+     * cheap enough to take for every symbol in the program. `valueDeclaration` and
+     * `parent` are compared by IDENTITY — a re-pointed reference is exactly the
+     * mutation that would make a shared bind wrong.
+     */
+    private class SymbolFingerprint(
+        val flags: Int,
+        val declarations: Int,
+        val valueDeclaration: Node?,
+        val members: Int,
+        val exports: Int,
+        val parent: Symbol?,
+    )
+
+    private fun fingerprint(symbol: Symbol) = SymbolFingerprint(
+        symbol.flags.value,
+        symbol.declarations.size,
+        symbol.valueDeclaration,
+        symbol.members?.size ?: -1,
+        symbol.exports?.size ?: -1,
+        symbol.parent,
+    )
+
+    /**
+     * Every `Symbol` reachable from the binder's output, keyed by IDENTITY —
+     * `Symbol` is a plain class, not a `data class`, so a `HashMap<Symbol, _>` is
+     * an identity map and none of round 471's deep-`hashCode` hazard applies.
+     *
+     * Reaches through `members` and `exports` as well as the two top-level tables,
+     * because those are themselves binder-built and are mutated by the merge.
+     */
+    private fun collectBinderSymbols(results: List<BinderResult>): MutableMap<Symbol, SymbolFingerprint> {
+        val out = HashMap<Symbol, SymbolFingerprint>()
+        val frontier = ArrayDeque<Symbol>()
+        for (result in results) {
+            result.locals.values.forEach { frontier.addLast(it) }
+            result.nodeToSymbol.values.forEach { frontier.addLast(it) }
+        }
+        while (frontier.isNotEmpty()) {
+            val symbol = frontier.removeFirst()
+            if (out.containsKey(symbol)) continue
+            out[symbol] = fingerprint(symbol)
+            symbol.members?.values?.forEach { frontier.addLast(it) }
+            symbol.exports?.values?.forEach { frontier.addLast(it) }
+        }
+        return out
+    }
+
+    /** Re-fingerprints [before]'s symbols and records which fields moved. */
+    private fun recordBinderMutations(before: Map<Symbol, SymbolFingerprint>) {
+        for ((symbol, was) in before) {
+            BindMutationCheck.symbolsChecked++
+            val now = fingerprint(symbol)
+            if (now.flags != was.flags) BindMutationCheck.flagsChanged++
+            if (now.declarations != was.declarations) BindMutationCheck.declarationsChanged++
+            if (now.valueDeclaration !== was.valueDeclaration) BindMutationCheck.valueDeclarationChanged++
+            if (now.members != was.members) BindMutationCheck.membersChanged++
+            if (now.exports != was.exports) BindMutationCheck.exportsChanged++
+            if (now.parent !== was.parent) BindMutationCheck.parentChanged++
+        }
+    }
+
     internal fun balancedFilePartition(files: List<SourceFile>, workers: Int): List<Set<String>> {
         val order = files.sortedWith(
             compareByDescending<SourceFile> { it.text.length }.thenBy { it.fileName }
@@ -2074,10 +2140,16 @@ class TypeScriptCompiler {
                 .distinctBy { "${it.start}|${it.length}|${it.code}|${it.message}" })
             checker = workerCheckers[0]
         } else {
+            // (PERF.HW.h) taken BEFORE the checker constructor, which is where the
+            // whole check runs, and compared after — so it sees every write site,
+            // not the ones a grep found.
+            val binderStateBefore =
+                if (BindMutationCheck.enabled) collectBinderSymbols(binderResults) else null
             checker = Checker(options, binderResults, isMultiFileSource = parsed.hasExplicitFilenames,
                 assignedFileNames = recheckOnly,
                 allInputFileNames = allInputFileNames,
                 jsonModuleContents = jsonModules)
+            if (binderStateBefore != null) recordBinderMutations(binderStateBefore)
             diagnostics.addAll(checker.getDiagnostics().applySkipLibCheck(options))
             if (PartitionCheck.workers > 1) runPartitionEquivalenceCheck(
                 options, parsedSourceFiles.values.toList(), parsed, checker.getDiagnostics(),

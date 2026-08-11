@@ -5415,6 +5415,21 @@ object FrontEnd {
             "FRONT END (config+crawl+parse+imports+bind): ${frontEnd / 1_000_000} ms = " +
                 "${if (total > 0) frontEnd * 100 / total else 0}% of the measured total"
         )
+        // (PERF.HW.h) — did the checker mutate binder-owned Symbol state at all?
+        // `0 changed` over a non-zero `checked` is the finding this arm exists to
+        // produce; a zero `checked` means the arm did not run and is not one.
+        if (BindMutationCheck.enabled) {
+            appendLine(
+                "  binder Symbols checked ${BindMutationCheck.symbolsChecked}, " +
+                    "changed ${BindMutationCheck.totalChanged} " +
+                    "(flags ${BindMutationCheck.flagsChanged}, " +
+                    "declarations ${BindMutationCheck.declarationsChanged}, " +
+                    "valueDeclaration ${BindMutationCheck.valueDeclarationChanged}, " +
+                    "members ${BindMutationCheck.membersChanged}, " +
+                    "exports ${BindMutationCheck.exportsChanged}, " +
+                    "parent ${BindMutationCheck.parentChanged})"
+            )
+        }
         // (PERF.HW.g) — `mergeSingleSymbol`'s shape. `adopts` is how many binder
         // `Symbol` objects ended up IN `globals` by reference, i.e. the population
         // a copy-on-adoption has to clone; `mutatesAdopted` is the subset of
@@ -5505,6 +5520,47 @@ object FrontEnd {
 object MergeCensus {
     var enabled: Boolean = false
     fun reset() { enabled = false }
+}
+
+/**
+ * (PERF.HW.h) `--bindMutationCheck` — the stage-1 closer for
+ * `docs/parallel-bind-sharing.md`: does the checker mutate binder-owned `Symbol`
+ * state ANYWHERE, or only in `mergeSingleSymbol`?
+ *
+ * `--mergeCensus` answered the question for one site and found 406 adoptions and
+ * 175 mutations. It cannot answer it for the other 150 write sites across
+ * `flags` / `valueDeclaration` / `members` / `exports` / `parent` /
+ * `declarations`, and a bind cannot be shared until they are all answered — so
+ * this arm does not READ the sites at all. It fingerprints every `Symbol`
+ * reachable from the `BinderResult`s before the checker runs and re-fingerprints
+ * afterwards, which catches a mutation from a site nobody thought to grep for.
+ *
+ * That is deliberately the opposite instrument from a static audit: a grep over
+ * receiver expressions cannot tell a binder-owned symbol from a checker-minted
+ * one, which is the only distinction that matters here.
+ */
+object BindMutationCheck {
+    var enabled: Boolean = false
+
+    /** Per-field divergence counts, filled by the post-check comparison. */
+    var symbolsChecked: Long = 0
+    var flagsChanged: Long = 0
+    var declarationsChanged: Long = 0
+    var valueDeclarationChanged: Long = 0
+    var membersChanged: Long = 0
+    var exportsChanged: Long = 0
+    var parentChanged: Long = 0
+
+    val totalChanged: Long
+        get() = flagsChanged + declarationsChanged + valueDeclarationChanged +
+            membersChanged + exportsChanged + parentChanged
+
+    fun reset() {
+        enabled = false
+        symbolsChecked = 0
+        flagsChanged = 0; declarationsChanged = 0; valueDeclarationChanged = 0
+        membersChanged = 0; exportsChanged = 0; parentChanged = 0
+    }
 }
 
 object FlowCensus {

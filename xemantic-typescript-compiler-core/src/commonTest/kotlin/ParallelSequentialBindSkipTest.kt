@@ -180,6 +180,63 @@ class ParallelSequentialBindSkipTest {
         }
     }
 
+    /**
+     * (PERF.HW.h) **THE POSITIVE CONTROL, and the reason the arm's headline zero
+     * is worth anything.**
+     *
+     * On the compiler profile `--bindMutationCheck` reports 15,580 binder Symbols
+     * checked and ZERO changed, while `--mergeCensus` reports 406 adoptions and
+     * 175 mutations in the same run — the two are only consistent if those merges
+     * land on LIB symbols, which are not part of any `BinderResult`. A zero from
+     * an instrument that cannot see is indistinguishable from a real negative
+     * (round 849), so this drives a shape where a program-file symbol MUST be
+     * merged and asserts the arm notices.
+     *
+     * Two GLOBAL SCRIPT files — no import, no export, so neither is a module and
+     * neither is module-scoped under INV.3(d) — each declaring the same name. The
+     * binder puts `shared` in both files' locals; the checker adopts the first
+     * into `globals` and merges the second into it, which appends to a
+     * binder-owned `declarations` list.
+     */
+    @Test
+    fun `the bind mutation check sees a merge that touches a program symbol`() {
+        val saved = BindMutationCheck.enabled
+        try {
+            BindMutationCheck.reset()
+            BindMutationCheck.enabled = true
+            val options = CompilerOptions()
+            val parsed = ParsedSource(
+                options,
+                listOf(
+                    SourceFileEntry("/p/one.ts", "declare var shared: number;\n"),
+                    SourceFileEntry("/p/two.ts", "declare var shared: number;\n"),
+                ),
+                hasExplicitFilenames = true,
+            )
+            TypeScriptCompiler().compileParsed(parsed, options, "/p/one.ts")
+            // The arm ran at all…
+            assert(BindMutationCheck.symbolsChecked > 0)
+            // …and it is not blind: the second file's declaration was appended to
+            // the first file's symbol, which is binder-owned.
+            assert(BindMutationCheck.declarationsChanged > 0)
+        } finally {
+            BindMutationCheck.enabled = saved
+        }
+    }
+
+    @Test
+    fun `negative control - the bind mutation check is silent when it is not armed`() {
+        val saved = BindMutationCheck.enabled
+        try {
+            BindMutationCheck.reset()
+            BindMutationCheck.enabled = false
+            compileWith(1)
+            assert(BindMutationCheck.symbolsChecked == 0L)
+        } finally {
+            BindMutationCheck.enabled = saved
+        }
+    }
+
     @Test
     fun `the skip is behaviour-free - both worker counts report the same diagnostics`() {
         val sequential = compileWith(1)

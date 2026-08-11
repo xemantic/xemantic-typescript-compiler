@@ -91,11 +91,46 @@ touches 164 sites' worth of state, not thousands. **This is much smaller than §
 implies** — but § 3 still applies in full, because the risk was never the SIZE of the population;
 it is that those 406 symbols are exactly the ones whose identity `globals` hands out.
 
-**What the census does NOT answer**, and what stage 1 must still close before stage 2 is written:
-`mergeSingleSymbol` is the only mutation site this census watches. Whether the checker mutates
-binder-owned `Symbol`s ANYWHERE ELSE (a stray `flags or=`, a `valueDeclaration =`, an `exports`
-install) is a separate question, and a bind cannot be shared until it is answered no. Grep for
-writes to `Symbol` fields reachable from a `BinderResult`, and prefer a census over a reading.
+**What the census does NOT answer**: `mergeSingleSymbol` is the only site it watches, and there are
+**150 other write sites** in `Checker.kt` across `flags` (4), `valueDeclaration` (30), `members`
+(19), `exports` (23), `parent` (11) and `declarations.add` (63). `Symbol.target` is written **0**
+times — it moved to the LinkStore side table. A grep cannot classify those 150, because it cannot
+tell a binder-owned receiver from a checker-minted one. Answered by § 2b instead.
+
+## 2b. Stage 1 CLOSED — the checker mutates **zero** binder Symbols on an all-module program
+
+`--bindMutationCheck` fingerprints every `Symbol` reachable from the `BinderResult`s (locals +
+`nodeToSymbol`, recursing through `members`/`exports`; identity-keyed, which is sound because
+`Symbol` is a plain class and not a `data class`) immediately before the `Checker` constructor —
+where the whole check runs — and re-compares afterwards. It therefore sees every write site rather
+than the ones a grep found. On the compiler profile:
+
+    binder Symbols checked 15580, changed 0
+      (flags 0, declarations 0, valueDeclaration 0, members 0, exports 0, parent 0)
+    mergeSingleSymbol: adopts 406, mutates 175 (of which reach an adopted symbol: 164)
+
+**Both lines are true at once, and their reconciliation is the finding:** the 406 adoptions and 175
+mutations land on **lib** symbols, which come from `bindRealLibs` / `init:mergeLibGlobals` and are
+not part of any `BinderResult`. **Program-file binder output is already immutable with respect to
+the checker.**
+
+**The zero has a positive control** (round 849's law — a zero from a blind instrument is
+indistinguishable from a real negative). `ParallelSequentialBindSkipTest` drives two GLOBAL SCRIPT
+files (no import, no export, so neither is a module) declaring the same name, which forces a merge
+onto a program symbol, and asserts `declarationsChanged > 0`. It passes, so the arm can see.
+
+**THE SCOPE OF THE RESULT, WHICH IS THE WHOLE CAVEAT.** It holds because every file on that profile
+is a MODULE, and INV.3(d) keeps a module's locals out of `globals` entirely — so nothing merges.
+A program containing global script files **does** mutate binder output; that is exactly what the
+positive control demonstrates. So:
+
+- sharing one bind across workers is sound **for an all-module program** with no further work;
+- for a program with script files it needs stage 2 (copy on adoption) first;
+- and the condition is cheap to test at runtime — `mergeAdopts`/the mutation counters over the
+  program's own binder results — so a shared-bind path can be **gated on the program's shape**
+  rather than blocked on the refactor.
+
+That gate is the recommended next step, and it is much smaller than stages 2-4.
 
 ## 3. What makes it hard — the identity invariants it collides with
 

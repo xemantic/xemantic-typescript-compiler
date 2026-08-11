@@ -71,6 +71,44 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**Round 882 (2026-08-11) — (PERF.HW.h): STAGE 1 **CLOSED**, AND THE ANSWER INVERTS THE CODE'S OWN
+COMMENT — ON AN ALL-MODULE PROGRAM THE CHECKER MUTATES **ZERO** OF THE 15,580 BINDER-OWNED `Symbol`s.**
+
+Round 881 sized `mergeSingleSymbol` at 406 adoptions / 175 mutations and left the real question open:
+that census watches ONE site, and `Checker.kt` has **150 others** — `flags` 4, `valueDeclaration` 30,
+`members` 19, `exports` 23, `parent` 11, `declarations.add` 63 (`Symbol.target` is written **0** times;
+it moved to the LinkStore side table). A grep cannot classify them, because it cannot tell a
+binder-owned receiver from a checker-minted one.
+
+- **THE INSTRUMENT IS THE OPPOSITE OF AN AUDIT.** `--bindMutationCheck` fingerprints every `Symbol`
+  reachable from the `BinderResult`s — locals + `nodeToSymbol`, recursing through `members`/`exports`,
+  identity-keyed (sound because `Symbol` is a plain class, not a `data class`, so round 471's
+  deep-`hashCode` hazard does not apply) — immediately before the `Checker` constructor, which is where
+  the whole check runs, and re-compares after. It sees every write site, including ones nobody grepped.
+
+- **THE RESULT.** `binder Symbols checked 15580, changed 0` on every field, in the same run as
+  `mergeSingleSymbol: adopts 406, mutates 175`. **Both are true because the merges land on LIB
+  symbols** (`bindRealLibs` / `init:mergeLibGlobals`), which are in no `BinderResult`. Program-file
+  binder output is ALREADY immutable with respect to the checker — the `PartitionCheck` comment that a
+  worker "must never reuse an already-checked bind" is true of the lib tables, not of the program's.
+
+- **THE ZERO HAS A POSITIVE CONTROL, WHICH IS THE ONLY REASON IT IS WORTH ANYTHING** (round 849: a zero
+  from a blind instrument reads exactly like a real negative). The pin drives two GLOBAL SCRIPT files —
+  no import, no export, so neither is a module — declaring the same name, which forces a merge onto a
+  program symbol, and asserts `declarationsChanged > 0`. It passes.
+
+- **THE SCOPE IS THE WHOLE CAVEAT AND IT IS NOT A FOOTNOTE.** The zero holds because every file on that
+  profile is a MODULE and INV.3(d) keeps a module's locals out of `globals`, so nothing merges. A
+  program with global script files DOES mutate binder output — that is what the control demonstrates.
+  So sharing one bind across workers is sound **for an all-module program with no further work**, needs
+  stage 2 first otherwise, and — the useful part — **the condition is cheap to test at runtime**, so a
+  shared-bind path can be GATED ON THE PROGRAM'S SHAPE instead of blocked on the refactor. That gate is
+  the recommended next step and is far smaller than stages 2-4.
+
+- **GATES.** Suite **14,265 -> 14,267** / 0 failures / 3 skipped = exactly the 2 new pins (the positive
+  control, plus a negative control that the arm is silent unarmed). `cost_gate.py` +0.00% on all 20
+  counters. `huge_methods.py --fail-over 0`: 0 over the limit, 684 classes. Warning-clean.
+
 **Round 881 (2026-08-11) — (PERF.HW.g): THE BIND-SHARING REFACTOR OPENED, AND STAGE 1's CENSUS SAYS THE
 BLOCKER IS **406 OBJECTS**, NOT A SYMBOL GRAPH.**
 
