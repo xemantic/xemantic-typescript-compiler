@@ -2106,6 +2106,17 @@ class TypeScriptCompiler {
             // times).
             RealLibSnapshots.prewarmParsedLibFiles(options)
             val sourceList = parsedSourceFiles.values.toList()
+            // (PERF.HW.i) one bind for every worker, on the CALLER thread — so its
+            // symbols come from the ordinary low id sequence, below every worker's
+            // rebased slice, and can collide with none of them. Opt-in: sound only
+            // while nothing merges a program symbol into `globals`, which is true
+            // for an all-module program and false for one with script files
+            // (round 882, `docs/parallel-bind-sharing.md` § 2b).
+            val sharedBind: List<BinderResult>? =
+                if (ShareBind.enabled) {
+                    val sharedBinder = Binder(options)
+                    sourceList.map { sharedBinder.bind(it) }
+                } else null
             val assignments = balancedFilePartition(sourceList, workers)
             // (PERF.HW.d) sized here, before any thread starts; worker `w` writes
             // index `w` and nothing reads them until every worker has joined.
@@ -2119,8 +2130,10 @@ class TypeScriptCompiler {
                     FrontEnd.workerFiles[w] = assigned.size.toLong()
                     FrontEnd.workerChars[w] =
                         sourceList.filter { it.fileName in assigned }.sumOf { it.text.length.toLong() }
-                    val workerBinder = Binder(options)
-                    val workerResults = sourceList.map { workerBinder.bind(it) }
+                    val workerResults = sharedBind ?: run {
+                        val workerBinder = Binder(options)
+                        sourceList.map { workerBinder.bind(it) }
+                    }
                     // The whole check runs in `Checker`'s init block, so the
                     // constructor IS this worker's work — bind included.
                     val workerChecker = Checker(

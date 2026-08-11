@@ -237,6 +237,30 @@ class ParallelSequentialBindSkipTest {
         }
     }
 
+    /**
+     * (PERF.HW.i): one shared bind must answer exactly what N independent binds
+     * answer, on a program where sharing is sound.
+     *
+     * Sound here means ALL-MODULE — the fixture's two files both `import`/`export`,
+     * so INV.3(d) keeps their locals out of `globals` and nothing merges. The
+     * arm is opt-in precisely because that is a property of the PROGRAM and not of
+     * the compiler, and the pin says so by construction rather than by comment.
+     */
+    @Test
+    fun `a shared bind answers what N independent binds answer`() {
+        val saved = ShareBind.enabled
+        try {
+            ShareBind.enabled = false
+            val independent = compileWith(4)
+            ShareBind.enabled = true
+            val shared = compileWith(4)
+            assert(independent.diagnostics.isNotEmpty())
+            assert(shared.diagnostics == independent.diagnostics)
+        } finally {
+            ShareBind.enabled = saved
+        }
+    }
+
     @Test
     fun `the skip is behaviour-free - both worker counts report the same diagnostics`() {
         val sequential = compileWith(1)

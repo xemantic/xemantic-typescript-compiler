@@ -104,6 +104,7 @@ class CliModeRestoreTest {
             FlowCensus::class.java,
             MergeCensus::class.java,
             BindMutationCheck::class.java,
+            ShareBind::class.java,
         )
 
         /**
@@ -114,6 +115,7 @@ class CliModeRestoreTest {
          */
         val BEHAVIOUR_CHANGING = listOf(
             "ParallelCheckMode.workers",
+            "ShareBind.enabled",
             "PartitionCheck.workers",
             "SpineDispatch.mode",
             "ArgNarrowGate.mode",
@@ -157,6 +159,7 @@ class CliModeRestoreTest {
         FlowCensus.reset()
         MergeCensus.reset()
         BindMutationCheck.reset()
+        ShareBind.reset()
         PartitionCheck.reportLines.clear()
     }
 
@@ -274,6 +277,6 @@ private val ACCEPTED_FLAGS = listOf(
     "--ccetPreGate", "--ccetPreGateBogus", "--frontEnd", "--parseAmp", "--parseCacheOff",
     "--tavOff", "--tavGateOff", "--flowScanLegacy",
     "--verifyFlowScan", "--flowScanBogus", "--flowEagerSet", "--flowIndexLegacy",
-    "--flowCensus", "--mergeCensus", "--bindMutationCheck", "--partitionCheck",
+    "--flowCensus", "--mergeCensus", "--bindMutationCheck", "--shareBind", "--partitionCheck",
     "--workers", "--globalsAmp", "--spineAmp", "--outDir", "--project", "--help",
 )

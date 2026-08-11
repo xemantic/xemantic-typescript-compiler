@@ -5539,6 +5539,37 @@ object MergeCensus {
  * receiver expressions cannot tell a binder-owned symbol from a checker-minted
  * one, which is the only distinction that matters here.
  */
+/**
+ * (PERF.HW.i) `--shareBind` — under `--workers N`, bind the program ONCE on the
+ * caller thread and give every worker the same `BinderResult`s, instead of N
+ * independent full binds.
+ *
+ * **OPT-IN, and deliberately not the default.** Round 882 measured that the
+ * checker mutates ZERO binder-owned `Symbol`s — but only on an ALL-MODULE
+ * program, because INV.3(d) keeps a module's locals out of `globals` so nothing
+ * merges. A program containing global script files DOES mutate binder output, and
+ * two checkers over one bind would then corrupt each other silently.
+ *
+ * **What it is expected to buy, stated before measuring so the answer cannot be
+ * rationalised afterwards: ZERO wall from the bind itself.** Round 879/880's law
+ * — the N binds were already CONCURRENT, so moving them to one serial bind leaves
+ * `wall = F + A/N` unchanged. The reason to measure it at all is the OTHER term:
+ * four workers each building a full symbol graph is what the +37% per-worker
+ * contention overhead would look like, and one shared graph is the only cheap
+ * test of that. A win here is a measurement of contention; a wash is the finding
+ * that contention is not memory-resident duplication.
+ *
+ * Id safety: the shared bind runs on the CALLER thread, so its symbols come from
+ * the ordinary low sequence, while every worker rebases to `WORKER_ID_BASE + i *
+ * WORKER_ID_STRIDE` (>= 1e9). The shared ids therefore sit below every worker's
+ * slice and can collide with none of them — the same invariant round 825's
+ * `forceIntrinsicTypeInit` exists to express.
+ */
+object ShareBind {
+    var enabled: Boolean = false
+    fun reset() { enabled = false }
+}
+
 object BindMutationCheck {
     var enabled: Boolean = false
 

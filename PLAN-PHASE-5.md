@@ -71,6 +71,54 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**Round 883 (2026-08-11) — (PERF.HW.i): ONE SHARED BIND FOR ALL WORKERS — **-5% WARM AT w4, REPLICATED
+IN TWO BATCHES WITH THE ROTATION REVERSED, THE TWO ARMS' RUNS COMPLETELY SEPARATE** — AND IT REFUTES A
+LAW THIS ARC DOCUMENTED TWO ROUNDS AGO.**
+
+Stage 1 (round 882) established that on an all-module program the checker mutates zero binder-owned
+`Symbol`s, so the N independent binds can become one. `--shareBind` does that: the program is bound
+ONCE on the caller thread and every worker gets the same `BinderResult`s.
+
+- **THE PREDICTION WAS WRITTEN DOWN FIRST AND IT WAS WRONG.** Rounds 879/880 concluded that concurrent
+  duplicated work costs no wall (`wall = D + A/N` whether D runs in one worker or all N), so the KDoc
+  said, before any measurement, that this would buy **zero** from the bind itself and that a win would
+  instead be a measurement of the +37% contention term. It won.
+
+- **THE MEASUREMENT.** `BenchMain <prof> 6 8 off noEmit workers4 shareBind`, one JVM per arm (round
+  867), ABBA, two batches with the rotation REVERSED between them so the leading-position bias lands
+  on the other arm the second time:
+  batch 1 — on 3,364.2 / 3,435.2 against off 3,559.2 / 3,564.5 = **-162 ms (-4.6%)**;
+  batch 2 — on 3,244.6 / 3,394.6 against off 3,491.8 / 3,557.4 = **-205 ms (-5.8%)**.
+  **All four `on` runs are faster than all four `off` runs** — the ranges do not overlap — which is a
+  stronger statement than either batch's median, and it is what round 858 asks for (one
+  sign-consistent batch is not a result; the second batch is).
+
+- **WHY THE LAW FAILED, AND THE REFINEMENT IT NEEDS.** "Concurrent duplication is free" assumes the
+  concurrency is free, i.e. that cores are abundant. They are not: four binder threads run alongside
+  four JIT compiler threads on 8 cores (CLAUDE.md's own note that a "single-threaded" run already
+  occupies ~4.17 of them), so four simultaneous whole-program binds cost MORE wall than the 515 ms one
+  bind costs, and replacing them with a single serial bind returns the difference. **So the law is
+  `wall = D + A/N` only while N workers doing D concurrently costs the same wall as one — which is
+  exactly the assumption the +37% per-worker overhead says is false here.**
+
+- **SOUNDNESS, AND WHY IT IS OPT-IN.** Sharing is safe only while nothing merges a PROGRAM symbol into
+  `globals`, which INV.3(d) guarantees for an all-module program and not otherwise; a program with
+  global script files mutates binder output, and two checkers over one bind would then corrupt each
+  other silently. Id safety is by construction: the shared bind runs on the CALLER thread, so its
+  symbols come from the ordinary low sequence, below every worker's rebased slice (>= 1e9), and can
+  collide with none of them. Correctness verified three ways — 3 `--listAll --workers 4 --shareBind`
+  runs at 46 errors and digest `59d930db…`, identical to every other arm this session; a suite
+  equivalence pin over an all-module fixture; and the full corpus.
+
+- **WHAT WOULD MAKE IT DEFAULT, AND IT IS NOT DONE:** a SHAPE GATE that decides, before checking,
+  whether any program symbol would merge into `globals`. The soundness predicate lives inside the
+  checker's merge, so the gate has to reuse it rather than re-derive it — and a re-derived predicate
+  that is wrong in the permissive direction corrupts silently. Queued, with the -5% attached.
+
+- **GATES.** Suite **14,267 -> 14,268** / 0 failures / 3 skipped = exactly the 1 new pin.
+  `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 686
+  classes. Warning-clean. The flag defaults OFF, so every other gate measures the unchanged path.
+
 **Round 882 (2026-08-11) — (PERF.HW.h): STAGE 1 **CLOSED**, AND THE ANSWER INVERTS THE CODE'S OWN
 COMMENT — ON AN ALL-MODULE PROGRAM THE CHECKER MUTATES **ZERO** OF THE 15,580 BINDER-OWNED `Symbol`s.**
 

@@ -448,6 +448,11 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
             // (PERF.HW.h) round 882 — stage-1 closer: fingerprint every binder
             // Symbol before the check and re-compare after, so a mutation from a
             // site nobody grepped for is still caught.
+            // (PERF.HW.i) round 883 — one shared bind for all workers. Opt-in:
+            // sound only while no program symbol merges into `globals`.
+            "--shareBind", "--sharebind" -> {
+                ShareBind.reset(); modes.set(ShareBind::enabled, true)
+            }
             "--bindMutationCheck", "--bindmutationcheck" -> {
                 BindMutationCheck.reset(); modes.set(BindMutationCheck::enabled, true)
             }
@@ -905,6 +910,10 @@ internal fun usageText(): String =
           --flowEagerSet     (FRONT.2) build B464 suffix sets eagerly (pre-801 arm)
           --flowIndexLegacy  (WARM.11) build the INV.2(b) side table by the pre-864 whole-tree walk
           --flowCensus       (WARM.12) flow nodes minted vs ever read by any checker consumer
+          --shareBind        (PERF.HW.i) under --workers, bind the program ONCE and share it with
+                             every worker instead of N full binds. Sound for an ALL-MODULE program
+                             (docs/parallel-bind-sharing.md); a program with global script files
+                             mutates binder output and must not use it
           --bindMutationCheck (PERF.HW.h) does the checker mutate binder-owned Symbol state
                              anywhere at all? Fingerprints every reachable Symbol before the
                              check and re-compares after (docs/parallel-bind-sharing.md)

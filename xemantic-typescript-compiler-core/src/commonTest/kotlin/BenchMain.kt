@@ -44,6 +44,7 @@ import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
 import com.xemantic.typescript.compiler.ParallelCheckMode
+import com.xemantic.typescript.compiler.ShareBind
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SpineAmp
@@ -692,7 +693,15 @@ fun main(args: Array<String>) {
     // ACROSS processes, never inside one.
     val workers: Int = parseWorkersFlag(args.getOrNull(5))
     ParallelCheckMode.workers = workers
-    println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers}""")
+    // (PERF.HW.i) the 7th argument, `shareBind`, arms the one-bind-for-all-workers
+    // arm. Set once per process for the same reason the worker level is.
+    val shareBind: Boolean = when (val f = args.getOrNull(6)?.lowercase()) {
+        null, "", "off", "false" -> false
+        "sharebind", "on", "true" -> true
+        else -> error("usage: 7th argument must be `shareBind`, `off`, or omitted — not '$f'")
+    }
+    ShareBind.enabled = shareBind
+    println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers,"shareBind":$shareBind}""")
 
     repeat(warmup) {
         ProjectCompiler(SystemVfs).build(project, noEmit = noEmit)
