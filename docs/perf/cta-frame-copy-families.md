@@ -169,3 +169,116 @@ and it is still **1.4%** of the entries it replaces.
 `clear()` on the view throws: no `varTypes` reader clears the map, and a clear
 cannot be recorded in O(1) — a silent one would drop the enclosing scopes'
 entries with no way to restore them at the pop.
+
+---
+
+# (WARM.18b) round 892 — the family § 4 refused, converted
+
+Round 891 refused `CtaFrame`'s localTypes+declNodes+shadowed family for three
+named reasons and queued **(WARM.18b)** with the instrument it needed. Round 892
+built that instrument FIRST, before a line of the fix, and all three reasons
+dissolved under it. This section supersedes § 4.
+
+## 6. The instrument, and what it read
+
+A THROWAWAY counting facade over every write path of all three components
+(round 890's shape: census, read, revert). It is the only way in — the maps are
+reached by reference through the ambient fields, so a hook anywhere else is
+round 891's 2-of-3-paths hook again.
+
+| write path | count |
+| --- | ---: |
+| `localTypes.put` @ fn-frame | 24,572 |
+| `localTypes.remove` @ fn-frame | 81 |
+| `localTypes.put` @ narrowing frame | 1,942 |
+| `declNodes.put` @ fn-frame | 1,582 |
+| `declNodes.remove` @ fn-frame | 352 |
+| `shadowed.add` @ fn-frame | 166 |
+| **writes needing an undo record** | **28,695** |
+| writes at the file root (no scope open — free) | 567 |
+| `putAll` / `addAll` anywhere but the seed | **0** |
+| `clear()` anywhere | **0** |
+| fn-frame pushes / narrowing pushes | 9,525 / 1,491 |
+| max `ctaFrames` depth | 10 |
+
+**28,695 against 1,089,527 entries copied = 2.6%** — the same order as
+`varTypes`' 1.4%, and 38x less work. The narrowing frames additionally copy
+**124,709** entries (26.4% of the whole `EpochMap` family), so the population
+actually at stake is **1,214,236 entries**.
+
+## 7. The three refusals, answered
+
+1. **"Its produced-versus-consumed is an un-instrumented zero."** It was, and
+   round 849's law is why that mattered. It is now 2.6%, measured.
+2. **"`ambiguousNames` RESETS rather than shadows."** True, and it is therefore
+   not convertible — but it is **not in the family**: a fn frame gives it a
+   FRESH EMPTY set, which is O(1), so it was never copied and needs no
+   mechanism at all. The refusal treated a sibling FIELD as a sibling COST.
+   Nothing about it changed in this round.
+3. **"The narrowing frame copies `localTypes` into a DIFFERENT family."** This
+   was the real one, and the answer is that it must be converted TOO, onto the
+   SAME stack. It is not optional: a function declared inside a then-branch
+   takes its base from `ctaFrames.last()`, so a copy at the narrowing frame and
+   a live map at the fn frame would be exactly the two-disciplines-over-one-
+   ambient-field hazard round 891 named — a nested body would inherit the
+   pre-narrow map. Converting it is also worth another 124,709 entries.
+
+## 8. The condition table, re-audited
+
+Round 869's law: replaceable EXACTLY when the stack is strictly LIFO, no reader
+RETAINS the map past its frame, and no reader depends on ITERATION ORDER.
+
+| condition | evidence |
+| --- | --- |
+| one LIFO stack | `ctaFrames` (`addLast`/`removeLast`, popped at `ctaSpineLeave` when `last().owner === node`), `reset` at the file boundary. The scope-opening frames are a SUBSEQUENCE — 9,525 fn-body + 1,491 narrowing — so the pop is flag-driven, exactly as `varScoped` already is. |
+| key removal | 433 removals, all RECORDED (the undo log restores a removed key's pre-value; round 869's "no removal" condition is about a first-write-only scheme, which this is not). |
+| reader iterates | **none.** No `.keys`/`.values`/`.entries`/`.forEach`/`.iterator`/`.sorted`/`.toMutableMap` and no `for (x in map)` across 374 `currentLocalTypes`, 12 `currentLocalDeclTypeNodes`, 37 `currentShadowedNames` references. The one whole-collection read is `name in currentShadowedNames`, i.e. `contains`. |
+| reader retains | The 56 `= currentLocalTypes` sites are 37 local `val saved…` pointer swaps (the object identity is stable, so the restore puts the same object back) plus **two field retentions** — `spineCaRestingLocalTypes` and `spineArithBase` — both taken at SPINE ENTRY, i.e. the PRE-SPINE resting map, which is never a cta frame's. |
+| `clear()` | 0 calls, measured. The view throws on one anyway. |
+| ad-hoc `EpochMap(currentLocalTypes)` installs (the ≥12 sites of § 3) | Harmless, and this is the point round 891 could not settle: each is a genuine DETACHED snapshot of the live map, written into and then discarded by a pointer-swap restore. A detached copy that never merges back cannot observe the difference between a copy chain and a live map. |
+
+## 9. What landed
+
+`MapScopeStack<V>` + `SetScopeStack` (commonMain, `internal`, `ScopeStack.kt`).
+Round 891's `VarScopeStack` is **RETIRED ONTO** the generic class rather than
+copied beside it — the reverse-replay mechanism exists once, not twice. Two
+things the set twin needs that the map does not: one BIT per touched element
+(`had` = present-before) instead of a value, so the restore is a different
+statement; and `addAll` recording per ELEMENT.
+
+Two flags on `CtaFrame`, because the two scope-opening shapes are not the same
+shape: `localScoped` (fn-body **and** narrowing frames → pop the localTypes
+stack) and `ctaFnScoped` (fn-body only → also pop declNodes and shadowedNames,
+which the narrowing frame SHARES with its parent). Push and pop are mirrored by
+construction, as `varScoped` already was.
+
+The `onMutate` hook reproduces the expression-memo epoch bump the replaced
+`EpochMap` performed. It is a SUPERSET — the fn-body maps were plain `HashMap`s
+and did not bump — and that is the safe direction: an extra bump can only make
+the probe-only shadow memo MISS, where a missing one could make it serve a
+stale entry.
+
+## 10. The controlled row (round 793 — no boundary and no population moves)
+
+| | before | after |
+| --- | ---: | ---: |
+| `CtaFrame` local pushes | 9,525 | **11,016** (+1,491 = the narrowing frames, MOVED here from `EpochMap`) |
+| entries copied by it | **1,089,527** | **0** |
+| undo records | 0 | **28,695** |
+| `EpochMap` pushes | 28,828 | 27,337 (−1,491, exactly) |
+| `EpochMap` entries | 471,726 | 347,017 (−124,709, exactly) |
+| `EpochMap` writes | 44,320 | 42,378 (−1,942, exactly) |
+| entries copied, ALL SIX families | 1,600,775 | **386,539** |
+
+**42.3x less work over an identical population.** The three exact `EpochMap`
+deltas are the falsifier that the narrowing frames MOVED rather than vanished,
+and the headline number is an INDEPENDENT cross-check: the undo log records
+**28,695**, which is the throwaway census's write count to the unit — two
+different instruments, on two different binaries, agreeing exactly.
+
+Price, from round 891's amplifier: the cta local family measured **43-55 ms**
+(one unreplicated batch), and the narrowing entries add ~4-6 ms at the
+30-51 ns/entry the two measured families put a copied entry at. So **~47-61 ms
+= 0.8-1.1% of a warm rebuild**, and **no wall-time A/B is claimed** — that is
+inside what this box settles (rounds 840(c)/858/886). The defence is the
+controlled row plus `cost_gate.py` at +0.00%.
