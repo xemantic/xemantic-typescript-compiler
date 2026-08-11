@@ -71,7 +71,57 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
-**(PERF.HW.e) QUEUED, WITH D DECOMPOSED — RUN THE PROGRAM-WIDE TAIL PASSES ONCE, NOT ONCE PER WORKER.**
+**Round 879 (2026-08-11) — (PERF.HW.e) RETRACTED BEFORE IT WAS BUILT, AND ROUND 878's D IS WRONG. THE
+TAIL PASSES ARE ALREADY PARTITION-SCOPED; HOISTING THEM WOULD HAVE COST ~2.4 s. THE REAL LOSS IS THAT A
+WORKER RUNS ITS OWN WORK ~50% SLOWER THAN THE SAME WORK RUNS SEQUENTIALLY.**
+
+The item below said: the ~400 tail passes are program-wide, every worker runs all of them, so run them
+once in the sequential prefix and share. Every clause was checked before anything was built, and the
+conclusion does not survive. Nothing was landed this round; that is the result.
+
+- **THE ARITHMETIC THAT SHOULD HAVE COME FIRST.** Duplicated work that is CONCURRENT does not cost
+  wall — `wall = D + A/N` whether D runs in one worker or in all N — so hoisting D to the SERIAL
+  prefix gives `wall = D + A/N` too: unchanged at best, and strictly worse to the extent the hoisted
+  work was already partition-scoped. CLAUDE.md states the general form ("the duplication is concurrent,
+  so it costs CPU and RSS, not WALL") and round 788 states the law ("skipping a cached resolution MOVES
+  the work"). The entry reasoned from a COUNT of duplicated passes and never asked what removing them
+  returns — round 758's error, one region over.
+
+- **THE MEASUREMENT** (PassLab, no recompile — `disable` for all 445 non-spine non-init passes).
+  Sequential 24,600 -> 20,258 ms, so the tail is **4,342 ms** of a sequential compile. At w4, ABBA x2:
+  ON 15,723 / 16,190, OFF 12,398 / 14,098 — **~2.7 s** returned for removing 4.3 s of work, with the
+  OFF arm spreading 12.8%, so 1.3-2.7 s. A fully-duplicated tail would return 4.3 s and a fully
+  partition-scoped one ~1.1 s; the per-worker rows say which: with the tail off, w0 (1 file) drops
+  1,194 ms while w1 (26 files) drops 3,651 — the tail is ~**1.1 s duplicated per worker plus ~98 ms per
+  ASSIGNED FILE**. **Hoisting it would have added 4.3 s to the serial prefix to save ~1.9 s per worker:
+  a net ~2.4 s LOSS.**
+
+- **ROUND 878's D = 9.4-11.2 s IS RETRACTED.** That fit took its points from DIFFERENT worker levels,
+  and contention differs between them (the same single file costs 13,503 ms at w4 and 15,885 ms at w6),
+  so the cross-level slope absorbed the contention and dumped it into the intercept. Fitting WITHIN one
+  level, on the quieter tail-off run, gives **D ~ 3.7 s**, and "each worker redoes 40-45% of the whole
+  compile" is wrong. What survives is the OBSERVATION it was drawn from — a worker holding one file
+  costs nearly what a worker holding 26 costs — whose cause is the tail's per-file term plus
+  contention, not a large duplicated core.
+
+- **WHAT THE NUMBERS DO SAY, AND IT IS A BIGGER TARGET THAN THE ONE RETRACTED.** `checkSpine` is
+  essentially fully partition-scoped: with the tail off, w0 and w1 spend 10.5 and 7.7 s of non-bind
+  work on 3,151 k and 2,275 k assigned chars, a ratio of 1.36 against a char ratio of 1.385.
+  Sequentially the spine runs at 2.02 ms per k-char, so w0's 3,151 k should be ~6.4 s, plus ~1.8 s of
+  bind = ~8.2 s, against **12.3 s measured**. **Each worker runs its own assigned work ~50% slower than
+  the same work runs sequentially** — that gap, not duplication, is the largest loss in the parallel
+  path, it is what makes the fitted R rise with N in every ladder taken here, and it is what four
+  workers each building a complete symbol+type graph would predict (peak RSS 1,393 -> 1,468 MB at w4,
+  2,445 at w6).
+
+- **SO THE NEXT ITEM IS ALLOCATION/CONTENTION, NOT SHARING — AND IT MUST BE MEASURED BEFORE IT IS
+  DESIGNED**: GC time and allocation rate per worker level (`-Xlog:gc`, or JFR allocation events),
+  then decide. Do NOT re-queue a "share the collectors" item off a count of `binderResults` loops: 321
+  of them is a fact about the source and says nothing about what removing them returns.
+
+The retracted entry follows, kept so the reasoning that failed is on the record.
+
+**(PERF.HW.e) — RETRACTED, SEE ABOVE. RUN THE PROGRAM-WIDE TAIL PASSES ONCE, NOT ONCE PER WORKER.**
 
 Follow-on scoping for round 878's D (9.4-11.2 s of duplicated per-worker work). Counted in
 `Checker.kt`: **321 loops over `binderResults`** (program-wide — every worker runs all of them) against
