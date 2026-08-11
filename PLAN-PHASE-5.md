@@ -71,6 +71,45 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**Round 880 (2026-08-11) — (PERF.HW.f): THE PARALLEL PATH IS DECOMPOSED AND ITS FLOOR IS NAMED.
+`wall(N) = 1,447 ms + 7,717/N` WARM. THE 1,447 IS A **PER-WORKER FIXED COST THAT SHARING CANNOT
+REDUCE** — ONLY DOING LESS WORK CAN. GC AND THE JIT ARE BOTH MEASURED AND BOTH ACQUITTED.**
+
+Round 879 left one number to explain: a worker appeared to run its own assigned work ~50% slower than
+the same work runs sequentially. Three candidate causes, taken in order of cheapness.
+
+- **GC: ACQUITTED.** `-Xlog:gc` totals 734 ms over 32 events at w1 (3.1% of the wall) and 1,338 ms over
+  36 at w4 (9.0%) — real, roughly doubled, and nowhere near the effect. The decisive test is that it is
+  **heap-INSENSITIVE**: `-Xmx4g` 14,896 ms against `-Xmx8g` **14,865 ms**, a 0.2% difference. Doubling
+  the heap of an allocation-bound workload does something; this one does not notice.
+- **JIT / core saturation: ACQUITTED, and this was the leading hypothesis.** CLAUDE.md records that a
+  "single-threaded" xtsc run already occupies ~4.17 of 8 cores because `CICompilerCountPerCPU` gives 4
+  compiler threads, so cold, 4 workers plus 4 JIT threads oversubscribe — which would make the effect a
+  COLD artefact. It is not: WARM, after six rebuilds, the per-worker rows still read w0 **3,892 ms**
+  (1 file, 3,151 k chars) against 3,157-3,310 for 25-26 files and 2,275 k chars each.
+- **WHAT IT ACTUALLY IS.** Fitting those two warm points — `worker = fixed + r x assigned chars` —
+  gives **r = 0.776 ms per k-char** and **fixed = 1,447 ms**. Against the sequential run (7,078 ms
+  instrumented, bind 515) the same fit gives a pure rate of **0.565 ms per k-char**, so the per-char
+  contention overhead is **+37%**, not 50%; the rest of round 879's apparent 50% was the fixed term
+  being mistaken for a rate. The fixed 1,447 ms is the re-bind (**515 ms**) plus ~**930 ms** of
+  program-wide checker work every worker performs regardless of assignment.
+
+**THE FLOOR, AND WHY `docs/parallel-caching.md` PHASE 1 CANNOT MOVE IT.** `wall(N) = 1,447 + 7,717/N`
+warm: N=4 predicts 3,376 ms against 3,035-3,232 measured, and N -> infinity gives **1,447 ms, a 4.35x
+ceiling** that contention will keep well out of reach. **A per-worker fixed cost cannot be shared away**
+— round 879's arithmetic applies to it exactly: hoisting F to the serial prefix leaves `wall = F + A/N`,
+identical. Resolving the lib slice once and freezing it (Phase 1's proposal) therefore buys **zero
+wall**, however redundant the N copies look. The only things that move the floor are (i) making the work
+partition-scoped, or (ii) doing less of it absolutely — and (ii) is ordinary single-thread optimisation,
+i.e. the (WARM.*) arc, not a concurrency lever at all.
+
+**SO THE CONCURRENCY ARC IS AT ITS USEFUL LIMIT ON THIS PROGRAM**: warm w4 is **1.95x** and the
+remaining parallel headroom is bounded by a floor whose two components are a re-bind that needs the
+`Checker`-does-not-mutate-binder-output work (parallel-caching.md's Phase 0/2, a large architectural
+item) and ~930 ms of program-wide passes that would have to be made partition-scoped one at a time.
+Neither is a scheduling change; both should be priced against the same instruments before being started.
+No source change this round — measurements only, so no gates were required.
+
 **Round 879 (2026-08-11) — (PERF.HW.e) RETRACTED BEFORE IT WAS BUILT, AND ROUND 878's D IS WRONG. THE
 TAIL PASSES ARE ALREADY PARTITION-SCOPED; HOISTING THEM WOULD HAVE COST ~2.4 s. THE REAL LOSS IS THAT A
 WORKER RUNS ITS OWN WORK ~50% SLOWER THAN THE SAME WORK RUNS SEQUENTIALLY.**
