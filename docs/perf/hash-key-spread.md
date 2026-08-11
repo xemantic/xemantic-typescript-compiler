@@ -257,6 +257,33 @@ replicate), so no A/B was run. `cost_gate.py` at +0.00% is the EXPECTED answer
 (round 876) and is read only as the control that no checker decision moved —
 same keys, same answers, same order.
 
+### 5.3a The ablation — one mistake, and the predicted red set
+
+The single mistake: `packIdPair` loses its `* NODE_KEY_MIX` and nothing else
+changes. Predicted before the run, and exactly what happened — **3 of the 4 new
+pins red, the 5 `nodeKey` pins GREEN** (the mistake is scoped to `packIdPair`,
+which is the control that the ablation hit what it aimed at):
+
+| pin | ablated | discriminates? |
+| --- | --- | --- |
+| `neighbouring ids are the worst case …` | **FAILED** | yes |
+| `the compiler profile's relation key shape spreads …` | **FAILED** | yes |
+| `the diagonal does not collapse onto one bucket` | **FAILED** | yes |
+| `the packing stays injective …` | green | **no — invariant guard, no claim attached** |
+
+The injectivity pin cannot discriminate and was written saying so (round 807):
+both packings are bijections. What it defends is a FUTURE change that reaches for
+a cheaper mix and loses injectivity, which would silently confuse two unrelated
+type pairs in the relation cache.
+
+**One pin failed on its FIRST run, before the ablation, and the reason is worth
+keeping.** The neighbouring-ids pin was written with the adjacent pair as
+`(2k+1, 2k+2)`, which does *not* XOR to 1 — `(2k, 2k+1)` does. So the pin
+asserted the pathology it claimed to reproduce, the pathology was not in its
+fixture, and the longhand `rawPack` comparison caught it. That is precisely the
+failure mode round 889's rewritten pin exists against, arriving one round later
+on the author instead of on the code.
+
 **Also not claimed: that the pins guard the ROUTING.** `IdPairKeyHashSpreadTest`
 pins `packIdPair` itself. A future site that hand-rolls `(a shl 32) or b` again
 instead of calling it is invisible to every pin in this repo; the only defence is

@@ -95,6 +95,14 @@ bucket arithmetic over each — as packed, and after the golden-ratio finalizer.
   claimed to reproduce and the pathology was not there, which is exactly the failure mode a
   longhand-comparison pin is supposed to expose, and it exposed it on the author.
 
+- **(G2) THE ABLATION, ONE MISTAKE, RED SET PREDICTED IN ADVANCE.** `packIdPair` loses its
+  `* NODE_KEY_MIX` and nothing else changes: **3 of the 4 new pins RED** (`neighbouring ids …`,
+  `the compiler profile's relation key shape …`, `the diagonal does not collapse …`) and **the 5
+  `nodeKey` pins GREEN**, which is the control that the mistake landed where it was aimed. The
+  fourth pin (`the packing stays injective …`) is green and was written saying it could not
+  discriminate — both packings are bijections — so it is an INVARIANT GUARD with no claim attached
+  (round 807), defending a future cheaper mix that loses injectivity. Restored tree: 9/9 green.
+
 - **(H) NO WALL-TIME NUMBER IS CLAIMED.** Round 889's JFR prices the `Relation.cache` group at 0.97%
   of compile-thread samples with 56% inside `HashMap$TreeNode` frames, i.e. a recoverable ~0.5% ≈
   ~30 ms of a ~5.9 s warm rebuild — well inside what this box settles (rounds 840(c)/858/886). The
