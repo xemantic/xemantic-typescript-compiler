@@ -165,13 +165,53 @@ class CtaSectionProbeTest {
         assert(CtaSections.stmtKind.sum() == 0L)
     }
 
+    /**
+     * (WARM.13b) round 888 — this pin USED to assert `invocationsA >
+     * stmtKind.sum()`, on the premise that "the handler is consulted about
+     * EVERY node, so its invocation count is far larger than the number of
+     * statements that anchor". The per-kind ENTER skip mask made that premise
+     * false ON PURPOSE: `spineCtaM3StatementAnchor` is now called only at the
+     * four kinds its closure names, so the pre-gate refusals the A_GATE row
+     * existed to measure no longer HAPPEN. The invariant is therefore restated
+     * across the two arms, which is strictly stronger than the old one-armed
+     * form — it pins the mask's effect at the one place an instrument can see
+     * it, and it is the only pin that would notice the mask silently ceasing to
+     * skip handler 5.
+     *
+     * Nothing about the compiler's OUTPUT differs between the arms; that is
+     * `SpineMaskEquivalenceTest`'s job, and the probe's own
+     * `the probe is behaviour-free when off` pin still guards this fixture.
+     */
+    @Test
+    fun `the skip mask removes the handler consultations the A gate used to refuse`() {
+        val saved = SpineMask.off
+        try {
+            SpineMask.off = true
+            runProbe()
+            val unmasked = CtaSections.invocationsA
+            val unmaskedAnchored = CtaSections.stmtKind.sum()
+            SpineMask.off = false
+            runProbe()
+            val masked = CtaSections.invocationsA
+            val maskedAnchored = CtaSections.stmtKind.sum()
+            // The mask strictly reduces consultations and changes no anchor.
+            assert(masked < unmasked)
+            assert(unmasked > unmaskedAnchored)
+            assert(maskedAnchored == unmaskedAnchored)
+            // What survives is exactly the four kinds the closure names.
+            assert(masked >= maskedAnchored)
+        } finally {
+            SpineMask.off = saved
+        }
+    }
+
     @Test
     fun `level A opens on the handler so the eligibility gate is a row`() {
         runProbe()
         val invocations = CtaSections.invocationsA
-        // The handler is consulted about EVERY node, so its invocation count is
-        // far larger than the number of statements that anchor.
-        assert(invocations > CtaSections.stmtKind.sum())
+        // Every consultation that survives the round-888 skip mask reaches the
+        // gate, and the anchoring statements are a subset of them.
+        assert(invocations >= CtaSections.stmtKind.sum())
         assert(CtaSections.calls[CtaSections.A_ENTRY] == invocations)
         // The gate row is reached at least once per invocation: once on entry,
         // and once more whenever an anchor handed the clock back.
