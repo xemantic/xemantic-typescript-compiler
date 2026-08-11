@@ -273,9 +273,51 @@ enum class ModuleInstanceState {
 // Node identity
 // ---------------------------------------------------------------------------
 
-/** Pack [pos]/[end] into a single Long for use as map keys. */
+/**
+ * Multiplicative finalizer for [nodeKey] — the golden-ratio odd constant
+ * `0x9E3779B97F4A7C15`, the same one [LongKeyMap] uses.
+ *
+ * (HASH.1) round 889. Multiplication by an ODD constant modulo 2^64 is a
+ * BIJECTION, so the packed key stays exact and collision-free as an identity;
+ * only its bit pattern changes.
+ */
+private const val NODE_KEY_MIX: Long = -0x61c8864680b583ebL
+
+/**
+ * Pack [pos]/[end] into a single Long for use as map keys.
+ *
+ * **(HASH.1) round 889 — why the multiply is load-bearing, and not a style
+ * choice.** `java.lang.Long.hashCode()` is `(int) (v xor (v ushr 32))`, so the
+ * plain `(pos shl 32) or end` packing hashes to exactly `pos xor end` — and for
+ * an AST node `end` is `pos` plus the node's LENGTH, so that XOR is dominated by
+ * the low bits and its whole range is roughly "the set of node lengths in the
+ * file" — a few hundred values, **however many nodes the file has**. Modelled on
+ * a 20,000-node file (`nodeToFlow` is per FILE): the un-mixed key fills
+ * **278 of 32,768 buckets**, `max bucket 1,765`, **98.3% of keys past the
+ * treeify threshold** — i.e. the map was not a hash table but a handful of
+ * red-black trees. With the finalizer: 14,896 buckets used, max bucket 6,
+ * ZERO treeified. Measured consequence on the round-888 warm profile:
+ * `HashMap$TreeNode.*` charged to `FlowGraphBuilder.recordFlow` alone was
+ * **1.11% of compile-thread samples**, and the whole `nodeToFlow` owner group
+ * 2.02% with **79% of it inside treeified buckets**
+ * (`docs/perf/hash-key-spread.md`).
+ *
+ * **The soundness argument is that nothing may depend on the key's VALUE.** Two
+ * things could and neither does: no consumer unpacks `pos`/`end` back out of a
+ * node key (the only unpacking site in the repo is `PassTiming`'s
+ * `redundantPairNanos`, a *site-id* pair, not a node key), and every container
+ * keyed by one — `Binder.nodeToSymbol`, `Binder.moduleInstanceStates`,
+ * `FlowGraphBuilder.nodeToFlow` — is a `mutableMapOf`, i.e. a
+ * **LinkedHashMap whose iteration is INSERTION order**, so the one place a
+ * `nodeToSymbol` is iterated (`TypeScriptCompiler`'s symbol frontier) cannot
+ * move. A plain `HashMap` here would have made this an iteration-order change,
+ * which is the rounds-754/776/778 hazard: invisible in every output diff.
+ *
+ * The sentinel comparison `key != nodeKey(-1, -1)` in `Binder` is unaffected —
+ * it compares against the packer's own answer, not a literal.
+ */
 fun nodeKey(pos: Int, end: Int): Long =
-    (pos.toLong() shl 32) or (end.toLong() and 0xFFFFFFFFL)
+    ((pos.toLong() shl 32) or (end.toLong() and 0xFFFFFFFFL)) * NODE_KEY_MIX
 
 /** Get the identity key for a [Node], based on its source position. */
 fun nodeKey(node: Node): Long = nodeKey(node.pos, node.end)
