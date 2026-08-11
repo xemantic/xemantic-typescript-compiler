@@ -71,6 +71,37 @@ holding 26 files costs 13,160 ms.** If assignment work dominated, those could no
   `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
   classes. Warning-clean.
 
+**(PERF.HW.e) QUEUED, WITH D DECOMPOSED — RUN THE PROGRAM-WIDE TAIL PASSES ONCE, NOT ONCE PER WORKER.**
+
+Follow-on scoping for round 878's D (9.4-11.2 s of duplicated per-worker work). Counted in
+`Checker.kt`: **321 loops over `binderResults`** (program-wide — every worker runs all of them) against
+**190 over `checkedResults`** (the INV.6 partition view, assignment-scoped). Sequential `--passTiming`
+on the compiler profile: `checkSpine` **20,128 ms**, then a FLAT tail — `init:buildFileLocalTypeMaps`
+443, `init:trackAllImportReferences` 104, and everything else 94 ms down to 48 ms.
+
+The arithmetic that scopes the work: the tail is ~4.5 s of a ~24.6 s compile and **every worker runs
+all of it**, the per-worker re-bind is a further ~1.4-1.8 s, and those two do not sum to D — so a
+program-wide REMAINDER inside `checkSpine` carries the rest. Three components, in the order their
+price is known:
+
+1. **The ~400 tail passes (~4.5 s, in EVERY worker).** Round 801 already characterised them: flat,
+   largest 75 ms, and "only 2 of 400 call `getTypeOfExpression` while none narrows — they are
+   traversals, not type-system work". A traversal of an immutable program is Tier 1 by
+   `docs/parallel-caching.md`'s taxonomy, i.e. exactly what that document says to build once in a
+   single-threaded phase and share read-only. Running them once would take ~4.5 s out of every
+   worker's D.
+2. **The per-worker re-bind (~1.4-1.8 s).** Blocked by the stated reason `Checker` init mutates the
+   symbols it is given; unblocking it is the immutability work, not a scheduling change.
+3. **The program-wide remainder inside `checkSpine`.** Unmeasured — the first job is to find it, since
+   the spine is supposed to be the partition-scoped half.
+
+**The obligation on (1), and it is per-pass, not global:** a pass may be hoisted only if it is a pure
+function of the frozen program. Two things disqualify one — reading Tier-3 first-touch state
+(`Type.id` allocation, the intern caches, `symbolTypes`), and emitting diagnostics whose SET depends on
+`assignedFileNames` rather than merely being filtered by it. So this is a classification job over the
+321 collector loops with a per-pass gate, not a switch to flip; the verification is the one already in
+use — byte-identical `--listAll` at every worker level plus an emit-mode `diff -r`.
+
 **Round 877 (2026-08-11) — (PERF.HW.c): THE WORKER PARTITION WAS THE LIMITER, AND IT WAS A ONE-LINE
 `i % workers == w`.**
 
