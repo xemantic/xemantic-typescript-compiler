@@ -84,6 +84,16 @@
 #   scripts/ab-warm.sh /tmp/xtsc_A xemantic-typescript-compiler-core/build/classes/kotlin/jvm/main 3
 #
 #   # knobs (env): WARMUP=2 ITERS=8 HEAP=4g PROJ_DIR=... KEEP_DAEMONS=1 XTSC_CP=...
+#   #              WORKERS=4   -> both arms run `--workers 4` (PERF.HW.b)
+#
+# WORKERS. Every `--workers` number this project has recorded (rounds 740/824/826)
+# is COLD and every warm number is SEQUENTIAL, so the two regimes had never met.
+# `WORKERS=N` sets BenchMain's 6th argument for BOTH arms, which is the only shape
+# that is a valid A/B: the worker level is a property of the PROCESS (round 867 —
+# two levels in one JVM share every compiled method in the binder and the checker,
+# so whichever ran first writes the branch profile the other is compiled against),
+# so comparing two LEVELS is a job for two separate invocations of this script,
+# never for one run with a level per arm.
 #
 # CLASSPATH CONTRACT — read this before wondering why A and B share anything.
 # `BenchMain` lives in `commonTest`, so the run needs the TEST classes too, while
@@ -142,6 +152,12 @@ DIR_A="$1"; DIR_B="$2"; PAIRS="$3"
 WARMUP="${WARMUP:-6}"
 ITERS="${ITERS:-8}"
 HEAP="${HEAP:-4g}"
+# (PERF.HW.b) 1 = the sequential path, i.e. exactly the pre-existing behaviour —
+# the argument is only passed through when it is not 1, so an unset WORKERS
+# reproduces every earlier invocation of this script byte for byte.
+WORKERS="${WORKERS:-1}"
+[[ "$WORKERS" =~ ^[0-9]+$ ]] && (( WORKERS >= 1 )) || {
+    echo "error: WORKERS must be a positive integer — got '$WORKERS'" >&2; exit 2; }
 TEST_CLASSES="$REPO_ROOT/xemantic-typescript-compiler-core/build/classes/kotlin/jvm/test"
 # The path moved with the module split; without this the driver would run with a
 # classpath entry that does not exist and report a verdict anyway.
@@ -190,8 +206,14 @@ fi
 run_one() {
     local dir="$1"
     local out; out="$(mktemp)"
+    # The 4th and 5th arguments are BenchMain's tier list and emit flag; both are
+    # spelled at their documented no-op values so the 6th slot can be reached at
+    # all — an omitted 4th cannot be followed by a 6th.
+    local extra=()
+    (( WORKERS > 1 )) && extra=(off noEmit "workers$WORKERS")
     java "-Xmx$HEAP" -cp "$dir:$TEST_CLASSES:$CP_TAIL" \
         com.xemantic.typescript.compiler.bench.BenchMainKt "$PROJ_DIR" "$WARMUP" "$ITERS" \
+        "${extra[@]+"${extra[@]}"}" \
         >"$out" 2>&1 || true
     python3 - "$out" <<'PY'
 import json, statistics, sys

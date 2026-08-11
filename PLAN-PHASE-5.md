@@ -20,6 +20,63 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 876 (2026-08-11) — (PERF.HW.b): THE SEQUENTIAL BIND A PARALLEL COMPILE WAS PAYING FOR AND
+NOBODY READ — AND THE INSTRUMENT THAT MAKES WARM CONCURRENCY MEASURABLE AT ALL.**
+
+`cpcBindAndCheck` opened with `val binderResults = parsedSourceFiles.values.map { binder.bind(it) }` and
+only THEN branched on `ParallelCheckMode.workers > 1`. That value is read in the sequential branch and in
+no other place: the parallel branch builds one `Binder` per worker and binds the whole program again on
+each worker thread — which it must, since `Checker` init mutates the symbols it is handed, so N checkers
+cannot share one bind. A `--workers` compile therefore paid a whole extra whole-program `Binder.bind`,
+serially, before any worker started.
+
+- **WHY NO GATE COULD SEE IT.** The redundant bind's `BinderResult`s were DROPPED, so it changed no
+  diagnostic, no emitted byte and no deterministic counter — `cost_gate.py` reads +0.00% on this change
+  in both directions, correctly, because the gate exercises the SEQUENTIAL path where the change is a
+  strict no-op. The only observable was the wall, and 515 ms warm sits under the spread of a parallel
+  compile. **So the pin is a count, not a time**: `FrontEnd.sequentialFileBinds`, assigned once per
+  compile from the caller thread (never from a worker — race-free by construction) and asserted exactly:
+  2 for a two-file sequential compile, **0** for the same compile at `workers = 4`. Round 868's law —
+  an assertion over a timed region is a coin flip, one over a recorded count is a fact.
+
+- **THE PRICE, MEASURED WARM, WHICH IS THE ONLY REGIME WHERE IT IS A PRICE.** `BenchMain <prof> 6 8
+  frontend` (sequential): median rebuild **6,293.7 ms**, `bind (all program files)` **515 ms**.
+  `BenchMain <prof> 6 8 frontend noEmit workers4`: median **4,112.1 ms**, bind row **0 ms**, front end
+  17 ms = 0% of the total. Both 78 files / 46 errors. That is **1.531x** for w4 warm, where round 826
+  measured **1.361x** cold — and the deleted 515 ms is ~11% of the warm parallel rebuild.
+
+- **THE COLD ARM MEASURED NO GAIN AND IS RECORDED AS SUCH.** Ten `--listAll` runs per arm: w4 medians
+  19,518 (before) vs 19,980 ms (after), w2 21,315 vs 21,254, w8 23,332 vs 23,562 — two NON-interleaved
+  batches, so round 858's law applies and the honest reading is "no effect this instrument can see".
+  The mechanism worth stating: cold, the discarded bind was also the thing that WARMED `Binder` /
+  `FlowGraphBuilder` for the workers, which now meet that code cold on four threads at once. This is
+  (JIT.1) in its sharpest form — a cold A/B is blind to a warm-path effect, and here it is worse than
+  blind, because it can show the removal of real work as a wash.
+
+- **CORRECTNESS.** 20 `--listAll` captures — w4 x5, w2 x2, w8 x2, w1 x1, on both binaries — every one
+  46 errors and every one md5 `59d930db849399aea5e03e25fedb8e4e` under the documented
+  `grep 'error TS' | sort` recipe. That is also the `--workers` distribution gate CLAUDE.md requires
+  (>= 5 runs per level; one capture is a coin flip).
+
+- **THE UNBLOCKER, AND IT OUTLIVES THIS FIX.** Every `--workers` figure in this repo (rounds 740, 824,
+  826) is COLD; every warm figure in `docs/perf` is SEQUENTIAL. The two regimes had never met, so no
+  concurrency change could be priced in the regime the daemon actually runs in. `BenchMain` now takes a
+  6th argument `workers<N>` and `ab-warm.sh` a `WORKERS` env knob. Both set the level ONCE per process,
+  deliberately: round 867's shared-branch-profile law is sharper here than anywhere it was written
+  about, since two worker levels in one JVM share every compiled method in the binder and the checker,
+  so whichever ran first writes the profile the other is compiled against. Comparing LEVELS is two
+  invocations, never two arms of one run. The argument is `workers<N>` rather than a bare integer for
+  the round-863 reason: a bare number in slot 6 is what a shifted argument list produces, and a harness
+  that accepted it would publish a parallel median under a run everyone reads as sequential.
+
+- **NOT DONE, AND NEXT.** No paired warm A/B against the pre-change binary — what is measured is the
+  attribution (a 515 ms serial row going to zero, plus the two warm medians), which is not a paired
+  delta. That is the next iteration's first job, and the harness for it now exists.
+
+- **GATES.** Suite **14,252 -> 14,255** / 0 failures / 3 skipped over all five modules = exactly the 3
+  new `ParallelSequentialBindSkipTest` pins. `cost_gate.py` +0.00% on all 20 counters.
+  `huge_methods.py --fail-over 0`: 0 over the limit, 677 classes. Warning-clean build.
+
 **MOD.7 (2026-08-10) — OWNER-DIRECTED MODULE SPLIT: THE GRAALVM IMAGE STOPS CARRYING A DAEMON IT CAN NEVER
 BE.** The image was built by `:xemantic-typescript-compiler-daemon`, so a one-shot binary dragged ktor-network,
 slf4j and `-api` through closed-world analysis. A new module `:xemantic-typescript-compiler-cli` holds a LEAN

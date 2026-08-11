@@ -1945,9 +1945,29 @@ class TypeScriptCompiler {
         diagnostics: MutableList<Diagnostic>,
     ): Checker {
         // Phase 2: Bind all files and create shared checker
+        //
+        // (PERF.HW.b): this bind is read by the SEQUENTIAL branch below and by
+        // nothing else — under `--workers N` every worker binds the whole program
+        // again for itself (it must: `Checker` init mutates the symbols it is
+        // given, so a bind cannot be shared), and this one's `BinderResult`s were
+        // then dropped on the floor. Computing them anyway put a whole redundant
+        // whole-program `Binder.bind` on the SEQUENTIAL prefix of every parallel
+        // compile — i.e. straight into Amdahl's R, the one term worker count
+        // cannot buy back. Skipping it leaves the sequential path byte-identical
+        // (that branch still binds exactly as before) and the parallel path
+        // byte-identical too (a worker's ids come from its own rebased slice, so
+        // the caller's Symbol counter never reached them).
+        val parallelCheck = ParallelCheckMode.workers > 1
         val feBindT0 = FrontEnd.t()
-        val binder = Binder(options)
-        val binderResults = parsedSourceFiles.values.map { binder.bind(it) }
+        val binderResults =
+            if (parallelCheck) emptyList()
+            else {
+                val binder = Binder(options)
+                parsedSourceFiles.values.map { binder.bind(it) }
+            }
+        FrontEnd.sequentialFileBinds = binderResults.size.toLong()
+        // Under `--workers` this row is ~0 by construction and the real bind cost
+        // lives inside [FrontEnd.CHECK], where the workers do it concurrently.
         FrontEnd.close(FrontEnd.BIND, feBindT0)
         val allInputFileNames = parsed.files.map { it.fileName }.toSet()
         val jsonModules = parsed.files
@@ -1955,7 +1975,7 @@ class TypeScriptCompiler {
             .associate { it.fileName to it.content }
         val checker: Checker
         val feCheckT0 = FrontEnd.t()
-        if (ParallelCheckMode.workers > 1) {
+        if (parallelCheck) {
             // INV.6(6c1): share-nothing parallel check — N partition checkers on
             // deep-stack worker threads replace the single full checker. Fresh
             // bind per worker (checker init mutates shared symbols via

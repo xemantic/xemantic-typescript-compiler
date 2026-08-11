@@ -4544,6 +4544,25 @@ object FrontEnd {
     var filesRead: Long = 0
     var charsRead: Long = 0
 
+    /**
+     * (PERF.HW.b) census — program files bound on the SEQUENTIAL prefix of
+     * `cpcBindAndCheck`, i.e. inside [BIND].
+     *
+     * It exists because the thing it measures is otherwise UNOBSERVABLE: under
+     * `--workers N` every worker binds the whole program for itself, and the
+     * sequential bind's `BinderResult`s were read by nobody — a redundant
+     * whole-program `Binder.bind` that no diagnostic, no emitted byte and no
+     * counter in `cost_gate.py` can see, only the wall clock. So `0` here under
+     * `--workers` and `<file count>` without it is the pin, and it is exact
+     * rather than timed (round 868: a timing assertion over a small region is a
+     * coin flip, an assertion over a recorded count is a fact).
+     *
+     * Written ONLY from the caller thread — the workers never touch it — so it
+     * is race-free, and it is maintained unconditionally (one assignment per
+     * compile) so a test need not arm the probe to read it.
+     */
+    var sequentialFileBinds: Long = 0
+
     /** Core parse loop: pre-parses REUSED versus parsed FRESH. */
     var parsedReused: Long = 0
     var parsedFresh: Long = 0
@@ -4915,6 +4934,7 @@ object FrontEnd {
         firstAt = LongArray(N)
         lastAt = LongArray(N)
         filesRead = 0; charsRead = 0
+        sequentialFileBinds = 0
         parsedReused = 0; parsedFresh = 0
         lexNodePops = 0; flowNodesBuilt = 0; flowGraphsBuilt = 0
         closureStarts = 0; reassignNames = 0; reassignScans = 0; reassignChars = 0

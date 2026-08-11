@@ -43,6 +43,7 @@ import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
+import com.xemantic.typescript.compiler.ParallelCheckMode
 import com.xemantic.typescript.compiler.PassTiming
 import com.xemantic.typescript.compiler.ProjectCompiler
 import com.xemantic.typescript.compiler.SpineAmp
@@ -554,6 +555,25 @@ internal fun parseEmitFlag(arg: String?): Boolean = when (val flag = arg?.lowerc
     else -> error("usage: 5th argument must be `emit`, `noEmit`, or omitted — not '$flag'")
 }
 
+/**
+ * (PERF.HW.b) — the 6th argument's `workers<N>` form, e.g. `workers4`.
+ *
+ * Deliberately NOT a bare integer: the 4th and 5th arguments are word-shaped, so
+ * a bare number in the 6th slot is exactly the sort of thing that lands there by
+ * a shifted argument list, and a harness that silently accepts it would report a
+ * PARALLEL median under a run everyone reads as sequential. The prefix makes the
+ * arm unambiguous in the shell history that produced the number.
+ */
+internal fun parseWorkersFlag(arg: String?): Int {
+    val flag = arg?.lowercase()
+    if (flag == null || flag == "" || flag == "off") return 1
+    val n = flag.removePrefix("workers").toIntOrNull()
+    if (!flag.startsWith("workers") || n == null || n < 1) {
+        error("usage: 6th argument must be `workers<N>` (N >= 1) or omitted — not '$flag'")
+    }
+    return n
+}
+
 /** Disarm every probe and release its counters. Safe to call for any tier. */
 internal fun tierStop() {
     PassTiming.enabled = false
@@ -654,7 +674,25 @@ fun main(args: Array<String>) {
     // and the two modes are different compiles (round 739).
     val emit: Boolean = parseEmitFlag(args.getOrNull(4))
     val noEmit = !emit
-    println("""{"mode":"${if (emit) "emit" else "noEmit"}"}""")
+
+    // (PERF.HW.b) — the 6th argument, `workers<N>`, is the ONLY way this harness
+    // can measure a PARALLEL compile at all, and the parallel path is where the
+    // remaining concurrency work lives. Every warm number in `docs/perf` was
+    // taken sequentially, while every `--workers` number ever recorded
+    // (rounds 740/824/826) is COLD — so the two regimes have never met, and a
+    // cold table cannot stand in for a warm one here: a cold run is dominated by
+    // the JIT ramp (25.1 s -> 7.0 s over six requests), and worker threads
+    // compete for exactly the compiler threads that ramp is running on.
+    //
+    // Set ONCE, before the warm-up, so the whole process is one arm. That is
+    // round 867's law and it is sharper for workers than for anything else it
+    // was written about: two worker levels in one JVM share every compiled
+    // method in the binder and the checker, so whichever ran first writes the
+    // branch profile the other is compiled against. Compare worker levels
+    // ACROSS processes, never inside one.
+    val workers: Int = parseWorkersFlag(args.getOrNull(5))
+    ParallelCheckMode.workers = workers
+    println("""{"mode":"${if (emit) "emit" else "noEmit"}","workers":$workers}""")
 
     repeat(warmup) {
         ProjectCompiler(SystemVfs).build(project, noEmit = noEmit)
