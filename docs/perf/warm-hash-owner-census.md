@@ -508,6 +508,19 @@ Prizes are **upper bounds** — "if this owner's map work went to zero" — over
 
 ### (1) Intern identifier / name strings in the Scanner — **prize ≤ 67.7 ms (1.24%)**
 
+> **REFUSED, round 897 — `docs/perf/name-intern-price.md`.** Measured prize
+> **17.2 ms (0.31%)** on the population that could be priced, i.e. the ceiling
+> below was **3.9x the answer**; measured cost **11.1 ms per program parse**
+> folded into the `KEYWORDS` probe the Scanner already pays, **27.6 ms** as the
+> separate table this section proposes. And the risk rating is falsified: the
+> prize needs a PROGRAM-WIDE table while `scanIdentifier` runs on the crawl's N
+> concurrent workers — round 825's hazard verbatim. Two things below are also
+> corrected there: the `String.hashCode` 24.8 ms is NOT scanner strings (the
+> parse is cached across rebuilds, so their hash is computed once per process),
+> and interning has a SECOND mechanism worth about as much as `String.equals` —
+> the key-object working set collapsing from ~400 k instances to ~22.4 k — which
+> no leaf-frame attribution can see.
+
 **Mechanism.** `Scanner.scanIdentifier` builds every identifier with
 `text.substring(start, pos)` (Scanner.kt:769) — no interning. Every occurrence of
 `kind` in the program is a *distinct* `String` instance. Consequently
@@ -555,7 +568,10 @@ is keyed by the same string. Note the path is hashed **twice** on the hot path �
 removes two probes, not one.
 
 **(2b) `moduleOnlyGlobalNames.contains(name)` → an int-id or bitset pre-filter —
-≤ 42.9 ms (0.79%).** Replicates (47.1/38.7/53.5/36.4). ~2 M probes per
+≤ 42.9 ms (0.79%).** *(REFUSED, round 897: **1,063,149 probes of which 623,146
+HIT (58.6%)**, and a "definitely absent" filter is worthless for a hit — its
+reachable population is the 440,003 misses and its prize is **~2-9 ms/rebuild
+(0.04-0.16%)**, an order of magnitude under this ceiling.)* Replicates (47.1/38.7/53.5/36.4). ~2 M probes per
 self-compile of a `HashSet<String>` answering a boolean.
 **Largely subsumed by candidate (1)** — with interned names this becomes an int
 probe. Independently, a hash-bitset pre-filter (`bits[h & mask]`) answers
@@ -630,6 +646,11 @@ with a deleted legacy walker.
 ---
 
 ### (7) `AliasedCondKey` → a packed primitive key — **prize ≤ 22.4 ms (0.41%)**
+
+> **CLOSED, round 897**, not merely deferred. Round 896 refused it because its
+> prerequisite — interned name ids — was unbuilt; that prerequisite is now
+> priced at **11.1-27.6 ms per parse** and structurally blocked, and this item's
+> own deletable part is **6.5 ms**. It can never pay for what it needs.
 
 A per-probe key allocation whose `equals` compares two Strings — the largest
 single key-side row (6.5 ms). `FlowNode.id` is an int; with interned names

@@ -253,5 +253,44 @@ Each process prints the `== (WARM.24) name-intern census ==` block. The
 process would share a compiled `probeSet` between arms (round 867), which is why
 each `N` gets its own JVM.
 
-Pins: `NameCensusTest` (6). Ablation: `scripts/round897-ablate.sh`, six single
+Pins: `NameCensusTest` (8). Ablation: `scripts/round897-ablate.sh`, six single
 mistakes one at a time.
+
+---
+
+## 8. The ablation, and what it took three passes to say
+
+| arm | the mistake | pins red |
+| --- | --- | --- |
+| A1 | the interned arm probes the RAW container | 1 — *the raw and interned arms probe two distinct containers* |
+| A2 | `canon` enters probes before members | **0 — a REDUNDANT guard** |
+| A3 | the fold arm starts from an EMPTY table | 1 — *the fold arm seeds the reserved words…* |
+| A4 | `idToken` counts reserved words as names | 1 — *idToken splits reserved words…* |
+| A5 | `publish` is last-wins | 1 — *publish never replaces a population…* |
+| A6 | `publish` accepts an EMPTY member set | 1 — *publish refuses an empty population…* |
+
+Five of six discriminate, each through exactly one pin. **A2 is a redundant
+guard and is recorded as one rather than claimed as coverage** (round 809):
+canonicalisation is applied to BOTH sides, so whichever occurrence wins the
+canonical slot, the two sides still agree on it — the insertion order reads as
+load-bearing and is not.
+
+The first pass read **4 of 6 arms green**, and the three mechanisms behind that
+are worth more than the table:
+
+* **A1 was a pin that did not exist.** Swapping the container does not change
+  the ANSWER — both hold the same values, so both arms still report the same
+  hit count, which is exactly the same-answers property every other pin
+  asserts. The fault is to the MEASUREMENT and only the container's IDENTITY
+  can see it.
+* **A1's first repair was blind in a way the arms' own ABBA rotation caused.**
+  Recording each arm's container and comparing the two at the end is defeated by
+  the rotation: a fault present only in the even branch is overwritten by the
+  odd one, and the end state reads healthy. The observable had to become
+  **sticky** — a claim about the whole replay rather than about its last
+  iteration. *A rotation that protects a measurement can hide a fault in it.*
+* **A5/A6 were blind because the fixture MASKED them.** Both publish pins seeded
+  the snapshots in between, and `seed` installs the snapshot directly — so a
+  last-wins or a premature capture was overwritten before it could be observed.
+  Split into two pins over populations that DISAGREE, through a `seedProbes`
+  seam that installs only the probe sequence.

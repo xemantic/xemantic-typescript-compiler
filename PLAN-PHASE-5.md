@@ -20,6 +20,103 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 897 (2026-08-12) — (WARM.24): ROUND 894'S **TOP-RANKED** CANDIDATE, SCANNER IDENTIFIER
+INTERNING, IS **REFUSED** — MEASURED PRIZE **17.2 ms (0.31%)** AGAINST A **67.7 ms** CEILING, MEASURED
+COST **11.1 ms PER PARSE**, AND A BLOCKER THE CENSUS'S "RISK: LOW, A HANDFUL OF LINES" DID NOT SEE:
+THE SCANNER RUNS ON THE CRAWL'S **N CONCURRENT WORKERS**.**
+
+Everything below was priced BEFORE a line of fix (CLAUDE.md's first law), with one instrument —
+`NameCensus.kt`, a `namecensus<N>` `BenchMain` tier, `scripts/round897-census.sh`, four JVMs in two
+batches. `docs/perf/name-intern-price.md`.
+
+- **(A) THE REGIME FACT, WHICH DECIDES HOW EVERY COST HERE IS READ.** `CrawlParseCache` serves the
+  program's parse from the previous request, so **in the warm regime this arc measures the Scanner
+  does not run at all**. An intern probe is paid once per file VERSION; the map probes it makes
+  cheaper are paid every rebuild. That also **corrects the census**: its 24.8 ms/rebuild of
+  `String.hashCode` is read there as "one hash per fresh identifier instance", but with a cached
+  parse those instances persist and `String.hashCode` caches per instance — an identifier is hashed
+  ONCE PER PROCESS. Whatever those 24.8 ms hash, interning at the Scanner cannot touch it, so the
+  candidate's ceiling was **42.9, not 67.7 ms**, before any other deflation.
+
+- **(B) THE POPULATIONS.** ~527 k identifier-shaped tokens per program parse collapse onto **~22.4 k
+  distinct names — a 94.4% intern hit rate**, mean length 10.4 chars. On the resolution path,
+  **1,063,149 `moduleOnlyGlobalNames` probes of which 623,146 HIT (58.6%)**, plus 440,003 onward
+  `globals[name]` reads. The hit RATE is the quantity that matters and nobody would have guessed it:
+  `HashMap` calls `String.equals` only for an entry whose 32-bit hash matches, so a MISS never walks
+  characters and **only a hit can pay what interning removes**.
+
+- **(C) THE PRIZE, BY REPLAY (round 896(B)'s shape) — 17.2 ms/rebuild (0.31%)**, four processes
+  14.2 / 15.3 / 20.3 / 19.1. The captured probe sequence is replayed against the real member
+  population twice, once with the production instances and once with every string collapsed onto a
+  canonical one, ABBA per rep, falsified by ARITHMETIC (every arm's hit count an exact multiple of
+  the reps, and the two arms agreeing on all of them — interning's equivalence claim in miniature).
+
+- **(D) AND THE DECOMPOSITION IS THE ROUND'S BEST FINDING: INTERNING IS ONLY HALF `String.equals`.**
+  The MAP arm is the control that makes the set arm readable — `globals` holds 185 entries and the
+  replay hits it 10,383 times per rep, so an equals-driven delta there is at most 0.15 ms, yet the
+  measured delta is **4.9-6.7 ms**. **97% of it is not `equals` at all: it is the KEY-OBJECT WORKING
+  SET collapsing from ~400 k `String` instances to ~22.4 k.** Splitting the set arm the same way
+  gives **`equals` 9.1 ms + locality 8.1 ms**, and **14.6 ns per equal-but-distinct comparison** —
+  § 5a's mechanism measured directly for the first time. **The locality half is invisible to a
+  leaf-frame profile**, because it is not time in `String.equals`, it is time in whatever frame
+  dereferences the object; any census that ranks a candidate off leaf frames under-reads it.
+
+- **(E) THE COST, AND A DESIGN THE CENSUS DID NOT CONSIDER.** `scanIdentifier` ALREADY probes a
+  `String`-keyed map for every identifier-shaped token (`KEYWORDS[word]`), so one table holding the
+  ~160 reserved words *and* every interned name answers both questions in one lookup. Measured:
+  **52.4 ns/token as a separate table (27.6 ms/parse), 21.2 ns/token folded (11.1 ms/parse)**. The
+  fold halves it and cannot go much lower — 434 k intern hits per parse at 14.6 ns is 6.3 ms on its
+  own. **11.1 ms is not "clearly below" a 17.2 ms saving**, and cold — the CLI, the shipped GraalVM
+  image CI benches per push, an edited file in a daemon — the census's own preferred design is a
+  net LOSS.
+
+- **(F) THE BLOCKER, WHICH IS THE STRONGER GROUND, AND THIS ROUND'S OWN INSTRUMENT PROVED IT.** The
+  prize needs a PROGRAM-WIDE table (it comes from probe and stored key being one object;
+  `moduleOnlyGlobalNames`' 4,088 members are minted in whichever file declared them and probed from
+  all 78, so a per-FILE table captures ~none of it) — and `parseForCrawl` runs inside
+  `withContext(Dispatchers.Default)`. A program-wide `HashMap.getOrPut` from `scanIdentifier` is
+  **round 825's hazard verbatim**. The proof is the census's own numbers: its SCANNER counters
+  disagree by up to 4.7% across four processes on one binary while its CHECKER counters are
+  identical to the last digit in all four. The thread-safe designs are an `expect`/`actual`
+  concurrent map on the hottest loop in the front end, or canonicalising after the parse — which
+  means writing `Identifier.text` and breaking INV.2(a), the property `CrawlParseCache` and
+  `RealLibSnapshots` both rest on.
+
+- **(G) TWO MORE CORRECTIONS TO ROUND 894'S LIST, FROM THE SAME RUN.** **(2b) is refused**: at a
+  58.6% hit rate a "definitely absent" bitset pre-filter is worthless for a hit, its reachable
+  population is the 440,003 misses, and its prize is **~2-9 ms (0.04-0.16%)** against a ≤42.9 ms
+  ceiling. **(7) is CLOSED, not deferred**: round 896 refused it because its prerequisite was
+  unbuilt; that prerequisite now costs 11.1-27.6 ms per parse and is blocked, while (7)'s own
+  deletable part is 6.5 ms — it can never pay for what it needs. **Three of round 894's ceilings are
+  now measured at 4-10x their answer**, which is round 896's finding for the third time.
+
+- **(H) THE ABLATION TOOK THREE PASSES AND THE TWO IT FAILED ARE THE LESSON.** Six single mistakes,
+  one at a time, dry-run for a real diff, on a committed tree. Final: **5 of 6 discriminate, one pin
+  each**; **A2 (the `canon` insertion order) is a REDUNDANT guard** — canonicalisation is applied to
+  both sides, so whichever occurrence wins the slot the two sides agree — recorded rather than
+  claimed (round 809). Pass 1 read 4 of 6 green. **A1 (the interned arm probing the RAW container)
+  was a pin that did not exist**: swapping the container does not change the ANSWER, so every
+  hit-count pin stays green, correctly — only the container's IDENTITY can see it. **A1's first
+  repair was then blind because of the arms' own ABBA rotation** — a fault in the even branch is
+  overwritten by the odd one and the end state reads healthy, so the observable had to become
+  STICKY. *A rotation that protects a measurement can hide a fault in it.* **A5/A6 were blind
+  because the FIXTURE masked them**: both publish pins seeded the snapshots in between, and `seed`
+  installs them directly, so a last-wins or premature capture was overwritten before it could be
+  observed.
+
+- **(I) GATES.** Suite **14,358 / 0 failures / 3 skipped** (+8 from 14,350, exactly the eight
+  `NameCensusTest` pins). `cost_gate.py` **+0.00% on all 20 counters** — the expected CONTROL for a
+  round that lands no behaviour change (round 876), and here it also says the inert hooks are inert.
+  `huge_methods.py --fail-over 0`: **0 over the limit**. **8-PROFILE `--listAll` GRID, ALL EIGHT
+  `added=0 removed=0`** (46 diagnostics each, harness 94), cross-round against round 896's committed
+  captures with the identical recipe — run because the round adds a hook to a line every identifier
+  of every file crosses, and a gate whose expected answer is "nothing moved" is a control.
+  `scripts/round897-grid.sh`.
+
+- **(J) NO WALL A/B, AND THIS TIME BECAUSE THERE IS NOTHING TO A/B.** The round lands an instrument
+  and a refusal. What is claimed is deterministic populations (1,063,149 probes, 623,146 hits,
+  ~22.4 k distinct names) and paired nanos over identical populations inside one process.
+
 **Round 896 (2026-08-12) — (WARM.23): TWO OF ROUND 894'S FIVE MAP-KEY CANDIDATES TAKEN, THREE REFUSED
 WITH A COST — AND THE REFUSALS ARE THE FINDING: **TWO OF THE FIVE CEILINGS ARE AN ORDER OF MAGNITUDE
 ABOVE THE ANSWER**, WHICH THE POPULATION COUNT SETTLES IN ONE DIVISION.**
@@ -982,121 +1079,4 @@ with the two controls round 886 lacked, and then removed the family.
   removal itself costs nothing). `cost_gate.py` **+0.00% on all 20 counters**.
   `huge_methods.py --fail-over 0`: **0 over the limit**, 688 classes. Diff: 147 insertions,
   184 deletions across `Checker.kt` and the renamed pin.
-
-**Round 886 (2026-08-11) — (SPINE.1)(m3-flags): tsgo MINED AND PRICED. ITS TWO PORTABLE-LOOKING
-DEVICES ARE **DEAD** (0.17% / 0.15%), AND THE ANCHOR MARKS I MADE CHEAP TURN OUT TO BE **INERT** —
-184,569 PRODUCED, 15,446 CONSULTED, **0 AFFIRMATIVE**.**
-
-Owner asked whether tsgo's sources (on the box since round 884) hold anything we can use. Every
-candidate was priced against round 874's kept warm leaf dumps BEFORE any code was written, which is
-the only reason the round did not spend itself on a 0.17% lever.
-
-- **THE INSTRUMENT.** `scripts/round886_mechanism.py` re-aggregates a `jfr print --stack-depth 512`
-  dump by MECHANISM family (round 874's law); `scripts/round886_hash_owners.py` charges a stdlib
-  family's samples to their nearest non-stdlib OWNER (round 868's law). Full table:
-  `docs/perf/tsgo-portability-census.md`.
-
-- **DEAD, MEASURED.** tsgo's `CacheHashKey` (128-bit xxh3 keys replacing tsc's string keys, used for
-  the relation cache / instantiation caches / signature keys) buys us nothing: we already use EXACT
-  packed `Long` keys (M0.3(iii)), and the residual boxing in `HashMap<Long,·>`/`HashSet<Long>` is
-  **0.16-0.18%** of samples. Its `getFlowReferenceKey` (hashing the flow path rather than building
-  it) is **0.09-0.22%**. The relation ENGINE is 3.6-3.7% inclusive — not our bottleneck either.
-
-- **THE REAL STRUCTURAL GAP, RECORDED AND NOT ATTEMPTED.** Hash probing is **24.3-24.6% of
-  compile-thread samples as a LEAF** (round 868 read 26.8/25.9 on a different binary). tsgo's answer
-  is ~25 narrow `core.LinkStore[K,V]`s, each ONE probe returning a struct of CO-ACCESSED fields;
-  tsc goes further and makes it a field on the node. Ours is one map per FACT. Max single owner is
-  **1.19%** with a long tail, so no row clears a candidate floor — a checker-wide refactor, priced
-  as such, deliberately not started.
-
-- **WHAT LANDED.** The bounded case: `ctaM3AnchoredStmts`/`cpaM3Anchored`/`ccetM3Anchored` were each
-  a `HashMap<String, HashSet<Int>>`, so every mark paid a String-keyed probe, a `getOrPut` lambda
-  check and a `HashSet.add` that BOXES the nodeId. Priced at **1.16-1.31% of a warm rebuild, 1.05-1.26%
-  of it in the MARK**. They now share ONE per-file `ByteArray` of bits — tsgo's `NodeCheckFlags`
-  shape in this walk's existing INV.2(b) idiom — with the map probe paid once per FILE.
-
-- **AND THEN THE ABLATION REFUTED THE THEORY BEHIND THE PIN, WHICH IS THE ROUND'S REAL FINDING.**
-  Making the array PROGRAM-WIDE (round 787's mistake) is unobservable through **every** instrument
-  here: the 4 new pins GREEN, the corpus **14,140 / 0**, and a `--listAll` whole-output diff over the
-  78-file profile **0 lines**. The census says why — `marks=184569 tests=15446 **true=0**
-  programWideWouldDiffer=4666 **noMarksForThatFile=0**`. Not one consultation affirms, so no
-  truncation ever fires; and the `noMarksForThatFile=0` control rules out the alternative reading (a
-  key mismatch between the mark site's `spineFileName` and the test site's `fileName`), which
-  otherwise looks identical (round 849). **Round 801's produced-vs-consumed ratio should have been
-  run FIRST; it was run only after the ablation surprised me.**
-
-- **CONSEQUENCE, QUEUED AS (SPINE.1)(m3-inert).** The 1.05-1.26% this round made cheap may be
-  removable outright rather than merely reduced. NOT a licence to delete: round 753's law says a
-  profile zero bounds FREQUENCY, never existence, and the corpus carries dedicated anchor pins whose
-  shapes presumably DO affirm. Next step is a `true` census over the CORPUS, then gating the 16 mark
-  sites to the kinds the 6 test sites can ask about.
-
-- **PINS RENAMED, per round 807** ("a signal with no uniquely-its-own failure is a REDUNDANT guard —
-  say so"). `M3AnchorFlagsTest` is documented as an output-EQUIVALENCE pin, not a seam pin; only its
-  growth case discriminates.
-
-- **NO WALL-TIME SAVING IS CLAIMED — TWO A/B BATCHES AND THEY DISAGREE.** Batch 1 read **-3.28%,
-  B wins 3/3, outside the band**; batch 2 read **-0.75%, 2/3, NOISE-DOMINATED** with the per-pair
-  range crossing zero ([-148, +147] ms). Batch 1 was suspect before batch 2 ran: it overshot its own
-  mechanism 2.5x and its arm sd was already 1.08%. Three of the four arm sds are at or above the ~1%
-  quiet-box threshold, so this box could not settle a 1.2% question today whatever the medians said
-  (rounds 840(c)/858). The change stays on EQUIVALENCE plus counted removed work, not on a number.
-  Next instrument for anything this size: a deterministic in-process counter or round 759's
-  amplification — the same conclusion (WARM.14) reached for the dispatch table.
-
-- **GATES.** Suite **14,274 / 0 failures / 3 skipped** (round 885: 14,270; +4 = this pin).
-  `cost_gate.py` **+0.00% on all 20 counters** — the EXPECTED answer for a data-structure change and
-  read as a control that the semantics are untouched (round 876), not as a win.
-  `huge_methods.py --fail-over 0`: **0 over the limit**, 688 classes.
-
-**Round 878 (2026-08-11) — (PERF.HW.d): THE PER-WORKER CENSUS. THE PARTITION IS NO LONGER THE
-LIMITER — DUPLICATED PER-WORKER WORK IS, AND IT IS 40-45% OF THE WHOLE COMPILE, PER WORKER.**
-
-Round 877 fixed a real imbalance and then reasoned that the residue was more of the same, quoting a
-3.16x ceiling computed from source lengths. The census says otherwise, and the single observation that
-kills the model is this: **at w4 the worker holding `checker.ts` ALONE costs 13,503 ms while a worker
-holding 26 files costs 13,160 ms.** If assignment work dominated, those could not be 2.6% apart.
-
-- **THE INSTRUMENT.** `FrontEnd.workerNanos` / `workerFiles` / `workerChars`, printed by `--frontEnd`
-  as `slowest/mean` plus a row per worker. Worker `w` writes index `w` and no other, the arrays are
-  sized before any thread starts, and nothing reads them until every worker has joined — race-free by
-  construction rather than by luck, which is the standard this repo already holds a census to. Three
-  stores per WORKER (not per file), maintained unconditionally so a reader need not arm the probe.
-
-- **THE TABLE** (cold, compiler profile, `--frontEnd --workers N`):
-  w2 — 15,530 / 15,512 ms, **100%**;
-  w4 — 13,503 / 13,164 / 13,168 / 13,160 ms, **101%** (w0 = `checker.ts` alone, 3,151 k chars; the
-  others 25-26 files and 2,275 k chars each);
-  w6 — 15,885 vs ~11,650 ms, **128%** — the one level at which the indivisible giant binds.
-
-- **THE DECOMPOSITION.** Fitting `worker = D + k x assigned chars` across the levels gives
-  **D = 9.4-11.2 s** against a ~24.6 s sequential compile. D is the work every checker does regardless
-  of `assignedFileNames`: the full re-bind of all 78 files plus the ~318 program-wide collectors.
-  **That caps file-level parallelism near 2.4x no matter how many cores are added**, which is the
-  plateau the ladder has been showing all along. Round 877's 3.16x was the ceiling of the ASSIGNMENT
-  and the assignment is not what is left — a ceiling computed over the wrong term.
-
-- **A SECOND, INDEPENDENT REASON NOT TO SPEND WORKERS PAST 4:** the SAME single file (`checker.ts`,
-  nothing else assigned) costs **13,503 ms at w4 and 15,885 ms at w6**. Past 4 workers the run
-  contends on 8 cores and the CRITICAL worker gets slower — an effect no partition can answer, and
-  the mechanism behind the "N-growing overhead" both this ladder and round 826's showed as a rising
-  fitted R. Peak RSS says the same: w1 1,393 MB, w4 1,468 MB (+5%), w6 2,445 MB (+75%).
-
-- **THE EMIT BLIND SPOT, CLOSED FOR THE PARALLEL PATH.** CLAUDE.md records that `--noEmit` makes every
-  instrument here blind to transform/emit, and every `--workers` capture ever taken in this project —
-  including rounds 876 and 877 — was `--noEmit`. A full `--outDir` build at w1 and at w4 emits **78
-  files each and `diff -r` reports no difference**. So the parallel path is now verified on the axis
-  that had never been checked, not merely on diagnostics.
-
-- **WHAT THIS MAKES THE NEXT ITEM, WITH A PRICE ON IT.** `docs/parallel-caching.md` Phase 1 — resolve
-  the context-free, assignment-independent slice ONCE in the single-threaded prefix, freeze it, share
-  it read-only across workers (its Tier 1: "build eagerly in a single-threaded phase, expose as
-  read-only Map, share freely") — is worth up to D. That is the largest single number anywhere in the
-  parallel path and it is now measured rather than argued. The obligation it carries is also known:
-  Tier 3 (`Type.id` allocation, the intern caches, `symbolTypes`) is first-touch-ordered and must stay
-  per-worker, so the work is to separate the two tiers, not to share more.
-
-- **GATES.** Suite **14,261 -> 14,263** / 0 failures / 3 skipped = exactly the 2 new census pins.
-  `cost_gate.py` +0.00% on all 20 counters. `huge_methods.py --fail-over 0`: 0 over the limit, 679
-  classes. Warning-clean.
 
