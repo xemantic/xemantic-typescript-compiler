@@ -27,6 +27,7 @@ ROUNDS = {
     "870": ("build/bench/round870/deep1.txt", "build/bench/round870/deep2.txt", 7068.0),
     "874": ("build/bench/round874/deep1.txt", "build/bench/round874/deep2.txt", 6597.0),
     "888": ("build/bench/round888/deep1.txt", "build/bench/round888/deep2.txt", 5905.0),
+    "893": ("build/bench/round893/deep1.txt", "build/bench/round893/deep2.txt", 5461.0),
 }
 
 # ORDER MATTERS — first match wins, so the narrow families precede the broad.

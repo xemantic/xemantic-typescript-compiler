@@ -1323,3 +1323,139 @@ What IS claimed is COUNTED REMOVED WORK, from the amplifier's own census of the
 population: **32,006,965 handler consultations per compiler-profile rebuild that
 are entered and immediately decline, ~97.3% of them on the enter side**, now
 replaced by 856,962 array loads and one register-resident bit test each.
+
+## 32. Round 893 — the FIFTH take, and the first table this arc can hold against a MEASURED wall delta
+
+Round 893's job was not the profile: it was the **cumulative warm A/B of rounds
+887–892**, six rounds that each landed counted removed work and each correctly
+declined to claim a wall number because each was ~0.5–1% against a box that
+settles at ~1%. The profile was taken in the same session, on the same quiet box,
+so for the first time a leaf table sits beside an independently measured delta
+for the same code.
+
+### 32.1 The wall delta (the thing the table is held against)
+
+Two BUILDS, one JVM per sample (round 867), `WARMUP=6` (the 2026-08-10
+calibration), two batches of six pairs with **opposite leading arms**:
+
+| | arm A = `6a4e3612` (pre-887) | arm B = `abf184ee` (HEAD) |
+|---|---:|---:|
+| n (process medians) | 12 | 12 |
+| median | 5,859 ms | 5,424 ms |
+| sd | 130 ms (**2.21%**) | 186 ms (**3.44%**) |
+
+**B wins 12/12. Median paired delta −8.18%; per-pair range [−12.03%, −2.81%],
+never crossing zero; batch 1 alone 6/6 (median −7.32%), batch 2 alone 6/6
+(median −9.51%).** Both arms answer the same program (78 files, 46 errors on
+every one of the 192 measured rebuilds; `--listAll` digest
+`59d930db849399aea5e03e25fedb8e4e` identical, zero diff) from structurally
+distinct binaries (694 vs 688 classes; `MapScopeStack`/`SetScopeStack`/`SpineMask`
+present only in B). **Both arm sds are ABOVE the ~1% quiet-box threshold** — what
+carries the verdict is the sign consistency (12/12 is 1-in-4,096 by chance) and
+its replication across two oppositely-rotated batches, not the point estimate.
+
+### 32.2 The denominators, and round 870's trap stated once
+
+The JFR window is a fixed 90 s of steady state, so both rounds draw ~8,000
+samples however fast the compile is and **a share is a share of WALL TIME**.
+Round 888's median rebuild was **5,905 ms**, round 893's is **5,461 ms**
+(BenchMain's own `medianMs` from the two JFR processes, the same construction
+round 888 used: 5,416.8 / 5,505.7). Every number below is
+`share × that round's median` = **ms per rebuild**. A naive share diff reads as a
+regression on every unchanged row, because the denominator fell 7.5%.
+
+**The span differs from the A/B's.** Round 888's dump already contains rounds 887
+and 888, so `888 → 893` is rounds **889–892** only, while the A/B spans **887–892**.
+And it is a CROSS-ROUND absolute comparison, which CLAUDE.md prices at up to 12.8%
+of drift on identical code — so the table below ranks mechanisms, and only the
+paired A/B measures the arc.
+
+### 32.3 The finding: red-black bucket probing went to EXACTLY ZERO
+
+| leaf-class family | ms888 | ms893 | Δ |
+|---|---:|---:|---:|
+| own code | 3,650.0 | 3,487.7 | **−162.3** |
+| **HashMap / HashSet** | **1,560.7** | **1,300.5** | **−260.2** |
+| ArrayList / ArrayDeque | 262.6 | 273.8 | +11.2 |
+| String / StringBuilder | 259.8 | 222.5 | −37.3 |
+| other stdlib | 148.7 | 157.5 | +8.7 |
+| `Intrinsics.areEqual` | 16.0 | 11.6 | −4.4 |
+| `java.util.regex` | 7.3 | 7.5 | +0.2 |
+
+and inside that family, split out on its own:
+
+| | round 888 | round 893 |
+|---|---:|---:|
+| `HashMap$TreeNode.*` as a LEAF | **5.91% = 348.8 ms/rebuild** | **0.00% = 0 ms** (zero samples in 16,055) |
+| whole `HashMap`/`HashSet` family | 26.43% = 1,560.7 ms | 23.81% = 1,300.5 ms |
+
+**Rounds 889/890 did not make the map lookups cheaper by a little — they removed
+an entire mechanism.** Treeified-bucket probing (`HashMap$TreeNode.find`/`getTreeNode`
+and their `compareTo` descent) was **5.9% of warm wall time** at round 888 and does
+not appear once in either round-893 process. The honest reading of the two rows
+together: of the 348.8 ms of tree probing, ~89 ms came back as ordinary linear
+bucket probing and **~260 ms is gone**. That is the single largest mechanism this
+arc has moved, and **round 890 priced its own change at ~0.5%** — i.e. it was
+under-read by roughly nine-fold, because a per-operation amplifier counts map
+OPERATIONS and the cost of a treeified bucket is superlinear in its depth
+(round 890 measured max bucket 1,140 → 6 for `Relation.packKey`).
+
+Caveat kept in force: **a JFR leaf share is not a wall-clock price** (§ 0, round
+623). What lifts this one above "candidate" is that an independent paired A/B on
+the same code, in the same session, measured −8.18% wall.
+
+### 32.4 Owner families (round 874's unit), ms/rebuild
+
+| family | ms888 | ms893 | Δ |
+|---|---:|---:|---:|
+| INV.4 reach classifiers | 371.1 | 376.4 | +5.3 |
+| type construction | 295.7 | 303.2 | +7.5 |
+| name resolution | 247.7 | 235.8 | −11.9 |
+| spine walk core | 220.3 | 204.4 | −15.9 |
+| **cta\* handlers** | **216.0** | **84.3** | **−131.7** |
+| **flow-graph build** | **207.2** | **134.0** | **−73.2** |
+| **module/import resolution** | **192.3** | **133.9** | **−58.4** |
+| scope frame copies | 183.2 | 178.1 | −5.1 |
+| narrowing walk | 142.2 | 141.9 | −0.3 |
+| cpa\* handlers | 143.6 | 132.6 | −11.0 |
+| relation engine | 118.3 | 108.4 | −9.9 |
+| ccet\* handlers | 92.5 | 85.0 | −7.5 |
+| unclassified residue | 3,474.3 | 3,342.8 | −131.5 |
+
+`cta*` −131.7 ms is rounds 891/892 (the `CtaFrame` copy families) landing exactly
+where they were built; the two rounds priced themselves at 0.59% + ~0.8–1.1% =
+~83 ms, so they too were under-read, by ~1.6×. `flow-graph build` −73.2 ms and
+`module/import resolution` −58.4 ms are round 889's `nodeKey` finalizer
+(`nodeToFlow` is a `FlowGraphBuilder` table). At the OWNER level the biggest single
+movers are `ctaSpineEnter` −54.6, `FlowGraphBuilder.recordFlow` −51.3,
+`cpaSpineLeave` −10.8, `spineEnterNode` −9.0 — i.e. **the mechanism is diffuse and
+the ROW is the wrong unit**, round 874's law holding for the fifth take running.
+
+### 32.5 The GC hypothesis, REFUTED — and refuted on BUDGET, not on sign
+
+One process per arm with `-Xlog:gc`, same 6+8 shape:
+
+| | pauses | total pause | max | per rebuild (14) |
+|---|---:|---:|---:|---:|
+| A (`6a4e3612`) | 68 | 1,375.3 ms | 65.4 ms | 98.2 ms |
+| B (`abf184ee`) | 86 | 1,286.6 ms | 43.4 ms | 91.9 ms |
+
+B does **more** GC cycles for **slightly less** total pause, and the whole pause
+budget is **~1.7% of a rebuild in both arms** — so eliminating GC entirely could
+not produce an 8% delta, and the 6.3 ms/rebuild that separates the arms is 0.1 of
+the 8 percentage points. **Removing 2.2 M copied map entries and 32 M consultations
+did not win by reducing GC pressure.** (n=1 per arm with logging on, so the −4.4%
+those two processes show is not a verdict; the refutation rests on the budget,
+which n=1 establishes.)
+
+### 32.6 What is still unexplained
+
+−8.18% measured against ~3–5% of summed per-round prices. Of the three candidate
+explanations: **GC is refuted** (§ 32.5); **superlinear red-black probing is
+directly supported and is probably most of it** (§ 32.3 — a 5.9%-of-wall mechanism
+at zero, under-priced ninefold by the instrument that judged it); and
+**non-additivity under a shifting denominator** (round 870) remains open and is not
+separately testable from here. The two under-readings the profile exposes
+(hash ~9×, `cta*` ~1.6×) together roughly close the gap, but that is an
+arithmetic coincidence unless someone prices them independently — so the state of
+the arc is: **the excess is largely attributed, not yet explained.**

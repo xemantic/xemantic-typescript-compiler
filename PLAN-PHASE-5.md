@@ -20,6 +20,120 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 893 (2026-08-12) — THE CUMULATIVE WARM A/B OF ROUNDS 887-892: **-8.18% MEDIAN PAIRED, B FASTER
+IN 12/12 PAIRS, BOTH BATCHES 6/6 ON OPPOSITE ROTATIONS** — THE ARC'S FIRST DEMONSTRATED WARM SPEED-UP,
+AND IT EXCEEDS THE SUM OF THE SIX ROUNDS' OWN PRICES. THE GC EXPLANATION IS REFUTED; THE LEAF PROFILE
+SHOWS RED-BLACK BUCKET PROBING AT **EXACTLY ZERO**, DOWN FROM 5.91% OF WARM WALL.**
+
+Six consecutive rounds landed counted removed work and every one of them declined to claim a wall
+number — correctly, each being ~0.5-1% against a box that settles at ~1% (rounds 840(c)/858/886 each
+recorded a disagreeing second batch at that size). The arc's actual wall effect was therefore
+UNMEASURED. This round measured it. **No production code changed.** `docs/perf/warm-leaf-profile.md`
+§ 32.
+
+- **(A) THE PROTOCOL, WHICH IS THE ROUND.** Two BUILDS — `6a4e3612` (parent of 887) and `abf184ee`
+  (HEAD) — snapshotted to two class dirs, **one JVM per SAMPLE** (round 867: two arms that share a
+  compiled method are not independent arms), `WARMUP=6` / `ITERS=8` (the 2026-08-10 calibration: two
+  identical arms sit 3.3% apart at warm-up 2 and 0.8% at 6), sample = that process's median.
+  **Two batches of six pairs with OPPOSITE leading arms**, so each arm leads exactly 6 of the 12
+  pairs — round 891's 4x disagreement came from a rotation that left the leading draw's ~15% on one
+  arm. Box quiesced (`--stop` + bracket-pattern kotlin-daemon kill BEFORE measuring, round 851;
+  14.4 GB free), and **the box was left alone for the whole 50 minutes** (round 774: watching a
+  benchmark is part of the benchmark).
+
+- **(B) THE RESULT.**
+
+  | | A = `6a4e3612` | B = `abf184ee` |
+  |---|---:|---:|
+  | n (process medians) | 12 | 12 |
+  | median | 5,859 ms | **5,424 ms** |
+  | mean | 5,882 ms | 5,418 ms |
+  | sd | 130 ms (**2.21%**) | 186 ms (**3.44%**) |
+
+  **B wins 12/12. Median paired delta -8.18% (-479 ms); mean -7.87%; per-pair range
+  [-12.03%, -2.81%], never crossing zero. Batch 1 6/6, median -7.32%; batch 2 6/6, median -9.51%.**
+  Median-of-medians -7.42%.
+
+- **(C) THE SD IS ABOVE THE QUIET-BOX THRESHOLD AND THIS SAYS SO EXPLICITLY.** `ab-warm.sh`'s rule is
+  that a warm run whose per-arm sd exceeds ~1% was not measured on a quiet box and its verdict should
+  be discarded. Both arms exceed it (2.21% / 3.44%). CLAUDE.md permits an explicit override when the
+  effect is many times the sd; **here it is ~2.4x the larger sd, which is NOT the "tens of times"
+  case, so the override is not what carries this.** What carries it is the SIGN: 12/12 is 1-in-4,096
+  under the null, the per-pair range lies wholly below zero, and the two batches are independently
+  6/6 with the rotation reversed — round 840(c)'s replication requirement, met. **-8.18% is not a
+  point estimate to quote as a precise figure**; the defensible claim is "a real speed-up of roughly
+  5-10%".
+
+- **(D) THE CONTROLS THAT MAKE THIS A COMPILER MEASUREMENT.** Both arms emit **46 errors** over 78
+  files on every one of the 192 measured rebuilds (BenchMain aborts the run on any files/errors
+  drift), the compiler-profile `--listAll` digest is `59d930db849399aea5e03e25fedb8e4e` for BOTH —
+  the cross-round recipe, `grep 'error TS' | sort` — with a **zero-line diff** and no
+  `... and N more error(s)` truncation in either capture (round 811). The binaries are structurally
+  distinct: **694 vs 688 classes**, with `MapScopeStack`/`SetScopeStack` (892) and `SpineMask` (888)
+  present only in B, asserted as positive controls by the driver before it ran a sample (round 853 —
+  a gate reading a class dir needs proof the code under test is in it). **Same answers, different
+  code.**
+
+- **(E) THE EXCESS: -8.18% AGAINST ~3-5% OF SUMMED PER-ROUND PRICES.** Three candidate explanations
+  were on the table; the round tested one, the leaf profile answered a second, and the third is open.
+
+- **(F) GC IS REFUTED, AND ON BUDGET RATHER THAN SIGN.** One process per arm with `-Xlog:gc`, same
+  6+8 shape: **A 68 pauses / 1,375 ms total / 65.4 ms max; B 86 pauses / 1,287 ms / 43.4 ms.**
+  B does MORE GC cycles for slightly less pause, and the whole budget is **~92-98 ms per rebuild =
+  ~1.7%** in both arms — an order of magnitude below the effect, so **eliminating GC entirely could
+  not produce 8%**, whichever way the arms fell. The 6.3 ms/rebuild that separates them is 0.1 of the
+  8 percentage points. Stated as a MEASURED NEGATIVE. (n=1 per arm with logging on, so the -4.4%
+  those two processes show is not a verdict; the budget is what n=1 establishes, and it is enough.)
+
+- **(G) THE LEAF PROFILE, RE-TAKEN A FIFTH TIME ON ROUND 888's EXACT RECIPE, FINDS THE MECHANISM.**
+  Two processes, `stackdepth=1024`, `delay=60s,duration=90s`, `jfr print --stack-depth 512`, filtered
+  to `xtsc-deep-stack`, stdlib charged to the nearest non-stdlib OWNER; 7,942 + 8,113 samples, max
+  depth 212/174. Denominators are each round's own `medianMs` (888: **5,905 ms**; 893: **5,461 ms**),
+  because a JFR share is a share of WALL TIME and the rebuild just got 7.5% shorter (round 870).
+
+  | leaf-class family | ms888 | ms893 | Δ |
+  |---|---:|---:|---:|
+  | own code | 3,650.0 | 3,487.7 | -162.3 |
+  | **HashMap / HashSet** | **1,560.7** | **1,300.5** | **-260.2** |
+  | String / StringBuilder | 259.8 | 222.5 | -37.3 |
+  | ArrayList / ArrayDeque | 262.6 | 273.8 | +11.2 |
+
+  and split out of that family: **`HashMap$TreeNode` as a leaf was 5.91% = 348.8 ms/rebuild at round
+  888 and is 0.00% — ZERO samples in 16,055 — at round 893.** Rounds 889/890 did not make map lookups
+  a bit cheaper; **they removed an entire mechanism.** Reading the two rows together: of the 348.8 ms
+  of red-black probing, ~89 ms returned as ordinary linear bucket probing and **~260 ms is gone**.
+  **Round 890 priced its own change at ~0.5%** — under-read ~9x, because an amplifier counts map
+  OPERATIONS while the cost of a treeified bucket is superlinear in its depth (890 measured max
+  bucket 1,140 -> 6 for `Relation.packKey`).
+
+- **(H) OWNER FAMILIES (round 874's unit), ms/rebuild.** `cta*` handlers **216.0 -> 84.3 (-131.7)** =
+  rounds 891/892 landing exactly where they were built (they priced themselves at ~83 ms, so ~1.6x
+  under-read); `flow-graph build` **207.2 -> 134.0 (-73.2)** and `module/import resolution`
+  **192.3 -> 133.9 (-58.4)** = round 889's `nodeKey` finalizer (`nodeToFlow` is a `FlowGraphBuilder`
+  table); `spine walk core` -15.9; `name resolution` -11.9; residue -131.5. **At the OWNER level the
+  biggest movers are `ctaSpineEnter` -54.6, `FlowGraphBuilder.recordFlow` -51.3, `cpaSpineLeave`
+  -10.8, `spineEnterNode` -9.0** — no row is more than ~1% of the rebuild, which is round 874's law
+  holding for the fifth take running: **the ROW is the wrong unit and the FAMILY is the right one.**
+
+- **(I) TWO CAVEATS ON THE TABLE THAT MUST TRAVEL WITH IT.** The profile spans **889-892** (round
+  888's dump already contains 887+888) while the A/B spans **887-892**; and it is a CROSS-ROUND
+  ABSOLUTE comparison, which CLAUDE.md prices at up to 12.8% of drift on identical code. So the table
+  RANKS mechanisms and only the paired A/B MEASURES the arc. Also unchanged: **a JFR leaf share is
+  not a wall-clock price** (round 623 eliminated a 5.3% leaf for -0.3%) — what lifts this one above
+  "candidate" is that an independent paired A/B on the same code in the same session measured -8.18%.
+
+- **(J) WHAT IS STILL UNEXPLAINED.** GC refuted; superlinear red-black probing directly supported and
+  probably most of it; **non-additivity under a shifting denominator (round 870) remains open and is
+  not separately testable from here.** The two under-readings the profile exposes (hash ~9x, `cta*`
+  ~1.6x) roughly close the gap arithmetically, but that is a coincidence unless each is priced
+  independently. **The honest state: the excess is largely ATTRIBUTED, not yet EXPLAINED.**
+
+- **(K) GATES.** No production code changed — no suite run, no `cost_gate.py`, no `huge_methods.py`
+  were required or run. The only source edits are two ROUNDS-dict lines in
+  `scripts/round888_compare.py` / `scripts/round888_families.py` (adding the 893 dumps) plus docs.
+  The repo's `build/classes` was restored from the HEAD snapshot after arm A's build, verified at 694
+  classes.
+
 **Round 892 (2026-08-11) — (WARM.18b): THE FAMILY ROUND 891 REFUSED IS **CONVERTED** — `CtaFrame`'s
 localTypes+declNodes+shadowed AND THE NARROWING FRAME'S `EpochMap`, **1,214,236 ENTRIES COPIED PER
 REBUILD -> 28,695 UNDO RECORDS OVER AN IDENTICAL POPULATION** — AND ALL THREE REFUSAL REASONS
