@@ -184,6 +184,10 @@ class NameCensusTest {
         assert(NameCensus.internSetArm != null)
         assert(NameCensus.rawSetArm !== NameCensus.internSetArm)
         assert(NameCensus.rawMapArm !== NameCensus.internMapArm)
+        // …and the sticky claim, which is the one that survives the arms
+        // alternating: a fault in the even branch alone is overwritten by the
+        // odd one, so the three references above read healthy at the end.
+        assert(!NameCensus.armsShared)
     }
 
     /**

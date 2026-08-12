@@ -205,6 +205,17 @@ object NameCensus {
     var rawMapArm: Any? = null
     var internMapArm: Any? = null
 
+    /**
+     * STICKY: set the moment the two arms are seen probing ONE container.
+     *
+     * A plain "are the two references different at the end" test is blind here
+     * and the ablation proved it: the arms alternate per rep, so a fault present
+     * in only the even branch is overwritten by the odd one and the final state
+     * looks healthy. A sticky flag is a claim about the whole replay rather than
+     * about its last iteration.
+     */
+    var armsShared: Boolean = false
+
     fun reset() {
         idTokens = 0; keywordTokens = 0; idChars = 0
         distinctNames.clear(); tokenCapture.clear()
@@ -219,6 +230,7 @@ object NameCensus {
         keywordNanos = 0; foldNanos = 0; keywordHitsSeen = 0; foldHitsSeen = 0
         sink = 0
         rawSetArm = null; internSetArm = null; rawMapArm = null; internMapArm = null
+        armsShared = false
     }
 
     /**
@@ -368,6 +380,7 @@ object NameCensus {
 
     private fun probeSet(set: HashSet<String>, keys: Array<String>, raw: Boolean): Long {
         if (raw) rawSetArm = set else internSetArm = set
+        if (rawSetArm != null && rawSetArm === internSetArm) armsShared = true
         val t0 = PassTiming.nowNanos()
         var hits = 0L
         var i = 0
@@ -380,6 +393,7 @@ object NameCensus {
 
     private fun probeMap(map: HashMap<String, Any>, keys: Array<String>, raw: Boolean): Long {
         if (raw) rawMapArm = map else internMapArm = map
+        if (rawMapArm != null && rawMapArm === internMapArm) armsShared = true
         val t0 = PassTiming.nowNanos()
         var hits = 0L
         var i = 0
