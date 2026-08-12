@@ -5409,6 +5409,13 @@ class Checker(
      */
     private val perFileScope: MutableMap<String, SymbolTable> = mutableMapOf()
 
+    /** (WARM.23) round 896 — [perFileScopeOf]'s one-entry reference-compared memo.
+     *  Declared HERE, beside the map it fronts and far above the `init` block that
+     *  runs the whole check: a checker field declared below `init` is still at its
+     *  JVM default while every pass executes. */
+    private var perFileScopeMemoKey: String? = null
+    private var perFileScopeMemoValue: SymbolTable? = null
+
     /**
      * (LIB.1)(c): `lib` option entries that are not lib names at all, recorded by
      * [bindRealLibs] and reported by [checkLibOption] as TS6046.
@@ -11047,6 +11054,12 @@ class Checker(
             // shadows-global semantics for the file's own declarations).
             for ((name, sym) in result.locals) fileScope[name] = sym
             perFileScope[result.sourceFile.fileName] = fileScope
+            // (WARM.23) round 896 — THE one mutation of [perFileScope], and so the
+            // one place [perFileScopeOf]'s memo could go stale. Clearing it here
+            // makes staleness inexpressible rather than unlikely; a new write site
+            // must clear it too.
+            perFileScopeMemoKey = null
+            perFileScopeMemoValue = null
         }
     }
 
@@ -11170,6 +11183,32 @@ class Checker(
      * two not-taken branches.
      */
     private fun perFileScopeOf(fileName: String): SymbolTable? {
+        // (WARM.23) round 896 — a ONE-ENTRY memo compared by REFERENCE, the shape
+        // round 895(D) landed for `SrcScanCache`: **a miss is never wrong, only
+        // slower.** A hit is sound because the same `String` INSTANCE cannot get
+        // a different answer out of a map that is not mutated in between — and
+        // the one mutation site ([buildPerFileScopes]' store) clears it, so
+        // staleness is not expressible either.
+        //
+        // Identity is the right test rather than a weakness: `perFileScope`'s keys
+        // ARE `sourceFile.fileName`, and every hot caller reaches here with that
+        // very instance ([lookupPerFileForNode] via `owner.fileName`), so the hit
+        // rate is a property of the traversal, not of string equality. Keying the
+        // MAP by identity would be the unsound version — an equal-but-distinct
+        // path would answer null and silently resolve a name to a foreign
+        // module's local, which is why the map probe stays authoritative.
+        if (fileName === perFileScopeMemoKey) {
+            if (MapCensus.on) MapCensus.perFileMemoHits++
+            return perFileScopeMemoValue
+        }
+        val scope = perFileScopeProbe(fileName)
+        perFileScopeMemoKey = fileName
+        perFileScopeMemoValue = scope
+        return scope
+    }
+
+
+    private fun perFileScopeProbe(fileName: String): SymbolTable? {
         if (MapCensus.on) MapCensus.perFileProbes++
         val r = MapCensus.perFileScopeReads
         if (r == 0) return perFileScope[fileName]
@@ -11198,8 +11237,22 @@ class Checker(
         return result
     }
 
-    internal fun lookupPerFile(fileName: String, name: String): Symbol? {
-        val scope = perFileScopeOf(fileName) ?: return null
+    internal fun lookupPerFile(fileName: String, name: String): Symbol? =
+        lookupInFileScope(perFileScopeOf(fileName) ?: return null, name)
+
+    /**
+     * [lookupPerFile] once the file's table is already in hand — the whole of its
+     * body below the `perFileScope` probe.
+     *
+     * (WARM.23) round 896, candidate (2a): [globalsForFile] used to ask
+     * `perFileScope.containsKey(fileName)` and then call [lookupPerFile], which
+     * asked `perFileScope[fileName]` again — the file PATH hashed TWICE per name
+     * lookup on the hottest resolution path in the checker. Splitting the body out
+     * lets the caller pass the table it already resolved. Same answers by
+     * construction: the map's value type is non-nullable, so `containsKey` and
+     * `get() != null` are the same predicate.
+     */
+    private fun lookupInFileScope(scope: SymbolTable, name: String): Symbol? {
         val sym = scope[name] ?: return null
         if (sym.flags.hasAny(SymbolFlags.Alias) && sym.declarations.any { it is ImportSpecifier }) {
             resolveImportedSymbolGeneral(sym)?.let { return it }
@@ -11230,14 +11283,20 @@ class Checker(
      * the per-pass conflated tables keep measuring only UN-migrated traffic.
      */
     internal fun globalsForFile(fileName: String, name: String): Symbol? {
-        if (name in moduleOnlyGlobalNames && perFileScopeOf(fileName) != null) {
-            // INV.3(d): the retired merge no longer puts module-only names into
-            // [globals] at all — the per-file resolution IS the symbol (the
-            // declaring file's own clean instance; an import alias resolves
-            // onward through [resolveImportedSymbolGeneral] inside
-            // [lookupPerFile]). Null exactly where the legacy merged consult
-            // would have LEAKED a foreign module file's local.
-            return lookupPerFile(fileName, name)
+        if (name in moduleOnlyGlobalNames) {
+            // (WARM.23) round 896 — ONE probe. This used to be
+            // `perFileScope.containsKey(fileName)` here and `perFileScope[fileName]`
+            // again inside [lookupPerFile]: the file PATH hashed twice per name.
+            val scope = perFileScopeOf(fileName)
+            if (scope != null) {
+                // INV.3(d): the retired merge no longer puts module-only names into
+                // [globals] at all — the per-file resolution IS the symbol (the
+                // declaring file's own clean instance; an import alias resolves
+                // onward through [resolveImportedSymbolGeneral] inside
+                // [lookupInFileScope]). Null exactly where the legacy merged
+                // consult would have LEAKED a foreign module file's local.
+                return lookupInFileScope(scope, name)
+            }
         }
         return globals[name]
     }

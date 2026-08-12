@@ -117,8 +117,11 @@ object MapCensus {
 
     // ---- (2a) perFileScope ----------------------------------------------
 
-    /** Production probes of `perFileScope` (counted whether or not amplified). */
+    /** Production probes of `perFileScope` that reached the MAP. */
     var perFileProbes: Long = 0
+
+    /** Reads the one-entry reference-compared memo answered without a map probe. */
+    var perFileMemoHits: Long = 0
 
     var perFileAmpNanos: Long = 0
     var perFileAmpCalls: Long = 0
@@ -141,7 +144,8 @@ object MapCensus {
         symAdds = 0; symReentries = 0; symMaxLive = 0; symLive = 0
         nodeAdds = 0; nodeReentries = 0; nodeMaxLive = 0; nodeLive = 0
         memberAdds = 0; memberReentries = 0; memberMaxLive = 0; memberLive = 0
-        perFileProbes = 0; perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
+        perFileProbes = 0; perFileMemoHits = 0
+        perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
         replayFiles = 0; replayKeys = 0; replayReps = 0
         legacyPutNanos = 0; legacyGetNanos = 0; longPutNanos = 0; longGetNanos = 0
     }
@@ -221,7 +225,10 @@ object MapCensus {
             "  (-) memberResolutionInProgress:     adds=$memberAdds re-entries=$memberReentries " +
                 "MAX LIVE=$memberMaxLive"
         )
-        appendLine("  (2a) perFileScope probes: $perFileProbes")
+        appendLine(
+            "  (2a) perFileScope map probes: $perFileProbes   memo hits: $perFileMemoHits   " +
+                "reads: ${perFileProbes + perFileMemoHits}"
+        )
         if (perFileAmpCalls > 0) {
             val per = perFileAmpNanos / perFileAmpCalls
             appendLine(
