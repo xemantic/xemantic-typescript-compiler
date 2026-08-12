@@ -43,6 +43,8 @@ import com.xemantic.typescript.compiler.FltmCensus
 import com.xemantic.typescript.compiler.FrontEnd
 import com.xemantic.typescript.compiler.ReachCensus
 import com.xemantic.typescript.compiler.LibTypeCensus
+import com.xemantic.typescript.compiler.CrawlParseCache
+import com.xemantic.typescript.compiler.NameCensus
 import com.xemantic.typescript.compiler.SrcScan
 import com.xemantic.typescript.compiler.ParallelCheckMode
 import com.xemantic.typescript.compiler.ShareBind
@@ -265,6 +267,33 @@ internal val TIERS = listOf(
 )
 
 /**
+ * (WARM.24) round 897 — the THIRD parameterised tier family: `namecensus<N>`
+ * arms [NameCensus] for one rebuild and then replays its captured populations
+ * `N` times.
+ *
+ * `N` is a rep count and not an amplification factor: the arms are ALREADY
+ * whole-population passes (2 M probes, 1.5 M tokens), so each one is tens of
+ * milliseconds against a ~90 ns timestamp pair and needs no algebraic boundary
+ * cancellation. What the reps buy is the ABBA rotation — rounds 869/891 —
+ * without which a single leading draw sets the answer.
+ *
+ * The tier ALSO disables [CrawlParseCache] for its rebuild, and that is not an
+ * incidental: the cache serves the program's parse from the previous request,
+ * so on a warm rebuild the Scanner does not run and the token population the
+ * COST arm needs does not exist to be captured. The disable is restored in
+ * [tierStop] — left set, it silently re-parses the program on every later
+ * rebuild in the process, which reads as a regression in whatever tier follows.
+ */
+internal fun nameCensusReps(tier: String): Int? {
+    if (!tier.startsWith("namecensus")) return null
+    val digits = tier.removePrefix("namecensus")
+    if (digits.isEmpty()) return 6
+    if (!digits.all { it in '0'..'9' }) return null
+    val n = digits.toIntOrNull() ?: return null
+    return if (n <= 0) null else n
+}
+
+/**
  * (WARM.14) round 867 — the ONE parameterised tier family: `amp<N>` runs the
  * [SpineAmp] amplifier at `N` extra consultation passes per node for one
  * rebuild, and `ampc<N>` runs its CONTROL arm (the identical loop with every
@@ -387,6 +416,14 @@ internal fun tierBegin(tier: String) {
     // the census counters cost the same in every arm of the slope, so they
     // cancel, while a pass or section probe would not (its boundaries are not
     // proportional to `r`).
+    // (WARM.24) — counters and captures only; the timed arms run in [tierReport],
+    // AFTER the rebuild, so nothing they do lands inside the compile they census.
+    if (nameCensusReps(tier) != null) {
+        NameCensus.reset()
+        NameCensus.on = true
+        CrawlParseCache.enabled = false
+        return
+    }
     val copyAmp = copyAmpReps(tier)
     if (copyAmp != null) {
         FrontEnd.reset()
@@ -487,6 +524,16 @@ internal fun tierReport(tier: String): String = if (ampReps(tier) != null) {
     // its own state (round 850) — a CONTROL row and a REAL row are otherwise
     // distinguishable only by a zero in the middle of the table.
     SpineAmp.report()
+} else if (nameCensusReps(tier) != null) {
+    // (WARM.24) — the counters are OFF before the replay runs, so the replay's
+    // own map traffic cannot enter the census it is reporting. The reps come
+    // from the tier name and are set here rather than in `tierBegin` for the
+    // same reason: a `replayReps` armed during the compile would make every
+    // `globalsForFile` call attempt a whole-population replay.
+    NameCensus.on = false
+    NameCensus.replayReps = nameCensusReps(tier)!!
+    NameCensus.replay()
+    NameCensus.report()
 } else if (copyAmpReps(tier) != null) {
     // (WARM.16) — taken while the census still holds its counters, and it
     // prints `amp=` from the live field, so an arm labels itself from its own
@@ -646,6 +693,16 @@ internal fun tierStop() {
     // its own rebuild never ran: `reps != 0` costs every later rebuild in this
     // process `r` extra passes per node, which is a large, silent, and entirely
     // plausible-looking slowdown of whatever tier follows it.
+    // (WARM.24) — three restores, each of which is silent if missed: `on` left
+    // set costs every later rebuild a capture per identifier AND per name probe,
+    // `replayReps` left set makes a later armed rebuild replay 2 M probes per
+    // `globalsForFile` call, and a disabled parse cache re-parses the whole
+    // program on every later rebuild — a ~270 ms regression (round 871) in
+    // whatever tier follows.
+    NameCensus.on = false
+    NameCensus.replayReps = 0
+    NameCensus.reset()
+    CrawlParseCache.enabled = true
     SpineAmp.reps = 0
     SpineAmp.reset()
     SpineDispatch.reset()
@@ -682,7 +739,10 @@ fun main(args: Array<String>) {
         null, "", "false", "0", "off" -> emptyList()
         "passtiming", "true", "1", "on" -> listOf("full")
         else -> flag.split(",").map { it.trim() }.filter { it.isNotEmpty() }.also { list ->
-            val bad = list.filter { it !in TIERS && ampReps(it) == null && copyAmpReps(it) == null }
+            val bad = list.filter {
+                it !in TIERS && ampReps(it) == null && copyAmpReps(it) == null &&
+                    nameCensusReps(it) == null
+            }
             if (list.isEmpty() || bad.isNotEmpty()) {
                 error(
                     "usage: 4th argument must be `passTiming`, omitted, or a comma-separated " +

@@ -11283,6 +11283,10 @@ class Checker(
      * the per-pass conflated tables keep measuring only UN-migrated traffic.
      */
     internal fun globalsForFile(fileName: String, name: String): Symbol? {
+        if (NameCensus.on) {
+            NameCensus.publish(moduleOnlyGlobalNames, globals.keys)
+            NameCensus.nameProbe(name, name in moduleOnlyGlobalNames, node = false)
+        }
         if (name in moduleOnlyGlobalNames) {
             // (WARM.23) round 896 — ONE probe. This used to be
             // `perFileScope.containsKey(fileName)` here and `perFileScope[fileName]`
@@ -11329,6 +11333,10 @@ class Checker(
         // fallback, which is consulted for ~2M identifiers per self-compile.
         // Before init step 1b2 the set is empty → everything degrades to the
         // legacy merged consult (same as the ownerless degradation below).
+        if (NameCensus.on) {
+            NameCensus.publish(moduleOnlyGlobalNames, globals.keys)
+            NameCensus.nameProbe(name, name in moduleOnlyGlobalNames, node = true)
+        }
         if (name !in moduleOnlyGlobalNames) return globals[name]
         // Walk to the owning SourceFile, capturing the INNERMOST enclosing
         // `declare module "<spec>"` block on the way (the INV.3(c)(iv)

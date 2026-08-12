@@ -770,6 +770,10 @@ class Scanner(private val text: String) {
         tokenValue = word
 
         val keywordKind = KEYWORDS[word]
+        // (WARM.24) round 897 — THE site round 894 candidate (1) names: one
+        // `substring` per identifier OCCURRENCE, so every mention of `kind` in the
+        // program is a distinct `String`. Off, a static read and a not-taken branch.
+        if (NameCensus.on) NameCensus.idToken(word, keywordKind != null)
         return keywordKind ?: SyntaxKind.Identifier
     }
 
@@ -867,6 +871,9 @@ class Scanner(private val text: String) {
         }
         tokenValue = sb.toString()
         val keywordKind = KEYWORDS[tokenValue]
+        // (WARM.24) — the escape-carrying twin of the site above. Rare, but it
+        // mints names too, so leaving it out would under-count the population.
+        if (NameCensus.on) NameCensus.idToken(tokenValue, keywordKind != null)
         return keywordKind ?: SyntaxKind.Identifier
     }
 
