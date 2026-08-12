@@ -299,9 +299,17 @@ class LexLevelProbeCensusTest {
         // a scan pays at most the level's whole length and at least one step
         assert(MapCensus.lexScanSteps <= MapCensus.lexProbeSizeSum)
         assert(MapCensus.lexScanSteps >= MapCensus.lexAmpCalls)
-        // and the population really is re-weighted: more symbols are traversed by
-        // probes than exist in all the scopes the binder bound
-        assert(MapCensus.lexProbeSizeSum > MapCensus.lexScopeBoundKeys)
+        // …and the population really is RE-WEIGHTED: the same level is probed many
+        // times over, so a probe-weighted total counts its symbols once per probe
+        // where a scope-weighted one counts them once.
+        //
+        // Stated against the QUERIED scopes' own keys and not the BOUND ones. The
+        // bound count is dominated by the lib binding on any small fixture, which
+        // is round 898's A3 and round 901's A2 for the third time: an inequality a
+        // fixture cannot express is satisfied — or violated — for a reason that
+        // has nothing to do with the thing under test.
+        val queriedOwn = MapCensus.lexScopeKeys - MapCensus.lexScopeExistingKeys
+        assert(MapCensus.lexProbeSizeSum > queriedOwn)
     }
 
     /**
