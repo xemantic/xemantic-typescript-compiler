@@ -1,5 +1,83 @@
 
 
+**Round 887 (2026-08-11) — (SPINE.1)(m3-inert): THE THREE SPINE-ANCHOR MARK FAMILIES ARE **DELETED**.
+319,777 MARKS AND 48,868 CONSULTATIONS PER CORPUS RUN, **ZERO AFFIRMATIVE** — AND THE MECHANISM IS
+NOT "THE CORPUS DOES NOT HAPPEN TO EXERCISE IT", IT IS THAT THE MARK SITES AND THE CONSULTATION
+SITES WERE **DISJOINT IN (BIT x NODE KIND)** FOR THE FAMILY'S WHOLE LIFE.**
+
+Round 886 made these tables cheap and then discovered by census that no consultation ever answers
+`true` on the compiler profile. It queued the removal but forbade acting on that alone, correctly:
+round 753's law says a profile zero bounds FREQUENCY, never existence, and the corpus carries
+dedicated anchor pins whose shapes might well affirm. This round ran the census over the CORPUS,
+with the two controls round 886 lacked, and then removed the family.
+
+- **THE CORPUS CENSUS** (full suite, 14,275 / 0 / 3; reproduced identically across two complete
+  runs). Consultations only ever arrive at four of the 44 marked (bit, kind) rows:
+
+  | bit  | marks   | consultations | **trues** | consulted kinds (counts)                                  |
+  |------|---------|---------------|-----------|-----------------------------------------------------------|
+  | CTA  | 148,599 | 4,272         | **0**     | `Block` 4,263, `ReturnStatement` 7, `ExpressionStatement` 2 |
+  | CPA  | 140,528 | 44,560        | **0**     | `VariableStatement` 44,560                                 |
+  | CCET | 30,650  | 36            | **0**     | `CallExpression` 36                                        |
+  | **all** | **319,777** | **48,868** | **0**   | all 8 truncation/gate sites: **fired 0, removed 0**        |
+
+- **THE TWO CONTROLS, WHICH ARE THE WHOLE REASON THE ZERO IS ACTIONABLE (round 849: a zero from a
+  blind instrument reads exactly like a real negative).** A POSITIVE control — every mark read back
+  immediately at its own (file, nodeId, bit) — reads `markReadBackOk 319,777 / markReadBackFail 0`,
+  so the store/load path is sound. A KEY control — which bucket each consultation lands in — reads
+  `testNoArrayForFile 0`, so every one of the 48,868 consultations found an array for its file. This
+  is **not** the `spineFileName`-vs-`fileName` mismatch that would look identical.
+
+- **AND THE SHARPER FINDING, WHICH IS WHAT MAKES THIS A DELETION RATHER THAN A DEAD-CODE REPORT:
+  `testInRangeOtherBitSet = 42,513` against `testInRangeThisBitSet = 0`.** 87% of consultations land
+  on a node that IS marked — just never with the bit being asked for. The two site families never
+  overlapped in (bit x kind): CPA marked seven statement kinds plus every loop/switch condition and
+  class-heritage `Expression` plus `PropertyDeclaration` — 140,528 marks — and was read back at ONE
+  site, for a `VariableStatement`; CTA additionally marked `IfStatement` and `PropertyDeclaration`,
+  neither of which any site passes (the `IfStatement` arm of `checkTypeAssignabilityInStmt` carries a
+  comment claiming it truncates and contains no truncation at all). So the `while (diagnostics.size >
+  mark) removeAt(…)` branches were unreachable **by construction**, not by accident of the input.
+
+- **WHAT WAS DELETED.** `m3AnchorFlags` + `m3FlagsForCurrent`/`m3Mark`/`m3Has`, the three `M3_BIT_*`
+  constants, the six mark/test wrappers, **13 mark call sites** (8 cta, 4 cpa, 1 ccet), **8
+  consultation sites** and the truncation/gate branches they fed — including
+  `checkFunctionBody`'s `if (!ctaM3BodyAnchored)` suppression of the B442 redeclare walker and the
+  FlatArray depth-param walker, and `cpaSpineLeave`'s per-decl recording gate.
+
+- **THE PIN.** Round 886's `M3AnchorFlagsTest` asserted a structure that no longer exists; it is
+  RENAMED `SpineAnchorEmitOnceTest`, its KDoc rewritten to record this census, and two tests added.
+  These now DO discriminate, which the round-886 versions did not: had any consultation been
+  affirmative, deleting it un-suppresses a legacy walker the spine already ran and the shape emits
+  TWICE. The sharpest is `the body-level redeclare walker reports once per function body` — that gate
+  suppressed a walker the spine runs itself, so a live gate would now double all three of its
+  diagnostics.
+
+- **NO WALL-TIME NUMBER IS CLAIMED.** Round 886 priced the mark path at 1.05-1.26% of a warm rebuild
+  and then got two A/B batches that disagreed, with three of four arm sds at or above the ~1%
+  quiet-box threshold; this box cannot settle a question that size today (rounds 840(c)/858). The
+  claim is COUNTED REMOVED WORK: 319,777 array stores and 48,868 consultations per corpus run, plus
+  the dead branches. `cost_gate.py` at +0.00% is the EXPECTED answer and is read as a control that
+  the semantics are untouched (round 876), not as a win.
+
+- **WHAT DID NOT WORK / WHAT I ALMOST SHIPPED INSTEAD.** The first plan was a KIND GATE — refuse a
+  mark whose node kind no consultation site can pass — which is provably output-equivalent and would
+  have removed 113,788 of the 319,777 marks (35.6%; CPA 70.2%, CTA 10.2%, CCET 0%). It was drafted in
+  full, with predicates, unit pins and a source-count ratchet. The controls made it obsolete: once
+  `testNoArrayForFile = 0` and the positive control both pass, the whole family goes rather than a
+  third of it. Recording it because the ratchet idea survives the deletion — see the gotcha.
+
+- **A PROCESS TRAP PAID FOR IN FULL.** I launched a second suite run while the first was still
+  finishing and its `rm -rf */build/test-results/jvmTest` killed the first at its results write —
+  `BUILD FAILED ... java.io.EOFException`, no XMLs, exactly CLAUDE.md's round-831 shape. The tell that
+  it was not a real failure: its census dump was byte-identical to the clean run's, i.e. its tests had
+  all completed. Also, the four-module XML glob must be run from the REPO ROOT — from inside a module
+  directory `*/build/test-results/jvmTest/*.xml` matches nothing and prints a plausible `0 0 0`.
+
+- **GATES.** Suite **14,274 -> 14,276 / 0 failures / 3 skipped** = exactly the 2 new pins (the
+  removal itself costs nothing). `cost_gate.py` **+0.00% on all 20 counters**.
+  `huge_methods.py --fail-over 0`: **0 over the limit**, 688 classes. Diff: 147 insertions,
+  184 deletions across `Checker.kt` and the renamed pin.
+
 **Round 886 (2026-08-11) — (SPINE.1)(m3-flags): tsgo MINED AND PRICED. ITS TWO PORTABLE-LOOKING
 DEVICES ARE **DEAD** (0.17% / 0.15%), AND THE ANCHOR MARKS I MADE CHEAP TURN OUT TO BE **INERT** —
 184,569 PRODUCED, 15,446 CONSULTED, **0 AFFIRMATIVE**.**

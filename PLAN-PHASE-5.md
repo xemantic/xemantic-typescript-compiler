@@ -20,6 +20,115 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 899 (2026-08-12) — (WARM.26): THE CUMULATIVE WARM A/B OF ROUNDS 895-898 — **B FASTER IN
+12/12 PAIRS, BOTH BATCHES 6/6 ON OPPOSITE ROTATIONS, SIGN-TEST p = 0.0005 — BUT THE EFFECT IS
+SMALLER THAN ONE ARM'S sd, SO THE *DIRECTION* IS ESTABLISHED AND THE *MAGNITUDE* IS NOT.** AND THE
+SIXTH LEAF PROFILE RECONCILES WITH IT TO WITHIN ITS OWN RESOLUTION.**
+
+**No production code changed.** Round 893 is the template; this block is ~4x smaller than that one
+and the round was designed for that up front. `docs/perf/warm-leaf-profile.md` § 33.
+
+- **(A) THE PRIOR, STATED BEFORE THE RUN.** Rounds 895-898 bank ~82-115 ms by counters (895's scan
+  gating -64.3 ms, 896's `nodeToFlow` -17.9, 896's `perFileScope` 6.4-33; 897/898 are refusals plus
+  flag-gated-OFF instruments, verified from the diff) = **1.5-2.1% of a ~5.4 s rebuild**, against
+  per-arm sds round 893 measured at 2.21%/3.44%. So "not resolvable, the counters remain the claim"
+  was a pre-declared acceptable outcome, and this note would have said so.
+
+- **(B) THE RESULT.** Arms `63819970` (pre-895) and HEAD `7a859f00`, one JVM per SAMPLE (round 867),
+  `WARMUP=6`/`ITERS=8` (the 2026-08-10 calibration), two batches of six pairs with OPPOSITE leading
+  arms, box quiesced and left alone for the whole 40 minutes (round 774).
+
+  | | A = `63819970` | B = HEAD |
+  |---|---:|---:|
+  | n (process medians) | 12 | 12 |
+  | median | 5,418.4 ms | **5,242.6 ms** |
+  | sd | 137.9 ms (**2.55%**) | 132.1 ms (**2.51%**) |
+
+  **12/12 to B.** Pooled median paired **-1.88%**, mean -2.48%, per-pair range **[-6.51%, -0.70%]**,
+  never crossing zero, exact two-sided sign test **p = 0.0005**. Batch 1 **6/6** (median -1.61%),
+  batch 2 **6/6** (median -1.88%) — round 840(c)'s replication met on reversed rotations.
+
+- **(C) AND THE MAGNITUDE IS WHERE THIS SAYS NO.** The three central estimators disagree by 1.7x
+  (median of paired deltas -1.88%, mean -2.48%, median-of-medians -3.25%) and the paired range spans
+  a factor of nine. Both arm sds are again over `ab-warm.sh`'s ~1% threshold, and **unlike round 893
+  the effect is SMALLER than one arm sd**, so CLAUDE.md's "many times the sd" override cannot be
+  invoked at all. What carries the direction is pairing plus replication; nothing carries a figure.
+  **The defensible claim is "roughly 1.5-3%, direction certain, point estimate not resolvable on this
+  box".**
+
+- **(D) A CROSS-ROUND ANCHOR THAT CAME OUT UNUSUALLY WELL — AND IS LUCK, NOT A NEW LAW.** Arm A here
+  differs from round 893's arm B by docs and two script lines; 893 measured that code at **5,424 ms**
+  and this round at **5,418 ms — 0.11% apart across sessions**, where CLAUDE.md prices the anchor at
+  up to 12.8% of drift. It does let the two rounds be laid side by side: **5,859 (pre-887) ->
+  5,424/5,418 (pre-895) -> 5,243 (HEAD) = -10.5% over rounds 887-898.**
+
+- **(E) SAME ANSWERS, DIFFERENT CODE.** All 192 measured rebuilds report 78 files / 46 errors;
+  both arms' `--listAll` capture is 46 diagnostics, digest `59d930db849399aea5e03e25fedb8e4e` (the
+  round-841 cross-round recipe, the same digest round 893 recorded), zero-line diff, no
+  `... and N more error(s)` truncation (round 811). 694 vs 711 classes with `SourceScanFilter` (895)
+  and `MapCensus` (896) in B only, asserted by the driver BEFORE it ran a sample (round 853).
+
+- **(F) THE SIXTH LEAF PROFILE, AND THE FIRST TIME THIS ARC HAS RECONCILED THREE INSTRUMENTS.**
+  Recipe identical to 888/893; 8,127+7,742 samples, max depth 182/170 vs the 512 cap, `checkSpine`
+  inclusive 74.09%/74.00%, denominator **5,429 ms** (round 870). The three landed changes can be
+  added up PER OWNER: `nodeToFlow` -42.6 gross but **+19.1 back as `LongKeyMap` frames = -23.5 net**;
+  `perFileScope` (`lookupPerFile` -29.7, `globalsForFile` -7.8, memo +1.2) **= -36.3**; the scan
+  gating (String family -74.7, `SourceScanFilter` +22.5) **= ~-52**. **Total ~-112 ms = 2.1%**,
+  against the A/B's -1.88% and the counters' 1.5-2.1%. Round 893 closed with "the excess is largely
+  attributed, not yet explained"; here the three instruments agree to within their own resolution.
+  **A container swap must be priced NET — 45% of `nodeToFlow`'s gross came straight back.**
+
+- **(G) BY FAMILY: the map family 1,300.7 -> 1,136.5 ms and String/StringBuilder 222.5 -> 147.8** —
+  exactly the two families the rounds targeted; everything else rose and the residue is flat, which
+  under a shrinking denominator is what an unchanged cost looks like (round 870) plus drift, so only
+  the falls are read. `HashMap$TreeNode` is **0 samples in 15,869** for the second round running. By
+  ROW the top owner is `cpaSpineLeave` at **1.81%** and nothing else clears 1.3% — round 874's law
+  holding for the SIXTH take. **No C2 key split** behind any large row delta; and `ctaSpineEnter`
+  reads 0.87% vs 0.61% WITHIN this round, so a cross-round delta of that size is uninterpretable.
+
+- **(H) THE RANKED LIST — SIX, AND EVERY ONE CARRIES ROUND 898's ARITHMETIC FILTER** (ms ÷ population
+  -> is the implied per-op cost physically possible?). § 33.8. **(1) `resolveImportedSymbolGeneral`**
+  24.3 ms — a PROVEN `containsKey`-then-`get` double probe (round 896's `globalsForFile` shape) on an
+  **Int**-keyed, boxed cache; real only at ~0.7-1.5 M probes/rebuild, **population unknown, first
+  instrument is a counter**; ~8-15 ms, LOW risk, same-answers. **(2) `lexLevelHasName`** 30.1 ms — NOT
+  a double probe (two different maps per level, O(depth) ascent); ~1.0 M probes at ~30 ns is
+  plausible against `globals.lookups` 748,522, so **not refuted**; the lever is a proof-of-absence
+  filter (round 895's shape) over a scope name set frozen after bind; ~8-12 ms, MEDIUM, grid.
+  **(3) `getTypeFromTypeNodeCore`** 57.1 ms, the largest map owner — 354 k ops -> **161 ns/op**, which
+  is plausible ONLY because the key is a data class with a recursive `hashCode` (round 471); the
+  deletable part is the deep hash, ~10-20 ms, **HIGH** risk (cache SHARING, `typeNode.cacheHits`,
+  program order, round 787). **(4) REFUSED HERE ON ARITHMETIC: the two UNCENSUSED whole-map copies**
+  `spineArithFnFrame` + `spineCaCopyTop` = 42.0 ms JFR, which at round 898's measured 2.6-3.4x
+  over-read is ~12-16 ms — below the 0.31% at which round 897 refused a LOW-risk change. **(5)
+  `SuffixNameSet.materialize`** 21.6 ms insert-100%, where the arithmetic makes the answer BINARY:
+  ~0.5-1.0 M adds is implausible for a set built once per file and plausible for one rebuilt per
+  query — one counter decides it. **(6)** `Integer.equals` at **29.4 ms** of key-side leaf work is a
+  LOCATION for the residual boxed-Int maps, with no owner named yet.
+
+- **(I) WHAT IS *NOT* ON THE LIST, AND THE RULE IT ESTABLISHES.** `lookupPerFileForNode` is the
+  second largest map owner (40.7 ms) and its arithmetic is textbook — round 897 counted 1,063,149
+  probes, so 31.1 ms of `HashSet.contains` is **29 ns/probe**. It is absent because the LEVER is
+  absent (a bitset refuses only the 440,003 misses = 2-9 ms; interning is 17.2 ms against 11.1 ms per
+  parse and round 825's concurrency blocker). **A real cost with no known lever is CLOSED, not open.**
+
+- **(J) tsgo — AND HALF OF IT WAS ALREADY CLOSED BY ROUND 889, WHICH THIS ROUND ALMOST RE-RAISED.**
+  `LinkStore[K, V] { entries map[K]*V; arena }` has two axes and they must not be conflated. The
+  GROUPING axis (~25 stores of co-accessed fields) **round 889 censused and refused** — our top such
+  cluster is 0.49% and the bottom is one sample. The KEY axis is open and unmeasured (889's key-shape
+  census left 40.8% "unclassified"): tsgo keys by `*ast.Node`, an 8-byte ADDRESS, where we key
+  `nodeTypes` by the AST VALUE. That is candidate (3) and nothing more. **Unpriced; recorded only to
+  fix which half is closed.**
+
+- **(K) GATES — STATED IN FULL BECAUSE MOST WERE NOT RUN.** No production source changed (`git diff`
+  touches only `scripts/` and `docs/`), so **no suite run, no `cost_gate.py`, no `huge_methods.py`,
+  no 8-profile grid** were required or run — the same posture as round 893 (K). What WAS run, and is
+  the round's own gate: the two arms' `--listAll` same-answers control above, the driver's
+  class-dir positive controls, BenchMain's per-rebuild files/errors abort on all 192 rebuilds, and
+  the profile's depth/thread/`checkSpine`-inclusive validity checks. The repo's `build/classes` was
+  restored from the HEAD snapshot after arm A's build and verified at 711 classes. Source edits are
+  the three new scripts plus one ROUNDS line in each of `round888_families.py`,
+  `round888_compare.py`, `round894_hash_owners.py`.
+
 **Round 898 (2026-08-12) — (WARM.25): ROUND 894'S LAST TWO OPEN CANDIDATES, **BOTH REFUSED**, AND
 WITH THEM THE WHOLE RANKED LIST: **EIGHT OF ITS NINE CEILINGS ARE NOW MEASURED AND EVERY ONE IS OVER
 BY 2.1-21x.** THE ROUND-891-vs-ROUND-894 CONTRADICTION RESOLVES **IN ROUND 891'S FAVOUR** —
@@ -1091,82 +1200,3 @@ so the only variable is the binary. `docs/perf/warm-leaf-profile.md` §§ 30-31.
   `pkill -f "spine_closure_audit"` killed the invoking shell instead — CLAUDE.md's documented self-match
   trap, exit 144, no output. And a TypeScript template literal inside a Kotlin raw string needs
   `${'$'}{...}`: `` `x${idx}y` `` compiled as a Kotlin template and failed with `Unresolved reference 'idx'`.
-
-**Round 887 (2026-08-11) — (SPINE.1)(m3-inert): THE THREE SPINE-ANCHOR MARK FAMILIES ARE **DELETED**.
-319,777 MARKS AND 48,868 CONSULTATIONS PER CORPUS RUN, **ZERO AFFIRMATIVE** — AND THE MECHANISM IS
-NOT "THE CORPUS DOES NOT HAPPEN TO EXERCISE IT", IT IS THAT THE MARK SITES AND THE CONSULTATION
-SITES WERE **DISJOINT IN (BIT x NODE KIND)** FOR THE FAMILY'S WHOLE LIFE.**
-
-Round 886 made these tables cheap and then discovered by census that no consultation ever answers
-`true` on the compiler profile. It queued the removal but forbade acting on that alone, correctly:
-round 753's law says a profile zero bounds FREQUENCY, never existence, and the corpus carries
-dedicated anchor pins whose shapes might well affirm. This round ran the census over the CORPUS,
-with the two controls round 886 lacked, and then removed the family.
-
-- **THE CORPUS CENSUS** (full suite, 14,275 / 0 / 3; reproduced identically across two complete
-  runs). Consultations only ever arrive at four of the 44 marked (bit, kind) rows:
-
-  | bit  | marks   | consultations | **trues** | consulted kinds (counts)                                  |
-  |------|---------|---------------|-----------|-----------------------------------------------------------|
-  | CTA  | 148,599 | 4,272         | **0**     | `Block` 4,263, `ReturnStatement` 7, `ExpressionStatement` 2 |
-  | CPA  | 140,528 | 44,560        | **0**     | `VariableStatement` 44,560                                 |
-  | CCET | 30,650  | 36            | **0**     | `CallExpression` 36                                        |
-  | **all** | **319,777** | **48,868** | **0**   | all 8 truncation/gate sites: **fired 0, removed 0**        |
-
-- **THE TWO CONTROLS, WHICH ARE THE WHOLE REASON THE ZERO IS ACTIONABLE (round 849: a zero from a
-  blind instrument reads exactly like a real negative).** A POSITIVE control — every mark read back
-  immediately at its own (file, nodeId, bit) — reads `markReadBackOk 319,777 / markReadBackFail 0`,
-  so the store/load path is sound. A KEY control — which bucket each consultation lands in — reads
-  `testNoArrayForFile 0`, so every one of the 48,868 consultations found an array for its file. This
-  is **not** the `spineFileName`-vs-`fileName` mismatch that would look identical.
-
-- **AND THE SHARPER FINDING, WHICH IS WHAT MAKES THIS A DELETION RATHER THAN A DEAD-CODE REPORT:
-  `testInRangeOtherBitSet = 42,513` against `testInRangeThisBitSet = 0`.** 87% of consultations land
-  on a node that IS marked — just never with the bit being asked for. The two site families never
-  overlapped in (bit x kind): CPA marked seven statement kinds plus every loop/switch condition and
-  class-heritage `Expression` plus `PropertyDeclaration` — 140,528 marks — and was read back at ONE
-  site, for a `VariableStatement`; CTA additionally marked `IfStatement` and `PropertyDeclaration`,
-  neither of which any site passes (the `IfStatement` arm of `checkTypeAssignabilityInStmt` carries a
-  comment claiming it truncates and contains no truncation at all). So the `while (diagnostics.size >
-  mark) removeAt(…)` branches were unreachable **by construction**, not by accident of the input.
-
-- **WHAT WAS DELETED.** `m3AnchorFlags` + `m3FlagsForCurrent`/`m3Mark`/`m3Has`, the three `M3_BIT_*`
-  constants, the six mark/test wrappers, **13 mark call sites** (8 cta, 4 cpa, 1 ccet), **8
-  consultation sites** and the truncation/gate branches they fed — including
-  `checkFunctionBody`'s `if (!ctaM3BodyAnchored)` suppression of the B442 redeclare walker and the
-  FlatArray depth-param walker, and `cpaSpineLeave`'s per-decl recording gate.
-
-- **THE PIN.** Round 886's `M3AnchorFlagsTest` asserted a structure that no longer exists; it is
-  RENAMED `SpineAnchorEmitOnceTest`, its KDoc rewritten to record this census, and two tests added.
-  These now DO discriminate, which the round-886 versions did not: had any consultation been
-  affirmative, deleting it un-suppresses a legacy walker the spine already ran and the shape emits
-  TWICE. The sharpest is `the body-level redeclare walker reports once per function body` — that gate
-  suppressed a walker the spine runs itself, so a live gate would now double all three of its
-  diagnostics.
-
-- **NO WALL-TIME NUMBER IS CLAIMED.** Round 886 priced the mark path at 1.05-1.26% of a warm rebuild
-  and then got two A/B batches that disagreed, with three of four arm sds at or above the ~1%
-  quiet-box threshold; this box cannot settle a question that size today (rounds 840(c)/858). The
-  claim is COUNTED REMOVED WORK: 319,777 array stores and 48,868 consultations per corpus run, plus
-  the dead branches. `cost_gate.py` at +0.00% is the EXPECTED answer and is read as a control that
-  the semantics are untouched (round 876), not as a win.
-
-- **WHAT DID NOT WORK / WHAT I ALMOST SHIPPED INSTEAD.** The first plan was a KIND GATE — refuse a
-  mark whose node kind no consultation site can pass — which is provably output-equivalent and would
-  have removed 113,788 of the 319,777 marks (35.6%; CPA 70.2%, CTA 10.2%, CCET 0%). It was drafted in
-  full, with predicates, unit pins and a source-count ratchet. The controls made it obsolete: once
-  `testNoArrayForFile = 0` and the positive control both pass, the whole family goes rather than a
-  third of it. Recording it because the ratchet idea survives the deletion — see the gotcha.
-
-- **A PROCESS TRAP PAID FOR IN FULL.** I launched a second suite run while the first was still
-  finishing and its `rm -rf */build/test-results/jvmTest` killed the first at its results write —
-  `BUILD FAILED ... java.io.EOFException`, no XMLs, exactly CLAUDE.md's round-831 shape. The tell that
-  it was not a real failure: its census dump was byte-identical to the clean run's, i.e. its tests had
-  all completed. Also, the four-module XML glob must be run from the REPO ROOT — from inside a module
-  directory `*/build/test-results/jvmTest/*.xml` matches nothing and prints a plausible `0 0 0`.
-
-- **GATES.** Suite **14,274 -> 14,276 / 0 failures / 3 skipped** = exactly the 2 new pins (the
-  removal itself costs nothing). `cost_gate.py` **+0.00% on all 20 counters**.
-  `huge_methods.py --fail-over 0`: **0 over the limit**, 688 classes. Diff: 147 insertions,
-  184 deletions across `Checker.kt` and the renamed pin.
-

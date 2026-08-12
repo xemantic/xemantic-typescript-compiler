@@ -1459,3 +1459,321 @@ separately testable from here. The two under-readings the profile exposes
 (hash ~9×, `cta*` ~1.6×) together roughly close the gap, but that is an
 arithmetic coincidence unless someone prices them independently — so the state of
 the arc is: **the excess is largely attributed, not yet explained.**
+
+---
+
+## 33. Round 899 — (WARM.26): the cumulative A/B of rounds 895-898, and the SIXTH take
+
+Round 893 established the shape: six rounds of counted removed work, each
+correctly declining to claim a wall number, measured collectively. Rounds
+895-898 are the next such block, and they are **~4x smaller** — so this section
+leads with what that does to the verdict rather than burying it.
+
+**No production code changed this round.**
+
+### 33.1 What was banked, by counters
+
+| round | change | counted |
+| --- | --- | ---: |
+| 895 | the whole-source `indexOf` family gated behind `SourceScanFilter` | 488,469,784 chars scanned -> 22,894,093; mechanism nanos **-64.3 ms** |
+| 896 | `nodeToFlow` -> `LongKeyMap` | **-17.9 ms** (262,404 keys) |
+| 896 | `perFileScope` double probe + one-entry memo | 650,394 map probes -> 6,426; **6.4-33 ms** |
+| 897, 898 | refusals and instruments only | (census probes flag-gated OFF; verified) |
+
+Summed, **~82-115 ms on a ~5.4 s rebuild = 1.5-2.1%**. Round 893's block was
+-8.18%. The prior stated BEFORE the run: this is at or under this box's
+per-arm sd (893 measured 2.21% / 3.44%), so a point estimate was not expected
+to be resolvable and "the counters remain the claim" was a pre-declared
+acceptable outcome.
+
+### 33.2 The A/B — the SIGN is decisive, the MAGNITUDE is not
+
+Protocol identical to round 893: arms `63819970` (round 893's own measurement
+commit, i.e. the state before 895) and HEAD `7a859f00`, snapshotted to separate
+class dirs; **one JVM per SAMPLE** (round 867); `WARMUP=6` / `ITERS=8` (the
+2026-08-10 calibration); sample = that process's median; **two batches of six
+pairs with opposite leading arms**; box quiesced before measuring and left alone
+for the whole run (round 774). `scripts/round899-ab.sh`,
+`scripts/round899_ab_report.py`.
+
+| | A = `63819970` | B = HEAD `7a859f00` |
+|---|---:|---:|
+| n (process medians) | 12 | 12 |
+| median | 5,418.4 ms | **5,242.6 ms** |
+| mean | 5,404.0 ms | 5,269.0 ms |
+| sd | 137.9 ms (**2.55%**) | 132.1 ms (**2.51%**) |
+
+**B is faster in 12/12 pairs.** Pooled median paired delta **-1.88%**, mean
+-2.48%, per-pair range **[-6.51%, -0.70%]** — never crossing zero. Exact
+two-sided sign test **p = 0.0005**. Batch 1 alone **6/6**, median -1.61%;
+batch 2 alone **6/6**, median -1.88% — the replication round 840(c) demands,
+on reversed rotations.
+
+**And the magnitude is where this must be honest.** The three central
+estimators disagree by 1.7x — median of paired deltas -1.88%, mean -2.48%,
+median-of-medians -3.25% — and the paired range spans a factor of nine. Both
+arm sds are again above `ab-warm.sh`'s ~1% quiet-box threshold, and unlike
+round 893 the effect is **smaller than one arm sd**, so the "many times the sd"
+override cannot be invoked at all. What carries the direction is pairing plus
+replication, and nothing carries a figure.
+
+> **The defensible claim: rounds 895-898 made the warm rebuild faster, by
+> roughly 1.5-3%. The point estimate is NOT resolvable at this size on this
+> box, and the counters remain the primary claim.**
+
+**One unusually good control fell out of it.** Arm A here is `63819970`, which
+differs from round 893's arm B (`abf184ee`) by docs and two script lines only.
+Round 893 measured that code at **5,424 ms**; this round measures it at
+**5,418 ms** — **0.11% apart, across sessions.** CLAUDE.md prices the
+cross-round anchor at up to 12.8% of drift, so this is luck rather than a new
+law, but it does mean the two rounds' absolute numbers can be laid side by side
+with unusual confidence: 5,859 (pre-887) -> 5,424/5,418 (pre-895) -> 5,243
+(HEAD) = **-10.5% over rounds 887-898**.
+
+**Same answers, different code.** Every one of the 192 measured rebuilds
+reports 78 files / 46 errors (BenchMain aborts on drift); both arms'
+`--listAll` capture is 46 diagnostics with digest
+`59d930db849399aea5e03e25fedb8e4e` — the same cross-round digest round 893
+recorded — with a zero-line diff and no `... and N more error(s)` truncation
+(round 811). The binaries are structurally distinct: 694 vs 711 classes, with
+`SourceScanFilter` (895) and `MapCensus` (896) present only in B, asserted by
+the driver before it ran a sample (round 853).
+
+### 33.3 The sixth leaf profile — validity
+
+Recipe identical to rounds 888/893 (`scripts/round899-profile.sh`):
+`stackdepth=1024`, `delay=60s,duration=90s`, `jfr print --stack-depth 512`,
+filtered to `xtsc-deep-stack`, stdlib charged to the nearest non-stdlib OWNER.
+8,127 + 7,742 samples (29 / 43 on other threads); **max depth 182 / 170**
+against the 512 cap, so nothing is truncated; `checkSpine` INCLUSIVE reads
+**74.09% / 74.00%** against this arc's known ~74%.
+
+Denominator, per round 870: this round's own medians **5,551.9 / 5,306.3**,
+mean **5,429 ms** (round 893: 5,461; round 888: 5,905). A JFR share is a share
+of WALL TIME, so every number below is `share x 5,429` = ms/rebuild.
+
+### 33.4 Leaf-class families, ms/rebuild
+
+| leaf-class family | ms888 | ms893 | ms899 | delta 893->899 |
+|---|---:|---:|---:|---:|
+| own code | 3,650.1 | 3,487.5 | 3,666.8 | +179.3 |
+| **HashMap / HashSet** | 1,560.3 | 1,300.7 | **1,136.5** | **-164.2** |
+| **String / StringBuilder** | 259.8 | 222.5 | **147.8** | **-74.7** |
+| ArrayList / ArrayDeque | 262.7 | 273.8 | 282.9 | +9.1 |
+| other stdlib | 148.8 | 157.5 | 176.5 | +19.0 |
+| `Intrinsics.areEqual` | 16.0 | 11.6 | 10.3 | -1.3 |
+| `java.util.regex` | 7.3 | 7.5 | 8.2 | +0.7 |
+
+`HashMap$TreeNode` as a leaf: **0 samples in 15,869**, a second confirmation
+that rounds 889/890 removed the mechanism rather than shrinking it.
+
+The two families that fell are exactly the two the rounds targeted — the map
+family (896) and the text-scan family (895) — and the residue rose. Since the
+column sums to the median by construction, a rise in "own code" is not
+independent evidence of anything; cross-round absolute comparison carries
+CLAUDE.md's up-to-12.8% drift caveat, so only the falls are read here.
+
+### 33.5 The reconciliation — three landed changes, per OWNER
+
+This is the part that makes the profile more than a ranking this round: the
+owners the three changes touch can be added up, and the sum can be held against
+an independently measured wall delta from the same session.
+
+| change | removed | added back | net |
+|---|---|---|---:|
+| 896 `nodeToFlow` -> `LongKeyMap` | `recordFlow` -34.1, `FlowGraph.<init>` -8.5 | `LongKeyMap.put` +8.5, `.grow` +7.9, `.get` +2.4, `.<init>` +0.3 | **-23.5** |
+| 896 `perFileScope` | `lookupPerFile` -29.7, `globalsForFile` -7.8 | `lookupPerFileForNode` +1.2 | **-36.3** |
+| 895 whole-source scans | String/StringBuilder family -74.7 | `SourceScanFilter.<init>` +20.5, `.mayContain` +2.0 | **~-52** |
+| | | | **~-112 ms** |
+
+**-112 ms = 2.1% of a 5,429 ms rebuild**, against a measured paired A/B median
+of **-1.88%** and counters of ~1.5-2.1%. **Three independent instruments agree
+to within their own resolution**, which is a materially better state than round
+893 left the arc in (§ 32.6: "largely attributed, not yet explained"). Two
+per-change notes worth keeping:
+
+* `nodeToFlow`'s replacement is **45% of the gross** — 19.1 ms of `LongKeyMap`
+  frames came back for 42.6 ms removed. Round 896 predicted exactly this ("a
+  replacement probe is not free, which is the whole 2.6x") and measured the net
+  at 17.9 ms; the profile reads 23.5. **A container swap must be priced net.**
+* `perFileScope` reads **-36.3 ms**, at or above the top of round 896's own
+  6.4-33 ms range and essentially at round 894's 34.7 ms JFR ceiling — the one
+  candidate in the whole § 9 list whose ceiling was about right.
+
+### 33.6 Owner families (round 874's unit), ms/rebuild
+
+| family | ms893 | ms899 | delta |
+|---|---:|---:|---:|
+| INV.4 reach classifiers | 376.4 | 389.9 | +13.5 |
+| type construction | 303.2 | 315.9 | +12.7 |
+| spine walk core | 204.4 | 214.7 | +10.3 |
+| name resolution | 235.8 | **199.2** | **-36.6** |
+| scope frame copies | 178.1 | 157.8 | -20.3 |
+| module/import resolution | 133.9 | 152.1 | +18.2 |
+| narrowing walk | 141.9 | 147.7 | +5.8 |
+| `cpa*` handlers | 132.6 | 144.3 | +11.7 |
+| relation engine | 108.4 | 97.5 | -10.9 |
+| `cta*` handlers | 84.3 | 95.2 | +10.9 |
+| `ccet*` handlers | 85.0 | 91.3 | +6.3 |
+| **flow-graph build** | 134.0 | **85.4** | **-48.6** |
+| unclassified residue | 3,342.8 | 3,338.0 | -4.8 |
+
+By ROW the top owner is `Checker.cpaSpineLeave` at **98.5 ms = 1.81%** and
+nothing else clears 1.3% — round 874's law holding for the SIXTH take running.
+**No C2 key split** was found behind any large row delta (round 888 § 30.2):
+the four biggest movers (`ctaSpineEnter` +10.2, `resolveFlowCalleeDecl` +10.5,
+`narrowTypeFromFlowCore` +8.5, `spineArgListOverlay` -8.6) each have a single
+owner name in both rounds and no sibling `$local` row appearing or vanishing.
+Note also that `ctaSpineEnter`'s own two processes read 0.87% and 0.61% WITHIN
+round 899 — a 43% within-round spread — so a cross-round delta of that size is
+not interpretable at all.
+
+### 33.7 The residual map family, and the arithmetic filter every candidate now passes through
+
+`scripts/round894_hash_owners.py --rounds 899,893`. STRICT **1,136.5 ms
+(20.93%)**, EXTENDED **1,317.9 ms (24.28%)** — down from 1,300.7 / 1,449.1.
+Operation split (EXTENDED): **lookup 822.1, insert 297.0, copy-construct 171.7,
+remove 15.4**. Cross-round movers are the three landed changes and nothing else.
+
+**ROUND 898'S CORRECTION IS NOW THE ADMISSION TEST.** Eight of round 894's nine
+ceilings were measured and every one was over, by 2.1-21x, clustering at ~3x
+wherever the owner really is one map operation. So a row in the table below is
+a LOCATION, and every candidate carries two build-free checks: **divide the ms
+by the operation count and ask whether the implied per-op cost is physically
+possible**, and **name the one map operation the row is supposed to be**.
+
+### 33.8 The ranked candidate list — six, each with its arithmetic
+
+Reference costs for the plausibility arithmetic, from this arc's own
+measurements: a `String`-keyed `HashMap` probe with a cached hash is **~20-50
+ns** (round 896 measured a production `perFileScope` probe at 10-51 ns); an
+equal-but-distinct `String.equals` is **14.6 ns** (round 897); a `HashMap`
+insert with a cached hash is **tens of ns**, which is what refuted 110 ns/entry
+(round 898).
+
+---
+
+**(1) `resolveImportedSymbolGeneral` — a double-probed, Int-BOXED cache.**
+JFR **24.3 ms** EXTENDED (of which **21.9 ms is `HashMap.containsKey`**), op
+mix lookup 94% / insert 5%.
+*Mechanism, read from source:* `if (topLevel && importedSymbolGeneralCache.containsKey(id)) return importedSymbolGeneralCache[id]`
+— two probes where one suffices, **exactly round 896's `globalsForFile` shape**,
+on a cache whose key is `aliasSymbol.id`, an **Int** that is boxed on every
+probe (the census independently shows **`Integer.equals` at 29.4 ms** of
+key-side leaf work program-wide).
+*Arithmetic:* an `Integer`-keyed `containsKey` is ~15-30 ns, so 21.9 ms is
+physically real only at **~0.7-1.5 M probes per rebuild**. **The population is
+unknown and the first instrument is a counter, not a fix** — if it is under
+~200 k the row is mis-attributed and the candidate dies for free.
+*Realistic prize if the population holds:* half the probes plus the boxing,
+**~8-15 ms (0.15-0.28%)**. *Risk LOW, same-answers* (a cache, not a semantic;
+`IntKeyMap` has no iterator, so the round-754/776/778 hazard is a compile error
+— round 896(D)). *Gate:* suite + `cost_gate.py`; no 8-profile grid needed.
+
+**(2) `lexLevelHasName` — the INV.4(c)(ii) hybrid chain ascent.**
+JFR **30.1 ms** map (owner TOT 39.0), **100% lookup**, of which 29.8 ms is
+`containsKey`.
+*Mechanism:* two `containsKey` probes on two DIFFERENT maps (`l.symbols`, then
+`l.existing`) per lexical LEVEL, inside an O(depth) ascent. **It is not a
+double probe** — round 896's fix does not transfer, which is why it is stated
+here rather than folded into (1).
+*Arithmetic:* at ~30 ns per `String`-keyed `containsKey`, 29.8 ms implies
+**~1.0 M probes per rebuild** = ~2 probes over ~500 k level-visits. Against
+`globals.lookups` 748,522 that is entirely plausible. **Not refuted.**
+*Lever:* a proof-of-absence filter per level — a scope's name set is FROZEN
+after bind, and `SourceScanFilter` (round 895) is the house shape for exactly
+that (one clear bit is a proof of absence; the real probe stays the oracle).
+*Realistic:* the negative fraction only, **~8-12 ms (0.15-0.22%)**.
+*Risk MEDIUM* — INV.4(c)(ii)'s three load-bearing rules, and the family decides
+TS2304. **Needs the 8-profile grid.**
+
+**(3) `getTypeFromTypeNodeCore` — the deep-hash-keyed `nodeTypes` cache.**
+JFR **57.1 ms**, the largest single map owner; lookup 71% / insert 26%.
+*Arithmetic:* `typeNode.cacheable` 176,282 lookups plus 59,283 misses paying
+insert + sentinel add + sentinel remove = **~354 k map ops -> 161 ns/op**.
+That is far above an ordinary probe and is plausible **only** because the key
+is an AST **data class** whose `hashCode()` recurses the subtree (round 471).
+So the row is real AND the deletable part is only the deep hash: the key-side
+census puts ALL own-code `hashCode` inside map operations at **57.5 ms**
+program-wide, of which the TypeNode-shaped rows are ~15-20 ms.
+*Realistic:* **10-20 ms (0.18-0.37%)**. *Risk HIGH* — identity or nodeId keying
+changes cache SHARING (`typeNode.cacheHits` 116,999 moves, a `cost_gate.py`
+counter), it is a program-ORDER hazard (rounds 754/776/778), and round 787
+forbids a raw `nodeId` as a program-wide key. **Round 896 already refused the
+sentinel half of this owner at 3-5 ms.** Grid required.
+
+**(4) The two UNCENSUSED whole-map scope copies — REFUSED HERE, on arithmetic.**
+`spineArithFnFrame` (`HashMap(spineArithLocals)`) **28.7 ms** and
+`spineCaCopyTop` (`HashMap(frames.last().consts)`) **13.3 ms** — **42.0 ms**
+combined, and round 898's copy census covered neither. The shape is exactly the
+one rounds 869/891/892 converted to `MapScopeStack`.
+*Arithmetic:* round 898 measured this family's JFR row at **2.6-3.4x** the
+truth, so the expected answer is **~12-16 ms**, at or below the **0.31%** floor
+at which round 897 refused a change it rated LOW risk. **Refused before
+building.** If it is ever revisited the first instrument is round 892's
+counting facade, one census, before any code — and only a population far larger
+than `EpochMap`'s would change the verdict.
+
+**(5) `SuffixNameSet.materialize` — 21.6 ms, insert 100%, and the answer is binary.**
+Builds a `HashSet` of module-specifier suffix names.
+*Arithmetic:* a `HashSet.add` with a cached `String` hash is ~20-40 ns, so
+21.6 ms implies **~0.5-1.0 M adds per rebuild** for a module-resolution helper
+over 78 files. That is implausibly large for a set built once per file and
+entirely plausible for a set rebuilt per QUERY. **So the counter decides it and
+the two outcomes are far apart**: rebuilt-per-query is a memo with a real
+prize; built-once means the row is over-attributed and there is nothing here.
+One counter, no build.
+
+**(6) The residual boxed-Int map keys — a LOCATION, not yet a candidate.**
+`Integer.equals` is **29.4 ms** of key-side leaf work, i.e. cost that exists
+*only* because a primitive key is boxed; `IntKeyMap`/`LongKeyMap` are the house
+idiom and already carry `symbolTypes`, the three intern caches and (since 896)
+`nodeToFlow`. There is no single owner to name — the instrument is a grep of
+`Map<Int` / `HashMap<Int` plus a per-site population count, and each site is
+then its own small same-answers decision. Quoted so the next reader knows the
+29.4 ms exists and is *fully* deletable in principle, and that nothing has yet
+established which maps hold it.
+
+**What is NOT on this list, and why:** `lookupPerFileForNode` is the second
+largest map owner (**40.7 ms**, of which 31.1 is `HashSet.contains` on
+`moduleOnlyGlobalNames`) and its arithmetic is fine — round 897 counted
+**1,063,149 probes**, so 31.1 ms is **29 ns/probe**, textbook. It is absent
+because the lever is absent: a bitset pre-filter can only refuse the 440,003
+misses (2-9 ms) and interning is measured at 17.2 ms against an 11.1 ms/parse
+cost and the round-825 concurrency blocker. **A real cost with no known lever
+is CLOSED, not open.**
+
+### 33.9 tsgo — and the half of it that round 889 already CLOSED
+
+Warm xtsc is 2.05x tsc and tsgo is 3.09x, so tsgo is ~1.5x faster than us warm.
+The obvious place to look for an architectural cause is `LinkStore`. **Half of
+that lead is already priced and REFUSED and must not be re-raised.**
+
+`typescript-go-repo/internal/core/linkstore.go` is
+`LinkStore[K comparable, V any] { entries map[K]*V; arena Arena[V] }`, and the
+checker holds `nodeLinks core.LinkStore[*ast.Node, NodeLinks]`,
+`TypeNodeLinks { resolvedType *Type }`, `SymbolNodeLinks`, `EnumMemberLinks` —
+i.e. ~25 narrow stores, each ONE probe returning a struct of CO-ACCESSED fields.
+**Round 889 censused whether our per-entity facts come in such bundles and the
+answer is no**: the two clusters that ARE tsc's `NodeLinks` shape exactly
+(`nodeTypes` + its sentinel; `symbolTypes` + its sentinel) are the top cluster
+at 0.49% of the profile and the bottom one at ONE sample, and a merge saves a
+probe only on the miss path. The GROUPING half of the `LinkStore` idea is
+closed — `docs/perf/hash-key-spread.md`, round 889 (A)/(B).
+
+**What round 889 did not price is the KEY half, and that is candidate (3).**
+tsgo keys `nodeLinks` by `*ast.Node` — a POINTER, hashed as an 8-byte address in
+constant time. We key `nodeTypes` by the AST **value**, a Kotlin data class whose
+`hashCode()` recurses the subtree, which is § 33.8(3)'s measured 161 ns/op.
+Round 889's own key-shape census left 40.8% of the family "unclassified (probes
+through a property path)", so this axis is genuinely unmeasured rather than
+refuted. CLAUDE.md records the same fact about tsc — *"`NodeLinks.resolvedType`
+is a field read on the node, with no key to build"* — and round 716 is why we
+have a keyed map at all.
+
+**This is a lead, not a claim, and it is not a new one:** it is candidate (3)
+with its full HIGH risk (cache-sharing semantics, `typeNode.cacheHits`, the
+program-order hazard, round 787's ban on a raw `nodeId` as a program-wide key).
+It is recorded here only to state precisely which half of the tsgo comparison is
+closed and which half is still open, because the two have been conflated once
+already.
