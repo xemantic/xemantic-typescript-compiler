@@ -634,6 +634,16 @@ roughly 14–20 ms but only under an assumption this census cannot test.
 
 ### (6) `spineArgListOverlay` → a chained scope map — **prize ≤ 41.2 ms (0.75%)**
 
+> **REFUSED, round 898 — `docs/perf/copy-family-price.md` § 4.** Measured prize
+> **12.7 ms (0.23%)**, i.e. this ceiling is **3.2x** the answer. The census it
+> never had: **393 copies per rebuild** (365 nested-fn overlays of mean 633
+> entries + 28 shadow-minus of mean 753) carrying **8,152 writes**. And the cost
+> that decides it is a population this section could not see — **56,096
+> `SpineArgCtx` lookups per rebuild, 29,703 of them (53%) MISSES**, which a
+> chain must walk to the END; that is 1-6 ms back out, leaving ~7-11 ms
+> (0.13-0.20%). Below the 0.31% at which round 897 refused a LOW-risk change,
+> with no counter in `cost-counters.txt` able to defend it.
+
 O(all visible function names) map copy per statement list that declares a
 function. **Risk: MEDIUM.** The undo-log shape of rounds 869/891/892 does NOT
 apply — `spineArgListCtxMemo` RETAINS each context, which is round 892's explicit
@@ -662,6 +672,18 @@ a hash — CLAUDE.md's `packIdPair` entry is the reference and `docs/perf/hash-k
 ---
 
 ### (8) Re-census the surviving `EpochMap` copies — **not a change; an instrument run**
+
+> **RUN, round 898 — `docs/perf/copy-family-price.md` §§ 1-2, 5. The
+> contradiction is resolved in ROUND 891's favour: measured 11-15 ms
+> (0.20-0.27%), and 38.1 ms here is 2.6-3.4x high.** The "2x discrepancy" was
+> partly not one — round 892 removed 124,709 entries from the family, so round
+> 891's derivation re-stated at today's 347,017 entries reads 10.4-17.7 ms and
+> BRACKETS the measurement. The per-call-term hypothesis is refuted by the
+> `EpochSet` arm (35,015 copies of mean 1.1, slope unresolvable). The
+> conversion stays REFUSED — the precondition is unchanged and the whole family
+> is worth under 0.25%. New: **54.4% of the copy volume is in copies NEVER
+> WRITTEN**, so a copy-on-write scheme (which needs no LIFO discipline) is worth
+> ~6-8 ms, still below the floor.
 
 **≤ 38.1 ms (0.70%)**, replicating (38.9/37.3/34.0/39.3). Round 891 DERIVED
 14–24 ms for `EpochMap(localTypes)` and REFUSED the conversion because the LIFO
@@ -745,7 +767,39 @@ Three things a next reader should carry:
    total; the split moves with C2's choices about where the loop's bounds check
    lands.
 
-## 12. Reproducing this
+## 12. What round 898 did with this list — and what is left of § 9
+
+Round 898 priced (6) and (8), which were the last two open, and the scoreboard
+is now complete: **eight of the nine candidates measured, EVERY ONE over.**
+
+| candidate | § 9 ceiling | measured | over by | round |
+| --- | ---: | ---: | ---: | --- |
+| (1) scanner interning | 67.7 | 17.2 | 3.9x | 897 |
+| (2a) `perFileScope` | 34.7 | 6.4-33 | 1.1-5.4x | 896 |
+| (2b) `moduleOnlyGlobalNames` | 42.9 | 2-9 | 4.8-21x | 897 |
+| (3) `nodeToFlow` | 46.6 | 17.9 | 2.6x | 896 |
+| (4) `symbolTypeResolutionInProgress` | 28.2 | 2-5 | 5.6-14x | 896 |
+| (5) `nodeTypeResolutionInProgress` | 14-20 | 3-5 | 2.8-6.7x | 896 |
+| (6) `spineArgListOverlay` | 41.2 | 12.7 | 3.2x | 898 |
+| (8) `EpochMap` copies | 38.1 | 11-15 | 2.6-3.4x | 898 |
+
+**THIS SECTION IS A LOCATION LIST, NOT A PRICE LIST.** § 0's own caveat — a JFR
+leaf share is not a wall-clock price — is correct and was then forgotten nine
+candidates running. The ratios cluster at ~3x wherever the owner really is one
+map operation ((1)(3)(6)(8)) and run much higher where the owner row was mostly
+something else ((2b)(4)(5)), which is a systematic attribution bias plus a
+per-candidate misidentification, not eight independent over-estimates.
+
+Two steps stand between a row here and a decision, and NEITHER NEEDS A BUILD:
+
+1. **Divide the owner row by its own population.** 110 ns to copy one map entry
+   (candidate 8), 1,164 ns to add one `Integer` to a 3-element set (candidate 4)
+   are refutations on their face.
+2. **Name the ONE map operation the row is supposed to be, and check the owner
+   does nothing else.** Candidate (4)'s owner row was real cost in a function
+   that was not that set at all.
+
+## 13. Reproducing this
 
 ```
 python3 scripts/round894_hash_owners.py                       # 893 vs 888
