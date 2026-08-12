@@ -323,6 +323,34 @@ fun nodeKey(pos: Int, end: Int): Long =
 fun nodeKey(node: Node): Long = nodeKey(node.pos, node.end)
 
 /**
+ * (WARM.23) round 896 — [nodeKey] shifted by one in BOTH coordinates, for the
+ * ONE container that left `java.util` for [LongKeyMap]: `FlowGraph.nodeToFlow`.
+ *
+ * [LongKeyMap] reserves `0L` as its empty-slot sentinel, and `nodeKey(0, 0)`
+ * **is** `0L` — a zero-width node at offset 0, which an error-recovery "missing"
+ * node at the start of a file really is. The shift is a BIJECTION on `(pos, end)`
+ * pairs (`nodeKey` itself is one: the pack is injective and `NODE_KEY_MIX` is
+ * odd, so multiplying is a permutation mod 2^64), so it changes nothing about
+ * the key's spread or its collision behaviour — only WHICH pair lands on the
+ * sentinel. After it that pair is `(-1, -1)`, and both directions are then
+ * right by construction:
+ *
+ *  * `recordFlow` refuses `pos < 0`, so every key WRITTEN has `pos + 1 >= 1` in
+ *    the high 32 bits — exactly [LongKeyMap]'s documented invariant;
+ *  * a synthetic node (`pos == -1`) asked at a READ site hashes to the sentinel
+ *    and [LongKeyMap.get] answers `null` there, which is the same `null` the
+ *    LinkedHashMap answered for a node nothing ever recorded.
+ *
+ * Do NOT re-use this for the other two `nodeKey`-keyed containers: `nodeToSymbol`
+ * is ITERATED (see [nodeKey]'s own note), so it cannot move to an unordered
+ * container at all.
+ */
+fun flowKey(pos: Int, end: Int): Long = nodeKey(pos + 1, end + 1)
+
+/** [flowKey] for a [Node], based on its source position. */
+fun flowKey(node: Node): Long = flowKey(node.pos, node.end)
+
+/**
  * Pack a pair of 32-bit ids into one Long map key — the checker's house idiom
  * since M0.3(iii) — with [nodeKey]'s multiplicative finalizer applied.
  *

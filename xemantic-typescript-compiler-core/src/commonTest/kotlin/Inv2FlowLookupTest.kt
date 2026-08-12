@@ -31,7 +31,7 @@ import kotlin.test.fail
 
 /**
  * INV.2(b): [FlowGraph.flowAt] — the pilot nodeId-array side table — must be
- * BEHAVIOR-PRESERVING vs the legacy `nodeToFlow[nodeKey(node)]` lookup:
+ * BEHAVIOR-PRESERVING vs the legacy `nodeToFlow.get(flowKey(node))` lookup:
  *
  *  - for every IN-TREE node the array answer equals the map answer BY
  *    CONSTRUCTION (the array is pre-computed from the finished map, so the
@@ -63,7 +63,7 @@ class Inv2FlowLookupTest {
         var checked = 0
         var recorded = 0
         for (node in allNodes(sourceFile)) {
-            val legacy = graph.nodeToFlow[nodeKey(node)]
+            val legacy = graph.nodeToFlow.get(flowKey(node))
             val fast = graph.flowAt(node)
             if (fast !== legacy) {
                 fail(
@@ -83,12 +83,12 @@ class Inv2FlowLookupTest {
     fun `a synthesized node carrying recorded extents falls back to the map answer`() {
         val sourceFile = Parser(INV2_RICH_FIXTURE, "rich.ts").parse()
         val graph = FlowGraphBuilder().build(sourceFile)
-        val recordedNode = allNodes(sourceFile).first { graph.nodeToFlow[nodeKey(it)] != null }
+        val recordedNode = allNodes(sourceFile).first { graph.nodeToFlow.get(flowKey(it)) != null }
         // A fresh node with the SAME extents but nodeId −1 / foreign identity: the
         // ownership check must reject the array path and serve the legacy map hit.
         val ghost = Identifier(text = "ghost", pos = recordedNode.pos, end = recordedNode.end)
         val viaGhost = graph.flowAt(ghost)
-        val legacy = graph.nodeToFlow[nodeKey(ghost)]
+        val legacy = graph.nodeToFlow.get(flowKey(ghost))
         assert(viaGhost != null)
         assert(viaGhost === legacy)
     }
@@ -102,7 +102,7 @@ class Inv2FlowLookupTest {
         // fails A's identity ownership check, so the answer must be A's map answer.
         for (node in allNodes(fileB)) {
             val fast = graphA.flowAt(node)
-            val legacy = graphA.nodeToFlow[nodeKey(node)]
+            val legacy = graphA.nodeToFlow.get(flowKey(node))
             if (fast !== legacy) {
                 fail(
                     "foreign ${node::class.simpleName} (nodeId ${(node as NodeBase).nodeId}) " +

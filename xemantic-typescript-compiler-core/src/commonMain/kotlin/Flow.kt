@@ -156,8 +156,18 @@ class FlowArrayMutation(
  *
  * Built by [FlowGraphBuilder] during [Binder.bind]. Stored on [BinderResult].
  */
-class FlowGraph(
-    val nodeToFlow: Map<Long, FlowNode>,
+class FlowGraph internal constructor(
+    /**
+     * (WARM.23) round 896 — a [LongKeyMap], not the `mutableMapOf<Long, FlowNode>`
+     * this was until then. Round 894 § 9(3) audited it as get/put/`size` only and
+     * the swap makes that audit PERMANENT rather than a claim about today's
+     * source: [LongKeyMap] has no iterator, no `keys`, no `entries`, so the
+     * rounds-754/776/778 iteration-order hazard — the one that is invisible in
+     * every output diff — is now a compile error rather than a review item.
+     *
+     * Keys come from [flowKey], never [nodeKey]: see its KDoc for the sentinel.
+     */
+    internal val nodeToFlow: LongKeyMap<FlowNode>,
     /** B464: closure (Arrow/FunctionExpression) [FlowStart]s carrying [FlowStart.outerFlow]. */
     val closureStarts: List<FlowStart> = emptyList(),
     /** Round 426 (faithful TS2563): the file this graph was built from — lets the
@@ -230,12 +240,12 @@ class FlowGraph(
         // **Why this is exactly the whole-tree walk's answer, for every node.**
         // The table has ONE reader, [flowAt], which uses it only when
         // `nodeById[id] === node` and otherwise falls back to
-        // `nodeToFlow[nodeKey(node)]`. Take any node of this file:
-        //  * RECORDED — both fills put `nodeToFlow[nodeKey(node)]` in its slot
+        // `nodeToFlow.get(flowKey(node))`. Take any node of this file:
+        //  * RECORDED — both fills put `nodeToFlow.get(flowKey(node))` in its slot
         //    (this one reads the FINISHED map, so a key written twice lands on
         //    the same final value the walk would have read);
         //  * in the tree but NOT recorded — the walk stored
-        //    `nodeToFlow[nodeKey(node)]`, which is `null` unless some recorded
+        //    `nodeToFlow.get(flowKey(node))`, which is `null` unless some recorded
         //    node shares its `(pos,end)` extent; here the slot stays empty and
         //    `flowAt` performs that identical lookup itself;
         //  * not in this tree at all — neither fill touches it, and `flowAt`
@@ -249,7 +259,7 @@ class FlowGraph(
                 val id = (node as NodeBase).nodeId
                 if (id in 0 until count) {
                     nodeById[id] = node
-                    val f = nodeToFlow[nodeKey(node)]
+                    val f = nodeToFlow.get(flowKey(node))
                     flowById[id] = f
                     if (FrontEnd.mode == FrontEnd.ON) {
                         visited++
@@ -266,7 +276,7 @@ class FlowGraph(
                 val id = (node as NodeBase).nodeId
                 if (id in 0 until count) {
                     nodeById[id] = node
-                    val f = nodeToFlow[nodeKey(node)]
+                    val f = nodeToFlow.get(flowKey(node))
                     flowById[id] = f
                     if (FrontEnd.mode == FrontEnd.ON) {
                         visited++
@@ -393,7 +403,7 @@ class FlowGraph(
             return f
         }
         if (FrontEnd.mode == FrontEnd.ON) FrontEnd.addFlowAt(2)
-        val fallback = nodeToFlow[nodeKey(node)]
+        val fallback = nodeToFlow.get(flowKey(node))
         if (FlowCensus.on && fallback != null) FlowCensus.touch(fallback, FlowCensus.CH_FLOWAT)
         return fallback
     }
@@ -600,7 +610,7 @@ internal class SuffixNameSet(
 
 class FlowGraphBuilder {
 
-    private val nodeToFlow: MutableMap<Long, FlowNode> = mutableMapOf()
+    private val nodeToFlow = LongKeyMap<FlowNode>(256)
     private var nextId = 0
 
     private var currentFlow: FlowNode = FlowStart(nextId++, null)
@@ -658,7 +668,7 @@ class FlowGraphBuilder {
         // file; recorded so the BIND_FLOW row can be read per flow node instead
         // of per file. Behaviour-free when the probe is off.
         FrontEnd.addFlowCensus(nextId.toLong())
-        FrontEnd.addFlowMintCensus(recordFlowCalls.toLong(), nodeToFlow.size.toLong())
+        FrontEnd.addFlowMintCensus(recordFlowCalls.toLong(), nodeToFlow.entryCount.toLong())
         val tIndex = FrontEnd.t()
         val graph = FlowGraph(
             nodeToFlow, closureStarts.toList(), sourceFile, containerStarts.toList(),
@@ -673,7 +683,7 @@ class FlowGraphBuilder {
         // read and a not-taken branch.
         if (MapCensus.flowReplayReps > 0) {
             val keys = LongArray(recordedNodes.size)
-            for (k in recordedNodes.indices) keys[k] = nodeKey(recordedNodes[k])
+            for (k in recordedNodes.indices) keys[k] = flowKey(recordedNodes[k])
             MapCensus.replayFlowKeys(keys)
         }
         return graph
@@ -801,7 +811,7 @@ class FlowGraphBuilder {
         if (node.pos < 0) return
         if (FrontEnd.mode == FrontEnd.ON) recordFlowCalls++
         recordedNodes.add(node)
-        nodeToFlow[nodeKey(node)] = currentFlow
+        nodeToFlow.put(flowKey(node), currentFlow)
     }
 
     // ---- statement bindings ---------------------------------------------
