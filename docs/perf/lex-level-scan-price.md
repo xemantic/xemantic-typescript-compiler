@@ -155,18 +155,50 @@ answer**, so no output assertion anywhere can see one.
 
 | arm | the mistake | pins red | uniquely its own |
 |---|---|---:|---|
-| B1 | the scan arm never runs | see § below | |
-| B2 | the hybrid arm never runs | | |
-| B3 | the scan stops one element short | | |
-| B4 | the array built from `symbols` **plus** `existing` (round 748) | | |
-| B5 | the size histogram de-duplicated per scope — *round 901's population, injected deliberately* | | |
-| B6 | the probe size recorded as 1 instead of the level's length | | |
+| B1 | the scan arm never runs | 2 | set unique; separated from B3 by the liveness pin |
+| B2 | the hybrid arm never runs | 2 | set unique |
+| B3 | the scan stops one element short | 1 | **no — a strict subset of B1** |
+| B4 | the array built from `symbols` **plus** `existing` (round 748) | 3 | **yes** — *the scanned array holds the level's own keys* |
+| B5 | the histogram de-duplicated per scope — *round 901's population, injected deliberately* | 2 | **yes** — *every real probe is bucketed exactly once* |
+| B6 | the probe size recorded as 1 instead of the level's length | 2 | **yes** — *the summed sizes agree with the histogram* |
+
+**All six discriminate. Five have a failure set contained in no other arm's;
+three have a pin that only they break.** B3 is caught but not separated from B1 —
+a scan that stops one element short and a scan that never runs both break the
+map-equality assertion, and nothing here distinguishes *wrong* from *absent*
+beyond the liveness pin B1 additionally trips. Recorded, not dressed up (round
+807).
+
+### Two arms were DEAD, not blind — and the driver could not tell
+
+The first pass reported B4 and B5 as BLIND: all pins green against an injected
+mistake. Both had in fact changed **nothing**.
+
+* **B5** guarded the histogram on `lexScopes.contains(l)`, which is *always true*
+  at that point — `lexLevelHasName` calls `MapCensus.lexScope(l)` two lines
+  before it calls `lexAmp`. The de-duplication it meant to inject had already
+  been performed on its own predicate.
+* **B4** polluted the scanned array with `existing` keys, but the SourceFile root
+  is the only level carrying an `existing` table past the untrusted-owner rule
+  (§ 1 of round 901), and the fixture's root bound nothing — empty `symbols`,
+  never a REAL probe, no array, nothing to corrupt.
+
+> **Round 855's law needs a sharper form: `git diff --shortstat` proves the EDIT
+> landed, never that it DOES anything — and in a driver's output a dead arm and a
+> blind pin are the same line.** The repairs were a genuine first-sight
+> de-duplication and a file-level bare block whose `var` is B83.5-hoisted into
+> the root's own `symbols`, which is what makes the root a real probe at all.
+
+And one pin had to be split twice for the same reason in one round: the size
+census began as a single method, so B5 and B6 failed the same lone assertion; and
+the consistency assertion, first written against the CALL count, fired under both
+defects and separated neither.
 
 ## 6. Gates
 
 | gate | result |
 |---|---|
-| `jvmTest`, 4 modules, real XML parser | **14,394 / 0 / 3** (+4 = exactly the new pins; baseline 14,390) |
+| `jvmTest`, 4 modules, real XML parser | **14,396 / 0 / 3** (+6 = exactly the new pins; baseline 14,390) |
 | `cost_gate.py` | **+0.00% on all 20 counters** — the expected control |
 | `huge_methods.py --fail-over 0` | **0 over the limit**, 714 classes |
 | 8-profile `--listAll` grid | **all eight `added=0 removed=0`** (46 each, harness 94) |
