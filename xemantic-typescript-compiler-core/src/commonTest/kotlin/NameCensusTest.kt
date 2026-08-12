@@ -160,31 +160,73 @@ class NameCensusTest {
         }
 
     /**
-     * [NameCensus.publish] is FIRST-WINS and refuses an empty member set.
+     * The two arms must probe two DIFFERENT containers.
      *
-     * Both halves are load-bearing and neither is cosmetic:
+     * This pin exists because the ablation found the mistake it names — the
+     * interned arm pointed back at the raw container — leaves every hit-count
+     * pin green, and correctly so: both containers hold the same values, so
+     * both arms report the same hits, which IS the same-answers property the
+     * other pins assert. The fault is to the measurement, not to the answer,
+     * and only the container identity can see it (round 813).
+     */
+    @Test
+    fun `the raw and interned arms probe two distinct containers`() = withSavedModes {
+        NameCensus.reset()
+        NameCensus.seed(
+            tokens = emptyList(),
+            probes = listOf(fresh("kind")),
+            members = setOf(fresh("kind")),
+            globalNames = setOf(fresh("kind")),
+        )
+        NameCensus.replayReps = 2
+        NameCensus.replay()
+        assert(NameCensus.rawSetArm != null)
+        assert(NameCensus.internSetArm != null)
+        assert(NameCensus.rawSetArm !== NameCensus.internSetArm)
+        assert(NameCensus.rawMapArm !== NameCensus.internMapArm)
+    }
+
+    /**
+     * [NameCensus.publish] is FIRST-WINS.
+     *
+     * A later publish must not replace a captured population. The two
+     * populations here are chosen so that last-wins gives a DIFFERENT answer —
+     * the second member set does not contain the probed name and the second
+     * global set does. A pin whose two populations agree cannot see the fault,
+     * which is what the first version of this test did.
+     */
+    @Test
+    fun `publish never replaces a population it has already captured`() = withSavedModes {
+        NameCensus.reset()
+        NameCensus.publish(setOf(fresh("kind")), emptySet())
+        NameCensus.publish(setOf(fresh("other")), setOf(fresh("kind")))
+        NameCensus.seedProbes(listOf(fresh("kind")))
+        NameCensus.replayReps = 1
+        NameCensus.replay()
+        // first-wins: "kind" IS a member and is NOT a global name
+        assert(NameCensus.setRawHits == 1L)
+        assert(NameCensus.mapRawHits == 0L)
+    }
+
+    /**
+     * [NameCensus.publish] refuses an EMPTY member set.
+     *
      * `moduleOnlyGlobalNames` is empty until init step 1b2, so a snapshot taken
      * before it would make every replayed probe a miss and the whole answer
      * vacuously zero — round 849's blind-instrument failure, which reads
-     * exactly like a real negative.
+     * exactly like a real negative. Nothing may be seeded in between here, or
+     * the seed masks the fault (which is what made the first version blind).
      */
     @Test
-    fun `publish refuses an empty population and never replaces a captured one`() =
+    fun `publish refuses an empty population so a premature snapshot cannot stick`() =
         withSavedModes {
             NameCensus.reset()
-            NameCensus.publish(emptySet(), emptySet())
-            NameCensus.seed(
-                tokens = emptyList(),
-                probes = listOf(fresh("a")),
-                members = setOf(fresh("a")),
-                globalNames = emptySet(),
-            )
-            // a later publish must not overwrite the population already held
-            NameCensus.publish(setOf(fresh("a"), fresh("b"), fresh("c")), setOf(fresh("z")))
+            NameCensus.publish(emptySet(), setOf(fresh("kind")))
+            NameCensus.publish(setOf(fresh("kind")), emptySet())
+            NameCensus.seedProbes(listOf(fresh("kind")))
             NameCensus.replayReps = 1
             NameCensus.replay()
             assert(NameCensus.setRawHits == 1L)
-            assert(NameCensus.mapRawHits == 0L)
         }
 
     /** Off is OFF: with no reps armed the replay records nothing at all. */

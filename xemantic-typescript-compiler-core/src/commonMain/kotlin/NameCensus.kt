@@ -188,6 +188,23 @@ object NameCensus {
     /** Consumes replayed results so nothing can be elided. */
     var sink: Long = 0
 
+    /**
+     * Which container each arm actually probed, recorded OUTSIDE the timed span.
+     *
+     * Round 897's ablation A1 — the interned arm pointed back at the RAW
+     * container — left every pin GREEN, because swapping the container does not
+     * change the ANSWER: both hold the same values, so both arms still report
+     * the same hit count, which is precisely the same-answers property the other
+     * pins assert. The fault it introduces is to the MEASUREMENT, and nothing
+     * observable to a hit count can see it. These four references are what a pin
+     * can hold instead (round 813: when a pin cannot see the mistake, find the
+     * observable that can, rather than recording coverage you do not have).
+     */
+    var rawSetArm: Any? = null
+    var internSetArm: Any? = null
+    var rawMapArm: Any? = null
+    var internMapArm: Any? = null
+
     fun reset() {
         idTokens = 0; keywordTokens = 0; idChars = 0
         distinctNames.clear(); tokenCapture.clear()
@@ -201,6 +218,7 @@ object NameCensus {
         internHits = 0
         keywordNanos = 0; foldNanos = 0; keywordHitsSeen = 0; foldHitsSeen = 0
         sink = 0
+        rawSetArm = null; internSetArm = null; rawMapArm = null; internMapArm = null
     }
 
     /**
@@ -258,6 +276,18 @@ object NameCensus {
         for (t in tokens) if (KEYWORDS[t] == null) distinctNames.add(t)
     }
 
+    /**
+     * Test seam: install ONLY the probe sequence, leaving whatever population
+     * [publish] captured in place.
+     *
+     * [seed] cannot serve the [publish] pins: it installs the snapshots too, so
+     * it MASKS a premature or a last-wins capture — which is exactly how this
+     * round's first two publish pins came to be blind under ablation.
+     */
+    fun seedProbes(probes: List<String>) {
+        probeCapture.clear(); probeCapture.addAll(probes)
+    }
+
     fun publish(members: Set<String>, globalNames: Set<String>) {
         if (memberSnapshot != null) return
         if (members.isEmpty()) return
@@ -282,11 +312,16 @@ object NameCensus {
         val tokens = tokenCapture.toTypedArray()
         if (probes.isEmpty()) return
 
-        // The canonical instance for every distinct VALUE seen anywhere. Members
-        // and global names are entered FIRST, so a probe whose value is in a
-        // container canonicalises onto that container's own instance — which is
-        // precisely the world interning produces, and the only world in which
-        // `String.equals` can take `this == anObject` at a hit.
+        // The canonical instance for every distinct VALUE seen anywhere: this is
+        // the world interning produces, and the only one in which `String.equals`
+        // can take `this == anObject` at a hit.
+        //
+        // The INSERTION ORDER below reads as load-bearing and is not — round
+        // 897's ablation A2 reversed it and every pin stayed green, correctly.
+        // Canonicalisation is applied to BOTH sides (the container is rebuilt
+        // through `canon` exactly as the probes are), so whichever occurrence
+        // wins the canonical slot, the two sides agree on it. It is a REDUNDANT
+        // guard, recorded rather than claimed as covered (round 809).
         val canon = HashMap<String, String>()
         for (s in members) if (!canon.containsKey(s)) canon[s] = s
         for (s in globalNames) if (!canon.containsKey(s)) canon[s] = s
@@ -332,6 +367,7 @@ object NameCensus {
     }
 
     private fun probeSet(set: HashSet<String>, keys: Array<String>, raw: Boolean): Long {
+        if (raw) rawSetArm = set else internSetArm = set
         val t0 = PassTiming.nowNanos()
         var hits = 0L
         var i = 0
@@ -343,6 +379,7 @@ object NameCensus {
     }
 
     private fun probeMap(map: HashMap<String, Any>, keys: Array<String>, raw: Boolean): Long {
+        if (raw) rawMapArm = map else internMapArm = map
         val t0 = PassTiming.nowNanos()
         var hits = 0L
         var i = 0
