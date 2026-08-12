@@ -112,11 +112,19 @@ class PerFileScopeMemoTest {
         }
     }
 
+    /**
+     * **An UNDISCRIMINATED seam, recorded rather than claimed (rounds 807-813).**
+     * This pin was written to catch the restructuring falling THROUGH to the
+     * merged `globals` when the per-file lookup answers null — the INV.3(d) leak.
+     * Its ablation (`scripts/round896-ablate-2a.sh` arm B3, which replaces the
+     * `return` with `?.let { return it }`) leaves every pin GREEN, and the reason
+     * is in the ablation's own output: INV.3(d) already retired module-only names
+     * OUT of `globals`, so the fall-through reaches a null anyway. The guard is
+     * therefore REDUNDANT today, not unpinned — and no input can discriminate it
+     * while that retirement holds. What the pin does test is named below.
+     */
     @Test
-    fun `globalsForFile answers null for a module-only name the file cannot see`() {
-        // The single-probe restructuring must keep RETURNING once the file has a
-        // scope: falling through to the merged `globals` for a name the file
-        // cannot see is exactly the INV.3(d) leak.
+    fun `a module-only name is invisible in a file that does not import it`() {
         val (checker, results) = buildChecker(
             "/proj/a.ts" to """
                 export interface Foo { x: number }

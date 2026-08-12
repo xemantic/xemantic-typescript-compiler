@@ -688,7 +688,43 @@ has never been counted. **Not priced further here** — it is a separate arc, an
 the gating shape (`checkExportAsNamespaceSelfCycle`'s cheap-guards-above-the-scan
 idiom) is already known to work.
 
-## 11. Reproducing this
+## 11. What round 896 did with this list — two taken, three refused
+
+Round 896 priced candidates (2a), (3), (4), (5) and (7) with
+`--mapCensus` / `--perFileScopeAmp N` / `--flowMapReplay N` (`MapCensus.kt`,
+`scripts/round896-census.sh`) BEFORE building any of them, and the headline is
+that **the ceilings in § 9 are ceilings in the strong sense: two of the five are
+an order of magnitude above the answer.** § 9's own instruction to "deflate this
+one deliberately" was right, and should be applied to the two that remain.
+
+| # | ceiling here | measured | verdict |
+| --- | ---: | ---: | --- |
+| (3) `nodeToFlow` -> `LongKeyMap` | 46.6 ms | **17.9 / 17.6 ms** (two draws) | **TAKEN** |
+| (2a) `perFileScope[path]` | 34.7 ms | probe 10-51 ns x 643,968 removed = **6.4-33 ms** | **TAKEN** |
+| (4) `symbolTypeResolutionInProgress` | 28.2 ms | **24,232 adds, MAX LIVE 3** => <= ~2-5 ms | refused |
+| (5) `nodeTypeResolutionInProgress` | ~14-20 ms | **59,283 adds, MAX LIVE 14** => ~3-5 ms | refused |
+| (7) `AliasedCondKey` | 22.4 ms | gated on candidate (1) | refused |
+
+Three things a next reader should carry:
+
+1. **§ 2's inlining-migration warning was under-applied to its own table.** The
+   `getTypeOfSymbol` row (28.2 ms, insert 100%) is flagged there as "first seen
+   at 893, unconfirmed at 888" — and the population settles it: the only
+   `java.util` insert in that function is `symbolTypeResolutionInProgress.add`,
+   which runs **24,232 times per rebuild**. 28.2 ms over 24,232 adds is
+   **1,164 ns per add**, ~20x a boxed `HashSet` probe on a table that never
+   exceeds **3** live entries. The row is real cost in that owner; it is not
+   that set. Any § 9 candidate whose owner row is not divided by its own
+   population count is a candidate that has not been priced.
+2. **Both sentinel sets are bounded, and round 890's law is why that matters:**
+   max live 3 / 14 / 6 means their tables never leave the initial 16 slots, so
+   they cannot treeify however bad the hash and there is no structural prize.
+3. **The replay instrument's TOTAL replicates and its put/get SPLIT does not**
+   (28.3/4.0 vs 22.1/10.8 ms across two runs, totals 32.3 vs 32.9). Quote the
+   total; the split moves with C2's choices about where the loop's bounds check
+   lands.
+
+## 12. Reproducing this
 
 ```
 python3 scripts/round894_hash_owners.py                       # 893 vs 888
