@@ -241,10 +241,21 @@ object MapCensus {
     var lexScopesBound: Long = 0
     var lexScopeBoundKeys: Long = 0
 
+    /**
+     * Bucketed by own-symbol count, because the SUCCESSOR candidate this census
+     * uncovered — replacing a 1.5-entry `HashMap` per scope with a parallel-array
+     * linear scan — lives or dies on the TAIL. A linear scan is faster than a
+     * hash probe only up to some size, so what decides it is not the mean but how
+     * much of the population sits above the fallback threshold.
+     */
+    val lexBoundHistogram = LongArray(10)
+
     fun lexBound(scopes: Map<Int, LexicalScope>) {
         for ((_, s) in scopes) {
             lexScopesBound++
-            lexScopeBoundKeys += s.symbols.size.toLong()
+            val n = s.symbols.size
+            lexScopeBoundKeys += n.toLong()
+            lexBoundHistogram[if (n >= 9) 9 else n]++
         }
     }
 
@@ -386,6 +397,7 @@ object MapCensus {
         lexMasks.clear(); lexAmpCalls = 0; lexAmpMapNanos = 0; lexAmpFilterNanos = 0
         lexAmpMapSink = 0; lexAmpFilterSink = 0
         lexScopesBound = 0; lexScopeBoundKeys = 0
+        for (i in lexBoundHistogram.indices) lexBoundHistogram[i] = 0
         perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
         replayFiles = 0; replayKeys = 0; replayReps = 0
         legacyPutNanos = 0; legacyGetNanos = 0; longPutNanos = 0; longGetNanos = 0
@@ -507,6 +519,10 @@ object MapCensus {
         appendLine(
             "       scopes BOUND=$lexScopesBound holding $lexScopeBoundKeys own keys " +
                 "— what an EAGER (race-free) filter must build, against $lexScopesQueried queried"
+        )
+        appendLine(
+            "       bound scopes by own-symbol count 0..8 then 9+: " +
+                lexBoundHistogram.joinToString(" ")
         )
         if (lexAmpCalls > 0) {
             appendLine(
