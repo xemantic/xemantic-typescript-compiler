@@ -4845,7 +4845,11 @@ object FrontEnd {
     const val CP_CTA_VAR = 4
     /** `CtaFrame`'s localTypes / localDeclNodes / shadowedNames fn-body copies. */
     const val CP_CTA_LOCAL = 5
-    const val CP_N = 6
+    /** (WARM.25) `spineArgListOverlay`'s `funcParams` overlay + shadow-minus. */
+    const val CP_ARG_OVERLAY = 6
+    /** (WARM.25) the other `SpineArgCtx` map copies — fn-boundary edges, ModuleBlock. */
+    const val CP_ARG_EDGE = 7
+    const val CP_N = 8
 
     val copyNames: Array<String> = arrayOf(
         "EpochMap(localTypes)",
@@ -4854,12 +4858,54 @@ object FrontEnd {
         "spinePd anns (HashMap)",
         "CtaFrame.varTypes (toMutableMap)",
         "CtaFrame localTypes+declNodes+shadowed",
+        "spineArgListOverlay funcParams",
+        "SpineArgCtx edge/ns copies",
     )
 
     var copyCalls: LongArray = LongArray(CP_N)
     var copyEntries: LongArray = LongArray(CP_N)
     var copyMax: LongArray = LongArray(CP_N)
     var copyMuts: LongArray = LongArray(CP_N)
+
+    /**
+     * (WARM.25) The copies that are DISCARDED UNWRITTEN, in calls and entries —
+     * round 801's produced-versus-consumed test at the granularity that decides
+     * a *copy-on-write* scheme rather than an undo log.
+     *
+     * `copyMuts` counts writes over the whole FAMILY, so it answers "is an undo
+     * log cheaper than a copy" and nothing else. It cannot answer "how many of
+     * these copies did anyone ever write to", which is a different question with
+     * a different lever behind it: a copy nobody writes could have been a shared
+     * pointer, and *that* replacement needs no LIFO discipline at all. The two
+     * numbers come apart hard whenever the writes concentrate — 12% of entries
+     * written is compatible with every copy being written once and with 1% of
+     * copies being written a hundred times.
+     *
+     * Charged on a copy's FIRST write, against the size it was born with, so
+     * `copyEntries - copyTouchedEntries` is exactly the entry volume that was
+     * copied and never read back through a mutation.
+     */
+    var copyTouchedCalls: LongArray = LongArray(CP_N)
+    var copyTouchedEntries: LongArray = LongArray(CP_N)
+
+    /**
+     * (WARM.25) `SpineArgCtx.funcParams` / `classCtorParams` READS, split by
+     * whether the name was present.
+     *
+     * This is the number that decides round 894's candidate (6), and it is the
+     * one its census could not have: the proposed replacement is a CHAINED
+     * scope map, which trades an O(1) probe for an O(depth) walk — and a MISS
+     * has to walk the WHOLE chain, where a hit stops early. So the prize
+     * (the copies removed) and the price (the lookups slowed) are two different
+     * populations and only their RATIO says whether the trade is worth taking.
+     */
+    var argLookupHits: Long = 0
+    var argLookupMisses: Long = 0
+
+    fun noteArgLookup(hit: Boolean) {
+        if (mode != ON) return
+        if (hit) argLookupHits++ else argLookupMisses++
+    }
 
     /**
      * Entries recorded by an UNDO LOG in place of a copy — the receipt of the
@@ -4946,6 +4992,22 @@ object FrontEnd {
         copyMuts[kind]++
     }
 
+    /** [n] writes into a map of [kind] while it was installed. */
+    fun noteMuts(kind: Int, n: Int) {
+        if (mode != ON) return
+        copyMuts[kind] += n
+    }
+
+    /**
+     * (WARM.25) The FIRST write into a copy of [kind] that was born holding
+     * [bornWith] entries. Called at most once per copied container.
+     */
+    fun noteFirstMut(kind: Int, bornWith: Int) {
+        if (mode != ON) return
+        copyTouchedCalls[kind]++
+        copyTouchedEntries[kind] += bornWith
+    }
+
     /** One entry recorded by an undo log instead of copied. */
     fun addUndo(kind: Int, n: Int) {
         if (mode != ON) return
@@ -4959,6 +5021,26 @@ object FrontEnd {
         var i = 0
         var s = 0L
         while (i < r) { s += HashMap(m).size.toLong(); i++ }
+        copyAmpSink += s
+    }
+
+    /**
+     * (WARM.25) amplifier for a family whose production copy is ORDERED.
+     *
+     * [ampCopyMap] builds a `HashMap`, which is the right shape for the
+     * `EpochMap`/`CtaFrame` families and the WRONG one for the `SpineArgCtx`
+     * ones: those copy with `toMutableMap()` and `Map.minus`, both of which
+     * yield a `LinkedHashMap` (round 483 — `mutableMapOf` is ordered), whose
+     * insert additionally pays `newNode` + `afterNodeInsertion` and two link
+     * pointers. Amplifying an ordered copy with an unordered one under-reads
+     * the family it is pricing, silently.
+     */
+    fun ampCopyOrdered(kind: Int, m: Map<*, *>) {
+        val r = copyAmp
+        if (r == 0 || (copyAmpKinds shr kind) and 1 == 0) return
+        var i = 0
+        var s = 0L
+        while (i < r) { s += m.toMutableMap().size.toLong(); i++ }
         copyAmpSink += s
     }
 
@@ -5000,6 +5082,8 @@ object FrontEnd {
         copyCalls = LongArray(CP_N); copyEntries = LongArray(CP_N)
         copyMax = LongArray(CP_N); copyMuts = LongArray(CP_N)
         copyUndo = LongArray(CP_N)
+        copyTouchedCalls = LongArray(CP_N); copyTouchedEntries = LongArray(CP_N)
+        argLookupHits = 0; argLookupMisses = 0
         copyAmpSink = 0
         parseAmpBase = 0; parseAmpSink = 0
     }
@@ -5359,13 +5443,19 @@ object FrontEnd {
                         "${copyEntries[k] * 10 / c % 10}" +
                         "  max ${copyMax[k].toString().padStart(5)}" +
                         "  writes ${copyMuts[k].toString().padStart(10)}" +
-                        "  undo ${copyUndo[k].toString().padStart(9)}"
+                        "  undo ${copyUndo[k].toString().padStart(9)}" +
+                        "  touchedCalls ${copyTouchedCalls[k].toString().padStart(9)}" +
+                        "  touchedEntries ${copyTouchedEntries[k].toString().padStart(11)}"
                 )
             }
             appendLine(
                 "    TOTAL pushes $tc, entries copied $te, writes $tm " +
                     "(writes/entries = ${if (te > 0) tm * 1000 / te else 0}/1000), undo $tu; " +
                     "ampSink $copyAmpSink (expected ${copyAmp * tae})"
+            )
+            appendLine(
+                "    SpineArgCtx lookups: hits $argLookupHits misses $argLookupMisses " +
+                    "(total ${argLookupHits + argLookupMisses})"
             )
         }
         // (WARM.8) — the four POST blocks abut, so their residue is a PARTITION

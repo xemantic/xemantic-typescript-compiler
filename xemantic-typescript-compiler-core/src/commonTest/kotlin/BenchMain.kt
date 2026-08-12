@@ -346,6 +346,18 @@ internal fun copyAmpKinds(tier: String): Int = when {
     tier.startsWith("copyampcv") -> 1 shl FrontEnd.CP_CTA_VAR
     tier.startsWith("copyampcl") -> 1 shl FrontEnd.CP_CTA_LOCAL
     tier.startsWith("copyampcta") -> (1 shl FrontEnd.CP_CTA_VAR) or (1 shl FrontEnd.CP_CTA_LOCAL)
+    // (WARM.25) round 894's candidate (8) — the `EpochMap`/`EpochSet` copies
+    // that rounds 891/892 left behind. They need their OWN arms and not the
+    // default `-1`: rounds 869/891/892 converted four of the six families, so a
+    // plain `copyamp<r>` now arms two live families and four dead ones, and its
+    // slope is the SUM — which is exactly the "difference of two whole-family
+    // slopes" shape `copyampos` was introduced to avoid.
+    tier.startsWith("copyampem") -> 1 shl FrontEnd.CP_EPOCH_MAP
+    tier.startsWith("copyampes") -> 1 shl FrontEnd.CP_EPOCH_SET
+    // (WARM.25) round 894's candidate (6) — `spineArgListOverlay` alone (`al`),
+    // and every `SpineArgCtx` map copy including the fn-boundary edges (`ag`).
+    tier.startsWith("copyampal") -> 1 shl FrontEnd.CP_ARG_OVERLAY
+    tier.startsWith("copyampag") -> (1 shl FrontEnd.CP_ARG_OVERLAY) or (1 shl FrontEnd.CP_ARG_EDGE)
     else -> -1
 }
 

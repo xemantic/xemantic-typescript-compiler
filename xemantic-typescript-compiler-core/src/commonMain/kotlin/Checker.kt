@@ -395,30 +395,48 @@ class Checker(
     private inner class EpochMap private constructor(
         private val backing: HashMap<String, Type>,
     ) : MutableMap<String, Type> by backing {
+        /** (WARM.25) the size this map was BORN with, or `-1` once it has been
+         *  written (and for a map that was never a copy at all). It is the only
+         *  place the "was this copy ever written" question can be answered: the
+         *  family counter `copyMuts` is a global write count and cannot tell one
+         *  copy written a hundred times from a hundred copies written once. */
+        private var bornWith: Int = -1
         constructor() : this(HashMap())
         constructor(m: Map<String, Type>) : this(HashMap(m)) {
+            bornWith = m.size
             FrontEnd.addCopy(FrontEnd.CP_EPOCH_MAP, m.size)
             FrontEnd.ampCopyMap(FrontEnd.CP_EPOCH_MAP, m)
         }
-        override fun put(key: String, value: Type): Type? { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.put"); return backing.put(key, value) }
-        override fun remove(key: String): Type? { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.remove"); return backing.remove(key) }
-        override fun putAll(from: Map<out String, Type>) { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.putAll"); backing.putAll(from) }
-        override fun clear() { FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.clear"); backing.clear() }
+        private fun firstMut() {
+            val n = bornWith
+            if (n >= 0) { bornWith = -1; FrontEnd.noteFirstMut(FrontEnd.CP_EPOCH_MAP, n) }
+        }
+        override fun put(key: String, value: Type): Type? { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.put"); return backing.put(key, value) }
+        override fun remove(key: String): Type? { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.remove"); return backing.remove(key) }
+        override fun putAll(from: Map<out String, Type>) { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.putAll"); backing.putAll(from) }
+        override fun clear() { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_MAP); bumpExprEpoch("EpochMap.clear"); backing.clear() }
     }
 
     /** In-place-mutation-tracked set for the name-set family (composition — see [EpochMap]). */
     private inner class EpochSet private constructor(
         private val backing: HashSet<String>,
     ) : MutableSet<String> by backing {
+        /** (WARM.25) — see [EpochMap.bornWith]. */
+        private var bornWith: Int = -1
         constructor() : this(HashSet())
         constructor(c: Collection<String>) : this(HashSet(c)) {
+            bornWith = c.size
             FrontEnd.addCopy(FrontEnd.CP_EPOCH_SET, c.size)
             FrontEnd.ampCopySet(FrontEnd.CP_EPOCH_SET, c)
         }
-        override fun add(element: String): Boolean { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.add"); return backing.add(element) }
-        override fun remove(element: String): Boolean { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.remove"); return backing.remove(element) }
-        override fun addAll(elements: Collection<String>): Boolean { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.addAll"); return backing.addAll(elements) }
-        override fun clear() { FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.clear"); backing.clear() }
+        private fun firstMut() {
+            val n = bornWith
+            if (n >= 0) { bornWith = -1; FrontEnd.noteFirstMut(FrontEnd.CP_EPOCH_SET, n) }
+        }
+        override fun add(element: String): Boolean { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.add"); return backing.add(element) }
+        override fun remove(element: String): Boolean { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.remove"); return backing.remove(element) }
+        override fun addAll(elements: Collection<String>): Boolean { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.addAll"); return backing.addAll(elements) }
+        override fun clear() { firstMut(); FrontEnd.noteMut(FrontEnd.CP_EPOCH_SET); bumpExprEpoch("EpochSet.clear"); backing.clear() }
     }
 
     /** (f1b-i): the SHADOW memo — under --passTiming only, getTypeOfExpression
@@ -60535,6 +60553,10 @@ interface DataView {
                 // with the same overload/var-arrow/inherited-ctor logic the
                 // file level gets.
                 val incoming = spineArgCtxAt(owner)
+                FrontEnd.addCopy(FrontEnd.CP_ARG_EDGE, incoming.funcParams.size)
+                FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_EDGE, incoming.funcParams)
+                FrontEnd.addCopy(FrontEnd.CP_ARG_EDGE, incoming.classCtorParams.size)
+                FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_EDGE, incoming.classCtorParams)
                 val nsFuncs = incoming.funcParams.toMutableMap()
                 val nsCtors = incoming.classCtorParams.toMutableMap()
                 collectFuncDecls(owner.statements, nsFuncs, nsCtors, spineIsJsLike, spineSource)
@@ -60569,12 +60591,20 @@ interface DataView {
             .filter { it.body != null && it.name != null }
             .toList()
         if (nestedFuncs.isNotEmpty()) {
+            // (WARM.25) census: this is round 894's candidate (6) — an
+            // O(all visible function names) copy taken so that O(nestedFuncs)
+            // names can be overlaid on it.
+            FrontEnd.addCopy(FrontEnd.CP_ARG_OVERLAY, effective.size)
+            FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_OVERLAY, effective)
             val overlay = effective.toMutableMap()
+            var written = 0
             for (fd in nestedFuncs) {
                 val name = fd.name?.text ?: continue
                 if (overlay[name]?.isOverloaded == true) continue
                 overlay[name] = paramInfo(fd.parameters, spineIsJsLike)
+                written++
             }
+            FrontEnd.noteMuts(FrontEnd.CP_ARG_OVERLAY, written)
             effective = overlay
         }
         if (incoming.fnDepth > 0) {
@@ -60585,13 +60615,24 @@ interface DataView {
                     val names = mutableSetOf<String>()
                     collectBindingNames(d.name, names)
                     for (n in names) {
-                        if (n in effective) {
+                        // The probe is hoisted into a local rather than written
+                        // as `effective.also { … }`: the `also` form evaluates
+                        // `n in it` a SECOND time, i.e. it would double this
+                        // site's production map traffic to census it.
+                        val present = n in effective
+                        FrontEnd.noteArgLookup(present)
+                        if (present) {
                             (shadowed ?: mutableSetOf<String>().also { shadowed = it }).add(n)
                         }
                     }
                 }
             }
-            shadowed?.let { effective = effective - it }
+            shadowed?.let {
+                FrontEnd.addCopy(FrontEnd.CP_ARG_OVERLAY, effective.size)
+                FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_OVERLAY, effective)
+                FrontEnd.noteMuts(FrontEnd.CP_ARG_OVERLAY, it.size)
+                effective = effective - it
+            }
         }
         return if (effective === incoming.funcParams) incoming else incoming.copy(funcParams = effective)
     }
@@ -60650,6 +60691,8 @@ interface DataView {
                 collectBindingNames(it.name, loopNames)
             }
             if (loopNames.any { it in ctx.funcParams }) {
+                FrontEnd.addCopy(FrontEnd.CP_ARG_EDGE, ctx.funcParams.size)
+                FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_EDGE, ctx.funcParams)
                 ctx.copy(funcParams = ctx.funcParams - loopNames)
             } else ctx
         } else ctx
@@ -60665,7 +60708,7 @@ interface DataView {
             ?.types?.firstOrNull()
             ?.expression
             ?.let { (it as? Identifier)?.text }
-            ?.let { ctx.classCtorParams[it] }
+            ?.let { n -> ctx.classCtorParams[n].also { FrontEnd.noteArgLookup(it != null) } }
 
     private data class FuncParamInfo(
         val minParams: Int,     // required params
@@ -60759,6 +60802,9 @@ interface DataView {
         for (p in parameters) collectBindingNames(p.name, names)
         val shadowed = names.filter { it in funcParams }
         if (shadowed.isEmpty()) return funcParams
+        FrontEnd.addCopy(FrontEnd.CP_ARG_EDGE, funcParams.size)
+        FrontEnd.ampCopyOrdered(FrontEnd.CP_ARG_EDGE, funcParams)
+        FrontEnd.noteMuts(FrontEnd.CP_ARG_EDGE, shadowed.size)
         return funcParams - shadowed.toSet()
     }
 
@@ -61000,7 +61046,8 @@ interface DataView {
         val funcParams = ctx.funcParams
         val source = spineSource
         val fileName = spineFileName
-        val info = if (calleeName == "super") ctx.superCtor else funcParams[calleeName]
+        val info = if (calleeName == "super") ctx.superCtor else
+            funcParams[calleeName].also { FrontEnd.noteArgLookup(it != null) }
         // M1.11 (Shape C): a SPREAD argument's expansion length is unknown, so a
         // too-FEW conclusion from counting it as 1 is unsound (`createDiagnostic(
         // ...diag)` / `reportRelationError(undefined, ...info)` — tsc accepts a
@@ -61252,7 +61299,7 @@ interface DataView {
                 emitTS2554TooMany(minArgs, maxArgs, argCount, expr.arguments ?: emptyList(), maxArgs, source, fileName)
             }
         }
-        val info = classCtorParams[className]
+        val info = classCtorParams[className].also { FrontEnd.noteArgLookup(it != null) }
         if (info != null && !info.isOverloaded) {
             val argCount = expr.arguments?.size ?: 0
             if (!info.hasRest && argCount > info.maxParams) {
@@ -61289,7 +61336,7 @@ interface DataView {
         val ctx = spineArgCtxAt(expr)
         val source = spineSource
         val fileName = spineFileName
-        val info = ctx.funcParams[calleeName]
+        val info = ctx.funcParams[calleeName].also { FrontEnd.noteArgLookup(it != null) }
         if (info != null && !info.isOverloaded) {
             val templateExpr = expr.template as? TemplateExpression
             val spanCount = templateExpr?.templateSpans?.size ?: 0
