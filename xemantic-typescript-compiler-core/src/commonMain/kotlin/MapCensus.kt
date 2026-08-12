@@ -129,6 +129,41 @@ object MapCensus {
     /** Consumes amplified results so the JIT cannot elide the reads. */
     var sink: Long = 0
 
+    // ---- (WARM.27)(1) resolveImportedSymbolGeneral -------------------------
+
+    /**
+     * Round 899 § 33.8(1) ranked `resolveImportedSymbolGeneral` at **24.3 ms**, of
+     * which **21.9 ms is `HashMap.containsKey`** on `importedSymbolGeneralCache` —
+     * a `containsKey`-then-`get` DOUBLE PROBE (round 896's `globalsForFile` shape)
+     * on an `Int`-keyed, therefore BOXED, cache.
+     *
+     * The row is physically real only at **~0.7-1.5 M probes per rebuild** (an
+     * `Integer`-keyed probe is ~15-30 ns), and that population was UNKNOWN, so
+     * round 898's admission test says the first instrument is a counter and not a
+     * fix. [risgTopLevel] is the probe population (one `containsKey` each) and
+     * [risgHits] the second probe (the `get` a hit additionally pays), so the
+     * removable half is exactly [risgHits] probes plus their boxing.
+     *
+     * The hook sits at the function's own entry, NOT on the cache guard: round
+     * 849's trap is a hook on an inner test that the caller duplicates, and here
+     * the caller (`lookupInFileScope`) pre-filters on the SYMBOL's alias flags —
+     * a different predicate — so entry is the boundary that sees every call.
+     */
+    var risgCalls: Long = 0
+
+    /** Calls made at the top level, i.e. those that probe the cache. */
+    var risgTopLevel: Long = 0
+
+    /** Top-level calls the cache answered — the second probe of the double probe. */
+    var risgHits: Long = 0
+
+    fun risgEnter(topLevel: Boolean, hit: Boolean) {
+        risgCalls++
+        if (!topLevel) return
+        risgTopLevel++
+        if (hit) risgHits++
+    }
+
     // ---- (3) nodeToFlow replay -------------------------------------------
 
     var replayFiles: Long = 0
@@ -145,6 +180,7 @@ object MapCensus {
         nodeAdds = 0; nodeReentries = 0; nodeMaxLive = 0; nodeLive = 0
         memberAdds = 0; memberReentries = 0; memberMaxLive = 0; memberLive = 0
         perFileProbes = 0; perFileMemoHits = 0
+        risgCalls = 0; risgTopLevel = 0; risgHits = 0
         perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
         replayFiles = 0; replayKeys = 0; replayReps = 0
         legacyPutNanos = 0; legacyGetNanos = 0; longPutNanos = 0; longGetNanos = 0
@@ -228,6 +264,11 @@ object MapCensus {
         appendLine(
             "  (2a) perFileScope map probes: $perFileProbes   memo hits: $perFileMemoHits   " +
                 "reads: ${perFileProbes + perFileMemoHits}"
+        )
+        appendLine(
+            "  (WARM.27)(1) resolveImportedSymbolGeneral: calls=$risgCalls " +
+                "top-level=$risgTopLevel hits=$risgHits " +
+                "map probes=${risgTopLevel + risgHits} (containsKey $risgTopLevel + get $risgHits)"
         )
         if (perFileAmpCalls > 0) {
             val per = perFileAmpNanos / perFileAmpCalls

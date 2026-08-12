@@ -534,6 +534,34 @@ object FlowScan {
     var setsCreated: Long = 0
     var setsMaterialized: Long = 0
 
+    /**
+     * (WARM.27) round 900 — names actually INSERTED by [SuffixNameSet.materialize].
+     *
+     * [setsMaterialized] counts SETS and cannot decide round 899 § 33.8(5), whose
+     * arithmetic is binary: a 21.6 ms JFR row on a 100%-insert owner is physically
+     * real only at ~0.5-1.0 M `HashSet.add`s per rebuild. One accumulate per
+     * materialisation (not per add), so this is as free as its two siblings and,
+     * like them, always counted — a ratio that justifies a class must not need a
+     * flag to be checkable.
+     */
+    var setEntries: Long = 0
+
+    /**
+     * (WARM.27) round 900 — the DENOMINATOR for [setEntries]: how many `ReassignScan`s
+     * back those sets, and how many names they hold between them.
+     *
+     * Every [SuffixNameSet] is a SUFFIX of one cached scan's name array, so the
+     * suffixes of one scan are NESTED and their union is the scan itself. That makes
+     * `scanNames` the size of the ONE per-scan structure that could answer all of
+     * them, and `scanNames` vs [setEntries] the whole price of the candidate.
+     */
+    var scansBuilt: Long = 0
+    var scanNames: Long = 0
+
+    /** (WARM.27) [SuffixNameIndex] builds actually performed, and names they inserted. */
+    var indexesBuilt: Long = 0
+    var indexEntries: Long = 0
+
     var scansCompared: Long = 0
     var scansDiverged: Long = 0
     var entriesCompared: Long = 0
@@ -541,7 +569,9 @@ object FlowScan {
 
     fun reset() {
         scansCompared = 0; scansDiverged = 0; entriesCompared = 0; entriesDiverged = 0
-        setsCreated = 0; setsMaterialized = 0
+        setsCreated = 0; setsMaterialized = 0; setEntries = 0
+        scansBuilt = 0; scanNames = 0
+        indexesBuilt = 0; indexEntries = 0
     }
 
     internal fun compare(fastPositions: IntArray, fastNames: Array<String>,
@@ -562,7 +592,11 @@ object FlowScan {
         "== (FRONT.2) flow-scan equivalence ==\n" +
             "scans compared $scansCompared, diverged $scansDiverged; " +
             "entries compared $entriesCompared, diverged $entriesDiverged\n" +
-            "suffix sets created $setsCreated, materialized $setsMaterialized\n"
+            "suffix sets created $setsCreated, materialized $setsMaterialized, " +
+            "names inserted $setEntries " +
+            "(mean ${setEntries / maxOf(setsMaterialized, 1)} per materialised set)\n" +
+            "reassign scans built $scansBuilt holding $scanNames names\n" +
+            "suffix name indexes built $indexesBuilt inserting $indexEntries names\n"
 }
 
 /**
@@ -583,9 +617,14 @@ object FlowScan {
  * nothing downstream has to know it is lazy.
  */
 internal class SuffixNameSet(
-    private val names: Array<String>,
+    private val index: SuffixNameIndex,
     private val lo: Int,
 ) : Set<String> {
+
+    /** The stand-alone shape — one index of its own. Used by the equivalence pins. */
+    constructor(names: Array<String>, lo: Int) : this(SuffixNameIndex(names), lo)
+
+    private val names: Array<String> get() = index.names
 
     private var built: HashSet<String>? = null
 
@@ -596,6 +635,7 @@ internal class SuffixNameSet(
             for (k in lo until names.size) b.add(names[k])
             built = b
             FlowScan.setsMaterialized++
+            FlowScan.setEntries += (names.size - lo).toLong()
         }
         return b
     }
@@ -603,9 +643,61 @@ internal class SuffixNameSet(
     override val size: Int get() = materialize().size
     override fun isEmpty(): Boolean = lo >= names.size
     override fun iterator(): Iterator<String> = materialize().iterator()
-    override fun contains(element: String): Boolean = materialize().contains(element)
+
+    /**
+     * (WARM.27) answered from the SHARED index, so the per-set hash set is never
+     * built for the one question production asks.
+     */
+    override fun contains(element: String): Boolean = index.lastIndexOf(element) >= lo
+
     override fun containsAll(elements: Collection<String>): Boolean =
-        materialize().containsAll(elements)
+        elements.all { contains(it) }
+}
+
+/**
+ * (WARM.27) round 900 — the LAST index at which each name occurs in one shared
+ * reassignment scan, so that every [SuffixNameSet] over that scan answers
+ * membership without building a hash set of its own.
+ *
+ * **Why one index answers all the suffixes.** A `SuffixNameSet(names, lo)` is
+ * `{ names[k] : k >= lo }`, so the suffixes of one scan are NESTED and their union
+ * is the scan. Membership is therefore a comparison, exactly:
+ *
+ *     e in suffix(lo)  <=>  (exists k >= lo) names[k] == e
+ *                      <=>  max { k : names[k] == e } >= lo
+ *
+ * — which is why the index stores the LAST occurrence and not the first. Duplicate
+ * names are the whole reason that distinction is load-bearing: with first-wins,
+ * a name reassigned both before and after `lo` would answer `false`.
+ *
+ * **Why it is worth a class (round 899 § 33.8(5), measured round 900).** The 1,143
+ * suffix sets a compiler-profile rebuild creates insert **767,521** names between
+ * them, while the **1,220** scans backing them hold **15,331** names in total — a
+ * 50x gap, because one cached scan backs hundreds of closures' suffixes. The JFR
+ * row is 21.6 ms over 767,521 inserts = **28.1 ns each**, which is precisely a
+ * `HashSet.add` with a cached `String` hash: this is the one candidate of round
+ * 899's six whose profile figure survives round 898's plausibility test rather
+ * than deflating ~3x under it.
+ *
+ * Built LAZILY, for the same reason [SuffixNameSet] itself is lazy: a scan whose
+ * suffixes are never questioned pays nothing.
+ */
+internal class SuffixNameIndex(val names: Array<String>) {
+
+    private var idx: HashMap<String, Int>? = null
+
+    /** The greatest `k` with `names[k] == name`, or `-1` when the name is absent. */
+    fun lastIndexOf(name: String): Int {
+        var m = idx
+        if (m == null) {
+            m = HashMap((names.size * 2).coerceAtLeast(8))
+            for (k in names.indices) m[names[k]] = k
+            idx = m
+            FlowScan.indexesBuilt++
+            FlowScan.indexEntries += names.size.toLong()
+        }
+        return m[name] ?: -1
+    }
 }
 
 class FlowGraphBuilder {
@@ -1317,7 +1409,7 @@ class FlowGraphBuilder {
                 val feV = FrontEnd.t()
                 val varDecls = collectEnclosingVarDecls(enclosing)
                 FrontEnd.close(FrontEnd.FLOW_VARDECLS, feV)
-                FrontEnd.addClosureCensus(reassigned.size.toLong())
+                FrontEnd.addClosureCensus(reassigned)
                 noteMint(
                     FlowStart(
                         id = nextId++,
@@ -1385,6 +1477,8 @@ class FlowGraphBuilder {
             scan = scanReassignedEntries(source, start, hi)
             reassignScanCache[hi] = scan
             FrontEnd.addReassignScan((hi - start).toLong())
+            FlowScan.scansBuilt++
+            FlowScan.scanNames += scan.names.size.toLong()
         }
         FrontEnd.close(FrontEnd.FLOW_SCAN, feS)
         // First entry with position >= start (positions ascend); all entries are < hi.
@@ -1411,7 +1505,7 @@ class FlowGraphBuilder {
                 FlowScan.setsMaterialized++
                 eager
             } else {
-                SuffixNameSet(scan.names, lo)
+                SuffixNameSet(scan.index, lo)
             }
         FlowScan.setsCreated++
         FrontEnd.close(FrontEnd.FLOW_SETBUILD, feB)
@@ -1420,7 +1514,10 @@ class FlowGraphBuilder {
 
     /** One reassignment-target scan over [start, hi): match positions (ascending) +
      *  the matched names, cached per `hi` in [reassignScanCache]. */
-    private class ReassignScan(val start: Int, val positions: IntArray, val names: Array<String>)
+    private class ReassignScan(val start: Int, val positions: IntArray, val names: Array<String>) {
+        /** (WARM.27) shared by every [SuffixNameSet] cut from this scan. */
+        val index = SuffixNameIndex(names)
+    }
 
     /**
      * (FRONT.2) unboxed neighbour read — the `Char?` of `getOrNull` boxes on the

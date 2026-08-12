@@ -5277,11 +5277,24 @@ object FrontEnd {
         lexNodePops += nodePops
     }
 
-    /** (FRONT.2) — one call per CLOSURE FlowStart, from `FlowGraphBuilder`. */
-    fun addClosureCensus(names: Long) {
+    /**
+     * (FRONT.2) — one call per CLOSURE FlowStart, from `FlowGraphBuilder`.
+     *
+     * **Takes the SET, not its size, and that is load-bearing (round 900).** The
+     * argument used to be `reassigned.size.toLong()`, evaluated at the CALL SITE
+     * — Kotlin is strict, so the `mode != ON` guard below could not stop it, and
+     * asking a [SuffixNameSet] its size MATERIALISES it. The probe therefore
+     * forced all 1,143 of round 801's lazy views to build their hash sets on
+     * every production compile, which is also why that round's own census read
+     * `created 1143, materialized 1143` and was written up as "every set is
+     * eventually asked": **the asker was the instrument.** Reading `.size` after
+     * the guard confines that to `--frontEnd` runs, where a probe is allowed to
+     * cost something.
+     */
+    fun addClosureCensus(names: Set<String>) {
         if (mode != ON) return
         closureStarts++
-        reassignNames += names
+        reassignNames += names.size.toLong()
     }
 
     /** (FRONT.2) — one call per reassign-scan cache MISS. */

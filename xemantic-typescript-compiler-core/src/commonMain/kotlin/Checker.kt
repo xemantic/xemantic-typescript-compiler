@@ -112421,7 +112421,9 @@ interface DataView {
      */
     private fun resolveImportedSymbolGeneral(aliasSymbol: Symbol, visited: MutableSet<Int> = mutableSetOf()): Symbol? {
         val topLevel = visited.isEmpty()
-        if (topLevel && importedSymbolGeneralCache.containsKey(aliasSymbol.id)) {
+        val cached = topLevel && importedSymbolGeneralCache.containsKey(aliasSymbol.id)
+        if (MapCensus.on) MapCensus.risgEnter(topLevel, cached)
+        if (cached) {
             return importedSymbolGeneralCache[aliasSymbol.id]
         }
         val result = computeImportedSymbolGeneral(aliasSymbol, visited)

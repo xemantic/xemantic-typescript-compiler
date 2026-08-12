@@ -387,6 +387,11 @@ class FlowScanEquivalenceTest {
     /**
      * An EMPTY suffix must answer `isEmpty` without materialising — that is the
      * one arithmetic short-circuit in the view, and getting it wrong is silent.
+     *
+     * Round 900 moved `contains` onto [SuffixNameIndex], so the second half of
+     * this pin now asserts the OPPOSITE of what it did: a membership question
+     * builds the shared index and still never builds the set. `size` is what is
+     * left that can materialise one.
      */
     @Test
     fun `an empty suffix set answers isEmpty without materializing`() {
@@ -395,6 +400,9 @@ class FlowScanEquivalenceTest {
         assert(view.isEmpty())
         assert(FlowScan.setsMaterialized == 0L)
         assert(!view.contains("a"))
+        assert(FlowScan.setsMaterialized == 0L)
+        assert(FlowScan.indexesBuilt == 1L)
+        assert(view.size == 0)
         assert(FlowScan.setsMaterialized == 1L)
         FlowScan.reset()
     }
