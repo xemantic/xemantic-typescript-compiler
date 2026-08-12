@@ -135,6 +135,49 @@ class SuffixNameIndexTest {
     }
 
     /**
+     * THE SHARING PIN, and it has to be a COUNTER one. Making every suffix build
+     * its own index (the production call site back on `SuffixNameSet(scan.names,
+     * lo)`) changes no answer whatsoever — it only does the work N times — so
+     * every membership pin above stays green against it and the ablation's A3 arm
+     * reads as a clean sweep. That is round 897's A1 verbatim: only the
+     * container's IDENTITY can see it, and here the counters are that identity.
+     *
+     * Both bounds hold BY CONSTRUCTION when the index belongs to the scan — a
+     * scan object contributes its names to `scanNames` once, at creation, and to
+     * `indexEntries` at most once, on first question — and both are breached as
+     * soon as one scan's suffixes start minting an index each.
+     */
+    @Test
+    fun `one index per scan and not one per suffix`() {
+        val source = """
+            function make(n: number | undefined, m: number | undefined): unknown {
+                n ??= 1;
+                const a = { get: () => n };
+                const b = { get: () => n };
+                m ??= 2;
+                const c = { get: () => m, also: () => n };
+                const d = { get: () => m };
+                n %= 3;
+                m %= 4;
+                return [a, b, c, d];
+            }
+        """
+        FlowScan.reset()
+        diagnose(source)
+        val created = FlowScan.setsCreated
+        val indexesBuilt = FlowScan.indexesBuilt
+        val indexEntries = FlowScan.indexEntries
+        val scansBuilt = FlowScan.scansBuilt
+        val scanNames = FlowScan.scanNames
+        FlowScan.reset()
+        // round 753: an assertion over a population of zero tests nothing.
+        assert(created > 1)
+        assert(indexesBuilt > 0)
+        assert(indexesBuilt <= scansBuilt)
+        assert(indexEntries <= scanNames)
+    }
+
+    /**
      * THE PIN FOR THE ROUND'S ACTUAL DEFECT. Driven through a real compile with
      * the `--frontEnd` probe OFF (its default), so it asserts what a PRODUCTION
      * run does: closure suffix sets are created and **none** is ever
