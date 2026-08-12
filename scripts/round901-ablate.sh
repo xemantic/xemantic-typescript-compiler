@@ -22,6 +22,9 @@
 #       filter's alone and the round's whole number is wrong, silently.
 #   A5  a census hook hoisted OUT of its `MapCensus.on` guard — round 900's
 #       ninety-nine-round defect, reproduced deliberately.
+#   A6  the mask built one bit off its own probe. This is the proof-of-absence
+#       property failing — the filter would then refuse a name the map HOLDS —
+#       and it is the arm that says whether the superset pin is real.
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
@@ -31,7 +34,7 @@ LOG=build/bench/round901-ablate
 mkdir -p "$LOG"
 
 ARMS=("$@")
-[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5)
+[[ ${#ARMS[@]} -eq 0 ]] && ARMS=(A1 A2 A3 A4 A5 A6)
 
 apply() {
   case "$1" in
@@ -66,7 +69,16 @@ EOF
 p='xemantic-typescript-compiler-core/src/commonMain/kotlin/MapCensus.kt'
 s=open(p).read()
 old="        if (lexAmpCalls and 1L == 0L) { lexAmpMap(l, name, r); lexAmpFilter(mask, name, r) }\n        else { lexAmpFilter(mask, name, r); lexAmpMap(l, name, r) }"
-new="        lexAmpFilter(mask, name, r)"
+new="        lexAmpFilter(mask, name, r)\n        if (r < 0) lexAmpMap(l, name, r)"
+assert s.count(old) == 1, s.count(old)
+open(p,'w').write(s.replace(old, new))
+EOF
+       ;;
+    A6) python3 - <<'EOF'
+p='xemantic-typescript-compiler-core/src/commonMain/kotlin/MapCensus.kt'
+s=open(p).read()
+old="        for (k in l.symbols.keys) m = m or (1L shl (k.hashCode() and 63))"
+new="        for (k in l.symbols.keys) m = m or (1L shl ((k.hashCode() + 1) and 63))"
 assert s.count(old) == 1, s.count(old)
 open(p,'w').write(s.replace(old, new))
 EOF
@@ -97,8 +109,13 @@ for arm in "${ARMS[@]}"; do
   if ! grep -qa 'BUILD SUCCESSFUL\|BUILD FAILED' "$LOG/$arm.log"; then
     echo "$arm: BUILD DID NOT COMPLETE — see $LOG/$arm.log"; continue
   fi
-  red=$(grep -ac 'FAILED$' "$LOG/$arm.log" || true)
-  echo "-- $arm: $(grep -a 'tests completed' "$LOG/$arm.log" || echo 'compile error')"
+  # Gradle prints "N tests completed, M failed" ONLY when something failed, so
+  # its ABSENCE means a green run — i.e. a BLIND arm, not a compile error. The
+  # first pass of this driver mislabelled exactly that and would have hidden two
+  # blind arms behind a word that reads like an infrastructure problem.
+  echo "-- $arm: $(grep -a 'tests completed' "$LOG/$arm.log" ||
+      grep -qa 'BUILD SUCCESSFUL' "$LOG/$arm.log" && echo 'ALL PINS GREEN — BLIND ARM' ||
+      echo 'BUILD FAILED — see the log')"
   grep -a 'FAILED$' "$LOG/$arm.log" | sed 's/^/     /' | head -12
 done
 
