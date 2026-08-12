@@ -299,27 +299,59 @@ class LexLevelProbeCensusTest {
      * total, which a scope-weighted one never can.
      */
     @Test
+    fun `every real probe is bucketed exactly once into the probe-weighted histogram`() =
+        withCensus(amp = 3) {
+            diagnose(source)
+            assert(MapCensus.lexAmpCalls > 0L)
+            var bucketed = 0L
+            for (b in MapCensus.lexProbeSizeHistogram) bucketed += b
+            // ONCE PER PROBE — the whole distinction the round turns on. A census
+            // that recorded once per SCOPE instead is the population round 901 § 5
+            // priced the successor from, and this is the only thing that sees it.
+            assert(bucketed == MapCensus.lexAmpCalls)
+            // …and never into bucket 0: the amplifier is armed only where the map
+            // is non-empty, so a zero-size probe would mean the EMPTY/REAL split
+            // stopped agreeing with the arm it gates.
+            assert(MapCensus.lexProbeSizeHistogram[0] == 0L)
+        }
+
+    /**
+     * (WARM.29) The summed sizes must be consistent with the histogram of the same
+     * sizes — two independent accumulations of one quantity, kept in their own
+     * method so they discriminate on their own.
+     *
+     * A census that recorded a CONSTANT size per probe (rather than the level's
+     * length) leaves the histogram intact and only the sum wrong, which the
+     * bucketing identity above cannot see and this can.
+     */
+    @Test
+    fun `the summed probe sizes agree with the histogram of those sizes`() = withCensus(amp = 3) {
+        diagnose(source)
+        var lower = 0L
+        for (i in MapCensus.lexProbeSizeHistogram.indices) {
+            lower += i.toLong() * MapCensus.lexProbeSizeHistogram[i]
+        }
+        assert(lower > MapCensus.lexAmpCalls)
+        assert(MapCensus.lexProbeSizeSum >= lower)
+    }
+
+    /**
+     * (WARM.29) …and the population really is RE-WEIGHTED: the same level is probed
+     * many times over, so a probe-weighted total counts its symbols once per probe
+     * where a scope-weighted one counts them once.
+     *
+     * Stated against the QUERIED scopes' own keys and not the BOUND ones. The bound
+     * count is dominated by the lib binding on any small fixture, which is round
+     * 898's A3 and round 901's A2 for the third time: an inequality a fixture
+     * cannot express is satisfied — or violated — for a reason that has nothing to
+     * do with the thing under test.
+     */
+    @Test
     fun `the probe-weighted size population is not the scope-weighted one`() = withCensus(amp = 3) {
         diagnose(source)
-        assert(MapCensus.lexAmpCalls > 0L)
-        // every real probe is bucketed exactly once, and never into bucket 0 —
-        // the amplifier is armed only where the map is non-empty
-        var bucketed = 0L
-        for (b in MapCensus.lexProbeSizeHistogram) bucketed += b
-        assert(bucketed == MapCensus.lexAmpCalls)
-        assert(MapCensus.lexProbeSizeHistogram[0] == 0L)
         // a scan pays at most the level's whole length and at least one step
         assert(MapCensus.lexScanSteps <= MapCensus.lexProbeSizeSum)
         assert(MapCensus.lexScanSteps >= MapCensus.lexAmpCalls)
-        // …and the population really is RE-WEIGHTED: the same level is probed many
-        // times over, so a probe-weighted total counts its symbols once per probe
-        // where a scope-weighted one counts them once.
-        //
-        // Stated against the QUERIED scopes' own keys and not the BOUND ones. The
-        // bound count is dominated by the lib binding on any small fixture, which
-        // is round 898's A3 and round 901's A2 for the third time: an inequality a
-        // fixture cannot express is satisfied — or violated — for a reason that
-        // has nothing to do with the thing under test.
         val queriedOwn = MapCensus.lexScopeKeys - MapCensus.lexScopeExistingKeys
         assert(MapCensus.lexProbeSizeSum > queriedOwn)
     }
