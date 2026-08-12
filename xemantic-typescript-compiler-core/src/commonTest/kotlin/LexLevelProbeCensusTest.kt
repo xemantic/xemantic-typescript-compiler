@@ -208,16 +208,21 @@ class LexLevelProbeCensusTest {
     }
 
     /**
-     * BOTH arms must run — one shared sink cannot tell a dropped arm from a
+     * ALL THREE arms must run — one shared sink cannot tell a dropped arm from a
      * running one, and a slope read off a single surviving arm is a measurement
      * of the wrong thing with nothing to say so.
      */
     @Test
-    fun `both amplified arms run`() = withCensus(amp = 3) {
+    fun `all four amplified arms run`() = withCensus(amp = 3) {
         diagnose(source)
         assert(MapCensus.lexAmpMapSink > 0L)
         assert(MapCensus.lexAmpFilterSink > 0L)
-        assert(MapCensus.sink == MapCensus.lexAmpMapSink + MapCensus.lexAmpFilterSink)
+        assert(MapCensus.lexAmpScanSink > 0L)
+        assert(MapCensus.lexAmpHybridSink > 0L)
+        assert(
+            MapCensus.sink == MapCensus.lexAmpMapSink + MapCensus.lexAmpFilterSink +
+                MapCensus.lexAmpScanSink + MapCensus.lexAmpHybridSink
+        )
     }
 
     /**
@@ -232,6 +237,94 @@ class LexLevelProbeCensusTest {
     fun `the filter never refuses a name the map holds`() = withCensus(amp = 3) {
         diagnose(source)
         assert(MapCensus.lexAmpFilterSink >= MapCensus.lexAmpMapSink)
+    }
+
+    /**
+     * (WARM.29) The scan arm's soundness assertion, and it is STRICTER than the
+     * filter's: a filter may only be a superset, while a linear scan of the same
+     * keys answers EXACTLY what the map answers. So the equality — not an
+     * inequality — is what a swap of container would have to preserve, and it is
+     * the one thing a container swap can silently get wrong (a stale array, a
+     * length taken from the wrong side, a scan that stops one element short).
+     *
+     * It is also the arm's liveness check in a form a shared sink cannot fake: an
+     * arm that never ran sinks zero, which is not equal to a non-zero map sink.
+     */
+    @Test
+    fun `the parallel-array scan answers exactly what the map answers`() = withCensus(amp = 3) {
+        diagnose(source)
+        assert(MapCensus.lexAmpMapSink > 0L)
+        assert(MapCensus.lexAmpScanSink == MapCensus.lexAmpMapSink)
+    }
+
+    /**
+     * (WARM.29) …and so must the HYBRID, whose two branches answer the same
+     * question by different means. A threshold off by one silently routes a level
+     * to the branch that was not measured, and only the equality sees it.
+     */
+    @Test
+    fun `the hybrid answers exactly what the map answers on both its branches`() = withCensus(amp = 3) {
+        diagnose(source)
+        assert(MapCensus.lexAmpMapSink > 0L)
+        assert(MapCensus.lexAmpHybridSink == MapCensus.lexAmpMapSink)
+        // …and both branches are actually taken on this fixture, so the equality
+        // is not carried by one of them alone (round 849: a zero from a blind
+        // instrument reads like a real negative).
+        assert(MapCensus.lexHybridScanned > 0L)
+        assert(MapCensus.lexHybridScanned + MapCensus.lexHybridFellBack == MapCensus.lexAmpCalls)
+    }
+
+    /**
+     * (WARM.29) THE ROUND'S DECIDING IDENTITY, and the one round 901 could not
+     * have stated: the scan's cost is weighted by PROBES, not by SCOPES.
+     *
+     * `lexBoundHistogram` counts each scope once, and off it round 901 read a mean
+     * of 1.51 own symbols and estimated a scan at 3-6 ns. `lexProbeSizeHistogram`
+     * counts each scope once PER PROBE, and the ascent reaches the outer levels on
+     * every walk — so the two means differ by more than two orders of magnitude on
+     * the compiler profile. Pinned as the structural fact that makes them
+     * different populations at all: a probe-weighted total can EXCEED the bound
+     * total, which a scope-weighted one never can.
+     */
+    @Test
+    fun `the probe-weighted size population is not the scope-weighted one`() = withCensus(amp = 3) {
+        diagnose(source)
+        assert(MapCensus.lexAmpCalls > 0L)
+        // every real probe is bucketed exactly once, and never into bucket 0 —
+        // the amplifier is armed only where the map is non-empty
+        var bucketed = 0L
+        for (b in MapCensus.lexProbeSizeHistogram) bucketed += b
+        assert(bucketed == MapCensus.lexAmpCalls)
+        assert(MapCensus.lexProbeSizeHistogram[0] == 0L)
+        // a scan pays at most the level's whole length and at least one step
+        assert(MapCensus.lexScanSteps <= MapCensus.lexProbeSizeSum)
+        assert(MapCensus.lexScanSteps >= MapCensus.lexAmpCalls)
+        // and the population really is re-weighted: more symbols are traversed by
+        // probes than exist in all the scopes the binder bound
+        assert(MapCensus.lexProbeSizeSum > MapCensus.lexScopeBoundKeys)
+    }
+
+    /**
+     * (WARM.29) The scan's array is a view of the level's OWN keys and of nothing
+     * else — never [LexicalScope.existing], whose table aliases the main binder's
+     * and would put every INV.3 name back in play (round 748). Pinned as a size
+     * identity because the array is built from `symbols.keys` and a scan over a
+     * wider array is exactly the mistake that cannot be seen in an answer while
+     * the amplifier is a measurement.
+     */
+    @Test
+    fun `the scanned array holds the level's own keys and only those`() = withCensus(amp = 3) {
+        diagnose(source)
+        var scopesWithArray = 0
+        var mismatches = 0
+        for (scope in MapCensus.lexScopesSeen()) {
+            val names = scope.censusNames ?: continue
+            scopesWithArray++
+            if (names.size != scope.symbols.size) mismatches++
+            for (n in names) if (!scope.symbols.containsKey(n)) mismatches++
+        }
+        assert(scopesWithArray > 0)
+        assert(mismatches == 0)
     }
 
     // ---- the round-900 lesson ----------------------------------------------
@@ -257,6 +350,9 @@ class LexLevelProbeCensusTest {
             assert(MapCensus.lexScopesQueried == 0L)
             assert(MapCensus.lexScopesBound == 0L)
             assert(MapCensus.lexAmpCalls == 0L)
+            assert(MapCensus.lexAmpScanSink == 0L)
+            assert(MapCensus.lexAmpHybridSink == 0L)
+            assert(MapCensus.lexProbeSizeSum == 0L)
             assert(MapCensus.sink == 0L)
         } finally {
             MapCensus.on = savedOn

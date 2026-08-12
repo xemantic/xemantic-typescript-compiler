@@ -228,6 +228,22 @@ class LexicalScope(
 ) {
     /** Bindings made by the lexical pass (scope-id space). Never shared with [existing]. */
     val symbols: SymbolTable = symbolTable()
+
+    /**
+     * (WARM.29) CENSUS-ONLY, and null on every production compile: a parallel-array
+     * view of [symbols]' keys, filled lazily by `MapCensus.lexAmp` when
+     * `--lexLevelAmp` is armed.
+     *
+     * It lives on the scope rather than in a side map ON PURPOSE. The quantity the
+     * amplifier has to measure is the cost of the FIRST probe of a level, which
+     * round 901 showed is three dependent pointer loads (`HashMap` -> `table` ->
+     * `Node`) and almost no hashing. Fetching the array out of a
+     * `HashMap<LexicalScope, ·>` just before the timed loop would pull its header
+     * into cache and measure a warm array against a cold map — a bias in exactly
+     * the direction that flatters the candidate. Reached from `l`, the scan pays
+     * the same kind of load the map arm pays.
+     */
+    var censusNames: Array<String>? = null
 }
 
 // ---------------------------------------------------------------------------

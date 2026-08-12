@@ -262,6 +262,13 @@ object MapCensus {
     /** Distinct [LexicalScope]s any of the three families ever probed. */
     private val lexScopes = HashSet<LexicalScope>()
 
+    /**
+     * (WARM.29) the queried scopes, for a pin that has to inspect the parallel
+     * arrays the scan arm builds. Read-only and census-only — nothing in the
+     * compiler reaches it.
+     */
+    fun lexScopesSeen(): Set<LexicalScope> = lexScopes
+
     var lexScopesQueried: Long = 0
 
     /** Keys a per-scope filter would have to hash, summed over [lexScopesQueried]. */
@@ -306,6 +313,74 @@ object MapCensus {
     var lexAmpMapSink: Long = 0
     var lexAmpFilterSink: Long = 0
 
+    /**
+     * (WARM.29) the third arm: a parallel-array linear scan, the successor round 901
+     * § 5 priced from the size histogram (46.7% of bound scopes hold ZERO own
+     * symbols, 98.7% hold <= 8) but explicitly did NOT build, because its rate was
+     * ESTIMATED at "~3-6 ns" and an estimate is not a measurement.
+     *
+     * Matched to the MAP arm's operation exactly — presence, not retrieval — so the
+     * delta is a like-for-like `containsKey` swap. A production `get` would add one
+     * more load from an array contiguous with the one just scanned.
+     *
+     * This arm measures a LOWER BOUND on the scan's real cost, and the bound is
+     * stated rather than hidden: it reads a bare `Array<String>` field through a
+     * direct load, i.e. it prices the ideal implementation with no container object
+     * and no dispatch between the caller and the array. A production shape that put
+     * the scan behind a `MutableMap` facade would pay an interface call on top.
+     */
+    var lexAmpScanNanos: Long = 0
+
+    /**
+     * Split per arm for round 901's reason (one shared sink cannot tell a dropped
+     * arm from a running one) — and this one pins something stronger than the
+     * filter's inequality: a scan over the same keys is EQUIVALENT to the map, so
+     * [lexAmpScanSink] must equal [lexAmpMapSink] EXACTLY at every `r`. The filter
+     * may only be a superset; the scan may not differ at all.
+     */
+    var lexAmpScanSink: Long = 0
+
+    /**
+     * (WARM.29) the size of the level a REAL probe lands on, bucketed and summed
+     * over PROBES rather than over scopes.
+     *
+     * Round 901 § 5 priced the successor off `lexBoundHistogram`, which counts
+     * SCOPES — 46.7% hold zero, 98.7% hold <= 8 — and concluded a linear scan
+     * would serve the population at ~3-6 ns. That is round 890's law one family
+     * over: **a scope population is not a probe population.** A level is scanned
+     * once per probe, not once per existence, and the ascent reaches the outermost
+     * levels on every walk, so a single large level can carry more scan steps than
+     * the 15,270 empty ones save. Only this histogram can say which.
+     */
+    val lexProbeSizeHistogram = LongArray(10)
+
+    /** Own symbols summed over REAL probes — the numerator of the scan's mean length. */
+    var lexProbeSizeSum: Long = 0
+
+    /** Element comparisons the scan arm performed, per rep, so `/ lexAmpCalls` is per probe. */
+    var lexScanSteps: Long = 0
+
+    /**
+     * (WARM.29) the FOURTH arm: round 901 § 5's actual proposal, which was "a
+     * parallel-array linear scan **(map fallback above ~8)**" — the unconditional
+     * scan the third arm measures is its upper bound, not its shape.
+     *
+     * It has to be measured separately rather than derived from the third arm's
+     * per-step rate, because a 3-element scan and a 212-element scan are different
+     * memory behaviours (one cache line and up to three `String` dereferences
+     * against a streamed array), and a per-step rate taken from the long one is a
+     * cost prior that does not transfer (round 789).
+     */
+    var lexAmpHybridNanos: Long = 0
+    var lexAmpHybridSink: Long = 0
+
+    /** The scan/map split the hybrid actually took, so its arm cannot be read blind. */
+    var lexHybridScanned: Long = 0
+    var lexHybridFellBack: Long = 0
+
+    /** Above this own-symbol count the hybrid arm defers to the real map. */
+    const val LEX_HYBRID_MAX = 8
+
     /** Filter masks, one per scope, built once — what production would cache. */
     private val lexMasks = HashMap<LexicalScope, Long>()
 
@@ -329,9 +404,96 @@ object MapCensus {
         val r = lexLevelAmp
         if (r <= 0) return
         val mask = lexMaskOf(l)
+        val names = l.censusNames ?: l.symbols.keys.toTypedArray().also { l.censusNames = it }
         lexAmpCalls++
-        if (lexAmpCalls and 1L == 0L) { lexAmpMap(l, name, r); lexAmpFilter(mask, name, r) }
-        else { lexAmpFilter(mask, name, r); lexAmpMap(l, name, r) }
+        // Probe-weighted, and recorded OUTSIDE every timestamp pair. The steps a
+        // scan of THIS level would take: its whole length on a miss, the winning
+        // index + 1 on a hit — which is what a linear scan actually pays and what
+        // a scope-count histogram cannot express.
+        lexProbeSizeSum += names.size.toLong()
+        lexProbeSizeHistogram[if (names.size >= 9) 9 else names.size]++
+        var st = 0
+        while (st < names.size) { st++; if (names[st - 1] == name) break }
+        lexScanSteps += st.toLong()
+        // Three arms, so the two-position ABBA of round 901 becomes a three-phase
+        // CYCLIC rotation: each arm runs first, second and last on a third of the
+        // calls, which is what keeps a drift inside the file from landing on one of
+        // them. The array is materialised ABOVE the rotation, outside every
+        // timestamp pair, exactly as the mask is.
+        if (names.size <= LEX_HYBRID_MAX) lexHybridScanned++ else lexHybridFellBack++
+        when (lexAmpCalls and 3L) {
+            0L -> {
+                lexAmpMap(l, name, r); lexAmpFilter(mask, name, r)
+                lexAmpScan(l, name, r); lexAmpHybrid(l, name, r)
+            }
+            1L -> {
+                lexAmpFilter(mask, name, r); lexAmpScan(l, name, r)
+                lexAmpHybrid(l, name, r); lexAmpMap(l, name, r)
+            }
+            2L -> {
+                lexAmpScan(l, name, r); lexAmpHybrid(l, name, r)
+                lexAmpMap(l, name, r); lexAmpFilter(mask, name, r)
+            }
+            else -> {
+                lexAmpHybrid(l, name, r); lexAmpMap(l, name, r)
+                lexAmpFilter(mask, name, r); lexAmpScan(l, name, r)
+            }
+        }
+    }
+
+    /**
+     * Round 901 § 5's proposal as written: scan the array while the level is small,
+     * defer to the real map above [LEX_HYBRID_MAX]. Equivalent to the map by
+     * construction on BOTH branches, so [lexAmpHybridSink] must equal
+     * [lexAmpMapSink] exactly — the same equality the pure scan carries, and the
+     * one thing a threshold off by one would break silently.
+     */
+    private fun lexAmpHybrid(l: LexicalScope, name: String, r: Int) {
+        val t0 = PassTiming.nowNanos()
+        var seen = 0L
+        var i = 0
+        while (i < r) {
+            val names = l.censusNames
+            if (names != null && names.size <= LEX_HYBRID_MAX) {
+                var j = 0
+                while (j < names.size) {
+                    if (names[j] == name) { seen++; break }
+                    j++
+                }
+            } else if (l.symbols.containsKey(name)) seen++
+            i++
+        }
+        lexAmpHybridNanos += PassTiming.nowNanos() - t0
+        lexAmpHybridSink += seen
+        sink += seen
+    }
+
+    /**
+     * The successor's arm: a linear scan of the level's own names, reached from the
+     * scope by one field load — no hash, no table, no `Node`.
+     *
+     * `seen` counts presence, matching [lexAmpMap]'s `containsKey` exactly, so
+     * [lexAmpScanSink] == [lexAmpMapSink] is an equivalence assertion and not merely
+     * a liveness one.
+     */
+    private fun lexAmpScan(l: LexicalScope, name: String, r: Int) {
+        val t0 = PassTiming.nowNanos()
+        var seen = 0L
+        var i = 0
+        while (i < r) {
+            val names = l.censusNames
+            if (names != null) {
+                var j = 0
+                while (j < names.size) {
+                    if (names[j] == name) { seen++; break }
+                    j++
+                }
+            }
+            i++
+        }
+        lexAmpScanNanos += PassTiming.nowNanos() - t0
+        lexAmpScanSink += seen
+        sink += seen
     }
 
     private fun lexAmpMap(l: LexicalScope, name: String, r: Int) {
@@ -396,6 +558,11 @@ object MapCensus {
         lexScopes.clear(); lexScopesQueried = 0; lexScopeKeys = 0; lexScopeExistingKeys = 0
         lexMasks.clear(); lexAmpCalls = 0; lexAmpMapNanos = 0; lexAmpFilterNanos = 0
         lexAmpMapSink = 0; lexAmpFilterSink = 0
+        lexAmpScanNanos = 0; lexAmpScanSink = 0
+        lexProbeSizeSum = 0; lexScanSteps = 0
+        lexAmpHybridNanos = 0; lexAmpHybridSink = 0
+        lexHybridScanned = 0; lexHybridFellBack = 0
+        for (i in lexProbeSizeHistogram.indices) lexProbeSizeHistogram[i] = 0
         lexScopesBound = 0; lexScopeBoundKeys = 0
         for (i in lexBoundHistogram.indices) lexBoundHistogram[i] = 0
         perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
@@ -529,10 +696,22 @@ object MapCensus {
                 "       amplified r=$lexLevelAmp over $lexAmpCalls calls:  " +
                     "MAP p(r)=${lexAmpMapNanos / lexAmpCalls} ns   " +
                     "FILTER p(r)=${lexAmpFilterNanos / lexAmpCalls} ns   " +
-                    "delta=${(lexAmpMapNanos - lexAmpFilterNanos) / lexAmpCalls} ns   " +
-                    "sink map=$lexAmpMapSink filter=$lexAmpFilterSink (filter must be >=)"
+                    "SCAN p(r)=${lexAmpScanNanos / lexAmpCalls} ns   " +
+                    "HYBRID p(r)=${lexAmpHybridNanos / lexAmpCalls} ns   " +
+                    "delta map-filter=${(lexAmpMapNanos - lexAmpFilterNanos) / lexAmpCalls} ns   " +
+                    "delta map-scan=${(lexAmpMapNanos - lexAmpScanNanos) / lexAmpCalls} ns   " +
+                    "delta map-hybrid=${(lexAmpMapNanos - lexAmpHybridNanos) / lexAmpCalls} ns   " +
+                    "sink map=$lexAmpMapSink filter=$lexAmpFilterSink scan=$lexAmpScanSink " +
+                    "hybrid=$lexAmpHybridSink (filter must be >=, scan and hybrid must be ==)   " +
+                    "hybrid split: scanned=$lexHybridScanned fellBack=$lexHybridFellBack"
             )
             appendLine("       the boundary cancels BETWEEN the arms at equal r; two r give each slope")
+            appendLine(
+                "       (WARM.29) PROBE-weighted level size: mean " +
+                    "${lexProbeSizeSum.toDouble() / maxOf(lexAmpCalls, 1)} own symbols, " +
+                    "scan steps/probe ${lexScanSteps.toDouble() / maxOf(lexAmpCalls, 1)}   " +
+                    "buckets 0..8 then 9+: ${lexProbeSizeHistogram.joinToString(" ")}"
+            )
         }
         if (perFileAmpCalls > 0) {
             val per = perFileAmpNanos / perFileAmpCalls

@@ -486,9 +486,10 @@ internal fun parseCliArgs(args: Array<String>, modes: ModeLedger): CliArgs {
                     modes.set(MapCensus::on, true)
                 }
             }
-            // (WARM.28) round 759's amplification for candidate (2): N probes of a
-            // real `LexicalScope.symbols` map AND N evaluations of the 64-bit
-            // proof-of-absence filter that would replace them, under one pair each.
+            // (WARM.28/29) round 759's amplification for candidate (2): N probes of a
+            // real `LexicalScope.symbols` map, N evaluations of the 64-bit
+            // proof-of-absence filter, and N parallel-array linear scans — one
+            // timestamp pair each, cyclically rotated so no arm owns a position.
             "--lexLevelAmp", "--lexlevelamp" -> {
                 i++
                 if (i < args.size) {
@@ -1008,9 +1009,10 @@ internal fun usageText(): String =
                              and the perFileScope file-PATH probe count
           --perFileScopeAmp N (WARM.23) price one perFileScope[path] probe: N probes under one
                              timestamp pair; NEGATIVE N is the in-situ empty bracket
-          --lexLevelAmp N    (WARM.28) price one LexicalScope.symbols probe AND the 64-bit
-                             proof-of-absence filter that would replace it: N of each under one
-                             timestamp pair, ABBA — the boundary cancels between the arms
+          --lexLevelAmp N    (WARM.28/29) price one LexicalScope.symbols probe, the 64-bit
+                             proof-of-absence filter, AND a parallel-array linear scan: N of each
+                             under one timestamp pair, cyclically rotated — the boundary cancels
+                             between the arms
           --flowMapReplay N  (WARM.23) replay each file's real nodeToFlow key sequence into a
                              fresh mutableMapOf and a fresh LongKeyMap, N reps, ABBA per file —
                              what a container swap RECOVERS, not what the old one costs
