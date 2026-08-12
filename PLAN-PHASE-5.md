@@ -20,6 +20,83 @@ material for the M3 items below; do not work its queue.
 
 (Live session notes accumulate here, most recent first — same convention as Phase 16.)
 
+**Round 901 (2026-08-12) — (WARM.28): ROUND 899's LAST UNREFUTED CANDIDATE, `lexLevelHasName`, IS
+**REAL — TWO INDEPENDENT INSTRUMENTS AGREE ON ITS RATE TO 0.5%** — AND IS **REFUSED AT ~14 ms
+(0.26%)**. THE CENSUS THAT PRICED IT FOUND THE ROW'S ACTUAL CAUSE: **32,693 `HashMap`s HOLDING 47,490
+KEYS BETWEEN THEM, 46.7% OF THEM EMPTY** — WORTH ~0.45%, WHICH THE FILTER WOULD HAVE FORECLOSED.**
+
+Priced BEFORE a line of fix, one instrument, no production behaviour change.
+`docs/perf/lex-level-probe-price.md`.
+
+- **(A) THE POPULATION IS EXACTLY WHAT ROUND 899 DERIVED, AND THE DERIVATION STILL COULD NOT HAVE
+  DECIDED IT.** **1,024,959 calls** against the predicted ~1.0 M. But **271,684 of the 1,009,275
+  probe-path calls cost NOTHING**: `HashMap.getNode` reads `table` BEFORE it hashes the key, and a
+  `mutableMapOf()` that was never written keeps `table == null`, so an empty level answers with a
+  null check and a return. *Round 898's law one level down — an operation that short-circuits before
+  it does anything is not one of the operations you divide by.* A census counting probes alone would
+  have manufactured 7-13 ms of prize out of free work.
+
+- **(B) THE ROW SURVIVES ITS ARITHMETIC, AND THEN SURVIVES A SECOND INSTRUMENT.** 29.8 ms over
+  **813,571 REAL probes = 36.6 ns**, inside the 20-50 ns band — the second row in this arc (after
+  round 900's candidate (5)) to pass, against 8 of round 894's 9 and 1 of round 899's 6 that did not.
+  But that band was measured on `perFileScope`, whose keys are file PATHS in a populated table, and
+  the mean queried level holds **1.5** entries, so the prior does not transfer (round 789).
+  `--lexLevelAmp` measures it: **MAP warm slope 6.4 ns, FILTER warm slope 1.17 ns**, and the two-arm
+  delta extrapolates to **33-37 ns for the FIRST probe** — which is the one production performs.
+  **Two independent instruments, agreeing to 0.5%.** Sink is an exact 4x between r=4 and r=16, so
+  neither loop was elided. *The amplifier amplifies BOTH arms in one call because at equal `r` the
+  ~90 ns boundary cancels BETWEEN them, which is the only way a first-probe rate is readable at all.*
+
+- **(C) REFUSED AT ~12.6-15.8 ms (0.23-0.29%), FOR THREE REASONS IN ASCENDING WEIGHT.** 474,954
+  refusable probes, ~2.3% false positives, minus a filter test on all 737,591 real-probe calls and a
+  0.5 ms eager build. **(a)** below this arc's floor — round 897 refused a LOW-risk change at 0.31%
+  gross, 898 refused MEDIUM at 0.13-0.20%, 900 refused at 0.07-0.14% and built at 0.39%. **(b)**
+  `cost_gate.py` reads **+0.00% by construction** (it removes probes, not resolutions), so its only
+  defence would be a wall A/B at **a seventh of what this box settles** — round 899 resolved 1.88% in
+  SIGN alone. **(c) THE REAL ONE: a filter in front of a container is a commitment to the
+  container.** Refusing 58% of those probes banks the smaller half and removes the justification for
+  replacing the container, which is worth nearly twice as much.
+
+- **(D) WHAT THE ROUND DID *NOT* HAVE TO WORRY ABOUT, RECORDED BECAUSE IT WAS THE FLAGGED RISK.** The
+  filter would sit BELOW INV.4(c)(ii)'s three load-bearing rules and guard ONE map probe whose answer
+  it proves — not the function's verdict — so the untrusted-level, non-head-fn and root-exclusion
+  rules are untouched by construction; and `LexicalScope.symbols` has **exactly one writer in the
+  repo** (`Binder.kt` `declareLexical`), so a mask built at the end of `bindLexicalScopes` cannot go
+  stale. **The soundness argument was fine. The number was not.**
+
+- **(E) THE SUCCESSOR, PRICED FROM THIS ROUND'S OWN CENSUS.** Bound scopes by own-symbol count:
+  `15270 8381 3748 1907 1171 768 456 394 174 424` — **46.7% hold ZERO** (an allocated `LinkedHashMap`
+  that never receives a key), 93.2% hold <=4, **98.7% hold <=8**, tail 424 scopes. Replacing the
+  per-scope `HashMap` with a parallel-array linear scan (map fallback above ~8) serves **794,251 real
+  probes** across the three families at ~3-6 ns instead of 33-37: **~22-25 ms = 0.41-0.47%**, which
+  clears every floor this arc has used. One writer, five readers (one audit-only). **NOT built: the
+  array scan's own rate is ESTIMATED, and the next instrument is a third `--lexLevelAmp` arm, not a
+  fix** (CLAUDE.md's first law). The 32,693 deleted allocations are recorded UNPRICED — an allocation
+  count is not a cost (round 801).
+
+- **(F) THE ABLATION — 6 ARMS, ALL DISCRIMINATE, FOUR UNIQUELY, AND TWO WERE BLIND FIRST TIME.** A1
+  (EMPTY/REAL collapsed) 1 pin, A2 (dedup dropped) 1 **unique**, A3 (`real` frozen false) 3
+  **unique**, A4 (map arm dropped) 1, A5 (hook outside its guard) 1 **unique**, A6 (mask one bit off)
+  2 **unique**. A1 and A4 are caught but NOT separated — strict subsets — stated, not dressed up
+  (round 807). **A2 was blind because the FIXTURE could not express the invariant** (round 898's A3):
+  `queried <= bound` is vacuous on a small file where the lib binding dominates the bound count, and
+  the discriminating form is the STRICT inequality against the probes. **A4 was blind because ONE
+  SHARED SINK CANNOT TELL A DROPPED ARM FROM A RUNNING ONE**; splitting it per arm catches it and
+  also buys the assertion that matters most — the filter is a SUPERSET of the map, so it can never
+  sink less, which IS the proof-of-absence property and is what A6 exists to test.
+
+- **(G) AND THE DRIVER CALLED A BLIND ARM A COMPILE ERROR.** Gradle prints `N tests completed, M
+  failed` **only when something failed**, so its ABSENCE is a green run — the first pass reported
+  that as `compile error`, a phrase that reads like infrastructure and would have buried both blind
+  arms. *A driver's verdict vocabulary needs a word for "the mistake landed and nothing noticed".*
+
+- **(H) GATES.** Suite **14,390 / 0 / 3** (+11 = exactly the new pins; baseline 14,379).
+  `cost_gate.py` **+0.00% on all 20 counters** — the expected control. `huge_methods.py --fail-over
+  0`: **0 over the limit**, 714 classes. **8-PROFILE `--listAll` GRID, ALL EIGHT `added=0 removed=0`**
+  (46 each, harness 94), cross-round against round 900's captures, identical recipe — a CONTROL this
+  round, run anyway because the hooks sit on the path that decides TS2304. No wall A/B for the tenth
+  round running, and nothing to A/B.
+
 **Round 900 (2026-08-12) — (WARM.27): ROUND 899's CANDIDATE (5) IS THE **FIRST JFR ROW IN THIS
 ARC WHOSE ARITHMETIC CONFIRMS IT** — 767,521 inserts at **28.1 ns** each — AND THE COUNTER THAT
 CONFIRMED IT ALSO FOUND WHY THEY EXIST: **A PROBE ARGUMENT HAD BEEN MATERIALISING ROUND 801's LAZY
