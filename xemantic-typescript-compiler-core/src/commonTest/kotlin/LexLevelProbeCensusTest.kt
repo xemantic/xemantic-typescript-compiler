@@ -175,6 +175,13 @@ class LexLevelProbeCensusTest {
         assert(MapCensus.lexScopesQueried <= MapCensus.lexScopesBound)
         val queriedOwnKeys = MapCensus.lexScopeKeys - MapCensus.lexScopeExistingKeys
         assert(queriedOwnKeys <= MapCensus.lexScopeBoundKeys)
+        // …and STRICTLY fewer scopes than probes, which is what de-duplication
+        // MEANS. The subset assertions above are satisfied vacuously by a fixture
+        // whose lib binding dominates the bound count (round 898's A3: the
+        // fixture could not express the invariant), so this is the one that
+        // discriminates: without the identity set the queried count becomes the
+        // call count.
+        assert(MapCensus.lexScopesQueried < MapCensus.lexSymEmpty + MapCensus.lexSymProbe)
     }
 
     // ---- the amplifier ------------------------------------------------------
@@ -198,6 +205,26 @@ class LexLevelProbeCensusTest {
     fun `the amplifier is armed on exactly the real probes`() = withCensus(amp = 3) {
         diagnose(source)
         assert(MapCensus.lexAmpCalls == MapCensus.lexSymProbe)
+    }
+
+    /**
+     * BOTH arms must run — one shared sink cannot tell a dropped arm from a
+     * running one, and a slope read off a single surviving arm is a measurement
+     * of the wrong thing with nothing to say so.
+     *
+     * The inequality is the more valuable half: the filter is a SUPERSET of the
+     * map by construction, so it can never sink less. That is the proof-of-absence
+     * property itself — a mask that refused a name the map holds would make the
+     * lever suppress a resolution, and this is the only assertion in the repo that
+     * would see it.
+     */
+    @Test
+    fun `both amplified arms run and the filter is a superset of the map`() = withCensus(amp = 3) {
+        diagnose(source)
+        assert(MapCensus.lexAmpMapSink > 0L)
+        assert(MapCensus.lexAmpFilterSink > 0L)
+        assert(MapCensus.lexAmpFilterSink >= MapCensus.lexAmpMapSink)
+        assert(MapCensus.sink == MapCensus.lexAmpMapSink + MapCensus.lexAmpFilterSink)
     }
 
     // ---- the round-900 lesson ----------------------------------------------

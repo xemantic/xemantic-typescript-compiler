@@ -284,6 +284,17 @@ object MapCensus {
     var lexAmpMapNanos: Long = 0
     var lexAmpFilterNanos: Long = 0
 
+    /**
+     * Per-arm sinks, split because one shared sink cannot tell a dropped arm from
+     * a running one — and because SPLIT they pin the property the whole lever
+     * would rest on: the filter is a SUPERSET of the map, so
+     * [lexAmpFilterSink] >= [lexAmpMapSink] at every `r`. A mask that ever refused
+     * a name the map holds would break that inequality, which is a proof of
+     * absence failing, which is a suppressed resolution.
+     */
+    var lexAmpMapSink: Long = 0
+    var lexAmpFilterSink: Long = 0
+
     /** Filter masks, one per scope, built once — what production would cache. */
     private val lexMasks = HashMap<LexicalScope, Long>()
 
@@ -318,6 +329,7 @@ object MapCensus {
         var i = 0
         while (i < r) { if (l.symbols.containsKey(name)) seen++; i++ }
         lexAmpMapNanos += PassTiming.nowNanos() - t0
+        lexAmpMapSink += seen
         sink += seen
     }
 
@@ -327,6 +339,7 @@ object MapCensus {
         var i = 0
         while (i < r) { if ((mask ushr (name.hashCode() and 63)) and 1L != 0L) seen++; i++ }
         lexAmpFilterNanos += PassTiming.nowNanos() - t0
+        lexAmpFilterSink += seen
         sink += seen
     }
 
@@ -371,6 +384,7 @@ object MapCensus {
         lexTpEmpty = 0; lexTpProbe = 0
         lexScopes.clear(); lexScopesQueried = 0; lexScopeKeys = 0; lexScopeExistingKeys = 0
         lexMasks.clear(); lexAmpCalls = 0; lexAmpMapNanos = 0; lexAmpFilterNanos = 0
+        lexAmpMapSink = 0; lexAmpFilterSink = 0
         lexScopesBound = 0; lexScopeBoundKeys = 0
         perFileAmpNanos = 0; perFileAmpCalls = 0; sink = 0
         replayFiles = 0; replayKeys = 0; replayReps = 0
@@ -499,7 +513,8 @@ object MapCensus {
                 "       amplified r=$lexLevelAmp over $lexAmpCalls calls:  " +
                     "MAP p(r)=${lexAmpMapNanos / lexAmpCalls} ns   " +
                     "FILTER p(r)=${lexAmpFilterNanos / lexAmpCalls} ns   " +
-                    "delta=${(lexAmpMapNanos - lexAmpFilterNanos) / lexAmpCalls} ns   sink=$sink"
+                    "delta=${(lexAmpMapNanos - lexAmpFilterNanos) / lexAmpCalls} ns   " +
+                    "sink map=$lexAmpMapSink filter=$lexAmpFilterSink (filter must be >=)"
             )
             appendLine("       the boundary cancels BETWEEN the arms at equal r; two r give each slope")
         }
