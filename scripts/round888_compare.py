@@ -26,6 +26,7 @@ ROUNDS = {
     "874": ("build/bench/round874/deep1.txt", "build/bench/round874/deep2.txt", 6597.0),
     "888": ("build/bench/round888/deep1.txt", "build/bench/round888/deep2.txt", 5905.0),
     "893": ("build/bench/round893/deep1.txt", "build/bench/round893/deep2.txt", 5461.0),
+    "899": ("build/bench/round899/deep1.txt", "build/bench/round899/deep2.txt", 5429.0),
 }
 
 
