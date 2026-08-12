@@ -331,7 +331,12 @@ class LexLevelProbeCensusTest {
         for (i in MapCensus.lexProbeSizeHistogram.indices) {
             lower += i.toLong() * MapCensus.lexProbeSizeHistogram[i]
         }
-        assert(lower > MapCensus.lexAmpCalls)
+        // Purely INTERNAL to the two accumulations, and deliberately so: comparing
+        // `lower` against the CALL count would also fail under a de-duplicated
+        // census, which is a different defect with a different consequence and
+        // already has its own pin. An assertion that fires for two causes
+        // separates neither (round 807).
+        assert(lower > 0L)
         assert(MapCensus.lexProbeSizeSum >= lower)
     }
 
